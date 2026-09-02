@@ -1,4 +1,4 @@
-import { formatBinding, matchesBinding } from "./hotkey";
+import { formatForDisplay, type RegisterableHotkey } from "@tanstack/react-hotkeys";
 
 /**
  * App commands. The id is what handlers, menus, and settings share.
@@ -10,8 +10,11 @@ export const COMMANDS = {
   "open-launcher": { label: "New Tab", keys: "Mod+T" },
   close: { label: "Close Tab", keys: "Mod+W" },
   "reopen-tab": { label: "Reopen Closed Tab", keys: "Mod+Shift+T" },
-  "next-tab": { label: "Next Tab", keys: "Mod+Shift+]" },
-  "prev-tab": { label: "Previous Tab", keys: "Mod+Shift+[" },
+  // TanStack's `Hotkey` string type excludes Shift+punctuation, so these two take the
+  // object form. Matching still falls back to event.code, which is what puts tab
+  // cycling on the same physical keys the browser uses on every layout.
+  "next-tab": { label: "Next Tab", keys: { key: "]", mod: true, shift: true } },
+  "prev-tab": { label: "Previous Tab", keys: { key: "[", mod: true, shift: true } },
   "tab-1": { label: "Go to Tab 1", keys: "Mod+1" },
   "tab-2": { label: "Go to Tab 2", keys: "Mod+2" },
   "tab-3": { label: "Go to Tab 3", keys: "Mod+3" },
@@ -35,7 +38,7 @@ export const COMMANDS = {
 
   "open-settings": { label: "Settings", keys: "Mod+," },
   "save-file": { label: "Save File", keys: "Mod+S" },
-} as const;
+} as const satisfies Record<string, { label: string; keys: RegisterableHotkey }>;
 
 export type CommandId = keyof typeof COMMANDS;
 
@@ -47,12 +50,12 @@ export function isCommandId(id: string): id is CommandId {
   return id in COMMANDS;
 }
 
-export function keysFor(id: CommandId): string {
+export function keysFor(id: CommandId): RegisterableHotkey {
   return COMMANDS[id].keys;
 }
 
 export function commandKeys(id: CommandId): string {
-  return formatBinding(keysFor(id));
+  return formatForDisplay(keysFor(id));
 }
 
 export function registerCommand(id: CommandId, handler: () => void): () => void {
@@ -80,13 +83,4 @@ export function listedCommands(): { id: CommandId; label: string; keys: string }
     label: COMMANDS[id].label,
     keys: commandKeys(id),
   }));
-}
-
-/** First bound command whose handler is registered. Unbound keys pass through. */
-export function commandForEvent(event: KeyboardEvent): CommandId | null {
-  for (const id of COMMAND_IDS) {
-    if (!handlers.has(id)) continue;
-    if (matchesBinding(event, keysFor(id))) return id;
-  }
-  return null;
 }
