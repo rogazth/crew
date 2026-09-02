@@ -114,7 +114,7 @@ export function SessionSidebar(props: Props) {
           window-level action. Nothing here scrolls, so it stays a drag region. */}
       <Sidebar.Header
         data-tauri-drag-region
-        className="flex h-10 shrink-0 flex-row items-center gap-1 border-b-0 py-0 pr-1.5 pl-1.5"
+        className="flex h-10 shrink-0 flex-row items-center gap-1 border-b border-border py-0 pr-1.5 pl-1.5"
       >
         {IS_MAC && <div className="w-[78px] shrink-0" />}
         <div className="min-w-0 flex-1" />
@@ -133,7 +133,7 @@ export function SessionSidebar(props: Props) {
       {/* Workspace row, then the session filter — R1's SidebarProjectPicker stack. */}
       <div
         data-tauri-drag-region
-        className="flex h-9 shrink-0 items-center gap-0.5 border-y border-border px-2"
+        className="flex h-9 shrink-0 items-center gap-0.5 border-b border-border px-2"
       >
         <WorkspacePicker
           workspaces={props.workspaces}

@@ -71,7 +71,7 @@ export function TabBar({ tabs, activeId, sessions, onSelect, onClose, onLaunch }
                   data-tauri-drag-region="false"
                   onAuxClick={(event) => event.button === 1 && onClose(tab.id)}
                   title={tabTitle(tab, sessions)}
-                  className={`group relative flex w-[190px] shrink-0 items-center gap-2 border-l border-border px-3 outline-none transition-colors ${
+                  className={`group relative flex w-[190px] shrink-0 items-center gap-2 border-l border-border px-3 outline-none transition-colors first:border-l-0 ${
                     active
                       ? "bg-canvas text-text before:absolute before:inset-x-0 before:top-0 before:h-0.5 before:bg-kumo-default"
                       : "text-text-muted hover:bg-hover"
@@ -103,7 +103,11 @@ export function TabBar({ tabs, activeId, sessions, onSelect, onClose, onLaunch }
             })}
           </Tabs.List>
 
-          <div className="flex shrink-0 items-center border-l border-border px-1.5">
+          <div
+            className={`flex shrink-0 items-center px-1.5 ${
+              tabs.length > 0 ? "border-l border-border" : ""
+            }`}
+          >
             <TabLauncher
               open={launcher}
               onOpenChange={setLauncher}
