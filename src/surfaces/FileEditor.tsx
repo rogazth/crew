@@ -23,12 +23,13 @@ const OPTIONS = {
 
 export function FileEditor({ path, relative }: Props) {
   const [loaded, setLoaded] = useState<string | null>(null);
+  const [saved, setSaved] = useState("");
   const [contents, setContents] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
   const name = relative.split("/").pop() ?? relative;
-  const dirty = loaded !== null && contents !== loaded;
+  const dirty = loaded !== null && contents !== saved;
 
   useEffect(() => {
     let cancelled = false;
@@ -39,6 +40,7 @@ export function FileEditor({ path, relative }: Props) {
       .then((text) => {
         if (cancelled) return;
         setLoaded(text);
+        setSaved(text);
         setContents(text);
       })
       .catch((e) => !cancelled && setError(String(e)));
@@ -52,7 +54,7 @@ export function FileEditor({ path, relative }: Props) {
     setSaving(true);
     try {
       await api.writeTextFile(path, contents);
-      setLoaded(contents);
+      setSaved(contents);
     } catch (e) {
       setError(String(e));
     } finally {
@@ -64,6 +66,8 @@ export function FileEditor({ path, relative }: Props) {
 
   // One item, so CodeView is really "a virtualized File". A stable cacheKey and
   // id are what let the editor persist per-file state across tab switches.
+  // `contents` stays the text as read from disk: the editor owns the document from
+  // here, and feeding it a new value without bumping `version` resets the session.
   const items = useMemo(
     () =>
       loaded === null
@@ -106,16 +110,17 @@ export function FileEditor({ path, relative }: Props) {
         </kbd>
       </div>
 
-      {/* CodeView owns its scroll container, but it needs a definite box to
-          size the virtual window against — `flex-1` alone leaves it at auto
-          height, which kills both scrolling and the virtualiser. */}
+      {/* CodeView scrolls its own root and needs a definite box to size the virtual
+          window against — `flex-1` alone leaves it at auto height, which kills both
+          scrolling and the virtualiser. The `overflow-auto` is on the root itself:
+          the library listens for `scroll` there but never styles it. */}
       <div data-selectable className="min-h-0 flex-1 overflow-hidden">
         <EditProvider createEditor={(options) => new Editor(options)}>
           <CodeView
             items={items}
             options={OPTIONS}
             editorOptions={{ persistState: true }}
-            className="h-full"
+            className="h-full min-h-0 overflow-auto"
             onItemEditChange={(_item, file) => setContents(file.contents)}
           />
         </EditProvider>
