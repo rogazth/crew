@@ -1,0 +1,202 @@
+# Crew — propuesta técnica
+
+App de escritorio para manejar agentes de código. Workspaces, agentes con chat propio, terminales del proveedor, y un file explorer rápido.
+
+Nada aquí es invención: cada decisión apunta a un archivo concreto en `reference/`.
+
+## Corrección de premisa
+
+> "la búsqueda de R1 funcionó muy bien, si esa es la velocidad que nos ofrece rust, lo añadiría al stack"
+
+La búsqueda de R1 **no es Rust**. Es esto:
+
+```rust
+// reference/R1/src-tauri/src/fs.rs:97
+fn git_ls_files(root: &Path) -> Option<Vec<ProjectFile>> {
+    Command::new("git").arg("-C").arg(root)
+        .args(["ls-files", "-co", "--exclude-standard", "-z"]).output()
+}
+```
+
+Un subproceso `git`, cap de 20.000 archivos, y **81 líneas de TypeScript** haciendo fuzzy match sobre el array en memoria (`src/lib/fuzzy.ts`). La búsqueda de contenido es un shell-out a `git grep` (`search.rs:70`).
+
+Esa velocidad se reproduce en TypeScript puro.
+
+**Rust igual entra al stack, pero por otras razones:** huella de memoria (Tauri usa el WebView del sistema, no empaqueta Chromium ni Node), manejo de PTY, y supervisión de procesos hijos con cleanup garantizado vía `Drop`. Esas tres sí las gana Rust, y son exactamente tus prioridades declaradas.
+
+## Stack
+
+Copiar R1 casi literal. Está probado, es chico, y lo tienes en el disco.
+
+| Capa | Elección | Evidencia |
+| --- | --- | --- |
+| Shell | Tauri 2 | `Cargo.toml` — sin tokio, sin runtime async pesado |
+| Backend | Rust, un archivo por concern | 18 archivos, 15k líneas total |
+| Store | `rusqlite` bundled + migraciones versionadas | `session_store.rs:375` |
+| Frontend | React 19 + Vite + TypeScript | sin librería de estado |
+| Estilos | Tailwind v4 (`@tailwindcss/vite`) | sin runtime CSS-in-JS |
+| Editor | **`@pierre/diffs`**, no Monaco ni CodeMirror | ver "Editor" abajo |
+| Terminal | `xterm.js` + `@xterm/addon-fit` | |
+| Markdown | `streamdown` | diseñado para streaming de tokens |
+
+Sin Redux, sin Zustand, sin TanStack Query. R1 no usa ninguno y su UI es la más rápida de las cuatro referencias.
+
+## Estructura
+
+### Rust — `src-tauri/src/`
+
+Un archivo por concern, sin submódulos. Es la convención de R1 y aguanta 15k líneas sin dolor.
+
+```
+main.rs        7 líneas: llama a lib::run()
+lib.rs         registro de comandos Tauri y estado global
+workspace.rs   NUEVO — crear/listar workspaces (nombre + path)
+agent.rs       ex-harness.rs — spawn/write/kill de CLIs de proveedor
+pty.rs         terminales interactivas (el 2º elemento)
+files.rs       ex-fs.rs — listar, leer, escribir
+search.rs      git ls-files + git grep
+store.rs       ex-session_store.rs — SQLite + migraciones
+```
+
+### Frontend — `src/`
+
+```
+App.tsx        el shell. MÁXIMO 300 LÍNEAS (ver "Límites duros")
+chrome/        el marco: Sidebar, TabBar, Composer, CommandPalette
+surfaces/      lo que llena un pane: AgentChat, TerminalView, FileEditor
+lib/           lógica pura, testeable sin React
+hooks/         glue de React
+```
+
+`chrome` = lo que rodea. `surfaces` = lo que se mete en un pane. Si un archivo importa `@tauri-apps/api` y no es de `lib/`, está mal ubicado.
+
+## Modelo de datos
+
+El schema de R1 (`session_store.rs:11`) más una tabla de workspaces:
+
+```sql
+CREATE TABLE workspaces (
+  id          TEXT PRIMARY KEY,
+  name        TEXT NOT NULL,
+  path        TEXT NOT NULL,
+  created_at  INTEGER NOT NULL
+);
+
+CREATE TABLE sessions (
+  id                   TEXT PRIMARY KEY,
+  workspace_id         TEXT NOT NULL REFERENCES workspaces(id),
+  kind                 TEXT NOT NULL,          -- 'agent' | 'terminal'
+  name                 TEXT NOT NULL,
+  provider             TEXT NOT NULL,          -- 'claude' en el MVP
+  model                TEXT NOT NULL DEFAULT '',
+  provider_session_id  TEXT,                   -- opaco: lo emite el proveedor
+  blocks_json          TEXT NOT NULL DEFAULT '[]',
+  created_at           INTEGER NOT NULL,
+  updated_at           INTEGER NOT NULL
+);
+
+CREATE INDEX sessions_workspace_updated_idx
+  ON sessions (workspace_id, updated_at DESC);
+```
+
+Tres decisiones que vienen de R1 y hay que respetar:
+
+1. **`provider_session_id` es opaco.** Crew nunca lo parsea. Es el token de resume del proveedor.
+2. **`blocks_json` es el transcript entero en una columna.** Sin tabla `messages`. Aguanta hasta que necesites búsqueda transversal; ahí agregas FTS5, no antes.
+3. **`schema_migrations` desde el día uno.** `store.rs` corre migraciones numeradas al abrir.
+
+`kind` distingue tus dos elementos: `agent` abre `AgentChat`, `terminal` abre `TerminalView`.
+
+## El seam multi-provider
+
+R1 lo resuelve con la abstracción más barata posible: **Rust no sabe qué es un proveedor.** Solo resuelve un path y supervisa un proceso.
+
+```rust
+// reference/R1/src-tauri/src/harness.rs:245
+pub fn harness_resolve_claude() -> Result<CursorBinary, String>
+pub fn harness_spawn(session_id, command, args, cwd) -> Result<(), String>
+pub fn harness_write(session_id, data) -> Result<(), String>
+pub fn harness_kill(session_id) -> Result<(), String>
+```
+
+Los eventos salen por el bus de Tauri: `agent-stdout`, `agent-stderr`, `agent-exit`.
+
+Todo el parseo de protocolo vive en TypeScript, un adapter por proveedor:
+
+```
+src/lib/providers/
+  types.ts      la interfaz
+  claude.ts     ÚNICO archivo del MVP — parsea stream-json de claude -p
+  index.ts      registry: Record<string, Provider>
+```
+
+Agregar Codex es un archivo nuevo y una fila en el registry. Sin UI para cambiar de proveedor, tal como pediste: el campo existe en la tabla, no en la pantalla.
+
+## Editor
+
+R2 usa Monaco: 2338 referencias en su `app.asar`, con `createDiffEditor` y `DiffEditorWidget` para diffs. No lo copiamos — `monaco-editor` pesa 97.9 MB desempaquetado. R2 lo absorbe porque es Electron con un asar de 136 MB; una app Tauri que existe por su huella chica, no.
+
+| | Monaco | CodeMirror 6 | `@pierre/diffs` |
+| --- | --- | --- | --- |
+| Desempaquetado | 97.9 MB | 1.25 MB + langs | 6.9 MB |
+| Look de fábrica | VS Code | plano | Shiki, listo |
+| Virtualización | sí | manual | incluida |
+| Highlighting en worker | sí | no | incluido |
+| Diffs | nativo | `@codemirror/merge` | su especialidad |
+| Madurez | 10 años | 4 años | ~7 meses |
+
+`@pierre/diffs` es un editor completo, no un visor: `dist/editor/pieceTable.js` (la estructura de buffer de VS Code), `editStack.js` para undo/redo, `EditableInstance` / `DiffsEditor` / `EditorSelection`, exports `./edit` y `./worker` con pool, más `Virtualizer` y `searchPanel`. Apache-2.0, mantenido por los autores de Bootstrap.
+
+**Por qué gana acá:** en Crew el agente escribe el código y el humano principalmente lee. CM6 gana cuando tecleas mucho — Lezer reparsea incrementalmente en el hilo principal. Shiki tokeniza con gramáticas TextMate, más pesado al teclear, y por eso Pierre trae workers. Para una superficie 90% lectura, ese modelo es mejor. Además resuelve el tema visual sin trabajo, y cubre los diffs del post-MVP sin una segunda librería.
+
+**Riesgo y mitigación:** siete meses de vida, la API puede moverse, y su lado diff está más maduro que el de edición. El editor vive detrás de un único componente `surfaces/FileEditor.tsx` con interfaz angosta (`path`, `content`, `onChange`). Migrar a CodeMirror 6 es un archivo.
+
+**Configuración obligatoria:** importar los lenguajes de Shiki de forma granular. Los 6.9 MB son casi todos gramáticas; traerlas completas anula la huella chica que motiva todo el stack.
+
+## Reglas de performance
+
+Cada una sale de leer las referencias, no de teoría.
+
+1. **Nunca camines el filesystem si hay git.** `git ls-files` primero, walk recursivo solo como fallback (`fs.rs:91`).
+2. **Cap duro en la lista de archivos.** 20.000. Sobre eso, el fuzzy match en memoria deja de ser instantáneo.
+3. **Fuzzy match en el cliente, sobre array en memoria.** Sin índice, sin FTS, sin ida y vuelta a Rust por tecla.
+4. **`spawn_blocking` para todo lo que toque disco.** `search.rs:43` lo hace para no bloquear el runtime de Tauri.
+5. **Nada de Monaco.** 97.9 MB desempaquetado contra los 6.9 de Pierre.
+6. **Virtualiza el transcript.** Un chat de agente llega a miles de bloques. El editor ya trae la suya.
+7. **Eventos, no polling.** El bus de Tauri empuja; nada de `setInterval`.
+8. **`Drop` mata los hijos.** `HarnessHost` y `PtyHost` implementan `Drop` para que cerrar la app no deje procesos huérfanos (`harness.rs:201`, `pty.rs:105`).
+
+## Límites duros
+
+Lo que separa esto de las referencias que envejecieron mal.
+
+- **`App.tsx` ≤ 300 líneas.** R1 tiene 4842. Es su peor archivo y el motivo por el que sería doloroso extenderlo. El estado de panes/tabs va a `lib/`, no al componente.
+- **Cero worktrees, cero git status, cero diffs.** Fuera del MVP, explícitamente.
+- **Sin monorepo.** t3code pesa 523 MB y necesita Effect, `contracts` y un paquete ACP propio. No vas ahí.
+- **Sin capa de repositorio sobre SQLite.** `store.rs` habla SQL.
+
+## Orden de construcción
+
+| # | Entrega | Estado |
+| --- | --- | --- |
+| 1 | Tauri, `store.rs` con migraciones, CRUD de workspaces | ✅ |
+| 2 | Sidebar + persistencia del workspace activo | ✅ |
+| 3 | `files.rs` + CommandPalette con fuzzy en memoria | ✅ |
+| 4 | Tabs + `FileEditor` | ⚠️ tabs y lectura listos; falta montar `@pierre/diffs` |
+| 5 | `pty.rs` + `TerminalView` | ⬜ la superficie existe, sin PTY |
+| 6 | `agent.rs` + `claude.ts` + `AgentChat` | ⬜ la superficie existe, sin runtime |
+| 7 | Persistencia del transcript y resume | ⬜ |
+
+Del 1 al 4 es andamiaje conocido. El 5 y 6 son el producto.
+
+## Lo que NO se copia
+
+| Referencia | Qué evitar | Por qué |
+| --- | --- | --- |
+| R1 | `App.tsx` de 4842 líneas | God component |
+| R1 | `checkpoint.rs`, `linear.rs`, `notes.rs` | Features fuera de alcance |
+| t3code | Effect, monorepo pnpm, `contracts`, `effect-acp` | Costo de mantenimiento que ya rechazaste |
+| t3code | `native/libghostty-vt` | xterm.js alcanza |
+| R3 | split `host` / `coordinator` / `box` | Diseñado para una VM remota que no tienes |
+| R3 | gateway, OTel, Statsig, webauthn | Infra de producto comercial |
+| R2 | orquestación, gates, dispatch | Sirve después; el MVP no coordina agentes entre sí |

@@ -1,0 +1,7 @@
+name: Crew
+icon: src-tauri/icons/icon.png
+processes:
+  app:
+    command: npm run app
+    auto_start: true
+    auto_restart: true

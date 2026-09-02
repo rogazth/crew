@@ -1,0 +1,206 @@
+import { Button, Input, InputArea, Label, Switch } from "@cloudflare/kumo";
+import { XIcon } from "@phosphor-icons/react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Kbd } from "./Kbd";
+import { ModelPicker } from "./ModelPicker";
+import { ProviderIcon } from "./ProviderIcon";
+import { DEFAULT_MODEL, DEFAULT_PROVIDER, type ProviderId } from "../lib/providers";
+import type { Session } from "../lib/types";
+
+export type AgentDraft = {
+  name: string;
+  provider: string;
+  model: string;
+  description: string;
+  notifications: boolean;
+};
+
+type Props = {
+  /** null = creating. */
+  session: Session | null;
+  existingNames: string[];
+  onSave: (draft: AgentDraft) => Promise<void>;
+  onClose: () => void;
+};
+
+const EMPTY: AgentDraft = {
+  name: "",
+  provider: DEFAULT_PROVIDER,
+  model: DEFAULT_MODEL,
+  description: "",
+  notifications: true,
+};
+
+/** Instant creation reads as cheap; a short floor makes it feel deliberate. */
+const MIN_SAVE_MS = 550;
+
+/** Must match .sheet-panel-out in index.css. */
+const CLOSE_MS = 150;
+
+export function AgentSheet({ session, existingNames, onSave, onClose }: Props) {
+  const [draft, setDraft] = useState<AgentDraft>(EMPTY);
+  const [submitted, setSubmitted] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [closing, setClosing] = useState(false);
+  const closeTimer = useRef<number | null>(null);
+
+  // The parent unmounts us the moment onClose fires, so the exit has to play first.
+  const requestClose = useCallback(() => {
+    if (closeTimer.current !== null) return;
+    setClosing(true);
+    closeTimer.current = window.setTimeout(onClose, CLOSE_MS);
+  }, [onClose]);
+
+  useEffect(() => () => {
+    if (closeTimer.current !== null) clearTimeout(closeTimer.current);
+  }, []);
+
+  useEffect(() => {
+    setSubmitted(false);
+    setDraft(
+      session
+        ? {
+            name: session.name,
+            provider: session.provider,
+            model: session.model || DEFAULT_MODEL,
+            description: session.description,
+            notifications: session.notifications,
+          }
+        : EMPTY,
+    );
+  }, [session]);
+
+  const name = draft.name.trim();
+  const taken = existingNames.some(
+    (n) => n.toLowerCase() === name.toLowerCase() && n !== session?.name,
+  );
+  const error = !name
+    ? "Name is required"
+    : taken
+      ? "An agent with this name already exists"
+      : null;
+
+  async function submit() {
+    setSubmitted(true);
+    if (error || saving || closing) return;
+    setSaving(true);
+    const started = Date.now();
+    try {
+      await onSave({ ...draft, name });
+      const rest = MIN_SAVE_MS - (Date.now() - started);
+      if (rest > 0) await new Promise((r) => setTimeout(r, rest));
+      requestClose();
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const showError = submitted && error ? error : undefined;
+
+  // Window-level so Escape works after clicking non-focusable content in the drawer.
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") requestClose();
+      if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) void submit();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  });
+
+  return (
+    <div
+      className={`fixed inset-0 z-40 flex justify-end ${closing ? "pointer-events-none" : ""}`}
+      onClick={requestClose}
+    >
+      <div
+        className={`absolute inset-0 bg-black/10 backdrop-blur-[1px] ${
+          closing ? "sheet-backdrop-out" : "sheet-backdrop"
+        }`}
+      />
+      <aside
+        onClick={(event) => event.stopPropagation()}
+        className={`relative flex h-full w-[380px] flex-col border-l border-border bg-canvas shadow-2xl ${
+          closing ? "sheet-panel-out" : "sheet-panel"
+        }`}
+      >
+        <header className="flex h-12 shrink-0 items-center justify-between border-b border-border pr-2 pl-4">
+          <span className="font-medium">{session ? "Agent settings" : "New agent"}</span>
+          <Button
+            variant="ghost"
+            shape="square"
+            size="sm"
+            icon={XIcon}
+            aria-label="Close"
+            onClick={requestClose}
+          />
+        </header>
+
+        <div className="min-h-0 flex-1 space-y-5 overflow-y-auto p-4">
+          <div className="flex justify-center pt-2 pb-1">
+            <div className="flex size-16 items-center justify-center rounded-2xl border border-border bg-sidebar">
+              <ProviderIcon provider={draft.provider} className="size-7" />
+            </div>
+          </div>
+
+          <Input
+            autoFocus
+            label="Name"
+            className="w-full"
+            value={draft.name}
+            placeholder="e.g. research"
+            {...(showError ? { error: showError } : {})}
+            variant={showError ? "error" : "default"}
+            onChange={(e) => setDraft({ ...draft, name: e.target.value })}
+          />
+
+          <div className="flex flex-col gap-1.5">
+            <Label>Model</Label>
+            <ModelPicker
+              provider={draft.provider}
+              model={draft.model}
+              onChange={(provider: ProviderId, model) =>
+                setDraft({ ...draft, provider, model })
+              }
+            />
+          </div>
+
+          <InputArea
+            label="Description"
+            className="w-full"
+            rows={4}
+            value={draft.description}
+            placeholder="What this agent is for, and how it should work"
+            onChange={(e) => setDraft({ ...draft, description: e.target.value })}
+          />
+
+          <div className="rounded-xl border border-border bg-sidebar p-3">
+            <Switch
+              variant="neutral"
+              controlFirst={false}
+              checked={draft.notifications}
+              onCheckedChange={(checked) => setDraft({ ...draft, notifications: checked })}
+              label={
+                <span className="block">
+                  <span className="block font-medium">Notifications</span>
+                  <span className="mt-0.5 block font-normal text-kumo-subtle">
+                    Get notified when this agent finishes or needs input
+                  </span>
+                </span>
+              }
+            />
+          </div>
+        </div>
+
+        <footer className="flex shrink-0 items-center justify-end gap-2 border-t border-border p-3">
+          <Button variant="secondary" onClick={requestClose}>
+            Cancel <Kbd keys="Esc" />
+          </Button>
+          <Button variant="primary" loading={saving} onClick={() => void submit()}>
+            {session ? "Save" : "Create agent"}{" "}
+            <Kbd keys="⌘⏎" className="border-white/20 bg-white/10 text-white/80" />
+          </Button>
+        </footer>
+      </aside>
+    </div>
+  );
+}

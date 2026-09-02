@@ -1,0 +1,150 @@
+@source "../node_modules/@cloudflare/kumo/dist/**/*.{js,jsx,ts,tsx}";
+@import "@cloudflare/kumo/styles";
+@import "tailwindcss";
+
+/* Local names kept for the chrome; values come from kumo so dark mode follows for free. */
+@theme {
+  --color-canvas: var(--color-kumo-base);
+  --color-sidebar: var(--color-kumo-elevated);
+  --color-rail: var(--color-kumo-recessed);
+  --color-border: var(--color-kumo-line);
+  --color-border-strong: var(--color-kumo-interact);
+  --color-text: var(--color-kumo-default);
+  --color-text-muted: var(--color-kumo-subtle);
+  --color-placeholder: var(--color-kumo-placeholder);
+  --color-hover: var(--color-kumo-tint);
+  --color-selected: var(--color-kumo-fill);
+  --color-accent: var(--color-kumo-brand);
+  --color-danger: var(--color-kumo-danger);
+}
+
+/* Neutral brand: primary buttons and focus rings read as dark grey, not Cloudflare blue. */
+:root {
+  --color-kumo-brand: light-dark(oklch(27% 0.005 285), oklch(92% 0 0));
+  --color-kumo-brand-hover: light-dark(oklch(22% 0.005 285), oklch(85% 0 0));
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  margin: 0;
+  background: var(--color-canvas);
+  color: var(--color-text);
+  font-family: ui-sans-serif, -apple-system, system-ui, sans-serif;
+  font-size: 13px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+
+::placeholder {
+  color: var(--color-placeholder);
+  opacity: 1;
+}
+
+/* Tailwind's preflight parks buttons on the arrow; anything clickable gets the hand back. */
+button:not(:disabled),
+summary,
+a[href],
+label[for],
+[role="button"]:not([aria-disabled="true"]),
+[role="tab"],
+[role="menuitem"],
+[role="option"] {
+  cursor: pointer;
+}
+
+[aria-disabled="true"],
+[data-disabled] {
+  cursor: default;
+}
+
+@layer base {
+  /* Native windows do not select their own chrome; content opts back in below. */
+  body {
+    -webkit-user-select: none;
+    user-select: none;
+    cursor: default;
+  }
+
+  [data-selectable],
+  input,
+  textarea,
+  [contenteditable]:not([contenteditable="false"]) {
+    -webkit-user-select: text;
+    user-select: text;
+    cursor: auto;
+  }
+
+  /* Without this an icon drags out of the window as a ghost image. */
+  img,
+  svg {
+    -webkit-user-drag: none;
+  }
+}
+
+/* A neutral tint over text is invisible at these weights, so selection carries hue. */
+::selection {
+  background: light-dark(oklch(84% 0.08 245), oklch(45% 0.11 255));
+  color: light-dark(oklch(22% 0.02 260), oklch(97% 0 0));
+}
+
+/* Scrollbars: present but quiet, so panes do not shift when content grows. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-border-strong) transparent;
+}
+
+/* The `*` rule above is unlayered, so it outranks kumo's utility; restate it here
+   for strips that carry their own scroll affordance (the tab bar). */
+.no-scrollbar {
+  scrollbar-width: none;
+}
+
+/* A working session breathes; everything else in the chrome holds still. */
+@keyframes status-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+.animate-status-pulse {
+  animation: status-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes sheet-in {
+  from { transform: translateX(24px); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
+@keyframes sheet-out {
+  from { transform: translateX(0); opacity: 1; }
+  to { transform: translateX(24px); opacity: 0; }
+}
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes fade-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+.sheet-panel {
+  animation: sheet-in 180ms cubic-bezier(0.2, 0, 0, 1);
+}
+.sheet-backdrop {
+  animation: fade-in 180ms ease-out;
+}
+/* Leaving is quicker than arriving; `forwards` holds the end state until unmount. */
+.sheet-panel-out {
+  animation: sheet-out 150ms cubic-bezier(0.4, 0, 1, 1) forwards;
+}
+.sheet-backdrop-out {
+  animation: fade-out 150ms ease-in forwards;
+}
+@media (prefers-reduced-motion: reduce) {
+  .sheet-panel, .sheet-backdrop, .sheet-panel-out, .sheet-backdrop-out,
+  .animate-status-pulse { animation: none; }
+}
