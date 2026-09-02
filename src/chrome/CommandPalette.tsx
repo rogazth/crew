@@ -1,7 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  ArrowCounterClockwiseIcon,
+  CommandIcon,
+  FloppyDiskIcon,
   FolderIcon,
+  FolderOpenIcon,
+  GearIcon,
   MagnifyingGlassIcon,
+  PlusIcon,
   RobotIcon,
   TerminalWindowIcon,
   type Icon,
@@ -255,6 +261,17 @@ const KIND_ICONS: Record<"agents" | "sessions" | "workspace", Icon> = {
   workspace: FolderIcon,
 };
 
+const ACTION_ICONS: Partial<Record<CommandId, Icon>> = {
+  "open-launcher": PlusIcon,
+  "reopen-tab": ArrowCounterClockwiseIcon,
+  "find-in-sidebar": MagnifyingGlassIcon,
+  "open-workspace": FolderOpenIcon,
+  "new-agent": RobotIcon,
+  "new-session": TerminalWindowIcon,
+  "open-settings": GearIcon,
+  "save-file": FloppyDiskIcon,
+};
+
 function Row({
   item,
   active,
@@ -314,7 +331,8 @@ function describe(item: Item): { icon: React.ReactNode; label: string; detail?: 
       detail: item.workspace.path,
     };
   }
-  return { icon: <span className="size-4 shrink-0" />, label: item.label };
+  const Glyph = ACTION_ICONS[item.id] ?? CommandIcon;
+  return { icon: <Glyph className="size-4 shrink-0 text-text-muted" />, label: item.label };
 }
 
 function Hint({ keys, label }: { keys: string; label: string }) {
