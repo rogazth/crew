@@ -131,6 +131,81 @@ body:has(button[data-sidebar="resize-handle"]:active) * {
   scrollbar-width: none;
 }
 
+/* Image viewer: the picture at rest on a scrim, nothing else lit. */
+.crew-lightbox-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: color-mix(in srgb, var(--text-color-kumo-default) 72%, transparent);
+  transition: opacity 150ms ease;
+}
+.crew-lightbox-scrim[data-starting-style],
+.crew-lightbox-scrim[data-ending-style] {
+  opacity: 0;
+}
+.crew-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 61;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  outline: none;
+  transition: opacity 150ms ease, transform 150ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.crew-lightbox[data-starting-style],
+.crew-lightbox[data-ending-style] {
+  opacity: 0;
+  transform: scale(0.98);
+}
+.crew-lightbox-image {
+  max-width: min(92vw, 1400px);
+  max-height: calc(100vh - 96px);
+  border-radius: 8px;
+  object-fit: contain;
+  box-shadow: 0 24px 64px -24px rgb(0 0 0 / 0.6);
+}
+.crew-lightbox-bar {
+  position: absolute;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 12px;
+  max-width: 60vw;
+  padding: 4px 12px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--color-kumo-base) 14%, transparent);
+  color: var(--color-kumo-base);
+  font-size: 12px;
+  line-height: 18px;
+}
+.crew-lightbox-nav,
+.crew-lightbox-close {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--color-kumo-base) 14%, transparent);
+  color: var(--color-kumo-base);
+  transition: background-color 100ms ease;
+}
+.crew-lightbox-nav {
+  top: 50%;
+  transform: translateY(-50%);
+}
+.crew-lightbox-close {
+  top: 12px;
+  right: 12px;
+}
+.crew-lightbox-nav:hover,
+.crew-lightbox-close:hover {
+  background: color-mix(in srgb, var(--color-kumo-base) 26%, transparent);
+}
+
 /* A card is the one thing in the log that waits for the user: hairline, radius 10, no fill. */
 .crew-card {
   display: flex;

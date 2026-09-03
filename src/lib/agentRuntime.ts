@@ -1,4 +1,5 @@
 import * as api from "./api";
+import { isImage, loadInlineImages } from "./attachments";
 import {
   newBlock,
   type Answers,
@@ -101,6 +102,9 @@ export async function send(
   };
 
   try {
+    const images = await loadInlineImages(files);
+    const inline = new Set(images.map((image) => image.path));
+    const paths = files.filter((file) => !isImage(file) || !inline.has(file.path)).map((file) => file.path);
     await runtimeFor(session.provider).send({
       sessionId: id,
       cwd,
@@ -111,7 +115,8 @@ export async function send(
       resume: session.providerSessionId,
       ...(options.fresh ? { fresh: true } : {}),
       text,
-      ...(files.length > 0 ? { files: files.map((file) => file.path) } : {}),
+      ...(paths.length > 0 ? { files: paths } : {}),
+      ...(images.length > 0 ? { images } : {}),
       onEvent,
     });
   } catch (error) {

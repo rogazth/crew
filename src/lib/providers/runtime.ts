@@ -1,3 +1,4 @@
+import type { InlineImage } from "../attachments";
 import type { Answers, ApprovalDecision, HarnessEvent } from "../blocks";
 import type { Autonomy } from "../types";
 import { claudeRuntime } from "../claudeTurn";
@@ -15,7 +16,10 @@ export type TurnInput = {
   /** Start a new vendor session instead of resuming: the episode is cut here. */
   fresh?: boolean;
   text: string;
+  /** Paths the provider should read itself. */
   files?: string[];
+  /** Images already loaded, for providers that take them inline. */
+  images?: InlineImage[];
   onEvent: (event: HarnessEvent) => void;
 };
 

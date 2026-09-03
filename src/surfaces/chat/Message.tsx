@@ -1,8 +1,7 @@
 import { Tooltip } from "@cloudflare/kumo";
 import { lazy, memo, Suspense } from "react";
-import { FileTypeIcon } from "../../chrome/FileTypeIcon";
-import { X } from "../../chrome/icons";
-import type { AttachedFile, Block, TurnUsage } from "../../lib/blocks";
+import type { Block, TurnUsage } from "../../lib/blocks";
+import { AttachmentStrip } from "./Attachments";
 import { clock, duration } from "../../lib/time";
 
 /** streamdown and its parsers are half a megabyte; the window opens without them. */
@@ -14,7 +13,7 @@ export const UserMessage = memo(function UserMessage({ block }: { block: Block }
     <div className="flex justify-end pl-16">
       <div className="crew-bubble">
         {block.text ? <p className="whitespace-pre-wrap">{block.text}</p> : null}
-        {block.files && block.files.length > 0 ? <FileChips files={block.files} onBubble /> : null}
+        {block.files && block.files.length > 0 ? <AttachmentStrip files={block.files} onInk /> : null}
       </div>
     </div>
   );
@@ -74,43 +73,4 @@ function compact(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
   if (n >= 1_000) return `${(n / 1_000).toFixed(n >= 10_000 ? 0 : 1)}k`;
   return String(n);
-}
-
-/** One chip recipe for the composer and the sent message. */
-export function FileChips({
-  files,
-  onRemove,
-  onBubble,
-}: {
-  files: AttachedFile[];
-  onRemove?: (path: string) => void;
-  /** Inside the ink bubble the chip is a lighter ink, not a darker card. */
-  onBubble?: boolean;
-}) {
-  return (
-    <div className="flex flex-wrap gap-1.5">
-      {files.map((file) => (
-        <span
-          key={file.path}
-          title={file.path}
-          className={`inline-flex h-6 max-w-[180px] items-center gap-1.5 rounded-md px-2 text-[12px] leading-4 ${
-            onBubble ? "crew-chip-on-ink" : "bg-card"
-          }`}
-        >
-          <FileTypeIcon name={file.name} className="size-3.5" />
-          <span className="min-w-0 truncate">{file.name}</span>
-          {onRemove && (
-            <button
-              type="button"
-              aria-label={`Remove ${file.name}`}
-              onClick={() => onRemove(file.path)}
-              className="-mr-0.5 flex size-4 items-center justify-center rounded text-kumo-subtle transition-colors hover:text-text"
-            >
-              <X className="size-3" />
-            </button>
-          )}
-        </span>
-      ))}
-    </div>
-  );
 }

@@ -1,4 +1,5 @@
 /** Claude Code stream-json. Protocol shapes come from R1's claudeProtocol. */
+import type { InlineImage } from "../attachments";
 import type { Answers, ApprovalDecision, Question } from "../blocks";
 
 export function asRecord(value: unknown): Record<string, unknown> | null {
@@ -63,13 +64,19 @@ export function buildClaudeUserMessage(
   sessionId: string,
   text: string,
   files: string[] = [],
+  images: InlineImage[] = [],
 ): Record<string, unknown> {
   const body = withAttachedPaths(text.trim(), files);
+  const content: Record<string, unknown>[] = images.map((image) => ({
+    type: "image",
+    source: { type: "base64", media_type: image.mediaType, data: image.data },
+  }));
+  if (body || content.length === 0) content.push({ type: "text", text: body });
   return {
     type: "user",
     session_id: sessionId,
     parent_tool_use_id: null,
-    message: { role: "user", content: [{ type: "text", text: body }] },
+    message: { role: "user", content },
   };
 }
 

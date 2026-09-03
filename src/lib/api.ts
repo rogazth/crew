@@ -132,6 +132,9 @@ export const writeTextFile = (path: string, contents: string): Promise<void> =>
 
 export const pathExists = (path: string): Promise<boolean> => invoke("path_exists", { path });
 
+export const readFileBase64 = (path: string): Promise<{ mime: string; data: string }> =>
+  invoke("read_file_base64", { path });
+
 /** Clipboard files have no path; the CLIs Crew hosts only take paths. */
 export async function writeTempFile(file: File): Promise<string> {
   const bytes = new Uint8Array(await file.arrayBuffer());

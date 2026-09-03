@@ -57,6 +57,7 @@ pub fn run() {
             files::write_text_file,
             files::path_exists,
             files::write_temp_file,
+            files::read_file_base64,
             pty::pty_spawn,
             pty::pty_write,
             pty::pty_resize,

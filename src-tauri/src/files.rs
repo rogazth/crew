@@ -141,6 +141,44 @@ pub async fn write_text_file(path: String, contents: String) -> Result<(), Strin
     .map_err(|e| e.to_string())?
 }
 
+#[derive(Serialize, Clone, Debug)]
+pub struct FileBytes {
+    pub mime: String,
+    pub data: String,
+}
+
+/// Images the chat shows and sends inline. The webview cannot read the disk
+/// itself and the asset protocol is off, so bytes travel as base64 over IPC.
+#[tauri::command]
+pub async fn read_file_base64(path: String) -> Result<FileBytes, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let meta = std::fs::metadata(&path).map_err(|e| e.to_string())?;
+        if meta.len() > MAX_TEMP_FILE_BYTES as u64 {
+            return Err("File is too large to attach".into());
+        }
+        let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
+        let mime = match Path::new(&path)
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.to_ascii_lowercase())
+            .as_deref()
+        {
+            Some("png") => "image/png",
+            Some("jpg") | Some("jpeg") => "image/jpeg",
+            Some("gif") => "image/gif",
+            Some("webp") => "image/webp",
+            Some("svg") => "image/svg+xml",
+            _ => "application/octet-stream",
+        };
+        Ok(FileBytes {
+            mime: mime.into(),
+            data: base64::engine::general_purpose::STANDARD.encode(bytes),
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[tauri::command(async)]
 pub fn path_exists(path: String) -> bool {
     std::path::Path::new(&path).exists()

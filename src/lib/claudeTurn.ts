@@ -294,7 +294,7 @@ async function runTurn(live: Live, input: TurnInput): Promise<void> {
   try {
     await writeJson(
       input.sessionId,
-      buildClaudeUserMessage(live.claudeSessionId, input.text.trim(), input.files ?? []),
+      buildClaudeUserMessage(live.claudeSessionId, input.text.trim(), input.files ?? [], input.images ?? []),
     );
     await turnPromise;
   } catch (error) {

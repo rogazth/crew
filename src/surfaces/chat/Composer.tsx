@@ -1,10 +1,18 @@
-import { useImperativeHandle, useLayoutEffect, useRef, type FormEvent, type KeyboardEvent, type Ref } from "react";
+import {
+  useImperativeHandle,
+  useLayoutEffect,
+  useRef,
+  type ClipboardEvent,
+  type FormEvent,
+  type KeyboardEvent,
+  type Ref,
+} from "react";
 import { ModelPicker } from "../../chrome/ModelPicker";
 import { Plus, Send, Square } from "../../chrome/icons";
 import type { AttachedFile } from "../../lib/blocks";
 import type { ProviderId } from "../../lib/providers";
 import type { Session } from "../../lib/types";
-import { FileChips } from "./Message";
+import { AttachmentStrip } from "./Attachments";
 
 type Props = {
   ref?: Ref<HTMLTextAreaElement>;
@@ -16,6 +24,8 @@ type Props = {
   onDraft: (value: string) => void;
   onModel: (provider: ProviderId, model: string) => void;
   onAttach: () => void;
+  /** Files pasted from the clipboard (screenshots); they have no path yet. */
+  onPasteFiles: (files: File[]) => void;
   onRemoveFile: (path: string) => void;
   onSend: () => void;
   onStop: () => void;
@@ -34,6 +44,7 @@ export function Composer({
   onDraft,
   onModel,
   onAttach,
+  onPasteFiles,
   onRemoveFile,
   onSend,
   onStop,
@@ -56,6 +67,13 @@ export function Composer({
     else if (canSend) onSend();
   };
 
+  const onPaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
+    const files = [...(event.clipboardData?.files ?? [])];
+    if (files.length === 0) return;
+    event.preventDefault();
+    onPasteFiles(files);
+  };
+
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
     event.preventDefault();
@@ -68,7 +86,7 @@ export function Composer({
       <form onSubmit={submit} className="crew-composer mx-auto max-w-[720px]">
         {files.length > 0 && (
           <div className="mb-2">
-            <FileChips files={files} onRemove={onRemoveFile} />
+            <AttachmentStrip files={files} onRemove={onRemoveFile} />
           </div>
         )}
         <textarea
@@ -79,6 +97,7 @@ export function Composer({
           spellCheck={false}
           onChange={(event) => onDraft(event.target.value)}
           onKeyDown={onKeyDown}
+          onPaste={onPaste}
           className="crew-composer-field"
         />
         <div className="mt-2 flex h-7 items-center justify-between gap-2">
