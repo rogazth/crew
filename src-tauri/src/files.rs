@@ -138,3 +138,8 @@ pub async fn write_text_file(path: String, contents: String) -> Result<(), Strin
     .await
     .map_err(|e| e.to_string())?
 }
+
+#[tauri::command]
+pub fn path_exists(path: String) -> bool {
+    std::path::Path::new(&path).exists()
+}

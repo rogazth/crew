@@ -66,3 +66,21 @@ export const readTextFile = (path: string): Promise<string> =>
 
 export const writeTextFile = (path: string, contents: string): Promise<void> =>
   invoke("write_text_file", { path, contents });
+
+export const pathExists = (path: string): Promise<boolean> => invoke("path_exists", { path });
+
+export const spawnPty = (
+  id: string,
+  cwd: string,
+  command: string[],
+  cols: number,
+  rows: number,
+): Promise<void> => invoke("pty_spawn", { id, cwd, command, cols, rows });
+
+export const writePty = (id: string, data: string): Promise<void> =>
+  invoke("pty_write", { id, data });
+
+export const resizePty = (id: string, cols: number, rows: number): Promise<void> =>
+  invoke("pty_resize", { id, cols, rows });
+
+export const killPty = (id: string): Promise<void> => invoke("pty_kill", { id });

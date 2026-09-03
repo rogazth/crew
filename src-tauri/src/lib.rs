@@ -1,11 +1,13 @@
 mod files;
 mod menu;
+mod pty;
 mod session;
 mod store;
 mod workspace;
 
 use tauri::Manager;
 
+use pty::PtyHost;
 use store::Store;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -17,6 +19,7 @@ pub fn run() {
             app.set_menu(menu::build(app)?)?;
             let dir = app.path().app_data_dir()?;
             app.manage(Store::open(dir.join("crew.sqlite3"))?);
+            app.manage(PtyHost::new());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -39,6 +42,11 @@ pub fn run() {
             files::list_project_files,
             files::read_text_file,
             files::write_text_file,
+            files::path_exists,
+            pty::pty_spawn,
+            pty::pty_write,
+            pty::pty_resize,
+            pty::pty_kill,
         ])
         .run(tauri::generate_context!())
         .expect("error while running crew");

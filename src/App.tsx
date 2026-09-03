@@ -12,6 +12,7 @@ import { useSelectAllScope } from "./hooks/useSelectAllScope";
 import { useSessions } from "./hooks/useSessions";
 import { useSidebarWidth } from "./hooks/useSidebarWidth";
 import { useTabs } from "./hooks/useTabs";
+import { TerminalPrefsProvider } from "./hooks/useTerminalPrefs";
 import { useWorkspaces } from "./hooks/useWorkspaces";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./lib/providers";
 import { fileTabId, sessionTabId, stubTabId } from "./lib/tabs";
@@ -30,7 +31,7 @@ export function App() {
   const workspaces = useWorkspaces();
   const sidebar = useSidebarWidth();
   const active = workspaces.active;
-  const { sessions, create, update, rename, remove, reorder, markStarted } = useSessions(active?.id ?? null);
+  const { sessions, create, update, rename, remove, reorder } = useSessions(active?.id ?? null);
   const tabs = useTabs(active?.id ?? null);
   const files = useProjectFiles(active?.path ?? null);
 
@@ -179,6 +180,7 @@ export function App() {
   const activeSessionId = tabs.active?.kind === "session" ? tabs.active.sessionId : null;
 
   return (
+    <TerminalPrefsProvider>
     <Sidebar.Provider
       contained
       collapsible="none"
@@ -258,7 +260,6 @@ export function App() {
                 activeId={tabs.active?.id ?? null}
                 sessions={sessions}
                 cwd={active.path}
-                onStarted={(session) => void markStarted(session.id)}
               />
             )}
           </div>
@@ -291,5 +292,6 @@ export function App() {
         />
       )}
     </Sidebar.Provider>
+    </TerminalPrefsProvider>
   );
 }

@@ -183,7 +183,7 @@ Lo que separa esto de las referencias que envejecieron mal.
 | 2 | Sidebar + persistencia del workspace activo | ✅ |
 | 3 | `files.rs` + CommandPalette con fuzzy en memoria | ✅ |
 | 4 | Tabs + `FileEditor` | ⚠️ tabs y lectura listos; falta montar `@pierre/diffs` |
-| 5 | `pty.rs` + `TerminalView` | ⬜ la superficie existe, sin PTY |
+| 5 | `pty.rs` + `TerminalView` | ✅ xterm.js sobre `pty.rs`; `claude --session-id` / `--resume` |
 | 6 | `agent.rs` + `claude.ts` + `AgentChat` | ⬜ la superficie existe, sin runtime |
 | 7 | Persistencia del transcript y resume | ⬜ |
 
