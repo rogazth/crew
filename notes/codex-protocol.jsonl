@@ -1,0 +1,17 @@
+{"type":"thread.started","thread_id":"01a068b3-442b-7101-acbd-df58756a43f6"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"pong"}}
+{"type":"turn.completed","usage":{"input_tokens":19094,"cached_input_tokens":5888,"cache_write_input_tokens":0,"output_tokens":5,"reasoning_output_tokens":0}}
+{"type":"thread.started","thread_id":"01a068b3-442b-7101-acbd-df58756a43f6"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"ping"}}
+{"type":"turn.completed","usage":{"input_tokens":19111,"cached_input_tokens":18176,"cache_write_input_tokens":0,"output_tokens":5,"reasoning_output_tokens":0}}
+{"type":"thread.started","thread_id":"01a068b7-f2b6-7cd0-8add-372f765cb52b"}
+{"type":"item.completed","item":{"id":"item_0","type":"error","message":"Model metadata for `gpt-5.6` not found. Defaulting to fallback metadata; this can degrade performance and cause issues."}}
+{"type":"turn.started"}
+{"type":"error","message":"{\"type\":\"error\",\"status\":400,\"error\":{\"type\":\"invalid_request_error\",\"message\":\"The 'gpt-5.6' model is not supported when using Codex with a ChatGPT account.\"}}"}
+{"type":"turn.failed","error":{"message":"{\"type\":\"error\",\"status\":400,\"error\":{\"type\":\"invalid_request_error\",\"message\":\"The 'gpt-5.6' model is not supported when using Codex with a ChatGPT account.\"}}"}}
+{"type":"item.completed","item":{"id":"item_0","type":"error","message":"Code Mode is unavailable because code-mode host is disabled. Code mode will fail closed; enable `features.code_mode_host` and install `codex-code-mode-host`."}}
+{"type":"item.started","item":{"id":"item_1","type":"mcp_tool_call","server":"cua_repl","tool":"js","arguments":{"code":"await cua.getState()","title":"Inspect available terminal surfaces"},"result":null,"error":null,"status":"in_progress"}}
+{"type":"item.started","item":{"id":"item_2","type":"mcp_tool_call","server":"cua_repl","tool":"js","arguments":{"code":"const app = await cua.getApp('Terminal'); await app.getAXState()","title":"Open terminal"},"result":null,"error":null,"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_2","type":"mcp_tool_call","server":"cua_repl","tool":"js","arguments":{"code":"const app = await cua.getApp('Terminal'); await app.getAXState()","title":"Open terminal"},"result":{"content":[{"type":"text","text":"cua.getApp is not a function"}],"_meta":{"codex/nodeReplExecutionDurationMs":0},"structured_content":null},"error":null,"status":"failed"}}
