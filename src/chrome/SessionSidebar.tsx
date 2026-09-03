@@ -157,7 +157,11 @@ export function SessionSidebar(props: SessionSidebarProps) {
           keys={commandKeys("new-session")}
           onClick={props.onNewSession}
         />
-        <div className="mt-2.5 flex h-8 items-center gap-2.5 rounded-md bg-kumo-control pr-1 pl-2 ring ring-kumo-line has-[input:focus]:ring-[1.5px] has-[input:focus]:ring-kumo-focus/50">
+      </div>
+
+      {/* The search belongs to the list under it, so the gap below is a beat, not a section break. */}
+      <div className="shrink-0 px-[11px]">
+        <div className="flex h-8 items-center gap-2.5 rounded-md bg-kumo-control pr-1 pl-2 ring ring-kumo-line has-[input:focus]:ring-[1.5px] has-[input:focus]:ring-kumo-focus/50">
           <MagnifyingGlassIcon className="size-4 shrink-0 text-kumo-subtle" />
           <input
             value={query}
