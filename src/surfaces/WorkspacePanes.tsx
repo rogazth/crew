@@ -1,4 +1,6 @@
+import { useMemo } from "react";
 import { Agents } from "./Agents";
+import { ChatContext, type ChatActions } from "./chat/context";
 import { Surface } from "./Surface";
 import { Terminals } from "./Terminals";
 import type { ProviderId } from "../lib/providers";
@@ -28,6 +30,17 @@ export function WorkspacePanes({
   onModel,
   onOpenFile,
 }: Props) {
+  const chat = useMemo<ChatActions>(
+    () => ({
+      openPath: (path) => {
+        if (!cwd) return;
+        const absolute = path.startsWith("/") ? path : `${cwd}/${path.replace(/^\.\//, "")}`;
+        const relative = absolute.startsWith(`${cwd}/`) ? absolute.slice(cwd.length + 1) : absolute;
+        onOpenFile({ path: absolute, relative, name: relative.split("/").pop() ?? relative });
+      },
+    }),
+    [cwd, onOpenFile],
+  );
   return (
     <div className="relative min-h-0 flex-1">
       <Surface
@@ -46,13 +59,15 @@ export function WorkspacePanes({
             onStatus={onStatus}
             onOpenFile={onOpenFile}
           />
-          <Agents
-            tabs={tabs}
-            activeId={tab?.id ?? null}
-            sessions={sessions}
-            cwd={cwd}
-            onModel={onModel}
-          />
+          <ChatContext value={chat}>
+            <Agents
+              tabs={tabs}
+              activeId={tab?.id ?? null}
+              sessions={sessions}
+              cwd={cwd}
+              onModel={onModel}
+            />
+          </ChatContext>
         </>
       )}
     </div>
