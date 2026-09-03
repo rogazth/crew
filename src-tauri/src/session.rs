@@ -2,7 +2,7 @@ use rusqlite::params;
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
-use crate::store::{now_millis, Store};
+use crate::store::{now_millis, set_order, Store};
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -22,10 +22,12 @@ pub struct Session {
     pub updated_at: i64,
 }
 
-const SELECT: &str = "SELECT id, workspace_id, kind, name, provider, model,
-                             provider_session_id, description, notifications,
-                             status, created_at, updated_at
-                      FROM sessions";
+const SELECT_BY_WORKSPACE: &str = "SELECT id, workspace_id, kind, name, provider, model,
+                                          provider_session_id, description, notifications,
+                                          status, created_at, updated_at
+                                   FROM sessions
+                                   WHERE workspace_id = ?1
+                                   ORDER BY sort_order ASC, created_at ASC";
 
 fn row_to_session(row: &rusqlite::Row) -> rusqlite::Result<Session> {
     Ok(Session {
@@ -44,17 +46,16 @@ fn row_to_session(row: &rusqlite::Row) -> rusqlite::Result<Session> {
     })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn session_list(store: State<Store>, workspace_id: String) -> Result<Vec<Session>, String> {
     store.with(|conn| {
-        let sql = format!("{SELECT} WHERE workspace_id = ?1 ORDER BY sort_order ASC, created_at ASC");
-        let mut stmt = conn.prepare(&sql)?;
+        let mut stmt = conn.prepare_cached(SELECT_BY_WORKSPACE)?;
         let rows = stmt.query_map(params![workspace_id], row_to_session)?;
         rows.collect()
     })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn session_create(
     store: State<Store>,
     workspace_id: String,
@@ -113,7 +114,7 @@ pub fn session_create(
     Ok(session)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn session_update(
     store: State<Store>,
     id: String,
@@ -139,7 +140,7 @@ pub fn session_update(
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn session_rename(store: State<Store>, id: String, name: String) -> Result<(), String> {
     let name = name.trim().to_string();
     if name.is_empty() {
@@ -154,37 +155,27 @@ pub fn session_rename(store: State<Store>, id: String, name: String) -> Result<(
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn session_delete(store: State<Store>, id: String) -> Result<(), String> {
     store.with(|conn| conn.execute("DELETE FROM sessions WHERE id = ?1", params![id]))?;
     Ok(())
 }
 
 /// The runtime owns this; the UI only renders whatever the last writer left.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn session_set_status(store: State<Store>, id: String, status: String) -> Result<(), String> {
     const KNOWN: [&str; 5] = ["idle", "working", "needs-input", "done", "error"];
     if !KNOWN.contains(&status.as_str()) {
         return Err(format!("Unknown session status: {status}"));
     }
     store.with(|conn| {
-        conn.execute(
-            "UPDATE sessions SET status = ?2 WHERE id = ?1",
-            params![id, status],
-        )
+        conn.prepare_cached("UPDATE sessions SET status = ?2 WHERE id = ?1")?
+            .execute(params![id, status])
     })?;
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn session_reorder(store: State<Store>, ids: Vec<String>) -> Result<(), String> {
-    store.with(|conn| {
-        for (index, id) in ids.iter().enumerate() {
-            conn.execute(
-                "UPDATE sessions SET sort_order = ?2 WHERE id = ?1",
-                params![id, index as i64],
-            )?;
-        }
-        Ok(())
-    })
+    store.with(|conn| set_order(conn, "sessions", &ids))
 }

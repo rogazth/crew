@@ -5,7 +5,7 @@ mod session;
 mod store;
 mod workspace;
 
-use tauri::Manager;
+use tauri::{Manager, RunEvent};
 
 use pty::PtyHost;
 use store::Store;
@@ -49,6 +49,13 @@ pub fn run() {
             pty::pty_resize,
             pty::pty_kill,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running crew");
+        .build(tauri::generate_context!())
+        .expect("error while building crew")
+        // Quit exits the process without dropping managed state, so the shells
+        // would only learn from a closed master fd and claude could linger.
+        .run(|app, event| {
+            if let RunEvent::Exit = event {
+                app.state::<PtyHost>().kill_all();
+            }
+        });
 }

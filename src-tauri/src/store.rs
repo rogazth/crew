@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use tauri::State;
 
 const MIGRATION_V1: &str = r#"
@@ -47,9 +47,16 @@ impl Store {
         // WAL keeps reads from blocking the write that persists a turn.
         conn.pragma_update(None, "journal_mode", "WAL")
             .map_err(|e| e.to_string())?;
+        // With WAL a NORMAL sync only loses the last transactions on power loss, never
+        // integrity; FULL would fsync on every tab switch and status change.
+        conn.pragma_update(None, "synchronous", "NORMAL")
+            .map_err(|e| e.to_string())?;
         conn.pragma_update(None, "foreign_keys", "ON")
             .map_err(|e| e.to_string())?;
         migrate(&conn).map_err(|e| e.to_string())?;
+        // Nothing is running yet, so a spinner left over from the last launch would never stop.
+        conn.execute("UPDATE sessions SET status = 'idle' WHERE status = 'working'", [])
+            .map_err(|e| e.to_string())?;
         Ok(Self {
             conn: Mutex::new(conn),
         })
@@ -126,32 +133,55 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
 
 /// Small durable key/value for chrome that has to survive a restart: the active
 /// workspace, the open tabs of each one.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn state_get(store: State<Store>, key: String) -> Result<Option<String>, String> {
-    store.with(|conn| {
-        conn.query_row(
-            "SELECT value FROM app_state WHERE key = ?1",
-            params![key],
-            |row| row.get::<_, String>(0),
-        )
-        .map(Some)
-        .or_else(|err| match err {
-            rusqlite::Error::QueryReturnedNoRows => Ok(None),
-            other => Err(other),
-        })
-    })
+    store.with(|conn| read_state(conn, &key))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn state_set(store: State<Store>, key: String, value: String) -> Result<(), String> {
-    store.with(|conn| {
-        conn.execute(
-            "INSERT INTO app_state (key, value) VALUES (?1, ?2)
-             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-            params![key, value],
-        )
-    })?;
-    Ok(())
+    store.with(|conn| write_state(conn, &key, Some(&value)))
+}
+
+pub fn read_state(conn: &Connection, key: &str) -> rusqlite::Result<Option<String>> {
+    conn.prepare_cached("SELECT value FROM app_state WHERE key = ?1")?
+        .query_row(params![key], |row| row.get::<_, String>(0))
+        .optional()
+}
+
+pub fn write_state(conn: &Connection, key: &str, value: Option<&str>) -> rusqlite::Result<()> {
+    match value {
+        Some(value) => conn
+            .prepare_cached(
+                "INSERT INTO app_state (key, value) VALUES (?1, ?2)
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            )?
+            .execute(params![key, value]),
+        None => conn
+            .prepare_cached("DELETE FROM app_state WHERE key = ?1")?
+            .execute(params![key]),
+    }
+    .map(|_| ())
+}
+
+/// One transaction, one fsync: row by row, a drag over twenty rows would sync twenty times.
+pub fn set_order(conn: &Connection, table: &str, ids: &[String]) -> rusqlite::Result<()> {
+    let sql = format!("UPDATE {table} SET sort_order = ?2 WHERE id = ?1");
+    conn.execute_batch("BEGIN")?;
+    let result = (|| {
+        let mut stmt = conn.prepare_cached(&sql)?;
+        for (index, id) in ids.iter().enumerate() {
+            stmt.execute(params![id, index as i64])?;
+        }
+        Ok(())
+    })();
+    match result {
+        Ok(()) => conn.execute_batch("COMMIT"),
+        Err(err) => {
+            let _ = conn.execute_batch("ROLLBACK");
+            Err(err)
+        }
+    }
 }
 
 pub fn now_millis() -> i64 {

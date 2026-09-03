@@ -1,8 +1,8 @@
-use rusqlite::params;
+use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
-use crate::store::{now_millis, Store};
+use crate::store::{now_millis, read_state, set_order, write_state, Store};
 
 const ACTIVE_WORKSPACE_KEY: &str = "active_workspace_id";
 
@@ -15,10 +15,10 @@ pub struct Workspace {
     pub created_at: i64,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn workspace_list(store: State<Store>) -> Result<Vec<Workspace>, String> {
     store.with(|conn| {
-        let mut stmt = conn.prepare(
+        let mut stmt = conn.prepare_cached(
             "SELECT id, name, path, created_at FROM workspaces ORDER BY sort_order ASC, created_at ASC",
         )?;
         let rows = stmt.query_map([], |row| {
@@ -33,7 +33,7 @@ pub fn workspace_list(store: State<Store>) -> Result<Vec<Workspace>, String> {
     })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn workspace_create(
     store: State<Store>,
     name: String,
@@ -60,11 +60,7 @@ pub fn workspace_create(
             params![workspace.path],
             |row| row.get(0),
         )
-        .map(Some)
-        .or_else(|err| match err {
-            rusqlite::Error::QueryReturnedNoRows => Ok(None),
-            other => Err(other),
-        })
+        .optional()
     })?;
     if let Some(name) = existing {
         return Err(format!("Already open as \"{name}\""));
@@ -86,7 +82,7 @@ pub fn workspace_create(
     Ok(workspace)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn workspace_rename(store: State<Store>, id: String, name: String) -> Result<(), String> {
     let name = name.trim().to_string();
     if name.is_empty() {
@@ -101,53 +97,23 @@ pub fn workspace_rename(store: State<Store>, id: String, name: String) -> Result
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn workspace_delete(store: State<Store>, id: String) -> Result<(), String> {
     store.with(|conn| conn.execute("DELETE FROM workspaces WHERE id = ?1", params![id]))?;
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn workspace_reorder(store: State<Store>, ids: Vec<String>) -> Result<(), String> {
-    store.with(|conn| {
-        for (index, id) in ids.iter().enumerate() {
-            conn.execute(
-                "UPDATE workspaces SET sort_order = ?2 WHERE id = ?1",
-                params![id, index as i64],
-            )?;
-        }
-        Ok(())
-    })
+    store.with(|conn| set_order(conn, "workspaces", &ids))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn active_workspace_get(store: State<Store>) -> Result<Option<String>, String> {
-    store.with(|conn| {
-        conn.query_row(
-            "SELECT value FROM app_state WHERE key = ?1",
-            params![ACTIVE_WORKSPACE_KEY],
-            |row| row.get::<_, String>(0),
-        )
-        .map(Some)
-        .or_else(|err| match err {
-            rusqlite::Error::QueryReturnedNoRows => Ok(None),
-            other => Err(other),
-        })
-    })
+    store.with(|conn| read_state(conn, ACTIVE_WORKSPACE_KEY))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn active_workspace_set(store: State<Store>, id: Option<String>) -> Result<(), String> {
-    store.with(|conn| match &id {
-        Some(value) => conn.execute(
-            "INSERT INTO app_state (key, value) VALUES (?1, ?2)
-             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-            params![ACTIVE_WORKSPACE_KEY, value],
-        ),
-        None => conn.execute(
-            "DELETE FROM app_state WHERE key = ?1",
-            params![ACTIVE_WORKSPACE_KEY],
-        ),
-    })?;
-    Ok(())
+    store.with(|conn| write_state(conn, ACTIVE_WORKSPACE_KEY, id.as_deref()))
 }

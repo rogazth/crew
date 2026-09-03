@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::os::unix::io::AsRawFd;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -36,6 +37,8 @@ struct LivePty {
     writer: Mutex<Box<dyn Write + Send>>,
     master_fd: i32,
     pid: u32,
+    /// Set once the child is reaped; from then on the pid may belong to someone else.
+    exited: AtomicBool,
 }
 
 pub struct PtyHost {
@@ -79,13 +82,13 @@ impl PtyHost {
         sessions.remove(id)
     }
 
-    fn kill_all(&self) {
+    pub fn kill_all(&self) {
         let kids: Vec<Arc<LivePty>> = {
             let mut map = self.sessions.lock().unwrap_or_else(|e| e.into_inner());
             map.drain().map(|(_, live)| live).collect()
         };
         for live in kids {
-            terminate(live.pid);
+            terminate(&live);
             close_fd(live.master_fd);
         }
     }
@@ -98,7 +101,7 @@ impl Drop for PtyHost {
 }
 
 /// `command` empty spawns the login shell; otherwise argv[0] is resolved on PATH.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn pty_spawn(
     app: AppHandle,
     host: State<PtyHost>,
@@ -109,13 +112,13 @@ pub fn pty_spawn(
     rows: u16,
 ) -> Result<(), String> {
     if let Some(prev) = host.remove(&id) {
-        terminate(prev.pid);
+        terminate(&prev);
         close_fd(prev.master_fd);
     }
     spawn_unix(app, host, id, cwd, command, cols.max(2), rows.max(2))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn pty_write(host: State<PtyHost>, id: String, data: String) -> Result<(), String> {
     let live = host
         .get(&id)
@@ -127,7 +130,7 @@ pub fn pty_write(host: State<PtyHost>, id: String, data: String) -> Result<(), S
         .map_err(|e| format!("Failed to write to terminal: {e}"))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn pty_resize(host: State<PtyHost>, id: String, cols: u16, rows: u16) -> Result<(), String> {
     let live = host
         .get(&id)
@@ -135,10 +138,10 @@ pub fn pty_resize(host: State<PtyHost>, id: String, cols: u16, rows: u16) -> Res
     resize_fd(live.master_fd, cols.max(2), rows.max(2))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn pty_kill(host: State<PtyHost>, id: String) -> Result<(), String> {
     if let Some(live) = host.remove(&id) {
-        terminate(live.pid);
+        terminate(&live);
         close_fd(live.master_fd);
     }
     Ok(())
@@ -216,14 +219,13 @@ fn spawn_unix(
     let reader = unsafe { File::from_raw_fd(dup_fd(master)?) };
     let writer = unsafe { File::from_raw_fd(dup_fd(master)?) };
 
-    host.insert(
-        id.clone(),
-        Arc::new(LivePty {
-            writer: Mutex::new(Box::new(writer)),
-            master_fd: master,
-            pid,
-        }),
-    );
+    let live = Arc::new(LivePty {
+        writer: Mutex::new(Box::new(writer)),
+        master_fd: master,
+        pid,
+        exited: AtomicBool::new(false),
+    });
+    host.insert(id.clone(), live.clone());
 
     let data_app = app.clone();
     let data_id = id.clone();
@@ -260,6 +262,7 @@ fn spawn_unix(
 
     thread::spawn(move || {
         let code = child.wait().ok().and_then(|status| status.code());
+        live.exited.store(true, Ordering::Release);
         // A respawn reuses the id; a stale wait thread must not evict the new
         // PTY from the host or paint its exit onto it.
         let Some(host) = app.try_state::<PtyHost>() else {
@@ -317,19 +320,25 @@ fn apply_path(cmd: &mut std::process::Command) {
     cmd.env("PATH", parts.join(":"));
 }
 
-fn terminate(pid: u32) {
-    if pid <= 1 {
+/// The child was started with setsid(), so its pid is also its process group.
+fn terminate(live: &Arc<LivePty>) {
+    if live.pid <= 1 || live.exited.load(Ordering::Acquire) {
         return;
     }
-    let ipid = pid as i32;
+    let ipid = live.pid as i32;
     unsafe {
         libc::kill(ipid, libc::SIGHUP);
         libc::kill(-ipid, libc::SIGHUP);
         libc::kill(ipid, libc::SIGTERM);
         libc::kill(-ipid, libc::SIGTERM);
     }
+    let live = live.clone();
     thread::spawn(move || {
         thread::sleep(KILL_ESCALATE);
+        // Once reaped the kernel may hand this pid to another process.
+        if live.exited.load(Ordering::Acquire) {
+            return;
+        }
         unsafe {
             libc::kill(ipid, libc::SIGKILL);
             libc::kill(-ipid, libc::SIGKILL);
@@ -463,6 +472,7 @@ mod tests {
                 writer: Mutex::new(Box::new(std::io::sink())),
                 master_fd: -1,
                 pid: 42,
+                exited: AtomicBool::new(false),
             }),
         );
         assert!(host.remove_if_pid("term", 7).is_none());
