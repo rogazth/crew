@@ -1,40 +1,46 @@
-import { useState } from "react";
+import { Checkbox, Radio } from "@cloudflare/kumo";
+import { useEffect, useRef, useState } from "react";
 import type { Answers, Block, Question } from "../../lib/blocks";
 
 type Props = {
   block: Block;
+  /** Only the newest open card listens for A/B/C and Enter; the rest are scrolled-past history. */
+  hot?: boolean;
   onAnswer: (requestId: number, answers: Answers | null) => void;
 };
 
-type Picks = Record<string, { chosen: string[]; other: string }>;
+type Pick = { chosen: string[]; other: string };
+type Picks = Record<string, Pick>;
 
 const LETTERS = "ABCDEFGHIJ";
+const EMPTY: Pick = { chosen: [], other: "" };
+
+function answered(pick: Pick | undefined): boolean {
+  return pick !== undefined && (pick.chosen.length > 0 || pick.other.trim().length > 0);
+}
 
 /** One question at a time; Submit sends the whole set the way Claude Code expects it. */
-export function QuestionCard({ block, onAnswer }: Props) {
+export function QuestionCard({ block, hot = false, onAnswer }: Props) {
   const ask = block.question;
   const [step, setStep] = useState(0);
   const [picks, setPicks] = useState<Picks>({});
-  if (!ask) return null;
+  const card = useRef<HTMLDivElement>(null);
 
-  const { questions, requestId } = ask;
+  const questions = ask?.questions ?? [];
   const current = questions[step];
-  if (!current) return null;
-  const pick = picks[current.question] ?? { chosen: [], other: "" };
+  const pick = current ? (picks[current.question] ?? EMPTY) : EMPTY;
   const last = step === questions.length - 1;
-  const answered = questions.every((q) => {
-    const p = picks[q.question];
-    return p && (p.chosen.length > 0 || p.other.trim());
-  });
+  const complete = questions.every((q) => answered(picks[q.question]));
 
-  const set = (next: { chosen: string[]; other: string }) =>
+  const set = (next: Pick) => {
+    if (!current) return;
     setPicks((prev) => ({ ...prev, [current.question]: next }));
+  };
 
   const choose = (label: string) => {
+    if (!current) return;
     if (current.multiSelect) {
-      const chosen = pick.chosen.includes(label)
-        ? pick.chosen.filter((item) => item !== label)
-        : [...pick.chosen, label];
+      const chosen = pick.chosen.includes(label) ? pick.chosen.filter((item) => item !== label) : [...pick.chosen, label];
       set({ ...pick, chosen });
     } else {
       set({ ...pick, chosen: [label] });
@@ -42,19 +48,62 @@ export function QuestionCard({ block, onAnswer }: Props) {
   };
 
   const submit = () => {
+    if (!ask || !complete) return;
     const answers: Answers = {};
     for (const q of questions) {
-      const p = picks[q.question];
-      if (!p) continue;
+      const p = picks[q.question] ?? EMPTY;
       const parts = [...p.chosen];
       if (p.other.trim()) parts.push(p.other.trim());
       answers[q.question] = parts.join(", ");
     }
-    onAnswer(requestId, answers);
+    onAnswer(ask.requestId, answers);
   };
 
+  const advance = () => {
+    if (last) submit();
+    else setStep(step + 1);
+  };
+
+  // The composer owns focus otherwise, and letters typed there are a draft, not an answer.
+  useEffect(() => {
+    if (hot) card.current?.focus();
+  }, [hot]);
+
+  // Letters pick, Enter advances, Escape dismisses: a keyboard answers without a click.
+  useEffect(() => {
+    if (!hot || !current) return;
+    const onKey = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      const typing = target?.matches("input, textarea, [contenteditable]") ?? false;
+      if (event.metaKey || event.ctrlKey || event.altKey) return;
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onAnswer(ask!.requestId, null);
+        return;
+      }
+      if (event.key === "Enter" && !event.shiftKey) {
+        if (typing && !card.current?.contains(target)) return;
+        if (answered(picks[current.question])) {
+          event.preventDefault();
+          advance();
+        }
+        return;
+      }
+      if (typing) return;
+      const index = LETTERS.indexOf(event.key.toUpperCase());
+      if (index >= 0 && index < current.options.length && event.key.length === 1) {
+        event.preventDefault();
+        choose(current.options[index]!.label);
+      }
+    };
+    document.addEventListener("keydown", onKey, true);
+    return () => document.removeEventListener("keydown", onKey, true);
+  });
+
+  if (!ask || !current) return null;
+
   return (
-    <div className="crew-prose my-1.5 flex flex-col gap-2 rounded-[10px] border border-hairline bg-canvas p-3">
+    <div ref={card} tabIndex={-1} className="crew-card my-1.5 outline-none">
       {questions.length > 1 && (
         <div className="flex gap-1">
           {questions.map((q, index) => (
@@ -62,9 +111,9 @@ export function QuestionCard({ block, onAnswer }: Props) {
               key={q.question}
               type="button"
               onClick={() => setStep(index)}
-              className={`h-6 rounded-md px-2 text-[12px] leading-4 ${
+              className={`h-6 rounded-md px-2 text-[12px] leading-4 transition-colors ${
                 index === step ? "bg-card text-text" : "text-text-muted hover:text-text"
-              }`}
+              } ${answered(picks[q.question]) && index !== step ? "line-through decoration-hairline" : ""}`}
             >
               {q.header}
             </button>
@@ -72,36 +121,23 @@ export function QuestionCard({ block, onAnswer }: Props) {
         </div>
       )}
       <p className="font-medium">{current.question}</p>
-      <Options question={current} chosen={pick.chosen} onChoose={choose} />
+      <Options key={current.question} question={current} chosen={pick.chosen} onChoose={choose} />
       <input
         value={pick.other}
         onChange={(event) => set({ ...pick, other: event.target.value })}
-        placeholder="Other"
-        className="h-7 rounded-md bg-card px-2 text-[12px] outline-none placeholder:text-placeholder"
+        placeholder={current.multiSelect ? "Anything else" : "Something else"}
+        className="crew-field"
       />
-      <div className="flex justify-end gap-1.5">
-        <button
-          type="button"
-          onClick={() => onAnswer(requestId, null)}
-          className="h-6 rounded-md px-2 text-[12px] leading-4 text-text-muted hover:text-text"
-        >
+      <div className="flex items-center justify-end gap-1.5">
+        <button type="button" onClick={() => onAnswer(ask.requestId, null)} className="crew-btn">
           Dismiss
         </button>
         {last ? (
-          <button
-            type="button"
-            disabled={!answered}
-            onClick={submit}
-            className="crew-ink h-6 rounded-md px-2.5 text-[12px] leading-4 disabled:opacity-40"
-          >
+          <button type="button" disabled={!complete} onClick={submit} className="crew-btn crew-btn-primary">
             Submit
           </button>
         ) : (
-          <button
-            type="button"
-            onClick={() => setStep(step + 1)}
-            className="crew-ink h-6 rounded-md px-2.5 text-[12px] leading-4"
-          >
+          <button type="button" disabled={!answered(pick)} onClick={advance} className="crew-btn crew-btn-primary">
             Next
           </button>
         )}
@@ -119,34 +155,36 @@ function Options({
   chosen: string[];
   onChoose: (label: string) => void;
 }) {
-  return (
-    <div className="flex flex-col gap-0.5">
-      {question.options.map((option, index) => {
-        const on = chosen.includes(option.label);
-        return (
-          <button
+  const label = (option: Question["options"][number], index: number) => (
+    <span className="flex items-start gap-2">
+      <kbd className="crew-keycap mt-px">{LETTERS[index] ?? "·"}</kbd>
+      <span className="flex min-w-0 flex-col">
+        <span>{option.label}</span>
+        {option.description && <span className="text-[12px] leading-4 text-text-muted">{option.description}</span>}
+      </span>
+    </span>
+  );
+  if (question.multiSelect) {
+    return (
+      <div role="group" aria-label={question.question} className="crew-options flex flex-col">
+        {question.options.map((option, index) => (
+          <Checkbox
             key={option.label}
-            type="button"
-            role={question.multiSelect ? "checkbox" : "radio"}
-            aria-checked={on}
-            onClick={() => onChoose(option.label)}
-            className={`flex items-start gap-2.5 rounded-md px-2 py-1.5 text-left hover:bg-card ${on ? "bg-card" : ""}`}
-          >
-            <span
-              className={`mt-px flex size-4 shrink-0 items-center justify-center rounded border text-[10px] leading-none ${
-                on ? "crew-ink border-transparent" : "border-border-strong text-text-muted"
-              }`}
-            >
-              {LETTERS[index] ?? "·"}
-            </span>
-            <span className="flex min-w-0 flex-col">
-              <span>{option.label}</span>
-              {option.description && <span className="text-[12px] leading-4 text-text-muted">{option.description}</span>}
-            </span>
-          </button>
-        );
-      })}
-    </div>
+            checked={chosen.includes(option.label)}
+            onCheckedChange={() => onChoose(option.label)}
+            label={label(option, index)}
+          />
+        ))}
+      </div>
+    );
+  }
+  return (
+    <Radio.Group value={chosen[0] ?? ""} onValueChange={(next) => onChoose(String(next))} className="crew-options">
+      <Radio.Legend className="sr-only">{question.question}</Radio.Legend>
+      {question.options.map((option, index) => (
+        <Radio.Item key={option.label} value={option.label} label={label(option, index)} />
+      ))}
+    </Radio.Group>
   );
 }
 

@@ -131,6 +131,90 @@ body:has(button[data-sidebar="resize-handle"]:active) * {
   scrollbar-width: none;
 }
 
+/* A card is the one thing in the log that waits for the user: hairline, radius 10, no fill. */
+.crew-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--color-hairline);
+  border-radius: 10px;
+  background: var(--color-kumo-base);
+  font-size: 13px;
+  line-height: 18px;
+  letter-spacing: -0.08px;
+}
+.crew-card .crew-code {
+  margin: 0;
+}
+.crew-field {
+  height: 28px;
+  padding: 0 8px;
+  border-radius: 6px;
+  background: var(--color-card);
+  font-size: 12px;
+  outline: none;
+  transition: box-shadow 100ms ease;
+}
+.crew-field:focus-visible {
+  box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--color-kumo-focus) 50%, transparent);
+}
+.crew-btn {
+  height: 26px;
+  padding: 0 10px;
+  border-radius: 6px;
+  background: var(--color-card);
+  color: var(--text-color-kumo-default);
+  font-size: 12px;
+  line-height: 16px;
+  transition: background-color 100ms ease, opacity 100ms ease;
+}
+.crew-btn:hover {
+  background: var(--color-hover);
+}
+.crew-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.crew-btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--color-kumo-focus) 50%, transparent);
+}
+.crew-btn-primary {
+  background: var(--text-color-kumo-default);
+  color: var(--color-kumo-base);
+}
+.crew-btn-primary:hover {
+  background: var(--color-kumo-brand-hover);
+}
+.crew-keycap {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 4px;
+  border: 1px solid var(--color-hairline);
+  border-radius: 4px;
+  font: 500 10px/1 ui-sans-serif, system-ui, sans-serif;
+  color: var(--text-color-kumo-subtle);
+}
+/* Kumo's choice cards at chat density. */
+.crew-options {
+  gap: 4px;
+}
+.crew-options label {
+  padding: 6px 8px;
+  font-size: 13px;
+  line-height: 18px;
+}
+.crew-diff {
+  border: 1px solid var(--color-hairline);
+  border-radius: 8px;
+  overflow: hidden;
+  font-size: 12px;
+}
+
 /* Base UI measures the panel; the transition rides its variable, so nothing is measured twice. */
 .crew-phase-panel {
   height: var(--collapsible-panel-height);

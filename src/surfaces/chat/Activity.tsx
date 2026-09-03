@@ -14,6 +14,7 @@ import {
 import { createElement, memo, useEffect, useState } from "react";
 import { buildActivity, phaseLabel, phaseOpen, summarize, type Phase, type PhaseKind } from "../../lib/activity";
 import { isOpen, type Answers, type ApprovalDecision, type Block } from "../../lib/blocks";
+import { ApprovalCard } from "./ApprovalCard";
 import { QuestionCard, answerSummary } from "./QuestionCard";
 
 type Props = {
@@ -34,12 +35,14 @@ const KIND_ICON: Record<PhaseKind, Icon> = {
 /** Tool calls fold into phases; a thought or a question is a row of its own. */
 export const ActivityGroup = memo(function ActivityGroup({ blocks, live, onApprove, onAnswer }: Props) {
   const items = buildActivity(blocks);
+  // Keys go to one card: the newest thing waiting on the user.
+  const hot = live ? blocks.filter(isOpen).at(-1)?.id : undefined;
   return (
     <div className="flex flex-col">
       {items.map((item, index) => {
         if (item.kind === "question") {
           return isOpen(item.block) ? (
-            <QuestionCard key={item.block.id} block={item.block} onAnswer={onAnswer} />
+            <QuestionCard key={item.block.id} block={item.block} hot={hot === item.block.id} onAnswer={onAnswer} />
           ) : (
             <AnsweredRow key={item.block.id} block={item.block} />
           );
@@ -50,6 +53,7 @@ export const ActivityGroup = memo(function ActivityGroup({ blocks, live, onAppro
             key={item.phase.id}
             phase={item.phase}
             live={live && index === items.length - 1}
+            hot={hot}
             onApprove={onApprove}
           />
         );
@@ -65,10 +69,12 @@ export const ActivityGroup = memo(function ActivityGroup({ blocks, live, onAppro
 function PhaseRow({
   phase,
   live,
+  hot,
   onApprove,
 }: {
   phase: Phase;
   live: boolean;
+  hot: string | undefined;
   onApprove: (requestId: number, decision: ApprovalDecision) => void;
 }) {
   const waiting = phaseOpen(phase);
@@ -82,7 +88,7 @@ function PhaseRow({
   const single = phase.blocks.length === 1 && !waiting;
 
   if (single) {
-    return <ToolRow block={phase.blocks[0]!} onApprove={onApprove} icon={KIND_ICON[phase.kind]} />;
+    return <ToolRow block={phase.blocks[0]!} hot={hot} onApprove={onApprove} icon={KIND_ICON[phase.kind]} />;
   }
 
   return (
@@ -108,7 +114,7 @@ function PhaseRow({
       <Collapsible.Panel className="crew-phase-panel">
         <div className="crew-phase-steps">
           {phase.blocks.map((block) => (
-            <ToolRow key={block.id} block={block} onApprove={onApprove} />
+            <ToolRow key={block.id} block={block} hot={hot} onApprove={onApprove} />
           ))}
         </div>
       </Collapsible.Panel>
@@ -118,10 +124,12 @@ function PhaseRow({
 
 function ToolRow({
   block,
+  hot,
   onApprove,
   icon,
 }: {
   block: Block;
+  hot: string | undefined;
   onApprove: (requestId: number, decision: ApprovalDecision) => void;
   /** Standalone rows carry the kind glyph; inside a phase the rail is the bullet. */
   icon?: Icon;
@@ -129,8 +137,9 @@ function ToolRow({
   const pending = isOpen(block);
   const failed = block.tool?.status === "failed";
   const denied = block.approval?.decided === "deny";
-  const requestId = block.approval?.requestId;
-  const undecided = block.role === "approval" && requestId != null && !block.approval?.decided;
+  if (block.role === "approval" && pending) {
+    return <ApprovalCard block={block} hot={hot === block.id} onApprove={onApprove} />;
+  }
 
   return (
     <div className="group flex min-h-5 items-center gap-2 py-0.5 text-[12px] leading-4">
@@ -152,41 +161,7 @@ function ToolRow({
       >
         {block.tool?.title ?? block.text}
       </span>
-      {undecided && requestId != null && (
-        <span className="flex shrink-0 items-center gap-1.5">
-          <SmallButton onClick={() => onApprove(requestId, "deny")}>Deny</SmallButton>
-          <SmallButton onClick={() => onApprove(requestId, "always")}>Always</SmallButton>
-          <SmallButton primary autoFocus onClick={() => onApprove(requestId, "allow")}>
-            Allow
-          </SmallButton>
-        </span>
-      )}
     </div>
-  );
-}
-
-function SmallButton({
-  primary,
-  autoFocus,
-  onClick,
-  children,
-}: {
-  primary?: boolean;
-  autoFocus?: boolean;
-  onClick: () => void;
-  children: string;
-}) {
-  return (
-    <button
-      type="button"
-      autoFocus={autoFocus}
-      onClick={onClick}
-      className={`h-6 rounded-md px-2 text-[12px] leading-4 transition-colors duration-100 focus-visible:ring-[1.5px] focus-visible:ring-kumo-focus/50 focus-visible:outline-none ${
-        primary ? "crew-ink hover:bg-kumo-brand-hover" : "bg-card text-text hover:bg-hover"
-      }`}
-    >
-      {children}
-    </button>
   );
 }
 
