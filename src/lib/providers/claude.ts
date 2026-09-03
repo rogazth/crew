@@ -29,6 +29,7 @@ export function buildClaudeSpawnArgs(input: {
   resume?: string;
   sessionId?: string;
   systemPrompt?: string;
+  autonomy?: "ask" | "full";
 }): string[] {
   const args = [
     "--output-format",
@@ -37,10 +38,10 @@ export function buildClaudeSpawnArgs(input: {
     "--input-format",
     "stream-json",
     "--include-partial-messages",
-    "--permission-prompt-tool",
-    "stdio",
     "--setting-sources=user,project,local",
   ];
+  if (input.autonomy === "full") args.push("--dangerously-skip-permissions");
+  else args.push("--permission-prompt-tool", "stdio");
   if (input.model) args.push("--model", input.model);
   if (input.systemPrompt) args.push("--append-system-prompt", input.systemPrompt);
   if (input.resume) args.push("--resume", input.resume);
@@ -48,19 +49,24 @@ export function buildClaudeSpawnArgs(input: {
   return args;
 }
 
+/** Short on purpose: it rides on every request and the cache only helps when it never changes. */
 export function personaPrompt(name: string, description: string): string {
   const who = name.trim() || "the user's agent";
   const job = description.trim();
-  return job
-    ? `You are ${who}. ${job} Reply in a short chat. Do the work with your tools; keep each message to a sentence or two.`
-    : `You are ${who}. Reply in a short chat. Do the work with your tools; keep each message to a sentence or two.`;
+  const rules =
+    "You are chatting inside Crew, a desktop app. Do the work with your tools, then reply like a colleague in chat: short, direct, no headers or preamble unless asked.";
+  return job ? `You are ${who}. ${job}\n\n${rules}` : `You are ${who}. ${rules}`;
 }
 
-export function buildClaudeUserMessage(text: string, files: string[] = []): Record<string, unknown> {
+export function buildClaudeUserMessage(
+  sessionId: string,
+  text: string,
+  files: string[] = [],
+): Record<string, unknown> {
   const body = withAttachedPaths(text.trim(), files);
   return {
     type: "user",
-    session_id: "",
+    session_id: sessionId,
     parent_tool_use_id: null,
     message: { role: "user", content: [{ type: "text", text: body }] },
   };
@@ -127,7 +133,8 @@ export function parseControlRequest(
 }
 
 export function parseControlCancelId(rec: Record<string, unknown>): string | undefined {
-  if (stringField(rec, "type") !== "control_cancel_request") return undefined;
+  const type = stringField(rec, "type");
+  if (type !== "control_cancel_request" && type !== "sdk_control_cancel_request") return undefined;
   return stringField(rec, "request_id") ?? stringField(asRecord(rec.request), "request_id");
 }
 
@@ -203,7 +210,8 @@ export function assistantToolUses(rec: Record<string, unknown>): Array<{
   if (!Array.isArray(content)) return [];
   return content.flatMap((block) => {
     const row = asRecord(block);
-    if (!row || stringField(row, "type") !== "tool_use") return [];
+    const type = stringField(row, "type") ?? "";
+    if (!row || (type !== "tool_use" && type !== "server_tool_use" && type !== "mcp_tool_use")) return [];
     const id = stringField(row, "id");
     const name = stringField(row, "name");
     if (!id || !name) return [];
@@ -234,12 +242,47 @@ export function tryParseJsonRecord(value: string): Record<string, unknown> | und
   }
 }
 
+export function turnUsage(rec: Record<string, unknown>): {
+  inputTokens?: number;
+  outputTokens?: number;
+  costUsd?: number;
+  durationMs?: number;
+} {
+  const usage = asRecord(rec.usage);
+  const num = (value: unknown) => (typeof value === "number" && Number.isFinite(value) ? value : undefined);
+  const cached = (num(usage?.cache_read_input_tokens) ?? 0) + (num(usage?.cache_creation_input_tokens) ?? 0);
+  const input = num(usage?.input_tokens);
+  const output = num(usage?.output_tokens);
+  const cost = num(rec.total_cost_usd);
+  const duration = num(rec.duration_ms);
+  return {
+    ...(input !== undefined ? { inputTokens: input + cached } : {}),
+    ...(output !== undefined ? { outputTokens: output } : {}),
+    ...(cost !== undefined ? { costUsd: cost } : {}),
+    ...(duration !== undefined ? { durationMs: duration } : {}),
+  };
+}
+
 export function turnFailed(rec: Record<string, unknown>): string | undefined {
-  if (stringField(rec, "subtype") === "success") return undefined;
+  const subtype = stringField(rec, "subtype");
+  const failed = rec.is_error === true || (subtype !== undefined && subtype !== "success");
+  if (!failed) return undefined;
   const errors = Array.isArray(rec.errors)
     ? rec.errors.filter((item): item is string => typeof item === "string")
     : [];
-  return errors.find((item) => !item.startsWith("[ede_diagnostic]")) ?? "Claude turn failed.";
+  return (
+    errors.find((item) => !item.startsWith("[ede_diagnostic]")) ??
+    stringField(rec, "result") ??
+    "Claude turn failed."
+  );
+}
+
+export function isMessageStart(rec: Record<string, unknown>): boolean {
+  return stringField(asRecord(rec.event), "type") === "message_start";
+}
+
+export function isCompactBoundary(rec: Record<string, unknown>): boolean {
+  return stringField(rec, "type") === "system" && stringField(rec, "subtype") === "compact_boundary";
 }
 
 /** One-line activity title. Path or command if we have it, else the tool name. */

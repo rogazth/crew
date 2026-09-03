@@ -1,13 +1,21 @@
 /** Transcript rows Crew paints. The vendor session is not this list. */
 export type BlockRole = "user" | "assistant" | "tool" | "approval" | "system";
 
-export type ToolStatus = "pending" | "completed" | "failed";
+/** `interrupted` is a pending row whose process is gone: no spinner, no verdict. */
+export type ToolStatus = "pending" | "completed" | "failed" | "interrupted";
 
 export type ApprovalDecision = "allow" | "deny";
 
 export type AttachedFile = {
   name: string;
   path: string;
+};
+
+export type TurnUsage = {
+  inputTokens?: number;
+  outputTokens?: number;
+  costUsd?: number;
+  durationMs?: number;
 };
 
 export type Block = {
@@ -18,25 +26,32 @@ export type Block = {
   files?: AttachedFile[];
   tool?: {
     callId: string;
+    /** Provider tool name; picks the glyph. */
+    name: string;
     title: string;
     status: ToolStatus;
   };
   approval?: {
     requestId: number;
+    name: string;
     decided?: ApprovalDecision;
   };
+  /** Set on the assistant block that closed a turn. */
+  usage?: TurnUsage;
 };
 
 export type HarnessEvent =
   | { type: "session.started" }
   | { type: "session.ended"; code?: number | null }
   | { type: "session.error"; message: string }
+  | { type: "session.note"; message: string }
   | { type: "session.providerBound"; providerSessionId: string }
   | { type: "message.delta"; text: string }
   | { type: "message.completed" }
-  | { type: "tool.started"; callId: string; title: string }
+  | { type: "turn.completed"; usage?: TurnUsage }
+  | { type: "tool.started"; callId: string; name: string; title: string }
   | { type: "tool.updated"; callId: string; title?: string; status?: ToolStatus }
-  | { type: "approval.requested"; requestId: number; title: string }
+  | { type: "approval.requested"; requestId: number; name: string; title: string }
   | { type: "approval.resolved"; requestId: number; decision: ApprovalDecision | "cancelled" };
 
 export function newBlock(role: BlockRole, text = ""): Block {
@@ -64,6 +79,21 @@ export function settleStreaming(blocks: Block[]): Block[] {
   return blocks.map((block) => (block.streaming ? { ...block, streaming: false } : block));
 }
 
+/**
+ * Nothing may stay open once the turn is over: a pending tool has either run
+ * (`completed`) or its process died (`interrupted`); an unanswered approval
+ * was never granted.
+ */
+export function settleTurn(blocks: Block[], tools: "completed" | "interrupted"): Block[] {
+  return settleStreaming(blocks).map((block) => {
+    if (block.tool?.status === "pending") return { ...block, tool: { ...block.tool, status: tools } };
+    if (block.approval && !block.approval.decided) {
+      return { ...block, approval: { ...block.approval, decided: "deny" } };
+    }
+    return block;
+  });
+}
+
 /** Fold a live harness event into the transcript. Pure so the turn engine stays dumb. */
 export function applyEvent(blocks: Block[], event: HarnessEvent): Block[] {
   switch (event.type) {
@@ -71,13 +101,22 @@ export function applyEvent(blocks: Block[], event: HarnessEvent): Block[] {
       return appendAssistant(blocks, event.text);
     case "message.completed":
       return settleStreaming(blocks);
+    case "turn.completed": {
+      const settled = settleTurn(blocks, "completed");
+      const usage = event.usage;
+      if (!usage) return settled;
+      let index = settled.length - 1;
+      while (index >= 0 && settled[index]?.role !== "assistant") index -= 1;
+      if (index < 0) return settled;
+      return settled.map((block, i) => (i === index ? { ...block, usage } : block));
+    }
     case "tool.started": {
       const settled = settleStreaming(blocks);
       return [
         ...settled,
         {
           ...newBlock("tool", event.title),
-          tool: { callId: event.callId, title: event.title, status: "pending" },
+          tool: { callId: event.callId, name: event.name, title: event.title, status: "pending" },
         },
       ];
     }
@@ -100,7 +139,7 @@ export function applyEvent(blocks: Block[], event: HarnessEvent): Block[] {
         ...settleStreaming(blocks),
         {
           ...newBlock("approval", event.title),
-          approval: { requestId: event.requestId },
+          approval: { requestId: event.requestId, name: event.name },
         },
       ];
     case "approval.resolved":
@@ -110,12 +149,17 @@ export function applyEvent(blocks: Block[], event: HarnessEvent): Block[] {
               ...block,
               approval: {
                 requestId: event.requestId,
-                ...(event.decision === "cancelled" ? {} : { decided: event.decision }),
+                name: block.approval.name,
+                decided: event.decision === "cancelled" ? "deny" : event.decision,
               },
             }
           : block,
       );
     case "session.error":
+      return [...settleTurn(blocks, "interrupted"), newBlock("system", event.message)];
+    case "session.ended":
+      return settleTurn(blocks, "interrupted");
+    case "session.note":
       return [...settleStreaming(blocks), newBlock("system", event.message)];
     default:
       return blocks;

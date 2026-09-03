@@ -40,6 +40,7 @@ function session(
     providerSessionId: null,
     description: "",
     notifications: true,
+    autonomy: "ask",
     status,
     createdAt: now - 6e5,
     updatedAt: now - 3e5,
@@ -85,7 +86,84 @@ const commands: Record<string, (args: Row) => unknown> = {
   pty_write: () => undefined,
   pty_resize: () => undefined,
   pty_kill: () => undefined,
+  session_get_blocks: ({ id }) => (id === "s1" ? JSON.stringify(SEED_BLOCKS) : "[]"),
+  session_set_blocks: () => undefined,
+  session_set_provider_session: () => undefined,
+  agent_resolve_claude: () => ({ path: "/mock/bin/claude" }),
+  agent_resolve: ({ name }) => ({ path: `/mock/bin/${name}` }),
+  agent_spawn: ({ sessionId }) => mockAgent(sessionId as string),
+  agent_write: ({ sessionId, line }) => void mockAgentInput(sessionId as string, line as string),
+  agent_kill: () => undefined,
+  agent_kill_all: () => undefined,
+  agent_running: () => [],
 };
+
+const SEED_BLOCKS = [
+  { id: "b1", role: "user", text: "Find where the sidebar decides which sessions to show and tell me if the grouping is cached." },
+  { id: "b2", role: "assistant", text: "Let me look at the sidebar first." },
+  { id: "b3", role: "tool", text: "Read SessionSidebar.tsx", tool: { callId: "t1", name: "Read", title: "Read SessionSidebar.tsx", status: "completed" } },
+  { id: "b4", role: "tool", text: "Grep groupSessions", tool: { callId: "t2", name: "Grep", title: "Grep groupSessions", status: "completed" } },
+  { id: "b5", role: "tool", text: "Read sidebarPrefs.ts", tool: { callId: "t3", name: "Read", title: "Read sidebarPrefs.ts", status: "completed" } },
+  { id: "b6", role: "tool", text: "Read useSidebarPrefs.ts", tool: { callId: "t4", name: "Read", title: "Read useSidebarPrefs.ts", status: "completed" } },
+  { id: "b7", role: "assistant", text: "Grouping lives in `groupSessions` in `src/lib/sidebarPrefs.ts`, called from `SessionSidebar.tsx` inside a `useMemo` keyed on sessions, prefs and the query. So it is cached per render input, not across renders of unrelated state.\n\nOne thing worth fixing: `shows(prefs, key)` does an array lookup per row, which react-doctor already flags.", usage: { inputTokens: 14200, outputTokens: 310, costUsd: 0.031, durationMs: 9400 } },
+  { id: "b8", role: "user", text: "Fix it and run the linter.", files: [{ name: "sidebarPrefs.ts", path: "/Users/me/Developer/experiments/crew/src/lib/sidebarPrefs.ts" }] },
+  { id: "b9", role: "tool", text: "Edit sidebarPrefs.ts", tool: { callId: "t5", name: "Edit", title: "Edit sidebarPrefs.ts", status: "completed" } },
+  { id: "b10", role: "approval", text: "npm run lint", approval: { requestId: 1, name: "Bash" } },
+];
+
+type MockAgent = { sessionId: string; initialized: boolean; pendingApproval: string | null };
+const agents = new Map<string, MockAgent>();
+
+function emitLines(sessionId: string, lines: unknown[]) {
+  window.__crewMockBus.emit("agent-stdout", { sessionId, lines: lines.map((line) => JSON.stringify(line)) });
+}
+
+function mockAgent(sessionId: string): number {
+  agents.set(sessionId, { sessionId, initialized: false, pendingApproval: null });
+  setTimeout(() => emitLines(sessionId, [{ type: "system", subtype: "init", session_id: `mock-${sessionId}` }]), 120);
+  return 4242;
+}
+
+const delta = (text: string) => ({ type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text } } });
+
+function mockAgentInput(sessionId: string, line: string) {
+  const agent = agents.get(sessionId);
+  if (!agent) return;
+  const msg = JSON.parse(line) as Row;
+  if (msg.type === "control_request") {
+    const req = msg.request as Row;
+    if (req.subtype === "initialize") {
+      setTimeout(() => emitLines(sessionId, [{ type: "control_response", response: { subtype: "success", request_id: msg.request_id } }]), 60);
+    }
+    return;
+  }
+  if (msg.type === "control_response") {
+    const inner = msg.response as Row;
+    const result = (inner.response as Row) ?? {};
+    const allowed = result.behavior === "allow";
+    agent.pendingApproval = null;
+    setTimeout(() => emitLines(sessionId, [
+      { type: "stream_event", event: { type: "content_block_start", index: 1, content_block: { type: "tool_use", id: "t2", name: "Bash", input: { command: "npm run lint" } } } },
+    ]), 100);
+    setTimeout(() => emitLines(sessionId, [{ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "t2", is_error: !allowed }] } }]), 900);
+    const tail = allowed ? "Lint is clean. The lookup is a Set now, so `shows` is O(1) per row." : "Skipped the lint run. The edit is in place; run it whenever you want.";
+    tail.split(" ").forEach((word, i) => setTimeout(() => emitLines(sessionId, [delta((i ? " " : "") + word)]), 1000 + i * 40));
+    setTimeout(() => emitLines(sessionId, [{ type: "result", subtype: "success", duration_ms: 4100, total_cost_usd: 0.012, usage: { input_tokens: 8200, output_tokens: 140 } }]), 1000 + tail.split(" ").length * 40 + 200);
+    return;
+  }
+  if (msg.type === "user") {
+    const intro = "Let me check that file.";
+    intro.split(" ").forEach((word, i) => setTimeout(() => emitLines(sessionId, [delta((i ? " " : "") + word)]), 400 + i * 50));
+    setTimeout(() => emitLines(sessionId, [
+      { type: "stream_event", event: { type: "content_block_start", index: 1, content_block: { type: "tool_use", id: "t1", name: "Read", input: { file_path: "src/App.tsx" } } } },
+    ]), 900);
+    setTimeout(() => emitLines(sessionId, [{ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "t1", is_error: false }] } }]), 1500);
+    setTimeout(() => {
+      agent.pendingApproval = "req-1";
+      emitLines(sessionId, [{ type: "control_request", request_id: "req-1", request: { subtype: "can_use_tool", tool_name: "Bash", input: { command: "npm run lint" } } }]);
+    }, 1700);
+  }
+}
 
 export async function invoke<T>(cmd: string, args: Row = {}): Promise<T> {
   const handler = commands[cmd];

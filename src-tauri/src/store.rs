@@ -55,7 +55,10 @@ impl Store {
             .map_err(|e| e.to_string())?;
         migrate(&conn).map_err(|e| e.to_string())?;
         // Nothing is running yet, so a spinner left over from the last launch would never stop.
-        conn.execute("UPDATE sessions SET status = 'idle' WHERE status = 'working'", [])
+        conn.execute(
+            "UPDATE sessions SET status = 'idle' WHERE status IN ('working', 'needs-input')",
+            [],
+        )
             .map_err(|e| e.to_string())?;
         Ok(Self {
             conn: Mutex::new(conn),
@@ -125,6 +128,15 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         )?;
         conn.execute(
             "INSERT INTO schema_migrations (version, applied_at) VALUES (5, ?1)",
+            params![now_millis()],
+        )?;
+    }
+    if current < 6 {
+        conn.execute_batch(
+            "ALTER TABLE sessions ADD COLUMN autonomy TEXT NOT NULL DEFAULT 'ask';",
+        )?;
+        conn.execute(
+            "INSERT INTO schema_migrations (version, applied_at) VALUES (6, ?1)",
             params![now_millis()],
         )?;
     }

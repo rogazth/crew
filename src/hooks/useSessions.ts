@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useState } from "react";
+import { dispose, onSessionPatch, reconcile } from "../lib/agentRuntime";
 import * as api from "../lib/api";
-import { stopSession } from "../lib/claudeTurn";
-import type { Session, SessionKind, SessionStatus } from "../lib/types";
+import type { Autonomy, Session, SessionKind, SessionStatus } from "../lib/types";
 
 type CreateInput = {
   name: string;
   provider: string;
   model: string;
   description: string;
+  autonomy: Autonomy;
 };
 
 export function useSessions(workspaceId: string | null) {
@@ -19,13 +20,26 @@ export function useSessions(workspaceId: string | null) {
       return;
     }
     let cancelled = false;
-    api.listSessions(workspaceId).then((list) => {
-      if (!cancelled) setSessions(list);
-    });
+    api
+      .listSessions(workspaceId)
+      .then(reconcile)
+      .then((list) => {
+        if (!cancelled) setSessions(list);
+      });
     return () => {
       cancelled = true;
     };
   }, [workspaceId]);
+
+  // The agent runtime keeps going while a tab is closed; its status and resume
+  // id land here, whichever workspace is showing.
+  useEffect(
+    () =>
+      onSessionPatch((id, patch) => {
+        setSessions((prev) => prev.map((s) => (s.id === id ? { ...s, ...patch } : s)));
+      }),
+    [],
+  );
 
   const create = useCallback(
     async (kind: SessionKind, input: CreateInput) => {
@@ -38,7 +52,7 @@ export function useSessions(workspaceId: string | null) {
   );
 
   const remove = useCallback(async (id: string) => {
-    await stopSession(id);
+    await dispose(id);
     await api.deleteSession(id);
     setSessions((prev) => prev.filter((s) => s.id !== id));
   }, []);
@@ -77,17 +91,11 @@ export function useSessions(workspaceId: string | null) {
     [],
   );
 
+  /** Terminals report through here; agent sessions are written by the runtime. */
   const setStatus = useCallback((id: string, status: SessionStatus) => {
     setSessions((prev) => prev.map((s) => (s.id === id ? { ...s, status } : s)));
     void api.setSessionStatus(id, status).catch(() => {});
   }, []);
 
-  const bindProvider = useCallback((id: string, providerSessionId: string) => {
-    setSessions((prev) =>
-      prev.map((s) => (s.id === id ? { ...s, providerSessionId } : s)),
-    );
-    void api.setProviderSession(id, providerSessionId).catch(() => {});
-  }, []);
-
-  return { sessions, create, update, rename, remove, reorder, setStatus, bindProvider };
+  return { sessions, create, update, rename, remove, reorder, setStatus };
 }

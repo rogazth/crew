@@ -5,7 +5,7 @@ import { Kbd } from "./Kbd";
 import { ModelPicker } from "./ModelPicker";
 import { ProviderIcon } from "./ProviderIcon";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER, type ProviderId } from "../lib/providers";
-import type { Session } from "../lib/types";
+import type { Autonomy, Session } from "../lib/types";
 
 export type AgentDraft = {
   name: string;
@@ -13,6 +13,7 @@ export type AgentDraft = {
   model: string;
   description: string;
   notifications: boolean;
+  autonomy: Autonomy;
 };
 
 type Props = {
@@ -29,6 +30,7 @@ const EMPTY: AgentDraft = {
   model: DEFAULT_MODEL,
   description: "",
   notifications: true,
+  autonomy: "ask",
 };
 
 /** Instant creation reads as cheap; a short floor makes it feel deliberate. */
@@ -65,6 +67,7 @@ export function AgentSheet({ session, existingNames, onSave, onClose }: Props) {
             model: session.model || DEFAULT_MODEL,
             description: session.description,
             notifications: session.notifications,
+            autonomy: session.autonomy,
           }
         : EMPTY,
     );
@@ -172,6 +175,25 @@ export function AgentSheet({ session, existingNames, onSave, onClose }: Props) {
             placeholder="What this agent is for, and how it should work"
             onChange={(e) => setDraft({ ...draft, description: e.target.value })}
           />
+
+          <div className="rounded-xl border border-border bg-sidebar p-3">
+            <Switch
+              variant="neutral"
+              controlFirst={false}
+              checked={draft.autonomy === "full"}
+              onCheckedChange={(checked) =>
+                setDraft({ ...draft, autonomy: checked ? "full" : "ask" })
+              }
+              label={
+                <span className="block">
+                  <span className="block font-medium">Run autonomously</span>
+                  <span className="mt-0.5 block font-normal text-kumo-subtle">
+                    Tools run without asking. Off means every edit and command waits for Allow
+                  </span>
+                </span>
+              }
+            />
+          </div>
 
           <div className="rounded-xl border border-border bg-sidebar p-3">
             <Switch

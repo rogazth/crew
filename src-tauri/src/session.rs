@@ -16,6 +16,8 @@ pub struct Session {
     pub provider_session_id: Option<String>,
     pub description: String,
     pub notifications: bool,
+    /// "ask" prompts for every tool; "full" lets the provider run unattended.
+    pub autonomy: String,
     /// "idle" | "working" | "needs-input" | "error". Set by the runtime, never by the UI.
     pub status: String,
     pub created_at: i64,
@@ -24,7 +26,7 @@ pub struct Session {
 
 const SELECT_BY_WORKSPACE: &str = "SELECT id, workspace_id, kind, name, provider, model,
                                           provider_session_id, description, notifications,
-                                          status, created_at, updated_at
+                                          status, created_at, updated_at, autonomy
                                    FROM sessions
                                    WHERE workspace_id = ?1
                                    ORDER BY sort_order ASC, created_at ASC";
@@ -40,6 +42,7 @@ fn row_to_session(row: &rusqlite::Row) -> rusqlite::Result<Session> {
         provider_session_id: row.get(6)?,
         description: row.get(7)?,
         notifications: row.get::<_, i64>(8)? != 0,
+        autonomy: row.get(12)?,
         status: row.get(9)?,
         created_at: row.get(10)?,
         updated_at: row.get(11)?,
@@ -64,6 +67,7 @@ pub fn session_create(
     provider: String,
     model: String,
     description: String,
+    autonomy: String,
 ) -> Result<Session, String> {
     let name = name.trim().to_string();
     if name.is_empty() {
@@ -84,6 +88,7 @@ pub fn session_create(
         provider_session_id: None,
         description,
         notifications: true,
+        autonomy: autonomy_or_default(autonomy),
         status: "idle".into(),
         created_at: now,
         updated_at: now,
@@ -93,8 +98,8 @@ pub fn session_create(
         conn.execute(
             "INSERT INTO sessions
                (id, workspace_id, kind, name, provider, model, description,
-                notifications, created_at, updated_at, sort_order)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                notifications, created_at, updated_at, sort_order, autonomy)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
             params![
                 session.id,
                 session.workspace_id,
@@ -106,7 +111,8 @@ pub fn session_create(
                 session.notifications,
                 session.created_at,
                 session.updated_at,
-                session.created_at
+                session.created_at,
+                session.autonomy
             ],
         )
     })?;
@@ -123,21 +129,31 @@ pub fn session_update(
     model: String,
     description: String,
     notifications: bool,
+    autonomy: String,
 ) -> Result<(), String> {
     let name = name.trim().to_string();
     if name.is_empty() {
         return Err("Name is required".into());
     }
+    let autonomy = autonomy_or_default(autonomy);
     store.with(|conn| {
         conn.execute(
             "UPDATE sessions
              SET name = ?2, provider = ?3, model = ?4, description = ?5,
-                 notifications = ?6, updated_at = ?7
+                 notifications = ?6, updated_at = ?7, autonomy = ?8
              WHERE id = ?1",
-            params![id, name, provider, model, description, notifications, now_millis()],
+            params![id, name, provider, model, description, notifications, now_millis(), autonomy],
         )
     })?;
     Ok(())
+}
+
+fn autonomy_or_default(value: String) -> String {
+    if value == "full" {
+        value
+    } else {
+        "ask".into()
+    }
 }
 
 #[tauri::command(async)]

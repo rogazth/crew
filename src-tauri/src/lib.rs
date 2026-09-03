@@ -55,9 +55,12 @@ pub fn run() {
             pty::pty_resize,
             pty::pty_kill,
             agent::agent_resolve_claude,
+            agent::agent_resolve,
             agent::agent_spawn,
             agent::agent_write,
             agent::agent_kill,
+            agent::agent_kill_all,
+            agent::agent_running,
         ])
         .build(tauri::generate_context!())
         .expect("error while building crew")

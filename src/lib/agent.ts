@@ -1,7 +1,7 @@
 import { listen } from "@tauri-apps/api/event";
 import * as api from "./api";
 
-type LinePayload = { sessionId: string; line: string };
+type LinesPayload = { sessionId: string; lines: string[] };
 type ExitPayload = { sessionId: string; code: number | null; pid: number };
 
 type LineHandler = (line: string) => void;
@@ -17,9 +17,9 @@ const MAX_BUFFERED = 1000;
 let bridge: Promise<Array<() => void>> | null = null;
 let users = 0;
 
-function push(map: Map<string, string[]>, sessionId: string, line: string) {
+function push(map: Map<string, string[]>, sessionId: string, lines: string[]) {
   const queued = map.get(sessionId) ?? [];
-  queued.push(line);
+  queued.push(...lines);
   if (queued.length > MAX_BUFFERED) queued.splice(0, queued.length - MAX_BUFFERED);
   map.set(sessionId, queued);
 }
@@ -32,21 +32,21 @@ function flush(map: Map<string, string[]>, handlers: Map<string, LineHandler>, s
   for (const line of queued) handler(line);
 }
 
+function deliver(
+  handlers: Map<string, LineHandler>,
+  buffer: Map<string, string[]>,
+  { sessionId, lines }: LinesPayload,
+) {
+  const handler = handlers.get(sessionId);
+  if (handler) for (const line of lines) handler(line);
+  else push(buffer, sessionId, lines);
+}
+
 function ensureBridge() {
   if (bridge) return;
   bridge = Promise.all([
-    listen<LinePayload>("agent-stdout", (event) => {
-      const { sessionId, line } = event.payload;
-      const handler = stdout.get(sessionId);
-      if (handler) handler(line);
-      else push(stdoutBuf, sessionId, line);
-    }),
-    listen<LinePayload>("agent-stderr", (event) => {
-      const { sessionId, line } = event.payload;
-      const handler = stderr.get(sessionId);
-      if (handler) handler(line);
-      else push(stderrBuf, sessionId, line);
-    }),
+    listen<LinesPayload>("agent-stdout", (event) => deliver(stdout, stdoutBuf, event.payload)),
+    listen<LinesPayload>("agent-stderr", (event) => deliver(stderr, stderrBuf, event.payload)),
     listen<ExitPayload>("agent-exit", (event) => {
       exits.get(event.payload.sessionId)?.(event.payload.code);
     }),
@@ -84,7 +84,7 @@ export function watchAgent(
   };
 }
 
-export const resolveClaude = api.resolveClaude;
+export const resolveBinary = api.resolveBinary;
 export const spawnAgent = api.spawnAgent;
 export const writeAgent = api.writeAgent;
 export const killAgent = api.killAgent;

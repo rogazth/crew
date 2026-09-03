@@ -30,7 +30,7 @@ export function App() {
   const workspaces = useWorkspaces();
   const sidebar = useSidebarWidth();
   const active = workspaces.active;
-  const { sessions, create, update, rename, remove, reorder, setStatus, bindProvider } =
+  const { sessions, create, update, rename, remove, reorder, setStatus } =
     useSessions(active?.id ?? null);
   const tabs = useTabs(active?.id ?? null);
   const files = useProjectFiles(active?.path ?? null);
@@ -63,11 +63,18 @@ export function App() {
       provider: DEFAULT_PROVIDER,
       model: DEFAULT_MODEL,
       description: "",
+      autonomy: "ask",
     });
     if (session) openSession(session);
   }, [create, openSession, sessions]);
 
   const newAgent = useCallback(() => setSheet({ session: null }), []);
+
+  const changeModel = useCallback(
+    (session: Session, provider: string, model: string) =>
+      void update(session.id, { ...session, provider, model }),
+    [update],
+  );
 
   const openStub = useCallback(
     (stub: StubKind, title: string) =>
@@ -272,7 +279,7 @@ export function App() {
             hasWorkspace={active !== null}
             onCreateWorkspace={workspaces.create}
             onStatus={setStatus}
-            onBindProvider={bindProvider}
+            onModel={changeModel}
             onOpenFile={openFile}
           />
         </div>

@@ -1,33 +1,38 @@
+import { useEffect } from "react";
 import { AgentChat } from "./AgentChat";
+import { setForeground } from "../lib/agentRuntime";
+import type { ProviderId } from "../lib/providers";
 import { isAgentTab } from "../lib/tabs";
-import type { Session, SessionStatus, Tab } from "../lib/types";
+import type { Session, Tab } from "../lib/types";
 
 type Props = {
   tabs: Tab[];
   activeId: string | null;
   sessions: Session[];
   cwd: string;
-  onStatus: (id: string, status: SessionStatus) => void;
-  onBindProvider: (id: string, providerSessionId: string) => void;
+  onModel: (session: Session, provider: ProviderId, model: string) => void;
 };
 
 /**
- * Every open agent tab stays mounted. Unmounting would drop the in-memory
- * turn listener; a tab switch must not end the Claude process.
+ * Open agent tabs stay mounted so a switch keeps scroll position and draft.
+ * The turn itself lives in the runtime, so unmounting would lose nothing.
  */
-export function Agents({ tabs, activeId, sessions, cwd, onStatus, onBindProvider }: Props) {
+export function Agents({ tabs, activeId, sessions, cwd, onModel }: Props) {
+  const active = tabs.find((tab) => tab.id === activeId) ?? null;
+  const foreground = isAgentTab(active, sessions) && active?.kind === "session" ? active.sessionId : null;
+
+  useEffect(() => {
+    setForeground(foreground);
+    return () => setForeground(null);
+  }, [foreground]);
+
   return tabs.map((tab) => {
     if (!isAgentTab(tab, sessions) || tab.kind !== "session") return null;
     const session = sessions.find((row) => row.id === tab.sessionId);
     if (!session) return null;
     return (
       <div key={tab.id} hidden={tab.id !== activeId} className="absolute inset-0">
-        <AgentChat
-          session={session}
-          cwd={cwd}
-          onStatus={onStatus}
-          onBindProvider={onBindProvider}
-        />
+        <AgentChat session={session} cwd={cwd} onModel={onModel} />
       </div>
     );
   });

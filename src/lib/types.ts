@@ -10,6 +10,9 @@ export type SessionKind = "agent" | "terminal";
 /** Written by whatever runs the session: the terminal today, the agent runtime later. */
 export type SessionStatus = "idle" | "working" | "needs-input" | "done" | "error";
 
+/** "ask" routes every tool through Allow/Deny; "full" lets the provider run unattended. */
+export type Autonomy = "ask" | "full";
+
 export type Session = {
   id: string;
   workspaceId: string;
@@ -20,6 +23,7 @@ export type Session = {
   providerSessionId: string | null;
   description: string;
   notifications: boolean;
+  autonomy: Autonomy;
   status: SessionStatus;
   createdAt: number;
   updatedAt: number;

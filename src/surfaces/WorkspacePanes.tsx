@@ -1,6 +1,7 @@
 import { Agents } from "./Agents";
 import { Surface } from "./Surface";
 import { Terminals } from "./Terminals";
+import type { ProviderId } from "../lib/providers";
 import type { ProjectFile, Session, SessionStatus, Tab } from "../lib/types";
 
 type Props = {
@@ -11,7 +12,7 @@ type Props = {
   hasWorkspace: boolean;
   onCreateWorkspace: () => void;
   onStatus: (id: string, status: SessionStatus) => void;
-  onBindProvider: (id: string, providerSessionId: string) => void;
+  onModel: (session: Session, provider: ProviderId, model: string) => void;
   onOpenFile: (file: ProjectFile) => void;
 };
 
@@ -24,7 +25,7 @@ export function WorkspacePanes({
   hasWorkspace,
   onCreateWorkspace,
   onStatus,
-  onBindProvider,
+  onModel,
   onOpenFile,
 }: Props) {
   return (
@@ -50,8 +51,7 @@ export function WorkspacePanes({
             activeId={tab?.id ?? null}
             sessions={sessions}
             cwd={cwd}
-            onStatus={onStatus}
-            onBindProvider={onBindProvider}
+            onModel={onModel}
           />
         </>
       )}

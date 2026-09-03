@@ -1,35 +1,51 @@
-import type { FormEvent, KeyboardEvent } from "react";
+import { useLayoutEffect, useRef, type FormEvent, type KeyboardEvent } from "react";
+import { ModelPicker } from "../../chrome/ModelPicker";
 import { Plus, Send, Square } from "../../chrome/icons";
 import type { AttachedFile } from "../../lib/blocks";
-import { FileChips } from "./Bubble";
+import type { ProviderId } from "../../lib/providers";
+import type { Session } from "../../lib/types";
+import { FileChips } from "./Message";
 
 type Props = {
-  name: string;
+  session: Session;
   draft: string;
   files: AttachedFile[];
   working: boolean;
   ready: boolean;
   onDraft: (value: string) => void;
+  onModel: (provider: ProviderId, model: string) => void;
   onAttach: () => void;
   onRemoveFile: (path: string) => void;
   onSend: () => void;
   onStop: () => void;
 };
 
-/** Cursor composer: tall field, plus + send on the bottom row. */
+const MAX_FIELD_PX = 160;
+
+/** A control well in the chrome's dialect: hairline, radius 12, plus and model left, send right. */
 export function Composer({
-  name,
+  session,
   draft,
   files,
   working,
   ready,
   onDraft,
+  onModel,
   onAttach,
   onRemoveFile,
   onSend,
   onStop,
 }: Props) {
+  const field = useRef<HTMLTextAreaElement>(null);
   const canSend = ready && (draft.trim().length > 0 || files.length > 0) && !working;
+
+  // Grows with the draft up to the cap; the browser's own sizing is one line.
+  useLayoutEffect(() => {
+    const el = field.current;
+    if (!el) return;
+    el.style.height = "0px";
+    el.style.height = `${Math.min(el.scrollHeight, MAX_FIELD_PX)}px`;
+  }, [draft]);
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
@@ -45,37 +61,53 @@ export function Composer({
   };
 
   return (
-    <div className="shrink-0 px-4 pb-4">
-      <form onSubmit={submit} className="crew-composer mx-auto max-w-3xl">
+    <div className="shrink-0 px-6 pb-4">
+      <form onSubmit={submit} className="crew-composer mx-auto max-w-[720px]">
         {files.length > 0 && (
           <div className="mb-2">
             <FileChips files={files} onRemove={onRemoveFile} />
           </div>
         )}
         <textarea
-          rows={3}
+          ref={field}
+          rows={2}
           value={draft}
-          placeholder={`Message ${name}`}
+          placeholder={`Message ${session.name}`}
+          spellCheck={false}
           onChange={(event) => onDraft(event.target.value)}
           onKeyDown={onKeyDown}
           className="crew-composer-field"
         />
-        <div className="mt-2 flex items-center justify-between">
-          <button
-            type="button"
-            aria-label="Attach files"
-            onClick={onAttach}
-            className="crew-composer-attach flex items-center justify-center"
-          >
-            <Plus className="size-4" />
-          </button>
+        <div className="mt-2 flex h-7 items-center justify-between gap-2">
+          <div className="flex min-w-0 items-center gap-0.5">
+            <button
+              type="button"
+              aria-label="Attach files"
+              title="Attach files"
+              onClick={onAttach}
+              className="flex size-7 shrink-0 items-center justify-center rounded-md text-kumo-subtle transition-colors duration-100 hover:bg-hover hover:text-text focus-visible:ring-[1.5px] focus-visible:ring-kumo-focus/50 focus-visible:outline-none active:bg-selected"
+            >
+              <Plus className="size-4" />
+            </button>
+            <ModelPicker
+              trigger="chip"
+              provider={session.provider}
+              model={session.model}
+              disabled={working}
+              onChange={onModel}
+            />
+          </div>
           <button
             type="submit"
             disabled={!working && !canSend}
             aria-label={working ? "Stop" : "Send"}
-            className="crew-ink flex size-[30px] shrink-0 items-center justify-center rounded-full transition-opacity disabled:opacity-20"
+            className={`flex size-7 shrink-0 items-center justify-center rounded-full transition-colors duration-100 focus-visible:ring-[1.5px] focus-visible:ring-kumo-focus/50 focus-visible:outline-none ${
+              working || canSend
+                ? "crew-ink hover:bg-kumo-brand-hover"
+                : "bg-card text-kumo-subtle"
+            }`}
           >
-            {working ? <Square className="size-3" /> : <Send className="size-3.5" />}
+            {working ? <Square className="size-2.5" /> : <Send className="ml-px size-3.5" />}
           </button>
         </div>
       </form>

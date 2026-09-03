@@ -9,9 +9,10 @@
   --color-rail: var(--color-kumo-recessed);
   --color-border: var(--color-kumo-line);
   --color-border-strong: var(--color-kumo-interact);
-  --color-text: var(--color-kumo-default);
-  --color-text-muted: var(--color-kumo-subtle);
-  --color-placeholder: var(--color-kumo-placeholder);
+  /* kumo namespaces its text colors under --text-color-*; the --color-* forms do not exist. */
+  --color-text: var(--text-color-kumo-default);
+  --color-text-muted: var(--text-color-kumo-subtle);
+  --color-placeholder: var(--text-color-kumo-placeholder);
   /* Not kumo's tint/fill: those sit 1% apart from the sidebar in light mode and
      resolve to the same neutral-800 in dark, so hover and active collapse. */
   --color-hover: light-dark(oklch(94.5% 0 0), oklch(21% 0 0));
@@ -177,57 +178,41 @@ body:has(button[data-sidebar="resize-handle"]:active) * {
   background: transparent !important;
 }
 
-/* `bg-text` is not a reliable Tailwind class: `text` is a typography
-   namespace, so the ink pill has to use the token directly. */
+/* Plain rules reference kumo's own variables: a theme alias only reaches the
+   CSS when some utility uses it, and these rules must not depend on that. */
 .crew-ink {
-  background: var(--color-text);
-  color: var(--color-canvas);
+  background: var(--text-color-kumo-default);
+  color: var(--color-kumo-base);
 }
-.crew-bubble {
-  max-width: min(88%, 640px);
-  padding: 8px 12px;
-  border-radius: 14px;
-  overflow-wrap: anywhere;
-}
-.crew-bubble-agent {
-  background: var(--color-sidebar);
+.crew-prose {
+  font-size: 13px;
+  line-height: 18px;
+  letter-spacing: -0.08px;
 }
 .crew-composer {
   display: flex;
   flex-direction: column;
-  min-height: 112px;
-  padding: 12px 12px 8px;
-  border: 1px solid var(--color-border);
-  border-radius: 16px;
-  background: var(--color-canvas);
-  box-shadow: 0 2px 8px color-mix(in srgb, var(--color-text) 4%, transparent);
-  transition: border-color 120ms ease;
+  min-height: 88px;
+  padding: 10px 12px 8px;
+  border: 1px solid color-mix(in srgb, var(--text-color-kumo-default) 10%, transparent);
+  border-radius: 12px;
+  background: var(--color-kumo-base);
+  transition: box-shadow 100ms ease;
 }
 .crew-composer:focus-within {
-  border-color: var(--color-border-strong);
+  box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--color-kumo-focus) 50%, transparent);
 }
 .crew-composer-field {
   display: block;
   width: 100%;
-  min-height: 56px;
+  min-height: 36px;
   max-height: 160px;
   resize: none;
   background: transparent;
   outline: none;
-  line-height: 1.45;
-}
-.crew-composer-attach {
-  width: 30px;
-  height: 30px;
-  color: var(--color-text);
-  background: var(--color-card);
-  border-radius: 9999px;
-}
-.crew-composer-attach:hover {
-  background: var(--color-hover);
-}
-.crew-chip-on-ink {
-  background: color-mix(in srgb, var(--color-canvas) 15%, transparent);
+  font-size: 13px;
+  line-height: 18px;
+  letter-spacing: -0.08px;
 }
 
 /* Chat markdown: Cursor 13/18, ink-mixed code, no extra chrome. */
