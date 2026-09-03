@@ -131,6 +131,46 @@ body:has(button[data-sidebar="resize-handle"]:active) * {
   scrollbar-width: none;
 }
 
+/* Base UI measures the panel; the transition rides its variable, so nothing is measured twice. */
+.crew-phase-panel {
+  height: var(--collapsible-panel-height);
+  overflow: hidden;
+  transition: height 200ms cubic-bezier(0.16, 1, 0.3, 1), opacity 150ms ease;
+}
+.crew-phase-panel[data-starting-style],
+.crew-phase-panel[data-ending-style] {
+  height: 0;
+  opacity: 0;
+}
+/* Steps hang off a hairline rail under the phase icon. */
+.crew-phase-steps {
+  margin-left: 6px;
+  padding-left: 14px;
+  border-left: 1px solid var(--color-hairline);
+}
+/* Live labels move; the rest of the log holds still. */
+@keyframes crew-shimmer {
+  0% { background-position: 120% 0; }
+  100% { background-position: -120% 0; }
+}
+.crew-shimmer {
+  color: transparent;
+  background: linear-gradient(
+      90deg,
+      var(--text-color-kumo-subtle) 0%,
+      var(--text-color-kumo-default) 50%,
+      var(--text-color-kumo-subtle) 100%
+    )
+    0 0 / 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  animation: crew-shimmer 1.6s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .crew-phase-panel { transition: none; }
+  .crew-shimmer { animation: none; color: var(--text-color-kumo-subtle); background: none; }
+}
+
 /* A working session breathes; everything else in the chrome holds still. */
 @keyframes status-pulse {
   0%, 100% { opacity: 1; }

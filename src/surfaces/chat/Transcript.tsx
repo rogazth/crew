@@ -1,7 +1,7 @@
 import { useLayoutEffect, useMemo, useRef } from "react";
 import { isOpen, type Answers, type ApprovalDecision, type Block, type TurnUsage } from "../../lib/blocks";
 import { dayLabel } from "../../lib/time";
-import { ActivityGroup, ThinkingLine } from "./ActivityLine";
+import { ActivityGroup, ThinkingLine } from "./Activity";
 import { AssistantMessage, DateBreak, Note, TurnFooter, UserMessage } from "./Message";
 
 const NEAR_BOTTOM_PX = 16;
@@ -122,7 +122,12 @@ export function Transcript({ blocks, working, onApprove, onAnswer }: Props) {
           if (row.kind === "activity") {
             return (
               <div key={row.id} className={className}>
-                <ActivityGroup blocks={row.blocks} onApprove={onApprove} onAnswer={onAnswer} />
+                <ActivityGroup
+                  blocks={row.blocks}
+                  live={working && index === rows.length - 1}
+                  onApprove={onApprove}
+                  onAnswer={onAnswer}
+                />
               </div>
             );
           }

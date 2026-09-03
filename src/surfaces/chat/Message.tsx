@@ -51,7 +51,7 @@ export function TurnFooter({ usage, at }: { usage: TurnUsage; at?: number }) {
   return (
     <div className="flex">
       {detail ? (
-        <Tooltip content={detail} side="top" align="start" delay={300}>
+        <Tooltip content={detail} side="top" align="start" delay={300} render={<span />}>
           {line}
         </Tooltip>
       ) : (
