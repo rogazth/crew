@@ -1,33 +1,36 @@
 import { Sidebar } from "@cloudflare/kumo";
-import { useCallback, useState } from "react";
+import { useCallback, useState, type CSSProperties } from "react";
 import { AgentSheet, type AgentDraft } from "./chrome/AgentSheet";
 import { CommandPalette, type PaletteMode } from "./chrome/CommandPalette";
 import { ConfirmDialog, type Confirm } from "./chrome/ConfirmDialog";
-import { SessionSidebar } from "./chrome/SessionSidebar";
+import { AppSidebar } from "./chrome/AppSidebar";
 import { TabBar } from "./chrome/TabBar";
 import type { Launch } from "./chrome/TabLauncher";
 import { useCommands } from "./hooks/useCommand";
 import { useProjectFiles } from "./hooks/useProjectFiles";
 import { useSelectAllScope } from "./hooks/useSelectAllScope";
 import { useSessions } from "./hooks/useSessions";
+import { useSidebarWidth } from "./hooks/useSidebarWidth";
 import { useTabs } from "./hooks/useTabs";
 import { useWorkspaces } from "./hooks/useWorkspaces";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./lib/providers";
 import { fileTabId, sessionTabId, stubTabId } from "./lib/tabs";
 import type { ProjectFile, Session, StubKind, Workspace } from "./lib/types";
+import { SETTINGS_DEFAULT, type SettingsSectionId } from "./lib/settings";
 import { nextSessionName } from "./lib/workspaces";
 import { Surface } from "./surfaces/Surface";
+import { Terminals } from "./surfaces/Terminals";
+import { SettingsView } from "./surfaces/SettingsView";
 
 type Sheet = { session: Session | null };
-
-const SIDEBAR_WIDTH = 264;
 
 export function App() {
   useSelectAllScope();
 
   const workspaces = useWorkspaces();
+  const sidebar = useSidebarWidth();
   const active = workspaces.active;
-  const { sessions, create, update, rename, remove, reorder } = useSessions(active?.id ?? null);
+  const { sessions, create, update, rename, remove, reorder, markStarted } = useSessions(active?.id ?? null);
   const tabs = useTabs(active?.id ?? null);
   const files = useProjectFiles(active?.path ?? null);
 
@@ -35,6 +38,7 @@ export function App() {
   const [sheet, setSheet] = useState<Sheet | null>(null);
   const [confirm, setConfirm] = useState<Confirm | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [settings, setSettings] = useState<SettingsSectionId | null>(null);
 
   const openSession = useCallback(
     (session: Session) =>
@@ -107,6 +111,25 @@ export function App() {
     [remove, tabs],
   );
 
+  const confirmRemoveSessions = useCallback(
+    (list: Session[]) => {
+      const [only] = list;
+      if (list.length === 1 && only) return confirmRemoveSession(only);
+      setConfirm({
+        title: `Delete ${list.length} items?`,
+        description: "Their history is removed from this workspace. This cannot be undone.",
+        action: "Delete",
+        onConfirm: async () => {
+          for (const session of list) {
+            tabs.closeForSession(session.id);
+            await remove(session.id);
+          }
+        },
+      });
+    },
+    [confirmRemoveSession, remove, tabs],
+  );
+
   const confirmRemoveWorkspace = useCallback(
     (workspace: Workspace) =>
       setConfirm({
@@ -130,7 +153,7 @@ export function App() {
     "open-workspace": workspaces.create,
     "new-agent": newAgent,
     "new-session": () => void newSession(),
-    "open-settings": () => openStub("settings", "Settings"),
+    "open-settings": () => setSettings((open) => (open ? null : SETTINGS_DEFAULT)),
     "reopen-tab": tabs.reopen,
     "next-tab": () => tabs.step(1),
     "prev-tab": () => tabs.step(-1),
@@ -146,11 +169,12 @@ export function App() {
     close: () => {
       if (palette) setPalette(null);
       else if (sheet) setSheet(null);
+      else if (settings) setSettings(null);
       else if (tabs.active) tabs.close(tabs.active.id);
     },
   });
 
-  if (workspaces.loading) return <div className="h-full" />;
+  if (workspaces.loading || sidebar.width === null) return <div className="h-full" />;
 
   const activeSessionId = tabs.active?.kind === "session" ? tabs.active.sessionId : null;
 
@@ -159,55 +183,85 @@ export function App() {
       contained
       collapsible="none"
       animationDuration={0}
-      defaultWidth={SIDEBAR_WIDTH}
+      resizable
+      // The resize handle collapses the sidebar below minWidth; pinning `open`
+      // turns that into a clamp, since `collapsible="none"` has nothing to show.
+      open
+      defaultWidth={sidebar.width}
+      minWidth={200}
+      maxWidth={560}
+      onWidthChange={sidebar.commit}
+      // kumo sets --sidebar-bg to the canvas colour with a class of equal weight,
+      // so the sidebar tone has to arrive inline to beat it.
+      style={{ "--sidebar-bg": "var(--color-kumo-elevated)" } as CSSProperties}
       className="h-full"
     >
       {active && (
-        <SessionSidebar
-          workspace={active}
-          workspaces={workspaces.workspaces}
-          pickerOpen={pickerOpen}
-          onPickerOpenChange={setPickerOpen}
-          onSelectWorkspace={workspaces.activate}
-          onCreateWorkspace={workspaces.create}
-          onRenameWorkspace={workspaces.rename}
-          onRemoveWorkspace={confirmRemoveWorkspace}
-          onReorderWorkspaces={workspaces.reorder}
-          sessions={sessions}
-          activeSessionId={activeSessionId}
-          onSelect={openSession}
-          onNewAgent={newAgent}
-          onNewSession={newSession}
-          onSearch={() => setPalette("files")}
-          onOpenSettings={() => openStub("settings", "Settings")}
-          onEdit={(session) => setSheet({ session })}
-          onRename={(session, name) => void rename(session.id, name)}
-          onRemove={confirmRemoveSession}
-          onReorder={reorder}
+        <AppSidebar
+          settings={settings}
+          onSelectSettings={setSettings}
+          onCloseSettings={() => setSettings(null)}
+          sessions={{
+            workspace: active,
+            workspaces: workspaces.workspaces,
+            pickerOpen,
+            onPickerOpenChange: setPickerOpen,
+            onSelectWorkspace: workspaces.activate,
+            onCreateWorkspace: workspaces.create,
+            onRenameWorkspace: workspaces.rename,
+            onRemoveWorkspace: confirmRemoveWorkspace,
+            onReorderWorkspaces: workspaces.reorder,
+            sessions,
+            activeSessionId,
+            settingsOpen: settings !== null,
+            onSelect: openSession,
+            onNewAgent: newAgent,
+            onNewSession: newSession,
+            onSearch: () => togglePalette("all"),
+            onOpenSettings: () => setSettings(SETTINGS_DEFAULT),
+            onEdit: (session) => setSheet({ session }),
+            onRename: (session, name) => void rename(session.id, name),
+            onRemove: confirmRemoveSession,
+            onRemoveMany: confirmRemoveSessions,
+            onReorder: reorder,
+          }}
         />
       )}
 
       <main className="flex min-w-0 flex-1 flex-col bg-canvas">
-        <TabBar
-          tabs={tabs.tabs}
-          activeId={tabs.active?.id ?? null}
-          sessions={sessions}
-          onSelect={tabs.select}
-          onClose={tabs.close}
-          onLaunch={launch}
-        />
-
-        {workspaces.error && (
-          <div className="border-b border-border px-3 py-2 text-danger">{workspaces.error}</div>
-        )}
-
-        <div className="min-h-0 flex-1">
-          <Surface
-            tab={tabs.active}
+        {settings && <SettingsView section={settings} />}
+        {/* Hidden, not unmounted: the terminals underneath keep their processes. */}
+        <div hidden={settings !== null} className="flex min-h-0 flex-1 flex-col">
+          <TabBar
+            tabs={tabs.tabs}
+            activeId={tabs.active?.id ?? null}
             sessions={sessions}
-            hasWorkspace={active !== null}
-            onCreateWorkspace={workspaces.create}
+            onSelect={tabs.select}
+            onClose={tabs.close}
+            onLaunch={launch}
           />
+
+          {workspaces.error && (
+            <div className="border-b border-border px-3 py-2 text-danger">{workspaces.error}</div>
+          )}
+
+          <div className="relative min-h-0 flex-1">
+            <Surface
+              tab={tabs.active}
+              sessions={sessions}
+              hasWorkspace={active !== null}
+              onCreateWorkspace={workspaces.create}
+            />
+            {active && (
+              <Terminals
+                tabs={tabs.tabs}
+                activeId={tabs.active?.id ?? null}
+                sessions={sessions}
+                cwd={active.path}
+                onStarted={(session) => void markStarted(session.id)}
+              />
+            )}
+          </div>
         </div>
       </main>
 
