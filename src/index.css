@@ -403,17 +403,38 @@ body:has(button[data-sidebar="resize-handle"]:active) * {
 .crew-chip-on-ink {
   background: color-mix(in srgb, var(--color-kumo-base) 18%, transparent);
 }
+/* Cursor's well: radius 16, a hairline that darkens on focus, no ring. */
 .crew-composer {
   display: flex;
   flex-direction: column;
-  min-height: 88px;
-  padding: 10px 12px 8px;
+  min-height: 96px;
+  padding: 12px 12px 10px;
   border: 1px solid color-mix(in srgb, var(--text-color-kumo-default) 10%, transparent);
-  border-radius: 12px;
+  border-radius: 16px;
   background: var(--color-kumo-base);
-  transition: box-shadow 100ms ease;
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--text-color-kumo-default) 4%, transparent);
+  transition: border-color 100ms ease;
 }
 .crew-composer:focus-within {
+  border-color: color-mix(in srgb, var(--text-color-kumo-default) 22%, transparent);
+}
+.crew-composer-plus {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 999px;
+  background: var(--color-card);
+  color: var(--text-color-kumo-subtle);
+  transition: background-color 100ms ease, color 100ms ease;
+}
+.crew-composer-plus:hover {
+  background: var(--color-hover);
+  color: var(--text-color-kumo-default);
+}
+.crew-composer-plus:focus-visible {
+  outline: none;
   box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--color-kumo-focus) 50%, transparent);
 }
 .crew-composer-field {

@@ -21,6 +21,8 @@ type Props = {
   files: AttachedFile[];
   working: boolean;
   ready: boolean;
+  /** An empty chat: the well is the page, so it sits in the middle. */
+  centered?: boolean;
   onDraft: (value: string) => void;
   onModel: (provider: ProviderId, model: string) => void;
   onAttach: () => void;
@@ -41,6 +43,7 @@ export function Composer({
   files,
   working,
   ready,
+  centered = false,
   onDraft,
   onModel,
   onAttach,
@@ -82,7 +85,7 @@ export function Composer({
   };
 
   return (
-    <div className="shrink-0 px-6 pb-4">
+    <div className={`shrink-0 px-6 ${centered ? "py-4" : "pb-4"}`}>
       <form onSubmit={submit} className="crew-composer mx-auto max-w-[720px]">
         {files.length > 0 && (
           <div className="mb-2">
@@ -100,14 +103,14 @@ export function Composer({
           onPaste={onPaste}
           className="crew-composer-field"
         />
-        <div className="mt-2 flex h-7 items-center justify-between gap-2">
-          <div className="flex min-w-0 items-center gap-0.5">
+        <div className="mt-2 flex h-[30px] items-center justify-between gap-2">
+          <div className="flex min-w-0 items-center gap-1.5">
             <button
               type="button"
               aria-label="Attach files"
               title="Attach files"
               onClick={onAttach}
-              className="flex size-7 shrink-0 items-center justify-center rounded-md text-kumo-subtle transition-colors duration-100 hover:bg-hover hover:text-text focus-visible:ring-[1.5px] focus-visible:ring-kumo-focus/50 focus-visible:outline-none active:bg-selected"
+              className="crew-composer-plus shrink-0"
             >
               <Plus className="size-4" />
             </button>
@@ -123,13 +126,13 @@ export function Composer({
             type="submit"
             disabled={!working && !canSend}
             aria-label={working ? "Stop" : "Send"}
-            className={`flex size-7 shrink-0 items-center justify-center rounded-full transition-colors duration-100 focus-visible:ring-[1.5px] focus-visible:ring-kumo-focus/50 focus-visible:outline-none ${
+            className={`flex size-[30px] shrink-0 items-center justify-center rounded-full transition-colors duration-100 focus-visible:ring-[1.5px] focus-visible:ring-kumo-focus/50 focus-visible:outline-none ${
               working || canSend
                 ? "crew-ink hover:bg-kumo-brand-hover"
                 : "bg-card text-kumo-subtle"
             }`}
           >
-            {working ? <Square className="size-2.5" /> : <Send className="ml-px size-3.5" />}
+            {working ? <Square className="size-2.5" /> : <Send className="size-4" />}
           </button>
         </div>
       </form>

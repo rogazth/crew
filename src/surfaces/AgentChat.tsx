@@ -1,12 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ProviderIcon } from "../chrome/ProviderIcon";
 import { useThread } from "../hooks/useThread";
 import { answer, respond, send, stop } from "../lib/agentRuntime";
 import { pickFiles, writeTempFile } from "../lib/api";
 import { attachedFrom } from "../lib/attachments";
 import { useFileDrop } from "../hooks/useFileDrop";
 import type { Answers, ApprovalDecision, AttachedFile } from "../lib/blocks";
-import { providerLine, type ProviderId } from "../lib/providers";
+import type { ProviderId } from "../lib/providers";
 import type { Session } from "../lib/types";
 import { Composer } from "./chat/Composer";
 import { Transcript } from "./chat/Transcript";
@@ -85,11 +84,12 @@ export function AgentChat({ session, cwd, active, onModel }: Props) {
         </div>
       )}
       {blocks.length === 0 ? (
-        <Identity session={session} />
+        <div className="min-h-0 flex-[5]" />
       ) : (
         <Transcript blocks={blocks} working={working} onApprove={approve} onAnswer={reply} />
       )}
       <Composer
+        centered={blocks.length === 0}
         ref={field}
         session={session}
         draft={draft}
@@ -104,32 +104,7 @@ export function AgentChat({ session, cwd, active, onModel }: Props) {
         onSend={submit}
         onStop={() => void stop(session)}
       />
-    </div>
-  );
-}
-
-/** The composer is the call to action; this is the session card, top-left, at chrome weight. */
-function Identity({ session }: { session: Session }) {
-  return (
-    <div data-selectable className="min-h-0 flex-1 overflow-y-auto">
-      <div className="mx-auto flex max-w-[720px] flex-col items-start px-6 pt-5">
-        <div className="flex items-center gap-2.5">
-          <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-card">
-            <ProviderIcon provider={session.provider} className="size-4" />
-          </span>
-          <div className="flex min-w-0 flex-col">
-            <span className="crew-prose font-medium">{session.name}</span>
-            <span className="text-[12px] leading-4 text-text-muted">
-              {providerLine(session.provider, session.model)}
-            </span>
-          </div>
-        </div>
-        {session.description && (
-          <p className="mt-2 line-clamp-2 max-w-[480px] text-[12px] leading-4 text-text-muted">
-            {session.description}
-          </p>
-        )}
-      </div>
+      {blocks.length === 0 && <div className="min-h-0 flex-[6]" />}
     </div>
   );
 }
