@@ -21,7 +21,9 @@ export function useCommand(id: CommandId, handler: () => void) {
 /** Register several handlers in one place (the app chrome). */
 export function useCommands(map: { [K in CommandId]?: () => void }) {
   const mapRef = useRef(map);
-  mapRef.current = map;
+  useEffect(() => {
+    mapRef.current = map;
+  });
 
   // Sorted so the array useHotkeys diffs by index stays stable across renders.
   const ids = (Object.keys(map) as CommandId[]).filter((id) => map[id]).sort();

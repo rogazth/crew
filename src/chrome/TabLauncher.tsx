@@ -228,7 +228,7 @@ function Row({
       onMouseEnter={onHover}
       onClick={onPick}
       className={`flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left ${
-        active ? "bg-kumo-tint text-kumo-default" : "text-kumo-default"
+        active ? "bg-hover text-kumo-default" : "text-kumo-default"
       }`}
     >
       {icon}

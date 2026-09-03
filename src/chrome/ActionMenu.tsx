@@ -156,7 +156,7 @@ export function ActionMenu({ point, actions, onPick, onClose, rename }: Props) {
             className={`flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-[13px] ${
               action.danger
                 ? "text-kumo-danger hover:bg-kumo-danger/10"
-                : "text-kumo-default hover:bg-kumo-tint"
+                : "text-kumo-default hover:bg-hover"
             }`}
           >
             <Icon className="size-4 shrink-0" />

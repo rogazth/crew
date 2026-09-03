@@ -5,7 +5,6 @@ const NOTES: Record<StubKind, string> = {
   terminal: "A shell in the workspace directory. pty.rs is not wired yet.",
   browser: "An embedded browser pane. Not built yet.",
   sidechat: "A chat alongside the current surface. Not built yet.",
-  settings: "Providers, appearance, and keybindings. Not built yet.",
 };
 
 export function StubView({ stub, title }: { stub: StubKind; title: string }) {

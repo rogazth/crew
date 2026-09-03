@@ -4,8 +4,8 @@ import { useState, type ReactNode } from "react";
 
 type Props = {
   label: string;
-  onAdd?: () => void;
-  addHint?: string;
+  onAdd?: (() => void) | undefined;
+  addHint?: string | undefined;
   collapsible?: boolean;
   children: ReactNode;
 };

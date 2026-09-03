@@ -32,7 +32,9 @@ export type ProjectFile = {
 };
 
 /** Surfaces that have chrome but no runtime yet. One tab kind covers them all. */
-export type StubKind = "terminal" | "browser" | "sidechat" | "settings";
+export const STUB_KINDS = ["terminal", "browser", "sidechat"] as const;
+
+export type StubKind = (typeof STUB_KINDS)[number];
 
 export type Tab =
   | { id: string; kind: "session"; sessionId: string }

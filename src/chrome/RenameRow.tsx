@@ -29,7 +29,7 @@ export function RenameRow({ initial, onCommit, onCancel, className = "" }: Props
   }
 
   return (
-    <div className={`flex w-full min-w-0 items-center rounded-lg bg-(--sidebar-active-bg) ${className}`}>
+    <div className={`flex w-full min-w-0 items-center rounded-lg bg-selected ${className}`}>
       <input
         ref={ref}
         autoFocus

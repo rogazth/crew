@@ -52,14 +52,12 @@ export function useWorkspaces() {
 
   const remove = useCallback(
     async (id: string) => {
+      const next = workspaces.filter((w) => w.id !== id);
       await api.deleteWorkspace(id);
-      setWorkspaces((prev) => {
-        const next = prev.filter((w) => w.id !== id);
-        if (id === activeId) activate(next[0]?.id ?? null);
-        return next;
-      });
+      setWorkspaces(next);
+      if (id === activeId) activate(next[0]?.id ?? null);
     },
-    [activeId, activate],
+    [workspaces, activeId, activate],
   );
 
   const reorder = useCallback((ids: string[]) => {

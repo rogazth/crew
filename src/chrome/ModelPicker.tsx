@@ -46,7 +46,7 @@ export function ModelPicker({ provider, model, onChange }: Props) {
                   aria-selected={p.id === tab}
                   onClick={() => setTab(p.id)}
                   className={`relative flex flex-1 items-center justify-center gap-1.5 py-2.5 transition-colors ${
-                    p.id === tab ? "text-kumo-default" : "text-kumo-subtle hover:bg-kumo-tint"
+                    p.id === tab ? "text-kumo-default" : "text-kumo-subtle hover:bg-hover"
                   }`}
                 >
                   <ProviderIcon provider={p.id} className="size-4" />
@@ -69,7 +69,7 @@ export function ModelPicker({ provider, model, onChange }: Props) {
                       onChange(tab, m.id);
                       setOpen(false);
                     }}
-                    className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left transition-colors hover:bg-kumo-tint"
+                    className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left transition-colors hover:bg-hover"
                   >
                     <span className="min-w-0 flex-1">
                       <span className="block truncate">{m.label}</span>
