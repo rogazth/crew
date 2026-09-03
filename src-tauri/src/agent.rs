@@ -44,7 +44,8 @@ pub struct AgentBinary {
 }
 
 struct LiveChild {
-    stdin: Mutex<ChildStdin>,
+    /// `None` once closed: CLIs that read the prompt from stdin need the EOF.
+    stdin: Mutex<Option<ChildStdin>>,
     pid: u32,
     /// Set once `wait` reaped it. The pid may belong to someone else after that.
     exited: AtomicBool,
@@ -213,7 +214,7 @@ pub fn agent_spawn(
     };
 
     let live = Arc::new(LiveChild {
-        stdin: Mutex::new(stdin),
+        stdin: Mutex::new(Some(stdin)),
         pid,
         exited: AtomicBool::new(false),
     });
@@ -320,12 +321,23 @@ pub fn agent_write(
     let live = host
         .get(&session_id)
         .ok_or_else(|| "Agent process is not running".to_string())?;
-    let mut stdin = live.stdin.lock().unwrap_or_else(|e| e.into_inner());
+    let mut slot = live.stdin.lock().unwrap_or_else(|e| e.into_inner());
+    let stdin = slot
+        .as_mut()
+        .ok_or_else(|| "Agent stdin is closed".to_string())?;
     stdin
         .write_all(line.as_bytes())
         .and_then(|_| stdin.write_all(b"\n"))
         .and_then(|_| stdin.flush())
         .map_err(|e| format!("Failed to write to agent: {e}"))
+}
+
+#[tauri::command(async)]
+pub fn agent_close_stdin(host: State<'_, AgentHost>, session_id: String) -> Result<(), String> {
+    if let Some(live) = host.get(&session_id) {
+        live.stdin.lock().unwrap_or_else(|e| e.into_inner()).take();
+    }
+    Ok(())
 }
 
 #[tauri::command(async)]

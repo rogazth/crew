@@ -87,6 +87,7 @@ export function watchAgent(
 export const resolveBinary = api.resolveBinary;
 export const spawnAgent = api.spawnAgent;
 export const writeAgent = api.writeAgent;
+export const closeAgentStdin = api.closeAgentStdin;
 export const killAgent = api.killAgent;
 
 export function writeJson(sessionId: string, value: unknown): Promise<void> {

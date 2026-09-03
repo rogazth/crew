@@ -80,6 +80,9 @@ export const spawnAgent = (
 export const writeAgent = (sessionId: string, line: string): Promise<void> =>
   invoke("agent_write", { sessionId, line });
 
+export const closeAgentStdin = (sessionId: string): Promise<void> =>
+  invoke("agent_close_stdin", { sessionId });
+
 export const killAgent = (sessionId: string): Promise<void> =>
   invoke("agent_kill", { sessionId });
 

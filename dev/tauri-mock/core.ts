@@ -93,6 +93,7 @@ const commands: Record<string, (args: Row) => unknown> = {
   agent_resolve: ({ name }) => ({ path: `/mock/bin/${name}` }),
   agent_spawn: ({ sessionId }) => mockAgent(sessionId as string),
   agent_write: ({ sessionId, line }) => void mockAgentInput(sessionId as string, line as string),
+  agent_close_stdin: () => undefined,
   agent_kill: () => undefined,
   agent_kill_all: () => undefined,
   agent_running: () => [],
