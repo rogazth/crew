@@ -63,7 +63,7 @@ export function RoutinesSection({ routines, onChange, onRunNow }: Props) {
       ) : (
         <ul className="flex flex-col border-t border-border">
           {routines.map((routine, index) => (
-            <li key={routine.id ?? `new-${index}`} className="border-b border-border last:border-b-0">
+            <li key={routine.key} className="border-b border-border last:border-b-0">
               {open === index ? (
                 <Editor
                   routine={routine}

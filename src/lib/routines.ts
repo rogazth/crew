@@ -32,9 +32,10 @@ export type Routine = Omit<RoutineRow, "runsJson"> & { runs: RoutineRun[] };
 
 export type ScheduledRoutine = { routine: RoutineRow; session: Session; cwd: string };
 
-/** What the sheet edits. `id` is missing until the first save. */
+/** What the sheet edits. `id` is missing until the first save; `key` is for React. */
 export type RoutineDraft = {
   id?: string;
+  key: string;
   name: string;
   enabled: boolean;
   prompt: string;
@@ -54,7 +55,7 @@ export const CADENCES: Array<{ id: string; label: string; schedule: Schedule }> 
 ];
 
 export function newRoutineDraft(): RoutineDraft {
-  return { name: "", enabled: true, prompt: "", schedule: CADENCES[3]!.schedule, runs: [] };
+  return { key: crypto.randomUUID(), name: "", enabled: true, prompt: "", schedule: CADENCES[3]!.schedule, runs: [] };
 }
 
 export function parseRuns(raw: string): RoutineRun[] {
@@ -78,6 +79,7 @@ export function fromRow(row: RoutineRow): Routine {
 export function toDraft(routine: Routine): RoutineDraft {
   return {
     id: routine.id,
+    key: routine.id,
     name: routine.name,
     enabled: routine.enabled,
     prompt: routine.prompt,
