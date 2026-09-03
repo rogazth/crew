@@ -1,13 +1,18 @@
 import { useLayoutEffect, useMemo, useRef } from "react";
-import { isOpen, type Answers, type ApprovalDecision, type Block } from "../../lib/blocks";
+import { isOpen, type Answers, type ApprovalDecision, type Block, type TurnUsage } from "../../lib/blocks";
+import { dayLabel } from "../../lib/time";
 import { ActivityGroup, ThinkingLine } from "./ActivityLine";
-import { AssistantMessage, Note, UserMessage } from "./Message";
+import { AssistantMessage, DateBreak, Note, TurnFooter, UserMessage } from "./Message";
 
 const NEAR_BOTTOM_PX = 16;
+/** A gap this long between messages gets a date line, like a chat app. */
+const DATE_BREAK_MS = 30 * 60_000;
 
 type Row =
   | { kind: "message"; block: Block }
-  | { kind: "activity"; id: string; blocks: Block[] };
+  | { kind: "activity"; id: string; blocks: Block[] }
+  | { kind: "footer"; id: string; usage: TurnUsage; at?: number }
+  | { kind: "date"; id: string; at: number };
 
 type Speaker = "user" | "agent" | "meta";
 
@@ -21,7 +26,8 @@ type Props = {
 const ACTIVITY_ROLES = new Set(["tool", "approval", "question", "reasoning"]);
 
 function speaker(row: Row): Speaker {
-  if (row.kind === "activity") return "agent";
+  if (row.kind === "activity" || row.kind === "footer") return "agent";
+  if (row.kind === "date") return "meta";
   if (row.block.role === "user") return "user";
   if (row.block.role === "system") return "meta";
   return "agent";
@@ -30,6 +36,7 @@ function speaker(row: Row): Speaker {
 function groupRows(blocks: Block[]): Row[] {
   const rows: Row[] = [];
   let activity: Block[] = [];
+  let lastAt: number | undefined;
   const flush = () => {
     if (activity.length === 0) return;
     rows.push({ kind: "activity", id: activity[0]!.id, blocks: activity });
@@ -42,20 +49,35 @@ function groupRows(blocks: Block[]): Row[] {
     }
     if (block.role === "assistant" && !block.text && block.streaming) continue;
     flush();
+    if (block.role === "user" && block.at !== undefined) {
+      if (lastAt === undefined || block.at - lastAt > DATE_BREAK_MS) {
+        rows.push({ kind: "date", id: `date-${block.id}`, at: block.at });
+      }
+    }
     rows.push({ kind: "message", block });
+    if (block.role === "assistant" && block.usage && !block.streaming) {
+      rows.push({
+        kind: "footer",
+        id: `footer-${block.id}`,
+        usage: block.usage,
+        ...(block.at !== undefined ? { at: block.at } : {}),
+      });
+    }
+    if (block.at !== undefined) lastAt = block.at;
   }
   flush();
   return rows;
 }
 
-/** Same speaker 6, a change of speaker 16, notes 12. */
+/** Same speaker 6, a change of speaker 20, meta 12; the footer hugs its reply. */
 function gapBefore(prev: Row | undefined, current: Row): string {
   if (!prev) return "";
+  if (current.kind === "footer") return "mt-1.5";
   const from = speaker(prev);
   const to = speaker(current);
   if (from === "meta" || to === "meta") return "mt-3";
   if (from === to) return "mt-1.5";
-  return "mt-4";
+  return "mt-5";
 }
 
 /** The pending tool row already is the live state; Thinking only fills a true gap. */
@@ -63,7 +85,7 @@ function showThinking(blocks: Block[], working: boolean): boolean {
   if (!working) return false;
   const last = blocks.at(-1);
   if (!last) return true;
-  if (last.role === "assistant" && last.streaming && last.text) return false;
+  if ((last.role === "assistant" || last.role === "reasoning") && last.streaming && last.text) return false;
   if (isOpen(last)) return false;
   return true;
 }
@@ -104,6 +126,20 @@ export function Transcript({ blocks, working, onApprove, onAnswer }: Props) {
               </div>
             );
           }
+          if (row.kind === "footer") {
+            return (
+              <div key={row.id} className={className}>
+                <TurnFooter usage={row.usage} {...(row.at !== undefined ? { at: row.at } : {})} />
+              </div>
+            );
+          }
+          if (row.kind === "date") {
+            return (
+              <div key={row.id} className={className}>
+                <DateBreak label={dayLabel(row.at)} />
+              </div>
+            );
+          }
           const { block } = row;
           return (
             <div key={block.id} className={className}>
@@ -118,7 +154,7 @@ export function Transcript({ blocks, working, onApprove, onAnswer }: Props) {
           );
         })}
         {thinking && (
-          <div className={rows.length > 0 ? (speaker(rows.at(-1)!) === "agent" ? "mt-1.5" : "mt-4") : ""}>
+          <div className={rows.length > 0 ? (speaker(rows.at(-1)!) === "agent" ? "mt-1.5" : "mt-5") : ""}>
             <ThinkingLine />
           </div>
         )}

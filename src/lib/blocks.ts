@@ -37,6 +37,8 @@ export type Block = {
   id: string;
   role: BlockRole;
   text: string;
+  /** Wall clock, ms. Set on what the user sent and on the reply that closed a turn. */
+  at?: number;
   streaming?: boolean;
   files?: AttachedFile[];
   tool?: {
@@ -87,7 +89,7 @@ export type HarnessEvent =
   | { type: "question.resolved"; requestId: number; answers: Answers | null };
 
 export function newBlock(role: BlockRole, text = ""): Block {
-  return { id: crypto.randomUUID(), role, text };
+  return { id: crypto.randomUUID(), role, text, at: Date.now() };
 }
 
 export function parseBlocks(raw: string | null | undefined): Block[] {
@@ -155,7 +157,7 @@ export function applyEvent(blocks: Block[], event: HarnessEvent): Block[] {
       let index = settled.length - 1;
       while (index >= 0 && settled[index]?.role !== "assistant") index -= 1;
       if (index < 0) return settled;
-      return settled.map((block, i) => (i === index ? { ...block, usage } : block));
+      return settled.map((block, i) => (i === index ? { ...block, usage, at: Date.now() } : block));
     }
     case "tool.started": {
       const settled = settleStreaming(blocks);

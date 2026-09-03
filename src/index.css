@@ -189,6 +189,21 @@ body:has(button[data-sidebar="resize-handle"]:active) * {
   line-height: 18px;
   letter-spacing: -0.08px;
 }
+/* The user's turn: ink on the canvas, the one shape on the page that is not flush. */
+.crew-bubble {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-width: 100%;
+  padding: 8px 12px;
+  border-radius: 16px 16px 4px 16px;
+  background: var(--text-color-kumo-default);
+  color: var(--color-kumo-base);
+  overflow-wrap: anywhere;
+}
+.crew-chip-on-ink {
+  background: color-mix(in srgb, var(--color-kumo-base) 18%, transparent);
+}
 .crew-composer {
   display: flex;
   flex-direction: column;
