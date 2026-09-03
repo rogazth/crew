@@ -29,13 +29,14 @@ export const COMMANDS = {
   "open-palette": { label: "Command Palette", keys: "Mod+K" },
   "go-to-file": { label: "Go to File", keys: "Mod+P" },
   "open-actions": { label: "Show All Actions", keys: "Mod+Shift+P" },
-  "find-in-sidebar": { label: "Find in Sidebar", keys: "Mod+Shift+F" },
   "open-workspace": { label: "Open Workspace", keys: "Mod+O" },
+  "switch-workspace": { label: "Switch Workspace", keys: "Mod+Shift+O" },
 
   // Making things
   "new-agent": { label: "New Agent", keys: "Mod+N" },
   "new-session": { label: "New Session", keys: "Mod+Shift+N" },
 
+  "toggle-sidebar": { label: "Toggle Sidebar", keys: "Mod+B" },
   "open-settings": { label: "Settings", keys: "Mod+," },
   "save-file": { label: "Save File", keys: "Mod+S" },
 } as const satisfies Record<string, { label: string; keys: RegisterableHotkey }>;

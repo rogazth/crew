@@ -12,10 +12,13 @@ import { useCommand } from "../hooks/useCommand";
 import { useModKeyHeld } from "../hooks/useModKeyHeld";
 import { useTabOverflow } from "../hooks/useTabOverflow";
 import { commandKeys } from "../lib/commands";
+import { IS_MAC } from "../lib/hotkey";
 import { tabHotkey, tabTitle } from "../lib/tabs";
 import type { Session, Tab } from "../lib/types";
 
 type Props = {
+  /** With the sidebar hidden, the traffic lights land on this strip. */
+  inset: boolean;
   tabs: Tab[];
   activeId: string | null;
   sessions: Session[];
@@ -25,7 +28,7 @@ type Props = {
 };
 
 /** R2's tab strip: one 40px row, full-height tabs divided by hairlines, plus on the end. */
-export function TabBar({ tabs, activeId, sessions, onSelect, onClose, onLaunch }: Props) {
+export function TabBar({ inset, tabs, activeId, sessions, onSelect, onClose, onLaunch }: Props) {
   const [launcher, setLauncher] = useState(false);
   const modHeld = useModKeyHeld();
   const strip = useTabOverflow(tabs.map((tab) => tab.id).join("|"));
@@ -46,6 +49,7 @@ export function TabBar({ tabs, activeId, sessions, onSelect, onClose, onLaunch }
       data-tauri-drag-region
       className="flex h-10 shrink-0 items-stretch border-b border-border bg-sidebar"
     >
+      {inset && IS_MAC && <div className="w-[78px] shrink-0" />}
       <Tabs.Root
         value={activeId}
         onValueChange={(value) => onSelect(String(value))}

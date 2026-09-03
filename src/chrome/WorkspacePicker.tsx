@@ -60,10 +60,10 @@ export function WorkspacePicker(props: Props) {
       <Popover.Trigger
         data-tauri-drag-region="false"
         title={active?.path}
-        className="flex h-7 min-w-0 flex-1 items-center gap-1.5 rounded-md px-1.5 text-left text-kumo-default outline-none transition-colors hover:bg-hover data-popup-open:bg-hover"
+        className="flex h-8 w-full min-w-0 items-center gap-2.5 rounded-md px-2 text-left text-kumo-default outline-none transition-colors hover:bg-hover focus-visible:bg-hover data-popup-open:bg-hover"
       >
         <FolderIcon className="size-4 shrink-0 text-kumo-subtle" />
-        <span className="min-w-0 flex-1 truncate font-medium">
+        <span className="min-w-0 flex-1 truncate">
           {active?.name ?? "No workspace"}
         </span>
         <CaretUpDownIcon className="size-3.5 shrink-0 text-kumo-subtle" />

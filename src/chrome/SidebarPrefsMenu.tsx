@@ -75,14 +75,15 @@ export function SidebarPrefsMenu({ prefs, onChange }: Props) {
   return (
     <Menu.Root modal={false}>
       <Menu.Trigger
-        aria-label="Sidebar preferences"
-        title="Sidebar preferences"
+        aria-label="Customize sidebar"
+        title="Customize sidebar"
         data-tauri-drag-region="false"
-        className={`grid size-6 shrink-0 place-items-center rounded-md outline-none transition-colors hover:bg-hover hover:text-kumo-default data-popup-open:bg-hover data-popup-open:text-kumo-default ${
-          dirty ? "bg-selected text-kumo-default" : "text-kumo-subtle"
+        className={`relative grid size-8 shrink-0 place-items-center rounded-md outline-none transition-colors hover:bg-hover hover:text-kumo-default data-popup-open:bg-hover data-popup-open:text-kumo-default ${
+          dirty ? "text-kumo-default" : "text-kumo-subtle"
         }`}
       >
-        <SlidersHorizontalIcon className="size-3.5" />
+        <SlidersHorizontalIcon className="size-4" />
+        {dirty && <span className="absolute top-1.5 right-1.5 size-1.5 rounded-full bg-kumo-default" />}
       </Menu.Trigger>
 
       <Menu.Portal>

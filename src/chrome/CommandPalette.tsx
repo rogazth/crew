@@ -9,6 +9,7 @@ import {
   MagnifyingGlassIcon,
   PlusIcon,
   RobotIcon,
+  SidebarSimpleIcon,
   TerminalWindowIcon,
   type Icon,
 } from "@phosphor-icons/react";
@@ -264,8 +265,9 @@ const KIND_ICONS: Record<"agents" | "sessions" | "workspace", Icon> = {
 const ACTION_ICONS: Partial<Record<CommandId, Icon>> = {
   "open-launcher": PlusIcon,
   "reopen-tab": ArrowCounterClockwiseIcon,
-  "find-in-sidebar": MagnifyingGlassIcon,
   "open-workspace": FolderOpenIcon,
+  "switch-workspace": FolderIcon,
+  "toggle-sidebar": SidebarSimpleIcon,
   "new-agent": RobotIcon,
   "new-session": TerminalWindowIcon,
   "open-settings": GearIcon,

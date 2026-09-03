@@ -1,11 +1,7 @@
-import { Button, Collapsible, Input, Select } from "@cloudflare/kumo";
-import {
-  ArrowCounterClockwiseIcon,
-  CaretDownIcon,
-  MinusIcon,
-  PlusIcon,
-} from "@phosphor-icons/react";
+import { Button, Select } from "@cloudflare/kumo";
+import { ArrowCounterClockwiseIcon, MinusIcon, PlusIcon } from "@phosphor-icons/react";
 import { useMemo, useState } from "react";
+import { SettingsRow, SettingsSection } from "../chrome/SettingsRow";
 import { useTerminalPrefs } from "../hooks/useTerminalPrefs";
 import { installedMonoFonts } from "../lib/fonts";
 import {
@@ -29,154 +25,77 @@ export function TerminalSettings() {
   const set = <K extends keyof TerminalPrefs>(key: K, value: TerminalPrefs[K]) =>
     update({ ...prefs, [key]: value });
 
+  const stepper = (
+    key: "fontSize" | "fontWeight" | "fontWeightBold" | "lineHeight",
+    label: string,
+    limits: { min: number; max: number },
+    step = 1,
+  ) => (
+    <>
+      <Reset
+        hidden={prefs[key] === DEFAULT_TERMINAL_PREFS[key]}
+        onClick={() => set(key, DEFAULT_TERMINAL_PREFS[key])}
+      />
+      <Stepper
+        key={prefs[key]}
+        label={label}
+        value={prefs[key]}
+        limits={limits}
+        step={step}
+        onCommit={(value) => set(key, value)}
+      />
+    </>
+  );
+
   const autoNote = ligaturesEnabled({ ...prefs, ligatures: "auto" })
-    ? `Auto - enabled for "${prefs.fontFamily}".`
-    : `Auto - disabled for "${prefs.fontFamily}".`;
+    ? `Auto turns them on for "${prefs.fontFamily}".`
+    : `Auto leaves them off for "${prefs.fontFamily}".`;
 
   return (
-    <section className="flex flex-col gap-4">
-      <h2 className="font-medium">Typography</h2>
+    <>
+      <SettingsSection title="Typography">
+        <SettingsRow label="Font size" description="Size of terminal text, in pixels.">
+          {stepper("fontSize", "Font size", LIMITS.fontSize)}
+        </SettingsRow>
+        <SettingsRow label="Font family" description="Monospace font for every terminal.">
+          <Reset
+            hidden={prefs.fontFamily === DEFAULT_TERMINAL_PREFS.fontFamily}
+            onClick={() => set("fontFamily", DEFAULT_TERMINAL_PREFS.fontFamily)}
+          />
+          <Select
+            aria-label="Font family"
+            size="sm"
+            className="w-56"
+            value={prefs.fontFamily}
+            onValueChange={(value) => value && set("fontFamily", value)}
+            items={fonts.map((name) => ({ value: name, label: name }))}
+          />
+        </SettingsRow>
+      </SettingsSection>
 
-      <Group>
-        <Row label="Font size">
-          <div className="flex items-center gap-1.5">
-            <Button
-              variant="secondary"
-              shape="square"
-              size="sm"
-              icon={MinusIcon}
-              aria-label="Smaller"
-              disabled={prefs.fontSize <= LIMITS.fontSize.min}
-              onClick={() => set("fontSize", prefs.fontSize - 1)}
-            />
-            <NumberField
-              key={prefs.fontSize}
-              label="Font size"
-              value={prefs.fontSize}
-              limits={LIMITS.fontSize}
-              onCommit={(value) => set("fontSize", value)}
-            />
-            <Button
-              variant="secondary"
-              shape="square"
-              size="sm"
-              icon={PlusIcon}
-              aria-label="Larger"
-              disabled={prefs.fontSize >= LIMITS.fontSize.max}
-              onClick={() => set("fontSize", prefs.fontSize + 1)}
-            />
-            <Unit>px</Unit>
-          </div>
-        </Row>
-
-        <Row label="Font family">
-          <div className="flex w-64 items-center gap-1.5">
-            <Select
-              hideLabel
-              label="Font family"
-              size="sm"
-              className="min-w-0 flex-1"
-              value={prefs.fontFamily}
-              onValueChange={(value) => value && set("fontFamily", value)}
-              items={fonts.map((name) => ({ value: name, label: name }))}
-            />
-            <Reset
-              hidden={prefs.fontFamily === DEFAULT_TERMINAL_PREFS.fontFamily}
-              onClick={() => set("fontFamily", DEFAULT_TERMINAL_PREFS.fontFamily)}
-            />
-          </div>
-        </Row>
-      </Group>
-
-      <Collapsible.Root>
-        <Collapsible.Trigger className="group flex items-center gap-1.5 rounded-md py-1 pr-2 font-medium text-kumo-default outline-none hover:text-kumo-default focus-visible:ring-[1.5px] focus-visible:ring-kumo-focus/50">
-          <CaretDownIcon className="size-3.5 -rotate-90 text-kumo-subtle transition-transform group-data-panel-open:rotate-0" />
-          Advanced
-        </Collapsible.Trigger>
-        <Collapsible.Panel>
-          <div className="pt-3">
-            <Group>
-              <Row label="Font weight" hint={`Default: ${DEFAULT_TERMINAL_PREFS.fontWeight}`}>
-                <NumberField
-                  key={prefs.fontWeight}
-                  label="Font weight"
-                  value={prefs.fontWeight}
-                  limits={LIMITS.fontWeight}
-                  step={100}
-                  onCommit={(value) => set("fontWeight", value)}
-                />
-                <Unit>100-900</Unit>
-              </Row>
-              <Row
-                label="Bold font weight"
-                hint={`Default: ${DEFAULT_TERMINAL_PREFS.fontWeightBold}`}
-              >
-                <NumberField
-                  key={prefs.fontWeightBold}
-                  label="Bold font weight"
-                  value={prefs.fontWeightBold}
-                  limits={LIMITS.fontWeight}
-                  step={100}
-                  onCommit={(value) => set("fontWeightBold", value)}
-                />
-                <Unit>100-900</Unit>
-              </Row>
-              <Row label="Line height" hint={`Default: ${DEFAULT_TERMINAL_PREFS.lineHeight}`}>
-                <NumberField
-                  key={prefs.lineHeight}
-                  label="Line height"
-                  value={prefs.lineHeight}
-                  limits={LIMITS.lineHeight}
-                  step={0.1}
-                  onCommit={(value) => set("lineHeight", value)}
-                />
-                <Unit>1-3</Unit>
-              </Row>
-              <Row label="Font ligatures" hint={autoNote}>
-                <Segmented
-                  options={LIGATURES}
-                  value={prefs.ligatures}
-                  onChange={(value) => set("ligatures", value)}
-                />
-              </Row>
-            </Group>
-          </div>
-        </Collapsible.Panel>
-      </Collapsible.Root>
-    </section>
+      <SettingsSection title="Advanced">
+        <SettingsRow label="Font weight" description="Weight for regular text, 100 to 900.">
+          {stepper("fontWeight", "Font weight", LIMITS.fontWeight, 100)}
+        </SettingsRow>
+        <SettingsRow label="Bold font weight" description="Weight for bold text, 100 to 900.">
+          {stepper("fontWeightBold", "Bold font weight", LIMITS.fontWeight, 100)}
+        </SettingsRow>
+        <SettingsRow label="Line height" description="Row height as a multiple of the font size.">
+          {stepper("lineHeight", "Line height", LIMITS.lineHeight, 0.1)}
+        </SettingsRow>
+        <SettingsRow label="Font ligatures" description={autoNote}>
+          <Select
+            aria-label="Font ligatures"
+            size="sm"
+            className="w-28"
+            value={prefs.ligatures}
+            onValueChange={(value) => value && set("ligatures", value as Ligatures)}
+            items={LIGATURES}
+          />
+        </SettingsRow>
+      </SettingsSection>
+    </>
   );
-}
-
-function Group({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="divide-y divide-border overflow-hidden rounded-lg ring ring-kumo-line">
-      {children}
-    </div>
-  );
-}
-
-function Row({
-  label,
-  hint,
-  children,
-}: {
-  label: string;
-  hint?: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className="flex min-h-12 items-center gap-4 px-3 py-2">
-      <div className="min-w-0 flex-1">
-        <p className="truncate">{label}</p>
-        {hint && <p className="mt-0.5 text-[11px] text-kumo-subtle">{hint}</p>}
-      </div>
-      <div className="flex shrink-0 items-center gap-2">{children}</div>
-    </div>
-  );
-}
-
-function Unit({ children }: { children: React.ReactNode }) {
-  return <span className="w-14 text-[11px] text-kumo-subtle tabular-nums">{children}</span>;
 }
 
 function Reset({ hidden, onClick }: { hidden: boolean; onClick: () => void }) {
@@ -187,27 +106,32 @@ function Reset({ hidden, onClick }: { hidden: boolean; onClick: () => void }) {
       size="sm"
       icon={ArrowCounterClockwiseIcon}
       aria-label="Reset to default"
-      className={hidden ? "invisible" : ""}
+      className={`text-kumo-subtle ${hidden ? "invisible" : ""}`}
       onClick={onClick}
     />
   );
 }
 
+/** Float steps (0.1) accumulate noise; snapping through toFixed keeps 1.2 as "1.2". */
+function snap(value: number, step: number, limits: { min: number; max: number }) {
+  return clamp(Number((Math.round(value / step) * step).toFixed(3)), limits);
+}
+
 /**
- * Edits stay local until blur or Enter, then clamp into range; Escape restores.
- * Callers key it by the committed value so an outside change (the stepper) resets the draft.
+ * Typed edits stay local until blur or Enter, then clamp into range; Escape restores.
+ * Callers key it by the committed value so an outside change (reset) drops the draft.
  */
-function NumberField({
+function Stepper({
   label,
   value,
   limits,
-  step = 1,
+  step,
   onCommit,
 }: {
   label: string;
   value: number;
   limits: { min: number; max: number };
-  step?: number;
+  step: number;
   onCommit: (value: number) => void;
 }) {
   const [draft, setDraft] = useState(String(value));
@@ -218,59 +142,65 @@ function NumberField({
       setDraft(String(value));
       return;
     }
-    const next = clamp(Math.round(parsed / step) * step, limits);
+    const next = snap(parsed, step, limits);
     setDraft(String(next));
     if (next !== value) onCommit(next);
   };
+  const nudge = (direction: 1 | -1) => onCommit(snap(value + direction * step, step, limits));
 
   return (
-    <Input
-      type="number"
-      size="sm"
-      aria-label={label}
-      min={limits.min}
-      max={limits.max}
-      step={step}
-      value={draft}
-      className="w-20 text-center tabular-nums"
-      onChange={(event) => setDraft(event.target.value)}
-      onBlur={commit}
-      onKeyDown={(event) => {
-        if (event.key === "Enter") event.currentTarget.blur();
-        if (event.key === "Escape") setDraft(String(value));
-      }}
-    />
+    <div className="flex h-7 items-center rounded-md bg-kumo-control ring ring-kumo-line has-[input:focus]:ring-[1.5px] has-[input:focus]:ring-kumo-focus/50">
+      <StepButton
+        icon={MinusIcon}
+        label="Smaller"
+        disabled={value <= limits.min}
+        onClick={() => nudge(-1)}
+      />
+      <input
+        type="number"
+        aria-label={label}
+        min={limits.min}
+        max={limits.max}
+        step={step}
+        value={draft}
+        className="w-12 [appearance:textfield] bg-transparent text-center tabular-nums outline-none [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+        onChange={(event) => setDraft(event.target.value)}
+        onBlur={commit}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") event.currentTarget.blur();
+          if (event.key === "Escape") setDraft(String(value));
+        }}
+      />
+      <StepButton
+        icon={PlusIcon}
+        label="Larger"
+        disabled={value >= limits.max}
+        onClick={() => nudge(1)}
+      />
+    </div>
   );
 }
 
-function Segmented<T extends string>({
-  options,
-  value,
-  onChange,
+function StepButton({
+  icon: Glyph,
+  label,
+  disabled,
+  onClick,
 }: {
-  options: { value: T; label: string }[];
-  value: T;
-  onChange: (value: T) => void;
+  icon: typeof MinusIcon;
+  label: string;
+  disabled: boolean;
+  onClick: () => void;
 }) {
   return (
-    <div role="radiogroup" className="flex rounded-lg bg-kumo-control p-0.5 ring ring-kumo-line">
-      {options.map((option) => {
-        const active = option.value === value;
-        return (
-          <button
-            key={option.value}
-            type="button"
-            role="radio"
-            aria-checked={active}
-            onClick={() => onChange(option.value)}
-            className={`rounded-md px-3 py-1 transition-colors ${
-              active ? "bg-selected text-kumo-default" : "text-kumo-subtle hover:text-kumo-default"
-            }`}
-          >
-            {option.label}
-          </button>
-        );
-      })}
-    </div>
+    <button
+      type="button"
+      aria-label={label}
+      disabled={disabled}
+      onClick={onClick}
+      className="flex size-7 items-center justify-center rounded-md text-kumo-subtle transition-colors hover:text-kumo-default disabled:text-kumo-placeholder"
+    >
+      <Glyph className="size-3.5" />
+    </button>
   );
 }

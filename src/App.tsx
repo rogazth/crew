@@ -39,6 +39,7 @@ export function App() {
   const [sheet, setSheet] = useState<Sheet | null>(null);
   const [confirm, setConfirm] = useState<Confirm | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
   const [settings, setSettings] = useState<SettingsSectionId | null>(null);
 
   const openSession = useCallback(
@@ -152,6 +153,12 @@ export function App() {
     "go-to-file": () => togglePalette("files"),
     "open-actions": () => togglePalette("actions"),
     "open-workspace": workspaces.create,
+    // The picker anchors to a sidebar row, so a hidden sidebar comes back first.
+    "switch-workspace": () => {
+      setSidebarOpen(true);
+      setPickerOpen((open) => !open);
+    },
+    "toggle-sidebar": () => setSidebarOpen((open) => !open),
     "new-agent": newAgent,
     "new-session": () => void newSession(),
     "open-settings": () => setSettings((open) => (open ? null : SETTINGS_DEFAULT)),
@@ -183,12 +190,11 @@ export function App() {
     <TerminalPrefsProvider>
     <Sidebar.Provider
       contained
-      collapsible="none"
+      collapsible="offcanvas"
       animationDuration={0}
       resizable
-      // The resize handle collapses the sidebar below minWidth; pinning `open`
-      // turns that into a clamp, since `collapsible="none"` has nothing to show.
-      open
+      open={sidebarOpen}
+      onOpenChange={setSidebarOpen}
       defaultWidth={sidebar.width}
       minWidth={200}
       maxWidth={560}
@@ -219,7 +225,6 @@ export function App() {
             onSelect: openSession,
             onNewAgent: newAgent,
             onNewSession: newSession,
-            onSearch: () => togglePalette("all"),
             onOpenSettings: () => setSettings(SETTINGS_DEFAULT),
             onEdit: (session) => setSheet({ session }),
             onRename: (session, name) => void rename(session.id, name),
@@ -235,6 +240,7 @@ export function App() {
         {/* Hidden, not unmounted: the terminals underneath keep their processes. */}
         <div hidden={settings !== null} className="flex min-h-0 flex-1 flex-col">
           <TabBar
+            inset={!sidebarOpen}
             tabs={tabs.tabs}
             activeId={tabs.active?.id ?? null}
             sessions={sessions}

@@ -18,6 +18,10 @@
   --color-selected: light-dark(oklch(89.8% 0 0), oklch(28.5% 0 0));
   --color-accent: var(--color-kumo-brand);
   --color-danger: var(--color-kumo-danger);
+  /* Ink mixed over transparent, not a fixed grey: the same card reads right on
+     any surface and flips with the theme without a second value. */
+  --color-card: color-mix(in srgb, var(--text-color-kumo-default) 6%, transparent);
+  --color-hairline: color-mix(in srgb, var(--text-color-kumo-default) 8%, transparent);
 }
 
 /* Neutral brand: primary buttons and focus rings read as dark grey, not Cloudflare blue. */
