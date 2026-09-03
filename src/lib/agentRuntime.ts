@@ -61,6 +61,7 @@ export async function send(
   cwd: string,
   text: string,
   files: AttachedFile[] = [],
+  options: { fresh?: boolean } = {},
 ): Promise<void> {
   const id = session.id;
   if (transcript.read(id).working) return;
@@ -97,6 +98,7 @@ export async function send(
       description: session.description,
       autonomy: session.autonomy,
       resume: session.providerSessionId,
+      ...(options.fresh ? { fresh: true } : {}),
       text,
       ...(files.length > 0 ? { files: files.map((file) => file.path) } : {}),
       onEvent,

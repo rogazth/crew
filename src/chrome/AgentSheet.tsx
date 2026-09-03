@@ -4,7 +4,16 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Kbd } from "./Kbd";
 import { ModelPicker } from "./ModelPicker";
 import { ProviderIcon } from "./ProviderIcon";
+import { getRoutine } from "../lib/api";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER, type ProviderId } from "../lib/providers";
+import {
+  CADENCES,
+  DEFAULT_ROUTINE,
+  cadenceOf,
+  parseSchedule,
+  type RoutineDraft,
+  type Schedule,
+} from "../lib/routines";
 import type { Autonomy, Session } from "../lib/types";
 
 export type AgentDraft = {
@@ -14,6 +23,7 @@ export type AgentDraft = {
   description: string;
   notifications: boolean;
   autonomy: Autonomy;
+  routine: RoutineDraft;
 };
 
 type Props = {
@@ -31,6 +41,7 @@ const EMPTY: AgentDraft = {
   description: "",
   notifications: true,
   autonomy: "ask",
+  routine: DEFAULT_ROUTINE,
 };
 
 /** Instant creation reads as cheap; a short floor makes it feel deliberate. */
@@ -68,9 +79,28 @@ export function AgentSheet({ session, existingNames, onSave, onClose }: Props) {
             description: session.description,
             notifications: session.notifications,
             autonomy: session.autonomy,
+            routine: DEFAULT_ROUTINE,
           }
         : EMPTY,
     );
+    if (!session) return;
+    let cancelled = false;
+    getRoutine(session.id)
+      .then((routine) => {
+        if (cancelled || !routine) return;
+        setDraft((prev) => ({
+          ...prev,
+          routine: {
+            enabled: routine.enabled,
+            prompt: routine.prompt,
+            schedule: parseSchedule(routine.schedule),
+          },
+        }));
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
   }, [session]);
 
   const name = draft.name.trim();
@@ -211,6 +241,31 @@ export function AgentSheet({ session, existingNames, onSave, onClose }: Props) {
               }
             />
           </div>
+
+          <div className="rounded-xl border border-border bg-sidebar p-3">
+            <Switch
+              variant="neutral"
+              controlFirst={false}
+              checked={draft.routine.enabled}
+              onCheckedChange={(checked) =>
+                setDraft({ ...draft, routine: { ...draft.routine, enabled: checked } })
+              }
+              label={
+                <span className="block">
+                  <span className="block font-medium">Run on a schedule</span>
+                  <span className="mt-0.5 block font-normal text-kumo-subtle">
+                    Starts a fresh conversation with this prompt and pings you when done
+                  </span>
+                </span>
+              }
+            />
+            {draft.routine.enabled && (
+              <ScheduleFields
+                routine={draft.routine}
+                onChange={(routine) => setDraft({ ...draft, routine })}
+              />
+            )}
+          </div>
         </div>
 
         <footer className="flex shrink-0 items-center justify-end gap-2 border-t border-border p-3">
@@ -223,6 +278,75 @@ export function AgentSheet({ session, existingNames, onSave, onClose }: Props) {
           </Button>
         </footer>
       </aside>
+    </div>
+  );
+}
+
+const FIELD =
+  "h-8 rounded-md bg-kumo-control px-2 text-kumo-default ring ring-kumo-line outline-none focus-visible:ring-[1.5px] focus-visible:ring-kumo-focus/50";
+
+function ScheduleFields({
+  routine,
+  onChange,
+}: {
+  routine: RoutineDraft;
+  onChange: (routine: RoutineDraft) => void;
+}) {
+  const schedule = routine.schedule;
+  const time =
+    schedule.kind === "daily"
+      ? `${String(schedule.hour).padStart(2, "0")}:${String(schedule.minute).padStart(2, "0")}`
+      : "";
+
+  const pickCadence = (id: string) => {
+    const base = CADENCES.find((c) => c.id === id)?.schedule ?? DEFAULT_ROUTINE.schedule;
+    const next: Schedule =
+      base.kind === "daily" && schedule.kind === "daily"
+        ? { ...base, hour: schedule.hour, minute: schedule.minute }
+        : base;
+    onChange({ ...routine, schedule: next });
+  };
+
+  const pickTime = (value: string) => {
+    if (schedule.kind !== "daily") return;
+    const [h, m] = value.split(":").map(Number);
+    if (h === undefined || m === undefined || Number.isNaN(h) || Number.isNaN(m)) return;
+    onChange({ ...routine, schedule: { ...schedule, hour: h, minute: m } });
+  };
+
+  return (
+    <div className="mt-3 flex flex-col gap-2.5">
+      <div className="flex gap-2">
+        <select
+          aria-label="Cadence"
+          value={cadenceOf(schedule)}
+          onChange={(event) => pickCadence(event.target.value)}
+          className={`${FIELD} min-w-0 flex-1`}
+        >
+          {CADENCES.map((c) => (
+            <option key={c.id} value={c.id}>
+              {c.label}
+            </option>
+          ))}
+        </select>
+        {schedule.kind === "daily" && (
+          <input
+            type="time"
+            aria-label="Time"
+            value={time}
+            onChange={(event) => pickTime(event.target.value)}
+            className={`${FIELD} w-[104px] tabular-nums`}
+          />
+        )}
+      </div>
+      <InputArea
+        aria-label="Scheduled prompt"
+        className="w-full"
+        rows={3}
+        value={routine.prompt}
+        placeholder="e.g. Check Jira for tickets assigned to me and summarize what changed since yesterday"
+        onChange={(e) => onChange({ ...routine, prompt: e.target.value })}
+      />
     </div>
   );
 }

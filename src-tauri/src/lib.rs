@@ -2,6 +2,7 @@ mod agent;
 mod files;
 mod menu;
 mod pty;
+mod routine;
 mod session;
 mod store;
 mod workspace;
@@ -44,6 +45,11 @@ pub fn run() {
             session::session_get_blocks,
             session::session_set_blocks,
             session::session_set_provider_session,
+            routine::routine_get,
+            routine::routine_list,
+            routine::routine_upsert,
+            routine::routine_delete,
+            routine::routine_mark_run,
             store::state_get,
             store::state_set,
             files::list_project_files,

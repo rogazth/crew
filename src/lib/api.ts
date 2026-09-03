@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
+import type { Routine, ScheduledRoutine } from "./routines";
 import type { Autonomy, ProjectFile, Session, SessionKind, SessionStatus, Workspace } from "./types";
 
 /** Native picker. No filters: any document the agent can read. */
@@ -89,6 +90,25 @@ export const killAgent = (sessionId: string): Promise<void> =>
 export const killAllAgents = (): Promise<void> => invoke("agent_kill_all");
 
 export const runningAgents = (): Promise<string[]> => invoke("agent_running");
+
+export const getRoutine = (sessionId: string): Promise<Routine | null> =>
+  invoke("routine_get", { sessionId });
+
+export const listRoutines = (): Promise<ScheduledRoutine[]> => invoke("routine_list");
+
+export const upsertRoutine = (input: {
+  sessionId: string;
+  enabled: boolean;
+  prompt: string;
+  schedule: string;
+  nextRunAt: number | null;
+}): Promise<Routine> => invoke("routine_upsert", input);
+
+export const deleteRoutine = (sessionId: string): Promise<void> =>
+  invoke("routine_delete", { sessionId });
+
+export const markRoutineRun = (id: string, lastRunAt: number, nextRunAt: number | null): Promise<void> =>
+  invoke("routine_mark_run", { id, lastRunAt, nextRunAt });
 
 export const stateGet = (key: string): Promise<string | null> => invoke("state_get", { key });
 

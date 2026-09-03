@@ -140,6 +140,25 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
             params![now_millis()],
         )?;
     }
+    if current < 7 {
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS routines (
+               id          TEXT PRIMARY KEY,
+               session_id  TEXT NOT NULL UNIQUE REFERENCES sessions(id) ON DELETE CASCADE,
+               enabled     INTEGER NOT NULL DEFAULT 1,
+               prompt      TEXT NOT NULL,
+               schedule    TEXT NOT NULL,
+               last_run_at INTEGER,
+               next_run_at INTEGER,
+               created_at  INTEGER NOT NULL,
+               updated_at  INTEGER NOT NULL
+             );",
+        )?;
+        conn.execute(
+            "INSERT INTO schema_migrations (version, applied_at) VALUES (7, ?1)",
+            params![now_millis()],
+        )?;
+    }
     Ok(())
 }
 

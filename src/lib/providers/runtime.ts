@@ -10,6 +10,8 @@ export type TurnInput = {
   description: string;
   autonomy: Autonomy;
   resume?: string | null;
+  /** Start a new vendor session instead of resuming: the episode is cut here. */
+  fresh?: boolean;
   text: string;
   files?: string[];
   onEvent: (event: HarnessEvent) => void;

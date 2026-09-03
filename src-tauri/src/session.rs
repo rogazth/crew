@@ -24,6 +24,11 @@ pub struct Session {
     pub updated_at: i64,
 }
 
+/// 13 columns, aliased on `s`, so a join can read a session at an offset.
+pub const SESSION_COLUMNS: &str = "s.id, s.workspace_id, s.kind, s.name, s.provider, s.model,
+                                   s.provider_session_id, s.description, s.notifications,
+                                   s.status, s.created_at, s.updated_at, s.autonomy";
+
 const SELECT_BY_WORKSPACE: &str = "SELECT id, workspace_id, kind, name, provider, model,
                                           provider_session_id, description, notifications,
                                           status, created_at, updated_at, autonomy
@@ -31,21 +36,21 @@ const SELECT_BY_WORKSPACE: &str = "SELECT id, workspace_id, kind, name, provider
                                    WHERE workspace_id = ?1
                                    ORDER BY sort_order ASC, created_at ASC";
 
-fn row_to_session(row: &rusqlite::Row) -> rusqlite::Result<Session> {
+pub fn row_to_session(row: &rusqlite::Row, at: usize) -> rusqlite::Result<Session> {
     Ok(Session {
-        id: row.get(0)?,
-        workspace_id: row.get(1)?,
-        kind: row.get(2)?,
-        name: row.get(3)?,
-        provider: row.get(4)?,
-        model: row.get(5)?,
-        provider_session_id: row.get(6)?,
-        description: row.get(7)?,
-        notifications: row.get::<_, i64>(8)? != 0,
-        autonomy: row.get(12)?,
-        status: row.get(9)?,
-        created_at: row.get(10)?,
-        updated_at: row.get(11)?,
+        id: row.get(at)?,
+        workspace_id: row.get(at + 1)?,
+        kind: row.get(at + 2)?,
+        name: row.get(at + 3)?,
+        provider: row.get(at + 4)?,
+        model: row.get(at + 5)?,
+        provider_session_id: row.get(at + 6)?,
+        description: row.get(at + 7)?,
+        notifications: row.get::<_, i64>(at + 8)? != 0,
+        autonomy: row.get(at + 12)?,
+        status: row.get(at + 9)?,
+        created_at: row.get(at + 10)?,
+        updated_at: row.get(at + 11)?,
     })
 }
 
@@ -53,7 +58,7 @@ fn row_to_session(row: &rusqlite::Row) -> rusqlite::Result<Session> {
 pub fn session_list(store: State<Store>, workspace_id: String) -> Result<Vec<Session>, String> {
     store.with(|conn| {
         let mut stmt = conn.prepare_cached(SELECT_BY_WORKSPACE)?;
-        let rows = stmt.query_map(params![workspace_id], row_to_session)?;
+        let rows = stmt.query_map(params![workspace_id], |row| row_to_session(row, 0))?;
         rows.collect()
     })
 }

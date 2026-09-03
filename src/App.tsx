@@ -1,5 +1,5 @@
 import { Sidebar } from "@cloudflare/kumo";
-import { useCallback, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useState, type CSSProperties } from "react";
 import { AgentSheet, type AgentDraft } from "./chrome/AgentSheet";
 import { CommandPalette, type PaletteMode } from "./chrome/CommandPalette";
 import { ConfirmDialog, type Confirm } from "./chrome/ConfirmDialog";
@@ -18,6 +18,7 @@ import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./lib/providers";
 import { fileTabId, sessionTabId, stubTabId } from "./lib/tabs";
 import type { ProjectFile, Session, StubKind, Workspace } from "./lib/types";
 import { SETTINGS_DEFAULT, type SettingsSectionId } from "./lib/settings";
+import { saveRoutine, startScheduler } from "./lib/scheduler";
 import { nextSessionName } from "./lib/workspaces";
 import { SettingsView } from "./surfaces/SettingsView";
 import { WorkspacePanes } from "./surfaces/WorkspacePanes";
@@ -25,6 +26,7 @@ import { WorkspacePanes } from "./surfaces/WorkspacePanes";
 type Sheet = { session: Session | null };
 
 export function App() {
+  useEffect(startScheduler, []);
   useSelectAllScope();
 
   const workspaces = useWorkspaces();
@@ -96,12 +98,15 @@ export function App() {
   const saveSheet = useCallback(
     async (draft: AgentDraft) => {
       const editing = sheet?.session;
+      let id = editing?.id ?? null;
       if (editing) {
         await update(editing.id, draft);
       } else {
         const session = await create("agent", draft);
         if (session) openSession(session);
+        id = session?.id ?? null;
       }
+      if (id) await saveRoutine(id, draft.routine);
     },
     [create, openSession, sheet, update],
   );

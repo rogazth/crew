@@ -163,6 +163,10 @@ async function sendTurn(input: TurnInput): Promise<void> {
 
 async function ensureLive(input: TurnInput): Promise<Live> {
   const existing = liveByThread.get(input.sessionId);
+  if (input.fresh) {
+    if (existing) await stopSession(input.sessionId);
+    resumeByThread.delete(input.sessionId);
+  }
   if (
     existing &&
     existing.cwd === input.cwd &&
@@ -178,7 +182,8 @@ async function ensureLive(input: TurnInput): Promise<Live> {
   // old session would resume with paths that no longer exist.
   const stored = resumeByThread.get(input.sessionId);
   const movedAway = stored != null && stored.cwd !== input.cwd;
-  const resume = movedAway ? undefined : (stored?.sessionId ?? input.resume?.trim() ?? undefined);
+  const resume =
+    movedAway || input.fresh ? undefined : (stored?.sessionId ?? input.resume?.trim() ?? undefined);
   const claudeSessionId = resume || crypto.randomUUID();
 
   const live: Live = {
