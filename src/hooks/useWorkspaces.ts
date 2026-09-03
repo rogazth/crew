@@ -60,6 +60,26 @@ export function useWorkspaces() {
     [workspaces, activeId, activate],
   );
 
+  // Keyboard switching walks the sidebar order and wraps, like tab cycling.
+  const step = useCallback(
+    (delta: number) => {
+      const index = workspaces.findIndex((w) => w.id === activeId);
+      const count = workspaces.length;
+      if (count < 2) return;
+      const next = workspaces[(((index === -1 ? 0 : index) + delta) % count + count) % count];
+      if (next) activate(next.id);
+    },
+    [activate, activeId, workspaces],
+  );
+
+  const activateAt = useCallback(
+    (index: number) => {
+      const target = workspaces[index];
+      if (target && target.id !== activeId) activate(target.id);
+    },
+    [activate, activeId, workspaces],
+  );
+
   const reorder = useCallback((ids: string[]) => {
     setWorkspaces((prev) => {
       const map = new Map(prev.map((workspace) => [workspace.id, workspace]));
@@ -72,5 +92,17 @@ export function useWorkspaces() {
   }, []);
 
   const active = resolveActive(workspaces, activeId);
-  return { workspaces, active, loading, error, activate, create, rename, remove, reorder };
+  return {
+    workspaces,
+    active,
+    loading,
+    error,
+    activate,
+    activateAt,
+    step,
+    create,
+    rename,
+    remove,
+    reorder,
+  };
 }

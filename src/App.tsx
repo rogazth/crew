@@ -159,6 +159,17 @@ export function App() {
       setSidebarOpen(true);
       setPickerOpen((open) => !open);
     },
+    "next-workspace": () => workspaces.step(1),
+    "prev-workspace": () => workspaces.step(-1),
+    "workspace-1": () => workspaces.activateAt(0),
+    "workspace-2": () => workspaces.activateAt(1),
+    "workspace-3": () => workspaces.activateAt(2),
+    "workspace-4": () => workspaces.activateAt(3),
+    "workspace-5": () => workspaces.activateAt(4),
+    "workspace-6": () => workspaces.activateAt(5),
+    "workspace-7": () => workspaces.activateAt(6),
+    "workspace-8": () => workspaces.activateAt(7),
+    "workspace-9": () => workspaces.activateAt(8),
     "toggle-sidebar": () => setSidebarOpen((open) => !open),
     "new-agent": newAgent,
     "new-session": () => void newSession(),
