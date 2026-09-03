@@ -32,7 +32,7 @@ export function Agents({ tabs, activeId, sessions, cwd, onModel }: Props) {
     if (!session) return null;
     return (
       <div key={tab.id} hidden={tab.id !== activeId} className="absolute inset-0">
-        <AgentChat session={session} cwd={cwd} onModel={onModel} />
+        <AgentChat session={session} cwd={cwd} active={tab.id === activeId} onModel={onModel} />
       </div>
     );
   });

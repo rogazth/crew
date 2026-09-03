@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, type FormEvent, type KeyboardEvent } from "react";
+import { useImperativeHandle, useLayoutEffect, useRef, type FormEvent, type KeyboardEvent, type Ref } from "react";
 import { ModelPicker } from "../../chrome/ModelPicker";
 import { Plus, Send, Square } from "../../chrome/icons";
 import type { AttachedFile } from "../../lib/blocks";
@@ -7,6 +7,7 @@ import type { Session } from "../../lib/types";
 import { FileChips } from "./Message";
 
 type Props = {
+  ref?: Ref<HTMLTextAreaElement>;
   session: Session;
   draft: string;
   files: AttachedFile[];
@@ -24,6 +25,7 @@ const MAX_FIELD_PX = 160;
 
 /** A control well in the chrome's dialect: hairline, radius 12, plus and model left, send right. */
 export function Composer({
+  ref,
   session,
   draft,
   files,
@@ -37,6 +39,7 @@ export function Composer({
   onStop,
 }: Props) {
   const field = useRef<HTMLTextAreaElement>(null);
+  useImperativeHandle(ref, () => field.current as HTMLTextAreaElement);
   const canSend = ready && (draft.trim().length > 0 || files.length > 0) && !working;
 
   // Grows with the draft up to the cap; the browser's own sizing is one line.

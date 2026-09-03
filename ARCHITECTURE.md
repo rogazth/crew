@@ -125,12 +125,31 @@ Todo el parseo de protocolo vive en TypeScript, un adapter por proveedor:
 
 ```
 src/lib/providers/
-  types.ts      la interfaz
-  claude.ts     ÚNICO archivo del MVP — parsea stream-json de claude -p
-  index.ts      registry: Record<string, Provider>
+  runtime.ts    la interfaz `ProviderRuntime` y el registry
+  claude.ts     helpers puros: parsea stream-json de claude
+src/lib/claudeTurn.ts   el runtime de Claude: proceso persistente por agente
 ```
 
-Agregar Codex es un archivo nuevo y una fila en el registry. Sin UI para cambiar de proveedor, tal como pediste: el campo existe en la tabla, no en la pantalla.
+Agregar Codex es un archivo nuevo y una fila en el registry.
+
+## El runtime del agente vive fuera de React
+
+```
+src/lib/transcript.ts    bloques por sesión; publica por frame, guarda con debounce
+src/lib/agentRuntime.ts  send/stop/respond; escribe status y provider_session_id
+src/lib/scheduler.ts     routines: un timer para la próxima ejecución
+src/hooks/useThread.ts   useSyncExternalStore sobre transcript.ts
+```
+
+Un tab cerrado o un reload del webview no pierden el turno: el runtime sigue
+escribiendo el transcript en SQLite, y al arrancar `reconcile()` mata huérfanos
+(`agent_kill_all`) y baja a `idle` cualquier `working` que nadie esté empujando.
+
+Rust agrupa las líneas de stdout por evento IPC (8 ms de coalescing, tope de
+256 líneas / 64 KiB) y las descarta si el proceso ya no es el dueño de la sesión.
+
+Un `claude` parado son ~200 MB de node: el runtime lo mata tras 10 min sin
+turnos y lo vuelve a levantar con `--resume`.
 
 ## Editor
 
@@ -184,8 +203,10 @@ Lo que separa esto de las referencias que envejecieron mal.
 | 3 | `files.rs` + CommandPalette con fuzzy en memoria | ✅ |
 | 4 | Tabs + `FileEditor` | ⚠️ tabs y lectura listos; falta montar `@pierre/diffs` |
 | 5 | `pty.rs` + `TerminalView` | ✅ xterm.js sobre `pty.rs`; `claude --session-id` / `--resume` |
-| 6 | `agent.rs` + `claude.ts` + `AgentChat` | ⬜ la superficie existe, sin runtime |
-| 7 | Persistencia del transcript y resume | ⬜ |
+| 6 | `agent.rs` + `claude.ts` + `AgentChat` | ✅ |
+| 7 | Persistencia del transcript y resume | ✅ runtime fuera de React, reconcile al arrancar |
+| 8 | Autonomía por agente, notificaciones nativas, routines | ✅ |
+| 9 | Adapters Codex y Cursor | ⚠️ en curso |
 
 Del 1 al 4 es andamiaje conocido. El 5 y 6 son el producto.
 

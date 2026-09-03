@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ProviderIcon } from "../chrome/ProviderIcon";
 import { useThread } from "../hooks/useThread";
 import { respond, send, stop } from "../lib/agentRuntime";
@@ -12,13 +12,20 @@ import { Transcript } from "./chat/Transcript";
 type Props = {
   session: Session;
   cwd: string;
+  active: boolean;
   onModel: (session: Session, provider: ProviderId, model: string) => void;
 };
 
-export function AgentChat({ session, cwd, onModel }: Props) {
+export function AgentChat({ session, cwd, active, onModel }: Props) {
   const { blocks, ready, working } = useThread(session.id);
   const [draft, setDraft] = useState("");
   const [files, setFiles] = useState<AttachedFile[]>([]);
+  const field = useRef<HTMLTextAreaElement>(null);
+
+  // Opening the tab means "talk to this agent"; the caret should already be there.
+  useEffect(() => {
+    if (active) field.current?.focus();
+  }, [active]);
 
   const attach = useCallback(async () => {
     const picked = await pickFiles();
@@ -56,6 +63,7 @@ export function AgentChat({ session, cwd, onModel }: Props) {
         <Transcript blocks={blocks} working={working} onApprove={approve} />
       )}
       <Composer
+        ref={field}
         session={session}
         draft={draft}
         files={files}
