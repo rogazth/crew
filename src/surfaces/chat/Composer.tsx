@@ -1,7 +1,9 @@
 import {
   useImperativeHandle,
   useLayoutEffect,
+  useMemo,
   useRef,
+  useState,
   type ClipboardEvent,
   type FormEvent,
   type KeyboardEvent,
@@ -10,9 +12,12 @@ import {
 import { ModelPicker } from "../../chrome/ModelPicker";
 import { Plus, Send, Square } from "../../chrome/icons";
 import type { AttachedFile } from "../../lib/blocks";
+import { completeMention, mentionAt, searchFiles, splitMentions } from "../../lib/mentions";
 import type { ProviderId } from "../../lib/providers";
-import type { Session } from "../../lib/types";
+import type { ProjectFile, Session } from "../../lib/types";
 import { AttachmentStrip } from "./Attachments";
+import { useChatActions } from "./context";
+import { MentionPicker } from "./MentionPicker";
 
 type Props = {
   ref?: Ref<HTMLTextAreaElement>;
@@ -35,7 +40,7 @@ type Props = {
 
 const MAX_FIELD_PX = 160;
 
-/** A control well in the chrome's dialect: hairline, radius 12, plus and model left, send right. */
+/** A control well in the chrome's dialect: hairline, radius 16, plus and model left, send right. */
 export function Composer({
   ref,
   session,
@@ -53,8 +58,20 @@ export function Composer({
   onStop,
 }: Props) {
   const field = useRef<HTMLTextAreaElement>(null);
+  const overlay = useRef<HTMLDivElement>(null);
   useImperativeHandle(ref, () => field.current as HTMLTextAreaElement);
+  const { files: projectFiles } = useChatActions();
   const canSend = ready && (draft.trim().length > 0 || files.length > 0) && !working;
+
+  // The caret is what decides whether an `@` is being typed; it moves without the text changing.
+  const [cursor, setCursor] = useState(0);
+  const [active, setActive] = useState(0);
+  const mention = mentionAt(draft, cursor);
+  const results = useMemo(
+    () => (mention ? searchFiles(mention.query, projectFiles) : []),
+    [mention?.query, projectFiles], // eslint-disable-line react-hooks/exhaustive-deps
+  );
+  const known = useMemo(() => new Set(projectFiles.map((file) => file.relative)), [projectFiles]);
 
   // Grows with the draft up to the cap; the browser's own sizing is one line.
   useLayoutEffect(() => {
@@ -62,7 +79,27 @@ export function Composer({
     if (!el) return;
     el.style.height = "0px";
     el.style.height = `${Math.min(el.scrollHeight, MAX_FIELD_PX)}px`;
+    if (overlay.current) overlay.current.style.height = el.style.height;
   }, [draft]);
+
+  const syncCursor = () => {
+    const el = field.current;
+    if (el) setCursor(el.selectionStart);
+  };
+
+  const pick = (file: ProjectFile) => {
+    const el = field.current;
+    if (!el) return;
+    const next = completeMention(draft, el.selectionStart, file);
+    if (!next) return;
+    onDraft(next.text);
+    setActive(0);
+    requestAnimationFrame(() => {
+      el.focus();
+      el.setSelectionRange(next.cursor, next.cursor);
+      setCursor(next.cursor);
+    });
+  };
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
@@ -71,13 +108,31 @@ export function Composer({
   };
 
   const onPaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
-    const files = [...(event.clipboardData?.files ?? [])];
-    if (files.length === 0) return;
+    const pasted = [...(event.clipboardData?.files ?? [])];
+    if (pasted.length === 0) return;
     event.preventDefault();
-    onPasteFiles(files);
+    onPasteFiles(pasted);
   };
 
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (mention && results.length > 0) {
+      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        event.preventDefault();
+        const step = event.key === "ArrowDown" ? 1 : -1;
+        setActive((index) => (index + step + results.length) % results.length);
+        return;
+      }
+      if (event.key === "Enter" || event.key === "Tab") {
+        event.preventDefault();
+        pick(results[Math.min(active, results.length - 1)]!);
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setCursor(-1);
+        return;
+      }
+    }
     if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
     event.preventDefault();
     if (working) onStop();
@@ -86,23 +141,51 @@ export function Composer({
 
   return (
     <div className={`shrink-0 px-6 ${centered ? "py-4" : "pb-4"}`}>
-      <form onSubmit={submit} className="crew-composer mx-auto max-w-[720px]">
+      <form onSubmit={submit} className="crew-composer relative mx-auto max-w-[720px]">
+        {mention && (
+          <MentionPicker results={results} active={Math.min(active, Math.max(0, results.length - 1))} onHover={setActive} onPick={pick} />
+        )}
         {files.length > 0 && (
           <div className="mb-2">
             <AttachmentStrip files={files} onRemove={onRemoveFile} />
           </div>
         )}
-        <textarea
-          ref={field}
-          rows={2}
-          value={draft}
-          placeholder={`Message ${session.name}`}
-          spellCheck={false}
-          onChange={(event) => onDraft(event.target.value)}
-          onKeyDown={onKeyDown}
-          onPaste={onPaste}
-          className="crew-composer-field"
-        />
+        <div className="relative">
+          <div ref={overlay} aria-hidden className="crew-composer-field crew-composer-overlay">
+            {splitMentions(draft, known).map((segment, index) =>
+              segment.kind === "mention" ? (
+                <mark key={index} className="crew-mention-run">
+                  {segment.text}
+                </mark>
+              ) : (
+                <span key={index}>{segment.text}</span>
+              ),
+            )}
+            {"​"}
+          </div>
+          <textarea
+            ref={field}
+            rows={2}
+            value={draft}
+            placeholder={`Message ${session.name}`}
+            spellCheck={false}
+            onChange={(event) => {
+              onDraft(event.target.value);
+              setCursor(event.target.selectionStart);
+              setActive(0);
+            }}
+            onSelect={syncCursor}
+            onKeyUp={syncCursor}
+            onClick={syncCursor}
+            onBlur={() => setCursor(-1)}
+            onScroll={(event) => {
+              if (overlay.current) overlay.current.scrollTop = event.currentTarget.scrollTop;
+            }}
+            onKeyDown={onKeyDown}
+            onPaste={onPaste}
+            className="crew-composer-field crew-composer-input"
+          />
+        </div>
         <div className="mt-2 flex h-[30px] items-center justify-between gap-2">
           <div className="flex min-w-0 items-center gap-1.5">
             <button

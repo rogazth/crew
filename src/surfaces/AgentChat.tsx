@@ -3,6 +3,8 @@ import { useThread } from "../hooks/useThread";
 import { answer, respond, send, stop } from "../lib/agentRuntime";
 import { pickFiles, writeTempFile } from "../lib/api";
 import { attachedFrom } from "../lib/attachments";
+import { mentionedFiles } from "../lib/mentions";
+import { useChatActions } from "./chat/context";
 import { useFileDrop } from "../hooks/useFileDrop";
 import type { Answers, ApprovalDecision, AttachedFile } from "../lib/blocks";
 import type { ProviderId } from "../lib/providers";
@@ -23,6 +25,7 @@ export function AgentChat({ session, cwd, active, onModel }: Props) {
   const [files, setFiles] = useState<AttachedFile[]>([]);
   const field = useRef<HTMLTextAreaElement>(null);
   const pane = useRef<HTMLDivElement>(null);
+  const { files: projectFiles } = useChatActions();
 
   // Opening the tab means "talk to this agent"; the caret should already be there.
   useEffect(() => {
@@ -62,10 +65,11 @@ export function AgentChat({ session, cwd, active, onModel }: Props) {
     const text = draft.trim();
     if ((!text && files.length === 0) || working || !ready) return;
     const attached = files;
+    const mentions = mentionedFiles(text, projectFiles).map((file) => file.path);
     setDraft("");
     setFiles([]);
-    void send(session, cwd, text, attached);
-  }, [cwd, draft, files, ready, session, working]);
+    void send(session, cwd, text, attached, mentions.length > 0 ? { mentions } : {});
+  }, [cwd, draft, files, projectFiles, ready, session, working]);
 
   const approve = useCallback(
     (requestId: number, decision: ApprovalDecision) => respond(session, requestId, decision),

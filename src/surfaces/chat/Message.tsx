@@ -1,23 +1,64 @@
 import { Tooltip } from "@cloudflare/kumo";
 import { lazy, memo, Suspense } from "react";
+import { FileTypeIcon } from "../../chrome/FileTypeIcon";
 import type { Block, TurnUsage } from "../../lib/blocks";
+import { splitMentions } from "../../lib/mentions";
 import { AttachmentStrip } from "./Attachments";
+import { useChatActions } from "./context";
 import { clock, duration } from "../../lib/time";
 
 /** streamdown and its parsers are half a megabyte; the window opens without them. */
 const Markdown = lazy(() => import("./Markdown").then((m) => ({ default: m.Markdown })));
 
-/** What the user said sits on the right, in ink. The reply below is flush; that is the hierarchy. */
+/**
+ * What the user said sits on the right, in ink. The reply below is flush; that
+ * is the hierarchy. Attachments are their own row under the bubble: a picture
+ * inside it would set the bubble's width, not the words.
+ */
 export const UserMessage = memo(function UserMessage({ block }: { block: Block }) {
   return (
-    <div className="flex justify-end pl-16">
-      <div className="crew-bubble">
-        {block.text ? <p className="whitespace-pre-wrap">{block.text}</p> : null}
-        {block.files && block.files.length > 0 ? <AttachmentStrip files={block.files} onInk /> : null}
-      </div>
+    <div className="flex flex-col items-end gap-1.5 pl-16">
+      {block.text ? (
+        <div className="crew-bubble">
+          <p className="whitespace-pre-wrap">
+            <MentionText text={block.text} />
+          </p>
+        </div>
+      ) : null}
+      {block.files && block.files.length > 0 ? (
+        <div className="flex justify-end">
+          <AttachmentStrip files={block.files} />
+        </div>
+      ) : null}
     </div>
   );
 });
+
+/** `@path` runs become pills that open the file; the rest is the text as typed. */
+function MentionText({ text }: { text: string }) {
+  const { openPath } = useChatActions();
+  const segments = splitMentions(text);
+  return (
+    <>
+      {segments.map((segment, index) =>
+        segment.kind === "mention" ? (
+          <button
+            key={index}
+            type="button"
+            title={segment.path}
+            onClick={() => openPath(segment.path)}
+            className="crew-mention-pill"
+          >
+            <FileTypeIcon name={segment.path.split("/").pop() ?? segment.path} className="size-3" />
+            {segment.path.split("/").pop()}
+          </button>
+        ) : (
+          <span key={index}>{segment.text}</span>
+        ),
+      )}
+    </>
+  );
+}
 
 /** Flush prose on the canvas. The column is the container; nothing wraps it. */
 export const AssistantMessage = memo(function AssistantMessage({ block }: { block: Block }) {

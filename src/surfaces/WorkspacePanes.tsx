@@ -16,6 +16,7 @@ type Props = {
   onStatus: (id: string, status: SessionStatus) => void;
   onModel: (session: Session, provider: ProviderId, model: string) => void;
   onOpenFile: (file: ProjectFile) => void;
+  files: ProjectFile[];
 };
 
 /** Active surface plus the mounted agent/terminal overlays. */
@@ -29,6 +30,7 @@ export function WorkspacePanes({
   onStatus,
   onModel,
   onOpenFile,
+  files,
 }: Props) {
   const chat = useMemo<ChatActions>(
     () => ({
@@ -38,8 +40,9 @@ export function WorkspacePanes({
         const relative = absolute.startsWith(`${cwd}/`) ? absolute.slice(cwd.length + 1) : absolute;
         onOpenFile({ path: absolute, relative, name: relative.split("/").pop() ?? relative });
       },
+      files,
     }),
-    [cwd, onOpenFile],
+    [cwd, onOpenFile, files],
   );
   return (
     <div className="relative min-h-0 flex-1">

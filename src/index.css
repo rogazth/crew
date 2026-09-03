@@ -442,12 +442,71 @@ body:has(button[data-sidebar="resize-handle"]:active) * {
   width: 100%;
   min-height: 36px;
   max-height: 160px;
+  padding: 0;
+  border: 0;
   resize: none;
   background: transparent;
   outline: none;
+  font: inherit;
   font-size: 13px;
   line-height: 18px;
   letter-spacing: -0.08px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  tab-size: 4;
+}
+/* The textarea keeps the caret and the events; the overlay behind it paints the same text with mentions marked. */
+.crew-composer-input {
+  position: relative;
+  color: transparent;
+  caret-color: var(--text-color-kumo-default);
+}
+.crew-composer-input::placeholder {
+  color: var(--color-placeholder);
+}
+.crew-composer-input::selection {
+  background: light-dark(oklch(84% 0.08 245 / 0.6), oklch(45% 0.11 255 / 0.6));
+  color: transparent;
+}
+.crew-composer-overlay {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  color: var(--text-color-kumo-default);
+}
+.crew-mention-run {
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--color-kumo-brand) 14%, transparent);
+  color: inherit;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-kumo-brand) 10%, transparent);
+}
+.crew-mention-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  vertical-align: baseline;
+  margin: 0 1px;
+  padding: 0 6px 0 4px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--color-kumo-base) 18%, transparent);
+  font-size: 12px;
+  line-height: 17px;
+  transition: background-color 100ms ease;
+}
+.crew-mention-pill:hover {
+  background: color-mix(in srgb, var(--color-kumo-base) 30%, transparent);
+}
+.crew-popover {
+  overflow: hidden;
+  padding: 4px 0;
+  border-radius: 12px;
+  background: var(--color-kumo-elevated);
+  box-shadow:
+    inset 0 0 0 1px var(--color-hairline),
+    0 6px 18px rgb(0 0 0 / 0.04),
+    0 3px 9px rgb(0 0 0 / 0.04),
+    0 1px 1px rgb(0 0 0 / 0.04);
 }
 
 /* Chat markdown: Cursor 13/18, ink-mixed code, no extra chrome. */

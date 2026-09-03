@@ -286,6 +286,7 @@ export function App() {
             onStatus={setStatus}
             onModel={changeModel}
             onOpenFile={openFile}
+            files={files}
           />
         </div>
       </main>

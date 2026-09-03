@@ -69,7 +69,7 @@ export async function send(
   cwd: string,
   text: string,
   files: AttachedFile[] = [],
-  options: { fresh?: boolean; hidden?: boolean } = {},
+  options: { fresh?: boolean; hidden?: boolean; mentions?: string[] } = {},
 ): Promise<boolean> {
   const id = session.id;
   if (transcript.read(id).working) return false;
@@ -105,7 +105,10 @@ export async function send(
   try {
     const images = await loadInlineImages(files);
     const inline = new Set(images.map((image) => image.path));
-    const paths = files.filter((file) => !isImage(file) || !inline.has(file.path)).map((file) => file.path);
+    const paths = [
+      ...(options.mentions ?? []),
+      ...files.filter((file) => !isImage(file) || !inline.has(file.path)).map((file) => file.path),
+    ];
     await runtimeFor(session.provider).send({
       sessionId: id,
       cwd,
