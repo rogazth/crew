@@ -96,15 +96,15 @@ export function WorkspacePicker(props: Props) {
       <Popover.Trigger
         data-tauri-drag-region="false"
         title={active?.path}
-        className="group flex h-8 w-full min-w-0 items-center gap-2 rounded-md px-1.5 text-left text-kumo-default outline-none transition-colors hover:bg-hover focus-visible:bg-hover data-popup-open:bg-hover"
+        className="group flex h-10 w-full min-w-0 items-center gap-2.5 rounded-lg px-1.5 text-left text-kumo-default outline-none transition-colors hover:bg-hover focus-visible:bg-hover data-popup-open:bg-hover"
       >
-        <Mark name={active?.name ?? "?"} />
-        <span className="min-w-0 flex-1 truncate font-medium">
+        <Mark name={active?.name ?? "?"} large />
+        <span className="min-w-0 flex-1 truncate text-[14px] font-semibold tracking-[-0.01em]">
           {active?.name ?? "No workspace"}
         </span>
         <CaretDownIcon
           weight="bold"
-          className="size-3 shrink-0 text-kumo-subtle transition-transform duration-200 group-data-popup-open:rotate-180"
+          className="size-3.5 shrink-0 text-kumo-subtle transition-transform duration-200 group-data-popup-open:rotate-180"
         />
       </Popover.Trigger>
 
@@ -205,11 +205,13 @@ export function WorkspacePicker(props: Props) {
 }
 
 /** A folder has no icon of its own, so its initials stand in, like a Slack team mark. */
-function Mark({ name, className = "" }: { name: string; className?: string }) {
+function Mark({ name, large = false }: { name: string; large?: boolean }) {
   return (
     <span
       aria-hidden
-      className={`flex size-5 shrink-0 items-center justify-center rounded-[5px] bg-kumo-brand text-[10px] font-semibold tracking-wide text-kumo-inverse ${className}`}
+      className={`flex shrink-0 items-center justify-center bg-kumo-brand font-semibold tracking-wide text-kumo-inverse ${
+        large ? "size-6 rounded-md text-[11px]" : "size-5 rounded-[5px] text-[10px]"
+      }`}
     >
       {workspaceMark(name)}
     </span>

@@ -129,7 +129,8 @@ export function SessionSidebar(props: SessionSidebarProps) {
         {IS_MAC && <div className="h-full w-[78px]" />}
       </Sidebar.Header>
 
-      <div className="flex shrink-0 flex-col gap-0.5 px-[11px] pb-3">
+      {/* The identity row sits apart from the actions, so the sidebar reads top-down: where, then what. */}
+      <div className="shrink-0 px-[11px] pb-3">
         <WorkspacePicker
           workspaces={props.workspaces}
           activeId={props.workspace.id}
@@ -141,6 +142,9 @@ export function SessionSidebar(props: SessionSidebarProps) {
           onRemove={props.onRemoveWorkspace}
           onReorder={props.onReorderWorkspaces}
         />
+      </div>
+
+      <div className="flex shrink-0 flex-col gap-0.5 px-[11px] pb-3">
         <SidebarRow
           icon={RobotIcon}
           label="New agent"
