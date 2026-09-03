@@ -1,8 +1,10 @@
-import { memo } from "react";
+import { lazy, memo, Suspense } from "react";
 import { FileTypeIcon } from "../../chrome/FileTypeIcon";
 import { X } from "../../chrome/icons";
 import type { AttachedFile, Block, TurnUsage } from "../../lib/blocks";
-import { Markdown } from "./Markdown";
+
+/** streamdown and its parsers are half a megabyte; the window opens without them. */
+const Markdown = lazy(() => import("./Markdown").then((m) => ({ default: m.Markdown })));
 
 /** A document card in the chrome's own dialect: 6% ink, radius 8, no invert. */
 export const UserMessage = memo(function UserMessage({ block }: { block: Block }) {
@@ -20,7 +22,9 @@ export const UserMessage = memo(function UserMessage({ block }: { block: Block }
 export const AssistantMessage = memo(function AssistantMessage({ block }: { block: Block }) {
   return (
     <div>
-      <Markdown text={block.text} {...(block.streaming ? { streaming: true } : {})} />
+      <Suspense fallback={<p className="whitespace-pre-wrap">{block.text}</p>}>
+        <Markdown text={block.text} {...(block.streaming ? { streaming: true } : {})} />
+      </Suspense>
       {block.usage && !block.streaming ? <Usage usage={block.usage} /> : null}
     </div>
   );
