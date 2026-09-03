@@ -31,7 +31,8 @@ export function App() {
   const workspaces = useWorkspaces();
   const sidebar = useSidebarWidth();
   const active = workspaces.active;
-  const { sessions, create, update, rename, remove, reorder } = useSessions(active?.id ?? null);
+  const { sessions, create, update, rename, remove, reorder, setStatus } =
+    useSessions(active?.id ?? null);
   const tabs = useTabs(active?.id ?? null);
   const files = useProjectFiles(active?.path ?? null);
 
@@ -266,6 +267,8 @@ export function App() {
                 activeId={tabs.active?.id ?? null}
                 sessions={sessions}
                 cwd={active.path}
+                onStatus={setStatus}
+                onOpenFile={openFile}
               />
             )}
           </div>

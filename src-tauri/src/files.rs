@@ -1,11 +1,13 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use base64::Engine as _;
 use serde::Serialize;
 
 /// Above this the in-memory fuzzy match on the frontend stops feeling instant.
 const MAX_PROJECT_FILES: usize = 20_000;
 const MAX_TEXT_FILE_BYTES: u64 = 8 * 1024 * 1024;
+const MAX_TEMP_FILE_BYTES: usize = 32 * 1024 * 1024;
 const SKIPPED_DIRS: &[&str] = &[
     "node_modules", ".git", "target", "dist", "build", ".next", ".venv", "vendor",
 ];
@@ -142,4 +144,50 @@ pub async fn write_text_file(path: String, contents: String) -> Result<(), Strin
 #[tauri::command]
 pub fn path_exists(path: String) -> bool {
     std::path::Path::new(&path).exists()
+}
+
+/// Clipboard images arrive as bytes with no path, and the CLIs Crew hosts take
+/// paths. The name is generated here so a caller can never walk out of the dir.
+#[tauri::command]
+pub async fn write_temp_file(extension: String, base64_contents: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(base64_contents.as_bytes())
+            .map_err(|e| format!("Clipboard data is not valid base64: {e}"))?;
+        if bytes.len() > MAX_TEMP_FILE_BYTES {
+            return Err("Pasted file is too large".into());
+        }
+        let dir = std::env::temp_dir().join("crew");
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let path = dir.join(format!("{}.{}", uuid::Uuid::new_v4(), safe_extension(&extension)));
+        std::fs::write(&path, bytes).map_err(|e| e.to_string())?;
+        Ok(path.to_string_lossy().into_owned())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+fn safe_extension(extension: &str) -> String {
+    let kept: String = extension
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .take(8)
+        .collect();
+    if kept.is_empty() {
+        "bin".into()
+    } else {
+        kept.to_ascii_lowercase()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::safe_extension;
+
+    #[test]
+    fn extension_keeps_only_alphanumerics() {
+        assert_eq!(safe_extension("png"), "png");
+        assert_eq!(safe_extension("../../etc/passwd"), "etcpassw");
+        assert_eq!(safe_extension(""), "bin");
+    }
 }

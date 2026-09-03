@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import * as api from "../lib/api";
-import type { Session, SessionKind } from "../lib/types";
+import type { Session, SessionKind, SessionStatus } from "../lib/types";
 
 type CreateInput = {
   name: string;
@@ -75,5 +75,10 @@ export function useSessions(workspaceId: string | null) {
     [],
   );
 
-  return { sessions, create, update, rename, remove, reorder };
+  const setStatus = useCallback((id: string, status: SessionStatus) => {
+    setSessions((prev) => prev.map((s) => (s.id === id ? { ...s, status } : s)));
+    void api.setSessionStatus(id, status).catch(() => {});
+  }, []);
+
+  return { sessions, create, update, rename, remove, reorder, setStatus };
 }

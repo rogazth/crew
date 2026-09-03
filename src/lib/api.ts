@@ -69,6 +69,18 @@ export const writeTextFile = (path: string, contents: string): Promise<void> =>
 
 export const pathExists = (path: string): Promise<boolean> => invoke("path_exists", { path });
 
+/** Clipboard files have no path; the CLIs Crew hosts only take paths. */
+export async function writeTempFile(file: File): Promise<string> {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  // fromCharCode takes the array as arguments, so a whole screenshot blows the stack.
+  let binary = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  }
+  const extension = file.type.split("/")[1] ?? file.name.split(".").pop() ?? "bin";
+  return invoke("write_temp_file", { extension, base64Contents: btoa(binary) });
+}
+
 export const spawnPty = (
   id: string,
   cwd: string,

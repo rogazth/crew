@@ -1,4 +1,11 @@
-import { PencilSimpleIcon, TrashIcon } from "@phosphor-icons/react";
+import {
+  BroomIcon,
+  ClipboardIcon,
+  CopyIcon,
+  PencilSimpleIcon,
+  SelectionAllIcon,
+  TrashIcon,
+} from "@phosphor-icons/react";
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type MouseEvent } from "react";
 import { createPortal } from "react-dom";
 import { IS_MAC, isDeleteChord } from "../lib/hotkey";
@@ -6,10 +13,11 @@ import { IS_MAC, isDeleteChord } from "../lib/hotkey";
 export type MenuAction = {
   id: string;
   label: string;
-  icon: "edit" | "delete";
+  icon: keyof typeof ICONS;
   /** Single key that fires the action while the menu is open; shown as the shortcut. */
   hotkey: string;
   danger?: boolean;
+  disabled?: boolean;
 };
 
 export type MenuPoint = { x: number; y: number };
@@ -24,7 +32,14 @@ export const DELETE: MenuAction = {
   danger: true,
 };
 
-const ICONS = { edit: PencilSimpleIcon, delete: TrashIcon };
+const ICONS = {
+  edit: PencilSimpleIcon,
+  delete: TrashIcon,
+  copy: CopyIcon,
+  paste: ClipboardIcon,
+  clear: BroomIcon,
+  "select-all": SelectionAllIcon,
+};
 
 type Props = {
   point: MenuPoint;
@@ -113,7 +128,7 @@ export function ActionMenu({ point, actions, onPick, onClose, rename }: Props) {
     const hit = isDeleteChord(event)
       ? actions.find((action) => action.id === "delete")
       : actions.find((action) => keyOf(action) === event.key.toLowerCase());
-    if (!hit) return;
+    if (!hit || hit.disabled) return;
     event.preventDefault();
     onPick(hit.id);
   }
@@ -146,17 +161,19 @@ export function ActionMenu({ point, actions, onPick, onClose, rename }: Props) {
       )}
       {actions.map((action) => {
         const Icon = ICONS[action.icon];
+        const tone = action.danger
+          ? "text-kumo-danger hover:bg-kumo-danger/10"
+          : "text-kumo-default hover:bg-hover";
         return (
           <button
             key={action.id}
             type="button"
             role="menuitem"
+            disabled={action.disabled}
             onMouseDown={(event) => event.preventDefault()}
             onClick={() => onPick(action.id)}
             className={`flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-[13px] ${
-              action.danger
-                ? "text-kumo-danger hover:bg-kumo-danger/10"
-                : "text-kumo-default hover:bg-hover"
+              action.disabled ? "text-kumo-placeholder" : tone
             }`}
           >
             <Icon className="size-4 shrink-0" />

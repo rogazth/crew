@@ -36,6 +36,9 @@ export const COMMANDS = {
   "new-agent": { label: "New Agent", keys: "Mod+N" },
   "new-session": { label: "New Session", keys: "Mod+Shift+N" },
 
+  // Terminal — bound only while a terminal fills the active tab.
+  "find-in-terminal": { label: "Find in Terminal", keys: "Mod+F" },
+
   "toggle-sidebar": { label: "Toggle Sidebar", keys: "Mod+B" },
   "open-settings": { label: "Settings", keys: "Mod+," },
   "save-file": { label: "Save File", keys: "Mod+S" },

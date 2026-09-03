@@ -110,6 +110,20 @@ function isTab(value: unknown): value is Tab {
   return false;
 }
 
+/** Which tab the terminal commands aim at. */
+export function isTerminalTab(tab: Tab | null, sessions: Session[]): boolean {
+  if (!tab) return false;
+  if (tab.kind === "stub") return tab.stub === "terminal";
+  if (tab.kind !== "session") return false;
+  return sessions.find((session) => session.id === tab.sessionId)?.kind === "terminal";
+}
+
+/** A path the terminal linked is absolute; a file tab labels itself with the short form. */
+export function relativeTo(root: string, path: string): string {
+  const base = root.replace(/\/$/, "");
+  return path.startsWith(`${base}/`) ? path.slice(base.length + 1) : path;
+}
+
 export function tabTitle(tab: Tab, sessions: Session[]): string {
   if (tab.kind === "stub") return tab.title;
   if (tab.kind === "file") return tab.relative.split("/").pop() ?? tab.relative;

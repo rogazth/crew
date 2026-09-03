@@ -1,11 +1,21 @@
 import { FitAddon } from "@xterm/addon-fit";
 import { LigaturesAddon } from "@xterm/addon-ligatures";
+import { SearchAddon } from "@xterm/addon-search";
+import { Unicode11Addon } from "@xterm/addon-unicode11";
+import { WebLinksAddon } from "@xterm/addon-web-links";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { Terminal } from "@xterm/xterm";
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { TerminalMenu } from "../chrome/TerminalMenu";
+import { menuFromEvent, type MenuPoint } from "../chrome/ActionMenu";
+import { useFileDrop } from "../hooks/useFileDrop";
 import { useTerminalPrefs } from "../hooks/useTerminalPrefs";
+import { useTerminalSearch } from "../hooks/useTerminalSearch";
 import * as api from "../lib/api";
 import { subscribePty } from "../lib/pty";
+import { holdTerminal } from "../lib/terminalFocus";
+import { filePathProvider, openExternal } from "../lib/terminalLinks";
+import { quotePath, quotePaths } from "../lib/terminalPaths";
 import { fontStack, ligaturesEnabled } from "../lib/terminalPrefs";
 import {
   ANSI_DARK,
@@ -14,6 +24,7 @@ import {
   oscColorReply,
   rgbToHex,
 } from "../lib/terminalColors";
+import { TerminalSearch } from "./TerminalSearch";
 import "@xterm/xterm/css/xterm.css";
 
 type Props = {
@@ -23,7 +34,14 @@ type Props = {
   command: string[];
   active: boolean;
   onExit?: ((code: number | null) => void) | undefined;
+  /** The process asked for attention: a bell, or an OSC notification. */
+  onBell?: (() => void) | undefined;
+  /** Output arrived. Throttled, so it reads as "this session is busy". */
+  onActivity?: (() => void) | undefined;
+  onOpenPath?: ((path: string) => void) | undefined;
 };
+
+const ACTIVITY_INTERVAL = 400;
 
 const DARK_SCHEME = window.matchMedia("(prefers-color-scheme: dark)");
 
@@ -52,19 +70,42 @@ function palette() {
   };
 }
 
-export function TerminalView({ id, cwd, command, active, onExit }: Props) {
+const isDark = () => DARK_SCHEME.matches;
+
+export function TerminalView({
+  id,
+  cwd,
+  command,
+  active,
+  onExit,
+  onBell,
+  onActivity,
+  onOpenPath,
+}: Props) {
+  const paneRef = useRef<HTMLDivElement>(null);
   const hostRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<() => void>(() => {});
   const ligaturesRef = useRef<LigaturesAddon | null>(null);
   const { prefs } = useTerminalPrefs();
-  const onExitRef = useRef(onExit);
-  const commandRef = useRef(command);
+  const [menu, setMenu] = useState<{ point: MenuPoint; hasSelection: boolean } | null>(null);
+  const search = useTerminalSearch(termRef, isDark);
+  const attachSearch = search.attach;
+
+  const latest = useRef({ onExit, onBell, onActivity, onOpenPath, command });
   useEffect(() => {
-    onExitRef.current = onExit;
-    // Only read at spawn; a later argv must not respawn the running process.
-    commandRef.current = command;
+    // Only `command` at spawn: a later argv must not respawn the running process.
+    latest.current = { onExit, onBell, onActivity, onOpenPath, command };
   });
+
+  const dropPaths = useCallback((paths: string[]) => {
+    const term = termRef.current;
+    if (!term) return;
+    // Trailing space, like every native terminal: the next drop lands as its own argument.
+    term.paste(`${quotePaths(paths)} `);
+    term.focus();
+  }, []);
+  const over = useFileDrop(paneRef, dropPaths);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -77,6 +118,8 @@ export function TerminalView({ id, cwd, command, active, onExit }: Props) {
       scrollback: 5000,
       smoothScrollDuration: 0,
       macOptionIsMeta: true,
+      allowProposedApi: true,
+      linkHandler: { activate: (_event, uri) => openExternal(uri) },
       theme: colors,
     });
     const fit = new FitAddon();
@@ -91,18 +134,30 @@ export function TerminalView({ id, cwd, command, active, onExit }: Props) {
     } catch {
       // DOM renderer stays.
     }
+    // Emoji and CJK are two cells wide from Unicode 11 on; without this the
+    // boxes an agent draws land a column short of their own borders.
+    term.loadAddon(new Unicode11Addon());
+    term.unicode.activeVersion = "11";
+    term.loadAddon(new WebLinksAddon((_event, uri) => openExternal(uri)));
+    const searchAddon = new SearchAddon();
+    term.loadAddon(searchAddon);
+    const detachSearch = attachSearch(searchAddon);
     termRef.current = term;
 
     let closed = false;
     let spawned = false;
     let lastCols = 0;
     let lastRows = 0;
+    let lastActivity = 0;
 
     // Meta combos are the app's hotkeys; the browser must see them. Cmd+V is
     // handled by the paste listener below, Cmd+C by the copy one.
     term.attachCustomKeyEventHandler((event) => {
       if (!event.metaKey || event.ctrlKey) return true;
-      if (event.key === "a" && event.type === "keydown") term.selectAll();
+      if (event.type !== "keydown") return false;
+      if (event.key === "a") term.selectAll();
+      // macOS spells "kill the line" ⌘⌫; readline and every TUI spell it ^U.
+      if (event.key === "Backspace" && spawned) void api.writePty(id, "\x15");
       return false;
     });
 
@@ -114,21 +169,41 @@ export function TerminalView({ id, cwd, command, active, onExit }: Props) {
     };
     const onPaste = (event: ClipboardEvent) => {
       const text = event.clipboardData?.getData("text/plain");
-      if (!text) return;
+      if (text) {
+        event.preventDefault();
+        term.paste(text);
+        return;
+      }
+      const image = [...(event.clipboardData?.files ?? [])].find((file) =>
+        file.type.startsWith("image/"),
+      );
+      if (!image) return;
       event.preventDefault();
-      term.paste(text);
+      void api
+        .writeTempFile(image)
+        .then((path) => {
+          term.paste(quotePath(path));
+          term.focus();
+        })
+        .catch(() => {});
     };
     host.addEventListener("copy", onCopy);
     host.addEventListener("paste", onPaste);
 
     const unsubscribe = subscribePty(
       id,
-      (bytes) => term.write(bytes),
+      (bytes) => {
+        term.write(bytes);
+        const now = Date.now();
+        if (now - lastActivity < ACTIVITY_INTERVAL) return;
+        lastActivity = now;
+        latest.current.onActivity?.();
+      },
       (code) => {
         if (closed) return;
         spawned = false;
         term.writeln(`\r\n\x1b[2m[process exited${code == null ? "" : ` (${code})`}]\x1b[0m`);
-        onExitRef.current?.(code);
+        latest.current.onExit?.(code);
       },
     );
 
@@ -136,12 +211,22 @@ export function TerminalView({ id, cwd, command, active, onExit }: Props) {
       void api.writePty(id, oscColorReply(code, hex));
       return true;
     };
+    const ring = () => {
+      latest.current.onBell?.();
+      return true;
+    };
     const osc = [
       term.parser.registerOscHandler(10, (d) => isOscColorQuery(d) && reply(10, colors.foreground)),
       term.parser.registerOscHandler(11, (d) => isOscColorQuery(d) && reply(11, colors.background)),
       term.parser.registerOscHandler(12, (d) => isOscColorQuery(d) && reply(12, colors.cursor)),
+      // OSC 9 is a notification unless it opens with `4;`, which is progress.
+      term.parser.registerOscHandler(9, (d) => !d.startsWith("4;") && ring()),
+      term.parser.registerOscHandler(777, (d) => d.startsWith("notify") && ring()),
     ];
-
+    const bell = term.onBell(() => latest.current.onBell?.());
+    const links = term.registerLinkProvider(
+      filePathProvider(term, cwd, (path) => latest.current.onOpenPath?.(path)),
+    );
     const input = term.onData((data) => {
       if (spawned) void api.writePty(id, data);
     });
@@ -158,7 +243,7 @@ export function TerminalView({ id, cwd, command, active, onExit }: Props) {
         return;
       }
       spawned = true;
-      void api.spawnPty(id, cwd, commandRef.current, cols, rows).catch((error: unknown) => {
+      void api.spawnPty(id, cwd, latest.current.command, cols, rows).catch((error: unknown) => {
         spawned = false;
         term.writeln(`\x1b[31m${error instanceof Error ? error.message : String(error)}\x1b[0m`);
       });
@@ -191,6 +276,9 @@ export function TerminalView({ id, cwd, command, active, onExit }: Props) {
       host.removeEventListener("copy", onCopy);
       host.removeEventListener("paste", onPaste);
       input.dispose();
+      bell.dispose();
+      links.dispose();
+      detachSearch();
       for (const handler of osc) handler.dispose();
       unsubscribe();
       void api.killPty(id);
@@ -199,7 +287,7 @@ export function TerminalView({ id, cwd, command, active, onExit }: Props) {
       termRef.current = null;
       fitRef.current = () => {};
     };
-  }, [id, cwd]);
+  }, [attachSearch, cwd, id]);
 
   // Runs after the mount effect, so the first spawn already measures the real font.
   useEffect(() => {
@@ -222,15 +310,66 @@ export function TerminalView({ id, cwd, command, active, onExit }: Props) {
     fitRef.current();
   }, [prefs]);
 
+  const clear = useCallback(() => termRef.current?.clear(), []);
+
+  const copySelection = useCallback(() => {
+    const text = termRef.current?.getSelection();
+    if (text) void navigator.clipboard.writeText(text).catch(() => {});
+  }, []);
+
+  const pasteClipboard = useCallback(() => {
+    void navigator.clipboard
+      .readText()
+      .then((text) => text && termRef.current?.paste(text))
+      .catch(() => {});
+  }, []);
+
+  const startFind = search.start;
   useEffect(() => {
     if (!active) return;
     fitRef.current();
     termRef.current?.focus();
-  }, [active]);
+    return holdTerminal({ find: startFind });
+  }, [active, startFind]);
 
   return (
-    <div className="crew-terminal h-full min-h-0 w-full min-w-0 bg-canvas p-3">
+    <div
+      ref={paneRef}
+      onContextMenu={(event) => {
+        if (!hostRef.current?.contains(event.target as Node)) return;
+        setMenu({
+          point: menuFromEvent(event),
+          hasSelection: termRef.current?.hasSelection() ?? false,
+        });
+      }}
+      className={`crew-terminal relative h-full min-h-0 w-full min-w-0 bg-canvas p-3 ${
+        over ? "ring-2 ring-accent ring-inset" : ""
+      }`}
+    >
       <div ref={hostRef} className="h-full min-h-0 w-full min-w-0 overflow-hidden" />
+
+      {search.open && (
+        <TerminalSearch
+          query={search.query}
+          results={search.results}
+          focusToken={search.open.token}
+          onQuery={search.setQuery}
+          onStep={search.step}
+          onClose={search.close}
+        />
+      )}
+
+      {menu && (
+        <TerminalMenu
+          point={menu.point}
+          hasSelection={menu.hasSelection}
+          onCopy={copySelection}
+          onPaste={pasteClipboard}
+          onSelectAll={() => termRef.current?.selectAll()}
+          onClear={clear}
+          onClose={() => setMenu(null)}
+        />
+      )}
     </div>
   );
 }
