@@ -335,7 +335,7 @@ function ScheduleFields({
             aria-label="Time"
             value={time}
             onChange={(event) => pickTime(event.target.value)}
-            className={`${FIELD} w-[104px] tabular-nums`}
+            className={`${FIELD} w-[124px] tabular-nums`}
           />
         )}
       </div>
