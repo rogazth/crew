@@ -70,10 +70,12 @@ function detach(sessionId: string, live: Live): void {
 async function sendTurn(input: TurnInput): Promise<void> {
   if (liveBySession.has(input.sessionId)) await stopSession(input.sessionId);
 
+  if (input.fresh) resumeBySession.delete(input.sessionId);
   const stored = resumeBySession.get(input.sessionId);
   const movedAway = stored != null && stored.cwd !== input.cwd;
   const fromInput = input.resume?.trim();
-  const resume = movedAway ? undefined : (stored?.threadId ?? (fromInput ? fromInput : undefined));
+  const resume =
+    movedAway || input.fresh ? undefined : (stored?.threadId ?? (fromInput ? fromInput : undefined));
   const model = input.model.trim() || undefined;
 
   const live: Live = {
@@ -123,7 +125,14 @@ async function sendTurn(input: TurnInput): Promise<void> {
         "Codex CLI not found. Install it from https://github.com/openai/codex and run `codex login`.",
       );
     });
-    const prompt = buildCodexPrompt(input.name, input.description, input.text, input.files ?? []);
+    // The thread already carries the persona after the first turn; resending it is paid twice.
+    const prompt = buildCodexPrompt(
+      resume ? "" : input.name,
+      resume ? "" : input.description,
+      input.text,
+      input.files ?? [],
+      resume === undefined,
+    );
     await spawnAgent(
       input.sessionId,
       path,

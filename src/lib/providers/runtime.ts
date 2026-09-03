@@ -2,6 +2,7 @@ import type { ApprovalDecision, HarnessEvent } from "../blocks";
 import type { Autonomy } from "../types";
 import { claudeRuntime } from "../claudeTurn";
 import { codexRuntime } from "../codexTurn";
+import { cursorRuntime } from "../cursorTurn";
 
 export type TurnInput = {
   sessionId: string;
@@ -30,6 +31,7 @@ export type ProviderRuntime = {
 const RUNTIMES: Record<string, ProviderRuntime> = {
   claude: claudeRuntime,
   codex: codexRuntime,
+  cursor: cursorRuntime,
 };
 
 export function runtimeFor(providerId: string): ProviderRuntime {

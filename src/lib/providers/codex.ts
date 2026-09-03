@@ -54,14 +54,20 @@ export function buildCodexPrompt(
   description: string,
   text: string,
   files: string[] = [],
+  withPersona = true,
 ): string {
+  const body = withAttachedPaths(text.trim(), files);
+  if (!withPersona) return body;
+  const persona = personaPrompt(name, description);
+  return body ? `${persona}\n\n${body}` : persona;
+}
+
+export function personaPrompt(name: string, description: string): string {
   const who = name.trim() || "the user's agent";
   const job = description.trim();
   const rules =
     "You are chatting inside Crew, a desktop app. Do the work with your tools, then reply like a colleague in chat: short, direct, no headers or preamble unless asked.";
-  const persona = job ? `You are ${who}. ${job}\n\n${rules}` : `You are ${who}. ${rules}`;
-  const body = withAttachedPaths(text.trim(), files);
-  return body ? `${persona}\n\n${body}` : persona;
+  return job ? `You are ${who}. ${job}\n\n${rules}` : `You are ${who}. ${rules}`;
 }
 
 function withAttachedPaths(text: string, files: string[]): string {
