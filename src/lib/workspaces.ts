@@ -62,3 +62,15 @@ export function nextSessionName(sessions: Session[], base: string): string {
     if (!taken.has(candidate)) return candidate;
   }
 }
+
+/** The home prefix says nothing about the folder; `~` keeps the tail visible. */
+export function shortenPath(path: string): string {
+  return path.replace(/^\/(?:Users|home)\/[^/]+(?=\/|$)/, "~");
+}
+
+/** Up to two initials from the folder name: `storefront-api` → FA, `crew` → C. */
+export function workspaceMark(name: string): string {
+  const words = name.split(/[\s\-_.]+/).filter(Boolean);
+  const initials = words.slice(0, 2).map((word) => word[0] ?? "");
+  return initials.join("").toUpperCase() || "?";
+}
