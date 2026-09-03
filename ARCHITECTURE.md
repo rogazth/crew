@@ -206,7 +206,7 @@ Lo que separa esto de las referencias que envejecieron mal.
 | 6 | `agent.rs` + `claude.ts` + `AgentChat` | ✅ |
 | 7 | Persistencia del transcript y resume | ✅ runtime fuera de React, reconcile al arrancar |
 | 8 | Autonomía por agente, notificaciones nativas, routines | ✅ |
-| 9 | Adapters Codex y Cursor | ⚠️ en curso |
+| 9 | Adapters Codex y Cursor (un proceso por turno, sin approvals) | ✅ |
 
 Del 1 al 4 es andamiaje conocido. El 5 y 6 son el producto.
 
