@@ -92,7 +92,7 @@ type SessionProps = {
 /** Resolves whether the provider already holds a transcript before the first spawn. */
 function SessionTerminal({ tabId, session, cwd, active, onStatus, onOpenPath }: SessionProps) {
   const [command, setCommand] = useState<string[] | null>(null);
-  const { onBell, onActivity } = useSessionActivity(session, active, onStatus);
+  const { onBell, onActivity, onExit } = useSessionActivity(session, active, onStatus);
 
   useEffect(() => {
     let cancelled = false;
@@ -118,6 +118,7 @@ function SessionTerminal({ tabId, session, cwd, active, onStatus, onOpenPath }: 
       cwd={cwd}
       command={command}
       active={active}
+      onExit={onExit}
       onBell={onBell}
       onActivity={onActivity}
       onOpenPath={onOpenPath}
