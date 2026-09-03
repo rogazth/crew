@@ -161,6 +161,44 @@ pub fn session_delete(store: State<Store>, id: String) -> Result<(), String> {
     Ok(())
 }
 
+#[tauri::command(async)]
+pub fn session_get_blocks(store: State<Store>, id: String) -> Result<String, String> {
+    store.with(|conn| {
+        conn.prepare_cached("SELECT blocks_json FROM sessions WHERE id = ?1")?
+            .query_row(params![id], |row| row.get::<_, String>(0))
+    })
+}
+
+#[tauri::command(async)]
+pub fn session_set_blocks(
+    store: State<Store>,
+    id: String,
+    blocks_json: String,
+) -> Result<(), String> {
+    store.with(|conn| {
+        conn.prepare_cached(
+            "UPDATE sessions SET blocks_json = ?2, updated_at = ?3 WHERE id = ?1",
+        )?
+        .execute(params![id, blocks_json, now_millis()])
+    })?;
+    Ok(())
+}
+
+#[tauri::command(async)]
+pub fn session_set_provider_session(
+    store: State<Store>,
+    id: String,
+    provider_session_id: String,
+) -> Result<(), String> {
+    store.with(|conn| {
+        conn.prepare_cached(
+            "UPDATE sessions SET provider_session_id = ?2, updated_at = ?3 WHERE id = ?1",
+        )?
+        .execute(params![id, provider_session_id, now_millis()])
+    })?;
+    Ok(())
+}
+
 /// The runtime owns this; the UI only renders whatever the last writer left.
 #[tauri::command(async)]
 pub fn session_set_status(store: State<Store>, id: String, status: String) -> Result<(), String> {

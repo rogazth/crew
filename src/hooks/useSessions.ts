@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import * as api from "../lib/api";
+import { stopSession } from "../lib/claudeTurn";
 import type { Session, SessionKind, SessionStatus } from "../lib/types";
 
 type CreateInput = {
@@ -37,6 +38,7 @@ export function useSessions(workspaceId: string | null) {
   );
 
   const remove = useCallback(async (id: string) => {
+    await stopSession(id);
     await api.deleteSession(id);
     setSessions((prev) => prev.filter((s) => s.id !== id));
   }, []);
@@ -80,5 +82,12 @@ export function useSessions(workspaceId: string | null) {
     void api.setSessionStatus(id, status).catch(() => {});
   }, []);
 
-  return { sessions, create, update, rename, remove, reorder, setStatus };
+  const bindProvider = useCallback((id: string, providerSessionId: string) => {
+    setSessions((prev) =>
+      prev.map((s) => (s.id === id ? { ...s, providerSessionId } : s)),
+    );
+    void api.setProviderSession(id, providerSessionId).catch(() => {});
+  }, []);
+
+  return { sessions, create, update, rename, remove, reorder, setStatus, bindProvider };
 }

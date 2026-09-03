@@ -1,5 +1,13 @@
 import { invoke } from "@tauri-apps/api/core";
+import { open } from "@tauri-apps/plugin-dialog";
 import type { ProjectFile, Session, SessionKind, SessionStatus, Workspace } from "./types";
+
+/** Native picker. No filters: any document the agent can read. */
+export async function pickFiles(): Promise<string[]> {
+  const picked = await open({ multiple: true, directory: false });
+  if (picked == null) return [];
+  return Array.isArray(picked) ? picked : [picked];
+}
 
 export const listWorkspaces = (): Promise<Workspace[]> => invoke("workspace_list");
 
@@ -46,6 +54,30 @@ export const deleteSession = (id: string): Promise<void> =>
 
 export const setSessionStatus = (id: string, status: SessionStatus): Promise<void> =>
   invoke("session_set_status", { id, status });
+
+export const getSessionBlocks = (id: string): Promise<string> =>
+  invoke("session_get_blocks", { id });
+
+export const setSessionBlocks = (id: string, blocksJson: string): Promise<void> =>
+  invoke("session_set_blocks", { id, blocksJson });
+
+export const setProviderSession = (id: string, providerSessionId: string): Promise<void> =>
+  invoke("session_set_provider_session", { id, providerSessionId });
+
+export const resolveClaude = (): Promise<{ path: string }> => invoke("agent_resolve_claude");
+
+export const spawnAgent = (
+  sessionId: string,
+  command: string,
+  args: string[],
+  cwd: string,
+): Promise<number> => invoke("agent_spawn", { sessionId, command, args, cwd });
+
+export const writeAgent = (sessionId: string, line: string): Promise<void> =>
+  invoke("agent_write", { sessionId, line });
+
+export const killAgent = (sessionId: string): Promise<void> =>
+  invoke("agent_kill", { sessionId });
 
 export const stateGet = (key: string): Promise<string | null> => invoke("state_get", { key });
 

@@ -77,6 +77,12 @@ export const Send = ({ className }: Props) => (
   </svg>
 );
 
+export const Square = ({ className }: Props) => (
+  <svg {...base} className={className}>
+    <rect x="6" y="6" width="12" height="12" rx="1.5" fill="currentColor" stroke="none" />
+  </svg>
+);
+
 export const Pencil = ({ className }: Props) => (
   <svg {...base} className={className}>
     <path d="M12 20h9" />

@@ -1,3 +1,4 @@
+mod agent;
 mod files;
 mod menu;
 mod pty;
@@ -7,6 +8,7 @@ mod workspace;
 
 use tauri::{Manager, RunEvent};
 
+use agent::AgentHost;
 use pty::PtyHost;
 use store::Store;
 
@@ -20,6 +22,7 @@ pub fn run() {
             let dir = app.path().app_data_dir()?;
             app.manage(Store::open(dir.join("crew.sqlite3"))?);
             app.manage(PtyHost::new());
+            app.manage(AgentHost::new());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -37,6 +40,9 @@ pub fn run() {
             session::session_delete,
             session::session_reorder,
             session::session_set_status,
+            session::session_get_blocks,
+            session::session_set_blocks,
+            session::session_set_provider_session,
             store::state_get,
             store::state_set,
             files::list_project_files,
@@ -48,6 +54,10 @@ pub fn run() {
             pty::pty_write,
             pty::pty_resize,
             pty::pty_kill,
+            agent::agent_resolve_claude,
+            agent::agent_spawn,
+            agent::agent_write,
+            agent::agent_kill,
         ])
         .build(tauri::generate_context!())
         .expect("error while building crew")
@@ -56,6 +66,7 @@ pub fn run() {
         .run(|app, event| {
             if let RunEvent::Exit = event {
                 app.state::<PtyHost>().kill_all();
+                app.state::<AgentHost>().kill_all();
             }
         });
 }

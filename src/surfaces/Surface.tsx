@@ -1,4 +1,3 @@
-import { AgentChat } from "./AgentChat";
 import { EmptyState } from "./EmptyState";
 import { FileEditor } from "./FileEditor";
 import { StubView } from "./StubView";
@@ -12,7 +11,7 @@ type Props = {
   onCreateWorkspace: () => void;
 };
 
-/** Routes the active tab to whatever fills the pane. Terminals live in `Terminals`, which stays mounted. */
+/** Routes the active tab to whatever fills the pane. Agents and terminals stay mounted in their overlays. */
 export function Surface({ tab, sessions, hasWorkspace, onCreateWorkspace }: Props) {
   if (!hasWorkspace) {
     return (
@@ -38,5 +37,5 @@ export function Surface({ tab, sessions, hasWorkspace, onCreateWorkspace }: Prop
 
   const session = sessions.find((s) => s.id === tab.sessionId);
   if (!session) return <EmptyState title="Session not found." />;
-  return session.kind === "terminal" ? null : <AgentChat session={session} />;
+  return null;
 }

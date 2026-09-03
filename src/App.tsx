@@ -19,9 +19,8 @@ import { fileTabId, sessionTabId, stubTabId } from "./lib/tabs";
 import type { ProjectFile, Session, StubKind, Workspace } from "./lib/types";
 import { SETTINGS_DEFAULT, type SettingsSectionId } from "./lib/settings";
 import { nextSessionName } from "./lib/workspaces";
-import { Surface } from "./surfaces/Surface";
-import { Terminals } from "./surfaces/Terminals";
 import { SettingsView } from "./surfaces/SettingsView";
+import { WorkspacePanes } from "./surfaces/WorkspacePanes";
 
 type Sheet = { session: Session | null };
 
@@ -31,7 +30,7 @@ export function App() {
   const workspaces = useWorkspaces();
   const sidebar = useSidebarWidth();
   const active = workspaces.active;
-  const { sessions, create, update, rename, remove, reorder, setStatus } =
+  const { sessions, create, update, rename, remove, reorder, setStatus, bindProvider } =
     useSessions(active?.id ?? null);
   const tabs = useTabs(active?.id ?? null);
   const files = useProjectFiles(active?.path ?? null);
@@ -249,7 +248,7 @@ export function App() {
 
       <main className="flex min-w-0 flex-1 flex-col bg-canvas">
         {settings && <SettingsView section={settings} />}
-        {/* Hidden, not unmounted: the terminals underneath keep their processes. */}
+        {/* Hidden, not unmounted: agent and terminal processes stay alive. */}
         <div hidden={settings !== null} className="flex min-h-0 flex-1 flex-col">
           <TabBar
             inset={!sidebarOpen}
@@ -265,24 +264,17 @@ export function App() {
             <div className="border-b border-border px-3 py-2 text-danger">{workspaces.error}</div>
           )}
 
-          <div className="relative min-h-0 flex-1">
-            <Surface
-              tab={tabs.active}
-              sessions={sessions}
-              hasWorkspace={active !== null}
-              onCreateWorkspace={workspaces.create}
-            />
-            {active && (
-              <Terminals
-                tabs={tabs.tabs}
-                activeId={tabs.active?.id ?? null}
-                sessions={sessions}
-                cwd={active.path}
-                onStatus={setStatus}
-                onOpenFile={openFile}
-              />
-            )}
-          </div>
+          <WorkspacePanes
+            tab={tabs.active}
+            tabs={tabs.tabs}
+            sessions={sessions}
+            cwd={active?.path ?? null}
+            hasWorkspace={active !== null}
+            onCreateWorkspace={workspaces.create}
+            onStatus={setStatus}
+            onBindProvider={bindProvider}
+            onOpenFile={openFile}
+          />
         </div>
       </main>
 

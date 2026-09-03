@@ -176,3 +176,104 @@ body:has(button[data-sidebar="resize-handle"]:active) * {
 .crew-terminal .xterm-viewport {
   background: transparent !important;
 }
+
+/* `bg-text` is not a reliable Tailwind class: `text` is a typography
+   namespace, so the ink pill has to use the token directly. */
+.crew-ink {
+  background: var(--color-text);
+  color: var(--color-canvas);
+}
+.crew-bubble {
+  max-width: min(88%, 640px);
+  padding: 8px 12px;
+  border-radius: 14px;
+  overflow-wrap: anywhere;
+}
+.crew-bubble-agent {
+  background: var(--color-sidebar);
+}
+.crew-composer {
+  display: flex;
+  flex-direction: column;
+  min-height: 112px;
+  padding: 12px 12px 8px;
+  border: 1px solid var(--color-border);
+  border-radius: 16px;
+  background: var(--color-canvas);
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--color-text) 4%, transparent);
+  transition: border-color 120ms ease;
+}
+.crew-composer:focus-within {
+  border-color: var(--color-border-strong);
+}
+.crew-composer-field {
+  display: block;
+  width: 100%;
+  min-height: 56px;
+  max-height: 160px;
+  resize: none;
+  background: transparent;
+  outline: none;
+  line-height: 1.45;
+}
+.crew-composer-attach {
+  width: 30px;
+  height: 30px;
+  color: var(--color-text);
+  background: var(--color-card);
+  border-radius: 9999px;
+}
+.crew-composer-attach:hover {
+  background: var(--color-hover);
+}
+.crew-chip-on-ink {
+  background: color-mix(in srgb, var(--color-canvas) 15%, transparent);
+}
+
+/* Chat markdown: Cursor 13/18, ink-mixed code, no extra chrome. */
+.crew-md {
+  font-size: 13px;
+  line-height: 18px;
+  letter-spacing: -0.08px;
+}
+.crew-md [data-streamdown="heading-1"],
+.crew-md [data-streamdown="heading-2"],
+.crew-md [data-streamdown="heading-3"] {
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 18px;
+  margin: 8px 0 4px;
+}
+.crew-md [data-streamdown="p"] {
+  margin: 0;
+}
+.crew-md [data-streamdown="p"] + [data-streamdown="p"] {
+  margin-top: 8px;
+}
+.crew-md [data-streamdown="code-block"],
+.crew-md pre {
+  margin: 8px 0;
+  max-width: 100%;
+  overflow-x: auto;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--text-color-kumo-default) 6%, transparent);
+  font: 12px/16px ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.crew-md :not(pre) > code,
+.crew-md [data-streamdown="inline-code"] {
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--text-color-kumo-default) 8%, transparent);
+  font: 12px/16px ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.crew-md ul,
+.crew-md ol {
+  margin: 6px 0;
+  padding-left: 1.2em;
+}
+.crew-md a,
+.crew-md [data-streamdown="link"] {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}

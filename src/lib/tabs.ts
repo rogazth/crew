@@ -110,6 +110,11 @@ function isTab(value: unknown): value is Tab {
   return false;
 }
 
+export function isAgentTab(tab: Tab | null, sessions: Session[]): boolean {
+  if (!tab || tab.kind !== "session") return false;
+  return sessions.find((session) => session.id === tab.sessionId)?.kind === "agent";
+}
+
 /** Which tab the terminal commands aim at. */
 export function isTerminalTab(tab: Tab | null, sessions: Session[]): boolean {
   if (!tab) return false;
