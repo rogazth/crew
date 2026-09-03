@@ -16,6 +16,7 @@ export default defineConfig({
           "@tauri-apps/api/path": mock("path"),
           "@tauri-apps/api/webview": mock("webview"),
           "@tauri-apps/plugin-dialog": mock("dialog"),
+          "@tauri-apps/plugin-notification": mock("notification"),
           "@tauri-apps/plugin-opener": mock("opener"),
         }
       : {},

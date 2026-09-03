@@ -1,5 +1,6 @@
 import * as api from "./api";
 import { newBlock, type ApprovalDecision, type AttachedFile, type HarnessEvent } from "./blocks";
+import { notify } from "./notify";
 import { anyLive, runtimeFor, stopEverywhere } from "./providers/runtime";
 import * as transcript from "./transcript";
 import type { Session, SessionStatus } from "./types";
@@ -78,7 +79,10 @@ export async function send(
       void api.setProviderSession(id, event.providerSessionId).catch(() => {});
       return;
     }
-    if (event.type === "approval.requested") setStatus(id, "needs-input");
+    if (event.type === "approval.requested") {
+      setStatus(id, "needs-input");
+      if (!watching(session)) void notify(session.name, `Wants to run: ${event.title}`);
+    }
     if (event.type === "approval.resolved") setStatus(id, "working");
     if (event.type === "session.error") failed = true;
     transcript.apply(id, event);
@@ -108,7 +112,23 @@ export async function send(
     transcript.settle(id);
     transcript.flush(id);
     setStatus(id, failed ? "error" : foreground === id ? "idle" : "done");
+    if (!watching(session)) void notify(session.name, failed ? "Ran into an error" : lastReply(id));
   }
+}
+
+/** Looking at the chat, with the window in front: no banner needed. */
+function watching(session: Session): boolean {
+  if (!session.notifications) return true;
+  return foreground === session.id && document.hasFocus();
+}
+
+function lastReply(id: string): string {
+  const blocks = transcript.read(id).blocks;
+  for (let i = blocks.length - 1; i >= 0; i -= 1) {
+    const block = blocks[i];
+    if (block?.role === "assistant" && block.text.trim()) return block.text.trim().split("\n")[0] ?? "Done";
+  }
+  return "Done";
 }
 
 export async function stop(session: Session): Promise<void> {
