@@ -6,7 +6,7 @@ import * as transcript from "./transcript";
 import type { Session, SessionStatus } from "./types";
 
 /** Runtime-owned columns. The sidebar renders them; only this module writes them. */
-export type SessionPatch = Partial<Pick<Session, "status" | "providerSessionId">>;
+export type SessionPatch = Partial<Pick<Session, "status" | "providerSessionId" | "updatedAt">>;
 
 type PatchListener = (id: string, patch: SessionPatch) => void;
 
@@ -157,7 +157,7 @@ export async function dispose(id: string): Promise<void> {
 function setStatus(id: string, status: SessionStatus): void {
   if (statuses.get(id) === status) return;
   statuses.set(id, status);
-  patch(id, { status });
+  patch(id, { status, updatedAt: Date.now() });
   void api.setSessionStatus(id, status).catch(() => {});
 }
 
