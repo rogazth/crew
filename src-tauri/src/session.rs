@@ -163,7 +163,7 @@ pub fn session_delete(store: State<Store>, id: String) -> Result<(), String> {
 /// The runtime owns this; the UI only renders whatever the last writer left.
 #[tauri::command]
 pub fn session_set_status(store: State<Store>, id: String, status: String) -> Result<(), String> {
-    const KNOWN: [&str; 4] = ["idle", "working", "needs-input", "error"];
+    const KNOWN: [&str; 5] = ["idle", "working", "needs-input", "done", "error"];
     if !KNOWN.contains(&status.as_str()) {
         return Err(format!("Unknown session status: {status}"));
     }

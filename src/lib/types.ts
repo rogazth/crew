@@ -7,8 +7,8 @@ export type Workspace = {
 
 export type SessionKind = "agent" | "terminal";
 
-/** Written by the provider runtime, never by the UI. */
-export type SessionStatus = "idle" | "working" | "needs-input" | "error";
+/** Written by whatever runs the session: the terminal today, the agent runtime later. */
+export type SessionStatus = "idle" | "working" | "needs-input" | "done" | "error";
 
 export type Session = {
   id: string;

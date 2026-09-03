@@ -81,9 +81,9 @@ export function TabBar({ inset, tabs, activeId, sessions, onSelect, onClose, onL
                       : "text-text-muted hover:bg-hover"
                   }`}
                 >
+                  <TabStatus tab={tab} sessions={sessions} />
                   <TabIcon tab={tab} sessions={sessions} />
                   <span className="min-w-0 flex-1 truncate">{tabTitle(tab, sessions)}</span>
-                  <TabStatus tab={tab} sessions={sessions} />
                   {/* Holding the modifier turns the close slot into the jump hint. */}
                   {modHeld && hotkey ? (
                     <Kbd keys={commandKeys(hotkey)} className="shrink-0" />
@@ -173,7 +173,7 @@ function TabStatus({ tab, sessions }: { tab: Tab; sessions: Session[] }) {
   if (tab.kind !== "session") return null;
   const session = sessions.find((s) => s.id === tab.sessionId);
   if (!session) return null;
-  return <StatusDot status={session.status} className="size-1.5" />;
+  return <StatusDot status={session.status} />;
 }
 
 function TabIcon({ tab, sessions }: { tab: Tab; sessions: Session[] }) {

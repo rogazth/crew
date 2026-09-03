@@ -302,7 +302,7 @@ function Row({
       <span className="shrink-0 truncate text-text">{face.label}</span>
       {face.detail && <span className="min-w-0 truncate text-[12px] opacity-60">{face.detail}</span>}
       <span className="flex-1" />
-      {item.kind === "session" && <StatusDot status={item.session.status} className="size-1.5" />}
+      {item.kind === "session" && <StatusDot status={item.session.status} />}
       {item.kind === "action" && item.keys && <Kbd keys={item.keys} className="shrink-0" />}
     </button>
   );

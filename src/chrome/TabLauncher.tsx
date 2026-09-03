@@ -233,7 +233,7 @@ function Row({
     >
       {icon}
       <span className="min-w-0 flex-1 truncate">{label}</span>
-      {status && <StatusDot status={status} className="size-1.5" />}
+      {status && <StatusDot status={status} />}
       {hint && <span className="shrink-0 text-[11px] text-kumo-subtle">{hint}</span>}
     </button>
   );
