@@ -3,11 +3,13 @@ import { useCallback, useEffect, useState } from "react";
 import { TerminalView } from "./TerminalView";
 import { useCommands } from "../hooks/useCommand";
 import { useSessionActivity } from "../hooks/useSessionActivity";
+import { useTerminalPrefs } from "../hooks/useTerminalPrefs";
 import * as api from "../lib/api";
 import { transcriptPath } from "../lib/claudeStorage";
 import { sessionCommand } from "../lib/sessionCommand";
 import { isTerminalTab, relativeTo } from "../lib/tabs";
 import { activeTerminal } from "../lib/terminalFocus";
+import { clamp, DEFAULT_TERMINAL_PREFS, LIMITS } from "../lib/terminalPrefs";
 import type { ProjectFile, Session, SessionStatus, Tab } from "../lib/types";
 
 type Props = {
@@ -25,11 +27,25 @@ type Props = {
  */
 export function Terminals({ tabs, activeId, sessions, cwd, onStatus, onOpenFile }: Props) {
   const focused = tabs.find((tab) => tab.id === activeId) ?? null;
+  const { prefs, update } = useTerminalPrefs();
+  const zoom = (delta: number) =>
+    update({
+      ...prefs,
+      fontSize:
+        delta === 0
+          ? DEFAULT_TERMINAL_PREFS.fontSize
+          : clamp(prefs.fontSize + delta, LIMITS.fontSize),
+    });
 
   // Bound to the terminal filling the active tab, so ⌘F reaches the pane you see.
   useCommands(
     isTerminalTab(focused, sessions)
-      ? { "find-in-terminal": () => activeTerminal()?.find() }
+      ? {
+          "find-in-terminal": () => activeTerminal()?.find(),
+          "zoom-in": () => zoom(1),
+          "zoom-out": () => zoom(-1),
+          "zoom-reset": () => zoom(0),
+        }
       : {},
   );
 

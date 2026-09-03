@@ -31,6 +31,18 @@ export const COMMANDS = {
   "open-actions": { label: "Show All Actions", keys: "Mod+Shift+P" },
   "open-workspace": { label: "Open Workspace", keys: "Mod+O" },
   "switch-workspace": { label: "Switch Workspace", keys: "Mod+Shift+O" },
+  // Workspaces sit one modifier above tabs: ⌃⌘ where tabs use ⌘, same keys.
+  "next-workspace": { label: "Next Workspace", keys: { key: "]", mod: true, ctrl: true } },
+  "prev-workspace": { label: "Previous Workspace", keys: { key: "[", mod: true, ctrl: true } },
+  "workspace-1": { label: "Go to Workspace 1", keys: { key: "1", mod: true, ctrl: true } },
+  "workspace-2": { label: "Go to Workspace 2", keys: { key: "2", mod: true, ctrl: true } },
+  "workspace-3": { label: "Go to Workspace 3", keys: { key: "3", mod: true, ctrl: true } },
+  "workspace-4": { label: "Go to Workspace 4", keys: { key: "4", mod: true, ctrl: true } },
+  "workspace-5": { label: "Go to Workspace 5", keys: { key: "5", mod: true, ctrl: true } },
+  "workspace-6": { label: "Go to Workspace 6", keys: { key: "6", mod: true, ctrl: true } },
+  "workspace-7": { label: "Go to Workspace 7", keys: { key: "7", mod: true, ctrl: true } },
+  "workspace-8": { label: "Go to Workspace 8", keys: { key: "8", mod: true, ctrl: true } },
+  "workspace-9": { label: "Go to Workspace 9", keys: { key: "9", mod: true, ctrl: true } },
 
   // Making things
   "new-agent": { label: "New Agent", keys: "Mod+N" },
@@ -38,6 +50,9 @@ export const COMMANDS = {
 
   // Terminal — bound only while a terminal fills the active tab.
   "find-in-terminal": { label: "Find in Terminal", keys: "Mod+F" },
+  "zoom-in": { label: "Increase Terminal Font", keys: { key: "=", mod: true } },
+  "zoom-out": { label: "Decrease Terminal Font", keys: { key: "-", mod: true } },
+  "zoom-reset": { label: "Reset Terminal Font", keys: "Mod+0" },
 
   "toggle-sidebar": { label: "Toggle Sidebar", keys: "Mod+B" },
   "open-settings": { label: "Settings", keys: "Mod+," },
@@ -78,7 +93,7 @@ export function runCommand(id: CommandId): boolean {
 
 /** Tab plumbing and the palette's own doors: bound, but noise in a command list. */
 const UNLISTED =
-  /^(tab-[1-8]|last-tab|next-tab|prev-tab|close|open-palette|go-to-file|open-actions)$/;
+  /^(tab-[1-8]|last-tab|next-tab|prev-tab|workspace-[1-9]|close|open-palette|go-to-file|open-actions)$/;
 
 /** Live commands worth offering in the palette, in declaration order. */
 export function listedCommands(): { id: CommandId; label: string; keys: string }[] {

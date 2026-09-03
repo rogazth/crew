@@ -14,7 +14,9 @@ import { useTerminalSearch } from "../hooks/useTerminalSearch";
 import * as api from "../lib/api";
 import { subscribePty } from "../lib/pty";
 import { holdTerminal } from "../lib/terminalFocus";
+import { IS_MAC } from "../lib/hotkey";
 import { filePathProvider, openExternal } from "../lib/terminalLinks";
+import { resolveTerminalKey } from "../lib/terminalKeys";
 import { quotePath, quotePaths } from "../lib/terminalPaths";
 import { fontStack, ligaturesEnabled } from "../lib/terminalPrefs";
 import {
@@ -117,7 +119,8 @@ export function TerminalView({
       cursorStyle: "bar",
       scrollback: 5000,
       smoothScrollDuration: 0,
-      macOptionIsMeta: true,
+      // Option composes accents, as in Terminal.app; word motions are spelled out in terminalKeys.
+      macOptionIsMeta: false,
       allowProposedApi: true,
       linkHandler: { activate: (_event, uri) => openExternal(uri) },
       theme: colors,
@@ -150,15 +153,30 @@ export function TerminalView({
     let lastRows = 0;
     let lastActivity = 0;
 
-    // Meta combos are the app's hotkeys; the browser must see them. Cmd+V is
-    // handled by the paste listener below, Cmd+C by the copy one.
+    // ⌘V reaches the paste listener below and ⌘C the copy one; the rest of the
+    // ⌘ chords are the app's hotkeys, which must bubble to the document.
     term.attachCustomKeyEventHandler((event) => {
-      if (!event.metaKey || event.ctrlKey) return true;
-      if (event.type !== "keydown") return false;
-      if (event.key === "a") term.selectAll();
-      // macOS spells "kill the line" ⌘⌫; readline and every TUI spell it ^U.
-      if (event.key === "Backspace" && spawned) void api.writePty(id, "\x15");
-      return false;
+      const action = resolveTerminalKey(event, {
+        isMac: IS_MAC,
+        hasSelection: term.hasSelection(),
+      });
+      switch (action.type) {
+        case "xterm":
+          return true;
+        case "app":
+          return false;
+        case "select-all":
+          term.selectAll();
+          return false;
+        case "scroll":
+          if (action.to === "top") term.scrollToTop();
+          else term.scrollToBottom();
+          return false;
+        case "input":
+          if (spawned) void api.writePty(id, action.data);
+          event.preventDefault();
+          return false;
+      }
     });
 
     const onCopy = (event: ClipboardEvent) => {
