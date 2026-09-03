@@ -48,6 +48,7 @@ function groupRows(blocks: Block[]): Row[] {
       continue;
     }
     if (block.role === "assistant" && !block.text && block.streaming) continue;
+    if (block.hidden) continue;
     flush();
     if (block.role === "user" && block.at !== undefined) {
       if (lastAt === undefined || block.at - lastAt > DATE_BREAK_MS) {

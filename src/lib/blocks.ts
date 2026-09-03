@@ -39,6 +39,8 @@ export type Block = {
   text: string;
   /** Wall clock, ms. Set on what the user sent and on the reply that closed a turn. */
   at?: number;
+  /** Sent on the user's behalf (a routine waking the agent); the transcript does not paint it. */
+  hidden?: boolean;
   streaming?: boolean;
   files?: AttachedFile[];
   tool?: {

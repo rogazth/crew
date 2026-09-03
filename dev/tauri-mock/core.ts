@@ -20,6 +20,18 @@ const sessions: Row[] = [
   session("s5", "w2", "terminal", "claude", "claude", "", "idle"),
 ];
 const state = new Map<string, string>([["active_workspace_id", "w1"]]);
+const routines: Row[] = [
+  {
+    id: "r1", sessionId: "s1", name: "Morning digest", enabled: true,
+    prompt: "Check the open PRs and tell me which ones wait on me.",
+    schedule: JSON.stringify({ kind: "daily", hour: 9, minute: 0, days: [1, 2, 3, 4, 5] }),
+    lastRunAt: now - 8 * 3600e3, nextRunAt: now + 16 * 3600e3,
+    runsJson: JSON.stringify([
+      { id: "run2", startedAt: now - 8 * 3600e3, finishedAt: now - 8 * 3600e3 + 42e3, status: "ok", trigger: "schedule" },
+      { id: "run1", startedAt: now - 32 * 3600e3, finishedAt: now - 32 * 3600e3 + 12e3, status: "error", trigger: "schedule" },
+    ]),
+  },
+];
 
 function session(
   id: string,
@@ -95,11 +107,18 @@ const commands: Record<string, (args: Row) => unknown> = {
   agent_spawn: ({ sessionId }) => mockAgent(sessionId as string),
   agent_write: ({ sessionId, line }) => void mockAgentInput(sessionId as string, line as string),
   agent_close_stdin: () => undefined,
-  routine_get: () => null,
+  routine_list_for_session: ({ sessionId }) => routines.filter((r) => r.sessionId === sessionId),
   routine_list: () => [],
-  routine_upsert: (args) => ({ id: "r1", sessionId: args.sessionId, enabled: args.enabled, prompt: args.prompt, schedule: args.schedule, lastRunAt: null, nextRunAt: args.nextRunAt }),
-  routine_delete: () => undefined,
-  routine_mark_run: () => undefined,
+  routine_upsert: (args) => {
+    const existing = routines.find((r) => r.id === args.id);
+    if (existing) return Object.assign(existing, args);
+    const row = { ...args, id: `r${Date.now()}`, lastRunAt: null, runsJson: "[]" };
+    routines.push(row);
+    return row;
+  },
+  routine_delete: ({ id }) => void routines.splice(routines.findIndex((r) => r.id === id) >>> 0, 1),
+  routine_mark_run: ({ id, lastRunAt, nextRunAt, runsJson }) =>
+    void Object.assign(routines.find((r) => r.id === id) ?? {}, { lastRunAt, nextRunAt, runsJson }),
   agent_kill: () => undefined,
   agent_kill_all: () => undefined,
   agent_running: () => [],

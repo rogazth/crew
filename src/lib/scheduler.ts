@@ -1,7 +1,19 @@
 import { send } from "./agentRuntime";
 import * as api from "./api";
+import { newBlock } from "./blocks";
+import {
+  fromRow,
+  nextRun,
+  parseSchedule,
+  pushRun,
+  wakePrompt,
+  type Routine,
+  type RoutineDraft,
+  type RoutineRun,
+  type ScheduledRoutine,
+} from "./routines";
 import * as transcript from "./transcript";
-import { nextRun, parseSchedule, type RoutineDraft, type ScheduledRoutine } from "./routines";
+import type { Session } from "./types";
 
 /** Timers drift across sleep; a short cap keeps a due run from waiting until tomorrow. */
 const MAX_WAIT_MS = 60_000;
@@ -9,6 +21,7 @@ const MAX_WAIT_MS = 60_000;
 let timer: number | null = null;
 let rows: ScheduledRoutine[] = [];
 let started = false;
+const listeners = new Set<() => void>();
 
 /** Loads every enabled routine and arms one timer for the earliest. Call once at boot. */
 export function startScheduler(): void {
@@ -21,6 +34,15 @@ export function startScheduler(): void {
 export async function refreshScheduler(): Promise<void> {
   rows = await api.listRoutines().catch(() => []);
   arm();
+  for (const listener of listeners) listener();
+}
+
+/** The sheet re-reads its list when a run lands. */
+export function onRoutinesChanged(listener: () => void): () => void {
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
 }
 
 function arm(): void {
@@ -40,32 +62,53 @@ async function tick(): Promise<void> {
   for (const row of rows) {
     const at = row.routine.nextRunAt;
     if (at === null || at > now) continue;
-    await fire(row, now);
+    void fire(fromRow(row.routine), row.session, row.cwd, "schedule");
+    row.routine.nextRunAt = nextRun(parseSchedule(row.routine.schedule), now);
   }
   arm();
 }
 
-/** A routine opens a fresh episode: yesterday's digest is not context for today's. */
-async function fire(row: ScheduledRoutine, now: number): Promise<void> {
-  const schedule = parseSchedule(row.routine.schedule);
-  const next = nextRun(schedule, now);
-  row.routine.lastRunAt = now;
-  row.routine.nextRunAt = next;
-  void api.markRoutineRun(row.routine.id, now, next).catch(() => {});
-  if (transcript.read(row.session.id).working) return;
-  transcript.apply(row.session.id, { type: "session.note", message: "Scheduled run" });
-  void send(row.session, row.cwd, row.routine.prompt, [], { fresh: true });
+/**
+ * A routine joins the agent's conversation as a hidden turn: what it found
+ * last time is context for this time. The note is the only trace of the wake-up.
+ */
+async function fire(routine: Routine, session: Session, cwd: string, trigger: RoutineRun["trigger"]): Promise<void> {
+  const now = Date.now();
+  const schedule = parseSchedule(routine.schedule);
+  const next = routine.enabled ? nextRun(schedule, now) : null;
+  const run: RoutineRun = { id: crypto.randomUUID(), startedAt: now, finishedAt: null, status: "running", trigger };
+  let runs = pushRun(routine.runs, run);
+  await api.markRoutineRun(routine.id, now, next, JSON.stringify(runs)).catch(() => {});
+  await refreshScheduler();
+
+  let ok = false;
+  await transcript.load(session.id);
+  if (!transcript.read(session.id).working) {
+    transcript.append(session.id, newBlock("system", `Routine · ${routine.name}`));
+    ok = await send(session, cwd, wakePrompt(routine.name, schedule, trigger, routine.prompt), [], { hidden: true });
+  }
+  runs = pushRun(runs, { ...run, finishedAt: Date.now(), status: ok ? "ok" : "error" });
+  await api.markRoutineRun(routine.id, now, next, JSON.stringify(runs)).catch(() => {});
+  await refreshScheduler();
 }
 
-/** The sheet's schedule card, persisted. An empty, disabled card means no routine at all. */
-export async function saveRoutine(sessionId: string, draft: RoutineDraft): Promise<void> {
-  const prompt = draft.prompt.trim();
-  if (!draft.enabled && !prompt) {
-    await api.deleteRoutine(sessionId).catch(() => {});
-  } else {
-    const enabled = draft.enabled && prompt.length > 0;
+/** "Test run" in the sheet. */
+export async function runRoutineNow(routine: Routine, session: Session, cwd: string): Promise<void> {
+  await fire(routine, session, cwd, "manual");
+}
+
+/** The sheet's list, persisted: drafts are upserted, anything it dropped is deleted. */
+export async function saveRoutines(sessionId: string, drafts: RoutineDraft[], removed: string[]): Promise<void> {
+  await Promise.all(removed.map((id) => api.deleteRoutine(id).catch(() => {})));
+  for (const draft of drafts) {
+    const prompt = draft.prompt.trim();
+    const name = draft.name.trim() || "Routine";
+    if (!prompt) continue;
+    const enabled = draft.enabled;
     await api.upsertRoutine({
+      ...(draft.id ? { id: draft.id } : {}),
       sessionId,
+      name,
       enabled,
       prompt,
       schedule: JSON.stringify(draft.schedule),

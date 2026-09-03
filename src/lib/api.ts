@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
-import type { Routine, ScheduledRoutine } from "./routines";
+import type { RoutineRow, ScheduledRoutine } from "./routines";
 import type { Autonomy, ProjectFile, Session, SessionKind, SessionStatus, Workspace } from "./types";
 
 /** Native picker. No filters: any document the agent can read. */
@@ -91,24 +91,29 @@ export const killAllAgents = (): Promise<void> => invoke("agent_kill_all");
 
 export const runningAgents = (): Promise<string[]> => invoke("agent_running");
 
-export const getRoutine = (sessionId: string): Promise<Routine | null> =>
-  invoke("routine_get", { sessionId });
+export const listSessionRoutines = (sessionId: string): Promise<RoutineRow[]> =>
+  invoke("routine_list_for_session", { sessionId });
 
 export const listRoutines = (): Promise<ScheduledRoutine[]> => invoke("routine_list");
 
 export const upsertRoutine = (input: {
+  id?: string;
   sessionId: string;
+  name: string;
   enabled: boolean;
   prompt: string;
   schedule: string;
   nextRunAt: number | null;
-}): Promise<Routine> => invoke("routine_upsert", input);
+}): Promise<RoutineRow> => invoke("routine_upsert", { id: null, ...input });
 
-export const deleteRoutine = (sessionId: string): Promise<void> =>
-  invoke("routine_delete", { sessionId });
+export const deleteRoutine = (id: string): Promise<void> => invoke("routine_delete", { id });
 
-export const markRoutineRun = (id: string, lastRunAt: number, nextRunAt: number | null): Promise<void> =>
-  invoke("routine_mark_run", { id, lastRunAt, nextRunAt });
+export const markRoutineRun = (
+  id: string,
+  lastRunAt: number,
+  nextRunAt: number | null,
+  runsJson: string,
+): Promise<void> => invoke("routine_mark_run", { id, lastRunAt, nextRunAt, runsJson });
 
 export const stateGet = (key: string): Promise<string | null> => invoke("state_get", { key });
 

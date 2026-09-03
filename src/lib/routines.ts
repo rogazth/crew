@@ -5,23 +5,44 @@ export type Schedule =
   | { kind: "interval"; minutes: number }
   | { kind: "daily"; hour: number; minute: number; days: number[] };
 
-export type Routine = {
+export type RunStatus = "running" | "ok" | "error";
+
+export type RoutineRun = {
+  id: string;
+  startedAt: number;
+  finishedAt: number | null;
+  status: RunStatus;
+  trigger: "schedule" | "manual";
+};
+
+/** The row as Rust hands it over; `runsJson` is parsed on the way in. */
+export type RoutineRow = {
   id: string;
   sessionId: string;
+  name: string;
   enabled: boolean;
   prompt: string;
   schedule: string;
   lastRunAt: number | null;
   nextRunAt: number | null;
+  runsJson: string;
 };
 
-export type ScheduledRoutine = { routine: Routine; session: Session; cwd: string };
+export type Routine = Omit<RoutineRow, "runsJson"> & { runs: RoutineRun[] };
 
+export type ScheduledRoutine = { routine: RoutineRow; session: Session; cwd: string };
+
+/** What the sheet edits. `id` is missing until the first save. */
 export type RoutineDraft = {
+  id?: string;
+  name: string;
   enabled: boolean;
   prompt: string;
   schedule: Schedule;
+  runs: RoutineRun[];
 };
+
+export const MAX_RUNS = 20;
 
 export const CADENCES: Array<{ id: string; label: string; schedule: Schedule }> = [
   { id: "30m", label: "Every 30 minutes", schedule: { kind: "interval", minutes: 30 } },
@@ -32,11 +53,38 @@ export const CADENCES: Array<{ id: string; label: string; schedule: Schedule }> 
   { id: "mondays", label: "Mondays at", schedule: { kind: "daily", hour: 9, minute: 0, days: [1] } },
 ];
 
-export const DEFAULT_ROUTINE: RoutineDraft = {
-  enabled: false,
-  prompt: "",
-  schedule: CADENCES[3]!.schedule,
-};
+export function newRoutineDraft(): RoutineDraft {
+  return { name: "", enabled: true, prompt: "", schedule: CADENCES[3]!.schedule, runs: [] };
+}
+
+export function parseRuns(raw: string): RoutineRun[] {
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(
+      (run): run is RoutineRun =>
+        typeof run === "object" && run !== null && typeof (run as RoutineRun).id === "string",
+    );
+  } catch {
+    return [];
+  }
+}
+
+export function fromRow(row: RoutineRow): Routine {
+  const { runsJson, ...rest } = row;
+  return { ...rest, runs: parseRuns(runsJson) };
+}
+
+export function toDraft(routine: Routine): RoutineDraft {
+  return {
+    id: routine.id,
+    name: routine.name,
+    enabled: routine.enabled,
+    prompt: routine.prompt,
+    schedule: parseSchedule(routine.schedule),
+    runs: routine.runs,
+  };
+}
 
 export function cadenceOf(schedule: Schedule): string {
   if (schedule.kind === "interval") {
@@ -65,7 +113,7 @@ export function parseSchedule(raw: string): Schedule {
   } catch {
     // fall through to the default below
   }
-  return DEFAULT_ROUTINE.schedule;
+  return CADENCES[3]!.schedule;
 }
 
 /** Next due time strictly after `from`. Daily schedules skip days not in `days`. */
@@ -93,4 +141,23 @@ export function describeSchedule(schedule: Schedule): string {
   const time = `${String(schedule.hour).padStart(2, "0")}:${String(schedule.minute).padStart(2, "0")}`;
   const cadence = CADENCES.find((c) => c.id === cadenceOf(schedule))?.label ?? "Every day at";
   return `${cadence} ${time}`;
+}
+
+/**
+ * The hidden turn that wakes the agent. It says who is talking so the reply
+ * does not read the schedule back, and it allows silence: a routine that
+ * found nothing should say nothing.
+ */
+export function wakePrompt(name: string, schedule: Schedule, trigger: RoutineRun["trigger"], prompt: string): string {
+  const when = describeSchedule(schedule).replace(/^Every/, "every");
+  const cue =
+    trigger === "manual"
+      ? `[routine] "${name}" was run on demand. The user pressed Test run in the app; it normally runs ${when}.`
+      : `[routine] "${name}" is due (${when}). This is your own standing order firing on schedule, not a message the user just typed.`;
+  return `${cue}\nWhat you saved to do each time:\n${prompt.trim()}\n\nCarry it out now. Report what matters in one short message. If nothing changed and the instruction does not ask for a report, end without filler.`;
+}
+
+/** Newest first, capped, so the JSON column never grows past a screen of history. */
+export function pushRun(runs: RoutineRun[], run: RoutineRun): RoutineRun[] {
+  return [run, ...runs.filter((row) => row.id !== run.id)].slice(0, MAX_RUNS);
 }

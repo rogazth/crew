@@ -159,6 +159,36 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
             params![now_millis()],
         )?;
     }
+    if current < 8 {
+        // Several routines per agent, each with a name and a run history. SQLite
+        // cannot drop the UNIQUE on session_id, so the table is rebuilt.
+        conn.execute_batch(
+            "CREATE TABLE routines_v8 (
+               id          TEXT PRIMARY KEY,
+               session_id  TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+               name        TEXT NOT NULL DEFAULT '',
+               enabled     INTEGER NOT NULL DEFAULT 1,
+               prompt      TEXT NOT NULL,
+               schedule    TEXT NOT NULL,
+               last_run_at INTEGER,
+               next_run_at INTEGER,
+               runs_json   TEXT NOT NULL DEFAULT '[]',
+               created_at  INTEGER NOT NULL,
+               updated_at  INTEGER NOT NULL
+             );
+             INSERT INTO routines_v8
+               (id, session_id, name, enabled, prompt, schedule, last_run_at, next_run_at, created_at, updated_at)
+             SELECT id, session_id, 'Routine', enabled, prompt, schedule, last_run_at, next_run_at, created_at, updated_at
+             FROM routines;
+             DROP TABLE routines;
+             ALTER TABLE routines_v8 RENAME TO routines;
+             CREATE INDEX IF NOT EXISTS routines_session_idx ON routines (session_id);",
+        )?;
+        conn.execute(
+            "INSERT INTO schema_migrations (version, applied_at) VALUES (8, ?1)",
+            params![now_millis()],
+        )?;
+    }
     Ok(())
 }
 

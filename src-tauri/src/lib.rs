@@ -45,7 +45,7 @@ pub fn run() {
             session::session_get_blocks,
             session::session_set_blocks,
             session::session_set_provider_session,
-            routine::routine_get,
+            routine::routine_list_for_session,
             routine::routine_list,
             routine::routine_upsert,
             routine::routine_delete,

@@ -5,6 +5,7 @@ import {
   type Answers,
   type ApprovalDecision,
   type AttachedFile,
+  type Block,
   type HarnessEvent,
 } from "./blocks";
 import { notify } from "./notify";
@@ -68,14 +69,14 @@ export async function send(
   cwd: string,
   text: string,
   files: AttachedFile[] = [],
-  options: { fresh?: boolean } = {},
-): Promise<void> {
+  options: { fresh?: boolean; hidden?: boolean } = {},
+): Promise<boolean> {
   const id = session.id;
-  if (transcript.read(id).working) return;
+  if (transcript.read(id).working) return false;
   await boot();
   await transcript.load(id);
 
-  const user = newBlock("user", text);
+  const user: Block = { ...newBlock("user", text), ...(options.hidden ? { hidden: true } : {}) };
   transcript.append(id, files.length > 0 ? { ...user, files } : user);
   transcript.setWorking(id, true);
   setStatus(id, "working");
@@ -132,6 +133,7 @@ export async function send(
     setStatus(id, failed ? "error" : foreground === id ? "idle" : "done");
     if (!watching(session)) void notify(session.name, failed ? "Ran into an error" : lastReply(id));
   }
+  return !failed;
 }
 
 /** Looking at the chat, with the window in front: no banner needed. */

@@ -18,7 +18,7 @@ import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./lib/providers";
 import { fileTabId, sessionTabId, stubTabId } from "./lib/tabs";
 import type { ProjectFile, Session, StubKind, Workspace } from "./lib/types";
 import { SETTINGS_DEFAULT, type SettingsSectionId } from "./lib/settings";
-import { saveRoutine, startScheduler } from "./lib/scheduler";
+import { saveRoutines, startScheduler } from "./lib/scheduler";
 import { nextSessionName } from "./lib/workspaces";
 import { SettingsView } from "./surfaces/SettingsView";
 import { WorkspacePanes } from "./surfaces/WorkspacePanes";
@@ -106,7 +106,7 @@ export function App() {
         if (session) openSession(session);
         id = session?.id ?? null;
       }
-      if (id) await saveRoutine(id, draft.routine);
+      if (id) await saveRoutines(id, draft.routines, draft.removedRoutines);
     },
     [create, openSession, sheet, update],
   );
@@ -309,6 +309,7 @@ export function App() {
 
       {sheet && (
         <AgentSheet
+          cwd={active?.path ?? null}
           session={sheet.session}
           existingNames={sessions.filter((s) => s.kind === "agent").map((s) => s.name)}
           onSave={saveSheet}

@@ -152,3 +152,24 @@ Recomendación primero; si no dices nada, se implementa la recomendación.
 3. **Always allow por prefijo en sesión** (recomendado, `curl:*`) vs la regla exacta que sugiere Claude (`curl -s -o … example.com`, inútil para el siguiente comando) vs `destination: "localSettings"` (persistente, toca los settings del usuario).
 4. **Routines anexadas a la conversación** (recomendado) vs conversación nueva.
 5. **Imágenes como bloques base64** (recomendado) vs rutas. Ahorra el Read y funciona igual con Codex y Cursor, que también aceptan imágenes inline.
+
+## Estado (2026-09-03)
+
+Las siete fases están implementadas y verificadas en el mock (`CREW_MOCK=1`), cada una en su commit:
+
+| # | Commit | Verificado |
+| --- | --- | --- |
+| 0 | `feat: answer agent questions and always-allow approvals over the Claude protocol` | vitest (`blocks`, `providers/claude`), flujo completo en el mock |
+| 1 | `feat: highlight chat code with shiki and open file chips from markdown` | ts y php resaltados, chips clicables |
+| 2 | `feat: right-align user turns and close replies with a footer instead of a cost line` | separadores de fecha, tooltip de costo |
+| 3 | `feat: fold tool calls into phases and collapse thinking rows` | vitest (`activity`), fases plegadas y viva |
+| 4 | `feat: answer questions with keyed choice cards and approve edits from a diff card` | teclas A/B/C, Enter, Esc; diff real de Edit |
+| 5 | `feat: show image attachments as thumbnails with a viewer and send them inline` | thumbnails, lightbox, `read_file_base64` (cargo check) |
+| 6 | `feat: restyle the composer after Cursor and center it on an empty chat` | empty state sin tarjeta |
+| 7 | `feat: replace the schedule switch with per-agent routines` | migración 8, Test run anexado a la conversación |
+
+Pendiente, fuera de este plan:
+
+- Modo oscuro: Kumo no cambia con `prefers-color-scheme` en el navegador; en la app hay que confirmar cómo se activa. Los tokens del chat ya usan `light-dark()` y mezclas de tinta.
+- Probar con `claude` real desde la app (el mock cubre el protocolo capturado, no el proceso).
+- Cron libre en routines: hoy solo los presets (`CADENCES`).
