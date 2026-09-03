@@ -72,7 +72,8 @@ const ActivityLine = memo(function ActivityLine({
   onApprove: (requestId: number, decision: ApprovalDecision) => void;
 }) {
   const pending = isOpen(block);
-  const failed = block.tool?.status === "failed" || block.approval?.decided === "deny";
+  const failed = block.tool?.status === "failed";
+  const skipped = block.approval?.decided === "deny";
   const label = block.tool?.title ?? block.text;
   const requestId = block.approval?.requestId;
   const undecided = block.role === "approval" && requestId != null && !block.approval?.decided;
@@ -88,7 +89,11 @@ const ActivityLine = memo(function ActivityLine({
       </span>
       <span
         className={`min-w-0 truncate transition-colors duration-100 ${
-          failed ? "text-danger" : "text-text-muted group-hover:text-text"
+          failed
+            ? "text-danger"
+            : skipped
+              ? "text-placeholder line-through"
+              : "text-text-muted group-hover:text-text"
         }`}
       >
         {label}

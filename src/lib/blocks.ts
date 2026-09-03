@@ -112,13 +112,16 @@ export function applyEvent(blocks: Block[], event: HarnessEvent): Block[] {
     }
     case "tool.started": {
       const settled = settleStreaming(blocks);
-      return [
-        ...settled,
-        {
-          ...newBlock("tool", event.title),
-          tool: { callId: event.callId, name: event.name, title: event.title, status: "pending" },
-        },
-      ];
+      const tool: Block = {
+        ...newBlock("tool", event.title),
+        tool: { callId: event.callId, name: event.name, title: event.title, status: "pending" },
+      };
+      // The approval row was this same call asking first; one line, not two.
+      const last = settled.at(-1);
+      if (last?.approval?.decided === "allow" && last.text === event.title) {
+        return [...settled.slice(0, -1), { ...tool, id: last.id }];
+      }
+      return [...settled, tool];
     }
     case "tool.updated":
       return blocks.map((block) => {

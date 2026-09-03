@@ -72,21 +72,26 @@ export function AgentChat({ session, cwd, onModel }: Props) {
   );
 }
 
+/** The composer is the call to action; this is the session card, top-left, at chrome weight. */
 function Identity({ session }: { session: Session }) {
   return (
     <div data-selectable className="min-h-0 flex-1 overflow-y-auto">
-      <div className="mx-auto flex h-full max-w-3xl flex-col items-center justify-center gap-3 px-6 text-center">
-        <div className="flex size-14 items-center justify-center rounded-2xl border border-border bg-sidebar">
-          <ProviderIcon provider={session.provider} className="size-6" />
-        </div>
-        <div>
-          <p className="font-medium">{session.name}</p>
-          <p className="mt-0.5 text-text-muted">
-            {providerLine(session.provider, session.model)}
-          </p>
+      <div className="mx-auto flex max-w-[720px] flex-col items-start px-6 pt-5">
+        <div className="flex items-center gap-2.5">
+          <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-card">
+            <ProviderIcon provider={session.provider} className="size-4" />
+          </span>
+          <div className="flex min-w-0 flex-col">
+            <span className="crew-prose font-medium">{session.name}</span>
+            <span className="text-[12px] leading-4 text-text-muted">
+              {providerLine(session.provider, session.model)}
+            </span>
+          </div>
         </div>
         {session.description && (
-          <p className="max-w-md text-text-muted">{session.description}</p>
+          <p className="mt-2 line-clamp-2 max-w-[480px] text-[12px] leading-4 text-text-muted">
+            {session.description}
+          </p>
         )}
       </div>
     </div>
