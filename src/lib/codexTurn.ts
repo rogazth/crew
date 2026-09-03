@@ -42,6 +42,7 @@ export const codexRuntime: ProviderRuntime = {
   cancel: cancelTurn,
   stop: stopSession,
   respondApproval: () => undefined,
+  respondQuestion: () => undefined,
   isLive: (sessionId) => liveBySession.has(sessionId),
 };
 

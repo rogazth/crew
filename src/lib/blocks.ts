@@ -1,15 +1,30 @@
 /** Transcript rows Crew paints. The vendor session is not this list. */
-export type BlockRole = "user" | "assistant" | "tool" | "approval" | "system";
+export type BlockRole = "user" | "assistant" | "reasoning" | "tool" | "approval" | "question" | "system";
 
 /** `interrupted` is a pending row whose process is gone: no spinner, no verdict. */
 export type ToolStatus = "pending" | "completed" | "failed" | "interrupted";
 
-export type ApprovalDecision = "allow" | "deny";
+/** `always` allows and asks the provider to stop prompting for the same kind of call this session. */
+export type ApprovalDecision = "allow" | "always" | "deny";
 
 export type AttachedFile = {
   name: string;
   path: string;
+  kind?: "image" | "file";
+  size?: number;
 };
+
+export type QuestionOption = { label: string; description?: string };
+
+export type Question = {
+  question: string;
+  header: string;
+  multiSelect: boolean;
+  options: QuestionOption[];
+};
+
+/** Keyed by question text; a multi-select joins labels with ", " (what Claude Code accepts). */
+export type Answers = Record<string, string>;
 
 export type TurnUsage = {
   inputTokens?: number;
@@ -34,7 +49,15 @@ export type Block = {
   approval?: {
     requestId: number;
     name: string;
+    /** The call as the provider will run it; a card shows the command or the diff. */
+    input?: Record<string, unknown>;
     decided?: ApprovalDecision;
+  };
+  question?: {
+    requestId: number;
+    questions: Question[];
+    answers?: Answers;
+    dismissed?: boolean;
   };
   /** Set on the assistant block that closed a turn. */
   usage?: TurnUsage;
@@ -48,11 +71,20 @@ export type HarnessEvent =
   | { type: "session.providerBound"; providerSessionId: string }
   | { type: "message.delta"; text: string }
   | { type: "message.completed" }
+  | { type: "reasoning.delta"; text: string }
   | { type: "turn.completed"; usage?: TurnUsage }
   | { type: "tool.started"; callId: string; name: string; title: string }
   | { type: "tool.updated"; callId: string; title?: string; status?: ToolStatus }
-  | { type: "approval.requested"; requestId: number; name: string; title: string }
-  | { type: "approval.resolved"; requestId: number; decision: ApprovalDecision | "cancelled" };
+  | {
+      type: "approval.requested";
+      requestId: number;
+      name: string;
+      title: string;
+      input?: Record<string, unknown>;
+    }
+  | { type: "approval.resolved"; requestId: number; decision: ApprovalDecision | "cancelled" }
+  | { type: "question.requested"; requestId: number; questions: Question[] }
+  | { type: "question.resolved"; requestId: number; answers: Answers | null };
 
 export function newBlock(role: BlockRole, text = ""): Block {
   return { id: crypto.randomUUID(), role, text };
@@ -75,6 +107,16 @@ function isBlock(value: unknown): value is Block {
   return typeof row.id === "string" && typeof row.role === "string" && typeof row.text === "string";
 }
 
+/** Anything still waiting on the provider or the user. */
+export function isOpen(block: Block): boolean {
+  if (block.role === "tool") return block.tool?.status === "pending";
+  if (block.role === "approval") return block.approval != null && !block.approval.decided;
+  if (block.role === "question") {
+    return block.question != null && !block.question.answers && !block.question.dismissed;
+  }
+  return false;
+}
+
 export function settleStreaming(blocks: Block[]): Block[] {
   return blocks.map((block) => (block.streaming ? { ...block, streaming: false } : block));
 }
@@ -82,13 +124,16 @@ export function settleStreaming(blocks: Block[]): Block[] {
 /**
  * Nothing may stay open once the turn is over: a pending tool has either run
  * (`completed`) or its process died (`interrupted`); an unanswered approval
- * was never granted.
+ * was never granted; an unanswered question was dismissed.
  */
 export function settleTurn(blocks: Block[], tools: "completed" | "interrupted"): Block[] {
   return settleStreaming(blocks).map((block) => {
     if (block.tool?.status === "pending") return { ...block, tool: { ...block.tool, status: tools } };
     if (block.approval && !block.approval.decided) {
       return { ...block, approval: { ...block.approval, decided: "deny" } };
+    }
+    if (block.question && !block.question.answers && !block.question.dismissed) {
+      return { ...block, question: { ...block.question, dismissed: true } };
     }
     return block;
   });
@@ -98,7 +143,9 @@ export function settleTurn(blocks: Block[], tools: "completed" | "interrupted"):
 export function applyEvent(blocks: Block[], event: HarnessEvent): Block[] {
   switch (event.type) {
     case "message.delta":
-      return appendAssistant(blocks, event.text);
+      return appendStreaming(blocks, "assistant", event.text);
+    case "reasoning.delta":
+      return appendStreaming(blocks, "reasoning", event.text);
     case "message.completed":
       return settleStreaming(blocks);
     case "turn.completed": {
@@ -118,7 +165,7 @@ export function applyEvent(blocks: Block[], event: HarnessEvent): Block[] {
       };
       // The approval row was this same call asking first; one line, not two.
       const last = settled.at(-1);
-      if (last?.approval?.decided === "allow" && last.text === event.title) {
+      if (last?.approval && last.approval.decided !== "deny" && last.text === event.title) {
         return [...settled.slice(0, -1), { ...tool, id: last.id }];
       }
       return [...settled, tool];
@@ -142,7 +189,11 @@ export function applyEvent(blocks: Block[], event: HarnessEvent): Block[] {
         ...settleStreaming(blocks),
         {
           ...newBlock("approval", event.title),
-          approval: { requestId: event.requestId, name: event.name },
+          approval: {
+            requestId: event.requestId,
+            name: event.name,
+            ...(event.input ? { input: event.input } : {}),
+          },
         },
       ];
     case "approval.resolved":
@@ -151,9 +202,34 @@ export function applyEvent(blocks: Block[], event: HarnessEvent): Block[] {
           ? {
               ...block,
               approval: {
-                requestId: event.requestId,
-                name: block.approval.name,
+                ...block.approval,
                 decided: event.decision === "cancelled" ? "deny" : event.decision,
+              },
+            }
+          : block,
+      );
+    case "question.requested": {
+      const settled = settleStreaming(blocks);
+      const first = event.questions[0];
+      const card: Block = {
+        ...newBlock("question", first?.header || first?.question || "Question"),
+        question: { requestId: event.requestId, questions: event.questions },
+      };
+      // The provider announced the ask as a tool call first; the card is that call.
+      const last = settled.at(-1);
+      if (last?.tool?.status === "pending" && isQuestionTool(last.tool.name)) {
+        return [...settled.slice(0, -1), { ...card, id: last.id }];
+      }
+      return [...settled, card];
+    }
+    case "question.resolved":
+      return blocks.map((block) =>
+        block.question?.requestId === event.requestId
+          ? {
+              ...block,
+              question: {
+                ...block.question,
+                ...(event.answers ? { answers: event.answers } : { dismissed: true }),
               },
             }
           : block,
@@ -169,10 +245,14 @@ export function applyEvent(blocks: Block[], event: HarnessEvent): Block[] {
   }
 }
 
-function appendAssistant(blocks: Block[], text: string): Block[] {
+export function isQuestionTool(name: string): boolean {
+  return /^askuserquestion$/i.test(name);
+}
+
+function appendStreaming(blocks: Block[], role: "assistant" | "reasoning", text: string): Block[] {
   const last = blocks.at(-1);
-  if (last?.role === "assistant" && last.streaming) {
+  if (last?.role === role && last.streaming) {
     return [...blocks.slice(0, -1), { ...last, text: last.text + text }];
   }
-  return [...settleStreaming(blocks), { ...newBlock("assistant", text), streaming: true }];
+  return [...settleStreaming(blocks), { ...newBlock(role, text), streaming: true }];
 }

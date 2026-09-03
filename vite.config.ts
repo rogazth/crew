@@ -1,7 +1,7 @@
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import { fileURLToPath } from "node:url";
-import { defineConfig } from "vite";
+import { defineConfig } from "vitest/config";
 
 const mock = (name: string) => fileURLToPath(new URL(`./dev/tauri-mock/${name}.ts`, import.meta.url));
 
@@ -21,6 +21,7 @@ export default defineConfig({
         }
       : {},
   },
+  test: { include: ["src/lib/**/*.test.ts"], environment: "node" },
   clearScreen: false,
   // The diffs worker lazy-loads Shiki grammars, so it needs a code-splittable
   // format. Vite's IIFE default cannot split.

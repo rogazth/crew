@@ -1,4 +1,5 @@
 /** Claude Code stream-json. Protocol shapes come from R1's claudeProtocol. */
+import type { Answers, ApprovalDecision, Question } from "../blocks";
 
 export function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -97,11 +98,52 @@ export function buildControlResponse(
 }
 
 export function toPermissionResult(
-  decision: "allow" | "deny",
+  decision: ApprovalDecision,
   input: Record<string, unknown>,
+  toolName = "",
 ): Record<string, unknown> {
+  if (decision === "deny") return { behavior: "deny", message: "User declined tool execution." };
   if (decision === "allow") return { behavior: "allow", updatedInput: input };
-  return { behavior: "deny", message: "User declined tool execution." };
+  return { behavior: "allow", updatedInput: input, updatedPermissions: [alwaysAllowRule(toolName, input)] };
+}
+
+/**
+ * A session-scoped rule, never written to the user's settings. Bash keeps the
+ * program as a prefix (`curl:*`); Claude's own suggestion is the exact command,
+ * which never matches the next call.
+ */
+export function alwaysAllowRule(toolName: string, input: Record<string, unknown>): Record<string, unknown> {
+  const command = /^bash$/i.test(toolName) ? stringField(input, "command") : undefined;
+  const program = command?.trim().split(/\s+/)[0];
+  const rule = program ? { toolName, ruleContent: `${program}:*` } : { toolName };
+  return { type: "addRules", rules: [rule], behavior: "allow", destination: "session" };
+}
+
+/** `AskUserQuestion` input, or nothing when it is not the shape we know how to ask. */
+export function parseQuestions(input: Record<string, unknown>): Question[] {
+  if (!Array.isArray(input.questions)) return [];
+  return input.questions.flatMap((item) => {
+    const row = asRecord(item);
+    const question = stringField(row, "question");
+    if (!row || !question || !Array.isArray(row.options)) return [];
+    const options = row.options.flatMap((option) => {
+      const opt = asRecord(option);
+      const label = stringField(opt, "label");
+      if (!label) return [];
+      const description = stringField(opt, "description");
+      return [{ label, ...(description && description !== label ? { description } : {}) }];
+    });
+    if (options.length === 0) return [];
+    return [{ question, header: stringField(row, "header") ?? question, multiSelect: row.multiSelect === true, options }];
+  });
+}
+
+export function toQuestionResult(
+  input: Record<string, unknown>,
+  answers: Answers | null,
+): Record<string, unknown> {
+  if (!answers) return { behavior: "deny", message: "User dismissed the question." };
+  return { behavior: "allow", updatedInput: { ...input, answers } };
 }
 
 export type ClaudeControlRequest = {

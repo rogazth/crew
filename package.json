@@ -14,7 +14,8 @@
     "lint": "eslint src",
     "doctor": "react-doctor src --no-score",
     "doctor:changed": "react-doctor src --scope changed --no-score",
-    "check": "npm run lint && tsc --noEmit && npm run doctor"
+    "check": "npm run lint && tsc --noEmit && npm run test && npm run doctor",
+    "test": "vitest run"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",
@@ -56,7 +57,8 @@
     "tailwindcss": "^4",
     "typescript": "~5.9.0",
     "typescript-eslint": "^8.69.0",
-    "vite": "^7.0.4"
+    "vite": "^7.0.4",
+    "vitest": "^3.2.7"
   },
   "allowScripts": {
     "esbuild@0.28.2": true

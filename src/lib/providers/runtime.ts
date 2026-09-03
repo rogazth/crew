@@ -1,4 +1,4 @@
-import type { ApprovalDecision, HarnessEvent } from "../blocks";
+import type { Answers, ApprovalDecision, HarnessEvent } from "../blocks";
 import type { Autonomy } from "../types";
 import { claudeRuntime } from "../claudeTurn";
 import { codexRuntime } from "../codexTurn";
@@ -25,6 +25,8 @@ export type ProviderRuntime = {
   cancel(sessionId: string): Promise<void>;
   stop(sessionId: string): Promise<void>;
   respondApproval(sessionId: string, requestId: number, decision: ApprovalDecision): void;
+  /** `null` dismisses: the provider gets a deny and carries on without answers. */
+  respondQuestion(sessionId: string, requestId: number, answers: Answers | null): void;
   isLive(sessionId: string): boolean;
 };
 

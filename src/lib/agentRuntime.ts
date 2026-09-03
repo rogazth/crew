@@ -1,5 +1,11 @@
 import * as api from "./api";
-import { newBlock, type ApprovalDecision, type AttachedFile, type HarnessEvent } from "./blocks";
+import {
+  newBlock,
+  type Answers,
+  type ApprovalDecision,
+  type AttachedFile,
+  type HarnessEvent,
+} from "./blocks";
 import { notify } from "./notify";
 import { anyLive, runtimeFor, stopEverywhere } from "./providers/runtime";
 import * as transcript from "./transcript";
@@ -84,7 +90,12 @@ export async function send(
       setStatus(id, "needs-input");
       if (!watching(session)) void notify(session.name, `Wants to run: ${event.title}`);
     }
-    if (event.type === "approval.resolved") setStatus(id, "working");
+    if (event.type === "question.requested") {
+      setStatus(id, "needs-input");
+      const first = event.questions[0];
+      if (!watching(session) && first) void notify(session.name, `Asks: ${first.question}`);
+    }
+    if (event.type === "approval.resolved" || event.type === "question.resolved") setStatus(id, "working");
     if (event.type === "session.error") failed = true;
     transcript.apply(id, event);
   };
@@ -145,6 +156,10 @@ export async function stop(session: Session): Promise<void> {
 
 export function respond(session: Session, requestId: number, decision: ApprovalDecision): void {
   runtimeFor(session.provider).respondApproval(session.id, requestId, decision);
+}
+
+export function answer(session: Session, requestId: number, answers: Answers | null): void {
+  runtimeFor(session.provider).respondQuestion(session.id, requestId, answers);
 }
 
 /** Session deleted: kill whatever it was running and drop its transcript cache. */

@@ -39,6 +39,7 @@ export const cursorRuntime: ProviderRuntime = {
   cancel: abortTurn,
   stop: abortTurn,
   respondApproval: (_sessionId: string, _requestId: number, _decision: ApprovalDecision) => undefined,
+  respondQuestion: () => undefined,
   isLive: (sessionId) => liveByThread.has(sessionId),
 };
 
@@ -168,6 +169,11 @@ function handleLine(sessionId: string, live: Live, line: string): void {
     if (!text) return;
     live.sawText = true;
     live.onEvent({ type: "message.delta", text });
+    return;
+  }
+  if (type === "thinking") {
+    const text = stringField(rec, "subtype") === "delta" ? rec.text : undefined;
+    if (typeof text === "string" && text) live.onEvent({ type: "reasoning.delta", text });
     return;
   }
   if (type === "tool_call") {

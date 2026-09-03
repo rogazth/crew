@@ -1,6 +1,6 @@
 import { useLayoutEffect, useMemo, useRef } from "react";
-import type { ApprovalDecision, Block } from "../../lib/blocks";
-import { ActivityGroup, ThinkingLine, isOpen } from "./ActivityLine";
+import { isOpen, type Answers, type ApprovalDecision, type Block } from "../../lib/blocks";
+import { ActivityGroup, ThinkingLine } from "./ActivityLine";
 import { AssistantMessage, Note, UserMessage } from "./Message";
 
 const NEAR_BOTTOM_PX = 16;
@@ -15,7 +15,10 @@ type Props = {
   blocks: Block[];
   working: boolean;
   onApprove: (requestId: number, decision: ApprovalDecision) => void;
+  onAnswer: (requestId: number, answers: Answers | null) => void;
 };
+
+const ACTIVITY_ROLES = new Set(["tool", "approval", "question", "reasoning"]);
 
 function speaker(row: Row): Speaker {
   if (row.kind === "activity") return "agent";
@@ -33,7 +36,7 @@ function groupRows(blocks: Block[]): Row[] {
     activity = [];
   };
   for (const block of blocks) {
-    if (block.role === "tool" || block.role === "approval") {
+    if (ACTIVITY_ROLES.has(block.role)) {
       activity.push(block);
       continue;
     }
@@ -66,7 +69,7 @@ function showThinking(blocks: Block[], working: boolean): boolean {
 }
 
 /** Stick-to-bottom scroller. Same 16px threshold as R1. */
-export function Transcript({ blocks, working, onApprove }: Props) {
+export function Transcript({ blocks, working, onApprove, onAnswer }: Props) {
   const scroller = useRef<HTMLDivElement>(null);
   const pinned = useRef(true);
   const rows = useMemo(() => groupRows(blocks), [blocks]);
@@ -97,7 +100,7 @@ export function Transcript({ blocks, working, onApprove }: Props) {
           if (row.kind === "activity") {
             return (
               <div key={row.id} className={className}>
-                <ActivityGroup blocks={row.blocks} onApprove={onApprove} />
+                <ActivityGroup blocks={row.blocks} onApprove={onApprove} onAnswer={onAnswer} />
               </div>
             );
           }

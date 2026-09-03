@@ -1,5 +1,5 @@
 import { killAgent, resolveBinary, spawnAgent, watchAgent, writeJson } from "./agent";
-import type { ApprovalDecision, HarnessEvent } from "./blocks";
+import type { Answers, ApprovalDecision, HarnessEvent } from "./blocks";
 import {
   assistantTextBlocks,
   assistantToolUses,
@@ -14,11 +14,13 @@ import {
   parseControlCancelId,
   parseControlRequest,
   parseJsonLine,
+  parseQuestions,
   personaPrompt,
   sessionIdFromMessage,
   streamTextDelta,
   stringField,
   toPermissionResult,
+  toQuestionResult,
   toolLabel,
   toolResultsFromUserMessage,
   toolStartFromEvent,
@@ -42,6 +44,11 @@ type PendingApproval = {
   resolve: (decision: ApprovalDecision | "cancelled") => void;
 };
 
+type PendingQuestion = {
+  requestId: string;
+  resolve: (answers: Answers | null | "cancelled") => void;
+};
+
 type InFlightTool = {
   id: string;
   name: string;
@@ -56,6 +63,7 @@ type Live = {
   claudeSessionId: string;
   onEvent: (event: HarnessEvent) => void;
   approvals: Map<number, PendingApproval>;
+  questions: Map<number, PendingQuestion>;
   nextApprovalUiId: number;
   nextControlId: number;
   toolsByIndex: Map<number, InFlightTool>;
@@ -82,11 +90,24 @@ export const claudeRuntime: ProviderRuntime = {
   cancel: cancelTurn,
   stop: stopSession,
   respondApproval,
+  respondQuestion,
   isLive: (sessionId) => liveByThread.has(sessionId),
 };
 
 function respondApproval(sessionId: string, requestId: number, decision: ApprovalDecision): void {
   liveByThread.get(sessionId)?.approvals.get(requestId)?.resolve(decision);
+}
+
+function respondQuestion(sessionId: string, requestId: number, answers: Answers | null): void {
+  liveByThread.get(sessionId)?.questions.get(requestId)?.resolve(answers);
+}
+
+/** Whatever was waiting on the user is not going to get an answer. */
+function dropPending(live: Live): void {
+  for (const pending of live.approvals.values()) pending.resolve("deny");
+  live.approvals.clear();
+  for (const pending of live.questions.values()) pending.resolve(null);
+  live.questions.clear();
 }
 
 async function cancelTurn(sessionId: string): Promise<void> {
@@ -97,8 +118,7 @@ async function cancelTurn(sessionId: string): Promise<void> {
   }
   live.cancelled = true;
   live.muteUpdates = true;
-  for (const pending of live.approvals.values()) pending.resolve("deny");
-  live.approvals.clear();
+  dropPending(live);
   if (live.activeTurn) {
     const settled = new Promise<void>((resolve) => {
       const previous = live.turnDone;
@@ -122,8 +142,7 @@ async function stopSession(sessionId: string): Promise<void> {
   const live = liveByThread.get(sessionId);
   if (live) {
     live.muteUpdates = true;
-    for (const pending of live.approvals.values()) pending.resolve("deny");
-    live.approvals.clear();
+    dropPending(live);
     live.activeTurn = false;
     live.turnDone?.();
     live.turnDone = null;
@@ -193,6 +212,7 @@ async function ensureLive(input: TurnInput): Promise<Live> {
     claudeSessionId,
     onEvent: input.onEvent,
     approvals: new Map(),
+    questions: new Map(),
     nextApprovalUiId: 1,
     nextControlId: 1,
     toolsByIndex: new Map(),
@@ -301,6 +321,12 @@ function handleLine(sessionId: string, live: Live, line: string): void {
       if (pending.requestId === cancelId) {
         pending.resolve("cancelled");
         live.approvals.delete(uiId);
+      }
+    }
+    for (const [uiId, pending] of live.questions) {
+      if (pending.requestId === cancelId) {
+        pending.resolve("cancelled");
+        live.questions.delete(uiId);
       }
     }
     return;
@@ -441,6 +467,7 @@ async function handleControl(
   }
 
   const input = control.input;
+  const toolName = control.toolName ?? "tool";
   if (live.cancelled || live.muteUpdates) {
     await writeJson(
       sessionId,
@@ -449,12 +476,33 @@ async function handleControl(
     return;
   }
 
+  const questions = parseQuestions(input);
+  if (questions.length > 0) {
+    const uiId = live.nextApprovalUiId++;
+    live.onEvent({ type: "question.requested", requestId: uiId, questions });
+    const answers = await new Promise<Answers | null | "cancelled">((resolve) => {
+      live.questions.set(uiId, { requestId: control.requestId, resolve });
+    });
+    live.questions.delete(uiId);
+    if (answers === "cancelled") {
+      live.onEvent({ type: "question.resolved", requestId: uiId, answers: null });
+      return;
+    }
+    live.onEvent({ type: "question.resolved", requestId: uiId, answers });
+    await writeJson(
+      sessionId,
+      buildControlResponse(control.requestId, toQuestionResult(input, answers)),
+    ).catch(() => undefined);
+    return;
+  }
+
   const uiId = live.nextApprovalUiId++;
   live.onEvent({
     type: "approval.requested",
     requestId: uiId,
-    name: control.toolName ?? "tool",
-    title: toolLabel(control.toolName ?? "tool", input),
+    name: toolName,
+    title: toolLabel(toolName, input),
+    input,
   });
   const decision = await new Promise<ApprovalDecision | "cancelled">((resolve) => {
     live.approvals.set(uiId, { requestId: control.requestId, input, resolve });
@@ -464,7 +512,7 @@ async function handleControl(
   if (decision === "cancelled") return;
   await writeJson(
     sessionId,
-    buildControlResponse(control.requestId, toPermissionResult(decision, input)),
+    buildControlResponse(control.requestId, toPermissionResult(decision, input, toolName)),
   ).catch(() => undefined);
 }
 

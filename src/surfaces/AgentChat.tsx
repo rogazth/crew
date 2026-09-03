@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ProviderIcon } from "../chrome/ProviderIcon";
 import { useThread } from "../hooks/useThread";
-import { respond, send, stop } from "../lib/agentRuntime";
+import { answer, respond, send, stop } from "../lib/agentRuntime";
 import { pickFiles } from "../lib/api";
-import type { ApprovalDecision, AttachedFile } from "../lib/blocks";
+import type { Answers, ApprovalDecision, AttachedFile } from "../lib/blocks";
 import { providerLine, type ProviderId } from "../lib/providers";
 import type { Session } from "../lib/types";
 import { Composer } from "./chat/Composer";
@@ -54,13 +54,17 @@ export function AgentChat({ session, cwd, active, onModel }: Props) {
     (requestId: number, decision: ApprovalDecision) => respond(session, requestId, decision),
     [session],
   );
+  const reply = useCallback(
+    (requestId: number, answers: Answers | null) => answer(session, requestId, answers),
+    [session],
+  );
 
   return (
     <div className="flex h-full flex-col bg-canvas">
       {blocks.length === 0 ? (
         <Identity session={session} />
       ) : (
-        <Transcript blocks={blocks} working={working} onApprove={approve} />
+        <Transcript blocks={blocks} working={working} onApprove={approve} onAnswer={reply} />
       )}
       <Composer
         ref={field}

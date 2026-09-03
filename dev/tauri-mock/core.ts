@@ -112,12 +112,13 @@ const SEED_BLOCKS = [
   { id: "b5", role: "tool", text: "Read sidebarPrefs.ts", tool: { callId: "t3", name: "Read", title: "Read sidebarPrefs.ts", status: "completed" } },
   { id: "b6", role: "tool", text: "Read useSidebarPrefs.ts", tool: { callId: "t4", name: "Read", title: "Read useSidebarPrefs.ts", status: "completed" } },
   { id: "b7", role: "assistant", text: "Grouping lives in `groupSessions` in `src/lib/sidebarPrefs.ts`, called from `SessionSidebar.tsx` inside a `useMemo` keyed on sessions, prefs and the query. So it is cached per render input, not across renders of unrelated state.\n\nOne thing worth fixing: `shows(prefs, key)` does an array lookup per row, which react-doctor already flags.", usage: { inputTokens: 14200, outputTokens: 310, costUsd: 0.031, durationMs: 9400 } },
-  { id: "b8", role: "user", text: "Fix it and run the linter.", files: [{ name: "sidebarPrefs.ts", path: "/Users/me/Developer/experiments/crew/src/lib/sidebarPrefs.ts" }] },
-  { id: "b9", role: "tool", text: "Edit sidebarPrefs.ts", tool: { callId: "t5", name: "Edit", title: "Edit sidebarPrefs.ts", status: "completed" } },
-  { id: "b10", role: "approval", text: "npm run lint", approval: { requestId: 1, name: "Bash" } },
+  { id: "b8", role: "user", text: "Fix it and run the linter.", files: [{ name: "sidebarPrefs.ts", path: "/Users/me/Developer/experiments/crew/src/lib/sidebarPrefs.ts", kind: "file" }] },
+  { id: "b9", role: "reasoning", text: "The user wants the lookup fixed and the linter run. The Set can be built per prefs object; a WeakMap would keep it stable across rows." },
+  { id: "b10", role: "tool", text: "Edit sidebarPrefs.ts", tool: { callId: "t5", name: "Edit", title: "Edit sidebarPrefs.ts", status: "completed" } },
+  { id: "b11", role: "approval", text: "npm run lint", approval: { requestId: 1, name: "Bash", input: { command: "npm run lint" } } },
 ];
 
-type MockAgent = { sessionId: string; initialized: boolean; pendingApproval: string | null };
+type MockAgent = { sessionId: string; stage: "idle" | "question" | "approval" };
 const agents = new Map<string, MockAgent>();
 
 function emitLines(sessionId: string, lines: unknown[]) {
@@ -125,13 +126,48 @@ function emitLines(sessionId: string, lines: unknown[]) {
 }
 
 function mockAgent(sessionId: string): number {
-  agents.set(sessionId, { sessionId, initialized: false, pendingApproval: null });
+  agents.set(sessionId, { sessionId, stage: "idle" });
   setTimeout(() => emitLines(sessionId, [{ type: "system", subtype: "init", session_id: `mock-${sessionId}` }]), 120);
   return 4242;
 }
 
 const delta = (text: string) => ({ type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text } } });
+const toolUse = (id: string, name: string, input: Row) => ({ type: "stream_event", event: { type: "content_block_start", index: 1, content_block: { type: "tool_use", id, name, input } } });
+const toolResult = (id: string, isError = false) => ({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: id, is_error: isError }] } });
 
+/** Words at 40ms, then `then` after the last one. */
+function say(sessionId: string, text: string, at: number, then?: () => void): number {
+  const words = text.split(" ");
+  words.forEach((word, i) => setTimeout(() => emitLines(sessionId, [delta((i ? " " : "") + word)]), at + i * 40));
+  const end = at + words.length * 40 + 120;
+  if (then) setTimeout(then, end);
+  return end;
+}
+
+const EDIT_INPUT = {
+  file_path: "/Users/me/Developer/experiments/crew/src/lib/sidebarPrefs.ts",
+  old_string: "  return prefs.hidden.includes(key);",
+  new_string: "  return hiddenSet(prefs).has(key);",
+};
+
+const REPLY = [
+  "Lint is clean. `shows` now reads from a `Set` built once per prefs object:",
+  "",
+  "```ts",
+  "const hiddenSet = (prefs: SidebarPrefs) => new Set(prefs.hidden);",
+  "",
+  "export function shows(prefs: SidebarPrefs, key: string): boolean {",
+  "  return !hiddenSet(prefs).has(key);",
+  "}",
+  "```",
+  "",
+  "Run `npm run check` when you want the full pass.",
+].join("\n");
+
+/**
+ * One scripted turn: prose, a read, a two-step question, an edit that needs
+ * approval, a reply with code. Everything the chat has to paint, in order.
+ */
 function mockAgentInput(sessionId: string, line: string) {
   const agent = agents.get(sessionId);
   if (!agent) return;
@@ -147,27 +183,61 @@ function mockAgentInput(sessionId: string, line: string) {
     const inner = msg.response as Row;
     const result = (inner.response as Row) ?? {};
     const allowed = result.behavior === "allow";
-    agent.pendingApproval = null;
-    setTimeout(() => emitLines(sessionId, [
-      { type: "stream_event", event: { type: "content_block_start", index: 1, content_block: { type: "tool_use", id: "t2", name: "Bash", input: { command: "npm run lint" } } } },
-    ]), 100);
-    setTimeout(() => emitLines(sessionId, [{ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "t2", is_error: !allowed }] } }]), 900);
-    const tail = allowed ? "Lint is clean. The lookup is a Set now, so `shows` is O(1) per row." : "Skipped the lint run. The edit is in place; run it whenever you want.";
-    tail.split(" ").forEach((word, i) => setTimeout(() => emitLines(sessionId, [delta((i ? " " : "") + word)]), 1000 + i * 40));
-    setTimeout(() => emitLines(sessionId, [{ type: "result", subtype: "success", duration_ms: 4100, total_cost_usd: 0.012, usage: { input_tokens: 8200, output_tokens: 140 } }]), 1000 + tail.split(" ").length * 40 + 200);
+    if (agent.stage === "question") {
+      agent.stage = "idle";
+      const answers = ((result.updatedInput as Row | undefined)?.answers as Row | undefined) ?? {};
+      setTimeout(() => emitLines(sessionId, [toolResult("q1", !allowed)]), 100);
+      const summary = allowed ? `Going with ${Object.values(answers).join(" and ")}.` : "No answer, so I will keep the current behaviour.";
+      say(sessionId, summary, 300, () => {
+        agent.stage = "approval";
+        emitLines(sessionId, [
+          { type: "control_request", request_id: "req-edit", request: { subtype: "can_use_tool", tool_name: "Edit", input: EDIT_INPUT } },
+        ]);
+      });
+      return;
+    }
+    agent.stage = "idle";
+    setTimeout(() => emitLines(sessionId, [toolUse("t2", "Edit", EDIT_INPUT)]), 100);
+    setTimeout(() => emitLines(sessionId, [toolResult("t2", !allowed)]), 700);
+    const tail = allowed ? REPLY : "Skipped the edit. Say the word and I will apply it.";
+    const end = say(sessionId, tail, 900);
+    setTimeout(() => emitLines(sessionId, [{ type: "result", subtype: "success", duration_ms: 4100, total_cost_usd: 0.012, usage: { input_tokens: 8200, output_tokens: 140 } }]), end);
     return;
   }
   if (msg.type === "user") {
-    const intro = "Let me check that file.";
-    intro.split(" ").forEach((word, i) => setTimeout(() => emitLines(sessionId, [delta((i ? " " : "") + word)]), 400 + i * 50));
-    setTimeout(() => emitLines(sessionId, [
-      { type: "stream_event", event: { type: "content_block_start", index: 1, content_block: { type: "tool_use", id: "t1", name: "Read", input: { file_path: "src/App.tsx" } } } },
-    ]), 900);
-    setTimeout(() => emitLines(sessionId, [{ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "t1", is_error: false }] } }]), 1500);
-    setTimeout(() => {
-      agent.pendingApproval = "req-1";
-      emitLines(sessionId, [{ type: "control_request", request_id: "req-1", request: { subtype: "can_use_tool", tool_name: "Bash", input: { command: "npm run lint" } } }]);
-    }, 1700);
+    say(sessionId, "Let me look at how the lookup is built.", 300, () => {
+      emitLines(sessionId, [toolUse("t1", "Read", { file_path: "src/lib/sidebarPrefs.ts" })]);
+      setTimeout(() => emitLines(sessionId, [toolResult("t1")]), 600);
+      setTimeout(() => {
+        agent.stage = "question";
+        emitLines(sessionId, [
+          toolUse("q1", "AskUserQuestion", {}),
+          {
+            type: "control_request",
+            request_id: "req-q",
+            request: {
+              subtype: "can_use_tool",
+              tool_name: "AskUserQuestion",
+              input: {
+                questions: [
+                  { question: "Where should the Set live?", header: "Cache", multiSelect: false, options: [
+                    { label: "Per call", description: "Build it inside shows(); simplest, still O(n) once per row" },
+                    { label: "Memoized on prefs", description: "WeakMap keyed by the prefs object" },
+                  ] },
+                  { question: "What else should I touch?", header: "Scope", multiSelect: true, options: [
+                    { label: "Run the linter" },
+                    { label: "Add a test" },
+                    { label: "Update ARCHITECTURE.md" },
+                  ] },
+                ],
+              },
+              tool_use_id: "q1",
+              requires_user_interaction: true,
+            },
+          },
+        ]);
+      }, 800);
+    });
   }
 }
 
