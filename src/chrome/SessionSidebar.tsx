@@ -70,7 +70,6 @@ function modifiersOf(event: { metaKey: boolean; ctrlKey: boolean; shiftKey: bool
 export function SessionSidebar(props: SessionSidebarProps) {
   const [query, setQuery] = useState("");
   const [prefs, setPrefs] = useSidebarPrefs();
-  const [searching, setSearching] = useState(false);
   const [renaming, setRenaming] = useState<string | null>(null);
   const [menu, setMenu] = useState<Menu | null>(null);
   const filtering = query.trim().length > 0;
@@ -154,37 +153,22 @@ export function SessionSidebar(props: SessionSidebarProps) {
           keys={commandKeys("new-session")}
           onClick={props.onNewSession}
         />
-        <div className="flex items-center gap-0.5">
-          {searching ? (
-            <div className="flex h-8 min-w-0 flex-1 items-center gap-2.5 rounded-md bg-kumo-control px-2 ring ring-kumo-line has-[input:focus]:ring-[1.5px] has-[input:focus]:ring-kumo-focus/50">
-              <MagnifyingGlassIcon className="size-4 shrink-0 text-kumo-subtle" />
-              <input
-                autoFocus
-                value={query}
-                placeholder="Search"
-                aria-label="Find agents and sessions"
-                spellCheck={false}
-                onChange={(event) => setQuery(event.target.value)}
-                onBlur={() => {
-                  if (!query) setSearching(false);
-                }}
-                onKeyDown={(event) => {
-                  if (event.key !== "Escape") return;
-                  event.stopPropagation();
-                  setQuery("");
-                  setSearching(false);
-                }}
-                className="h-full min-w-0 flex-1 bg-transparent py-0 outline-none"
-              />
-            </div>
-          ) : (
-            <SidebarRow
-              icon={MagnifyingGlassIcon}
-              label="Search"
-              className="min-w-0 flex-1"
-              onClick={() => setSearching(true)}
-            />
-          )}
+        <div className="mt-2.5 flex h-8 items-center gap-2.5 rounded-md bg-kumo-control pr-1 pl-2 ring ring-kumo-line has-[input:focus]:ring-[1.5px] has-[input:focus]:ring-kumo-focus/50">
+          <MagnifyingGlassIcon className="size-4 shrink-0 text-kumo-subtle" />
+          <input
+            value={query}
+            placeholder="Search"
+            aria-label="Find agents and sessions"
+            spellCheck={false}
+            onChange={(event) => setQuery(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key !== "Escape") return;
+              event.stopPropagation();
+              setQuery("");
+              event.currentTarget.blur();
+            }}
+            className="h-full min-w-0 flex-1 bg-transparent py-0 outline-none"
+          />
           {prefs && <SidebarPrefsMenu prefs={prefs} onChange={setPrefs} />}
         </div>
       </div>

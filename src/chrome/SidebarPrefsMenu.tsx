@@ -78,16 +78,24 @@ export function SidebarPrefsMenu({ prefs, onChange }: Props) {
         aria-label="Customize sidebar"
         title="Customize sidebar"
         data-tauri-drag-region="false"
-        className={`relative grid size-8 shrink-0 place-items-center rounded-md outline-none transition-colors hover:bg-hover hover:text-kumo-default data-popup-open:bg-hover data-popup-open:text-kumo-default ${
+        className={`relative grid size-6 shrink-0 place-items-center rounded-md outline-none transition-colors hover:bg-hover hover:text-kumo-default data-popup-open:bg-hover data-popup-open:text-kumo-default ${
           dirty ? "text-kumo-default" : "text-kumo-subtle"
         }`}
       >
         <SlidersHorizontalIcon className="size-4" />
-        {dirty && <span className="absolute top-1.5 right-1.5 size-1.5 rounded-full bg-kumo-default" />}
+        {dirty && (
+          <span className="absolute -top-0.5 -right-0.5 size-1.5 rounded-full bg-kumo-default ring-2 ring-kumo-control" />
+        )}
       </Menu.Trigger>
 
       <Menu.Portal>
-        <Menu.Positioner side="bottom" align="end" sideOffset={4} className="z-50">
+        <Menu.Positioner
+          side="right"
+          align="start"
+          sideOffset={4}
+          collisionAvoidance={{ side: "shift", align: "shift", fallbackAxisSide: "none" }}
+          className="z-50"
+        >
           <Menu.Popup className={PANEL}>
             <Submenu label="Grouping" value={grouping?.label}>
               <Menu.RadioGroup
