@@ -7,9 +7,7 @@ const QUIET_AFTER = 1500;
 /**
  * The tab indicator speaks for the sessions you are not looking at: output means
  * it is still going, silence after output means it finished, a bell means it
- * wants you. Opening the tab is the acknowledgement that turns any of those into
- * a check. A session that has never said anything stays `idle`, which draws
- * nothing at all.
+ * wants you. Opening the tab reads it, which clears the indicator back to `idle`.
  */
 export function useSessionActivity(
   session: Session,
@@ -36,7 +34,7 @@ export function useSessionActivity(
   useEffect(() => {
     if (!active) return;
     stopWaiting();
-    if (sent.current !== "idle") push("done");
+    push("idle");
   }, [active, push]);
 
   useEffect(() => stopWaiting, []);
@@ -44,7 +42,7 @@ export function useSessionActivity(
   return {
     onBell: useCallback(() => {
       stopWaiting();
-      push(active ? "done" : "needs-input");
+      push(active ? "idle" : "needs-input");
     }, [active, push]),
     onActivity: useCallback(() => {
       if (active) return;
@@ -60,9 +58,10 @@ export function useSessionActivity(
     onExit: useCallback(
       (code: number | null) => {
         stopWaiting();
-        push(code === 0 || code === null ? "done" : "error");
+        if (code !== 0 && code !== null) push("error");
+        else push(active ? "idle" : "done");
       },
-      [push],
+      [active, push],
     ),
   };
 }
