@@ -46,8 +46,13 @@ pub trait BridgeEvents: Send + Sync {
     fn tool(&self, call: ToolCall);
 }
 
+struct Pending {
+    stream: UnixStream,
+    call: ToolCall,
+}
+
 struct Shared {
-    pending: Mutex<HashMap<u64, UnixStream>>,
+    pending: Mutex<HashMap<u64, Pending>>,
     next_id: AtomicU64,
     socket_path: PathBuf,
     token: String,
@@ -102,7 +107,22 @@ impl Bridge {
     }
 
     fn take(&self, id: u64) -> Option<UnixStream> {
-        self.shared.pending.lock().ok()?.remove(&id)
+        self.shared
+            .pending
+            .lock()
+            .ok()?
+            .remove(&id)
+            .map(|pending| pending.stream)
+    }
+
+    pub fn pending_tools(&self) -> Vec<ToolCall> {
+        self.shared
+            .pending
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .values()
+            .map(|pending| pending.call.clone())
+            .collect()
     }
 
     pub fn info(&self) -> Result<BridgeInfo, String> {
@@ -144,8 +164,15 @@ fn serve(bridge: Bridge, stream: UnixStream) {
     }
 
     let id = bridge.shared.next_id.fetch_add(1, Ordering::Relaxed);
-    if let Ok(mut pending) = bridge.shared.pending.lock() {
-        pending.insert(id, stream);
+    let call = ToolCall {
+        id,
+        session_id: request.session_id,
+        method: request.method,
+        params: request.params,
+    };
+    {
+        let mut pending = bridge.shared.pending.lock().unwrap_or_else(|e| e.into_inner());
+        pending.insert(id, Pending { stream, call: call.clone() });
     }
     let Some(events) = bridge.events() else {
         if let Some(stream) = bridge.take(id) {
@@ -153,12 +180,7 @@ fn serve(bridge: Bridge, stream: UnixStream) {
         }
         return;
     };
-    events.tool(ToolCall {
-        id,
-        session_id: request.session_id,
-        method: request.method,
-        params: request.params,
-    });
+    events.tool(call);
 
     thread::sleep(REPLY_TIMEOUT);
     if let Some(stream) = bridge.take(id) {

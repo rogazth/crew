@@ -305,6 +305,23 @@ async fn handle_socket(stream: TcpStream, hosts: Hosts, hub: Arc<Hub>, token: St
     }
 
     let (client_id, mut outgoing) = hub.subscribe();
+    for call in hosts.bridge.pending_tools() {
+        hub.send(
+            client_id,
+            Outgoing::Text(encode(&match proto::event(
+                "agent-tool",
+                proto::ToolCall {
+                    id: call.id,
+                    session_id: call.session_id,
+                    method: call.method,
+                    params: call.params,
+                },
+            ) {
+                Ok(event) => event,
+                Err(_) => continue,
+            })),
+        );
+    }
     let writer = tokio::spawn(async move {
         while let Some(msg) = outgoing.recv().await {
             let sent = match msg {
@@ -1063,6 +1080,46 @@ mod tests {
         drop(producer_ack);
     }
 
+    #[tokio::test]
+    async fn pending_tool_is_replayed_after_reconnect() {
+        let dir = test_dir("tool-replay");
+        let handle = test_serve(&dir);
+        let mut ws = connect_authed(&handle).await;
+        send_json(
+            &mut ws,
+            &Request {
+                id: 1,
+                method: "bridge_info".into(),
+                params: serde_json::json!({}),
+            },
+        )
+        .await;
+        let info_resp = wait_response(&mut ws, 1).await;
+        assert!(info_resp.ok, "{}", info_resp.error.unwrap_or_default());
+        let info: proto::BridgeInfo = serde_json::from_value(info_resp.result.expect("info")).expect("BridgeInfo");
+        drop(ws);
+
+        let payload = serde_json::json!({
+            "token": info.token,
+            "sessionId": "s1",
+            "method": "tools/list",
+            "params": {}
+        });
+        {
+            let mut stream = std::os::unix::net::UnixStream::connect(&info.socket_path).expect("unix");
+            use std::io::Write;
+            writeln!(stream, "{payload}").expect("write");
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+
+        let mut ws = connect_authed(&handle).await;
+        let event = wait_event(&mut ws, "agent-tool").await;
+        let call: proto::ToolCall = serde_json::from_value(event.payload).expect("ToolCall");
+        assert_eq!(call.session_id, "s1");
+        assert_eq!(call.method, "tools/list");
+        handle.shutdown();
+    }
+
     async fn attach_pty(ws: &mut Ws, id: u32, pty: &str, from: u64) -> proto::PtyAttached {
         send_json(
             ws,
@@ -1166,6 +1223,24 @@ mod tests {
         for window in bytes.windows(2) {
             let step = (i16::from(window[1]) - i16::from(window[0]) + 10) % 10;
             assert_eq!(step, 1, "unordered or duplicate bytes around {window:?}");
+        }
+    }
+
+    async fn wait_event(ws: &mut Ws, name: &str) -> proto::Event {
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            let msg = tokio::time::timeout_at(deadline, ws.next())
+                .await
+                .expect("event timeout")
+                .expect("closed")
+                .expect("ws");
+            if let Message::Text(text) = msg {
+                if let Ok(event) = serde_json::from_str::<proto::Event>(text.as_ref()) {
+                    if event.event == name {
+                        return event;
+                    }
+                }
+            }
         }
     }
 

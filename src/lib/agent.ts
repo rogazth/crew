@@ -13,7 +13,6 @@ const exits = new Map<string, ExitHandler>();
 const stdoutBuf = new Map<string, string[]>();
 const stderrBuf = new Map<string, string[]>();
 const exitBuf = new Map<string, ExitPayload>();
-const seenLive = new Set<string>();
 const MAX_BUFFERED = 1000;
 
 let stops: Array<() => void> | null = null;
@@ -39,14 +38,12 @@ function deliver(
   buffer: Map<string, string[]>,
   { sessionId, lines }: LinesPayload,
 ) {
-  seenLive.add(sessionId);
   const handler = handlers.get(sessionId);
   if (handler) for (const line of lines) handler(line);
   else push(buffer, sessionId, lines);
 }
 
 function deliverExit(event: ExitPayload) {
-  seenLive.delete(event.sessionId);
   const handler = exits.get(event.sessionId);
   if (handler) handler(event.code);
   else exitBuf.set(event.sessionId, event);
@@ -58,7 +55,7 @@ function recoverExits() {
     .then((running) => {
       const live = new Set(running);
       for (const sessionId of [...exits.keys()]) {
-        if (live.has(sessionId) || !seenLive.has(sessionId)) continue;
+        if (live.has(sessionId)) continue;
         deliverExit({ sessionId, code: null, pid: 0 });
       }
     })
@@ -87,7 +84,6 @@ export function watchAgent(
 ): () => void {
   users += 1;
   ensureBridge();
-  seenLive.delete(sessionId);
   stdout.set(sessionId, onLine);
   exits.set(sessionId, onExit);
   if (onStderr) stderr.set(sessionId, onStderr);

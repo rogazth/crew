@@ -205,9 +205,11 @@ export function onAgentCreated(listener: (session: Session) => void): () => void
 
 let started = false;
 const toolBuf: ToolCall[] = [];
+const answered = new Set<number>();
 const MAX_BUFFERED_TOOLS = 32;
 
 function deliverTool(call: ToolCall) {
+  if (answered.has(call.id)) return;
   if (!started) {
     toolBuf.push(call);
     if (toolBuf.length > MAX_BUFFERED_TOOLS) toolBuf.shift();
@@ -225,6 +227,8 @@ export function startAgentTools(): void {
 }
 
 async function handle(call: ToolCall): Promise<void> {
+  if (answered.has(call.id)) return;
+  answered.add(call.id);
   const response = await dispatch(call).then(
     (result) => ({ result }),
     (error: unknown) => ({ error: message(error) }),
