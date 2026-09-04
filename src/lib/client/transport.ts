@@ -18,7 +18,12 @@ let reconnecting = false;
 let ready = false;
 
 function connect(): Promise<void> {
-  opened ??= open();
+  if (!opened) {
+    opened = open().catch((error) => {
+      opened = null;
+      throw error;
+    });
+  }
   return opened;
 }
 
