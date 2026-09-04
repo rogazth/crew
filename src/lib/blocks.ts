@@ -1,94 +1,26 @@
-/** Transcript rows Crew paints. The vendor session is not this list. */
-export type BlockRole = "user" | "assistant" | "reasoning" | "tool" | "approval" | "question" | "system";
+import type {
+  ApprovalDecision,
+  AttachedFile,
+  Block,
+  BlockRole,
+  HarnessEvent,
+  Question,
+  ToolStatus,
+  TurnUsage,
+} from "./protocol";
 
-/** `interrupted` is a pending row whose process is gone: no spinner, no verdict. */
-export type ToolStatus = "pending" | "completed" | "failed" | "interrupted";
-
-/** `always` allows and asks the provider to stop prompting for the same kind of call this session. */
-export type ApprovalDecision = "allow" | "always" | "deny";
-
-export type AttachedFile = {
-  name: string;
-  path: string;
-  kind?: "image" | "file";
-  size?: number;
+export type {
+  ApprovalDecision,
+  AttachedFile,
+  Block,
+  BlockRole,
+  HarnessEvent,
+  Question,
+  ToolStatus,
+  TurnUsage,
 };
 
-export type QuestionOption = { label: string; description?: string };
-
-export type Question = {
-  question: string;
-  header: string;
-  multiSelect: boolean;
-  options: QuestionOption[];
-};
-
-/** Keyed by question text; a multi-select joins labels with ", " (what Claude Code accepts). */
-export type Answers = Record<string, string>;
-
-export type TurnUsage = {
-  inputTokens?: number;
-  outputTokens?: number;
-  costUsd?: number;
-  durationMs?: number;
-};
-
-export type Block = {
-  id: string;
-  role: BlockRole;
-  text: string;
-  /** Wall clock, ms. Set on what the user sent and on the reply that closed a turn. */
-  at?: number;
-  /** Sent on the user's behalf (a routine waking the agent); the transcript does not paint it. */
-  hidden?: boolean;
-  streaming?: boolean;
-  files?: AttachedFile[];
-  tool?: {
-    callId: string;
-    /** Provider tool name; picks the glyph. */
-    name: string;
-    title: string;
-    status: ToolStatus;
-  };
-  approval?: {
-    requestId: number;
-    name: string;
-    /** The call as the provider will run it; a card shows the command or the diff. */
-    input?: Record<string, unknown>;
-    decided?: ApprovalDecision;
-  };
-  question?: {
-    requestId: number;
-    questions: Question[];
-    answers?: Answers;
-    dismissed?: boolean;
-  };
-  /** Set on the assistant block that closed a turn. */
-  usage?: TurnUsage;
-};
-
-export type HarnessEvent =
-  | { type: "session.started" }
-  | { type: "session.ended"; code?: number | null }
-  | { type: "session.error"; message: string }
-  | { type: "session.note"; message: string }
-  | { type: "session.providerBound"; providerSessionId: string }
-  | { type: "message.delta"; text: string }
-  | { type: "message.completed" }
-  | { type: "reasoning.delta"; text: string }
-  | { type: "turn.completed"; usage?: TurnUsage }
-  | { type: "tool.started"; callId: string; name: string; title: string }
-  | { type: "tool.updated"; callId: string; title?: string; status?: ToolStatus }
-  | {
-      type: "approval.requested";
-      requestId: number;
-      name: string;
-      title: string;
-      input?: Record<string, unknown>;
-    }
-  | { type: "approval.resolved"; requestId: number; decision: ApprovalDecision | "cancelled" }
-  | { type: "question.requested"; requestId: number; questions: Question[] }
-  | { type: "question.resolved"; requestId: number; answers: Answers | null };
+export type Answers = { [key in string]: string };
 
 export function newBlock(role: BlockRole, text = ""): Block {
   return { id: crypto.randomUUID(), role, text, at: Date.now() };
@@ -111,7 +43,6 @@ function isBlock(value: unknown): value is Block {
   return typeof row.id === "string" && typeof row.role === "string" && typeof row.text === "string";
 }
 
-/** Anything still waiting on the provider or the user. */
 export function isOpen(block: Block): boolean {
   if (block.role === "tool") return block.tool?.status === "pending";
   if (block.role === "approval") return block.approval != null && !block.approval.decided;
@@ -143,7 +74,6 @@ export function settleTurn(blocks: Block[], tools: "completed" | "interrupted"):
   });
 }
 
-/** Fold a live harness event into the transcript. Pure so the turn engine stays dumb. */
 export function applyEvent(blocks: Block[], event: HarnessEvent): Block[] {
   switch (event.type) {
     case "message.delta":
@@ -167,7 +97,6 @@ export function applyEvent(blocks: Block[], event: HarnessEvent): Block[] {
         ...newBlock("tool", event.title),
         tool: { callId: event.callId, name: event.name, title: event.title, status: "pending" },
       };
-      // The approval row was this same call asking first; one line, not two.
       const last = settled.at(-1);
       if (last?.approval && last.approval.decided !== "deny" && last.text === event.title) {
         return [...settled.slice(0, -1), { ...tool, id: last.id }];
@@ -219,7 +148,6 @@ export function applyEvent(blocks: Block[], event: HarnessEvent): Block[] {
         ...newBlock("question", first?.header || first?.question || "Question"),
         question: { requestId: event.requestId, questions: event.questions },
       };
-      // The provider announced the ask as a tool call first; the card is that call.
       const last = settled.at(-1);
       if (last?.tool?.status === "pending" && isQuestionTool(last.tool.name)) {
         return [...settled.slice(0, -1), { ...card, id: last.id }];

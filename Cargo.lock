@@ -82,6 +82,7 @@ name = "crew-core"
 version = "0.1.0"
 dependencies = [
  "base64",
+ "crew-protocol",
  "libc",
  "rusqlite",
  "serde",

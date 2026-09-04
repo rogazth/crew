@@ -1,4 +1,5 @@
 pub mod agent;
+pub mod blocks;
 pub mod bridge;
 pub mod files;
 pub mod mcp;

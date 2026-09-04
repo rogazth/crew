@@ -1,0 +1,39 @@
+{
+  "start": [{ "id": "user-1", "role": "user", "text": "hi", "at": 1 }],
+  "events": [
+    { "type": "session.started" },
+    { "type": "session.providerBound", "providerSessionId": "sess-1" },
+    { "type": "reasoning.delta", "text": "Let me " },
+    { "type": "reasoning.delta", "text": "think." },
+    { "type": "message.delta", "text": "Done." },
+    { "type": "message.delta", "text": " Really." },
+    { "type": "message.completed" },
+    {
+      "type": "approval.requested",
+      "requestId": 1,
+      "name": "Bash",
+      "title": "npm run lint",
+      "input": { "command": "npm run lint" }
+    },
+    { "type": "approval.resolved", "requestId": 1, "decision": "always" },
+    { "type": "tool.started", "callId": "t1", "name": "Bash", "title": "npm run lint" },
+    { "type": "tool.updated", "callId": "t1", "status": "completed" },
+    { "type": "tool.started", "callId": "t2", "name": "AskUserQuestion", "title": "AskUserQuestion" },
+    {
+      "type": "question.requested",
+      "requestId": 2,
+      "questions": [
+        {
+          "question": "Pick a color",
+          "header": "Color",
+          "multiSelect": false,
+          "options": [{ "label": "Red" }, { "label": "Blue" }]
+        }
+      ]
+    },
+    { "type": "question.resolved", "requestId": 2, "answers": { "Pick a color": "Red" } },
+    { "type": "turn.completed", "usage": { "costUsd": 0.01, "inputTokens": 10, "outputTokens": 4 } },
+    { "type": "session.note", "message": "note" },
+    { "type": "session.ended", "code": 0 }
+  ]
+}

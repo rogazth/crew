@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+crew-protocol = { path = "../crew-protocol" }
 serde.workspace = true
 serde_json.workspace = true
 rusqlite = { version = "0.40.2", features = ["bundled", "cache"], default-features = false }

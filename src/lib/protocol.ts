@@ -8,7 +8,25 @@ export type AgentLines = { sessionId: string, lines: Array<string>, };
 
 export type AgentSpawn = { sessionId: string, command: string, args: Array<string>, cwd: string, env: { [key in string]: string } | null, };
 
+export type ApprovalDecision = "allow" | "always" | "deny";
+
+export type ApprovalResolution = "allow" | "always" | "deny" | "cancelled";
+
+export type AttachedFile = { name: string, path: string, kind?: AttachedFileKind, size?: number, };
+
+export type AttachedFileKind = "image" | "file";
+
 export type Auth = { auth: string, };
+
+export type Block = { id: string, role: BlockRole, text: string, at?: number, hidden?: boolean, streaming?: boolean, files?: Array<AttachedFile>, tool?: BlockTool, approval?: BlockApproval, question?: BlockQuestion, usage?: TurnUsage, };
+
+export type BlockApproval = { requestId: number, name: string, input?: Record<string, unknown>, decided?: ApprovalDecision, };
+
+export type BlockQuestion = { requestId: number, questions: Array<Question>, answers?: { [key in string]: string }, dismissed?: boolean, };
+
+export type BlockRole = "user" | "assistant" | "reasoning" | "tool" | "approval" | "question" | "system";
+
+export type BlockTool = { callId: string, name: string, title: string, status: ToolStatus, };
 
 export type BridgeInfo = { socketPath: string, token: string, exe: string, };
 
@@ -21,6 +39,8 @@ export type DaemonInfo = { url: string, token: string, };
 export type Event = { event: string, payload: unknown, };
 
 export type FileBytes = { mime: string, data: string, };
+
+export type HarnessEvent = { "type": "session.started", } | { "type": "session.ended", code?: number | null, } | { "type": "session.error", message: string, } | { "type": "session.note", message: string, } | { "type": "session.providerBound", providerSessionId: string, } | { "type": "message.delta", text: string, } | { "type": "message.completed", } | { "type": "reasoning.delta", text: string, } | { "type": "turn.completed", usage?: TurnUsage, } | { "type": "tool.started", callId: string, name: string, title: string, } | { "type": "tool.updated", callId: string, title?: string, status?: ToolStatus, } | { "type": "approval.requested", requestId: number, name: string, title: string, input?: Record<string, unknown>, } | { "type": "approval.resolved", requestId: number, decision: ApprovalResolution, } | { "type": "question.requested", requestId: number, questions: Array<Question>, } | { "type": "question.resolved", requestId: number, answers: { [key in string]: string } | null, };
 
 export type Id = { id: string, };
 
@@ -68,6 +88,10 @@ export type PtySpawn = { id: string, cwd: string, command: Array<string>, cols: 
 
 export type PtyWrite = { id: string, data: string, };
 
+export type Question = { question: string, header: string, multiSelect: boolean, options: Array<QuestionOption>, };
+
+export type QuestionOption = { label: string, description?: string, };
+
 export type Request = { id: number, method: string, params: unknown, };
 
 export type Response = { id: number, ok: boolean, result?: unknown, error?: string, };
@@ -93,6 +117,10 @@ export type SessionUpdate = { id: string, name: string, provider: string, model:
 export type TempFile = { extension: string, base64Contents: string, };
 
 export type ToolCall = { id: number, sessionId: string, method: string, params: unknown, };
+
+export type ToolStatus = "pending" | "completed" | "failed" | "interrupted";
+
+export type TurnUsage = { inputTokens?: number, outputTokens?: number, costUsd?: number, durationMs?: number, };
 
 export type Workspace = { id: string, name: string, path: string, createdAt: number, };
 
