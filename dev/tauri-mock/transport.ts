@@ -356,7 +356,9 @@ function onReconnect(_hook: () => void): () => void {
   return () => {};
 }
 
-function writeStream(_id: number, _bytes: Uint8Array) {}
+function writeStream(_id: number, _bytes: Uint8Array): Promise<void> {
+  return Promise.resolve();
+}
 
 /** A prompt a beat after spawn, so the status machinery has something to chew on. */
 function mockShell(_id: string, streamId: number) {

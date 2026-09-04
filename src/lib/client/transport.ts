@@ -8,6 +8,8 @@ const listeners = new Map<string, Set<Listener>>();
 const streams = new Map<number, (bytes: Uint8Array) => void>();
 const buffered = new Map<number, Uint8Array[]>();
 const reconnectHooks = new Set<() => void>();
+const writes: Array<{ id: number; bytes: Uint8Array; resolve: () => void }> = [];
+const WRITE_CAP = 256;
 
 let nextId = 1;
 let socket: WebSocket | null = null;
@@ -30,6 +32,7 @@ async function open(): Promise<void> {
       socket = ws;
       ready = true;
       ws.send(JSON.stringify({ auth: info.token }));
+      flushWrites();
       resolve();
       if (again) for (const hook of reconnectHooks) hook();
     };
@@ -130,13 +133,35 @@ function openStream(id: number, onBytes: (bytes: Uint8Array) => void): () => voi
   };
 }
 
-function writeStream(id: number, bytes: Uint8Array) {
-  const ws = socket;
-  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+function sendFrame(ws: WebSocket, id: number, bytes: Uint8Array) {
   const frame = new Uint8Array(4 + bytes.byteLength);
   new DataView(frame.buffer).setUint32(0, id, true);
   frame.set(bytes, 4);
   ws.send(frame);
+}
+
+function flushWrites() {
+  const ws = socket;
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  while (writes.length) {
+    const item = writes.shift();
+    if (!item) break;
+    sendFrame(ws, item.id, item.bytes);
+    item.resolve();
+  }
+}
+
+function writeStream(id: number, bytes: Uint8Array): Promise<void> {
+  const ws = socket;
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    sendFrame(ws, id, bytes);
+    return Promise.resolve();
+  }
+  if (writes.length >= WRITE_CAP) return Promise.reject(new Error("Crew daemon is not connected"));
+  return new Promise((resolve, reject) => {
+    writes.push({ id, bytes, resolve, reject });
+    void connect().catch(() => {});
+  });
 }
 
 export const transport = { request, on, onReconnect, openStream, writeStream };

@@ -68,10 +68,7 @@ export async function spawnPty(
 
 export function writePty(id: string, data: string): Promise<void> {
   const stream = streams.get(id);
-  if (stream) {
-    client.writeStream(stream.id, encoder.encode(data));
-    return Promise.resolve();
-  }
+  if (stream) return client.writeStream(stream.id, encoder.encode(data));
   return client.request("pty_write", { id, data });
 }
 
