@@ -12,6 +12,7 @@ import { useSelectAllScope } from "./hooks/useSelectAllScope";
 import { useSessions } from "./hooks/useSessions";
 import { useSidebarWidth } from "./hooks/useSidebarWidth";
 import { useTabs } from "./hooks/useTabs";
+import { AgentThemeProvider } from "./hooks/useAgentTheme";
 import { TerminalPrefsProvider } from "./hooks/useTerminalPrefs";
 import { useWorkspaces } from "./hooks/useWorkspaces";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./lib/providers";
@@ -213,6 +214,7 @@ export function App() {
 
   return (
     <TerminalPrefsProvider>
+    <AgentThemeProvider>
     <Sidebar.Provider
       contained
       collapsible="offcanvas"
@@ -320,6 +322,7 @@ export function App() {
         />
       )}
     </Sidebar.Provider>
+    </AgentThemeProvider>
     </TerminalPrefsProvider>
   );
 }

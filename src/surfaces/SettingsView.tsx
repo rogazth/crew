@@ -1,4 +1,7 @@
+import { Select } from "@cloudflare/kumo";
 import { SettingsRow, SettingsSection } from "../chrome/SettingsRow";
+import { useAgentTheme } from "../hooks/useAgentTheme";
+import { AGENT_THEMES, type AgentThemeId } from "../lib/agentTheme";
 import { COMMANDS, COMMAND_IDS, commandKeys } from "../lib/commands";
 import { settingsSection, type SettingsSectionId } from "../lib/settings";
 import { TerminalSettings } from "./TerminalSettings";
@@ -12,12 +15,33 @@ export function SettingsView({ section }: { section: SettingsSectionId }) {
           {meta.label}
         </h1>
         <div className="flex flex-col gap-8">
+          {section === "appearance" && <Appearance />}
           {section === "keybindings" && <Keybindings />}
           {section === "terminal" && <TerminalSettings />}
-          {section !== "keybindings" && section !== "terminal" && <Pending label={meta.label} />}
+          {section !== "appearance" && section !== "keybindings" && section !== "terminal" && (
+            <Pending label={meta.label} />
+          )}
         </div>
       </div>
     </div>
+  );
+}
+
+function Appearance() {
+  const { theme, update } = useAgentTheme();
+  return (
+    <SettingsSection title="Agents">
+      <SettingsRow label="Agent theme" description="Layout and chrome for every agent chat.">
+        <Select
+          aria-label="Agent theme"
+          size="sm"
+          className="w-40"
+          value={theme}
+          onValueChange={(value) => value && update(value as AgentThemeId)}
+          items={AGENT_THEMES.map((item) => ({ value: item.id, label: item.label }))}
+        />
+      </SettingsRow>
+    </SettingsSection>
   );
 }
 
