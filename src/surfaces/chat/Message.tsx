@@ -5,6 +5,7 @@ import type { Block, TurnUsage } from "../../lib/blocks";
 import { splitMentions } from "../../lib/mentions";
 import { AttachmentStrip } from "./Attachments";
 import { useChatActions } from "./context";
+import { CopyButton } from "./CopyButton";
 import { clock, duration } from "../../lib/time";
 
 /** streamdown and its parsers are half a megabyte; the window opens without them. */
@@ -19,10 +20,13 @@ export const UserMessage = memo(function UserMessage({ block }: { block: Block }
   return (
     <div className="flex flex-col items-end gap-1.5">
       {block.text ? (
-        <div className="crew-bubble">
-          <p className="whitespace-pre-wrap">
-            <MentionText text={block.text} />
-          </p>
+        <div className="crew-md-row is-user">
+          <div className="crew-bubble">
+            <p className="whitespace-pre-wrap">
+              <MentionText text={block.text} />
+            </p>
+          </div>
+          <CopyButton text={block.text} className="crew-copy crew-copy-aside" />
         </div>
       ) : null}
       {block.files && block.files.length > 0 ? (

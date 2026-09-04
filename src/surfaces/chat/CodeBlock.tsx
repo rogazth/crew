@@ -1,6 +1,6 @@
-import { CheckIcon, CopyIcon } from "@phosphor-icons/react";
 import { memo, useEffect, useState } from "react";
 import { highlightInline, resolveLang } from "../../lib/shiki";
+import { CopyButton } from "./CopyButton";
 import { DiffFence } from "./DiffView";
 
 type Props = {
@@ -39,7 +39,7 @@ export const CodeBlock = memo(function CodeBlock({ code, lang, streaming }: Prop
     <div className="crew-code" data-lang={lang ?? ""}>
       <div className="crew-code-head">
         <span>{lang || "text"}</span>
-        <CopyButton code={code} />
+        <CopyButton text={code} />
       </div>
       {diff && !streaming ? (
         <DiffFence code={code} />
@@ -51,23 +51,3 @@ export const CodeBlock = memo(function CodeBlock({ code, lang, streaming }: Prop
     </div>
   );
 });
-
-function CopyButton({ code }: { code: string }) {
-  const [done, setDone] = useState(false);
-  useEffect(() => {
-    if (!done) return;
-    const timer = window.setTimeout(() => setDone(false), 1500);
-    return () => window.clearTimeout(timer);
-  }, [done]);
-  return (
-    <button
-      type="button"
-      aria-label={done ? "Copied" : "Copy code"}
-      title="Copy"
-      onClick={() => void navigator.clipboard.writeText(code).then(() => setDone(true))}
-      className="crew-code-copy"
-    >
-      {done ? <CheckIcon className="size-3.5" weight="bold" /> : <CopyIcon className="size-3.5" />}
-    </button>
-  );
-}

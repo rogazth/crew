@@ -6,6 +6,7 @@ import { openExternal } from "../../lib/external";
 import { groupRuns, isHeadingOnly } from "../../lib/markdownRuns";
 import { CodeBlock } from "./CodeBlock";
 import { useChatActions } from "./context";
+import { CopyButton } from "./CopyButton";
 
 type Props = { text: string; streaming?: boolean };
 
@@ -82,18 +83,32 @@ export const Markdown = memo(function Markdown({ text, streaming }: Props) {
   const runs = useMemo(() => groupRuns(text), [text]);
   return (
     <div className="crew-md">
-      {runs.map((run, index) => (
-        <div key={index} className={runClass(run.kind, run.text)}>
-          <Streamdown
-            className="crew-md-flow"
-            controls={false}
-            components={COMPONENTS}
-            isAnimating={streaming === true && index === runs.length - 1}
-          >
-            {run.text}
-          </Streamdown>
-        </div>
-      ))}
+      {runs.map((run, index) => {
+        const className = runClass(run.kind, run.text);
+        const body = (
+          <div className={className}>
+            <Streamdown
+              className="crew-md-flow"
+              controls={false}
+              components={COMPONENTS}
+              isAnimating={streaming === true && index === runs.length - 1}
+            >
+              {run.text}
+            </Streamdown>
+          </div>
+        );
+        // Only the bubble gets the aside copy; code and diffs carry their own.
+        return className === "crew-md-prose" ? (
+          <div key={index} className="crew-md-row">
+            {body}
+            <CopyButton text={run.text.trim()} className="crew-copy crew-copy-aside" />
+          </div>
+        ) : (
+          <div key={index} className="crew-md-row">
+            {body}
+          </div>
+        );
+      })}
     </div>
   );
 });

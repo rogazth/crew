@@ -527,9 +527,30 @@ body:has(button[data-sidebar="resize-handle"]:active) * {
   background: var(--color-card);
   overflow-wrap: anywhere;
 }
+/* Every shape shares the bubble's width; a table hugs its columns inside it. */
 .crew-md-wide {
+  width: 72%;
+  min-width: 0;
+}
+.crew-md-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
   width: 100%;
   min-width: 0;
+}
+.crew-md-row.is-user {
+  flex-direction: row-reverse;
+}
+.crew-copy-aside {
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity 100ms ease, background-color 100ms ease, color 100ms ease;
+}
+.crew-md-row:hover .crew-copy-aside,
+.crew-copy-aside:focus-visible,
+.crew-copy-aside[data-done] {
+  opacity: 1;
 }
 /* Headings with nothing under them caption the block that follows; no bubble. */
 .crew-md-label {
@@ -648,13 +669,14 @@ body:has(button[data-sidebar="resize-handle"]:active) * {
 }
 .crew-md [data-streamdown="table-wrapper"] {
   display: block;
+  width: fit-content;
+  max-width: 100%;
   overflow-x: auto;
   overscroll-behavior-x: contain;
   border: 1px solid var(--color-hairline);
   border-radius: 8px;
 }
 .crew-md [data-streamdown="table"] {
-  width: 100%;
   border-collapse: collapse;
   font-size: 13px;
   line-height: 18px;
@@ -731,6 +753,7 @@ body:has(button[data-sidebar="resize-handle"]:active) * {
   font-size: 11px;
   color: var(--text-color-kumo-subtle);
 }
+.crew-copy,
 .crew-code-copy {
   display: flex;
   align-items: center;
@@ -741,6 +764,7 @@ body:has(button[data-sidebar="resize-handle"]:active) * {
   color: var(--text-color-kumo-subtle);
   transition: background-color 100ms ease, color 100ms ease;
 }
+.crew-copy:hover,
 .crew-code-copy:hover {
   background: color-mix(in srgb, var(--text-color-kumo-default) 8%, transparent);
   color: var(--text-color-kumo-default);
