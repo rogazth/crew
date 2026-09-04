@@ -260,6 +260,15 @@ impl PtyHost {
         write_live(&live, data)
     }
 
+    pub fn session_of_stream(&self, stream_id: u32) -> Option<String> {
+        self.inner
+            .streams
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&stream_id)
+            .cloned()
+    }
+
     pub fn resize(&self, id: &str, cols: u16, rows: u16) -> Result<(), String> {
         let live = self
             .get(id)

@@ -106,6 +106,14 @@ pub struct PtyExit {
     pub code: Option<i32>,
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
+pub struct PtyError {
+    pub id: String,
+    pub error: String,
+}
+
 pub fn ok(id: u32, result: Value) -> Response {
     Response {
         id,

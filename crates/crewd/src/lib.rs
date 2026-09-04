@@ -312,7 +312,7 @@ async fn handle_socket(stream: TcpStream, hosts: Hosts, hub: Arc<Hub>, token: St
                     continue;
                 }
                 let stream_id = u32::from_le_bytes(bytes[..4].try_into().unwrap());
-                enqueue_pty_input(&pty_in, &hosts, stream_id, bytes[4..].to_vec());
+                enqueue_pty_input(&pty_in, &hosts, &hub, stream_id, bytes[4..].to_vec());
             }
             Message::Close(_) => break,
             Message::Ping(payload) => {
@@ -329,29 +329,57 @@ async fn handle_socket(stream: TcpStream, hosts: Hosts, hub: Arc<Hub>, token: St
 fn enqueue_pty_input(
     pty_in: &Mutex<HashMap<u32, mpsc::Sender<Vec<u8>>>>,
     hosts: &Hosts,
+    hub: &Arc<Hub>,
     stream_id: u32,
     data: Vec<u8>,
 ) {
     let mut map = pty_in.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(tx) = map.get(&stream_id) {
-        let _ = tx.try_send(data);
+        if tx.try_send(data).is_err() {
+            drop(map);
+            emit_pty_error(hub, &hosts.pty, stream_id, "Terminal is not accepting input");
+        }
         return;
     }
     let (tx, rx) = mpsc::channel(32);
-    let _ = tx.try_send(data);
+    if tx.try_send(data).is_err() {
+        drop(map);
+        emit_pty_error(hub, &hosts.pty, stream_id, "Terminal is not accepting input");
+        return;
+    }
     map.insert(stream_id, tx);
     drop(map);
     let host = hosts.pty.clone();
+    let hub = hub.clone();
     tokio::spawn(async move {
-        drain_pty_input(host, stream_id, rx).await;
+        drain_pty_input(host, hub, stream_id, rx).await;
     });
 }
 
-async fn drain_pty_input(host: PtyHost, stream_id: u32, mut rx: mpsc::Receiver<Vec<u8>>) {
+async fn drain_pty_input(
+    host: PtyHost,
+    hub: Arc<Hub>,
+    stream_id: u32,
+    mut rx: mpsc::Receiver<Vec<u8>>,
+) {
     while let Some(data) = rx.recv().await {
-        let host = host.clone();
-        let _ = tokio::task::spawn_blocking(move || host.write_stream(stream_id, &data)).await;
+        let writer = host.clone();
+        let result = tokio::task::spawn_blocking(move || writer.write_stream(stream_id, &data)).await;
+        let error = match result {
+            Ok(Ok(())) => continue,
+            Ok(Err(error)) => error,
+            Err(error) => error.to_string(),
+        };
+        emit_pty_error(&hub, &host, stream_id, error);
+        break;
     }
+}
+
+fn emit_pty_error(hub: &Hub, host: &PtyHost, stream_id: u32, error: impl Into<String>) {
+    let id = host
+        .session_of_stream(stream_id)
+        .unwrap_or_else(|| stream_id.to_string());
+    hub.emit("pty-error", proto::PtyError { id, error: error.into() });
 }
 
 async fn dispatch_text(hosts: &Hosts, text: &str) -> String {
