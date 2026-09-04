@@ -27,7 +27,11 @@ const XTERM: TerminalKey = { type: "xterm" };
 
 export function resolveTerminalKey(
   event: Key,
-  { isMac, hasSelection }: { isMac: boolean; hasSelection: boolean },
+  {
+    isMac,
+    hasSelection,
+    kittyKeyboard = false,
+  }: { isMac: boolean; hasSelection: boolean; kittyKeyboard?: boolean },
 ): TerminalKey {
   const { metaKey, ctrlKey, altKey, shiftKey, key, code } = event;
 
@@ -59,7 +63,10 @@ export function resolveTerminalKey(
 
   if (event.type !== "keydown") return XTERM;
 
-  if (shiftKey && !metaKey && !ctrlKey && !altKey && key === "Enter") return INPUT("\x1b\r");
+  // With the kitty protocol on, xterm encodes ⇧⏎ as `CSI 13;2u` itself.
+  if (shiftKey && !metaKey && !ctrlKey && !altKey && key === "Enter") {
+    return kittyKeyboard ? XTERM : INPUT("\x1b\r");
+  }
   if (ctrlKey && !metaKey && !altKey && !shiftKey && key === "Backspace") return INPUT("\x17");
 
   if (altKey && !metaKey && !ctrlKey && !shiftKey) {

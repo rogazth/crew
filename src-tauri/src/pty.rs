@@ -3,7 +3,7 @@ use std::io::{Read, Write};
 use std::os::unix::io::AsRawFd;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -18,6 +18,12 @@ const READ_CHUNK: usize = 32 * 1024;
 /// chunks per second and froze keyboard input until they were batched.
 const PTY_COALESCE: Duration = Duration::from_millis(8);
 const KILL_ESCALATE: Duration = Duration::from_secs(1);
+/// Bytes emitted but not yet parsed by xterm. Past HIGH the reader stops
+/// draining the master, so a flooding child blocks on write instead of
+/// burying the webview; below LOW it drains again.
+const FLOW_HIGH: u64 = 256 * 1024;
+const FLOW_LOW: u64 = 32 * 1024;
+const FLOW_POLL: Duration = Duration::from_millis(250);
 
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -39,6 +45,60 @@ struct LivePty {
     pid: u32,
     /// Set once the child is reaped; from then on the pid may belong to someone else.
     exited: AtomicBool,
+    flow: Mutex<Flow>,
+    credit: Condvar,
+}
+
+#[derive(Default)]
+struct Flow {
+    sent: u64,
+    acked: u64,
+}
+
+impl LivePty {
+    fn new(writer: Box<dyn Write + Send>, master_fd: i32, pid: u32) -> Self {
+        Self {
+            writer: Mutex::new(writer),
+            master_fd,
+            pid,
+            exited: AtomicBool::new(false),
+            flow: Mutex::new(Flow::default()),
+            credit: Condvar::new(),
+        }
+    }
+
+    fn sent(&self, bytes: usize) {
+        self.flow.lock().unwrap_or_else(|e| e.into_inner()).sent += bytes as u64;
+    }
+
+    fn ack(&self, processed: u64) {
+        let mut flow = self.flow.lock().unwrap_or_else(|e| e.into_inner());
+        flow.acked = flow.acked.max(processed);
+        self.credit.notify_all();
+    }
+
+    /// Blocks while the renderer is behind. Returns false once the child is gone.
+    fn wait_for_credit(&self) -> bool {
+        let mut flow = self.flow.lock().unwrap_or_else(|e| e.into_inner());
+        if in_flight(&flow) < FLOW_HIGH {
+            return true;
+        }
+        while in_flight(&flow) >= FLOW_LOW {
+            if self.exited.load(Ordering::Acquire) {
+                return false;
+            }
+            flow = self
+                .credit
+                .wait_timeout(flow, FLOW_POLL)
+                .unwrap_or_else(|e| e.into_inner())
+                .0;
+        }
+        true
+    }
+}
+
+fn in_flight(flow: &Flow) -> u64 {
+    flow.sent.saturating_sub(flow.acked)
 }
 
 pub struct PtyHost {
@@ -138,6 +198,15 @@ pub fn pty_resize(host: State<PtyHost>, id: String, cols: u16, rows: u16) -> Res
     resize_fd(live.master_fd, cols.max(2), rows.max(2))
 }
 
+/// Cumulative bytes xterm has parsed for this terminal.
+#[tauri::command(async)]
+pub fn pty_ack(host: State<PtyHost>, id: String, processed: u64) -> Result<(), String> {
+    if let Some(live) = host.get(&id) {
+        live.ack(processed);
+    }
+    Ok(())
+}
+
 #[tauri::command(async)]
 pub fn pty_kill(host: State<PtyHost>, id: String) -> Result<(), String> {
     if let Some(live) = host.remove(&id) {
@@ -177,7 +246,16 @@ fn spawn_unix(
         .env("TERM", "xterm-256color")
         .env("COLORTERM", "truecolor")
         .env("TERM_PROGRAM", "Crew")
+        .env("TERM_PROGRAM_VERSION", env!("CARGO_PKG_VERSION"))
+        // supports-hyperlinks only knows a few TERM_PROGRAM values, so without
+        // this CLIs print bare paths instead of the OSC 8 links xterm renders.
+        .env("FORCE_HYPERLINK", "1")
         .env("PWD", &workdir);
+    // A GUI app inherits no locale from launchd; without UTF-8 the box drawing
+    // and emoji agents print come out as mojibake.
+    if std::env::var_os("LANG").map_or(true, |lang| lang.is_empty()) {
+        cmd.env("LANG", "en_US.UTF-8");
+    }
     apply_path(&mut cmd);
     if let Some(home) = home_dir() {
         cmd.env("HOME", &home);
@@ -188,6 +266,13 @@ fn spawn_unix(
         let key = key.to_string_lossy();
         if key == "CLAUDECODE" || key.starts_with("CLAUDE_CODE_") {
             cmd.env_remove(key.as_ref());
+        }
+    }
+    // A parent that disabled colour for its own logs must not decide for the terminal.
+    cmd.env_remove("NO_COLOR");
+    for key in ["FORCE_COLOR", "CLICOLOR"] {
+        if std::env::var_os(key).is_some_and(|value| value == "0") {
+            cmd.env_remove(key);
         }
     }
 
@@ -219,16 +304,12 @@ fn spawn_unix(
     let reader = unsafe { File::from_raw_fd(dup_fd(master)?) };
     let writer = unsafe { File::from_raw_fd(dup_fd(master)?) };
 
-    let live = Arc::new(LivePty {
-        writer: Mutex::new(Box::new(writer)),
-        master_fd: master,
-        pid,
-        exited: AtomicBool::new(false),
-    });
+    let live = Arc::new(LivePty::new(Box::new(writer), master, pid));
     host.insert(id.clone(), live.clone());
 
     let data_app = app.clone();
     let data_id = id.clone();
+    let data_live = live.clone();
     thread::spawn(move || {
         let mut file = reader;
         let fd = file.as_raw_fd();
@@ -237,6 +318,9 @@ fn spawn_unix(
         let mut last_emit = Instant::now();
         loop {
             if acc.is_empty() {
+                if !data_live.wait_for_credit() {
+                    break;
+                }
                 match file.read(&mut buf) {
                     Ok(0) | Err(_) => break,
                     Ok(n) => {
@@ -248,6 +332,7 @@ fn spawn_unix(
                 || !wait_readable(fd, PTY_COALESCE.saturating_sub(last_emit.elapsed()))
             {
                 emit_data(&data_app, &data_id, &acc);
+                data_live.sent(acc.len());
                 acc.clear();
                 last_emit = Instant::now();
             } else {
@@ -263,6 +348,7 @@ fn spawn_unix(
     thread::spawn(move || {
         let code = child.wait().ok().and_then(|status| status.code());
         live.exited.store(true, Ordering::Release);
+        live.credit.notify_all();
         // A respawn reuses the id; a stale wait thread must not evict the new
         // PTY from the host or paint its exit onto it.
         let Some(host) = app.try_state::<PtyHost>() else {
@@ -464,16 +550,22 @@ mod tests {
     }
 
     #[test]
+    fn credit_blocks_past_high_water_until_acked_below_low() {
+        let live = LivePty::new(Box::new(std::io::sink()), -1, 42);
+        live.sent(FLOW_HIGH as usize);
+        live.ack(FLOW_HIGH - FLOW_LOW);
+        assert!(live.wait_for_credit());
+        live.sent(FLOW_HIGH as usize);
+        live.exited.store(true, Ordering::Release);
+        assert!(!live.wait_for_credit());
+    }
+
+    #[test]
     fn remove_if_pid_ignores_a_replaced_session() {
         let host = PtyHost::new();
         host.insert(
             "term".into(),
-            Arc::new(LivePty {
-                writer: Mutex::new(Box::new(std::io::sink())),
-                master_fd: -1,
-                pid: 42,
-                exited: AtomicBool::new(false),
-            }),
+            Arc::new(LivePty::new(Box::new(std::io::sink()), -1, 42)),
         );
         assert!(host.remove_if_pid("term", 7).is_none());
         assert!(host.get("term").is_some());

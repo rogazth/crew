@@ -167,3 +167,7 @@ export const resizePty = (id: string, cols: number, rows: number): Promise<void>
   invoke("pty_resize", { id, cols, rows });
 
 export const killPty = (id: string): Promise<void> => invoke("pty_kill", { id });
+/** Cumulative bytes xterm has parsed; the host stops reading the PTY when the renderer falls behind. */
+export const ackPty = (id: string, processed: number): Promise<void> =>
+  invoke("pty_ack", { id, processed });
+

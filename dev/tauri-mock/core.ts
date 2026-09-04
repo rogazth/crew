@@ -101,6 +101,7 @@ const commands: Record<string, (args: Row) => unknown> = {
   pty_kill: () => undefined,
   session_get_blocks: ({ id }) => (id === "s1" ? JSON.stringify(SEED_BLOCKS) : "[]"),
   session_set_blocks: () => undefined,
+  pty_ack: () => undefined,
   session_set_provider_session: () => undefined,
   agent_resolve_claude: () => ({ path: "/mock/bin/claude" }),
   agent_resolve: ({ name }) => ({ path: `/mock/bin/${name}` }),
@@ -275,7 +276,11 @@ export async function invoke<T>(cmd: string, args: Row = {}): Promise<T> {
 /** A prompt a beat after spawn, so the status machinery has something to chew on. */
 function mockShell(id: string) {
   const { emit } = window.__crewMockBus;
-  const say = (text: string) => emit("pty-data", { id, data: btoa(text) });
+  const say = (text: string) =>
+    emit("pty-data", {
+      id,
+      data: btoa(String.fromCharCode(...new TextEncoder().encode(text))),
+    });
   setTimeout(() => say("Last login: today on ttys000\r\n"), 50);
   setTimeout(() => say("\x1b[32m❯\x1b[0m "), 250);
 }

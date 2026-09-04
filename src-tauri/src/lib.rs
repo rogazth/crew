@@ -66,6 +66,7 @@ pub fn run() {
             agent::agent_resolve,
             agent::agent_spawn,
             agent::agent_write,
+            pty::pty_ack,
             agent::agent_close_stdin,
             agent::agent_kill,
             agent::agent_kill_all,

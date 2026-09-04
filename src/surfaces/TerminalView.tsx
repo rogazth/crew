@@ -17,6 +17,7 @@ import { holdTerminal } from "../lib/terminalFocus";
 import { IS_MAC } from "../lib/hotkey";
 import { filePathProvider, openExternal } from "../lib/terminalLinks";
 import { resolveTerminalKey } from "../lib/terminalKeys";
+import { activateZwjUnicode } from "../lib/terminalUnicode";
 import { quotePath, quotePaths } from "../lib/terminalPaths";
 import { fontStack, ligaturesEnabled } from "../lib/terminalPrefs";
 import {
@@ -44,6 +45,9 @@ type Props = {
 };
 
 const ACTIVITY_INTERVAL = 400;
+const ACK_FLUSH_MS = 4;
+/** Frames the proposed grid may keep changing before it is applied anyway. */
+const MAX_STABILITY_FRAMES = 8;
 
 const DARK_SCHEME = window.matchMedia("(prefers-color-scheme: dark)");
 
@@ -121,7 +125,9 @@ export function TerminalView({
       smoothScrollDuration: 0,
       // Option composes accents, as in Terminal.app; word motions are spelled out in terminalKeys.
       macOptionIsMeta: false,
+      macOptionClickForcesSelection: true,
       allowProposedApi: true,
+      vtExtensions: { kittyKeyboard: true },
       linkHandler: { activate: (_event, uri) => openExternal(uri) },
       theme: colors,
     });
@@ -137,10 +143,8 @@ export function TerminalView({
     } catch {
       // DOM renderer stays.
     }
-    // Emoji and CJK are two cells wide from Unicode 11 on; without this the
-    // boxes an agent draws land a column short of their own borders.
     term.loadAddon(new Unicode11Addon());
-    term.unicode.activeVersion = "11";
+    activateZwjUnicode(term);
     term.loadAddon(new WebLinksAddon((_event, uri) => openExternal(uri)));
     const searchAddon = new SearchAddon();
     term.loadAddon(searchAddon);
@@ -152,6 +156,10 @@ export function TerminalView({
     let lastCols = 0;
     let lastRows = 0;
     let lastActivity = 0;
+    let processed = 0;
+    let ackTimer = 0;
+    // xterm keeps the kitty flags private, so they are mirrored off the output stream.
+    let kittyFlags = 0;
 
     // ⌘V reaches the paste listener below and ⌘C the copy one; the rest of the
     // ⌘ chords are the app's hotkeys, which must bubble to the document.
@@ -159,6 +167,7 @@ export function TerminalView({
       const action = resolveTerminalKey(event, {
         isMac: IS_MAC,
         hasSelection: term.hasSelection(),
+        kittyKeyboard: kittyFlags !== 0,
       });
       switch (action.type) {
         case "xterm":
@@ -208,10 +217,17 @@ export function TerminalView({
     host.addEventListener("copy", onCopy);
     host.addEventListener("paste", onPaste);
 
+    const flushAck = () => {
+      ackTimer = 0;
+      if (spawned) void api.ackPty(id, processed);
+    };
     const unsubscribe = subscribePty(
       id,
       (bytes) => {
-        term.write(bytes);
+        term.write(bytes, () => {
+          processed += bytes.length;
+          if (!ackTimer) ackTimer = window.setTimeout(flushAck, ACK_FLUSH_MS);
+        });
         const now = Date.now();
         if (now - lastActivity < ACTIVITY_INTERVAL) return;
         lastActivity = now;
@@ -220,6 +236,7 @@ export function TerminalView({
       (code) => {
         if (closed) return;
         spawned = false;
+        kittyFlags = 0;
         term.writeln(`\r\n\x1b[2m[process exited${code == null ? "" : ` (${code})`}]\x1b[0m`);
         latest.current.onExit?.(code);
       },
@@ -241,6 +258,23 @@ export function TerminalView({
       term.parser.registerOscHandler(9, (d) => !d.startsWith("4;") && ring()),
       term.parser.registerOscHandler(777, (d) => d.startsWith("notify") && ring()),
     ];
+    const kittyParam = (params: (number | number[])[]) =>
+      typeof params[0] === "number" ? params[0] : 0;
+    // Returning false leaves the sequence to xterm; the handlers only observe.
+    const csi = [
+      term.parser.registerCsiHandler({ prefix: ">", final: "u" }, (params) => {
+        kittyFlags = kittyParam(params);
+        return false;
+      }),
+      term.parser.registerCsiHandler({ prefix: "=", final: "u" }, (params) => {
+        kittyFlags = kittyParam(params);
+        return false;
+      }),
+      term.parser.registerCsiHandler({ prefix: "<", final: "u" }, () => {
+        kittyFlags = 0;
+        return false;
+      }),
+    ];
     const bell = term.onBell(() => latest.current.onBell?.());
     const links = term.registerLinkProvider(
       filePathProvider(term, cwd, (path) => latest.current.onOpenPath?.(path)),
@@ -249,8 +283,9 @@ export function TerminalView({
       if (spawned) void api.writePty(id, data);
     });
 
+    const visible = () => host.clientWidth >= 8 && host.clientHeight >= 8;
     const applySize = () => {
-      if (closed || host.clientWidth < 8 || host.clientHeight < 8) return;
+      if (closed || !visible()) return;
       fit.fit();
       const { cols, rows } = term;
       if (cols === lastCols && rows === lastRows) return;
@@ -268,13 +303,41 @@ export function TerminalView({
     };
     fitRef.current = applySize;
 
+    const propose = () => {
+      try {
+        return fit.proposeDimensions() ?? null;
+      } catch {
+        return null;
+      }
+    };
+    // The grid is applied once two frames agree on it (or it already matches),
+    // so a scrollbar wobble mid-resize does not turn into a SIGWINCH loop that
+    // makes full-screen TUIs repaint and shake.
     let raf = 0;
     const schedule = () => {
       if (raf) return;
-      raf = requestAnimationFrame(() => {
-        raf = 0;
-        applySize();
-      });
+      let previous = propose();
+      let frames = 0;
+      const tick = () => {
+        raf = requestAnimationFrame(() => {
+          raf = 0;
+          if (closed || !visible()) return;
+          const next = propose();
+          frames += 1;
+          const settled =
+            !next ||
+            (next.cols === term.cols && next.rows === term.rows) ||
+            (previous?.cols === next.cols && previous?.rows === next.rows) ||
+            frames >= MAX_STABILITY_FRAMES;
+          if (settled) {
+            applySize();
+            return;
+          }
+          previous = next;
+          tick();
+        });
+      };
+      tick();
     };
     const observer = new ResizeObserver(schedule);
     observer.observe(host);
@@ -289,6 +352,7 @@ export function TerminalView({
     return () => {
       closed = true;
       if (raf) cancelAnimationFrame(raf);
+      if (ackTimer) clearTimeout(ackTimer);
       observer.disconnect();
       DARK_SCHEME.removeEventListener("change", onScheme);
       host.removeEventListener("copy", onCopy);
@@ -298,6 +362,7 @@ export function TerminalView({
       links.dispose();
       detachSearch();
       for (const handler of osc) handler.dispose();
+      for (const handler of csi) handler.dispose();
       unsubscribe();
       void api.killPty(id);
       term.dispose();
