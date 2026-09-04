@@ -70,7 +70,7 @@ export const AssistantMessage = memo(function AssistantMessage({ block }: { bloc
 });
 
 export function Note({ block }: { block: Block }) {
-  return <p className="text-[12px] leading-4 text-text-muted">{block.text}</p>;
+  return <p className="text-[13px] leading-[18px] text-text-muted">{block.text}</p>;
 }
 
 export function DateBreak({ label }: { label: string }) {

@@ -93,7 +93,7 @@ function PhaseRow({
 
   return (
     <Collapsible.Root open={open} onOpenChange={(next) => setPinned(next)}>
-      <Collapsible.Trigger className="group flex min-h-5 w-full items-center gap-2 py-0.5 text-left text-[12px] leading-4">
+      <Collapsible.Trigger className="group flex min-h-5 w-full items-center gap-2 py-0.5 text-left text-[13px] leading-[18px]">
         <span className="relative flex size-3.5 shrink-0 items-center justify-center text-kumo-subtle">
           {waiting ? (
             <CircleNotchIcon className="size-3.5 animate-spin text-kumo-warning" weight="bold" />
@@ -142,7 +142,7 @@ function ToolRow({
   }
 
   return (
-    <div className="group flex min-h-5 items-center gap-2 py-0.5 text-[12px] leading-4">
+    <div className="group flex min-h-5 items-center gap-2 py-0.5 text-[13px] leading-[18px]">
       {(icon || pending || failed) && (
         <span className="flex size-3.5 shrink-0 items-center justify-center text-kumo-subtle">
           {pending ? (
@@ -173,7 +173,7 @@ function ReasoningRow({ block }: { block: Block }) {
   const summary = summarize(block.text);
   return (
     <Collapsible.Root open={open} onOpenChange={(next) => setPinned(next)}>
-      <Collapsible.Trigger className="group flex min-h-5 w-full items-center gap-2 py-0.5 text-left text-[12px] leading-4">
+      <Collapsible.Trigger className="group flex min-h-5 w-full items-center gap-2 py-0.5 text-left text-[13px] leading-[18px]">
         <span className="relative flex size-3.5 shrink-0 items-center justify-center text-kumo-subtle">
           <SparkleIcon className="size-3.5 transition-opacity group-hover:opacity-0" />
           <CaretRightIcon
@@ -186,7 +186,7 @@ function ReasoningRow({ block }: { block: Block }) {
         </span>
       </Collapsible.Trigger>
       <Collapsible.Panel className="crew-phase-panel">
-        <p className="crew-phase-steps whitespace-pre-wrap py-0.5 text-[12px] leading-4 text-text-muted">{block.text}</p>
+        <p className="crew-phase-steps whitespace-pre-wrap py-0.5 text-[13px] leading-[18px] text-text-muted">{block.text}</p>
       </Collapsible.Panel>
     </Collapsible.Root>
   );
@@ -196,7 +196,7 @@ function AnsweredRow({ block }: { block: Block }) {
   const summary = answerSummary(block);
   const dismissed = block.question?.dismissed === true;
   return (
-    <div className="flex min-h-5 items-center gap-2 py-0.5 text-[12px] leading-4">
+    <div className="flex min-h-5 items-center gap-2 py-0.5 text-[13px] leading-[18px]">
       <span className="flex size-3.5 shrink-0 items-center justify-center text-kumo-subtle">
         <ChatCircleDotsIcon className="size-3.5" />
       </span>
@@ -211,7 +211,7 @@ function AnsweredRow({ block }: { block: Block }) {
 /** One activity-weight line for the gap between sending and the first token. */
 export function ThinkingLine() {
   return (
-    <div className="flex min-h-5 items-center gap-2 py-0.5 text-[12px] leading-4">
+    <div className="flex min-h-5 items-center gap-2 py-0.5 text-[13px] leading-[18px]">
       <span className="flex size-3.5 shrink-0 items-center justify-center">
         <CircleNotchIcon className="size-3.5 animate-spin text-kumo-warning" weight="bold" />
       </span>

@@ -117,7 +117,7 @@ export function Transcript({ blocks, working, onApprove, onAnswer }: Props) {
       onScroll={onScroll}
       className="min-h-0 flex-1 overflow-y-auto"
     >
-      <div className="crew-prose mx-auto max-w-[720px] px-6 pt-5 pb-2">
+      <div className="crew-prose px-6 pt-5 pb-2">
         {rows.map((row, index) => {
           const className = gapBefore(rows[index - 1], row);
           if (row.kind === "activity") {

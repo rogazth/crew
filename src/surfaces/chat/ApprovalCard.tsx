@@ -64,7 +64,7 @@ export const ApprovalCard = memo(function ApprovalCard({ block, hot = false, onA
 
   return (
     <div ref={card} tabIndex={-1} className="crew-card my-1.5 outline-none">
-      <p className="text-[12px] leading-4 text-text-muted">{headline(name, input, block.text)}</p>
+      <p className="text-[13px] leading-[18px] text-text-muted">{headline(name, input, block.text)}</p>
       <Body name={name} input={input} />
       <div className="flex items-center justify-end gap-1.5">
         <button type="button" onClick={() => onApprove(requestId, "deny")} className="crew-btn">

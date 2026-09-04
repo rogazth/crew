@@ -215,9 +215,9 @@ body:has(button[data-sidebar="resize-handle"]:active) * {
   border: 1px solid var(--color-hairline);
   border-radius: 10px;
   background: var(--color-kumo-base);
-  font-size: 13px;
-  line-height: 18px;
-  letter-spacing: -0.08px;
+  font-size: 14px;
+  line-height: 20px;
+  letter-spacing: -0.1px;
 }
 .crew-card .crew-code {
   margin: 0;
@@ -384,9 +384,9 @@ body:has(button[data-sidebar="resize-handle"]:active) * {
   color: var(--color-kumo-base);
 }
 .crew-prose {
-  font-size: 13px;
-  line-height: 18px;
-  letter-spacing: -0.08px;
+  font-size: 14px;
+  line-height: 20px;
+  letter-spacing: -0.1px;
 }
 /* The user's turn: ink on the canvas, the one shape on the page that is not flush. */
 .crew-bubble {
@@ -448,9 +448,9 @@ body:has(button[data-sidebar="resize-handle"]:active) * {
   background: transparent;
   outline: none;
   font: inherit;
-  font-size: 13px;
-  line-height: 18px;
-  letter-spacing: -0.08px;
+  font-size: 14px;
+  line-height: 20px;
+  letter-spacing: -0.1px;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   tab-size: 4;
@@ -490,8 +490,8 @@ body:has(button[data-sidebar="resize-handle"]:active) * {
   padding: 0 6px 0 4px;
   border-radius: 999px;
   background: color-mix(in srgb, var(--color-kumo-base) 18%, transparent);
-  font-size: 12px;
-  line-height: 17px;
+  font-size: 13px;
+  line-height: 19px;
   transition: background-color 100ms ease;
 }
 .crew-mention-pill:hover {
@@ -509,31 +509,31 @@ body:has(button[data-sidebar="resize-handle"]:active) * {
     0 1px 1px rgb(0 0 0 / 0.04);
 }
 
-/* Chat markdown: Cursor 13/18, ink-mixed code, no extra chrome. */
+/* Chat markdown: 14/20 like Grok, ink-mixed code, no extra chrome. */
 .crew-md {
-  font-size: 13px;
-  line-height: 18px;
-  letter-spacing: -0.08px;
+  font-size: 14px;
+  line-height: 20px;
+  letter-spacing: -0.1px;
 }
 .crew-md [data-streamdown="heading-1"],
 .crew-md [data-streamdown="heading-2"],
 .crew-md [data-streamdown="heading-3"] {
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 600;
-  line-height: 18px;
-  margin: 8px 0 4px;
+  line-height: 20px;
+  margin: 10px 0 4px;
 }
 .crew-md [data-streamdown="p"] {
   margin: 0;
 }
 .crew-md [data-streamdown="p"] + [data-streamdown="p"] {
-  margin-top: 8px;
+  margin-top: 10px;
 }
 .crew-inline-code {
   padding: 1px 4px;
   border-radius: 4px;
   background: color-mix(in srgb, var(--text-color-kumo-default) 8%, transparent);
-  font: 12px/16px ui-monospace, SFMono-Regular, Menlo, monospace;
+  font: 13px/18px ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 /* A path in backticks is a link to the file, at the same weight as inline code. */
 .crew-file-chip {
@@ -544,7 +544,7 @@ body:has(button[data-sidebar="resize-handle"]:active) * {
   padding: 1px 5px 1px 4px;
   border-radius: 4px;
   background: color-mix(in srgb, var(--text-color-kumo-default) 8%, transparent);
-  font: 12px/16px ui-monospace, SFMono-Regular, Menlo, monospace;
+  font: 13px/18px ui-monospace, SFMono-Regular, Menlo, monospace;
   color: var(--text-color-kumo-default);
   transition: background-color 100ms ease;
 }
@@ -559,7 +559,7 @@ body:has(button[data-sidebar="resize-handle"]:active) * {
   border: 1px solid color-mix(in srgb, var(--text-color-kumo-default) 8%, transparent);
   border-radius: 8px;
   background: color-mix(in srgb, var(--text-color-kumo-default) 3%, transparent);
-  font: 12px/18px ui-monospace, SFMono-Regular, Menlo, monospace;
+  font: 12.5px/19px ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 .crew-code-head {
   display: flex;
