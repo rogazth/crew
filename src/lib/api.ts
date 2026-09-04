@@ -1,5 +1,5 @@
-import { open } from "@tauri-apps/plugin-dialog";
 import { client } from "./client";
+import { open } from "./host";
 import type { RoutineRow, ScheduledRoutine } from "./routines";
 import type { Autonomy, ProjectFile, Session, SessionKind, SessionStatus, Workspace } from "./types";
 

@@ -1,4 +1,4 @@
-import { openUrl } from "@tauri-apps/plugin-opener";
+import { openUrl } from "./host";
 
 /** Agent output is untrusted: only what a browser would follow leaves the app. */
 const OPENABLE = /^(?:https?|mailto):/i;

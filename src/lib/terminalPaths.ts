@@ -1,4 +1,4 @@
-import { homeDir } from "@tauri-apps/api/path";
+import { homeDir } from "./host";
 
 /** Everything else would be re-read by the shell, so it travels quoted. */
 const BARE = /^[A-Za-z0-9_@%+=:,./-]+$/;

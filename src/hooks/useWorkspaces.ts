@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
-import { open } from "@tauri-apps/plugin-dialog";
 import * as api from "../lib/api";
+import { open } from "../lib/host";
 import type { Workspace } from "../lib/types";
 import { nameFromPath, resolveActive } from "../lib/workspaces";
 

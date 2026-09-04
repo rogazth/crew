@@ -1,5 +1,5 @@
-import { invoke } from "@tauri-apps/api/core";
-import type { DaemonInfo, Event, Response } from "../protocol";
+import { daemonInfo } from "../host";
+import type { Event, Response } from "../protocol";
 
 type Listener = (payload: unknown) => void;
 
@@ -33,7 +33,7 @@ function connect(): Promise<void> {
 }
 
 async function open(): Promise<void> {
-  const info = await invoke<DaemonInfo>("daemon_info");
+  const info = await daemonInfo();
   await new Promise<void>((resolve, reject) => {
     const ws = new WebSocket(info.url);
     ws.binaryType = "arraybuffer";

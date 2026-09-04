@@ -1,4 +1,4 @@
-import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { onDragDrop } from "./host";
 
 type Target = {
   el: () => HTMLElement | null;
@@ -10,11 +10,6 @@ const targets = new Set<Target>();
 let hovered: Target | null = null;
 let listening = false;
 
-/**
- * A file dragged from Finder never reaches the DOM as a drop: the webview owns
- * that gesture and reports it once for the whole window, which is also the only
- * way to learn the real path. So panes register here and the window hit-tests.
- */
 function under(position: { x: number; y: number }): Target | null {
   const ratio = window.devicePixelRatio || 1;
   const x = position.x / ratio;
@@ -40,7 +35,7 @@ function hover(next: Target | null) {
 function listen() {
   if (listening) return;
   listening = true;
-  void getCurrentWebview().onDragDropEvent(({ payload }) => {
+  onDragDrop((payload) => {
     if (payload.type === "enter" || payload.type === "over") {
       hover(under(payload.position));
       return;

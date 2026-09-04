@@ -54,6 +54,14 @@ body {
   overflow: hidden;
 }
 
+[data-tauri-drag-region] {
+  -webkit-app-region: drag;
+}
+
+[data-tauri-drag-region="false"] {
+  -webkit-app-region: no-drag;
+}
+
 ::placeholder {
   color: var(--color-placeholder);
   opacity: 1;

@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const invoke = vi.fn();
-vi.mock("@tauri-apps/api/core", () => ({ invoke }));
+const daemonInfo = vi.fn();
+vi.mock("../host", () => ({ daemonInfo }));
 
 class FakeSocket {
   static OPEN = 1;
@@ -26,14 +26,14 @@ class FakeSocket {
 describe("transport connect", () => {
   beforeEach(() => {
     vi.resetModules();
-    invoke.mockReset();
+    daemonInfo.mockReset();
     FakeSocket.instances = [];
     vi.stubGlobal("WebSocket", FakeSocket);
   });
 
   it("retries after a rejected daemon_info", async () => {
-    invoke.mockRejectedValueOnce(new Error("not ready"));
-    invoke.mockResolvedValue({ url: "ws://127.0.0.1:9", token: "tok" });
+    daemonInfo.mockRejectedValueOnce(new Error("not ready"));
+    daemonInfo.mockResolvedValue({ url: "ws://127.0.0.1:9", token: "tok" });
     const { transport } = await import("./transport");
     await expect(transport.request("state_get", { key: "x" })).rejects.toThrow("not ready");
 

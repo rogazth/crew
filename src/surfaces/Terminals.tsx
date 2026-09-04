@@ -1,5 +1,5 @@
-import { homeDir } from "@tauri-apps/api/path";
 import { lazy, Suspense, useCallback, useEffect, useState } from "react";
+import { homeDir } from "../lib/host";
 import { useCommands } from "../hooks/useCommand";
 import { useSessionActivity } from "../hooks/useSessionActivity";
 import { useTerminalPrefs } from "../hooks/useTerminalPrefs";

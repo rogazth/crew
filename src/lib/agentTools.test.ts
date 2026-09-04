@@ -3,7 +3,6 @@ import { describe, expect, it, vi } from "vitest";
 vi.mock("./client", () => ({
   client: { request: vi.fn(), on: vi.fn(), onReconnect: vi.fn(), openStream: vi.fn(), writeStream: vi.fn() },
 }));
-vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
 
 const { validateSchedule } = await import("./agentTools");
 const { wakePrompt } = await import("./routines");
