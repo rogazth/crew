@@ -134,6 +134,7 @@ function SessionTerminal({ tabId, session, cwd, active, onStatus, onOpenPath }: 
       cwd={cwd}
       command={command}
       active={active}
+      shellOnExit
       onExit={onExit}
       onBell={onBell}
       onActivity={onActivity}

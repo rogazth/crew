@@ -37,6 +37,8 @@ type Props = {
   command: string[];
   active: boolean;
   onExit?: ((code: number | null) => void) | undefined;
+  /** Once the process exits, fall back to the login shell instead of a dead pane. */
+  shellOnExit?: boolean | undefined;
   /** The process asked for attention: a bell, or an OSC notification. */
   onBell?: (() => void) | undefined;
   /** Output arrived. Throttled, so it reads as "this session is busy". */
@@ -83,6 +85,7 @@ export function TerminalView({
   cwd,
   command,
   active,
+  shellOnExit,
   onExit,
   onBell,
   onActivity,
@@ -98,10 +101,10 @@ export function TerminalView({
   const search = useTerminalSearch(termRef, isDark);
   const attachSearch = search.attach;
 
-  const latest = useRef({ onExit, onBell, onActivity, onOpenPath, command });
+  const latest = useRef({ onExit, onBell, onActivity, onOpenPath, command, shellOnExit });
   useEffect(() => {
     // Only `command` at spawn: a later argv must not respawn the running process.
-    latest.current = { onExit, onBell, onActivity, onOpenPath, command };
+    latest.current = { onExit, onBell, onActivity, onOpenPath, command, shellOnExit };
   });
 
   const dropPaths = useCallback((paths: string[]) => {
@@ -153,6 +156,7 @@ export function TerminalView({
 
     let closed = false;
     let spawned = false;
+    let shellFallback = false;
     let lastCols = 0;
     let lastRows = 0;
     let lastActivity = 0;
@@ -239,6 +243,11 @@ export function TerminalView({
         kittyFlags = 0;
         term.writeln(`\r\n\x1b[2m[process exited${code == null ? "" : ` (${code})`}]\x1b[0m`);
         latest.current.onExit?.(code);
+        // The shell replaces the agent once; when the user exits that shell too,
+        // the pane stays dead instead of looping a new prompt forever.
+        if (!latest.current.shellOnExit || shellFallback) return;
+        shellFallback = true;
+        spawn([]);
       },
     );
 
@@ -283,6 +292,14 @@ export function TerminalView({
       if (spawned) void api.writePty(id, data);
     });
 
+    const spawn = (command: string[]) => {
+      spawned = true;
+      void api.spawnPty(id, cwd, command, term.cols, term.rows).catch((error: unknown) => {
+        spawned = false;
+        term.writeln(`\x1b[31m${error instanceof Error ? error.message : String(error)}\x1b[0m`);
+      });
+    };
+
     const visible = () => host.clientWidth >= 8 && host.clientHeight >= 8;
     const applySize = () => {
       if (closed || !visible()) return;
@@ -295,11 +312,7 @@ export function TerminalView({
         void api.resizePty(id, cols, rows);
         return;
       }
-      spawned = true;
-      void api.spawnPty(id, cwd, latest.current.command, cols, rows).catch((error: unknown) => {
-        spawned = false;
-        term.writeln(`\x1b[31m${error instanceof Error ? error.message : String(error)}\x1b[0m`);
-      });
+      spawn(latest.current.command);
     };
     fitRef.current = applySize;
 
