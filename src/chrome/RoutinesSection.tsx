@@ -163,8 +163,8 @@ function Editor({
               Test run
             </Button>
           )}
-          <Button variant="ghost" size="sm" shape="square" icon={TrashIcon} aria-label="Delete routine" onClick={onRemove} />
-          <Button variant="ghost" size="sm" shape="square" icon={XIcon} aria-label="Done" onClick={onClose} />
+          <Button variant="ghost" size="sm" shape="square" icon={<TrashIcon className="size-4" />} aria-label="Delete routine" onClick={onRemove} />
+          <Button variant="ghost" size="sm" shape="square" icon={<XIcon className="size-4" />} aria-label="Done" onClick={onClose} />
         </div>
       </div>
       <input

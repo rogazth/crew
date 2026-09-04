@@ -18,7 +18,9 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
       poolOptions={{ workerFactory: () => new DiffsWorker(), poolSize: 4 }}
       highlighterOptions={{ langs: LANGS }}
     >
-      <IconContext.Provider value={{ weight: "bold" }}>
+      {/* The value replaces Phosphor's whole default context, so size has to come
+          along or unsized icons stretch to fill their button. */}
+      <IconContext.Provider value={{ weight: "bold", size: "1em" }}>
         <App />
       </IconContext.Provider>
     </WorkerPoolContextProvider>
