@@ -179,8 +179,8 @@ function writeStream(id: number, bytes: Uint8Array): Promise<void> {
     return Promise.resolve();
   }
   if (writes.length >= WRITE_CAP) return Promise.reject(new Error("Crew daemon is not connected"));
-  return new Promise((resolve, reject) => {
-    writes.push({ id, bytes, resolve, reject });
+  return new Promise((resolve) => {
+    writes.push({ id, bytes, resolve });
     void connect().catch(() => {});
   });
 }
