@@ -78,16 +78,20 @@ export const AssistantMessage = memo(function AssistantMessage({ block }: { bloc
   );
 });
 
-export function Note({ block }: { block: Block }) {
+export const Note = memo(function Note({ block }: { block: Block }) {
   return <p className="text-[13px] leading-[18px] text-text-muted">{block.text}</p>;
-}
+});
 
-export function DateBreak({ label }: { label: string }) {
+export const DateBreak = memo(function DateBreak({ label }: { label: string }) {
   return <p className="text-center text-[11px] leading-4 text-placeholder">{label}</p>;
-}
+});
 
-/** Closes a turn: how long it took, when. Tokens and cost wait in the tooltip. */
-export function TurnFooter({ usage, at }: { usage: TurnUsage; at?: number }) {
+/**
+ * Closes a turn: how long it took, when. Tokens and cost wait in the tooltip.
+ * Memoised because every footer above the live turn would otherwise rebuild its
+ * tooltip on each streamed token.
+ */
+export const TurnFooter = memo(function TurnFooter({ usage, at }: { usage: TurnUsage; at?: number }) {
   const worked = usage.durationMs !== undefined ? `Worked for ${duration(usage.durationMs)}` : null;
   const parts = [worked, at !== undefined ? clock(at) : null].filter((p): p is string => p !== null);
   if (parts.length === 0) return null;
@@ -108,7 +112,7 @@ export function TurnFooter({ usage, at }: { usage: TurnUsage; at?: number }) {
       )}
     </div>
   );
-}
+});
 
 function usageDetail(usage: TurnUsage): string | null {
   const parts: string[] = [];

@@ -11,7 +11,7 @@ import {
   XIcon,
   type Icon,
 } from "@phosphor-icons/react";
-import { createElement, memo, useEffect, useState } from "react";
+import { createElement, memo, useEffect, useMemo, useState } from "react";
 import { buildActivity, phaseLabel, phaseOpen, summarize, type Phase, type PhaseKind } from "../../lib/activity";
 import { isOpen, type Answers, type ApprovalDecision, type Block } from "../../lib/blocks";
 import { ApprovalCard } from "./ApprovalCard";
@@ -32,9 +32,22 @@ const KIND_ICON: Record<PhaseKind, Icon> = {
   other: WrenchIcon,
 };
 
+/**
+ * The transcript regroups its rows every frame a turn streams, so `blocks` is a
+ * fresh array holding the same blocks. Comparing it by element is what lets a
+ * settled group sit out the turn instead of rebuilding its phases 60 times a second.
+ */
+function sameBlocks(prev: Props, next: Props): boolean {
+  if (prev.live !== next.live || prev.onApprove !== next.onApprove || prev.onAnswer !== next.onAnswer) {
+    return false;
+  }
+  if (prev.blocks.length !== next.blocks.length) return false;
+  return prev.blocks.every((block, index) => block === next.blocks[index]);
+}
+
 /** Tool calls fold into phases; a thought or a question is a row of its own. */
 export const ActivityGroup = memo(function ActivityGroup({ blocks, live, onApprove, onAnswer }: Props) {
-  const items = buildActivity(blocks);
+  const items = useMemo(() => buildActivity(blocks), [blocks]);
   // Keys go to one card: the newest thing waiting on the user.
   const hot = live ? blocks.filter(isOpen).at(-1)?.id : undefined;
   return (
@@ -60,7 +73,7 @@ export const ActivityGroup = memo(function ActivityGroup({ blocks, live, onAppro
       })}
     </div>
   );
-});
+}, sameBlocks);
 
 /**
  * Open while the agent is in it or something in it needs an answer; folds

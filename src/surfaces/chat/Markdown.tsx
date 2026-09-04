@@ -98,34 +98,50 @@ function runClass(kind: "prose" | "wide", text: string): string {
  */
 export const Markdown = memo(function Markdown({ text, streaming }: Props) {
   const runs = useMemo(() => groupRuns(text), [text]);
+  const last = runs.length - 1;
   return (
     <div className="crew-md">
-      {runs.map((run, index) => {
-        const className = runClass(run.kind, run.text);
-        const body = (
-          <div className={className}>
-            <Streamdown
-              className="crew-md-flow"
-              controls={false}
-              components={COMPONENTS}
-              isAnimating={streaming === true && index === runs.length - 1}
-            >
-              {run.text}
-            </Streamdown>
-          </div>
-        );
-        // Only the bubble gets the aside copy; code and diffs carry their own.
-        return className === "crew-md-prose" ? (
-          <div key={index} className="crew-md-row">
-            {body}
-            <CopyButton text={run.text.trim()} className="crew-copy crew-copy-aside" />
-          </div>
-        ) : (
-          <div key={index} className="crew-md-row">
-            {body}
-          </div>
-        );
-      })}
+      {runs.map((run, index) => (
+        <MarkdownRun
+          key={index}
+          kind={run.kind}
+          text={run.text}
+          animating={streaming === true && index === last}
+        />
+      ))}
+    </div>
+  );
+});
+
+/**
+ * A turn re-splits its whole text on every token, so every settled run comes
+ * back with the same string. Memoising per run is what keeps Streamdown from
+ * re-parsing the finished paragraphs behind the one still arriving.
+ */
+const MarkdownRun = memo(function MarkdownRun({
+  kind,
+  text,
+  animating,
+}: {
+  kind: "prose" | "wide";
+  text: string;
+  animating: boolean;
+}) {
+  const className = runClass(kind, text);
+  const body = (
+    <div className={className}>
+      <Streamdown className="crew-md-flow" controls={false} components={COMPONENTS} isAnimating={animating}>
+        {text}
+      </Streamdown>
+    </div>
+  );
+  // Only the bubble gets the aside copy; code and diffs carry their own.
+  return (
+    <div className="crew-md-row">
+      {body}
+      {className === "crew-md-prose" && (
+        <CopyButton text={text.trim()} className="crew-copy crew-copy-aside" />
+      )}
     </div>
   );
 });
