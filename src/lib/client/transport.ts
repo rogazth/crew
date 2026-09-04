@@ -7,6 +7,9 @@ const pending = new Map<number, { resolve: (value: unknown) => void; reject: (er
 const listeners = new Map<string, Set<Listener>>();
 const streams = new Map<number, (bytes: Uint8Array) => void>();
 const buffered = new Map<number, Uint8Array[]>();
+const bufferedBytes = new Map<number, number>();
+const closed = new Set<number>();
+const BUFFER_MAX_BYTES = 256 * 1024;
 const reconnectHooks = new Set<() => void>();
 const writes: Array<{ id: number; bytes: Uint8Array; resolve: () => void }> = [];
 const WRITE_CAP = 256;
@@ -72,14 +75,23 @@ function onMessage(event: MessageEvent) {
     if (bytes.byteLength < 4) return;
     const id = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint32(0, true);
     const payload = bytes.subarray(4);
+    if (closed.has(id)) return;
     const handler = streams.get(id);
     if (handler) {
       handler(payload);
       return;
     }
-    const queue = buffered.get(id) ?? [];
+    let queue = buffered.get(id) ?? [];
+    let size = bufferedBytes.get(id) ?? 0;
+    while (queue.length > 0 && size + payload.byteLength > BUFFER_MAX_BYTES) {
+      const old = queue.shift();
+      if (!old) break;
+      size -= old.byteLength;
+    }
+    if (size + payload.byteLength > BUFFER_MAX_BYTES) return;
     queue.push(payload);
     buffered.set(id, queue);
+    bufferedBytes.set(id, size + payload.byteLength);
     return;
   }
 
@@ -126,15 +138,19 @@ function onReconnect(hook: () => void): () => void {
 }
 
 function openStream(id: number, onBytes: (bytes: Uint8Array) => void): () => void {
+  closed.delete(id);
   streams.set(id, onBytes);
   const queue = buffered.get(id);
   if (queue) {
     buffered.delete(id);
+    bufferedBytes.delete(id);
     for (const chunk of queue) onBytes(chunk);
   }
   return () => {
     if (streams.get(id) === onBytes) streams.delete(id);
     buffered.delete(id);
+    bufferedBytes.delete(id);
+    closed.add(id);
   };
 }
 
