@@ -1,8 +1,9 @@
 import { client } from "./client";
-import type { PtyExit } from "./protocol";
+import type { PtyAttached, PtyExit } from "./protocol";
 
 const encoder = new TextEncoder();
 const dataHandlers = new Map<string, (bytes: Uint8Array) => void>();
+const attachHandlers = new Map<string, (start: number) => void>();
 const streams = new Map<string, { id: number; stop: () => void }>();
 const delivered = new Map<string, number>();
 let reconnectHook: (() => void) | null = null;
@@ -11,9 +12,15 @@ function ensureReconnect() {
   if (reconnectHook) return;
   reconnectHook = client.onReconnect(() => {
     for (const [id] of streams) {
-      void client.request("pty_attach", { id, from: delivered.get(id) ?? 0 }).catch(() => {});
+      void applyAttach(id, delivered.get(id) ?? 0).catch(() => {});
     }
   });
+}
+
+async function applyAttach(id: string, from: number): Promise<void> {
+  const attached = await client.request<PtyAttached>("pty_attach", { id, from });
+  delivered.set(id, attached.start);
+  attachHandlers.get(id)?.(attached.start);
 }
 
 function attach(sessionId: string, streamId: number, onData: (bytes: Uint8Array) => void) {
@@ -34,9 +41,11 @@ export function subscribePty(
   id: string,
   onData: (bytes: Uint8Array) => void,
   onExit: (code: number | null) => void,
+  onAttach?: (start: number) => void,
 ): () => void {
   ensureReconnect();
   dataHandlers.set(id, onData);
+  if (onAttach) attachHandlers.set(id, onAttach);
   const existing = streams.get(id);
   if (existing) attach(id, existing.id, onData);
   const stopExit = client.on("pty-exit", (payload) => {
@@ -46,6 +55,7 @@ export function subscribePty(
   return () => {
     stopExit();
     if (dataHandlers.get(id) === onData) dataHandlers.delete(id);
+    if (attachHandlers.get(id) === onAttach) attachHandlers.delete(id);
     streams.get(id)?.stop();
     streams.delete(id);
     delivered.delete(id);
@@ -60,6 +70,7 @@ export async function spawnPty(
   rows: number,
 ): Promise<number> {
   const streamId = await client.request<number>("pty_spawn", { id, cwd, command, cols, rows });
+  await applyAttach(id, delivered.get(id) ?? 0);
   const onData = dataHandlers.get(id);
   if (onData) attach(id, streamId, onData);
   else streams.set(id, { id: streamId, stop: () => {} });
@@ -82,6 +93,7 @@ export const killPty = (id: string): Promise<void> => {
   streams.get(id)?.stop();
   streams.delete(id);
   dataHandlers.delete(id);
+  attachHandlers.delete(id);
   delivered.delete(id);
   return client.request("pty_kill", { id });
 };

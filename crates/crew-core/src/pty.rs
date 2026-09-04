@@ -32,15 +32,19 @@ struct LivePty {
     stream_id: u32,
     /// Set once the child is reaped; from then on the pid may belong to someone else.
     exited: AtomicBool,
-    flow: Mutex<Flow>,
+    state: Mutex<PtyState>,
     credit: Condvar,
-    ring: Mutex<Ring>,
 }
 
-#[derive(Default)]
-struct Flow {
-    sent: u64,
+struct PtyState {
+    ring: Ring,
+    emitted: u64,
     acked: u64,
+}
+
+pub struct PtyAttached {
+    pub start: u64,
+    pub emitted: u64,
 }
 
 #[derive(Default)]
@@ -61,11 +65,6 @@ impl Ring {
             self.start += drop as u64;
         }
     }
-
-    fn tail_from(&self, from: u64) -> Vec<u8> {
-        let skip = from.saturating_sub(self.start).min(self.buf.len() as u64) as usize;
-        self.buf[skip..].to_vec()
-    }
 }
 
 impl LivePty {
@@ -76,35 +75,39 @@ impl LivePty {
             pid,
             stream_id,
             exited: AtomicBool::new(false),
-            flow: Mutex::new(Flow::default()),
+            state: Mutex::new(PtyState {
+                ring: Ring::default(),
+                emitted: 0,
+                acked: 0,
+            }),
             credit: Condvar::new(),
-            ring: Mutex::new(Ring::default()),
         }
     }
 
-    fn sent(&self, bytes: usize) {
-        self.flow.lock().unwrap_or_else(|e| e.into_inner()).sent += bytes as u64;
+    #[cfg(test)]
+    fn emit(&self, bytes: usize) {
+        self.state.lock().unwrap_or_else(|e| e.into_inner()).emitted += bytes as u64;
     }
 
     fn ack(&self, processed: u64) {
-        let mut flow = self.flow.lock().unwrap_or_else(|e| e.into_inner());
-        flow.acked = flow.acked.max(processed);
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        state.acked = state.acked.max(processed.min(state.emitted));
         self.credit.notify_all();
     }
 
     /// Blocks while the renderer is behind. Returns false once the child is gone.
     fn wait_for_credit(&self) -> bool {
-        let mut flow = self.flow.lock().unwrap_or_else(|e| e.into_inner());
-        if in_flight(&flow) < FLOW_HIGH {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        if in_flight(&state) < FLOW_HIGH {
             return true;
         }
-        while in_flight(&flow) >= FLOW_LOW {
+        while in_flight(&state) >= FLOW_LOW {
             if self.exited.load(Ordering::Acquire) {
                 return false;
             }
-            flow = self
+            state = self
                 .credit
-                .wait_timeout(flow, FLOW_POLL)
+                .wait_timeout(state, FLOW_POLL)
                 .unwrap_or_else(|e| e.into_inner())
                 .0;
         }
@@ -112,8 +115,8 @@ impl LivePty {
     }
 }
 
-fn in_flight(flow: &Flow) -> u64 {
-    flow.sent.saturating_sub(flow.acked)
+fn in_flight(state: &PtyState) -> u64 {
+    state.emitted.saturating_sub(state.acked)
 }
 
 struct Inner {
@@ -283,23 +286,26 @@ impl PtyHost {
         }
     }
 
-    pub fn attach(&self, id: &str, from: u64) -> Result<u32, String> {
+    pub fn attach<F>(&self, id: &str, from: u64, send: F) -> Result<PtyAttached, String>
+    where
+        F: FnOnce(&PtyAttached, u32, &[u8]),
+    {
         let live = self
             .get(id)
             .ok_or_else(|| "Terminal is not running".to_string())?;
-        let tail = live.ring.lock().unwrap_or_else(|e| e.into_inner()).tail_from(from);
-        {
-            let mut flow = live.flow.lock().unwrap_or_else(|e| e.into_inner());
-            flow.acked = 0;
-            flow.sent = tail.len() as u64;
+        let mut state = live.state.lock().unwrap_or_else(|e| e.into_inner());
+        if from < state.ring.start {
+            state.acked = state.acked.max(state.ring.start);
+            live.credit.notify_all();
         }
-        live.credit.notify_all();
-        if !tail.is_empty() {
-            if let Some(events) = self.events() {
-                events.data(live.stream_id, &tail);
-            }
-        }
-        Ok(live.stream_id)
+        let start = from.max(state.ring.start);
+        let skip = start.saturating_sub(state.ring.start).min(state.ring.buf.len() as u64) as usize;
+        let attached = PtyAttached {
+            start,
+            emitted: state.emitted,
+        };
+        send(&attached, live.stream_id, &state.ring.buf[skip..]);
+        Ok(attached)
     }
 
     pub fn kill(&self, id: &str) {
@@ -441,7 +447,6 @@ fn spawn_unix(
                 || !wait_readable(fd, PTY_COALESCE.saturating_sub(last_emit.elapsed()))
             {
                 emit_data(&data_host, stream_id, &acc);
-                data_live.sent(acc.len());
                 acc.clear();
                 last_emit = Instant::now();
             } else {
@@ -621,7 +626,13 @@ fn emit_data(host: &PtyHost, stream_id: u32, bytes: &[u8]) {
         return;
     }
     if let Some(live) = host.get_stream(stream_id) {
-        live.ring.lock().unwrap_or_else(|e| e.into_inner()).push(bytes);
+        let mut state = live.state.lock().unwrap_or_else(|e| e.into_inner());
+        state.ring.push(bytes);
+        state.emitted += bytes.len() as u64;
+        if let Some(events) = host.events() {
+            events.data(stream_id, bytes);
+        }
+        return;
     }
     if let Some(events) = host.events() {
         events.data(stream_id, bytes);
@@ -659,33 +670,65 @@ mod tests {
     #[test]
     fn credit_blocks_past_high_water_until_acked_below_low() {
         let live = LivePty::new(Box::new(std::io::sink()), -1, 42, 1);
-        live.sent(FLOW_HIGH as usize);
+        live.emit(FLOW_HIGH as usize);
         live.ack(FLOW_HIGH - FLOW_LOW);
         assert!(live.wait_for_credit());
-        live.sent(FLOW_HIGH as usize);
+        live.emit(FLOW_HIGH as usize);
         live.exited.store(true, Ordering::Release);
         assert!(!live.wait_for_credit());
     }
 
     #[test]
-    fn attach_resets_a_stuck_window_and_replays_the_ring() {
-        struct Rec(Mutex<Vec<u8>>);
-        impl PtyEvents for Rec {
-            fn data(&self, _: u32, bytes: &[u8]) {
-                self.0.lock().unwrap_or_else(|e| e.into_inner()).extend_from_slice(bytes);
-            }
-            fn exit(&self, _: &str, _: Option<i32>) {}
-        }
+    fn ack_ignores_processed_past_emitted() {
+        let live = LivePty::new(Box::new(std::io::sink()), -1, 1, 1);
+        live.emit(50);
+        live.ack(1000);
+        assert_eq!(live.state.lock().unwrap_or_else(|e| e.into_inner()).acked, 50);
+    }
+
+    #[test]
+    fn attach_replays_from_the_ring_without_resetting_offsets() {
         let host = PtyHost::new();
-        let rec = Arc::new(Rec(Mutex::new(Vec::new())));
-        host.set_events(rec.clone());
         let live = Arc::new(LivePty::new(Box::new(std::io::sink()), -1, 1, 7));
-        live.ring.lock().unwrap_or_else(|e| e.into_inner()).push(&[7; 64]);
-        live.sent(FLOW_HIGH as usize);
+        {
+            let mut state = live.state.lock().unwrap_or_else(|e| e.into_inner());
+            state.ring.push(&[7; 64]);
+            state.emitted = 64;
+            state.acked = 10;
+        }
         host.insert("t".into(), live.clone());
-        assert_eq!(host.attach("t", 0).unwrap(), 7);
-        assert_eq!(rec.0.lock().unwrap_or_else(|e| e.into_inner()).as_slice(), &[7; 64]);
-        assert!(live.wait_for_credit());
+        let mut replay = Vec::new();
+        let attached = host
+            .attach("t", 0, |_, _, tail| replay.extend_from_slice(tail))
+            .unwrap();
+        assert_eq!(attached.start, 0);
+        assert_eq!(attached.emitted, 64);
+        assert_eq!(replay.as_slice(), &[7; 64]);
+        let state = live.state.lock().unwrap_or_else(|e| e.into_inner());
+        assert_eq!(state.acked, 10);
+        assert_eq!(state.emitted, 64);
+    }
+
+    #[test]
+    fn attach_advances_acked_over_a_wrapped_gap() {
+        let host = PtyHost::new();
+        let live = Arc::new(LivePty::new(Box::new(std::io::sink()), -1, 1, 7));
+        {
+            let mut state = live.state.lock().unwrap_or_else(|e| e.into_inner());
+            state.ring.start = 100;
+            state.ring.buf.extend_from_slice(&[7; 64]);
+            state.emitted = 164;
+            state.acked = 0;
+        }
+        host.insert("t".into(), live.clone());
+        let mut replay = Vec::new();
+        let attached = host
+            .attach("t", 0, |_, _, tail| replay.extend_from_slice(tail))
+            .unwrap();
+        assert_eq!(attached.start, 100);
+        assert_eq!(attached.emitted, 164);
+        assert_eq!(replay.len(), 64);
+        assert_eq!(live.state.lock().unwrap_or_else(|e| e.into_inner()).acked, 100);
     }
 
     #[test]

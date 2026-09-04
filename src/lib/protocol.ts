@@ -54,6 +54,8 @@ export type PtyAck = { id: string, processed: number, };
 
 export type PtyAttach = { id: string, from: number, };
 
+export type PtyAttached = { start: number, emitted: number, };
+
 export type PtyError = { id: string, error: string, };
 
 export type PtyExit = { id: string, code: number | null, };

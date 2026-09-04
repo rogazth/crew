@@ -103,6 +103,16 @@ pub struct PtyAttach {
 #[derive(Serialize, Deserialize, Clone, Debug, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
+pub struct PtyAttached {
+    #[ts(type = "number")]
+    pub start: u64,
+    #[ts(type = "number")]
+    pub emitted: u64,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
 pub struct PtyExit {
     pub id: String,
     pub code: Option<i32>,

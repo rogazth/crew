@@ -249,6 +249,9 @@ export function TerminalView({
         shellFallback = true;
         spawn([]);
       },
+      (start) => {
+        processed = start;
+      },
     );
 
     const reply = (code: 10 | 11 | 12, hex: string) => {

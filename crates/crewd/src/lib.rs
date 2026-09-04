@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{mpsc as std_mpsc, Arc, Mutex};
 use std::thread;
@@ -13,7 +13,7 @@ use crew_core::store::{self as app_state, Store};
 use crew_core::workspace;
 use crew_protocol::{
     self as proto, AgentSpawn, Auth, BridgeReply, Cwd, DaemonInfo, Id, IdBlocks, IdName, IdProvider, IdStatus,
-    Ids, Key, KeyValue, Name, NamePath, OptionalId, PathArg, PathContents, PtyAck, PtyAttach, PtyKill,
+    Ids, Key, KeyValue, Name, NamePath, OptionalId, PathArg, PathContents, PtyAck, PtyAttach, PtyAttached, PtyKill,
     PtyResize, PtySpawn, PtyWrite, Request, RoutineMark, RoutineUpsert, SessionCreate, SessionId, SessionLine,
     SessionUpdate, TempFile, WorkspaceId,
 };
@@ -68,6 +68,7 @@ enum Outgoing {
 
 struct Hub {
     clients: Mutex<HashMap<u64, mpsc::UnboundedSender<Outgoing>>>,
+    pty_attached: Mutex<HashSet<u64>>,
     next: AtomicU64,
 }
 
@@ -75,6 +76,7 @@ impl Hub {
     fn new() -> Self {
         Self {
             clients: Mutex::new(HashMap::new()),
+            pty_attached: Mutex::new(HashSet::new()),
             next: AtomicU64::new(1),
         }
     }
@@ -89,8 +91,19 @@ impl Hub {
         (id, rx)
     }
 
+    fn watch_pty(&self, id: u64) {
+        self.pty_attached
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(id);
+    }
+
     fn unsubscribe(&self, id: u64) {
         self.clients
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&id);
+        self.pty_attached
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .remove(&id);
@@ -141,7 +154,16 @@ impl PtyEvents for Hub {
         let mut frame = Vec::with_capacity(4 + bytes.len());
         frame.extend_from_slice(&stream_id.to_le_bytes());
         frame.extend_from_slice(bytes);
-        self.broadcast(Outgoing::Binary(frame));
+        let ids: Vec<u64> = self
+            .pty_attached
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .copied()
+            .collect();
+        for id in ids {
+            self.send(id, Outgoing::Binary(frame.clone()));
+        }
     }
 
     fn exit(&self, id: &str, code: Option<i32>) {
@@ -306,8 +328,9 @@ async fn handle_socket(stream: TcpStream, hosts: Hosts, hub: Arc<Hub>, token: St
                 let hosts = hosts.clone();
                 let hub = hub.clone();
                 tokio::spawn(async move {
-                    let reply = dispatch_text(&hosts, text.as_ref()).await;
-                    hub.send(client_id, Outgoing::Text(reply));
+                    if let Some(reply) = handle_text(&hosts, &hub, client_id, text.as_ref()).await {
+                        hub.send(client_id, Outgoing::Text(reply));
+                    }
                 });
             }
             Message::Binary(bytes) => {
@@ -385,16 +408,58 @@ fn emit_pty_error(hub: &Hub, host: &PtyHost, stream_id: u32, error: impl Into<St
     hub.emit("pty-error", proto::PtyError { id, error: error.into() });
 }
 
-async fn dispatch_text(hosts: &Hosts, text: &str) -> String {
+async fn handle_text(hosts: &Hosts, hub: &Arc<Hub>, client_id: u64, text: &str) -> Option<String> {
     let request = match serde_json::from_str::<Request>(text) {
         Ok(request) => request,
-        Err(error) => return encode(&proto::err(0, format!("Bad request: {error}"))),
+        Err(error) => return Some(encode(&proto::err(0, format!("Bad request: {error}")))),
     };
+    if request.method == "pty_attach" {
+        attach_pty(hosts, hub, client_id, request.id, request.params).await;
+        return None;
+    }
     let result = dispatch(hosts, &request.method, request.params).await;
-    encode(&match result {
+    Some(encode(&match result {
         Ok(value) => proto::ok(request.id, value),
         Err(error) => proto::err(request.id, error),
+    }))
+}
+
+async fn attach_pty(hosts: &Hosts, hub: &Arc<Hub>, client_id: u64, req_id: u32, params: Value) {
+    let PtyAttach { id, from } = match parse(params) {
+        Ok(value) => value,
+        Err(error) => {
+            hub.send(client_id, Outgoing::Text(encode(&proto::err(req_id, error))));
+            return;
+        }
+    };
+    let host = hosts.pty.clone();
+    let hub_c = hub.clone();
+    let result = block(move || {
+        host.attach(&id, from, |attached, stream_id, tail| {
+            hub_c.watch_pty(client_id);
+            let value = match serde_json::to_value(PtyAttached {
+                start: attached.start,
+                emitted: attached.emitted,
+            }) {
+                Ok(value) => value,
+                Err(error) => {
+                    hub_c.send(client_id, Outgoing::Text(encode(&proto::err(req_id, error.to_string()))));
+                    return;
+                }
+            };
+            hub_c.send(client_id, Outgoing::Text(encode(&proto::ok(req_id, value))));
+            if !tail.is_empty() {
+                let mut frame = Vec::with_capacity(4 + tail.len());
+                frame.extend_from_slice(&stream_id.to_le_bytes());
+                frame.extend_from_slice(tail);
+                hub_c.send(client_id, Outgoing::Binary(frame));
+            }
+        })
     })
+    .await;
+    if let Err(error) = result {
+        hub.send(client_id, Outgoing::Text(encode(&proto::err(req_id, error))));
+    }
 }
 
 async fn block<T: Send + 'static>(
@@ -447,11 +512,6 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
             })
             .await?;
             Ok(Value::Null)
-        }
-        "pty_attach" => {
-            let PtyAttach { id, from } = parse(params)?;
-            let host = hosts.pty.clone();
-            json(block(move || host.attach(&id, from)).await?)
         }
         "workspace_list" => {
             let store = hosts.store.clone();
@@ -797,6 +857,8 @@ mod tests {
         send_json(&mut ws, &spawn_req(1, "t")).await;
 
         let stream_id = wait_response(&mut ws, 1).await.result.and_then(|v| v.as_u64()).expect("stream") as u32;
+        let attached = attach_pty(&mut ws, 2, "t", 0).await;
+        assert_eq!(attached.start, 0);
         let mut frame = Vec::from(stream_id.to_le_bytes());
         frame.extend_from_slice(b"echo hi\n");
         ws.send(Message::Binary(frame.into())).await.expect("write");
@@ -877,8 +939,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn pty_keeps_flowing_after_disconnect_and_attach() {
-        let dir = test_dir("pty-flood");
+    async fn pty_attach_after_wrap_keeps_flow_control() {
+        let dir = test_dir("pty-wrap");
         let handle = test_serve(&dir);
         let mut ws = connect_authed(&handle).await;
         send_json(
@@ -899,53 +961,95 @@ mod tests {
         .await;
         let spawn = wait_response(&mut ws, 1).await;
         assert!(spawn.ok, "{}", spawn.error.unwrap_or_default());
-
-        wait_bytes(&mut ws, b"y").await;
+        attach_pty(&mut ws, 2, "t", 0).await;
+        drain_and_ack(&mut ws, "t", 10, 300 * 1024).await;
         drop(ws);
         tokio::time::sleep(std::time::Duration::from_millis(400)).await;
 
         let mut ws = connect_authed(&handle).await;
+        let attached = attach_pty(&mut ws, 1, "t", 1000).await;
+        assert!(attached.start > 1000, "start={} from=1000", attached.start);
+        assert!(attached.emitted >= attached.start);
+
+        let replay = next_binary(&mut ws).await;
+        assert_eq!(replay.len() as u64, attached.emitted - attached.start);
+
         send_json(
             &mut ws,
             &Request {
                 id: 2,
-                method: "pty_attach".into(),
-                params: serde_json::json!({ "id": "t", "from": 0 }),
-            },
-        )
-        .await;
-        let attached = wait_response(&mut ws, 2).await;
-        assert!(attached.ok, "{}", attached.error.unwrap_or_default());
-        send_json(
-            &mut ws,
-            &Request {
-                id: 3,
                 method: "pty_ack".into(),
-                params: serde_json::json!({ "id": "t", "processed": 256 * 1024 }),
+                params: serde_json::json!({ "id": "t", "processed": attached.start + replay.len() as u64 }),
             },
         )
         .await;
+        let ack = wait_response(&mut ws, 2).await;
+        assert!(ack.ok, "{}", ack.error.unwrap_or_default());
 
-        let mut got = 0usize;
-        let mut processed = 256 * 1024u64;
+        let extra = collect_bytes(&mut ws, std::time::Duration::from_secs(1)).await;
+        assert!(
+            extra <= 256 * 1024 + 64 * 1024,
+            "flow control disabled: extra={extra}"
+        );
+        assert!(extra >= 128 * 1024, "reader did not refill the window: extra={extra}");
+        handle.shutdown();
+    }
+
+    #[tokio::test]
+    async fn pty_attach_during_flood_is_ordered() {
+        let dir = test_dir("pty-live-attach");
+        let handle = test_serve(&dir);
+        let mut producer = connect_authed(&handle).await;
+        send_json(
+            &mut producer,
+            &Request {
+                id: 1,
+                method: "pty_spawn".into(),
+                params: serde_json::to_value(PtySpawn {
+                    id: "t".into(),
+                    cwd: std::env::temp_dir().to_string_lossy().into_owned(),
+                    command: vec![
+                        "/usr/bin/python3".into(),
+                        "-c".into(),
+                        "import sys\ni=0\nwhile True:\n    sys.stdout.buffer.write(bytes([48+(i%10)])); i+=1\n    if i&4095==0: sys.stdout.flush()".into(),
+                    ],
+                    cols: 80,
+                    rows: 24,
+                })
+                .unwrap(),
+            },
+        )
+        .await;
+        let spawn = wait_response(&mut producer, 1).await;
+        assert!(spawn.ok, "{}", spawn.error.unwrap_or_default());
+        attach_pty(&mut producer, 2, "t", 0).await;
+        let producer_ack = tokio::spawn(async move {
+            ack_forever(&mut producer, "t", 100).await;
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+
+        let mut ws = connect_authed(&handle).await;
+        let attached = attach_pty(&mut ws, 1, "t", 0).await;
+        let mut bytes = Vec::new();
+        let mut processed = attached.start;
+        let mut req = 2u32;
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
-        while got < 300 * 1024 {
+        while bytes.len() < 64 * 1024 {
             let msg = tokio::time::timeout_at(deadline, ws.next())
                 .await
-                .expect("flood timeout")
+                .expect("counter timeout")
                 .expect("closed")
                 .expect("ws");
-            if let Message::Binary(bytes) = msg {
-                if bytes.len() >= 4 {
-                    let n = bytes.len() - 4;
-                    got += n;
-                    processed += n as u64;
-                }
-                if got % (32 * 1024) < bytes.len().saturating_sub(4) {
+            if let Message::Binary(frame) = msg {
+                if frame.len() >= 4 {
+                    let chunk = &frame[4..];
+                    bytes.extend_from_slice(chunk);
+                    processed += chunk.len() as u64;
+                    req += 1;
                     send_json(
                         &mut ws,
                         &Request {
-                            id: 4,
+                            id: req,
                             method: "pty_ack".into(),
                             params: serde_json::json!({ "id": "t", "processed": processed }),
                         },
@@ -954,7 +1058,115 @@ mod tests {
                 }
             }
         }
+        assert_digit_run(&bytes);
         handle.shutdown();
+        drop(producer_ack);
+    }
+
+    async fn attach_pty(ws: &mut Ws, id: u32, pty: &str, from: u64) -> proto::PtyAttached {
+        send_json(
+            ws,
+            &Request {
+                id,
+                method: "pty_attach".into(),
+                params: serde_json::json!({ "id": pty, "from": from }),
+            },
+        )
+        .await;
+        let response = wait_response(ws, id).await;
+        assert!(response.ok, "{}", response.error.unwrap_or_default());
+        serde_json::from_value(response.result.expect("attach result")).expect("PtyAttached")
+    }
+
+    async fn drain_and_ack(ws: &mut Ws, pty: &str, mut req: u32, want: usize) -> u64 {
+        let mut got = 0usize;
+        let mut processed = 0u64;
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+        while got < want {
+            let msg = tokio::time::timeout_at(deadline, ws.next())
+                .await
+                .expect("drain timeout")
+                .expect("closed")
+                .expect("ws");
+            if let Message::Binary(bytes) = msg {
+                if bytes.len() >= 4 {
+                    let n = bytes.len() - 4;
+                    got += n;
+                    processed += n as u64;
+                    req += 1;
+                    send_json(
+                        ws,
+                        &Request {
+                            id: req,
+                            method: "pty_ack".into(),
+                            params: serde_json::json!({ "id": pty, "processed": processed }),
+                        },
+                    )
+                    .await;
+                }
+            }
+        }
+        processed
+    }
+
+    async fn ack_forever(ws: &mut Ws, pty: &str, mut req: u32) {
+        let mut processed = 0u64;
+        while let Some(Ok(msg)) = ws.next().await {
+            if let Message::Binary(bytes) = msg {
+                if bytes.len() >= 4 {
+                    processed += (bytes.len() - 4) as u64;
+                    req += 1;
+                    send_json(
+                        ws,
+                        &Request {
+                            id: req,
+                            method: "pty_ack".into(),
+                            params: serde_json::json!({ "id": pty, "processed": processed }),
+                        },
+                    )
+                    .await;
+                }
+            }
+        }
+    }
+
+    async fn next_binary(ws: &mut Ws) -> Vec<u8> {
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            let msg = tokio::time::timeout_at(deadline, ws.next())
+                .await
+                .expect("binary timeout")
+                .expect("closed")
+                .expect("ws");
+            if let Message::Binary(bytes) = msg {
+                if bytes.len() >= 4 {
+                    return bytes[4..].to_vec();
+                }
+            }
+        }
+    }
+
+    async fn collect_bytes(ws: &mut Ws, duration: std::time::Duration) -> usize {
+        let deadline = tokio::time::Instant::now() + duration;
+        let mut got = 0usize;
+        loop {
+            match tokio::time::timeout_at(deadline, ws.next()).await {
+                Ok(Some(Ok(Message::Binary(bytes)))) if bytes.len() >= 4 => {
+                    got += bytes.len() - 4;
+                }
+                Ok(Some(Ok(_))) => {}
+                _ => break,
+            }
+        }
+        got
+    }
+
+    fn assert_digit_run(bytes: &[u8]) {
+        assert!(bytes.len() >= 2, "need a run to check order");
+        for window in bytes.windows(2) {
+            let step = (i16::from(window[1]) - i16::from(window[0]) + 10) % 10;
+            assert_eq!(step, 1, "unordered or duplicate bytes around {window:?}");
+        }
     }
 
     async fn wait_response(ws: &mut Ws, id: u32) -> proto::Response {

@@ -164,7 +164,7 @@ const commands: Record<string, (args: Row) => unknown> = {
   session_get_blocks: ({ id }) => (id === "s1" ? JSON.stringify(SEED_BLOCKS) : "[]"),
   session_set_blocks: () => undefined,
   pty_ack: () => undefined,
-  pty_attach: () => undefined,
+  pty_attach: () => ({ start: 0, emitted: 0 }),
   session_set_provider_session: () => undefined,
   agent_resolve_claude: () => ({ path: "/mock/bin/claude" }),
   agent_resolve: ({ name }) => ({ path: `/mock/bin/${name}` }),
