@@ -20,14 +20,7 @@ pub struct ProjectFile {
     pub relative: String,
 }
 
-#[tauri::command]
-pub async fn list_project_files(cwd: String) -> Result<Vec<ProjectFile>, String> {
-    tauri::async_runtime::spawn_blocking(move || list_sync(&cwd))
-        .await
-        .map_err(|e| e.to_string())?
-}
-
-fn list_sync(cwd: &str) -> Result<Vec<ProjectFile>, String> {
+pub fn list(cwd: &str) -> Result<Vec<ProjectFile>, String> {
     let root = PathBuf::from(cwd);
     if !root.is_dir() {
         return Err(format!("{cwd}: Not a directory"));
@@ -37,6 +30,13 @@ fn list_sync(cwd: &str) -> Result<Vec<ProjectFile>, String> {
         return Ok(files);
     }
     Ok(walk(&root))
+}
+
+#[tauri::command]
+pub async fn list_project_files(cwd: String) -> Result<Vec<ProjectFile>, String> {
+    tauri::async_runtime::spawn_blocking(move || list(&cwd))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 fn git_ls_files(root: &Path) -> Option<Vec<ProjectFile>> {
@@ -119,26 +119,30 @@ fn has_skipped_dir(relative: &str) -> bool {
         .any(|segment| SKIPPED_DIRS.contains(&segment))
 }
 
+pub fn read_text(path: &str) -> Result<String, String> {
+    let meta = std::fs::metadata(path).map_err(|e| e.to_string())?;
+    if meta.len() > MAX_TEXT_FILE_BYTES {
+        return Err("File is too large to open".into());
+    }
+    std::fs::read_to_string(path).map_err(|e| e.to_string())
+}
+
+pub fn write_text(path: &str, contents: &str) -> Result<(), String> {
+    std::fs::write(path, contents).map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 pub async fn read_text_file(path: String) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let meta = std::fs::metadata(&path).map_err(|e| e.to_string())?;
-        if meta.len() > MAX_TEXT_FILE_BYTES {
-            return Err("File is too large to open".into());
-        }
-        std::fs::read_to_string(&path).map_err(|e| e.to_string())
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    tauri::async_runtime::spawn_blocking(move || read_text(&path))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
 pub async fn write_text_file(path: String, contents: String) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        std::fs::write(&path, contents).map_err(|e| e.to_string())
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    tauri::async_runtime::spawn_blocking(move || write_text(&path, &contents))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -147,62 +151,70 @@ pub struct FileBytes {
     pub data: String,
 }
 
+pub fn read_base64(path: &str) -> Result<FileBytes, String> {
+    let meta = std::fs::metadata(path).map_err(|e| e.to_string())?;
+    if meta.len() > MAX_TEMP_FILE_BYTES as u64 {
+        return Err("File is too large to attach".into());
+    }
+    let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+    let mime = match Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("png") => "image/png",
+        Some("jpg") | Some("jpeg") => "image/jpeg",
+        Some("gif") => "image/gif",
+        Some("webp") => "image/webp",
+        Some("svg") => "image/svg+xml",
+        _ => "application/octet-stream",
+    };
+    Ok(FileBytes {
+        mime: mime.into(),
+        data: base64::engine::general_purpose::STANDARD.encode(bytes),
+    })
+}
+
+pub fn exists(path: &str) -> bool {
+    std::path::Path::new(path).exists()
+}
+
+pub fn write_temp(extension: &str, base64_contents: &str) -> Result<String, String> {
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(base64_contents.as_bytes())
+        .map_err(|e| format!("Clipboard data is not valid base64: {e}"))?;
+    if bytes.len() > MAX_TEMP_FILE_BYTES {
+        return Err("Pasted file is too large".into());
+    }
+    let dir = std::env::temp_dir().join("crew");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let path = dir.join(format!("{}.{}", uuid::Uuid::new_v4(), safe_extension(extension)));
+    std::fs::write(&path, bytes).map_err(|e| e.to_string())?;
+    Ok(path.to_string_lossy().into_owned())
+}
+
 /// Images the chat shows and sends inline. The webview cannot read the disk
 /// itself and the asset protocol is off, so bytes travel as base64 over IPC.
 #[tauri::command]
 pub async fn read_file_base64(path: String) -> Result<FileBytes, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let meta = std::fs::metadata(&path).map_err(|e| e.to_string())?;
-        if meta.len() > MAX_TEMP_FILE_BYTES as u64 {
-            return Err("File is too large to attach".into());
-        }
-        let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
-        let mime = match Path::new(&path)
-            .extension()
-            .and_then(|e| e.to_str())
-            .map(|e| e.to_ascii_lowercase())
-            .as_deref()
-        {
-            Some("png") => "image/png",
-            Some("jpg") | Some("jpeg") => "image/jpeg",
-            Some("gif") => "image/gif",
-            Some("webp") => "image/webp",
-            Some("svg") => "image/svg+xml",
-            _ => "application/octet-stream",
-        };
-        Ok(FileBytes {
-            mime: mime.into(),
-            data: base64::engine::general_purpose::STANDARD.encode(bytes),
-        })
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    tauri::async_runtime::spawn_blocking(move || read_base64(&path))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[tauri::command(async)]
 pub fn path_exists(path: String) -> bool {
-    std::path::Path::new(&path).exists()
+    exists(&path)
 }
 
 /// Clipboard images arrive as bytes with no path, and the CLIs Crew hosts take
 /// paths. The name is generated here so a caller can never walk out of the dir.
 #[tauri::command]
 pub async fn write_temp_file(extension: String, base64_contents: String) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let bytes = base64::engine::general_purpose::STANDARD
-            .decode(base64_contents.as_bytes())
-            .map_err(|e| format!("Clipboard data is not valid base64: {e}"))?;
-        if bytes.len() > MAX_TEMP_FILE_BYTES {
-            return Err("Pasted file is too large".into());
-        }
-        let dir = std::env::temp_dir().join("crew");
-        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-        let path = dir.join(format!("{}.{}", uuid::Uuid::new_v4(), safe_extension(&extension)));
-        std::fs::write(&path, bytes).map_err(|e| e.to_string())?;
-        Ok(path.to_string_lossy().into_owned())
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    tauri::async_runtime::spawn_blocking(move || write_temp(&extension, &base64_contents))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 fn safe_extension(extension: &str) -> String {

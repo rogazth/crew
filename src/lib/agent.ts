@@ -1,5 +1,5 @@
-import { listen } from "@tauri-apps/api/event";
 import * as api from "./api";
+import { client } from "./client";
 
 type LinesPayload = { sessionId: string; lines: string[] };
 type ExitPayload = { sessionId: string; code: number | null; pid: number };
@@ -14,7 +14,7 @@ const stdoutBuf = new Map<string, string[]>();
 const stderrBuf = new Map<string, string[]>();
 const MAX_BUFFERED = 1000;
 
-let bridge: Promise<Array<() => void>> | null = null;
+let stops: Array<() => void> | null = null;
 let users = 0;
 
 function push(map: Map<string, string[]>, sessionId: string, lines: string[]) {
@@ -43,19 +43,20 @@ function deliver(
 }
 
 function ensureBridge() {
-  if (bridge) return;
-  bridge = Promise.all([
-    listen<LinesPayload>("agent-stdout", (event) => deliver(stdout, stdoutBuf, event.payload)),
-    listen<LinesPayload>("agent-stderr", (event) => deliver(stderr, stderrBuf, event.payload)),
-    listen<ExitPayload>("agent-exit", (event) => {
-      exits.get(event.payload.sessionId)?.(event.payload.code);
+  if (stops) return;
+  stops = [
+    client.on("agent-stdout", (payload) => deliver(stdout, stdoutBuf, payload as LinesPayload)),
+    client.on("agent-stderr", (payload) => deliver(stderr, stderrBuf, payload as LinesPayload)),
+    client.on("agent-exit", (payload) => {
+      const event = payload as ExitPayload;
+      exits.get(event.sessionId)?.(event.code);
     }),
-  ]);
+  ];
 }
 
 /**
- * Subscribe before spawn. `listen` resolves late; lines that arrive first sit
- * in the buffer until the handler is registered.
+ * Subscribe before spawn. Lines that arrive first sit in the buffer until the
+ * handler is registered.
  */
 export function watchAgent(
   sessionId: string,
@@ -76,10 +77,8 @@ export function watchAgent(
     exits.delete(sessionId);
     users -= 1;
     if (users === 0) {
-      void bridge?.then((stops) => {
-        for (const stop of stops) stop();
-      });
-      bridge = null;
+      for (const stop of stops ?? []) stop();
+      stops = null;
     }
   };
 }

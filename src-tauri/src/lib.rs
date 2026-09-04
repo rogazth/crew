@@ -27,12 +27,21 @@ pub fn run() {
         .setup(|app| {
             app.set_menu(menu::build(app)?)?;
             let dir = app.path().app_data_dir()?;
+            let store = Store::open(dir.join("crew.sqlite3"))?;
             let pty = PtyHost::new();
-            let daemon = serve(Config { pty: pty.clone() }).map_err(|e| e.to_string())?;
-            app.manage(Store::open(dir.join("crew.sqlite3"))?);
+            let agents = AgentHost::new();
+            let bridge = Bridge::start(dir)?;
+            let daemon = serve(Config {
+                pty: pty.clone(),
+                store: store.clone(),
+                agents: agents.clone(),
+                bridge: bridge.clone(),
+            })
+            .map_err(|e| e.to_string())?;
+            app.manage(store);
             app.manage(pty);
-            app.manage(AgentHost::new());
-            app.manage(Bridge::start(app.handle().clone(), dir)?);
+            app.manage(agents);
+            app.manage(bridge);
             app.manage(daemon);
             Ok(())
         })

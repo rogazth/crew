@@ -3,9 +3,17 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{mpsc as std_mpsc, Arc, Mutex};
 use std::thread;
 
+use crew_core::agent::{AgentEvents, AgentHost};
+use crew_core::bridge::{Bridge, BridgeEvents, ToolCall};
+use crew_core::files;
 use crew_core::pty::{PtyEvents, PtyHost};
+use crew_core::routine;
+use crew_core::session;
+use crew_core::store::{self as app_state, Store};
+use crew_core::workspace;
 use crew_protocol::{self as proto, Auth, DaemonInfo, PtyAck, PtyKill, PtyResize, PtySpawn, PtyWrite, Request};
 use futures_util::{SinkExt, StreamExt};
+use serde::Deserialize;
 use serde_json::Value;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc;
@@ -13,6 +21,17 @@ use tokio_tungstenite::tungstenite::Message;
 
 pub struct Config {
     pub pty: PtyHost,
+    pub store: Store,
+    pub agents: AgentHost,
+    pub bridge: Bridge,
+}
+
+#[derive(Clone)]
+struct Hosts {
+    pty: PtyHost,
+    store: Store,
+    agents: AgentHost,
+    bridge: Bridge,
 }
 
 pub struct Handle {
@@ -98,6 +117,16 @@ impl Hub {
             });
         }
     }
+
+    fn emit(&self, event: &str, payload: impl serde::Serialize) {
+        let Ok(event) = proto::event(event, payload) else {
+            return;
+        };
+        let Ok(text) = serde_json::to_string(&event) else {
+            return;
+        };
+        self.broadcast(Outgoing::Text(text));
+    }
 }
 
 impl PtyEvents for Hub {
@@ -109,13 +138,44 @@ impl PtyEvents for Hub {
     }
 
     fn exit(&self, id: &str, code: Option<i32>) {
-        let Ok(event) = proto::event("pty-exit", proto::PtyExit { id: id.to_string(), code }) else {
-            return;
-        };
-        let Ok(text) = serde_json::to_string(&event) else {
-            return;
-        };
-        self.broadcast(Outgoing::Text(text));
+        self.emit("pty-exit", proto::PtyExit { id: id.to_string(), code });
+    }
+}
+
+impl AgentEvents for Hub {
+    fn lines(&self, event: &str, session_id: &str, lines: Vec<String>) {
+        self.emit(
+            event,
+            proto::AgentLines {
+                session_id: session_id.to_string(),
+                lines,
+            },
+        );
+    }
+
+    fn exit(&self, session_id: &str, code: Option<i32>, pid: u32) {
+        self.emit(
+            "agent-exit",
+            proto::AgentExit {
+                session_id: session_id.to_string(),
+                code,
+                pid,
+            },
+        );
+    }
+}
+
+impl BridgeEvents for Hub {
+    fn tool(&self, call: ToolCall) {
+        self.emit(
+            "agent-tool",
+            proto::ToolCall {
+                id: call.id,
+                session_id: call.session_id,
+                method: call.method,
+                params: call.params,
+            },
+        );
     }
 }
 
@@ -123,10 +183,17 @@ pub fn serve(config: Config) -> Result<Handle, String> {
     let token = random_token();
     let hub = Arc::new(Hub::new());
     config.pty.set_events(hub.clone());
+    config.agents.set_events(hub.clone());
+    config.bridge.set_events(hub.clone());
 
     let (ready_tx, ready_rx) = std_mpsc::channel();
     let (stop_tx, stop_rx) = tokio::sync::oneshot::channel();
-    let pty = config.pty;
+    let hosts = Hosts {
+        pty: config.pty,
+        store: config.store,
+        agents: config.agents,
+        bridge: config.bridge,
+    };
     let serve_token = token.clone();
 
     thread::Builder::new()
@@ -139,7 +206,7 @@ pub fn serve(config: Config) -> Result<Handle, String> {
                     return;
                 }
             };
-            runtime.block_on(run(pty, hub, serve_token, ready_tx, stop_rx));
+            runtime.block_on(run(hosts, hub, serve_token, ready_tx, stop_rx));
         })
         .map_err(|e| e.to_string())?;
 
@@ -151,7 +218,7 @@ pub fn serve(config: Config) -> Result<Handle, String> {
 }
 
 async fn run(
-    pty: PtyHost,
+    hosts: Hosts,
     hub: Arc<Hub>,
     token: String,
     ready_tx: std_mpsc::Sender<Result<String, String>>,
@@ -178,18 +245,18 @@ async fn run(
             _ = &mut stop_rx => break,
             accepted = listener.accept() => {
                 let Ok((stream, _)) = accepted else { break };
-                let pty = pty.clone();
+                let hosts = hosts.clone();
                 let hub = hub.clone();
                 let token = token.clone();
                 tokio::spawn(async move {
-                    handle_socket(stream, pty, hub, token).await;
+                    handle_socket(stream, hosts, hub, token).await;
                 });
             }
         }
     }
 }
 
-async fn handle_socket(stream: TcpStream, pty: PtyHost, hub: Arc<Hub>, token: String) {
+async fn handle_socket(stream: TcpStream, hosts: Hosts, hub: Arc<Hub>, token: String) {
     let Ok(ws) = tokio_tungstenite::accept_async(stream).await else {
         return;
     };
@@ -226,7 +293,7 @@ async fn handle_socket(stream: TcpStream, pty: PtyHost, hub: Arc<Hub>, token: St
         let Ok(msg) = msg else { break };
         match msg {
             Message::Text(text) => {
-                let reply = dispatch_text(&pty, text.as_ref()).await;
+                let reply = dispatch_text(&hosts, text.as_ref()).await;
                 hub.send(client_id, Outgoing::Text(reply));
             }
             Message::Binary(bytes) => {
@@ -235,7 +302,7 @@ async fn handle_socket(stream: TcpStream, pty: PtyHost, hub: Arc<Hub>, token: St
                 }
                 let stream_id = u32::from_le_bytes(bytes[..4].try_into().unwrap());
                 let data = bytes[4..].to_vec();
-                let host = pty.clone();
+                let host = hosts.pty.clone();
                 let _ = tokio::task::spawn_blocking(move || host.write_stream(stream_id, &data)).await;
             }
             Message::Close(_) => break,
@@ -247,62 +314,332 @@ async fn handle_socket(stream: TcpStream, pty: PtyHost, hub: Arc<Hub>, token: St
     writer.abort();
 }
 
-async fn dispatch_text(pty: &PtyHost, text: &str) -> String {
+async fn dispatch_text(hosts: &Hosts, text: &str) -> String {
     let request = match serde_json::from_str::<Request>(text) {
         Ok(request) => request,
         Err(error) => return encode(&proto::err(0, format!("Bad request: {error}"))),
     };
-    let result = dispatch(pty, &request.method, request.params).await;
+    let result = dispatch(hosts, &request.method, request.params).await;
     encode(&match result {
         Ok(value) => proto::ok(request.id, value),
         Err(error) => proto::err(request.id, error),
     })
 }
 
-async fn dispatch(pty: &PtyHost, method: &str, params: Value) -> Result<Value, String> {
-    let host = pty.clone();
+async fn block<T: Send + 'static>(
+    work: impl FnOnce() -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
+    tokio::task::spawn_blocking(work)
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn json(value: impl serde::Serialize) -> Result<Value, String> {
+    serde_json::to_value(value).map_err(|e| e.to_string())
+}
+
+async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, String> {
     match method {
         "pty_spawn" => {
-            let PtySpawn { id, cwd, command, cols, rows } =
-                serde_json::from_value(params).map_err(|e| e.to_string())?;
-            let stream_id =
-                tokio::task::spawn_blocking(move || host.spawn(id, cwd, command, cols, rows))
-                    .await
-                    .map_err(|e| e.to_string())??;
-            Ok(Value::from(stream_id))
+            let PtySpawn { id, cwd, command, cols, rows } = parse(params)?;
+            let host = hosts.pty.clone();
+            json(block(move || host.spawn(id, cwd, command, cols, rows)).await?)
         }
         "pty_write" => {
-            let PtyWrite { id, data } = serde_json::from_value(params).map_err(|e| e.to_string())?;
-            tokio::task::spawn_blocking(move || host.write(&id, data.as_bytes()))
-                .await
-                .map_err(|e| e.to_string())??;
+            let PtyWrite { id, data } = parse(params)?;
+            let host = hosts.pty.clone();
+            block(move || host.write(&id, data.as_bytes())).await?;
             Ok(Value::Null)
         }
         "pty_resize" => {
-            let PtyResize { id, cols, rows } =
-                serde_json::from_value(params).map_err(|e| e.to_string())?;
-            tokio::task::spawn_blocking(move || host.resize(&id, cols, rows))
-                .await
-                .map_err(|e| e.to_string())??;
+            let PtyResize { id, cols, rows } = parse(params)?;
+            let host = hosts.pty.clone();
+            block(move || host.resize(&id, cols, rows)).await?;
             Ok(Value::Null)
         }
         "pty_ack" => {
-            let PtyAck { id, processed } =
-                serde_json::from_value(params).map_err(|e| e.to_string())?;
-            tokio::task::spawn_blocking(move || host.ack(&id, processed))
-                .await
-                .map_err(|e| e.to_string())?;
+            let PtyAck { id, processed } = parse(params)?;
+            let host = hosts.pty.clone();
+            block(move || {
+                host.ack(&id, processed);
+                Ok(())
+            })
+            .await?;
             Ok(Value::Null)
         }
         "pty_kill" => {
-            let PtyKill { id } = serde_json::from_value(params).map_err(|e| e.to_string())?;
-            tokio::task::spawn_blocking(move || host.kill(&id))
-                .await
-                .map_err(|e| e.to_string())?;
+            let PtyKill { id } = parse(params)?;
+            let host = hosts.pty.clone();
+            block(move || {
+                host.kill(&id);
+                Ok(())
+            })
+            .await?;
+            Ok(Value::Null)
+        }
+        "workspace_list" => {
+            let store = hosts.store.clone();
+            json(block(move || workspace::list(&store)).await?)
+        }
+        "workspace_create" => {
+            let NamePath { name, path } = parse(params)?;
+            let store = hosts.store.clone();
+            json(block(move || workspace::create(&store, name, path)).await?)
+        }
+        "workspace_rename" => {
+            let IdName { id, name } = parse(params)?;
+            let store = hosts.store.clone();
+            block(move || workspace::rename(&store, id, name)).await?;
+            Ok(Value::Null)
+        }
+        "workspace_delete" => {
+            let Id { id } = parse(params)?;
+            let store = hosts.store.clone();
+            block(move || workspace::delete(&store, id)).await?;
+            Ok(Value::Null)
+        }
+        "workspace_reorder" => {
+            let Ids { ids } = parse(params)?;
+            let store = hosts.store.clone();
+            block(move || workspace::reorder(&store, ids)).await?;
+            Ok(Value::Null)
+        }
+        "active_workspace_get" => {
+            let store = hosts.store.clone();
+            json(block(move || workspace::active_get(&store)).await?)
+        }
+        "active_workspace_set" => {
+            let OptionalId { id } = parse(params)?;
+            let store = hosts.store.clone();
+            block(move || workspace::active_set(&store, id)).await?;
+            Ok(Value::Null)
+        }
+        "session_list" => {
+            let WorkspaceId { workspace_id } = parse(params)?;
+            let store = hosts.store.clone();
+            json(block(move || session::list(&store, workspace_id)).await?)
+        }
+        "session_get" => {
+            let Id { id } = parse(params)?;
+            let store = hosts.store.clone();
+            json(block(move || session::get(&store, id)).await?)
+        }
+        "session_create" => {
+            let p: SessionCreate = parse(params)?;
+            let store = hosts.store.clone();
+            json(block(move || {
+                session::create(
+                    &store,
+                    p.workspace_id,
+                    p.kind,
+                    p.name,
+                    p.provider,
+                    p.model,
+                    p.description,
+                    p.autonomy,
+                )
+            })
+            .await?)
+        }
+        "session_update" => {
+            let p: SessionUpdate = parse(params)?;
+            let store = hosts.store.clone();
+            block(move || {
+                session::update(
+                    &store,
+                    p.id,
+                    p.name,
+                    p.provider,
+                    p.model,
+                    p.description,
+                    p.notifications,
+                    p.autonomy,
+                )
+            })
+            .await?;
+            Ok(Value::Null)
+        }
+        "session_rename" => {
+            let IdName { id, name } = parse(params)?;
+            let store = hosts.store.clone();
+            block(move || session::rename(&store, id, name)).await?;
+            Ok(Value::Null)
+        }
+        "session_delete" => {
+            let Id { id } = parse(params)?;
+            let store = hosts.store.clone();
+            block(move || session::delete(&store, id)).await?;
+            Ok(Value::Null)
+        }
+        "session_reorder" => {
+            let Ids { ids } = parse(params)?;
+            let store = hosts.store.clone();
+            block(move || session::reorder(&store, ids)).await?;
+            Ok(Value::Null)
+        }
+        "session_set_status" => {
+            let IdStatus { id, status } = parse(params)?;
+            let store = hosts.store.clone();
+            block(move || session::set_status(&store, id, status)).await?;
+            Ok(Value::Null)
+        }
+        "session_get_blocks" => {
+            let Id { id } = parse(params)?;
+            let store = hosts.store.clone();
+            json(block(move || session::get_blocks(&store, id)).await?)
+        }
+        "session_set_blocks" => {
+            let IdBlocks { id, blocks_json } = parse(params)?;
+            let store = hosts.store.clone();
+            block(move || session::set_blocks(&store, id, blocks_json)).await?;
+            Ok(Value::Null)
+        }
+        "session_set_provider_session" => {
+            let IdProvider { id, provider_session_id } = parse(params)?;
+            let store = hosts.store.clone();
+            block(move || session::set_provider_session(&store, id, provider_session_id)).await?;
+            Ok(Value::Null)
+        }
+        "routine_list_for_session" => {
+            let SessionId { session_id } = parse(params)?;
+            let store = hosts.store.clone();
+            json(block(move || routine::list_for_session(&store, session_id)).await?)
+        }
+        "routine_list" => {
+            let store = hosts.store.clone();
+            json(block(move || routine::list(&store)).await?)
+        }
+        "routine_upsert" => {
+            let p: RoutineUpsert = parse(params)?;
+            let store = hosts.store.clone();
+            json(block(move || {
+                routine::upsert(
+                    &store,
+                    p.id,
+                    p.session_id,
+                    p.name,
+                    p.enabled,
+                    p.prompt,
+                    p.schedule,
+                    p.next_run_at,
+                    p.created_by,
+                )
+            })
+            .await?)
+        }
+        "routine_delete" => {
+            let Id { id } = parse(params)?;
+            let store = hosts.store.clone();
+            block(move || routine::delete(&store, id)).await?;
+            Ok(Value::Null)
+        }
+        "routine_mark_run" => {
+            let p: RoutineMark = parse(params)?;
+            let store = hosts.store.clone();
+            block(move || routine::mark_run(&store, p.id, p.last_run_at, p.next_run_at, p.runs_json)).await?;
+            Ok(Value::Null)
+        }
+        "state_get" => {
+            let Key { key } = parse(params)?;
+            let store = hosts.store.clone();
+            json(block(move || app_state::get(&store, key)).await?)
+        }
+        "state_set" => {
+            let KeyValue { key, value } = parse(params)?;
+            let store = hosts.store.clone();
+            block(move || app_state::set(&store, key, value)).await?;
+            Ok(Value::Null)
+        }
+        "list_project_files" => {
+            let Cwd { cwd } = parse(params)?;
+            json(block(move || files::list(&cwd)).await?)
+        }
+        "read_text_file" => {
+            let PathArg { path } = parse(params)?;
+            json(block(move || files::read_text(&path)).await?)
+        }
+        "write_text_file" => {
+            let PathContents { path, contents } = parse(params)?;
+            block(move || files::write_text(&path, &contents)).await?;
+            Ok(Value::Null)
+        }
+        "path_exists" => {
+            let PathArg { path } = parse(params)?;
+            Ok(Value::from(files::exists(&path)))
+        }
+        "read_file_base64" => {
+            let PathArg { path } = parse(params)?;
+            json(block(move || files::read_base64(&path)).await?)
+        }
+        "write_temp_file" => {
+            let TempFile { extension, base64_contents } = parse(params)?;
+            json(block(move || files::write_temp(&extension, &base64_contents)).await?)
+        }
+        "agent_resolve_claude" => json(block(AgentHost::resolve_claude).await?),
+        "agent_resolve" => {
+            let Name { name } = parse(params)?;
+            json(block(move || AgentHost::resolve(&name)).await?)
+        }
+        "agent_spawn" => {
+            let p: AgentSpawn = parse(params)?;
+            let host = hosts.agents.clone();
+            json(block(move || host.spawn(p.session_id, p.command, p.args, p.cwd, p.env)).await?)
+        }
+        "agent_write" => {
+            let SessionLine { session_id, line } = parse(params)?;
+            let host = hosts.agents.clone();
+            block(move || host.write(&session_id, &line)).await?;
+            Ok(Value::Null)
+        }
+        "agent_close_stdin" => {
+            let SessionId { session_id } = parse(params)?;
+            let host = hosts.agents.clone();
+            block(move || {
+                host.close_stdin(&session_id);
+                Ok(())
+            })
+            .await?;
+            Ok(Value::Null)
+        }
+        "agent_kill" => {
+            let SessionId { session_id } = parse(params)?;
+            let host = hosts.agents.clone();
+            block(move || {
+                host.kill(&session_id);
+                Ok(())
+            })
+            .await?;
+            Ok(Value::Null)
+        }
+        "agent_kill_all" => {
+            let host = hosts.agents.clone();
+            block(move || {
+                host.kill_all();
+                Ok(())
+            })
+            .await?;
+            Ok(Value::Null)
+        }
+        "agent_running" => {
+            let host = hosts.agents.clone();
+            json(block(move || Ok(host.running())).await?)
+        }
+        "bridge_info" => {
+            let bridge = hosts.bridge.clone();
+            json(block(move || bridge.info()).await?)
+        }
+        "bridge_reply" => {
+            let BridgeReply { id, response } = parse(params)?;
+            let bridge = hosts.bridge.clone();
+            block(move || bridge.reply(id, response)).await?;
             Ok(Value::Null)
         }
         _ => Err(format!("Unknown method: {method}")),
     }
+}
+
+fn parse<T: for<'de> Deserialize<'de>>(params: Value) -> Result<T, String> {
+    serde_json::from_value(params).map_err(|e| e.to_string())
 }
 
 fn encode(value: &impl serde::Serialize) -> String {
@@ -315,16 +652,188 @@ fn random_token() -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
+#[derive(Deserialize)]
+struct Id {
+    id: String,
+}
+
+#[derive(Deserialize)]
+struct OptionalId {
+    id: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct Ids {
+    ids: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct IdName {
+    id: String,
+    name: String,
+}
+
+#[derive(Deserialize)]
+struct NamePath {
+    name: String,
+    path: String,
+}
+
+#[derive(Deserialize)]
+struct Name {
+    name: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WorkspaceId {
+    workspace_id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SessionId {
+    session_id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SessionCreate {
+    workspace_id: String,
+    kind: String,
+    name: String,
+    provider: String,
+    model: String,
+    description: String,
+    autonomy: String,
+}
+
+#[derive(Deserialize)]
+struct SessionUpdate {
+    id: String,
+    name: String,
+    provider: String,
+    model: String,
+    description: String,
+    notifications: bool,
+    autonomy: String,
+}
+
+#[derive(Deserialize)]
+struct IdStatus {
+    id: String,
+    status: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct IdBlocks {
+    id: String,
+    blocks_json: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct IdProvider {
+    id: String,
+    provider_session_id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RoutineUpsert {
+    id: Option<String>,
+    session_id: String,
+    name: String,
+    enabled: bool,
+    prompt: String,
+    schedule: String,
+    next_run_at: Option<i64>,
+    created_by: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RoutineMark {
+    id: String,
+    last_run_at: i64,
+    next_run_at: Option<i64>,
+    runs_json: String,
+}
+
+#[derive(Deserialize)]
+struct Key {
+    key: String,
+}
+
+#[derive(Deserialize)]
+struct KeyValue {
+    key: String,
+    value: String,
+}
+
+#[derive(Deserialize)]
+struct Cwd {
+    cwd: String,
+}
+
+#[derive(Deserialize)]
+struct PathArg {
+    path: String,
+}
+
+#[derive(Deserialize)]
+struct PathContents {
+    path: String,
+    contents: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TempFile {
+    extension: String,
+    base64_contents: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentSpawn {
+    session_id: String,
+    command: String,
+    args: Vec<String>,
+    cwd: String,
+    env: Option<HashMap<String, String>>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SessionLine {
+    session_id: String,
+    line: String,
+}
+
+#[derive(Deserialize)]
+struct BridgeReply {
+    id: u64,
+    response: Value,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crew_core::store::Store;
     use futures_util::{SinkExt, StreamExt};
     use tokio_tungstenite::connect_async;
 
     #[tokio::test]
     async fn pty_echoes_hi_over_the_stream() {
+        let dir = std::env::temp_dir().join(format!("crewd-pty-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
         let handle = serve(Config {
             pty: PtyHost::new(),
+            store: Store::open(dir.join("crew.sqlite3")).expect("store"),
+            agents: AgentHost::new(),
+            bridge: Bridge::start(dir).expect("bridge"),
         })
         .expect("serve");
         let (mut ws, _) = connect_async(handle.url()).await.expect("connect");

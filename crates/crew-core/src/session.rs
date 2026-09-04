@@ -54,8 +54,7 @@ pub fn row_to_session(row: &rusqlite::Row, at: usize) -> rusqlite::Result<Sessio
     })
 }
 
-#[tauri::command(async)]
-pub fn session_list(store: State<Store>, workspace_id: String) -> Result<Vec<Session>, String> {
+pub fn list(store: &Store, workspace_id: String) -> Result<Vec<Session>, String> {
     store.with(|conn| {
         let mut stmt = conn.prepare_cached(SELECT_BY_WORKSPACE)?;
         let rows = stmt.query_map(params![workspace_id], |row| row_to_session(row, 0))?;
@@ -63,8 +62,7 @@ pub fn session_list(store: State<Store>, workspace_id: String) -> Result<Vec<Ses
     })
 }
 
-#[tauri::command(async)]
-pub fn session_get(store: State<Store>, id: String) -> Result<Option<Session>, String> {
+pub fn get(store: &Store, id: String) -> Result<Option<Session>, String> {
     store.with(|conn| {
         conn.prepare_cached(&format!("SELECT {SESSION_COLUMNS} FROM sessions s WHERE s.id = ?1"))?
             .query_row(params![id], |row| row_to_session(row, 0))
@@ -72,9 +70,8 @@ pub fn session_get(store: State<Store>, id: String) -> Result<Option<Session>, S
     })
 }
 
-#[tauri::command(async)]
-pub fn session_create(
-    store: State<Store>,
+pub fn create(
+    store: &Store,
     workspace_id: String,
     kind: String,
     name: String,
@@ -134,9 +131,8 @@ pub fn session_create(
     Ok(session)
 }
 
-#[tauri::command(async)]
-pub fn session_update(
-    store: State<Store>,
+pub fn update(
+    store: &Store,
     id: String,
     name: String,
     provider: String,
@@ -170,8 +166,7 @@ fn autonomy_or_default(value: String) -> String {
     }
 }
 
-#[tauri::command(async)]
-pub fn session_rename(store: State<Store>, id: String, name: String) -> Result<(), String> {
+pub fn rename(store: &Store, id: String, name: String) -> Result<(), String> {
     let name = name.trim().to_string();
     if name.is_empty() {
         return Err("Name is required".into());
@@ -185,26 +180,19 @@ pub fn session_rename(store: State<Store>, id: String, name: String) -> Result<(
     Ok(())
 }
 
-#[tauri::command(async)]
-pub fn session_delete(store: State<Store>, id: String) -> Result<(), String> {
+pub fn delete(store: &Store, id: String) -> Result<(), String> {
     store.with(|conn| conn.execute("DELETE FROM sessions WHERE id = ?1", params![id]))?;
     Ok(())
 }
 
-#[tauri::command(async)]
-pub fn session_get_blocks(store: State<Store>, id: String) -> Result<String, String> {
+pub fn get_blocks(store: &Store, id: String) -> Result<String, String> {
     store.with(|conn| {
         conn.prepare_cached("SELECT blocks_json FROM sessions WHERE id = ?1")?
             .query_row(params![id], |row| row.get::<_, String>(0))
     })
 }
 
-#[tauri::command(async)]
-pub fn session_set_blocks(
-    store: State<Store>,
-    id: String,
-    blocks_json: String,
-) -> Result<(), String> {
+pub fn set_blocks(store: &Store, id: String, blocks_json: String) -> Result<(), String> {
     store.with(|conn| {
         conn.prepare_cached(
             "UPDATE sessions SET blocks_json = ?2, updated_at = ?3 WHERE id = ?1",
@@ -214,9 +202,8 @@ pub fn session_set_blocks(
     Ok(())
 }
 
-#[tauri::command(async)]
-pub fn session_set_provider_session(
-    store: State<Store>,
+pub fn set_provider_session(
+    store: &Store,
     id: String,
     provider_session_id: String,
 ) -> Result<(), String> {
@@ -229,9 +216,7 @@ pub fn session_set_provider_session(
     Ok(())
 }
 
-/// The runtime owns this; the UI only renders whatever the last writer left.
-#[tauri::command(async)]
-pub fn session_set_status(store: State<Store>, id: String, status: String) -> Result<(), String> {
+pub fn set_status(store: &Store, id: String, status: String) -> Result<(), String> {
     const KNOWN: [&str; 5] = ["idle", "working", "needs-input", "done", "error"];
     if !KNOWN.contains(&status.as_str()) {
         return Err(format!("Unknown session status: {status}"));
@@ -243,7 +228,88 @@ pub fn session_set_status(store: State<Store>, id: String, status: String) -> Re
     Ok(())
 }
 
+pub fn reorder(store: &Store, ids: Vec<String>) -> Result<(), String> {
+    store.with(|conn| set_order(conn, "sessions", &ids))
+}
+
+#[tauri::command(async)]
+pub fn session_list(store: State<Store>, workspace_id: String) -> Result<Vec<Session>, String> {
+    list(&store, workspace_id)
+}
+
+#[tauri::command(async)]
+pub fn session_get(store: State<Store>, id: String) -> Result<Option<Session>, String> {
+    get(&store, id)
+}
+
+#[tauri::command(async)]
+pub fn session_create(
+    store: State<Store>,
+    workspace_id: String,
+    kind: String,
+    name: String,
+    provider: String,
+    model: String,
+    description: String,
+    autonomy: String,
+) -> Result<Session, String> {
+    create(&store, workspace_id, kind, name, provider, model, description, autonomy)
+}
+
+#[tauri::command(async)]
+pub fn session_update(
+    store: State<Store>,
+    id: String,
+    name: String,
+    provider: String,
+    model: String,
+    description: String,
+    notifications: bool,
+    autonomy: String,
+) -> Result<(), String> {
+    update(&store, id, name, provider, model, description, notifications, autonomy)
+}
+
+#[tauri::command(async)]
+pub fn session_rename(store: State<Store>, id: String, name: String) -> Result<(), String> {
+    rename(&store, id, name)
+}
+
+#[tauri::command(async)]
+pub fn session_delete(store: State<Store>, id: String) -> Result<(), String> {
+    delete(&store, id)
+}
+
+#[tauri::command(async)]
+pub fn session_get_blocks(store: State<Store>, id: String) -> Result<String, String> {
+    get_blocks(&store, id)
+}
+
+#[tauri::command(async)]
+pub fn session_set_blocks(
+    store: State<Store>,
+    id: String,
+    blocks_json: String,
+) -> Result<(), String> {
+    set_blocks(&store, id, blocks_json)
+}
+
+#[tauri::command(async)]
+pub fn session_set_provider_session(
+    store: State<Store>,
+    id: String,
+    provider_session_id: String,
+) -> Result<(), String> {
+    set_provider_session(&store, id, provider_session_id)
+}
+
+/// The runtime owns this; the UI only renders whatever the last writer left.
+#[tauri::command(async)]
+pub fn session_set_status(store: State<Store>, id: String, status: String) -> Result<(), String> {
+    set_status(&store, id, status)
+}
+
 #[tauri::command(async)]
 pub fn session_reorder(store: State<Store>, ids: Vec<String>) -> Result<(), String> {
-    store.with(|conn| set_order(conn, "sessions", &ids))
+    reorder(&store, ids)
 }

@@ -1,5 +1,5 @@
-import { listen } from "@tauri-apps/api/event";
 import * as api from "./api";
+import { client } from "./client";
 import { newBlock } from "./blocks";
 import { isValidCron } from "./cron";
 import { modelsOf, providerOf, PROVIDERS } from "./providers";
@@ -209,7 +209,7 @@ let started = false;
 export function startAgentTools(): void {
   if (started) return;
   started = true;
-  void listen<ToolCall>("agent-tool", (event) => void handle(event.payload));
+  client.on("agent-tool", (payload) => void handle(payload as ToolCall));
 }
 
 async function handle(call: ToolCall): Promise<void> {

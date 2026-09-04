@@ -1,5 +1,5 @@
-import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
+import { client } from "./client";
 import type { RoutineRow, ScheduledRoutine } from "./routines";
 import type { Autonomy, ProjectFile, Session, SessionKind, SessionStatus, Workspace } from "./types";
 
@@ -10,33 +10,33 @@ export async function pickFiles(): Promise<string[]> {
   return Array.isArray(picked) ? picked : [picked];
 }
 
-export const listWorkspaces = (): Promise<Workspace[]> => invoke("workspace_list");
+export const listWorkspaces = (): Promise<Workspace[]> => client.request("workspace_list");
 
 export const createWorkspace = (name: string, path: string): Promise<Workspace> =>
-  invoke("workspace_create", { name, path });
+  client.request("workspace_create", { name, path });
 
 export const renameWorkspace = (id: string, name: string): Promise<void> =>
-  invoke("workspace_rename", { id, name });
+  client.request("workspace_rename", { id, name });
 
 export const deleteWorkspace = (id: string): Promise<void> =>
-  invoke("workspace_delete", { id });
+  client.request("workspace_delete", { id });
 
 export const getActiveWorkspace = (): Promise<string | null> =>
-  invoke("active_workspace_get");
+  client.request("active_workspace_get");
 
 export const setActiveWorkspace = (id: string | null): Promise<void> =>
-  invoke("active_workspace_set", { id });
+  client.request("active_workspace_set", { id });
 
-export const getSession = (id: string): Promise<Session | null> => invoke("session_get", { id });
+export const getSession = (id: string): Promise<Session | null> => client.request("session_get", { id });
 
 export const listSessions = (workspaceId: string): Promise<Session[]> =>
-  invoke("session_list", { workspaceId });
+  client.request("session_list", { workspaceId });
 
 export const createSession = (
   workspaceId: string,
   kind: SessionKind,
   input: { name: string; provider: string; model: string; description: string; autonomy: Autonomy },
-): Promise<Session> => invoke("session_create", { workspaceId, kind, ...input });
+): Promise<Session> => client.request("session_create", { workspaceId, kind, ...input });
 
 export const updateSession = (
   id: string,
@@ -48,30 +48,30 @@ export const updateSession = (
     notifications: boolean;
     autonomy: Autonomy;
   },
-): Promise<void> => invoke("session_update", { id, ...input });
+): Promise<void> => client.request("session_update", { id, ...input });
 
 export const renameSession = (id: string, name: string): Promise<void> =>
-  invoke("session_rename", { id, name });
+  client.request("session_rename", { id, name });
 
 export const deleteSession = (id: string): Promise<void> =>
-  invoke("session_delete", { id });
+  client.request("session_delete", { id });
 
 export const setSessionStatus = (id: string, status: SessionStatus): Promise<void> =>
-  invoke("session_set_status", { id, status });
+  client.request("session_set_status", { id, status });
 
 export const getSessionBlocks = (id: string): Promise<string> =>
-  invoke("session_get_blocks", { id });
+  client.request("session_get_blocks", { id });
 
 export const setSessionBlocks = (id: string, blocksJson: string): Promise<void> =>
-  invoke("session_set_blocks", { id, blocksJson });
+  client.request("session_set_blocks", { id, blocksJson });
 
 export const setProviderSession = (id: string, providerSessionId: string): Promise<void> =>
-  invoke("session_set_provider_session", { id, providerSessionId });
+  client.request("session_set_provider_session", { id, providerSessionId });
 
-export const resolveClaude = (): Promise<{ path: string }> => invoke("agent_resolve_claude");
+export const resolveClaude = (): Promise<{ path: string }> => client.request("agent_resolve_claude");
 
 export const resolveBinary = (name: string): Promise<{ path: string }> =>
-  invoke("agent_resolve", { name });
+  client.request("agent_resolve", { name });
 
 export const spawnAgent = (
   sessionId: string,
@@ -79,25 +79,25 @@ export const spawnAgent = (
   args: string[],
   cwd: string,
   env: Record<string, string> = {},
-): Promise<number> => invoke("agent_spawn", { sessionId, command, args, cwd, env });
+): Promise<number> => client.request("agent_spawn", { sessionId, command, args, cwd, env });
 
 export const writeAgent = (sessionId: string, line: string): Promise<void> =>
-  invoke("agent_write", { sessionId, line });
+  client.request("agent_write", { sessionId, line });
 
 export const closeAgentStdin = (sessionId: string): Promise<void> =>
-  invoke("agent_close_stdin", { sessionId });
+  client.request("agent_close_stdin", { sessionId });
 
 export const killAgent = (sessionId: string): Promise<void> =>
-  invoke("agent_kill", { sessionId });
+  client.request("agent_kill", { sessionId });
 
-export const killAllAgents = (): Promise<void> => invoke("agent_kill_all");
+export const killAllAgents = (): Promise<void> => client.request("agent_kill_all");
 
-export const runningAgents = (): Promise<string[]> => invoke("agent_running");
+export const runningAgents = (): Promise<string[]> => client.request("agent_running");
 
 export const listSessionRoutines = (sessionId: string): Promise<RoutineRow[]> =>
-  invoke("routine_list_for_session", { sessionId });
+  client.request("routine_list_for_session", { sessionId });
 
-export const listRoutines = (): Promise<ScheduledRoutine[]> => invoke("routine_list");
+export const listRoutines = (): Promise<ScheduledRoutine[]> => client.request("routine_list");
 
 export const upsertRoutine = (input: {
   id?: string;
@@ -108,48 +108,48 @@ export const upsertRoutine = (input: {
   schedule: string;
   nextRunAt: number | null;
   createdBy?: string;
-}): Promise<RoutineRow> => invoke("routine_upsert", { id: null, ...input });
+}): Promise<RoutineRow> => client.request("routine_upsert", { id: null, ...input });
 
-export const deleteRoutine = (id: string): Promise<void> => invoke("routine_delete", { id });
+export const deleteRoutine = (id: string): Promise<void> => client.request("routine_delete", { id });
 
 export const markRoutineRun = (
   id: string,
   lastRunAt: number,
   nextRunAt: number | null,
   runsJson: string,
-): Promise<void> => invoke("routine_mark_run", { id, lastRunAt, nextRunAt, runsJson });
+): Promise<void> => client.request("routine_mark_run", { id, lastRunAt, nextRunAt, runsJson });
 
 export type BridgeInfo = { socketPath: string; token: string; exe: string };
 
-export const bridgeInfo = (): Promise<BridgeInfo> => invoke("bridge_info");
+export const bridgeInfo = (): Promise<BridgeInfo> => client.request("bridge_info");
 
 export const bridgeReply = (id: number, response: unknown): Promise<void> =>
-  invoke("bridge_reply", { id, response });
+  client.request("bridge_reply", { id, response });
 
-export const stateGet = (key: string): Promise<string | null> => invoke("state_get", { key });
+export const stateGet = (key: string): Promise<string | null> => client.request("state_get", { key });
 
 export const stateSet = (key: string, value: string): Promise<void> =>
-  invoke("state_set", { key, value });
+  client.request("state_set", { key, value });
 
 export const reorderSessions = (ids: string[]): Promise<void> =>
-  invoke("session_reorder", { ids });
+  client.request("session_reorder", { ids });
 
 export const reorderWorkspaces = (ids: string[]): Promise<void> =>
-  invoke("workspace_reorder", { ids });
+  client.request("workspace_reorder", { ids });
 
 export const listProjectFiles = (cwd: string): Promise<ProjectFile[]> =>
-  invoke("list_project_files", { cwd });
+  client.request("list_project_files", { cwd });
 
 export const readTextFile = (path: string): Promise<string> =>
-  invoke("read_text_file", { path });
+  client.request("read_text_file", { path });
 
 export const writeTextFile = (path: string, contents: string): Promise<void> =>
-  invoke("write_text_file", { path, contents });
+  client.request("write_text_file", { path, contents });
 
-export const pathExists = (path: string): Promise<boolean> => invoke("path_exists", { path });
+export const pathExists = (path: string): Promise<boolean> => client.request("path_exists", { path });
 
 export const readFileBase64 = (path: string): Promise<{ mime: string; data: string }> =>
-  invoke("read_file_base64", { path });
+  client.request("read_file_base64", { path });
 
 /** Clipboard files have no path; the CLIs Crew hosts only take paths. */
 export async function writeTempFile(file: File): Promise<string> {
@@ -160,7 +160,7 @@ export async function writeTempFile(file: File): Promise<string> {
     binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
   }
   const extension = file.type.split("/")[1] ?? file.name.split(".").pop() ?? "bin";
-  return invoke("write_temp_file", { extension, base64Contents: btoa(binary) });
+  return client.request("write_temp_file", { extension, base64Contents: btoa(binary) });
 }
 
 export { ackPty, killPty, resizePty, spawnPty, writePty } from "./pty";

@@ -9,11 +9,10 @@ use std::thread;
 use std::time::Duration;
 
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::State;
 
 const STDOUT_EVENT: &str = "agent-stdout";
 const STDERR_EVENT: &str = "agent-stderr";
-const EXIT_EVENT: &str = "agent-exit";
 const KILL_ESCALATE: Duration = Duration::from_secs(2);
 /// How long the emitter waits for the next line before sending what it has.
 const COALESCE: Duration = Duration::from_millis(8);
@@ -22,19 +21,9 @@ const SPAWN_CANCELLED: &str = "Agent start was cancelled";
 const MAX_BATCH: usize = 256;
 const MAX_BATCH_BYTES: usize = 64 * 1024;
 
-#[derive(Serialize, Clone)]
-#[serde(rename_all = "camelCase")]
-struct AgentLines {
-    session_id: String,
-    lines: Vec<String>,
-}
-
-#[derive(Serialize, Clone)]
-#[serde(rename_all = "camelCase")]
-struct AgentExit {
-    session_id: String,
-    code: Option<i32>,
-    pid: u32,
+pub trait AgentEvents: Send + Sync {
+    fn lines(&self, event: &str, session_id: &str, lines: Vec<String>);
+    fn exit(&self, session_id: &str, code: Option<i32>, pid: u32);
 }
 
 #[derive(Serialize)]
@@ -56,24 +45,41 @@ struct Inner {
     epochs: HashMap<String, u64>,
 }
 
-pub struct AgentHost {
+struct Shared {
     inner: Mutex<Inner>,
     kill_all_gen: AtomicU64,
+    events: Mutex<Option<Arc<dyn AgentEvents>>>,
+}
+
+#[derive(Clone)]
+pub struct AgentHost {
+    shared: Arc<Shared>,
 }
 
 impl AgentHost {
     pub fn new() -> Self {
         Self {
-            inner: Mutex::new(Inner {
-                children: HashMap::new(),
-                epochs: HashMap::new(),
+            shared: Arc::new(Shared {
+                inner: Mutex::new(Inner {
+                    children: HashMap::new(),
+                    epochs: HashMap::new(),
+                }),
+                kill_all_gen: AtomicU64::new(0),
+                events: Mutex::new(None),
             }),
-            kill_all_gen: AtomicU64::new(0),
         }
     }
 
+    pub fn set_events(&self, events: Arc<dyn AgentEvents>) {
+        *self.shared.events.lock().unwrap_or_else(|e| e.into_inner()) = Some(events);
+    }
+
+    fn events(&self) -> Option<Arc<dyn AgentEvents>> {
+        self.shared.events.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
     fn lock(&self) -> std::sync::MutexGuard<'_, Inner> {
-        self.inner.lock().unwrap_or_else(|e| e.into_inner())
+        self.shared.inner.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     fn get(&self, session_id: &str) -> Option<Arc<LiveChild>> {
@@ -82,7 +88,7 @@ impl AgentHost {
 
     fn begin_spawn(&self, session_id: &str) -> (u64, u64, Option<Arc<LiveChild>>) {
         let mut inner = self.lock();
-        let kill_all = self.kill_all_gen.load(Ordering::SeqCst);
+        let kill_all = self.shared.kill_all_gen.load(Ordering::SeqCst);
         let epoch = inner.epochs.entry(session_id.to_string()).or_insert(0);
         *epoch += 1;
         let epoch = *epoch;
@@ -98,7 +104,7 @@ impl AgentHost {
         live: Arc<LiveChild>,
     ) -> Option<Arc<LiveChild>> {
         let mut inner = self.lock();
-        if self.kill_all_gen.load(Ordering::SeqCst) != kill_all {
+        if self.shared.kill_all_gen.load(Ordering::SeqCst) != kill_all {
             return Some(live);
         }
         if inner.epochs.get(&session_id) != Some(&epoch) {
@@ -124,17 +130,149 @@ impl AgentHost {
         inner.children.remove(session_id)
     }
 
-    fn running(&self) -> Vec<String> {
+    fn current_epoch(&self, session_id: &str, epoch: u64) -> bool {
+        self.lock().epochs.get(session_id) == Some(&epoch)
+    }
+
+    pub fn running(&self) -> Vec<String> {
         self.lock().children.keys().cloned().collect()
     }
 
     pub fn kill_all(&self) {
         let kids: Vec<Arc<LiveChild>> = {
             let mut inner = self.lock();
-            self.kill_all_gen.fetch_add(1, Ordering::SeqCst);
+            self.shared.kill_all_gen.fetch_add(1, Ordering::SeqCst);
             inner.children.drain().map(|(_, child)| child).collect()
         };
         for live in kids {
+            terminate(&live);
+        }
+    }
+
+    pub fn resolve_claude() -> Result<AgentBinary, String> {
+        resolve_binary("claude")
+            .map(|path| AgentBinary {
+                path: path.to_string_lossy().into_owned(),
+            })
+            .ok_or_else(|| {
+                "Claude Code CLI not found. Install it from https://claude.com/product/claude-code and run `claude auth login`."
+                    .into()
+            })
+    }
+
+    pub fn resolve(name: &str) -> Result<AgentBinary, String> {
+        if name.is_empty() || name.contains('/') {
+            return Err(format!("Not a binary name: {name}"));
+        }
+        resolve_binary(name)
+            .map(|path| AgentBinary {
+                path: path.to_string_lossy().into_owned(),
+            })
+            .ok_or_else(|| format!("`{name}` was not found on your PATH."))
+    }
+
+    pub fn spawn(
+        &self,
+        session_id: String,
+        command: String,
+        args: Vec<String>,
+        cwd: String,
+        env: Option<HashMap<String, String>>,
+    ) -> Result<u32, String> {
+        let workdir = PathBuf::from(&cwd);
+        if !workdir.is_dir() {
+            return Err(format!("Working directory does not exist: {cwd}"));
+        }
+
+        let (epoch, kill_all, prev) = self.begin_spawn(&session_id);
+        if let Some(prev) = prev {
+            terminate(&prev);
+        }
+
+        let mut cmd = Command::new(&command);
+        cmd.args(&args)
+            .envs(env.unwrap_or_default())
+            .current_dir(&workdir)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        prepare_child(&mut cmd);
+
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| format!("Failed to start {command}: {e}"))?;
+        let pid = child.id();
+
+        let (stdin, stdout, stderr) = match (child.stdin.take(), child.stdout.take(), child.stderr.take()) {
+            (Some(stdin), Some(stdout), Some(stderr)) => (stdin, stdout, stderr),
+            _ => {
+                kill_group(pid);
+                let _ = child.wait();
+                return Err("Failed to open the agent's pipes".into());
+            }
+        };
+
+        let live = Arc::new(LiveChild {
+            stdin: Mutex::new(Some(stdin)),
+            pid,
+            exited: AtomicBool::new(false),
+        });
+        if let Some(rejected) = self.install_spawn(session_id.clone(), epoch, kill_all, live.clone()) {
+            terminate(&rejected);
+            thread::spawn(move || {
+                let _ = child.wait();
+                rejected.exited.store(true, Ordering::Release);
+            });
+            return Err(SPAWN_CANCELLED.to_string());
+        }
+
+        let gate = Arc::new(Gate {
+            session_id: session_id.clone(),
+            epoch,
+        });
+        pump(self.clone(), STDOUT_EVENT, gate.clone(), stdout);
+        pump(self.clone(), STDERR_EVENT, gate, stderr);
+
+        let wait_host = self.clone();
+        let wait_id = session_id;
+        thread::spawn(move || {
+            let code = child.wait().ok().and_then(|status| status.code());
+            live.exited.store(true, Ordering::Release);
+            // Only the child that still owns the slot may report; a replaced one
+            // would otherwise end the turn of its successor.
+            if wait_host.remove_if_pid(&wait_id, pid).is_some() {
+                if let Some(events) = wait_host.events() {
+                    events.exit(&wait_id, code, pid);
+                }
+            }
+        });
+
+        Ok(pid)
+    }
+
+    pub fn write(&self, session_id: &str, line: &str) -> Result<(), String> {
+        let live = self
+            .get(session_id)
+            .ok_or_else(|| "Agent process is not running".to_string())?;
+        let mut slot = live.stdin.lock().unwrap_or_else(|e| e.into_inner());
+        let stdin = slot
+            .as_mut()
+            .ok_or_else(|| "Agent stdin is closed".to_string())?;
+        stdin
+            .write_all(line.as_bytes())
+            .and_then(|_| stdin.write_all(b"\n"))
+            .and_then(|_| stdin.flush())
+            .map_err(|e| format!("Failed to write to agent: {e}"))
+    }
+
+    pub fn close_stdin(&self, session_id: &str) {
+        if let Some(live) = self.get(session_id) {
+            live.stdin.lock().unwrap_or_else(|e| e.into_inner()).take();
+        }
+    }
+
+    pub fn kill(&self, session_id: &str) {
+        if let Some(live) = self.kill_session(session_id) {
             terminate(&live);
         }
     }
@@ -142,7 +280,9 @@ impl AgentHost {
 
 impl Drop for AgentHost {
     fn drop(&mut self) {
-        self.kill_all();
+        if Arc::strong_count(&self.shared) == 1 {
+            self.kill_all();
+        }
     }
 }
 
@@ -150,31 +290,16 @@ impl Drop for AgentHost {
 /// launchd's PATH, so Homebrew / `~/.local/bin` would otherwise look missing.
 #[tauri::command(async)]
 pub fn agent_resolve_claude() -> Result<AgentBinary, String> {
-    resolve_binary("claude")
-        .map(|path| AgentBinary {
-            path: path.to_string_lossy().into_owned(),
-        })
-        .ok_or_else(|| {
-            "Claude Code CLI not found. Install it from https://claude.com/product/claude-code and run `claude auth login`."
-                .into()
-        })
+    AgentHost::resolve_claude()
 }
 
 #[tauri::command(async)]
 pub fn agent_resolve(name: String) -> Result<AgentBinary, String> {
-    if name.is_empty() || name.contains('/') {
-        return Err(format!("Not a binary name: {name}"));
-    }
-    resolve_binary(&name)
-        .map(|path| AgentBinary {
-            path: path.to_string_lossy().into_owned(),
-        })
-        .ok_or_else(|| format!("`{name}` was not found on your PATH."))
+    AgentHost::resolve(&name)
 }
 
 #[tauri::command(async)]
 pub fn agent_spawn(
-    app: AppHandle,
     host: State<'_, AgentHost>,
     session_id: String,
     command: String,
@@ -182,84 +307,42 @@ pub fn agent_spawn(
     cwd: String,
     env: Option<HashMap<String, String>>,
 ) -> Result<u32, String> {
-    let workdir = PathBuf::from(&cwd);
-    if !workdir.is_dir() {
-        return Err(format!("Working directory does not exist: {cwd}"));
-    }
+    host.spawn(session_id, command, args, cwd, env)
+}
 
-    let (epoch, kill_all, prev) = host.begin_spawn(&session_id);
-    if let Some(prev) = prev {
-        terminate(&prev);
-    }
+/// Async: a child that stopped draining stdin would otherwise park the main thread.
+#[tauri::command(async)]
+pub fn agent_write(
+    host: State<'_, AgentHost>,
+    session_id: String,
+    line: String,
+) -> Result<(), String> {
+    host.write(&session_id, &line)
+}
 
-    let mut cmd = Command::new(&command);
-    cmd.args(&args)
-        .envs(env.unwrap_or_default())
-        .current_dir(&workdir)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    prepare_child(&mut cmd);
+#[tauri::command(async)]
+pub fn agent_close_stdin(host: State<'_, AgentHost>, session_id: String) -> Result<(), String> {
+    host.close_stdin(&session_id);
+    Ok(())
+}
 
-    let mut child = cmd
-        .spawn()
-        .map_err(|e| format!("Failed to start {command}: {e}"))?;
-    let pid = child.id();
+#[tauri::command(async)]
+pub fn agent_kill(host: State<'_, AgentHost>, session_id: String) -> Result<(), String> {
+    host.kill(&session_id);
+    Ok(())
+}
 
-    let (stdin, stdout, stderr) = match (child.stdin.take(), child.stdout.take(), child.stderr.take()) {
-        (Some(stdin), Some(stdout), Some(stderr)) => (stdin, stdout, stderr),
-        _ => {
-            kill_group(pid);
-            let _ = child.wait();
-            return Err("Failed to open the agent's pipes".into());
-        }
-    };
+/// The webview reloaded without the app restarting: every child is now an
+/// orphan nobody parses, so the runtime clears the slate before it starts.
+#[tauri::command(async)]
+pub fn agent_kill_all(host: State<'_, AgentHost>) -> Result<(), String> {
+    host.kill_all();
+    Ok(())
+}
 
-    let live = Arc::new(LiveChild {
-        stdin: Mutex::new(Some(stdin)),
-        pid,
-        exited: AtomicBool::new(false),
-    });
-    if let Some(rejected) = host.install_spawn(session_id.clone(), epoch, kill_all, live.clone()) {
-        terminate(&rejected);
-        thread::spawn(move || {
-            let _ = child.wait();
-            rejected.exited.store(true, Ordering::Release);
-        });
-        return Err(SPAWN_CANCELLED.to_string());
-    }
-
-    let gate = Arc::new(Gate {
-        session_id: session_id.clone(),
-        epoch,
-    });
-    pump(app.clone(), STDOUT_EVENT, gate.clone(), stdout);
-    pump(app.clone(), STDERR_EVENT, gate, stderr);
-
-    let wait_app = app.clone();
-    let wait_id = session_id;
-    thread::spawn(move || {
-        let code = child.wait().ok().and_then(|status| status.code());
-        live.exited.store(true, Ordering::Release);
-        // Only the child that still owns the slot may report; a replaced one
-        // would otherwise end the turn of its successor.
-        let owner = wait_app
-            .try_state::<AgentHost>()
-            .map(|host| host.remove_if_pid(&wait_id, pid).is_some())
-            .unwrap_or(true);
-        if owner {
-            let _ = wait_app.emit(
-                EXIT_EVENT,
-                AgentExit {
-                    session_id: wait_id,
-                    code,
-                    pid,
-                },
-            );
-        }
-    });
-
-    Ok(pid)
+#[tauri::command(async)]
+pub fn agent_running(host: State<'_, AgentHost>) -> Result<Vec<String>, String> {
+    Ok(host.running())
 }
 
 /// Which spawn a reader belongs to. Lines from a child that was replaced or
@@ -272,7 +355,7 @@ struct Gate {
 /// One reader thread feeds a channel; the emitter waits a beat for the rest of
 /// the burst and sends it as one event. With partial messages on, claude writes
 /// a line per token, and each event is a JSON round-trip into the webview.
-fn pump(app: AppHandle, event: &'static str, gate: Arc<Gate>, reader: impl Read + Send + 'static) {
+fn pump(host: AgentHost, event: &'static str, gate: Arc<Gate>, reader: impl Read + Send + 'static) {
     let (tx, rx) = mpsc::channel::<String>();
     thread::spawn(move || {
         for line in BufReader::new(reader).lines() {
@@ -295,72 +378,14 @@ fn pump(app: AppHandle, event: &'static str, gate: Arc<Gate>, reader: impl Read 
                     Err(_) => break,
                 }
             }
-            let current = app
-                .try_state::<AgentHost>()
-                .map(|host| host.lock().epochs.get(&gate.session_id) == Some(&gate.epoch))
-                .unwrap_or(false);
-            if !current {
+            if !host.current_epoch(&gate.session_id, gate.epoch) {
                 continue;
             }
-            let _ = app.emit(
-                event,
-                AgentLines {
-                    session_id: gate.session_id.clone(),
-                    lines,
-                },
-            );
+            if let Some(events) = host.events() {
+                events.lines(event, &gate.session_id, lines);
+            }
         }
     });
-}
-
-/// Async: a child that stopped draining stdin would otherwise park the main thread.
-#[tauri::command(async)]
-pub fn agent_write(
-    host: State<'_, AgentHost>,
-    session_id: String,
-    line: String,
-) -> Result<(), String> {
-    let live = host
-        .get(&session_id)
-        .ok_or_else(|| "Agent process is not running".to_string())?;
-    let mut slot = live.stdin.lock().unwrap_or_else(|e| e.into_inner());
-    let stdin = slot
-        .as_mut()
-        .ok_or_else(|| "Agent stdin is closed".to_string())?;
-    stdin
-        .write_all(line.as_bytes())
-        .and_then(|_| stdin.write_all(b"\n"))
-        .and_then(|_| stdin.flush())
-        .map_err(|e| format!("Failed to write to agent: {e}"))
-}
-
-#[tauri::command(async)]
-pub fn agent_close_stdin(host: State<'_, AgentHost>, session_id: String) -> Result<(), String> {
-    if let Some(live) = host.get(&session_id) {
-        live.stdin.lock().unwrap_or_else(|e| e.into_inner()).take();
-    }
-    Ok(())
-}
-
-#[tauri::command(async)]
-pub fn agent_kill(host: State<'_, AgentHost>, session_id: String) -> Result<(), String> {
-    if let Some(live) = host.kill_session(&session_id) {
-        terminate(&live);
-    }
-    Ok(())
-}
-
-/// The webview reloaded without the app restarting: every child is now an
-/// orphan nobody parses, so the runtime clears the slate before it starts.
-#[tauri::command(async)]
-pub fn agent_kill_all(host: State<'_, AgentHost>) -> Result<(), String> {
-    host.kill_all();
-    Ok(())
-}
-
-#[tauri::command(async)]
-pub fn agent_running(host: State<'_, AgentHost>) -> Result<Vec<String>, String> {
-    Ok(host.running())
 }
 
 fn prepare_child(cmd: &mut Command) {

@@ -15,8 +15,7 @@ pub struct Workspace {
     pub created_at: i64,
 }
 
-#[tauri::command(async)]
-pub fn workspace_list(store: State<Store>) -> Result<Vec<Workspace>, String> {
+pub fn list(store: &Store) -> Result<Vec<Workspace>, String> {
     store.with(|conn| {
         let mut stmt = conn.prepare_cached(
             "SELECT id, name, path, created_at FROM workspaces ORDER BY sort_order ASC, created_at ASC",
@@ -33,12 +32,7 @@ pub fn workspace_list(store: State<Store>) -> Result<Vec<Workspace>, String> {
     })
 }
 
-#[tauri::command(async)]
-pub fn workspace_create(
-    store: State<Store>,
-    name: String,
-    path: String,
-) -> Result<Workspace, String> {
+pub fn create(store: &Store, name: String, path: String) -> Result<Workspace, String> {
     let name = name.trim().to_string();
     if name.is_empty() {
         return Err("Workspace name is required".into());
@@ -82,8 +76,7 @@ pub fn workspace_create(
     Ok(workspace)
 }
 
-#[tauri::command(async)]
-pub fn workspace_rename(store: State<Store>, id: String, name: String) -> Result<(), String> {
+pub fn rename(store: &Store, id: String, name: String) -> Result<(), String> {
     let name = name.trim().to_string();
     if name.is_empty() {
         return Err("Workspace name is required".into());
@@ -97,23 +90,54 @@ pub fn workspace_rename(store: State<Store>, id: String, name: String) -> Result
     Ok(())
 }
 
-#[tauri::command(async)]
-pub fn workspace_delete(store: State<Store>, id: String) -> Result<(), String> {
+pub fn delete(store: &Store, id: String) -> Result<(), String> {
     store.with(|conn| conn.execute("DELETE FROM workspaces WHERE id = ?1", params![id]))?;
     Ok(())
 }
 
+pub fn reorder(store: &Store, ids: Vec<String>) -> Result<(), String> {
+    store.with(|conn| set_order(conn, "workspaces", &ids))
+}
+
+pub fn active_get(store: &Store) -> Result<Option<String>, String> {
+    store.with(|conn| read_state(conn, ACTIVE_WORKSPACE_KEY))
+}
+
+pub fn active_set(store: &Store, id: Option<String>) -> Result<(), String> {
+    store.with(|conn| write_state(conn, ACTIVE_WORKSPACE_KEY, id.as_deref()))
+}
+
+#[tauri::command(async)]
+pub fn workspace_list(store: State<Store>) -> Result<Vec<Workspace>, String> {
+    list(&store)
+}
+
+#[tauri::command(async)]
+pub fn workspace_create(store: State<Store>, name: String, path: String) -> Result<Workspace, String> {
+    create(&store, name, path)
+}
+
+#[tauri::command(async)]
+pub fn workspace_rename(store: State<Store>, id: String, name: String) -> Result<(), String> {
+    rename(&store, id, name)
+}
+
+#[tauri::command(async)]
+pub fn workspace_delete(store: State<Store>, id: String) -> Result<(), String> {
+    delete(&store, id)
+}
+
 #[tauri::command(async)]
 pub fn workspace_reorder(store: State<Store>, ids: Vec<String>) -> Result<(), String> {
-    store.with(|conn| set_order(conn, "workspaces", &ids))
+    reorder(&store, ids)
 }
 
 #[tauri::command(async)]
 pub fn active_workspace_get(store: State<Store>) -> Result<Option<String>, String> {
-    store.with(|conn| read_state(conn, ACTIVE_WORKSPACE_KEY))
+    active_get(&store)
 }
 
 #[tauri::command(async)]
 pub fn active_workspace_set(store: State<Store>, id: Option<String>) -> Result<(), String> {
-    store.with(|conn| write_state(conn, ACTIVE_WORKSPACE_KEY, id.as_deref()))
+    active_set(&store, id)
 }

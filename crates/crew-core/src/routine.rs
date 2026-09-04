@@ -52,11 +52,7 @@ fn row_to_routine(row: &rusqlite::Row, offset: usize) -> rusqlite::Result<Routin
     })
 }
 
-#[tauri::command(async)]
-pub fn routine_list_for_session(
-    store: State<Store>,
-    session_id: String,
-) -> Result<Vec<Routine>, String> {
+pub fn list_for_session(store: &Store, session_id: String) -> Result<Vec<Routine>, String> {
     store.with(|conn| {
         let mut stmt = conn.prepare_cached(&format!(
             "SELECT {ROUTINE_COLUMNS} FROM routines r WHERE r.session_id = ?1 ORDER BY r.created_at"
@@ -66,8 +62,7 @@ pub fn routine_list_for_session(
     })
 }
 
-#[tauri::command(async)]
-pub fn routine_list(store: State<Store>) -> Result<Vec<ScheduledRoutine>, String> {
+pub fn list(store: &Store) -> Result<Vec<ScheduledRoutine>, String> {
     store.with(|conn| {
         let sql = format!(
             "SELECT {ROUTINE_COLUMNS}, {SESSION_COLUMNS}, w.path
@@ -91,10 +86,9 @@ pub fn routine_list(store: State<Store>) -> Result<Vec<ScheduledRoutine>, String
     })
 }
 
-#[tauri::command(async)]
 #[allow(clippy::too_many_arguments)]
-pub fn routine_upsert(
-    store: State<Store>,
+pub fn upsert(
+    store: &Store,
     id: Option<String>,
     session_id: String,
     name: String,
@@ -123,15 +117,13 @@ pub fn routine_upsert(
     })
 }
 
-#[tauri::command(async)]
-pub fn routine_delete(store: State<Store>, id: String) -> Result<(), String> {
+pub fn delete(store: &Store, id: String) -> Result<(), String> {
     store.with(|conn| conn.execute("DELETE FROM routines WHERE id = ?1", params![id]))?;
     Ok(())
 }
 
-#[tauri::command(async)]
-pub fn routine_mark_run(
-    store: State<Store>,
+pub fn mark_run(
+    store: &Store,
     id: String,
     last_run_at: i64,
     next_run_at: Option<i64>,
@@ -145,4 +137,49 @@ pub fn routine_mark_run(
         )
     })?;
     Ok(())
+}
+
+#[tauri::command(async)]
+pub fn routine_list_for_session(
+    store: State<Store>,
+    session_id: String,
+) -> Result<Vec<Routine>, String> {
+    list_for_session(&store, session_id)
+}
+
+#[tauri::command(async)]
+pub fn routine_list(store: State<Store>) -> Result<Vec<ScheduledRoutine>, String> {
+    list(&store)
+}
+
+#[tauri::command(async)]
+#[allow(clippy::too_many_arguments)]
+pub fn routine_upsert(
+    store: State<Store>,
+    id: Option<String>,
+    session_id: String,
+    name: String,
+    enabled: bool,
+    prompt: String,
+    schedule: String,
+    next_run_at: Option<i64>,
+    created_by: Option<String>,
+) -> Result<Routine, String> {
+    upsert(&store, id, session_id, name, enabled, prompt, schedule, next_run_at, created_by)
+}
+
+#[tauri::command(async)]
+pub fn routine_delete(store: State<Store>, id: String) -> Result<(), String> {
+    delete(&store, id)
+}
+
+#[tauri::command(async)]
+pub fn routine_mark_run(
+    store: State<Store>,
+    id: String,
+    last_run_at: i64,
+    next_run_at: Option<i64>,
+    runs_json: String,
+) -> Result<(), String> {
+    mark_run(&store, id, last_run_at, next_run_at, runs_json)
 }

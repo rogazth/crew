@@ -1,5 +1,5 @@
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use rusqlite::{params, Connection, OptionalExtension};
 use tauri::State;
@@ -34,8 +34,9 @@ CREATE TABLE IF NOT EXISTS app_state (
 );
 "#;
 
+#[derive(Clone)]
 pub struct Store {
-    conn: Mutex<Connection>,
+    conn: Arc<Mutex<Connection>>,
 }
 
 impl Store {
@@ -61,7 +62,7 @@ impl Store {
         )
             .map_err(|e| e.to_string())?;
         Ok(Self {
-            conn: Mutex::new(conn),
+            conn: Arc::new(Mutex::new(conn)),
         })
     }
 
@@ -201,14 +202,22 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
 
 /// Small durable key/value for chrome that has to survive a restart: the active
 /// workspace, the open tabs of each one.
+pub fn get(store: &Store, key: String) -> Result<Option<String>, String> {
+    store.with(|conn| read_state(conn, &key))
+}
+
+pub fn set(store: &Store, key: String, value: String) -> Result<(), String> {
+    store.with(|conn| write_state(conn, &key, Some(&value)))
+}
+
 #[tauri::command(async)]
 pub fn state_get(store: State<Store>, key: String) -> Result<Option<String>, String> {
-    store.with(|conn| read_state(conn, &key))
+    get(&store, key)
 }
 
 #[tauri::command(async)]
 pub fn state_set(store: State<Store>, key: String, value: String) -> Result<(), String> {
-    store.with(|conn| write_state(conn, &key, Some(&value)))
+    set(&store, key, value)
 }
 
 pub fn read_state(conn: &Connection, key: &str) -> rusqlite::Result<Option<String>> {

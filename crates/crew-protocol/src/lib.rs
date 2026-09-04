@@ -115,6 +115,34 @@ pub fn err(id: u32, error: impl Into<String>) -> Response {
     }
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
+pub struct AgentLines {
+    pub session_id: String,
+    pub lines: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
+pub struct AgentExit {
+    pub session_id: String,
+    pub code: Option<i32>,
+    pub pid: u32,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
+pub struct ToolCall {
+    pub id: u64,
+    pub session_id: String,
+    pub method: String,
+    #[ts(type = "unknown")]
+    pub params: Value,
+}
+
 pub fn event(event: impl Into<String>, payload: impl Serialize) -> Result<Event, serde_json::Error> {
     Ok(Event {
         event: event.into(),
