@@ -289,21 +289,25 @@ async fn handle_socket(stream: TcpStream, hosts: Hosts, hub: Arc<Hub>, token: St
         let _ = sink.close().await;
     });
 
+    let pty_in: Arc<Mutex<HashMap<u32, mpsc::Sender<Vec<u8>>>>> = Arc::new(Mutex::new(HashMap::new()));
+
     while let Some(msg) = source.next().await {
         let Ok(msg) = msg else { break };
         match msg {
             Message::Text(text) => {
-                let reply = dispatch_text(&hosts, text.as_ref()).await;
-                hub.send(client_id, Outgoing::Text(reply));
+                let hosts = hosts.clone();
+                let hub = hub.clone();
+                tokio::spawn(async move {
+                    let reply = dispatch_text(&hosts, text.as_ref()).await;
+                    hub.send(client_id, Outgoing::Text(reply));
+                });
             }
             Message::Binary(bytes) => {
                 if bytes.len() < 4 {
                     continue;
                 }
                 let stream_id = u32::from_le_bytes(bytes[..4].try_into().unwrap());
-                let data = bytes[4..].to_vec();
-                let host = hosts.pty.clone();
-                let _ = tokio::task::spawn_blocking(move || host.write_stream(stream_id, &data)).await;
+                enqueue_pty_input(&pty_in, &hosts, stream_id, bytes[4..].to_vec());
             }
             Message::Close(_) => break,
             Message::Ping(_) | Message::Pong(_) | Message::Frame(_) => {}
@@ -312,6 +316,34 @@ async fn handle_socket(stream: TcpStream, hosts: Hosts, hub: Arc<Hub>, token: St
 
     hub.unsubscribe(client_id);
     writer.abort();
+}
+
+fn enqueue_pty_input(
+    pty_in: &Mutex<HashMap<u32, mpsc::Sender<Vec<u8>>>>,
+    hosts: &Hosts,
+    stream_id: u32,
+    data: Vec<u8>,
+) {
+    let mut map = pty_in.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(tx) = map.get(&stream_id) {
+        let _ = tx.try_send(data);
+        return;
+    }
+    let (tx, rx) = mpsc::channel(32);
+    let _ = tx.try_send(data);
+    map.insert(stream_id, tx);
+    drop(map);
+    let host = hosts.pty.clone();
+    tokio::spawn(async move {
+        drain_pty_input(host, stream_id, rx).await;
+    });
+}
+
+async fn drain_pty_input(host: PtyHost, stream_id: u32, mut rx: mpsc::Receiver<Vec<u8>>) {
+    while let Some(data) = rx.recv().await {
+        let host = host.clone();
+        let _ = tokio::task::spawn_blocking(move || host.write_stream(stream_id, &data)).await;
+    }
 }
 
 async fn dispatch_text(hosts: &Hosts, text: &str) -> String {
@@ -824,18 +856,27 @@ mod tests {
     use crew_core::store::Store;
     use futures_util::{SinkExt, StreamExt};
     use tokio_tungstenite::connect_async;
+    use tokio_tungstenite::WebSocketStream;
 
-    #[tokio::test]
-    async fn pty_echoes_hi_over_the_stream() {
-        let dir = std::env::temp_dir().join(format!("crewd-pty-{}", std::process::id()));
+    type Ws = WebSocketStream<tokio_tungstenite::MaybeTlsStream<TcpStream>>;
+
+    fn test_dir(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("crewd-{name}-{}", std::process::id()));
         let _ = std::fs::create_dir_all(&dir);
-        let handle = serve(Config {
+        dir
+    }
+
+    fn test_serve(dir: &std::path::Path) -> Handle {
+        serve(Config {
             pty: PtyHost::new(),
             store: Store::open(dir.join("crew.sqlite3")).expect("store"),
             agents: AgentHost::new(),
-            bridge: Bridge::start(dir).expect("bridge"),
+            bridge: Bridge::start(dir.to_path_buf()).expect("bridge"),
         })
-        .expect("serve");
+        .expect("serve")
+    }
+
+    async fn connect_authed(handle: &Handle) -> Ws {
         let (mut ws, _) = connect_async(handle.url()).await.expect("connect");
         ws.send(Message::Text(
             serde_json::to_string(&Auth {
@@ -846,24 +887,38 @@ mod tests {
         ))
         .await
         .expect("auth");
+        ws
+    }
 
-        let spawn = Request {
-            id: 1,
+    fn spawn_req(id: u32, pty: &str) -> Request {
+        Request {
+            id,
             method: "pty_spawn".into(),
             params: serde_json::to_value(PtySpawn {
-                id: "t".into(),
+                id: pty.into(),
                 cwd: std::env::temp_dir().to_string_lossy().into_owned(),
                 command: vec!["/bin/sh".into()],
                 cols: 80,
                 rows: 24,
             })
             .unwrap(),
-        };
-        ws.send(Message::Text(serde_json::to_string(&spawn).unwrap().into()))
-            .await
-            .expect("spawn");
+        }
+    }
 
-        let stream_id = wait_stream_id(&mut ws).await;
+    async fn send_json(ws: &mut Ws, value: &impl serde::Serialize) {
+        ws.send(Message::Text(serde_json::to_string(value).unwrap().into()))
+            .await
+            .expect("send");
+    }
+
+    #[tokio::test]
+    async fn pty_echoes_hi_over_the_stream() {
+        let dir = test_dir("pty");
+        let handle = test_serve(&dir);
+        let mut ws = connect_authed(&handle).await;
+        send_json(&mut ws, &spawn_req(1, "t")).await;
+
+        let stream_id = wait_response(&mut ws, 1).await.result.and_then(|v| v.as_u64()).expect("stream") as u32;
         let mut frame = Vec::from(stream_id.to_le_bytes());
         frame.extend_from_slice(b"echo hi\n");
         ws.send(Message::Binary(frame.into())).await.expect("write");
@@ -873,31 +928,76 @@ mod tests {
         handle.shutdown();
     }
 
-    async fn wait_stream_id<S>(ws: &mut S) -> u32
-    where
-        S: StreamExt<Item = Result<Message, tokio_tungstenite::tungstenite::Error>> + Unpin,
-    {
+    #[tokio::test]
+    async fn slow_rpc_does_not_delay_pty_ack() {
+        let dir = test_dir("slow-rpc");
+        let handle = test_serve(&dir);
+        let mut ws = connect_authed(&handle).await;
+        send_json(&mut ws, &spawn_req(1, "t")).await;
+        let spawn = wait_response(&mut ws, 1).await;
+        assert!(spawn.ok, "{}", spawn.error.unwrap_or_default());
+
+        let fifo = dir.join("block");
+        assert!(
+            std::process::Command::new("mkfifo")
+                .arg(&fifo)
+                .status()
+                .expect("mkfifo")
+                .success()
+        );
+
+        send_json(
+            &mut ws,
+            &Request {
+                id: 2,
+                method: "read_text_file".into(),
+                params: serde_json::json!({ "path": fifo }),
+            },
+        )
+        .await;
+        send_json(
+            &mut ws,
+            &Request {
+                id: 3,
+                method: "pty_ack".into(),
+                params: serde_json::json!({ "id": "t", "processed": 0 }),
+            },
+        )
+        .await;
+
+        let first = wait_one_of(&mut ws, &[2, 3]).await;
+        assert_eq!(first.id, 3, "pty_ack must finish while read_text_file is blocked");
+        assert!(first.ok, "{}", first.error.unwrap_or_default());
+
+        std::fs::write(&fifo, "ok").expect("unblock");
+        let slow = wait_response(&mut ws, 2).await;
+        assert!(slow.ok, "{}", slow.error.unwrap_or_default());
+        handle.shutdown();
+    }
+
+    async fn wait_response(ws: &mut Ws, id: u32) -> proto::Response {
+        wait_one_of(ws, &[id]).await
+    }
+
+    async fn wait_one_of(ws: &mut Ws, ids: &[u32]) -> proto::Response {
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
         loop {
             let msg = tokio::time::timeout_at(deadline, ws.next())
                 .await
-                .expect("spawn timeout")
+                .expect("rpc timeout")
                 .expect("closed")
                 .expect("ws");
             if let Message::Text(text) = msg {
-                let response: proto::Response = serde_json::from_str(text.as_ref()).expect("json");
-                if response.id == 1 {
-                    assert!(response.ok, "{}", response.error.unwrap_or_default());
-                    return response.result.and_then(|v| v.as_u64()).expect("stream") as u32;
+                if let Ok(response) = serde_json::from_str::<proto::Response>(text.as_ref()) {
+                    if ids.contains(&response.id) {
+                        return response;
+                    }
                 }
             }
         }
     }
 
-    async fn wait_bytes<S>(ws: &mut S, needle: &[u8]) -> Vec<u8>
-    where
-        S: StreamExt<Item = Result<Message, tokio_tungstenite::tungstenite::Error>> + Unpin,
-    {
+    async fn wait_bytes(ws: &mut Ws, needle: &[u8]) -> Vec<u8> {
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
         let mut acc = Vec::new();
         loop {
