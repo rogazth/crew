@@ -60,6 +60,7 @@ impl Handle {
 enum Outgoing {
     Text(String),
     Binary(Vec<u8>),
+    Pong(Vec<u8>),
 }
 
 struct Hub {
@@ -116,6 +117,7 @@ impl Hub {
             let _ = tx.send(match &msg {
                 Outgoing::Text(text) => Outgoing::Text(text.clone()),
                 Outgoing::Binary(bytes) => Outgoing::Binary(bytes.clone()),
+                Outgoing::Pong(payload) => Outgoing::Pong(payload.clone()),
             });
         }
     }
@@ -283,6 +285,7 @@ async fn handle_socket(stream: TcpStream, hosts: Hosts, hub: Arc<Hub>, token: St
             let sent = match msg {
                 Outgoing::Text(text) => sink.send(Message::Text(text.into())).await,
                 Outgoing::Binary(bytes) => sink.send(Message::Binary(bytes.into())).await,
+                Outgoing::Pong(payload) => sink.send(Message::Pong(payload.into())).await,
             };
             if sent.is_err() {
                 break;
@@ -312,7 +315,10 @@ async fn handle_socket(stream: TcpStream, hosts: Hosts, hub: Arc<Hub>, token: St
                 enqueue_pty_input(&pty_in, &hosts, stream_id, bytes[4..].to_vec());
             }
             Message::Close(_) => break,
-            Message::Ping(_) | Message::Pong(_) | Message::Frame(_) => {}
+            Message::Ping(payload) => {
+                hub.send(client_id, Outgoing::Pong(payload.to_vec()));
+            }
+            Message::Pong(_) | Message::Frame(_) => {}
         }
     }
 
@@ -980,6 +986,29 @@ mod tests {
         let slow = wait_response(&mut ws, 2).await;
         assert!(slow.ok, "{}", slow.error.unwrap_or_default());
         handle.shutdown();
+    }
+
+    #[tokio::test]
+    async fn ping_is_answered_with_a_pong() {
+        let dir = test_dir("ping");
+        let handle = test_serve(&dir);
+        let mut ws = connect_authed(&handle).await;
+        ws.send(Message::Ping(b"crew".to_vec().into()))
+            .await
+            .expect("ping");
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            let msg = tokio::time::timeout_at(deadline, ws.next())
+                .await
+                .expect("pong timeout")
+                .expect("closed")
+                .expect("ws");
+            if let Message::Pong(payload) = msg {
+                assert_eq!(payload.as_ref(), b"crew");
+                handle.shutdown();
+                return;
+            }
+        }
     }
 
     #[tokio::test]
