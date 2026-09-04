@@ -1,7 +1,8 @@
-import { memo, useEffect, useRef } from "react";
+import { lazy, memo, Suspense, useEffect, useRef } from "react";
 import type { ApprovalDecision, Block } from "../../lib/blocks";
-import { CodeBlock } from "./CodeBlock";
-import { Diff } from "./DiffView";
+
+/** The diff renderer is ~300 kB and most turns never raise a card; it loads with the first one. */
+const ApprovalBody = lazy(() => import("./ApprovalBody").then((m) => ({ default: m.ApprovalBody })));
 
 type Props = {
   block: Block;
@@ -55,7 +56,9 @@ export const ApprovalCard = memo(function ApprovalCard({ block, hot = false, onA
   return (
     <div ref={card} tabIndex={-1} className="crew-card my-1.5 outline-none">
       <p className="text-[13px] leading-[18px] text-text-muted">{headline(name, input, block.text)}</p>
-      <Body name={name} input={input} />
+      <Suspense fallback={null}>
+        <ApprovalBody name={name} input={input} />
+      </Suspense>
       <div className="flex items-center justify-end gap-1.5">
         <button type="button" onClick={() => onApprove(requestId, "deny")} className="crew-btn">
           Deny
@@ -78,19 +81,4 @@ function headline(name: string, input: Record<string, unknown> | undefined, titl
   if (/^bash$/i.test(name)) return "Wants to run a command";
   if (/^read$/i.test(name)) return leaf ? `Wants to read ${leaf}` : "Wants to read a file";
   return `Wants to use ${name}: ${title}`;
-}
-
-function Body({ name, input }: { name: string; input: Record<string, unknown> | undefined }) {
-  const command = str(input, "command");
-  if (command) return <CodeBlock code={command} lang="bash" />;
-  const path = str(input, "file_path") ?? str(input, "path");
-  if (EDIT.test(name) && path) {
-    const before = str(input, "old_string") ?? "";
-    const after = str(input, "new_string") ?? str(input, "content") ?? "";
-    if (before || after) return <Diff name={path.split("/").pop() ?? path} before={before} after={after} />;
-  }
-  if (input && Object.keys(input).length > 0) {
-    return <CodeBlock code={JSON.stringify(input, null, 2)} lang="json" />;
-  }
-  return null;
 }

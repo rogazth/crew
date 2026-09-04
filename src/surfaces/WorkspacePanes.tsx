@@ -1,5 +1,6 @@
 import { useMemo } from "react";
 import { Agents } from "./Agents";
+import { DiffsPool } from "./DiffsPool";
 import { ChatContext, type ChatActions } from "./chat/context";
 import { Surface } from "./Surface";
 import { Terminals } from "./Terminals";
@@ -46,12 +47,14 @@ export function WorkspacePanes({
   );
   return (
     <div className="relative min-h-0 flex-1">
-      <Surface
-        tab={tab}
-        sessions={sessions}
-        hasWorkspace={hasWorkspace}
-        onCreateWorkspace={onCreateWorkspace}
-      />
+      <DiffsPool>
+        <Surface
+          tab={tab}
+          sessions={sessions}
+          hasWorkspace={hasWorkspace}
+          onCreateWorkspace={onCreateWorkspace}
+        />
+      </DiffsPool>
       {cwd && (
         <>
           <Terminals

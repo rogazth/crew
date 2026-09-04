@@ -1,6 +1,5 @@
 import { homeDir } from "@tauri-apps/api/path";
-import { useCallback, useEffect, useState } from "react";
-import { TerminalView } from "./TerminalView";
+import { lazy, Suspense, useCallback, useEffect, useState } from "react";
 import { useCommands } from "../hooks/useCommand";
 import { useSessionActivity } from "../hooks/useSessionActivity";
 import { useTerminalPrefs } from "../hooks/useTerminalPrefs";
@@ -11,6 +10,9 @@ import { isTerminalTab, relativeTo } from "../lib/tabs";
 import { activeTerminal } from "../lib/terminalFocus";
 import { clamp, DEFAULT_TERMINAL_PREFS, LIMITS } from "../lib/terminalPrefs";
 import type { ProjectFile, Session, SessionStatus, Tab } from "../lib/types";
+
+/** xterm and its addons are ~800 kB of the bundle; the window opens without them. */
+const TerminalView = lazy(() => import("./TerminalView").then((m) => ({ default: m.TerminalView })));
 
 type Props = {
   tabs: Tab[];
@@ -89,7 +91,8 @@ export function Terminals({ tabs, activeId, sessions, cwd, onStatus, onOpenFile 
 function Pane({ active, children }: { active: boolean; children: React.ReactNode }) {
   return (
     <div hidden={!active} className="absolute inset-0">
-      {children}
+      {/* Per pane, so the first terminal's chunk does not blank the ones already running. */}
+      <Suspense fallback={null}>{children}</Suspense>
     </div>
   );
 }

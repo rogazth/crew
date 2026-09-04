@@ -1,8 +1,11 @@
+import { lazy, Suspense } from "react";
 import { EmptyState } from "./EmptyState";
-import { FileEditor } from "./FileEditor";
 import { StubView } from "./StubView";
 import { commandKeys } from "../lib/commands";
 import type { Session, Tab } from "../lib/types";
+
+/** The diff editor and its highlighter are ~600 kB; only a file tab pays for them. */
+const FileEditor = lazy(() => import("./FileEditor").then((m) => ({ default: m.FileEditor })));
 
 type Props = {
   tab: Tab | null;
@@ -32,7 +35,11 @@ export function Surface({ tab, sessions, hasWorkspace, onCreateWorkspace }: Prop
   if (tab.kind === "file") {
     // Keyed by path: CodeView keeps its previous item when only props change,
     // which rendered the old file's contents under the new tab's header.
-    return <FileEditor key={tab.path} path={tab.path} relative={tab.relative} />;
+    return (
+      <Suspense fallback={null}>
+        <FileEditor key={tab.path} path={tab.path} relative={tab.relative} />
+      </Suspense>
+    );
   }
 
   const session = sessions.find((s) => s.id === tab.sessionId);

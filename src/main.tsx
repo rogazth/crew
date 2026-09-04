@@ -1,28 +1,18 @@
 import { IconContext } from "@phosphor-icons/react";
 import React from "react";
 import ReactDOM from "react-dom/client";
-import { WorkerPoolContextProvider } from "@pierre/diffs/react";
-import DiffsWorker from "@pierre/diffs/worker/worker.js?worker";
 import { App } from "./App";
 import { installComposedRangesShim } from "./lib/composedRanges";
-import { LANGS } from "./lib/highlighting";
 import "./index.css";
 
 installComposedRangesShim();
 
-// Tokenizing on the main thread froze the window on a 14k-line composer.lock.
-// The pool moves it off-thread; `langs` keeps Shiki from pulling every grammar.
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
-    <WorkerPoolContextProvider
-      poolOptions={{ workerFactory: () => new DiffsWorker(), poolSize: 4 }}
-      highlighterOptions={{ langs: LANGS }}
-    >
-      {/* The value replaces Phosphor's whole default context, so size has to come
-          along or unsized icons stretch to fill their button. */}
-      <IconContext.Provider value={{ weight: "bold", size: "1em" }}>
-        <App />
-      </IconContext.Provider>
-    </WorkerPoolContextProvider>
+    {/* The value replaces Phosphor's whole default context, so size has to come
+        along or unsized icons stretch to fill their button. */}
+    <IconContext.Provider value={{ weight: "bold", size: "1em" }}>
+      <App />
+    </IconContext.Provider>
   </React.StrictMode>,
 );
