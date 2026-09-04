@@ -18,6 +18,7 @@ const KILL_ESCALATE: Duration = Duration::from_secs(1);
 const FLOW_HIGH: u64 = 256 * 1024;
 const FLOW_LOW: u64 = 32 * 1024;
 const FLOW_POLL: Duration = Duration::from_millis(250);
+const RING_CAP: usize = FLOW_HIGH as usize;
 
 pub trait PtyEvents: Send + Sync {
     fn data(&self, stream_id: u32, bytes: &[u8]);
@@ -33,12 +34,38 @@ struct LivePty {
     exited: AtomicBool,
     flow: Mutex<Flow>,
     credit: Condvar,
+    ring: Mutex<Ring>,
 }
 
 #[derive(Default)]
 struct Flow {
     sent: u64,
     acked: u64,
+}
+
+#[derive(Default)]
+struct Ring {
+    start: u64,
+    buf: Vec<u8>,
+}
+
+impl Ring {
+    fn push(&mut self, bytes: &[u8]) {
+        if bytes.is_empty() {
+            return;
+        }
+        self.buf.extend_from_slice(bytes);
+        if self.buf.len() > RING_CAP {
+            let drop = self.buf.len() - RING_CAP;
+            self.buf.drain(..drop);
+            self.start += drop as u64;
+        }
+    }
+
+    fn tail_from(&self, from: u64) -> Vec<u8> {
+        let skip = from.saturating_sub(self.start).min(self.buf.len() as u64) as usize;
+        self.buf[skip..].to_vec()
+    }
 }
 
 impl LivePty {
@@ -51,6 +78,7 @@ impl LivePty {
             exited: AtomicBool::new(false),
             flow: Mutex::new(Flow::default()),
             credit: Condvar::new(),
+            ring: Mutex::new(Ring::default()),
         }
     }
 
@@ -244,6 +272,25 @@ impl PtyHost {
         if let Some(live) = self.get(id) {
             live.ack(processed);
         }
+    }
+
+    pub fn attach(&self, id: &str, from: u64) -> Result<u32, String> {
+        let live = self
+            .get(id)
+            .ok_or_else(|| "Terminal is not running".to_string())?;
+        let tail = live.ring.lock().unwrap_or_else(|e| e.into_inner()).tail_from(from);
+        {
+            let mut flow = live.flow.lock().unwrap_or_else(|e| e.into_inner());
+            flow.acked = 0;
+            flow.sent = tail.len() as u64;
+        }
+        live.credit.notify_all();
+        if !tail.is_empty() {
+            if let Some(events) = self.events() {
+                events.data(live.stream_id, &tail);
+            }
+        }
+        Ok(live.stream_id)
     }
 
     pub fn kill(&self, id: &str) {
@@ -564,6 +611,9 @@ fn emit_data(host: &PtyHost, stream_id: u32, bytes: &[u8]) {
     if bytes.is_empty() {
         return;
     }
+    if let Some(live) = host.get_stream(stream_id) {
+        live.ring.lock().unwrap_or_else(|e| e.into_inner()).push(bytes);
+    }
     if let Some(events) = host.events() {
         events.data(stream_id, bytes);
     }
@@ -606,6 +656,27 @@ mod tests {
         live.sent(FLOW_HIGH as usize);
         live.exited.store(true, Ordering::Release);
         assert!(!live.wait_for_credit());
+    }
+
+    #[test]
+    fn attach_resets_a_stuck_window_and_replays_the_ring() {
+        struct Rec(Mutex<Vec<u8>>);
+        impl PtyEvents for Rec {
+            fn data(&self, _: u32, bytes: &[u8]) {
+                self.0.lock().unwrap_or_else(|e| e.into_inner()).extend_from_slice(bytes);
+            }
+            fn exit(&self, _: &str, _: Option<i32>) {}
+        }
+        let host = PtyHost::new();
+        let rec = Arc::new(Rec(Mutex::new(Vec::new())));
+        host.set_events(rec.clone());
+        let live = Arc::new(LivePty::new(Box::new(std::io::sink()), -1, 1, 7));
+        live.ring.lock().unwrap_or_else(|e| e.into_inner()).push(&[7; 64]);
+        live.sent(FLOW_HIGH as usize);
+        host.insert("t".into(), live.clone());
+        assert_eq!(host.attach("t", 0).unwrap(), 7);
+        assert_eq!(rec.0.lock().unwrap_or_else(|e| e.into_inner()).as_slice(), &[7; 64]);
+        assert!(live.wait_for_credit());
     }
 
     #[test]

@@ -4,10 +4,25 @@ import type { PtyExit } from "./protocol";
 const encoder = new TextEncoder();
 const dataHandlers = new Map<string, (bytes: Uint8Array) => void>();
 const streams = new Map<string, { id: number; stop: () => void }>();
+const delivered = new Map<string, number>();
+let reconnectHook: (() => void) | null = null;
+
+function ensureReconnect() {
+  if (reconnectHook) return;
+  reconnectHook = client.onReconnect(() => {
+    for (const [id] of streams) {
+      void client.request("pty_attach", { id, from: delivered.get(id) ?? 0 }).catch(() => {});
+    }
+  });
+}
 
 function attach(sessionId: string, streamId: number, onData: (bytes: Uint8Array) => void) {
   streams.get(sessionId)?.stop();
-  streams.set(sessionId, { id: streamId, stop: client.openStream(streamId, onData) });
+  const wrapped = (bytes: Uint8Array) => {
+    delivered.set(sessionId, (delivered.get(sessionId) ?? 0) + bytes.byteLength);
+    onData(bytes);
+  };
+  streams.set(sessionId, { id: streamId, stop: client.openStream(streamId, wrapped) });
 }
 
 /**
@@ -20,6 +35,7 @@ export function subscribePty(
   onData: (bytes: Uint8Array) => void,
   onExit: (code: number | null) => void,
 ): () => void {
+  ensureReconnect();
   dataHandlers.set(id, onData);
   const existing = streams.get(id);
   if (existing) attach(id, existing.id, onData);
@@ -32,6 +48,7 @@ export function subscribePty(
     if (dataHandlers.get(id) === onData) dataHandlers.delete(id);
     streams.get(id)?.stop();
     streams.delete(id);
+    delivered.delete(id);
   };
 }
 
@@ -68,5 +85,6 @@ export const killPty = (id: string): Promise<void> => {
   streams.get(id)?.stop();
   streams.delete(id);
   dataHandlers.delete(id);
+  delivered.delete(id);
   return client.request("pty_kill", { id });
 };

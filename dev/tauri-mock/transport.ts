@@ -152,6 +152,7 @@ const commands: Record<string, (args: Row) => unknown> = {
   session_get_blocks: ({ id }) => (id === "s1" ? JSON.stringify(SEED_BLOCKS) : "[]"),
   session_set_blocks: () => undefined,
   pty_ack: () => undefined,
+  pty_attach: () => undefined,
   session_set_provider_session: () => undefined,
   agent_resolve_claude: () => ({ path: "/mock/bin/claude" }),
   agent_resolve: ({ name }) => ({ path: `/mock/bin/${name}` }),
@@ -351,6 +352,10 @@ function openStream(id: number, onBytes: (bytes: Uint8Array) => void): () => voi
   };
 }
 
+function onReconnect(_hook: () => void): () => void {
+  return () => {};
+}
+
 function writeStream(_id: number, _bytes: Uint8Array) {}
 
 /** A prompt a beat after spawn, so the status machinery has something to chew on. */
@@ -361,7 +366,7 @@ function mockShell(_id: string, streamId: number) {
   setTimeout(() => say("\x1b[32m❯\x1b[0m "), 250);
 }
 
-export const transport = { request, on, openStream, writeStream };
+export const transport = { request, on, onReconnect, openStream, writeStream };
 
 declare global {
   interface Window {

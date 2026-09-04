@@ -7,11 +7,13 @@ const pending = new Map<number, { resolve: (value: unknown) => void; reject: (er
 const listeners = new Map<string, Set<Listener>>();
 const streams = new Map<number, (bytes: Uint8Array) => void>();
 const buffered = new Map<number, Uint8Array[]>();
+const reconnectHooks = new Set<() => void>();
 
 let nextId = 1;
 let socket: WebSocket | null = null;
 let opened: Promise<void> | null = null;
 let reconnecting = false;
+let ready = false;
 
 function connect(): Promise<void> {
   opened ??= open();
@@ -24,9 +26,12 @@ async function open(): Promise<void> {
     const ws = new WebSocket(info.url);
     ws.binaryType = "arraybuffer";
     ws.onopen = () => {
+      const again = ready;
       socket = ws;
+      ready = true;
       ws.send(JSON.stringify({ auth: info.token }));
       resolve();
+      if (again) for (const hook of reconnectHooks) hook();
     };
     ws.onerror = () => reject(new Error("Crew daemon connection failed"));
     ws.onmessage = onMessage;
@@ -105,6 +110,13 @@ function on(event: string, listener: Listener): () => void {
   };
 }
 
+function onReconnect(hook: () => void): () => void {
+  reconnectHooks.add(hook);
+  return () => {
+    reconnectHooks.delete(hook);
+  };
+}
+
 function openStream(id: number, onBytes: (bytes: Uint8Array) => void): () => void {
   streams.set(id, onBytes);
   const queue = buffered.get(id);
@@ -127,4 +139,4 @@ function writeStream(id: number, bytes: Uint8Array) {
   ws.send(frame);
 }
 
-export const transport = { request, on, openStream, writeStream };
+export const transport = { request, on, onReconnect, openStream, writeStream };

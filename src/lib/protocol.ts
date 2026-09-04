@@ -12,6 +12,8 @@ export type Event = { event: string, payload: unknown, };
 
 export type PtyAck = { id: string, processed: number, };
 
+export type PtyAttach = { id: string, from: number, };
+
 export type PtyExit = { id: string, code: number | null, };
 
 export type PtyKill = { id: string, };

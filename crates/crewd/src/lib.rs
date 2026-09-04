@@ -11,7 +11,9 @@ use crew_core::routine;
 use crew_core::session;
 use crew_core::store::{self as app_state, Store};
 use crew_core::workspace;
-use crew_protocol::{self as proto, Auth, DaemonInfo, PtyAck, PtyKill, PtyResize, PtySpawn, PtyWrite, Request};
+use crew_protocol::{
+    self as proto, Auth, DaemonInfo, PtyAck, PtyAttach, PtyKill, PtyResize, PtySpawn, PtyWrite, Request,
+};
 use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
 use serde_json::Value;
@@ -408,6 +410,11 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
             })
             .await?;
             Ok(Value::Null)
+        }
+        "pty_attach" => {
+            let PtyAttach { id, from } = parse(params)?;
+            let host = hosts.pty.clone();
+            json(block(move || host.attach(&id, from)).await?)
         }
         "workspace_list" => {
             let store = hosts.store.clone();
@@ -972,6 +979,87 @@ mod tests {
         std::fs::write(&fifo, "ok").expect("unblock");
         let slow = wait_response(&mut ws, 2).await;
         assert!(slow.ok, "{}", slow.error.unwrap_or_default());
+        handle.shutdown();
+    }
+
+    #[tokio::test]
+    async fn pty_keeps_flowing_after_disconnect_and_attach() {
+        let dir = test_dir("pty-flood");
+        let handle = test_serve(&dir);
+        let mut ws = connect_authed(&handle).await;
+        send_json(
+            &mut ws,
+            &Request {
+                id: 1,
+                method: "pty_spawn".into(),
+                params: serde_json::to_value(PtySpawn {
+                    id: "t".into(),
+                    cwd: std::env::temp_dir().to_string_lossy().into_owned(),
+                    command: vec!["/usr/bin/yes".into()],
+                    cols: 80,
+                    rows: 24,
+                })
+                .unwrap(),
+            },
+        )
+        .await;
+        let spawn = wait_response(&mut ws, 1).await;
+        assert!(spawn.ok, "{}", spawn.error.unwrap_or_default());
+
+        wait_bytes(&mut ws, b"y").await;
+        drop(ws);
+        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+
+        let mut ws = connect_authed(&handle).await;
+        send_json(
+            &mut ws,
+            &Request {
+                id: 2,
+                method: "pty_attach".into(),
+                params: serde_json::json!({ "id": "t", "from": 0 }),
+            },
+        )
+        .await;
+        let attached = wait_response(&mut ws, 2).await;
+        assert!(attached.ok, "{}", attached.error.unwrap_or_default());
+        send_json(
+            &mut ws,
+            &Request {
+                id: 3,
+                method: "pty_ack".into(),
+                params: serde_json::json!({ "id": "t", "processed": 256 * 1024 }),
+            },
+        )
+        .await;
+
+        let mut got = 0usize;
+        let mut processed = 256 * 1024u64;
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        while got < 300 * 1024 {
+            let msg = tokio::time::timeout_at(deadline, ws.next())
+                .await
+                .expect("flood timeout")
+                .expect("closed")
+                .expect("ws");
+            if let Message::Binary(bytes) = msg {
+                if bytes.len() >= 4 {
+                    let n = bytes.len() - 4;
+                    got += n;
+                    processed += n as u64;
+                }
+                if got % (32 * 1024) < bytes.len().saturating_sub(4) {
+                    send_json(
+                        &mut ws,
+                        &Request {
+                            id: 4,
+                            method: "pty_ack".into(),
+                            params: serde_json::json!({ "id": "t", "processed": processed }),
+                        },
+                    )
+                    .await;
+                }
+            }
+        }
         handle.shutdown();
     }
 
