@@ -1,15 +1,8 @@
-import { openUrl } from "@tauri-apps/plugin-opener";
 import type { ILink, ILinkProvider, Terminal } from "@xterm/xterm";
 import * as api from "./api";
 import { findPaths, homePath, resolvePath, type PathHit } from "./terminalPaths";
 
-/** Terminal output is untrusted: only what a browser would follow leaves the app. */
-const OPENABLE = /^(?:https?|mailto):/i;
-
-export function openExternal(uri: string): void {
-  if (!OPENABLE.test(uri)) return;
-  void openUrl(uri).catch(() => {});
-}
+export { openExternal } from "./external";
 
 const known = new Map<string, boolean>();
 

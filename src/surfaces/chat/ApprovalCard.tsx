@@ -1,23 +1,13 @@
-import { FileDiff } from "@pierre/diffs/react";
-import { parseDiffFromFile } from "@pierre/diffs";
-import { memo, useEffect, useMemo, useRef } from "react";
+import { memo, useEffect, useRef } from "react";
 import type { ApprovalDecision, Block } from "../../lib/blocks";
-import { THEME } from "../../lib/highlighting";
 import { CodeBlock } from "./CodeBlock";
+import { Diff } from "./DiffView";
 
 type Props = {
   block: Block;
   /** Only the newest open card takes Enter and Escape. */
   hot?: boolean;
   onApprove: (requestId: number, decision: ApprovalDecision) => void;
-};
-
-const DIFF_OPTIONS = {
-  theme: THEME,
-  themeType: "light" as const,
-  disableFileHeader: true,
-  diffStyle: "unified" as const,
-  overflow: "scroll" as const,
 };
 
 const EDIT = /^(edit|multiedit|write|notebookedit)$/i;
@@ -97,24 +87,10 @@ function Body({ name, input }: { name: string; input: Record<string, unknown> | 
   if (EDIT.test(name) && path) {
     const before = str(input, "old_string") ?? "";
     const after = str(input, "new_string") ?? str(input, "content") ?? "";
-    if (before || after) return <Diff path={path} before={before} after={after} />;
+    if (before || after) return <Diff name={path.split("/").pop() ?? path} before={before} after={after} />;
   }
   if (input && Object.keys(input).length > 0) {
     return <CodeBlock code={JSON.stringify(input, null, 2)} lang="json" />;
   }
   return null;
-}
-
-function Diff({ path, before, after }: { path: string; before: string; after: string }) {
-  const name = path.split("/").pop() ?? path;
-  // A snippet is not a file; without the trailing newline every hunk warns about it.
-  const fileDiff = useMemo(
-    () =>
-      parseDiffFromFile(
-        before ? { name, contents: before.endsWith("\n") ? before : `${before}\n` } : null,
-        after ? { name, contents: after.endsWith("\n") ? after : `${after}\n` } : null,
-      ),
-    [name, before, after],
-  );
-  return <FileDiff fileDiff={fileDiff} options={DIFF_OPTIONS} disableWorkerPool className="crew-diff" />;
 }

@@ -393,7 +393,7 @@ body:has(button[data-sidebar="resize-handle"]:active) * {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  max-width: 100%;
+  max-width: 72%;
   padding: 8px 12px;
   border-radius: 16px 16px 4px 16px;
   background: var(--text-color-kumo-default);
@@ -509,25 +509,185 @@ body:has(button[data-sidebar="resize-handle"]:active) * {
     0 1px 1px rgb(0 0 0 / 0.04);
 }
 
-/* Chat markdown: 14/20 like Grok, ink-mixed code, no extra chrome. */
+/* The agent's turn: prose in a grey bubble on the left, at the user's width
+   mirrored; code, quotes, tables and images break out to the column. */
 .crew-md {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
   font-size: 14px;
   line-height: 20px;
   letter-spacing: -0.1px;
 }
-.crew-md [data-streamdown="heading-1"],
-.crew-md [data-streamdown="heading-2"],
-.crew-md [data-streamdown="heading-3"] {
+.crew-md-prose {
+  max-width: 72%;
+  padding: 9px 13px 10px;
+  border-radius: 16px 16px 16px 4px;
+  background: var(--color-card);
+  overflow-wrap: anywhere;
+}
+.crew-md-wide {
+  width: 100%;
+  min-width: 0;
+}
+/* Headings with nothing under them caption the block that follows; no bubble. */
+.crew-md-label {
+  max-width: 72%;
+  padding: 6px 2px 0;
+}
+.crew-md-wide .crew-code {
+  margin: 0;
+}
+/* On the grey bubble an ink tint would vanish; code lifts toward the canvas instead. */
+.crew-md-prose .crew-inline-code,
+.crew-md-prose .crew-file-chip {
+  background: color-mix(in srgb, var(--color-kumo-base) 72%, transparent);
+}
+.crew-md-prose .crew-file-chip:hover {
+  background: var(--color-kumo-base);
+}
+/* Zero-specificity reset so the rhythm rules below win on equal footing. */
+.crew-md :where(h1, h2, h3, h4, h5, h6, p, ul, ol, blockquote, table) {
+  margin: 0;
+}
+/* Vertical rhythm: 8 between blocks, 18 into a heading, 6 out of one. */
+.crew-md-flow > * + * {
+  margin-top: 8px;
+}
+.crew-md-flow > * + [data-streamdown^="heading"] {
+  margin-top: 18px;
+}
+.crew-md-flow > [data-streamdown^="heading"] + * {
+  margin-top: 6px;
+}
+.crew-md-flow > [data-streamdown^="heading"] + [data-streamdown^="heading"] {
+  margin-top: 10px;
+}
+.crew-md [data-streamdown^="heading"] {
   font-size: 14px;
   font-weight: 600;
   line-height: 20px;
-  margin: 10px 0 4px;
+  letter-spacing: -0.2px;
 }
-.crew-md [data-streamdown="p"] {
+.crew-md [data-streamdown="heading-1"] {
+  font-size: 17px;
+  line-height: 24px;
+  letter-spacing: -0.3px;
+}
+.crew-md [data-streamdown="heading-2"] {
+  font-size: 15px;
+  line-height: 22px;
+}
+.crew-md [data-streamdown="heading-4"],
+.crew-md [data-streamdown="heading-5"],
+.crew-md [data-streamdown="heading-6"] {
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--text-color-kumo-subtle);
+}
+.crew-md [data-streamdown="strong"] {
+  font-weight: 600;
+}
+.crew-md del {
+  color: var(--text-color-kumo-subtle);
+}
+.crew-md [data-streamdown="unordered-list"],
+.crew-md [data-streamdown="ordered-list"] {
+  padding-left: 1.5em;
+  list-style-position: outside;
+}
+.crew-md [data-streamdown="unordered-list"] {
+  list-style-type: disc;
+}
+.crew-md [data-streamdown="unordered-list"] [data-streamdown="unordered-list"] {
+  list-style-type: circle;
+}
+.crew-md [data-streamdown="unordered-list"] [data-streamdown="unordered-list"] [data-streamdown="unordered-list"] {
+  list-style-type: square;
+}
+.crew-md [data-streamdown="ordered-list"] {
+  list-style-type: decimal;
+}
+.crew-md [data-streamdown="list-item"] {
+  padding: 0;
+}
+.crew-md [data-streamdown="list-item"]::marker {
+  color: var(--text-color-kumo-subtle);
+  font-variant-numeric: tabular-nums;
+}
+.crew-md [data-streamdown="list-item"] + [data-streamdown="list-item"],
+.crew-md [data-streamdown="list-item"] > [data-streamdown="unordered-list"],
+.crew-md [data-streamdown="list-item"] > [data-streamdown="ordered-list"],
+.crew-md [data-streamdown="list-item"] > p + * {
+  margin-top: 4px;
+}
+/* A task item: the box replaces the bullet instead of following it. */
+.crew-md [data-streamdown="list-item"]:has(> input[type="checkbox"]) {
+  list-style: none;
+}
+.crew-md [data-streamdown="list-item"] > input[type="checkbox"] {
+  width: 14px;
+  height: 14px;
+  margin: 0 8px 0 -1.5em;
+  vertical-align: -2px;
+  accent-color: var(--text-color-kumo-default);
+}
+/* Outside the bubble a quote is a hairline and a quieter voice, not italics. */
+.crew-md [data-streamdown="blockquote"] {
+  padding: 2px 0 2px 12px;
+  border-left: 2px solid color-mix(in srgb, var(--text-color-kumo-default) 20%, transparent);
+  color: var(--text-color-kumo-subtle);
+  font-style: normal;
+}
+.crew-md [data-streamdown="blockquote"] > * + * {
+  margin-top: 6px;
+}
+.crew-md [data-streamdown="blockquote"] [data-streamdown="blockquote"] {
+  margin-top: 6px;
+}
+.crew-md [data-streamdown="table-wrapper"] {
+  display: block;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  border: 1px solid var(--color-hairline);
+  border-radius: 8px;
+}
+.crew-md [data-streamdown="table"] {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  line-height: 18px;
+}
+.crew-md [data-streamdown="table-header-cell"],
+.crew-md [data-streamdown="table-cell"] {
+  padding: 6px 10px;
+  border: 0;
+  border-bottom: 1px solid var(--color-hairline);
+  text-align: left;
+  vertical-align: top;
+}
+.crew-md [data-streamdown="table-header-cell"] {
+  background: color-mix(in srgb, var(--text-color-kumo-default) 3%, transparent);
+  font-weight: 600;
+}
+.crew-md [data-streamdown="table-body"] [data-streamdown="table-row"]:last-child [data-streamdown="table-cell"] {
+  border-bottom: 0;
+}
+.crew-md [data-streamdown="horizontal-rule"] {
+  width: 100%;
+  height: 1px;
+  margin: 2px 0;
+  border: 0;
+  background: var(--color-hairline);
+}
+.crew-md [data-streamdown="image-wrapper"] {
   margin: 0;
 }
-.crew-md [data-streamdown="p"] + [data-streamdown="p"] {
-  margin-top: 10px;
+.crew-md [data-streamdown="image"] {
+  max-width: 100%;
+  max-height: 360px;
+  border-radius: 8px;
 }
 .crew-inline-code {
   padding: 1px 4px;
@@ -599,13 +759,20 @@ body:has(button[data-sidebar="resize-handle"]:active) * {
 .crew-code-body span[style] {
   color: light-dark(var(--shiki-light), var(--shiki-dark));
 }
-.crew-md ul,
-.crew-md ol {
-  margin: 6px 0;
-  padding-left: 1.2em;
+/* A diff fence: the diff view is the body, the box keeps its head and copy. */
+.crew-code .crew-diff {
+  border: 0;
+  border-radius: 0 0 7px 7px;
+  font-size: 12.5px;
 }
-.crew-md a,
 .crew-md [data-streamdown="link"] {
+  cursor: pointer;
+  font-weight: 500;
   text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, currentColor 40%, transparent);
   text-underline-offset: 2px;
+  transition: text-decoration-color 100ms ease;
+}
+.crew-md [data-streamdown="link"]:hover {
+  text-decoration-color: currentColor;
 }

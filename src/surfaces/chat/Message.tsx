@@ -11,13 +11,13 @@ import { clock, duration } from "../../lib/time";
 const Markdown = lazy(() => import("./Markdown").then((m) => ({ default: m.Markdown })));
 
 /**
- * What the user said sits on the right, in ink. The reply below is flush; that
- * is the hierarchy. Attachments are their own row under the bubble: a picture
- * inside it would set the bubble's width, not the words.
+ * What the user said sits on the right, in ink; the agent answers on the left
+ * in grey. Attachments are their own row under the bubble: a picture inside it
+ * would set the bubble's width, not the words.
  */
 export const UserMessage = memo(function UserMessage({ block }: { block: Block }) {
   return (
-    <div className="flex flex-col items-end gap-1.5 pl-16">
+    <div className="flex flex-col items-end gap-1.5">
       {block.text ? (
         <div className="crew-bubble">
           <p className="whitespace-pre-wrap">
@@ -60,10 +60,15 @@ function MentionText({ text }: { text: string }) {
   );
 }
 
-/** Flush prose on the canvas. The column is the container; nothing wraps it. */
 export const AssistantMessage = memo(function AssistantMessage({ block }: { block: Block }) {
   return (
-    <Suspense fallback={<p className="whitespace-pre-wrap">{block.text}</p>}>
+    <Suspense
+      fallback={
+        <div className="crew-md">
+          <div className="crew-md-prose whitespace-pre-wrap">{block.text}</div>
+        </div>
+      }
+    >
       <Markdown text={block.text} {...(block.streaming ? { streaming: true } : {})} />
     </Suspense>
   );

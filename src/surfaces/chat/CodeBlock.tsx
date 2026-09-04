@@ -1,6 +1,7 @@
 import { CheckIcon, CopyIcon } from "@phosphor-icons/react";
 import { memo, useEffect, useState } from "react";
 import { highlightInline, resolveLang } from "../../lib/shiki";
+import { DiffFence } from "./DiffView";
 
 type Props = {
   code: string;
@@ -10,10 +11,12 @@ type Props = {
 };
 
 const SETTLE_MS = 150;
+const DIFF = /^(?:diff|patch)$/i;
 
 /** One box: language and copy on top, code below. Plain text until shiki answers. */
 export const CodeBlock = memo(function CodeBlock({ code, lang, streaming }: Props) {
-  const language = resolveLang(lang);
+  const diff = lang !== undefined && DIFF.test(lang);
+  const language = diff ? null : resolveLang(lang);
   const [html, setHtml] = useState<{ code: string; html: string } | null>(null);
 
   useEffect(() => {
@@ -38,9 +41,13 @@ export const CodeBlock = memo(function CodeBlock({ code, lang, streaming }: Prop
         <span>{lang || "text"}</span>
         <CopyButton code={code} />
       </div>
-      <pre className="crew-code-body">
-        {ready ? <code dangerouslySetInnerHTML={{ __html: html.html }} /> : <code>{code}</code>}
-      </pre>
+      {diff && !streaming ? (
+        <DiffFence code={code} />
+      ) : (
+        <pre className="crew-code-body">
+          {ready ? <code dangerouslySetInnerHTML={{ __html: html.html }} /> : <code>{code}</code>}
+        </pre>
+      )}
     </div>
   );
 });
