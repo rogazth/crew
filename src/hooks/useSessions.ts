@@ -50,10 +50,12 @@ export function useSessions(workspaceId: string | null) {
     [workspaceId],
   );
 
+  // `settle` lets a caller hold the list back so the row and its sheet land together.
   const create = useCallback(
-    async (kind: SessionKind, input: CreateInput) => {
+    async (kind: SessionKind, input: CreateInput, settle?: Promise<unknown>) => {
       if (!workspaceId) return null;
       const session = await api.createSession(workspaceId, kind, input);
+      await settle;
       setSessions((prev) => [...prev, session]);
       return session;
     },
@@ -91,8 +93,10 @@ export function useSessions(workspaceId: string | null) {
     async (
       id: string,
       input: CreateInput & { notifications: boolean },
+      settle?: Promise<unknown>,
     ) => {
       await api.updateSession(id, input);
+      await settle;
       setSessions((prev) =>
         prev.map((s) => (s.id === id ? { ...s, ...input } : s)),
       );

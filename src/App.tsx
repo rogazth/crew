@@ -1,6 +1,7 @@
 import { Sidebar } from "@cloudflare/kumo";
 import { useCallback, useEffect, useState, type CSSProperties } from "react";
 import { AgentSheet, type AgentDraft } from "./chrome/AgentSheet";
+import { MIN_SAVE_MS } from "./lib/timing";
 import { CommandPalette, type PaletteMode } from "./chrome/CommandPalette";
 import { ConfirmDialog, type Confirm } from "./chrome/ConfirmDialog";
 import { AppSidebar } from "./chrome/AppSidebar";
@@ -102,10 +103,13 @@ export function App() {
     async (draft: AgentDraft) => {
       const editing = sheet?.session;
       let id = editing?.id ?? null;
+      // Writing is instant, which reads as cheap; the floor holds the spinner so the
+      // sidebar row, the tab and the sheet's exit all land on the same beat.
+      const settle = new Promise((r) => setTimeout(r, MIN_SAVE_MS));
       if (editing) {
-        await update(editing.id, draft);
+        await update(editing.id, draft, settle);
       } else {
-        const session = await create("agent", draft);
+        const session = await create("agent", draft, settle);
         if (session) openSession(session);
         id = session?.id ?? null;
       }

@@ -43,9 +43,6 @@ const EMPTY: AgentDraft = {
   removedRoutines: [],
 };
 
-/** Instant creation reads as cheap; a short floor makes it feel deliberate. */
-const MIN_SAVE_MS = 550;
-
 /** Must match .sheet-panel-out in index.css. */
 const CLOSE_MS = 150;
 
@@ -125,18 +122,19 @@ export function AgentSheet({ session, cwd, existingNames, onSave, onClose }: Pro
     setSubmitted(true);
     if (error || saving || closing) return;
     setSaving(true);
-    const started = Date.now();
     try {
+      // onSave holds the spinner for MIN_SAVE_MS so its result and this exit coincide.
       await onSave({ ...draft, name });
-      const rest = MIN_SAVE_MS - (Date.now() - started);
-      if (rest > 0) await new Promise((r) => setTimeout(r, rest));
       requestClose();
-    } finally {
+    } catch {
       setSaving(false);
     }
   }
 
-  const showError = submitted && error ? error : undefined;
+  // Saving adds the name to existingNames, so validation would flash "already
+  // exists" over the agent we just created while the sheet plays its exit.
+  const live = taken || submitted;
+  const showError = saving || closing || !live ? undefined : (error ?? undefined);
 
   // Window-level so Escape works after clicking non-focusable content in the drawer.
   useEffect(() => {
@@ -170,7 +168,7 @@ export function AgentSheet({ session, cwd, existingNames, onSave, onClose }: Pro
             variant="ghost"
             shape="square"
             size="sm"
-            icon={XIcon}
+            icon={<XIcon className="size-4" />}
             aria-label="Close"
             onClick={requestClose}
           />
