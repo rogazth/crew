@@ -141,7 +141,7 @@ export function Composer({
 
   return (
     <div className={`shrink-0 px-6 ${centered ? "py-4" : "pb-4"}`}>
-      <form onSubmit={submit} className="crew-composer relative">
+      <form onSubmit={submit} className={`crew-composer relative ${centered ? "mx-auto w-full max-w-[720px]" : ""}`}>
         {mention && (
           <MentionPicker results={results} active={Math.min(active, Math.max(0, results.length - 1))} onHover={setActive} onPick={pick} />
         )}
