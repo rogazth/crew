@@ -1,20 +1,15 @@
-mod agent;
-mod bridge;
-mod files;
-pub mod mcp;
 mod menu;
-mod pty;
-mod routine;
-mod session;
-mod store;
-mod workspace;
 
 use tauri::{Manager, RunEvent};
 
-use agent::AgentHost;
-use bridge::Bridge;
-use pty::PtyHost;
-use store::Store;
+use crew_core::agent::{self, AgentHost};
+use crew_core::bridge::{self, Bridge};
+use crew_core::files;
+use crew_core::pty::{self, PtyHost};
+use crew_core::routine;
+use crew_core::session;
+use crew_core::store::{self, Store};
+use crew_core::workspace;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {

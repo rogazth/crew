@@ -7,8 +7,8 @@ use std::process::ExitCode;
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
-        Some("--mcp") => crew_lib::mcp::serve_stdio(),
-        Some("call") => crew_lib::mcp::call(&args[1..]),
+        Some("--mcp") => crew_core::mcp::serve_stdio(),
+        Some("call") => crew_core::mcp::call(&args[1..]),
         _ => {
             crew_lib::run();
             ExitCode::SUCCESS

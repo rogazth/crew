@@ -1,0 +1,13 @@
+[package]
+name = "crew-core"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+tauri = { version = "2", features = ["macos-private-api"] }
+serde.workspace = true
+serde_json.workspace = true
+rusqlite = { version = "0.40.2", features = ["bundled", "cache"], default-features = false }
+uuid = { version = "1", features = ["v4"] }
+libc = "0.2.189"
+base64 = "0.23.1"

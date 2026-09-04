@@ -562,16 +562,24 @@ dependencies = [
 name = "crew"
 version = "0.1.0"
 dependencies = [
+ "crew-core",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-dialog",
+ "tauri-plugin-notification",
+ "tauri-plugin-opener",
+]
+
+[[package]]
+name = "crew-core"
+version = "0.1.0"
+dependencies = [
  "base64 0.23.1",
  "libc",
  "rusqlite",
  "serde",
  "serde_json",
  "tauri",
- "tauri-build",
- "tauri-plugin-dialog",
- "tauri-plugin-notification",
- "tauri-plugin-opener",
  "uuid",
 ]
 
