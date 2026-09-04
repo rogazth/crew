@@ -370,7 +370,7 @@ function Card({
   onRemove: () => void;
 }) {
   const avatar = session.kind === "agent" && shows(prefs, "avatar");
-  const meta = shows(prefs, "provider") || shows(prefs, "status");
+  const meta = shows(prefs, "provider");
 
   function onKeyDown(event: KeyboardEvent<HTMLButtonElement>) {
     if (event.key === "F2" && onRename) {
@@ -398,7 +398,7 @@ function Card({
       onKeyDown={onKeyDown}
       title={session.description || session.name}
       aria-current={active ? "page" : undefined}
-      className={`flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-left outline-none transition-colors ${
+      className={`flex w-full items-center gap-2.5 rounded-chrome px-2 py-1.5 text-left outline-none transition-colors duration-150 ease-out ${
         active ? "bg-card" : selected ? "bg-selected" : "hover:bg-hover focus-visible:bg-hover"
       }`}
     >
@@ -418,18 +418,14 @@ function Card({
         </span>
         {meta && (
           <span className="flex items-center gap-1.5 text-[12px] text-kumo-subtle">
-            {shows(prefs, "provider") && (
-              <>
-                <ProviderIcon provider={session.provider} className="size-3.5" />
-                <span className="min-w-0 truncate">
-                  {providerLine(session.provider, session.model)}
-                </span>
-              </>
-            )}
-            {shows(prefs, "status") && <StatusDot status={session.status} />}
+            <ProviderIcon provider={session.provider} className="size-3.5" />
+            <span className="min-w-0 truncate">
+              {providerLine(session.provider, session.model)}
+            </span>
           </span>
         )}
       </span>
+      {shows(prefs, "status") && <StatusDot status={session.status} />}
     </button>
   );
 }

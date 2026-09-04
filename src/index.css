@@ -25,6 +25,9 @@
   --color-link: light-dark(oklch(55% 0.185 258), oklch(75% 0.13 250));
   --color-card: color-mix(in srgb, var(--text-color-kumo-default) 6%, transparent);
   --color-hairline: color-mix(in srgb, var(--text-color-kumo-default) 8%, transparent);
+  /* Arc's generous row radius. One value for every row of chrome — sidebar
+     items and tabs — so the two strips read as the same surface. */
+  --radius-chrome: 0.625rem;
 }
 
 /* Neutral brand: primary buttons and focus rings read as dark grey, not Cloudflare blue. */

@@ -7,7 +7,7 @@ const LABEL: Record<SessionStatus, string> = {
   idle: "Idle",
   working: "Working",
   "needs-input": "Needs input",
-  done: "Answered",
+  done: "Unread",
   error: "Error",
 };
 

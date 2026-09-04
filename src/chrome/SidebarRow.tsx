@@ -24,7 +24,7 @@ export function SidebarRow({
       data-tauri-drag-region="false"
       aria-current={active ? "page" : undefined}
       {...rest}
-      className={`flex h-8 w-full items-center gap-2.5 rounded-md px-2 text-left outline-none transition-colors ${
+      className={`flex h-8 w-full items-center gap-2.5 rounded-chrome px-2 text-left outline-none transition-colors duration-150 ease-out ${
         active ? "bg-card" : "hover:bg-hover focus-visible:bg-hover data-popup-open:bg-hover"
       } ${className}`}
     >
