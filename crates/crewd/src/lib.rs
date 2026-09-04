@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{mpsc as std_mpsc, Arc, Mutex};
 use std::thread;
+use std::time::Duration;
 
 use crew_core::agent::{AgentEvents, AgentHost};
 use crew_core::bridge::{Bridge, BridgeEvents, ToolCall};
@@ -60,6 +61,9 @@ impl Handle {
     }
 }
 
+const OUT_CAP: usize = 1024;
+const SEND_WAIT: Duration = Duration::from_secs(5);
+
 enum Outgoing {
     Text(String),
     Binary(Vec<u8>),
@@ -67,9 +71,10 @@ enum Outgoing {
 }
 
 struct Hub {
-    clients: Mutex<HashMap<u64, mpsc::UnboundedSender<Outgoing>>>,
+    clients: Mutex<HashMap<u64, mpsc::Sender<Outgoing>>>,
     pty_attached: Mutex<HashSet<u64>>,
     next: AtomicU64,
+    runtime: Mutex<Option<tokio::runtime::Handle>>,
 }
 
 impl Hub {
@@ -78,11 +83,16 @@ impl Hub {
             clients: Mutex::new(HashMap::new()),
             pty_attached: Mutex::new(HashSet::new()),
             next: AtomicU64::new(1),
+            runtime: Mutex::new(None),
         }
     }
 
-    fn subscribe(&self) -> (u64, mpsc::UnboundedReceiver<Outgoing>) {
-        let (tx, rx) = mpsc::unbounded_channel();
+    fn set_runtime(&self, handle: tokio::runtime::Handle) {
+        *self.runtime.lock().unwrap_or_else(|e| e.into_inner()) = Some(handle);
+    }
+
+    fn subscribe(&self) -> (u64, mpsc::Receiver<Outgoing>) {
+        let (tx, rx) = mpsc::channel(OUT_CAP);
         let id = self.next.fetch_add(1, Ordering::Relaxed);
         self.clients
             .lock()
@@ -116,25 +126,52 @@ impl Hub {
             .unwrap_or_else(|e| e.into_inner())
             .get(&id)
             .cloned();
-        if let Some(tx) = tx {
-            let _ = tx.send(msg);
+        let Some(tx) = tx else {
+            return;
+        };
+        match tx.try_send(msg) {
+            Ok(()) => {}
+            Err(mpsc::error::TrySendError::Closed(_)) => self.unsubscribe(id),
+            Err(mpsc::error::TrySendError::Full(msg)) => {
+                if !self.send_wait(&tx, msg) {
+                    self.unsubscribe(id);
+                }
+            }
         }
     }
 
+    fn send_wait(&self, tx: &mpsc::Sender<Outgoing>, msg: Outgoing) -> bool {
+        let send = async {
+            tokio::time::timeout(SEND_WAIT, tx.send(msg)).await
+        };
+        let result = if tokio::runtime::Handle::try_current().is_ok() {
+            tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(send))
+        } else {
+            let Some(handle) = self.runtime.lock().unwrap_or_else(|e| e.into_inner()).clone() else {
+                return false;
+            };
+            handle.block_on(send)
+        };
+        matches!(result, Ok(Ok(())))
+    }
+
     fn broadcast(&self, msg: Outgoing) {
-        let clients: Vec<mpsc::UnboundedSender<Outgoing>> = self
+        let ids: Vec<u64> = self
             .clients
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .values()
-            .cloned()
+            .keys()
+            .copied()
             .collect();
-        for tx in clients {
-            let _ = tx.send(match &msg {
-                Outgoing::Text(text) => Outgoing::Text(text.clone()),
-                Outgoing::Binary(bytes) => Outgoing::Binary(bytes.clone()),
-                Outgoing::Pong(payload) => Outgoing::Pong(payload.clone()),
-            });
+        for id in ids {
+            self.send(
+                id,
+                match &msg {
+                    Outgoing::Text(text) => Outgoing::Text(text.clone()),
+                    Outgoing::Binary(bytes) => Outgoing::Binary(bytes.clone()),
+                    Outgoing::Pong(payload) => Outgoing::Pong(payload.clone()),
+                },
+            );
         }
     }
 
@@ -268,6 +305,7 @@ async fn run(
         }
     };
     let _ = ready_tx.send(Ok(format!("ws://{addr}")));
+    hub.set_runtime(tokio::runtime::Handle::current());
 
     loop {
         tokio::select! {

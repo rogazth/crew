@@ -9,6 +9,8 @@ const streams = new Map<number, (bytes: Uint8Array) => void>();
 const buffered = new Map<number, Uint8Array[]>();
 const bufferedBytes = new Map<number, number>();
 const closed = new Set<number>();
+const closedOrder: number[] = [];
+const CLOSED_CAP = 1024;
 const BUFFER_MAX_BYTES = 256 * 1024;
 const reconnectHooks = new Set<() => void>();
 const writes: Array<{ id: number; bytes: Uint8Array; resolve: () => void }> = [];
@@ -150,8 +152,18 @@ function openStream(id: number, onBytes: (bytes: Uint8Array) => void): () => voi
     if (streams.get(id) === onBytes) streams.delete(id);
     buffered.delete(id);
     bufferedBytes.delete(id);
-    closed.add(id);
+    markClosed(id);
   };
+}
+
+function markClosed(id: number) {
+  if (closed.has(id)) return;
+  closed.add(id);
+  closedOrder.push(id);
+  if (closedOrder.length > CLOSED_CAP) {
+    const old = closedOrder.shift();
+    if (old !== undefined) closed.delete(old);
+  }
 }
 
 function sendFrame(ws: WebSocket, id: number, bytes: Uint8Array) {
