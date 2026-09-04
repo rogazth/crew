@@ -204,12 +204,24 @@ export function onAgentCreated(listener: (session: Session) => void): () => void
 }
 
 let started = false;
+const toolBuf: ToolCall[] = [];
+const MAX_BUFFERED_TOOLS = 32;
+
+function deliverTool(call: ToolCall) {
+  if (!started) {
+    toolBuf.push(call);
+    if (toolBuf.length > MAX_BUFFERED_TOOLS) toolBuf.shift();
+    return;
+  }
+  void handle(call);
+}
 
 /** Answers the bridge for the life of the webview. Call once at boot. */
 export function startAgentTools(): void {
   if (started) return;
+  client.on("agent-tool", (payload) => deliverTool(payload as ToolCall));
   started = true;
-  client.on("agent-tool", (payload) => void handle(payload as ToolCall));
+  for (const call of toolBuf.splice(0)) void handle(call);
 }
 
 async function handle(call: ToolCall): Promise<void> {
