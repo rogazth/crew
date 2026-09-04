@@ -1,5 +1,5 @@
 import { client } from "./client";
-import type { PtyAttached, PtyExit } from "./protocol";
+import type { PtyAttached, PtyError, PtyExit } from "./protocol";
 
 const encoder = new TextEncoder();
 const dataHandlers = new Map<string, (bytes: Uint8Array) => void>();
@@ -52,8 +52,13 @@ export function subscribePty(
     const event = payload as PtyExit;
     if (event.id === id) onExit(event.code);
   });
+  const stopError = client.on("pty-error", (payload) => {
+    const event = payload as PtyError;
+    if (event.id === id) onExit(null);
+  });
   return () => {
     stopExit();
+    stopError();
     if (dataHandlers.get(id) === onData) dataHandlers.delete(id);
     if (attachHandlers.get(id) === onAttach) attachHandlers.delete(id);
     streams.get(id)?.stop();
