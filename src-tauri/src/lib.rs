@@ -10,6 +10,13 @@ use crew_core::routine;
 use crew_core::session;
 use crew_core::store::{self, Store};
 use crew_core::workspace;
+use crew_protocol::DaemonInfo;
+use crewd::{serve, Config, Handle};
+
+#[tauri::command]
+fn daemon_info(daemon: tauri::State<Handle>) -> DaemonInfo {
+    daemon.info.clone()
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -20,13 +27,17 @@ pub fn run() {
         .setup(|app| {
             app.set_menu(menu::build(app)?)?;
             let dir = app.path().app_data_dir()?;
+            let pty = PtyHost::new();
+            let daemon = serve(Config { pty: pty.clone() }).map_err(|e| e.to_string())?;
             app.manage(Store::open(dir.join("crew.sqlite3"))?);
-            app.manage(PtyHost::new());
+            app.manage(pty);
             app.manage(AgentHost::new());
             app.manage(Bridge::start(app.handle().clone(), dir)?);
+            app.manage(daemon);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            daemon_info,
             workspace::workspace_list,
             workspace::workspace_create,
             workspace::workspace_rename,
@@ -83,6 +94,7 @@ pub fn run() {
                 app.state::<PtyHost>().kill_all();
                 app.state::<AgentHost>().kill_all();
                 app.state::<Bridge>().shutdown();
+                app.state::<Handle>().shutdown();
             }
         });
 }

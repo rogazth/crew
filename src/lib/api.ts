@@ -163,22 +163,4 @@ export async function writeTempFile(file: File): Promise<string> {
   return invoke("write_temp_file", { extension, base64Contents: btoa(binary) });
 }
 
-export const spawnPty = (
-  id: string,
-  cwd: string,
-  command: string[],
-  cols: number,
-  rows: number,
-): Promise<void> => invoke("pty_spawn", { id, cwd, command, cols, rows });
-
-export const writePty = (id: string, data: string): Promise<void> =>
-  invoke("pty_write", { id, data });
-
-export const resizePty = (id: string, cols: number, rows: number): Promise<void> =>
-  invoke("pty_resize", { id, cols, rows });
-
-/** Cumulative bytes xterm has parsed; the host stops reading the PTY when the renderer falls behind. */
-export const ackPty = (id: string, processed: number): Promise<void> =>
-  invoke("pty_ack", { id, processed });
-
-export const killPty = (id: string): Promise<void> => invoke("pty_kill", { id });
+export { ackPty, killPty, resizePty, spawnPty, writePty } from "./pty";

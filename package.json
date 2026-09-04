@@ -15,7 +15,8 @@
     "doctor": "react-doctor src --no-score",
     "doctor:changed": "react-doctor src --scope changed --no-score",
     "check": "npm run lint && tsc --noEmit && npm run test && npm run doctor",
-    "test": "vitest run"
+    "test": "vitest run",
+    "protocol": "cargo test -p crew-protocol"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",

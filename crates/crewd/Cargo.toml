@@ -1,0 +1,21 @@
+[package]
+name = "crewd"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "crewd"
+
+[[bin]]
+name = "crewd"
+path = "src/main.rs"
+
+[dependencies]
+crew-core = { path = "../crew-core" }
+crew-protocol = { path = "../crew-protocol" }
+futures-util.workspace = true
+rand.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tokio-tungstenite.workspace = true

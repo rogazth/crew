@@ -12,6 +12,8 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 crew-core = { path = "../crates/crew-core" }
+crew-protocol = { path = "../crates/crew-protocol" }
+crewd = { path = "../crates/crewd" }
 tauri = { version = "2", features = ["macos-private-api"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"

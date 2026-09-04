@@ -2,17 +2,13 @@ use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::os::unix::io::AsRawFd;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use base64::Engine as _;
-use serde::Serialize;
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::State;
 
-const DATA_EVENT: &str = "pty-data";
-const EXIT_EVENT: &str = "pty-exit";
 const READ_CHUNK: usize = 32 * 1024;
 /// Each `emit` is a JS eval in the webview. A busy PTY read thousands of small
 /// chunks per second and froze keyboard input until they were batched.
@@ -25,24 +21,16 @@ const FLOW_HIGH: u64 = 256 * 1024;
 const FLOW_LOW: u64 = 32 * 1024;
 const FLOW_POLL: Duration = Duration::from_millis(250);
 
-#[derive(Serialize, Clone)]
-#[serde(rename_all = "camelCase")]
-struct PtyData {
-    id: String,
-    data: String,
-}
-
-#[derive(Serialize, Clone)]
-#[serde(rename_all = "camelCase")]
-struct PtyExit {
-    id: String,
-    code: Option<i32>,
+pub trait PtyEvents: Send + Sync {
+    fn data(&self, stream_id: u32, bytes: &[u8]);
+    fn exit(&self, id: &str, code: Option<i32>);
 }
 
 struct LivePty {
     writer: Mutex<Box<dyn Write + Send>>,
     master_fd: i32,
     pid: u32,
+    stream_id: u32,
     /// Set once the child is reaped; from then on the pid may belong to someone else.
     exited: AtomicBool,
     flow: Mutex<Flow>,
@@ -56,11 +44,12 @@ struct Flow {
 }
 
 impl LivePty {
-    fn new(writer: Box<dyn Write + Send>, master_fd: i32, pid: u32) -> Self {
+    fn new(writer: Box<dyn Write + Send>, master_fd: i32, pid: u32, stream_id: u32) -> Self {
         Self {
             writer: Mutex::new(writer),
             master_fd,
             pid,
+            stream_id,
             exited: AtomicBool::new(false),
             flow: Mutex::new(Flow::default()),
             credit: Condvar::new(),
@@ -101,53 +90,158 @@ fn in_flight(flow: &Flow) -> u64 {
     flow.sent.saturating_sub(flow.acked)
 }
 
-pub struct PtyHost {
+struct Inner {
     sessions: Mutex<HashMap<String, Arc<LivePty>>>,
+    streams: Mutex<HashMap<u32, String>>,
+    next_stream: AtomicU32,
+    events: Mutex<Option<Arc<dyn PtyEvents>>>,
+}
+
+#[derive(Clone)]
+pub struct PtyHost {
+    inner: Arc<Inner>,
 }
 
 impl PtyHost {
     pub fn new() -> Self {
         Self {
-            sessions: Mutex::new(HashMap::new()),
+            inner: Arc::new(Inner {
+                sessions: Mutex::new(HashMap::new()),
+                streams: Mutex::new(HashMap::new()),
+                next_stream: AtomicU32::new(1),
+                events: Mutex::new(None),
+            }),
         }
     }
 
+    pub fn set_events(&self, events: Arc<dyn PtyEvents>) {
+        *self.inner.events.lock().unwrap_or_else(|e| e.into_inner()) = Some(events);
+    }
+
+    fn events(&self) -> Option<Arc<dyn PtyEvents>> {
+        self.inner.events.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
     fn insert(&self, id: String, live: Arc<LivePty>) {
-        self.sessions
+        let stream_id = live.stream_id;
+        self.inner
+            .sessions
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .insert(id, live);
+            .insert(id.clone(), live);
+        self.inner
+            .streams
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(stream_id, id);
     }
 
     fn get(&self, id: &str) -> Option<Arc<LivePty>> {
-        self.sessions
+        self.inner
+            .sessions
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .get(id)
             .cloned()
     }
 
-    fn remove(&self, id: &str) -> Option<Arc<LivePty>> {
-        self.sessions
+    fn get_stream(&self, stream_id: u32) -> Option<Arc<LivePty>> {
+        let id = self
+            .inner
+            .streams
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .remove(id)
+            .get(&stream_id)
+            .cloned()?;
+        self.get(&id)
+    }
+
+    fn remove(&self, id: &str) -> Option<Arc<LivePty>> {
+        let live = self
+            .inner
+            .sessions
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(id)?;
+        self.inner
+            .streams
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&live.stream_id);
+        Some(live)
     }
 
     fn remove_if_pid(&self, id: &str, pid: u32) -> Option<Arc<LivePty>> {
-        let mut sessions = self.sessions.lock().unwrap_or_else(|e| e.into_inner());
+        let mut sessions = self.inner.sessions.lock().unwrap_or_else(|e| e.into_inner());
         if sessions.get(id).map(|live| live.pid) != Some(pid) {
             return None;
         }
-        sessions.remove(id)
+        let live = sessions.remove(id)?;
+        drop(sessions);
+        self.inner
+            .streams
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&live.stream_id);
+        Some(live)
     }
 
     pub fn kill_all(&self) {
         let kids: Vec<Arc<LivePty>> = {
-            let mut map = self.sessions.lock().unwrap_or_else(|e| e.into_inner());
+            let mut map = self.inner.sessions.lock().unwrap_or_else(|e| e.into_inner());
             map.drain().map(|(_, live)| live).collect()
         };
+        self.inner.streams.lock().unwrap_or_else(|e| e.into_inner()).clear();
         for live in kids {
+            terminate(&live);
+            close_fd(live.master_fd);
+        }
+    }
+
+    pub fn spawn(
+        &self,
+        id: String,
+        cwd: String,
+        command: Vec<String>,
+        cols: u16,
+        rows: u16,
+    ) -> Result<u32, String> {
+        if let Some(prev) = self.remove(&id) {
+            terminate(&prev);
+            close_fd(prev.master_fd);
+        }
+        spawn_unix(self, id, cwd, command, cols.max(2), rows.max(2))
+    }
+
+    pub fn write(&self, id: &str, data: &[u8]) -> Result<(), String> {
+        let live = self
+            .get(id)
+            .ok_or_else(|| "Terminal is not running".to_string())?;
+        write_live(&live, data)
+    }
+
+    pub fn write_stream(&self, stream_id: u32, data: &[u8]) -> Result<(), String> {
+        let live = self
+            .get_stream(stream_id)
+            .ok_or_else(|| "Terminal is not running".to_string())?;
+        write_live(&live, data)
+    }
+
+    pub fn resize(&self, id: &str, cols: u16, rows: u16) -> Result<(), String> {
+        let live = self
+            .get(id)
+            .ok_or_else(|| "Terminal is not running".to_string())?;
+        resize_fd(live.master_fd, cols.max(2), rows.max(2))
+    }
+
+    pub fn ack(&self, id: &str, processed: u64) {
+        if let Some(live) = self.get(id) {
+            live.ack(processed);
+        }
+    }
+
+    pub fn kill(&self, id: &str) {
+        if let Some(live) = self.remove(id) {
             terminate(&live);
             close_fd(live.master_fd);
         }
@@ -156,75 +250,64 @@ impl PtyHost {
 
 impl Drop for PtyHost {
     fn drop(&mut self) {
-        self.kill_all();
+        if Arc::strong_count(&self.inner) == 1 {
+            self.kill_all();
+        }
     }
+}
+
+fn write_live(live: &LivePty, data: &[u8]) -> Result<(), String> {
+    let mut writer = live.writer.lock().unwrap_or_else(|e| e.into_inner());
+    writer
+        .write_all(data)
+        .and_then(|_| writer.flush())
+        .map_err(|e| format!("Failed to write to terminal: {e}"))
 }
 
 /// `command` empty spawns the login shell; otherwise argv[0] is resolved on PATH.
 #[tauri::command(async)]
 pub fn pty_spawn(
-    app: AppHandle,
     host: State<PtyHost>,
     id: String,
     cwd: String,
     command: Vec<String>,
     cols: u16,
     rows: u16,
-) -> Result<(), String> {
-    if let Some(prev) = host.remove(&id) {
-        terminate(&prev);
-        close_fd(prev.master_fd);
-    }
-    spawn_unix(app, host, id, cwd, command, cols.max(2), rows.max(2))
+) -> Result<u32, String> {
+    host.spawn(id, cwd, command, cols, rows)
 }
 
 #[tauri::command(async)]
 pub fn pty_write(host: State<PtyHost>, id: String, data: String) -> Result<(), String> {
-    let live = host
-        .get(&id)
-        .ok_or_else(|| "Terminal is not running".to_string())?;
-    let mut writer = live.writer.lock().unwrap_or_else(|e| e.into_inner());
-    writer
-        .write_all(data.as_bytes())
-        .and_then(|_| writer.flush())
-        .map_err(|e| format!("Failed to write to terminal: {e}"))
+    host.write(&id, data.as_bytes())
 }
 
 #[tauri::command(async)]
 pub fn pty_resize(host: State<PtyHost>, id: String, cols: u16, rows: u16) -> Result<(), String> {
-    let live = host
-        .get(&id)
-        .ok_or_else(|| "Terminal is not running".to_string())?;
-    resize_fd(live.master_fd, cols.max(2), rows.max(2))
+    host.resize(&id, cols, rows)
 }
 
 /// Cumulative bytes xterm has parsed for this terminal.
 #[tauri::command(async)]
 pub fn pty_ack(host: State<PtyHost>, id: String, processed: u64) -> Result<(), String> {
-    if let Some(live) = host.get(&id) {
-        live.ack(processed);
-    }
+    host.ack(&id, processed);
     Ok(())
 }
 
 #[tauri::command(async)]
 pub fn pty_kill(host: State<PtyHost>, id: String) -> Result<(), String> {
-    if let Some(live) = host.remove(&id) {
-        terminate(&live);
-        close_fd(live.master_fd);
-    }
+    host.kill(&id);
     Ok(())
 }
 
 fn spawn_unix(
-    app: AppHandle,
-    host: State<PtyHost>,
+    host: &PtyHost,
     id: String,
     cwd: String,
     command: Vec<String>,
     cols: u16,
     rows: u16,
-) -> Result<(), String> {
+) -> Result<u32, String> {
     use std::fs::File;
     use std::os::unix::io::FromRawFd;
     use std::os::unix::process::CommandExt;
@@ -304,11 +387,11 @@ fn spawn_unix(
     let reader = unsafe { File::from_raw_fd(dup_fd(master)?) };
     let writer = unsafe { File::from_raw_fd(dup_fd(master)?) };
 
-    let live = Arc::new(LivePty::new(Box::new(writer), master, pid));
+    let stream_id = host.inner.next_stream.fetch_add(1, Ordering::Relaxed);
+    let live = Arc::new(LivePty::new(Box::new(writer), master, pid, stream_id));
     host.insert(id.clone(), live.clone());
 
-    let data_app = app.clone();
-    let data_id = id.clone();
+    let data_host = host.clone();
     let data_live = live.clone();
     thread::spawn(move || {
         let mut file = reader;
@@ -331,7 +414,7 @@ fn spawn_unix(
             } else if should_flush(acc.len(), last_emit.elapsed())
                 || !wait_readable(fd, PTY_COALESCE.saturating_sub(last_emit.elapsed()))
             {
-                emit_data(&data_app, &data_id, &acc);
+                emit_data(&data_host, stream_id, &acc);
                 data_live.sent(acc.len());
                 acc.clear();
                 last_emit = Instant::now();
@@ -342,25 +425,25 @@ fn spawn_unix(
                 }
             }
         }
-        emit_data(&data_app, &data_id, &acc);
+        emit_data(&data_host, stream_id, &acc);
     });
 
+    let wait_host = host.clone();
     thread::spawn(move || {
         let code = child.wait().ok().and_then(|status| status.code());
         live.exited.store(true, Ordering::Release);
         live.credit.notify_all();
         // A respawn reuses the id; a stale wait thread must not evict the new
         // PTY from the host or paint its exit onto it.
-        let Some(host) = app.try_state::<PtyHost>() else {
-            return;
-        };
-        if let Some(live) = host.remove_if_pid(&id, pid) {
+        if wait_host.remove_if_pid(&id, pid).is_some() {
             close_fd(live.master_fd);
-            let _ = app.emit(EXIT_EVENT, PtyExit { id, code });
+            if let Some(events) = wait_host.events() {
+                events.exit(&id, code);
+            }
         }
     });
 
-    Ok(())
+    Ok(stream_id)
 }
 
 fn home_dir() -> Option<String> {
@@ -507,18 +590,13 @@ fn os_err(ctx: &str) -> String {
     format!("{ctx}: {}", std::io::Error::last_os_error())
 }
 
-fn emit_data(app: &AppHandle, id: &str, bytes: &[u8]) {
+fn emit_data(host: &PtyHost, stream_id: u32, bytes: &[u8]) {
     if bytes.is_empty() {
         return;
     }
-    let data = base64::engine::general_purpose::STANDARD.encode(bytes);
-    let _ = app.emit(
-        DATA_EVENT,
-        PtyData {
-            id: id.to_string(),
-            data,
-        },
-    );
+    if let Some(events) = host.events() {
+        events.data(stream_id, bytes);
+    }
 }
 
 fn should_flush(buffered: usize, since: Duration) -> bool {
@@ -551,7 +629,7 @@ mod tests {
 
     #[test]
     fn credit_blocks_past_high_water_until_acked_below_low() {
-        let live = LivePty::new(Box::new(std::io::sink()), -1, 42);
+        let live = LivePty::new(Box::new(std::io::sink()), -1, 42, 1);
         live.sent(FLOW_HIGH as usize);
         live.ack(FLOW_HIGH - FLOW_LOW);
         assert!(live.wait_for_credit());
@@ -565,7 +643,7 @@ mod tests {
         let host = PtyHost::new();
         host.insert(
             "term".into(),
-            Arc::new(LivePty::new(Box::new(std::io::sink()), -1, 42)),
+            Arc::new(LivePty::new(Box::new(std::io::sink()), -1, 42, 1)),
         );
         assert!(host.remove_if_pid("term", 7).is_none());
         assert!(host.get("term").is_some());
