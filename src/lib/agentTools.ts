@@ -1,6 +1,7 @@
 import { listen } from "@tauri-apps/api/event";
 import * as api from "./api";
 import { newBlock } from "./blocks";
+import { isValidCron } from "./cron";
 import { modelsOf, providerOf, PROVIDERS } from "./providers";
 import { describeSchedule, fromRow, nextRun, parseSchedule, type Routine, type Schedule } from "./routines";
 import { refreshScheduler } from "./scheduler";
@@ -20,17 +21,18 @@ type Tool = {
 };
 
 const SCHEDULE_HELP =
-  'schedule is {"kind":"interval","minutes":N} or {"kind":"daily","hour":0-23,"minute":0-59,"days":[0-6]} (days empty = every day, 0 = Sunday)';
+  'schedule is {"kind":"interval","minutes":N}, {"kind":"daily","hour":0-23,"minute":0-59,"days":[0-6]} (days empty = every day, 0 = Sunday) or {"kind":"cron","expression":"m h dom mon dow"}';
 
 const SCHEDULE_SCHEMA = {
   type: "object",
   description: SCHEDULE_HELP,
   properties: {
-    kind: { type: "string", enum: ["interval", "daily"] },
+    kind: { type: "string", enum: ["interval", "daily", "cron"] },
     minutes: { type: "integer", minimum: 1 },
     hour: { type: "integer", minimum: 0, maximum: 23 },
     minute: { type: "integer", minimum: 0, maximum: 59 },
     days: { type: "array", items: { type: "integer", minimum: 0, maximum: 6 } },
+    expression: { type: "string", description: "Five-field cron, local time." },
   },
   required: ["kind"],
 };
@@ -325,6 +327,13 @@ export function validateSchedule(input: unknown): Schedule {
       throw new Error(`days must be a list of 0-6 (Sunday to Saturday). ${SCHEDULE_HELP}`);
     }
     return { kind: "daily", hour, minute, days: [...new Set(days as number[])].sort((a, b) => a - b) };
+  }
+  if (value.kind === "cron") {
+    const expression = typeof value.expression === "string" ? value.expression.trim() : "";
+    if (!isValidCron(expression)) {
+      throw new Error(`expression must be five cron fields: minute hour day-of-month month day-of-week`);
+    }
+    return { kind: "cron", expression };
   }
   throw new Error(SCHEDULE_HELP);
 }

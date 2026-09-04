@@ -55,6 +55,7 @@ export const COMMANDS = {
   "zoom-reset": { label: "Reset Terminal Font", keys: "Mod+0" },
 
   "toggle-sidebar": { label: "Toggle Sidebar", keys: "Mod+B" },
+  "open-routines": { label: "Routines", keys: "Mod+Shift+R" },
   "open-settings": { label: "Settings", keys: "Mod+," },
   "save-file": { label: "Save File", keys: "Mod+S" },
 } as const satisfies Record<string, { label: string; keys: RegisterableHotkey }>;

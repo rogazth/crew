@@ -3,11 +3,12 @@ import { useCallback, useEffect, useState, type CSSProperties } from "react";
 import { AgentSheet, type AgentDraft } from "./chrome/AgentSheet";
 import { MIN_SAVE_MS } from "./lib/timing";
 import { CommandPalette, type PaletteMode } from "./chrome/CommandPalette";
-import { ConfirmDialog, type Confirm } from "./chrome/ConfirmDialog";
+import { ConfirmDialog } from "./chrome/ConfirmDialog";
 import { AppSidebar } from "./chrome/AppSidebar";
 import { TabBar } from "./chrome/TabBar";
 import type { Launch } from "./chrome/TabLauncher";
 import { useCommands } from "./hooks/useCommand";
+import { useConfirmations } from "./hooks/useConfirmations";
 import { useProjectFiles } from "./hooks/useProjectFiles";
 import { useSelectAllScope } from "./hooks/useSelectAllScope";
 import { useSessions } from "./hooks/useSessions";
@@ -18,15 +19,26 @@ import { TerminalPrefsProvider } from "./hooks/useTerminalPrefs";
 import { useWorkspaces } from "./hooks/useWorkspaces";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./lib/providers";
 import { fileTabId, sessionTabId, stubTabId } from "./lib/tabs";
-import type { ProjectFile, Session, StubKind, Workspace } from "./lib/types";
+import type { ProjectFile, Session, StubKind } from "./lib/types";
 import { SETTINGS_DEFAULT, type SettingsSectionId } from "./lib/settings";
 import { startAgentTools } from "./lib/agentTools";
-import { saveRoutines, startScheduler } from "./lib/scheduler";
+import { startScheduler } from "./lib/scheduler";
+import { newRoutineDraft, type RoutineDraft } from "./lib/routines";
 import { nextSessionName } from "./lib/workspaces";
+import { RoutinesView } from "./surfaces/RoutinesView";
 import { SettingsView } from "./surfaces/SettingsView";
 import { WorkspacePanes } from "./surfaces/WorkspacePanes";
 
 type Sheet = { session: Session | null };
+
+/**
+ * Pages take over the main area; only settings swaps the sidebar too. They stack over
+ * the tabs, so anything that opens or picks a tab has to leave the page first.
+ */
+type View =
+  | { kind: "workspace" }
+  | { kind: "settings"; section: SettingsSectionId }
+  | { kind: "routines"; draft: RoutineDraft | null };
 
 export function App() {
   useEffect(startScheduler, []);
@@ -40,26 +52,44 @@ export function App() {
     useSessions(active?.id ?? null);
   const tabs = useTabs(active?.id ?? null);
   const files = useProjectFiles(active?.path ?? null);
+  const confirms = useConfirmations({
+    closeTabsFor: tabs.closeForSession,
+    removeSession: remove,
+    removeWorkspace: workspaces.remove,
+  });
 
   const [palette, setPalette] = useState<PaletteMode | null>(null);
   const [sheet, setSheet] = useState<Sheet | null>(null);
-  const [confirm, setConfirm] = useState<Confirm | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [settings, setSettings] = useState<SettingsSectionId | null>(null);
+  const [view, setView] = useState<View>({ kind: "workspace" });
+  const settings = view.kind === "settings" ? view.section : null;
+  const closeView = useCallback(() => setView({ kind: "workspace" }), []);
+
+  /** Wraps a tab action so it lands in view instead of behind whatever page is up. */
+  const inTabs = useCallback(
+    (act: () => void) => () => {
+      closeView();
+      act();
+    },
+    [closeView],
+  );
 
   const openSession = useCallback(
-    (session: Session) =>
-      tabs.open({ id: sessionTabId(session.id), kind: "session", sessionId: session.id }),
-    [tabs],
+    (session: Session) => {
+      closeView();
+      tabs.open({ id: sessionTabId(session.id), kind: "session", sessionId: session.id });
+    },
+    [closeView, tabs],
   );
 
   const openFile = useCallback(
     (file: ProjectFile) => {
+      closeView();
       tabs.open({ id: fileTabId(file.path), kind: "file", path: file.path, relative: file.relative });
       setPalette(null);
     },
-    [tabs],
+    [closeView, tabs],
   );
 
   // Sessions open straight away; the name is derived, never prompted.
@@ -76,6 +106,11 @@ export function App() {
 
   const newAgent = useCallback(() => setSheet({ session: null }), []);
 
+  const newRoutineFor = useCallback(
+    (session: Session) => () => setView({ kind: "routines", draft: newRoutineDraft(session.id) }),
+    [],
+  );
+
   const changeModel = useCallback(
     (session: Session, provider: string, model: string) =>
       void update(session.id, { ...session, provider, model }),
@@ -83,9 +118,11 @@ export function App() {
   );
 
   const openStub = useCallback(
-    (stub: StubKind, title: string) =>
-      tabs.open({ id: stubTabId(stub), kind: "stub", stub, title }),
-    [tabs],
+    (stub: StubKind, title: string) => {
+      closeView();
+      tabs.open({ id: stubTabId(stub), kind: "stub", stub, title });
+    },
+    [closeView, tabs],
   );
 
   const launch = useCallback(
@@ -102,64 +139,17 @@ export function App() {
   const saveSheet = useCallback(
     async (draft: AgentDraft) => {
       const editing = sheet?.session;
-      let id = editing?.id ?? null;
       // Writing is instant, which reads as cheap; the floor holds the spinner so the
       // sidebar row, the tab and the sheet's exit all land on the same beat.
       const settle = new Promise((r) => setTimeout(r, MIN_SAVE_MS));
       if (editing) {
         await update(editing.id, draft, settle);
-      } else {
-        const session = await create("agent", draft, settle);
-        if (session) openSession(session);
-        id = session?.id ?? null;
+        return;
       }
-      if (id) await saveRoutines(id, draft.routines, draft.removedRoutines);
+      const session = await create("agent", draft, settle);
+      if (session) openSession(session);
     },
     [create, openSession, sheet, update],
-  );
-
-  const confirmRemoveSession = useCallback(
-    (session: Session) =>
-      setConfirm({
-        title: `Delete ${session.kind === "agent" ? "agent" : "session"} "${session.name}"?`,
-        description: "Its history is removed from this workspace. This cannot be undone.",
-        action: "Delete",
-        onConfirm: async () => {
-          tabs.closeForSession(session.id);
-          await remove(session.id);
-        },
-      }),
-    [remove, tabs],
-  );
-
-  const confirmRemoveSessions = useCallback(
-    (list: Session[]) => {
-      const [only] = list;
-      if (list.length === 1 && only) return confirmRemoveSession(only);
-      setConfirm({
-        title: `Delete ${list.length} items?`,
-        description: "Their history is removed from this workspace. This cannot be undone.",
-        action: "Delete",
-        onConfirm: async () => {
-          for (const session of list) {
-            tabs.closeForSession(session.id);
-            await remove(session.id);
-          }
-        },
-      });
-    },
-    [confirmRemoveSession, remove, tabs],
-  );
-
-  const confirmRemoveWorkspace = useCallback(
-    (workspace: Workspace) =>
-      setConfirm({
-        title: `Remove workspace "${workspace.name}"?`,
-        description: "Agents and sessions inside it are deleted. Files on disk are untouched.",
-        action: "Remove",
-        onConfirm: () => workspaces.remove(workspace.id),
-      }),
-    [workspaces],
   );
 
   const togglePalette = useCallback(
@@ -191,23 +181,30 @@ export function App() {
     "toggle-sidebar": () => setSidebarOpen((open) => !open),
     "new-agent": newAgent,
     "new-session": () => void newSession(),
-    "open-settings": () => setSettings((open) => (open ? null : SETTINGS_DEFAULT)),
-    "reopen-tab": tabs.reopen,
-    "next-tab": () => tabs.step(1),
-    "prev-tab": () => tabs.step(-1),
-    "tab-1": () => tabs.activate(0),
-    "tab-2": () => tabs.activate(1),
-    "tab-3": () => tabs.activate(2),
-    "tab-4": () => tabs.activate(3),
-    "tab-5": () => tabs.activate(4),
-    "tab-6": () => tabs.activate(5),
-    "tab-7": () => tabs.activate(6),
-    "tab-8": () => tabs.activate(7),
-    "last-tab": () => tabs.activate(-1),
+    "open-routines": () =>
+      setView((open) =>
+        open.kind === "routines" ? { kind: "workspace" } : { kind: "routines", draft: null },
+      ),
+    "open-settings": () =>
+      setView((open) =>
+        open.kind === "settings" ? { kind: "workspace" } : { kind: "settings", section: SETTINGS_DEFAULT },
+      ),
+    "reopen-tab": inTabs(tabs.reopen),
+    "next-tab": inTabs(() => tabs.step(1)),
+    "prev-tab": inTabs(() => tabs.step(-1)),
+    "tab-1": inTabs(() => tabs.activate(0)),
+    "tab-2": inTabs(() => tabs.activate(1)),
+    "tab-3": inTabs(() => tabs.activate(2)),
+    "tab-4": inTabs(() => tabs.activate(3)),
+    "tab-5": inTabs(() => tabs.activate(4)),
+    "tab-6": inTabs(() => tabs.activate(5)),
+    "tab-7": inTabs(() => tabs.activate(6)),
+    "tab-8": inTabs(() => tabs.activate(7)),
+    "last-tab": inTabs(() => tabs.activate(-1)),
     close: () => {
       if (palette) setPalette(null);
       else if (sheet) setSheet(null);
-      else if (settings) setSettings(null);
+      else if (view.kind !== "workspace") closeView();
       else if (tabs.active) tabs.close(tabs.active.id);
     },
   });
@@ -238,8 +235,8 @@ export function App() {
       {active && (
         <AppSidebar
           settings={settings}
-          onSelectSettings={setSettings}
-          onCloseSettings={() => setSettings(null)}
+          onSelectSettings={(section) => setView({ kind: "settings", section })}
+          onCloseSettings={closeView}
           sessions={{
             workspace: active,
             workspaces: workspaces.workspaces,
@@ -248,19 +245,21 @@ export function App() {
             onSelectWorkspace: workspaces.activate,
             onCreateWorkspace: workspaces.create,
             onRenameWorkspace: workspaces.rename,
-            onRemoveWorkspace: confirmRemoveWorkspace,
+            onRemoveWorkspace: confirms.askWorkspace,
             onReorderWorkspaces: workspaces.reorder,
             sessions,
             activeSessionId,
             settingsOpen: settings !== null,
+            routinesOpen: view.kind === "routines",
             onSelect: openSession,
             onNewAgent: newAgent,
             onNewSession: newSession,
-            onOpenSettings: () => setSettings(SETTINGS_DEFAULT),
+            onOpenRoutines: () => setView({ kind: "routines", draft: null }),
+            onOpenSettings: () => setView({ kind: "settings", section: SETTINGS_DEFAULT }),
             onEdit: (session) => setSheet({ session }),
             onRename: (session, name) => void rename(session.id, name),
-            onRemove: confirmRemoveSession,
-            onRemoveMany: confirmRemoveSessions,
+            onRemove: confirms.askSession,
+            onRemoveMany: confirms.askSessions,
             onReorder: reorder,
           }}
         />
@@ -268,8 +267,20 @@ export function App() {
 
       <main className="flex min-w-0 flex-1 flex-col bg-canvas">
         {settings && <SettingsView section={settings} />}
+        {view.kind === "routines" && active && (
+          <RoutinesView
+            // A draft arriving from the agent drawer has to reopen the editor even
+            // when the page is already up.
+            key={view.draft?.key ?? "routines"}
+            draft={view.draft}
+            workspaces={workspaces.workspaces}
+            activeWorkspaceId={active.id}
+            agents={sessions.filter((session) => session.kind === "agent")}
+            onConfirm={confirms.ask}
+          />
+        )}
         {/* Hidden, not unmounted: agent and terminal processes stay alive. */}
-        <div hidden={settings !== null} className="flex min-h-0 flex-1 flex-col">
+        <div hidden={view.kind !== "workspace"} className="flex min-h-0 flex-1 flex-col">
           <TabBar
             inset={!sidebarOpen}
             tabs={tabs.tabs}
@@ -314,13 +325,13 @@ export function App() {
         />
       )}
 
-      <ConfirmDialog confirm={confirm} onClose={() => setConfirm(null)} />
+      <ConfirmDialog confirm={confirms.confirm} onClose={confirms.close} />
 
       {sheet && (
         <AgentSheet
-          cwd={active?.path ?? null}
           session={sheet.session}
           existingNames={sessions.filter((s) => s.kind === "agent").map((s) => s.name)}
+          onNewRoutine={sheet.session ? newRoutineFor(sheet.session) : null}
           onSave={saveSheet}
           onClose={() => setSheet(null)}
         />

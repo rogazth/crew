@@ -23,7 +23,8 @@ pub struct Routine {
     pub created_by: Option<String>,
 }
 
-/// What the scheduler needs to fire a run without another round trip.
+/// What the scheduler needs to fire a run, and the routines screen to list one,
+/// without another round trip.
 #[derive(Serialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct ScheduledRoutine {
@@ -73,7 +74,7 @@ pub fn routine_list(store: State<Store>) -> Result<Vec<ScheduledRoutine>, String
              FROM routines r
              JOIN sessions s ON s.id = r.session_id
              JOIN workspaces w ON w.id = s.workspace_id
-             WHERE r.enabled = 1"
+             ORDER BY r.created_at"
         );
         let mut stmt = conn.prepare_cached(&sql)?;
         let rows = stmt.query_map([], |row| {

@@ -1,14 +1,10 @@
 import { Button, Input, InputArea, Label, Switch } from "@cloudflare/kumo";
-import { XIcon } from "@phosphor-icons/react";
+import { PlusIcon, XIcon } from "@phosphor-icons/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Kbd } from "./Kbd";
 import { ModelPicker } from "./ModelPicker";
 import { ProviderIcon } from "./ProviderIcon";
-import { RoutinesSection } from "./RoutinesSection";
-import { listSessionRoutines } from "../lib/api";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER, type ProviderId } from "../lib/providers";
-import { fromRow, toDraft, type RoutineDraft } from "../lib/routines";
-import { onRoutinesChanged, runRoutineNow } from "../lib/scheduler";
 import type { Autonomy, Session } from "../lib/types";
 
 export type AgentDraft = {
@@ -18,16 +14,14 @@ export type AgentDraft = {
   description: string;
   notifications: boolean;
   autonomy: Autonomy;
-  routines: RoutineDraft[];
-  /** Ids the user deleted in the sheet; gone on save. */
-  removedRoutines: string[];
 };
 
 type Props = {
   /** null = creating. */
   session: Session | null;
-  cwd: string | null;
   existingNames: string[];
+  /** null while creating: a routine needs an agent that already exists. */
+  onNewRoutine: (() => void) | null;
   onSave: (draft: AgentDraft) => Promise<void>;
   onClose: () => void;
 };
@@ -39,14 +33,12 @@ const EMPTY: AgentDraft = {
   description: "",
   notifications: true,
   autonomy: "ask",
-  routines: [],
-  removedRoutines: [],
 };
 
 /** Must match .sheet-panel-out in index.css. */
 const CLOSE_MS = 150;
 
-export function AgentSheet({ session, cwd, existingNames, onSave, onClose }: Props) {
+export function AgentSheet({ session, existingNames, onNewRoutine, onSave, onClose }: Props) {
   const [draft, setDraft] = useState<AgentDraft>(EMPTY);
   const [submitted, setSubmitted] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -75,37 +67,9 @@ export function AgentSheet({ session, cwd, existingNames, onSave, onClose }: Pro
             description: session.description,
             notifications: session.notifications,
             autonomy: session.autonomy,
-            routines: [],
-            removedRoutines: [],
           }
         : EMPTY,
     );
-    if (!session) return;
-    let cancelled = false;
-    // Runs land while the sheet is open; the list follows them without losing edits.
-    const load = () =>
-      listSessionRoutines(session.id)
-        .then((rows) => {
-          if (cancelled) return;
-          const saved = rows.map((row) => toDraft(fromRow(row)));
-          setDraft((prev) => ({
-            ...prev,
-            routines: [
-              ...saved.map((routine) => {
-                const edited = prev.routines.find((row) => row.id === routine.id);
-                return edited ? { ...edited, runs: routine.runs } : routine;
-              }),
-              ...prev.routines.filter((row) => !row.id),
-            ].filter((row) => !row.id || !prev.removedRoutines.includes(row.id)),
-          }));
-        })
-        .catch(() => {});
-    void load();
-    const unsubscribe = onRoutinesChanged(load);
-    return () => {
-      cancelled = true;
-      unsubscribe();
-    };
   }, [session]);
 
   const name = draft.name.trim();
@@ -248,33 +212,19 @@ export function AgentSheet({ session, cwd, existingNames, onSave, onClose }: Pro
             />
           </div>
 
-          <RoutinesSection
-            routines={draft.routines}
-            onChange={(routines) =>
-              setDraft({
-                ...draft,
-                routines,
-                removedRoutines: [
-                  ...draft.removedRoutines,
-                  ...draft.routines
-                    .map((row) => row.id)
-                    .filter((id): id is string => !!id && !routines.some((row) => row.id === id)),
-                ],
-              })
-            }
-            {...(session && cwd
-              ? {
-                  onRunNow: async (routine: RoutineDraft) => {
-                    if (!routine.id) return;
-                    await runRoutineNow(
-                      { ...routine, id: routine.id, sessionId: session.id, schedule: JSON.stringify(routine.schedule), lastRunAt: null, nextRunAt: null, createdBy: null },
-                      session,
-                      cwd,
-                    );
-                  },
-                }
-              : {})}
-          />
+          {onNewRoutine && (
+            <Button
+              variant="secondary"
+              className="w-full"
+              icon={PlusIcon}
+              onClick={() => {
+                requestClose();
+                onNewRoutine();
+              }}
+            >
+              New routine
+            </Button>
+          )}
         </div>
 
         <footer className="flex shrink-0 items-center justify-end gap-2 border-t border-border p-3">

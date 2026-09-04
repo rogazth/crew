@@ -1,5 +1,6 @@
 import { Sidebar } from "@cloudflare/kumo";
 import {
+  ArrowsClockwiseIcon,
   GearIcon,
   MagnifyingGlassIcon,
   RobotIcon,
@@ -49,9 +50,11 @@ export type SessionSidebarProps = {
   sessions: Session[];
   activeSessionId: string | null;
   settingsOpen: boolean;
+  routinesOpen: boolean;
   onSelect: (session: Session) => void;
   onNewAgent: () => void;
   onNewSession: () => void;
+  onOpenRoutines: () => void;
   onOpenSettings: () => void;
   onEdit: (session: Session) => void;
   onRename: (session: Session, name: string) => void;
@@ -66,7 +69,7 @@ function modifiersOf(event: { metaKey: boolean; ctrlKey: boolean; shiftKey: bool
   return { toggle: IS_MAC ? event.metaKey : event.ctrlKey, range: event.shiftKey };
 }
 
-/** The sidebar's default view: workspace switcher, find, session list, settings row. */
+/** The sidebar's default view: workspace switcher, actions, session list, settings row. */
 export function SessionSidebar(props: SessionSidebarProps) {
   const [query, setQuery] = useState("");
   const [prefs, setPrefs] = useSidebarPrefs();
@@ -156,6 +159,13 @@ export function SessionSidebar(props: SessionSidebarProps) {
           label="New session"
           keys={commandKeys("new-session")}
           onClick={props.onNewSession}
+        />
+        <SidebarRow
+          icon={ArrowsClockwiseIcon}
+          label="Routines"
+          keys={commandKeys("open-routines")}
+          active={props.routinesOpen}
+          onClick={props.onOpenRoutines}
         />
       </div>
 

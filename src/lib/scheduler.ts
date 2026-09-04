@@ -23,21 +23,21 @@ let rows: ScheduledRoutine[] = [];
 let started = false;
 const listeners = new Set<() => void>();
 
-/** Loads every enabled routine and arms one timer for the earliest. Call once at boot. */
+/** Loads every routine and arms one timer for the earliest due. Call once at boot. */
 export function startScheduler(): void {
   if (started) return;
   started = true;
   void refreshScheduler();
 }
 
-/** Re-read after the sheet saved a routine or a session went away. */
+/** Re-read after a routine was saved or a session went away. */
 export async function refreshScheduler(): Promise<void> {
   rows = await api.listRoutines().catch(() => []);
   arm();
   for (const listener of listeners) listener();
 }
 
-/** The sheet re-reads its list when a run lands. */
+/** The routines screen re-reads its list when a run lands. */
 export function onRoutinesChanged(listener: () => void): () => void {
   listeners.add(listener);
   return () => {
@@ -61,7 +61,7 @@ async function tick(): Promise<void> {
   const now = Date.now();
   for (const row of rows) {
     const at = row.routine.nextRunAt;
-    if (at === null || at > now) continue;
+    if (!row.routine.enabled || at === null || at > now) continue;
     void fire(fromRow(row.routine), row.session, row.cwd, "schedule");
     row.routine.nextRunAt = nextRun(parseSchedule(row.routine.schedule), now);
   }
@@ -100,28 +100,28 @@ async function creatorName(routine: Routine, session: Session): Promise<string |
   return creator?.name ?? "another agent";
 }
 
-/** "Test run" in the sheet. */
+/** "Run now" on the routines screen. */
 export async function runRoutineNow(routine: Routine, session: Session, cwd: string): Promise<void> {
   await fire(routine, session, cwd, "manual");
 }
 
-/** The sheet's list, persisted: drafts are upserted, anything it dropped is deleted. */
-export async function saveRoutines(sessionId: string, drafts: RoutineDraft[], removed: string[]): Promise<void> {
-  await Promise.all(removed.map((id) => api.deleteRoutine(id).catch(() => {})));
-  for (const draft of drafts) {
-    const prompt = draft.prompt.trim();
-    const name = draft.name.trim() || "Routine";
-    if (!prompt) continue;
-    const enabled = draft.enabled;
-    await api.upsertRoutine({
-      ...(draft.id ? { id: draft.id } : {}),
-      sessionId,
-      name,
-      enabled,
-      prompt,
-      schedule: JSON.stringify(draft.schedule),
-      nextRunAt: enabled ? nextRun(draft.schedule, Date.now()) : null,
-    });
-  }
+/** One routine, persisted. Returns the id so a new draft can keep editing itself. */
+export async function saveRoutine(draft: RoutineDraft): Promise<string> {
+  const schedule = draft.schedule;
+  const row = await api.upsertRoutine({
+    ...(draft.id ? { id: draft.id } : {}),
+    sessionId: draft.sessionId,
+    name: draft.name.trim() || "Routine",
+    enabled: draft.enabled,
+    prompt: draft.prompt.trim(),
+    schedule: JSON.stringify(schedule),
+    nextRunAt: draft.enabled ? nextRun(schedule, Date.now()) : null,
+  });
+  await refreshScheduler();
+  return row.id;
+}
+
+export async function removeRoutine(id: string): Promise<void> {
+  await api.deleteRoutine(id);
   await refreshScheduler();
 }

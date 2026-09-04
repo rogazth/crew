@@ -18,6 +18,7 @@ const sessions: Row[] = [
   session("s3", "w1", "terminal", "claude", "claude", "claude-sonnet-5", "working"),
   session("s4", "w1", "terminal", "claude 2", "claude", "claude-sonnet-5", "done"),
   session("s5", "w2", "terminal", "claude", "claude", "", "idle"),
+  session("s6", "w3", "agent", "Bookkeeper", "cursor", "cursor-grok-4.6", "idle"),
 ];
 const state = new Map<string, string>([["active_workspace_id", "w1"]]);
 const routines: Row[] = [
@@ -30,6 +31,27 @@ const routines: Row[] = [
       { id: "run2", startedAt: now - 8 * 3600e3, finishedAt: now - 8 * 3600e3 + 42e3, status: "ok", trigger: "schedule" },
       { id: "run1", startedAt: now - 32 * 3600e3, finishedAt: now - 32 * 3600e3 + 12e3, status: "error", trigger: "schedule" },
     ]),
+  },
+  {
+    id: "r2", sessionId: "s2", name: "Find critical bugs", enabled: true,
+    prompt: "Inspect recent commits and identify critical correctness bugs that escaped review. Only surface issues that would cause data loss, crashes, security holes or significant user-facing breakage.",
+    schedule: JSON.stringify({ kind: "interval", minutes: 180 }),
+    lastRunAt: now - 2 * 3600e3, nextRunAt: now + 3600e3,
+    runsJson: JSON.stringify([
+      { id: "run3", startedAt: now - 2 * 3600e3, finishedAt: now - 2 * 3600e3 + 96e3, status: "error", trigger: "manual" },
+    ]),
+  },
+  {
+    id: "r3", sessionId: "s2", name: "Weekly dependency sweep", enabled: false,
+    prompt: "Check for outdated dependencies and open one PR per safe upgrade.",
+    schedule: JSON.stringify({ kind: "cron", expression: "0 7 * * 1" }),
+    lastRunAt: null, nextRunAt: null, runsJson: "[]",
+  },
+  {
+    id: "r4", sessionId: "s6", name: "Reconcile expenses", enabled: true,
+    prompt: "Import yesterday's transactions and flag anything that does not match a budget category.",
+    schedule: JSON.stringify({ kind: "daily", hour: 22, minute: 30, days: [] }),
+    lastRunAt: now - 20 * 3600e3, nextRunAt: now + 4 * 3600e3, runsJson: "[]",
   },
 ];
 
@@ -112,11 +134,16 @@ const commands: Record<string, (args: Row) => unknown> = {
   agent_write: ({ sessionId, line }) => void mockAgentInput(sessionId as string, line as string),
   agent_close_stdin: () => undefined,
   routine_list_for_session: ({ sessionId }) => routines.filter((r) => r.sessionId === sessionId),
-  routine_list: () => [],
+  routine_list: () =>
+    routines.flatMap((routine) => {
+      const owner = sessions.find((s) => s.id === routine.sessionId);
+      const workspace = workspaces.find((w) => w.id === owner?.workspaceId);
+      return owner && workspace ? [{ routine, session: owner, cwd: workspace.path }] : [];
+    }),
   routine_upsert: (args) => {
     const existing = routines.find((r) => r.id === args.id);
     if (existing) return Object.assign(existing, args);
-    const row = { ...args, id: `r${Date.now()}`, lastRunAt: null, runsJson: "[]" };
+    const row = { ...args, id: `r${Date.now()}`, lastRunAt: null, runsJson: "[]", createdBy: null };
     routines.push(row);
     return row;
   },
