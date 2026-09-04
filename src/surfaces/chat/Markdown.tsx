@@ -1,3 +1,4 @@
+import { CheckCircleIcon, CircleIcon } from "@phosphor-icons/react";
 import { cloneElement, isValidElement, memo, useMemo, type ComponentProps, type ReactNode } from "react";
 import { Streamdown, type Components } from "streamdown";
 import "streamdown/styles.css";
@@ -7,6 +8,7 @@ import { groupRuns, isHeadingOnly } from "../../lib/markdownRuns";
 import { CodeBlock } from "./CodeBlock";
 import { useChatActions } from "./context";
 import { CopyButton } from "./CopyButton";
+import { SiteIcon } from "./SiteIcon";
 
 type Props = { text: string; streaming?: boolean };
 
@@ -45,6 +47,7 @@ type LinkProps = ComponentProps<"a"> & { node?: unknown };
 /** Links leave for the default browser; the URL shows on hover instead of in a dialog. */
 function Link({ href, children, node: _node, ...rest }: LinkProps) {
   const url = href && !href.startsWith("streamdown:") ? href : undefined;
+  const web = url && /^https?:\/\//i.test(url) ? url : undefined;
   return (
     <a
       {...rest}
@@ -56,14 +59,25 @@ function Link({ href, children, node: _node, ...rest }: LinkProps) {
         if (url) openExternal(url);
       }}
     >
+      {web ? <SiteIcon url={web} /> : null}
       {children}
     </a>
   );
 }
 
+type InputProps = ComponentProps<"input"> & { node?: unknown };
+
+/** A task item's box: the native control can't take the icon shape the list wants. */
+function Input({ type, checked, node: _node, ...rest }: InputProps) {
+  if (type !== "checkbox") return <input type={type} checked={checked} {...rest} />;
+  const Glyph = checked ? CheckCircleIcon : CircleIcon;
+  return <Glyph className="crew-md-task" aria-hidden />;
+}
+
 const COMPONENTS: Components = {
   a: Link,
   code: Code,
+  input: Input,
   // The fence's <pre> only marks its child as a block; the box is CodeBlock's.
   pre: ({ children }) =>
     isValidElement(children) ? cloneElement(children, { "data-block": true } as object) : <>{children}</>,

@@ -1,3 +1,4 @@
+import { IconContext } from "@phosphor-icons/react";
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { WorkerPoolContextProvider } from "@pierre/diffs/react";
@@ -17,7 +18,9 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
       poolOptions={{ workerFactory: () => new DiffsWorker(), poolSize: 4 }}
       highlighterOptions={{ langs: LANGS }}
     >
-      <App />
+      <IconContext.Provider value={{ weight: "bold" }}>
+        <App />
+      </IconContext.Provider>
     </WorkerPoolContextProvider>
   </React.StrictMode>,
 );

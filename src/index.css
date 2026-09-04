@@ -21,6 +21,8 @@
   --color-danger: var(--color-kumo-danger);
   /* Ink mixed over transparent, not a fixed grey: the same card reads right on
      any surface and flips with the theme without a second value. */
+  /* The one blue in a neutral palette: a link has to read as a link. */
+  --color-link: light-dark(oklch(55% 0.185 258), oklch(75% 0.13 250));
   --color-card: color-mix(in srgb, var(--text-color-kumo-default) 6%, transparent);
   --color-hairline: color-mix(in srgb, var(--text-color-kumo-default) 8%, transparent);
 }
@@ -643,16 +645,17 @@ body:has(button[data-sidebar="resize-handle"]:active) * {
 .crew-md [data-streamdown="list-item"] > p + * {
   margin-top: 4px;
 }
-/* A task item: the box replaces the bullet instead of following it. */
-.crew-md [data-streamdown="list-item"]:has(> input[type="checkbox"]) {
+/* A task item: the ring replaces the bullet instead of following it. */
+.crew-md [data-streamdown="list-item"]:has(> .crew-md-task) {
   list-style: none;
 }
-.crew-md [data-streamdown="list-item"] > input[type="checkbox"] {
-  width: 14px;
-  height: 14px;
-  margin: 0 8px 0 -1.5em;
-  vertical-align: -2px;
-  accent-color: var(--text-color-kumo-default);
+.crew-md-task {
+  display: inline-block;
+  width: 15px;
+  height: 15px;
+  margin: 0 7px 0 -1.5em;
+  vertical-align: -3px;
+  color: var(--text-color-kumo-subtle);
 }
 /* Outside the bubble a quote is a hairline and a quieter voice, not italics. */
 .crew-md [data-streamdown="blockquote"] {
@@ -667,30 +670,42 @@ body:has(button[data-sidebar="resize-handle"]:active) * {
 .crew-md [data-streamdown="blockquote"] [data-streamdown="blockquote"] {
   margin-top: 6px;
 }
+/* streamdown pads the table inside a second card; the box is the table's own. */
 .crew-md [data-streamdown="table-wrapper"] {
   display: block;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+}
+.crew-md [data-streamdown="table-wrapper"] > div {
   width: fit-content;
   max-width: 100%;
   overflow-x: auto;
   overscroll-behavior-x: contain;
   border: 1px solid var(--color-hairline);
-  border-radius: 8px;
+  border-radius: 10px;
+  background: none;
 }
 .crew-md [data-streamdown="table"] {
   border-collapse: collapse;
-  font-size: 13px;
-  line-height: 18px;
+  font-size: inherit;
+  line-height: inherit;
 }
 .crew-md [data-streamdown="table-header-cell"],
 .crew-md [data-streamdown="table-cell"] {
-  padding: 6px 10px;
+  padding: 8px 14px;
   border: 0;
   border-bottom: 1px solid var(--color-hairline);
+  border-right: 1px solid var(--color-hairline);
   text-align: left;
   vertical-align: top;
 }
+.crew-md [data-streamdown="table-row"] > :last-child {
+  border-right: 0;
+}
 .crew-md [data-streamdown="table-header-cell"] {
-  background: color-mix(in srgb, var(--text-color-kumo-default) 3%, transparent);
+  background: none;
   font-weight: 600;
 }
 .crew-md [data-streamdown="table-body"] [data-streamdown="table-row"]:last-child [data-streamdown="table-cell"] {
@@ -740,11 +755,13 @@ body:has(button[data-sidebar="resize-handle"]:active) * {
   max-width: 100%;
   border: 1px solid color-mix(in srgb, var(--text-color-kumo-default) 8%, transparent);
   border-radius: 8px;
-  background: color-mix(in srgb, var(--text-color-kumo-default) 3%, transparent);
+  background: var(--color-kumo-base);
   font: 12.5px/19px ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 .crew-code-head {
   display: flex;
+  border-radius: 7px 7px 0 0;
+  background: color-mix(in srgb, var(--text-color-kumo-default) 3%, transparent);
   align-items: center;
   justify-content: space-between;
   height: 28px;
@@ -791,12 +808,29 @@ body:has(button[data-sidebar="resize-handle"]:active) * {
 }
 .crew-md [data-streamdown="link"] {
   cursor: pointer;
+  color: var(--color-link);
   font-weight: 500;
-  text-decoration: underline;
-  text-decoration-color: color-mix(in srgb, currentColor 40%, transparent);
-  text-underline-offset: 2px;
-  transition: text-decoration-color 100ms ease;
+  text-decoration: none;
+  overflow-wrap: anywhere;
+  /* Padded at rest so the hover pill costs no reflow; clone keeps a wrapped
+     link's second line inside the same shape. */
+  padding: 1px 5px;
+  margin: 0 -3px;
+  border-radius: 6px;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+  transition: background-color 100ms ease;
 }
 .crew-md [data-streamdown="link"]:hover {
-  text-decoration-color: currentColor;
+  background: color-mix(in srgb, var(--color-link) 14%, transparent);
+}
+/* The host mark keeps the ink colour so the blue stays on the label alone. */
+.crew-site-icon {
+  display: inline-block;
+  width: 15px;
+  height: 15px;
+  margin-right: 5px;
+  vertical-align: -3px;
+  object-fit: contain;
+  color: var(--text-color-kumo-default);
 }
