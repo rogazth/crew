@@ -108,6 +108,47 @@ body:has(button[data-sidebar="resize-handle"]:active) * {
     cursor: auto;
   }
 
+  /* A drag in the transcript must catch words, not the rails, timestamps and
+     labels between them; the blocks that hold text opt back in. Still a
+     [data-selectable] so Cmd+A keeps scoping to the whole transcript. */
+  [data-selectable="blocks"] {
+    -webkit-user-select: none;
+    user-select: none;
+    cursor: default;
+  }
+
+  /* WebKit fills the selection out to each block's edge, so a bubble-wide box
+     would paint its padding and the room after its last line. The island is the
+     text block itself, sized to its words and clipping its own paint. */
+  [data-selectable="blocks"]
+    :is(.crew-md-flow, .crew-bubble)
+    > *:not(.crew-code, .crew-diff) {
+    -webkit-user-select: text;
+    user-select: text;
+    cursor: auto;
+    width: fit-content;
+    contain: paint;
+  }
+
+  /* A fence keeps its box; inside it the code hugs its longest line, and the
+     language and copy row is chrome, not text. */
+  [data-selectable="blocks"] :is(.crew-code, .crew-diff) {
+    -webkit-user-select: text;
+    user-select: text;
+    cursor: auto;
+    contain: paint;
+  }
+
+  [data-selectable="blocks"] .crew-code-body code {
+    width: fit-content;
+  }
+
+  [data-selectable="blocks"] .crew-code-head {
+    -webkit-user-select: none;
+    user-select: none;
+    cursor: default;
+  }
+
   /* Without this an icon drags out of the window as a ghost image. */
   img,
   svg {
@@ -119,6 +160,14 @@ body:has(button[data-sidebar="resize-handle"]:active) * {
 ::selection {
   background: light-dark(oklch(84% 0.08 245), oklch(45% 0.11 255));
   color: light-dark(oklch(22% 0.02 260), oklch(97% 0 0));
+}
+
+/* The user's bubble runs inverted against the canvas: one translucent blue reads
+   on both its grounds, and the text keeps the colour it already had. */
+.crew-bubble::selection,
+.crew-bubble ::selection {
+  background: color-mix(in srgb, oklch(72% 0.15 250) 55%, transparent);
+  color: var(--color-kumo-base);
 }
 
 /* Scrollbars: present but quiet, so panes do not shift when content grows. */
@@ -820,6 +869,13 @@ body:has(button[data-sidebar="resize-handle"]:active) * {
   box-decoration-break: clone;
   -webkit-box-decoration-break: clone;
   transition: background-color 100ms ease;
+}
+/* A footnote's ref and backref are marks in the text, not labels: no pill to
+   push them off the line they sit on. */
+.crew-md sup [data-streamdown="link"],
+.crew-md [data-streamdown="link"][data-footnote-backref] {
+  padding: 0;
+  margin: 0;
 }
 .crew-md [data-streamdown="link"]:hover {
   background: color-mix(in srgb, var(--color-link) 14%, transparent);

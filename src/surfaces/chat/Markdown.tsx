@@ -46,17 +46,20 @@ type LinkProps = ComponentProps<"a"> & { node?: unknown };
 
 /** Links leave for the default browser; the URL shows on hover instead of in a dialog. */
 function Link({ href, children, node: _node, ...rest }: LinkProps) {
-  const url = href && !href.startsWith("streamdown:") ? href : undefined;
+  // A footnote's ref and backref are `#ids` into this same message, not the web.
+  const anchor = href?.startsWith("#") ? href.slice(1) : undefined;
+  const url = href && anchor === undefined && !href.startsWith("streamdown:") ? href : undefined;
   const web = url && /^https?:\/\//i.test(url) ? url : undefined;
   return (
     <a
       {...rest}
-      href={url ?? "#"}
+      href={href ?? "#"}
       {...(url ? { title: url } : {})}
       data-streamdown="link"
       onClick={(event) => {
         event.preventDefault();
         if (url) openExternal(url);
+        else if (anchor) document.getElementById(anchor)?.scrollIntoView({ block: "center" });
       }}
     >
       {web ? <SiteIcon url={web} /> : null}

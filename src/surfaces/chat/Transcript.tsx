@@ -113,7 +113,7 @@ export function Transcript({ blocks, working, onApprove, onAnswer }: Props) {
   return (
     <div
       ref={scroller}
-      data-selectable
+      data-selectable="blocks"
       onScroll={onScroll}
       className="min-h-0 flex-1 overflow-y-auto"
     >
