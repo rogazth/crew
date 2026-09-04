@@ -17,5 +17,5 @@ futures-util.workspace = true
 rand.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["signal"] }
 tokio-tungstenite.workspace = true
