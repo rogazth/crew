@@ -18,6 +18,7 @@ import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./lib/providers";
 import { fileTabId, sessionTabId, stubTabId } from "./lib/tabs";
 import type { ProjectFile, Session, StubKind, Workspace } from "./lib/types";
 import { SETTINGS_DEFAULT, type SettingsSectionId } from "./lib/settings";
+import { startAgentTools } from "./lib/agentTools";
 import { saveRoutines, startScheduler } from "./lib/scheduler";
 import { nextSessionName } from "./lib/workspaces";
 import { SettingsView } from "./surfaces/SettingsView";
@@ -27,6 +28,7 @@ type Sheet = { session: Session | null };
 
 export function App() {
   useEffect(startScheduler, []);
+  useEffect(startAgentTools, []);
   useSelectAllScope();
 
   const workspaces = useWorkspaces();

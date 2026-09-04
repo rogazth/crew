@@ -26,6 +26,7 @@ export type RoutineRow = {
   lastRunAt: number | null;
   nextRunAt: number | null;
   runsJson: string;
+  createdBy: string | null;
 };
 
 export type Routine = Omit<RoutineRow, "runsJson"> & { runs: RoutineRun[] };
@@ -150,12 +151,19 @@ export function describeSchedule(schedule: Schedule): string {
  * does not read the schedule back, and it allows silence: a routine that
  * found nothing should say nothing.
  */
-export function wakePrompt(name: string, schedule: Schedule, trigger: RoutineRun["trigger"], prompt: string): string {
+export function wakePrompt(
+  name: string,
+  schedule: Schedule,
+  trigger: RoutineRun["trigger"],
+  prompt: string,
+  by: string | null = null,
+): string {
   const when = describeSchedule(schedule).replace(/^Every/, "every");
+  const whose = by ? `a standing order ${by} set up for you` : "your own standing order";
   const cue =
     trigger === "manual"
       ? `[routine] "${name}" was run on demand. The user pressed Test run in the app; it normally runs ${when}.`
-      : `[routine] "${name}" is due (${when}). This is your own standing order firing on schedule, not a message the user just typed.`;
+      : `[routine] "${name}" is due (${when}). This is ${whose} firing on schedule, not a message the user just typed.`;
   return `${cue}\nWhat you saved to do each time:\n${prompt.trim()}\n\nCarry it out now. Report what matters in one short message. If nothing changed and the instruction does not ask for a report, end without filler.`;
 }
 

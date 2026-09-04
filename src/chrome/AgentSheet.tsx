@@ -269,7 +269,7 @@ export function AgentSheet({ session, cwd, existingNames, onSave, onClose }: Pro
                   onRunNow: async (routine: RoutineDraft) => {
                     if (!routine.id) return;
                     await runRoutineNow(
-                      { ...routine, id: routine.id, sessionId: session.id, schedule: JSON.stringify(routine.schedule), lastRunAt: null, nextRunAt: null },
+                      { ...routine, id: routine.id, sessionId: session.id, schedule: JSON.stringify(routine.schedule), lastRunAt: null, nextRunAt: null, createdBy: null },
                       session,
                       cwd,
                     );

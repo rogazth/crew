@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { dispose, onSessionPatch, reconcile } from "../lib/agentRuntime";
+import { onAgentCreated } from "../lib/agentTools";
 import * as api from "../lib/api";
 import type { Autonomy, Session, SessionKind, SessionStatus } from "../lib/types";
 
@@ -39,6 +40,14 @@ export function useSessions(workspaceId: string | null) {
         setSessions((prev) => prev.map((s) => (s.id === id ? { ...s, ...patch } : s)));
       }),
     [],
+  );
+
+  useEffect(
+    () =>
+      onAgentCreated((session) => {
+        if (session.workspaceId === workspaceId) setSessions((prev) => [...prev, session]);
+      }),
+    [workspaceId],
   );
 
   const create = useCallback(

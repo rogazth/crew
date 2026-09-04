@@ -30,8 +30,14 @@ export function buildCodexSpawnArgs(input: {
   resume?: string;
   cwd?: string;
   autonomy?: "ask" | "full";
+  mcp?: { command: string; args: string[] };
 }): string[] {
   const args = ["exec"];
+  // `-c` takes TOML values; JSON strings and string arrays are valid TOML too.
+  if (input.mcp) {
+    args.push("-c", `mcp_servers.crew.command=${JSON.stringify(input.mcp.command)}`);
+    args.push("-c", `mcp_servers.crew.args=${JSON.stringify(input.mcp.args)}`);
+  }
   if (input.resume) {
     // `exec resume` rejects --sandbox and -C; cwd comes from spawnAgent.
     args.push("resume", "--json", "--skip-git-repo-check");
@@ -55,19 +61,21 @@ export function buildCodexPrompt(
   text: string,
   files: string[] = [],
   withPersona = true,
+  tools?: string,
 ): string {
   const body = withAttachedPaths(text.trim(), files);
   if (!withPersona) return body;
-  const persona = personaPrompt(name, description);
+  const persona = personaPrompt(name, description, tools);
   return body ? `${persona}\n\n${body}` : persona;
 }
 
-export function personaPrompt(name: string, description: string): string {
+export function personaPrompt(name: string, description: string, tools?: string): string {
   const who = name.trim() || "the user's agent";
   const job = description.trim();
   const rules =
     "You are chatting inside Crew, a desktop app. Do the work with your tools, then reply like a colleague in chat: short, direct, no headers or preamble unless asked.";
-  return job ? `You are ${who}. ${job}\n\n${rules}` : `You are ${who}. ${rules}`;
+  const persona = job ? `You are ${who}. ${job}\n\n${rules}` : `You are ${who}. ${rules}`;
+  return tools ? `${persona}\n\n${tools}` : persona;
 }
 
 function withAttachedPaths(text: string, files: string[]): string {

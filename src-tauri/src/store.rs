@@ -189,6 +189,13 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
             params![now_millis()],
         )?;
     }
+    if current < 9 {
+        conn.execute("ALTER TABLE routines ADD COLUMN created_by TEXT", [])?;
+        conn.execute(
+            "INSERT INTO schema_migrations (version, applied_at) VALUES (9, ?1)",
+            params![now_millis()],
+        )?;
+    }
     Ok(())
 }
 

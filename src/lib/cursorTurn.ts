@@ -1,4 +1,5 @@
 import { killAgent, resolveBinary, spawnAgent, watchAgent } from "./agent";
+import { agentEnv, cliHint, mcpServer } from "./agentTools";
 import type { ApprovalDecision, HarnessEvent } from "./blocks";
 import {
   assistantDeltaText,
@@ -119,19 +120,22 @@ async function runTurn(input: TurnInput): Promise<void> {
     const { path } = await resolveBinary("cursor-agent").catch(() => {
       throw new Error("Cursor Agent CLI not found. Install the Cursor CLI and run `cursor-agent login`.");
     });
+    // No per-run MCP flag: the shell is the way back into Crew.
+    const [env, mcp] = await Promise.all([agentEnv(input.sessionId), mcpServer()]);
     await spawnAgent(
       input.sessionId,
       path,
       buildCursorSpawnArgs({
         prompt: withPersona(
           withAttachedFiles(input.text.trim(), input.files ?? []),
-          resume ? null : personaPrompt(input.name, input.description),
+          resume ? null : personaPrompt(input.name, input.description, mcp ? cliHint(mcp.command) : undefined),
         ),
         autonomy: input.autonomy,
         ...(model ? { model } : {}),
         ...(resume ? { resume } : {}),
       }),
       input.cwd,
+      env,
     );
     live.onEvent({ type: "session.started" });
     await turnPromise;

@@ -48,10 +48,12 @@ Sin Redux, sin Zustand, sin TanStack Query. R1 no usa ninguno y su UI es la más
 Un archivo por concern, sin submódulos. Es la convención de R1 y aguanta 15k líneas sin dolor.
 
 ```
-main.rs        7 líneas: llama a lib::run()
+main.rs        despacha: app, `crew --mcp` o `crew call`
 lib.rs         registro de comandos Tauri y estado global
 workspace.rs   NUEVO — crear/listar workspaces (nombre + path)
 agent.rs       ex-harness.rs — spawn/write/kill de CLIs de proveedor
+bridge.rs      socket UNIX: relay de tool calls de los agentes al webview
+mcp.rs         el otro extremo: servidor MCP por stdio y CLI dentro del agente
 pty.rs         terminales interactivas (el 2º elemento)
 files.rs       ex-fs.rs — listar, leer, escribir
 search.rs      git ls-files + git grep
@@ -138,8 +140,15 @@ Agregar Codex es un archivo nuevo y una fila en el registry.
 src/lib/transcript.ts    bloques por sesión; publica por frame, guarda con debounce
 src/lib/agentRuntime.ts  send/stop/respond; escribe status y provider_session_id
 src/lib/scheduler.ts     routines: un timer para la próxima ejecución
+src/lib/agentTools.ts    los tools que un agente tiene sobre Crew (agentes, rutinas)
 src/hooks/useThread.ts   useSyncExternalStore sobre transcript.ts
 ```
+
+Los agentes llegan a Crew por `bridge.rs`: `crew --mcp` (Claude, Codex) o
+`crew call` (Cursor) escriben una línea JSON en el socket, Rust la emite como
+evento `agent-tool`, `agentTools.ts` la resuelve con `api.ts` y el scheduler, y
+`bridge_reply` devuelve la respuesta. Rust no interpreta ninguna llamada. Ver
+`notes/agent-tools-plan.md`.
 
 Un tab cerrado o un reload del webview no pierden el turno: el runtime sigue
 escribiendo el transcript en SQLite, y al arrancar `reconcile()` mata huérfanos

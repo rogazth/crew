@@ -19,6 +19,8 @@ pub struct Routine {
     pub last_run_at: Option<i64>,
     pub next_run_at: Option<i64>,
     pub runs_json: String,
+    /// Session that set it up when it was an agent, not the user; the wake prompt names it.
+    pub created_by: Option<String>,
 }
 
 /// What the scheduler needs to fire a run without another round trip.
@@ -31,8 +33,8 @@ pub struct ScheduledRoutine {
 }
 
 const ROUTINE_COLUMNS: &str =
-    "r.id, r.session_id, r.name, r.enabled, r.prompt, r.schedule, r.last_run_at, r.next_run_at, r.runs_json";
-const ROUTINE_COLUMN_COUNT: usize = 9;
+    "r.id, r.session_id, r.name, r.enabled, r.prompt, r.schedule, r.last_run_at, r.next_run_at, r.runs_json, r.created_by";
+const ROUTINE_COLUMN_COUNT: usize = 10;
 
 fn row_to_routine(row: &rusqlite::Row, offset: usize) -> rusqlite::Result<Routine> {
     Ok(Routine {
@@ -45,6 +47,7 @@ fn row_to_routine(row: &rusqlite::Row, offset: usize) -> rusqlite::Result<Routin
         last_run_at: row.get(offset + 6)?,
         next_run_at: row.get(offset + 7)?,
         runs_json: row.get(offset + 8)?,
+        created_by: row.get(offset + 9)?,
     })
 }
 
@@ -98,19 +101,21 @@ pub fn routine_upsert(
     prompt: String,
     schedule: String,
     next_run_at: Option<i64>,
+    created_by: Option<String>,
 ) -> Result<Routine, String> {
     let now = now_millis();
     let id = id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     store.with(|conn| {
         conn.execute(
             "INSERT INTO routines
-               (id, session_id, name, enabled, prompt, schedule, next_run_at, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)
+               (id, session_id, name, enabled, prompt, schedule, next_run_at, created_by, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?9, ?8, ?8)
              ON CONFLICT(id) DO UPDATE SET
                name = excluded.name, enabled = excluded.enabled, prompt = excluded.prompt,
                schedule = excluded.schedule, next_run_at = excluded.next_run_at,
+               created_by = COALESCE(routines.created_by, excluded.created_by),
                updated_at = excluded.updated_at",
-            params![id, session_id, name, enabled, prompt, schedule, next_run_at, now],
+            params![id, session_id, name, enabled, prompt, schedule, next_run_at, now, created_by],
         )?;
         conn.prepare_cached(&format!("SELECT {ROUTINE_COLUMNS} FROM routines r WHERE r.id = ?1"))?
             .query_row(params![id], |row| row_to_routine(row, 0))

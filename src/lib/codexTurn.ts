@@ -1,4 +1,5 @@
 import { closeAgentStdin, killAgent, resolveBinary, spawnAgent, watchAgent } from "./agent";
+import { agentEnv, mcpServer, TOOLS_HINT } from "./agentTools";
 import type { HarnessEvent } from "./blocks";
 import {
   agentMessageText,
@@ -126,6 +127,7 @@ async function sendTurn(input: TurnInput): Promise<void> {
         "Codex CLI not found. Install it from https://github.com/openai/codex and run `codex login`.",
       );
     });
+    const [env, mcp] = await Promise.all([agentEnv(input.sessionId), mcpServer()]);
     // The thread already carries the persona after the first turn; resending it is paid twice.
     const prompt = buildCodexPrompt(
       resume ? "" : input.name,
@@ -133,6 +135,7 @@ async function sendTurn(input: TurnInput): Promise<void> {
       input.text,
       input.files ?? [],
       resume === undefined,
+      mcp ? TOOLS_HINT : undefined,
     );
     await spawnAgent(
       input.sessionId,
@@ -143,8 +146,10 @@ async function sendTurn(input: TurnInput): Promise<void> {
         cwd: input.cwd,
         ...(model ? { model } : {}),
         ...(resume ? { resume } : {}),
+        ...(mcp ? { mcp } : {}),
       }),
       input.cwd,
+      env,
     );
     // Piped stdin stays open; exec then waits to append a `<stdin>` block.
     await closeAgentStdin(input.sessionId).catch(() => undefined);

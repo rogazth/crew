@@ -85,11 +85,19 @@ async function fire(routine: Routine, session: Session, cwd: string, trigger: Ro
   await transcript.load(session.id);
   if (!transcript.read(session.id).working) {
     transcript.append(session.id, newBlock("system", `Routine · ${routine.name}`));
-    ok = await send(session, cwd, wakePrompt(routine.name, schedule, trigger, routine.prompt), [], { hidden: true });
+    const by = await creatorName(routine, session);
+    ok = await send(session, cwd, wakePrompt(routine.name, schedule, trigger, routine.prompt, by), [], { hidden: true });
   }
   runs = pushRun(runs, { ...run, finishedAt: Date.now(), status: ok ? "ok" : "error" });
   await api.markRoutineRun(routine.id, now, next, JSON.stringify(runs)).catch(() => {});
   await refreshScheduler();
+}
+
+/** Null when the user or the agent itself wrote the routine. */
+async function creatorName(routine: Routine, session: Session): Promise<string | null> {
+  if (!routine.createdBy || routine.createdBy === session.id) return null;
+  const creator = await api.getSession(routine.createdBy).catch(() => null);
+  return creator?.name ?? "another agent";
 }
 
 /** "Test run" in the sheet. */

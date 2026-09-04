@@ -48,12 +48,13 @@ export function withAttachedFiles(text: string, files: string[]): string {
 }
 
 /** Only the first turn of a chat carries it; the chat remembers after that. */
-export function personaPrompt(name: string, description: string): string {
+export function personaPrompt(name: string, description: string, tools?: string): string {
   const who = name.trim() || "the user's agent";
   const job = description.trim();
   const rules =
     "You are chatting inside Crew, a desktop app. Do the work with your tools, then reply like a colleague in chat: short, direct, no headers or preamble unless asked.";
-  return job ? `You are ${who}. ${job}\n\n${rules}` : `You are ${who}. ${rules}`;
+  const persona = job ? `You are ${who}. ${job}\n\n${rules}` : `You are ${who}. ${rules}`;
+  return tools ? `${persona}\n\n${tools}` : persona;
 }
 
 export function withPersona(body: string, persona: string | null): string {

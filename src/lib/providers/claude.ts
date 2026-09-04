@@ -32,6 +32,8 @@ export function buildClaudeSpawnArgs(input: {
   sessionId?: string;
   systemPrompt?: string;
   autonomy?: "ask" | "full";
+  /** Inline JSON for `--mcp-config`. */
+  mcpConfig?: string;
 }): string[] {
   const args = [
     "--output-format",
@@ -52,16 +54,19 @@ export function buildClaudeSpawnArgs(input: {
   if (input.systemPrompt) args.push("--append-system-prompt", input.systemPrompt);
   if (input.resume) args.push("--resume", input.resume);
   else if (input.sessionId) args.push("--session-id", input.sessionId);
+  // Variadic: anything after it that is not a flag would be read as another config.
+  if (input.mcpConfig) args.push("--mcp-config", input.mcpConfig);
   return args;
 }
 
 /** Short on purpose: it rides on every request and the cache only helps when it never changes. */
-export function personaPrompt(name: string, description: string): string {
+export function personaPrompt(name: string, description: string, tools?: string): string {
   const who = name.trim() || "the user's agent";
   const job = description.trim();
   const rules =
     "You are chatting inside Crew, a desktop app. Do the work with your tools, then reply like a colleague in chat: short, direct, no headers or preamble unless asked.";
-  return job ? `You are ${who}. ${job}\n\n${rules}` : `You are ${who}. ${rules}`;
+  const body = job ? `You are ${who}. ${job}\n\n${rules}` : `You are ${who}. ${rules}`;
+  return tools ? `${body}\n\n${tools}` : body;
 }
 
 export function buildClaudeUserMessage(
@@ -340,6 +345,12 @@ export function isCompactBoundary(rec: Record<string, unknown>): boolean {
 
 /** One-line activity title. Path or command if we have it, else the tool name. */
 export function toolLabel(name: string, input: Record<string, unknown>): string {
+  const crew = /^mcp__crew__(\w+)$/.exec(name);
+  if (crew) {
+    const verb = `Crew ${crew[1]!.replace(/_/g, " ")}`;
+    const subject = stringField(input, "name") ?? stringField(input, "routine_id") ?? stringField(input, "agent_id");
+    return subject ? `${verb} ${clip(subject, 40)}` : verb;
+  }
   const command = stringField(input, "command") ?? stringField(input, "cmd");
   const path =
     stringField(input, "file_path") ??

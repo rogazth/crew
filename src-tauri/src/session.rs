@@ -1,4 +1,4 @@
-use rusqlite::params;
+use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
@@ -60,6 +60,15 @@ pub fn session_list(store: State<Store>, workspace_id: String) -> Result<Vec<Ses
         let mut stmt = conn.prepare_cached(SELECT_BY_WORKSPACE)?;
         let rows = stmt.query_map(params![workspace_id], |row| row_to_session(row, 0))?;
         rows.collect()
+    })
+}
+
+#[tauri::command(async)]
+pub fn session_get(store: State<Store>, id: String) -> Result<Option<Session>, String> {
+    store.with(|conn| {
+        conn.prepare_cached(&format!("SELECT {SESSION_COLUMNS} FROM sessions s WHERE s.id = ?1"))?
+            .query_row(params![id], |row| row_to_session(row, 0))
+            .optional()
     })
 }
 

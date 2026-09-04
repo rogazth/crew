@@ -180,6 +180,7 @@ pub fn agent_spawn(
     command: String,
     args: Vec<String>,
     cwd: String,
+    env: Option<HashMap<String, String>>,
 ) -> Result<u32, String> {
     let workdir = PathBuf::from(&cwd);
     if !workdir.is_dir() {
@@ -193,6 +194,7 @@ pub fn agent_spawn(
 
     let mut cmd = Command::new(&command);
     cmd.args(&args)
+        .envs(env.unwrap_or_default())
         .current_dir(&workdir)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

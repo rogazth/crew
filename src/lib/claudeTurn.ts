@@ -1,4 +1,5 @@
 import { killAgent, resolveBinary, spawnAgent, watchAgent, writeJson } from "./agent";
+import { agentEnv, mcpServer, TOOLS_HINT } from "./agentTools";
 import type { Answers, ApprovalDecision, HarnessEvent } from "./blocks";
 import {
   assistantTextBlocks,
@@ -258,13 +259,15 @@ async function ensureLive(input: TurnInput): Promise<Live> {
         "Claude Code CLI not found. Install it from https://claude.com/product/claude-code and run `claude auth login`.",
       );
     });
+    const [env, mcp] = await Promise.all([agentEnv(input.sessionId), mcpServer()]);
     const spawn = {
       model: input.model,
       autonomy: input.autonomy,
-      systemPrompt: personaPrompt(input.name, input.description),
+      systemPrompt: personaPrompt(input.name, input.description, mcp ? TOOLS_HINT : undefined),
       ...(resume ? { resume } : { sessionId: claudeSessionId }),
+      ...(mcp ? { mcpConfig: JSON.stringify({ mcpServers: { crew: mcp } }) } : {}),
     };
-    await spawnAgent(input.sessionId, path, buildClaudeSpawnArgs(spawn), input.cwd);
+    await spawnAgent(input.sessionId, path, buildClaudeSpawnArgs(spawn), input.cwd, env);
     liveByThread.set(input.sessionId, live);
     resumeByThread.set(input.sessionId, { sessionId: claudeSessionId, cwd: input.cwd });
 
