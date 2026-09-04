@@ -25,7 +25,7 @@ function pushBytes(id: number, bytes: Uint8Array) {
     handler(bytes);
     return;
   }
-  let queue = buffered.get(id) ?? [];
+  const queue = buffered.get(id) ?? [];
   let size = bufferedBytes.get(id) ?? 0;
   while (queue.length > 0 && size + bytes.byteLength > BUFFER_MAX_BYTES) {
     const old = queue.shift();

@@ -81,7 +81,7 @@ function onMessage(event: MessageEvent) {
       handler(payload);
       return;
     }
-    let queue = buffered.get(id) ?? [];
+    const queue = buffered.get(id) ?? [];
     let size = bufferedBytes.get(id) ?? 0;
     while (queue.length > 0 && size + payload.byteLength > BUFFER_MAX_BYTES) {
       const old = queue.shift();
