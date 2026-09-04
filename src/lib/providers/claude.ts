@@ -40,7 +40,11 @@ export function buildClaudeSpawnArgs(input: {
     "--input-format",
     "stream-json",
     "--include-partial-messages",
-    "--setting-sources=user,project,local",
+    // Only the workspace's own settings: the persona and Crew's rules are the
+    // agent's whole configuration, and ~/.claude would inject a competing one.
+    "--setting-sources=project,local",
+    "--settings",
+    JSON.stringify({ autoMemoryEnabled: false }),
   ];
   if (input.autonomy === "full") args.push("--dangerously-skip-permissions");
   else args.push("--permission-prompt-tool", "stdio");
