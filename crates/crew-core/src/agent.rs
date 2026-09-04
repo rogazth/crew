@@ -239,14 +239,17 @@ impl AgentHost {
             session_id: session_id.clone(),
             epoch,
         });
-        pump(self.clone(), STDOUT_EVENT, gate.clone(), stdout);
-        pump(self.clone(), STDERR_EVENT, gate, stderr);
+        let (pumps_done, pumps) = mpsc::channel();
+        pump(self.clone(), STDOUT_EVENT, gate.clone(), stdout, pumps_done.clone());
+        pump(self.clone(), STDERR_EVENT, gate, stderr, pumps_done);
 
         let wait_host = self.clone();
         let wait_id = session_id;
         thread::spawn(move || {
             let code = child.wait().ok().and_then(|status| status.code());
             live.exited.store(true, Ordering::Release);
+            let _ = pumps.recv();
+            let _ = pumps.recv();
             // Only the child that still owns the slot may report; a replaced one
             // would otherwise end the turn of its successor.
             if wait_host.remove_if_pid(&wait_id, pid).is_some() {
@@ -305,7 +308,13 @@ struct Gate {
 /// One reader thread feeds a channel; the emitter waits a beat for the rest of
 /// the burst and sends it as one event. With partial messages on, claude writes
 /// a line per token, and each event is a JSON round-trip into the webview.
-fn pump(host: AgentHost, event: &'static str, gate: Arc<Gate>, reader: impl Read + Send + 'static) {
+fn pump(
+    host: AgentHost,
+    event: &'static str,
+    gate: Arc<Gate>,
+    reader: impl Read + Send + 'static,
+    done: mpsc::Sender<()>,
+) {
     let (tx, rx) = mpsc::channel::<String>();
     thread::spawn(move || {
         for line in BufReader::new(reader).lines() {
@@ -335,6 +344,7 @@ fn pump(host: AgentHost, event: &'static str, gate: Arc<Gate>, reader: impl Read
                 events.lines(event, &gate.session_id, lines);
             }
         }
+        let _ = done.send(());
     });
 }
 
