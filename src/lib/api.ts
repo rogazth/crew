@@ -27,6 +27,8 @@ export const getActiveWorkspace = (): Promise<string | null> =>
 export const setActiveWorkspace = (id: string | null): Promise<void> =>
   invoke("active_workspace_set", { id });
 
+export const getSession = (id: string): Promise<Session | null> => invoke("session_get", { id });
+
 export const listSessions = (workspaceId: string): Promise<Session[]> =>
   invoke("session_list", { workspaceId });
 
@@ -76,7 +78,8 @@ export const spawnAgent = (
   command: string,
   args: string[],
   cwd: string,
-): Promise<number> => invoke("agent_spawn", { sessionId, command, args, cwd });
+  env: Record<string, string> = {},
+): Promise<number> => invoke("agent_spawn", { sessionId, command, args, cwd, env });
 
 export const writeAgent = (sessionId: string, line: string): Promise<void> =>
   invoke("agent_write", { sessionId, line });
@@ -104,6 +107,7 @@ export const upsertRoutine = (input: {
   prompt: string;
   schedule: string;
   nextRunAt: number | null;
+  createdBy?: string;
 }): Promise<RoutineRow> => invoke("routine_upsert", { id: null, ...input });
 
 export const deleteRoutine = (id: string): Promise<void> => invoke("routine_delete", { id });
@@ -114,6 +118,13 @@ export const markRoutineRun = (
   nextRunAt: number | null,
   runsJson: string,
 ): Promise<void> => invoke("routine_mark_run", { id, lastRunAt, nextRunAt, runsJson });
+
+export type BridgeInfo = { socketPath: string; token: string; exe: string };
+
+export const bridgeInfo = (): Promise<BridgeInfo> => invoke("bridge_info");
+
+export const bridgeReply = (id: number, response: unknown): Promise<void> =>
+  invoke("bridge_reply", { id, response });
 
 export const stateGet = (key: string): Promise<string | null> => invoke("state_get", { key });
 
@@ -166,8 +177,8 @@ export const writePty = (id: string, data: string): Promise<void> =>
 export const resizePty = (id: string, cols: number, rows: number): Promise<void> =>
   invoke("pty_resize", { id, cols, rows });
 
-export const killPty = (id: string): Promise<void> => invoke("pty_kill", { id });
 /** Cumulative bytes xterm has parsed; the host stops reading the PTY when the renderer falls behind. */
 export const ackPty = (id: string, processed: number): Promise<void> =>
   invoke("pty_ack", { id, processed });
 
+export const killPty = (id: string): Promise<void> => invoke("pty_kill", { id });

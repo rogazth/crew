@@ -1,5 +1,7 @@
 mod agent;
+mod bridge;
 mod files;
+pub mod mcp;
 mod menu;
 mod pty;
 mod routine;
@@ -10,6 +12,7 @@ mod workspace;
 use tauri::{Manager, RunEvent};
 
 use agent::AgentHost;
+use bridge::Bridge;
 use pty::PtyHost;
 use store::Store;
 
@@ -25,6 +28,7 @@ pub fn run() {
             app.manage(Store::open(dir.join("crew.sqlite3"))?);
             app.manage(PtyHost::new());
             app.manage(AgentHost::new());
+            app.manage(Bridge::start(app.handle().clone(), dir)?);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -36,6 +40,7 @@ pub fn run() {
             workspace::active_workspace_get,
             workspace::active_workspace_set,
             session::session_list,
+            session::session_get,
             session::session_create,
             session::session_update,
             session::session_rename,
@@ -71,6 +76,8 @@ pub fn run() {
             agent::agent_kill,
             agent::agent_kill_all,
             agent::agent_running,
+            bridge::bridge_info,
+            bridge::bridge_reply,
         ])
         .build(tauri::generate_context!())
         .expect("error while building crew")
@@ -80,6 +87,7 @@ pub fn run() {
             if let RunEvent::Exit = event {
                 app.state::<PtyHost>().kill_all();
                 app.state::<AgentHost>().kill_all();
+                app.state::<Bridge>().shutdown();
             }
         });
 }

@@ -77,7 +77,10 @@ const commands: Record<string, (args: Row) => unknown> = {
     sessions.push(row);
     return row;
   },
+  session_get: ({ id }) => sessions.find((s) => s.id === id) ?? null,
   session_update: ({ id, ...rest }) => void Object.assign(sessions.find((s) => s.id === id) ?? {}, rest),
+  bridge_info: () => ({ socketPath: "/mock/crew.sock", token: "mock", exe: "/mock/bin/crew" }),
+  bridge_reply: ({ id, response }) => void (window.__crewBridgeReplies ??= []).push({ id, response }),
   session_rename: ({ id, name }) => void Object.assign(sessions.find((s) => s.id === id) ?? {}, { name }),
   session_delete: ({ id }) => void sessions.splice(sessions.findIndex((s) => s.id === id) >>> 0, 1),
   session_reorder: () => undefined,
@@ -288,5 +291,7 @@ function mockShell(id: string) {
 declare global {
   interface Window {
     __crewMockBus: { emit: (event: string, payload: unknown) => void };
+    /** What `agentTools` answered, since no socket is waiting in the browser. */
+    __crewBridgeReplies?: Array<{ id: unknown; response: unknown }>;
   }
 }
