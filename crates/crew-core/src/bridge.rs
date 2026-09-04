@@ -10,7 +10,6 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use tauri::State;
 
 /// A reload drops every listener; a call that arrives meanwhile fails instead of hanging.
 const REPLY_TIMEOUT: Duration = Duration::from_secs(15);
@@ -172,14 +171,4 @@ fn reply(mut stream: UnixStream, body: Value) {
     text.push('\n');
     let _ = stream.write_all(text.as_bytes());
     let _ = stream.shutdown(std::net::Shutdown::Both);
-}
-
-#[tauri::command(async)]
-pub fn bridge_info(bridge: State<Bridge>) -> Result<BridgeInfo, String> {
-    bridge.info()
-}
-
-#[tauri::command(async)]
-pub fn bridge_reply(bridge: State<Bridge>, id: u64, response: Value) -> Result<(), String> {
-    bridge.reply(id, response)
 }

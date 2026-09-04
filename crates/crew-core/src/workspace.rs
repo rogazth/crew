@@ -1,6 +1,5 @@
 use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
-use tauri::State;
 
 use crate::store::{now_millis, read_state, set_order, write_state, Store};
 
@@ -105,39 +104,4 @@ pub fn active_get(store: &Store) -> Result<Option<String>, String> {
 
 pub fn active_set(store: &Store, id: Option<String>) -> Result<(), String> {
     store.with(|conn| write_state(conn, ACTIVE_WORKSPACE_KEY, id.as_deref()))
-}
-
-#[tauri::command(async)]
-pub fn workspace_list(store: State<Store>) -> Result<Vec<Workspace>, String> {
-    list(&store)
-}
-
-#[tauri::command(async)]
-pub fn workspace_create(store: State<Store>, name: String, path: String) -> Result<Workspace, String> {
-    create(&store, name, path)
-}
-
-#[tauri::command(async)]
-pub fn workspace_rename(store: State<Store>, id: String, name: String) -> Result<(), String> {
-    rename(&store, id, name)
-}
-
-#[tauri::command(async)]
-pub fn workspace_delete(store: State<Store>, id: String) -> Result<(), String> {
-    delete(&store, id)
-}
-
-#[tauri::command(async)]
-pub fn workspace_reorder(store: State<Store>, ids: Vec<String>) -> Result<(), String> {
-    reorder(&store, ids)
-}
-
-#[tauri::command(async)]
-pub fn active_workspace_get(store: State<Store>) -> Result<Option<String>, String> {
-    active_get(&store)
-}
-
-#[tauri::command(async)]
-pub fn active_workspace_set(store: State<Store>, id: Option<String>) -> Result<(), String> {
-    active_set(&store, id)
 }

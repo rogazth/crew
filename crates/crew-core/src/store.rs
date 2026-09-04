@@ -2,7 +2,6 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use rusqlite::{params, Connection, OptionalExtension};
-use tauri::State;
 
 const MIGRATION_V1: &str = r#"
 CREATE TABLE IF NOT EXISTS workspaces (
@@ -208,16 +207,6 @@ pub fn get(store: &Store, key: String) -> Result<Option<String>, String> {
 
 pub fn set(store: &Store, key: String, value: String) -> Result<(), String> {
     store.with(|conn| write_state(conn, &key, Some(&value)))
-}
-
-#[tauri::command(async)]
-pub fn state_get(store: State<Store>, key: String) -> Result<Option<String>, String> {
-    get(&store, key)
-}
-
-#[tauri::command(async)]
-pub fn state_set(store: State<Store>, key: String, value: String) -> Result<(), String> {
-    set(&store, key, value)
 }
 
 pub fn read_state(conn: &Connection, key: &str) -> rusqlite::Result<Option<String>> {

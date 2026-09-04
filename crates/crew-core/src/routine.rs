@@ -1,6 +1,5 @@
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
-use tauri::State;
 
 use crate::session::{row_to_session, Session, SESSION_COLUMNS};
 use crate::store::{now_millis, Store};
@@ -137,49 +136,4 @@ pub fn mark_run(
         )
     })?;
     Ok(())
-}
-
-#[tauri::command(async)]
-pub fn routine_list_for_session(
-    store: State<Store>,
-    session_id: String,
-) -> Result<Vec<Routine>, String> {
-    list_for_session(&store, session_id)
-}
-
-#[tauri::command(async)]
-pub fn routine_list(store: State<Store>) -> Result<Vec<ScheduledRoutine>, String> {
-    list(&store)
-}
-
-#[tauri::command(async)]
-#[allow(clippy::too_many_arguments)]
-pub fn routine_upsert(
-    store: State<Store>,
-    id: Option<String>,
-    session_id: String,
-    name: String,
-    enabled: bool,
-    prompt: String,
-    schedule: String,
-    next_run_at: Option<i64>,
-    created_by: Option<String>,
-) -> Result<Routine, String> {
-    upsert(&store, id, session_id, name, enabled, prompt, schedule, next_run_at, created_by)
-}
-
-#[tauri::command(async)]
-pub fn routine_delete(store: State<Store>, id: String) -> Result<(), String> {
-    delete(&store, id)
-}
-
-#[tauri::command(async)]
-pub fn routine_mark_run(
-    store: State<Store>,
-    id: String,
-    last_run_at: i64,
-    next_run_at: Option<i64>,
-    runs_json: String,
-) -> Result<(), String> {
-    mark_run(&store, id, last_run_at, next_run_at, runs_json)
 }

@@ -7,8 +7,6 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use tauri::State;
-
 const READ_CHUNK: usize = 32 * 1024;
 /// Each `emit` is a JS eval in the webview. A busy PTY read thousands of small
 /// chunks per second and froze keyboard input until they were batched.
@@ -100,6 +98,12 @@ struct Inner {
 #[derive(Clone)]
 pub struct PtyHost {
     inner: Arc<Inner>,
+}
+
+impl Default for PtyHost {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl PtyHost {
@@ -198,6 +202,7 @@ impl PtyHost {
         }
     }
 
+    /// `command` empty spawns the login shell; otherwise argv[0] is resolved on PATH.
     pub fn spawn(
         &self,
         id: String,
@@ -234,6 +239,7 @@ impl PtyHost {
         resize_fd(live.master_fd, cols.max(2), rows.max(2))
     }
 
+    /// Cumulative bytes xterm has parsed for this terminal.
     pub fn ack(&self, id: &str, processed: u64) {
         if let Some(live) = self.get(id) {
             live.ack(processed);
@@ -262,42 +268,6 @@ fn write_live(live: &LivePty, data: &[u8]) -> Result<(), String> {
         .write_all(data)
         .and_then(|_| writer.flush())
         .map_err(|e| format!("Failed to write to terminal: {e}"))
-}
-
-/// `command` empty spawns the login shell; otherwise argv[0] is resolved on PATH.
-#[tauri::command(async)]
-pub fn pty_spawn(
-    host: State<PtyHost>,
-    id: String,
-    cwd: String,
-    command: Vec<String>,
-    cols: u16,
-    rows: u16,
-) -> Result<u32, String> {
-    host.spawn(id, cwd, command, cols, rows)
-}
-
-#[tauri::command(async)]
-pub fn pty_write(host: State<PtyHost>, id: String, data: String) -> Result<(), String> {
-    host.write(&id, data.as_bytes())
-}
-
-#[tauri::command(async)]
-pub fn pty_resize(host: State<PtyHost>, id: String, cols: u16, rows: u16) -> Result<(), String> {
-    host.resize(&id, cols, rows)
-}
-
-/// Cumulative bytes xterm has parsed for this terminal.
-#[tauri::command(async)]
-pub fn pty_ack(host: State<PtyHost>, id: String, processed: u64) -> Result<(), String> {
-    host.ack(&id, processed);
-    Ok(())
-}
-
-#[tauri::command(async)]
-pub fn pty_kill(host: State<PtyHost>, id: String) -> Result<(), String> {
-    host.kill(&id);
-    Ok(())
 }
 
 fn spawn_unix(
@@ -336,7 +306,7 @@ fn spawn_unix(
         .env("PWD", &workdir);
     // A GUI app inherits no locale from launchd; without UTF-8 the box drawing
     // and emoji agents print come out as mojibake.
-    if std::env::var_os("LANG").map_or(true, |lang| lang.is_empty()) {
+    if std::env::var_os("LANG").is_none_or(|lang| lang.is_empty()) {
         cmd.env("LANG", "en_US.UTF-8");
     }
     apply_path(&mut cmd);

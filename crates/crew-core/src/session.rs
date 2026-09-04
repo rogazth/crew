@@ -1,6 +1,5 @@
 use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
-use tauri::State;
 
 use crate::store::{now_millis, set_order, Store};
 
@@ -70,6 +69,7 @@ pub fn get(store: &Store, id: String) -> Result<Option<Session>, String> {
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn create(
     store: &Store,
     workspace_id: String,
@@ -131,6 +131,7 @@ pub fn create(
     Ok(session)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn update(
     store: &Store,
     id: String,
@@ -216,6 +217,7 @@ pub fn set_provider_session(
     Ok(())
 }
 
+/// The runtime owns this; the UI only renders whatever the last writer left.
 pub fn set_status(store: &Store, id: String, status: String) -> Result<(), String> {
     const KNOWN: [&str; 5] = ["idle", "working", "needs-input", "done", "error"];
     if !KNOWN.contains(&status.as_str()) {
@@ -230,86 +232,4 @@ pub fn set_status(store: &Store, id: String, status: String) -> Result<(), Strin
 
 pub fn reorder(store: &Store, ids: Vec<String>) -> Result<(), String> {
     store.with(|conn| set_order(conn, "sessions", &ids))
-}
-
-#[tauri::command(async)]
-pub fn session_list(store: State<Store>, workspace_id: String) -> Result<Vec<Session>, String> {
-    list(&store, workspace_id)
-}
-
-#[tauri::command(async)]
-pub fn session_get(store: State<Store>, id: String) -> Result<Option<Session>, String> {
-    get(&store, id)
-}
-
-#[tauri::command(async)]
-pub fn session_create(
-    store: State<Store>,
-    workspace_id: String,
-    kind: String,
-    name: String,
-    provider: String,
-    model: String,
-    description: String,
-    autonomy: String,
-) -> Result<Session, String> {
-    create(&store, workspace_id, kind, name, provider, model, description, autonomy)
-}
-
-#[tauri::command(async)]
-pub fn session_update(
-    store: State<Store>,
-    id: String,
-    name: String,
-    provider: String,
-    model: String,
-    description: String,
-    notifications: bool,
-    autonomy: String,
-) -> Result<(), String> {
-    update(&store, id, name, provider, model, description, notifications, autonomy)
-}
-
-#[tauri::command(async)]
-pub fn session_rename(store: State<Store>, id: String, name: String) -> Result<(), String> {
-    rename(&store, id, name)
-}
-
-#[tauri::command(async)]
-pub fn session_delete(store: State<Store>, id: String) -> Result<(), String> {
-    delete(&store, id)
-}
-
-#[tauri::command(async)]
-pub fn session_get_blocks(store: State<Store>, id: String) -> Result<String, String> {
-    get_blocks(&store, id)
-}
-
-#[tauri::command(async)]
-pub fn session_set_blocks(
-    store: State<Store>,
-    id: String,
-    blocks_json: String,
-) -> Result<(), String> {
-    set_blocks(&store, id, blocks_json)
-}
-
-#[tauri::command(async)]
-pub fn session_set_provider_session(
-    store: State<Store>,
-    id: String,
-    provider_session_id: String,
-) -> Result<(), String> {
-    set_provider_session(&store, id, provider_session_id)
-}
-
-/// The runtime owns this; the UI only renders whatever the last writer left.
-#[tauri::command(async)]
-pub fn session_set_status(store: State<Store>, id: String, status: String) -> Result<(), String> {
-    set_status(&store, id, status)
-}
-
-#[tauri::command(async)]
-pub fn session_reorder(store: State<Store>, ids: Vec<String>) -> Result<(), String> {
-    reorder(&store, ids)
 }

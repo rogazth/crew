@@ -9,7 +9,6 @@ use std::thread;
 use std::time::Duration;
 
 use serde::Serialize;
-use tauri::State;
 
 const STDOUT_EVENT: &str = "agent-stdout";
 const STDERR_EVENT: &str = "agent-stderr";
@@ -54,6 +53,12 @@ struct Shared {
 #[derive(Clone)]
 pub struct AgentHost {
     shared: Arc<Shared>,
+}
+
+impl Default for AgentHost {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl AgentHost {
@@ -138,6 +143,8 @@ impl AgentHost {
         self.lock().children.keys().cloned().collect()
     }
 
+    /// The webview reloaded without the app restarting: every child is now an
+    /// orphan nobody parses, so the runtime clears the slate before it starts.
     pub fn kill_all(&self) {
         let kids: Vec<Arc<LiveChild>> = {
             let mut inner = self.lock();
@@ -149,6 +156,8 @@ impl AgentHost {
         }
     }
 
+    /// Resolve `claude` the way a terminal would. Finder-launched apps inherit
+    /// launchd's PATH, so Homebrew / `~/.local/bin` would otherwise look missing.
     pub fn resolve_claude() -> Result<AgentBinary, String> {
         resolve_binary("claude")
             .map(|path| AgentBinary {
@@ -284,65 +293,6 @@ impl Drop for AgentHost {
             self.kill_all();
         }
     }
-}
-
-/// Resolve `claude` the way a terminal would. Finder-launched apps inherit
-/// launchd's PATH, so Homebrew / `~/.local/bin` would otherwise look missing.
-#[tauri::command(async)]
-pub fn agent_resolve_claude() -> Result<AgentBinary, String> {
-    AgentHost::resolve_claude()
-}
-
-#[tauri::command(async)]
-pub fn agent_resolve(name: String) -> Result<AgentBinary, String> {
-    AgentHost::resolve(&name)
-}
-
-#[tauri::command(async)]
-pub fn agent_spawn(
-    host: State<'_, AgentHost>,
-    session_id: String,
-    command: String,
-    args: Vec<String>,
-    cwd: String,
-    env: Option<HashMap<String, String>>,
-) -> Result<u32, String> {
-    host.spawn(session_id, command, args, cwd, env)
-}
-
-/// Async: a child that stopped draining stdin would otherwise park the main thread.
-#[tauri::command(async)]
-pub fn agent_write(
-    host: State<'_, AgentHost>,
-    session_id: String,
-    line: String,
-) -> Result<(), String> {
-    host.write(&session_id, &line)
-}
-
-#[tauri::command(async)]
-pub fn agent_close_stdin(host: State<'_, AgentHost>, session_id: String) -> Result<(), String> {
-    host.close_stdin(&session_id);
-    Ok(())
-}
-
-#[tauri::command(async)]
-pub fn agent_kill(host: State<'_, AgentHost>, session_id: String) -> Result<(), String> {
-    host.kill(&session_id);
-    Ok(())
-}
-
-/// The webview reloaded without the app restarting: every child is now an
-/// orphan nobody parses, so the runtime clears the slate before it starts.
-#[tauri::command(async)]
-pub fn agent_kill_all(host: State<'_, AgentHost>) -> Result<(), String> {
-    host.kill_all();
-    Ok(())
-}
-
-#[tauri::command(async)]
-pub fn agent_running(host: State<'_, AgentHost>) -> Result<Vec<String>, String> {
-    Ok(host.running())
 }
 
 /// Which spawn a reader belongs to. Lines from a child that was replaced or

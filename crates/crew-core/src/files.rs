@@ -32,13 +32,6 @@ pub fn list(cwd: &str) -> Result<Vec<ProjectFile>, String> {
     Ok(walk(&root))
 }
 
-#[tauri::command]
-pub async fn list_project_files(cwd: String) -> Result<Vec<ProjectFile>, String> {
-    tauri::async_runtime::spawn_blocking(move || list(&cwd))
-        .await
-        .map_err(|e| e.to_string())?
-}
-
 fn git_ls_files(root: &Path) -> Option<Vec<ProjectFile>> {
     let output = Command::new("git")
         .arg("-C")
@@ -131,26 +124,14 @@ pub fn write_text(path: &str, contents: &str) -> Result<(), String> {
     std::fs::write(path, contents).map_err(|e| e.to_string())
 }
 
-#[tauri::command]
-pub async fn read_text_file(path: String) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || read_text(&path))
-        .await
-        .map_err(|e| e.to_string())?
-}
-
-#[tauri::command]
-pub async fn write_text_file(path: String, contents: String) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || write_text(&path, &contents))
-        .await
-        .map_err(|e| e.to_string())?
-}
-
 #[derive(Serialize, Clone, Debug)]
 pub struct FileBytes {
     pub mime: String,
     pub data: String,
 }
 
+/// Images the chat shows and sends inline. The webview cannot read the disk
+/// itself and the asset protocol is off, so bytes travel as base64 over IPC.
 pub fn read_base64(path: &str) -> Result<FileBytes, String> {
     let meta = std::fs::metadata(path).map_err(|e| e.to_string())?;
     if meta.len() > MAX_TEMP_FILE_BYTES as u64 {
@@ -180,6 +161,8 @@ pub fn exists(path: &str) -> bool {
     std::path::Path::new(path).exists()
 }
 
+/// Clipboard images arrive as bytes with no path, and the CLIs Crew hosts take
+/// paths. The name is generated here so a caller can never walk out of the dir.
 pub fn write_temp(extension: &str, base64_contents: &str) -> Result<String, String> {
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(base64_contents.as_bytes())
@@ -192,29 +175,6 @@ pub fn write_temp(extension: &str, base64_contents: &str) -> Result<String, Stri
     let path = dir.join(format!("{}.{}", uuid::Uuid::new_v4(), safe_extension(extension)));
     std::fs::write(&path, bytes).map_err(|e| e.to_string())?;
     Ok(path.to_string_lossy().into_owned())
-}
-
-/// Images the chat shows and sends inline. The webview cannot read the disk
-/// itself and the asset protocol is off, so bytes travel as base64 over IPC.
-#[tauri::command]
-pub async fn read_file_base64(path: String) -> Result<FileBytes, String> {
-    tauri::async_runtime::spawn_blocking(move || read_base64(&path))
-        .await
-        .map_err(|e| e.to_string())?
-}
-
-#[tauri::command(async)]
-pub fn path_exists(path: String) -> bool {
-    exists(&path)
-}
-
-/// Clipboard images arrive as bytes with no path, and the CLIs Crew hosts take
-/// paths. The name is generated here so a caller can never walk out of the dir.
-#[tauri::command]
-pub async fn write_temp_file(extension: String, base64_contents: String) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || write_temp(&extension, &base64_contents))
-        .await
-        .map_err(|e| e.to_string())?
 }
 
 fn safe_extension(extension: &str) -> String {
