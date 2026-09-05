@@ -51,7 +51,9 @@ export function useSessions(workspaceId: string | null) {
         setSessions((prev) => [...prev, session]);
       }
     });
-    return unsubscribe;
+    return () => {
+      unsubscribe();
+    };
   }, [workspaceId]);
 
   // `settle` lets a caller hold the list back so the row and its sheet land together.
