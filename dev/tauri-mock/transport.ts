@@ -161,16 +161,40 @@ const commands: Record<string, (args: Row) => unknown> = {
   pty_write: () => undefined,
   pty_resize: () => undefined,
   pty_kill: ({ id }) => void emit("pty-exit", { id, code: 0 }),
-  session_get_blocks: ({ id }) => (id === "s1" ? JSON.stringify(SEED_BLOCKS) : "[]"),
-  session_set_blocks: () => undefined,
+  session_get_blocks: ({ id }) => JSON.stringify(thread(id as string).blocks),
   pty_ack: () => undefined,
   pty_attach: () => ({ start: 0, emitted: 0 }),
-  session_set_provider_session: () => undefined,
   agent_resolve_claude: () => ({ path: "/mock/bin/claude" }),
   agent_resolve: ({ name }) => ({ path: `/mock/bin/${name}` }),
-  agent_spawn: ({ sessionId }) => mockAgent(sessionId as string),
-  agent_write: ({ sessionId, line }) => void mockAgentInput(sessionId as string, line as string),
-  agent_close_stdin: () => undefined,
+  transcript_get: ({ sessionId }) => {
+    const row = thread(sessionId as string);
+    return { blocks: row.blocks, working: row.working, status: row.status, seq: row.seq };
+  },
+  turn_start: (args) => {
+    const sessionId = args.sessionId as string;
+    const row = thread(sessionId);
+    row.blocks.push({
+      id: `u${Date.now()}`,
+      role: "user",
+      text: args.text,
+      at: Date.now(),
+      ...(args.hidden ? { hidden: true } : {}),
+      ...(args.files ? { files: args.files } : {}),
+    });
+    emitStatus(sessionId, "working");
+    setTimeout(() => playTurn(sessionId), 200);
+    return { working: true };
+  },
+  turn_stop: ({ sessionId }) => {
+    const id = sessionId as string;
+    emitApply(id, { type: "session.ended" });
+    thread(id).blocks.push({ id: `sys${Date.now()}`, role: "system", text: "Stopped", at: Date.now() });
+    emitStatus(id, "idle");
+  },
+  turn_respond: ({ sessionId, requestId, decision }) =>
+    void mockRespond(sessionId as string, requestId as number, decision as string),
+  turn_answer: ({ sessionId, requestId, answers }) =>
+    void mockAnswer(sessionId as string, requestId as number, answers as Row | null),
   routine_list_for_session: ({ sessionId }) => routines.filter((r) => r.sessionId === sessionId),
   routine_list: () =>
     routines.flatMap((routine) => {
@@ -188,9 +212,6 @@ const commands: Record<string, (args: Row) => unknown> = {
   routine_delete: ({ id }) => void routines.splice(routines.findIndex((r) => r.id === id) >>> 0, 1),
   routine_mark_run: ({ id, lastRunAt, nextRunAt, runsJson }) =>
     void Object.assign(routines.find((r) => r.id === id) ?? {}, { lastRunAt, nextRunAt, runsJson }),
-  agent_kill: () => undefined,
-  agent_kill_all: () => undefined,
-  agent_running: () => [],
 };
 
 /** 160×100 gradient; any image the mock is asked for is this one. */
@@ -213,26 +234,45 @@ const SEED_BLOCKS = [
 ];
 
 type MockAgent = { sessionId: string; stage: "idle" | "question" | "approval" };
+type TranscriptRow = { blocks: Row[]; seq: number; working: boolean; status: string };
 const agents = new Map<string, MockAgent>();
+const transcripts = new Map<string, TranscriptRow>();
 
-function emitLines(sessionId: string, lines: unknown[]) {
-  emit("agent-stdout", { sessionId, lines: lines.map((line) => JSON.stringify(line)) });
+function thread(id: string): TranscriptRow {
+  let row = transcripts.get(id);
+  if (!row) {
+    row = {
+      blocks: id === "s1" ? (SEED_BLOCKS as Row[]).map((block) => ({ ...block })) : [],
+      seq: 0,
+      working: id === "s1",
+      status: id === "s1" ? "needs-input" : "idle",
+    };
+    transcripts.set(id, row);
+  }
+  return row;
 }
 
-function mockAgent(sessionId: string): number {
-  agents.set(sessionId, { sessionId, stage: "idle" });
-  setTimeout(() => emitLines(sessionId, [{ type: "system", subtype: "init", session_id: `mock-${sessionId}` }]), 120);
-  return 4242;
+function emitApply(sessionId: string, event: Row) {
+  const row = thread(sessionId);
+  row.seq += 1;
+  emit("transcript-apply", { sessionId, seq: row.seq, event });
 }
 
-const delta = (text: string) => ({ type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text } } });
-const toolUse = (id: string, name: string, input: Row) => ({ type: "stream_event", event: { type: "content_block_start", index: 1, content_block: { type: "tool_use", id, name, input } } });
-const toolResult = (id: string, isError = false) => ({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: id, is_error: isError }] } });
+function emitStatus(sessionId: string, status: string) {
+  const row = thread(sessionId);
+  row.status = status;
+  row.working = status === "working" || status === "needs-input";
+  const session = sessions.find((item) => item.id === sessionId);
+  if (session) session.status = status;
+  emit("session-status", { sessionId, status, updatedAt: Date.now() });
+}
 
 /** Words at 40ms, then `then` after the last one. */
 function say(sessionId: string, text: string, at: number, then?: () => void): number {
   const words = text.split(" ");
-  words.forEach((word, i) => setTimeout(() => emitLines(sessionId, [delta((i ? " " : "") + word)]), at + i * 40));
+  words.forEach((word, i) =>
+    setTimeout(() => emitApply(sessionId, { type: "message.delta", text: (i ? " " : "") + word }), at + i * 40),
+  );
   const end = at + words.length * 40 + 120;
   if (then) setTimeout(then, end);
   return end;
@@ -258,81 +298,112 @@ const REPLY = [
   "Run `npm run check` when you want the full pass.",
 ].join("\n");
 
+const QUESTIONS = [
+  {
+    question: "Where should the Set live?",
+    header: "Cache",
+    multiSelect: false,
+    options: [
+      { label: "Per call", description: "Build it inside shows(); simplest, still O(n) once per row" },
+      { label: "Memoized on prefs", description: "WeakMap keyed by the prefs object" },
+    ],
+  },
+  {
+    question: "What else should I touch?",
+    header: "Scope",
+    multiSelect: true,
+    options: [
+      { label: "Run the linter" },
+      { label: "Add a test" },
+      { label: "Update ARCHITECTURE.md" },
+    ],
+  },
+];
+
 /**
  * One scripted turn: prose, a read, a two-step question, an edit that needs
  * approval, a reply with code. Everything the chat has to paint, in order.
  */
-function mockAgentInput(sessionId: string, line: string) {
-  const agent = agents.get(sessionId);
-  if (!agent) return;
-  const msg = JSON.parse(line) as Row;
-  if (msg.type === "control_request") {
-    const req = msg.request as Row;
-    if (req.subtype === "initialize") {
-      setTimeout(() => emitLines(sessionId, [{ type: "control_response", response: { subtype: "success", request_id: msg.request_id } }]), 60);
-    }
-    return;
-  }
-  if (msg.type === "control_response") {
-    const inner = msg.response as Row;
-    const result = (inner.response as Row) ?? {};
-    const allowed = result.behavior === "allow";
-    if (agent.stage === "question") {
-      agent.stage = "idle";
-      const answers = ((result.updatedInput as Row | undefined)?.answers as Row | undefined) ?? {};
-      setTimeout(() => emitLines(sessionId, [toolResult("q1", !allowed)]), 100);
-      const summary = allowed ? `Going with ${Object.values(answers).join(" and ")}.` : "No answer, so I will keep the current behaviour.";
-      say(sessionId, summary, 300, () => {
-        agent.stage = "approval";
-        emitLines(sessionId, [
-          { type: "control_request", request_id: "req-edit", request: { subtype: "can_use_tool", tool_name: "Edit", input: EDIT_INPUT } },
-        ]);
-      });
-      return;
-    }
-    agent.stage = "idle";
-    setTimeout(() => emitLines(sessionId, [toolUse("t2", "Edit", EDIT_INPUT)]), 100);
-    setTimeout(() => emitLines(sessionId, [toolResult("t2", !allowed)]), 700);
-    const tail = allowed ? REPLY : "Skipped the edit. Say the word and I will apply it.";
-    const end = say(sessionId, tail, 900);
-    setTimeout(() => emitLines(sessionId, [{ type: "result", subtype: "success", duration_ms: 4100, total_cost_usd: 0.012, usage: { input_tokens: 8200, output_tokens: 140 } }]), end);
-    return;
-  }
-  if (msg.type === "user") {
-    say(sessionId, "Let me look at how the lookup is built.", 300, () => {
-      emitLines(sessionId, [toolUse("t1", "Read", { file_path: "src/lib/sidebarPrefs.ts" })]);
-      setTimeout(() => emitLines(sessionId, [toolResult("t1")]), 600);
-      setTimeout(() => {
-        agent.stage = "question";
-        emitLines(sessionId, [
-          toolUse("q1", "AskUserQuestion", {}),
-          {
-            type: "control_request",
-            request_id: "req-q",
-            request: {
-              subtype: "can_use_tool",
-              tool_name: "AskUserQuestion",
-              input: {
-                questions: [
-                  { question: "Where should the Set live?", header: "Cache", multiSelect: false, options: [
-                    { label: "Per call", description: "Build it inside shows(); simplest, still O(n) once per row" },
-                    { label: "Memoized on prefs", description: "WeakMap keyed by the prefs object" },
-                  ] },
-                  { question: "What else should I touch?", header: "Scope", multiSelect: true, options: [
-                    { label: "Run the linter" },
-                    { label: "Add a test" },
-                    { label: "Update ARCHITECTURE.md" },
-                  ] },
-                ],
-              },
-              tool_use_id: "q1",
-              requires_user_interaction: true,
-            },
-          },
-        ]);
-      }, 800);
+function playTurn(sessionId: string) {
+  agents.set(sessionId, { sessionId, stage: "idle" });
+  say(sessionId, "Let me look at how the lookup is built.", 300, () => {
+    emitApply(sessionId, {
+      type: "tool.started",
+      callId: "t1",
+      name: "Read",
+      title: "Read src/lib/sidebarPrefs.ts",
     });
-  }
+    setTimeout(
+      () =>
+        emitApply(sessionId, {
+          type: "tool.updated",
+          callId: "t1",
+          status: "completed",
+        }),
+      600,
+    );
+    setTimeout(() => {
+      const agent = agents.get(sessionId);
+      if (agent) agent.stage = "question";
+      emitStatus(sessionId, "needs-input");
+      emitApply(sessionId, { type: "question.requested", requestId: 1, questions: QUESTIONS });
+    }, 800);
+  });
+}
+
+function mockAnswer(sessionId: string, requestId: number, answers: Row | null) {
+  const agent = agents.get(sessionId);
+  if (!agent || agent.stage !== "question") return;
+  agent.stage = "idle";
+  emitApply(sessionId, { type: "question.resolved", requestId, answers });
+  emitStatus(sessionId, "working");
+  const summary = answers
+    ? `Going with ${Object.values(answers).join(" and ")}.`
+    : "No answer, so I will keep the current behaviour.";
+  say(sessionId, summary, 300, () => {
+    agent.stage = "approval";
+    emitStatus(sessionId, "needs-input");
+    emitApply(sessionId, {
+      type: "approval.requested",
+      requestId: 2,
+      name: "Edit",
+      title: "Edit sidebarPrefs.ts",
+      input: EDIT_INPUT,
+    });
+  });
+}
+
+function mockRespond(sessionId: string, requestId: number, decision: string) {
+  const agent = agents.get(sessionId);
+  if (!agent || agent.stage !== "approval") return;
+  agent.stage = "idle";
+  emitApply(sessionId, { type: "approval.resolved", requestId, decision });
+  emitStatus(sessionId, "working");
+  const allowed = decision === "allow" || decision === "always";
+  setTimeout(() => {
+    emitApply(sessionId, {
+      type: "tool.started",
+      callId: "t2",
+      name: "Edit",
+      title: "Edit sidebarPrefs.ts",
+    });
+  }, 100);
+  setTimeout(() => {
+    emitApply(sessionId, {
+      type: "tool.updated",
+      callId: "t2",
+      status: allowed ? "completed" : "failed",
+    });
+  }, 700);
+  const tail = allowed ? REPLY : "Skipped the edit. Say the word and I will apply it.";
+  const end = say(sessionId, tail, 900);
+  setTimeout(() => {
+    emitApply(sessionId, {
+      type: "turn.completed",
+      usage: { inputTokens: 8200, outputTokens: 140, costUsd: 0.012, durationMs: 4100 },
+    });
+    emitStatus(sessionId, "done");
+  }, end);
 }
 
 async function request<T>(method: string, params: object = {}): Promise<T> {

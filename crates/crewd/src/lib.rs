@@ -15,10 +15,10 @@ use crew_core::transcript::TranscriptEvents;
 use crew_core::turns::TurnHost;
 use crew_core::workspace;
 use crew_protocol::{
-    self as proto, AgentSpawn, Auth, BridgeReply, Cwd, DaemonInfo, Id, IdBlocks, IdName, IdProvider, IdStatus,
-    Ids, Key, KeyValue, Name, NamePath, OptionalId, PathArg, PathContents, PtyAck, PtyAttach, PtyAttached, PtyKill,
-    PtyResize, PtySpawn, PtyWrite, Request, RoutineMark, RoutineUpsert, SessionCreate, SessionId, SessionLine,
-    SessionUpdate, TempFile, TranscriptApply, TurnAnswer, TurnRespond, TurnStart, WorkspaceId,
+    self as proto, Auth, BridgeReply, Cwd, DaemonInfo, Id, IdName, IdStatus, Ids, Key, KeyValue, Name, NamePath,
+    OptionalId, PathArg, PathContents, PtyAck, PtyAttach, PtyAttached, PtyKill, PtyResize, PtySpawn, PtyWrite,
+    Request, RoutineMark, RoutineUpsert, SessionCreate, SessionId, SessionUpdate, TempFile, TranscriptApply,
+    TurnAnswer, TurnRespond, TurnStart, WorkspaceId,
 };
 use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
@@ -38,7 +38,6 @@ pub struct Config {
 struct Hosts {
     pty: PtyHost,
     store: Store,
-    agents: AgentHost,
     bridge: Bridge,
     turns: TurnHost,
 }
@@ -216,29 +215,6 @@ impl PtyEvents for Hub {
     }
 }
 
-impl AgentEvents for Hub {
-    fn lines(&self, event: &str, session_id: &str, lines: Vec<String>) {
-        self.emit(
-            event,
-            proto::AgentLines {
-                session_id: session_id.to_string(),
-                lines,
-            },
-        );
-    }
-
-    fn exit(&self, session_id: &str, code: Option<i32>, pid: u32) {
-        self.emit(
-            "agent-exit",
-            proto::AgentExit {
-                session_id: session_id.to_string(),
-                code,
-                pid,
-            },
-        );
-    }
-}
-
 impl BridgeEvents for Hub {
     fn tool(&self, call: ToolCall) {
         self.emit(
@@ -285,18 +261,15 @@ impl TranscriptEvents for Hub {
 }
 
 struct AgentFanout {
-    hub: Arc<Hub>,
     turns: TurnHost,
 }
 
 impl AgentEvents for AgentFanout {
     fn lines(&self, event: &str, session_id: &str, lines: Vec<String>) {
-        self.hub.lines(event, session_id, lines.clone());
         self.turns.on_agent_lines(event, session_id, lines);
     }
 
-    fn exit(&self, session_id: &str, code: Option<i32>, pid: u32) {
-        AgentEvents::exit(&*self.hub, session_id, code, pid);
+    fn exit(&self, session_id: &str, code: Option<i32>, _pid: u32) {
         self.turns.on_agent_exit(session_id, code);
     }
 }
@@ -314,7 +287,6 @@ pub fn serve(config: Config) -> Result<Handle, String> {
     );
     config.pty.set_events(hub.clone());
     config.agents.set_events(Arc::new(AgentFanout {
-        hub: hub.clone(),
         turns: turns.clone(),
     }));
     config.bridge.set_events(hub.clone());
@@ -324,7 +296,6 @@ pub fn serve(config: Config) -> Result<Handle, String> {
     let hosts = Hosts {
         pty: config.pty,
         store: config.store,
-        agents: config.agents,
         bridge: config.bridge,
         turns: turns.clone(),
     };
@@ -749,18 +720,6 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
             let store = hosts.store.clone();
             json(block(move || session::get_blocks(&store, id)).await?)
         }
-        "session_set_blocks" => {
-            let IdBlocks { id, blocks_json } = parse(params)?;
-            let store = hosts.store.clone();
-            block(move || session::set_blocks(&store, id, blocks_json)).await?;
-            Ok(Value::Null)
-        }
-        "session_set_provider_session" => {
-            let IdProvider { id, provider_session_id } = parse(params)?;
-            let store = hosts.store.clone();
-            block(move || session::set_provider_session(&store, id, provider_session_id)).await?;
-            Ok(Value::Null)
-        }
         "routine_list_for_session" => {
             let SessionId { session_id } = parse(params)?;
             let store = hosts.store.clone();
@@ -840,50 +799,6 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
         "agent_resolve" => {
             let Name { name } = parse(params)?;
             json(block(move || AgentHost::resolve(&name)).await?)
-        }
-        "agent_spawn" => {
-            let p: AgentSpawn = parse(params)?;
-            let host = hosts.agents.clone();
-            json(block(move || host.spawn(p.session_id, p.command, p.args, p.cwd, p.env)).await?)
-        }
-        "agent_write" => {
-            let SessionLine { session_id, line } = parse(params)?;
-            let host = hosts.agents.clone();
-            block(move || host.write(&session_id, &line)).await?;
-            Ok(Value::Null)
-        }
-        "agent_close_stdin" => {
-            let SessionId { session_id } = parse(params)?;
-            let host = hosts.agents.clone();
-            block(move || {
-                host.close_stdin(&session_id);
-                Ok(())
-            })
-            .await?;
-            Ok(Value::Null)
-        }
-        "agent_kill" => {
-            let SessionId { session_id } = parse(params)?;
-            let host = hosts.agents.clone();
-            block(move || {
-                host.kill(&session_id);
-                Ok(())
-            })
-            .await?;
-            Ok(Value::Null)
-        }
-        "agent_kill_all" => {
-            let host = hosts.agents.clone();
-            block(move || {
-                host.kill_all();
-                Ok(())
-            })
-            .await?;
-            Ok(Value::Null)
-        }
-        "agent_running" => {
-            let host = hosts.agents.clone();
-            json(block(move || Ok(host.running())).await?)
         }
         "bridge_info" => {
             let bridge = hosts.bridge.clone();

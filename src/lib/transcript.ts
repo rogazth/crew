@@ -1,5 +1,6 @@
-import { getSessionBlocks, setSessionBlocks } from "./api";
-import { applyEvent, parseBlocks, settleTurn, type Block, type HarnessEvent } from "./blocks";
+import { client } from "./client";
+import { applyEvent, type Block, type HarnessEvent } from "./blocks";
+import type { TranscriptApply, TranscriptSnapshot } from "./protocol";
 
 /** What a chat surface reads. One object per session; a new one each publish. */
 export type ThreadSnapshot = {
@@ -12,18 +13,31 @@ type Thread = {
   blocks: Block[];
   ready: boolean;
   working: boolean;
+  seq: number;
   snapshot: ThreadSnapshot;
   loading: Promise<void> | null;
   listeners: Set<() => void>;
   frame: number | null;
-  saveTimer: number | null;
-  dirty: boolean;
 };
 
-const SAVE_MS = 600;
 const EMPTY: ThreadSnapshot = { blocks: [], ready: false, working: false };
 
 const threads = new Map<string, Thread>();
+let hooked = false;
+
+function ensureBridge() {
+  if (hooked) return;
+  hooked = true;
+  client.on("transcript-apply", (payload) => {
+    const apply = payload as TranscriptApply;
+    applyRemote(apply.sessionId, apply.seq, apply.event);
+  });
+  client.onReconnect(() => {
+    for (const [id, row] of threads) {
+      if (row.ready) void reload(id);
+    }
+  });
+}
 
 function thread(id: string): Thread {
   let row = threads.get(id);
@@ -32,12 +46,11 @@ function thread(id: string): Thread {
       blocks: [],
       ready: false,
       working: false,
+      seq: 0,
       snapshot: EMPTY,
       loading: null,
       listeners: new Set(),
       frame: null,
-      saveTimer: null,
-      dirty: false,
     };
     threads.set(id, row);
   }
@@ -50,6 +63,7 @@ function thread(id: string): Thread {
  * streams a line per token and the surface only needs one paint each.
  */
 export function subscribe(id: string, listener: () => void): () => void {
+  ensureBridge();
   const row = thread(id);
   row.listeners.add(listener);
   return () => {
@@ -66,46 +80,52 @@ export function isReady(id: string): boolean {
 }
 
 export function load(id: string): Promise<void> {
+  ensureBridge();
   const row = thread(id);
   if (row.ready) return Promise.resolve();
   if (row.loading) return row.loading;
-  row.loading = getSessionBlocks(id)
-    .then((raw) => {
-      row.blocks = settleTurn(parseBlocks(raw), "interrupted");
-    })
-    .catch(() => undefined)
-    .then(() => {
-      row.ready = true;
-      row.loading = null;
-      publish(row);
-    });
+  row.loading = reload(id);
   return row.loading;
+}
+
+export async function reload(id: string): Promise<void> {
+  ensureBridge();
+  const row = thread(id);
+  try {
+    const snap = await client.request<TranscriptSnapshot>("transcript_get", { sessionId: id });
+    row.blocks = snap.blocks;
+    row.working = snap.working;
+    row.seq = snap.seq;
+  } catch {
+    /* keep whatever we already have */
+  }
+  row.ready = true;
+  row.loading = null;
+  publish(row);
 }
 
 export function apply(id: string, event: HarnessEvent): void {
   const row = thread(id);
   row.blocks = applyEvent(row.blocks, event);
-  touch(id, row);
-  if (
-    event.type === "message.completed" ||
-    event.type === "turn.completed" ||
-    event.type === "session.error" ||
-    event.type === "session.ended"
-  ) {
-    flush(id);
+  schedule(row);
+}
+
+function applyRemote(id: string, seq: number, event: HarnessEvent): void {
+  const row = threads.get(id);
+  if (!row?.ready) return;
+  if (seq !== row.seq + 1) {
+    void reload(id);
+    return;
   }
+  row.seq = seq;
+  row.blocks = applyEvent(row.blocks, event);
+  schedule(row);
 }
 
 export function append(id: string, block: Block): void {
   const row = thread(id);
   row.blocks = [...row.blocks, block];
-  touch(id, row);
-}
-
-export function settle(id: string): void {
-  const row = thread(id);
-  row.blocks = settleTurn(row.blocks, "interrupted");
-  touch(id, row);
+  schedule(row);
 }
 
 export function setWorking(id: string, working: boolean): void {
@@ -115,32 +135,11 @@ export function setWorking(id: string, working: boolean): void {
   schedule(row);
 }
 
-export function flush(id: string): void {
-  const row = threads.get(id);
-  if (!row || !row.dirty) return;
-  if (row.saveTimer !== null) window.clearTimeout(row.saveTimer);
-  row.saveTimer = null;
-  row.dirty = false;
-  void setSessionBlocks(id, JSON.stringify(row.blocks)).catch(() => {});
-}
-
 export function forget(id: string): void {
   const row = threads.get(id);
   if (!row) return;
-  if (row.saveTimer !== null) window.clearTimeout(row.saveTimer);
   if (row.frame !== null) window.cancelAnimationFrame(row.frame);
   threads.delete(id);
-}
-
-function touch(id: string, row: Thread): void {
-  row.dirty = true;
-  if (row.saveTimer === null) {
-    row.saveTimer = window.setTimeout(() => {
-      row.saveTimer = null;
-      flush(id);
-    }, SAVE_MS);
-  }
-  schedule(row);
 }
 
 function schedule(row: Thread): void {

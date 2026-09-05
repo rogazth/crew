@@ -59,40 +59,30 @@ export const deleteSession = (id: string): Promise<void> =>
 export const setSessionStatus = (id: string, status: SessionStatus): Promise<void> =>
   client.request("session_set_status", { id, status });
 
-export const getSessionBlocks = (id: string): Promise<string> =>
-  client.request("session_get_blocks", { id });
+export const turnStart = (params: {
+  sessionId: string;
+  cwd: string;
+  text: string;
+  files?: unknown;
+  mentions?: string[];
+  hidden?: boolean;
+  fresh?: boolean;
+}): Promise<{ working: boolean }> => client.request("turn_start", params);
 
-export const setSessionBlocks = (id: string, blocksJson: string): Promise<void> =>
-  client.request("session_set_blocks", { id, blocksJson });
+export const turnStop = (sessionId: string): Promise<void> =>
+  client.request("turn_stop", { sessionId });
 
-export const setProviderSession = (id: string, providerSessionId: string): Promise<void> =>
-  client.request("session_set_provider_session", { id, providerSessionId });
-
-export const resolveClaude = (): Promise<{ path: string }> => client.request("agent_resolve_claude");
-
-export const resolveBinary = (name: string): Promise<{ path: string }> =>
-  client.request("agent_resolve", { name });
-
-export const spawnAgent = (
+export const turnRespond = (
   sessionId: string,
-  command: string,
-  args: string[],
-  cwd: string,
-  env: Record<string, string> = {},
-): Promise<number> => client.request("agent_spawn", { sessionId, command, args, cwd, env });
+  requestId: number,
+  decision: "allow" | "always" | "deny",
+): Promise<void> => client.request("turn_respond", { sessionId, requestId, decision });
 
-export const writeAgent = (sessionId: string, line: string): Promise<void> =>
-  client.request("agent_write", { sessionId, line });
-
-export const closeAgentStdin = (sessionId: string): Promise<void> =>
-  client.request("agent_close_stdin", { sessionId });
-
-export const killAgent = (sessionId: string): Promise<void> =>
-  client.request("agent_kill", { sessionId });
-
-export const killAllAgents = (): Promise<void> => client.request("agent_kill_all");
-
-export const runningAgents = (): Promise<string[]> => client.request("agent_running");
+export const turnAnswer = (
+  sessionId: string,
+  requestId: number,
+  answers: { [key in string]: string } | null,
+): Promise<void> => client.request("turn_answer", { sessionId, requestId, answers });
 
 export const listSessionRoutines = (sessionId: string): Promise<RoutineRow[]> =>
   client.request("routine_list_for_session", { sessionId });
