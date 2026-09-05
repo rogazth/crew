@@ -100,9 +100,9 @@ function stopDaemon(): Promise<void> {
   stopping = true;
   return new Promise((resolve) => {
     const timer = setTimeout(() => {
-      proc.kill("SIGKILL");
+      console.error("crewd still running after SIGTERM; continuing quit");
       resolve();
-    }, 2000);
+    }, 5000);
     proc.once("exit", () => {
       clearTimeout(timer);
       resolve();
