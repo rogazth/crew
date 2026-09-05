@@ -130,7 +130,7 @@ function createWindow(): void {
   if (app.isPackaged) {
     void win.loadFile(path.join(app.getAppPath(), "dist/index.html"));
   } else {
-    void win.loadURL("http://localhost:1420");
+    void win.loadURL("http://127.0.0.1:1420");
   }
   win.on("closed", () => {
     win = null;
