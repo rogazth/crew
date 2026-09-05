@@ -5,7 +5,9 @@ use serde_json::Value;
 use ts_rs::TS;
 
 mod blocks;
+mod turns;
 pub use blocks::*;
+pub use turns::*;
 
 #[derive(Serialize, Deserialize, Clone, Debug, TS)]
 #[ts(export, export_to = "../../../src/lib/protocol.ts")]

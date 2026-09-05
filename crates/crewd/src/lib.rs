@@ -11,12 +11,14 @@ use crew_core::pty::{PtyEvents, PtyHost};
 use crew_core::routine;
 use crew_core::session;
 use crew_core::store::{self as app_state, Store};
+use crew_core::transcript::TranscriptEvents;
+use crew_core::turns::TurnHost;
 use crew_core::workspace;
 use crew_protocol::{
     self as proto, AgentSpawn, Auth, BridgeReply, Cwd, DaemonInfo, Id, IdBlocks, IdName, IdProvider, IdStatus,
     Ids, Key, KeyValue, Name, NamePath, OptionalId, PathArg, PathContents, PtyAck, PtyAttach, PtyAttached, PtyKill,
     PtyResize, PtySpawn, PtyWrite, Request, RoutineMark, RoutineUpsert, SessionCreate, SessionId, SessionLine,
-    SessionUpdate, TempFile, WorkspaceId,
+    SessionUpdate, TempFile, TranscriptApply, TurnAnswer, TurnRespond, TurnStart, WorkspaceId,
 };
 use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
@@ -38,11 +40,13 @@ struct Hosts {
     store: Store,
     agents: AgentHost,
     bridge: Bridge,
+    turns: TurnHost,
 }
 
 pub struct Handle {
     pub info: DaemonInfo,
     shutdown: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+    turns: TurnHost,
 }
 
 impl Handle {
@@ -58,6 +62,10 @@ impl Handle {
         if let Some(tx) = self.shutdown.lock().unwrap_or_else(|e| e.into_inner()).take() {
             let _ = tx.send(());
         }
+    }
+
+    pub fn override_agent_binary(&self, name: &str, path: impl Into<String>) {
+        self.turns.override_binary(name, path);
     }
 }
 
@@ -245,11 +253,70 @@ impl BridgeEvents for Hub {
     }
 }
 
+impl TranscriptEvents for Hub {
+    fn apply(&self, session_id: &str, seq: u64, event: &crew_protocol::HarnessEvent) {
+        self.emit(
+            "transcript-apply",
+            TranscriptApply {
+                session_id: session_id.to_string(),
+                seq,
+                event: event.clone(),
+            },
+        );
+    }
+
+    fn status(
+        &self,
+        session_id: &str,
+        status: &str,
+        provider_session_id: Option<&str>,
+        updated_at: i64,
+    ) {
+        self.emit(
+            "session-status",
+            proto::SessionStatusEvent {
+                session_id: session_id.to_string(),
+                status: status.to_string(),
+                provider_session_id: provider_session_id.map(str::to_string),
+                updated_at,
+            },
+        );
+    }
+}
+
+struct AgentFanout {
+    hub: Arc<Hub>,
+    turns: TurnHost,
+}
+
+impl AgentEvents for AgentFanout {
+    fn lines(&self, event: &str, session_id: &str, lines: Vec<String>) {
+        self.hub.lines(event, session_id, lines.clone());
+        self.turns.on_agent_lines(event, session_id, lines);
+    }
+
+    fn exit(&self, session_id: &str, code: Option<i32>, pid: u32) {
+        AgentEvents::exit(&*self.hub, session_id, code, pid);
+        self.turns.on_agent_exit(session_id, code);
+    }
+}
+
 pub fn serve(config: Config) -> Result<Handle, String> {
     let token = random_token();
     let hub = Arc::new(Hub::new());
+    let transcripts = crew_core::transcript::TranscriptHub::new(config.store.clone());
+    transcripts.set_events(hub.clone());
+    let turns = TurnHost::new(
+        config.agents.clone(),
+        config.store.clone(),
+        transcripts,
+        config.bridge.clone(),
+    );
     config.pty.set_events(hub.clone());
-    config.agents.set_events(hub.clone());
+    config.agents.set_events(Arc::new(AgentFanout {
+        hub: hub.clone(),
+        turns: turns.clone(),
+    }));
     config.bridge.set_events(hub.clone());
 
     let (ready_tx, ready_rx) = std_mpsc::channel();
@@ -259,6 +326,7 @@ pub fn serve(config: Config) -> Result<Handle, String> {
         store: config.store,
         agents: config.agents,
         bridge: config.bridge,
+        turns: turns.clone(),
     };
     let serve_token = token.clone();
 
@@ -280,6 +348,7 @@ pub fn serve(config: Config) -> Result<Handle, String> {
     Ok(Handle {
         info: DaemonInfo { url, token },
         shutdown: Mutex::new(Some(stop_tx)),
+        turns,
     })
 }
 
@@ -306,6 +375,7 @@ async fn run(
     };
     let _ = ready_tx.send(Ok(format!("ws://{addr}")));
     hub.set_runtime(tokio::runtime::Handle::current());
+    hosts.turns.set_runtime(tokio::runtime::Handle::current());
 
     loop {
         tokio::select! {
@@ -825,6 +895,34 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
             block(move || bridge.reply(id, response)).await?;
             Ok(Value::Null)
         }
+        "turn_start" => {
+            let p: TurnStart = parse(params)?;
+            let turns = hosts.turns.clone();
+            json(block(move || turns.start(p)).await?)
+        }
+        "turn_stop" => {
+            let SessionId { session_id } = parse(params)?;
+            let turns = hosts.turns.clone();
+            block(move || turns.stop(&session_id)).await?;
+            Ok(Value::Null)
+        }
+        "turn_respond" => {
+            let TurnRespond { session_id, request_id, decision } = parse(params)?;
+            let turns = hosts.turns.clone();
+            block(move || turns.respond(&session_id, request_id, decision)).await?;
+            Ok(Value::Null)
+        }
+        "turn_answer" => {
+            let TurnAnswer { session_id, request_id, answers } = parse(params)?;
+            let turns = hosts.turns.clone();
+            block(move || turns.answer(&session_id, request_id, answers)).await?;
+            Ok(Value::Null)
+        }
+        "transcript_get" => {
+            let SessionId { session_id } = parse(params)?;
+            let turns = hosts.turns.clone();
+            json(block(move || Ok(turns.transcripts().get(&session_id))).await?)
+        }
         _ => Err(format!("Unknown method: {method}")),
     }
 }
@@ -1155,6 +1253,220 @@ mod tests {
         let call: proto::ToolCall = serde_json::from_value(event.payload).expect("ToolCall");
         assert_eq!(call.session_id, "s1");
         assert_eq!(call.method, "tools/list");
+        handle.shutdown();
+    }
+
+    fn write_fake_claude(dir: &std::path::Path) -> std::path::PathBuf {
+        write_fake_claude_script(dir, false)
+    }
+
+    fn write_fake_claude_approval(dir: &std::path::Path) -> std::path::PathBuf {
+        write_fake_claude_script(dir, true)
+    }
+
+    fn write_fake_claude_script(dir: &std::path::Path, approval: bool) -> std::path::PathBuf {
+        let path = dir.join(if approval {
+            "fake-claude-approval"
+        } else {
+            "fake-claude"
+        });
+        let wait_approval = if approval { "True" } else { "False" };
+        std::fs::write(
+            &path,
+            format!(
+                r#"#!/usr/bin/env python3
+import json, sys, time
+WAIT_APPROVAL = {wait_approval}
+print(json.dumps({{"type":"system","subtype":"init"}}), flush=True)
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    try:
+        rec = json.loads(line)
+    except Exception:
+        continue
+    if rec.get("type") == "control_request":
+        print(json.dumps({{"type":"control_response"}}), flush=True)
+        continue
+    if rec.get("type") != "user":
+        continue
+    if WAIT_APPROVAL:
+        print(json.dumps({{
+            "type": "control_request",
+            "request_id": "c1",
+            "request": {{"subtype": "can_use_tool", "tool_name": "Bash", "input": {{"command": "ls"}}}}
+        }}), flush=True)
+        for line2 in sys.stdin:
+            try:
+                rec2 = json.loads(line2)
+            except Exception:
+                continue
+            if rec2.get("type") == "control_response":
+                break
+    time.sleep(0.25)
+    print(json.dumps({{"type":"stream_event","event":{{"type":"content_block_delta","delta":{{"type":"text_delta","text":"hello"}}}}}}), flush=True)
+    print(json.dumps({{"type":"result","subtype":"success","usage":{{"input_tokens":1,"output_tokens":1}}}}), flush=True)
+"#
+            ),
+        )
+        .expect("fake claude");
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        path
+    }
+
+    async fn seed_agent(ws: &mut Ws, cwd: &str) -> String {
+        send_json(
+            ws,
+            &Request {
+                id: 1,
+                method: "workspace_create".into(),
+                params: serde_json::json!({ "name": "w", "path": cwd }),
+            },
+        )
+        .await;
+        let workspace: proto::Workspace =
+            serde_json::from_value(wait_response(ws, 1).await.result.expect("ws")).expect("workspace");
+        send_json(
+            ws,
+            &Request {
+                id: 2,
+                method: "session_create".into(),
+                params: serde_json::json!({
+                    "workspaceId": workspace.id,
+                    "kind": "agent",
+                    "name": "A",
+                    "provider": "claude",
+                    "model": "m",
+                    "description": "",
+                    "autonomy": "ask"
+                }),
+            },
+        )
+        .await;
+        let session: proto::Session =
+            serde_json::from_value(wait_response(ws, 2).await.result.expect("session")).expect("session");
+        session.id
+    }
+
+    #[tokio::test]
+    async fn turn_survives_disconnect() {
+        let dir = test_dir("turn-disconnect");
+        let handle = test_serve(&dir);
+        let fake = write_fake_claude(&dir);
+        handle.override_agent_binary("claude", fake.to_string_lossy().into_owned());
+        let mut ws = connect_authed(&handle).await;
+        let session_id = seed_agent(&mut ws, dir.to_str().unwrap()).await;
+        send_json(
+            &mut ws,
+            &Request {
+                id: 3,
+                method: "turn_start".into(),
+                params: serde_json::json!({
+                    "sessionId": session_id,
+                    "cwd": dir.to_string_lossy(),
+                    "text": "hi"
+                }),
+            },
+        )
+        .await;
+        let started = wait_response(&mut ws, 3).await;
+        assert!(started.ok, "{}", started.error.unwrap_or_default());
+        drop(ws);
+        tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+        let mut ws = connect_authed(&handle).await;
+        send_json(
+            &mut ws,
+            &Request {
+                id: 1,
+                method: "transcript_get".into(),
+                params: serde_json::json!({ "sessionId": session_id }),
+            },
+        )
+        .await;
+        let snap: proto::TranscriptSnapshot =
+            serde_json::from_value(wait_response(&mut ws, 1).await.result.expect("snap")).expect("snapshot");
+        assert!(!snap.working);
+        assert!(snap.blocks.iter().any(|b| b.role == proto::BlockRole::Assistant && b.text.contains("hello")));
+        handle.shutdown();
+    }
+
+    #[tokio::test]
+    async fn turn_respond_unblocks_approval() {
+        let dir = test_dir("turn-approval");
+        let handle = test_serve(&dir);
+        let fake = write_fake_claude_approval(&dir);
+        handle.override_agent_binary("claude", fake.to_string_lossy().into_owned());
+        let mut ws = connect_authed(&handle).await;
+        let session_id = seed_agent(&mut ws, dir.to_str().unwrap()).await;
+        send_json(
+            &mut ws,
+            &Request {
+                id: 3,
+                method: "turn_start".into(),
+                params: serde_json::json!({
+                    "sessionId": session_id,
+                    "cwd": dir.to_string_lossy(),
+                    "text": "hi"
+                }),
+            },
+        )
+        .await;
+        assert!(wait_response(&mut ws, 3).await.ok);
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut request_id = None;
+        while request_id.is_none() {
+            let msg = tokio::time::timeout_at(deadline, ws.next())
+                .await
+                .expect("approval timeout")
+                .expect("closed")
+                .expect("ws");
+            if let Message::Text(text) = msg {
+                if let Ok(event) = serde_json::from_str::<proto::Event>(text.as_ref()) {
+                    if event.event == "transcript-apply" {
+                        if let Ok(apply) = serde_json::from_value::<proto::TranscriptApply>(event.payload) {
+                            if let crew_protocol::HarnessEvent::ApprovalRequested { request_id: id, .. } = apply.event {
+                                request_id = Some(id);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        send_json(
+            &mut ws,
+            &Request {
+                id: 4,
+                method: "turn_respond".into(),
+                params: serde_json::json!({
+                    "sessionId": session_id,
+                    "requestId": request_id.unwrap(),
+                    "decision": "allow"
+                }),
+            },
+        )
+        .await;
+        assert!(wait_response(&mut ws, 4).await.ok);
+        tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+        send_json(
+            &mut ws,
+            &Request {
+                id: 5,
+                method: "transcript_get".into(),
+                params: serde_json::json!({ "sessionId": session_id }),
+            },
+        )
+        .await;
+        let snap: proto::TranscriptSnapshot =
+            serde_json::from_value(wait_response(&mut ws, 5).await.result.expect("snap")).expect("snapshot");
+        let approval = snap.blocks.iter().find(|b| b.role == proto::BlockRole::Approval || b.role == proto::BlockRole::Tool);
+        assert!(approval.is_some());
+        if let Some(block) = approval {
+            if let Some(row) = &block.approval {
+                assert_eq!(row.decided, Some(proto::ApprovalDecision::Allow));
+            }
+        }
         handle.shutdown();
     }
 

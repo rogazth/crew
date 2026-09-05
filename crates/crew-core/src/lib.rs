@@ -8,4 +8,6 @@ pub mod pty;
 pub mod routine;
 pub mod session;
 pub mod store;
+pub mod transcript;
+pub mod turns;
 pub mod workspace;

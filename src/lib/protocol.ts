@@ -108,9 +108,13 @@ export type Session = { id: string, workspaceId: string, kind: string, name: str
 
 export type SessionCreate = { workspaceId: string, kind: string, name: string, provider: string, model: string, description: string, autonomy: string, };
 
+export type SessionCreated = { session: Session, };
+
 export type SessionId = { sessionId: string, };
 
 export type SessionLine = { sessionId: string, line: string, };
+
+export type SessionStatusEvent = { sessionId: string, status: string, providerSessionId?: string, updatedAt: number, };
 
 export type SessionUpdate = { id: string, name: string, provider: string, model: string, description: string, notifications: boolean, autonomy: string, };
 
@@ -119,6 +123,18 @@ export type TempFile = { extension: string, base64Contents: string, };
 export type ToolCall = { id: number, sessionId: string, method: string, params: unknown, };
 
 export type ToolStatus = "pending" | "completed" | "failed" | "interrupted";
+
+export type TranscriptApply = { sessionId: string, seq: number, event: HarnessEvent, };
+
+export type TranscriptSnapshot = { blocks: Array<Block>, working: boolean, status: string, seq: number, };
+
+export type TurnAnswer = { sessionId: string, requestId: number, answers: { [key in string]: string } | null, };
+
+export type TurnRespond = { sessionId: string, requestId: number, decision: ApprovalDecision, };
+
+export type TurnStart = { sessionId: string, cwd: string, text: string, files?: Array<AttachedFile>, mentions?: Array<string>, hidden?: boolean, fresh?: boolean, };
+
+export type TurnStarted = { working: boolean, };
 
 export type TurnUsage = { inputTokens?: number, outputTokens?: number, costUsd?: number, durationMs?: number, };
 

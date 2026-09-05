@@ -54,12 +54,7 @@ impl Store {
         conn.pragma_update(None, "foreign_keys", "ON")
             .map_err(|e| e.to_string())?;
         migrate(&conn).map_err(|e| e.to_string())?;
-        // Nothing is running yet, so a spinner left over from the last launch would never stop.
-        conn.execute(
-            "UPDATE sessions SET status = 'idle' WHERE status IN ('working', 'needs-input')",
-            [],
-        )
-            .map_err(|e| e.to_string())?;
+        settle_open_turns(&conn).map_err(|e| e.to_string())?;
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
         })
@@ -248,6 +243,28 @@ pub fn set_order(conn: &Connection, table: &str, ids: &[String]) -> rusqlite::Re
             Err(err)
         }
     }
+}
+
+fn settle_open_turns(conn: &Connection) -> rusqlite::Result<()> {
+    let mut stmt = conn.prepare(
+        "SELECT id, blocks_json FROM sessions WHERE status IN ('working', 'needs-input')",
+    )?;
+    let rows = stmt
+        .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    drop(stmt);
+    for (id, raw) in rows {
+        let settled = crate::blocks::settle_turn(
+            crate::blocks::parse_blocks(Some(&raw)),
+            crew_protocol::ToolStatus::Interrupted,
+        );
+        let json = serde_json::to_string(&settled).unwrap_or_else(|_| "[]".into());
+        conn.execute(
+            "UPDATE sessions SET blocks_json = ?2, status = 'idle', updated_at = ?3 WHERE id = ?1",
+            params![id, json, now_millis()],
+        )?;
+    }
+    Ok(())
 }
 
 pub fn now_millis() -> i64 {
