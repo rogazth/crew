@@ -43,17 +43,16 @@ export function useSessions(workspaceId: string | null) {
     [],
   );
 
-  useEffect(
-    () =>
-      client.on("session-created", (payload) => {
-        const created = payload as SessionCreated;
-        if (created.session.workspaceId === workspaceId) {
-          const session = created.session as unknown as Session;
-          setSessions((prev) => [...prev, session]);
-        }
-      }),
-    [workspaceId],
-  );
+  useEffect(() => {
+    const unsubscribe = client.on("session-created", (payload) => {
+      const created = payload as SessionCreated;
+      if (created.session.workspaceId === workspaceId) {
+        const session = created.session as unknown as Session;
+        setSessions((prev) => [...prev, session]);
+      }
+    });
+    return unsubscribe;
+  }, [workspaceId]);
 
   // `settle` lets a caller hold the list back so the row and its sheet land together.
   const create = useCallback(
