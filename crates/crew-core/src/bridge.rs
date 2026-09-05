@@ -109,7 +109,7 @@ fn serve(bridge: Bridge, stream: UnixStream) {
         .unwrap_or_else(|e| e.into_inner())
         .clone();
     let Some(handler) = handler else {
-        return reply(stream, json!({ "error": "Crew could not reach its window" }));
+        return reply(stream, json!({ "error": "Tool handler is not set" }));
     };
     let body = match handler.handle(&request.session_id, &request.method, request.params) {
         Ok(result) => json!({ "result": result }),
