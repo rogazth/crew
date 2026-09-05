@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use ts_rs::TS;
@@ -147,23 +145,6 @@ pub fn err(id: u32, error: impl Into<String>) -> Response {
         result: None,
         error: Some(error.into()),
     }
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
-pub struct AgentLines {
-    pub session_id: String,
-    pub lines: Vec<String>,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
-pub struct AgentExit {
-    pub session_id: String,
-    pub code: Option<i32>,
-    pub pid: u32,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, TS)]
@@ -348,29 +329,9 @@ pub struct TempFile {
 #[derive(Serialize, Deserialize, Clone, Debug, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
-pub struct AgentSpawn {
-    pub session_id: String,
-    pub command: String,
-    pub args: Vec<String>,
-    pub cwd: String,
-    pub env: Option<HashMap<String, String>>,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
 pub struct SessionLine {
     pub session_id: String,
     pub line: String,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug, TS)]
-#[ts(export, export_to = "../../../src/lib/protocol.ts")]
-pub struct BridgeReply {
-    #[ts(type = "number")]
-    pub id: u64,
-    #[ts(type = "unknown")]
-    pub response: Value,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, TS)]

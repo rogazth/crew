@@ -2,12 +2,6 @@
 
 export type AgentBinary = { path: string, };
 
-export type AgentExit = { sessionId: string, code: number | null, pid: number, };
-
-export type AgentLines = { sessionId: string, lines: Array<string>, };
-
-export type AgentSpawn = { sessionId: string, command: string, args: Array<string>, cwd: string, env: { [key in string]: string } | null, };
-
 export type ApprovalDecision = "allow" | "always" | "deny";
 
 export type ApprovalResolution = "allow" | "always" | "deny" | "cancelled";
@@ -29,8 +23,6 @@ export type BlockRole = "user" | "assistant" | "reasoning" | "tool" | "approval"
 export type BlockTool = { callId: string, name: string, title: string, status: ToolStatus, };
 
 export type BridgeInfo = { socketPath: string, token: string, exe: string, };
-
-export type BridgeReply = { id: number, response: unknown, };
 
 export type Cwd = { cwd: string, };
 
