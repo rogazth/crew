@@ -1229,26 +1229,34 @@ mod tests {
     }
 
     fn write_fake_claude(dir: &std::path::Path) -> std::path::PathBuf {
-        write_fake_claude_script(dir, false)
+        write_fake_claude_script(dir, false, false)
     }
 
     fn write_fake_claude_approval(dir: &std::path::Path) -> std::path::PathBuf {
-        write_fake_claude_script(dir, true)
+        write_fake_claude_script(dir, true, false)
     }
 
-    fn write_fake_claude_script(dir: &std::path::Path, approval: bool) -> std::path::PathBuf {
-        let path = dir.join(if approval {
+    fn write_fake_claude_approval_tool(dir: &std::path::Path) -> std::path::PathBuf {
+        write_fake_claude_script(dir, true, true)
+    }
+
+    fn write_fake_claude_script(dir: &std::path::Path, approval: bool, after_tool: bool) -> std::path::PathBuf {
+        let path = dir.join(if after_tool {
+            "fake-claude-approval-tool"
+        } else if approval {
             "fake-claude-approval"
         } else {
             "fake-claude"
         });
         let wait_approval = if approval { "True" } else { "False" };
+        let emit_tool = if after_tool { "True" } else { "False" };
         std::fs::write(
             &path,
             format!(
                 r#"#!/usr/bin/env python3
 import json, sys, time
 WAIT_APPROVAL = {wait_approval}
+EMIT_TOOL = {emit_tool}
 print(json.dumps({{"type":"system","subtype":"init"}}), flush=True)
 for line in sys.stdin:
     line = line.strip()
@@ -1276,6 +1284,15 @@ for line in sys.stdin:
                 continue
             if rec2.get("type") == "control_response":
                 break
+        if EMIT_TOOL:
+            print(json.dumps({{
+                "type": "stream_event",
+                "event": {{
+                    "type": "content_block_start",
+                    "index": 0,
+                    "content_block": {{"type": "tool_use", "id": "toolu_1", "name": "Bash", "input": {{"command": "ls"}}}}
+                }}
+            }}), flush=True)
     time.sleep(0.25)
     print(json.dumps({{"type":"stream_event","event":{{"type":"content_block_delta","delta":{{"type":"text_delta","text":"hello"}}}}}}), flush=True)
     print(json.dumps({{"type":"result","subtype":"success","usage":{{"input_tokens":1,"output_tokens":1}}}}), flush=True)
@@ -1481,13 +1498,66 @@ print(json.dumps({"type":"turn.failed","error":{"message":"Codex exploded"}}), f
         .await;
         let snap: proto::TranscriptSnapshot =
             serde_json::from_value(wait_response(&mut ws, 5).await.result.expect("snap")).expect("snapshot");
-        let approval = snap.blocks.iter().find(|b| b.role == proto::BlockRole::Approval || b.role == proto::BlockRole::Tool);
-        assert!(approval.is_some());
-        if let Some(block) = approval {
-            if let Some(row) = &block.approval {
-                assert_eq!(row.decided, Some(proto::ApprovalDecision::Allow));
+        let approval = snap.blocks.iter().find(|b| b.approval.is_some());
+        let row = approval.expect("approval block").approval.as_ref().expect("approval");
+        assert_eq!(row.decided, Some(proto::ApprovalDecision::Allow));
+        handle.shutdown();
+    }
+
+    #[tokio::test]
+    async fn allowed_tool_row_keeps_decided() {
+        let dir = test_dir("turn-approval-tool");
+        let handle = test_serve(&dir);
+        let fake = write_fake_claude_approval_tool(&dir);
+        handle.override_agent_binary("claude", fake.to_string_lossy().into_owned());
+        let mut ws = connect_authed(&handle).await;
+        let session_id = seed_agent(&mut ws, dir.to_str().unwrap()).await;
+        start_turn(&mut ws, 3, &session_id, dir.to_str().unwrap()).await;
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut request_id = None;
+        while request_id.is_none() {
+            let msg = tokio::time::timeout_at(deadline, ws.next())
+                .await
+                .expect("approval timeout")
+                .expect("closed")
+                .expect("ws");
+            if let Message::Text(text) = msg {
+                if let Ok(event) = serde_json::from_str::<proto::Event>(text.as_ref()) {
+                    if event.event == "transcript-apply" {
+                        if let Ok(apply) = serde_json::from_value::<proto::TranscriptApply>(event.payload) {
+                            if let crew_protocol::HarnessEvent::ApprovalRequested { request_id: id, .. } = apply.event {
+                                request_id = Some(id);
+                            }
+                        }
+                    }
+                }
             }
         }
+        send_json(
+            &mut ws,
+            &Request {
+                id: 4,
+                method: "turn_respond".into(),
+                params: serde_json::json!({
+                    "sessionId": session_id,
+                    "requestId": request_id.unwrap(),
+                    "decision": "allow"
+                }),
+            },
+        )
+        .await;
+        assert!(wait_response(&mut ws, 4).await.ok);
+        wait_status(&mut ws, &session_id, "done").await;
+        let snap = transcript_of(&mut ws, 5, &session_id).await;
+        let tool = snap
+            .blocks
+            .iter()
+            .find(|b| b.role == proto::BlockRole::Tool)
+            .expect("folded tool row");
+        assert_eq!(
+            tool.approval.as_ref().and_then(|row| row.decided.clone()),
+            Some(proto::ApprovalDecision::Allow)
+        );
         handle.shutdown();
     }
 

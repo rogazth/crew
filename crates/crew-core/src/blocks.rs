@@ -132,6 +132,7 @@ pub fn apply_event(blocks: Vec<Block>, event: HarnessEvent) -> Vec<Block> {
                 if let Some(approval) = &last.approval {
                     if approval.decided != Some(ApprovalDecision::Deny) && last.text == title {
                         tool.id = last.id.clone();
+                        tool.approval = last.approval.clone();
                         let mut next = settled;
                         next.pop();
                         next.push(tool);
@@ -510,6 +511,10 @@ mod tests {
         );
         assert_eq!(blocks.len(), 1);
         assert_eq!(blocks[0].role, BlockRole::Tool);
+        assert_eq!(
+            blocks[0].approval.as_ref().and_then(|row| row.decided.clone()),
+            Some(ApprovalDecision::Always)
+        );
     }
 
     #[test]

@@ -99,7 +99,7 @@ export function applyEvent(blocks: Block[], event: HarnessEvent): Block[] {
       };
       const last = settled.at(-1);
       if (last?.approval && last.approval.decided !== "deny" && last.text === event.title) {
-        return [...settled.slice(0, -1), { ...tool, id: last.id }];
+        return [...settled.slice(0, -1), { ...tool, id: last.id, approval: last.approval }];
       }
       return [...settled, tool];
     }

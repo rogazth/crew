@@ -71,6 +71,7 @@ describe("approvals", () => {
     ]);
     expect(blocks).toHaveLength(1);
     expect(blocks[0]?.role).toBe("tool");
+    expect(blocks[0]?.approval?.decided).toBe("always");
   });
 
   it("keeps a denied call as its own row", () => {
