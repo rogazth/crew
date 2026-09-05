@@ -296,3 +296,205 @@ pub fn completed_tool_status(item: &Map<String, Value>) -> crew_protocol::ToolSt
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crew_protocol::{HarnessEvent, ToolStatus};
+    use serde_json::json;
+
+    fn rec(value: Value) -> Map<String, Value> {
+        value.as_object().cloned().expect("object")
+    }
+
+    fn events(line: &Value) -> Vec<HarnessEvent> {
+        let rec = rec(line.clone());
+        let mut out = Vec::new();
+        if let Some(thread_id) = thread_id_from_event(&rec) {
+            out.push(HarnessEvent::SessionProviderBound {
+                provider_session_id: thread_id,
+            });
+        }
+        if string_field(Some(&rec), "type").as_deref() == Some("error") {
+            if let Some(fatal) = stream_error_message(&rec) {
+                out.push(HarnessEvent::SessionError { message: fatal });
+            }
+        }
+        let type_name = string_field(Some(&rec), "type");
+        if type_name.as_deref() == Some("turn.completed") {
+            out.push(HarnessEvent::MessageCompleted {});
+            out.push(HarnessEvent::TurnCompleted {
+                usage: turn_usage(&rec),
+            });
+            return out;
+        }
+        if type_name.as_deref() == Some("turn.failed") {
+            out.push(HarnessEvent::MessageCompleted {});
+            out.push(HarnessEvent::TurnCompleted { usage: None });
+            if let Some(message) = stream_error_message(&rec) {
+                out.push(HarnessEvent::SessionError { message });
+            }
+            return out;
+        }
+        let Some(item) = item_from_event(&rec) else {
+            return out;
+        };
+        if let Some(error) = item_error_message(&item) {
+            out.push(HarnessEvent::SessionNote { message: error });
+            return out;
+        }
+        if let Some(text) = agent_message_text(&item) {
+            out.push(HarnessEvent::MessageDelta { text });
+            if type_name.as_deref() == Some("item.completed") {
+                out.push(HarnessEvent::MessageCompleted {});
+            }
+            return out;
+        }
+        if !is_tool_item(&item) {
+            return out;
+        }
+        let Some(call_id) = tool_call_id(&item) else {
+            return out;
+        };
+        out.push(HarnessEvent::ToolStarted {
+            call_id: call_id.clone(),
+            name: tool_name(&item),
+            title: tool_label(&item),
+        });
+        if type_name.as_deref() == Some("item.completed") {
+            out.push(HarnessEvent::ToolUpdated {
+                call_id,
+                title: None,
+                status: Some(completed_tool_status(&item)),
+            });
+        }
+        out
+    }
+
+    #[test]
+    fn item_started_command_emits_tool_started() {
+        let got = events(&json!({
+            "type": "item.started",
+            "item": { "type": "command_execution", "id": "c1", "command": "ls -la" }
+        }));
+        assert_eq!(
+            got,
+            vec![HarnessEvent::ToolStarted {
+                call_id: "c1".into(),
+                name: "bash".into(),
+                title: "ls -la".into(),
+            }]
+        );
+    }
+
+    #[test]
+    fn item_completed_command_marks_the_tool_done() {
+        let got = events(&json!({
+            "type": "item.completed",
+            "item": { "type": "command_execution", "id": "c1", "command": "ls", "exit_code": 0 }
+        }));
+        assert_eq!(
+            got,
+            vec![
+                HarnessEvent::ToolStarted {
+                    call_id: "c1".into(),
+                    name: "bash".into(),
+                    title: "ls".into(),
+                },
+                HarnessEvent::ToolUpdated {
+                    call_id: "c1".into(),
+                    title: None,
+                    status: Some(ToolStatus::Completed),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn item_started_file_change_names_the_file() {
+        let got = events(&json!({
+            "type": "item.started",
+            "item": {
+                "type": "file_change",
+                "id": "e1",
+                "changes": [{ "path": "/tmp/app/foo.ts", "kind": "add" }]
+            }
+        }));
+        assert_eq!(
+            got,
+            vec![HarnessEvent::ToolStarted {
+                call_id: "e1".into(),
+                name: "edit".into(),
+                title: "Write foo.ts".into(),
+            }]
+        );
+    }
+
+    #[test]
+    fn agent_message_emits_delta_then_completed() {
+        let got = events(&json!({
+            "type": "item.completed",
+            "item": { "type": "agent_message", "text": "hello" }
+        }));
+        assert_eq!(
+            got,
+            vec![
+                HarnessEvent::MessageDelta { text: "hello".into() },
+                HarnessEvent::MessageCompleted {},
+            ]
+        );
+    }
+
+    #[test]
+    fn turn_completed_carries_usage() {
+        let got = events(&json!({
+            "type": "turn.completed",
+            "usage": { "input_tokens": 3, "output_tokens": 5 }
+        }));
+        assert_eq!(
+            got,
+            vec![
+                HarnessEvent::MessageCompleted {},
+                HarnessEvent::TurnCompleted {
+                    usage: Some(TurnUsage {
+                        input_tokens: Some(3),
+                        output_tokens: Some(5),
+                        cost_usd: None,
+                        duration_ms: None,
+                    }),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn turn_failed_emits_session_error() {
+        let got = events(&json!({
+            "type": "turn.failed",
+            "error": { "message": "boom" }
+        }));
+        assert_eq!(
+            got,
+            vec![
+                HarnessEvent::MessageCompleted {},
+                HarnessEvent::TurnCompleted { usage: None },
+                HarnessEvent::SessionError { message: "boom".into() },
+            ]
+        );
+    }
+
+    #[test]
+    fn thread_id_binds_the_provider_session() {
+        let got = events(&json!({
+            "type": "item.started",
+            "thread_id": "thr_1",
+            "item": { "type": "agent_message", "text": "hi" }
+        }));
+        assert_eq!(
+            got.first(),
+            Some(&HarnessEvent::SessionProviderBound {
+                provider_session_id: "thr_1".into(),
+            })
+        );
+    }
+}

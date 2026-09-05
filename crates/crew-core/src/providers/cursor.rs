@@ -359,3 +359,160 @@ fn pretty_tool(name: &str) -> String {
     }
     name.to_string()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crew_protocol::{HarnessEvent, ToolStatus};
+    use serde_json::json;
+
+    fn rec(value: Value) -> Map<String, Value> {
+        value.as_object().cloned().expect("object")
+    }
+
+    fn events(line: &Value) -> Vec<HarnessEvent> {
+        let rec = rec(line.clone());
+        let mut out = Vec::new();
+        if let Some(chat_id) = session_id_from_event(&rec) {
+            out.push(HarnessEvent::SessionProviderBound {
+                provider_session_id: chat_id,
+            });
+        }
+        let type_name = string_field(Some(&rec), "type");
+        if type_name.as_deref() == Some("assistant") {
+            if let Some(text) = assistant_delta_text(&rec) {
+                out.push(HarnessEvent::MessageDelta { text });
+            }
+            return out;
+        }
+        if type_name.as_deref() == Some("thinking")
+            && string_field(Some(&rec), "subtype").as_deref() == Some("delta")
+        {
+            if let Some(text) = rec.get("text").and_then(Value::as_str).filter(|t| !t.is_empty()) {
+                out.push(HarnessEvent::ReasoningDelta {
+                    text: text.to_string(),
+                });
+            }
+            return out;
+        }
+        if type_name.as_deref() == Some("tool_call") {
+            if let Some(call) = parse_tool_call(&rec) {
+                out.push(HarnessEvent::ToolStarted {
+                    call_id: call.call_id.clone(),
+                    name: call.name,
+                    title: call.title,
+                });
+                if call.phase == ToolPhase::Completed {
+                    out.push(HarnessEvent::ToolUpdated {
+                        call_id: call.call_id,
+                        title: None,
+                        status: Some(tool_status(call.failed)),
+                    });
+                }
+            }
+            return out;
+        }
+        if type_name.as_deref() == Some("result") {
+            if let Some(error) = turn_failed(&rec) {
+                out.push(HarnessEvent::SessionError { message: error });
+            }
+            out.push(HarnessEvent::MessageCompleted {});
+            out.push(HarnessEvent::TurnCompleted {
+                usage: Some(turn_usage(&rec)),
+            });
+        }
+        out
+    }
+
+    #[test]
+    fn assistant_delta_emits_message_delta() {
+        let got = events(&json!({
+            "type": "assistant",
+            "timestamp_ms": 1,
+            "message": { "content": [{ "type": "text", "text": "hello" }] }
+        }));
+        assert_eq!(got, vec![HarnessEvent::MessageDelta { text: "hello".into() }]);
+    }
+
+    #[test]
+    fn tool_call_started_emits_tool_started() {
+        let got = events(&json!({
+            "type": "tool_call",
+            "subtype": "started",
+            "call_id": "t1",
+            "tool_call": { "shellToolCall": { "args": { "command": "ls" } } }
+        }));
+        assert_eq!(
+            got,
+            vec![HarnessEvent::ToolStarted {
+                call_id: "t1".into(),
+                name: "Shell".into(),
+                title: "ls".into(),
+            }]
+        );
+    }
+
+    #[test]
+    fn tool_call_completed_marks_the_tool_done() {
+        let got = events(&json!({
+            "type": "tool_call",
+            "subtype": "completed",
+            "call_id": "t1",
+            "tool_call": {
+                "function": {
+                    "name": "read",
+                    "arguments": { "path": "/tmp/a.ts" },
+                    "result": { "success": { "exitCode": 0 } }
+                }
+            }
+        }));
+        assert_eq!(
+            got,
+            vec![
+                HarnessEvent::ToolStarted {
+                    call_id: "t1".into(),
+                    name: "read".into(),
+                    title: "Read a.ts".into(),
+                },
+                HarnessEvent::ToolUpdated {
+                    call_id: "t1".into(),
+                    title: None,
+                    status: Some(ToolStatus::Completed),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn result_is_error_emits_session_error() {
+        let got = events(&json!({
+            "type": "result",
+            "is_error": true,
+            "result": "Cursor exploded",
+            "usage": { "inputTokens": 1, "outputTokens": 2 }
+        }));
+        assert_eq!(
+            got.first(),
+            Some(&HarnessEvent::SessionError {
+                message: "Cursor exploded".into(),
+            })
+        );
+        assert!(matches!(got.last(), Some(HarnessEvent::TurnCompleted { .. })));
+    }
+
+    #[test]
+    fn session_id_binds_the_provider_session() {
+        let got = events(&json!({
+            "type": "assistant",
+            "timestamp_ms": 1,
+            "session_id": "chat_9",
+            "message": { "content": [{ "type": "text", "text": "ok" }] }
+        }));
+        assert_eq!(
+            got.first(),
+            Some(&HarnessEvent::SessionProviderBound {
+                provider_session_id: "chat_9".into(),
+            })
+        );
+    }
+}
