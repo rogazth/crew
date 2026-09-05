@@ -14,6 +14,7 @@ let child: ChildProcessWithoutNullStreams | null = null;
 let info: DaemonInfo | null = null;
 let stopping = false;
 let restarts = 0;
+let starting: Promise<void> | null = null;
 
 function crewdPath(): string {
   if (app.isPackaged) return path.join(process.resourcesPath, "crewd");
@@ -109,55 +110,64 @@ function recover(error: unknown): Promise<void> {
 }
 
 async function startDaemon(): Promise<void> {
-  const dir = app.getPath("userData");
-  const proc = spawn(crewdPath(), ["--data-dir", dir], {
-    stdio: ["pipe", "pipe", "inherit"],
-    detached: true,
-  });
-  child = proc;
-  const exited = new Promise<Error>((resolve) => {
-    proc.once("exit", (code) => {
-      if (child === proc) child = null;
-      resolve(new Error(`crewd exited ${code ?? ""}`.trim()));
+  const run = (async () => {
+    const dir = app.getPath("userData");
+    const proc = spawn(crewdPath(), ["--data-dir", dir], {
+      stdio: ["pipe", "pipe", "inherit"],
+      detached: true,
     });
-  });
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const timedOut = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => {
-      reject(new Error(`crewd did not handshake within 10s.\nData directory: ${dir}`));
-    }, 10_000);
-  });
-  try {
-    info = await Promise.race([
-      readInfo(proc),
-      exited.then((error) => Promise.reject(error)),
-      timedOut,
-    ]);
-  } catch (error) {
-    if (proc.exitCode === null && proc.signalCode === null) proc.kill("SIGTERM");
-    if (error instanceof Error && error.message.startsWith("crewd did not handshake")) {
-      dialog.showErrorBox("Crew", error.message);
-      app.quit();
-      throw error;
+    child = proc;
+    const exited = new Promise<Error>((resolve) => {
+      proc.once("exit", (code) => {
+        if (child === proc) child = null;
+        resolve(new Error(`crewd exited ${code ?? ""}`.trim()));
+      });
+    });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timedOut = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        reject(new Error(`crewd did not handshake within 10s.\nData directory: ${dir}`));
+      }, 10_000);
+    });
+    try {
+      info = await Promise.race([
+        readInfo(proc),
+        exited.then((error) => Promise.reject(error)),
+        timedOut,
+      ]);
+    } catch (error) {
+      if (proc.exitCode === null && proc.signalCode === null) proc.kill("SIGTERM");
+      if (error instanceof Error && error.message.startsWith("crewd did not handshake")) {
+        dialog.showErrorBox("Crew", error.message);
+        app.quit();
+        throw error;
+      }
+      await recover(error);
+      return;
+    } finally {
+      if (timer) clearTimeout(timer);
     }
-    await recover(error);
-    return;
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
-  void exited.then((error) => {
-    if (stopping) return;
-    void recover(error).catch((retryError) => {
-      dialog.showErrorBox("Crew", String(retryError));
-      app.quit();
+    void exited.then((error) => {
+      if (stopping) return;
+      void recover(error).catch((retryError) => {
+        dialog.showErrorBox("Crew", String(retryError));
+        app.quit();
+      });
     });
-  });
+  })();
+  starting = run;
+  try {
+    await run;
+  } finally {
+    if (starting === run) starting = null;
+  }
 }
 
-function stopDaemon(): Promise<void> {
-  const proc = child;
-  if (!proc) return Promise.resolve();
+async function stopDaemon(): Promise<void> {
   stopping = true;
+  if (starting) await starting.catch(() => {});
+  const proc = child;
+  if (!proc) return;
   return new Promise((resolve) => {
     const timer = setTimeout(() => {
       console.error("crewd still running after SIGTERM; continuing quit");
@@ -267,7 +277,7 @@ app.on("window-all-closed", () => {
 });
 
 app.on("before-quit", (event) => {
-  if (stopping || !child) return;
+  if (stopping || (!child && !starting)) return;
   event.preventDefault();
   void stopDaemon().then(() => app.quit());
 });
