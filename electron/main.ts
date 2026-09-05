@@ -45,24 +45,38 @@ function allowedUrl(url: string): boolean {
   }
 }
 
+function parseInfo(line: string): DaemonInfo | null {
+  try {
+    const parsed = JSON.parse(line) as DaemonInfo;
+    if (typeof parsed.url === "string" && typeof parsed.token === "string") return parsed;
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+function ignoreStdout(proc: ChildProcessWithoutNullStreams): void {
+  proc.stdout.removeAllListeners();
+  proc.stdout.resume();
+}
+
 function readInfo(proc: ChildProcessWithoutNullStreams): Promise<DaemonInfo> {
   return new Promise((resolve, reject) => {
     const lines = createInterface({ input: proc.stdout });
+    let settled = false;
     const fail = (error: Error) => {
+      if (settled) return;
+      settled = true;
       lines.close();
       reject(error);
     };
-    lines.once("line", (line) => {
+    lines.on("line", (line) => {
+      const parsed = parseInfo(line);
+      if (!parsed || settled) return;
+      settled = true;
       lines.close();
-      try {
-        const parsed = JSON.parse(line) as DaemonInfo;
-        if (typeof parsed.url !== "string" || typeof parsed.token !== "string") {
-          throw new Error("crewd handshake was not {url, token}");
-        }
-        resolve(parsed);
-      } catch (error) {
-        fail(error instanceof Error ? error : new Error(String(error)));
-      }
+      ignoreStdout(proc);
+      resolve(parsed);
     });
     proc.once("error", (error) => fail(error));
   });
