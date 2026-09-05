@@ -17,7 +17,7 @@ use crate::providers::claude::{
     is_message_start, is_subagent_message, parse_control_cancel_id, parse_control_request, parse_questions,
     persona_prompt as claude_persona, session_id_from_message, stream_text_delta, to_permission_result,
     to_question_result, tool_label as claude_tool_label, tool_results_from_user_message, tool_start_from_event,
-    try_parse_json_record, turn_failed as claude_turn_failed, turn_usage as claude_turn_usage, ClaudeControlRequest,
+    try_parse_json_record, turn_usage as claude_turn_usage, ClaudeControlRequest,
     ClaudeSpawn,
 };
 use crate::providers::codex::{
@@ -43,6 +43,13 @@ const STDERR_TAIL: usize = 12;
 const TOOLS_HINT: &str = "Crew also gives you tools (the crew MCP server) to list and create agents in this workspace and to manage routines: standing orders that wake an agent on a schedule with a saved prompt. Use them when asked to schedule work or set up an agent.";
 
 type Answers = HashMap<String, String>;
+
+#[derive(Debug, Clone)]
+enum TurnOutcome {
+    Completed,
+    Failed(String),
+    Stopped,
+}
 
 enum QuestionReply {
     Answers(Answers),
@@ -83,7 +90,7 @@ struct ClaudeLive {
     active: bool,
     initialized: bool,
     init_tx: Option<Sender<bool>>,
-    turn_tx: Option<Sender<Result<(), String>>>,
+    turn_tx: Option<Sender<TurnOutcome>>,
     emitted_assistant: String,
     stderr: Vec<String>,
     idle_gen: u64,
@@ -92,7 +99,7 @@ struct ClaudeLive {
 struct StreamLive {
     cancelled: bool,
     active: bool,
-    turn_tx: Option<Sender<Result<(), String>>>,
+    turn_tx: Option<Sender<TurnOutcome>>,
     emitted_assistant: String,
     seen_tools: HashSet<String>,
     stderr: Vec<String>,
@@ -185,17 +192,13 @@ impl TurnHost {
         self.transcripts.set_status(&params.session_id, "working", session.provider_session_id.as_deref());
         let host = self.clone();
         thread::spawn(move || {
-            let _ = host.run_turn(session, params);
+            host.run_turn(session, params);
         });
         Ok(TurnStarted { working: true })
     }
 
     pub fn stop(&self, session_id: &str) -> Result<(), String> {
         self.cancel(session_id, true);
-        self.transcripts.apply(session_id, HarnessEvent::SessionEnded { code: None });
-        self.transcripts.append_system(session_id, "Stopped");
-        self.transcripts.set_status(session_id, "idle", None);
-        self.transcripts.flush(session_id);
         Ok(())
     }
 
@@ -269,18 +272,12 @@ impl TurnHost {
                         session_id,
                         HarnessEvent::SessionEnded { code },
                     );
-                    self.fail_turn(session_id, exit_message("Claude Code", code, &stderr));
+                    self.signal(session_id, TurnOutcome::Failed(exit_message("Claude Code", code, &stderr)));
                     return;
-                }
-                if let Some(tx) = row.turn_tx.take() {
-                    let _ = tx.send(Ok(()));
                 }
             }
             Live::Codex(row) | Live::Cursor(row) => {
                 if row.cancelled || row.settled {
-                    if let Some(tx) = row.turn_tx.take() {
-                        let _ = tx.send(Ok(()));
-                    }
                     return;
                 }
                 let mid = row.active;
@@ -293,55 +290,27 @@ impl TurnHost {
                 if mid {
                     drop(map);
                     self.transcripts.apply(session_id, HarnessEvent::SessionEnded { code });
-                    self.fail_turn(session_id, exit_message(provider, code, &stderr));
+                    self.signal(session_id, TurnOutcome::Failed(exit_message(provider, code, &stderr)));
                 }
             }
         }
     }
 
-    fn fail_turn(&self, session_id: &str, message: String) {
-        self.transcripts
-            .apply(session_id, HarnessEvent::SessionError { message: message.clone() });
+    fn signal(&self, session_id: &str, outcome: TurnOutcome) {
         let mut map = self.lock();
         if let Some(live) = map.get_mut(session_id) {
             match live {
                 Live::Claude(row) => {
                     row.active = false;
                     if let Some(tx) = row.turn_tx.take() {
-                        let _ = tx.send(Err(message));
+                        let _ = tx.send(outcome);
                     }
                 }
                 Live::Codex(row) | Live::Cursor(row) => {
                     row.active = false;
                     row.settled = true;
                     if let Some(tx) = row.turn_tx.take() {
-                        let _ = tx.send(Err(message));
-                    }
-                }
-            }
-        }
-        self.transcripts.set_status(session_id, "error", None);
-        self.transcripts.flush(session_id);
-        self.detach(session_id);
-    }
-
-    fn finish_ok(&self, session_id: &str) {
-        self.transcripts.set_status(session_id, "done", None);
-        self.transcripts.flush(session_id);
-        let mut map = self.lock();
-        if let Some(live) = map.get_mut(session_id) {
-            match live {
-                Live::Claude(row) => {
-                    row.active = false;
-                    if let Some(tx) = row.turn_tx.take() {
-                        let _ = tx.send(Ok(()));
-                    }
-                }
-                Live::Codex(row) | Live::Cursor(row) => {
-                    row.active = false;
-                    row.settled = true;
-                    if let Some(tx) = row.turn_tx.take() {
-                        let _ = tx.send(Ok(()));
+                        let _ = tx.send(outcome);
                     }
                 }
             }
@@ -363,6 +332,30 @@ impl TurnHost {
                 None
             }
         };
+        {
+            let mut map = self.lock();
+            if let Some(live) = map.get_mut(session_id) {
+                match live {
+                    Live::Claude(row) => {
+                        row.cancelled = true;
+                        row.mute = true;
+                        row.active = false;
+                        drop_pending(row);
+                        if let Some(tx) = row.turn_tx.take() {
+                            let _ = tx.send(TurnOutcome::Stopped);
+                        }
+                    }
+                    Live::Codex(row) | Live::Cursor(row) => {
+                        row.cancelled = true;
+                        row.active = false;
+                        row.settled = true;
+                        if let Some(tx) = row.turn_tx.take() {
+                            let _ = tx.send(TurnOutcome::Stopped);
+                        }
+                    }
+                }
+            }
+        }
         if let Some(id) = interrupt {
             let _ = self.agents.write(
                 session_id,
@@ -371,29 +364,6 @@ impl TurnHost {
             );
             thread::sleep(INTERRUPT_GRACE);
         }
-        let mut map = self.lock();
-        if let Some(live) = map.get_mut(session_id) {
-            match live {
-                Live::Claude(row) => {
-                    row.cancelled = true;
-                    row.mute = true;
-                    row.active = false;
-                    drop_pending(row);
-                    if let Some(tx) = row.turn_tx.take() {
-                        let _ = tx.send(Ok(()));
-                    }
-                }
-                Live::Codex(row) | Live::Cursor(row) => {
-                    row.cancelled = true;
-                    row.active = false;
-                    row.settled = true;
-                    if let Some(tx) = row.turn_tx.take() {
-                        let _ = tx.send(Ok(()));
-                    }
-                }
-            }
-        }
-        drop(map);
         if kill {
             self.agents.kill(session_id);
             self.detach(session_id);
@@ -433,37 +403,48 @@ impl TurnHost {
         Some((info.exe, vec!["--mcp".into()]))
     }
 
-    fn run_turn(&self, session: crate::session::Session, params: TurnStart) -> Result<(), String> {
+    fn run_turn(&self, session: crate::session::Session, params: TurnStart) {
         let session_id = session.id.clone();
-        let result = match session.provider.as_str() {
+        let outcome = match session.provider.as_str() {
             "claude" => self.run_claude(session, params),
             "codex" => self.run_codex(session, params),
             "cursor" => self.run_cursor(session, params),
-            other => Err(format!("{other} agents are not wired up yet. Pick Claude for now.")),
+            other => TurnOutcome::Failed(format!(
+                "{other} agents are not wired up yet. Pick Claude for now."
+            )),
         };
-        match &result {
-            Ok(()) => self.finish_ok(&session_id),
-            Err(error) => {
+        match outcome {
+            TurnOutcome::Completed => {
+                self.transcripts.set_status(&session_id, "done", None);
+                self.transcripts.flush(&session_id);
+            }
+            TurnOutcome::Failed(message) => {
                 self.transcripts.apply(
                     &session_id,
-                    HarnessEvent::SessionError {
-                        message: error.clone(),
-                    },
+                    HarnessEvent::SessionError { message },
                 );
                 self.transcripts.set_status(&session_id, "error", None);
                 self.transcripts.flush(&session_id);
             }
+            TurnOutcome::Stopped => {
+                self.transcripts
+                    .apply(&session_id, HarnessEvent::SessionEnded { code: None });
+                self.transcripts.append_system(&session_id, "Stopped");
+                self.transcripts.set_status(&session_id, "idle", None);
+                self.transcripts.flush(&session_id);
+            }
         }
-        result
     }
 
-    fn run_claude(&self, session: crate::session::Session, params: TurnStart) -> Result<(), String> {
+    fn run_claude(&self, session: crate::session::Session, params: TurnStart) -> TurnOutcome {
         let session_id = session.id.clone();
-        self.ensure_claude(&session, &params)?;
+        if let Err(error) = self.ensure_claude(&session, &params) {
+            return TurnOutcome::Failed(error);
+        }
         let (turn_rx, claude_session_id) = {
             let mut map = self.lock();
             let Some(Live::Claude(live)) = map.get_mut(&session_id) else {
-                return Err("Claude session is gone".into());
+                return TurnOutcome::Failed("Claude session is gone".into());
             };
             live.cancelled = false;
             live.mute = false;
@@ -480,9 +461,13 @@ impl TurnHost {
         let inline: HashSet<String> = images.iter().map(|image| image.path.clone()).collect();
         let files = path_list(&params, &inline);
         let message = build_claude_user_message(&claude_session_id, params.text.trim(), &files, &images);
-        self.agents
-            .write(&session_id, &serde_json::to_string(&message).unwrap_or_default())?;
-        let outcome = turn_rx.recv().unwrap_or(Ok(()));
+        if let Err(error) = self
+            .agents
+            .write(&session_id, &serde_json::to_string(&message).unwrap_or_default())
+        {
+            return TurnOutcome::Failed(error);
+        }
+        let outcome = turn_rx.recv().unwrap_or(TurnOutcome::Failed("Turn channel closed".into()));
         self.schedule_claude_idle(&session_id);
         outcome
     }
@@ -659,7 +644,7 @@ impl TurnHost {
         });
     }
 
-    fn run_codex(&self, session: crate::session::Session, params: TurnStart) -> Result<(), String> {
+    fn run_codex(&self, session: crate::session::Session, params: TurnStart) -> TurnOutcome {
         let session_id = session.id.clone();
         self.agents.kill(&session_id);
         let resume = if params.fresh.unwrap_or(false) {
@@ -667,8 +652,14 @@ impl TurnHost {
         } else {
             session.provider_session_id.clone().filter(|id| !id.is_empty())
         };
-        let (turn_rx, _) = self.install_stream(&session_id, params.cwd.clone(), true)?;
-        let path = self.resolve_bin("codex")?;
+        let (turn_rx, _) = match self.install_stream(&session_id, params.cwd.clone(), true) {
+            Ok(pair) => pair,
+            Err(error) => return TurnOutcome::Failed(error),
+        };
+        let path = match self.resolve_bin("codex") {
+            Ok(path) => path,
+            Err(error) => return TurnOutcome::Failed(error),
+        };
         let mcp = self.mcp();
         let prompt = build_codex_prompt(
             if resume.is_some() { "" } else { &session.name },
@@ -678,7 +669,7 @@ impl TurnHost {
             resume.is_none(),
             mcp.as_ref().map(|_| TOOLS_HINT),
         );
-        self.agents.spawn(
+        if let Err(error) = self.agents.spawn(
             session_id.clone(),
             path,
             build_codex_spawn_args(&CodexSpawn {
@@ -695,7 +686,9 @@ impl TurnHost {
             }),
             params.cwd,
             Some(self.agent_env(&session_id)),
-        )?;
+        ) {
+            return TurnOutcome::Failed(error);
+        }
         self.agents.close_stdin(&session_id);
         if let Some(resume) = resume {
             self.transcripts.apply(
@@ -707,21 +700,27 @@ impl TurnHost {
         }
         self.transcripts
             .apply(&session_id, HarnessEvent::SessionStarted {});
-        let result = turn_rx.recv().unwrap_or(Ok(()));
+        let outcome = turn_rx.recv().unwrap_or(TurnOutcome::Failed("Turn channel closed".into()));
         self.agents.kill(&session_id);
         self.detach(&session_id);
-        result
+        outcome
     }
 
-    fn run_cursor(&self, session: crate::session::Session, params: TurnStart) -> Result<(), String> {
+    fn run_cursor(&self, session: crate::session::Session, params: TurnStart) -> TurnOutcome {
         let session_id = session.id.clone();
         let resume = if params.fresh.unwrap_or(false) {
             None
         } else {
             session.provider_session_id.clone().filter(|id| !id.is_empty())
         };
-        let (turn_rx, _) = self.install_stream(&session_id, params.cwd.clone(), false)?;
-        let path = self.resolve_bin("cursor-agent")?;
+        let (turn_rx, _) = match self.install_stream(&session_id, params.cwd.clone(), false) {
+            Ok(pair) => pair,
+            Err(error) => return TurnOutcome::Failed(error),
+        };
+        let path = match self.resolve_bin("cursor-agent") {
+            Ok(path) => path,
+            Err(error) => return TurnOutcome::Failed(error),
+        };
         let mcp = self.mcp();
         let body = with_attached_files(params.text.trim(), &path_list(&params, &HashSet::new()));
         let persona = if resume.is_some() {
@@ -734,7 +733,7 @@ impl TurnHost {
             ))
         };
         let prompt = with_persona(&body, persona.as_deref());
-        self.agents.spawn(
+        if let Err(error) = self.agents.spawn(
             session_id.clone(),
             path,
             build_cursor_spawn_args(&CursorSpawn {
@@ -749,7 +748,9 @@ impl TurnHost {
             }),
             params.cwd,
             Some(self.agent_env(&session_id)),
-        )?;
+        ) {
+            return TurnOutcome::Failed(error);
+        }
         if let Some(resume) = resume {
             self.transcripts.apply(
                 &session_id,
@@ -760,10 +761,10 @@ impl TurnHost {
         }
         self.transcripts
             .apply(&session_id, HarnessEvent::SessionStarted {});
-        let result = turn_rx.recv().unwrap_or(Ok(()));
+        let outcome = turn_rx.recv().unwrap_or(TurnOutcome::Failed("Turn channel closed".into()));
         self.agents.kill(&session_id);
         self.detach(&session_id);
-        result
+        outcome
     }
 
     fn install_stream(
@@ -771,7 +772,7 @@ impl TurnHost {
         session_id: &str,
         _cwd: String,
         _codex: bool,
-    ) -> Result<(mpsc::Receiver<Result<(), String>>, ()), String> {
+    ) -> Result<(mpsc::Receiver<TurnOutcome>, ()), String> {
         let (tx, rx) = mpsc::channel();
         let live = StreamLive {
             cancelled: false,
@@ -849,8 +850,6 @@ impl TurnHost {
 
         let mut events = Vec::new();
         let mut bind: Option<String> = None;
-        let mut fail: Option<String> = None;
-        let mut finished = false;
         {
             let mut map = self.lock();
             let Some(Live::Claude(live)) = map.get_mut(session_id) else {
@@ -900,18 +899,12 @@ impl TurnHost {
                     });
                 }
             } else if type_name.as_deref() == Some("result") {
-                if let Some(error) = claude_turn_failed(&rec) {
-                    if !live.cancelled {
-                        fail = Some(error);
-                    }
-                }
                 events.push(HarnessEvent::TurnCompleted {
                     usage: Some(claude_turn_usage(&rec)),
                 });
                 live.active = false;
-                finished = true;
                 if let Some(tx) = live.turn_tx.take() {
-                    let _ = tx.send(Ok(()));
+                    let _ = tx.send(TurnOutcome::Completed);
                 }
             }
         }
@@ -925,14 +918,6 @@ impl TurnHost {
         }
         for event in events {
             self.transcripts.apply(session_id, event);
-        }
-        if let Some(error) = fail {
-            self.transcripts
-                .apply(session_id, HarnessEvent::SessionError { message: error });
-        }
-        if finished {
-            self.transcripts.set_status(session_id, "done", None);
-            self.transcripts.flush(session_id);
         }
     }
 
@@ -1128,7 +1113,7 @@ impl TurnHost {
                     usage: codex_turn_usage(&rec),
                 },
             );
-            self.finish_ok(session_id);
+            self.signal(session_id, TurnOutcome::Completed);
             return;
         }
         if type_name.as_deref() == Some("turn.failed") {
@@ -1136,7 +1121,7 @@ impl TurnHost {
                 .apply(session_id, HarnessEvent::MessageCompleted {});
             self.transcripts
                 .apply(session_id, HarnessEvent::TurnCompleted { usage: None });
-            self.finish_ok(session_id);
+            self.signal(session_id, TurnOutcome::Completed);
             return;
         }
         let Some(item) = item_from_event(&rec) else {
@@ -1359,7 +1344,7 @@ impl TurnHost {
                 usage: Some(cursor_turn_usage(&rec)),
             },
         );
-        self.finish_ok(session_id);
+        self.signal(session_id, TurnOutcome::Completed);
     }
 }
 
