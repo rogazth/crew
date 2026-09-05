@@ -58,6 +58,7 @@ impl Handle {
     }
 
     pub fn shutdown(&self) {
+        self.turns.transcripts().flush_all();
         if let Some(tx) = self.shutdown.lock().unwrap_or_else(|e| e.into_inner()).take() {
             let _ = tx.send(());
         }
@@ -381,10 +382,21 @@ async fn run(
     let _ = ready_tx.send(Ok(format!("ws://{addr}")));
     hub.set_runtime(tokio::runtime::Handle::current());
     hosts.turns.set_runtime(tokio::runtime::Handle::current());
+    hosts.turns.transcripts().set_runtime(tokio::runtime::Handle::current());
 
+    #[cfg(unix)]
+    let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).ok();
     loop {
         tokio::select! {
             _ = &mut stop_rx => break,
+            _ = async {
+                #[cfg(unix)]
+                if let Some(signal) = terminate.as_mut() {
+                    signal.recv().await;
+                    return;
+                }
+                std::future::pending::<()>().await;
+            } => break,
             accepted = listener.accept() => {
                 let Ok((stream, _)) = accepted else { break };
                 let hosts = hosts.clone();
@@ -396,6 +408,7 @@ async fn run(
             }
         }
     }
+    hosts.turns.transcripts().flush_all();
 }
 
 async fn handle_socket(stream: TcpStream, hosts: Hosts, hub: Arc<Hub>, token: String) {

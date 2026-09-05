@@ -1,8 +1,11 @@
 use std::collections::{HashMap, HashSet};
+use std::future::Future;
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
+
+use tokio::sync::oneshot;
 
 use crew_protocol::{
     ApprovalDecision, ApprovalResolution, HarnessEvent, ToolStatus, TurnStart, TurnStarted,
@@ -89,8 +92,8 @@ struct ClaudeLive {
     mute: bool,
     active: bool,
     initialized: bool,
-    init_tx: Option<Sender<bool>>,
-    turn_tx: Option<Sender<TurnOutcome>>,
+    init_tx: Option<oneshot::Sender<bool>>,
+    turn_tx: Option<oneshot::Sender<TurnOutcome>>,
     emitted_assistant: String,
     stderr: Vec<String>,
     idle_gen: u64,
@@ -99,7 +102,7 @@ struct ClaudeLive {
 struct StreamLive {
     cancelled: bool,
     active: bool,
-    turn_tx: Option<Sender<TurnOutcome>>,
+    turn_tx: Option<oneshot::Sender<TurnOutcome>>,
     emitted_assistant: String,
     seen_tools: HashSet<String>,
     stderr: Vec<String>,
@@ -167,6 +170,18 @@ impl TurnHost {
                 thread::sleep(dur);
                 f();
             });
+        }
+    }
+
+    fn block_on<T>(&self, fut: impl Future<Output = T> + Send) -> T {
+        if let Some(handle) = self.runtime.lock().unwrap_or_else(|e| e.into_inner()).clone() {
+            handle.block_on(fut)
+        } else {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("runtime")
+                .block_on(fut)
         }
     }
 
@@ -362,7 +377,15 @@ impl TurnHost {
                 &serde_json::to_string(&build_control_request(&id, json!({ "subtype": "interrupt" })))
                     .unwrap_or_default(),
             );
-            thread::sleep(INTERRUPT_GRACE);
+            if kill {
+                let host = self.clone();
+                let session_id = session_id.to_string();
+                self.after(INTERRUPT_GRACE, move || {
+                    host.agents.kill(&session_id);
+                    host.detach(&session_id);
+                });
+                return;
+            }
         }
         if kill {
             self.agents.kill(session_id);
@@ -453,7 +476,7 @@ impl TurnHost {
             live.tools_by_index.clear();
             live.tools_by_id.clear();
             live.idle_gen += 1;
-            let (tx, rx) = mpsc::channel();
+            let (tx, rx) = oneshot::channel();
             live.turn_tx = Some(tx);
             (rx, live.claude_session_id.clone())
         };
@@ -467,7 +490,9 @@ impl TurnHost {
         {
             return TurnOutcome::Failed(error);
         }
-        let outcome = turn_rx.recv().unwrap_or(TurnOutcome::Failed("Turn channel closed".into()));
+        let outcome = self
+            .block_on(turn_rx)
+            .unwrap_or(TurnOutcome::Failed("Turn channel closed".into()));
         self.schedule_claude_idle(&session_id);
         outcome
     }
@@ -567,7 +592,7 @@ impl TurnHost {
             Some(self.agent_env(&session_id)),
         )?;
 
-        let (init_tx, init_rx) = mpsc::channel();
+        let (init_tx, init_rx) = oneshot::channel();
         {
             let mut map = self.lock();
             if let Some(Live::Claude(live)) = map.get_mut(&session_id) {
@@ -588,9 +613,9 @@ impl TurnHost {
             &serde_json::to_string(&build_control_request(&ctrl, json!({ "subtype": "initialize" })))
                 .unwrap_or_default(),
         )?;
-        match init_rx.recv_timeout(INIT_TIMEOUT) {
-            Ok(true) => {}
-            Ok(false) => {
+        match self.block_on(async { tokio::time::timeout(INIT_TIMEOUT, init_rx).await }) {
+            Ok(Ok(true)) => {}
+            Ok(Ok(false)) | Ok(Err(_)) => {
                 let stderr = self
                     .lock()
                     .get(&session_id)
@@ -700,7 +725,9 @@ impl TurnHost {
         }
         self.transcripts
             .apply(&session_id, HarnessEvent::SessionStarted {});
-        let outcome = turn_rx.recv().unwrap_or(TurnOutcome::Failed("Turn channel closed".into()));
+        let outcome = self
+            .block_on(turn_rx)
+            .unwrap_or(TurnOutcome::Failed("Turn channel closed".into()));
         self.agents.kill(&session_id);
         self.detach(&session_id);
         outcome
@@ -761,7 +788,9 @@ impl TurnHost {
         }
         self.transcripts
             .apply(&session_id, HarnessEvent::SessionStarted {});
-        let outcome = turn_rx.recv().unwrap_or(TurnOutcome::Failed("Turn channel closed".into()));
+        let outcome = self
+            .block_on(turn_rx)
+            .unwrap_or(TurnOutcome::Failed("Turn channel closed".into()));
         self.agents.kill(&session_id);
         self.detach(&session_id);
         outcome
@@ -772,8 +801,8 @@ impl TurnHost {
         session_id: &str,
         _cwd: String,
         _codex: bool,
-    ) -> Result<(mpsc::Receiver<TurnOutcome>, ()), String> {
-        let (tx, rx) = mpsc::channel();
+    ) -> Result<(oneshot::Receiver<TurnOutcome>, ()), String> {
+        let (tx, rx) = oneshot::channel();
         let live = StreamLive {
             cancelled: false,
             active: true,

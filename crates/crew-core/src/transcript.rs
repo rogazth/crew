@@ -4,6 +4,7 @@ use std::thread;
 use std::time::Duration;
 
 use crew_protocol::{Block, HarnessEvent, TranscriptSnapshot};
+use tokio::task::AbortHandle;
 
 use crate::blocks::{apply_event, parse_blocks};
 use crate::session;
@@ -28,7 +29,8 @@ struct Live {
     status: String,
     seq: u64,
     dirty: bool,
-    saving: bool,
+    save_gen: u64,
+    save: Option<AbortHandle>,
 }
 
 #[derive(Clone)]
@@ -36,6 +38,7 @@ pub struct TranscriptHub {
     store: Store,
     inner: Arc<Mutex<HashMap<String, Live>>>,
     events: Arc<Mutex<Option<Arc<dyn TranscriptEvents>>>>,
+    runtime: Arc<Mutex<Option<tokio::runtime::Handle>>>,
 }
 
 impl TranscriptHub {
@@ -44,11 +47,16 @@ impl TranscriptHub {
             store,
             inner: Arc::new(Mutex::new(HashMap::new())),
             events: Arc::new(Mutex::new(None)),
+            runtime: Arc::new(Mutex::new(None)),
         }
     }
 
     pub fn set_events(&self, events: Arc<dyn TranscriptEvents>) {
         *self.events.lock().unwrap_or_else(|e| e.into_inner()) = Some(events);
+    }
+
+    pub fn set_runtime(&self, handle: tokio::runtime::Handle) {
+        *self.runtime.lock().unwrap_or_else(|e| e.into_inner()) = Some(handle);
     }
 
     fn events(&self) -> Option<Arc<dyn TranscriptEvents>> {
@@ -72,7 +80,8 @@ impl TranscriptHub {
             status,
             seq: 0,
             dirty: false,
-            saving: false,
+            save_gen: 0,
+            save: None,
         }
     }
 
@@ -85,7 +94,8 @@ impl TranscriptHub {
                 status: row.status.clone(),
                 seq: row.seq,
                 dirty: row.dirty,
-                saving: row.saving,
+                save_gen: row.save_gen,
+                save: None,
             };
         }
         drop(map);
@@ -97,7 +107,8 @@ impl TranscriptHub {
             status: created.status.clone(),
             seq: created.seq,
             dirty: false,
-            saving: false,
+            save_gen: 0,
+            save: None,
         });
         created
     }
@@ -208,34 +219,79 @@ impl TranscriptHub {
             let Some(row) = map.get_mut(session_id) else {
                 return;
             };
+            if let Some(save) = row.save.take() {
+                save.abort();
+            }
             if !row.dirty {
                 return;
             }
             row.dirty = false;
-            row.saving = false;
+            row.save_gen += 1;
             row.blocks.clone()
         };
         let json = serde_json::to_string(&blocks).unwrap_or_else(|_| "[]".into());
         let _ = session::set_blocks(&self.store, session_id.to_string(), json);
     }
 
+    pub fn flush_all(&self) {
+        let ids: Vec<String> = {
+            let map = self.lock();
+            map.iter()
+                .filter(|(_, row)| row.dirty)
+                .map(|(id, _)| id.clone())
+                .collect()
+        };
+        for id in ids {
+            self.flush(&id);
+        }
+    }
+
     fn schedule_save(&self, session_id: &str) {
-        {
+        let gen = {
             let mut map = self.lock();
             let Some(row) = map.get_mut(session_id) else {
                 return;
             };
-            if row.saving {
-                return;
+            if let Some(save) = row.save.take() {
+                save.abort();
             }
-            row.saving = true;
-        }
+            row.save_gen += 1;
+            row.save_gen
+        };
         let hub = self.clone();
         let id = session_id.to_string();
-        thread::spawn(move || {
-            thread::sleep(Duration::from_millis(SAVE_MS));
-            hub.flush(&id);
-        });
+        if let Some(handle) = self.runtime.lock().unwrap_or_else(|e| e.into_inner()).clone() {
+            let wait_id = id.clone();
+            let task = handle.spawn(async move {
+                tokio::time::sleep(Duration::from_millis(SAVE_MS)).await;
+                hub.flush_if(&wait_id, gen);
+            });
+            if let Some(row) = self.lock().get_mut(&id) {
+                if row.save_gen == gen {
+                    row.save = Some(task.abort_handle());
+                } else {
+                    task.abort();
+                }
+            }
+        } else {
+            thread::spawn(move || {
+                thread::sleep(Duration::from_millis(SAVE_MS));
+                hub.flush_if(&id, gen);
+            });
+        }
+    }
+
+    fn flush_if(&self, session_id: &str, gen: u64) {
+        {
+            let map = self.lock();
+            let Some(row) = map.get(session_id) else {
+                return;
+            };
+            if row.save_gen != gen || !row.dirty {
+                return;
+            }
+        }
+        self.flush(session_id);
     }
 }
 
@@ -243,6 +299,7 @@ impl TranscriptHub {
 mod tests {
     use super::*;
     use crate::store::Store;
+    use crew_protocol::BlockRole;
 
     fn tmp_store() -> Store {
         let dir = std::env::temp_dir().join(format!("crew-transcript-{}", uuid::Uuid::new_v4()));
