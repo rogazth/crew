@@ -65,8 +65,18 @@ function readInfo(proc: ChildProcessWithoutNullStreams): Promise<DaemonInfo> {
       }
     });
     proc.once("error", (error) => fail(error));
-    proc.once("exit", (code) => fail(new Error(`crewd exited ${code ?? ""}`.trim())));
   });
+}
+
+function recover(error: unknown): Promise<void> {
+  if (stopping) return Promise.resolve();
+  if (restarts === 0) {
+    restarts += 1;
+    return startDaemon().then(() => {
+      win?.reload();
+    });
+  }
+  return Promise.reject(error instanceof Error ? error : new Error(String(error)));
 }
 
 async function startDaemon(): Promise<void> {
@@ -75,22 +85,25 @@ async function startDaemon(): Promise<void> {
     detached: true,
   });
   child = proc;
-  info = await readInfo(proc);
-  proc.once("exit", () => {
-    if (child === proc) child = null;
+  const exited = new Promise<Error>((resolve) => {
+    proc.once("exit", (code) => {
+      if (child === proc) child = null;
+      resolve(new Error(`crewd exited ${code ?? ""}`.trim()));
+    });
+  });
+  try {
+    info = await Promise.race([readInfo(proc), exited.then((error) => Promise.reject(error))]);
+  } catch (error) {
+    if (proc.exitCode === null && proc.signalCode === null) proc.kill("SIGTERM");
+    await recover(error);
+    return;
+  }
+  void exited.then((error) => {
     if (stopping) return;
-    if (restarts === 0) {
-      restarts += 1;
-      void startDaemon()
-        .then(() => win?.reload())
-        .catch((error) => {
-          dialog.showErrorBox("Crew", String(error));
-          app.quit();
-        });
-      return;
-    }
-    dialog.showErrorBox("Crew", "The Crew daemon stopped unexpectedly.");
-    app.quit();
+    void recover(error).catch((retryError) => {
+      dialog.showErrorBox("Crew", String(retryError));
+      app.quit();
+    });
   });
 }
 
