@@ -147,10 +147,15 @@ function listenDomDrops(handler: (event: HostDragDrop) => void): void {
     if (!hasFiles(event)) return;
     event.preventDefault();
     const files = event.dataTransfer ? Array.from(event.dataTransfer.files) : [];
+    const paths: string[] = [];
+    for (const file of files) {
+      const path = pathForFile(file);
+      if (path) paths.push(path);
+    }
     handler({
       type: "drop",
       position: position(event),
-      paths: files.map(pathForFile).filter(Boolean),
+      paths,
     });
   };
   window.addEventListener("dragover", onDragOver);

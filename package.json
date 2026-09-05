@@ -11,7 +11,7 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "app": "node scripts/app.mjs",
-    "app:build": "tauri build",
+    "app:build": "node scripts/app-build.mjs",
     "prepare": "husky",
     "lint": "eslint src",
     "doctor": "react-doctor src --no-score",
@@ -52,6 +52,7 @@
     "@types/react-dom": "^19",
     "@vitejs/plugin-react": "^4.6.0",
     "electron": "^39.8.10",
+    "electron-builder": "^26.15.3",
     "esbuild": "^0.25.12",
     "eslint": "^10.9.1",
     "eslint-plugin-react-hooks": "^7.1.1",
@@ -68,7 +69,41 @@
   },
   "allowScripts": {
     "electron": true,
+    "electron-builder": true,
     "esbuild": true,
     "esbuild@0.28.2": true
+  },
+  "build": {
+    "appId": "com.relay.crew",
+    "productName": "Crew",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "electron-dist/**/*",
+      "dist/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "target/release/crewd",
+        "to": "crewd"
+      }
+    ],
+    "mac": {
+      "target": [
+        {
+          "target": "dir",
+          "arch": [
+            "arm64"
+          ]
+        }
+      ],
+      "category": "public.app-category.developer-tools",
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false,
+      "identity": null
+    }
   }
 }

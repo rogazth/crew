@@ -1,6 +1,7 @@
 node_modules/
 dist/
 electron-dist/
+release/
 target/
 .DS_Store
 *.local
