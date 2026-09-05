@@ -421,6 +421,7 @@ async fn handle_socket(stream: TcpStream, hosts: Hosts, hub: Arc<Hub>, token: St
     }
 
     let (client_id, mut outgoing) = hub.subscribe();
+    replay_busy_sessions(&hosts, &hub, client_id);
     let writer = tokio::spawn(async move {
         while let Some(msg) = outgoing.recv().await {
             let sent = match msg {
@@ -466,6 +467,33 @@ async fn handle_socket(stream: TcpStream, hosts: Hosts, hub: Arc<Hub>, token: St
 
     hub.unsubscribe(client_id);
     writer.abort();
+}
+
+fn replay_busy_sessions(hosts: &Hosts, hub: &Hub, client_id: u64) {
+    let Ok(rows) = session::list_busy(&hosts.store) else {
+        return;
+    };
+    let updated_at = app_state::now_millis();
+    for row in rows {
+        if row.status != "working" && row.status != "needs-input" {
+            continue;
+        }
+        let Ok(event) = proto::event(
+            "session-status",
+            proto::SessionStatusEvent {
+                session_id: row.id,
+                status: row.status,
+                provider_session_id: row.provider_session_id,
+                updated_at,
+            },
+        ) else {
+            continue;
+        };
+        let Ok(text) = serde_json::to_string(&event) else {
+            continue;
+        };
+        hub.send(client_id, Outgoing::Text(text));
+    }
 }
 
 fn enqueue_pty_input(

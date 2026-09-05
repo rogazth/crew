@@ -61,6 +61,21 @@ pub fn list(store: &Store, workspace_id: String) -> Result<Vec<Session>, String>
     })
 }
 
+pub fn list_busy(store: &Store) -> Result<Vec<Session>, String> {
+    store.with(|conn| {
+        let mut stmt = conn.prepare_cached(
+            "SELECT id, workspace_id, kind, name, provider, model,
+                    provider_session_id, description, notifications,
+                    status, created_at, updated_at, autonomy
+             FROM sessions
+             WHERE status IN ('working', 'needs-input')
+             ORDER BY updated_at ASC",
+        )?;
+        let rows = stmt.query_map([], |row| row_to_session(row, 0))?;
+        rows.collect()
+    })
+}
+
 pub fn get(store: &Store, id: String) -> Result<Option<Session>, String> {
     store.with(|conn| {
         conn.prepare_cached(&format!("SELECT {SESSION_COLUMNS} FROM sessions s WHERE s.id = ?1"))?
