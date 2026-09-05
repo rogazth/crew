@@ -44,7 +44,17 @@ export async function homeDir(): Promise<string> {
   return "";
 }
 
+function allowedUrl(url: string): boolean {
+  try {
+    const protocol = new URL(url).protocol;
+    return protocol === "http:" || protocol === "https:" || protocol === "mailto:";
+  } catch {
+    return false;
+  }
+}
+
 export async function openUrl(url: string): Promise<void> {
+  if (!allowedUrl(url)) return;
   const host = crewHost();
   if (host) return host.openUrl(url);
   window.open(url, "_blank", "noopener,noreferrer");
