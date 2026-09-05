@@ -15,6 +15,7 @@ type KnownSession = { name: string; notifications: boolean };
 
 const patchListeners = new Set<PatchListener>();
 const statuses = new Map<string, SessionStatus>();
+const seenDone = new Set<string>();
 const known = new Map<string, KnownSession>();
 const waiters = new Map<string, Array<(ok: boolean) => void>>();
 let foreground: string | null = null;
@@ -59,7 +60,7 @@ export async function reconcile(sessions: Session[]): Promise<Session[]> {
 /** The chat the user is looking at; its turns end quiet instead of flagged. */
 export function setForeground(id: string | null): void {
   foreground = id;
-  if (id && statuses.get(id) === "done") markIdle(id);
+  if (id && (statuses.get(id) === "done" || seenDone.has(id))) markIdle(id);
 }
 
 export function isWorking(id: string): boolean {
@@ -131,6 +132,7 @@ export async function dispose(id: string): Promise<void> {
   if (busy) await api.turnStop(id).catch(() => undefined);
   transcript.forget(id);
   statuses.delete(id);
+  seenDone.delete(id);
   finishWaiters(id, false);
 }
 
@@ -150,16 +152,15 @@ function onStatus(event: SessionStatusEvent) {
   const id = event.sessionId;
   const status = event.status as SessionStatus;
   statuses.set(id, status);
+  if (status === "done") seenDone.add(id);
+  if (status === "idle" || status === "working" || status === "error") seenDone.delete(id);
   transcript.setWorking(id, status === "working" || status === "needs-input");
   const display = status === "done" && foreground === id ? "idle" : status;
-  if (display === "idle" && status === "done") markIdle(id);
-  else {
-    patch(id, {
-      status: display,
-      updatedAt: event.updatedAt,
-      ...(event.providerSessionId ? { providerSessionId: event.providerSessionId } : {}),
-    });
-  }
+  patch(id, {
+    status: display,
+    updatedAt: event.updatedAt,
+    ...(event.providerSessionId ? { providerSessionId: event.providerSessionId } : {}),
+  });
   if (status === "done" || status === "idle" || status === "error") {
     finishWaiters(id, status !== "error");
     if (status !== "idle" && !isWatching(id)) {
@@ -170,10 +171,8 @@ function onStatus(event: SessionStatusEvent) {
 }
 
 function markIdle(id: string) {
-  statuses.set(id, "idle");
   transcript.setWorking(id, false);
   patch(id, { status: "idle", updatedAt: Date.now() });
-  void api.setSessionStatus(id, "idle").catch(() => {});
 }
 
 function remember(session: Session) {
