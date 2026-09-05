@@ -161,6 +161,10 @@ function onStatus(event: SessionStatusEvent) {
     updatedAt: event.updatedAt,
     ...(event.providerSessionId ? { providerSessionId: event.providerSessionId } : {}),
   });
+  if (status === "needs-input" && !isWatching(id)) {
+    const name = sessionName(id);
+    if (name) void notify(name, "Needs your input");
+  }
   if (status === "done" || status === "idle" || status === "error") {
     finishWaiters(id, status !== "error");
     if (status !== "idle" && !isWatching(id)) {
