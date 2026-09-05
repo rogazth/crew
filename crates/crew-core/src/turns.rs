@@ -504,33 +504,33 @@ impl TurnHost {
         } else {
             Autonomy::Ask
         };
-        {
+        let moved = {
             let map = self.lock();
-            if let Some(Live::Claude(live)) = map.get(&session_id) {
-                if !params.fresh.unwrap_or(false)
-                    && live.cwd == params.cwd
-                    && live.autonomy == autonomy
-                    && live.model == session.model
-                {
-                    return Ok(());
+            match map.get(&session_id) {
+                Some(Live::Claude(live)) => {
+                    if !params.fresh.unwrap_or(false)
+                        && live.cwd == params.cwd
+                        && live.autonomy == autonomy
+                        && live.model == session.model
+                    {
+                        return Ok(());
+                    }
+                    live.cwd != params.cwd
+                        || live.autonomy != autonomy
+                        || live.model != session.model
                 }
+                _ => false,
             }
-        }
+        };
         if params.fresh.unwrap_or(false) || self.lock().contains_key(&session_id) {
             self.agents.kill(&session_id);
             self.detach(&session_id);
         }
+        if moved {
+            let _ = session::set_provider_session(&self.store, session_id.clone(), String::new());
+        }
 
         let stored = session.provider_session_id.clone().filter(|id| !id.is_empty());
-        let moved = stored.is_some() && {
-            let map = self.lock();
-            map.get(&session_id)
-                .and_then(|live| match live {
-                    Live::Claude(row) => Some(row.cwd.as_str() != params.cwd),
-                    _ => None,
-                })
-                .unwrap_or(false)
-        };
         let resume = if moved || params.fresh.unwrap_or(false) {
             None
         } else {
