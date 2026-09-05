@@ -3,12 +3,14 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
+  "main": "electron-dist/main.cjs",
+  "productName": "Crew",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
-    "app": "tauri dev",
+    "app": "node scripts/app.mjs",
     "app:build": "tauri build",
     "prepare": "husky",
     "lint": "eslint src",
@@ -49,6 +51,8 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "@vitejs/plugin-react": "^4.6.0",
+    "electron": "^39.8.10",
+    "esbuild": "^0.25.12",
     "eslint": "^10.9.1",
     "eslint-plugin-react-hooks": "^7.1.1",
     "eslint-plugin-react-refresh": "^0.5.6",
@@ -63,6 +67,8 @@
     "vitest": "^3.2.7"
   },
   "allowScripts": {
+    "electron": true,
+    "esbuild": true,
     "esbuild@0.28.2": true
   }
 }

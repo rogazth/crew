@@ -8,6 +8,7 @@ const liveTransport = fileURLToPath(new URL("./src/lib/client/transport.ts", imp
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  base: "./",
   // CREW_MOCK=1 swaps the client transport and Tauri plugins so the chrome opens in a browser.
   resolve: {
     alias: {
@@ -31,6 +32,7 @@ export default defineConfig({
   // format. Vite's IIFE default cannot split.
   worker: { format: "es" },
   server: {
+    host: "127.0.0.1",
     port: 1420,
     strictPort: true,
     watch: { ignored: ["**/src-tauri/**", "**/reference/**"] },
