@@ -17,7 +17,7 @@ use crate::providers::claude::{
     is_message_start, is_subagent_message, parse_control_cancel_id, parse_control_request, parse_questions,
     persona_prompt as claude_persona, session_id_from_message, stream_text_delta, to_permission_result,
     to_question_result, tool_label as claude_tool_label, tool_results_from_user_message, tool_start_from_event,
-    try_parse_json_record, turn_usage as claude_turn_usage, ClaudeControlRequest,
+    try_parse_json_record, turn_failed as claude_turn_failed, turn_usage as claude_turn_usage, ClaudeControlRequest,
     ClaudeSpawn,
 };
 use crate::providers::codex::{
@@ -899,12 +899,20 @@ impl TurnHost {
                     });
                 }
             } else if type_name.as_deref() == Some("result") {
+                let failed = if live.cancelled {
+                    None
+                } else {
+                    claude_turn_failed(&rec)
+                };
                 events.push(HarnessEvent::TurnCompleted {
                     usage: Some(claude_turn_usage(&rec)),
                 });
                 live.active = false;
                 if let Some(tx) = live.turn_tx.take() {
-                    let _ = tx.send(TurnOutcome::Completed);
+                    let _ = tx.send(match failed {
+                        Some(message) => TurnOutcome::Failed(message),
+                        None => TurnOutcome::Completed,
+                    });
                 }
             }
         }
@@ -1099,11 +1107,13 @@ impl TurnHost {
                 },
             );
         }
-        if let Some(fatal) = stream_error_message(&rec) {
-            self.transcripts
-                .apply(session_id, HarnessEvent::SessionError { message: fatal });
-        }
         let type_name = string_field(Some(&rec), "type");
+        if type_name.as_deref() == Some("error") {
+            if let Some(fatal) = stream_error_message(&rec) {
+                self.transcripts
+                    .apply(session_id, HarnessEvent::SessionError { message: fatal });
+            }
+        }
         if type_name.as_deref() == Some("turn.completed") {
             self.transcripts
                 .apply(session_id, HarnessEvent::MessageCompleted {});
@@ -1117,11 +1127,12 @@ impl TurnHost {
             return;
         }
         if type_name.as_deref() == Some("turn.failed") {
+            let message = stream_error_message(&rec).unwrap_or_else(|| "Codex turn failed.".into());
             self.transcripts
                 .apply(session_id, HarnessEvent::MessageCompleted {});
             self.transcripts
                 .apply(session_id, HarnessEvent::TurnCompleted { usage: None });
-            self.signal(session_id, TurnOutcome::Completed);
+            self.signal(session_id, TurnOutcome::Failed(message));
             return;
         }
         let Some(item) = item_from_event(&rec) else {
@@ -1314,10 +1325,7 @@ impl TurnHost {
         if type_name.as_deref() != Some("result") {
             return;
         }
-        if let Some(error) = cursor_turn_failed(&rec) {
-            self.transcripts
-                .apply(session_id, HarnessEvent::SessionError { message: error });
-        }
+        let failed = cursor_turn_failed(&rec);
         let fallback = string_field(Some(&rec), "result");
         let saw = {
             let map = self.lock();
@@ -1325,7 +1333,7 @@ impl TurnHost {
         };
         if !saw {
             if let Some(fallback) = fallback {
-                if cursor_turn_failed(&rec).is_none() {
+                if failed.is_none() {
                     if let Some(Live::Cursor(live)) = self.lock().get_mut(session_id) {
                         live.saw_text = true;
                     }
@@ -1344,7 +1352,11 @@ impl TurnHost {
                 usage: Some(cursor_turn_usage(&rec)),
             },
         );
-        self.signal(session_id, TurnOutcome::Completed);
+        if let Some(error) = failed {
+            self.signal(session_id, TurnOutcome::Failed(error));
+        } else {
+            self.signal(session_id, TurnOutcome::Completed);
+        }
     }
 }
 

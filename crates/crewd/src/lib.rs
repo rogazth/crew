@@ -1275,7 +1275,56 @@ for line in sys.stdin:
         path
     }
 
+    fn write_fake_claude_error(dir: &std::path::Path) -> std::path::PathBuf {
+        let path = dir.join("fake-claude-error");
+        std::fs::write(
+            &path,
+            r#"#!/usr/bin/env python3
+import json, sys
+print(json.dumps({"type":"system","subtype":"init"}), flush=True)
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    try:
+        rec = json.loads(line)
+    except Exception:
+        continue
+    if rec.get("type") == "control_request":
+        print(json.dumps({"type":"control_response"}), flush=True)
+        continue
+    if rec.get("type") != "user":
+        continue
+    print(json.dumps({"type":"result","subtype":"error","is_error":True,"result":"Claude exploded"}), flush=True)
+"#,
+        )
+        .expect("fake claude error");
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        path
+    }
+
+    fn write_fake_codex_failed(dir: &std::path::Path) -> std::path::PathBuf {
+        let path = dir.join("fake-codex-failed");
+        std::fs::write(
+            &path,
+            r#"#!/usr/bin/env python3
+import json, time
+time.sleep(0.05)
+print(json.dumps({"type":"turn.failed","error":{"message":"Codex exploded"}}), flush=True)
+"#,
+        )
+        .expect("fake codex");
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        path
+    }
+
     async fn seed_agent(ws: &mut Ws, cwd: &str) -> String {
+        seed_agent_provider(ws, cwd, "claude").await
+    }
+
+    async fn seed_agent_provider(ws: &mut Ws, cwd: &str, provider: &str) -> String {
         send_json(
             ws,
             &Request {
@@ -1296,7 +1345,7 @@ for line in sys.stdin:
                     "workspaceId": workspace.id,
                     "kind": "agent",
                     "name": "A",
-                    "provider": "claude",
+                    "provider": provider,
                     "model": "m",
                     "description": "",
                     "autonomy": "ask"
@@ -1426,6 +1475,100 @@ for line in sys.stdin:
                 assert_eq!(row.decided, Some(proto::ApprovalDecision::Allow));
             }
         }
+        handle.shutdown();
+    }
+
+    async fn start_turn(ws: &mut Ws, id: u32, session_id: &str, cwd: &str) {
+        send_json(
+            ws,
+            &Request {
+                id,
+                method: "turn_start".into(),
+                params: serde_json::json!({
+                    "sessionId": session_id,
+                    "cwd": cwd,
+                    "text": "hi"
+                }),
+            },
+        )
+        .await;
+        assert!(wait_response(ws, id).await.ok);
+    }
+
+    async fn wait_status(ws: &mut Ws, session_id: &str, want: &str) -> proto::SessionStatusEvent {
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            let msg = tokio::time::timeout_at(deadline, ws.next())
+                .await
+                .expect("status timeout")
+                .expect("closed")
+                .expect("ws");
+            if let Message::Text(text) = msg {
+                if let Ok(event) = serde_json::from_str::<proto::Event>(text.as_ref()) {
+                    if event.event == "session-status" {
+                        if let Ok(status) = serde_json::from_value::<proto::SessionStatusEvent>(event.payload) {
+                            if status.session_id == session_id && status.status == want {
+                                return status;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    async fn transcript_of(ws: &mut Ws, id: u32, session_id: &str) -> proto::TranscriptSnapshot {
+        send_json(
+            ws,
+            &Request {
+                id,
+                method: "transcript_get".into(),
+                params: serde_json::json!({ "sessionId": session_id }),
+            },
+        )
+        .await;
+        serde_json::from_value(wait_response(ws, id).await.result.expect("snap")).expect("snapshot")
+    }
+
+    fn system_errors(snap: &proto::TranscriptSnapshot) -> Vec<&str> {
+        snap.blocks
+            .iter()
+            .filter(|b| b.role == proto::BlockRole::System)
+            .map(|b| b.text.as_str())
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn claude_is_error_fails_the_turn() {
+        let dir = test_dir("turn-claude-error");
+        let handle = test_serve(&dir);
+        let fake = write_fake_claude_error(&dir);
+        handle.override_agent_binary("claude", fake.to_string_lossy().into_owned());
+        let mut ws = connect_authed(&handle).await;
+        let session_id = seed_agent(&mut ws, dir.to_str().unwrap()).await;
+        start_turn(&mut ws, 3, &session_id, dir.to_str().unwrap()).await;
+        wait_status(&mut ws, &session_id, "error").await;
+        let snap = transcript_of(&mut ws, 4, &session_id).await;
+        assert_eq!(snap.status, "error");
+        let errors = system_errors(&snap);
+        assert_eq!(errors, vec!["Claude exploded"]);
+        handle.shutdown();
+    }
+
+    #[tokio::test]
+    async fn codex_turn_failed_fails_the_turn() {
+        let dir = test_dir("turn-codex-failed");
+        let handle = test_serve(&dir);
+        let fake = write_fake_codex_failed(&dir);
+        handle.override_agent_binary("codex", fake.to_string_lossy().into_owned());
+        let mut ws = connect_authed(&handle).await;
+        let session_id = seed_agent_provider(&mut ws, dir.to_str().unwrap(), "codex").await;
+        start_turn(&mut ws, 3, &session_id, dir.to_str().unwrap()).await;
+        wait_status(&mut ws, &session_id, "error").await;
+        let snap = transcript_of(&mut ws, 4, &session_id).await;
+        assert_eq!(snap.status, "error");
+        let errors = system_errors(&snap);
+        assert_eq!(errors, vec!["Codex exploded"]);
         handle.shutdown();
     }
 
