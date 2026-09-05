@@ -2,7 +2,10 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use base64::Engine as _;
+use crew_protocol::{AttachedFile, AttachedFileKind};
 use serde::Serialize;
+
+use crate::providers::InlineImage;
 
 /// Above this the in-memory fuzzy match on the frontend stops feeling instant.
 const MAX_PROJECT_FILES: usize = 20_000;
@@ -157,6 +160,42 @@ pub fn read_base64(path: &str) -> Result<FileBytes, String> {
     })
 }
 
+pub fn image_mime(name: &str) -> Option<&'static str> {
+    match Path::new(name)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("png") => Some("image/png"),
+        Some("jpg") | Some("jpeg") => Some("image/jpeg"),
+        Some("gif") => Some("image/gif"),
+        Some("webp") => Some("image/webp"),
+        _ => None,
+    }
+}
+
+pub fn is_image(file: &AttachedFile) -> bool {
+    matches!(file.kind, Some(AttachedFileKind::Image))
+        || (file.kind.is_none() && image_mime(&file.name).is_some())
+}
+
+pub fn load_inline_images(files: &[AttachedFile]) -> Vec<InlineImage> {
+    files
+        .iter()
+        .filter(|file| is_image(file))
+        .filter_map(|file| {
+            let media_type = image_mime(&file.name)?.to_string();
+            let bytes = read_base64(&file.path).ok()?;
+            Some(InlineImage {
+                path: file.path.clone(),
+                media_type,
+                data: bytes.data,
+            })
+        })
+        .collect()
+}
+
 pub fn exists(path: &str) -> bool {
     std::path::Path::new(path).exists()
 }
@@ -192,12 +231,37 @@ fn safe_extension(extension: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::safe_extension;
+    use super::{image_mime, load_inline_images, safe_extension};
+    use crew_protocol::{AttachedFile, AttachedFileKind};
 
     #[test]
     fn extension_keeps_only_alphanumerics() {
         assert_eq!(safe_extension("png"), "png");
         assert_eq!(safe_extension("../../etc/passwd"), "etcpassw");
         assert_eq!(safe_extension(""), "bin");
+    }
+
+    #[test]
+    fn image_mime_knows_inline_types() {
+        assert_eq!(image_mime("shot.PNG"), Some("image/png"));
+        assert_eq!(image_mime("notes.txt"), None);
+    }
+
+    #[test]
+    fn load_inline_images_reads_bytes() {
+        let dir = std::env::temp_dir().join(format!("crew-inline-{}", uuid::Uuid::new_v4()));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("pic.png");
+        std::fs::write(&path, [0x89, 0x50, 0x4e, 0x47]).unwrap();
+        let files = [AttachedFile {
+            name: "pic.png".into(),
+            path: path.to_string_lossy().into_owned(),
+            kind: Some(AttachedFileKind::Image),
+            size: None,
+        }];
+        let images = load_inline_images(&files);
+        assert_eq!(images.len(), 1);
+        assert_eq!(images[0].media_type, "image/png");
+        assert!(!images[0].data.is_empty());
     }
 }

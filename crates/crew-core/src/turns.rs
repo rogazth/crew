@@ -476,8 +476,10 @@ impl TurnHost {
             live.turn_tx = Some(tx);
             (rx, live.claude_session_id.clone())
         };
-        let files = path_list(&params);
-        let message = build_claude_user_message(&claude_session_id, params.text.trim(), &files, &[]);
+        let images = crate::files::load_inline_images(params.files.as_deref().unwrap_or(&[]));
+        let inline: HashSet<String> = images.iter().map(|image| image.path.clone()).collect();
+        let files = path_list(&params, &inline);
+        let message = build_claude_user_message(&claude_session_id, params.text.trim(), &files, &images);
         self.agents
             .write(&session_id, &serde_json::to_string(&message).unwrap_or_default())?;
         let outcome = turn_rx.recv().unwrap_or(Ok(()));
@@ -672,7 +674,7 @@ impl TurnHost {
             if resume.is_some() { "" } else { &session.name },
             if resume.is_some() { "" } else { &session.description },
             &params.text,
-            &path_list(&params),
+            &path_list(&params, &HashSet::new()),
             resume.is_none(),
             mcp.as_ref().map(|_| TOOLS_HINT),
         );
@@ -721,7 +723,7 @@ impl TurnHost {
         let (turn_rx, _) = self.install_stream(&session_id, params.cwd.clone(), false)?;
         let path = self.resolve_bin("cursor-agent")?;
         let mcp = self.mcp();
-        let body = with_attached_files(params.text.trim(), &path_list(&params));
+        let body = with_attached_files(params.text.trim(), &path_list(&params, &HashSet::new()));
         let persona = if resume.is_some() {
             None
         } else {
@@ -1461,11 +1463,13 @@ fn drop_pending(live: &mut ClaudeLive) {
     }
 }
 
-fn path_list(params: &TurnStart) -> Vec<String> {
+fn path_list(params: &TurnStart, skip: &HashSet<String>) -> Vec<String> {
     let mut paths = params.mentions.clone().unwrap_or_default();
     if let Some(files) = &params.files {
         for file in files {
-            paths.push(file.path.clone());
+            if !skip.contains(&file.path) {
+                paths.push(file.path.clone());
+            }
         }
     }
     paths
