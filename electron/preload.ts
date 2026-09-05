@@ -6,11 +6,5 @@ contextBridge.exposeInMainWorld("crewHost", {
   homeDir: () => ipcRenderer.invoke("home-dir"),
   openUrl: (url: string) => ipcRenderer.invoke("open-url", url),
   notify: (title: string, body: string) => ipcRenderer.invoke("notify", { title, body }),
-  pathForFile: (file: File) => {
-    try {
-      return webUtils.getPathForFile(file);
-    } catch {
-      return "";
-    }
-  },
+  pathForFile: (file: File) => webUtils.getPathForFile(file),
 });

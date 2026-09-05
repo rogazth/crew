@@ -100,8 +100,16 @@ function listenDomDrops(handler: (event: HostDragDrop) => void): void {
     const files = event.dataTransfer ? Array.from(event.dataTransfer.files) : [];
     const paths: string[] = [];
     for (const file of files) {
-      const path = pathForFile(file);
-      if (path) paths.push(path);
+      try {
+        const path = pathForFile(file);
+        if (!path) {
+          console.error(`Drop rejected: no filesystem path for ${file.name || "file"}`);
+          continue;
+        }
+        paths.push(path);
+      } catch (error) {
+        console.error("Drop rejected:", error instanceof Error ? error.message : error);
+      }
     }
     handler({
       type: "drop",
