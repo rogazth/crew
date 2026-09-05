@@ -1177,7 +1177,7 @@ impl TurnHost {
         );
     }
 
-    fn handle_codex_line(&self, session_id: &str, line: &str) {
+    pub(crate) fn handle_codex_line(&self, session_id: &str, line: &str) {
         let Some(rec) = parse_json_line(line) else {
             return;
         };
@@ -1325,7 +1325,7 @@ impl TurnHost {
         }
     }
 
-    fn handle_cursor_line(&self, session_id: &str, line: &str) {
+    pub(crate) fn handle_cursor_line(&self, session_id: &str, line: &str) {
         let Some(rec) = parse_json_line(line) else {
             return;
         };
@@ -1564,6 +1564,65 @@ fn exit_message(provider: &str, code: Option<i32>, stderr: &[String]) -> String 
         format!("{head}.")
     } else {
         format!("{head}.\n{tail}")
+    }
+}
+
+#[cfg(test)]
+pub(crate) struct Applied(Mutex<Vec<HarnessEvent>>);
+
+#[cfg(test)]
+impl Default for Applied {
+    fn default() -> Self {
+        Self(Mutex::new(Vec::new()))
+    }
+}
+
+#[cfg(test)]
+impl Applied {
+    pub(crate) fn take(&self) -> Vec<HarnessEvent> {
+        std::mem::take(&mut *self.0.lock().unwrap_or_else(|e| e.into_inner()))
+    }
+}
+
+#[cfg(test)]
+impl crate::transcript::TranscriptEvents for Applied {
+    fn apply(&self, _session_id: &str, _seq: u64, event: &HarnessEvent) {
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).push(event.clone());
+    }
+
+    fn status(
+        &self,
+        _session_id: &str,
+        _status: &str,
+        _provider_session_id: Option<&str>,
+        _updated_at: i64,
+    ) {
+    }
+}
+
+#[cfg(test)]
+impl TurnHost {
+    pub(crate) fn test_new() -> Self {
+        let dir = std::path::PathBuf::from(format!("/tmp/c{}", &uuid::Uuid::new_v4().simple().to_string()[..10]));
+        let _ = std::fs::create_dir_all(&dir);
+        let store = crate::store::Store::open(dir.join("crew.sqlite3")).expect("store");
+        let transcripts = crate::transcript::TranscriptHub::new(store.clone());
+        let bridge = crate::bridge::Bridge::start(dir).expect("bridge");
+        Self::new(crate::agent::AgentHost::new(), store, transcripts, bridge)
+    }
+
+    pub(crate) fn test_capture(&self) -> Arc<Applied> {
+        let applied = Arc::new(Applied::default());
+        self.transcripts.set_events(applied.clone());
+        applied
+    }
+
+    pub(crate) fn test_install_codex(&self, id: &str) {
+        let _ = self.install_stream(id, String::new(), true);
+    }
+
+    pub(crate) fn test_install_cursor(&self, id: &str) {
+        let _ = self.install_stream(id, String::new(), false);
     }
 }
 

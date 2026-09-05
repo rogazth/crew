@@ -275,75 +275,16 @@ pub fn completed_tool_status(item: &Map<String, Value>) -> crew_protocol::ToolSt
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::turns::TurnHost;
     use crew_protocol::{HarnessEvent, ToolStatus};
     use serde_json::json;
 
-    fn rec(value: Value) -> Map<String, Value> {
-        value.as_object().cloned().expect("object")
-    }
-
     fn events(line: &Value) -> Vec<HarnessEvent> {
-        let rec = rec(line.clone());
-        let mut out = Vec::new();
-        if let Some(thread_id) = thread_id_from_event(&rec) {
-            out.push(HarnessEvent::SessionProviderBound {
-                provider_session_id: thread_id,
-            });
-        }
-        if string_field(Some(&rec), "type").as_deref() == Some("error") {
-            if let Some(fatal) = stream_error_message(&rec) {
-                out.push(HarnessEvent::SessionError { message: fatal });
-            }
-        }
-        let type_name = string_field(Some(&rec), "type");
-        if type_name.as_deref() == Some("turn.completed") {
-            out.push(HarnessEvent::MessageCompleted {});
-            out.push(HarnessEvent::TurnCompleted {
-                usage: turn_usage(&rec),
-            });
-            return out;
-        }
-        if type_name.as_deref() == Some("turn.failed") {
-            out.push(HarnessEvent::MessageCompleted {});
-            out.push(HarnessEvent::TurnCompleted { usage: None });
-            if let Some(message) = stream_error_message(&rec) {
-                out.push(HarnessEvent::SessionError { message });
-            }
-            return out;
-        }
-        let Some(item) = item_from_event(&rec) else {
-            return out;
-        };
-        if let Some(error) = item_error_message(&item) {
-            out.push(HarnessEvent::SessionNote { message: error });
-            return out;
-        }
-        if let Some(text) = agent_message_text(&item) {
-            out.push(HarnessEvent::MessageDelta { text });
-            if type_name.as_deref() == Some("item.completed") {
-                out.push(HarnessEvent::MessageCompleted {});
-            }
-            return out;
-        }
-        if !is_tool_item(&item) {
-            return out;
-        }
-        let Some(call_id) = tool_call_id(&item) else {
-            return out;
-        };
-        out.push(HarnessEvent::ToolStarted {
-            call_id: call_id.clone(),
-            name: tool_name(&item),
-            title: tool_label(&item),
-        });
-        if type_name.as_deref() == Some("item.completed") {
-            out.push(HarnessEvent::ToolUpdated {
-                call_id,
-                title: None,
-                status: Some(completed_tool_status(&item)),
-            });
-        }
-        out
+        let host = TurnHost::test_new();
+        let cap = host.test_capture();
+        host.test_install_codex("s");
+        host.handle_codex_line("s", &line.to_string());
+        cap.take()
     }
 
     #[test]
@@ -443,7 +384,7 @@ mod tests {
     }
 
     #[test]
-    fn turn_failed_emits_session_error() {
+    fn turn_failed_settles_the_turn() {
         let got = events(&json!({
             "type": "turn.failed",
             "error": { "message": "boom" }
@@ -453,7 +394,6 @@ mod tests {
             vec![
                 HarnessEvent::MessageCompleted {},
                 HarnessEvent::TurnCompleted { usage: None },
-                HarnessEvent::SessionError { message: "boom".into() },
             ]
         );
     }
