@@ -22,7 +22,7 @@ Un subproceso `git`, cap de 20.000 archivos, y **81 líneas de TypeScript** haci
 
 Esa velocidad se reproduce en TypeScript puro.
 
-**Rust igual entra al stack, pero por otras razones:** huella de memoria (Tauri usa el WebView del sistema, no empaqueta Chromium ni Node), manejo de PTY, y supervisión de procesos hijos con cleanup garantizado vía `Drop`. Esas tres sí las gana Rust, y son exactamente tus prioridades declaradas.
+**Rust igual entra al stack, pero por otras razones:** `crewd` maneja PTY y supervisión de procesos hijos con cleanup garantizado vía `Drop`. El shell es Electron; la UI habla con el host solo a través de `src/lib/host.ts`.
 
 ## Stack
 
@@ -30,7 +30,7 @@ Copiar R1 casi literal. Está probado, es chico, y lo tienes en el disco.
 
 | Capa | Elección | Evidencia |
 | --- | --- | --- |
-| Shell | Tauri 2 | `Cargo.toml` — sin tokio, sin runtime async pesado |
+| Shell | Electron | `electron/` — Crew.app spawnea `crewd`; `src/lib/host.ts` es el único módulo que toca `window.crewHost` |
 | Backend | Rust, un archivo por concern | 18 archivos, 15k líneas total |
 | Store | `rusqlite` bundled + migraciones versionadas | `session_store.rs:375` |
 | Frontend | React 19 + Vite + TypeScript | sin librería de estado |
@@ -43,21 +43,21 @@ Sin Redux, sin Zustand, sin TanStack Query. R1 no usa ninguno y su UI es la más
 
 ## Estructura
 
-### Rust — `src-tauri/src/`
+### Rust — `crates/`
 
 Un archivo por concern, sin submódulos. Es la convención de R1 y aguanta 15k líneas sin dolor.
 
 ```
-main.rs        despacha: app, `crew --mcp` o `crew call`
-lib.rs         registro de comandos Tauri y estado global
-workspace.rs   NUEVO — crear/listar workspaces (nombre + path)
-agent.rs       ex-harness.rs — spawn/write/kill de CLIs de proveedor
-bridge.rs      socket UNIX: relay de tool calls de los agentes al webview
-mcp.rs         el otro extremo: servidor MCP por stdio y CLI dentro del agente
-pty.rs         terminales interactivas (el 2º elemento)
-files.rs       ex-fs.rs — listar, leer, escribir
-search.rs      git ls-files + git grep
-store.rs       ex-session_store.rs — SQLite + migraciones
+crewd/src/main.rs  daemon: handshake JSON, teardown, `--mcp` / `call`
+crewd/src/lib.rs   websocket + RPC
+workspace.rs       crear/listar workspaces (nombre + path)
+agent.rs           spawn/write/kill de CLIs de proveedor
+bridge.rs          socket UNIX: relay de tool calls de los agentes al renderer
+mcp.rs             servidor MCP por stdio y CLI dentro del agente
+pty.rs             terminales interactivas (el 2º elemento)
+files.rs           listar, leer, escribir
+search.rs          git ls-files + git grep
+store.rs           SQLite + migraciones
 ```
 
 ### Frontend — `src/`
@@ -70,7 +70,7 @@ lib/           lógica pura, testeable sin React
 hooks/         glue de React
 ```
 
-`chrome` = lo que rodea. `surfaces` = lo que se mete en un pane. Si un archivo importa `@tauri-apps/api` y no es de `lib/`, está mal ubicado.
+`chrome` = lo que rodea. `surfaces` = lo que se mete en un pane. Si un archivo toca el host nativo y no es `src/lib/host.ts`, está mal ubicado.
 
 ## Modelo de datos
 
