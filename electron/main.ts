@@ -2,6 +2,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createInterface } from "node:readline";
 import { homedir } from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { app, BrowserWindow, dialog, ipcMain, Menu, Notification, session, shell } from "electron";
 import { buildMenu } from "./menu";
 
@@ -40,6 +41,20 @@ function allowedUrl(url: string): boolean {
   try {
     const protocol = new URL(url).protocol;
     return protocol === "http:" || protocol === "https:" || protocol === "mailto:";
+  } catch {
+    return false;
+  }
+}
+
+const DEV_ORIGIN = "http://127.0.0.1:1420";
+
+function allowedNavigation(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    if (!app.isPackaged) return parsed.origin === DEV_ORIGIN;
+    if (parsed.protocol !== "file:") return false;
+    const root = pathToFileURL(path.join(app.getAppPath(), "dist")).href;
+    return parsed.href === root || parsed.href.startsWith(`${root}/`);
   } catch {
     return false;
   }
@@ -173,6 +188,12 @@ function createWindow(): void {
     },
   });
   win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  win.webContents.on("will-navigate", (event) => {
+    if (!allowedNavigation(event.url)) event.preventDefault();
+  });
+  win.webContents.on("will-redirect", (event) => {
+    if (!allowedNavigation(event.url)) event.preventDefault();
+  });
   if (app.isPackaged) {
     void win.loadFile(path.join(app.getAppPath(), "dist/index.html"));
   } else {
