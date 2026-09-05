@@ -19,3 +19,9 @@ serde.workspace = true
 serde_json.workspace = true
 tokio = { workspace = true, features = ["signal"] }
 tokio-tungstenite.workspace = true
+
+[dev-dependencies]
+futures-util.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "time"] }
+tokio-tungstenite.workspace = true

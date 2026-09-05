@@ -118,9 +118,15 @@ fn wait_for_exit() {
                     else {
                         return;
                     };
+                    let Ok(mut sighup) =
+                        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup())
+                    else {
+                        return;
+                    };
                     tokio::select! {
                         _ = sigterm.recv() => {}
                         _ = sigint.recv() => {}
+                        _ = sighup.recv() => {}
                     }
                 }
                 #[cfg(not(unix))]

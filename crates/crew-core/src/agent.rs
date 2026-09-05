@@ -116,7 +116,7 @@ impl AgentHost {
             return Some(live);
         }
         if let Some(prev) = inner.children.insert(session_id, live) {
-            terminate(&prev);
+            let _ = terminate(&prev);
         }
         None
     }
@@ -151,8 +151,9 @@ impl AgentHost {
             self.shared.kill_all_gen.fetch_add(1, Ordering::SeqCst);
             inner.children.drain().map(|(_, child)| child).collect()
         };
-        for live in kids {
-            terminate(&live);
+        let waits: Vec<_> = kids.iter().filter_map(terminate).collect();
+        for wait in waits {
+            let _ = wait.join();
         }
     }
 
@@ -195,7 +196,7 @@ impl AgentHost {
 
         let (epoch, kill_all, prev) = self.begin_spawn(&session_id);
         if let Some(prev) = prev {
-            terminate(&prev);
+            let _ = terminate(&prev);
         }
 
         let mut cmd = Command::new(&command);
@@ -227,7 +228,7 @@ impl AgentHost {
             exited: AtomicBool::new(false),
         });
         if let Some(rejected) = self.install_spawn(session_id.clone(), epoch, kill_all, live.clone()) {
-            terminate(&rejected);
+            let _ = terminate(&rejected);
             thread::spawn(move || {
                 let _ = child.wait();
                 rejected.exited.store(true, Ordering::Release);
@@ -285,7 +286,7 @@ impl AgentHost {
 
     pub fn kill(&self, session_id: &str) {
         if let Some(live) = self.kill_session(session_id) {
-            terminate(&live);
+            let _ = terminate(&live);
         }
     }
 }
@@ -412,16 +413,16 @@ fn home_dir() -> Option<String> {
 
 /// SIGTERM the group, then SIGKILL it if the child is still ours two seconds
 /// later. `exited` is the guard: once reaped, the pid can be anyone's.
-fn terminate(live: &Arc<LiveChild>) {
+fn terminate(live: &Arc<LiveChild>) -> Option<thread::JoinHandle<()>> {
     if live.pid <= 1 || live.exited.load(Ordering::Acquire) {
-        return;
+        return None;
     }
     let ipid = live.pid as i32;
     unsafe {
         libc::kill(-ipid, libc::SIGTERM);
     }
     let live = live.clone();
-    thread::spawn(move || {
+    Some(thread::spawn(move || {
         thread::sleep(KILL_ESCALATE);
         if live.exited.load(Ordering::Acquire) {
             return;
@@ -429,7 +430,7 @@ fn terminate(live: &Arc<LiveChild>) {
         unsafe {
             libc::kill(-ipid, libc::SIGKILL);
         }
-    });
+    }))
 }
 
 fn kill_group(pid: u32) {

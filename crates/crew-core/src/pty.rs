@@ -227,9 +227,16 @@ impl PtyHost {
             map.drain().map(|(_, live)| live).collect()
         };
         self.inner.streams.lock().unwrap_or_else(|e| e.into_inner()).clear();
-        for live in kids {
-            terminate(&live);
-            close_fd(live.master_fd);
+        let waits: Vec<_> = kids
+            .into_iter()
+            .filter_map(|live| {
+                let wait = terminate(&live);
+                close_fd(live.master_fd);
+                wait
+            })
+            .collect();
+        for wait in waits {
+            let _ = wait.join();
         }
     }
 
@@ -243,7 +250,7 @@ impl PtyHost {
         rows: u16,
     ) -> Result<u32, String> {
         if let Some(prev) = self.remove(&id) {
-            terminate(&prev);
+            let _ = terminate(&prev);
             close_fd(prev.master_fd);
         }
         spawn_unix(self, id, cwd, command, cols.max(2), rows.max(2))
@@ -310,7 +317,7 @@ impl PtyHost {
 
     pub fn kill(&self, id: &str) {
         if let Some(live) = self.remove(id) {
-            terminate(&live);
+            let _ = terminate(&live);
             close_fd(live.master_fd);
         }
     }
@@ -521,9 +528,9 @@ fn apply_path(cmd: &mut std::process::Command) {
 }
 
 /// The child was started with setsid(), so its pid is also its process group.
-fn terminate(live: &Arc<LivePty>) {
+fn terminate(live: &Arc<LivePty>) -> Option<thread::JoinHandle<()>> {
     if live.pid <= 1 || live.exited.load(Ordering::Acquire) {
-        return;
+        return None;
     }
     let ipid = live.pid as i32;
     unsafe {
@@ -533,7 +540,7 @@ fn terminate(live: &Arc<LivePty>) {
         libc::kill(-ipid, libc::SIGTERM);
     }
     let live = live.clone();
-    thread::spawn(move || {
+    Some(thread::spawn(move || {
         thread::sleep(KILL_ESCALATE);
         // Once reaped the kernel may hand this pid to another process.
         if live.exited.load(Ordering::Acquire) {
@@ -543,7 +550,7 @@ fn terminate(live: &Arc<LivePty>) {
             libc::kill(ipid, libc::SIGKILL);
             libc::kill(-ipid, libc::SIGKILL);
         }
-    });
+    }))
 }
 
 fn open_pty(cols: u16, rows: u16) -> Result<(i32, i32), String> {

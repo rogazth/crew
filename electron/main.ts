@@ -72,6 +72,7 @@ function readInfo(proc: ChildProcessWithoutNullStreams): Promise<DaemonInfo> {
 async function startDaemon(): Promise<void> {
   const proc = spawn(crewdPath(), ["--data-dir", app.getPath("userData")], {
     stdio: ["pipe", "pipe", "inherit"],
+    detached: true,
   });
   child = proc;
   info = await readInfo(proc);

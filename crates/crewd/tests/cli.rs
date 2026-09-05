@@ -2,6 +2,10 @@ use std::io::{BufRead, BufReader};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
+use futures_util::{SinkExt, StreamExt};
+use tokio_tungstenite::connect_async;
+use tokio_tungstenite::tungstenite::Message;
+
 fn crewd() -> Command {
     Command::new(env!("CARGO_BIN_EXE_crewd"))
 }
@@ -93,4 +97,123 @@ fn mcp_flag_does_not_print_daemon_info() {
     assert!(!output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(!stdout.contains("ws://"), "{stdout}");
+}
+
+fn alive(pid: u32) -> bool {
+    Command::new("kill")
+        .args(["-0", &pid.to_string()])
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
+}
+
+fn children_of(pid: u32) -> Vec<u32> {
+    let output = Command::new("pgrep")
+        .args(["-P", &pid.to_string()])
+        .output()
+        .expect("pgrep");
+    String::from_utf8_lossy(&output.stdout)
+        .split_whitespace()
+        .filter_map(|word| word.parse().ok())
+        .collect()
+}
+
+fn wait_until(timeout: Duration, mut pred: impl FnMut() -> bool) -> bool {
+    let start = Instant::now();
+    loop {
+        if pred() {
+            return true;
+        }
+        if start.elapsed() > timeout {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+#[tokio::test]
+async fn killed_node_parent_reaps_pty_sleep() {
+    let dir = data_dir("killed-parent");
+    let mut parent = Command::new("node")
+        .arg("-e")
+        .arg(
+            r#"
+const { spawn } = require("node:child_process");
+const crewd = spawn(process.env.CREWD, ["--data-dir", process.env.CREWD_DIR], {
+  stdio: ["pipe", "pipe", "inherit"],
+});
+process.stdout.write(`crewd-pid ${crewd.pid}\n`);
+crewd.stdout.on("data", (chunk) => process.stdout.write(chunk));
+setInterval(() => {}, 1 << 30);
+"#,
+        )
+        .env("CREWD", env!("CARGO_BIN_EXE_crewd"))
+        .env("CREWD_DIR", &dir)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn node parent");
+
+    let stdout = parent.stdout.take().expect("stdout");
+    let mut lines = BufReader::new(stdout).lines();
+    let pid_line = lines.next().expect("pid line").expect("pid line");
+    let crewd_pid: u32 = pid_line
+        .strip_prefix("crewd-pid ")
+        .expect("crewd-pid prefix")
+        .parse()
+        .expect("crewd pid");
+    let handshake = lines.next().expect("handshake").expect("handshake");
+    let info: serde_json::Value = serde_json::from_str(handshake.trim()).expect("json");
+    let url = info["url"].as_str().expect("url").to_string();
+    let token = info["token"].as_str().expect("token").to_string();
+
+    let (mut ws, _) = connect_async(&url).await.expect("connect");
+    ws.send(Message::Text(format!(r#"{{"auth":"{token}"}}"#).into()))
+        .await
+        .expect("auth");
+    ws.send(Message::Text(
+        format!(
+            r#"{{"id":1,"method":"pty_spawn","params":{{"id":"t","cwd":"{}","command":["/bin/sleep","1000"],"cols":80,"rows":24}}}}"#,
+            dir.display()
+        )
+        .into(),
+    ))
+    .await
+    .expect("spawn");
+
+    let mut spawned = false;
+    while let Some(msg) = ws.next().await {
+        let Message::Text(text) = msg.expect("ws") else {
+            continue;
+        };
+        let value: serde_json::Value = serde_json::from_str(&text).expect("response");
+        if value["id"] == 1 {
+            assert!(value["ok"].as_bool().unwrap_or(false), "{text}");
+            spawned = true;
+            break;
+        }
+    }
+    assert!(spawned, "pty_spawn did not finish");
+    drop(ws);
+
+    let sleep_pids = wait_until(Duration::from_secs(2), || !children_of(crewd_pid).is_empty())
+        .then(|| children_of(crewd_pid))
+        .expect("sleep child of crewd");
+    assert!(
+        sleep_pids.iter().any(|&pid| alive(pid)),
+        "sleep {sleep_pids:?} should be running"
+    );
+
+    let status = Command::new("kill")
+        .args(["-9", &parent.id().to_string()])
+        .status()
+        .expect("sigkill parent");
+    assert!(status.success());
+    let _ = parent.wait();
+
+    assert!(
+        wait_until(Duration::from_secs(3), || !alive(crewd_pid) && sleep_pids.iter().all(|&pid| !alive(pid))),
+        "crewd {crewd_pid} or sleep {sleep_pids:?} still alive after parent SIGKILL"
+    );
 }
