@@ -3,31 +3,10 @@ use std::collections::HashMap;
 use crew_protocol::{ApprovalDecision, Question, QuestionOption, TurnUsage};
 use serde_json::{json, Map, Value};
 
-use super::runtime::{Autonomy, InlineImage, ProviderRuntime, TurnInput};
+use super::runtime::{Autonomy, InlineImage};
 use super::{as_record, as_record_owned, clip, finite_number, leaf, string_field};
 
 pub use super::{parse_json_line, try_parse_json_record};
-
-pub struct ClaudeRuntime;
-
-impl ProviderRuntime for ClaudeRuntime {
-    fn send(&self, _input: TurnInput, _on_event: &dyn Fn(crew_protocol::HarnessEvent)) -> Result<(), String> {
-        Err("turn driver not wired".into())
-    }
-    fn cancel(&self, _session_id: &str) {}
-    fn stop(&self, _session_id: &str) {}
-    fn respond_approval(&self, _session_id: &str, _request_id: u64, _decision: ApprovalDecision) {}
-    fn respond_question(
-        &self,
-        _session_id: &str,
-        _request_id: u64,
-        _answers: Option<HashMap<String, String>>,
-    ) {
-    }
-    fn is_live(&self, _session_id: &str) -> bool {
-        false
-    }
-}
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ClaudeSpawn {

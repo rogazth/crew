@@ -3,16 +3,7 @@ pub mod codex;
 pub mod cursor;
 pub mod runtime;
 
-pub use runtime::{Autonomy, InlineImage, ProviderRuntime, TurnInput};
-
-pub fn runtime_for(id: &str) -> Option<&'static dyn ProviderRuntime> {
-    match id {
-        "claude" => Some(&claude::ClaudeRuntime),
-        "codex" => Some(&codex::CodexRuntime),
-        "cursor" => Some(&cursor::CursorRuntime),
-        _ => None,
-    }
-}
+pub use runtime::{Autonomy, InlineImage};
 
 use serde_json::{Map, Value};
 

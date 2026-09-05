@@ -1,35 +1,10 @@
 use crew_protocol::TurnUsage;
 use serde_json::{Map, Value};
 
-use std::collections::HashMap;
-
-use crew_protocol::{ApprovalDecision, HarnessEvent};
-
-use super::runtime::{Autonomy, ProviderRuntime, TurnInput};
+use super::runtime::Autonomy;
 use super::{as_record, as_record_owned, clip, finite_number, leaf, string_field, try_parse_json_record};
 
 pub use super::parse_json_line;
-
-pub struct CodexRuntime;
-
-impl ProviderRuntime for CodexRuntime {
-    fn send(&self, _input: TurnInput, _on_event: &dyn Fn(HarnessEvent)) -> Result<(), String> {
-        Err("turn driver not wired".into())
-    }
-    fn cancel(&self, _session_id: &str) {}
-    fn stop(&self, _session_id: &str) {}
-    fn respond_approval(&self, _session_id: &str, _request_id: u64, _decision: ApprovalDecision) {}
-    fn respond_question(
-        &self,
-        _session_id: &str,
-        _request_id: u64,
-        _answers: Option<HashMap<String, String>>,
-    ) {
-    }
-    fn is_live(&self, _session_id: &str) -> bool {
-        false
-    }
-}
 
 pub struct CodexSpawn {
     pub prompt: String,
