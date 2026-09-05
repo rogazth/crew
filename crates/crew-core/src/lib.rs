@@ -1,6 +1,7 @@
 pub mod agent;
 pub mod blocks;
 pub mod bridge;
+pub mod providers;
 pub mod files;
 pub mod mcp;
 pub mod pty;
