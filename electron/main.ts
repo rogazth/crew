@@ -124,24 +124,17 @@ async function startDaemon(): Promise<void> {
       });
     });
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const timedOut = new Promise<never>((_, reject) => {
+    const timedOut = new Promise<Error>((resolve) => {
       timer = setTimeout(() => {
-        reject(new Error(`crewd did not handshake within 10s.\nData directory: ${dir}`));
+        resolve(new Error(`crewd did not handshake within 10s.\nData directory: ${dir}`));
       }, 10_000);
     });
+    const failed = Promise.race([exited, timedOut]).then((error) => Promise.reject(error));
+    void failed.catch(() => {});
     try {
-      info = await Promise.race([
-        readInfo(proc),
-        exited.then((error) => Promise.reject(error)),
-        timedOut,
-      ]);
+      info = await Promise.race([readInfo(proc), failed]);
     } catch (error) {
       if (proc.exitCode === null && proc.signalCode === null) proc.kill("SIGTERM");
-      if (error instanceof Error && error.message.startsWith("crewd did not handshake")) {
-        dialog.showErrorBox("Crew", error.message);
-        app.quit();
-        throw error;
-      }
       await recover(error);
       return;
     } finally {
