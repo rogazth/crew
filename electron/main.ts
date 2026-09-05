@@ -25,7 +25,7 @@ function csp(): string {
     : "http://localhost:1420 ws://localhost:1420 ws://127.0.0.1:*";
   return [
     "default-src 'self'",
-    "script-src 'self'",
+    app.isPackaged ? "script-src 'self'" : "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
     "style-src 'self' 'unsafe-inline'",
     "img-src 'self' data: blob: https://www.google.com",
     "font-src 'self' data:",
