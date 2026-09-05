@@ -384,6 +384,15 @@ mod tests {
     }
 
     #[test]
+    fn stream_error_settles_without_a_row() {
+        let got = events(&json!({
+            "type": "error",
+            "message": "boom"
+        }));
+        assert!(got.is_empty());
+    }
+
+    #[test]
     fn turn_failed_settles_the_turn() {
         let got = events(&json!({
             "type": "turn.failed",

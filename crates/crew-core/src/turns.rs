@@ -1192,9 +1192,9 @@ impl TurnHost {
         let type_name = string_field(Some(&rec), "type");
         if type_name.as_deref() == Some("error") {
             if let Some(fatal) = stream_error_message(&rec) {
-                self.transcripts
-                    .apply(session_id, HarnessEvent::SessionError { message: fatal });
+                self.signal(session_id, TurnOutcome::Failed(fatal));
             }
+            return;
         }
         if type_name.as_deref() == Some("turn.completed") {
             self.transcripts
