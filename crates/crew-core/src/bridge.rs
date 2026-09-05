@@ -1,20 +1,13 @@
-use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::{json, Value};
 
-/// A reload drops every listener; a call that arrives meanwhile fails instead of hanging.
-const REPLY_TIMEOUT: Duration = Duration::from_secs(15);
-
-/// One line in from `crew --mcp` / `crew call`: who is asking and what for.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Request {
@@ -25,16 +18,7 @@ struct Request {
     params: Value,
 }
 
-#[derive(Serialize, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct ToolCall {
-    pub id: u64,
-    pub session_id: String,
-    pub method: String,
-    pub params: Value,
-}
-
-#[derive(Serialize)]
+#[derive(serde::Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct BridgeInfo {
     pub socket_path: String,
@@ -42,25 +26,17 @@ pub struct BridgeInfo {
     pub exe: String,
 }
 
-pub trait BridgeEvents: Send + Sync {
-    fn tool(&self, call: ToolCall);
-}
-
-struct Pending {
-    stream: UnixStream,
-    call: ToolCall,
+pub trait ToolHost: Send + Sync {
+    fn handle(&self, session_id: &str, method: &str, params: Value) -> Result<Value, String>;
 }
 
 struct Shared {
-    pending: Mutex<HashMap<u64, Pending>>,
-    next_id: AtomicU64,
+    handler: Mutex<Option<Arc<dyn ToolHost>>>,
     socket_path: PathBuf,
     token: String,
-    events: Mutex<Option<Arc<dyn BridgeEvents>>>,
 }
 
-/// Relays tool calls from agent processes to the webview and their replies back.
-/// Rust never interprets a call; the handlers live in `src/lib/agentTools.ts`.
+/// Relays `crew --mcp` / `crew call` into the daemon tool host.
 #[derive(Clone)]
 pub struct Bridge {
     shared: Arc<Shared>,
@@ -77,11 +53,9 @@ impl Bridge {
 
         let bridge = Self {
             shared: Arc::new(Shared {
-                pending: Mutex::new(HashMap::new()),
-                next_id: AtomicU64::new(1),
+                handler: Mutex::new(None),
                 socket_path,
                 token: uuid::Uuid::new_v4().to_string(),
-                events: Mutex::new(None),
             }),
         };
         let serve_bridge = bridge.clone();
@@ -94,35 +68,12 @@ impl Bridge {
         Ok(bridge)
     }
 
-    pub fn set_events(&self, events: Arc<dyn BridgeEvents>) {
-        *self.shared.events.lock().unwrap_or_else(|e| e.into_inner()) = Some(events);
-    }
-
-    fn events(&self) -> Option<Arc<dyn BridgeEvents>> {
-        self.shared.events.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    pub fn set_handler(&self, handler: Arc<dyn ToolHost>) {
+        *self.shared.handler.lock().unwrap_or_else(|e| e.into_inner()) = Some(handler);
     }
 
     pub fn shutdown(&self) {
         let _ = std::fs::remove_file(&self.shared.socket_path);
-    }
-
-    fn take(&self, id: u64) -> Option<UnixStream> {
-        self.shared
-            .pending
-            .lock()
-            .ok()?
-            .remove(&id)
-            .map(|pending| pending.stream)
-    }
-
-    pub fn pending_tools(&self) -> Vec<ToolCall> {
-        self.shared
-            .pending
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .values()
-            .map(|pending| pending.call.clone())
-            .collect()
     }
 
     pub fn info(&self) -> Result<BridgeInfo, String> {
@@ -133,16 +84,6 @@ impl Bridge {
             exe: exe.to_string_lossy().into_owned(),
         })
     }
-
-    pub fn reply(&self, id: u64, response: Value) -> Result<(), String> {
-        match self.take(id) {
-            Some(stream) => {
-                reply(stream, response);
-                Ok(())
-            }
-            None => Err("No call is waiting on that id".into()),
-        }
-    }
 }
 
 fn serve(bridge: Bridge, stream: UnixStream) {
@@ -151,7 +92,6 @@ fn serve(bridge: Bridge, stream: UnixStream) {
         Ok(reader) => reader,
         Err(_) => return,
     });
-    let _ = stream.set_read_timeout(Some(REPLY_TIMEOUT));
     if reader.read_line(&mut line).is_err() {
         return;
     }
@@ -162,30 +102,20 @@ fn serve(bridge: Bridge, stream: UnixStream) {
     if request.token != bridge.shared.token {
         return reply(stream, json!({ "error": "Bad token" }));
     }
-
-    let id = bridge.shared.next_id.fetch_add(1, Ordering::Relaxed);
-    let call = ToolCall {
-        id,
-        session_id: request.session_id,
-        method: request.method,
-        params: request.params,
+    let handler = bridge
+        .shared
+        .handler
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
+    let Some(handler) = handler else {
+        return reply(stream, json!({ "error": "Crew could not reach its window" }));
     };
-    {
-        let mut pending = bridge.shared.pending.lock().unwrap_or_else(|e| e.into_inner());
-        pending.insert(id, Pending { stream, call: call.clone() });
-    }
-    let Some(events) = bridge.events() else {
-        if let Some(stream) = bridge.take(id) {
-            reply(stream, json!({ "error": "Crew could not reach its window" }));
-        }
-        return;
+    let body = match handler.handle(&request.session_id, &request.method, request.params) {
+        Ok(result) => json!({ "result": result }),
+        Err(error) => json!({ "error": error }),
     };
-    events.tool(call);
-
-    thread::sleep(REPLY_TIMEOUT);
-    if let Some(stream) = bridge.take(id) {
-        reply(stream, json!({ "error": "Crew did not answer in time" }));
-    }
+    reply(stream, body);
 }
 
 fn reply(mut stream: UnixStream, body: Value) {

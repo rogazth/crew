@@ -21,7 +21,6 @@ import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./lib/providers";
 import { fileTabId, sessionTabId, stubTabId } from "./lib/tabs";
 import type { ProjectFile, Session, StubKind } from "./lib/types";
 import { SETTINGS_DEFAULT, type SettingsSectionId } from "./lib/settings";
-import { startAgentTools } from "./lib/agentTools";
 import { startScheduler } from "./lib/scheduler";
 import { newRoutineDraft, type RoutineDraft } from "./lib/routines";
 import { nextSessionName } from "./lib/workspaces";
@@ -42,7 +41,6 @@ type View =
 
 export function App() {
   useEffect(startScheduler, []);
-  useEffect(startAgentTools, []);
   useSelectAllScope();
 
   const workspaces = useWorkspaces();

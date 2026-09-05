@@ -1,13 +1,16 @@
 pub mod agent;
 pub mod blocks;
 pub mod bridge;
+pub mod cron;
 pub mod providers;
 pub mod files;
 pub mod mcp;
 pub mod pty;
 pub mod routine;
+pub mod schedule;
 pub mod session;
 pub mod store;
+pub mod tools;
 pub mod transcript;
 pub mod turns;
 pub mod workspace;

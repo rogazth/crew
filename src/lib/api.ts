@@ -113,9 +113,6 @@ export type BridgeInfo = { socketPath: string; token: string; exe: string };
 
 export const bridgeInfo = (): Promise<BridgeInfo> => client.request("bridge_info");
 
-export const bridgeReply = (id: number, response: unknown): Promise<void> =>
-  client.request("bridge_reply", { id, response });
-
 export const stateGet = (key: string): Promise<string | null> => client.request("state_get", { key });
 
 export const stateSet = (key: string, value: string): Promise<void> =>

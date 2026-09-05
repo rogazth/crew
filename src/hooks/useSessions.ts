@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { dispose, onSessionPatch, reconcile } from "../lib/agentRuntime";
-import { onAgentCreated } from "../lib/agentTools";
+import { client } from "../lib/client";
 import * as api from "../lib/api";
+import type { SessionCreated } from "../lib/protocol";
 import type { Autonomy, Session, SessionKind, SessionStatus } from "../lib/types";
 
 type CreateInput = {
@@ -44,8 +45,12 @@ export function useSessions(workspaceId: string | null) {
 
   useEffect(
     () =>
-      onAgentCreated((session) => {
-        if (session.workspaceId === workspaceId) setSessions((prev) => [...prev, session]);
+      client.on("session-created", (payload) => {
+        const created = payload as SessionCreated;
+        if (created.session.workspaceId === workspaceId) {
+          const session = created.session as unknown as Session;
+          setSessions((prev) => [...prev, session]);
+        }
       }),
     [workspaceId],
   );

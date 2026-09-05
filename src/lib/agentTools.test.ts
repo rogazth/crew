@@ -4,8 +4,7 @@ vi.mock("./client", () => ({
   client: { request: vi.fn(), on: vi.fn(), onReconnect: vi.fn(), openStream: vi.fn(), writeStream: vi.fn() },
 }));
 
-const { validateSchedule } = await import("./agentTools");
-const { wakePrompt } = await import("./routines");
+const { validateSchedule, wakePrompt } = await import("./routines");
 
 describe("validateSchedule", () => {
   it("accepts an interval", () => {

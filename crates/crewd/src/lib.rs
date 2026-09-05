@@ -5,7 +5,7 @@ use std::thread;
 use std::time::Duration;
 
 use crew_core::agent::{AgentEvents, AgentHost};
-use crew_core::bridge::{Bridge, BridgeEvents, ToolCall};
+use crew_core::bridge::{Bridge, ToolHost};
 use crew_core::files;
 use crew_core::pty::{PtyEvents, PtyHost};
 use crew_core::routine;
@@ -15,10 +15,10 @@ use crew_core::transcript::TranscriptEvents;
 use crew_core::turns::TurnHost;
 use crew_core::workspace;
 use crew_protocol::{
-    self as proto, Auth, BridgeReply, Cwd, DaemonInfo, Id, IdName, IdStatus, Ids, Key, KeyValue, Name, NamePath,
+    self as proto, Auth, Cwd, DaemonInfo, Id, IdName, IdStatus, Ids, Key, KeyValue, Name, NamePath,
     OptionalId, PathArg, PathContents, PtyAck, PtyAttach, PtyAttached, PtyKill, PtyResize, PtySpawn, PtyWrite,
-    Request, RoutineMark, RoutineUpsert, SessionCreate, SessionId, SessionUpdate, TempFile, TranscriptApply,
-    TurnAnswer, TurnRespond, TurnStart, WorkspaceId,
+    Request, RoutineMark, RoutineUpsert, SessionCreate, SessionCreated, SessionId, SessionUpdate, TempFile,
+    TranscriptApply, TurnAnswer, TurnRespond, TurnStart, WorkspaceId,
 };
 use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
@@ -215,20 +215,6 @@ impl PtyEvents for Hub {
     }
 }
 
-impl BridgeEvents for Hub {
-    fn tool(&self, call: ToolCall) {
-        self.emit(
-            "agent-tool",
-            proto::ToolCall {
-                id: call.id,
-                session_id: call.session_id,
-                method: call.method,
-                params: call.params,
-            },
-        );
-    }
-}
-
 impl TranscriptEvents for Hub {
     fn apply(&self, session_id: &str, seq: u64, event: &crew_protocol::HarnessEvent) {
         self.emit(
@@ -264,6 +250,50 @@ struct AgentFanout {
     turns: TurnHost,
 }
 
+struct ToolDispatch {
+    store: crew_core::store::Store,
+    transcripts: crew_core::transcript::TranscriptHub,
+    hub: Arc<Hub>,
+}
+
+impl ToolHost for ToolDispatch {
+    fn handle(&self, session_id: &str, method: &str, params: Value) -> Result<Value, String> {
+        crew_core::tools::handle(
+            &self.store,
+            &self.transcripts,
+            &|created| {
+                self.hub.emit(
+                    "session-created",
+                    SessionCreated {
+                        session: proto_session(created),
+                    },
+                );
+            },
+            session_id,
+            method,
+            params,
+        )
+    }
+}
+
+fn proto_session(row: &crew_core::session::Session) -> proto::Session {
+    proto::Session {
+        id: row.id.clone(),
+        workspace_id: row.workspace_id.clone(),
+        kind: row.kind.clone(),
+        name: row.name.clone(),
+        provider: row.provider.clone(),
+        model: row.model.clone(),
+        provider_session_id: row.provider_session_id.clone(),
+        description: row.description.clone(),
+        notifications: row.notifications,
+        autonomy: row.autonomy.clone(),
+        status: row.status.clone(),
+        created_at: row.created_at,
+        updated_at: row.updated_at,
+    }
+}
+
 impl AgentEvents for AgentFanout {
     fn lines(&self, event: &str, session_id: &str, lines: Vec<String>) {
         self.turns.on_agent_lines(event, session_id, lines);
@@ -282,14 +312,18 @@ pub fn serve(config: Config) -> Result<Handle, String> {
     let turns = TurnHost::new(
         config.agents.clone(),
         config.store.clone(),
-        transcripts,
+        transcripts.clone(),
         config.bridge.clone(),
     );
     config.pty.set_events(hub.clone());
     config.agents.set_events(Arc::new(AgentFanout {
         turns: turns.clone(),
     }));
-    config.bridge.set_events(hub.clone());
+    config.bridge.set_handler(Arc::new(ToolDispatch {
+        store: config.store.clone(),
+        transcripts,
+        hub: hub.clone(),
+    }));
 
     let (ready_tx, ready_rx) = std_mpsc::channel();
     let (stop_tx, stop_rx) = tokio::sync::oneshot::channel();
@@ -384,23 +418,6 @@ async fn handle_socket(stream: TcpStream, hosts: Hosts, hub: Arc<Hub>, token: St
     }
 
     let (client_id, mut outgoing) = hub.subscribe();
-    for call in hosts.bridge.pending_tools() {
-        hub.send(
-            client_id,
-            Outgoing::Text(encode(&match proto::event(
-                "agent-tool",
-                proto::ToolCall {
-                    id: call.id,
-                    session_id: call.session_id,
-                    method: call.method,
-                    params: call.params,
-                },
-            ) {
-                Ok(event) => event,
-                Err(_) => continue,
-            })),
-        );
-    }
     let writer = tokio::spawn(async move {
         while let Some(msg) = outgoing.recv().await {
             let sent = match msg {
@@ -804,12 +821,6 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
             let bridge = hosts.bridge.clone();
             json(block(move || bridge.info()).await?)
         }
-        "bridge_reply" => {
-            let BridgeReply { id, response } = parse(params)?;
-            let bridge = hosts.bridge.clone();
-            block(move || bridge.reply(id, response)).await?;
-            Ok(Value::Null)
-        }
         "turn_start" => {
             let p: TurnStart = parse(params)?;
             let turns = hosts.turns.clone();
@@ -1132,43 +1143,76 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn pending_tool_is_replayed_after_reconnect() {
-        let dir = test_dir("tool-replay");
+    async fn list_agents_runs_without_a_window() {
+        let dir = test_dir("tool-headless");
         let handle = test_serve(&dir);
         let mut ws = connect_authed(&handle).await;
+        let session_id = seed_agent(&mut ws, dir.to_str().unwrap()).await;
         send_json(
             &mut ws,
             &Request {
-                id: 1,
+                id: 3,
                 method: "bridge_info".into(),
                 params: serde_json::json!({}),
             },
         )
         .await;
-        let info_resp = wait_response(&mut ws, 1).await;
-        assert!(info_resp.ok, "{}", info_resp.error.unwrap_or_default());
-        let info: proto::BridgeInfo = serde_json::from_value(info_resp.result.expect("info")).expect("BridgeInfo");
+        let info: proto::BridgeInfo =
+            serde_json::from_value(wait_response(&mut ws, 3).await.result.expect("info")).expect("BridgeInfo");
         drop(ws);
-
         let payload = serde_json::json!({
             "token": info.token,
-            "sessionId": "s1",
-            "method": "tools/list",
-            "params": {}
+            "sessionId": session_id,
+            "method": "tools/call",
+            "params": { "name": "list_agents", "arguments": {} }
         });
-        {
-            let mut stream = std::os::unix::net::UnixStream::connect(&info.socket_path).expect("unix");
-            use std::io::Write;
-            writeln!(stream, "{payload}").expect("write");
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
-
-        let mut ws = connect_authed(&handle).await;
-        let event = wait_event(&mut ws, "agent-tool").await;
-        let call: proto::ToolCall = serde_json::from_value(event.payload).expect("ToolCall");
-        assert_eq!(call.session_id, "s1");
-        assert_eq!(call.method, "tools/list");
+        let reply = unix_call(&info.socket_path, &payload);
+        let text = reply["result"]["content"][0]["text"].as_str().unwrap_or("");
+        assert!(text.contains(&session_id), "reply: {reply}");
         handle.shutdown();
+    }
+
+    #[tokio::test]
+    async fn create_agent_emits_session_created() {
+        let dir = test_dir("tool-created");
+        let handle = test_serve(&dir);
+        let mut ws = connect_authed(&handle).await;
+        let session_id = seed_agent(&mut ws, dir.to_str().unwrap()).await;
+        send_json(
+            &mut ws,
+            &Request {
+                id: 3,
+                method: "bridge_info".into(),
+                params: serde_json::json!({}),
+            },
+        )
+        .await;
+        let info: proto::BridgeInfo =
+            serde_json::from_value(wait_response(&mut ws, 3).await.result.expect("info")).expect("BridgeInfo");
+        let payload = serde_json::json!({
+            "token": info.token,
+            "sessionId": session_id,
+            "method": "tools/call",
+            "params": { "name": "create_agent", "arguments": { "name": "B", "description": "does B" } }
+        });
+        let reply = unix_call(&info.socket_path, &payload);
+        let text = reply["result"]["content"][0]["text"].as_str().unwrap_or("");
+        assert!(text.contains("\"name\": \"B\"") || text.contains("\"name\":\"B\""), "reply: {reply}");
+        let event = wait_event(&mut ws, "session-created").await;
+        let created: proto::SessionCreated = serde_json::from_value(event.payload).expect("created");
+        assert_eq!(created.session.name, "B");
+        handle.shutdown();
+    }
+
+    fn unix_call(path: &str, payload: &serde_json::Value) -> serde_json::Value {
+        let mut stream = std::os::unix::net::UnixStream::connect(path).expect("unix");
+        use std::io::{BufRead, Write};
+        writeln!(stream, "{payload}").expect("write");
+        let mut reply = String::new();
+        std::io::BufReader::new(stream)
+            .read_line(&mut reply)
+            .expect("read");
+        serde_json::from_str(&reply).expect("json")
     }
 
     fn write_fake_claude(dir: &std::path::Path) -> std::path::PathBuf {

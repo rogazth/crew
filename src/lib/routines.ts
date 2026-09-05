@@ -123,6 +123,46 @@ export function withTrigger(schedule: Schedule, id: TriggerId): Schedule {
   return { ...base, hour: schedule.hour, minute: schedule.minute };
 }
 
+const SCHEDULE_HELP =
+  'schedule is {"kind":"interval","minutes":N}, {"kind":"daily","hour":0-23,"minute":0-59,"days":[0-6]} (days empty = every day, 0 = Sunday) or {"kind":"cron","expression":"m h dom mon dow"}';
+
+export function validateSchedule(input: unknown): Schedule {
+  const value = record(input);
+  if (!value) throw new Error(SCHEDULE_HELP);
+  if (value.kind === "interval") {
+    const minutes = integer(value.minutes);
+    if (minutes === null || minutes < 1) throw new Error(`minutes must be a whole number of at least 1. ${SCHEDULE_HELP}`);
+    return { kind: "interval", minutes };
+  }
+  if (value.kind === "daily") {
+    const hour = integer(value.hour);
+    const minute = value.minute === undefined ? 0 : integer(value.minute);
+    if (hour === null || hour < 0 || hour > 23) throw new Error(`hour must be 0-23. ${SCHEDULE_HELP}`);
+    if (minute === null || minute < 0 || minute > 59) throw new Error(`minute must be 0-59. ${SCHEDULE_HELP}`);
+    const days = value.days === undefined ? [] : value.days;
+    if (!Array.isArray(days) || days.some((day) => integer(day) === null || (day as number) < 0 || (day as number) > 6)) {
+      throw new Error(`days must be a list of 0-6 (Sunday to Saturday). ${SCHEDULE_HELP}`);
+    }
+    return { kind: "daily", hour, minute, days: [...new Set(days as number[])].sort((a, b) => a - b) };
+  }
+  if (value.kind === "cron") {
+    const expression = typeof value.expression === "string" ? value.expression.trim() : "";
+    if (!isValidCron(expression)) {
+      throw new Error(`expression must be five cron fields: minute hour day-of-month month day-of-week`);
+    }
+    return { kind: "cron", expression };
+  }
+  throw new Error(SCHEDULE_HELP);
+}
+
+function record(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+}
+
+function integer(value: unknown): number | null {
+  return typeof value === "number" && Number.isInteger(value) ? value : null;
+}
+
 export function parseSchedule(raw: string): Schedule {
   try {
     const value = JSON.parse(raw) as Partial<Schedule> & { expression?: unknown };
