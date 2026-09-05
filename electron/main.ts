@@ -94,7 +94,8 @@ function recover(error: unknown): Promise<void> {
 }
 
 async function startDaemon(): Promise<void> {
-  const proc = spawn(crewdPath(), ["--data-dir", app.getPath("userData")], {
+  const dir = app.getPath("userData");
+  const proc = spawn(crewdPath(), ["--data-dir", dir], {
     stdio: ["pipe", "pipe", "inherit"],
     detached: true,
   });
@@ -105,12 +106,29 @@ async function startDaemon(): Promise<void> {
       resolve(new Error(`crewd exited ${code ?? ""}`.trim()));
     });
   });
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timedOut = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      reject(new Error(`crewd did not handshake within 10s.\nData directory: ${dir}`));
+    }, 10_000);
+  });
   try {
-    info = await Promise.race([readInfo(proc), exited.then((error) => Promise.reject(error))]);
+    info = await Promise.race([
+      readInfo(proc),
+      exited.then((error) => Promise.reject(error)),
+      timedOut,
+    ]);
   } catch (error) {
     if (proc.exitCode === null && proc.signalCode === null) proc.kill("SIGTERM");
+    if (error instanceof Error && error.message.startsWith("crewd did not handshake")) {
+      dialog.showErrorBox("Crew", error.message);
+      app.quit();
+      throw error;
+    }
     await recover(error);
     return;
+  } finally {
+    if (timer) clearTimeout(timer);
   }
   void exited.then((error) => {
     if (stopping) return;
