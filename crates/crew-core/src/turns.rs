@@ -288,7 +288,6 @@ impl TurnHost {
                         HarnessEvent::SessionEnded { code },
                     );
                     self.signal(session_id, TurnOutcome::Failed(exit_message("Claude Code", code, &stderr)));
-                    return;
                 }
             }
             Live::Codex(row) | Live::Cursor(row) => {
