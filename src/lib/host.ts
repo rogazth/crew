@@ -26,47 +26,27 @@ function crewHost(): CrewHost | undefined {
   return typeof window !== "undefined" ? window.crewHost : undefined;
 }
 
-function isTauri(): boolean {
-  return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
-}
-
 export async function daemonInfo(): Promise<DaemonInfo> {
   const host = crewHost();
   if (host) return host.daemonInfo();
-  if (isTauri()) {
-    const { invoke } = await import("@tauri-apps/api/core");
-    return invoke<DaemonInfo>("daemon_info");
-  }
   throw new Error("Crew daemon is not available");
 }
 
 export async function open(opts: OpenOptions): Promise<string | string[] | null> {
   const host = crewHost();
   if (host) return host.open(opts);
-  if (isTauri()) {
-    const { open: tauriOpen } = await import("@tauri-apps/plugin-dialog");
-    return tauriOpen(opts);
-  }
   return browserOpen(opts);
 }
 
 export async function homeDir(): Promise<string> {
   const host = crewHost();
   if (host) return host.homeDir();
-  if (isTauri()) {
-    const { homeDir: tauriHome } = await import("@tauri-apps/api/path");
-    return tauriHome();
-  }
   return "";
 }
 
 export async function openUrl(url: string): Promise<void> {
   const host = crewHost();
   if (host) return host.openUrl(url);
-  if (isTauri()) {
-    const { openUrl: tauriOpenUrl } = await import("@tauri-apps/plugin-opener");
-    return tauriOpenUrl(url);
-  }
   window.open(url, "_blank", "noopener,noreferrer");
 }
 
@@ -75,19 +55,6 @@ let allowed: Promise<boolean> | null = null;
 export async function notify(title: string, body: string): Promise<void> {
   const host = crewHost();
   if (host) return host.notify(title, body);
-  if (isTauri()) {
-    const { isPermissionGranted, requestPermission, sendNotification } = await import(
-      "@tauri-apps/plugin-notification"
-    );
-    if (!allowed) {
-      allowed = isPermissionGranted()
-        .then((granted) => granted || requestPermission().then((state) => state === "granted"))
-        .catch(() => false);
-    }
-    if (!(await allowed)) return;
-    sendNotification({ title, body });
-    return;
-  }
   if (typeof Notification === "undefined") return;
   if (Notification.permission === "denied") return;
   if (Notification.permission !== "granted") {
@@ -109,22 +76,6 @@ export function pathForFile(file: File): string {
 }
 
 export function onDragDrop(handler: (event: HostDragDrop) => void): void {
-  if (isTauri() && !crewHost()) {
-    void import("@tauri-apps/api/webview").then(({ getCurrentWebview }) => {
-      void getCurrentWebview().onDragDropEvent(({ payload }) => {
-        if (payload.type === "enter" || payload.type === "over") {
-          handler({ type: payload.type, position: payload.position });
-          return;
-        }
-        if (payload.type === "drop") {
-          handler({ type: "drop", position: payload.position, paths: payload.paths });
-          return;
-        }
-        handler({ type: "leave" });
-      });
-    });
-    return;
-  }
   listenDomDrops(handler);
 }
 
