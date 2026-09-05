@@ -125,6 +125,7 @@ pub struct TurnHost {
     inner: Arc<Mutex<HashMap<String, Live>>>,
     binaries: Arc<Mutex<HashMap<String, String>>>,
     runtime: Arc<Mutex<Option<tokio::runtime::Handle>>>,
+    cancelled: Arc<Mutex<HashSet<String>>>,
 }
 
 impl TurnHost {
@@ -137,6 +138,7 @@ impl TurnHost {
             inner: Arc::new(Mutex::new(HashMap::new())),
             binaries: Arc::new(Mutex::new(HashMap::new())),
             runtime: Arc::new(Mutex::new(None)),
+            cancelled: Arc::new(Mutex::new(HashSet::new())),
         }
     }
 
@@ -185,12 +187,34 @@ impl TurnHost {
         }
     }
 
+    fn stop_requested(&self, session_id: &str) -> bool {
+        self.cancelled
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains(session_id)
+    }
+
+    fn mark_stop(&self, session_id: &str) {
+        self.cancelled
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(session_id.to_string());
+    }
+
+    fn clear_stop(&self, session_id: &str) {
+        self.cancelled
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(session_id);
+    }
+
     pub fn start(&self, params: TurnStart) -> Result<TurnStarted, String> {
         let session = session::get(&self.store, params.session_id.clone())?
             .ok_or_else(|| "Session not found".to_string())?;
         if session.kind != "agent" {
             return Err("Not an agent session".into());
         }
+        self.clear_stop(&params.session_id);
         {
             let map = self.lock();
             if map.get(&params.session_id).is_some_and(|live| match live {
@@ -332,6 +356,7 @@ impl TurnHost {
     }
 
     fn cancel(&self, session_id: &str, kill: bool) {
+        self.mark_stop(session_id);
         let interrupt = {
             let mut map = self.lock();
             if let Some(Live::Claude(row)) = map.get_mut(session_id) {
@@ -460,14 +485,31 @@ impl TurnHost {
 
     fn run_claude(&self, session: crate::session::Session, params: TurnStart) -> TurnOutcome {
         let session_id = session.id.clone();
+        if self.stop_requested(&session_id) {
+            return TurnOutcome::Stopped;
+        }
         if let Err(error) = self.ensure_claude(&session, &params) {
-            return TurnOutcome::Failed(error);
+            return if self.stop_requested(&session_id) {
+                TurnOutcome::Stopped
+            } else {
+                TurnOutcome::Failed(error)
+            };
+        }
+        if self.stop_requested(&session_id) {
+            return TurnOutcome::Stopped;
         }
         let (turn_rx, claude_session_id) = {
             let mut map = self.lock();
             let Some(Live::Claude(live)) = map.get_mut(&session_id) else {
-                return TurnOutcome::Failed("Claude session is gone".into());
+                return if self.stop_requested(&session_id) {
+                    TurnOutcome::Stopped
+                } else {
+                    TurnOutcome::Failed("Claude session is gone".into())
+                };
             };
+            if self.stop_requested(&session_id) {
+                return TurnOutcome::Stopped;
+            }
             live.cancelled = false;
             live.mute = false;
             live.active = true;
@@ -561,6 +603,10 @@ impl TurnHost {
             idle_gen: 0,
         };
         self.lock().insert(session_id.clone(), Live::Claude(Box::new(live)));
+        if self.stop_requested(&session_id) {
+            self.agents.kill(&session_id);
+            return Err("cancelled".into());
+        }
 
         let path = self.resolve_bin("claude").or_else(|_| self.resolve_bin("claude"))?;
         let mcp = self.mcp();
@@ -583,6 +629,10 @@ impl TurnHost {
                 json!({ "mcpServers": { "crew": { "command": command, "args": args } } }).to_string()
             }),
         };
+        if self.stop_requested(&session_id) {
+            self.agents.kill(&session_id);
+            return Err("cancelled".into());
+        }
         self.agents.spawn(
             session_id.clone(),
             path,
@@ -590,6 +640,10 @@ impl TurnHost {
             params.cwd.clone(),
             Some(self.agent_env(&session_id)),
         )?;
+        if self.stop_requested(&session_id) {
+            self.agents.kill(&session_id);
+            return Err("cancelled".into());
+        }
 
         let (init_tx, init_rx) = oneshot::channel();
         {

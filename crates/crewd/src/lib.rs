@@ -1305,6 +1305,21 @@ for line in sys.stdin:
         path
     }
 
+    fn write_fake_claude_hang_init(dir: &std::path::Path) -> std::path::PathBuf {
+        let path = dir.join("fake-claude-hang-init");
+        std::fs::write(
+            &path,
+            r#"#!/usr/bin/env python3
+import time
+time.sleep(60)
+"#,
+        )
+        .expect("fake claude hang");
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        path
+    }
+
     fn write_fake_claude_error(dir: &std::path::Path) -> std::path::PathBuf {
         let path = dir.join("fake-claude-error");
         std::fs::write(
@@ -1620,6 +1635,39 @@ print(json.dumps({"type":"turn.failed","error":{"message":"Codex exploded"}}), f
             .filter(|b| b.role == proto::BlockRole::System)
             .map(|b| b.text.as_str())
             .collect()
+    }
+
+    #[tokio::test]
+    async fn stop_during_claude_init_ends_idle() {
+        let dir = test_dir("turn-stop-init");
+        let handle = test_serve(&dir);
+        let fake = write_fake_claude_hang_init(&dir);
+        handle.override_agent_binary("claude", fake.to_string_lossy().into_owned());
+        let mut ws = connect_authed(&handle).await;
+        let session_id = seed_agent(&mut ws, dir.to_str().unwrap()).await;
+        start_turn(&mut ws, 3, &session_id, dir.to_str().unwrap()).await;
+        send_json(
+            &mut ws,
+            &Request {
+                id: 4,
+                method: "turn_stop".into(),
+                params: serde_json::json!({ "sessionId": session_id }),
+            },
+        )
+        .await;
+        assert!(wait_response(&mut ws, 4).await.ok);
+        wait_status(&mut ws, &session_id, "idle").await;
+        let snap = transcript_of(&mut ws, 5, &session_id).await;
+        assert_eq!(snap.status, "idle");
+        assert!(!snap.working);
+        let systems: Vec<&str> = snap
+            .blocks
+            .iter()
+            .filter(|b| b.role == proto::BlockRole::System)
+            .map(|b| b.text.as_str())
+            .collect();
+        assert_eq!(systems, vec!["Stopped"]);
+        handle.shutdown();
     }
 
     #[tokio::test]
