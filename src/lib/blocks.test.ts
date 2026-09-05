@@ -83,6 +83,21 @@ describe("approvals", () => {
   });
 });
 
+describe("daemon appends", () => {
+  it("projects a user row from user.message", () => {
+    const blocks = run([{ type: "user.message", text: "hi", hidden: true }]);
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]?.role).toBe("user");
+    expect(blocks[0]?.text).toBe("hi");
+    expect(blocks[0]?.hidden).toBe(true);
+  });
+
+  it("projects a system row from system.message", () => {
+    const blocks = run([{ type: "system.message", text: "Stopped" }]);
+    expect(blocks.map((b) => [b.role, b.text])).toEqual([["system", "Stopped"]]);
+  });
+});
+
 describe("turn end", () => {
   it("pins usage on the last assistant row", () => {
     const blocks = run(

@@ -5,8 +5,7 @@ use std::time::Duration;
 
 use crew_protocol::{Block, HarnessEvent, TranscriptSnapshot};
 
-use crate::blocks::{apply_event, new_block, parse_blocks};
-use crew_protocol::BlockRole;
+use crate::blocks::{apply_event, parse_blocks};
 use crate::session;
 use crate::store::{now_millis, Store};
 
@@ -120,23 +119,14 @@ impl TranscriptHub {
         hidden: bool,
         files: Option<Vec<crew_protocol::AttachedFile>>,
     ) {
-        let mut block = new_block(BlockRole::User, text);
-        if hidden {
-            block.hidden = Some(true);
-        }
-        if let Some(files) = files.filter(|rows| !rows.is_empty()) {
-            block.files = Some(files);
-        }
-        let mut map = self.lock();
-        let row = map.entry(session_id.to_string()).or_insert_with(|| self.hydrate_locked(session_id));
-        row.blocks.push(block);
-        row.dirty = true;
-        drop(map);
-        self.schedule_save(session_id);
-    }
-
-    fn hydrate_locked(&self, session_id: &str) -> Live {
-        self.hydrate(session_id)
+        self.apply(
+            session_id,
+            HarnessEvent::UserMessage {
+                text: text.to_string(),
+                hidden: if hidden { Some(true) } else { None },
+                files: files.filter(|rows| !rows.is_empty()),
+            },
+        );
     }
 
     pub fn apply(&self, session_id: &str, event: HarnessEvent) -> u64 {
@@ -156,6 +146,7 @@ impl TranscriptHub {
                 | HarnessEvent::TurnCompleted { .. }
                 | HarnessEvent::SessionError { .. }
                 | HarnessEvent::SessionEnded { .. }
+                | HarnessEvent::SystemMessage { .. }
         );
         let (seq, emit_event) = {
             let mut map = self.lock();
@@ -179,15 +170,12 @@ impl TranscriptHub {
     }
 
     pub fn append_system(&self, session_id: &str, text: &str) {
-        let block = new_block(BlockRole::System, text);
-        let mut map = self.lock();
-        let row = map
-            .entry(session_id.to_string())
-            .or_insert_with(|| self.hydrate(session_id));
-        row.blocks.push(block);
-        row.dirty = true;
-        drop(map);
-        self.flush(session_id);
+        self.apply(
+            session_id,
+            HarnessEvent::SystemMessage {
+                text: text.to_string(),
+            },
+        );
     }
 
     pub fn set_working(&self, session_id: &str, working: bool) {
@@ -286,7 +274,7 @@ mod tests {
             },
         );
         let seq = hub.apply(&session.id, HarnessEvent::TurnCompleted { usage: None });
-        assert_eq!(seq, 2);
+        assert_eq!(seq, 3);
         let snap = hub.get(&session.id);
         assert_eq!(snap.blocks.iter().filter(|b| b.role == BlockRole::Assistant).count(), 1);
         let raw = crate::session::get_blocks(&store, session.id).unwrap();

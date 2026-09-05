@@ -278,6 +278,27 @@ pub fn apply_event(blocks: Vec<Block>, event: HarnessEvent) -> Vec<Block> {
             next.push(new_block(BlockRole::System, message));
             next
         }
+        HarnessEvent::UserMessage {
+            text,
+            hidden,
+            files,
+        } => {
+            let mut block = new_block(BlockRole::User, text);
+            if hidden == Some(true) {
+                block.hidden = Some(true);
+            }
+            if let Some(files) = files.filter(|rows| !rows.is_empty()) {
+                block.files = Some(files);
+            }
+            let mut next = blocks;
+            next.push(block);
+            next
+        }
+        HarnessEvent::SystemMessage { text } => {
+            let mut next = blocks;
+            next.push(new_block(BlockRole::System, text));
+            next
+        }
         HarnessEvent::SessionStarted {} | HarnessEvent::SessionProviderBound { .. } => blocks,
     }
 }
@@ -517,6 +538,28 @@ mod tests {
             blocks.iter().map(|b| b.role.clone()).collect::<Vec<_>>(),
             vec![BlockRole::Approval, BlockRole::Tool]
         );
+    }
+
+    #[test]
+    fn user_and_system_messages_append_rows() {
+        let blocks = run(
+            vec![
+                HarnessEvent::UserMessage {
+                    text: "hi".into(),
+                    hidden: Some(true),
+                    files: None,
+                },
+                HarnessEvent::SystemMessage {
+                    text: "Stopped".into(),
+                },
+            ],
+            vec![],
+        );
+        assert_eq!(blocks[0].role, BlockRole::User);
+        assert_eq!(blocks[0].text, "hi");
+        assert_eq!(blocks[0].hidden, Some(true));
+        assert_eq!(blocks[1].role, BlockRole::System);
+        assert_eq!(blocks[1].text, "Stopped");
     }
 
     #[test]

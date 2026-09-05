@@ -1572,6 +1572,55 @@ print(json.dumps({"type":"turn.failed","error":{"message":"Codex exploded"}}), f
         handle.shutdown();
     }
 
+    #[tokio::test]
+    async fn second_client_sees_user_block_before_delta() {
+        let dir = test_dir("turn-two-clients");
+        let handle = test_serve(&dir);
+        let fake = write_fake_claude(&dir);
+        handle.override_agent_binary("claude", fake.to_string_lossy().into_owned());
+        let mut starter = connect_authed(&handle).await;
+        let mut watcher = connect_authed(&handle).await;
+        let session_id = seed_agent(&mut starter, dir.to_str().unwrap()).await;
+        start_turn(&mut starter, 3, &session_id, dir.to_str().unwrap()).await;
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut saw_user = false;
+        loop {
+            let msg = tokio::time::timeout_at(deadline, watcher.next())
+                .await
+                .expect("apply timeout")
+                .expect("closed")
+                .expect("ws");
+            let Message::Text(text) = msg else {
+                continue;
+            };
+            let Ok(event) = serde_json::from_str::<proto::Event>(text.as_ref()) else {
+                continue;
+            };
+            if event.event != "transcript-apply" {
+                continue;
+            }
+            let Ok(apply) = serde_json::from_value::<proto::TranscriptApply>(event.payload) else {
+                continue;
+            };
+            if apply.session_id != session_id {
+                continue;
+            }
+            match apply.event {
+                crew_protocol::HarnessEvent::UserMessage { text, .. } => {
+                    assert_eq!(text, "hi");
+                    saw_user = true;
+                }
+                crew_protocol::HarnessEvent::MessageDelta { .. } => {
+                    assert!(saw_user, "watcher saw a delta before the user block");
+                    break;
+                }
+                _ => {}
+            }
+        }
+        assert!(saw_user);
+        handle.shutdown();
+    }
+
     async fn attach_pty(ws: &mut Ws, id: u32, pty: &str, from: u64) -> proto::PtyAttached {
         send_json(
             ws,

@@ -172,6 +172,16 @@ export function applyEvent(blocks: Block[], event: HarnessEvent): Block[] {
       return settleTurn(blocks, "interrupted");
     case "session.note":
       return [...settleStreaming(blocks), newBlock("system", event.message)];
+    case "user.message": {
+      const block: Block = {
+        ...newBlock("user", event.text),
+        ...(event.hidden ? { hidden: true } : {}),
+        ...(event.files && event.files.length > 0 ? { files: event.files } : {}),
+      };
+      return [...blocks, block];
+    }
+    case "system.message":
+      return [...blocks, newBlock("system", event.text)];
     default:
       return blocks;
   }

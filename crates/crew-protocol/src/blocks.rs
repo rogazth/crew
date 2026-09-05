@@ -198,6 +198,20 @@ pub enum HarnessEvent {
     #[serde(rename = "session.note")]
     #[ts(rename = "session.note")]
     SessionNote { message: String },
+    #[serde(rename = "user.message")]
+    #[ts(rename = "user.message")]
+    UserMessage {
+        text: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        hidden: Option<bool>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        files: Option<Vec<AttachedFile>>,
+    },
+    #[serde(rename = "system.message")]
+    #[ts(rename = "system.message")]
+    SystemMessage { text: String },
     #[serde(rename = "session.providerBound")]
     #[ts(rename = "session.providerBound")]
     SessionProviderBound {
