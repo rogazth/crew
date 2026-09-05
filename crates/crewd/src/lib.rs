@@ -1412,20 +1412,21 @@ print(json.dumps({"type":"turn.failed","error":{"message":"Codex exploded"}}), f
         let started = wait_response(&mut ws, 3).await;
         assert!(started.ok, "{}", started.error.unwrap_or_default());
         drop(ws);
-        tokio::time::sleep(std::time::Duration::from_millis(800)).await;
         let mut ws = connect_authed(&handle).await;
-        send_json(
-            &mut ws,
-            &Request {
-                id: 1,
-                method: "transcript_get".into(),
-                params: serde_json::json!({ "sessionId": session_id }),
-            },
-        )
-        .await;
-        let snap: proto::TranscriptSnapshot =
-            serde_json::from_value(wait_response(&mut ws, 1).await.result.expect("snap")).expect("snapshot");
-        assert!(!snap.working);
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut req = 1u32;
+        let snap = loop {
+            let snap = transcript_of(&mut ws, req, &session_id).await;
+            req += 1;
+            if !snap.working {
+                break snap;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "turn still working after disconnect"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        };
         assert!(snap.blocks.iter().any(|b| b.role == proto::BlockRole::Assistant && b.text.contains("hello")));
         handle.shutdown();
     }
