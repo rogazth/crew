@@ -156,6 +156,8 @@ export function TerminalView({
 
     let closed = false;
     let spawned = false;
+    /** Only the first spawn is size-driven; a dead pane must not resize back to life. */
+    let started = false;
     let shellFallback = false;
     let lastCols = 0;
     let lastRows = 0;
@@ -308,14 +310,19 @@ export function TerminalView({
       if (closed || !visible()) return;
       fit.fit();
       const { cols, rows } = term;
+      // The first spawn must not ride on a size change: a pane that measures the
+      // same twice would never start, and its later kill would find nothing.
+      if (!started) {
+        started = true;
+        lastCols = cols;
+        lastRows = rows;
+        spawn(latest.current.command);
+        return;
+      }
       if (cols === lastCols && rows === lastRows) return;
       lastCols = cols;
       lastRows = rows;
-      if (spawned) {
-        void api.resizePty(id, cols, rows);
-        return;
-      }
-      spawn(latest.current.command);
+      void api.resizePty(id, cols, rows);
     };
     fitRef.current = applySize;
 
@@ -380,7 +387,7 @@ export function TerminalView({
       for (const handler of osc) handler.dispose();
       for (const handler of csi) handler.dispose();
       unsubscribe();
-      void api.killPty(id);
+      if (started) void api.killPty(id);
       term.dispose();
       ligaturesRef.current = null;
       termRef.current = null;

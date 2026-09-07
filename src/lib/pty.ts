@@ -75,10 +75,12 @@ export async function spawnPty(
   rows: number,
 ): Promise<number> {
   const streamId = await client.request<number>("pty_spawn", { id, cwd, command, cols, rows });
-  await applyAttach(id, delivered.get(id) ?? 0);
+  // Wire the stream before the replay: the process is already running, so a
+  // rejection here would strand it with no way to reach it again.
   const onData = dataHandlers.get(id);
   if (onData) attach(id, streamId, onData);
   else streams.set(id, { id: streamId, stop: () => {} });
+  await applyAttach(id, delivered.get(id) ?? 0).catch(() => {});
   return streamId;
 }
 
