@@ -56,6 +56,20 @@ export function App() {
     removeWorkspace: workspaces.remove,
   });
 
+  const closeTab = useCallback(
+    (id: string) => {
+      const tab = tabs.tabs.find((t) => t.id === id);
+      const session =
+        tab?.kind === "session" ? sessions.find((s) => s.id === tab.sessionId) : undefined;
+      if (!session) {
+        tabs.close(id);
+        return;
+      }
+      confirms.askCloseTab(session, () => tabs.close(id));
+    },
+    [confirms, sessions, tabs],
+  );
+
   const [palette, setPalette] = useState<PaletteMode | null>(null);
   const [sheet, setSheet] = useState<Sheet | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -203,7 +217,7 @@ export function App() {
       if (palette) setPalette(null);
       else if (sheet) setSheet(null);
       else if (view.kind !== "workspace") closeView();
-      else if (tabs.active) tabs.close(tabs.active.id);
+      else if (tabs.active) closeTab(tabs.active.id);
     },
   });
 
@@ -285,7 +299,7 @@ export function App() {
             activeId={tabs.active?.id ?? null}
             sessions={sessions}
             onSelect={tabs.select}
-            onClose={tabs.close}
+            onClose={closeTab}
             onLaunch={launch}
           />
 

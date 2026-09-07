@@ -1,6 +1,15 @@
 import { useCallback, useState } from "react";
 import type { Confirm } from "../chrome/ConfirmDialog";
-import type { Session, Workspace } from "../lib/types";
+import type { Session, SessionStatus, Workspace } from "../lib/types";
+
+const RUNNING: Record<string, string> = {
+  working: "is still working",
+  "needs-input": "is waiting on you",
+};
+
+export function runningLabel(status: SessionStatus): string | null {
+  return RUNNING[status] ?? null;
+}
 
 type Deps = {
   /** A deleted session must lose its tabs before the row goes. */
@@ -57,7 +66,29 @@ export function useConfirmations({ closeTabsFor, removeSession, removeWorkspace 
     [removeWorkspace],
   );
 
+  const askCloseTab = useCallback((session: Session, onConfirm: () => void) => {
+    const label = runningLabel(session.status);
+    if (!label) {
+      onConfirm();
+      return;
+    }
+    setConfirm({
+      title: `Close "${session.name}"?`,
+      description: `It ${label}. Closing the tab ends the process; the session stays in the sidebar.`,
+      action: "Close",
+      onConfirm,
+    });
+  }, []);
+
   const close = useCallback(() => setConfirm(null), []);
 
-  return { confirm, ask: setConfirm, askSession, askSessions, askWorkspace, close };
+  return {
+    confirm,
+    ask: setConfirm,
+    askCloseTab,
+    askSession,
+    askSessions,
+    askWorkspace,
+    close,
+  };
 }
