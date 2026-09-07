@@ -120,6 +120,10 @@ fn in_flight(state: &PtyState) -> u64 {
 }
 
 struct Inner {
+    /// Held across remove/spawn/insert. Every RPC lands on its own blocking
+    /// thread, so without it two spawns for one id both find the map empty and
+    /// the second insert drops a live child nothing can reach again.
+    spawning: Mutex<()>,
     sessions: Mutex<HashMap<String, Arc<LivePty>>>,
     streams: Mutex<HashMap<u32, String>>,
     next_stream: AtomicU32,
@@ -141,6 +145,7 @@ impl PtyHost {
     pub fn new() -> Self {
         Self {
             inner: Arc::new(Inner {
+                spawning: Mutex::new(()),
                 sessions: Mutex::new(HashMap::new()),
                 streams: Mutex::new(HashMap::new()),
                 next_stream: AtomicU32::new(1),
@@ -159,11 +164,18 @@ impl PtyHost {
 
     fn insert(&self, id: String, live: Arc<LivePty>) {
         let stream_id = live.stream_id;
-        self.inner
+        let pid = live.pid;
+        let replaced = self
+            .inner
             .sessions
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .insert(id.clone(), live);
+        if let Some(prev) = replaced {
+            eprintln!("[pty] {id}: pid {pid} replaced live pid {}; terminating it", prev.pid);
+            let _ = terminate(&prev);
+            close_fd(prev.master_fd);
+        }
         self.inner
             .streams
             .lock()
@@ -222,6 +234,7 @@ impl PtyHost {
     }
 
     pub fn kill_all(&self) {
+        let _spawning = self.inner.spawning.lock().unwrap_or_else(|e| e.into_inner());
         let kids: Vec<Arc<LivePty>> = {
             let mut map = self.inner.sessions.lock().unwrap_or_else(|e| e.into_inner());
             map.drain().map(|(_, live)| live).collect()
@@ -249,7 +262,9 @@ impl PtyHost {
         cols: u16,
         rows: u16,
     ) -> Result<u32, String> {
+        let _spawning = self.inner.spawning.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(prev) = self.remove(&id) {
+            eprintln!("[pty] {id}: respawn terminates pid {}", prev.pid);
             let _ = terminate(&prev);
             close_fd(prev.master_fd);
         }
@@ -316,9 +331,13 @@ impl PtyHost {
     }
 
     pub fn kill(&self, id: &str) {
-        if let Some(live) = self.remove(id) {
-            let _ = terminate(&live);
-            close_fd(live.master_fd);
+        let _spawning = self.inner.spawning.lock().unwrap_or_else(|e| e.into_inner());
+        match self.remove(id) {
+            Some(live) => {
+                let _ = terminate(&live);
+                close_fd(live.master_fd);
+            }
+            None => eprintln!("[pty] {id}: kill found nothing registered"),
         }
     }
 }
@@ -666,6 +685,54 @@ fn wait_readable(fd: i32, timeout: Duration) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn marker_children(marker: &str) -> usize {
+        let out = std::process::Command::new("pgrep")
+            .args(["-f", marker])
+            .output()
+            .expect("pgrep failed");
+        String::from_utf8_lossy(&out.stdout).lines().filter(|l| !l.is_empty()).count()
+    }
+
+    #[test]
+    fn concurrent_spawns_on_one_id_leave_a_single_child() {
+        let marker = format!("crew_pty_race_{}", std::process::id());
+        let host = PtyHost::new();
+        let id = "session:concurrent".to_string();
+        let command = vec![
+            "/bin/sh".to_string(),
+            "-c".to_string(),
+            format!("exec -a {marker} sleep 30"),
+        ];
+        // Without the barrier the threads rarely overlap inside spawn, and the
+        // overlap is exactly what this guards.
+        let gate = Arc::new(std::sync::Barrier::new(2));
+        let handles: Vec<_> = (0..2)
+            .map(|_| {
+                let host = host.clone();
+                let id = id.clone();
+                let command = command.clone();
+                let gate = gate.clone();
+                thread::spawn(move || {
+                    gate.wait();
+                    host.spawn(id, "/".to_string(), command, 80, 24)
+                })
+            })
+            .collect();
+        for handle in handles {
+            handle.join().expect("spawn thread panicked").expect("spawn failed");
+        }
+        thread::sleep(Duration::from_millis(300));
+        let spawned = marker_children(&marker);
+
+        host.kill(&id);
+        thread::sleep(KILL_ESCALATE + Duration::from_millis(700));
+        let survivors = marker_children(&marker);
+        let _ = std::process::Command::new("pkill").args(["-f", &marker]).status();
+
+        assert_eq!(spawned, 1, "two concurrent spawns left {spawned} children");
+        assert_eq!(survivors, 0, "kill left {survivors} children running");
+    }
 
     #[test]
     fn flush_waits_for_a_full_chunk_or_the_coalesce_window() {
