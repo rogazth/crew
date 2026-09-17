@@ -66,6 +66,11 @@ impl Store {
     }
 }
 
+fn has_column(conn: &Connection, table: &str, column: &str) -> rusqlite::Result<bool> {
+    conn.prepare("SELECT 1 FROM pragma_table_info(?1) WHERE name = ?2")?
+        .exists(params![table, column])
+}
+
 fn migrate(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute(
         "CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -217,14 +222,32 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         )?;
     }
     if current < 13 {
-        // The rows become the only copy, so make sure they are complete first:
-        // a session whose sync fell behind would otherwise lose the difference.
-        crate::messages::backfill_missing(conn)?;
-        conn.execute_batch("ALTER TABLE sessions DROP COLUMN blocks_json;")?;
-        conn.execute(
-            "INSERT INTO schema_migrations (version, applied_at) VALUES (13, ?1)",
-            params![now_millis()],
-        )?;
+        // The first destructive migration, so it is also the first that has to
+        // be all or nothing: dying between the DROP and the version row would
+        // leave a database that can never be opened again, because the retry
+        // starts by reading the column that is gone.
+        conn.execute_batch("BEGIN")?;
+        let applied = (|| -> rusqlite::Result<()> {
+            // Belt and braces: a database half-migrated by an older build has
+            // no column left, and reading it again would lock the user out.
+            if has_column(conn, "sessions", "blocks_json")? {
+                // The rows become the only copy, so repair any that fell behind.
+                crate::messages::backfill_missing(conn)?;
+                conn.execute_batch("ALTER TABLE sessions DROP COLUMN blocks_json;")?;
+            }
+            conn.execute(
+                "INSERT INTO schema_migrations (version, applied_at) VALUES (13, ?1)",
+                params![now_millis()],
+            )?;
+            Ok(())
+        })();
+        match applied {
+            Ok(()) => conn.execute_batch("COMMIT")?,
+            Err(error) => {
+                let _ = conn.execute_batch("ROLLBACK");
+                return Err(error);
+            }
+        }
     }
     Ok(())
 }

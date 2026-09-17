@@ -218,7 +218,9 @@ pub fn sync(
         return Ok(());
     }
 
-    conn.execute_batch("BEGIN IMMEDIATE")?;
+    // A savepoint, not a transaction: the v13 migration wraps its own repair in
+    // one, and a transaction inside a transaction is an error.
+    conn.execute_batch("SAVEPOINT crew_sync")?;
     let result = (|| -> rusqlite::Result<()> {
         {
             let mut stmt = conn.prepare_cached(
@@ -250,12 +252,12 @@ pub fn sync(
     })();
     match result {
         Ok(()) => {
-            conn.execute_batch("COMMIT")?;
+            conn.execute_batch("RELEASE crew_sync")?;
             *prior = next;
             Ok(())
         }
         Err(err) => {
-            let _ = conn.execute_batch("ROLLBACK");
+            let _ = conn.execute_batch("ROLLBACK TO crew_sync; RELEASE crew_sync");
             Err(err)
         }
     }
@@ -417,12 +419,16 @@ pub fn backfill_missing(conn: &Connection) -> rusqlite::Result<usize> {
     let mut repaired = 0;
     for (id, raw) in sessions {
         let blocks = crate::blocks::parse_blocks(Some(&raw));
-        if blocks.len() as i64 <= count(conn, &id)? {
-            continue;
-        }
+        // Content, not length. The old flush wrote the column and the rows in
+        // two transactions, so the ways the rows fall behind without the count
+        // moving are the common ones: text that grew, a tool that completed, a
+        // turn that attached its usage.
         let mut prior = fingerprints(conn, &id)?;
+        let before = prior.clone();
         sync(conn, &id, &blocks, &mut prior)?;
-        repaired += 1;
+        if prior != before {
+            repaired += 1;
+        }
     }
     Ok(repaired)
 }
@@ -1190,5 +1196,191 @@ mod plan_tests {
         let start = std::time::Instant::now();
         let written = store.with(backfill).expect("backfill");
         println!("backfill of {written} blocks over 8 sessions: {:?}", start.elapsed());
+    }
+}
+
+/// Adversarial review of the A6 migration. Added by review; no production code
+/// is touched.
+#[cfg(test)]
+mod drop_column_review {
+    use super::*;
+    use crate::blocks::new_block;
+
+    fn store() -> Store {
+        let dir = std::env::temp_dir().join(format!("crew-drop-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        Store::open(dir.join("crew.sqlite3")).expect("store")
+    }
+
+    fn session(store: &Store, name: &str) -> String {
+        let root = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
+        std::fs::create_dir_all(&root).expect("root");
+        let workspace =
+            crate::workspace::create(store, format!("w-{name}"), root.to_string_lossy().into())
+                .expect("workspace");
+        crate::session::create(
+            store,
+            workspace.id,
+            "agent".into(),
+            name.into(),
+            "claude".into(),
+            "m".into(),
+            "".into(),
+            "ask".into(),
+        )
+        .expect("session")
+        .id
+    }
+
+    /// Put the column back on a HEAD database, the way `print_the_plans`
+    /// already does, so the pre-13 state can be built and migrated.
+    fn with_column(store: &Store, id: &str, blocks: &[Block]) {
+        let raw = serde_json::to_string(blocks).expect("json");
+        store
+            .with(|conn| {
+                conn.execute_batch(
+                    "ALTER TABLE sessions ADD COLUMN blocks_json TEXT NOT NULL DEFAULT '[]';",
+                )?;
+                conn.execute(
+                    "UPDATE sessions SET blocks_json = ?1 WHERE id = ?2",
+                    params![raw, id],
+                )?;
+                Ok(())
+            })
+            .expect("column");
+    }
+
+    /// `backfill_missing` decides a session is behind by comparing
+    /// `blocks.len()` with `COUNT(*)`. A flush that died between the blob write
+    /// and the row write leaves the rows behind in *content* with the same
+    /// count — a streaming answer that grew, a tool row that went
+    /// pending -> completed. Migration 13 then drops the only copy that had it.
+    #[test]
+    fn backfill_missing_walks_past_rows_that_are_stale_without_being_short() {
+        let store = store();
+        let id = session(&store, "drift");
+
+        // What the last flush that landed wrote.
+        let mut rows = vec![
+            new_block(BlockRole::User, "summarise the plan".to_string()),
+            new_block(BlockRole::Assistant, "The plan is".to_string()),
+        ];
+        store
+            .with(|conn| sync(conn, &id, &rows, &mut Vec::new()))
+            .expect("rows");
+
+        // What `blocks_json` held when the daemon died: same blocks, further on.
+        rows[1].text = "The plan is to ship A, then B, then C.".to_string();
+        with_column(&store, &id, &rows);
+
+        let repaired = store.with(|conn| backfill_missing(conn)).expect("backfill");
+        let kept = store.with(|conn| all(conn, &id)).expect("read back");
+        assert_eq!(
+            kept[1].text, "The plan is to ship A, then B, then C.",
+            "migration 13 dropped the only copy of the rest of the answer \
+             (backfill_missing repaired {repaired} sessions)"
+        );
+    }
+
+    /// Migration 13 is three statements with no transaction around them: the
+    /// repair, the DROP, and the row that records the version. A crash between
+    /// the DROP and the row leaves a database whose `schema_migrations` says 12
+    /// and whose `sessions` has no `blocks_json` — and the retry starts by
+    /// selecting that column.
+    #[test]
+    fn migration_13_can_be_run_again_after_it_is_interrupted() {
+        let dir = std::env::temp_dir().join(format!("crew-half-13-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let path = dir.join("crew.sqlite3");
+        {
+            let store = Store::open(path.clone()).expect("first open");
+            let id = session(&store, "half");
+            store
+                .with(|conn| {
+                    sync(
+                        conn,
+                        &id,
+                        &[new_block(BlockRole::User, "keep me".to_string())],
+                        &mut Vec::new(),
+                    )?;
+                    // The DROP landed; the process died before the version row.
+                    conn.execute("DELETE FROM schema_migrations WHERE version = 13", [])
+                })
+                .expect("interrupt");
+        }
+        let again = Store::open(path);
+        assert!(
+            again.is_ok(),
+            "the database can never be opened again: {}",
+            again.err().unwrap_or_default()
+        );
+    }
+
+    /// A search hit is now an instruction to scroll: `focus()` maps `pos` to a
+    /// block and `Transcript.tsx` looks for `[data-block=<id>]`. Only user,
+    /// assistant and system rows carry that attribute — `groupRows` folds tool,
+    /// reasoning, approval and question blocks into an ActivityGroup and skips
+    /// `hidden` ones outright — so a hit on anything else opens the agent and
+    /// then silently does nothing, leaving `focusId` set forever because
+    /// `onFocused` is only called when the element is found.
+    #[test]
+    fn search_only_offers_hits_the_chat_can_scroll_to() {
+        let store = store();
+        let id = session(&store, "reachable");
+        let mut hidden = new_block(BlockRole::User, "wake up and check the sidebar".to_string());
+        hidden.hidden = Some(true); // what lib/scheduler.ts sends for a routine
+        let blocks = vec![
+            hidden,
+            new_block(BlockRole::Reasoning, "the sidebar grouping is memoised".to_string()),
+            new_block(BlockRole::Tool, "grep sidebar".to_string()),
+        ];
+        store
+            .with(|conn| sync(conn, &id, &blocks, &mut Vec::new()))
+            .expect("rows");
+
+        let hits = search(
+            &store,
+            SearchQuery {
+                query: "sidebar".into(),
+                ..Default::default()
+            },
+        )
+        .expect("search");
+        let offered: Vec<String> = hits
+            .iter()
+            .map(|hit| format!("{:?}", hit.role))
+            .collect();
+        assert!(
+            hits.is_empty(),
+            "search offered {} hits the chat cannot take the reader to: {offered:?}",
+            hits.len()
+        );
+    }
+
+    /// The same one-sided test in the other direction: rows that outnumber the
+    /// column are never trimmed, so blocks the transcript no longer had come
+    /// back from the dead once the hub hydrates from the rows.
+    #[test]
+    fn backfill_missing_walks_past_rows_that_outnumber_the_column() {
+        let store = store();
+        let id = session(&store, "phantom");
+        let blocks = vec![
+            new_block(BlockRole::User, "one".to_string()),
+            new_block(BlockRole::Assistant, "two".to_string()),
+            new_block(BlockRole::Assistant, "three".to_string()),
+        ];
+        store
+            .with(|conn| sync(conn, &id, &blocks, &mut Vec::new()))
+            .expect("rows");
+        with_column(&store, &id, &blocks[..1]);
+
+        store.with(|conn| backfill_missing(conn)).expect("backfill");
+        let kept = store.with(|conn| all(conn, &id)).expect("read back");
+        assert_eq!(
+            kept.len(),
+            1,
+            "two blocks the transcript had dropped are back: {:?}",
+            kept.iter().map(|b| b.text.clone()).collect::<Vec<_>>()
+        );
     }
 }
