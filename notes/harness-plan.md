@@ -120,14 +120,27 @@ cargo test        # rust
 
 | # | Phase | State |
 | --- | --- | --- |
-| A1 | migration v10 + `messages` model + tests | pending |
-| A2 | dual-write from `TranscriptHub::flush` | pending |
-| A3 | `transcript_tail` / `transcript_since` / nonce dedupe | pending |
-| A4 | `messages_search` RPC + FTS ranking + date filter | pending |
-| B1 | `message_agent` tool + mailbox delivery | pending |
-| B2 | UI for inter-agent messages | pending |
-| C1 | opencode protocol capture + adapter | pending |
-| C2 | opencode in the provider registry + UI | pending |
+| E0 | `ToolDetail` on the block and both tool events | done `92f77ae` |
+| E0b | Claude, Codex and Cursor fill it | done `08f3ecc` |
+| E1 | tool rows fold to a command and open to its output | done `08f3ecc` |
+| A1 | migration v10 + `messages` + FTS5 + backfill | done `801b6b8` |
+| A2 | fingerprinted dual-write from `TranscriptHub::flush` | done `801b6b8` |
+| A3 | `transcript_tail` / `transcript_since` / nonce dedupe | done `801b6b8` |
+| A4 | `messages_search` with bm25, dates, sessions, sort | done `801b6b8` |
+| B1 | mailbox + `message_agent` + delivery callback | done `3e5319d` |
+| B2 | incoming agent messages render on the left, named | done `3e5319d` |
+| B3 | `from_agent` on `TurnStart`; drain the box when a turn ends | **blocked on C: both live in `turns.rs`** |
+| A5 | the chat loads from `transcript_tail` instead of the whole blob | pending |
+| C1 | opencode protocol capture + adapter | in flight |
+| C2 | opencode in the provider registry | in flight |
 | D1 | tool catalog + gateway tools | pending |
-| E1 | tool/command transparency in the transcript | pending |
+| E2 | `message_agent` reads as a message in the sender's transcript | pending |
 | F1 | agent-to-agent QA pass | pending |
+
+## Known issues
+
+- `pty::tests::concurrent_spawns_on_one_id_leave_a_single_child` fails on this
+  machine and failed before any of this work started. Unrelated; still unfixed.
+- Search indexes block text, which for a tool row is its title. Command output
+  is stored but not indexed, on purpose: the index stays small and a query
+  answers in under a millisecond.
