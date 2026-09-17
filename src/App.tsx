@@ -21,10 +21,10 @@ import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./lib/providers";
 import { fileTabId, sessionTabId, stubTabId } from "./lib/tabs";
 import type { ProjectFile, Session, StubKind } from "./lib/types";
 import { SETTINGS_DEFAULT } from "./lib/settings";
-import { startScheduler } from "./lib/scheduler";
 import { nextSessionName } from "./lib/workspaces";
 import { Pages } from "./surfaces/Pages";
 import { usePages } from "./hooks/usePages";
+import { boot } from "./lib/agentRuntime";
 import { focus as focusBlock } from "./lib/transcript";
 import { WorkspacePanes } from "./surfaces/WorkspacePanes";
 
@@ -35,7 +35,10 @@ type Sheet = { session: Session | null };
  * the tabs, so anything that opens or picks a tab has to leave the page first.
  */
 export function App() {
-  useEffect(startScheduler, []);
+  // The daemon runs turns whether or not anyone asked for one — a routine comes
+  // due, an agent writes to another — so the window listens from the moment it
+  // opens rather than from the first thing the user sends.
+  useEffect(() => void boot(), []);
   useSelectAllScope();
 
   const workspaces = useWorkspaces();

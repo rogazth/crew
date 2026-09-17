@@ -3,6 +3,7 @@ import {
   CaretRightIcon,
   CheckIcon,
   CircleNotchIcon,
+  MinusIcon,
   PlayIcon,
   TrashIcon,
   XIcon,
@@ -235,5 +236,7 @@ function RunMark({ run }: { run: RoutineRun }) {
   if (run.status === "running")
     return <CircleNotchIcon className="size-3.5 shrink-0 animate-spin text-kumo-warning" weight="bold" />;
   if (run.status === "ok") return <CheckIcon className="size-3.5 shrink-0 text-kumo-success" weight="bold" />;
+  // Came due while the agent was busy: nothing ran, and nothing went wrong.
+  if (run.status === "skipped") return <MinusIcon className="size-3.5 shrink-0 text-placeholder" weight="bold" />;
   return <XIcon className="size-3.5 shrink-0 text-danger" weight="bold" />;
 }

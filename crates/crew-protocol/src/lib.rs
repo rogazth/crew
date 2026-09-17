@@ -279,13 +279,8 @@ pub struct RoutineUpsert {
 #[derive(Serialize, Deserialize, Clone, Debug, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
-pub struct RoutineMark {
-    pub id: String,
-    #[ts(type = "number")]
-    pub last_run_at: i64,
-    #[ts(optional, type = "number")]
-    pub next_run_at: Option<i64>,
-    pub runs_json: String,
+pub struct RoutineRunNow {
+    pub routine_id: String,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, TS)]

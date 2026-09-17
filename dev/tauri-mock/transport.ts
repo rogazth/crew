@@ -63,6 +63,7 @@ const routines: Row[] = [
     runsJson: JSON.stringify([
       { id: "run2", startedAt: now - 8 * 3600e3, finishedAt: now - 8 * 3600e3 + 42e3, status: "ok", trigger: "schedule" },
       { id: "run1", startedAt: now - 32 * 3600e3, finishedAt: now - 32 * 3600e3 + 12e3, status: "error", trigger: "schedule" },
+      { id: "run0", startedAt: now - 56 * 3600e3, finishedAt: now - 56 * 3600e3, status: "skipped", trigger: "schedule" },
     ]),
   },
   {
@@ -222,8 +223,17 @@ const commands: Record<string, (args: Row) => unknown> = {
     return row;
   },
   routine_delete: ({ id }) => void routines.splice(routines.findIndex((r) => r.id === id) >>> 0, 1),
-  routine_mark_run: ({ id, lastRunAt, nextRunAt, runsJson }) =>
-    void Object.assign(routines.find((r) => r.id === id) ?? {}, { lastRunAt, nextRunAt, runsJson }),
+  /** The daemon fires routines; the mock just records that one ran. */
+  routine_run_now: ({ routineId }) => {
+    const routine = routines.find((r) => r.id === routineId);
+    if (!routine) return undefined;
+    const now = Date.now();
+    const runs = JSON.parse((routine.runsJson as string) ?? "[]") as Row[];
+    runs.unshift({ id: `run${now}`, startedAt: now, finishedAt: now, status: "ok", trigger: "manual" });
+    Object.assign(routine, { lastRunAt: now, runsJson: JSON.stringify(runs.slice(0, 20)) });
+    emit("routines-changed", {});
+    return undefined;
+  },
 };
 
 /** 160×100 gradient; any image the mock is asked for is this one. */

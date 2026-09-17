@@ -1,6 +1,7 @@
-use rusqlite::params;
+use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
+use crate::schedule::{describe_schedule, Schedule};
 use crate::session::{row_to_session, Session, SESSION_COLUMNS};
 use crate::store::{now_millis, Store};
 
@@ -85,6 +86,28 @@ pub fn list(store: &Store) -> Result<Vec<ScheduledRoutine>, String> {
     })
 }
 
+/// The one row the scheduler needs to fire a routine on demand.
+pub fn scheduled(store: &Store, id: String) -> Result<Option<ScheduledRoutine>, String> {
+    store.with(|conn| {
+        let sql = format!(
+            "SELECT {ROUTINE_COLUMNS}, {SESSION_COLUMNS}, w.path
+             FROM routines r
+             JOIN sessions s ON s.id = r.session_id
+             JOIN workspaces w ON w.id = s.workspace_id
+             WHERE r.id = ?1"
+        );
+        conn.prepare_cached(&sql)?
+            .query_row(params![id], |row| {
+                Ok(ScheduledRoutine {
+                    routine: row_to_routine(row, 0)?,
+                    session: row_to_session(row, ROUTINE_COLUMN_COUNT)?,
+                    cwd: row.get(ROUTINE_COLUMN_COUNT + 13)?,
+                })
+            })
+            .optional()
+    })
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn upsert(
     store: &Store,
@@ -136,4 +159,96 @@ pub fn mark_run(
         )
     })?;
     Ok(())
+}
+
+/// Newest first, capped, so the JSON column never grows past a screen of history.
+pub const MAX_RUNS: usize = 20;
+
+/// `Skipped`: it came due while the agent was still working on something else.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum RunStatus {
+    Running,
+    Ok,
+    Error,
+    Skipped,
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum RunTrigger {
+    Schedule,
+    Manual,
+}
+
+/// One line of `runs_json`. The routines screen parses that column straight
+/// out of the row, so these names are the ones it reads.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RoutineRun {
+    pub id: String,
+    pub started_at: i64,
+    pub finished_at: Option<i64>,
+    pub status: RunStatus,
+    pub trigger: RunTrigger,
+}
+
+/// A line the daemon cannot read is a line it drops, never a history it loses.
+pub fn parse_runs(raw: &str) -> Vec<RoutineRun> {
+    serde_json::from_str::<Vec<serde_json::Value>>(raw)
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|item| serde_json::from_value(item).ok())
+        .collect()
+}
+
+pub fn push_run(runs: &[RoutineRun], run: RoutineRun) -> Vec<RoutineRun> {
+    let mut out: Vec<RoutineRun> = runs.iter().filter(|row| row.id != run.id).cloned().collect();
+    out.insert(0, run);
+    out.truncate(MAX_RUNS);
+    out
+}
+
+pub fn runs_json(runs: &[RoutineRun]) -> String {
+    serde_json::to_string(runs).unwrap_or_else(|_| "[]".into())
+}
+
+/// The hidden turn that wakes the agent. It says who is talking so the reply
+/// does not read the schedule back, and it allows silence: a routine that
+/// found nothing should say nothing.
+pub fn wake_prompt(
+    name: &str,
+    schedule: &Schedule,
+    trigger: RunTrigger,
+    prompt: &str,
+    by: Option<&str>,
+) -> String {
+    let when = match schedule {
+        Schedule::Cron { expression } => format!("on the cron schedule {expression}"),
+        _ => {
+            let described = describe_schedule(schedule);
+            match described.strip_prefix("Every") {
+                Some(rest) => format!("every{rest}"),
+                None => described,
+            }
+        }
+    };
+    let cue = match trigger {
+        RunTrigger::Manual => format!(
+            "[routine] \"{name}\" was run on demand. The user pressed Run now in the app; it normally runs {when}."
+        ),
+        RunTrigger::Schedule => {
+            let whose = match by {
+                Some(by) => format!("a standing order {by} set up for you"),
+                None => "your own standing order".into(),
+            };
+            format!(
+                "[routine] \"{name}\" is due ({when}). This is {whose} firing on schedule, not a message the user just typed."
+            )
+        }
+    };
+    format!(
+        "{cue}\nWhat you saved to do each time:\n{}\n\nCarry it out now. Report what matters in one short message. If nothing changed and the instruction does not ask for a report, end without filler.",
+        prompt.trim()
+    )
 }

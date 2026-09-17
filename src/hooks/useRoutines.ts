@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import * as api from "../lib/api";
+import { client } from "../lib/client";
 import { fromRow, type Routine } from "../lib/routines";
 import { onRoutinesChanged } from "../lib/scheduler";
 import type { Session } from "../lib/types";
@@ -27,11 +28,15 @@ export function useRoutines(): RoutineEntry[] | null {
           if (!cancelled) setEntries([]);
         });
     void load();
-    // Saves, deletes and finished runs all land through the scheduler.
+    // Saves and deletes go through the scheduler module. A run is the daemon's
+    // doing, and it says so on the wire the moment the history moves — start,
+    // skip and end alike.
     const unsubscribe = onRoutinesChanged(load);
+    const offFired = client.on("routines-changed", () => void load());
     return () => {
       cancelled = true;
       unsubscribe();
+      offFired();
     };
   }, []);
 

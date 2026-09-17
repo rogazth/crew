@@ -10,6 +10,7 @@ use crew_core::files;
 use crew_core::messages;
 use crew_core::pty::{PtyEvents, PtyHost};
 use crew_core::routine;
+use crew_core::scheduler::Scheduler;
 use crew_core::session;
 use crew_core::store::{self as app_state, Store};
 use crew_core::transcript::TranscriptEvents;
@@ -18,7 +19,7 @@ use crew_core::workspace;
 use crew_protocol::{
     self as proto, Auth, Cwd, DaemonInfo, Id, IdName, IdStatus, Ids, Key, KeyValue, Name, NamePath,
     OptionalId, PathArg, PathContents, PtyAck, PtyAttach, PtyAttached, PtyKill, PtyResize, PtySpawn, PtyWrite,
-    Request, RoutineMark, RoutineUpsert, SessionCreate, SessionCreated, SessionId, SessionUpdate, TempFile,
+    Request, RoutineRunNow, RoutineUpsert, SessionCreate, SessionCreated, SessionId, SessionUpdate, TempFile,
     SearchQuery, TranscriptApply, TranscriptTail, TurnAnswer, TurnRespond,
     TurnStart, TurnStarted, WorkspaceId,
 };
@@ -42,12 +43,14 @@ struct Hosts {
     store: Store,
     bridge: Bridge,
     turns: TurnHost,
+    scheduler: Scheduler,
 }
 
 pub struct Handle {
     pub info: DaemonInfo,
     shutdown: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
     turns: TurnHost,
+    scheduler: Scheduler,
 }
 
 impl Handle {
@@ -60,6 +63,7 @@ impl Handle {
     }
 
     pub fn shutdown(&self) {
+        self.scheduler.stop();
         self.turns.transcripts().flush_all();
         if let Some(tx) = self.shutdown.lock().unwrap_or_else(|e| e.into_inner()).take() {
             let _ = tx.send(());
@@ -249,6 +253,14 @@ impl TranscriptEvents for Hub {
     }
 }
 
+impl crew_core::scheduler::RoutineEvents for Hub {
+    /// A run started, skipped or ended. The screen re-reads; the payload would
+    /// only be a row it is about to ask for anyway.
+    fn routines_changed(&self) {
+        self.emit("routines-changed", serde_json::json!({}));
+    }
+}
+
 struct AgentFanout {
     turns: TurnHost,
 }
@@ -257,6 +269,7 @@ struct ToolDispatch {
     store: crew_core::store::Store,
     transcripts: crew_core::transcript::TranscriptHub,
     turns: TurnHost,
+    scheduler: Scheduler,
     hub: Arc<Hub>,
 }
 
@@ -281,6 +294,7 @@ impl ToolHost for ToolDispatch {
                     },
                 );
             },
+            &|| self.scheduler.arm(),
             &|target| self.deliver(target),
             session_id,
             method,
@@ -332,10 +346,13 @@ pub fn serve(config: Config) -> Result<Handle, String> {
     config.agents.set_events(Arc::new(AgentFanout {
         turns: turns.clone(),
     }));
+    let scheduler = Scheduler::new(config.store.clone(), turns.clone());
+    scheduler.set_events(hub.clone());
     config.bridge.set_handler(Arc::new(ToolDispatch {
         store: config.store.clone(),
         transcripts,
         turns: turns.clone(),
+        scheduler: scheduler.clone(),
         hub: hub.clone(),
     }));
 
@@ -350,6 +367,7 @@ pub fn serve(config: Config) -> Result<Handle, String> {
         store: config.store,
         bridge: config.bridge,
         turns: turns.clone(),
+        scheduler: scheduler.clone(),
     };
     let serve_token = token.clone();
 
@@ -372,6 +390,7 @@ pub fn serve(config: Config) -> Result<Handle, String> {
         info: DaemonInfo { url, token },
         shutdown: Mutex::new(Some(stop_tx)),
         turns,
+        scheduler,
     })
 }
 
@@ -400,6 +419,10 @@ async fn run(
     hub.set_runtime(tokio::runtime::Handle::current());
     hosts.turns.set_runtime(tokio::runtime::Handle::current());
     hosts.turns.transcripts().set_runtime(tokio::runtime::Handle::current());
+    // Routines are the daemon's to fire: a standing order outlives the window.
+    hosts.scheduler.set_runtime(tokio::runtime::Handle::current());
+    let scheduler = hosts.scheduler.clone();
+    tokio::task::spawn_blocking(move || scheduler.arm());
 
     loop {
         tokio::select! {
@@ -415,6 +438,7 @@ async fn run(
             }
         }
     }
+    hosts.scheduler.stop();
     hosts.turns.transcripts().flush_all();
 }
 
@@ -792,7 +816,7 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
         "routine_upsert" => {
             let p: RoutineUpsert = parse(params)?;
             let store = hosts.store.clone();
-            json(block(move || {
+            let row = block(move || {
                 routine::upsert(
                     &store,
                     p.id,
@@ -805,18 +829,23 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
                     p.created_by,
                 )
             })
-            .await?)
+            .await?;
+            let scheduler = hosts.scheduler.clone();
+            tokio::task::spawn_blocking(move || scheduler.arm());
+            json(row)
         }
         "routine_delete" => {
             let Id { id } = parse(params)?;
             let store = hosts.store.clone();
             block(move || routine::delete(&store, id)).await?;
+            let scheduler = hosts.scheduler.clone();
+            tokio::task::spawn_blocking(move || scheduler.arm());
             Ok(Value::Null)
         }
-        "routine_mark_run" => {
-            let p: RoutineMark = parse(params)?;
-            let store = hosts.store.clone();
-            block(move || routine::mark_run(&store, p.id, p.last_run_at, p.next_run_at, p.runs_json)).await?;
+        "routine_run_now" => {
+            let RoutineRunNow { routine_id } = parse(params)?;
+            let scheduler = hosts.scheduler.clone();
+            block(move || scheduler.run_now(routine_id)).await?;
             Ok(Value::Null)
         }
         "state_get" => {

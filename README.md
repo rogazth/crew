@@ -17,7 +17,7 @@ Crew is the roster product, self-hosted, and it is not a chat companion: it is a
 - **Agents that write to each other.** `message_agent` drops a letter in the target's box; it arrives as a turn with the sender's name on it. Nothing blocks; a busy agent reads it when its turn ends.
 - **Agents that carry on.** Writing to itself is how an agent keeps working past the end of a turn. Twenty-five laps with nobody else speaking stops it.
 - **Search over every message**, ⌘⇧F: FTS5, date range, per-agent filter, best-match or newest.
-- **Routines**: standing orders that wake an agent on a schedule.
+- **Routines**: standing orders that wake an agent on a schedule. The daemon fires them, so they do not need the window open.
 - **Terminals**, for the times you want the CLI yourself.
 
 Agents are disposable. A turn ends and the CLI goes; what persists is the transcript and the provider's own resume token.
@@ -35,6 +35,7 @@ cargo test --workspace
 node scripts/drive.mjs              # two agents, a message between them, headless
 SCENARIO=code node scripts/drive.mjs
 SCENARIO=loop node scripts/drive.mjs
+SCENARIO=routine node scripts/drive.mjs
 node scripts/shot.mjs               # a screenshot of the chat against the mock
 ```
 

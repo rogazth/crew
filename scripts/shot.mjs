@@ -27,7 +27,9 @@ await new Promise((resolve, reject) => {
 });
 
 const browser = await chromium.launch();
-const page = await browser.newPage({ viewport: { width: 1280, height: 900 }, deviceScaleFactor: 2 });
+// The routines editor is a tall form; the rest of the app reads at 900.
+const height = process.env.SHOT === "routines" ? 1250 : 900;
+const page = await browser.newPage({ viewport: { width: 1280, height }, deviceScaleFactor: 2 });
 page.on("console", (message) => message.type() === "error" && console.log(`[page] ${message.text()}`));
 // `SHOT=history` seeds a long transcript so the window's affordance shows.
 const query = process.env.SHOT === "history" ? "?history=400" : "";
@@ -38,7 +40,20 @@ const shot = process.env.SHOT ?? "chat";
 await page.mouse.click(900, 700);
 await page.waitForTimeout(300);
 
-if (shot === "history") {
+if (shot === "routines") {
+  await page.keyboard.press("Control+Shift+R");
+  await page.waitForTimeout(700);
+  const heading = await page.locator("h1").first().textContent();
+  if (heading !== "Routines") throw new Error(`the routines page never opened (h1 was ${heading})`);
+  await page.locator("text=Morning digest").first().click();
+  await page.waitForTimeout(700);
+  await page.locator("text=Run history").scrollIntoViewIfNeeded();
+  await page.waitForTimeout(400);
+  // A run that came due while the agent was busy gets its own mark, which is
+  // neither a tick nor a cross.
+  const marks = await page.locator("svg").count();
+  if (marks === 0) throw new Error("the run history rendered no marks");
+} else if (shot === "history") {
   await page.locator('[data-sidebar="sidebar"] button').filter({ hasText: "Planner" }).first().click();
   await page.waitForTimeout(1500);
   const earlier = page.locator('button', { hasText: "Earlier messages" }).first();

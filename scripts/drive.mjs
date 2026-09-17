@@ -146,6 +146,39 @@ const SCENARIOS = {
       ];
     },
   },
+  // A standing order comes due and the daemon wakes the agent for it, with no
+  // window open anywhere.
+  routine: {
+    async start() {
+      await rpc("routine_upsert", {
+        sessionId: coder.id,
+        name: "Morning check",
+        enabled: true,
+        prompt: "Reply with exactly: the branch is green",
+        schedule: JSON.stringify({ kind: "interval", minutes: 60 }),
+        // Due a moment ago, so the daemon's first tick picks it up.
+        nextRunAt: Date.now() - 1000,
+      });
+      // The scheduler wakes on its own; nothing here asks it to.
+      await sleep(3000);
+    },
+    check(coderEnd) {
+      const note = coderEnd.blocks.find(
+        (b) => b.role === "system" && b.text.startsWith("Routine ·"),
+      );
+      const woken = coderEnd.blocks.find((b) => b.role === "user" && b.hidden);
+      const answered = coderEnd.blocks.some((b) => b.role === "assistant" && b.text.trim());
+      return [
+        ["the daemon fired it with no client asking", Boolean(note), note?.text ?? "no routine note"],
+        [
+          "the agent was woken with the standing order",
+          Boolean(woken?.text.includes("the branch is green")),
+          woken ? woken.text.slice(0, 60) : "no hidden turn",
+        ],
+        ["it carried the order out", answered, ""],
+      ];
+    },
+  },
   // The agent does real work, and the transcript says what it did.
   code: {
     prompt:
@@ -174,12 +207,16 @@ const SCENARIOS = {
 
 const scenario = SCENARIOS[process.env.SCENARIO ?? "message"] ?? SCENARIOS.message;
 
-await rpc("turn_start", {
-  sessionId: coder.id,
-  cwd: workDir,
-  text: process.env.PROMPT ?? scenario.prompt,
-  nonce: crypto.randomUUID(),
-});
+if (scenario.start) {
+  await scenario.start();
+} else {
+  await rpc("turn_start", {
+    sessionId: coder.id,
+    cwd: workDir,
+    text: process.env.PROMPT ?? scenario.prompt,
+    nonce: crypto.randomUUID(),
+  });
+}
 
 const coderEnd = await settle(coder.id);
 const cuddlesEnd = await settle(cuddles.id);

@@ -153,6 +153,7 @@ cargo test        # rust
 | A6 | rows are the only store; the blob stops being rewritten every flush | done `9b392af` |
 | E5 | a search hit opens the agent on that line and marks it | done `befaf99` |
 | F5 | the second review's ten findings | done |
+| G1 | routines fire in the daemon, not in the window | done |
 
 ### How A5 landed
 
@@ -200,10 +201,42 @@ window can hold loses its cost footer on the client until the reader loads the
 page above, because `turn.completed` attaches usage to the last assistant block
 and the window may not contain one.
 
+## Routines belong to the daemon
+
+A routine is a standing order: "every weekday at 09:00, check Jira and tell me
+what moved". It used to fire from a `window.setTimeout` in the renderer, so it
+only ran while the app was open — which is not a standing order, and which the
+daemon's own rule in `ARCHITECTURE.md` already rules out: everything that must
+stay alive when the client is not there belongs in `crewd`.
+
+The daemon fires them now. The renderer keeps the screen: writing them, the run
+history, and a "Run now" that goes through the same path the schedule does.
+
+A run that comes due while the agent is still working is recorded as `skipped`
+rather than queued — a routine that piles up is worse than one that misses a
+beat — and the history says so instead of calling it a failure.
+
+A run is the one change to a routine that no client asked for, so the daemon
+says `routines-changed` on the wire every time the history moves — when the run
+starts, when it is skipped, and when it ends. Watching `session-status` instead
+loses the race: the turn ends, the client re-reads, and the entry is rewritten
+from `running` a moment later.
+
+`routine_mark_run` went with the renderer's timer. The daemon writes the run
+history now, so an RPC that let a client write it was a second writer for the
+one thing the daemon owns.
+
+Known duplication, pre-existing: the schedule math exists in both languages,
+because the UI computes the next run when it saves and the daemon computes it
+when it fires. They read the same `Schedule` JSON and both have tests.
+
 ## Seeing it work
 
 ```bash
 cargo build -p crewd
+
+# a standing order fires with no window open anywhere
+SCENARIO=routine node scripts/drive.mjs
 
 # a database from before the messages table, opened by the current daemon
 node scripts/migrate-check.mjs
@@ -242,3 +275,6 @@ The default provider is opencode on its free models, which need no credentials.
   rewrites the rows after it.
 - `from_agent` rides inside `extra_json`, so "everything agent X wrote" is not
   a SQL query yet.
+- `tests/cli.rs` watches real processes start and die, so it fails under enough
+  load — seen once with a `cargo clippy` building alongside it. Five runs on
+  their own are clean.

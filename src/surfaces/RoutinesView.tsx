@@ -95,7 +95,7 @@ export function RoutinesView({ draft, workspaces, activeWorkspaceId, agents, onC
           await saveRoutine(draft);
         }}
         onDelete={() => confirmDelete(editing)}
-        onRunNow={() => runRoutineNow(editing.routine, editing.session, editing.cwd)}
+        onRunNow={() => runRoutineNow(editing.routine.id)}
         onBack={() => setOpen(null)}
       />
     );

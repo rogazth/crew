@@ -143,6 +143,25 @@ turno que termina drena el buzón (`TurnHost::drain_mailbox`).
 nombre la recibe como turno nuevo apenas termina el actual. Veinticinco vueltas
 seguidas sin que hable nadie más lo cortan y lo dicen en el transcript.
 
+## Las rutinas las dispara el daemon
+
+Una rutina es una orden permanente: "cada día hábil a las 09:00, mirá Jira y
+contame qué se movió". Se disparaba desde un `setTimeout` del renderer, así que
+solo corría con la app abierta —que no es una orden permanente, y que la regla
+de arriba ya excluía: al daemon va todo lo que debe seguir vivo cuando el
+cliente no está—.
+
+`crewd` arma un timer para la más próxima (con tope de 60 s por espera, porque
+los timers se corren al suspender), la dispara como turno oculto con el prompt
+guardado, y deja una nota `Routine · <nombre>` en el transcript. Si el agente
+está ocupado, la corrida se anota como `skipped`: una rutina que se apila es
+peor que una que se saltea una vuelta.
+
+El renderer conserva la pantalla —escribirlas, el historial, y un "Run now" que
+pasa por el mismo camino que el horario—. Una corrida que nadie pidió es lo
+único que la pantalla no puede enterarse sola, así que cada vez que el historial
+se mueve el daemon emite `routines-changed` y la lista se relee.
+
 ## Las tools que Crew le da al agente
 
 `tools/list` devuelve cinco: `list_agents`, `message_agent`, `search_messages`,
@@ -184,7 +203,7 @@ Agregar Codex es un archivo nuevo y una fila en el registry.
 ```
 src/lib/transcript.ts    bloques por sesión; publica por frame, guarda con debounce
 src/lib/agentRuntime.ts  send/stop/respond; escribe status y provider_session_id
-src/lib/scheduler.ts     routines: un timer para la próxima ejecución
+src/lib/scheduler.ts     routines: guardar, borrar y "Run now" (el timer es del daemon)
 src/lib/agentTools.ts    los tools que un agente tiene sobre Crew (agentes, rutinas)
 src/hooks/useThread.ts   useSyncExternalStore sobre transcript.ts
 ```

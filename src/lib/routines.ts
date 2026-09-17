@@ -7,7 +7,8 @@ export type Schedule =
   | { kind: "daily"; hour: number; minute: number; days: number[] }
   | { kind: "cron"; expression: string };
 
-export type RunStatus = "running" | "ok" | "error";
+/** `skipped`: it came due while the agent was still working on something else. */
+export type RunStatus = "running" | "ok" | "error" | "skipped";
 
 export type RoutineRun = {
   id: string;
@@ -235,29 +236,6 @@ export function summarize(prompt: string, max = 140): string {
   return text.length > max ? `${text.slice(0, max - 1).trimEnd()}…` : text;
 }
 
-/**
- * The hidden turn that wakes the agent. It says who is talking so the reply
- * does not read the schedule back, and it allows silence: a routine that
- * found nothing should say nothing.
- */
-export function wakePrompt(
-  name: string,
-  schedule: Schedule,
-  trigger: RoutineRun["trigger"],
-  prompt: string,
-  by: string | null = null,
-): string {
-  const when =
-    schedule.kind === "cron"
-      ? `on the cron schedule ${schedule.expression}`
-      : describeSchedule(schedule).replace(/^Every/, "every");
-  const whose = by ? `a standing order ${by} set up for you` : "your own standing order";
-  const cue =
-    trigger === "manual"
-      ? `[routine] "${name}" was run on demand. The user pressed Run now in the app; it normally runs ${when}.`
-      : `[routine] "${name}" is due (${when}). This is ${whose} firing on schedule, not a message the user just typed.`;
-  return `${cue}\nWhat you saved to do each time:\n${prompt.trim()}\n\nCarry it out now. Report what matters in one short message. If nothing changed and the instruction does not ask for a report, end without filler.`;
-}
 
 /** Newest first, capped, so the JSON column never grows past a screen of history. */
 export function pushRun(runs: RoutineRun[], run: RoutineRun): RoutineRun[] {

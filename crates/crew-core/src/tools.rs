@@ -268,10 +268,12 @@ fn find_tool(args: &Value) -> Result<Value, String> {
 /// a letter nobody delivers.
 pub type Deliver<'a> = &'a dyn Fn(&Session) -> bool;
 
+#[allow(clippy::too_many_arguments)]
 pub fn handle(
     store: &Store,
     transcripts: &TranscriptHub,
     on_created: &dyn Fn(&Session),
+    on_routines: &dyn Fn(),
     deliver: Deliver<'_>,
     session_id: &str,
     method: &str,
@@ -292,7 +294,7 @@ pub fn handle(
             let name = params.get("name").and_then(Value::as_str).unwrap_or("");
             let args = params.get("arguments").cloned().unwrap_or(json!({}));
             let args = if args.is_object() { args } else { json!({}) };
-            match run(store, transcripts, on_created, deliver, &caller, name, &args) {
+            match run(store, transcripts, on_created, on_routines, deliver, &caller, name, &args) {
                 Ok(out) => {
                     let body = match out {
                         Value::String(text) => text,
@@ -315,6 +317,8 @@ fn run(
     store: &Store,
     transcripts: &TranscriptHub,
     on_created: &dyn Fn(&Session),
+    // A routine the agent just wrote is a routine the daemon has to wake for.
+    on_routines: &dyn Fn(),
     deliver: Deliver<'_>,
     caller: &Session,
     name: &str,
@@ -332,11 +336,11 @@ fn run(
                 return Err(format!("{inner} cannot call itself. Name a tool find_tool returned."));
             }
             let inner_args = args.get("arguments").cloned().unwrap_or_else(|| json!({}));
-            run(store, transcripts, on_created, deliver, caller, &inner, &inner_args)
+            run(store, transcripts, on_created, on_routines, deliver, caller, &inner, &inner_args)
         }
         "list_routines" => list_routines(store, caller, args),
-        "upsert_routine" => upsert_routine(store, transcripts, caller, args),
-        "delete_routine" => delete_routine(store, transcripts, caller, args),
+        "upsert_routine" => upsert_routine(store, transcripts, on_routines, caller, args),
+        "delete_routine" => delete_routine(store, transcripts, on_routines, caller, args),
         _ => Err(format!(
             "Unknown tool \"{name}\". One of: {}",
             catalog().into_iter().map(|t| t.name).collect::<Vec<_>>().join(", ")
@@ -531,6 +535,7 @@ fn list_routines(store: &Store, caller: &Session, args: &Value) -> Result<Value,
 fn upsert_routine(
     store: &Store,
     transcripts: &TranscriptHub,
+    on_routines: &dyn Fn(),
     caller: &Session,
     args: &Value,
 ) -> Result<Value, String> {
@@ -579,12 +584,14 @@ fn upsert_routine(
         let verb = if existing.is_some() { "updated" } else { "set up" };
         transcripts.append_system(&target.id, &format!("Routine · {name} {verb} by {}", caller.name));
     }
+    on_routines();
     Ok(describe_routine(&row, &target))
 }
 
 fn delete_routine(
     store: &Store,
     transcripts: &TranscriptHub,
+    on_routines: &dyn Fn(),
     caller: &Session,
     args: &Value,
 ) -> Result<Value, String> {
@@ -597,6 +604,7 @@ fn delete_routine(
             &format!("Routine · {} removed by {}", found.1.name, caller.name),
         );
     }
+    on_routines();
     Ok(Value::String(format!(
         "Deleted \"{}\" from {}.",
         found.1.name, found.0.name
@@ -775,6 +783,7 @@ mod tests {
             store,
             transcripts,
             &|_| {},
+            &|| {},
             &|target| postman.deliver(store, target),
             &caller.id,
             "tools/call",
@@ -796,6 +805,7 @@ mod tests {
             store,
             transcripts,
             &|_| {},
+            &|| {},
             &|target| postman.deliver(store, target),
             &caller.id,
             "tools/list",
@@ -1156,6 +1166,7 @@ mod tests {
             &store,
             &transcripts,
             &|_| {},
+            &|| {},
             &|_target| {
                 // TurnHost::drain_mailbox, on the target's thread, racing the
                 // delivery this call is about to attempt.
@@ -1275,6 +1286,7 @@ mod tests {
             &store,
             &transcripts,
             &|_| {},
+            &|| {},
             &|target| postman.deliver(&store, target),
             &cuddles.id,
             "tools/call",

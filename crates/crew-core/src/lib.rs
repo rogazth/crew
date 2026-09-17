@@ -10,6 +10,7 @@ pub mod messages;
 pub mod pty;
 pub mod routine;
 pub mod schedule;
+pub mod scheduler;
 pub mod session;
 pub mod store;
 pub mod tools;

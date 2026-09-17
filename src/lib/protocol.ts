@@ -113,7 +113,7 @@ export type Response = { id: number, ok: boolean, result?: unknown, error?: stri
 
 export type Routine = { id: string, sessionId: string, name: string, enabled: boolean, prompt: string, schedule: string, lastRunAt?: number, nextRunAt?: number, runsJson: string, createdBy: string | null, };
 
-export type RoutineMark = { id: string, lastRunAt: number, nextRunAt?: number, runsJson: string, };
+export type RoutineRunNow = { routineId: string, };
 
 export type RoutineUpsert = { id: string | null, sessionId: string, name: string, enabled: boolean, prompt: string, schedule: string, nextRunAt?: number, createdBy: string | null, };
 

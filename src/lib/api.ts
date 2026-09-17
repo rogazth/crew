@@ -101,6 +101,10 @@ export const listSessionRoutines = (sessionId: string): Promise<RoutineRow[]> =>
 
 export const listRoutines = (): Promise<ScheduledRoutine[]> => client.request("routine_list");
 
+/** Fire one routine now. The daemon runs it exactly as it runs a due one. */
+export const runRoutineNow = (routineId: string): Promise<void> =>
+  client.request("routine_run_now", { routineId });
+
 export const upsertRoutine = (input: {
   id?: string;
   sessionId: string;
@@ -113,13 +117,6 @@ export const upsertRoutine = (input: {
 }): Promise<RoutineRow> => client.request("routine_upsert", { id: null, ...input });
 
 export const deleteRoutine = (id: string): Promise<void> => client.request("routine_delete", { id });
-
-export const markRoutineRun = (
-  id: string,
-  lastRunAt: number,
-  nextRunAt: number | null,
-  runsJson: string,
-): Promise<void> => client.request("routine_mark_run", { id, lastRunAt, nextRunAt, runsJson });
 
 export type BridgeInfo = { socketPath: string; token: string; exe: string };
 

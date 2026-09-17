@@ -4,7 +4,7 @@ vi.mock("./client", () => ({
   client: { request: vi.fn(), on: vi.fn(), onReconnect: vi.fn(), openStream: vi.fn(), writeStream: vi.fn() },
 }));
 
-const { validateSchedule, wakePrompt } = await import("./routines");
+const { validateSchedule } = await import("./routines");
 
 describe("validateSchedule", () => {
   it("accepts an interval", () => {
@@ -28,16 +28,3 @@ describe("validateSchedule", () => {
   });
 });
 
-describe("wakePrompt", () => {
-  const schedule = { kind: "interval" as const, minutes: 60 };
-
-  it("names the agent that set the routine up", () => {
-    expect(wakePrompt("Digest", schedule, "schedule", "look", "Planner")).toContain(
-      "a standing order Planner set up for you",
-    );
-  });
-
-  it("calls it your own when nobody else did", () => {
-    expect(wakePrompt("Digest", schedule, "schedule", "look")).toContain("your own standing order");
-  });
-});
