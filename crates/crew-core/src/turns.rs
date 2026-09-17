@@ -247,6 +247,14 @@ impl TurnHost {
                 return Err("Turn already running".into());
             }
         }
+        // A turn nobody else asked for is you: that clears the lap budget, so
+        // the message the transcript tells you to send actually frees the loop.
+        if params.from_agent.is_none() {
+            self.loops
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .remove(&params.session_id);
+        }
         let hidden = params.hidden.unwrap_or(false);
         match params.from_agent.clone() {
             Some(from) => self
@@ -539,6 +547,9 @@ impl TurnHost {
             }
         };
         if laps > MAX_SELF_TURNS {
+            // The note stays in the box: it is what the agent told itself to do
+            // next, and the cap is a pause, not a decision to drop the work.
+            let _ = mailbox::release(&self.store, &letter.id);
             self.transcripts.append_system(
                 session_id,
                 &format!("Stopped after {MAX_SELF_TURNS} turns writing to itself. Send it a message to continue."),
