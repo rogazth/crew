@@ -363,7 +363,13 @@ function search(args: Row): Row[] {
       const at = (block.at as number | undefined) ?? Date.now();
       const found = text.toLowerCase().indexOf(query);
       if (found < 0 || (from !== undefined && at < from)) return;
-      const window = text.slice(Math.max(0, found - 40), found + query.length + 80);
+      // The daemon snippets by token; slicing by character would cut a word in
+      // half and make the mock look worse than the thing it stands in for.
+      const before = text.slice(0, found);
+      const after = text.slice(found + query.length);
+      const head = before.length > 40 ? `…${before.slice(-40).replace(/^\S*\s*/, "")}` : before;
+      const tail = after.length > 80 ? `${after.slice(0, 80).replace(/\s*\S*$/, "")}…` : after;
+      const window = `${head}${text.slice(found, found + query.length)}${tail}`;
       const start = window.toLowerCase().indexOf(query);
       hits.push({
         sessionId: session.id,

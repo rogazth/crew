@@ -1,3 +1,4 @@
+import { rememberAgents } from "./agentNames";
 import { describe, expect, it } from "vitest";
 import { applyEvent, newBlock } from "./blocks";
 import type { Block, ToolDetail, ToolStatus } from "./protocol";
@@ -85,6 +86,18 @@ describe("toolLine", () => {
     const line = toolLine(tool({ kind: "message", to: "Cuddles", text: "done\nwith details" }));
     expect(line.text).toBe("done");
     expect(line.suffix).toBe("to Cuddles");
+  });
+
+  // list_agents hands the model ids, so half the message rows arrive as a uuid.
+  it("says the name of the agent an id belongs to", () => {
+    rememberAgents([{ id: "4be7e9ad-a184", name: "Cuddles" }]);
+    const line = toolLine(tool({ kind: "message", to: "4be7e9ad-a184", text: "done" }));
+    expect(line.suffix).toBe("to Cuddles");
+  });
+
+  it("leaves an id it has never seen alone", () => {
+    const line = toolLine(tool({ kind: "message", to: "nobody-here", text: "done" }));
+    expect(line.suffix).toBe("to nobody-here");
   });
 });
 

@@ -1,3 +1,4 @@
+import { agentLabel } from "../../lib/agentNames";
 import { memo } from "react";
 import type { Block } from "../../lib/blocks";
 import { detailOf, splitClip } from "../../lib/toolDetail";
@@ -61,7 +62,7 @@ export const ToolBody = memo(function ToolBody({ block }: { block: Block }) {
         <CodeBlock code={splitClip(detail.preview).body} {...langProp(detail.path)} />
       ) : null;
     case "message":
-      return <Pre head={`to ${detail.to}`} text={detail.text} />;
+      return <Pre head={`to ${agentLabel(detail.to)}`} text={detail.text} />;
     case "output":
       return <Pre head="output" text={detail.text} />;
     default:

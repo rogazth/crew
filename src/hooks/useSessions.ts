@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { rememberAgents } from "../lib/agentNames";
 import { dispose, onSessionPatch, reconcile } from "../lib/agentRuntime";
 import { client } from "../lib/client";
 import * as api from "../lib/api";
@@ -32,6 +33,10 @@ export function useSessions(workspaceId: string | null) {
       cancelled = true;
     };
   }, [workspaceId]);
+
+  // A chat shows the name an id belongs to, and every way a session is made,
+  // renamed or loaded ends here.
+  useEffect(() => rememberAgents(sessions), [sessions]);
 
   // The agent runtime keeps going while a tab is closed; its status and resume
   // id land here, whichever workspace is showing.

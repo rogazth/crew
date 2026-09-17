@@ -1,3 +1,4 @@
+import { agentLabel } from "./agentNames";
 import type { Block, ToolDetail } from "./protocol";
 
 export type { ToolDetail };
@@ -85,7 +86,7 @@ export function toolLine(block: Block): ToolLine {
     case "fetch":
       return { text: detail.title ?? host(detail.url), mono: false, suffix: host(detail.url), failed };
     case "message":
-      return { text: firstLine(detail.text), mono: false, suffix: `to ${detail.to}`, failed };
+      return { text: firstLine(detail.text), mono: false, suffix: `to ${agentLabel(detail.to)}`, failed };
     case "output":
       return { text: firstLine(detail.text), mono: false, failed };
   }
