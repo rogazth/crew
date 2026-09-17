@@ -192,6 +192,10 @@ The wire and the renderer hold a page; `crewd` holds the transcript.
 ```bash
 cargo build -p crewd
 
+# a database from before the messages table, opened by the current daemon
+node scripts/migrate-check.mjs
+CASE=behind node scripts/migrate-check.mjs   # rows that fell behind the column
+
 # two agents, one messages the other, assertions on both transcripts
 node scripts/drive.mjs
 
