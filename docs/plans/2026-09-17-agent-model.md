@@ -214,21 +214,37 @@ on a refusal.
 - **Roster visibility.** `list_agents` still answers with every agent's name,
   description, model and status. Decision 14 fenced message content but not the
   roster; nobody has argued either way.
-- **The shape of the tool sheet.** One paragraph or one line per tool.
 - **Caps on creation.** Deferred at step 2, not dismissed.
+
+Settled while building: the tool sheet is one line per tool, not a paragraph.
+The paragraph was what got skimmed.
 
 ## Status
 
-| # | Decision | State |
+All sixteen landed on 2026-09-17.
+
+| # | Decision | Where |
 | --- | --- | --- |
-| 1–3 | creation: no caps, inherited autonomy, creator trace | ☐ |
-| 4–6 | addressing by uuid, `continue_after_turn`, id in the envelope | ☐ |
-| 7 | no `awaiting` | ✅ nothing to build |
-| 8–9 | uniform turn prompt, stamped tail | ☐ |
-| 10 | approvals unchanged | ✅ nothing to build |
-| 11 | `needs-input` dot | ☐ |
-| 12 | no forced reply; `tools_hint` rewritten | ☐ |
-| 13 | `update_description` | ☐ |
-| 14 | `search_messages` scoped to self | ☐ |
-| 15 | no fence | ✅ nothing to build |
-| 16 | token per session | ☐ |
+| 1–3 | creation: no caps, inherited autonomy, creator trace | `tools.rs` |
+| 4–6 | addressing by uuid, `continue_after_turn`, id in the envelope | `tools.rs`, `mailbox.rs` |
+| 7 | no `awaiting` | nothing to build |
+| 8–9 | uniform turn prompt, stamped tail | `working_set.rs`, `store.rs`, `TurnStart.sent_at` |
+| 10 | approvals unchanged | nothing to build |
+| 11 | `needs-input` dot | `StatusDot.tsx` |
+| 12 | no forced reply; the tool sheet rewritten | `turns.rs` |
+| 13 | `update_description` | `tools.rs` |
+| 14 | `search_messages` scoped to self | `tools.rs` |
+| 15 | no fence | nothing to build |
+| 16 | token per session | `bridge.rs`, `mcp.rs`, `turns.rs` |
+
+Seen working, not only tested: `PROVIDER=claude node scripts/drive.mjs` has the
+agent call `list_agents`, address the id it finds, and the letter arrive with
+the sender on it; `SCENARIO=loop` has it leave itself a note and pick the work
+back up in a second turn.
+
+Two things the build turned up that the walk had not:
+
+- `bridge_info` was an RPC nobody called whose only payload was the
+  daemon-wide token. Removed with it.
+- A session that is deleted has its token revoked, or its process keeps a
+  working credential for an agent that no longer exists.
