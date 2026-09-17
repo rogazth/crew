@@ -12,7 +12,7 @@ use crew_protocol::AgentRef;
 use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
-use crate::store::{now_millis, Store};
+use crate::store::{now_millis, stamp, Store};
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Letter {
@@ -40,20 +40,27 @@ CREATE INDEX IF NOT EXISTS mailbox_waiting_idx
   ON mailbox (to_session, at) WHERE delivered_at IS NULL;
 "#;
 
-/// The line that goes above a letter when it is handed over.
+/// The header a letter is handed over under.
 ///
 /// A letter arrives as a user turn — the same shape as something the person
-/// typed — so without this the model answers in its own chat and the sender
-/// waits forever. One line, like `[routine]`: who wrote it, and that they are
-/// an agent. How to write back is in the persona, where it is said once
-/// instead of in every letter.
-pub fn envelope(from: &AgentRef, body: &str, to_self: bool) -> String {
-    let head = if to_self {
-        "[message] From yourself, to continue.".to_string()
+/// typed — so the header is what tells them apart. It carries facts and no
+/// instructions: who wrote it, the id they are reached at, and when they wrote
+/// it. What to do about it is the agent's to decide, with the tool sheet in
+/// the persona and the tail above.
+///
+/// The id and not the name, because the name is the user's: they rename an
+/// agent and a reply addressed to the old one reaches nobody. A sender that
+/// has been deleted since has no id left (`ON DELETE SET NULL`), and saying so
+/// is better than offering an address that is not one.
+pub fn envelope(from: &AgentRef, body: &str, at: i64, to_self: bool) -> String {
+    let who = if to_self {
+        "yourself, to continue".to_string()
+    } else if from.id.is_empty() {
+        format!("{} (agent, no longer in this workspace)", from.name)
     } else {
-        format!("[message] {} (agent)", from.name)
+        format!("{} (agent {})", from.name, from.id)
     };
-    format!("{head}\n{body}")
+    format!("## Message\nFrom: {who}\nAt: {}\n\n{body}", stamp(at))
 }
 
 pub fn enqueue(store: &Store, to_session: &str, from: &AgentRef, text: &str) -> Result<Letter, String> {
@@ -185,9 +192,27 @@ mod tests {
     }
 
     #[test]
-    fn the_envelope_names_the_agent_that_wrote_the_letter() {
-        let letter = envelope(&sender("s1"), "the branch is green", false);
-        assert_eq!(letter, "[message] Coder (agent)\nthe branch is green");
+    fn the_envelope_carries_the_id_the_sender_is_reached_at() {
+        let letter = envelope(&sender("s1"), "the branch is green", 0, false);
+        assert!(letter.starts_with("## Message\nFrom: Coder (agent s1)\nAt: "), "{letter}");
+        assert!(letter.ends_with("\n\nthe branch is green"), "{letter}");
+    }
+
+    /// The time it was written, not the time it was handed over: a letter that
+    /// waited an hour in a busy agent's box still says when it was written.
+    #[test]
+    fn the_envelope_says_when_it_was_written() {
+        let at = crate::store::now_millis() - 3_600_000;
+        let letter = envelope(&sender("s1"), "hi", at, false);
+        assert!(letter.contains(&format!("At: {}", crate::store::stamp(at))), "{letter}");
+    }
+
+    /// A sender that was deleted leaves a name and no address. Offering the
+    /// empty id would be offering a reply that goes nowhere.
+    #[test]
+    fn a_deleted_sender_is_named_without_an_address() {
+        let letter = envelope(&AgentRef { id: String::new(), name: "Coder".into() }, "hi", 0, false);
+        assert!(letter.contains("Coder (agent, no longer in this workspace)"), "{letter}");
     }
 
     /// A note an agent left itself is not the user either, and saying who wrote
@@ -195,8 +220,8 @@ mod tests {
     /// somebody else.
     #[test]
     fn a_note_to_yourself_says_so() {
-        let letter = envelope(&sender("s1"), "next: run the tests", true);
-        assert!(letter.starts_with("[message] From yourself, to continue."), "{letter}");
+        let letter = envelope(&sender("s1"), "next: run the tests", 0, true);
+        assert!(letter.contains("From: yourself, to continue"), "{letter}");
         assert!(letter.ends_with("next: run the tests"), "{letter}");
     }
 

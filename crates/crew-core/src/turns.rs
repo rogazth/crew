@@ -326,8 +326,12 @@ impl TurnHost {
                 // on the block for the reader.
                 self.transcripts
                     .append_from_agent(&params.session_id, &params.text, from.clone());
-                params.text =
-                    mailbox::envelope(&from, &params.text, from.id == params.session_id);
+                params.text = mailbox::envelope(
+                    &from,
+                    &params.text,
+                    params.sent_at.unwrap_or_else(crate::store::now_millis),
+                    from.id == params.session_id,
+                );
             }
             None => self
                 .transcripts
@@ -642,6 +646,7 @@ impl TurnHost {
             mentions: None,
             hidden: None,
             from_agent: Some(letter.from.clone()),
+            sent_at: Some(letter.at),
             nonce: None,
         });
         if started.is_err() {
@@ -2197,6 +2202,7 @@ print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type
                 mentions: None,
                 hidden: None,
                 from_agent: None,
+                sent_at: None,
                 nonce: None,
             })
             .expect("start");
@@ -2233,6 +2239,7 @@ print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type
                 mentions: None,
                 hidden: None,
                 from_agent: None,
+                sent_at: None,
                 nonce: None,
             })
             .expect("start");
@@ -2296,11 +2303,11 @@ print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type
         turn(&world, &coder, "y ahora?");
         let second = std::fs::read_to_string(&seen).expect("the provider was never spawned");
         assert!(second.starts_with("You are Coder."), "the persona is on every turn: {second}");
-        assert!(second.contains("[user] el parser se cae con tabs"), "{second}");
-        assert!(second.contains("[you] ok"), "the reply is in the tail too: {second}");
+        assert!(second.contains("· user] el parser se cae con tabs"), "{second}");
+        assert!(second.contains("· you] ok"), "the reply is in the tail too: {second}");
         assert!(second.trim_end().ends_with("y ahora?"), "{second}");
         assert!(
-            second.find("[user] el parser").unwrap() < second.find("## This turn").unwrap(),
+            second.find("· user] el parser").unwrap() < second.find("## This turn").unwrap(),
             "{second}"
         );
     }
@@ -2329,10 +2336,16 @@ print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type
         settle(&world, &cuddles.id);
 
         let prompt = std::fs::read_to_string(&seen).expect("the provider was never spawned");
+        // The id, so the reader has an address and not only a label, and the
+        // time it was written rather than the time it was handed over.
         assert!(
-            prompt.contains("[message] Coder (agent)\nthe branch is green"),
+            prompt.contains(&format!(
+                "## Message\nFrom: Coder (agent {})\nAt: ",
+                coder.id
+            )),
             "{prompt}"
         );
+        assert!(prompt.contains("\n\nthe branch is green"), "{prompt}");
         // And the reader sees the letter, not the envelope.
         let rows = blocks(&world, &cuddles.id);
         assert!(
@@ -2364,10 +2377,8 @@ print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type
         settle(&world, &coder.id);
 
         let prompt = std::fs::read_to_string(&seen).expect("the provider was never spawned");
-        assert!(
-            prompt.contains("[message] From yourself, to continue.\nnext: run the tests"),
-            "{prompt}"
-        );
+        assert!(prompt.contains("From: yourself, to continue"), "{prompt}");
+        assert!(prompt.contains("\n\nnext: run the tests"), "{prompt}");
     }
 
     #[test]
@@ -2444,6 +2455,7 @@ print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type
                 mentions: None,
                 hidden: None,
                 from_agent: None,
+                sent_at: None,
                 nonce: None,
             })
             .expect("start");

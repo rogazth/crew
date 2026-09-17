@@ -189,6 +189,11 @@ export type TurnStart = { sessionId: string, cwd: string, text: string, files?: 
  */
 fromAgent?: AgentRef, 
 /**
+ * When the letter was written, which is not when it was handed over: one
+ * that waited in a busy agent's box still says when it was written.
+ */
+sentAt?: number, 
+/**
  * One id per Enter, replayed unchanged by a retry. The daemon accepts it
  * once; a second arrival is answered without starting a second turn.
  */

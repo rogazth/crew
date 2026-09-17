@@ -25,6 +25,11 @@ pub struct TurnStart {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub from_agent: Option<AgentRef>,
+    /// When the letter was written, which is not when it was handed over: one
+    /// that waited in a busy agent's box still says when it was written.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "number")]
+    pub sent_at: Option<i64>,
     /// One id per Enter, replayed unchanged by a retry. The daemon accepts it
     /// once; a second arrival is answered without starting a second turn.
     #[serde(default, skip_serializing_if = "Option::is_none")]

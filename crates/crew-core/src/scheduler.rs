@@ -229,6 +229,7 @@ impl Scheduler {
             mentions: None,
             hidden: Some(true),
             from_agent: None,
+            sent_at: None,
             nonce: None,
         });
         if started_turn.is_err() {

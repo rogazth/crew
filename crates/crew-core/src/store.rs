@@ -332,3 +332,34 @@ pub fn now_millis() -> i64 {
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0)
 }
+
+/// A moment, written the way a model can do arithmetic on it: local time, and
+/// the date as well as the clock. Without the date "yesterday" has nothing to
+/// resolve against, and a turn is a fresh session that knows only what today is.
+pub fn stamp(ms: i64) -> String {
+    let secs = (ms / 1000) as libc::time_t;
+    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+    unsafe {
+        libc::localtime_r(&secs, &mut tm);
+    }
+    format!(
+        "{:04}-{:02}-{:02} {:02}:{:02}",
+        tm.tm_year + 1900,
+        tm.tm_mon + 1,
+        tm.tm_mday,
+        tm.tm_hour,
+        tm.tm_min
+    )
+}
+
+#[cfg(test)]
+mod stamp_tests {
+    #[test]
+    fn a_stamp_carries_the_date_and_the_clock() {
+        let out = super::stamp(super::now_millis());
+        assert_eq!(out.len(), 16, "{out}");
+        assert_eq!(&out[4..5], "-");
+        assert_eq!(&out[10..11], " ");
+        assert_eq!(&out[13..14], ":");
+    }
+}
