@@ -140,6 +140,9 @@ cargo test        # rust
 | E3 | a folded phase says it failed; rows wear what they did | done `2de6918` |
 | F1 | agent-to-agent QA against real CLIs (`scripts/drive.mjs`) | done `f11a656` |
 | F2 | the working-directory bug that fix found | done `92ac4dc` |
+| E4 | the client folds `detail` too, so a live row shows its command | done `f0ff62d` |
+| F3 | Claude keeps a finished row's command; Write stops claiming −0 | done `de1ba7e` |
+| F4 | the loop cap pauses instead of eating the agent's own note | done `925386f` |
 | A5 | the chat loads from `transcript_tail` instead of the whole blob | **next** |
 
 ### Why A5 is still open
