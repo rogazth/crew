@@ -60,7 +60,51 @@ const IDLE_KILL: Duration = Duration::from_secs(5);
 /// row without anyone else speaking is a runaway, not a plan.
 const MAX_SELF_TURNS: u32 = 25;
 const STDERR_TAIL: usize = 12;
-const TOOLS_HINT: &str = "Crew gives you tools through its crew MCP server. list_agents says who else is in this workspace. message_agent writes to one of them, and writing to yourself is how you carry on after this turn ends: leave yourself the next step and it arrives as a new turn. search_messages looks up what was already said. find_tool searches everything else Crew offers and answers with arguments you can call through call_tool; reach for it before deciding something is not possible here.";
+/// The Crew tools an agent is handed, spelled the way its own harness will
+/// accept them.
+///
+/// The names matter more than they look. An agent told about `message_agent`
+/// goes looking for `message_agent`, and what it finds is whatever else it has
+/// of that shape — with Claude Code that is its own cross-session SendMessage,
+/// which writes to another machine entirely. Measured, not guessed: it happened
+/// in `scripts/drive.mjs` and the letter left the building.
+fn tools_hint(lead: &str, spell: &dyn Fn(&str) -> String) -> String {
+    format!(
+        "{lead} {} says who else is in this workspace. {} writes to one of them, and writing \
+         to yourself is how you carry on after this turn ends: leave yourself the next step and \
+         it arrives as a new turn. {} looks up what was already said. {} searches everything else \
+         Crew offers and answers with arguments you can call through {}; reach for it before \
+         deciding something is not possible here.",
+        spell("list_agents"),
+        spell("message_agent"),
+        spell("search_messages"),
+        spell("find_tool"),
+        spell("call_tool"),
+    )
+}
+
+/// Claude and Codex namespace an MCP server's tools under its name.
+fn mcp_tools_hint() -> String {
+    tools_hint("Crew gives you tools through its crew MCP server, under these names.", &|tool| {
+        format!("`mcp__crew__{tool}`")
+    })
+}
+
+/// opencode flattens them onto the server name instead.
+fn opencode_tools_hint() -> String {
+    tools_hint("Crew gives you tools through its crew MCP server, under these names.", &|tool| {
+        format!("`crew_{tool}`")
+    })
+}
+
+/// Cursor has no MCP, so it reaches the same bridge through the shell.
+fn shell_tools_hint(exe: &str) -> String {
+    tools_hint(
+        "Crew's tools are not in your tool list; you reach them by running them in the shell, \
+         and `<json>` is the arguments object.",
+        &|tool| format!("`{exe} call {tool} '<json>'`"),
+    )
+}
 
 type Answers = HashMap<String, String>;
 
@@ -742,11 +786,8 @@ impl TurnHost {
 
         let path = self.resolve_bin("claude").or_else(|_| self.resolve_bin("claude"))?;
         let mcp = self.mcp();
-        let persona = claude_persona(
-            &session.name,
-            &session.description,
-            mcp.as_ref().map(|_| TOOLS_HINT),
-        );
+        let hint = mcp.as_ref().map(|_| mcp_tools_hint());
+        let persona = claude_persona(&session.name, &session.description, hint.as_deref());
         let spawn = ClaudeSpawn {
             model: Some(session.model.clone()).filter(|m| !m.is_empty()),
             resume: resume.clone(),
@@ -871,13 +912,14 @@ impl TurnHost {
             Err(error) => return TurnOutcome::Failed(error),
         };
         let mcp = self.mcp();
+        let hint = mcp.as_ref().map(|_| mcp_tools_hint());
         let prompt = build_codex_prompt(
             if resume.is_some() { "" } else { &session.name },
             if resume.is_some() { "" } else { &session.description },
             &params.text,
             &path_list(&params, &HashSet::new()),
             resume.is_none(),
-            mcp.as_ref().map(|_| TOOLS_HINT),
+            hint.as_deref(),
         );
         if let Err(error) = self.agents.spawn(
             session_id.clone(),
@@ -935,14 +977,12 @@ impl TurnHost {
         };
         let mcp = self.mcp();
         let body = with_attached_files(params.text.trim(), &path_list(&params, &HashSet::new()));
+        // Cursor takes no MCP config, so the bridge is a command it runs.
+        let hint = mcp.as_ref().map(|(exe, _)| shell_tools_hint(exe));
         let persona = if resume.is_some() {
             None
         } else {
-            Some(cursor_persona(
-                &session.name,
-                &session.description,
-                mcp.as_ref().map(|_| TOOLS_HINT),
-            ))
+            Some(cursor_persona(&session.name, &session.description, hint.as_deref()))
         };
         let prompt = with_persona(&body, persona.as_deref());
         if let Err(error) = self.agents.spawn(
@@ -997,13 +1037,14 @@ impl TurnHost {
             Ok(path) => path,
             Err(error) => return TurnOutcome::Failed(error),
         };
+        let hint = mcp.as_ref().map(|_| opencode_tools_hint());
         let prompt = build_opencode_prompt(
             if resume.is_some() { "" } else { &session.name },
             if resume.is_some() { "" } else { &session.description },
             &params.text,
             &path_list(&params, &HashSet::new()),
             resume.is_none(),
-            mcp.as_ref().map(|_| TOOLS_HINT),
+            hint.as_deref(),
         );
         // opencode has no approval channel: without --auto it falls back to the
         // user's own permission config, which Crew cannot answer for. Saying so
@@ -2415,5 +2456,40 @@ print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type
             blocks(&world, &coder.id).iter().any(|b| b.text == "one more lap"),
             "after the user spoke the agent still cannot pick up its own note"
         );
+    }
+
+    /// Every provider spells a Crew tool differently, and an agent that cannot
+    /// spell it goes looking for something else of that shape. Claude Code has
+    /// its own cross-session SendMessage, and in `scripts/drive.mjs` an agent
+    /// told about "message_agent" found that one and wrote to another machine.
+    #[test]
+    fn a_tool_sheet_names_the_tools_the_way_the_provider_takes_them() {
+        let mcp = mcp_tools_hint();
+        assert!(mcp.contains("`mcp__crew__message_agent`"), "{mcp}");
+        let opencode = opencode_tools_hint();
+        assert!(opencode.contains("`crew_message_agent`"), "{opencode}");
+        let shell = shell_tools_hint("/usr/local/bin/crew");
+        assert!(shell.contains("`/usr/local/bin/crew call message_agent '<json>'`"), "{shell}");
+
+        // The bare name never appears on its own: that is the one an agent
+        // cannot call, and the one it will go looking for elsewhere.
+        for sheet in [&mcp, &opencode, &shell] {
+            for tool in ["list_agents", "message_agent", "search_messages", "find_tool", "call_tool"] {
+                assert!(
+                    !sheet.contains(&format!("`{tool}`")),
+                    "the sheet offers a bare {tool}: {sheet}"
+                );
+            }
+        }
+    }
+
+    /// Whatever the spelling, every tool `tools/list` answers with is on it.
+    #[test]
+    fn a_tool_sheet_covers_the_whole_standing_set() {
+        for sheet in [mcp_tools_hint(), opencode_tools_hint(), shell_tools_hint("crew")] {
+            for tool in crate::tools::standing() {
+                assert!(sheet.contains(tool.name), "{} is not on the sheet: {sheet}", tool.name);
+            }
+        }
     }
 }

@@ -101,6 +101,16 @@ first. Revisit at a thousand tools, not before. `describe_tool` was dropped —
 Cursor reaches the bridge through `crew call` with no MCP at all, so dynamic
 `tools/list_changed` is not an option; the gateway is the portable answer.
 
+The sheet in an agent's prompt names those five tools the way its own harness
+will take them — `mcp__crew__x` for Claude and Codex, `crew_x` for opencode,
+`<exe> call x '<json>'` for Cursor. The bare name is not on the sheet at all.
+This is not tidiness: an agent told about `message_agent` goes looking for
+`message_agent`, and what it finds is whatever else it has of that shape. In
+`scripts/drive.mjs` a Claude agent found Claude Code's own cross-session
+SendMessage and wrote to another machine, then reported that no agent named
+Cuddles existed. opencode failed the same way more politely, with "Model tried
+to call unavailable tool 'message_agent'".
+
 ## Workstream E — UI
 
 Tool and command transparency. Design owned here, not delegated.
@@ -162,7 +172,8 @@ cargo test        # rust
 | G5 | cron and the routine store, tested where they are written | done `3e9f965` |
 | G6 | the rules a workspace and a session enforce | done `d19b68d` |
 | G7 | the review of the review: four more, in the same class | done `d8ed0e2` |
-| E8 | a turn's cost is the turn's, not the last thing it said | done |
+| E8 | a turn's cost is the turn's, not the last thing it said | done `8b34973` |
+| D2 | the tool sheet names tools the way each provider takes them | done |
 
 ### How A5 landed
 

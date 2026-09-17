@@ -31,8 +31,8 @@ const PROVIDERS: &[(&str, &[&str])] = &[
     ),
 ];
 
-struct Tool {
-    name: &'static str,
+pub(crate) struct Tool {
+    pub(crate) name: &'static str,
     description: &'static str,
     schema: Value,
     /// Words someone would search for that the name and description miss.
@@ -43,7 +43,7 @@ struct Tool {
     core: bool,
 }
 
-fn catalog() -> Vec<Tool> {
+pub(crate) fn catalog() -> Vec<Tool> {
     let schedule = json!({
         "type": "object",
         "description": schedule_help(),
@@ -151,6 +151,13 @@ fn catalog() -> Vec<Tool> {
             core: false,
         },
     ]
+}
+
+/// Exactly what `tools/list` answers with, and exactly what the sheet in an
+/// agent's prompt names: the two have to agree or the agent is told about a
+/// tool it cannot call.
+pub(crate) fn standing() -> Vec<Tool> {
+    catalog().into_iter().filter(|tool| tool.core).chain(gateway()).collect()
 }
 
 /// The two tools that stand in for everything not listed. They are described
@@ -283,12 +290,7 @@ pub fn handle(
         .ok_or_else(|| "This session no longer exists in Crew".to_string())?;
     match method {
         "tools/list" => Ok(json!({
-            "tools": catalog()
-                .iter()
-                .filter(|tool| tool.core)
-                .chain(gateway().iter())
-                .map(describe)
-                .collect::<Vec<_>>()
+            "tools": standing().iter().map(describe).collect::<Vec<_>>()
         })),
         "tools/call" => {
             let name = params.get("name").and_then(Value::as_str).unwrap_or("");
