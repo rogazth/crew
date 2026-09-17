@@ -97,7 +97,7 @@ pub fn waiting(store: &Store, to_session: &str) -> Result<Vec<Letter>, String> {
 /// statement is what keeps two drains from handing the same letter over twice.
 pub fn claim(store: &Store, to_session: &str) -> Result<Option<Letter>, String> {
     store.with(|conn| {
-        conn.prepare_cached(&format!(
+        conn.prepare_cached(
             "UPDATE mailbox SET delivered_at = ?2
              WHERE id = (
                SELECT id FROM mailbox
@@ -106,8 +106,8 @@ pub fn claim(store: &Store, to_session: &str) -> Result<Option<Letter>, String> 
                -- so the order out is the order in.
                ORDER BY at ASC, rowid ASC LIMIT 1
              )
-             RETURNING id, to_session, from_session, from_name, text, at"
-        ))?
+             RETURNING id, to_session, from_session, from_name, text, at",
+        )?
         .query_row(params![to_session, now_millis()], row_to_letter)
         .optional()
     })

@@ -78,7 +78,7 @@ fn catalog() -> Vec<Tool> {
             schema: json!({
                 "type": "object",
                 "properties": {
-                    "to": { "type": "string", "description": "The agent's name or id. Use list_agents if unsure." },
+                    "to": { "type": "string", "description": "The agent's name or id, or your own name to continue after this turn. Use list_agents if unsure." },
                     "text": { "type": "string", "description": "What to say. Give it everything it needs; it cannot see your conversation." }
                 },
                 "required": ["to", "text"]
@@ -383,9 +383,7 @@ fn message_agent(
     let who = text(args.get("to")).ok_or_else(|| "to is required".to_string())?;
     let body = text(args.get("text")).ok_or_else(|| "text is required".to_string())?;
     let target = find_agent(store, caller, &who)?;
-    if target.id == caller.id {
-        return Err("That is you. Answer in this conversation instead.".into());
-    }
+    let to_self = target.id == caller.id;
 
     let from = crew_protocol::AgentRef { id: caller.id.clone(), name: caller.name.clone() };
     mailbox::enqueue(store, &target.id, &from, &body)?;
@@ -404,7 +402,9 @@ fn message_agent(
         "to": target.name,
         "delivered": delivered,
         "waiting": waiting,
-        "note": if delivered {
+        "note": if to_self {
+            "You will read this as a new turn once this one ends. That is how you keep working; stop writing to yourself when the work is done.".to_string()
+        } else if delivered {
             format!("{} is reading it now. Its reply will reach you as a message.", target.name)
         } else {
             format!("{} is busy; it will read this when its turn ends.", target.name)
@@ -444,7 +444,7 @@ fn search_messages(store: &Store, caller: &Session, args: &Value) -> Result<Valu
                 "when": when(hit.at),
                 "role": format!("{:?}", hit.role).to_lowercase(),
                 // The marks are for painting a UI; a model reads the words.
-                "text": hit.snippet.replace(crate::messages::MARK_OPEN, "").replace(crate::messages::MARK_CLOSE, "")
+                "text": hit.snippet.replace([crate::messages::MARK_OPEN, crate::messages::MARK_CLOSE], "")
             })
         })
         .collect();
@@ -1009,16 +1009,28 @@ mod tests {
     }
 
     #[test]
-    fn an_agent_cannot_message_itself() {
+    fn writing_to_itself_is_how_an_agent_carries_on() {
         let store = store();
         let transcripts = TranscriptHub::new(store.clone());
         let ws = workspace(&store);
         let coder = agent(&store, &ws, "Coder");
-        let postman = Postman::default();
-        let out = call(&store, &transcripts, &postman, &coder, "message_agent", json!({ "to": "Coder", "text": "hi" }))
-            .expect("call");
-        assert!(is_error(&out));
-        assert!(body(&out).contains("That is you"));
+        // The caller is mid-turn by definition, so its own letter cannot be
+        // handed over now; it waits for the turn to end.
+        let postman = Postman { busy: true, ..Postman::default() };
+        let out = call(
+            &store,
+            &transcripts,
+            &postman,
+            &coder,
+            "message_agent",
+            json!({ "to": "Coder", "text": "next: run the tests" }),
+        )
+        .expect("call");
+        assert!(!is_error(&out), "{}", body(&out));
+        assert!(body(&out).contains("once this one ends"), "{}", body(&out));
+        let waiting = mailbox::waiting(&store, &coder.id).expect("waiting");
+        assert_eq!(waiting.len(), 1);
+        assert_eq!(waiting[0].from.id, coder.id);
     }
 
     #[test]

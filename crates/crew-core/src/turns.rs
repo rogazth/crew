@@ -42,13 +42,20 @@ use crate::providers::opencode::{
     stream_error_message as opencode_error_message, text_part, turn_ended, OpencodeSpawn, OpencodeText,
 };
 use crate::providers::{string_field, Autonomy};
+use crate::mailbox;
 use crate::session;
 use crate::store::Store;
 use crate::transcript::TranscriptHub;
 
 const INIT_TIMEOUT: Duration = Duration::from_secs(15);
 const INTERRUPT_GRACE: Duration = Duration::from_millis(1500);
-const IDLE_KILL: Duration = Duration::from_secs(10 * 60);
+/// An agent is disposable: it wakes on a message, works, and lets its CLI go.
+/// The window is only wide enough that an agent which writes itself back does
+/// not pay a cold start on every lap of its loop.
+const IDLE_KILL: Duration = Duration::from_secs(5);
+/// A self-addressed letter is how an agent keeps working. This many laps in a
+/// row without anyone else speaking is a runaway, not a plan.
+const MAX_SELF_TURNS: u32 = 25;
 const STDERR_TAIL: usize = 12;
 const TOOLS_HINT: &str = "Crew also gives you tools (the crew MCP server) to list and create agents in this workspace and to manage routines: standing orders that wake an agent on a schedule with a saved prompt. Use them when asked to schedule work or set up an agent.";
 
@@ -138,6 +145,8 @@ pub struct TurnHost {
     binaries: Arc<Mutex<HashMap<String, String>>>,
     runtime: Arc<Mutex<Option<tokio::runtime::Handle>>>,
     cancelled: Arc<Mutex<HashSet<String>>>,
+    /// Consecutive turns an agent has started by writing to itself.
+    loops: Arc<Mutex<HashMap<String, u32>>>,
 }
 
 impl TurnHost {
@@ -151,6 +160,7 @@ impl TurnHost {
             binaries: Arc::new(Mutex::new(HashMap::new())),
             runtime: Arc::new(Mutex::new(None)),
             cancelled: Arc::new(Mutex::new(HashSet::new())),
+            loops: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -237,8 +247,14 @@ impl TurnHost {
             }
         }
         let hidden = params.hidden.unwrap_or(false);
-        self.transcripts
-            .append_user(&params.session_id, &params.text, hidden, params.files.clone());
+        match params.from_agent.clone() {
+            Some(from) => self
+                .transcripts
+                .append_from_agent(&params.session_id, &params.text, from),
+            None => self
+                .transcripts
+                .append_user(&params.session_id, &params.text, hidden, params.files.clone()),
+        }
         self.transcripts.set_working(&params.session_id, true);
         self.transcripts.set_status(&params.session_id, "working", session.provider_session_id.as_deref());
         let host = self.clone();
@@ -465,6 +481,7 @@ impl TurnHost {
 
     fn run_turn(&self, session: crate::session::Session, params: TurnStart) {
         let session_id = session.id.clone();
+        let workspace_id = session.workspace_id.clone();
         let outcome = match session.provider.as_str() {
             "claude" => self.run_claude(session, params),
             "codex" => self.run_codex(session, params),
@@ -493,7 +510,61 @@ impl TurnHost {
                 self.transcripts.append_system(&session_id, "Stopped");
                 self.transcripts.set_status(&session_id, "idle", None);
                 self.transcripts.flush(&session_id);
+                // A stop is the user saying enough; whatever is queued waits
+                // for them, it does not restart the agent.
+                return;
             }
+        }
+        self.drain_mailbox(&session_id, &workspace_id);
+    }
+
+    /// Hand over the next letter waiting for an agent that has just gone quiet.
+    /// This is also how an agent loops: it writes to itself, the letter cannot
+    /// be delivered while it is working, and it arrives the moment it stops.
+    fn drain_mailbox(&self, session_id: &str, workspace_id: &str) {
+        let Ok(Some(letter)) = mailbox::claim(&self.store, session_id) else {
+            return;
+        };
+        let to_self = letter.from.id == session_id;
+        let laps = {
+            let mut laps = self.loops.lock().unwrap_or_else(|error| error.into_inner());
+            if to_self {
+                let count = laps.entry(session_id.to_string()).or_insert(0);
+                *count += 1;
+                *count
+            } else {
+                laps.remove(session_id);
+                0
+            }
+        };
+        if laps > MAX_SELF_TURNS {
+            self.transcripts.append_system(
+                session_id,
+                &format!("Stopped after {MAX_SELF_TURNS} turns writing to itself. Send it a message to continue."),
+            );
+            self.transcripts.flush(session_id);
+            return;
+        }
+        let cwd = crate::workspace::get(&self.store, workspace_id.to_string())
+            .ok()
+            .flatten()
+            .map(|row| row.path)
+            .unwrap_or_default();
+        let started = self.start(TurnStart {
+            session_id: session_id.to_string(),
+            cwd,
+            text: letter.text.clone(),
+            files: None,
+            mentions: None,
+            hidden: None,
+            fresh: None,
+            from_agent: Some(letter.from.clone()),
+            nonce: None,
+        });
+        if started.is_err() {
+            // Something else took the agent between the turn ending and this
+            // line. The letter goes back at the head of the queue.
+            let _ = mailbox::release(&self.store, &letter.id);
         }
     }
 
@@ -1810,6 +1881,14 @@ impl TurnHost {
         Self::new(crate::agent::AgentHost::new(), store, transcripts, bridge)
     }
 
+    pub(crate) fn test_agents(&self) -> &AgentHost {
+        &self.agents
+    }
+
+    pub(crate) fn test_store(&self) -> &crate::store::Store {
+        &self.store
+    }
+
     pub(crate) fn test_capture(&self) -> Arc<Applied> {
         let applied = Arc::new(Applied::default());
         self.transcripts.set_events(applied.clone());
@@ -1856,3 +1935,251 @@ impl TurnHost {
     }
 }
 
+
+#[cfg(test)]
+mod mailbox_tests {
+    use super::*;
+    use crew_protocol::{AgentRef, BlockRole};
+
+    /// An opencode that answers once and stops. Enough to end a turn, which is
+    /// the moment the box is drained. `pause` makes it slow enough to interrupt.
+    fn fake_opencode(dir: &std::path::Path) -> String {
+        fake_opencode_paused(dir, 0.0)
+    }
+
+    fn fake_opencode_paused(dir: &std::path::Path, pause: f32) -> String {
+        let path = dir.join(format!("fake-opencode-{pause}"));
+        std::fs::write(
+            &path,
+            format!(
+                r#"#!/usr/bin/env python3
+import json, sys, time
+sys.stdin.read()
+time.sleep({pause})
+sid = "ses_test"
+print(json.dumps({{"type":"text","sessionID":sid,"part":{{"id":"p1","type":"text","text":"ok"}}}}), flush=True)
+print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type":"step-finish","reason":"stop","tokens":{{"input":1,"output":1,"reasoning":0,"cache":{{"read":0,"write":0}}}},"cost":0}}}}), flush=True)
+"#
+            ),
+        )
+        .expect("write fake");
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        path.to_string_lossy().into_owned()
+    }
+
+    struct World {
+        host: TurnHost,
+        dir: std::path::PathBuf,
+    }
+
+    /// The daemon wires the agent process's stdout back into the turn host; a
+    /// test that spawns a real process has to do the same or nothing ever ends.
+    struct Fanout(TurnHost);
+
+    impl crate::agent::AgentEvents for Fanout {
+        fn lines(&self, event: &str, session_id: &str, lines: Vec<String>) {
+            self.0.on_agent_lines(event, session_id, lines);
+        }
+        fn exit(&self, session_id: &str, code: Option<i32>, _pid: u32) {
+            self.0.on_agent_exit(session_id, code);
+        }
+    }
+
+    fn world() -> World {
+        let host = TurnHost::test_new();
+        host.test_agents().set_events(Arc::new(Fanout(host.clone())));
+        let dir = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
+        std::fs::create_dir_all(&dir).expect("dir");
+        host.override_binary("opencode", fake_opencode(&dir));
+        World { host, dir }
+    }
+
+    fn agent(world: &World, workspace_id: &str, name: &str) -> crate::session::Session {
+        crate::session::create(
+            world.host.test_store(),
+            workspace_id.to_string(),
+            "agent".into(),
+            name.into(),
+            "opencode".into(),
+            "m".into(),
+            "".into(),
+            "full".into(),
+        )
+        .expect("agent")
+    }
+
+    fn workspace(world: &World) -> String {
+        crate::workspace::create(
+            world.host.test_store(),
+            "w".into(),
+            world.dir.to_string_lossy().into_owned(),
+        )
+        .expect("workspace")
+        .id
+    }
+
+    /// Turns run on their own thread; wait for the agent to go quiet.
+    fn settle(world: &World, session_id: &str) {
+        for _ in 0..200 {
+            let status = crate::session::get(world.host.test_store(), session_id.to_string())
+                .ok()
+                .flatten()
+                .map(|row| row.status)
+                .unwrap_or_default();
+            if status != "working" && status != "needs-input" {
+                std::thread::sleep(std::time::Duration::from_millis(30));
+                let again = crate::session::get(world.host.test_store(), session_id.to_string())
+                    .ok()
+                    .flatten()
+                    .map(|row| row.status)
+                    .unwrap_or_default();
+                if again != "working" && again != "needs-input" {
+                    return;
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        panic!("{session_id} never settled");
+    }
+
+    fn turn(world: &World, session: &crate::session::Session, text: &str) {
+        world
+            .host
+            .start(TurnStart {
+                session_id: session.id.clone(),
+                cwd: world.dir.to_string_lossy().into_owned(),
+                text: text.into(),
+                files: None,
+                mentions: None,
+                hidden: None,
+                fresh: None,
+                from_agent: None,
+                nonce: None,
+            })
+            .expect("start");
+        settle(world, &session.id);
+    }
+
+    fn blocks(world: &World, session_id: &str) -> Vec<crew_protocol::Block> {
+        world.host.transcripts().get(session_id).blocks
+    }
+
+    #[test]
+    fn a_letter_waiting_is_read_as_soon_as_the_turn_ends() {
+        let world = world();
+        let ws = workspace(&world);
+        let coder = agent(&world, &ws, "Coder");
+        let cuddles = agent(&world, &ws, "Cuddles");
+        mailbox::enqueue(
+            world.host.test_store(),
+            &cuddles.id,
+            &AgentRef { id: coder.id.clone(), name: "Coder".into() },
+            "the branch is green",
+        )
+        .expect("enqueue");
+
+        turn(&world, &cuddles, "hello");
+        settle(&world, &cuddles.id);
+
+        let rows = blocks(&world, &cuddles.id);
+        let delivered = rows
+            .iter()
+            .find(|block| block.role == BlockRole::User && block.text == "the branch is green")
+            .expect("the letter never arrived");
+        assert_eq!(delivered.from_agent.as_ref().map(|from| from.name.as_str()), Some("Coder"));
+        assert_eq!(
+            mailbox::waiting_count(world.host.test_store(), &cuddles.id).expect("count"),
+            0
+        );
+    }
+
+    #[test]
+    fn an_agent_carries_on_by_writing_to_itself() {
+        let world = world();
+        let ws = workspace(&world);
+        let coder = agent(&world, &ws, "Coder");
+        mailbox::enqueue(
+            world.host.test_store(),
+            &coder.id,
+            &AgentRef { id: coder.id.clone(), name: "Coder".into() },
+            "next: run the tests",
+        )
+        .expect("enqueue");
+
+        turn(&world, &coder, "start");
+        settle(&world, &coder.id);
+
+        let rows = blocks(&world, &coder.id);
+        assert!(
+            rows.iter().any(|block| block.text == "next: run the tests"),
+            "the agent did not pick its own note back up"
+        );
+    }
+
+    #[test]
+    fn a_runaway_loop_stops_itself() {
+        let world = world();
+        let ws = workspace(&world);
+        let coder = agent(&world, &ws, "Coder");
+        let me = AgentRef { id: coder.id.clone(), name: "Coder".into() };
+        for _ in 0..(MAX_SELF_TURNS + 2) {
+            mailbox::enqueue(world.host.test_store(), &coder.id, &me, "again").expect("enqueue");
+        }
+
+        turn(&world, &coder, "start");
+        settle(&world, &coder.id);
+
+        let rows = blocks(&world, &coder.id);
+        let laps = rows.iter().filter(|block| block.text == "again").count() as u32;
+        assert_eq!(laps, MAX_SELF_TURNS, "the loop ran {laps} times");
+        assert!(
+            rows.iter().any(|block| block.role == BlockRole::System
+                && block.text.contains("writing to itself")),
+            "the transcript does not say why it stopped"
+        );
+    }
+
+    #[test]
+    fn a_stopped_turn_leaves_the_box_alone() {
+        let world = world();
+        let ws = workspace(&world);
+        let coder = agent(&world, &ws, "Coder");
+        let cuddles = agent(&world, &ws, "Cuddles");
+        mailbox::enqueue(
+            world.host.test_store(),
+            &cuddles.id,
+            &AgentRef { id: coder.id.clone(), name: "Coder".into() },
+            "later",
+        )
+        .expect("enqueue");
+
+        // Slow enough that the stop lands mid-turn instead of after it.
+        world
+            .host
+            .override_binary("opencode", fake_opencode_paused(&world.dir, 5.0));
+        world
+            .host
+            .start(TurnStart {
+                session_id: cuddles.id.clone(),
+                cwd: world.dir.to_string_lossy().into_owned(),
+                text: "hello".into(),
+                files: None,
+                mentions: None,
+                hidden: None,
+                fresh: None,
+                from_agent: None,
+                nonce: None,
+            })
+            .expect("start");
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        world.host.stop(&cuddles.id).expect("stop");
+        settle(&world, &cuddles.id);
+
+        assert_eq!(
+            mailbox::waiting_count(world.host.test_store(), &cuddles.id).expect("count"),
+            1,
+            "a stop should not hand the agent its next letter"
+        );
+    }
+}
