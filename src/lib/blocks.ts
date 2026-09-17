@@ -97,7 +97,13 @@ export function applyEvent(blocks: Block[], event: HarnessEvent): Block[] {
       const settled = settleStreaming(blocks);
       const tool: Block = {
         ...newBlock("tool", event.title),
-        tool: { callId: event.callId, name: event.name, title: event.title, status: "pending" },
+        tool: {
+          callId: event.callId,
+          name: event.name,
+          title: event.title,
+          status: "pending",
+          ...(event.detail ? { detail: event.detail } : {}),
+        },
       };
       const last = settled.at(-1);
       if (last?.approval && last.approval.decided !== "deny" && last.text === event.title) {
@@ -116,6 +122,9 @@ export function applyEvent(blocks: Block[], event: HarnessEvent): Block[] {
             ...block.tool,
             title,
             status: event.status ?? block.tool.status,
+            // An update with no detail is a status change, not an erasure: the
+            // command a row already showed stays on it.
+            ...(event.detail ? { detail: event.detail } : {}),
           },
         };
       });
