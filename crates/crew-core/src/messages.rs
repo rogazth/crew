@@ -378,8 +378,14 @@ pub const MARK_CLOSE: char = '\u{e001}';
 
 /// True the first time a nonce is seen for a session, false on a replay. The
 /// caller starts a turn only when it is true.
+/// A replayed send arrives within seconds of the first; anything older is a
+/// row nobody will ever look at again.
+const NONCE_TTL_MS: i64 = 24 * 60 * 60 * 1000;
+
 pub fn claim_nonce(store: &Store, session_id: &str, nonce: &str) -> Result<bool, String> {
     store.with(|conn| {
+        conn.prepare_cached("DELETE FROM send_nonces WHERE at < ?1")?
+            .execute(params![now_millis() - NONCE_TTL_MS])?;
         let rows = conn
             .prepare_cached(
                 "INSERT INTO send_nonces (session_id, nonce, at) VALUES (?1, ?2, ?3)
@@ -757,6 +763,39 @@ mod tests {
         )
         .expect("newest");
         assert_eq!(newest[0].at, 9_000);
+    }
+
+    #[test]
+    fn an_old_nonce_is_swept_so_the_table_does_not_grow_forever() {
+        let store = store();
+        let id = session(&store, "sweep");
+        store
+            .with(|conn| {
+                conn.execute(
+                    "INSERT INTO send_nonces (session_id, nonce, at) VALUES (?1, ?2, ?3)",
+                    params![id, "ancient", now_millis() - NONCE_TTL_MS - 1],
+                )
+            })
+            .expect("seed");
+        claim_nonce(&store, &id, "fresh").expect("claim");
+        let left: i64 = store
+            .with(|conn| {
+                conn.query_row("SELECT COUNT(*) FROM send_nonces", [], |row| row.get(0))
+            })
+            .expect("count");
+        assert_eq!(left, 1, "the sweep kept a nonce nobody will ever replay");
+    }
+
+    #[test]
+    fn a_turn_that_never_ran_gives_its_nonce_back() {
+        let store = store();
+        let id = session(&store, "refused");
+        assert!(claim_nonce(&store, &id, "n1").expect("first"));
+        release_nonce(&store, &id, "n1").expect("release");
+        assert!(
+            claim_nonce(&store, &id, "n1").expect("retry"),
+            "the retry of a refused send was treated as a duplicate"
+        );
     }
 
     #[test]

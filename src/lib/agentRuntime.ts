@@ -95,15 +95,34 @@ export async function send(
   try {
     await api.turnStart(params);
   } catch (error) {
-    finishWaiters(id, false);
-    transcript.apply(id, {
-      type: "session.error",
-      message: error instanceof Error ? error.message : String(error),
-    });
-    return false;
+    // A socket that dropped mid-send says nothing about whether the daemon got
+    // it. Asking again with the same nonce is safe: it accepts the id once, so
+    // either the first one landed and this is answered with it, or it did not
+    // and this one runs. Any other error is the daemon's answer, not a gap.
+    if (!dropped(error)) return failed(id, error);
+    try {
+      await api.turnStart(params);
+    } catch (again) {
+      return failed(id, again);
+    }
   }
   await transcript.reload(id);
   return finished;
+}
+
+/** The transport's own words for "I never found out". */
+function dropped(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.startsWith("Crew daemon");
+}
+
+function failed(id: string, error: unknown): false {
+  finishWaiters(id, false);
+  transcript.apply(id, {
+    type: "session.error",
+    message: error instanceof Error ? error.message : String(error),
+  });
+  return false;
 }
 
 function lastReply(id: string): string {

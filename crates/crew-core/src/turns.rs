@@ -49,6 +49,8 @@ use crate::store::Store;
 use crate::transcript::TranscriptHub;
 
 const INIT_TIMEOUT: Duration = Duration::from_secs(15);
+/// How long a provider may stay silent before its first line.
+const FIRST_OUTPUT_TIMEOUT: Duration = Duration::from_secs(120);
 const INTERRUPT_GRACE: Duration = Duration::from_millis(1500);
 /// An agent is disposable: it wakes on a message, works, and lets its CLI go.
 /// The window is only wide enough that an agent which writes itself back does
@@ -122,6 +124,8 @@ struct StreamLive {
     seen_tools: HashSet<String>,
     stderr: Vec<String>,
     saw_text: bool,
+    /// Any line at all, of any shape. A provider that answers nothing is hung.
+    saw_output: bool,
     settled: bool,
     /// opencode's text parts are snapshots, each carrying its whole text. One
     /// slot per part, because two that grow in turn would otherwise forget each
@@ -1001,6 +1005,15 @@ impl TurnHost {
             resume.is_none(),
             mcp.as_ref().map(|_| TOOLS_HINT),
         );
+        // opencode has no approval channel: without --auto it falls back to the
+        // user's own permission config, which Crew cannot answer for. Saying so
+        // once beats an "ask" that silently never asks.
+        if resume.is_none() && session.autonomy != "full" {
+            self.transcripts.append_system(
+                &session_id,
+                "opencode decides its own permissions: it has no way to ask Crew, so it runs under your opencode config.",
+            );
+        }
         let mut env = self.agent_env(&session_id);
         if let Some(config) = opencode_config(mcp.as_ref()) {
             env.insert("OPENCODE_CONFIG_CONTENT".into(), config);
@@ -1059,15 +1072,56 @@ impl TurnHost {
             seen_tools: HashSet::new(),
             stderr: Vec::new(),
             saw_text: false,
+            saw_output: false,
             settled: false,
             text_parts: HashMap::new(),
             usage: None,
         };
         self.lock().insert(session_id.to_string(), wrap(live));
+        self.watch_for_silence(session_id);
         Ok((rx, ()))
     }
 
+    /// A provider that has not said one word is not working, it is stuck — a
+    /// resumed opencode session whose directory moved hangs exactly this way,
+    /// with no output and no exit. Once anything arrives the turn is its own
+    /// business: a long tool call is silent too, and killing that would be
+    /// worse than waiting.
+    fn watch_for_silence(&self, session_id: &str) {
+        let host = self.clone();
+        let id = session_id.to_string();
+        self.after(FIRST_OUTPUT_TIMEOUT, move || {
+            let silent = {
+                let map = host.lock();
+                match map.get(&id) {
+                    Some(Live::Codex(live)) | Some(Live::Cursor(live)) | Some(Live::Opencode(live)) => {
+                        live.active && !live.saw_output && !live.cancelled
+                    }
+                    _ => false,
+                }
+            };
+            if silent {
+                host.signal(
+                    &id,
+                    TurnOutcome::Failed(format!(
+                        "No answer in {}s. The CLI started and said nothing; if it was resumed, its session may belong to another directory — send again to start fresh.",
+                        FIRST_OUTPUT_TIMEOUT.as_secs()
+                    )),
+                );
+            }
+        });
+    }
+
     fn handle_line(&self, session_id: &str, line: &str) {
+        {
+            let mut map = self.lock();
+            if let Some(
+                Live::Codex(live) | Live::Cursor(live) | Live::Opencode(live),
+            ) = map.get_mut(session_id)
+            {
+                live.saw_output = true;
+            }
+        }
         let kind = {
             let map = self.lock();
             match map.get(session_id) {
@@ -2148,6 +2202,48 @@ print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type
 
     fn blocks(world: &World, session_id: &str) -> Vec<crew_protocol::Block> {
         world.host.transcripts().get(session_id).blocks
+    }
+
+    /// A provider that starts and says nothing must not leave the agent
+    /// "working" forever.
+    #[test]
+    fn a_provider_that_says_nothing_does_not_hang_the_agent() {
+        let world = world();
+        let ws = workspace(&world);
+        let coder = agent(&world, &ws, "Coder");
+        let path = world.dir.join("mute-opencode");
+        std::fs::write(&path, "#!/usr/bin/env python3\nimport sys, time\nsys.stdin.read()\ntime.sleep(600)\n")
+            .expect("write");
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        world
+            .host
+            .override_binary("opencode", path.to_string_lossy().into_owned());
+
+        world
+            .host
+            .start(TurnStart {
+                session_id: coder.id.clone(),
+                cwd: world.dir.to_string_lossy().into_owned(),
+                text: "hello".into(),
+                files: None,
+                mentions: None,
+                hidden: None,
+                fresh: None,
+                from_agent: None,
+                nonce: None,
+            })
+            .expect("start");
+        // The watchdog's own timeout is two minutes; this asserts it is armed,
+        // not that the test waits for it.
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        let silent_and_watched = {
+            let map = world.host.lock();
+            matches!(map.get(&coder.id), Some(Live::Opencode(live)) if live.active && !live.saw_output)
+        };
+        world.host.stop(&coder.id).expect("stop");
+        settle(&world, &coder.id);
+        assert!(silent_and_watched, "a provider with no output was not being watched");
     }
 
     #[test]
