@@ -156,7 +156,8 @@ cargo test        # rust
 | G1 | routines fire in the daemon, not in the window | done `641a2bf` |
 | E6 | the persona stops telling the model how to talk | done `c23c6e0` |
 | E7 | a message row names the agent instead of its uuid | done `c46b4f2` |
-| G2 | the scheduler review's ten findings | done |
+| G2 | the scheduler review's ten findings | done `2241ae5` |
+| G3 | the schedule math is pinned on both sides of the duplication | done |
 
 ### How A5 landed
 
@@ -264,7 +265,11 @@ turn token `TurnHost::start` does not hand out yet.
 
 Known duplication, pre-existing: the schedule math exists in both languages,
 because the UI computes the next run when it saves and the daemon computes it
-when it fires. They read the same `Schedule` JSON and both have tests.
+when it fires. They read the same `Schedule` JSON, and the same seven cases are
+asserted in `src/lib/routines.test.ts` and `crates/crew-core/src/schedule.rs` —
+an interval mid-hour, a daily time before and after and exactly on the hour,
+weekdays from a Friday, one weekday from the day after it, and a cron. That
+table is what makes the duplication safe; it moves on both sides or not at all.
 
 ## Seeing it work
 

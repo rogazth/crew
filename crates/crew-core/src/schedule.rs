@@ -225,6 +225,99 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    /// Local wall clock, because a routine is set in the user's own day.
+    fn at(year: i32, month: i32, day: i32, hour: i32, minute: i32) -> i64 {
+        let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+        tm.tm_year = year - 1900;
+        tm.tm_mon = month - 1;
+        tm.tm_mday = day;
+        tm.tm_hour = hour;
+        tm.tm_min = minute;
+        from_tm(tm)
+    }
+
+    /// The same table `src/lib/routines.test.ts` holds. The schedule math lives
+    /// in both languages — the screen computes the next run when it saves and
+    /// the daemon computes it when it fires — so these are the rows that make
+    /// the duplication safe. They move together or not at all.
+    #[test]
+    fn next_run_answers_what_the_screen_answers() {
+        let cases: Vec<(&str, Schedule, i64, Option<i64>)> = vec![
+            (
+                "an interval counts from now, not from the hour",
+                Schedule::Interval { minutes: 30 },
+                at(2026, 9, 17, 8, 13),
+                Some(at(2026, 9, 17, 8, 43)),
+            ),
+            (
+                "a daily time later today is today",
+                Schedule::Daily { hour: 9, minute: 0, days: vec![] },
+                at(2026, 9, 17, 8, 0),
+                Some(at(2026, 9, 17, 9, 0)),
+            ),
+            (
+                "a daily time already past is tomorrow",
+                Schedule::Daily { hour: 9, minute: 0, days: vec![] },
+                at(2026, 9, 17, 10, 0),
+                Some(at(2026, 9, 18, 9, 0)),
+            ),
+            (
+                "exactly on the hour is the next one, never this one",
+                Schedule::Daily { hour: 9, minute: 0, days: vec![] },
+                at(2026, 9, 17, 9, 0),
+                Some(at(2026, 9, 18, 9, 0)),
+            ),
+            (
+                "weekdays from a Friday afternoon is Monday",
+                Schedule::Daily { hour: 9, minute: 0, days: vec![1, 2, 3, 4, 5] },
+                at(2026, 9, 18, 15, 0),
+                Some(at(2026, 9, 21, 9, 0)),
+            ),
+            (
+                "a single weekday from the day after it is a week out",
+                Schedule::Daily { hour: 9, minute: 0, days: vec![1] },
+                at(2026, 9, 22, 12, 0),
+                Some(at(2026, 9, 28, 9, 0)),
+            ),
+            (
+                "a cron expression lands on its next minute",
+                Schedule::Cron { expression: "30 6 * * *".into() },
+                at(2026, 9, 17, 8, 0),
+                Some(at(2026, 9, 18, 6, 30)),
+            ),
+        ];
+        for (what, schedule, from, expected) in cases {
+            assert_eq!(next_run(&schedule, from), expected, "{what}");
+        }
+    }
+
+    #[test]
+    fn a_cron_nothing_can_match_has_no_next_run() {
+        assert_eq!(next_run(&Schedule::Cron { expression: "not a cron".into() }, 0), None);
+    }
+
+    /// Whatever the schedule, the answer is in the future. A time in the past
+    /// is a routine that fires again the instant it lands.
+    #[test]
+    fn a_next_run_is_always_after_the_time_it_was_asked_about() {
+        let from = at(2026, 9, 17, 23, 59);
+        for schedule in [
+            Schedule::Interval { minutes: 30 },
+            Schedule::Daily { hour: 9, minute: 0, days: vec![] },
+            Schedule::Daily { hour: 9, minute: 0, days: vec![1, 2, 3, 4, 5] },
+            Schedule::Cron { expression: "30 6 * * *".into() },
+        ] {
+            assert!(next_run(&schedule, from).is_some_and(|at| at > from), "{schedule:?}");
+        }
+    }
+
+    #[test]
+    fn a_schedule_the_column_cannot_hold_reads_as_the_default() {
+        let default = Schedule::Daily { hour: 9, minute: 0, days: vec![] };
+        assert_eq!(parse_schedule("{oh no"), None);
+        assert_eq!(parse_schedule(&default.to_json()), Some(default));
+    }
+
     #[test]
     fn validate_schedule_matches_typescript() {
         assert_eq!(
