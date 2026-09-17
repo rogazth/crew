@@ -115,8 +115,11 @@ console.log(`coder=${coder.id} cuddles=${cuddles.id}`);
 const SCENARIOS = {
   // One agent writes to another and the message shows up on both sides.
   message: {
+    // Named, not addressed: agents are reached by id, so the way through is
+    // list_agents first. A prompt that handed over the id would skip the half
+    // of this that goes wrong in practice.
     prompt:
-      "Use your message_agent tool to send Cuddles exactly this text: 'the branch is green'. Then reply to me with one short sentence saying you sent it.",
+      "Send the agent called Cuddles exactly this text: 'the branch is green'. Then reply to me with one short sentence saying you sent it.",
     check(coderEnd, cuddlesEnd) {
       const sent = coderEnd.blocks.find((b) => b.tool?.detail?.kind === "message");
       const received = cuddlesEnd.blocks.find((b) => b.role === "user" && b.fromAgent);
@@ -134,13 +137,13 @@ const SCENARIOS = {
   // The agent carries itself past the end of a turn by writing to itself.
   loop: {
     prompt:
-      "Do this in two turns, not one. Turn one: create a file called step1.txt containing the word one, then call message_agent with to='Coder' (yourself) and text='turn two: create step2.txt containing the word two, then stop'. Say nothing else. You will receive that message as your next turn; carry it out then.",
+      "Do this in two turns, not one. Turn one: create a file called step1.txt containing the word one, then call continue_after_turn with text='turn two: create step2.txt containing the word two, then stop'. Say nothing else. You will receive that note as your next turn; carry it out then.",
     check(coderEnd) {
       const turns = coderEnd.blocks.filter((b) => b.role === "user");
       const woken = turns.filter((b) => b.fromAgent);
       const wrote = coderEnd.blocks.filter((b) => b.tool?.detail?.kind === "edit");
       return [
-        ["the agent wrote to itself", coderEnd.blocks.some((b) => b.tool?.detail?.kind === "message"), ""],
+        ["the agent left itself a note", woken.length >= 1, ""],
         ["the note came back as a second turn", woken.length >= 1, `${turns.length} turns, ${woken.length} from an agent`],
         ["both steps ran", wrote.length >= 2, wrote.map((b) => b.tool.detail.path.split("/").pop()).join(", ")],
       ];
