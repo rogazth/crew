@@ -603,10 +603,17 @@ pub fn tool_detail(name: &str, input: &Map<String, Value>) -> Option<ToolDetail>
                 preview: None,
             })
         }
-        "write" | "edit" => Some(ToolDetail::Edit {
+        "edit" => Some(ToolDetail::Edit {
             path: string_field(Some(input), "file_path")?,
-            added: Some(line_count(input, "new_string") + line_count(input, "content")),
+            added: Some(line_count(input, "new_string")),
             removed: Some(line_count(input, "old_string")),
+        }),
+        // A write replaces whatever was there, and the call does not say what
+        // that was: counting zero removed lines would be a claim, not a fact.
+        "write" => Some(ToolDetail::Edit {
+            path: string_field(Some(input), "file_path")?,
+            added: Some(line_count(input, "content")),
+            removed: None,
         }),
         // MultiEdit keeps its edits in an array we do not walk. The path is
         // worth showing; a tally we did not compute is not.
@@ -822,6 +829,100 @@ mod tests {
         let input = json!({ "file_path": "/w/a.ts", "old_string": "a", "new_string": "b" });
         let got = tool_details(&[tool_use("Edit", input), tool_result("The file has been updated.")]);
         assert_eq!(got.last(), Some(&None));
+    }
+
+    /// REVIEW: the CLI is spawned with `--include-partial-messages`, so a tool
+    /// call arrives as content_block_start (empty input) + input_json_delta.
+    /// The delta is folded into `tools_by_index` only; `tools_by_id` — the map
+    /// the tool_result reads — keeps the empty input it was opened with.
+    #[test]
+    fn review_a_streamed_bash_keeps_its_command_when_the_result_lands() {
+        let start = json!({
+            "type": "stream_event",
+            "event": {
+                "type": "content_block_start",
+                "index": 1,
+                "content_block": { "type": "tool_use", "id": CALL, "name": "Bash", "input": {} }
+            },
+            "session_id": "s"
+        });
+        let delta = json!({
+            "type": "stream_event",
+            "event": {
+                "type": "content_block_delta",
+                "index": 1,
+                "delta": { "type": "input_json_delta", "partial_json": "{\"command\":\"npm test\"}" }
+            },
+            "session_id": "s"
+        });
+        let got = tool_details(&[start, delta, tool_result("2 passing\n")]);
+        assert_eq!(
+            got.last().cloned().flatten(),
+            Some(ToolDetail::Command {
+                command: "npm test".into(),
+                exit_code: None,
+                output: Some("2 passing\n".into()),
+            }),
+            "the streamed command was lost; the row fell back to raw output"
+        );
+    }
+
+    /// REVIEW: the realistic CLI order — the deltas, then the whole `assistant`
+    /// frame, then the result. `claude_assistant` skips a call it already saw,
+    /// so the complete input never reaches `tools_by_id` either.
+    #[test]
+    fn review_the_assistant_frame_does_not_repair_the_streamed_input() {
+        let start = json!({
+            "type": "stream_event",
+            "event": {
+                "type": "content_block_start",
+                "index": 1,
+                "content_block": { "type": "tool_use", "id": CALL, "name": "Bash", "input": {} }
+            },
+            "session_id": "s"
+        });
+        let delta = json!({
+            "type": "stream_event",
+            "event": {
+                "type": "content_block_delta",
+                "index": 1,
+                "delta": { "type": "input_json_delta", "partial_json": "{\"command\":\"npm test\"}" }
+            },
+            "session_id": "s"
+        });
+        let got = tool_details(&[
+            start,
+            delta,
+            tool_use("Bash", json!({ "command": "npm test" })),
+            tool_result("2 passing\n"),
+        ]);
+        assert_eq!(
+            got.last().cloned().flatten(),
+            Some(ToolDetail::Command {
+                command: "npm test".into(),
+                exit_code: None,
+                output: Some("2 passing\n".into()),
+            }),
+            "the assistant frame did not restore the command"
+        );
+    }
+
+    /// REVIEW: `ToolDetail::Edit` documents that absent counts mean "the
+    /// provider did not say", which "is not the same as a write that changed
+    /// nothing". A `Write` over an existing file has no `old_string`, so
+    /// `removed` comes back `Some(0)` and the row claims "+N -0" for a full
+    /// overwrite of a file that had content.
+    #[test]
+    fn review_a_write_does_not_claim_it_removed_nothing() {
+        let input = json!({ "file_path": "/w/a.ts", "content": "one\ntwo\nthree" });
+        assert_eq!(
+            tool_detail("Write", input.as_object().unwrap()),
+            Some(ToolDetail::Edit {
+                path: "/w/a.ts".into(),
+                added: Some(3),
+                removed: None,
+            })
+        );
     }
 
     #[test]

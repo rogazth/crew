@@ -158,7 +158,13 @@ const SCENARIOS = {
       return [
         ["the agent called tools at all", tools.length > 0, `${tools.length} rows`],
         ["a file it wrote is named in the transcript", Boolean(wrote), wrote ? wrote.tool.detail.path : "no edit row"],
-        ["a command it ran carries its exit code", ran?.tool.detail.exitCode !== undefined, ran ? `exit ${ran.tool.detail.exitCode}` : "no command row"],
+        // Claude's protocol carries no exit code, so the claim is the command
+        // itself; a failure still shows through the row's status.
+        [
+          "a command it ran is on the row, with its exit code where the provider gives one",
+          Boolean(ran?.tool.detail.command),
+          ran ? `${ran.tool.detail.command.slice(0, 40)}${ran.tool.detail.exitCode === undefined ? "" : ` (exit ${ran.tool.detail.exitCode})`}` : "no command row",
+        ],
         ["the command output is kept", greeted, ran?.tool.detail.output?.trim().slice(0, 60) ?? ""],
         ["every tool row says what it was", tools.every((b) => b.tool.detail || b.tool.title), ""],
       ];

@@ -1764,11 +1764,19 @@ fn claude_stream(live: &mut ClaudeLive, rec: &Map<String, Value>, events: &mut V
         return;
     };
     tool.input = parsed.clone();
+    let id = tool.id.clone();
+    let name = tool.name.clone();
+    // The streamed input arrives by index; the result is looked up by id. Without
+    // this the id side keeps the empty input it started with, and a finished row
+    // loses its command to the raw text of its own output.
+    if let Some(by_id) = live.tools_by_id.get_mut(&id) {
+        by_id.input = parsed.clone();
+    }
     events.push(HarnessEvent::ToolUpdated {
-        call_id: tool.id.clone(),
-        title: Some(claude_tool_label(&tool.name, &parsed)),
+        call_id: id,
+        title: Some(claude_tool_label(&name, &parsed)),
         status: None,
-        detail: claude_tool_detail(&tool.name, &parsed),
+        detail: claude_tool_detail(&name, &parsed),
     });
 }
 
@@ -1789,7 +1797,18 @@ fn claude_assistant(live: &mut ClaudeLive, rec: &Map<String, Value>, events: &mu
         events.push(HarnessEvent::MessageDelta { text: snapshot });
     }
     for use_ in assistant_tool_uses(rec) {
-        if live.tools_by_id.contains_key(&use_.id) {
+        // This frame carries the whole input; a streamed call may have been
+        // registered before its arguments finished arriving.
+        if let Some(known) = live.tools_by_id.get_mut(&use_.id) {
+            if known.input.is_empty() && !use_.input.is_empty() {
+                known.input = use_.input.clone();
+                events.push(HarnessEvent::ToolUpdated {
+                    call_id: use_.id.clone(),
+                    title: Some(claude_tool_label(&use_.name, &use_.input)),
+                    status: None,
+                    detail: claude_tool_detail(&use_.name, &use_.input),
+                });
+            }
             continue;
         }
         live.tools_by_id.insert(

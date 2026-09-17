@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { newBlock } from "./blocks";
+import { applyEvent, newBlock } from "./blocks";
 import type { Block, ToolDetail, ToolStatus } from "./protocol";
 import { hasBody, splitClip, toolLine } from "./toolDetail";
 
@@ -121,5 +121,64 @@ describe("splitClip", () => {
 
   it("leaves untouched text alone", () => {
     expect(splitClip("all of it")).toEqual({ body: "all of it", dropped: null });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// REVIEW additions: the client store applies harness events with
+// `applyEvent` (src/lib/transcript.ts:109,121), so whatever it drops is what a
+// live turn renders until the next full reload.
+// ---------------------------------------------------------------------------
+describe("REVIEW: the live client store and ToolDetail", () => {
+  it("keeps the detail a tool.started carried", () => {
+    const blocks = applyEvent([], {
+      type: "tool.started",
+      callId: "c1",
+      name: "Bash",
+      title: "npm test",
+      detail: { kind: "command", command: "npm test" },
+    });
+    expect(blocks[0]?.tool?.detail).toEqual({ kind: "command", command: "npm test" });
+  });
+
+  it("lands the result detail a tool.updated carried", () => {
+    const started = applyEvent([], {
+      type: "tool.started",
+      callId: "c1",
+      name: "Bash",
+      title: "npm test",
+      detail: { kind: "command", command: "npm test" },
+    });
+    const done = applyEvent(started, {
+      type: "tool.updated",
+      callId: "c1",
+      status: "completed",
+      detail: { kind: "command", command: "npm test", exitCode: 1, output: "boom" },
+    });
+    expect(done[0]?.tool?.detail).toEqual({
+      kind: "command",
+      command: "npm test",
+      exitCode: 1,
+      output: "boom",
+    });
+  });
+
+  it("renders the command, not the provider title, on a live row", () => {
+    const blocks = applyEvent([], {
+      type: "tool.started",
+      callId: "c1",
+      name: "Bash",
+      title: "Bash",
+      detail: { kind: "command", command: "npm run check", exitCode: 0 },
+    });
+    expect(toolLine(blocks[0]!).text).toBe("npm run check");
+  });
+});
+
+describe("REVIEW: hasBody and indented single-line output", () => {
+  it("does not offer to open a one-line output that happens to be indented", () => {
+    // firstLine() returns the raw line, the comparison trims only one side, so
+    // any leading whitespace makes a one-liner look like it has a body.
+    expect(hasBody(tool({ kind: "output", text: "  Ada, Grace" }))).toBe(false);
   });
 });

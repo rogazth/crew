@@ -62,13 +62,16 @@ export function toolLine(block: Block): ToolLine {
       return { text: shortPath(detail.path), mono: true, suffix: range, failed };
     }
     case "edit": {
-      // A provider that reported no tally gets no tally: "+0 −0" would read as
-      // a write that changed nothing.
-      const known = detail.added !== undefined && detail.removed !== undefined;
+      // Show what the provider counted and nothing else: "+0 −0" would read as
+      // a write that changed nothing, and a write does not know what it replaced.
+      const parts = [
+        detail.added === undefined ? null : `+${detail.added}`,
+        detail.removed === undefined ? null : `−${detail.removed}`,
+      ].filter((part): part is string => part !== null);
       return {
         text: shortPath(detail.path),
         mono: true,
-        suffix: known ? `+${detail.added} −${detail.removed}` : undefined,
+        suffix: parts.length > 0 ? parts.join(" ") : undefined,
         failed,
       };
     }
@@ -104,10 +107,12 @@ export function hasBody(block: Block): boolean {
       return Boolean(detail.output?.trim()) || detail.command.includes("\n");
     case "file":
       return Boolean(detail.preview?.trim());
+    // Both sides trimmed: an indented single line is still a single line, and
+    // opening the row would show exactly what the row already shows.
     case "message":
-      return detail.text.trim() !== firstLine(detail.text);
+      return detail.text.trim() !== firstLine(detail.text).trim();
     case "output":
-      return detail.text.trim() !== firstLine(detail.text);
+      return detail.text.trim() !== firstLine(detail.text).trim();
     default:
       return false;
   }
