@@ -487,11 +487,12 @@ mod tests {
             let lines = collected.0.lock().unwrap_or_else(|e| e.into_inner()).clone();
             if lines.len() >= 2 {
                 for line in lines {
-                    assert_eq!(
-                        std::path::PathBuf::from(line.trim()),
-                        want,
-                        "the agent was left in the daemon's directory"
-                    );
+                    // The shell reports the logical path it was handed; the
+                    // same directory under /var and /private/var is the same
+                    // directory, and this test is about which one it is.
+                    let got = std::fs::canonicalize(line.trim())
+                        .unwrap_or_else(|_| std::path::PathBuf::from(line.trim()));
+                    assert_eq!(got, want, "the agent was left in the daemon's directory");
                 }
                 return;
             }
