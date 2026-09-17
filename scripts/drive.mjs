@@ -112,12 +112,51 @@ const coder = await agent("Coder", "You write code and report to Cuddles.");
 const cuddles = await agent("Cuddles", "You coordinate. When an agent reports, acknowledge briefly.");
 console.log(`coder=${coder.id} cuddles=${cuddles.id}`);
 
+const SCENARIOS = {
+  // One agent writes to another and the message shows up on both sides.
+  message: {
+    prompt:
+      "Use your message_agent tool to send Cuddles exactly this text: 'the branch is green'. Then reply to me with one short sentence saying you sent it.",
+    check(coderEnd, cuddlesEnd) {
+      const sent = coderEnd.blocks.find((b) => b.tool?.detail?.kind === "message");
+      const received = cuddlesEnd.blocks.find((b) => b.role === "user" && b.fromAgent);
+      return [
+        ["the sender's transcript shows the message it wrote", Boolean(sent), sent ? `to ${sent.tool.detail.to}` : "no message row"],
+        [
+          "the reader's transcript shows who wrote to it",
+          Boolean(received),
+          received ? `from ${received.fromAgent.name}: ${received.text.slice(0, 60)}` : "no incoming turn",
+        ],
+        ["the reader answered", cuddlesEnd.blocks.some((b) => b.role === "assistant" && b.text.trim()), ""],
+      ];
+    },
+  },
+  // The agent does real work, and the transcript says what it did.
+  code: {
+    prompt:
+      "Write a file called greet.js in this directory holding a function greet(name) that returns `Hello, ${name}!`, then run `node -e \"console.log(require('./greet.js')('crew'))\"` to prove it works. Reply with the output.",
+    check(coderEnd) {
+      const tools = coderEnd.blocks.filter((b) => b.tool);
+      const wrote = tools.find((b) => b.tool.detail?.kind === "edit");
+      const ran = tools.find((b) => b.tool.detail?.kind === "command");
+      const greeted = Boolean(ran?.tool.detail.output?.includes("Hello, crew!"));
+      return [
+        ["the agent called tools at all", tools.length > 0, `${tools.length} rows`],
+        ["a file it wrote is named in the transcript", Boolean(wrote), wrote ? wrote.tool.detail.path : "no edit row"],
+        ["a command it ran carries its exit code", ran?.tool.detail.exitCode !== undefined, ran ? `exit ${ran.tool.detail.exitCode}` : "no command row"],
+        ["the command output is kept", greeted, ran?.tool.detail.output?.trim().slice(0, 60) ?? ""],
+        ["every tool row says what it was", tools.every((b) => b.tool.detail || b.tool.title), ""],
+      ];
+    },
+  },
+};
+
+const scenario = SCENARIOS[process.env.SCENARIO ?? "message"] ?? SCENARIOS.message;
+
 await rpc("turn_start", {
   sessionId: coder.id,
   cwd: workDir,
-  text:
-    process.env.PROMPT ??
-    "Use your message_agent tool to send Cuddles exactly this text: 'the branch is green'. Then reply to me with one short sentence saying you sent it.",
+  text: process.env.PROMPT ?? scenario.prompt,
   nonce: crypto.randomUUID(),
 });
 
@@ -126,18 +165,7 @@ const cuddlesEnd = await settle(cuddles.id);
 show("Coder", coderEnd);
 show("Cuddles", cuddlesEnd);
 
-const checks = [];
-const sent = coderEnd.blocks.find((b) => b.tool?.detail?.kind === "message");
-checks.push(["the sender's transcript shows the message it wrote", Boolean(sent), sent ? `to ${sent.tool.detail.to}` : "no message row"]);
-
-const received = cuddlesEnd.blocks.find((b) => b.role === "user" && b.fromAgent);
-checks.push(["the reader's transcript shows who wrote to it", Boolean(received), received ? `from ${received.fromAgent.name}: ${received.text.slice(0, 60)}` : "no incoming turn"]);
-
-const answered = cuddlesEnd.blocks.some((b) => b.role === "assistant" && b.text.trim().length > 0);
-checks.push(["the reader answered", answered, ""]);
-
-const commands = cuddlesEnd.blocks.filter((b) => b.tool?.detail?.kind === "command");
-checks.push(["commands are recorded with their exit code", commands.length === 0 || commands.some((b) => b.tool.detail.exitCode !== undefined), `${commands.length} commands`]);
+const checks = scenario.check(coderEnd, cuddlesEnd);
 
 console.log("\n--- checks ---");
 let failed = 0;

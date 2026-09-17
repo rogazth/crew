@@ -203,6 +203,10 @@ impl AgentHost {
         cmd.args(&args)
             .envs(env.unwrap_or_default())
             .current_dir(&workdir)
+            // current_dir moves the process, but PWD is inherited from us, and
+            // tools that trust PWD over getcwd() then write into the daemon's
+            // directory instead of the agent's.
+            .env("PWD", &workdir)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -439,5 +443,60 @@ fn kill_group(pid: u32) {
     }
     unsafe {
         libc::kill(-(pid as i32), libc::SIGKILL);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct Collect(Mutex<Vec<String>>);
+
+    impl AgentEvents for Collect {
+        fn lines(&self, event: &str, _session_id: &str, lines: Vec<String>) {
+            if event == STDOUT_EVENT {
+                self.0.lock().unwrap_or_else(|e| e.into_inner()).extend(lines);
+            }
+        }
+        fn exit(&self, _session_id: &str, _code: Option<i32>, _pid: u32) {}
+    }
+
+    #[test]
+    fn an_agent_runs_where_it_was_told_to() {
+        let dir = std::env::temp_dir().join(format!("crew-cwd-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let script = dir.join("say-where");
+        // Both answers matter: a tool may ask the kernel or trust the variable.
+        std::fs::write(&script, "#!/bin/sh\npwd\necho \"$PWD\"\n").expect("script");
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+
+        let host = AgentHost::new();
+        let collected = Arc::new(Collect(Mutex::new(Vec::new())));
+        host.set_events(collected.clone());
+        host.spawn(
+            "s1".into(),
+            script.to_string_lossy().into_owned(),
+            Vec::new(),
+            dir.to_string_lossy().into_owned(),
+            None,
+        )
+        .expect("spawn");
+
+        let want = std::fs::canonicalize(&dir).expect("canonical");
+        for _ in 0..100 {
+            let lines = collected.0.lock().unwrap_or_else(|e| e.into_inner()).clone();
+            if lines.len() >= 2 {
+                for line in lines {
+                    assert_eq!(
+                        std::path::PathBuf::from(line.trim()),
+                        want,
+                        "the agent was left in the daemon's directory"
+                    );
+                }
+                return;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        panic!("the script never answered");
     }
 }
