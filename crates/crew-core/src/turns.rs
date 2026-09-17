@@ -37,6 +37,7 @@ use crate::providers::cursor::{
     turn_usage as cursor_turn_usage, with_attached_files, with_persona, CursorSpawn, ToolPhase,
 };
 use crate::providers::opencode::{
+    opencode_config,
     add_step_usage, build_opencode_prompt, build_opencode_spawn_args,
     parse_tool_call as parse_opencode_tool_call, session_id_from_event as opencode_session_id,
     stream_error_message as opencode_error_message, text_part, turn_ended, OpencodeSpawn, OpencodeText,
@@ -57,7 +58,7 @@ const IDLE_KILL: Duration = Duration::from_secs(5);
 /// row without anyone else speaking is a runaway, not a plan.
 const MAX_SELF_TURNS: u32 = 25;
 const STDERR_TAIL: usize = 12;
-const TOOLS_HINT: &str = "Crew also gives you tools (the crew MCP server) to list and create agents in this workspace and to manage routines: standing orders that wake an agent on a schedule with a saved prompt. Use them when asked to schedule work or set up an agent.";
+const TOOLS_HINT: &str = "Crew gives you tools through its crew MCP server. list_agents says who else is in this workspace. message_agent writes to one of them, and writing to yourself is how you carry on after this turn ends: leave yourself the next step and it arrives as a new turn. search_messages looks up what was already said. find_tool searches everything else Crew offers and answers with arguments you can call through call_tool; reach for it before deciding something is not possible here.";
 
 type Answers = HashMap<String, String>;
 
@@ -936,6 +937,7 @@ impl TurnHost {
 
     fn run_opencode(&self, session: crate::session::Session, params: TurnStart) -> TurnOutcome {
         let session_id = session.id.clone();
+        let mcp = self.mcp();
         let resume = if params.fresh.unwrap_or(false) {
             None
         } else {
@@ -955,7 +957,12 @@ impl TurnHost {
             &params.text,
             &path_list(&params, &HashSet::new()),
             resume.is_none(),
+            mcp.as_ref().map(|_| TOOLS_HINT),
         );
+        let mut env = self.agent_env(&session_id);
+        if let Some(config) = opencode_config(mcp.as_ref()) {
+            env.insert("OPENCODE_CONFIG_CONTENT".into(), config);
+        }
         if let Err(error) = self.agents.spawn(
             session_id.clone(),
             path,
@@ -969,7 +976,7 @@ impl TurnHost {
                 },
             }),
             params.cwd,
-            Some(self.agent_env(&session_id)),
+            Some(env),
         ) {
             return TurnOutcome::Failed(error);
         }

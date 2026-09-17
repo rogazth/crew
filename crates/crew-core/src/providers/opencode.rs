@@ -2,7 +2,7 @@ use crew_protocol::{ToolDetail, ToolStatus, TurnUsage};
 use serde_json::{Map, Value};
 
 use super::runtime::Autonomy;
-use super::{as_record, as_record_owned, clip, finite_number, leaf, string_field};
+use super::{as_record, as_record_owned, clip, crew_tool_detail, finite_number, leaf, string_field};
 
 pub use super::parse_json_line;
 
@@ -38,12 +38,16 @@ pub fn build_opencode_prompt(
     text: &str,
     files: &[String],
     with_persona: bool,
+    tools: Option<&str>,
 ) -> String {
     let body = with_attached_paths(text.trim(), files);
     if !with_persona {
         return body;
     }
-    let persona = persona_prompt(name, description);
+    let persona = match tools {
+        Some(hint) => format!("{}\n\n{hint}", persona_prompt(name, description)),
+        None => persona_prompt(name, description),
+    };
     if body.is_empty() {
         persona
     } else {
@@ -51,8 +55,20 @@ pub fn build_opencode_prompt(
     }
 }
 
-/// opencode takes no MCP server on the command line, so this persona names no
-/// Crew tools: the agent has none.
+/// opencode takes no MCP server on the command line, only through config. It
+/// reads `OPENCODE_CONFIG_CONTENT` as inline JSON, so the bridge is handed over
+/// on the environment instead of a file in the user's repo.
+pub fn opencode_config(mcp: Option<&(String, Vec<String>)>) -> Option<String> {
+    let (exe, args) = mcp?;
+    let mut command = vec![exe.clone()];
+    command.extend(args.iter().cloned());
+    serde_json::to_string(&serde_json::json!({
+        "$schema": "https://opencode.ai/config.json",
+        "mcp": { "crew": { "type": "local", "command": command, "enabled": true } }
+    }))
+    .ok()
+}
+
 pub fn persona_prompt(name: &str, description: &str) -> String {
     let who = {
         let trimmed = name.trim();
@@ -142,7 +158,7 @@ pub fn parse_tool_call(rec: &Map<String, Value>) -> Option<OpencodeToolCall> {
     Some(OpencodeToolCall {
         title: tool_label(&name, &input),
         detail: tool_detail(&name, &input, state),
-        status: tool_status(state),
+        status: tool_status(&name, state),
         call_id,
         name,
     })
@@ -150,8 +166,11 @@ pub fn parse_tool_call(rec: &Map<String, Value>) -> Option<OpencodeToolCall> {
 
 /// A shell that answers with a non-zero exit failed as surely as a tool that
 /// threw, and opencode calls both of those `completed`.
-fn tool_status(state: Option<&Map<String, Value>>) -> ToolStatus {
-    let failed = string_field(state, "status").as_deref() == Some("error")
+fn tool_status(name: &str, state: Option<&Map<String, Value>>) -> ToolStatus {
+    // A call the model got wrong is reported as a completed tool named
+    // `invalid`; nothing about it succeeded.
+    let failed = name == "invalid"
+        || string_field(state, "status").as_deref() == Some("error")
         || metadata(state)
             .and_then(|meta| meta.get("exit"))
             .and_then(Value::as_i64)
@@ -174,6 +193,9 @@ fn tool_detail(
     input: &Map<String, Value>,
     state: Option<&Map<String, Value>>,
 ) -> Option<ToolDetail> {
+    if let Some(detail) = crew_tool_detail(name, input) {
+        return Some(detail);
+    }
     if string_field(state, "status").as_deref() == Some("error") {
         return Some(ToolDetail::Output {
             text: string_field(state, "error")?,
@@ -223,6 +245,16 @@ fn tool_detail(
 }
 
 fn tool_label(name: &str, input: &Map<String, Value>) -> String {
+    if let Some(verb) = super::crew_tool(name) {
+        let subject = string_field(Some(input), "to")
+            .or_else(|| string_field(Some(input), "name"))
+            .or_else(|| string_field(Some(input), "query"));
+        let verb = format!("Crew {}", verb.replace('_', " "));
+        return match subject {
+            Some(subject) => format!("{verb} {}", clip(&subject, 40)),
+            None => verb,
+        };
+    }
     if let Some(command) = string_field(Some(input), "command") {
         return clip(&command, 72);
     }
@@ -633,5 +665,57 @@ mod tests {
             "error": { "name": "ProviderAuthError", "data": { "message": "no credentials" } }
         })]);
         assert_eq!(got, vec![]);
+    }
+
+    #[test]
+    fn a_message_to_another_agent_reads_as_the_message() {
+        let events = events(&[json!({
+            "type": "tool_use",
+            "sessionID": "ses_1",
+            "part": {
+                "type": "tool",
+                "tool": "crew_message_agent",
+                "callID": "call_1",
+                "state": {
+                    "status": "completed",
+                    "input": { "to": "Cuddles", "text": "the branch is green" },
+                    "output": "{\"delivered\": true}"
+                }
+            }
+        })]);
+        let detail = events.iter().find_map(|event| match event {
+            HarnessEvent::ToolStarted { detail: Some(detail), .. } => Some(detail.clone()),
+            _ => None,
+        });
+        let Some(ToolDetail::Message { to, text }) = detail else {
+            panic!("expected a message detail, got {detail:?}");
+        };
+        assert_eq!(to, "Cuddles");
+        assert_eq!(text, "the branch is green");
+    }
+
+    #[test]
+    fn a_call_the_model_got_wrong_is_a_failed_row() {
+        let events = events(&[json!({
+            "type": "tool_use",
+            "sessionID": "ses_1",
+            "part": {
+                "type": "tool",
+                "tool": "invalid",
+                "callID": "call_2",
+                "state": {
+                    "status": "completed",
+                    "input": { "tool": "message_agent", "error": "unavailable tool" },
+                    "output": "The arguments provided to the tool are invalid"
+                }
+            }
+        })]);
+        assert!(
+            events.iter().any(|event| matches!(
+                event,
+                HarnessEvent::ToolUpdated { status: Some(ToolStatus::Failed), .. }
+            )),
+            "a rejected call should not read as a success: {events:?}"
+        );
     }
 }

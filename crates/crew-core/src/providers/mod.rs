@@ -24,6 +24,26 @@ pub fn string_field(rec: Option<&Map<String, Value>>, key: &str) -> Option<Strin
         .map(str::to_string)
 }
 
+/// The bare name of a Crew tool, whatever the provider prefixed it with:
+/// Claude and Codex namespace MCP tools `mcp__crew__x`, opencode `crew_x`.
+pub fn crew_tool(name: &str) -> Option<&str> {
+    name.strip_prefix("mcp__crew__")
+        .or_else(|| name.strip_prefix("crew_"))
+        .filter(|verb| !verb.is_empty())
+}
+
+/// What a Crew tool did, for the one that is worth reading in a transcript: a
+/// message to another agent is half of a conversation happening in two places.
+pub fn crew_tool_detail(name: &str, input: &Map<String, Value>) -> Option<crew_protocol::ToolDetail> {
+    if crew_tool(name)? != "message_agent" {
+        return None;
+    }
+    Some(crew_protocol::ToolDetail::Message {
+        to: string_field(Some(input), "to")?,
+        text: string_field(Some(input), "text").unwrap_or_default(),
+    })
+}
+
 pub fn parse_json_line(line: &str) -> Option<Map<String, Value>> {
     let trimmed = line.trim();
     if !trimmed.starts_with('{') {

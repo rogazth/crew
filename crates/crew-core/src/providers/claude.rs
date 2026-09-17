@@ -580,6 +580,9 @@ pub fn tool_label(name: &str, input: &Map<String, Value>) -> String {
 /// What the row shows under its title, read off the input alone so a pending
 /// call already names its command or its file.
 pub fn tool_detail(name: &str, input: &Map<String, Value>) -> Option<ToolDetail> {
+    if let Some(detail) = super::crew_tool_detail(name, input) {
+        return Some(detail);
+    }
     match name.to_ascii_lowercase().as_str() {
         "bash" => Some(ToolDetail::Command {
             command: string_field(Some(input), "command")?,
@@ -981,5 +984,23 @@ mod tests {
                 "destination": "session"
             })
         );
+    }
+
+    #[test]
+    fn a_message_to_another_agent_reads_as_the_message() {
+        let details = tool_details(&[json!({
+            "type": "assistant",
+            "message": { "content": [{
+                "type": "tool_use",
+                "id": "toolu_1",
+                "name": "mcp__crew__message_agent",
+                "input": { "to": "Cuddles", "text": "the branch is green\nMR is up" }
+            }] }
+        })]);
+        let Some(Some(ToolDetail::Message { to, text })) = details.first() else {
+            panic!("expected a message detail, got {details:?}");
+        };
+        assert_eq!(to, "Cuddles");
+        assert!(text.starts_with("the branch is green"));
     }
 }
