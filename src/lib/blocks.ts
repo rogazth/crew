@@ -101,8 +101,10 @@ export function applyEvent(blocks: Block[], event: HarnessEvent): Block[] {
       const settled = settleTurn(blocks, "completed");
       const usage = event.usage;
       if (!usage) return settled;
-      let index = settled.length - 1;
-      while (index >= 0 && settled[index]?.role !== "assistant") index -= 1;
+      // The last block of the turn, the same one the daemon writes it to. It
+      // is also the one place the reader is certainly looking: a window holds
+      // the newest blocks, and a reply from before the window is not in it.
+      const index = settled.length - 1;
       if (index < 0) return settled;
       return settled.map((block, i) => (i === index ? { ...block, usage, at: Date.now() } : block));
     }

@@ -108,7 +108,11 @@ pub fn apply_event(blocks: Vec<Block>, event: HarnessEvent) -> Vec<Block> {
             let Some(usage) = usage else {
                 return settled;
             };
-            let Some(index) = settled.iter().rposition(|block| block.role == BlockRole::Assistant) else {
+            // The last block of the turn, whatever it is. A run that ends on a
+            // tool call would otherwise hang its cost on a reply fifty rows
+            // above — which reads as what that reply cost — or lose it, when
+            // the turn had no reply at all.
+            let Some(index) = settled.len().checked_sub(1) else {
                 return settled;
             };
             settled[index].usage = Some(usage);
@@ -591,7 +595,7 @@ mod tests {
     }
 
     #[test]
-    fn turn_completed_pins_usage_on_last_assistant() {
+    fn turn_completed_pins_usage_on_the_reply_the_turn_ended_with() {
         let blocks = run(
             vec![
                 HarnessEvent::MessageDelta { text: "ok".into() },
@@ -609,6 +613,47 @@ mod tests {
         let last = blocks.last().unwrap();
         assert_eq!(last.usage.as_ref().and_then(|u| u.cost_usd), Some(0.01));
         assert_eq!(last.streaming, Some(false));
+    }
+
+    /// An agentic run ends on its last tool call as often as on a sentence.
+    /// The cost is the turn's either way, and hanging it on a reply from
+    /// further up reads as what that reply cost.
+    #[test]
+    fn turn_completed_pins_usage_on_a_tool_row_when_the_turn_ended_on_one() {
+        let blocks = run(
+            vec![
+                HarnessEvent::MessageDelta { text: "on it".into() },
+                HarnessEvent::MessageCompleted {},
+                HarnessEvent::ToolStarted {
+                    call_id: "c1".into(),
+                    name: "bash".into(),
+                    title: "npm test".into(),
+                    detail: None,
+                },
+                HarnessEvent::ToolUpdated {
+                    call_id: "c1".into(),
+                    title: None,
+                    status: Some(ToolStatus::Completed),
+                    detail: None,
+                },
+                HarnessEvent::TurnCompleted {
+                    usage: Some(TurnUsage {
+                        input_tokens: None,
+                        output_tokens: None,
+                        cost_usd: Some(0.02),
+                        duration_ms: None,
+                    }),
+                },
+            ],
+            vec![new_block(BlockRole::User, "hi")],
+        );
+        let last = blocks.last().unwrap();
+        assert_eq!(last.role, BlockRole::Tool);
+        assert_eq!(last.usage.as_ref().and_then(|u| u.cost_usd), Some(0.02));
+        assert!(
+            blocks.iter().all(|b| b.role != BlockRole::Assistant || b.usage.is_none()),
+            "the cost landed on a reply as well"
+        );
     }
 
     #[test]

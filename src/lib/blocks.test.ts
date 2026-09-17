@@ -100,7 +100,7 @@ describe("daemon appends", () => {
 });
 
 describe("turn end", () => {
-  it("pins usage on the last assistant row", () => {
+  it("pins usage on the reply the turn ended with", () => {
     const blocks = run(
       [
         { type: "message.delta", text: "ok" },
@@ -110,5 +110,32 @@ describe("turn end", () => {
     );
     expect(blocks.at(-1)?.usage).toEqual({ costUsd: 0.01 });
     expect(blocks.at(-1)?.streaming).toBe(false);
+  });
+
+  // An agentic run ends on its last tool call as often as on a sentence. The
+  // cost is the turn's either way, and hanging it on a reply from further up
+  // reads as what that reply cost — or is lost, when the window starts below it.
+  it("pins usage on a tool row when the turn ended on one", () => {
+    const blocks = run(
+      [
+        { type: "message.delta", text: "on it" },
+        { type: "message.completed" },
+        { type: "tool.started", callId: "c1", name: "bash", title: "npm test" },
+        { type: "tool.updated", callId: "c1", status: "completed" },
+        { type: "turn.completed", usage: { costUsd: 0.02 } },
+      ],
+      [newBlock("user", "hi")],
+    );
+    const last = blocks.at(-1);
+    expect(last?.role).toBe("tool");
+    expect(last?.usage).toEqual({ costUsd: 0.02 });
+    expect(blocks.find((b) => b.role === "assistant")?.usage).toBeUndefined();
+  });
+
+  it("keeps quiet when the turn brought no usage with it", () => {
+    const blocks = run([{ type: "message.delta", text: "ok" }, { type: "turn.completed" }], [
+      newBlock("user", "hi"),
+    ]);
+    expect(blocks.at(-1)?.usage).toBeUndefined();
   });
 });

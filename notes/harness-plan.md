@@ -161,7 +161,8 @@ cargo test        # rust
 | G4 | the client runtime has tests: the retry, the badge, the notifications | done `34f7d01` |
 | G5 | cron and the routine store, tested where they are written | done `3e9f965` |
 | G6 | the rules a workspace and a session enforce | done `d19b68d` |
-| G7 | the review of the review: four more, in the same class | done |
+| G7 | the review of the review: four more, in the same class | done `d8ed0e2` |
+| E8 | a turn's cost is the turn's, not the last thing it said | done |
 
 ### How A5 landed
 
@@ -204,10 +205,15 @@ transcript. Measured at roughly 5 MB for a heavy session, which is why it is
 still open and not urgent — and doing it means position arithmetic in the write
 path, which is the one place a mistake loses history.
 
-Also still open, and pre-existing: an agentic run with more tool calls than a
-window can hold loses its cost footer on the client until the reader loads the
-page above, because `turn.completed` attaches usage to the last assistant block
-and the window may not contain one.
+That last one is fixed in E8: `turn.completed` attaches its usage to the last
+block of the turn, whatever it is, on both sides of the wire. A run that ends on
+its fortieth tool call now shows the cost under that group instead of hanging it
+on a reply forty rows up — which read as what *that reply* cost — or losing it,
+which is what happened when the reply was above the window.
+
+The grouping that decides all of this moved to `src/lib/transcriptRows.ts`,
+because it was in a `.tsx` where the project's own rule says it could not be
+tested. Thirteen tests came with it.
 
 ## Routines belong to the daemon
 
