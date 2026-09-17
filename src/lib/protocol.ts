@@ -120,7 +120,12 @@ snippet: string, };
 
 export type SearchQuery = { query: string, 
 /**
- * Empty means every session.
+ * Which workspace to stay inside. Absent searches every one of them, which
+ * only a caller that means it should ask for.
+ */
+workspaceId?: string, 
+/**
+ * Empty means every session the workspace filter left.
  */
 sessionIds: Array<string>, from?: number, to?: number, limit?: number, 
 /**

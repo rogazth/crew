@@ -186,8 +186,6 @@ The default provider is opencode on its free models, which need no credentials.
 
 ## Known issues
 
-- `pty::tests::concurrent_spawns_on_one_id_leave_a_single_child` fails on this
-  machine and failed before any of this work started. Unrelated; still unfixed.
 - Search indexes block text, which for a tool row is its title. Command output
   is stored but not indexed, on purpose: it keeps the index small.
 - Measured, not guessed: over 16k rows a narrow query answers in ~1.7 ms and a

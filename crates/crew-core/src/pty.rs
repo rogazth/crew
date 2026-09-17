@@ -696,14 +696,16 @@ mod tests {
 
     #[test]
     fn concurrent_spawns_on_one_id_leave_a_single_child() {
+        // A script named after the marker, rather than `exec -a`: that is a
+        // bashism, and /bin/sh is dash on most Linux.
         let marker = format!("crew_pty_race_{}", std::process::id());
+        let script = std::env::temp_dir().join(format!("{marker}.sh"));
+        // No `exec`: the shell has to stay, because its command line is what
+        // carries the marker that pgrep looks for.
+        std::fs::write(&script, "sleep 30\n").expect("write marker script");
         let host = PtyHost::new();
         let id = "session:concurrent".to_string();
-        let command = vec![
-            "/bin/sh".to_string(),
-            "-c".to_string(),
-            format!("exec -a {marker} sleep 30"),
-        ];
+        let command = vec!["/bin/sh".to_string(), script.to_string_lossy().into_owned()];
         // Without the barrier the threads rarely overlap inside spawn, and the
         // overlap is exactly what this guards.
         let gate = Arc::new(std::sync::Barrier::new(2));
@@ -729,6 +731,7 @@ mod tests {
         thread::sleep(KILL_ESCALATE + Duration::from_millis(700));
         let survivors = marker_children(&marker);
         let _ = std::process::Command::new("pkill").args(["-f", &marker]).status();
+        let _ = std::fs::remove_file(&script);
 
         assert_eq!(spawned, 1, "two concurrent spawns left {spawned} children");
         assert_eq!(survivors, 0, "kill left {survivors} children running");
