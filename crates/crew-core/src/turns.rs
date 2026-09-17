@@ -67,20 +67,28 @@ const STDERR_TAIL: usize = 12;
 /// in `scripts/drive.mjs` and the letter left the building.
 fn tools_hint(lead: &str, spell: &dyn Fn(&str) -> String) -> String {
     format!(
-        "{lead} {} says who else is in this workspace. {} writes to one of them, and writing \
-         to yourself is how you carry on after this turn ends: leave yourself the next step and \
-         it arrives as a new turn. A turn that opens with `[message]` was written by one of \
-         them, not by the user: it is answered with {} to the name on that line, because what \
-         you write in the chat is read by the user and never reaches the agent that wrote to \
-         you. {} looks up what was already said. {} searches everything else \
-         Crew offers and answers with arguments you can call through {}; reach for it before \
-         deciding something is not possible here.",
+        "{lead}\n\
+         - {} — the other agents here, each with the id it is addressed by.\n\
+         - {} — write to one of them, by id. It arrives as a turn with your name and id on \
+         it, and it is read in its own time. You are not waiting here, and anything it sends \
+         back reaches you as a message of its own.\n\
+         - {} — leave yourself the next step. It arrives as a new turn the moment this one \
+         ends, with the tail of this conversation, so it is how you carry on past work that \
+         does not fit in one turn.\n\
+         - {} — look up what was already said in this conversation. It does not reach anybody \
+         else's; what another agent knows, you ask it for.\n\
+         - {} and {} — everything else Crew offers, searched and then called. Reach for them \
+         before deciding something is not possible here.\n\n\
+         A turn that opens with `## Message` was written by another agent, not by the user. \
+         What you write in the chat is read by the user and does not reach that agent; {} to \
+         the id on that line is what does.",
         spell("list_agents"),
         spell("message_agent"),
-        spell("message_agent"),
+        spell("continue_after_turn"),
         spell("search_messages"),
         spell("find_tool"),
         spell("call_tool"),
+        spell("message_agent"),
     )
 }
 
@@ -2519,7 +2527,14 @@ print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type
         // The bare name never appears on its own: that is the one an agent
         // cannot call, and the one it will go looking for elsewhere.
         for sheet in [&mcp, &opencode, &shell] {
-            for tool in ["list_agents", "message_agent", "search_messages", "find_tool", "call_tool"] {
+            for tool in [
+                "list_agents",
+                "message_agent",
+                "continue_after_turn",
+                "search_messages",
+                "find_tool",
+                "call_tool",
+            ] {
                 assert!(
                     !sheet.contains(&format!("`{tool}`")),
                     "the sheet offers a bare {tool}: {sheet}"
