@@ -242,3 +242,101 @@ pub fn set_status(store: &Store, id: String, status: String) -> Result<(), Strin
 pub fn reorder(store: &Store, ids: Vec<String>) -> Result<(), String> {
     store.with(|conn| set_order(conn, "sessions", &ids))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn world() -> (Store, String) {
+        let dir = std::env::temp_dir().join(format!("crew-session-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let store = Store::open(dir.join("crew.sqlite3")).expect("store");
+        let root = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
+        std::fs::create_dir_all(&root).expect("root");
+        let workspace = crate::workspace::create(&store, "w".into(), root.to_string_lossy().into())
+            .expect("workspace");
+        (store, workspace.id)
+    }
+
+    fn agent(store: &Store, workspace: &str, name: &str, autonomy: &str) -> Result<Session, String> {
+        create(
+            store,
+            workspace.to_string(),
+            "agent".into(),
+            name.into(),
+            "claude".into(),
+            "m".into(),
+            "".into(),
+            autonomy.into(),
+        )
+    }
+
+    #[test]
+    fn an_agent_needs_a_name_and_a_kind_crew_knows() {
+        let (store, workspace) = world();
+        assert!(agent(&store, &workspace, "   ", "ask").is_err_and(|e| e.contains("Name is required")));
+        let wrong_kind = create(
+            &store,
+            workspace.clone(),
+            "robot".into(),
+            "Planner".into(),
+            "claude".into(),
+            "m".into(),
+            "".into(),
+            "ask".into(),
+        );
+        assert!(wrong_kind.is_err_and(|e| e.contains("Unknown session kind")));
+    }
+
+    /// Anything but "full" is "ask": a typo in autonomy must not be the thing
+    /// that lets an agent run commands unattended.
+    #[test]
+    fn autonomy_falls_back_to_asking() {
+        let (store, workspace) = world();
+        assert_eq!(agent(&store, &workspace, "A", "full").unwrap().autonomy, "full");
+        assert_eq!(agent(&store, &workspace, "B", "ask").unwrap().autonomy, "ask");
+        assert_eq!(agent(&store, &workspace, "C", "FULL").unwrap().autonomy, "ask");
+        assert_eq!(agent(&store, &workspace, "D", "").unwrap().autonomy, "ask");
+    }
+
+    /// The runtime owns status. A value the UI invented would render as nothing
+    /// and, worse, read as "not working" to everything that asks.
+    #[test]
+    fn only_the_statuses_the_runtime_writes_are_accepted() {
+        let (store, workspace) = world();
+        let made = agent(&store, &workspace, "Planner", "ask").expect("agent");
+        for status in ["idle", "working", "needs-input", "done", "error"] {
+            set_status(&store, made.id.clone(), status.into()).expect(status);
+        }
+        assert!(set_status(&store, made.id.clone(), "busy".into()).is_err());
+        assert_eq!(get(&store, made.id).unwrap().unwrap().status, "error");
+    }
+
+    #[test]
+    fn a_session_lists_only_in_its_own_workspace() {
+        let (store, workspace) = world();
+        let other = {
+            let root = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
+            std::fs::create_dir_all(&root).expect("root");
+            crate::workspace::create(&store, "other".into(), root.to_string_lossy().into())
+                .expect("workspace")
+                .id
+        };
+        agent(&store, &workspace, "Planner", "ask").expect("agent");
+        agent(&store, &other, "Stranger", "ask").expect("agent");
+
+        let names: Vec<String> = list(&store, workspace).unwrap().into_iter().map(|s| s.name).collect();
+        assert_eq!(names, vec!["Planner"]);
+        assert_eq!(list_all(&store).unwrap().len(), 2, "the sweep missed a workspace");
+    }
+
+    #[test]
+    fn deleting_a_workspace_takes_its_sessions_with_it() {
+        let (store, workspace) = world();
+        let made = agent(&store, &workspace, "Planner", "ask").expect("agent");
+
+        crate::workspace::delete(&store, workspace).expect("delete");
+
+        assert!(get(&store, made.id).unwrap().is_none(), "an orphaned session survived");
+    }
+}

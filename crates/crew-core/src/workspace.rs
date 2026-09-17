@@ -122,3 +122,54 @@ pub fn active_get(store: &Store) -> Result<Option<String>, String> {
 pub fn active_set(store: &Store, id: Option<String>) -> Result<(), String> {
     store.with(|conn| write_state(conn, ACTIVE_WORKSPACE_KEY, id.as_deref()))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn store() -> Store {
+        let dir = std::env::temp_dir().join(format!("crew-ws-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        Store::open(dir.join("crew.sqlite3")).expect("store")
+    }
+
+    fn a_folder() -> String {
+        let dir = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
+        std::fs::create_dir_all(&dir).expect("dir");
+        dir.to_string_lossy().into_owned()
+    }
+
+    #[test]
+    fn a_workspace_is_a_directory_that_exists() {
+        let store = store();
+        let path = a_folder();
+        assert!(create(&store, "crew".into(), path.clone()).is_ok());
+
+        let missing = create(&store, "gone".into(), format!("{path}/nope"));
+        assert!(missing.is_err_and(|e| e.contains("Not a directory")), "a missing folder was opened");
+        let file = std::path::Path::new(&path).join("a-file");
+        std::fs::write(&file, "x").expect("file");
+        let as_file = create(&store, "file".into(), file.to_string_lossy().into_owned());
+        assert!(as_file.is_err_and(|e| e.contains("Not a directory")), "a file was opened as a folder");
+    }
+
+    #[test]
+    fn a_name_is_required_and_trimmed() {
+        let store = store();
+        assert!(create(&store, "   ".into(), a_folder()).is_err());
+        let made = create(&store, "  crew  ".into(), a_folder()).expect("workspace");
+        assert_eq!(made.name, "crew");
+    }
+
+    /// Two rows for one folder would be two transcripts for one project.
+    #[test]
+    fn the_same_folder_cannot_be_opened_twice() {
+        let store = store();
+        let path = a_folder();
+        create(&store, "crew".into(), path.clone()).expect("first");
+
+        let again = create(&store, "crew again".into(), path);
+
+        assert!(again.is_err_and(|e| e.contains("Already open as \"crew\"")), "the folder opened twice");
+    }
+}

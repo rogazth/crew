@@ -159,7 +159,8 @@ cargo test        # rust
 | G2 | the scheduler review's ten findings | done `2241ae5` |
 | G3 | the schedule math is pinned on both sides of the duplication | done `41b5826` |
 | G4 | the client runtime has tests: the retry, the badge, the notifications | done `34f7d01` |
-| G5 | cron and the routine store, tested where they are written | done |
+| G5 | cron and the routine store, tested where they are written | done `3e9f965` |
+| G6 | the rules a workspace and a session enforce | done |
 
 ### How A5 landed
 
