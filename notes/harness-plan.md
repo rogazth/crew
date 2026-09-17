@@ -173,7 +173,8 @@ cargo test        # rust
 | G6 | the rules a workspace and a session enforce | done `d19b68d` |
 | G7 | the review of the review: four more, in the same class | done `d8ed0e2` |
 | E8 | a turn's cost is the turn's, not the last thing it said | done `8b34973` |
-| D2 | the tool sheet names tools the way each provider takes them | done |
+| D2 | the tool sheet names tools the way each provider takes them | done `b41fb3e` |
+| D3 | a refusal says what the tool takes | done |
 
 ### How A5 landed
 

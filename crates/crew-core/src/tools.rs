@@ -304,14 +304,40 @@ pub fn handle(
                     };
                     Ok(json!({ "content": [{ "type": "text", "text": body }] }))
                 }
+                // A refusal carries the arguments the tool wanted. An agent
+                // that guessed one field name has usually guessed the others,
+                // and a round trip per field is a turn spent on paperwork.
                 Err(error) => Ok(json!({
-                    "content": [{ "type": "text", "text": error }],
+                    "content": [{ "type": "text", "text": with_arguments(name, &error) }],
                     "isError": true
                 })),
             }
         }
         _ => Err(format!("Unknown method {method}")),
     }
+}
+
+/// The tool's arguments, appended to whatever it said when it refused.
+fn with_arguments(name: &str, error: &str) -> String {
+    let Some(tool) = catalog().into_iter().chain(gateway()).find(|tool| tool.name == name) else {
+        return error.to_string();
+    };
+    // Required first, in the order the schema names them, because that is the
+    // order the tool's own description talks about them in.
+    let required: Vec<String> = tool
+        .schema
+        .get("required")
+        .and_then(Value::as_array)
+        .map(|names| names.iter().filter_map(Value::as_str).map(str::to_string).collect())
+        .unwrap_or_default();
+    let mut fields = required.clone();
+    if let Some(props) = tool.schema.get("properties").and_then(Value::as_object) {
+        fields.extend(props.keys().filter(|key| !required.contains(key)).cloned());
+    }
+    if fields.is_empty() {
+        return error.to_string();
+    }
+    format!("{error}\n{name} takes: {}.", fields.join(", "))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1307,4 +1333,43 @@ mod tests {
             "the request named Cuddles and was believed: any holder of CREW_TOKEN speaks as any session"
         );
     }
+    /// An agent that guessed one field name has usually guessed the others.
+    /// Answering "to is required" alone costs a round trip per field.
+    #[test]
+    fn a_refusal_says_what_the_tool_takes() {
+        let store = store();
+        let transcripts = TranscriptHub::new(store.clone());
+        let ws = workspace(&store);
+        let coder = agent(&store, &ws, "Coder");
+        let postman = Postman::default();
+
+        let answer = call(
+            &store,
+            &transcripts,
+            &postman,
+            &coder,
+            "message_agent",
+            json!({ "agent_id": "x", "message": "hi" }),
+        )
+        .expect("handled");
+
+        assert!(is_error(&answer), "{}", body(&answer));
+        assert!(body(&answer).contains("message_agent takes: to, text."), "{}", body(&answer));
+    }
+
+    #[test]
+    fn a_refusal_from_a_tool_nobody_has_stays_as_it_came() {
+        let store = store();
+        let transcripts = TranscriptHub::new(store.clone());
+        let ws = workspace(&store);
+        let coder = agent(&store, &ws, "Coder");
+        let postman = Postman::default();
+
+        let answer = call(&store, &transcripts, &postman, &coder, "no_such_tool", json!({}))
+            .expect("handled");
+
+        assert!(body(&answer).starts_with("Unknown tool"), "{}", body(&answer));
+        assert!(!body(&answer).contains("takes:"), "{}", body(&answer));
+    }
+
 }
