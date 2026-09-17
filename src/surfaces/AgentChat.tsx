@@ -98,6 +98,7 @@ export function AgentChat({ session, cwd, active, onModel }: Props) {
         blocks={blocks}
         working={working}
         ready={ready}
+        active={active}
         more={more}
         loadingEarlier={loadingEarlier}
         onLoadEarlier={loadEarlier}

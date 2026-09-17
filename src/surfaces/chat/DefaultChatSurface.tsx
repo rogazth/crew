@@ -6,6 +6,7 @@ export function DefaultChatSurface({
   session,
   blocks,
   working,
+  active,
   more,
   loadingEarlier,
   onLoadEarlier,
@@ -40,6 +41,7 @@ export function DefaultChatSurface({
         <Transcript
           blocks={blocks}
           working={working}
+          active={active}
           more={more}
           loadingEarlier={loadingEarlier}
           onLoadEarlier={onLoadEarlier}

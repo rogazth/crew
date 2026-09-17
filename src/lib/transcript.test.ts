@@ -13,6 +13,9 @@ function remote(): (payload: unknown) => void {
   return hook[1] as (payload: unknown) => void;
 }
 
+/** What `transcript.ts` opens a chat with. */
+const PAGE = 80;
+
 function page(blocks: Block[], seq: number, options: { from?: number; more?: boolean; working?: boolean } = {}) {
   const from = options.from ?? 1;
   return {
@@ -162,7 +165,7 @@ describe("the window", () => {
     request.mockResolvedValue(page([said("recent")], 3, { from: 41, more: true }));
     const transcript = await load("s1");
     expect(transcript.read("s1").more).toBe(true);
-    expect(request).toHaveBeenCalledWith("transcript_tail", { sessionId: "s1", limit: 200 });
+    expect(request).toHaveBeenCalledWith("transcript_tail", { sessionId: "s1", limit: PAGE });
   });
 
   it("prepends the page before the one it holds", async () => {
@@ -173,7 +176,7 @@ describe("the window", () => {
     await transcript.loadEarlier("s1");
     expect(request).toHaveBeenLastCalledWith("transcript_tail", {
       sessionId: "s1",
-      limit: 200,
+      limit: PAGE,
       beforePos: 41,
     });
     expect(transcript.read("s1").blocks.map((block) => block.text)).toEqual(["older", "recent"]);
@@ -218,7 +221,7 @@ describe("the window", () => {
     request.mockResolvedValue(page([said("older"), said("a"), said("b")], 9, { from: 21, more: true }));
     await transcript.reload("s1");
     // Three blocks in hand, so the resync must not shrink the window to one page.
-    expect(request).toHaveBeenCalledWith("transcript_tail", { sessionId: "s1", limit: 200 });
+    expect(request).toHaveBeenCalledWith("transcript_tail", { sessionId: "s1", limit: PAGE });
     expect(transcript.read("s1").blocks).toHaveLength(3);
   });
 });
@@ -308,13 +311,15 @@ describe("review: the window against live events", () => {
     });
 
     const transcript = await load("s1");
-    await transcript.loadEarlier("s1"); // 601..1000
-    await transcript.loadEarlier("s1"); // 401..1000, the reader is reading "line 401"
-    expect(transcript.read("s1").blocks[0]?.text).toBe("line 401");
+    await transcript.loadEarlier("s1");
+    await transcript.loadEarlier("s1");
+    // Two pages back from the tail, whatever a page is worth.
+    const oldest = transcript.read("s1").blocks[0]?.text;
+    expect(oldest).toBeDefined();
 
     // A transcript-apply event goes missing; the store resyncs. `reload` is
     // what applyRemote reaches for, so await it rather than racing it.
     await transcript.reload("s1");
-    expect(transcript.read("s1").blocks[0]?.text).toBe("line 401");
+    expect(transcript.read("s1").blocks[0]?.text).toBe(oldest);
   });
 });

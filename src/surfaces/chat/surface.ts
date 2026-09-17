@@ -9,6 +9,8 @@ export type ChatSurfaceProps = {
   blocks: Block[];
   working: boolean;
   ready: boolean;
+  /** False while the tab sits behind another one. */
+  active: boolean;
   /** The chat holds a window; older blocks are a click away. */
   more: boolean;
   loadingEarlier: boolean;

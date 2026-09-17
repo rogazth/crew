@@ -4,9 +4,10 @@ import type { MessagePage, TranscriptApply } from "./protocol";
 
 /**
  * How many blocks a chat opens with. A year of conversation is not something a
- * window has to hold to be useful, and everything older is one click away.
+ * window has to hold to be useful, and a screenful is what the reader sees
+ * before the scroller asks for the page behind it.
  */
-const PAGE = 200;
+const PAGE = 80;
 
 /** What a chat surface reads. One object per session; a new one each publish. */
 export type ThreadSnapshot = {

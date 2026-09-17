@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import {
   isOpen,
   type Answers,
@@ -17,11 +17,15 @@ import {
 } from "./Message";
 
 const NEAR_BOTTOM_PX = 16;
+/** How close to the top the reader gets before the page behind it is fetched. */
+const PREFETCH_PX = 600;
 /** How many frames to wait for a folded phase to mount the row it holds. */
 const FOCUS_FRAMES = 20;
 type Props = {
   blocks: Block[];
   working: boolean;
+  /** False while the tab sits behind another one, where nothing has a size. */
+  active: boolean;
   /** Older blocks exist before the first one held; the header offers them. */
   more: boolean;
   loadingEarlier: boolean;
@@ -52,6 +56,7 @@ function showThinking(blocks: Block[], working: boolean): boolean {
 export function Transcript({
   blocks,
   working,
+  active,
   more,
   loadingEarlier,
   onLoadEarlier,
@@ -60,6 +65,8 @@ export function Transcript({
   onAnswer,
 }: Props) {
   const scroller = useRef<HTMLDivElement>(null);
+  const content = useRef<HTMLDivElement>(null);
+  const sentinel = useRef<HTMLDivElement>(null);
   const pinned = useRef(true);
   /** Where the reader is, measured from the bottom: everything that arrives
    *  arrives above them, so this is the number that must not change. */
@@ -75,9 +82,12 @@ export function Transcript({
     fromBottom.current = el.scrollHeight - el.scrollTop;
   };
 
-  useLayoutEffect(() => {
+  const place = useCallback(() => {
     const el = scroller.current;
-    if (!el) return;
+    // A tab behind another one is display:none, where every measurement reads
+    // 0; writing one there is what lands the reader at the top of a year of
+    // history the moment the tab is shown.
+    if (!el || el.clientHeight === 0) return;
     if (pinned.current) {
       el.scrollTop = el.scrollHeight;
       return;
@@ -85,7 +95,41 @@ export function Transcript({
     // Reading something further up: history loading above, or a resync
     // trimming it, must leave that line where it was.
     el.scrollTop = el.scrollHeight - fromBottom.current;
-  }, [blocks, thinking]);
+  }, []);
+
+  useLayoutEffect(place, [place, blocks, thinking, active]);
+
+  // Shiki answering, an image resolving, a webfont landing: each one grows the
+  // transcript after the paint that placed the reader. The observer runs
+  // before that paint, so re-pinning here is a number changing, not a jump.
+  useEffect(() => {
+    const el = scroller.current;
+    const body = content.current;
+    if (!el || !body) return;
+    const observer = new ResizeObserver(() => {
+      if (pinned.current) place();
+    });
+    observer.observe(body);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [place]);
+
+  // Nearing the top asks for the page behind it. A hidden tab has no boxes to
+  // intersect, so a background chat never fetches; the button stays for the
+  // fetch that failed.
+  useEffect(() => {
+    const el = scroller.current;
+    const mark = sentinel.current;
+    if (!el || !mark || !more) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) onLoadEarlier();
+      },
+      { root: el, rootMargin: `${PREFETCH_PX}px 0px 0px 0px` },
+    );
+    observer.observe(mark);
+    return () => observer.disconnect();
+  }, [more, onLoadEarlier]);
 
   // Scrolled to once. The mark is the focus itself, so it survives until the
   // next hit — the animation fades it, and keeping it is what holds open the
@@ -123,7 +167,8 @@ export function Transcript({
       onScroll={onScroll}
       className="min-h-0 flex-1 overflow-y-auto"
     >
-      <div className="crew-prose px-6 pt-5 pb-7">
+      <div ref={content} className="crew-prose px-6 pt-5 pb-7">
+        <div ref={sentinel} aria-hidden className="h-px" />
         {more && (
           <div className="mb-4 flex justify-center">
             <button
