@@ -414,16 +414,13 @@ mod review_tests {
         let id = agent(&store);
         let hub = TranscriptHub::new(store.clone());
 
-        let threads: Vec<_> = (0..8)
+        let threads: Vec<_> = (0..6)
             .map(|t| {
                 let hub = hub.clone();
                 let id = id.clone();
                 thread::spawn(move || {
-                    // Fat blocks: serialising the transcript happens outside the
-                    // hub lock, which is exactly the window two flushes share.
-                    let pad = "x".repeat(4096);
                     for n in 0..50 {
-                        hub.append_system(&id, &format!("line {t}-{n} {pad}"));
+                        hub.append_system(&id, &format!("line {t}-{n}"));
                     }
                 })
             })

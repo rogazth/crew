@@ -877,3 +877,169 @@ mod review_tests {
         assert_eq!(touched, 1, "one new block rewrote {touched} rows");
     }
 }
+
+#[cfg(test)]
+mod plan_tests {
+    use super::*;
+    use crate::blocks::new_block;
+
+    fn store() -> Store {
+        let dir = std::env::temp_dir().join(format!("crew-plan-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        Store::open(dir.join("crew.sqlite3")).expect("store")
+    }
+
+    fn plan(store: &Store, sql: &str, binds: &[rusqlite::types::Value]) -> Vec<String> {
+        store
+            .with(|conn| {
+                let mut stmt = conn.prepare(&format!("EXPLAIN QUERY PLAN {sql}"))?;
+                let rows = stmt.query_map(rusqlite::params_from_iter(binds.iter()), |row| {
+                    row.get::<_, String>(3)
+                })?;
+                rows.collect::<rusqlite::Result<Vec<_>>>()
+            })
+            .expect("plan")
+    }
+
+    #[test]
+    fn print_the_plans() {
+        let store = store();
+        let root = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
+        std::fs::create_dir_all(&root).expect("root");
+        let ws = crate::workspace::create(&store, "w".into(), root.to_string_lossy().into())
+            .expect("workspace");
+        let mut ids = Vec::new();
+        for n in 0..8 {
+            let id = crate::session::create(
+                &store,
+                ws.id.clone(),
+                "agent".into(),
+                format!("a{n}"),
+                "claude".into(),
+                "m".into(),
+                "".into(),
+                "ask".into(),
+            )
+            .expect("session")
+            .id;
+            let blocks: Vec<Block> = (0..2000)
+                .map(|i| {
+                    let mut b = new_block(BlockRole::Assistant, &format!("row {i} deploy word{i}"));
+                    b.at = Some(1_700_000_000_000 + i as i64);
+                    b
+                })
+                .collect();
+            store
+                .with(|conn| sync(conn, &id, &blocks, &mut Vec::new()))
+                .expect("sync");
+            ids.push(id);
+        }
+        store.with(|conn| conn.execute_batch("ANALYZE")).expect("analyze");
+
+        let holes = ids.iter().enumerate().map(|(i, _)| format!("?{}", i + 4)).collect::<Vec<_>>().join(", ");
+        let search_sql = format!(
+            "SELECT m.session_id, s.name, m.pos, m.id, m.role, m.at,
+                    snippet(messages_fts, 0, 'a', 'b', '…', 12)
+             FROM messages_fts
+             JOIN messages m ON m.rowid = messages_fts.rowid
+             JOIN sessions s ON s.id = m.session_id
+             WHERE messages_fts MATCH ?1 AND m.at >= ?2 AND m.at <= ?3
+               AND m.session_id IN ({holes})
+             ORDER BY bm25(messages_fts) ASC, m.at DESC LIMIT 50 OFFSET 0"
+        );
+        let newest_sql = search_sql.replace("bm25(messages_fts) ASC, m.at DESC", "m.at DESC");
+        println!("--- search (fts + date + {} sessions) ---", ids.len());
+        let mut binds: Vec<rusqlite::types::Value> = vec![
+            "deploy".to_string().into(),
+            0i64.into(),
+            i64::MAX.into(),
+        ];
+        for id in &ids {
+            binds.push(id.clone().into());
+        }
+        for line in plan(&store, &search_sql, &binds) {
+            println!("  {line}");
+        }
+        println!("--- search, sort=newest ---");
+        for line in plan(&store, &newest_sql, &binds) {
+            println!("  {line}");
+        }
+        println!("--- tail ---");
+        for line in plan(
+            &store,
+            "SELECT id, role, text, at, extra_json, pos FROM messages
+             WHERE session_id = ?1 AND pos < ?2 ORDER BY pos DESC LIMIT ?3",
+            &[ids[0].clone().into(), i64::MAX.into(), 50i64.into()],
+        ) {
+            println!("  {line}");
+        }
+        println!("--- since ---");
+        for line in plan(
+            &store,
+            "SELECT id, role, text, at, extra_json, pos FROM messages
+             WHERE session_id = ?1 AND pos > ?2 ORDER BY pos ASC LIMIT ?3",
+            &[ids[0].clone().into(), 0i64.into(), 500i64.into()],
+        ) {
+            println!("  {line}");
+        }
+        println!("--- last_activity ---");
+        for line in plan(
+            &store,
+            "SELECT MAX(at) FROM messages WHERE session_id = ?1",
+            &[ids[0].clone().into()],
+        ) {
+            println!("  {line}");
+        }
+        println!("--- fingerprints (hydrate) ---");
+        for line in plan(
+            &store,
+            "SELECT id, role, text, at, extra_json FROM messages WHERE session_id = ?1 ORDER BY pos ASC",
+            &[ids[0].clone().into()],
+        ) {
+            println!("  {line}");
+        }
+
+        // And the wall clock on the real path: 16k rows over 8 sessions.
+        let start = std::time::Instant::now();
+        let hits = search(
+            &store,
+            SearchQuery {
+                query: "deploy".into(),
+                session_ids: ids.clone(),
+                from: Some(0),
+                limit: Some(50),
+                ..Default::default()
+            },
+        )
+        .expect("search");
+        println!("search over 16000 rows: {} hits in {:?}", hits.len(), start.elapsed());
+
+        let start = std::time::Instant::now();
+        let hits = search(
+            &store,
+            SearchQuery { query: "word7".into(), session_ids: ids, ..Default::default() },
+        )
+        .expect("search");
+        println!("narrow search: {} hits in {:?}", hits.len(), start.elapsed());
+
+        // The backfill the v10 migration runs at startup, on a database the
+        // size of a few months of use.
+        let raw = serde_json::to_string(
+            &(0..2000)
+                .map(|i| new_block(BlockRole::Assistant, &format!("row {i} deploy word{i}")))
+                .collect::<Vec<_>>(),
+        )
+        .unwrap();
+        store
+            .with(|conn| {
+                conn.execute_batch("DELETE FROM messages")?;
+                let mut stmt = conn.prepare("UPDATE sessions SET blocks_json = ?1")?;
+                stmt.execute(rusqlite::params![raw])?;
+                Ok(())
+            })
+            .expect("seed");
+        let start = std::time::Instant::now();
+        let written = store.with(|conn| backfill(conn)).expect("backfill");
+        println!("backfill of {written} blocks over 8 sessions: {:?}", start.elapsed());
+    }
+}

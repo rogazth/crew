@@ -546,7 +546,8 @@ pub fn tool_label(name: &str, input: &Map<String, Value>) -> String {
                 .all(|c| c.is_ascii_alphanumeric() || c == '_')
         {
             let verb = format!("Crew {}", verb_raw.replace('_', " "));
-            let subject = string_field(Some(input), "name")
+            let subject = string_field(Some(input), "to")
+                .or_else(|| string_field(Some(input), "name"))
                 .or_else(|| string_field(Some(input), "routine_id"))
                 .or_else(|| string_field(Some(input), "agent_id"));
             return match subject {
@@ -633,6 +634,12 @@ pub fn tool_detail(name: &str, input: &Map<String, Value>) -> Option<ToolDetail>
 /// The detail again once the call returned. `None` means the row already says
 /// everything the result could add, and keeps the detail it has.
 pub fn tool_result_detail(name: &str, input: &Map<String, Value>, content: &str) -> Option<ToolDetail> {
+    // The message row already shows the message. Its result is the delivery
+    // receipt, and the input that would rebuild the row is no longer in hand
+    // by then, so this kept replacing the message with its own receipt.
+    if super::crew_tool(name) == Some("message_agent") {
+        return None;
+    }
     let text = || Some(content.to_string()).filter(|body| !body.is_empty());
     match tool_detail(name, input) {
         Some(ToolDetail::Command { command, .. }) => Some(ToolDetail::Command {
@@ -1002,5 +1009,15 @@ mod tests {
         };
         assert_eq!(to, "Cuddles");
         assert!(text.starts_with("the branch is green"));
+    }
+
+    #[test]
+    fn a_message_keeps_its_detail_when_the_result_lands() {
+        // The result arrives without the input that started it, which is when
+        // the row used to lose the message and show the receipt instead.
+        assert_eq!(
+            tool_result_detail("mcp__crew__message_agent", &Map::new(), "{\"delivered\": true}"),
+            None
+        );
     }
 }
