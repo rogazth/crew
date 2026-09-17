@@ -78,6 +78,29 @@ pub(crate) struct Tool {
     core: bool,
 }
 
+/// The provider names, from the one place they are listed. The enum used to be
+/// written out again in the schema, which is a second list to keep in step.
+fn provider_names() -> Vec<&'static str> {
+    PROVIDERS.iter().map(|(id, _)| *id).collect()
+}
+
+/// Every model there is, grouped by the provider that has it.
+///
+/// It rides in `create_agent`'s own schema rather than behind a tool of its
+/// own: the moment an agent needs a model id is the moment it is reading this
+/// schema, and there is no second moment. Thirty-six ids are shorter than most
+/// tools' arguments, and only a turn that looks up `create_agent` pays for
+/// them. Without it an agent guesses from memory — `grok-4.6` under codex,
+/// which is neither the provider nor the spelling — and reports back that the
+/// model does not exist here.
+fn model_sheet() -> String {
+    PROVIDERS
+        .iter()
+        .map(|(provider, models)| format!("{provider}: {}", models.join(", ")))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 pub(crate) fn catalog() -> Vec<Tool> {
     let schedule = json!({
         "type": "object",
@@ -108,8 +131,16 @@ pub(crate) fn catalog() -> Vec<Tool> {
                 "properties": {
                     "name": { "type": "string" },
                     "description": { "type": "string", "description": "Its job, written as instructions to it." },
-                    "provider": { "type": "string", "enum": ["claude", "cursor", "codex", "opencode"] },
-                    "model": { "type": "string", "description": "Models belong to a provider, and the same one is spelled differently by each. Name it however you know it: a model this does not have is answered with where it is and how it is spelled." }
+                    "provider": { "type": "string", "enum": provider_names(), "description": "Defaults to yours." },
+                    "model": {
+                        "type": "string",
+                        "description": format!(
+                            "Defaults to yours when the provider is yours. A model belongs to one \
+                             provider and is spelled differently by each, so pass the two together. \
+                             What there is:\n{}",
+                            model_sheet()
+                        )
+                    }
                 },
                 "required": ["name", "description"]
             }),
@@ -619,7 +650,7 @@ fn create_agent(
     let models = provider_models(&provider).ok_or_else(|| {
         format!(
             "Unknown provider \"{provider}\". One of: {}",
-            PROVIDERS.iter().map(|(id, _)| *id).collect::<Vec<_>>().join(", ")
+            provider_names().join(", ")
         )
     })?;
     let requested = text(args.get("model"));
@@ -1474,6 +1505,24 @@ mod tests {
     /// opencode agent inherits its own provider as the default and is told it
     /// does not exist. It cannot create any agent at all without naming someone
     /// else's provider, and nobody can create an opencode agent.
+    /// The catalogue lives in one const and is read into the schema, so a model
+    /// added to one cannot go missing from the other — which is how an agent
+    /// ends up guessing a spelling.
+    #[test]
+    fn the_create_schema_names_every_model_there_is() {
+        let tool = catalog()
+            .into_iter()
+            .find(|tool| tool.name == "create_agent")
+            .expect("create_agent");
+        let schema = describe(&tool).to_string();
+        for (provider, models) in PROVIDERS {
+            assert!(schema.contains(provider), "{provider} is not in the schema");
+            for model in *models {
+                assert!(schema.contains(model), "{model} is not in the schema");
+            }
+        }
+    }
+
     /// Measured, not guessed: a codex agent asked for "grok-4.6", `create_agent`
     /// defaulted the provider to its own, and the refusal listed five codex
     /// models. The agent reported back that Grok was not available here. It is

@@ -149,6 +149,28 @@ const SCENARIOS = {
       ];
     },
   },
+  // Naming a model the way a person does, under a provider that does not have
+  // it. A codex agent asked for "grok 4.6" and reported back that Grok was not
+  // available here; it is, under cursor, spelled cursor-grok-4.6-high.
+  create: {
+    prompt:
+      "Create an agent called Scout that runs on Grok 4.6 and reads documentation. Then reply with one short sentence saying what provider and model it ended up on.",
+    async check(coderEnd) {
+      const made = (await rpc("session_list", { workspaceId: workspace.id })).find(
+        (s) => s.name === "Scout",
+      );
+      const asked = coderEnd.blocks.filter((b) => b.tool?.name?.includes("create_agent"));
+      return [
+        ["the agent was created at all", Boolean(made), made ? `${made.provider}/${made.model}` : "no Scout"],
+        [
+          "it landed on the provider that has Grok",
+          made?.provider === "cursor" && made?.model?.includes("grok-4.6"),
+          made ? `${made.provider}/${made.model}` : "",
+        ],
+        ["it did not need more than one try", asked.length <= 1, `${asked.length} create_agent calls`],
+      ];
+    },
+  },
   // A standing order comes due and the daemon wakes the agent for it, with no
   // window open anywhere.
   routine: {
@@ -226,7 +248,7 @@ const cuddlesEnd = await settle(cuddles.id);
 show("Coder", coderEnd);
 show("Cuddles", cuddlesEnd);
 
-const checks = scenario.check(coderEnd, cuddlesEnd);
+const checks = await scenario.check(coderEnd, cuddlesEnd);
 
 console.log("\n--- checks ---");
 let failed = 0;
