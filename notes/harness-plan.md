@@ -340,9 +340,12 @@ The default provider is opencode on its free models, which need no credentials.
   every match before the limit, so the cost follows the number of matches, not
   the page size. Fine at this size, and the thing to fix first if it is not.
 - The `messages` upsert is keyed by position, not by block id, so the write
-  path is cheap only while blocks are append-only — which the event model
-  guarantees today and nothing enforces. One block arriving anywhere else
-  rewrites the rows after it.
+  path is cheap only while blocks are append-only. One block arriving anywhere
+  else rewrites the rows after it — so `no_event_puts_a_block_anywhere_but_the_end`
+  applies every event this reducer knows to a transcript that already has
+  history and asserts none of them moves a block that was already written.
+  Adding an event that inserts in the middle now fails a test instead of
+  quietly making every flush a full rewrite.
 - `from_agent` rides inside `extra_json`, so "everything agent X wrote" is not
   a SQL query yet.
 - Cursor reaches the bridge through `crew call` rather than MCP, so a message

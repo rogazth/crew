@@ -735,6 +735,96 @@ mod tests {
         serde_json::from_slice(&output.stdout).expect("ts fold json")
     }
 
+    /// Every event this reducer knows, against a transcript that already has
+    /// history, so the invariant below is tested where it could break.
+    fn every_event() -> Vec<HarnessEvent> {
+        vec![
+            HarnessEvent::SessionStarted {},
+            HarnessEvent::UserMessage {
+                text: "hi".into(),
+                files: None,
+                hidden: None,
+                from_agent: None,
+            },
+            HarnessEvent::SystemMessage { text: "note".into() },
+            HarnessEvent::SessionNote { message: "note".into() },
+            HarnessEvent::ReasoningDelta { text: "hm".into() },
+            HarnessEvent::MessageDelta { text: "ok".into() },
+            HarnessEvent::MessageCompleted {},
+            HarnessEvent::ToolStarted {
+                call_id: "c9".into(),
+                name: "bash".into(),
+                title: "ls".into(),
+                detail: None,
+            },
+            HarnessEvent::ToolUpdated {
+                call_id: "c9".into(),
+                title: None,
+                status: Some(ToolStatus::Completed),
+                detail: None,
+            },
+            HarnessEvent::ApprovalRequested {
+                request_id: 7,
+                name: "bash".into(),
+                title: "rm".into(),
+                input: None,
+            },
+            HarnessEvent::ApprovalResolved {
+                request_id: 7,
+                decision: ApprovalResolution::Allow,
+            },
+            HarnessEvent::QuestionRequested { request_id: 8, questions: Vec::new() },
+            HarnessEvent::QuestionResolved { request_id: 8, answers: None },
+            HarnessEvent::TurnCompleted { usage: None },
+            HarnessEvent::SessionError { message: "boom".into() },
+            HarnessEvent::SessionEnded { code: Some(1) },
+        ]
+    }
+
+    /// The `messages` table upserts by position, which is only cheap because
+    /// blocks are append-only: a block arriving anywhere but the end rewrites
+    /// every row after it. Nothing in the type system says so, so this does.
+    ///
+    /// "Append-only" allows a trailing block to go — an empty streaming reply
+    /// is dropped when it settles — so the rule is that the shorter list is a
+    /// prefix of the longer one. An insertion in the middle breaks that.
+    #[test]
+    fn no_event_puts_a_block_anywhere_but_the_end() {
+        let history = run(
+            vec![
+                HarnessEvent::UserMessage {
+                    text: "earlier".into(),
+                    files: None,
+                    hidden: None,
+                    from_agent: None,
+                },
+                HarnessEvent::MessageDelta { text: "earlier answer".into() },
+                HarnessEvent::MessageCompleted {},
+                HarnessEvent::ToolStarted {
+                    call_id: "c1".into(),
+                    name: "bash".into(),
+                    title: "npm test".into(),
+                    detail: None,
+                },
+            ],
+            Vec::new(),
+        );
+        let before: Vec<String> = history.iter().map(|block| block.id.clone()).collect();
+
+        for event in every_event() {
+            let after: Vec<String> = apply_event(history.clone(), event.clone())
+                .iter()
+                .map(|block| block.id.clone())
+                .collect();
+            let shared = before.len().min(after.len());
+            assert_eq!(
+                before[..shared],
+                after[..shared],
+                "{event:?} moved a block that was already written"
+            );
+        }
+    }
+
     #[test]
     fn apply_event_matches_typescript() {
         let payload = include_str!("../tests/fixtures/blocks-parity.json");
