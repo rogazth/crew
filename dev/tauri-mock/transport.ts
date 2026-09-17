@@ -169,6 +169,24 @@ const commands: Record<string, (args: Row) => unknown> = {
     const row = thread(sessionId as string);
     return { blocks: row.blocks, working: row.working, status: row.status, seq: row.seq };
   },
+  transcript_tail: ({ sessionId, limit, beforePos }) => {
+    const blocks = thread(sessionId as string).blocks;
+    const before = (beforePos as number | undefined) ?? blocks.length + 1;
+    const end = Math.max(0, Math.min(blocks.length, before - 1));
+    const start = Math.max(0, end - ((limit as number | undefined) ?? 50));
+    return {
+      blocks: blocks.slice(start, end),
+      fromPos: start + 1,
+      toPos: end,
+      more: start > 0,
+    };
+  },
+  transcript_since: ({ sessionId, pos }) => {
+    const blocks = thread(sessionId as string).blocks;
+    const from = (pos as number) ?? 0;
+    return { blocks: blocks.slice(from), fromPos: from + 1, toPos: blocks.length, more: false };
+  },
+  messages_search: (args) => search(args),
   turn_start: (args) => {
     const sessionId = args.sessionId as string;
     const row = thread(sessionId);
@@ -320,6 +338,42 @@ const SEED_BLOCKS = [
     usage: { inputTokens: 18400, outputTokens: 180, costUsd: 0.024, durationMs: 21600 },
   },
 ];
+
+/** FTS5 in a browser is not worth faking; substring over the seed is enough to
+ *  see the screen. The marks are the daemon's, so the UI paints the same runs. */
+function search(args: Row): Row[] {
+  const query = String(args.query ?? "").trim().toLowerCase();
+  if (!query) return [];
+  const only = (args.sessionIds as string[] | undefined) ?? [];
+  const from = args.from as number | undefined;
+  const hits: Row[] = [];
+  for (const session of sessions) {
+    if (session.kind !== "agent") continue;
+    if (only.length > 0 && !only.includes(session.id)) continue;
+    // thread() materializes the seed; a search should not depend on
+    // whether someone opened the chat first.
+    const blocks = thread(session.id).blocks;
+    blocks.forEach((block, index) => {
+      const text = String(block.text ?? "");
+      const at = (block.at as number | undefined) ?? Date.now();
+      const found = text.toLowerCase().indexOf(query);
+      if (found < 0 || (from !== undefined && at < from)) return;
+      const window = text.slice(Math.max(0, found - 40), found + query.length + 80);
+      const start = window.toLowerCase().indexOf(query);
+      hits.push({
+        sessionId: session.id,
+        sessionName: session.name,
+        pos: index + 1,
+        id: block.id,
+        role: block.role,
+        at,
+        snippet: `${window.slice(0, start)}\ue000${window.slice(start, start + query.length)}\ue001${window.slice(start + query.length)}`,
+      });
+    });
+  }
+  hits.sort((a, b) => (b.at as number) - (a.at as number));
+  return hits.slice(0, (args.limit as number | undefined) ?? 50);
+}
 
 type MockAgent = { sessionId: string; stage: "idle" | "question" | "approval" };
 type TranscriptRow = { blocks: Row[]; seq: number; working: boolean; status: string };

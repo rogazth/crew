@@ -9,7 +9,8 @@ import { spawn } from "node:child_process";
 import { mkdirSync } from "node:fs";
 import { chromium } from "playwright-core";
 
-const PORT = 1421;
+// A fixed port leaves a stuck server blocking the next run; take a free one.
+const PORT = 1400 + Math.floor(Math.random() * 500);
 const OUT = new URL("../out/", import.meta.url).pathname;
 mkdirSync(OUT, { recursive: true });
 
@@ -31,11 +32,19 @@ page.on("console", (message) => message.type() === "error" && console.log(`[page
 await page.goto(`http://localhost:${PORT}/`, { waitUntil: "networkidle" });
 
 const shot = process.env.SHOT ?? "chat";
+// The first key after load lands before the shell is listening; give it focus.
+await page.mouse.click(900, 700);
+await page.waitForTimeout(300);
+
 if (shot === "search") {
   await page.keyboard.press("Control+Shift+F");
-  await page.waitForTimeout(400);
+  await page.waitForTimeout(600);
   await page.keyboard.type("sidebar");
-  await page.waitForTimeout(800);
+  await page.waitForTimeout(900);
+  const heading = await page.locator("h1").first().textContent();
+  if (heading !== "Search") throw new Error(`the search page never opened (h1 was ${heading})`);
+  const empty = await page.locator("text=Nothing matches").count();
+  if (empty > 0) throw new Error("the search found nothing; the mock may not answer messages_search");
 } else {
   // The seeded transcript belongs to the first agent in the sidebar.
   await page.locator('[data-sidebar="sidebar"] button').filter({ hasText: "Planner" }).first().click();

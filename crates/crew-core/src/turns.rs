@@ -2189,4 +2189,57 @@ print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type
             "a stop should not hand the agent its next letter"
         );
     }
+
+    /// The cap consumes the letter that trips it: it is claimed, refused, and
+    /// never released. What the agent told itself to do next is gone.
+    #[test]
+    fn the_letter_the_cap_refuses_goes_back_in_the_box() {
+        let world = world();
+        let ws = workspace(&world);
+        let coder = agent(&world, &ws, "Coder");
+        let me = AgentRef { id: coder.id.clone(), name: "Coder".into() };
+        for _ in 0..(MAX_SELF_TURNS + 1) {
+            mailbox::enqueue(world.host.test_store(), &coder.id, &me, "again").expect("enqueue");
+        }
+
+        turn(&world, &coder, "start");
+        settle(&world, &coder.id);
+
+        assert_eq!(
+            mailbox::waiting_count(world.host.test_store(), &coder.id).expect("count"),
+            1,
+            "the letter that tripped the cap was swallowed instead of left waiting"
+        );
+    }
+
+    /// The transcript says "Send it a message to continue". Doing that does not
+    /// reset the lap counter, because only a letter from someone *else* clears
+    /// it, and a user turn is not a letter. The agent can never loop again.
+    #[test]
+    fn a_message_from_the_user_lets_the_agent_loop_again() {
+        let world = world();
+        let ws = workspace(&world);
+        let coder = agent(&world, &ws, "Coder");
+        let me = AgentRef { id: coder.id.clone(), name: "Coder".into() };
+        for _ in 0..MAX_SELF_TURNS {
+            mailbox::enqueue(world.host.test_store(), &coder.id, &me, "again").expect("enqueue");
+        }
+        turn(&world, &coder, "start");
+        settle(&world, &coder.id);
+        assert_eq!(
+            blocks(&world, &coder.id).iter().filter(|b| b.text == "again").count() as u32,
+            MAX_SELF_TURNS,
+            "the loop did not run to the cap"
+        );
+
+        // The user does exactly what the app told them to do.
+        mailbox::enqueue(world.host.test_store(), &coder.id, &me, "one more lap").expect("enqueue");
+        turn(&world, &coder, "carry on");
+        settle(&world, &coder.id);
+
+        assert!(
+            blocks(&world, &coder.id).iter().any(|b| b.text == "one more lap"),
+            "after the user spoke the agent still cannot pick up its own note"
+        );
+    }
 }

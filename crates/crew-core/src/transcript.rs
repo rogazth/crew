@@ -373,3 +373,72 @@ mod tests {
         assert!(raw.contains("ok"));
     }
 }
+
+#[cfg(test)]
+mod review_tests {
+    use super::*;
+    use crate::store::Store;
+
+    fn tmp_store() -> Store {
+        let dir = std::env::temp_dir().join(format!("crew-flush-{}", uuid::Uuid::new_v4()));
+        let _ = std::fs::create_dir_all(&dir);
+        Store::open(dir.join("crew.sqlite3")).expect("store")
+    }
+
+    fn agent(store: &Store) -> String {
+        let root = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
+        let _ = std::fs::create_dir_all(&root);
+        let workspace =
+            crate::workspace::create(store, "w".into(), root.to_string_lossy().into()).unwrap();
+        crate::session::create(
+            store,
+            workspace.id,
+            "agent".into(),
+            "A".into(),
+            "claude".into(),
+            "m".into(),
+            "".into(),
+            "ask".into(),
+        )
+        .unwrap()
+        .id
+    }
+
+    /// `flush` clones the blocks under the lock and writes them outside it, so
+    /// two flushes can be in flight at once and the older one can land last.
+    /// Every event here is one the hub flushes immediately, which is what a
+    /// provider stream and a turn ending do at the same moment.
+    #[test]
+    fn concurrent_flushes_do_not_lose_blocks() {
+        let store = tmp_store();
+        let id = agent(&store);
+        let hub = TranscriptHub::new(store.clone());
+
+        let threads: Vec<_> = (0..8)
+            .map(|t| {
+                let hub = hub.clone();
+                let id = id.clone();
+                thread::spawn(move || {
+                    // Fat blocks: serialising the transcript happens outside the
+                    // hub lock, which is exactly the window two flushes share.
+                    let pad = "x".repeat(4096);
+                    for n in 0..50 {
+                        hub.append_system(&id, &format!("line {t}-{n} {pad}"));
+                    }
+                })
+            })
+            .collect();
+        for handle in threads {
+            handle.join().expect("thread");
+        }
+        hub.flush(&id);
+
+        let live = hub.get(&id).blocks.len();
+        let stored = parse_blocks(Some(&session::get_blocks(&store, id.clone()).unwrap())).len();
+        let rows = store
+            .with(|conn| crate::messages::count(conn, &id))
+            .expect("count") as usize;
+        assert_eq!(stored, live, "blocks_json lost {} blocks", live - stored);
+        assert_eq!(rows, live, "the messages table holds {rows} of {live} blocks");
+    }
+}

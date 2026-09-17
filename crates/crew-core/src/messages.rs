@@ -775,3 +775,105 @@ mod tests {
         assert_eq!(read, prior, "a fresh hub would rewrite rows that never changed");
     }
 }
+
+#[cfg(test)]
+mod review_tests {
+    use super::*;
+    use crate::blocks::new_block;
+
+    fn store() -> Store {
+        let dir = std::env::temp_dir().join(format!("crew-review-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        Store::open(dir.join("crew.sqlite3")).expect("store")
+    }
+
+    fn session(store: &Store, name: &str) -> String {
+        let root = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
+        std::fs::create_dir_all(&root).expect("root");
+        let workspace =
+            crate::workspace::create(store, format!("w-{name}"), root.to_string_lossy().into())
+                .expect("workspace");
+        crate::session::create(
+            store,
+            workspace.id,
+            "agent".into(),
+            name.into(),
+            "claude".into(),
+            "m".into(),
+            "".into(),
+            "ask".into(),
+        )
+        .expect("session")
+        .id
+    }
+
+    fn write(store: &Store, session_id: &str, blocks: &[Block]) {
+        store
+            .with(|conn| sync(conn, session_id, blocks, &mut Vec::new()))
+            .expect("sync");
+    }
+
+    fn say(role: BlockRole, text: &str) -> Block {
+        new_block(role, text)
+    }
+
+    /// A cascade delete does not fire the `messages_ad` trigger, so the FTS
+    /// index keeps the rowid of a row that is gone. The next insert reuses that
+    /// rowid and inherits the dead session's words.
+    #[test]
+    fn a_deleted_session_does_not_lend_its_words_to_the_next_one() {
+        let store = store();
+        let doomed = session(&store, "doomed");
+        write(&store, &doomed, &[say(BlockRole::Assistant, "kubernetes")]);
+        crate::session::delete(&store, doomed).expect("delete");
+
+        let fresh = session(&store, "fresh");
+        write(&store, &fresh, &[say(BlockRole::Assistant, "podman")]);
+
+        let hits = search(
+            &store,
+            SearchQuery { query: "kubernetes".into(), ..Default::default() },
+        )
+        .expect("search");
+        assert!(
+            hits.is_empty(),
+            "a deleted session's word still matches, and it points at {:?}",
+            hits.iter().map(|h| (h.session_name.clone(), h.snippet.clone())).collect::<Vec<_>>()
+        );
+    }
+
+    /// FTS5 can check itself against its content table. After a session is
+    /// deleted the two disagree.
+    #[test]
+    fn the_index_stays_consistent_with_the_table_after_a_delete() {
+        let store = store();
+        let doomed = session(&store, "doomed");
+        write(&store, &doomed, &[say(BlockRole::Assistant, "kubernetes")]);
+        crate::session::delete(&store, doomed).expect("delete");
+        let check = store.with(|conn| {
+            conn.execute_batch("INSERT INTO messages_fts (messages_fts) VALUES ('integrity-check')")
+        });
+        assert!(check.is_ok(), "fts5 integrity-check failed: {:?}", check.err());
+    }
+
+    /// The write path claims to touch only rows that moved. A block inserted
+    /// anywhere but the end renumbers every row after it, because the upsert is
+    /// keyed by position, not by block id.
+    #[test]
+    fn an_insert_in_the_middle_rewrites_only_the_rows_that_moved() {
+        let store = store();
+        let id = session(&store, "shift");
+        let mut blocks: Vec<Block> = (1..=200)
+            .map(|n| say(BlockRole::Assistant, &format!("line {n}")))
+            .collect();
+        let mut prior = Vec::new();
+        store.with(|conn| sync(conn, &id, &blocks, &mut prior)).expect("first");
+
+        blocks.insert(0, say(BlockRole::User, "an earlier line"));
+        let next: Vec<u64> = blocks.iter().map(fingerprint).collect();
+        let touched = (0..blocks.len())
+            .filter(|i| prior.get(*i) != next.get(*i))
+            .count();
+        assert_eq!(touched, 1, "one new block rewrote {touched} rows");
+    }
+}
