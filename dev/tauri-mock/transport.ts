@@ -253,7 +253,7 @@ const SEED_BLOCKS = [
     role: "user",
     at: now - 3 * 60e3,
     text: "The sidebar grouping is fixed on my side. Can you run the suite before I open the MR?",
-    fromAgent: { id: "s2", name: "Cuddles" },
+    fromAgent: { id: "s2", name: "Reviewer" },
   },
   {
     id: "b13",
@@ -317,15 +317,15 @@ const SEED_BLOCKS = [
   {
     id: "b17",
     role: "tool",
-    text: "Crew message agent Cuddles",
+    text: "Crew message agent Reviewer",
     tool: {
       callId: "t10",
       name: "mcp__crew__message_agent",
-      title: "Crew message agent Cuddles",
+      title: "Crew message agent Reviewer",
       status: "completed",
       detail: {
         kind: "message",
-        to: "Cuddles",
+        to: "Reviewer",
         text: "Suite is green after the fix: one test was asserting the old lookup. Lint has 19 warnings, all pre-existing. Go ahead with the MR.",
       },
     },
@@ -334,7 +334,7 @@ const SEED_BLOCKS = [
     id: "b18",
     role: "assistant",
     at: now - 60e3,
-    text: "Green. One test was pinned to the old lookup, so I updated it with the fix and told Cuddles to open the MR.",
+    text: "Green. One test was pinned to the old lookup, so I updated it with the fix and told Reviewer to open the MR.",
     usage: { inputTokens: 18400, outputTokens: 180, costUsd: 0.024, durationMs: 21600 },
   },
 ];
