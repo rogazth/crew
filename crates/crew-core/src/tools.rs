@@ -818,12 +818,18 @@ mod tests {
         let coder = agent(&store, &ws, "Coder");
         let names = listed(&store, &transcripts, &coder);
 
-        for core in ["list_agents", "message_agent", "search_messages", "find_tool", "call_tool"] {
-            assert!(names.contains(&core.to_string()), "{core} missing from {names:?}");
-        }
-        // The rest is reachable, not listed.
-        assert!(!names.contains(&"upsert_routine".to_string()));
-        assert!(!names.contains(&"create_agent".to_string()));
+        // An exact set: a tool that quietly becomes core would otherwise slip
+        // the whole hidden catalogue back into every prompt.
+        assert_eq!(
+            names,
+            vec![
+                "list_agents".to_string(),
+                "message_agent".to_string(),
+                "search_messages".to_string(),
+                "find_tool".to_string(),
+                "call_tool".to_string(),
+            ]
+        );
     }
 
     #[test]
@@ -887,9 +893,19 @@ mod tests {
         let ws = workspace(&store);
         let coder = agent(&store, &ws, "Coder");
         let postman = Postman::default();
-        let out = call(&store, &transcripts, &postman, &coder, "call_tool", json!({ "name": "call_tool" }))
-            .expect("call");
+        // With arguments, so that a missing guard would recurse rather than
+        // fail on a missing field and look like the guard worked.
+        let out = call(
+            &store,
+            &transcripts,
+            &postman,
+            &coder,
+            "call_tool",
+            json!({ "name": "call_tool", "arguments": { "name": "list_agents" } }),
+        )
+        .expect("call");
         assert!(is_error(&out));
+        assert!(body(&out).contains("cannot call itself"), "{}", body(&out));
     }
 
     #[test]

@@ -105,7 +105,8 @@ describe("phaseKind", () => {
       text: "read",
       tool: {
         callId: "1",
-        name: "read",
+        // Names the regex would not classify: only the detail can.
+        name: "fs_open",
         title: "read",
         status: "completed",
         detail: { kind: "file", path: "src/a.ts" },
@@ -117,7 +118,7 @@ describe("phaseKind", () => {
       text: "grep",
       tool: {
         callId: "2",
-        name: "grep",
+        name: "codebase_lookup",
         title: "grep",
         status: "completed",
         detail: { kind: "search", query: "TODO", matches: 2 },

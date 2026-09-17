@@ -18,8 +18,8 @@ Five things to ship:
    a conversation. Async delivery, never a blocking RPC.
 3. **opencode** — fourth provider. `opencode run --format json` is the cleanest
    protocol of the four (see `notes/opencode-protocol.jsonl`).
-4. **Tool gateway** — `find_tool` / `describe_tool` / `call_tool` over an
-   FTS-indexed catalog, so a hundred tools cost four entries in `tools/list`.
+4. **Tool gateway** — `find_tool` / `call_tool` over the catalogue, so a
+   hundred tools cost two entries in `tools/list` instead of a hundred.
 5. **Tool & command transparency in the UI** — the run shows what it did.
 
 Out of scope, decided: VM control locks, handoffs, isolation, worktrees.
@@ -89,10 +89,17 @@ end to end in CI.
 
 ## Workstream D — tool gateway
 
-Catalog in SQLite + FTS. `tools/list` returns the four stable entries plus the
-always-on ones (`message_agent`, `search_messages`). Cursor reaches the bridge
-through `crew call` with no MCP at all, so dynamic `tools/list_changed` is not
-an option — the gateway is the portable answer.
+`tools/list` returns five: `list_agents`, `message_agent`, `search_messages`,
+`find_tool`, `call_tool`. Everything else is found by `find_tool`.
+
+Shipped as an in-memory scan over the catalogue with a hand-weighted score, not
+the SQLite+FTS index this section first proposed: a few dozen tools rank in
+microseconds and an index would be a second thing to keep in step with the
+first. Revisit at a thousand tools, not before. `describe_tool` was dropped —
+`find_tool` already answers with each match's schema, so it had nothing to add.
+
+Cursor reaches the bridge through `crew call` with no MCP at all, so dynamic
+`tools/list_changed` is not an option; the gateway is the portable answer.
 
 ## Workstream E — UI
 
@@ -182,5 +189,15 @@ The default provider is opencode on its free models, which need no credentials.
 - `pty::tests::concurrent_spawns_on_one_id_leave_a_single_child` fails on this
   machine and failed before any of this work started. Unrelated; still unfixed.
 - Search indexes block text, which for a tool row is its title. Command output
-  is stored but not indexed, on purpose: the index stays small and a query
-  answers in under a millisecond.
+  is stored but not indexed, on purpose: it keeps the index small.
+- Measured, not guessed: over 16k rows a narrow query answers in ~1.7 ms and a
+  term matching every row in ~20 ms. The FTS match drives the query; the date
+  and session filters are applied per matched row and the sort materialises
+  every match before the limit, so the cost follows the number of matches, not
+  the page size. Fine at this size, and the thing to fix first if it is not.
+- The `messages` upsert is keyed by position, not by block id, so the write
+  path is cheap only while blocks are append-only — which the event model
+  guarantees today and nothing enforces. One block arriving anywhere else
+  rewrites the rows after it.
+- `from_agent` rides inside `extra_json`, so "everything agent X wrote" is not
+  a SQL query yet.
