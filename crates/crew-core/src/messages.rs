@@ -60,8 +60,6 @@ CREATE TABLE IF NOT EXISTS messages (
   PRIMARY KEY (session_id, pos)
 );
 
-CREATE INDEX IF NOT EXISTS messages_at_idx ON messages (at DESC);
-
 CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts
   USING fts5(text, content='messages', content_rowid='rowid');
 
@@ -94,6 +92,9 @@ CREATE TABLE IF NOT EXISTS send_nonces (
 pub fn fingerprint(block: &Block) -> u64 {
     let mut hasher = DefaultHasher::new();
     block.id.hash(&mut hasher);
+    // Everything the row stores, or a change to a column the hash ignores
+    // would leave the table holding the old value forever.
+    role_str(&block.role).hash(&mut hasher);
     block.text.hash(&mut hasher);
     block.at.hash(&mut hasher);
     // The variable parts of a live row: a tool going from pending to completed,
@@ -271,13 +272,16 @@ pub fn since(store: &Store, session_id: String, pos: i64) -> Result<MessagePage,
                 Ok((row.get::<_, i64>(5)?, row_to_block(row, 0)?))
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
+        // A full page means there is more behind it. Saying otherwise would
+        // leave a client that fell far behind quietly missing the rest.
+        let more = rows.len() as u32 == MAX_LIMIT;
         let from_pos = rows.first().map(|(pos, _)| *pos).unwrap_or(0);
         let to_pos = rows.last().map(|(pos, _)| *pos).unwrap_or(0);
         Ok(MessagePage {
             blocks: rows.into_iter().map(|(_, block)| block).collect(),
             from_pos,
             to_pos,
-            more: false,
+            more,
         })
     })
 }
@@ -323,6 +327,10 @@ pub fn search(store: &Store, query: SearchQuery) -> Result<Vec<SearchHit>, Strin
     if let Some(to) = query.to {
         binds.push(to.into());
         sql.push_str(&format!(" AND m.at <= ?{}", binds.len()));
+    }
+    if let Some(workspace_id) = &query.workspace_id {
+        binds.push(workspace_id.clone().into());
+        sql.push_str(&format!(" AND s.workspace_id = ?{}", binds.len()));
     }
     if !query.session_ids.is_empty() {
         let first = binds.len() + 1;
@@ -382,6 +390,17 @@ pub fn claim_nonce(store: &Store, session_id: &str, nonce: &str) -> Result<bool,
     })
 }
 
+/// Give a nonce back, for a send that was accepted here and then refused by the
+/// runtime. Without this a retry of a turn that never ran is answered as if it
+/// had.
+pub fn release_nonce(store: &Store, session_id: &str, nonce: &str) -> Result<(), String> {
+    store.with(|conn| {
+        conn.prepare_cached("DELETE FROM send_nonces WHERE session_id = ?1 AND nonce = ?2")?
+            .execute(params![session_id, nonce])
+    })?;
+    Ok(())
+}
+
 /// How many blocks a session has on disk. The transcript hub uses it to decide
 /// whether its cache of fingerprints is still aligned with the table.
 pub fn count(conn: &Connection, session_id: &str) -> rusqlite::Result<i64> {
@@ -420,8 +439,8 @@ pub fn backfill(conn: &Connection) -> rusqlite::Result<usize> {
     Ok(written)
 }
 
-/// The last time each session produced a block. Cheap enough to read on the
-/// list screen because of `messages_at_idx`.
+/// The last time each session produced a block. It walks the session's rows by
+/// primary key, which is the order they were written in.
 pub fn last_activity(store: &Store, session_id: String) -> Result<Option<i64>, String> {
     store.with(|conn| {
         conn.prepare_cached("SELECT MAX(at) FROM messages WHERE session_id = ?1")?
@@ -781,6 +800,13 @@ mod review_tests {
     use super::*;
     use crate::blocks::new_block;
 
+    fn workspace_of(store: &Store, session_id: &str) -> Option<String> {
+        crate::session::get(store, session_id.to_string())
+            .ok()
+            .flatten()
+            .map(|row| row.workspace_id)
+    }
+
     fn store() -> Store {
         let dir = std::env::temp_dir().join(format!("crew-review-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).expect("dir");
@@ -856,11 +882,122 @@ mod review_tests {
         assert!(check.is_ok(), "fts5 integrity-check failed: {:?}", check.err());
     }
 
-    /// The write path claims to touch only rows that moved. A block inserted
-    /// anywhere but the end renumbers every row after it, because the upsert is
-    /// keyed by position, not by block id.
+    /// The existing `sync_only_touches_the_rows_that_moved` compares
+    /// fingerprints, which are the same whether or not a statement ran. This
+    /// counts the rows SQLite actually wrote.
     #[test]
-    fn an_insert_in_the_middle_rewrites_only_the_rows_that_moved() {
+    fn sync_really_writes_only_the_rows_that_moved() {
+        let store = store();
+        let id = session(&store, "counted");
+        let mut blocks: Vec<Block> = (0..200)
+            .map(|n| say(BlockRole::Assistant, &format!("line {n}")))
+            .collect();
+        let mut prior = Vec::new();
+        store.with(|conn| sync(conn, &id, &blocks, &mut prior)).expect("first");
+
+        let changes = |store: &Store| store.with(|conn| Ok(conn.total_changes())).expect("changes");
+
+        let before = changes(&store);
+        store.with(|conn| sync(conn, &id, &blocks, &mut prior)).expect("noop");
+        let noop = changes(&store) - before;
+
+        let before = changes(&store);
+        blocks.last_mut().unwrap().text.push_str(" and more");
+        store.with(|conn| sync(conn, &id, &blocks, &mut prior)).expect("tail");
+        let one = changes(&store) - before;
+
+        let before = changes(&store);
+        blocks.push(say(BlockRole::Assistant, "brand new"));
+        store.with(|conn| sync(conn, &id, &blocks, &mut prior)).expect("append");
+        let appended = changes(&store) - before;
+
+        println!("no-op flush: {noop} rows; tail edit: {one}; append: {appended}");
+        assert_eq!(noop, 0, "a flush with nothing new still wrote {noop} rows");
+        assert!(one < 20, "editing the last block wrote {one} rows");
+        assert!(appended < 20, "appending one block wrote {appended} rows");
+    }
+
+    /// `transcript_since` is "everything after pos", capped at MAX_LIMIT and
+    /// reporting `more: false` unconditionally. A client that was away for more
+    /// than 500 blocks is handed 500 and told that is all there was.
+    #[test]
+    fn since_does_not_quietly_swallow_what_it_could_not_fit() {
+        let store = store();
+        let id = session(&store, "long");
+        let blocks: Vec<Block> = (1..=(MAX_LIMIT as usize + 10))
+            .map(|n| say(BlockRole::Assistant, &format!("line {n}")))
+            .collect();
+        write(&store, &id, &blocks);
+
+        let page = since(&store, id, 0).expect("since");
+        assert_eq!(page.blocks.len(), MAX_LIMIT as usize, "sanity: the cap bites");
+        assert!(
+            page.more,
+            "{} blocks were left behind and the page says there are none",
+            blocks.len() - page.blocks.len()
+        );
+    }
+
+    /// FTS5 external-content tables corrupt silently if a 'delete' command is
+    /// given text other than what was indexed. The upsert path churns rows;
+    /// check the index still agrees with the table afterwards.
+    #[test]
+    fn the_index_survives_the_upsert_churn() {
+        let store = store();
+        let id = session(&store, "churn");
+        let mut blocks: Vec<Block> = (0..50)
+            .map(|n| say(BlockRole::Assistant, &format!("word{n}")))
+            .collect();
+        let mut prior = Vec::new();
+        for round in 0..10 {
+            for (n, block) in blocks.iter_mut().enumerate() {
+                block.text = format!("round{round} word{n}");
+            }
+            store.with(|conn| sync(conn, &id, &blocks, &mut prior)).expect("sync");
+        }
+        blocks.truncate(10);
+        store.with(|conn| sync(conn, &id, &blocks, &mut prior)).expect("shrink");
+        let check = store.with(|conn| {
+            conn.execute_batch("INSERT INTO messages_fts (messages_fts) VALUES ('integrity-check')")
+        });
+        assert!(check.is_ok(), "fts5 integrity-check failed: {:?}", check.err());
+        let stale = search(&store, SearchQuery { query: "round3".into(), ..Default::default() })
+            .expect("stale");
+        assert!(stale.is_empty(), "the index still holds text from round 3: {stale:?}");
+    }
+
+    /// An empty `session_ids` drops the filter entirely rather than matching
+    /// nothing, so the Search page's "All agents" — which sends `[]` when no
+    /// single agent is picked (src/surfaces/SearchView.tsx) — reads every
+    /// workspace, not the one that is open.
+    #[test]
+    fn an_empty_session_filter_does_not_reach_into_other_workspaces() {
+        let store = store();
+        let mine = session(&store, "mine");
+        let theirs = session(&store, "theirs"); // its own workspace
+        write(&store, &mine, &[say(BlockRole::Assistant, "kubernetes here")]);
+        write(&store, &theirs, &[say(BlockRole::Assistant, "kubernetes there")]);
+
+        let hits = search(
+            &store,
+            SearchQuery {
+                query: "kubernetes".into(),
+                workspace_id: workspace_of(&store, &mine),
+                session_ids: Vec::new(),
+                ..Default::default()
+            },
+        )
+        .expect("search");
+        let names: Vec<String> = hits.iter().map(|hit| hit.session_name.clone()).collect();
+        assert_eq!(names, vec!["mine".to_string()], "the search crossed workspaces: {names:?}");
+    }
+
+    /// The upsert is keyed by `pos`, not by the block id the plan specified
+    /// (notes/harness-plan.md, `messages_id_idx`). The cheap path is therefore
+    /// only correct and only cheap while blocks are strictly append-only:
+    /// one block arriving anywhere else renumbers everything after it.
+    #[test]
+    fn a_block_inserted_anywhere_but_the_end_rewrites_the_whole_transcript() {
         let store = store();
         let id = session(&store, "shift");
         let mut blocks: Vec<Block> = (1..=200)
@@ -870,11 +1007,59 @@ mod review_tests {
         store.with(|conn| sync(conn, &id, &blocks, &mut prior)).expect("first");
 
         blocks.insert(0, say(BlockRole::User, "an earlier line"));
-        let next: Vec<u64> = blocks.iter().map(fingerprint).collect();
-        let touched = (0..blocks.len())
-            .filter(|i| prior.get(*i) != next.get(*i))
-            .count();
-        assert_eq!(touched, 1, "one new block rewrote {touched} rows");
+        let before = store.with(|conn| Ok(conn.total_changes())).expect("changes");
+        store.with(|conn| sync(conn, &id, &blocks, &mut prior)).expect("shifted");
+        let written = store.with(|conn| Ok(conn.total_changes())).expect("changes") - before;
+        println!("one new block at the head rewrote {written} rows");
+        assert!(written > 200, "expected the whole transcript to be rewritten");
+    }
+
+    /// `fingerprint` hashes id, text, at and the extra payload — but not the
+    /// role column it also writes. Two blocks that differ only in role are
+    /// indistinguishable to the cache, so a role change in place would never
+    /// reach the table.
+    #[test]
+    fn the_fingerprint_ignores_the_role_it_stores() {
+        let mut one = say(BlockRole::Assistant, "same words");
+        let mut two = one.clone();
+        two.role = BlockRole::System;
+        assert_ne!(
+            fingerprint(&one),
+            fingerprint(&two),
+            "a role change is invisible to the write path"
+        );
+        one.text.push('!');
+        assert_ne!(fingerprint(&one), fingerprint(&two), "sanity");
+    }
+
+    /// The comparison itself is not free: every flush re-serialises every
+    /// block's optional payload to JSON just to hash it, on top of the
+    /// `blocks_json` dump. This is the cost of a 600 ms debounce tick on a long
+    /// transcript in which nothing changed.
+    #[test]
+    fn the_no_op_comparison_costs_a_full_json_pass() {
+        let blocks: Vec<Block> = (0..2000)
+            .map(|n| {
+                let mut b = say(BlockRole::Tool, &format!("bash {n}"));
+                b.tool = Some(BlockTool {
+                    call_id: format!("c{n}"),
+                    name: "Bash".into(),
+                    title: format!("bash {n}"),
+                    status: crew_protocol::ToolStatus::Completed,
+                    detail: Some(crew_protocol::ToolDetail::Command {
+                        command: format!("echo {n}"),
+                        exit_code: Some(0),
+                        output: Some("x".repeat(2048)),
+                    }),
+                });
+                b
+            })
+            .collect();
+        let start = std::time::Instant::now();
+        for _ in 0..10 {
+            let _: Vec<u64> = blocks.iter().map(fingerprint).collect();
+        }
+        println!("10 no-op fingerprint passes over 2000 tool blocks: {:?}", start.elapsed());
     }
 }
 
@@ -924,7 +1109,7 @@ mod plan_tests {
             .id;
             let blocks: Vec<Block> = (0..2000)
                 .map(|i| {
-                    let mut b = new_block(BlockRole::Assistant, &format!("row {i} deploy word{i}"));
+                    let mut b = new_block(BlockRole::Assistant, format!("row {i} deploy word{i}"));
                     b.at = Some(1_700_000_000_000 + i as i64);
                     b
                 })
@@ -1026,7 +1211,7 @@ mod plan_tests {
         // size of a few months of use.
         let raw = serde_json::to_string(
             &(0..2000)
-                .map(|i| new_block(BlockRole::Assistant, &format!("row {i} deploy word{i}")))
+                .map(|i| new_block(BlockRole::Assistant, format!("row {i} deploy word{i}")))
                 .collect::<Vec<_>>(),
         )
         .unwrap();
@@ -1039,7 +1224,7 @@ mod plan_tests {
             })
             .expect("seed");
         let start = std::time::Instant::now();
-        let written = store.with(|conn| backfill(conn)).expect("backfill");
+        let written = store.with(backfill).expect("backfill");
         println!("backfill of {written} blocks over 8 sessions: {:?}", start.elapsed());
     }
 }

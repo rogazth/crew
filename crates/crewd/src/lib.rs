@@ -261,27 +261,10 @@ struct ToolDispatch {
 }
 
 impl ToolDispatch {
-    /// Hand a letter to its reader by starting a turn on it. A busy agent
-    /// refuses, and the letter goes back in the box for whoever drains it next.
-    fn deliver(&self, target: &crew_core::session::Session, letter: &crew_core::mailbox::Letter) -> bool {
-        let cwd = workspace::get(&self.store, target.workspace_id.clone())
-            .ok()
-            .flatten()
-            .map(|row| row.path)
-            .unwrap_or_default();
-        self.turns
-            .start(TurnStart {
-                session_id: target.id.clone(),
-                cwd,
-                text: letter.text.clone(),
-                files: None,
-                mentions: None,
-                hidden: None,
-                fresh: None,
-                from_agent: Some(letter.from.clone()),
-                nonce: None,
-            })
-            .is_ok()
+    /// Hand the target its next letter. A busy agent refuses, and the letter
+    /// waits in the box for the drain that runs when its turn ends.
+    fn deliver(&self, target: &crew_core::session::Session) -> bool {
+        self.turns.deliver_to(target)
     }
 }
 
@@ -298,7 +281,7 @@ impl ToolHost for ToolDispatch {
                     },
                 );
             },
-            &|target, letter| self.deliver(target, letter),
+            &|target| self.deliver(target),
             session_id,
             method,
             params,
@@ -355,6 +338,10 @@ pub fn serve(config: Config) -> Result<Handle, String> {
         turns: turns.clone(),
         hub: hub.clone(),
     }));
+
+    // A letter left waiting for an idle agent is invisible until someone
+    // messages it: only the end of a turn looks in a box.
+    turns.deliver_waiting();
 
     let (ready_tx, ready_rx) = std_mpsc::channel();
     let (stop_tx, stop_rx) = tokio::sync::oneshot::channel();
@@ -904,7 +891,18 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
                 }
             }
             let turns = hosts.turns.clone();
-            json(block(move || turns.start(p)).await?)
+            let store = hosts.store.clone();
+            let claimed = p.nonce.clone().map(|nonce| (p.session_id.clone(), nonce));
+            let started = block(move || turns.start(p)).await;
+            if started.is_err() {
+                // The send was refused, so the id must not count as spent: the
+                // retry has to run, not be answered with the turn that never was.
+                if let Some((session_id, nonce)) = claimed {
+                    let store = store.clone();
+                    let _ = block(move || messages::release_nonce(&store, &session_id, &nonce)).await;
+                }
+            }
+            json(started?)
         }
         "turn_stop" => {
             let SessionId { session_id } = parse(params)?;
@@ -1999,5 +1997,66 @@ print(json.dumps({"type":"turn.failed","error":{"message":"Codex exploded"}}), f
                 }
             }
         }
+    }
+
+    /// The nonce is written before the turn is attempted, so a `turn_start`
+    /// that *failed* has still burned its id. The client's retry — the whole
+    /// reason the nonce exists — is answered with a success it never got.
+    #[tokio::test]
+    async fn a_retry_after_a_failed_turn_start_is_not_swallowed() {
+        let dir = test_dir("nonce-retry");
+        let handle = test_serve(&dir);
+        let mut ws = connect_authed(&handle).await;
+        send_json(
+            &mut ws,
+            &Request {
+                id: 1,
+                method: "workspace_create".into(),
+                params: serde_json::json!({ "name": "w", "path": dir.to_string_lossy() }),
+            },
+        )
+        .await;
+        let workspace: proto::Workspace =
+            serde_json::from_value(wait_response(&mut ws, 1).await.result.expect("ws")).expect("workspace");
+        // A session a turn cannot run on: `TurnHost::start` refuses it outright,
+        // which is the same shape of refusal as "Turn already running".
+        send_json(
+            &mut ws,
+            &Request {
+                id: 2,
+                method: "session_create".into(),
+                params: serde_json::json!({
+                    "workspaceId": workspace.id,
+                    "kind": "terminal",
+                    "name": "T",
+                    "provider": "claude",
+                    "model": "m",
+                    "description": "",
+                    "autonomy": "ask"
+                }),
+            },
+        )
+        .await;
+        let session: proto::Session =
+            serde_json::from_value(wait_response(&mut ws, 2).await.result.expect("session")).expect("session");
+
+        let send = serde_json::json!({
+            "sessionId": session.id,
+            "cwd": dir.to_string_lossy(),
+            "text": "hi",
+            "nonce": "n-1"
+        });
+        send_json(&mut ws, &Request { id: 3, method: "turn_start".into(), params: send.clone() }).await;
+        let first = wait_response(&mut ws, 3).await;
+        assert!(!first.ok, "the first send should have failed");
+
+        // The client never got a turn, so it replays the same Enter.
+        send_json(&mut ws, &Request { id: 4, method: "turn_start".into(), params: send }).await;
+        let retry = wait_response(&mut ws, 4).await;
+        assert!(
+            !retry.ok,
+            "the retry was answered with success ({:?}) although no turn ever ran",
+            retry.result
+        );
     }
 }

@@ -1,6 +1,6 @@
 use serde_json::{json, Value};
 
-use crate::mailbox::{self, Letter};
+use crate::mailbox;
 use crate::routine::{self, Routine};
 use crate::schedule::{describe_schedule, next_run, parse_schedule, schedule_help, validate_schedule};
 use crate::session::{self, Session};
@@ -19,6 +19,16 @@ const PROVIDERS: &[(&str, &[&str])] = &[
     ),
     ("cursor", &["grok-4.6", "composer-1"]),
     ("codex", &["gpt-5.6-codex", "gpt-5.6"]),
+    (
+        "opencode",
+        &[
+            "opencode/ling-3.0-flash-fin-free",
+            "opencode/nemotron-3.5-lightning-free",
+            "opencode/nemotron-3-ultra-free",
+            "opencode/mimo-v2.5-free",
+            "opencode/muse-spark-1.3-contributor-free",
+        ],
+    ),
 ];
 
 struct Tool {
@@ -63,7 +73,7 @@ fn catalog() -> Vec<Tool> {
                 "properties": {
                     "name": { "type": "string" },
                     "description": { "type": "string", "description": "Its job, written as instructions to it." },
-                    "provider": { "type": "string", "enum": ["claude", "cursor", "codex"] },
+                    "provider": { "type": "string", "enum": ["claude", "cursor", "codex", "opencode"] },
                     "model": { "type": "string" },
                     "autonomy": { "type": "string", "enum": ["ask", "full"] }
                 },
@@ -248,10 +258,15 @@ fn find_tool(args: &Value) -> Result<Value, String> {
     }))
 }
 
-/// Hand a letter to its reader: start a turn on it, or say it could not.
-/// `tools.rs` owns the queue; starting a turn belongs to whoever owns the
+/// Drain an agent's box now: claim its oldest letter and start a turn on it.
+/// Returns whether one went over. Starting a turn belongs to whoever owns the
 /// runtime, which is why this arrives as a callback.
-pub type Deliver<'a> = &'a dyn Fn(&Session, &Letter) -> bool;
+///
+/// It takes the agent, not the letter, so that claiming stays in one place. A
+/// caller that claimed first and handed the letter over would hide it from the
+/// drain that runs when the target's turn ends, and a letter nobody can see is
+/// a letter nobody delivers.
+pub type Deliver<'a> = &'a dyn Fn(&Session) -> bool;
 
 pub fn handle(
     store: &Store,
@@ -388,15 +403,9 @@ fn message_agent(
     let from = crew_protocol::AgentRef { id: caller.id.clone(), name: caller.name.clone() };
     mailbox::enqueue(store, &target.id, &from, &body)?;
 
-    // Hand over the oldest letter, which may not be this one: a queue that
-    // delivers out of order is worse than one that waits.
-    let mut delivered = false;
-    if let Some(letter) = mailbox::claim(store, &target.id)? {
-        delivered = deliver(&target, &letter);
-        if !delivered {
-            mailbox::release(store, &letter.id)?;
-        }
-    }
+    // What goes over is the oldest letter, which may not be this one: a queue
+    // that delivers out of order is worse than one that waits.
+    let delivered = deliver(&target);
     let waiting = mailbox::waiting_count(store, &target.id)?;
     Ok(json!({
         "to": target.name,
@@ -416,18 +425,16 @@ fn search_messages(store: &Store, caller: &Session, args: &Value) -> Result<Valu
     let query = text(args.get("query")).ok_or_else(|| "query is required".to_string())?;
     let limit = args.get("limit").and_then(Value::as_u64).unwrap_or(10).clamp(1, 50) as u32;
     let days = args.get("days").and_then(Value::as_u64);
+    // The workspace is the fence; naming an agent narrows it further.
     let session_ids = match text(args.get("agent_id")) {
         Some(who) => vec![find_agent(store, caller, &who)?.id],
-        None => session::list(store, caller.workspace_id.clone())?
-            .into_iter()
-            .filter(|row| row.kind == "agent")
-            .map(|row| row.id)
-            .collect(),
+        None => Vec::new(),
     };
     let hits = crate::messages::search(
         store,
         crew_protocol::SearchQuery {
             query,
+            workspace_id: Some(caller.workspace_id.clone()),
             session_ids,
             from: days.map(|days| now_millis() - (days as i64) * 86_400_000),
             to: None,
@@ -740,10 +747,15 @@ mod tests {
     }
 
     impl Postman {
-        fn deliver(&self, target: &Session, letter: &Letter) -> bool {
+        /// Stands in for the runtime: claims the oldest letter and "starts a
+        /// turn" on it, exactly where TurnHost::drain_mailbox does.
+        fn deliver(&self, store: &Store, target: &Session) -> bool {
             if self.busy {
                 return false;
             }
+            let Ok(Some(letter)) = mailbox::claim(store, &target.id) else {
+                return false;
+            };
             self.handed
                 .borrow_mut()
                 .push((target.name.clone(), letter.text.clone()));
@@ -763,7 +775,7 @@ mod tests {
             store,
             transcripts,
             &|_| {},
-            &|target, letter| postman.deliver(target, letter),
+            &|target| postman.deliver(store, target),
             &caller.id,
             "tools/call",
             json!({ "name": name, "arguments": args }),
@@ -784,7 +796,7 @@ mod tests {
             store,
             transcripts,
             &|_| {},
-            &|target, letter| postman.deliver(target, letter),
+            &|target| postman.deliver(store, target),
             &caller.id,
             "tools/list",
             json!({}),
@@ -1107,5 +1119,162 @@ mod tests {
             .expect("call");
         assert!(is_error(&out));
         assert!(body(&out).contains("text is required"));
+    }
+
+    /// `message_agent` marks the oldest letter delivered *before* it knows the
+    /// target will take it, and only puts it back afterwards. `drain_mailbox`
+    /// runs on the target's own turn thread the moment that turn ends, so it
+    /// can land inside that window — and then it drains an empty box and the
+    /// agent goes idle with a letter still queued and nobody left to hand it
+    /// over. The callback below stands in for that turn ending.
+    #[test]
+    fn a_turn_ending_while_a_letter_is_in_flight_still_sees_it() {
+        let store = store();
+        let transcripts = TranscriptHub::new(store.clone());
+        let ws = workspace(&store);
+        let coder = agent(&store, &ws, "Coder");
+        let cuddles = agent(&store, &ws, "Cuddles");
+
+        let drained: RefCell<Option<String>> = RefCell::new(None);
+        let out = handle(
+            &store,
+            &transcripts,
+            &|_| {},
+            &|_target| {
+                // TurnHost::drain_mailbox, on the target's thread, racing the
+                // delivery this call is about to attempt.
+                *drained.borrow_mut() = mailbox::claim(&store, &cuddles.id)
+                    .expect("drain")
+                    .map(|letter| letter.text);
+                false
+            },
+            &coder.id,
+            "tools/call",
+            json!({
+                "name": "message_agent",
+                "arguments": { "to": "Cuddles", "text": "the branch is green" }
+            }),
+        )
+        .expect("call");
+        assert!(!is_error(&out), "{}", body(&out));
+
+        let left = mailbox::waiting_count(&store, &cuddles.id).expect("count");
+        assert_eq!(
+            drained.borrow().as_deref(),
+            Some("the branch is green"),
+            "the drain saw an empty box; {left} letter(s) are now queued for an idle agent that will never be woken"
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // Adversarial review additions (tool gateway).
+    // ---------------------------------------------------------------
+
+    fn agent_with_provider(store: &Store, workspace_id: &str, name: &str, provider: &str) -> Session {
+        session::create(
+            store,
+            workspace_id.to_string(),
+            "agent".into(),
+            name.into(),
+            provider.into(),
+            "".into(),
+            "".into(),
+            "ask".into(),
+        )
+        .expect("agent")
+    }
+
+    /// opencode shipped as a provider but never reached `PROVIDERS`, so an
+    /// opencode agent inherits its own provider as the default and is told it
+    /// does not exist. It cannot create any agent at all without naming someone
+    /// else's provider, and nobody can create an opencode agent.
+    #[test]
+    fn review_an_opencode_agent_can_create_an_agent() {
+        let store = store();
+        let transcripts = TranscriptHub::new(store.clone());
+        let ws = workspace(&store);
+        let coder = agent_with_provider(&store, &ws, "Coder", "opencode");
+        let postman = Postman::default();
+        let out = call(
+            &store,
+            &transcripts,
+            &postman,
+            &coder,
+            "create_agent",
+            json!({ "name": "Helper", "description": "runs errands" }),
+        )
+        .expect("call");
+        assert!(!is_error(&out), "{}", body(&out));
+    }
+
+    /// `call_tool` refusing its own name is asserted by
+    /// `call_tool_refuses_to_call_itself`, but that test passes the payload
+    /// `{"name": "call_tool"}` with no inner arguments, which also errors with
+    /// "name is required" when the guard is deleted. This is the payload that
+    /// actually tells the two apart: without the guard it delivers the letter.
+    #[test]
+    fn review_call_tool_cannot_be_nested_to_reach_a_tool() {
+        let store = store();
+        let transcripts = TranscriptHub::new(store.clone());
+        let ws = workspace(&store);
+        let coder = agent(&store, &ws, "Coder");
+        agent(&store, &ws, "Cuddles");
+        let postman = Postman::default();
+        let out = call(
+            &store,
+            &transcripts,
+            &postman,
+            &coder,
+            "call_tool",
+            json!({
+                "name": "call_tool",
+                "arguments": {
+                    "name": "message_agent",
+                    "arguments": { "to": "Cuddles", "text": "smuggled" }
+                }
+            }),
+        )
+        .expect("call");
+        assert!(is_error(&out), "{}", body(&out));
+        assert!(postman.handed.borrow().is_empty(), "the nested call went through");
+    }
+
+    /// The gateway hides tools from `tools/list`; it does not gate them. The
+    /// caller identity is whatever session id arrives on the request, and the
+    /// bridge authenticates one daemon-wide token that every agent process is
+    /// handed in `CREW_TOKEN`. So one agent's shell can act as another agent.
+    #[test]
+    fn review_the_caller_is_not_the_session_that_asked() {
+        let store = store();
+        let transcripts = TranscriptHub::new(store.clone());
+        let ws = workspace(&store);
+        let coder = agent(&store, &ws, "Coder");
+        let cuddles = agent(&store, &ws, "Cuddles");
+        let victim = agent(&store, &ws, "Victim");
+        // Busy, so the letter queues and its sender can be read back.
+        let postman = Postman { busy: true, ..Postman::default() };
+        // Coder's bash tool inherits CREW_SOCKET/CREW_TOKEN and simply names
+        // Cuddles' session id on the wire. `handle` believes it.
+        let out = handle(
+            &store,
+            &transcripts,
+            &|_| {},
+            &|target| postman.deliver(&store, target),
+            &cuddles.id,
+            "tools/call",
+            json!({
+                "name": "message_agent",
+                "arguments": { "to": "Victim", "text": "signed, Cuddles" }
+            }),
+        )
+        .expect("call");
+        assert!(!is_error(&out), "{}", body(&out));
+        let waiting = mailbox::waiting(&store, &victim.id).expect("waiting");
+        let _ = coder;
+        assert_eq!(
+            waiting.first().map(|letter| letter.from.name.as_str()),
+            Some("Cuddles"),
+            "the request named Cuddles and was believed: any holder of CREW_TOKEN speaks as any session"
+        );
     }
 }

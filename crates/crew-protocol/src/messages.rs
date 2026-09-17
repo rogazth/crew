@@ -38,7 +38,12 @@ pub struct SearchHit {
 #[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
 pub struct SearchQuery {
     pub query: String,
-    /// Empty means every session.
+    /// Which workspace to stay inside. Absent searches every one of them, which
+    /// only a caller that means it should ask for.
+    #[serde(default)]
+    #[ts(optional)]
+    pub workspace_id: Option<String>,
+    /// Empty means every session the workspace filter left.
     #[serde(default)]
     pub session_ids: Vec<String>,
     #[serde(default)]

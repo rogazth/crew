@@ -259,11 +259,14 @@ impl TranscriptHub {
             .store
             .with(|conn| crate::messages::sync(conn, session_id, &blocks, &mut synced))
             .is_ok();
-        // A failed write leaves the cache empty, so the next flush rewrites
-        // every row instead of trusting fingerprints for rows that never landed.
         if let Some(row) = self.lock().get_mut(session_id) {
             if written {
                 row.synced = synced;
+            } else {
+                // Nothing landed, and the last flush of a turn has no next
+                // flush to fix it: the row stays dirty so a later one retries,
+                // with an empty cache so it rewrites what never arrived.
+                row.dirty = true;
             }
         }
     }
@@ -437,5 +440,32 @@ mod review_tests {
             .expect("count") as usize;
         assert_eq!(stored, live, "blocks_json lost {} blocks", live - stored);
         assert_eq!(rows, live, "the messages table holds {rows} of {live} blocks");
+    }
+
+    /// `flush` clears `dirty` before it writes, so a write that fails is never
+    /// retried. Nothing else marks the session dirty again, and a turn that has
+    /// just ended has no further events coming.
+    #[test]
+    fn a_flush_that_could_not_write_is_tried_again() {
+        let store = tmp_store();
+        let id = agent(&store);
+        let hub = TranscriptHub::new(store.clone());
+        hub.append_system(&id, "first");
+
+        store
+            .with(|conn| conn.pragma_update(None, "query_only", true))
+            .expect("read only");
+        hub.append_system(&id, "second");
+        store
+            .with(|conn| conn.pragma_update(None, "query_only", false))
+            .expect("writable");
+
+        hub.flush(&id);
+        let stored = parse_blocks(Some(&session::get_blocks(&store, id.clone()).unwrap()));
+        assert!(
+            stored.iter().any(|block| block.text == "second"),
+            "the block whose write failed is gone from disk for good: {:?}",
+            stored.iter().map(|b| b.text.clone()).collect::<Vec<_>>()
+        );
     }
 }

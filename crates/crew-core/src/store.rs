@@ -207,6 +207,15 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
             params![now_millis()],
         )?;
     }
+    if current < 12 {
+        // No query ever used it: search is driven by the FTS match and every
+        // other read goes by primary key. It was write amplification only.
+        conn.execute_batch("DROP INDEX IF EXISTS messages_at_idx;")?;
+        conn.execute(
+            "INSERT INTO schema_migrations (version, applied_at) VALUES (12, ?1)",
+            params![now_millis()],
+        )?;
+    }
     Ok(())
 }
 

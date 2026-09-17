@@ -37,7 +37,7 @@ use crate::providers::cursor::{
     turn_usage as cursor_turn_usage, with_attached_files, with_persona, CursorSpawn, ToolPhase,
 };
 use crate::providers::opencode::{
-    opencode_config,
+    opencode_config, step_failure as opencode_step_failure,
     add_step_usage, build_opencode_prompt, build_opencode_spawn_args,
     parse_tool_call as parse_opencode_tool_call, session_id_from_event as opencode_session_id,
     stream_error_message as opencode_error_message, text_part, turn_ended, OpencodeSpawn, OpencodeText,
@@ -123,8 +123,10 @@ struct StreamLive {
     stderr: Vec<String>,
     saw_text: bool,
     settled: bool,
-    /// opencode's text parts are snapshots: the id says which one is growing.
-    text_part: String,
+    /// opencode's text parts are snapshots, each carrying its whole text. One
+    /// slot per part, because two that grow in turn would otherwise forget each
+    /// other and re-emit what the transcript already has.
+    text_parts: HashMap<String, String>,
     /// opencode counts every step apart, so the turn's usage adds up here.
     usage: Option<TurnUsage>,
 }
@@ -530,9 +532,12 @@ impl TurnHost {
     /// Hand over the next letter waiting for an agent that has just gone quiet.
     /// This is also how an agent loops: it writes to itself, the letter cannot
     /// be delivered while it is working, and it arrives the moment it stops.
-    fn drain_mailbox(&self, session_id: &str, workspace_id: &str) {
+    ///
+    /// The one place a letter is claimed, so two callers racing cannot lose one
+    /// between them: the loser finds an empty box, which is the truth.
+    pub fn drain_mailbox(&self, session_id: &str, workspace_id: &str) -> bool {
         let Ok(Some(letter)) = mailbox::claim(&self.store, session_id) else {
-            return;
+            return false;
         };
         let to_self = letter.from.id == session_id;
         let laps = {
@@ -555,7 +560,7 @@ impl TurnHost {
                 &format!("Stopped after {MAX_SELF_TURNS} turns writing to itself. Send it a message to continue."),
             );
             self.transcripts.flush(session_id);
-            return;
+            return false;
         }
         let cwd = crate::workspace::get(&self.store, workspace_id.to_string())
             .ok()
@@ -575,8 +580,34 @@ impl TurnHost {
         });
         if started.is_err() {
             // Something else took the agent between the turn ending and this
-            // line. The letter goes back at the head of the queue.
+            // line. The letter goes back at the head of the queue, and that
+            // turn's own ending will come back for it.
             let _ = mailbox::release(&self.store, &letter.id);
+            return false;
+        }
+        true
+    }
+
+    /// Drain an agent's box by id, for a caller that has only that. Used when a
+    /// letter has just been dropped in.
+    pub fn deliver_to(&self, target: &crate::session::Session) -> bool {
+        self.drain_mailbox(&target.id, &target.workspace_id)
+    }
+
+    /// Letters left waiting for an idle agent — a delivery that raced a turn
+    /// ending, or a daemon that stopped between the two — are invisible: only
+    /// the end of a turn looks in a box. This is the sweep at startup.
+    pub fn deliver_waiting(&self) {
+        let Ok(sessions) = crate::session::list_all(&self.store) else {
+            return;
+        };
+        for session in sessions {
+            if session.kind != "agent" || session.status == "working" || session.status == "needs-input" {
+                continue;
+            }
+            if mailbox::waiting_count(&self.store, &session.id).unwrap_or(0) > 0 {
+                self.deliver_to(&session);
+            }
         }
     }
 
@@ -1029,7 +1060,7 @@ impl TurnHost {
             stderr: Vec::new(),
             saw_text: false,
             settled: false,
-            text_part: String::new(),
+            text_parts: HashMap::new(),
             usage: None,
         };
         self.lock().insert(session_id.to_string(), wrap(live));
@@ -1673,6 +1704,19 @@ impl TurnHost {
             return;
         }
         if type_name.as_deref() == Some("error") {
+            // The steps before it were paid for; a failure is not a reason to
+            // forget what the turn cost.
+            let usage = {
+                let map = self.lock();
+                match map.get(session_id) {
+                    Some(Live::Opencode(live)) => live.usage.clone(),
+                    _ => None,
+                }
+            };
+            if usage.is_some() {
+                self.transcripts
+                    .apply(session_id, HarnessEvent::TurnCompleted { usage });
+            }
             self.signal(session_id, TurnOutcome::Failed(opencode_error_message(&rec)));
             return;
         }
@@ -1694,6 +1738,13 @@ impl TurnHost {
         }
         self.transcripts
             .apply(session_id, HarnessEvent::MessageCompleted {});
+        // A step can stop for a reason that is not success — out of room, cut
+        // off by the provider — and a turn that died mid-answer must not paint
+        // green just because nothing else follows it.
+        if let Some(reason) = opencode_step_failure(&rec) {
+            self.signal(session_id, TurnOutcome::Failed(reason));
+            return;
+        }
         self.transcripts
             .apply(session_id, HarnessEvent::TurnCompleted { usage });
         self.signal(session_id, TurnOutcome::Completed);
@@ -1705,16 +1756,13 @@ impl TurnHost {
             let Some(Live::Opencode(live)) = map.get_mut(session_id) else {
                 return;
             };
-            if live.text_part != part.id {
-                live.text_part = part.id.clone();
-                live.emitted_assistant.clear();
-            }
+            let emitted = live.text_parts.entry(part.id.clone()).or_default();
             let extra = part
                 .text
-                .strip_prefix(live.emitted_assistant.as_str())
+                .strip_prefix(emitted.as_str())
                 .unwrap_or(&part.text)
                 .to_string();
-            live.emitted_assistant = part.text.clone();
+            *emitted = part.text.clone();
             extra
         };
         if extra.is_empty() {

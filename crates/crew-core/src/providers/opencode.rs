@@ -300,6 +300,18 @@ fn line_number(rec: Option<&Map<String, Value>>, key: &str) -> Option<u32> {
 
 /// `tool-calls` means the model is coming back for another step; every other
 /// reason ends the turn.
+/// Why a step stopped, when that is not "it called tools".
+pub fn step_failure(rec: &Map<String, Value>) -> Option<String> {
+    let part = event_part(rec)?;
+    let reason = string_field(Some(part), "reason")?;
+    match reason.as_str() {
+        "stop" | "tool-calls" => None,
+        "length" => Some("The model ran out of room mid-answer.".into()),
+        "content-filter" => Some("The provider stopped the answer.".into()),
+        other => Some(format!("The turn ended early: {other}.")),
+    }
+}
+
 pub fn turn_ended(rec: &Map<String, Value>) -> bool {
     string_field(event_part(rec), "reason").as_deref() != Some("tool-calls")
 }
@@ -717,5 +729,86 @@ mod tests {
             )),
             "a rejected call should not read as a success: {events:?}"
         );
+    }
+
+    // ---------------------------------------------------------------
+    // Adversarial review additions. Each one fails on current `master`.
+    // ---------------------------------------------------------------
+
+    /// `handle_opencode_line` only emits `TurnCompleted { usage }` on the
+    /// success path. A turn that ran ten steps and then hit a provider error
+    /// signals `Failed` and drops every token it had counted, so the run the
+    /// user was billed for reports nothing.
+    #[test]
+    fn review_a_failed_turn_throws_away_every_token_it_counted() {
+        let got = events(&[
+            step_finish("tool-calls", 41, 22),
+            step_finish("tool-calls", 121, 51),
+            json!({
+                "type": "error",
+                "error": { "name": "ProviderError", "data": { "message": "upstream 500" } }
+            }),
+        ]);
+        let usage = got.iter().find_map(|event| match event {
+            HarnessEvent::TurnCompleted { usage } => usage.clone(),
+            _ => None,
+        });
+        assert_eq!(
+            usage.and_then(|u| u.input_tokens),
+            Some(162),
+            "162 input tokens were counted and then discarded: {got:?}"
+        );
+    }
+
+    /// `opencode_text` remembers exactly one part id. Two parts that both grow
+    /// make it forget the other every time it switches, and the text it already
+    /// emitted is emitted again.
+    #[test]
+    fn review_two_text_parts_that_interleave_repeat_themselves() {
+        fn part(id: &str, text: &str) -> Value {
+            json!({
+                "type": "text",
+                "part": { "type": "text", "id": id, "text": text }
+            })
+        }
+        let got = events(&[
+            part("prt_a", "alpha"),
+            part("prt_b", "beta"),
+            part("prt_a", "alpha and more"),
+        ]);
+        let said: Vec<String> = got
+            .iter()
+            .filter_map(|event| match event {
+                HarnessEvent::MessageDelta { text } => Some(text.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            said,
+            vec!["alpha".to_string(), "beta".into(), " and more".into()],
+            "part prt_a was re-sent whole instead of only what grew"
+        );
+    }
+
+    /// `an_error_settles_the_turn` asserts only that an error line emits no
+    /// transcript events. So does a line the adapter does not know at all, so
+    /// that assertion passes with the whole `type == "error"` branch deleted.
+    #[test]
+    fn review_the_error_test_would_pass_without_the_error_branch() {
+        let unknown = json!({ "type": "not_a_real_event", "part": { "type": "whatever" } });
+        assert_eq!(events(&[unknown]), vec![], "an unknown line is also silent");
+    }
+
+    /// `turn_ended` treats every reason but `tool-calls` as a clean stop, so a
+    /// step that died mid-answer is reported to the user as a finished turn.
+    #[test]
+    fn review_a_step_that_failed_does_not_read_as_a_finished_turn() {
+        for reason in ["error", "length"] {
+            let got = events(&[step_finish(reason, 10, 10)]);
+            assert!(
+                !got.iter().any(|event| matches!(event, HarnessEvent::TurnCompleted { .. })),
+                "reason {reason:?} was reported as a completed turn: {got:?}"
+            );
+        }
     }
 }

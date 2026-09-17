@@ -61,6 +61,17 @@ pub fn list(store: &Store, workspace_id: String) -> Result<Vec<Session>, String>
     })
 }
 
+/// Every session in every workspace. The startup sweep needs it; screens do not.
+pub fn list_all(store: &Store) -> Result<Vec<Session>, String> {
+    store.with(|conn| {
+        let mut stmt = conn.prepare_cached(&format!(
+            "SELECT {SESSION_COLUMNS} FROM sessions s ORDER BY s.created_at ASC"
+        ))?;
+        let rows = stmt.query_map([], |row| row_to_session(row, 0))?;
+        rows.collect()
+    })
+}
+
 pub fn list_busy(store: &Store) -> Result<Vec<Session>, String> {
     store.with(|conn| {
         let mut stmt = conn.prepare_cached(

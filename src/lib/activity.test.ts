@@ -157,3 +157,18 @@ describe("phaseFailed", () => {
     expect(phaseFailed(phase(items))).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// REVIEW: vacuity probe for `phaseKind > "groups a file read and a search into
+// one research phase"`. The same two blocks WITHOUT any detail group exactly
+// the same way, because kindOf("read") and kindOf("grep") are both "research".
+// So the grouping half of that test passes with the detail branch of
+// `phaseKind` deleted; only `phaseLabel` (via targetOf) exercises the feature.
+// ---------------------------------------------------------------------------
+describe("REVIEW: what the detail branch of phaseKind actually buys", () => {
+  it("groups by name alone, detail or no detail", () => {
+    const items = buildActivity([tool("read", "read"), tool("grep", "grep")]);
+    expect(items).toHaveLength(1);
+    expect(phase(items).kind).toBe("research");
+  });
+});
