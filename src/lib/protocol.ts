@@ -2,6 +2,12 @@
 
 export type AgentBinary = { path: string, };
 
+/**
+ * Who wrote a message, when it was not the user. Agents address each other by
+ * name; the id is what the UI opens when you click it.
+ */
+export type AgentRef = { id: string, name: string, };
+
 export type ApprovalDecision = "allow" | "always" | "deny";
 
 export type ApprovalResolution = "allow" | "always" | "deny" | "cancelled";
@@ -12,7 +18,11 @@ export type AttachedFileKind = "image" | "file";
 
 export type Auth = { auth: string, };
 
-export type Block = { id: string, role: BlockRole, text: string, at?: number, hidden?: boolean, streaming?: boolean, files?: Array<AttachedFile>, tool?: BlockTool, approval?: BlockApproval, question?: BlockQuestion, usage?: TurnUsage, };
+export type Block = { id: string, role: BlockRole, text: string, at?: number, hidden?: boolean, streaming?: boolean, files?: Array<AttachedFile>, tool?: BlockTool, approval?: BlockApproval, question?: BlockQuestion, usage?: TurnUsage, 
+/**
+ * Set when another agent wrote this line instead of the user.
+ */
+fromAgent?: AgentRef, };
 
 export type BlockApproval = { requestId: number, name: string, input?: Record<string, unknown>, decided?: ApprovalDecision, };
 
@@ -32,7 +42,7 @@ export type Event = { event: string, payload: unknown, };
 
 export type FileBytes = { mime: string, data: string, };
 
-export type HarnessEvent = { "type": "session.started", } | { "type": "session.ended", code?: number | null, } | { "type": "session.error", message: string, } | { "type": "session.note", message: string, } | { "type": "user.message", text: string, hidden?: boolean, files?: Array<AttachedFile>, } | { "type": "system.message", text: string, } | { "type": "session.providerBound", providerSessionId: string, } | { "type": "message.delta", text: string, } | { "type": "message.completed", } | { "type": "reasoning.delta", text: string, } | { "type": "turn.completed", usage?: TurnUsage, } | { "type": "tool.started", callId: string, name: string, title: string, detail?: ToolDetail, } | { "type": "tool.updated", callId: string, title?: string, status?: ToolStatus, detail?: ToolDetail, } | { "type": "approval.requested", requestId: number, name: string, title: string, input?: Record<string, unknown>, } | { "type": "approval.resolved", requestId: number, decision: ApprovalResolution, } | { "type": "question.requested", requestId: number, questions: Array<Question>, } | { "type": "question.resolved", requestId: number, answers: { [key in string]: string } | null, };
+export type HarnessEvent = { "type": "session.started", } | { "type": "session.ended", code?: number | null, } | { "type": "session.error", message: string, } | { "type": "session.note", message: string, } | { "type": "user.message", text: string, hidden?: boolean, files?: Array<AttachedFile>, from_agent?: AgentRef, } | { "type": "system.message", text: string, } | { "type": "session.providerBound", providerSessionId: string, } | { "type": "message.delta", text: string, } | { "type": "message.completed", } | { "type": "reasoning.delta", text: string, } | { "type": "turn.completed", usage?: TurnUsage, } | { "type": "tool.started", callId: string, name: string, title: string, detail?: ToolDetail, } | { "type": "tool.updated", callId: string, title?: string, status?: ToolStatus, detail?: ToolDetail, } | { "type": "approval.requested", requestId: number, name: string, title: string, input?: Record<string, unknown>, } | { "type": "approval.resolved", requestId: number, decision: ApprovalResolution, } | { "type": "question.requested", requestId: number, questions: Array<Question>, } | { "type": "question.resolved", requestId: number, answers: { [key in string]: string } | null, };
 
 export type Id = { id: string, };
 
@@ -164,6 +174,10 @@ export type TurnAnswer = { sessionId: string, requestId: number, answers: { [key
 export type TurnRespond = { sessionId: string, requestId: number, decision: ApprovalDecision, };
 
 export type TurnStart = { sessionId: string, cwd: string, text: string, files?: Array<AttachedFile>, mentions?: Array<string>, hidden?: boolean, fresh?: boolean, 
+/**
+ * Set when this turn is another agent's message, not yours.
+ */
+fromAgent?: AgentRef, 
 /**
  * One id per Enter, replayed unchanged by a retry. The daemon accepts it
  * once; a second arrival is answered without starting a second turn.

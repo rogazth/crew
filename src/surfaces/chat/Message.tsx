@@ -1,7 +1,7 @@
 import { Tooltip } from "@cloudflare/kumo";
 import { lazy, memo, Suspense } from "react";
 import { FileTypeIcon } from "../../chrome/FileTypeIcon";
-import type { Block, TurnUsage } from "../../lib/blocks";
+import type { AgentRef, Block, TurnUsage } from "../../lib/blocks";
 import { splitMentions } from "../../lib/mentions";
 import { AttachmentStrip } from "./Attachments";
 import { useChatActions } from "./context";
@@ -15,8 +15,13 @@ const Markdown = lazy(() => import("./Markdown").then((m) => ({ default: m.Markd
  * What the user said sits on the right, in ink; the agent answers on the left
  * in grey. Attachments are their own row under the bubble: a picture inside it
  * would set the bubble's width, not the words.
+ *
+ * A turn another agent sent is still `role=user`, but it is not you: it keeps
+ * to the left with its sender named, so the right-hand side stays the things
+ * you typed.
  */
 export const UserMessage = memo(function UserMessage({ block }: { block: Block }) {
+  if (block.fromAgent) return <AgentMessage block={block} from={block.fromAgent} />;
   return (
     <div className="flex flex-col items-end gap-1.5">
       {block.text ? (
@@ -37,6 +42,31 @@ export const UserMessage = memo(function UserMessage({ block }: { block: Block }
     </div>
   );
 });
+
+function AgentMessage({ block, from }: { block: Block; from: AgentRef }) {
+  const { openSession } = useChatActions();
+  return (
+    <div className="flex flex-col items-start gap-1">
+      <button
+        type="button"
+        onClick={() => openSession(from.id)}
+        className="text-[11px] leading-4 text-placeholder transition-colors hover:text-text"
+        title={`Open ${from.name}`}
+      >
+        {from.name}
+      </button>
+      {block.text ? (
+        <div className="crew-md-row">
+          <div className="crew-bubble is-from-agent">
+            <p className="whitespace-pre-wrap">{block.text}</p>
+          </div>
+          <CopyButton text={block.text} className="crew-copy crew-copy-aside" />
+        </div>
+      ) : null}
+      {block.files && block.files.length > 0 ? <AttachmentStrip files={block.files} /> : null}
+    </div>
+  );
+}
 
 /** `@path` runs become pills that open the file; the rest is the text as typed. */
 function MentionText({ text }: { text: string }) {

@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use crate::{ApprovalDecision, AttachedFile, Block, HarnessEvent, Session};
+use crate::{AgentRef, ApprovalDecision, AttachedFile, Block, HarnessEvent, Session};
 
 #[derive(Serialize, Deserialize, Clone, Debug, TS)]
 #[serde(rename_all = "camelCase")]
@@ -24,6 +24,10 @@ pub struct TurnStart {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub fresh: Option<bool>,
+    /// Set when this turn is another agent's message, not yours.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub from_agent: Option<AgentRef>,
     /// One id per Enter, replayed unchanged by a retry. The daemon accepts it
     /// once; a second arrival is answered without starting a second turn.
     #[serde(default, skip_serializing_if = "Option::is_none")]

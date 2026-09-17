@@ -146,6 +146,20 @@ impl TranscriptHub {
                 text: text.to_string(),
                 hidden: if hidden { Some(true) } else { None },
                 files: files.filter(|rows| !rows.is_empty()),
+                from_agent: None,
+            },
+        );
+    }
+
+    /// A line another agent wrote into this transcript.
+    pub fn append_from_agent(&self, session_id: &str, text: &str, from: crew_protocol::AgentRef) {
+        self.apply(
+            session_id,
+            HarnessEvent::UserMessage {
+                text: text.to_string(),
+                hidden: None,
+                files: None,
+                from_agent: Some(from),
             },
         );
     }

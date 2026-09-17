@@ -1,4 +1,5 @@
 import type {
+  AgentRef,
   ApprovalDecision,
   AttachedFile,
   Block,
@@ -10,6 +11,7 @@ import type {
 } from "./protocol";
 
 export type {
+  AgentRef,
   ApprovalDecision,
   AttachedFile,
   Block,

@@ -256,7 +256,33 @@ struct AgentFanout {
 struct ToolDispatch {
     store: crew_core::store::Store,
     transcripts: crew_core::transcript::TranscriptHub,
+    turns: TurnHost,
     hub: Arc<Hub>,
+}
+
+impl ToolDispatch {
+    /// Hand a letter to its reader by starting a turn on it. A busy agent
+    /// refuses, and the letter goes back in the box for whoever drains it next.
+    fn deliver(&self, target: &crew_core::session::Session, letter: &crew_core::mailbox::Letter) -> bool {
+        let cwd = workspace::get(&self.store, target.workspace_id.clone())
+            .ok()
+            .flatten()
+            .map(|row| row.path)
+            .unwrap_or_default();
+        self.turns
+            .start(TurnStart {
+                session_id: target.id.clone(),
+                cwd,
+                text: letter.text.clone(),
+                files: None,
+                mentions: None,
+                hidden: None,
+                fresh: None,
+                from_agent: Some(letter.from.clone()),
+                nonce: None,
+            })
+            .is_ok()
+    }
 }
 
 impl ToolHost for ToolDispatch {
@@ -272,6 +298,7 @@ impl ToolHost for ToolDispatch {
                     },
                 );
             },
+            &|target, letter| self.deliver(target, letter),
             session_id,
             method,
             params,
@@ -325,6 +352,7 @@ pub fn serve(config: Config) -> Result<Handle, String> {
     config.bridge.set_handler(Arc::new(ToolDispatch {
         store: config.store.clone(),
         transcripts,
+        turns: turns.clone(),
         hub: hub.clone(),
     }));
 

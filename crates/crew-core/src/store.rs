@@ -200,6 +200,13 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
             params![now_millis()],
         )?;
     }
+    if current < 11 {
+        conn.execute_batch(crate::mailbox::MIGRATION_V11)?;
+        conn.execute(
+            "INSERT INTO schema_migrations (version, applied_at) VALUES (11, ?1)",
+            params![now_millis()],
+        )?;
+    }
     Ok(())
 }
 

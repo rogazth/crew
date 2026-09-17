@@ -17,6 +17,7 @@ type Props = {
   onStatus: (id: string, status: SessionStatus) => void;
   onModel: (session: Session, provider: ProviderId, model: string) => void;
   onOpenFile: (file: ProjectFile) => void;
+  onOpenSession: (sessionId: string) => void;
   files: ProjectFile[];
 };
 
@@ -31,6 +32,7 @@ export function WorkspacePanes({
   onStatus,
   onModel,
   onOpenFile,
+  onOpenSession,
   files,
 }: Props) {
   const chat = useMemo<ChatActions>(
@@ -41,9 +43,10 @@ export function WorkspacePanes({
         const relative = absolute.startsWith(`${cwd}/`) ? absolute.slice(cwd.length + 1) : absolute;
         onOpenFile({ path: absolute, relative, name: relative.split("/").pop() ?? relative });
       },
+      openSession: onOpenSession,
       files,
     }),
-    [cwd, onOpenFile, files],
+    [cwd, onOpenFile, onOpenSession, files],
   );
   return (
     <div className="relative min-h-0 flex-1">

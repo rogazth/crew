@@ -31,6 +31,23 @@ pub fn list(store: &Store) -> Result<Vec<Workspace>, String> {
     })
 }
 
+fn row_to_workspace(row: &rusqlite::Row) -> rusqlite::Result<Workspace> {
+    Ok(Workspace {
+        id: row.get(0)?,
+        name: row.get(1)?,
+        path: row.get(2)?,
+        created_at: row.get(3)?,
+    })
+}
+
+pub fn get(store: &Store, id: String) -> Result<Option<Workspace>, String> {
+    store.with(|conn| {
+        conn.prepare_cached("SELECT id, name, path, created_at FROM workspaces WHERE id = ?1")?
+            .query_row(params![id], row_to_workspace)
+            .optional()
+    })
+}
+
 pub fn create(store: &Store, name: String, path: String) -> Result<Workspace, String> {
     let name = name.trim().to_string();
     if name.is_empty() {

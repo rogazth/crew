@@ -14,7 +14,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
 use crew_protocol::{
-    AttachedFile, Block, BlockApproval, BlockQuestion, BlockRole, BlockTool, MessagePage,
+    AgentRef, AttachedFile, Block, BlockApproval, BlockQuestion, BlockRole, BlockTool, MessagePage,
     SearchHit, SearchQuery, TurnUsage,
 };
 use rusqlite::{params, Connection, OptionalExtension};
@@ -41,6 +41,8 @@ struct Extra {
     question: Option<BlockQuestion>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     usage: Option<TurnUsage>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    from_agent: Option<AgentRef>,
 }
 
 const DEFAULT_LIMIT: u32 = 50;
@@ -111,6 +113,7 @@ fn extra_of(block: &Block) -> Extra {
         approval: block.approval.clone(),
         question: block.question.clone(),
         usage: block.usage.clone(),
+        from_agent: block.from_agent.clone(),
     }
 }
 
@@ -154,6 +157,7 @@ fn row_to_block(row: &rusqlite::Row, at: usize) -> rusqlite::Result<Block> {
         approval: extra.approval,
         question: extra.question,
         usage: extra.usage,
+        from_agent: extra.from_agent,
     })
 }
 

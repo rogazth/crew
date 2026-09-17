@@ -4,6 +4,7 @@ pub mod bridge;
 pub mod cron;
 pub mod providers;
 pub mod files;
+pub mod mailbox;
 pub mod mcp;
 pub mod messages;
 pub mod pty;

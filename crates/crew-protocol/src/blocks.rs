@@ -68,6 +68,16 @@ pub struct AttachedFile {
     pub size: Option<u64>,
 }
 
+/// Who wrote a message, when it was not the user. Agents address each other by
+/// name; the id is what the UI opens when you click it.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
+pub struct AgentRef {
+    pub id: String,
+    pub name: String,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, TS)]
 #[ts(export, export_to = "../../../src/lib/protocol.ts")]
 pub struct QuestionOption {
@@ -305,6 +315,10 @@ pub struct Block {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub usage: Option<TurnUsage>,
+    /// Set when another agent wrote this line instead of the user.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub from_agent: Option<AgentRef>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, TS)]
@@ -337,6 +351,9 @@ pub enum HarnessEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         files: Option<Vec<AttachedFile>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        from_agent: Option<AgentRef>,
     },
     #[serde(rename = "system.message")]
     #[ts(rename = "system.message")]

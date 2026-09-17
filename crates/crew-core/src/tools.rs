@@ -1,5 +1,6 @@
 use serde_json::{json, Value};
 
+use crate::mailbox::{self, Letter};
 use crate::routine::{self, Routine};
 use crate::schedule::{describe_schedule, next_run, parse_schedule, schedule_help, validate_schedule};
 use crate::session::{self, Session};
@@ -62,6 +63,18 @@ fn catalog() -> Vec<Tool> {
             }),
         },
         Tool {
+            name: "message_agent",
+            description: "Send a message to another agent in this workspace. It arrives as a turn with your name on it and is answered in its own time; you are not waiting for a reply, and a reply comes back as a message to you. If the agent is busy the message waits in its box.",
+            schema: json!({
+                "type": "object",
+                "properties": {
+                    "to": { "type": "string", "description": "The agent's name or id. Use list_agents if unsure." },
+                    "text": { "type": "string", "description": "What to say. Give it everything it needs; it cannot see your conversation." }
+                },
+                "required": ["to", "text"]
+            }),
+        },
+        Tool {
             name: "list_routines",
             description: "List the routines of an agent: standing orders that wake it on a schedule with a saved prompt. Defaults to your own.",
             schema: json!({
@@ -96,10 +109,16 @@ fn catalog() -> Vec<Tool> {
     ]
 }
 
+/// Hand a letter to its reader: start a turn on it, or say it could not.
+/// `tools.rs` owns the queue; starting a turn belongs to whoever owns the
+/// runtime, which is why this arrives as a callback.
+pub type Deliver<'a> = &'a dyn Fn(&Session, &Letter) -> bool;
+
 pub fn handle(
     store: &Store,
     transcripts: &TranscriptHub,
     on_created: &dyn Fn(&Session),
+    deliver: Deliver<'_>,
     session_id: &str,
     method: &str,
     params: Value,
@@ -118,7 +137,7 @@ pub fn handle(
             let name = params.get("name").and_then(Value::as_str).unwrap_or("");
             let args = params.get("arguments").cloned().unwrap_or(json!({}));
             let args = if args.is_object() { args } else { json!({}) };
-            match run(store, transcripts, on_created, &caller, name, &args) {
+            match run(store, transcripts, on_created, deliver, &caller, name, &args) {
                 Ok(out) => {
                     let body = match out {
                         Value::String(text) => text,
@@ -136,10 +155,12 @@ pub fn handle(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run(
     store: &Store,
     transcripts: &TranscriptHub,
     on_created: &dyn Fn(&Session),
+    deliver: Deliver<'_>,
     caller: &Session,
     name: &str,
     args: &Value,
@@ -147,6 +168,7 @@ fn run(
     match name {
         "list_agents" => list_agents(store, caller),
         "create_agent" => create_agent(store, transcripts, on_created, caller, args),
+        "message_agent" => message_agent(store, deliver, caller, args),
         "list_routines" => list_routines(store, caller, args),
         "upsert_routine" => upsert_routine(store, transcripts, caller, args),
         "delete_routine" => delete_routine(store, transcripts, caller, args),
@@ -179,6 +201,65 @@ fn list_agents(store: &Store, caller: &Session) -> Result<Value, String> {
         })
         .collect();
     Ok(Value::Array(rows))
+}
+
+/// Resolve "who" the way a person would: an id if that is what arrived, else a
+/// name, case and spacing forgiven.
+fn find_agent(store: &Store, caller: &Session, who: &str) -> Result<Session, String> {
+    let agents: Vec<Session> = session::list(store, caller.workspace_id.clone())?
+        .into_iter()
+        .filter(|row| row.kind == "agent")
+        .collect();
+    let wanted = who.trim().to_lowercase();
+    agents
+        .iter()
+        .find(|row| row.id == who)
+        .or_else(|| agents.iter().find(|row| row.name.to_lowercase() == wanted))
+        .cloned()
+        .ok_or_else(|| {
+            format!(
+                "No agent \"{who}\" in this workspace. One of: {}",
+                agents.iter().map(|row| row.name.as_str()).collect::<Vec<_>>().join(", ")
+            )
+        })
+}
+
+fn message_agent(
+    store: &Store,
+    deliver: Deliver<'_>,
+    caller: &Session,
+    args: &Value,
+) -> Result<Value, String> {
+    let who = text(args.get("to")).ok_or_else(|| "to is required".to_string())?;
+    let body = text(args.get("text")).ok_or_else(|| "text is required".to_string())?;
+    let target = find_agent(store, caller, &who)?;
+    if target.id == caller.id {
+        return Err("That is you. Answer in this conversation instead.".into());
+    }
+
+    let from = crew_protocol::AgentRef { id: caller.id.clone(), name: caller.name.clone() };
+    mailbox::enqueue(store, &target.id, &from, &body)?;
+
+    // Hand over the oldest letter, which may not be this one: a queue that
+    // delivers out of order is worse than one that waits.
+    let mut delivered = false;
+    if let Some(letter) = mailbox::claim(store, &target.id)? {
+        delivered = deliver(&target, &letter);
+        if !delivered {
+            mailbox::release(store, &letter.id)?;
+        }
+    }
+    let waiting = mailbox::waiting_count(store, &target.id)?;
+    Ok(json!({
+        "to": target.name,
+        "delivered": delivered,
+        "waiting": waiting,
+        "note": if delivered {
+            format!("{} is reading it now. Its reply will reach you as a message.", target.name)
+        } else {
+            format!("{} is busy; it will read this when its turn ends.", target.name)
+        }
+    }))
 }
 
 fn create_agent(
@@ -427,4 +508,251 @@ fn when(ms: i64) -> String {
         tm.tm_year + 1900,
         tm.tm_min
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::RefCell;
+
+    fn store() -> Store {
+        let dir = std::env::temp_dir().join(format!("crew-tools-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        Store::open(dir.join("crew.sqlite3")).expect("store")
+    }
+
+    fn workspace(store: &Store) -> String {
+        let root = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
+        std::fs::create_dir_all(&root).expect("root");
+        crate::workspace::create(store, "w".into(), root.to_string_lossy().into())
+            .expect("workspace")
+            .id
+    }
+
+    fn agent(store: &Store, workspace_id: &str, name: &str) -> Session {
+        session::create(
+            store,
+            workspace_id.to_string(),
+            "agent".into(),
+            name.into(),
+            "claude".into(),
+            "claude-opus-5".into(),
+            "".into(),
+            "ask".into(),
+        )
+        .expect("agent")
+    }
+
+    /// Records who was handed what, and can refuse like a busy agent would.
+    #[derive(Default)]
+    struct Postman {
+        handed: RefCell<Vec<(String, String)>>,
+        busy: bool,
+    }
+
+    impl Postman {
+        fn deliver(&self, target: &Session, letter: &Letter) -> bool {
+            if self.busy {
+                return false;
+            }
+            self.handed
+                .borrow_mut()
+                .push((target.name.clone(), letter.text.clone()));
+            true
+        }
+    }
+
+    fn call(
+        store: &Store,
+        transcripts: &TranscriptHub,
+        postman: &Postman,
+        caller: &Session,
+        name: &str,
+        args: Value,
+    ) -> Result<Value, String> {
+        handle(
+            store,
+            transcripts,
+            &|_| {},
+            &|target, letter| postman.deliver(target, letter),
+            &caller.id,
+            "tools/call",
+            json!({ "name": name, "arguments": args }),
+        )
+    }
+
+    fn body(result: &Value) -> String {
+        result["content"][0]["text"].as_str().unwrap_or_default().to_string()
+    }
+
+    fn is_error(result: &Value) -> bool {
+        result["isError"].as_bool().unwrap_or(false)
+    }
+
+    #[test]
+    fn message_agent_is_offered_to_every_agent() {
+        let names: Vec<&str> = catalog().into_iter().map(|tool| tool.name).collect();
+        assert!(names.contains(&"message_agent"));
+    }
+
+    #[test]
+    fn a_message_reaches_an_idle_agent_right_away() {
+        let store = store();
+        let transcripts = TranscriptHub::new(store.clone());
+        let ws = workspace(&store);
+        let coder = agent(&store, &ws, "Coder");
+        agent(&store, &ws, "Cuddles");
+        let postman = Postman::default();
+
+        let out = call(
+            &store,
+            &transcripts,
+            &postman,
+            &coder,
+            "message_agent",
+            json!({ "to": "Cuddles", "text": "the branch is green" }),
+        )
+        .expect("call");
+        assert!(!is_error(&out));
+        assert!(body(&out).contains("\"delivered\": true"), "{}", body(&out));
+        assert_eq!(
+            postman.handed.borrow().as_slice(),
+            [("Cuddles".to_string(), "the branch is green".to_string())]
+        );
+    }
+
+    #[test]
+    fn a_message_to_a_busy_agent_waits_in_its_box() {
+        let store = store();
+        let transcripts = TranscriptHub::new(store.clone());
+        let ws = workspace(&store);
+        let coder = agent(&store, &ws, "Coder");
+        let cuddles = agent(&store, &ws, "Cuddles");
+        let postman = Postman { busy: true, ..Postman::default() };
+
+        let out = call(
+            &store,
+            &transcripts,
+            &postman,
+            &coder,
+            "message_agent",
+            json!({ "to": "Cuddles", "text": "when you get a minute" }),
+        )
+        .expect("call");
+        assert!(body(&out).contains("\"delivered\": false"), "{}", body(&out));
+        assert!(postman.handed.borrow().is_empty());
+        // Released, not lost: it is still first in line.
+        let waiting = mailbox::waiting(&store, &cuddles.id).expect("waiting");
+        assert_eq!(waiting.len(), 1);
+        assert_eq!(waiting[0].text, "when you get a minute");
+        assert_eq!(waiting[0].from.name, "Coder");
+    }
+
+    #[test]
+    fn the_oldest_letter_goes_first_even_when_a_newer_one_triggered_the_delivery() {
+        let store = store();
+        let transcripts = TranscriptHub::new(store.clone());
+        let ws = workspace(&store);
+        let coder = agent(&store, &ws, "Coder");
+        let cuddles = agent(&store, &ws, "Cuddles");
+
+        let busy = Postman { busy: true, ..Postman::default() };
+        call(&store, &transcripts, &busy, &coder, "message_agent", json!({ "to": "Cuddles", "text": "first" }))
+            .expect("first");
+        let free = Postman::default();
+        call(&store, &transcripts, &free, &coder, "message_agent", json!({ "to": "Cuddles", "text": "second" }))
+            .expect("second");
+
+        assert_eq!(free.handed.borrow()[0].1, "first");
+        assert_eq!(mailbox::waiting_count(&store, &cuddles.id).expect("count"), 1);
+    }
+
+    #[test]
+    fn an_agent_cannot_message_itself() {
+        let store = store();
+        let transcripts = TranscriptHub::new(store.clone());
+        let ws = workspace(&store);
+        let coder = agent(&store, &ws, "Coder");
+        let postman = Postman::default();
+        let out = call(&store, &transcripts, &postman, &coder, "message_agent", json!({ "to": "Coder", "text": "hi" }))
+            .expect("call");
+        assert!(is_error(&out));
+        assert!(body(&out).contains("That is you"));
+    }
+
+    #[test]
+    fn an_unknown_name_lists_the_agents_there_are() {
+        let store = store();
+        let transcripts = TranscriptHub::new(store.clone());
+        let ws = workspace(&store);
+        let coder = agent(&store, &ws, "Coder");
+        agent(&store, &ws, "Cuddles");
+        let postman = Postman::default();
+        let out = call(&store, &transcripts, &postman, &coder, "message_agent", json!({ "to": "Nobody", "text": "hi" }))
+            .expect("call");
+        assert!(is_error(&out));
+        assert!(body(&out).contains("Cuddles"), "{}", body(&out));
+    }
+
+    #[test]
+    fn a_name_is_matched_however_it_was_typed() {
+        let store = store();
+        let transcripts = TranscriptHub::new(store.clone());
+        let ws = workspace(&store);
+        let coder = agent(&store, &ws, "Coder");
+        agent(&store, &ws, "Cuddles");
+        let postman = Postman::default();
+        call(&store, &transcripts, &postman, &coder, "message_agent", json!({ "to": "  cuddles ", "text": "hi" }))
+            .expect("call");
+        assert_eq!(postman.handed.borrow()[0].0, "Cuddles");
+    }
+
+    #[test]
+    fn an_agent_in_another_workspace_is_out_of_reach() {
+        let store = store();
+        let transcripts = TranscriptHub::new(store.clone());
+        let here = workspace(&store);
+        let there = workspace(&store);
+        let coder = agent(&store, &here, "Coder");
+        agent(&store, &there, "Stranger");
+        let postman = Postman::default();
+        let out = call(&store, &transcripts, &postman, &coder, "message_agent", json!({ "to": "Stranger", "text": "hi" }))
+            .expect("call");
+        assert!(is_error(&out));
+        assert!(postman.handed.borrow().is_empty());
+    }
+
+    #[test]
+    fn an_id_works_as_well_as_a_name() {
+        let store = store();
+        let transcripts = TranscriptHub::new(store.clone());
+        let ws = workspace(&store);
+        let coder = agent(&store, &ws, "Coder");
+        let cuddles = agent(&store, &ws, "Cuddles");
+        let postman = Postman::default();
+        call(
+            &store,
+            &transcripts,
+            &postman,
+            &coder,
+            "message_agent",
+            json!({ "to": cuddles.id, "text": "by id" }),
+        )
+        .expect("call");
+        assert_eq!(postman.handed.borrow()[0].0, "Cuddles");
+    }
+
+    #[test]
+    fn a_message_needs_something_to_say() {
+        let store = store();
+        let transcripts = TranscriptHub::new(store.clone());
+        let ws = workspace(&store);
+        let coder = agent(&store, &ws, "Coder");
+        agent(&store, &ws, "Cuddles");
+        let postman = Postman::default();
+        let out = call(&store, &transcripts, &postman, &coder, "message_agent", json!({ "to": "Cuddles" }))
+            .expect("call");
+        assert!(is_error(&out));
+        assert!(body(&out).contains("text is required"));
+    }
 }

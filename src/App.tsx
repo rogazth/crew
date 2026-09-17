@@ -95,6 +95,15 @@ export function App() {
     [closeView, tabs],
   );
 
+  /** A message from another agent names its sender; the name opens its tab. */
+  const openSessionById = useCallback(
+    (id: string) => {
+      const found = sessions.find((session) => session.id === id);
+      if (found) openSession(found);
+    },
+    [sessions, openSession],
+  );
+
   const openFile = useCallback(
     (file: ProjectFile) => {
       closeView();
@@ -317,6 +326,7 @@ export function App() {
             onStatus={setStatus}
             onModel={changeModel}
             onOpenFile={openFile}
+            onOpenSession={openSessionById}
             files={files}
           />
         </div>

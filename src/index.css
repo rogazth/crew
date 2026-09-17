@@ -911,3 +911,11 @@ body:has(button[data-sidebar="resize-handle"]:active) * {
 .crew-tool-body .crew-code {
   margin: 4px 0 6px;
 }
+
+/* A message from another agent: the mirror of your bubble, in card ink, so the
+   right-hand side stays the things you typed. */
+.crew-bubble.is-from-agent {
+  border-radius: 16px 16px 16px 4px;
+  background: var(--color-card);
+  color: var(--color-text);
+}
