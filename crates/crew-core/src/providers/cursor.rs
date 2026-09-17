@@ -53,27 +53,7 @@ pub fn with_attached_files(text: &str, files: &[String]) -> String {
     }
 }
 
-pub fn persona_prompt(name: &str, description: &str, tools: Option<&str>) -> String {
-    let who = {
-        let trimmed = name.trim();
-        if trimmed.is_empty() {
-            "the user's agent"
-        } else {
-            trimmed
-        }
-    };
-    let job = description.trim();
-    let rules = "You are chatting inside Crew, a desktop app. Do the work with your tools, then reply like a colleague in chat: short, direct, no headers or preamble unless asked.";
-    let persona = if job.is_empty() {
-        format!("You are {who}. {rules}")
-    } else {
-        format!("You are {who}. {job}\n\n{rules}")
-    };
-    match tools {
-        Some(tools) if !tools.is_empty() => format!("{persona}\n\n{tools}"),
-        _ => persona,
-    }
-}
+pub use super::persona_prompt;
 
 pub fn with_persona(body: &str, persona: Option<&str>) -> String {
     match persona.filter(|p| !p.is_empty()) {

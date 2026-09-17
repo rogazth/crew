@@ -24,6 +24,30 @@ pub fn string_field(rec: Option<&Map<String, Value>>, key: &str) -> Option<Strin
         .map(str::to_string)
 }
 
+/// What every provider is told before the first word of the conversation.
+///
+/// It says where the agent is and what the reply is for, and stops there. How
+/// the model writes is the model's; a house style here would reach every agent
+/// the user ever makes, and they did not ask for one.
+pub fn persona_prompt(name: &str, description: &str, tools: Option<&str>) -> String {
+    let who = match name.trim() {
+        "" => "the user's agent",
+        named => named,
+    };
+    let job = description.trim();
+    let rules = "You are chatting inside Crew, a desktop app. Your reply is read in a chat window, \
+                 next to the tools you ran: do the work first, then say what happened.";
+    let persona = if job.is_empty() {
+        format!("You are {who}. {rules}")
+    } else {
+        format!("You are {who}. {job}\n\n{rules}")
+    };
+    match tools {
+        Some(tools) if !tools.is_empty() => format!("{persona}\n\n{tools}"),
+        _ => persona,
+    }
+}
+
 /// The bare name of a Crew tool, whatever the provider prefixed it with:
 /// Claude and Codex namespace MCP tools `mcp__crew__x`, opencode `crew_x`.
 pub fn crew_tool(name: &str) -> Option<&str> {
@@ -82,4 +106,41 @@ pub fn leaf(path: &str) -> String {
         .filter(|part| !part.is_empty())
         .unwrap_or(path)
         .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_persona_names_the_agent_and_its_job() {
+        let prompt = persona_prompt("Planner", "You keep the roadmap.", None);
+        assert!(prompt.starts_with("You are Planner. You keep the roadmap."), "{prompt}");
+        assert!(prompt.contains("chatting inside Crew"), "{prompt}");
+    }
+
+    #[test]
+    fn an_agent_with_no_job_is_still_somebody() {
+        let prompt = persona_prompt("Planner", "   ", None);
+        assert!(prompt.starts_with("You are Planner. You are chatting"), "{prompt}");
+        let unnamed = persona_prompt("  ", "", None);
+        assert!(unnamed.starts_with("You are the user's agent."), "{unnamed}");
+    }
+
+    /// The user asked for a harness that does not tell the model how to talk.
+    /// Whatever else this prompt says, it does not say that.
+    #[test]
+    fn the_persona_does_not_dictate_a_voice() {
+        let prompt = persona_prompt("Planner", "You keep the roadmap.", None).to_lowercase();
+        for dictated in ["short", "concise", "brief", "no headers", "no preamble", "tone"] {
+            assert!(!prompt.contains(dictated), "the persona still dictates \"{dictated}\": {prompt}");
+        }
+    }
+
+    #[test]
+    fn the_tool_sheet_goes_last_and_only_when_there_is_one() {
+        let with = persona_prompt("Planner", "", Some("You have: message_agent."));
+        assert!(with.ends_with("\n\nYou have: message_agent."), "{with}");
+        assert_eq!(persona_prompt("Planner", "", Some("")), persona_prompt("Planner", "", None));
+    }
 }

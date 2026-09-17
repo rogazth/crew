@@ -45,8 +45,8 @@ pub fn build_opencode_prompt(
         return body;
     }
     let persona = match tools {
-        Some(hint) => format!("{}\n\n{hint}", persona_prompt(name, description)),
-        None => persona_prompt(name, description),
+        Some(hint) => format!("{}\n\n{hint}", persona_prompt(name, description, None)),
+        None => persona_prompt(name, description, None),
     };
     if body.is_empty() {
         persona
@@ -69,23 +69,7 @@ pub fn opencode_config(mcp: Option<&(String, Vec<String>)>) -> Option<String> {
     .ok()
 }
 
-pub fn persona_prompt(name: &str, description: &str) -> String {
-    let who = {
-        let trimmed = name.trim();
-        if trimmed.is_empty() {
-            "the user's agent"
-        } else {
-            trimmed
-        }
-    };
-    let job = description.trim();
-    let rules = "You are chatting inside Crew, a desktop app. Do the work with your tools, then reply like a colleague in chat: short, direct, no headers or preamble unless asked.";
-    if job.is_empty() {
-        format!("You are {who}. {rules}")
-    } else {
-        format!("You are {who}. {job}\n\n{rules}")
-    }
-}
+pub use super::persona_prompt;
 
 fn with_attached_paths(text: &str, files: &[String]) -> String {
     if files.is_empty() {
