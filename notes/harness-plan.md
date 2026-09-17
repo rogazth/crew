@@ -131,11 +131,25 @@ cargo test        # rust
 | B2 | incoming agent messages render on the left, named | done `3e5319d` |
 | B3 | `from_agent` on `TurnStart`; drain the box when a turn ends | **blocked on C: both live in `turns.rs`** |
 | A5 | the chat loads from `transcript_tail` instead of the whole blob | pending |
-| C1 | opencode protocol capture + adapter | in flight |
-| C2 | opencode in the provider registry | in flight |
-| D1 | tool catalog + gateway tools | pending |
-| E2 | `message_agent` reads as a message in the sender's transcript | pending |
-| F1 | agent-to-agent QA pass | pending |
+| B3 | `from_agent` on a turn; the box drains when a turn ends | done `10265f4` |
+| B4 | agents are disposable; a self-message is the loop | done `10265f4` |
+| C1 | opencode protocol capture + adapter | done `ea3d732` |
+| C2 | opencode in the registry, with the Crew tools | done `f11a656` |
+| D1 | tool catalog + `find_tool` / `call_tool` + `search_messages` | done `e9be096` |
+| E2 | a message reads as a message in the sender's transcript | done `f11a656` |
+| E3 | a folded phase says it failed; rows wear what they did | done `2de6918` |
+| F1 | agent-to-agent QA against real CLIs (`scripts/drive.mjs`) | done `f11a656` |
+| F2 | the working-directory bug that fix found | done `92ac4dc` |
+| A5 | the chat loads from `transcript_tail` instead of the whole blob | **next** |
+
+### Why A5 is still open
+
+`transcript_get` answers from the hub's memory, so opening a chat is already
+fast; what the tail saves is the wire payload and the renderer's list. The real
+ceiling is that the *daemon* holds every block of every live session in memory,
+and moving the client to a tail does not move that. Doing it properly means
+pagination in `lib/transcript.ts` plus a "load earlier" affordance, and it
+touches the streaming path — worth doing awake, with the app open.
 
 ## Known issues
 

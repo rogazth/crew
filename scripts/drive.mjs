@@ -131,6 +131,21 @@ const SCENARIOS = {
       ];
     },
   },
+  // The agent carries itself past the end of a turn by writing to itself.
+  loop: {
+    prompt:
+      "Do this in two turns, not one. Turn one: create a file called step1.txt containing the word one, then call message_agent with to='Coder' (yourself) and text='turn two: create step2.txt containing the word two, then stop'. Say nothing else. You will receive that message as your next turn; carry it out then.",
+    check(coderEnd) {
+      const turns = coderEnd.blocks.filter((b) => b.role === "user");
+      const woken = turns.filter((b) => b.fromAgent);
+      const wrote = coderEnd.blocks.filter((b) => b.tool?.detail?.kind === "edit");
+      return [
+        ["the agent wrote to itself", coderEnd.blocks.some((b) => b.tool?.detail?.kind === "message"), ""],
+        ["the note came back as a second turn", woken.length >= 1, `${turns.length} turns, ${woken.length} from an agent`],
+        ["both steps ran", wrote.length >= 2, wrote.map((b) => b.tool.detail.path.split("/").pop()).join(", ")],
+      ];
+    },
+  },
   // The agent does real work, and the transcript says what it did.
   code: {
     prompt:
