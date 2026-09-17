@@ -919,3 +919,17 @@ body:has(button[data-sidebar="resize-handle"]:active) * {
   background: var(--color-card);
   color: var(--color-text);
 }
+
+/* The line a search hit sent you to. It fades, because the point is to find it,
+   not to keep it marked. */
+@keyframes crew-found {
+  from { background: color-mix(in srgb, var(--color-kumo-brand) 18%, transparent); }
+  to { background: transparent; }
+}
+.crew-found {
+  border-radius: 8px;
+  animation: crew-found 2.4s ease-out forwards;
+}
+@media (prefers-reduced-motion: reduce) {
+  .crew-found { animation: none; background: var(--color-card); }
+}

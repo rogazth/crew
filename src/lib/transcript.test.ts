@@ -222,3 +222,42 @@ describe("the window", () => {
     expect(transcript.read("s1").blocks).toHaveLength(3);
   });
 });
+
+describe("focus", () => {
+  it("takes the reader to a block already in the window", async () => {
+    request.mockResolvedValue(page([said("a"), said("b"), said("c")], 2, { from: 10 }));
+    const transcript = await load("s1");
+    await transcript.focus("s1", 11);
+    expect(transcript.read("s1").focusId).toBe("b");
+  });
+
+  it("walks history back until the hit is in hand", async () => {
+    request.mockResolvedValue(page([said("recent")], 2, { from: 21, more: true }));
+    const transcript = await load("s1");
+    request.mockResolvedValue(page([said("wanted")], 2, { from: 20, more: true }));
+    await transcript.focus("s1", 20);
+    expect(transcript.read("s1").focusId).toBe("wanted");
+  });
+
+  it("gives up rather than walking a year of pages", async () => {
+    request.mockResolvedValue(page([said("recent")], 2, { from: 5000, more: true }));
+    const transcript = await load("s1");
+    request.mockClear();
+    request.mockImplementation(() =>
+      Promise.resolve(page([said("older")], 2, { from: 4999, more: true })),
+    );
+    await transcript.focus("s1", 1);
+    // Five pages, then it stops and leaves them where it got to.
+    expect(request).toHaveBeenCalledTimes(5);
+    expect(transcript.read("s1").focusId).toBeNull();
+  });
+
+  it("forgets the mark once the chat has shown it", async () => {
+    request.mockResolvedValue(page([said("a")], 2, { from: 1 }));
+    const transcript = await load("s1");
+    await transcript.focus("s1", 1);
+    expect(transcript.read("s1").focusId).toBe("a");
+    transcript.clearFocus("s1");
+    expect(transcript.read("s1").focusId).toBeNull();
+  });
+});

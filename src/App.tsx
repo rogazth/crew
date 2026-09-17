@@ -25,6 +25,7 @@ import { startScheduler } from "./lib/scheduler";
 import { nextSessionName } from "./lib/workspaces";
 import { Pages } from "./surfaces/Pages";
 import { usePages } from "./hooks/usePages";
+import { focus as focusBlock } from "./lib/transcript";
 import { WorkspacePanes } from "./surfaces/WorkspacePanes";
 
 type Sheet = { session: Session | null };
@@ -96,6 +97,15 @@ export function App() {
       if (found) openSession(found);
     },
     [sessions, openSession],
+  );
+
+  /** A search hit: open the agent, then take the reader to the line. */
+  const openHit = useCallback(
+    (id: string, pos: number) => {
+      openSessionById(id);
+      void focusBlock(id, pos);
+    },
+    [openSessionById],
   );
 
   const openFile = useCallback(
@@ -282,7 +292,7 @@ export function App() {
           activeWorkspace={active}
           sessions={sessions}
           onConfirm={confirms.ask}
-          onOpenSession={openSessionById}
+          onOpenHit={openHit}
         />
         {/* Hidden, not unmounted: agent and terminal processes stay alive. */}
         <div hidden={!isWorkspace} className="flex min-h-0 flex-1 flex-col">

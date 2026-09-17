@@ -1,10 +1,12 @@
-import { useLayoutEffect, useMemo, useRef } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { isOpen, type Answers, type ApprovalDecision, type Block, type TurnUsage } from "../../lib/blocks";
 import { dayLabel } from "../../lib/time";
 import { ActivityGroup, ThinkingLine } from "./Activity";
 import { AssistantMessage, DateBreak, Note, TurnFooter, UserMessage } from "./Message";
 
 const NEAR_BOTTOM_PX = 16;
+/** Long enough to catch the eye, short enough not to become decoration. */
+const MARK_MS = 2600;
 /** A gap this long between messages gets a date line, like a chat app. */
 const DATE_BREAK_MS = 30 * 60_000;
 
@@ -23,6 +25,9 @@ type Props = {
   more: boolean;
   loadingEarlier: boolean;
   onLoadEarlier: () => void;
+  /** A block the reader was sent to; scrolled to and marked, once. */
+  focusId: string | null;
+  onFocused: () => void;
   onApprove: (requestId: number, decision: ApprovalDecision) => void;
   onAnswer: (requestId: number, answers: Answers | null) => void;
 };
@@ -102,6 +107,8 @@ export function Transcript({
   more,
   loadingEarlier,
   onLoadEarlier,
+  focusId,
+  onFocused,
   onApprove,
   onAnswer,
 }: Props) {
@@ -135,6 +142,27 @@ export function Transcript({
     }
     if (pinned.current) el.scrollTop = el.scrollHeight;
   }, [blocks, thinking]);
+
+  // Where to scroll is the store's business and happens once; how long the mark
+  // stays is this component's, because clearing the one clears the other.
+  const [marked, setMarked] = useState<string | null>(null);
+
+  useLayoutEffect(() => {
+    if (!focusId) return;
+    const target = scroller.current?.querySelector(`[data-block="${focusId}"]`);
+    if (!target) return;
+    // The reader came from a search hit: stop following the bottom and show it.
+    pinned.current = false;
+    target.scrollIntoView({ block: "center" });
+    setMarked(focusId);
+    onFocused();
+  }, [focusId, onFocused]);
+
+  useEffect(() => {
+    if (!marked) return;
+    const timer = window.setTimeout(() => setMarked(null), MARK_MS);
+    return () => window.clearTimeout(timer);
+  }, [marked]);
 
   return (
     <div
@@ -186,7 +214,11 @@ export function Transcript({
           }
           const { block } = row;
           return (
-            <div key={block.id} className={className}>
+            <div
+              key={block.id}
+              data-block={block.id}
+              className={`${className}${block.id === marked ? " crew-found" : ""}`}
+            >
               {block.role === "user" ? (
                 <UserMessage block={block} />
               ) : block.role === "system" ? (

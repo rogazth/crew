@@ -19,7 +19,7 @@ type Props = {
   activeWorkspace: Workspace | null;
   sessions: Session[];
   onConfirm: (confirm: Confirm) => void;
-  onOpenSession: (sessionId: string) => void;
+  onOpenHit: (sessionId: string, pos: number) => void;
 };
 
 /**
@@ -32,11 +32,11 @@ export function Pages({
   activeWorkspace,
   sessions,
   onConfirm,
-  onOpenSession,
+  onOpenHit,
 }: Props) {
   const agents = sessions.filter((session) => session.kind === "agent");
   if (page.kind === "settings") return <SettingsView section={page.section} />;
-  if (page.kind === "search") return <SearchView agents={agents} onOpenSession={onOpenSession} />;
+  if (page.kind === "search") return <SearchView agents={agents} onOpenHit={onOpenHit} />;
   if (page.kind === "routines" && activeWorkspace) {
     return (
       <RoutinesView

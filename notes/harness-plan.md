@@ -150,7 +150,8 @@ cargo test        # rust
 | F3 | Claude keeps a finished row's command; Write stops claiming −0 | done `de1ba7e` |
 | F4 | the loop cap pauses instead of eating the agent's own note | done `925386f` |
 | A5 | the chat holds a window, with a page of history a click away | done `f4cc523` |
-| A6 | rows are the only store; the blob stops being rewritten every flush | done |
+| A6 | rows are the only store; the blob stops being rewritten every flush | done `9b392af` |
+| E5 | a search hit opens the agent on that line and marks it | done |
 
 ### How A5 landed
 

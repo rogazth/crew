@@ -16,6 +16,8 @@ export type ThreadSnapshot = {
   /** Older blocks exist before the first one held here. */
   more: boolean;
   loadingEarlier: boolean;
+  /** A block the reader asked to be taken to, from a search hit. */
+  focusId: string | null;
 };
 
 type Thread = {
@@ -27,6 +29,7 @@ type Thread = {
   fromPos: number;
   more: boolean;
   loadingEarlier: boolean;
+  focusId: string | null;
   snapshot: ThreadSnapshot;
   loading: Promise<void> | null;
   listeners: Set<() => void>;
@@ -39,6 +42,7 @@ const EMPTY: ThreadSnapshot = {
   working: false,
   more: false,
   loadingEarlier: false,
+  focusId: null,
 };
 
 const threads = new Map<string, Thread>();
@@ -69,6 +73,7 @@ function thread(id: string): Thread {
       fromPos: 0,
       more: false,
       loadingEarlier: false,
+      focusId: null,
       snapshot: EMPTY,
       loading: null,
       listeners: new Set(),
@@ -133,6 +138,33 @@ function take(row: Thread, page: MessagePage): void {
   row.seq = page.seq;
   row.fromPos = page.fromPos;
   row.more = page.more;
+}
+
+/** How many pages back a search hit is worth chasing before giving up. */
+const FOCUS_PAGES = 5;
+
+/**
+ * Take the reader to a block by its position, loading history until it is in
+ * hand. A hit from a year ago is not worth walking a year of pages for, so this
+ * gives up after a few and leaves them at the oldest page it reached.
+ */
+export async function focus(id: string, pos: number): Promise<void> {
+  await load(id);
+  const row = threads.get(id);
+  if (!row) return;
+  for (let page = 0; page < FOCUS_PAGES && row.fromPos > pos && row.more; page += 1) {
+    await loadEarlier(id);
+  }
+  row.focusId = row.blocks[pos - row.fromPos]?.id ?? null;
+  publish(row);
+}
+
+/** The reader has been taken there; stop asking for it. */
+export function clearFocus(id: string): void {
+  const row = threads.get(id);
+  if (!row || row.focusId === null) return;
+  row.focusId = null;
+  publish(row);
 }
 
 /** The page before the one in hand, prepended. */
@@ -212,6 +244,7 @@ function publish(row: Thread): void {
     working: row.working,
     more: row.more,
     loadingEarlier: row.loadingEarlier,
+    focusId: row.focusId,
   };
   for (const listener of row.listeners) listener();
 }

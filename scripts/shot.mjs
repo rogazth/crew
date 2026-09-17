@@ -71,6 +71,18 @@ if (shot === "history") {
   if (heading !== "Search") throw new Error(`the search page never opened (h1 was ${heading})`);
   const empty = await page.locator("text=Nothing matches").count();
   if (empty > 0) throw new Error("the search found nothing; the mock may not answer messages_search");
+
+  // Clicking a hit has to land on the line, not just the agent.
+  const hits = page.locator('[data-block]');
+  await page.locator("button", { hasText: "Find where the sidebar" }).first().click();
+  await page.waitForTimeout(1200);
+  const marked = await page.locator(".crew-found").count();
+  if (marked === 0) {
+    const blocks = await hits.count();
+    const tab = await page.locator('[role="tab"], [data-tab]').first().textContent().catch(() => "?");
+    throw new Error(`the hit opened the agent but did not mark the line (blocks=${blocks}, tab=${tab})`);
+  }
+  console.log(`hit opened and marked one of ${await hits.count()} blocks`);
 } else {
   // The seeded transcript belongs to the first agent in the sidebar.
   await page.locator('[data-sidebar="sidebar"] button').filter({ hasText: "Planner" }).first().click();

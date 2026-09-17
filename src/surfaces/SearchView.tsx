@@ -10,7 +10,8 @@ import type { Session } from "../lib/types";
 type Props = {
   /** Agents of the active workspace, for the "in" filter. */
   agents: Session[];
-  onOpenSession: (sessionId: string) => void;
+  /** Opens the agent and takes the reader to that line. */
+  onOpenHit: (sessionId: string, pos: number) => void;
 };
 
 const SORTS: { value: SearchSort; label: string }[] = [
@@ -28,7 +29,7 @@ const PAGE = 100;
  * index, so this stays a keystroke away from the answer even on a year of
  * transcripts; the debounce is for the round trip, not for the query.
  */
-export function SearchView({ agents, onOpenSession }: Props) {
+export function SearchView({ agents, onOpenHit }: Props) {
   const [query, setQuery] = useState("");
   const [range, setRange] = useState<Range>("any");
   const [sort, setSort] = useState<SearchSort>("relevance");
@@ -130,7 +131,7 @@ export function SearchView({ agents, onOpenSession }: Props) {
         ) : (
           <div className="flex flex-col">
             {showing.slice(0, PAGE).map((hit) => (
-              <HitRow key={`${hit.sessionId}:${hit.pos}`} hit={hit} onOpen={onOpenSession} />
+              <HitRow key={`${hit.sessionId}:${hit.pos}`} hit={hit} onOpen={onOpenHit} />
             ))}
           </div>
         )}
@@ -145,11 +146,17 @@ function countLabel(found: number): string {
   return found === 1 ? "1 result" : `${found} results`;
 }
 
-function HitRow({ hit, onOpen }: { hit: SearchHit; onOpen: (sessionId: string) => void }) {
+function HitRow({
+  hit,
+  onOpen,
+}: {
+  hit: SearchHit;
+  onOpen: (sessionId: string, pos: number) => void;
+}) {
   return (
     <button
       type="button"
-      onClick={() => onOpen(hit.sessionId)}
+      onClick={() => onOpen(hit.sessionId, hit.pos)}
       className="flex flex-col gap-1 rounded-chrome border-b border-hairline px-3 py-2.5 text-left transition-colors last:border-b-0 hover:bg-hover"
     >
       <span className="flex items-center gap-2 text-[11px] leading-4 text-placeholder">
