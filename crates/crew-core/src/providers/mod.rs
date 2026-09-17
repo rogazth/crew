@@ -108,10 +108,16 @@ fn today() -> String {
 }
 
 /// The bare name of a Crew tool, whatever the provider prefixed it with:
-/// Claude and Codex namespace MCP tools `mcp__crew__x`, opencode `crew_x`.
+/// Claude spells it `mcp__crew__x`, opencode `crew_x`, codex `crew.x`.
+///
+/// Getting one wrong is not a crash, which is what makes it worth a test: the
+/// call still runs and the row still appears, but with no detail — a message to
+/// another agent shows as a blob of result JSON instead of who it went to and
+/// what it said, in the chat and in the sender's own tail.
 pub fn crew_tool(name: &str) -> Option<&str> {
-    name.strip_prefix("mcp__crew__")
-        .or_else(|| name.strip_prefix("crew_"))
+    ["mcp__crew__", "crew_", "crew."]
+        .iter()
+        .find_map(|prefix| name.strip_prefix(prefix))
         .filter(|verb| !verb.is_empty())
 }
 
@@ -170,6 +176,20 @@ pub fn leaf(path: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    /// Measured, not guessed: codex reports `crew.message_agent`, and the row
+    /// it produced carried a dump of the tool's result where the chat wanted
+    /// "wrote to Cuddles: the branch is green".
+    #[test]
+    fn a_crew_tool_is_recognised_however_the_provider_spells_it() {
+        for spelling in ["mcp__crew__message_agent", "crew_message_agent", "crew.message_agent"] {
+            assert_eq!(crew_tool(spelling), Some("message_agent"), "{spelling}");
+        }
+        for other in ["message_agent", "crew", "crew_", "spawn_agent", "mcp__solo__spawn_agent"] {
+            assert_eq!(crew_tool(other), None, "{other}");
+        }
+    }
 
     #[test]
     fn the_persona_names_the_agent_and_its_job() {

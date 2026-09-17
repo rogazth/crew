@@ -88,6 +88,65 @@ pub fn build_codex_prompt(
 pub use super::persona_prompt;
 
 #[cfg(test)]
+mod crew_row_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn item(value: Value) -> Map<String, Value> {
+        value.as_object().expect("object").clone()
+    }
+
+    /// Measured, not guessed: a codex agent messaged another one through the
+    /// MCP and its own chat showed a dump of the delivery receipt where the
+    /// reader wanted "wrote to Cuddles: the branch is green".
+    #[test]
+    fn a_message_a_codex_agent_sent_reads_as_a_message() {
+        let detail = tool_detail(&item(json!({
+            "type": "mcp_tool_call",
+            "server": "crew",
+            "tool": "message_agent",
+            "arguments": { "to": "6e854800-504b", "text": "the branch is green" },
+            "result": { "content": [{ "type": "text", "text": "{\"delivered\": true}" }] }
+        })));
+        assert_eq!(
+            detail,
+            Some(ToolDetail::Message {
+                to: "6e854800-504b".into(),
+                text: "the branch is green".into()
+            })
+        );
+    }
+
+    /// Any other Crew tool keeps its result: the message row is the only one
+    /// whose arguments say more than its answer does.
+    #[test]
+    fn another_crew_tool_still_shows_what_it_answered() {
+        let detail = tool_detail(&item(json!({
+            "type": "mcp_tool_call",
+            "server": "crew",
+            "tool": "list_agents",
+            "arguments": {},
+            "result": { "content": [{ "type": "text", "text": "[]" }] }
+        })));
+        assert_eq!(detail, Some(ToolDetail::Output { text: "[]".into() }));
+    }
+
+    /// And a server that is not Crew is left alone. `cua_repl`'s `js` tool
+    /// takes `code` and a `title`, neither of which is a message.
+    #[test]
+    fn somebody_elses_mcp_tool_is_not_read_as_crews() {
+        let detail = tool_detail(&item(json!({
+            "type": "mcp_tool_call",
+            "server": "cua_repl",
+            "tool": "js",
+            "arguments": { "code": "await cua.getState()", "title": "Inspect" },
+            "result": { "content": [{ "type": "text", "text": "Window: Crew" }] }
+        })));
+        assert_eq!(detail, Some(ToolDetail::Output { text: "Window: Crew".into() }));
+    }
+}
+
+#[cfg(test)]
 mod spawn_tests {
     use super::*;
 
@@ -307,9 +366,24 @@ pub fn tool_detail(item: &Map<String, Value>) -> Option<ToolDetail> {
             removed: None,
             })
         }
-        Some("mcp_tool_call") => Some(ToolDetail::Output {
-            text: output_text(item.get("result").and_then(as_record)?.get("content"))?,
-        }),
+        Some("mcp_tool_call") => {
+            // codex splits the server from the tool instead of prefixing it, so
+            // a Crew call arrives as server "crew" and tool "message_agent".
+            // Without this every one of them rendered as its result JSON, and
+            // the row that says who a message went to said nothing.
+            if string_field(Some(item), "server").as_deref() == Some("crew") {
+                let named = string_field(Some(item), "tool").map(|tool| format!("crew.{tool}"));
+                let arguments = item.get("arguments").and_then(as_record);
+                if let (Some(named), Some(arguments)) = (named, arguments) {
+                    if let Some(detail) = super::crew_tool_detail(&named, arguments) {
+                        return Some(detail);
+                    }
+                }
+            }
+            Some(ToolDetail::Output {
+                text: output_text(item.get("result").and_then(as_record)?.get("content"))?,
+            })
+        }
         Some("web_search") => Some(ToolDetail::Search {
             query: string_field(Some(item), "query")?,
             matches: None,
