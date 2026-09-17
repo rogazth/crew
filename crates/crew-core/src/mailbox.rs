@@ -40,6 +40,22 @@ CREATE INDEX IF NOT EXISTS mailbox_waiting_idx
   ON mailbox (to_session, at) WHERE delivered_at IS NULL;
 "#;
 
+/// The line that goes above a letter when it is handed over.
+///
+/// A letter arrives as a user turn — the same shape as something the person
+/// typed — so without this the model answers in its own chat and the sender
+/// waits forever. One line, like `[routine]`: who wrote it, and that they are
+/// an agent. How to write back is in the persona, where it is said once
+/// instead of in every letter.
+pub fn envelope(from: &AgentRef, body: &str, to_self: bool) -> String {
+    let head = if to_self {
+        "[message] From yourself, to continue.".to_string()
+    } else {
+        format!("[message] {} (agent)", from.name)
+    };
+    format!("{head}\n{body}")
+}
+
 pub fn enqueue(store: &Store, to_session: &str, from: &AgentRef, text: &str) -> Result<Letter, String> {
     let letter = Letter {
         id: uuid::Uuid::new_v4().to_string(),
@@ -166,6 +182,22 @@ mod tests {
 
     fn sender(id: &str) -> AgentRef {
         AgentRef { id: id.to_string(), name: "Coder".into() }
+    }
+
+    #[test]
+    fn the_envelope_names_the_agent_that_wrote_the_letter() {
+        let letter = envelope(&sender("s1"), "the branch is green", false);
+        assert_eq!(letter, "[message] Coder (agent)\nthe branch is green");
+    }
+
+    /// A note an agent left itself is not the user either, and saying who wrote
+    /// it is the whole point: "Coder (agent)" in your own transcript reads like
+    /// somebody else.
+    #[test]
+    fn a_note_to_yourself_says_so() {
+        let letter = envelope(&sender("s1"), "next: run the tests", true);
+        assert!(letter.starts_with("[message] From yourself, to continue."), "{letter}");
+        assert!(letter.ends_with("next: run the tests"), "{letter}");
     }
 
     #[test]

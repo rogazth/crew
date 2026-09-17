@@ -29,14 +29,21 @@ pub fn string_field(rec: Option<&Map<String, Value>>, key: &str) -> Option<Strin
 /// It says where the agent is and what the reply is for, and stops there. How
 /// the model writes is the model's; a house style here would reach every agent
 /// the user ever makes, and they did not ask for one.
+///
+/// Every turn gets this, because every turn is a new session. The date is part
+/// of it for the same reason: a model with no session behind it has no way to
+/// know what day it is except the one it was trained on.
 pub fn persona_prompt(name: &str, description: &str, tools: Option<&str>) -> String {
     let who = match name.trim() {
         "" => "the user's agent",
         named => named,
     };
     let job = description.trim();
-    let rules = "You are chatting inside Crew, a desktop app. Your reply is read in a chat window, \
-                 next to the tools you ran: do the work first, then say what happened.";
+    let rules = format!(
+        "You are chatting inside Crew, a desktop app. Today is {}. Your reply is read by the user \
+         in a chat window, next to the tools you ran: do the work first, then say what happened.",
+        today()
+    );
     let persona = if job.is_empty() {
         format!("You are {who}. {rules}")
     } else {
@@ -46,6 +53,28 @@ pub fn persona_prompt(name: &str, description: &str, tools: Option<&str>) -> Str
         Some(tools) if !tools.is_empty() => format!("{persona}\n\n{tools}"),
         _ => persona,
     }
+}
+
+/// The machine's own date, the way a person here would write it.
+fn today() -> String {
+    const DAYS: [&str; 7] = [
+        "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday",
+    ];
+    const MONTHS: [&str; 12] = [
+        "January", "February", "March", "April", "May", "June", "July", "August", "September",
+        "October", "November", "December",
+    ];
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|since| since.as_secs() as libc::time_t)
+        .unwrap_or(0);
+    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+    unsafe {
+        libc::localtime_r(&secs, &mut tm);
+    }
+    let day = DAYS.get(tm.tm_wday.clamp(0, 6) as usize).copied().unwrap_or("");
+    let month = MONTHS.get(tm.tm_mon.clamp(0, 11) as usize).copied().unwrap_or("");
+    format!("{day}, {} {month} {}", tm.tm_mday, tm.tm_year + 1900)
 }
 
 /// The bare name of a Crew tool, whatever the provider prefixed it with:
@@ -136,6 +165,16 @@ mod tests {
         for dictated in ["short", "concise", "brief", "no headers", "no preamble", "tone"] {
             assert!(!prompt.contains(dictated), "the persona still dictates \"{dictated}\": {prompt}");
         }
+    }
+
+    /// A clean session per turn means the model has no conversation behind it
+    /// to date itself from.
+    #[test]
+    fn the_persona_says_what_day_it_is() {
+        let prompt = persona_prompt("Planner", "", None);
+        let today = today();
+        assert!(prompt.contains(&format!("Today is {today}.")), "{prompt}");
+        assert!(today.contains(", "), "the date reads as a date: {today}");
     }
 
     #[test]

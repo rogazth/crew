@@ -45,6 +45,7 @@ use crate::providers::opencode::{
 use crate::providers::{string_field, Autonomy};
 use crate::mailbox;
 use crate::session;
+use crate::working_set;
 use crate::store::Store;
 use crate::transcript::TranscriptHub;
 
@@ -72,10 +73,14 @@ fn tools_hint(lead: &str, spell: &dyn Fn(&str) -> String) -> String {
     format!(
         "{lead} {} says who else is in this workspace. {} writes to one of them, and writing \
          to yourself is how you carry on after this turn ends: leave yourself the next step and \
-         it arrives as a new turn. {} looks up what was already said. {} searches everything else \
+         it arrives as a new turn. A turn that opens with `[message]` was written by one of \
+         them, not by the user: it is answered with {} to the name on that line, because what \
+         you write in the chat is read by the user and never reaches the agent that wrote to \
+         you. {} looks up what was already said. {} searches everything else \
          Crew offers and answers with arguments you can call through {}; reach for it before \
          deciding something is not possible here.",
         spell("list_agents"),
+        spell("message_agent"),
         spell("message_agent"),
         spell("search_messages"),
         spell("find_tool"),
@@ -281,7 +286,7 @@ impl TurnHost {
             .remove(session_id);
     }
 
-    pub fn start(&self, params: TurnStart) -> Result<TurnStarted, String> {
+    pub fn start(&self, mut params: TurnStart) -> Result<TurnStarted, String> {
         let session = session::get(&self.store, params.session_id.clone())?
             .ok_or_else(|| "Session not found".to_string())?;
         if session.kind != "agent" {
@@ -305,11 +310,25 @@ impl TurnHost {
                 .unwrap_or_else(|error| error.into_inner())
                 .remove(&params.session_id);
         }
+        // Read before the new message is appended: the tail is what the agent
+        // is reminded of, and this turn is not history yet.
+        let history = working_set::history(
+            &self
+                .transcripts
+                .window(&params.session_id, Some(working_set::TAIL_BLOCKS), None)
+                .blocks,
+        );
         let hidden = params.hidden.unwrap_or(false);
         match params.from_agent.clone() {
-            Some(from) => self
-                .transcripts
-                .append_from_agent(&params.session_id, &params.text, from),
+            Some(from) => {
+                // The transcript keeps the letter as it was written: the
+                // envelope is for the model, and the sender's name is already
+                // on the block for the reader.
+                self.transcripts
+                    .append_from_agent(&params.session_id, &params.text, from.clone());
+                params.text =
+                    mailbox::envelope(&from, &params.text, from.id == params.session_id);
+            }
             None => self
                 .transcripts
                 .append_user(&params.session_id, &params.text, hidden, params.files.clone()),
@@ -318,7 +337,7 @@ impl TurnHost {
         self.transcripts.set_status(&params.session_id, "working", session.provider_session_id.as_deref());
         let host = self.clone();
         thread::spawn(move || {
-            host.run_turn(session, params);
+            host.run_turn(session, params, history);
         });
         Ok(TurnStarted { working: true })
     }
@@ -538,14 +557,14 @@ impl TurnHost {
         Some((info.exe, vec!["--mcp".into()]))
     }
 
-    fn run_turn(&self, session: crate::session::Session, params: TurnStart) {
+    fn run_turn(&self, session: crate::session::Session, params: TurnStart, history: Option<String>) {
         let session_id = session.id.clone();
         let workspace_id = session.workspace_id.clone();
         let outcome = match session.provider.as_str() {
-            "claude" => self.run_claude(session, params),
-            "codex" => self.run_codex(session, params),
-            "cursor" => self.run_cursor(session, params),
-            "opencode" => self.run_opencode(session, params),
+            "claude" => self.run_claude(session, params, history),
+            "codex" => self.run_codex(session, params, history),
+            "cursor" => self.run_cursor(session, params, history),
+            "opencode" => self.run_opencode(session, params, history),
             other => TurnOutcome::Failed(format!(
                 "{other} agents are not wired up yet. Pick Claude for now."
             )),
@@ -2148,6 +2167,30 @@ print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type
         path.to_string_lossy().into_owned()
     }
 
+    /// Same fake, but it keeps what the provider was handed: the prompt is the
+    /// only place the envelope shows up, since the transcript holds the letter
+    /// as it was written.
+    fn fake_opencode_recording(dir: &std::path::Path, seen: &std::path::Path) -> String {
+        let path = dir.join(format!("fake-opencode-rec-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::write(
+            &path,
+            format!(
+                r#"#!/usr/bin/env python3
+import json, sys
+open({seen:?}, "w").write(sys.stdin.read())
+sid = "ses_test"
+print(json.dumps({{"type":"text","sessionID":sid,"part":{{"id":"p1","type":"text","text":"ok"}}}}), flush=True)
+print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type":"step-finish","reason":"stop","tokens":{{"input":1,"output":1,"reasoning":0,"cache":{{"read":0,"write":0}}}},"cost":0}}}}), flush=True)
+"#,
+                seen = seen.to_string_lossy()
+            ),
+        )
+        .expect("write fake");
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        path.to_string_lossy().into_owned()
+    }
+
     struct World {
         host: TurnHost,
         dir: std::path::PathBuf,
@@ -2313,6 +2356,71 @@ print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type
         assert_eq!(
             mailbox::waiting_count(world.host.test_store(), &cuddles.id).expect("count"),
             0
+        );
+    }
+
+    /// Without this the model gets a turn shaped exactly like something the
+    /// user typed, and answers in its own chat where the sender never reads it.
+    #[test]
+    fn a_letter_reaches_the_model_with_the_sender_on_it() {
+        let world = world();
+        let seen = world.dir.join("prompt.txt");
+        world
+            .host
+            .override_binary("opencode", fake_opencode_recording(&world.dir, &seen));
+        let ws = workspace(&world);
+        let coder = agent(&world, &ws, "Coder");
+        let cuddles = agent(&world, &ws, "Cuddles");
+        mailbox::enqueue(
+            world.host.test_store(),
+            &cuddles.id,
+            &AgentRef { id: coder.id.clone(), name: "Coder".into() },
+            "the branch is green",
+        )
+        .expect("enqueue");
+
+        world.host.deliver_to(&cuddles);
+        settle(&world, &cuddles.id);
+
+        let prompt = std::fs::read_to_string(&seen).expect("the provider was never spawned");
+        assert!(
+            prompt.contains("[message] Coder (agent)\nthe branch is green"),
+            "{prompt}"
+        );
+        // And the reader sees the letter, not the envelope.
+        let rows = blocks(&world, &cuddles.id);
+        assert!(
+            rows.iter().any(|block| block.role == BlockRole::User
+                && block.text == "the branch is green"
+                && block.from_agent.is_some()),
+            "the transcript should hold the letter as written: {rows:?}"
+        );
+    }
+
+    #[test]
+    fn a_note_an_agent_left_itself_is_not_the_user_either() {
+        let world = world();
+        let seen = world.dir.join("prompt.txt");
+        world
+            .host
+            .override_binary("opencode", fake_opencode_recording(&world.dir, &seen));
+        let ws = workspace(&world);
+        let coder = agent(&world, &ws, "Coder");
+        mailbox::enqueue(
+            world.host.test_store(),
+            &coder.id,
+            &AgentRef { id: coder.id.clone(), name: "Coder".into() },
+            "next: run the tests",
+        )
+        .expect("enqueue");
+
+        world.host.deliver_to(&coder);
+        settle(&world, &coder.id);
+
+        let prompt = std::fs::read_to_string(&seen).expect("the provider was never spawned");
+        assert!(
+            prompt.contains("[message] From yourself, to continue.\nnext: run the tests"),
+            "{prompt}"
         );
     }
 
