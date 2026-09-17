@@ -151,6 +151,29 @@ and moving the client to a tail does not move that. Doing it properly means
 pagination in `lib/transcript.ts` plus a "load earlier" affordance, and it
 touches the streaming path — worth doing awake, with the app open.
 
+## Seeing it work
+
+```bash
+cargo build -p crewd
+
+# two agents, one messages the other, assertions on both transcripts
+node scripts/drive.mjs
+
+# an agent writes a file and runs it; the transcript shows the command and its exit
+SCENARIO=code node scripts/drive.mjs
+
+# an agent hands itself the second half of a job and picks it back up
+SCENARIO=loop node scripts/drive.mjs
+
+# the same on your own provider
+PROVIDER=claude MODEL=claude-haiku-4-5-20251001 node scripts/drive.mjs
+
+# the chat and the search page, rendered against the mock
+node scripts/shot.mjs && SHOT=search node scripts/shot.mjs   # → out/*.png
+```
+
+The default provider is opencode on its free models, which need no credentials.
+
 ## Known issues
 
 - `pty::tests::concurrent_spawns_on_one_id_leave_a_single_child` fails on this
