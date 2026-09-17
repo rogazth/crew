@@ -185,10 +185,15 @@ makes the write cheap; it is now the floor rather than a rounding error next to
 the blob. The timing tests are `#[ignore]`d instruments — `cargo test --
 --ignored --nocapture` — because they starve tests that wait on a timeout.
 
-Still open: the daemon hydrates every block of every open session into memory,
-and `window()` clones that list before slicing a page out of it. The wire and
-the renderer hold a page; `crewd` holds the transcript. Measured at roughly
-5 MB for a heavy session, which is why it is still open and not urgent.
+`window()` slices under the lock, so a page costs a page: 96 µs on a
+4000-block transcript against 98 µs on a 200-block one. It used to clone the
+whole list first.
+
+Still open: the daemon hydrates every block of every open session into memory.
+The wire, the renderer and now the read path all hold a page; `crewd` holds the
+transcript. Measured at roughly 5 MB for a heavy session, which is why it is
+still open and not urgent — and doing it means position arithmetic in the write
+path, which is the one place a mistake loses history.
 
 Also still open, and pre-existing: an agentic run with more tool calls than a
 window can hold loses its cost footer on the client until the reader loads the
