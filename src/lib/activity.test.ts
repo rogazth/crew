@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildActivity, phaseLabel, summarize, type Phase } from "./activity";
+import { buildActivity, phaseKind, phaseLabel, summarize, type Phase } from "./activity";
 import type { Block, ToolStatus } from "./blocks";
 
 function tool(name: string, title: string, status: ToolStatus = "completed"): Block {
@@ -74,5 +74,74 @@ describe("summarize", () => {
   it("takes the first non-empty line without markdown", () => {
     expect(summarize("\n## **Plan**\n- do the thing")).toBe("Plan");
     expect(summarize("x".repeat(120), 10)).toBe("xxxxxxxxx…");
+  });
+});
+
+describe("phaseKind", () => {
+  it("reads the kind off the detail, whatever the provider called the tool", () => {
+    const block: Block = {
+      id: "x",
+      role: "tool",
+      text: "bash",
+      tool: {
+        callId: "1",
+        name: "exec_command",
+        title: "bash",
+        status: "completed",
+        detail: { kind: "command", command: "npm test", exitCode: 0 },
+      },
+    };
+    expect(phaseKind(block)).toBe("run");
+  });
+
+  it("falls back to the tool name when no detail arrived", () => {
+    expect(phaseKind(tool("Grep", "Grep foo"))).toBe("research");
+  });
+
+  it("groups a file read and a search into one research phase", () => {
+    const read: Block = {
+      id: "r",
+      role: "tool",
+      text: "read",
+      tool: {
+        callId: "1",
+        name: "read",
+        title: "read",
+        status: "completed",
+        detail: { kind: "file", path: "src/a.ts" },
+      },
+    };
+    const grep: Block = {
+      id: "g",
+      role: "tool",
+      text: "grep",
+      tool: {
+        callId: "2",
+        name: "grep",
+        title: "grep",
+        status: "completed",
+        detail: { kind: "search", query: "TODO", matches: 2 },
+      },
+    };
+    const items = buildActivity([read, grep]);
+    expect(items).toHaveLength(1);
+    expect(phase(items).kind).toBe("research");
+    expect(phaseLabel(phase(items))).toBe("Explored the project");
+  });
+
+  it("names the file from the detail instead of parsing the title", () => {
+    const edit: Block = {
+      id: "e",
+      role: "tool",
+      text: "apply_patch",
+      tool: {
+        callId: "1",
+        name: "apply_patch",
+        title: "apply_patch",
+        status: "completed",
+        detail: { kind: "edit", path: "src/lib/tabs.ts", added: 2, removed: 1 },
+      },
+    };
+    expect(phaseLabel(phase(buildActivity([edit])))).toBe("Edited src/lib/tabs.ts");
   });
 });

@@ -1,4 +1,4 @@
-use crew_protocol::TurnUsage;
+use crew_protocol::{ToolDetail, TurnUsage};
 use serde_json::{Map, Value};
 
 use super::runtime::Autonomy;
@@ -258,6 +258,56 @@ pub fn tool_label(item: &Map<String, Value>) -> String {
     }
 }
 
+/// Codex sends the whole item on every phase, so the completed item already
+/// carries the exit code and the output the started one could not.
+pub fn tool_detail(item: &Map<String, Value>) -> Option<ToolDetail> {
+    match string_field(Some(item), "type").as_deref() {
+        Some("command_execution") => Some(ToolDetail::Command {
+            command: string_field(Some(item), "command")?,
+            exit_code: item
+                .get("exit_code")
+                .and_then(Value::as_i64)
+                .map(|code| code as i32),
+            output: output_text(item.get("aggregated_output")),
+        }),
+        Some("file_change") => {
+            let changes = item.get("changes").and_then(Value::as_array)?;
+            // A multi-file change has no single path to name; the title already
+            // counts them.
+            let [only] = changes.as_slice() else {
+                return None;
+            };
+            Some(ToolDetail::Edit {
+                path: string_field(as_record(only), "path")?,
+                added: None,
+            removed: None,
+            })
+        }
+        Some("mcp_tool_call") => Some(ToolDetail::Output {
+            text: output_text(item.get("result").and_then(as_record)?.get("content"))?,
+        }),
+        Some("web_search") => Some(ToolDetail::Search {
+            query: string_field(Some(item), "query")?,
+            matches: None,
+        }),
+        _ => None,
+    }
+}
+
+/// MCP results arrive as a list of content blocks; everything else is a string.
+fn output_text(value: Option<&Value>) -> Option<String> {
+    let text = match value? {
+        Value::String(text) => text.clone(),
+        Value::Array(parts) => parts
+            .iter()
+            .filter_map(|part| as_record(part)?.get("text")?.as_str().map(str::to_string))
+            .collect::<Vec<_>>()
+            .join("\n"),
+        _ => return None,
+    };
+    Some(text).filter(|text| !text.is_empty())
+}
+
 pub fn completed_tool_status(item: &Map<String, Value>) -> crew_protocol::ToolStatus {
     match string_field(Some(item), "status").as_deref() {
         Some("failed" | "declined") => crew_protocol::ToolStatus::Failed,
@@ -276,7 +326,7 @@ pub fn completed_tool_status(item: &Map<String, Value>) -> crew_protocol::ToolSt
 mod tests {
     use super::*;
     use crate::turns::TurnHost;
-    use crew_protocol::{HarnessEvent, ToolStatus};
+    use crew_protocol::{HarnessEvent, ToolDetail, ToolStatus};
     use serde_json::json;
 
     fn events(line: &Value) -> Vec<HarnessEvent> {
@@ -285,6 +335,13 @@ mod tests {
         host.test_install_codex("s");
         host.handle_codex_line("s", &line.to_string());
         cap.take()
+    }
+
+    fn detail(line: &Value) -> Option<ToolDetail> {
+        events(line).into_iter().find_map(|event| match event {
+            HarnessEvent::ToolStarted { detail, .. } => detail,
+            _ => None,
+        })
     }
 
     #[test]
@@ -299,6 +356,11 @@ mod tests {
                 call_id: "c1".into(),
                 name: "bash".into(),
                 title: "ls -la".into(),
+                detail: Some(ToolDetail::Command {
+                    command: "ls -la".into(),
+                    exit_code: None,
+                    output: None,
+                }),
             }]
         );
     }
@@ -316,11 +378,17 @@ mod tests {
                     call_id: "c1".into(),
                     name: "bash".into(),
                     title: "ls".into(),
+                    detail: Some(ToolDetail::Command {
+                        command: "ls".into(),
+                        exit_code: Some(0),
+                        output: None,
+                    }),
                 },
                 HarnessEvent::ToolUpdated {
                     call_id: "c1".into(),
                     title: None,
                     status: Some(ToolStatus::Completed),
+                    detail: None,
                 },
             ]
         );
@@ -342,6 +410,11 @@ mod tests {
                 call_id: "e1".into(),
                 name: "edit".into(),
                 title: "Write foo.ts".into(),
+                detail: Some(ToolDetail::Edit {
+                    path: "/tmp/app/foo.ts".into(),
+                    added: None,
+            removed: None,
+                }),
             }]
         );
     }
@@ -404,6 +477,102 @@ mod tests {
                 HarnessEvent::MessageCompleted {},
                 HarnessEvent::TurnCompleted { usage: None },
             ]
+        );
+    }
+
+    #[test]
+    fn a_failed_command_carries_its_exit_code_and_output() {
+        let got = events(&json!({
+            "type": "item.completed",
+            "item": {
+                "type": "command_execution",
+                "id": "c1",
+                "command": "cargo test",
+                "exit_code": 101,
+                "aggregated_output": "error: 1 test failed\n",
+                "status": "failed"
+            }
+        }));
+        assert_eq!(
+            got,
+            vec![
+                HarnessEvent::ToolStarted {
+                    call_id: "c1".into(),
+                    name: "bash".into(),
+                    title: "cargo test".into(),
+                    detail: Some(ToolDetail::Command {
+                        command: "cargo test".into(),
+                        exit_code: Some(101),
+                        output: Some("error: 1 test failed\n".into()),
+                    }),
+                },
+                HarnessEvent::ToolUpdated {
+                    call_id: "c1".into(),
+                    title: None,
+                    status: Some(ToolStatus::Failed),
+                    detail: None,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn a_change_across_files_names_no_single_path() {
+        assert_eq!(
+            detail(&json!({
+                "type": "item.started",
+                "item": {
+                    "type": "file_change",
+                    "id": "e2",
+                    "changes": [
+                        { "path": "/tmp/app/foo.ts", "kind": "add" },
+                        { "path": "/tmp/app/bar.ts", "kind": "update" }
+                    ]
+                }
+            })),
+            None
+        );
+    }
+
+    /// Both captures come from `notes/codex-protocol.jsonl`: an MCP call says
+    /// nothing until it answers.
+    #[test]
+    fn an_mcp_call_says_nothing_until_it_answers() {
+        assert_eq!(
+            detail(&json!({
+                "type": "item.started",
+                "item": {
+                    "type": "mcp_tool_call",
+                    "id": "item_1",
+                    "server": "cua_repl",
+                    "tool": "js",
+                    "arguments": { "code": "await cua.getState()", "title": "Inspect available terminal surfaces" },
+                    "result": null,
+                    "error": null,
+                    "status": "in_progress"
+                }
+            })),
+            None
+        );
+    }
+
+    #[test]
+    fn an_mcp_result_becomes_output() {
+        assert_eq!(
+            detail(&json!({
+                "type": "item.completed",
+                "item": {
+                    "type": "mcp_tool_call",
+                    "id": "item_2",
+                    "server": "cua_repl",
+                    "tool": "js",
+                    "arguments": { "code": "const app = await cua.getApp('Terminal')", "title": "Open terminal" },
+                    "result": { "content": [{ "type": "text", "text": "cua.getApp is not a function" }] },
+                    "error": null,
+                    "status": "failed"
+                }
+            })),
+            Some(ToolDetail::Output { text: "cua.getApp is not a function".into() })
         );
     }
 

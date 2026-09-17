@@ -421,6 +421,7 @@ mod tests {
                     call_id: "t1".into(),
                     name: "AskUserQuestion".into(),
                     title: "AskUserQuestion".into(),
+                    detail: None,
                 },
                 HarnessEvent::QuestionRequested {
                     request_id: 1,
@@ -513,6 +514,7 @@ mod tests {
                     call_id: "t1".into(),
                     name: "Bash".into(),
                     title: "npm run lint".into(),
+                    detail: None,
                 },
             ],
             vec![],
@@ -543,6 +545,7 @@ mod tests {
                     call_id: "t1".into(),
                     name: "Bash".into(),
                     title: "rm -rf dist".into(),
+                    detail: None,
                 },
             ],
             vec![],

@@ -14,8 +14,10 @@ import {
 import { createElement, memo, useEffect, useMemo, useState } from "react";
 import { buildActivity, phaseLabel, phaseOpen, summarize, type Phase, type PhaseKind } from "../../lib/activity";
 import { isOpen, type Answers, type ApprovalDecision, type Block } from "../../lib/blocks";
+import { hasBody, toolLine } from "../../lib/toolDetail";
 import { ApprovalCard } from "./ApprovalCard";
 import { QuestionCard, answerSummary } from "./QuestionCard";
+import { ToolBody } from "./ToolBody";
 
 type Props = {
   blocks: Block[];
@@ -147,34 +149,62 @@ function ToolRow({
   /** Standalone rows carry the kind glyph; inside a phase the rail is the bullet. */
   icon?: Icon;
 }) {
+  const [open, setOpen] = useState(false);
   const pending = isOpen(block);
-  const failed = block.tool?.status === "failed";
   const denied = block.approval?.decided === "deny";
   if (block.role === "approval" && pending) {
     return <ApprovalCard block={block} hot={hot === block.id} onApprove={onApprove} />;
   }
 
-  return (
-    <div className="group flex min-h-5 items-center gap-2 py-0.5 text-[13px] leading-[18px]">
-      {(icon || pending || failed) && (
-        <span className="flex size-3.5 shrink-0 items-center justify-center text-kumo-subtle">
-          {pending ? (
-            <CircleNotchIcon className="size-3.5 animate-spin text-kumo-warning" weight="bold" />
-          ) : failed ? (
-            <XIcon className="size-3 text-danger" weight="bold" />
-          ) : icon ? (
-            createElement(icon, { className: "size-3.5" })
-          ) : null}
-        </span>
-      )}
-      <span
-        className={`min-w-0 truncate ${
-          failed ? "text-danger" : denied ? "text-placeholder line-through" : "text-text-muted group-hover:text-text"
-        } transition-colors`}
-      >
-        {block.tool?.title ?? block.text}
+  const line = toolLine(block);
+  const failed = line.failed === true;
+  const openable = hasBody(block);
+  const tone = failed
+    ? "text-danger"
+    : denied
+      ? "text-placeholder line-through"
+      : "text-text-muted group-hover:text-text";
+
+  const label = (
+    <>
+      <span className="flex size-3.5 shrink-0 items-center justify-center text-kumo-subtle">
+        {pending ? (
+          <CircleNotchIcon className="size-3.5 animate-spin text-kumo-warning" weight="bold" />
+        ) : failed ? (
+          <XIcon className="size-3 text-danger" weight="bold" />
+        ) : openable ? (
+          <CaretRightIcon
+            weight="bold"
+            className={`size-3 transition-transform duration-150 ${open ? "rotate-90" : ""}`}
+          />
+        ) : icon ? (
+          createElement(icon, { className: "size-3.5" })
+        ) : null}
       </span>
-    </div>
+      <span className={`min-w-0 truncate transition-colors ${tone} ${line.mono ? "font-mono text-[12.5px]" : ""}`}>
+        {line.text}
+      </span>
+      {line.suffix ? (
+        <span className={`shrink-0 text-[11px] ${failed ? "text-danger" : "text-placeholder"}`}>{line.suffix}</span>
+      ) : null}
+    </>
+  );
+
+  if (!openable) {
+    return <div className="group flex min-h-5 items-center gap-2 py-0.5 text-[13px] leading-[18px]">{label}</div>;
+  }
+
+  return (
+    <Collapsible.Root open={open} onOpenChange={setOpen}>
+      <Collapsible.Trigger className="group flex min-h-5 w-full items-center gap-2 py-0.5 text-left text-[13px] leading-[18px]">
+        {label}
+      </Collapsible.Trigger>
+      <Collapsible.Panel className="crew-phase-panel">
+        <div className="crew-tool-body">
+          <ToolBody block={block} />
+        </div>
+      </Collapsible.Panel>
+    </Collapsible.Root>
   );
 }
 

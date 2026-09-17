@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crew_protocol::{ApprovalDecision, Question, QuestionOption, TurnUsage};
+use crew_protocol::{ApprovalDecision, Question, QuestionOption, ToolDetail, TurnUsage};
 use serde_json::{json, Map, Value};
 
 use super::runtime::{Autonomy, InlineImage};
@@ -441,6 +441,7 @@ pub fn assistant_tool_uses(rec: &Map<String, Value>) -> Vec<AssistantToolUse> {
 pub struct ToolResult {
     pub tool_use_id: String,
     pub is_error: bool,
+    pub content: String,
 }
 
 pub fn tool_results_from_user_message(rec: &Map<String, Value>) -> Vec<ToolResult> {
@@ -462,9 +463,24 @@ pub fn tool_results_from_user_message(rec: &Map<String, Value>) -> Vec<ToolResul
             Some(ToolResult {
                 tool_use_id: string_field(Some(row), "tool_use_id")?,
                 is_error: row.get("is_error") == Some(&Value::Bool(true)),
+                content: result_text(row.get("content")),
             })
         })
         .collect()
+}
+
+/// A tool result is a string on simple calls and a list of content blocks once
+/// images or MCP payloads are involved.
+fn result_text(value: Option<&Value>) -> String {
+    match value {
+        Some(Value::String(text)) => text.clone(),
+        Some(Value::Array(parts)) => parts
+            .iter()
+            .filter_map(|part| as_record(part)?.get("text")?.as_str().map(str::to_string))
+            .collect::<Vec<_>>()
+            .join("\n"),
+        _ => String::new(),
+    }
 }
 
 pub fn turn_usage(rec: &Map<String, Value>) -> TurnUsage {
@@ -561,6 +577,86 @@ pub fn tool_label(name: &str, input: &Map<String, Value>) -> String {
     verb
 }
 
+/// What the row shows under its title, read off the input alone so a pending
+/// call already names its command or its file.
+pub fn tool_detail(name: &str, input: &Map<String, Value>) -> Option<ToolDetail> {
+    match name.to_ascii_lowercase().as_str() {
+        "bash" => Some(ToolDetail::Command {
+            command: string_field(Some(input), "command")?,
+            exit_code: None,
+            output: None,
+        }),
+        "read" => {
+            let limit = input.get("limit").and_then(Value::as_u64);
+            let start = input
+                .get("offset")
+                .and_then(Value::as_u64)
+                .or_else(|| limit.map(|_| 1));
+            Some(ToolDetail::File {
+                path: string_field(Some(input), "file_path")?,
+                line_start: start.map(|line| line as u32),
+                line_end: limit.map(|count| (start.unwrap_or(1) + count.max(1) - 1) as u32),
+                preview: None,
+            })
+        }
+        "write" | "edit" => Some(ToolDetail::Edit {
+            path: string_field(Some(input), "file_path")?,
+            added: Some(line_count(input, "new_string") + line_count(input, "content")),
+            removed: Some(line_count(input, "old_string")),
+        }),
+        // MultiEdit keeps its edits in an array we do not walk. The path is
+        // worth showing; a tally we did not compute is not.
+        "multiedit" => Some(ToolDetail::Edit {
+            path: string_field(Some(input), "file_path")?,
+            added: None,
+            removed: None,
+        }),
+        "glob" | "grep" => Some(ToolDetail::Search {
+            query: string_field(Some(input), "pattern")?,
+            matches: None,
+        }),
+        "webfetch" => Some(ToolDetail::Fetch {
+            url: string_field(Some(input), "url")?,
+            title: None,
+        }),
+        "websearch" => Some(ToolDetail::Search {
+            query: string_field(Some(input), "query")?,
+            matches: None,
+        }),
+        _ => None,
+    }
+}
+
+/// The detail again once the call returned. `None` means the row already says
+/// everything the result could add, and keeps the detail it has.
+pub fn tool_result_detail(name: &str, input: &Map<String, Value>, content: &str) -> Option<ToolDetail> {
+    let text = || Some(content.to_string()).filter(|body| !body.is_empty());
+    match tool_detail(name, input) {
+        Some(ToolDetail::Command { command, .. }) => Some(ToolDetail::Command {
+            command,
+            exit_code: None,
+            output: text(),
+        }),
+        Some(ToolDetail::File { path, line_start, line_end, .. }) => Some(ToolDetail::File {
+            path,
+            line_start,
+            line_end,
+            preview: text(),
+        }),
+        Some(_) => None,
+        None => text().map(|text| ToolDetail::Output { text }),
+    }
+}
+
+fn line_count(input: &Map<String, Value>, key: &str) -> u32 {
+    input
+        .get(key)
+        .and_then(Value::as_str)
+        .filter(|text| !text.is_empty())
+        .map(|text| text.lines().count() as u32)
+        .unwrap_or(0)
+}
+
 fn pretty_tool(name: &str) -> String {
     if name.eq_ignore_ascii_case("bash") {
         return "Bash".into();
@@ -589,7 +685,166 @@ fn pretty_tool(name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::turns::TurnHost;
+    use crew_protocol::{HarnessEvent, ToolDetail};
     use serde_json::json;
+
+    /// The command Claude asked to run in capture 2 of
+    /// `notes/claude-permissions-protocol.jsonl`.
+    const CURL: &str = "curl -s -o /dev/null -w '%{http_code}' https://example.com";
+    const CALL: &str = "toolu_01NXryc1w4bSyP5MGzDE8Hbe";
+
+    fn tool_details(lines: &[Value]) -> Vec<Option<ToolDetail>> {
+        let host = TurnHost::test_new();
+        let cap = host.test_capture();
+        host.test_install_claude("s");
+        for line in lines {
+            host.handle_claude_line("s", &line.to_string());
+        }
+        cap.take()
+            .into_iter()
+            .filter_map(|event| match event {
+                HarnessEvent::ToolStarted { detail, .. } | HarnessEvent::ToolUpdated { detail, .. } => {
+                    Some(detail)
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The assistant frame of capture 2, with the tool swapped in.
+    fn tool_use(name: &str, input: Value) -> Value {
+        json!({
+            "type": "assistant",
+            "message": {
+                "role": "assistant",
+                "content": [{ "type": "tool_use", "id": CALL, "name": name, "input": input }]
+            },
+            "parent_tool_use_id": null,
+            "session_id": "9cf6b7f7-b8ab-4de7-86da-b03fb297fcd7"
+        })
+    }
+
+    fn tool_result(content: &str) -> Value {
+        json!({
+            "type": "user",
+            "message": {
+                "role": "user",
+                "content": [{ "tool_use_id": CALL, "type": "tool_result", "content": content, "is_error": false }]
+            },
+            "parent_tool_use_id": null,
+            "session_id": "9cf6b7f7-b8ab-4de7-86da-b03fb297fcd7"
+        })
+    }
+
+    #[test]
+    fn a_bash_call_carries_its_command() {
+        assert_eq!(
+            tool_details(&[tool_use("Bash", json!({ "command": CURL, "description": "Get HTTP status code" }))]),
+            vec![Some(ToolDetail::Command {
+                command: CURL.into(),
+                exit_code: None,
+                output: None,
+            })]
+        );
+    }
+
+    #[test]
+    fn a_bash_result_puts_the_output_on_the_command() {
+        let got = tool_details(&[
+            tool_use("Bash", json!({ "command": CURL })),
+            tool_result("200"),
+        ]);
+        assert_eq!(
+            got.last().cloned().flatten(),
+            Some(ToolDetail::Command {
+                command: CURL.into(),
+                exit_code: None,
+                output: Some("200".into()),
+            })
+        );
+    }
+
+    #[test]
+    fn a_read_carries_the_path_and_the_window() {
+        let got = tool_details(&[
+            tool_use("Read", json!({ "file_path": "/w/src/lib.rs", "offset": 40, "limit": 12 })),
+            tool_result("    40→use std::fmt;"),
+        ]);
+        assert_eq!(
+            got,
+            vec![
+                Some(ToolDetail::File {
+                    path: "/w/src/lib.rs".into(),
+                    line_start: Some(40),
+                    line_end: Some(51),
+                    preview: None,
+                }),
+                Some(ToolDetail::File {
+                    path: "/w/src/lib.rs".into(),
+                    line_start: Some(40),
+                    line_end: Some(51),
+                    preview: Some("    40→use std::fmt;".into()),
+                }),
+            ]
+        );
+    }
+
+    #[test]
+    fn an_edit_counts_the_lines_it_swaps() {
+        let input = json!({
+            "file_path": "/w/src/lib/sidebarPrefs.ts",
+            "old_string": "  return prefs.hidden.includes(key);",
+            "new_string": "  const set = hiddenSet(prefs);\n  return set.has(key);",
+        });
+        assert_eq!(
+            tool_details(&[tool_use("Edit", input)]),
+            vec![Some(ToolDetail::Edit {
+                path: "/w/src/lib/sidebarPrefs.ts".into(),
+                added: Some(2),
+                removed: Some(1),
+            })]
+        );
+    }
+
+    #[test]
+    fn an_edit_result_leaves_the_edit_alone() {
+        let input = json!({ "file_path": "/w/a.ts", "old_string": "a", "new_string": "b" });
+        let got = tool_details(&[tool_use("Edit", input), tool_result("The file has been updated.")]);
+        assert_eq!(got.last(), Some(&None));
+    }
+
+    #[test]
+    fn a_tool_with_nothing_to_show_stays_none() {
+        let input = json!({ "todos": [{ "content": "Ship it", "status": "pending" }] });
+        assert_eq!(tool_details(&[tool_use("TodoWrite", input)]), vec![None]);
+    }
+
+    #[test]
+    fn an_unrecognized_tool_falls_back_to_its_result_text() {
+        let got = tool_details(&[
+            tool_use("mcp__crew__list_agents", json!({})),
+            tool_result("Ada, Grace"),
+        ]);
+        assert_eq!(
+            got.last().cloned().flatten(),
+            Some(ToolDetail::Output { text: "Ada, Grace".into() })
+        );
+    }
+
+    #[test]
+    fn searches_name_what_they_looked_for() {
+        let grep = json!({ "pattern": "ToolDetail", "path": "crates" });
+        assert_eq!(
+            tool_detail("Grep", grep.as_object().unwrap()),
+            Some(ToolDetail::Search { query: "ToolDetail".into(), matches: None })
+        );
+        let fetch = json!({ "url": "https://example.com", "prompt": "what is this" });
+        assert_eq!(
+            tool_detail("WebFetch", fetch.as_object().unwrap()),
+            Some(ToolDetail::Fetch { url: "https://example.com".into(), title: None })
+        );
+    }
 
     fn ask() -> Value {
         json!({

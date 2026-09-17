@@ -143,12 +143,16 @@ pub enum ToolDetail {
         preview: Option<String>,
     },
     /// A file the agent wrote. The diff itself rides on the approval block.
+    /// The counts are absent when the provider did not say — which is not the
+    /// same as a write that changed nothing.
     Edit {
         path: String,
-        #[ts(type = "number")]
-        added: u32,
-        #[ts(type = "number")]
-        removed: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional, type = "number")]
+        added: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional, type = "number")]
+        removed: Option<u32>,
     },
     Search {
         query: String,

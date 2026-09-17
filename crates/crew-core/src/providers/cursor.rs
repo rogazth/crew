@@ -1,4 +1,4 @@
-use crew_protocol::{ToolStatus, TurnUsage};
+use crew_protocol::{ToolDetail, ToolStatus, TurnUsage};
 use serde_json::{Map, Value};
 
 use super::runtime::Autonomy;
@@ -128,11 +128,12 @@ pub fn assistant_delta_text(rec: &Map<String, Value>) -> Option<String> {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct CursorToolCall {
     pub call_id: String,
     pub name: String,
     pub title: String,
+    pub detail: Option<ToolDetail>,
     pub phase: ToolPhase,
     pub failed: bool,
 }
@@ -162,11 +163,12 @@ pub fn parse_tool_call(rec: &Map<String, Value>) -> Option<CursorToolCall> {
         .as_ref()
         .map(|p| p.args.clone())
         .unwrap_or_default();
-    let failed = phase == ToolPhase::Completed
-        && tool_failed(payload.as_ref().and_then(|p| p.result.as_ref()));
+    let result = payload.as_ref().and_then(|p| p.result.as_ref());
+    let failed = phase == ToolPhase::Completed && tool_failed(result);
     Some(CursorToolCall {
         call_id,
         title: tool_label(&name, &args),
+        detail: tool_detail(&name, &args, result),
         name,
         phase,
         failed,
@@ -204,10 +206,7 @@ pub fn turn_failed(rec: &Map<String, Value>) -> Option<String> {
 
 pub fn tool_label(name: &str, input: &Map<String, Value>) -> String {
     let command = string_field(Some(input), "command").or_else(|| string_field(Some(input), "cmd"));
-    let path = string_field(Some(input), "path")
-        .or_else(|| string_field(Some(input), "file_path"))
-        .or_else(|| string_field(Some(input), "target_file"))
-        .or_else(|| string_field(Some(input), "filePath"));
+    let path = path_argument(input);
     let query = string_field(Some(input), "pattern")
         .or_else(|| string_field(Some(input), "glob"))
         .or_else(|| string_field(Some(input), "query"))
@@ -223,6 +222,69 @@ pub fn tool_label(name: &str, input: &Map<String, Value>) -> String {
         return format!("{verb} {}", clip(&query, 40));
     }
     verb
+}
+
+/// A failed call answers with an error instead of `success` and repeats none of
+/// its arguments, so it yields `None` and the row keeps what it already showed.
+fn tool_detail(
+    name: &str,
+    args: &Map<String, Value>,
+    result: Option<&Map<String, Value>>,
+) -> Option<ToolDetail> {
+    let success = result.and_then(|row| row.get("success")).and_then(as_record);
+    match name.to_ascii_lowercase().as_str() {
+        "shell" | "bash" => Some(ToolDetail::Command {
+            command: string_field(Some(args), "command")?,
+            exit_code: success
+                .and_then(|row| row.get("exitCode"))
+                .and_then(Value::as_i64)
+                .map(|code| code as i32),
+            output: text_field(success, "interleavedOutput").or_else(|| text_field(success, "stdout")),
+        }),
+        "read" => {
+            let range = success.and_then(|row| row.get("readRange")).and_then(as_record);
+            Some(ToolDetail::File {
+                path: string_field(Some(args), "path").or_else(|| string_field(success, "path"))?,
+                line_start: line_number(range, "startLine"),
+                line_end: line_number(range, "endLine"),
+                preview: text_field(success, "content"),
+            })
+        }
+        // Cursor names no before/after text on a write, so the counts stay 0.
+        "write" | "edit" | "multiedit" => Some(ToolDetail::Edit {
+            path: path_argument(args)?,
+            added: None,
+            removed: None,
+        }),
+        "glob" | "grep" => Some(ToolDetail::Search {
+            query: string_field(Some(args), "pattern")
+                .or_else(|| string_field(Some(args), "glob"))
+                .or_else(|| string_field(Some(args), "query"))
+                .or_else(|| string_field(Some(args), "regex"))?,
+            matches: None,
+        }),
+        _ => None,
+    }
+}
+
+fn path_argument(args: &Map<String, Value>) -> Option<String> {
+    string_field(Some(args), "path")
+        .or_else(|| string_field(Some(args), "file_path"))
+        .or_else(|| string_field(Some(args), "target_file"))
+        .or_else(|| string_field(Some(args), "filePath"))
+}
+
+/// Output and file excerpts keep their whitespace: `string_field` trims, and a
+/// preview that starts mid-indentation would lose its shape.
+fn text_field(rec: Option<&Map<String, Value>>, key: &str) -> Option<String> {
+    rec?.get(key)
+        .and_then(Value::as_str)
+        .filter(|text| !text.is_empty())
+        .map(str::to_string)
+}
+
+fn line_number(rec: Option<&Map<String, Value>>, key: &str) -> Option<u32> {
+    rec?.get(key).and_then(Value::as_u64).map(|line| line as u32)
 }
 
 pub fn tool_status(failed: bool) -> ToolStatus {
@@ -339,7 +401,7 @@ fn pretty_tool(name: &str) -> String {
 mod tests {
     use super::*;
     use crate::turns::TurnHost;
-    use crew_protocol::{HarnessEvent, ToolStatus};
+    use crew_protocol::{HarnessEvent, ToolDetail, ToolStatus};
     use serde_json::json;
 
     fn events(line: &Value) -> Vec<HarnessEvent> {
@@ -348,6 +410,13 @@ mod tests {
         host.test_install_cursor("s");
         host.handle_cursor_line("s", &line.to_string());
         cap.take()
+    }
+
+    fn detail(line: &Value) -> Option<ToolDetail> {
+        events(line).into_iter().find_map(|event| match event {
+            HarnessEvent::ToolUpdated { detail, .. } | HarnessEvent::ToolStarted { detail, .. } => detail,
+            _ => None,
+        })
     }
 
     #[test]
@@ -374,6 +443,11 @@ mod tests {
                 call_id: "t1".into(),
                 name: "Shell".into(),
                 title: "ls".into(),
+                detail: Some(ToolDetail::Command {
+                    command: "ls".into(),
+                    exit_code: None,
+                    output: None,
+                }),
             }]
         );
     }
@@ -399,13 +473,114 @@ mod tests {
                     call_id: "t1".into(),
                     name: "read".into(),
                     title: "Read a.ts".into(),
+                    detail: Some(ToolDetail::File {
+                        path: "/tmp/a.ts".into(),
+                        line_start: None,
+                        line_end: None,
+                        preview: None,
+                    }),
                 },
                 HarnessEvent::ToolUpdated {
                     call_id: "t1".into(),
                     title: None,
                     status: Some(ToolStatus::Completed),
+                    detail: Some(ToolDetail::File {
+                        path: "/tmp/a.ts".into(),
+                        line_start: None,
+                        line_end: None,
+                        preview: None,
+                    }),
                 },
             ]
+        );
+    }
+
+    /// The shell call of `notes/cursor-protocol.jsonl`, with the exit code
+    /// turned non-zero.
+    #[test]
+    fn a_failed_shell_call_carries_its_exit_code_and_output() {
+        let got = events(&json!({
+            "type": "tool_call",
+            "subtype": "completed",
+            "call_id": "t9",
+            "tool_call": {
+                "shellToolCall": {
+                    "args": { "command": "echo hello-from-cursor", "workingDirectory": "", "timeout": 30000 },
+                    "result": {
+                        "success": {
+                            "command": "echo hello-from-cursor",
+                            "exitCode": 2,
+                            "stdout": "",
+                            "stderr": "boom\n",
+                            "interleavedOutput": "boom\n"
+                        }
+                    }
+                }
+            }
+        }));
+        assert_eq!(
+            got.last(),
+            Some(&HarnessEvent::ToolUpdated {
+                call_id: "t9".into(),
+                title: None,
+                status: Some(ToolStatus::Failed),
+                detail: Some(ToolDetail::Command {
+                    command: "echo hello-from-cursor".into(),
+                    exit_code: Some(2),
+                    output: Some("boom\n".into()),
+                }),
+            })
+        );
+    }
+
+    /// The read of `notes/cursor-protocol.jsonl`: `limit: 3` on the way in, a
+    /// `readRange` on the way back.
+    #[test]
+    fn a_read_carries_the_window_it_returned() {
+        assert_eq!(
+            detail(&json!({
+                "type": "tool_call",
+                "subtype": "completed",
+                "call_id": "t8",
+                "tool_call": {
+                    "readToolCall": {
+                        "args": { "path": "/w/package.json", "limit": 3 },
+                        "result": {
+                            "success": {
+                                "content": "{\n  \"name\": \"crew\",\n  \"private\": true,",
+                                "totalLines": 64,
+                                "path": "/w/package.json",
+                                "readRange": { "startLine": 1, "endLine": 3 }
+                            }
+                        }
+                    }
+                }
+            })),
+            Some(ToolDetail::File {
+                path: "/w/package.json".into(),
+                line_start: Some(1),
+                line_end: Some(3),
+                preview: Some("{\n  \"name\": \"crew\",\n  \"private\": true,".into()),
+            })
+        );
+    }
+
+    /// The failed read of `notes/cursor-protocol.jsonl`: an error result repeats
+    /// no arguments, so the row keeps the detail it already had.
+    #[test]
+    fn a_failed_call_adds_no_detail() {
+        assert_eq!(
+            detail(&json!({
+                "type": "tool_call",
+                "subtype": "completed",
+                "call_id": "t7",
+                "tool_call": {
+                    "readToolCall": {
+                        "result": { "error": { "errorMessage": "Service temporarily unavailable." } }
+                    }
+                }
+            })),
+            None
         );
     }
 

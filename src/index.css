@@ -901,3 +901,13 @@ body:has(button[data-sidebar="resize-handle"]:active) * {
   object-fit: contain;
   color: var(--text-color-kumo-default);
 }
+
+/* A tool's payload hangs under its row, narrower than the prose column so the
+   box reads as belonging to the line above it. */
+.crew-tool-body {
+  margin-left: 6px;
+  padding-left: 14px;
+}
+.crew-tool-body .crew-code {
+  margin: 4px 0 6px;
+}

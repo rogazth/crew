@@ -19,14 +19,16 @@ use crate::providers::claude::{
     build_control_request, build_control_response, input_json_delta_from_event, is_compact_boundary,
     is_message_start, is_subagent_message, parse_control_cancel_id, parse_control_request, parse_questions,
     persona_prompt as claude_persona, session_id_from_message, stream_text_delta, to_permission_result,
-    to_question_result, tool_label as claude_tool_label, tool_results_from_user_message, tool_start_from_event,
+    to_question_result, tool_detail as claude_tool_detail, tool_label as claude_tool_label,
+    tool_result_detail as claude_tool_result_detail, tool_results_from_user_message, tool_start_from_event,
     try_parse_json_record, turn_failed as claude_turn_failed, turn_usage as claude_turn_usage, ClaudeControlRequest,
     ClaudeSpawn,
 };
 use crate::providers::codex::{
     agent_message_text, build_codex_prompt, build_codex_spawn_args, completed_tool_status, item_error_message,
     item_from_event, is_tool_item, parse_json_line, stream_error_message, thread_id_from_event,
-    tool_call_id, tool_label as codex_tool_label, tool_name as codex_tool_name, turn_usage as codex_turn_usage,
+    tool_call_id, tool_detail as codex_tool_detail, tool_label as codex_tool_label,
+    tool_name as codex_tool_name, turn_usage as codex_turn_usage,
     CodexSpawn,
 };
 use crate::providers::cursor::{
@@ -896,7 +898,7 @@ impl TurnHost {
         }
     }
 
-    fn handle_claude_line(&self, session_id: &str, line: &str) {
+    pub(crate) fn handle_claude_line(&self, session_id: &str, line: &str) {
         let Some(rec) = parse_json_line(line) else {
             return;
         };
@@ -970,6 +972,11 @@ impl TurnHost {
                 claude_assistant(live, &rec, &mut events);
             } else if type_name.as_deref() == Some("user") {
                 for result in tool_results_from_user_message(&rec) {
+                    // The result names only the call, so the input the row was
+                    // opened with is what turns it back into a detail.
+                    let detail = live.tools_by_id.get(&result.tool_use_id).and_then(|tool| {
+                        claude_tool_result_detail(&tool.name, &tool.input, &result.content)
+                    });
                     events.push(HarnessEvent::ToolUpdated {
                         call_id: result.tool_use_id,
                         title: None,
@@ -978,7 +985,7 @@ impl TurnHost {
                         } else {
                             ToolStatus::Completed
                         }),
-                        detail: None,
+                        detail,
                     });
                 }
             } else if type_name.as_deref() == Some("result") {
@@ -1258,7 +1265,7 @@ impl TurnHost {
                     call_id: call_id.clone(),
                     name: codex_tool_name(&item),
                     title: title.clone(),
-                    detail: None,
+                    detail: codex_tool_detail(&item),
                 },
             );
         } else {
@@ -1268,7 +1275,7 @@ impl TurnHost {
                     call_id: call_id.clone(),
                     title: Some(title),
                     status: None,
-                    detail: None,
+                    detail: codex_tool_detail(&item),
                 },
             );
         }
@@ -1393,7 +1400,7 @@ impl TurnHost {
                         call_id: call.call_id.clone(),
                         name: call.name,
                         title: call.title,
-                        detail: None,
+                        detail: call.detail.clone(),
                     },
                 );
             }
@@ -1404,7 +1411,7 @@ impl TurnHost {
                         call_id: call.call_id,
                         title: None,
                         status: Some(cursor_tool_status(call.failed)),
-                        detail: None,
+                        detail: call.detail,
                     },
                 );
             }
@@ -1481,7 +1488,7 @@ fn claude_stream(live: &mut ClaudeLive, rec: &Map<String, Value>, events: &mut V
             call_id: started.id,
             name: started.name.clone(),
             title: claude_tool_label(&started.name, &started.input),
-            detail: None,
+            detail: claude_tool_detail(&started.name, &started.input),
         });
         return;
     }
@@ -1500,7 +1507,7 @@ fn claude_stream(live: &mut ClaudeLive, rec: &Map<String, Value>, events: &mut V
         call_id: tool.id.clone(),
         title: Some(claude_tool_label(&tool.name, &parsed)),
         status: None,
-        detail: None,
+        detail: claude_tool_detail(&tool.name, &parsed),
     });
 }
 
@@ -1537,7 +1544,7 @@ fn claude_assistant(live: &mut ClaudeLive, rec: &Map<String, Value>, events: &mu
             call_id: use_.id,
             name: use_.name.clone(),
             title: claude_tool_label(&use_.name, &use_.input),
-            detail: None,
+            detail: claude_tool_detail(&use_.name, &use_.input),
         });
     }
 }
@@ -1624,6 +1631,33 @@ impl TurnHost {
         let applied = Arc::new(Applied::default());
         self.transcripts.set_events(applied.clone());
         applied
+    }
+
+    pub(crate) fn test_install_claude(&self, id: &str) {
+        self.lock().insert(
+            id.to_string(),
+            Live::Claude(Box::new(ClaudeLive {
+                cwd: String::new(),
+                autonomy: Autonomy::Full,
+                model: String::new(),
+                claude_session_id: String::new(),
+                approvals: HashMap::new(),
+                questions: HashMap::new(),
+                next_ui: 1,
+                next_control: 1,
+                tools_by_index: HashMap::new(),
+                tools_by_id: HashMap::new(),
+                cancelled: false,
+                mute: false,
+                active: true,
+                initialized: true,
+                init_tx: None,
+                turn_tx: None,
+                emitted_assistant: String::new(),
+                stderr: Vec::new(),
+                idle_gen: 0,
+            })),
+        );
     }
 
     pub(crate) fn test_install_codex(&self, id: &str) {

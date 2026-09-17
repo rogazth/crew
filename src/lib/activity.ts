@@ -1,4 +1,5 @@
 import { isOpen, type Block } from "./blocks";
+import { detailOf } from "./toolDetail";
 
 /** What a run of tool calls was for. Drives the phase icon and its one-line label. */
 export type PhaseKind = "edit" | "research" | "run" | "other";
@@ -22,6 +23,30 @@ export function kindOf(name: string): PhaseKind {
   return "other";
 }
 
+/**
+ * What the call was. The detail knows — Claude's `Bash`, Codex's `exec_command`
+ * and opencode's `bash` all arrive as a command — so the name regexes above are
+ * only the fallback for a provider that sent no detail.
+ */
+export function phaseKind(block: Block): PhaseKind {
+  const detail = detailOf(block);
+  switch (detail?.kind) {
+    case "command":
+      return "run";
+    case "edit":
+      return "edit";
+    case "file":
+    case "search":
+    case "fetch":
+      return "research";
+    case "message":
+    case "output":
+      return "other";
+    default:
+      return kindOf(toolName(block));
+  }
+}
+
 function toolName(block: Block): string {
   return block.tool?.name ?? block.approval?.name ?? "";
 }
@@ -40,7 +65,7 @@ export function buildActivity(blocks: Block[]): ActivityItem[] {
       items.push({ kind: "question", block });
       continue;
     }
-    const kind = kindOf(toolName(block));
+    const kind = phaseKind(block);
     if (phase && phase.kind === kind) {
       phase.blocks.push(block);
       continue;
@@ -57,9 +82,19 @@ export function phaseOpen(phase: Phase): boolean {
 
 /** "Read sidebarPrefs.ts" → the file; "npm run lint" → nothing. */
 function targetOf(block: Block): string | null {
+  const detail = detailOf(block);
+  if (detail?.kind === "file" || detail?.kind === "edit") return detail.path;
+  if (detail) return null;
   const title = block.tool?.title ?? block.text;
   const match = /^(?:Read|Edit|Write|Glob|Grep|Search|Fetch|List)\s+(.+)$/.exec(title);
   return match?.[1] ?? null;
+}
+
+/** A phase counts a call as a search when the detail says so, name be damned. */
+function isSearch(block: Block): boolean {
+  const detail = detailOf(block);
+  if (detail) return detail.kind === "search" || detail.kind === "fetch";
+  return /^(glob|grep|websearch|search|find)$/i.test(toolName(block));
 }
 
 function fileLabel(files: Set<string>): string {
@@ -76,9 +111,8 @@ export function phaseLabel(phase: Phase): string {
   const files = new Set<string>();
   let searches = 0;
   for (const block of phase.blocks) {
-    const name = toolName(block);
     const target = targetOf(block);
-    if (/^(glob|grep|websearch|search|find)$/i.test(name)) searches += 1;
+    if (isSearch(block)) searches += 1;
     else if (target) files.add(target);
   }
   const count = phase.blocks.length;

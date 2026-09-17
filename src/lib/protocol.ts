@@ -50,6 +50,12 @@ export type Key = { key: string, };
 
 export type KeyValue = { key: string, value: string, };
 
+/**
+ * A window of a transcript. `more` says whether older blocks exist before
+ * `fromPos`, so the UI knows whether to keep a "load earlier" affordance.
+ */
+export type MessagePage = { blocks: Array<Block>, fromPos: number, toPos: number, more: boolean, };
+
 export type Name = { name: string, };
 
 export type NamePath = { name: string, path: string, };
@@ -96,6 +102,23 @@ export type RoutineUpsert = { id: string | null, sessionId: string, name: string
 
 export type ScheduledRoutine = { routine: Routine, session: Session, cwd: string, };
 
+export type SearchHit = { sessionId: string, sessionName: string, pos: number, id: string, role: BlockRole, at: number, 
+/**
+ * The matching line with the hit marked, from FTS5's own snippet().
+ */
+snippet: string, };
+
+export type SearchQuery = { query: string, 
+/**
+ * Empty means every session.
+ */
+sessionIds: Array<string>, from?: number, to?: number, limit?: number, 
+/**
+ * Skip this many hits. Paging a search is rare, so an offset beats a
+ * cursor that would have to encode a bm25 score.
+ */
+offset?: number, };
+
 export type Session = { id: string, workspaceId: string, kind: string, name: string, provider: string, model: string, providerSessionId: string | null, description: string, notifications: boolean, autonomy: string, status: string, createdAt: number, updatedAt: number, };
 
 export type SessionCreate = { workspaceId: string, kind: string, name: string, provider: string, model: string, description: string, autonomy: string, };
@@ -120,19 +143,32 @@ export type ToolCall = { id: number, sessionId: string, method: string, params: 
  * or opencode's `bash`: the adapters translate into this, and the UI renders
  * one shape instead of four.
  */
-export type ToolDetail = { "kind": "command", command: string, exitCode?: number, output?: string, } | { "kind": "file", path: string, lineStart?: number, lineEnd?: number, preview?: string, } | { "kind": "edit", path: string, added: number, removed: number, } | { "kind": "search", query: string, matches?: number, } | { "kind": "fetch", url: string, title?: string, } | { "kind": "message", to: string, text: string, } | { "kind": "output", text: string, };
+export type ToolDetail = { "kind": "command", command: string, exitCode?: number, output?: string, } | { "kind": "file", path: string, lineStart?: number, lineEnd?: number, preview?: string, } | { "kind": "edit", path: string, added?: number, removed?: number, } | { "kind": "search", query: string, matches?: number, } | { "kind": "fetch", url: string, title?: string, } | { "kind": "message", to: string, text: string, } | { "kind": "output", text: string, };
 
 export type ToolStatus = "pending" | "completed" | "failed" | "interrupted";
 
 export type TranscriptApply = { sessionId: string, seq: number, event: HarnessEvent, };
 
+export type TranscriptSince = { sessionId: string, pos: number, };
+
 export type TranscriptSnapshot = { blocks: Array<Block>, working: boolean, status: string, seq: number, };
+
+export type TranscriptTail = { sessionId: string, limit?: number, 
+/**
+ * Page backwards: the position the last page started at.
+ */
+beforePos?: number, };
 
 export type TurnAnswer = { sessionId: string, requestId: number, answers: { [key in string]: string } | null, };
 
 export type TurnRespond = { sessionId: string, requestId: number, decision: ApprovalDecision, };
 
-export type TurnStart = { sessionId: string, cwd: string, text: string, files?: Array<AttachedFile>, mentions?: Array<string>, hidden?: boolean, fresh?: boolean, };
+export type TurnStart = { sessionId: string, cwd: string, text: string, files?: Array<AttachedFile>, mentions?: Array<string>, hidden?: boolean, fresh?: boolean, 
+/**
+ * One id per Enter, replayed unchanged by a retry. The daemon accepts it
+ * once; a second arrival is answered without starting a second turn.
+ */
+nonce?: string, };
 
 export type TurnStarted = { working: boolean, };
 
