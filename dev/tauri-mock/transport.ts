@@ -367,7 +367,11 @@ function search(args: Row): Row[] {
       // half and make the mock look worse than the thing it stands in for.
       const before = text.slice(0, found);
       const after = text.slice(found + query.length);
-      const head = before.length > 40 ? `…${before.slice(-40).replace(/^\S*\s*/, "")}` : before;
+      // A long run with no whitespace in it keeps its tail rather than
+      // collapsing to a bare ellipsis.
+      const lead = before.slice(-40);
+      const word = lead.replace(/^\S*\s*/, "");
+      const head = before.length > 40 ? `…${word || lead}` : before;
       const tail = after.length > 80 ? `${after.slice(0, 80).replace(/\s*\S*$/, "")}…` : after;
       const window = `${head}${text.slice(found, found + query.length)}${tail}`;
       const start = window.toLowerCase().indexOf(query);

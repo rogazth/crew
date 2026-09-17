@@ -178,11 +178,18 @@ pub fn record_run(
 /// The end of a run, and nothing else. A turn can outlast the schedule that
 /// started it: the user edits the routine while it works, and the row they
 /// saved is the one that stands.
+///
+/// In place, not pushed: a run that started before the ones below it does not
+/// become the newest by finishing last, and one that has already aged off the
+/// end of the history does not come back.
 pub fn finish_run(store: &Store, id: &str, run: &RoutineRun) -> Result<(), String> {
     store.with(|conn| {
-        let runs = read_runs(conn, id)?;
+        let runs: Vec<RoutineRun> = read_runs(conn, id)?
+            .into_iter()
+            .map(|row| if row.id == run.id { run.clone() } else { row })
+            .collect();
         conn.prepare_cached("UPDATE routines SET runs_json = ?2 WHERE id = ?1")?
-            .execute(params![id, runs_json(&push_run(&runs, run.clone()))])
+            .execute(params![id, runs_json(&runs)])
     })?;
     Ok(())
 }
@@ -361,6 +368,40 @@ mod tests {
         assert_eq!(runs.len(), 2, "a run was lost: {runs:?}");
         assert_eq!(runs.iter().find(|row| row.id == "a").map(|row| row.status), Some(RunStatus::Ok));
         assert_eq!(runs.iter().find(|row| row.id == "b").map(|row| row.status), Some(RunStatus::Skipped));
+    }
+
+    /// A long run that ends last is still the run that started first. Pushing
+    /// it back on would put it above runs that began after it, and would
+    /// resurrect one that had already aged off the end.
+    #[test]
+    fn finishing_a_run_leaves_it_where_it_started() {
+        let store = store();
+        let routine = a_routine(&store);
+        record_run(&store, &routine.id, Some(1), Some(2), &run("long", RunStatus::Running)).unwrap();
+        record_run(&store, &routine.id, None, Some(2), &run("later", RunStatus::Ok)).unwrap();
+
+        finish_run(&store, &routine.id, &run("long", RunStatus::Ok)).unwrap();
+
+        let runs = history(&store, &routine.id);
+        let ids: Vec<&str> = runs.iter().map(|row| row.id.as_str()).collect();
+        assert_eq!(ids, vec!["later", "long"], "the finished run jumped the queue");
+        assert_eq!(runs[1].status, RunStatus::Ok, "it did not close where it was");
+    }
+
+    #[test]
+    fn a_run_that_has_already_aged_off_the_history_does_not_come_back() {
+        let store = store();
+        let routine = a_routine(&store);
+        record_run(&store, &routine.id, None, Some(1), &run("ancient", RunStatus::Running)).unwrap();
+        for i in 0..MAX_RUNS {
+            record_run(&store, &routine.id, None, Some(1), &run(&format!("r{i}"), RunStatus::Ok)).unwrap();
+        }
+
+        finish_run(&store, &routine.id, &run("ancient", RunStatus::Ok)).unwrap();
+
+        let runs = history(&store, &routine.id);
+        assert_eq!(runs.len(), MAX_RUNS);
+        assert!(!runs.iter().any(|row| row.id == "ancient"), "a run came back from the dead");
     }
 
     /// A turn can outlast the row that started it. What the user saved while it

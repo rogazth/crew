@@ -160,7 +160,8 @@ cargo test        # rust
 | G3 | the schedule math is pinned on both sides of the duplication | done `41b5826` |
 | G4 | the client runtime has tests: the retry, the badge, the notifications | done `34f7d01` |
 | G5 | cron and the routine store, tested where they are written | done `3e9f965` |
-| G6 | the rules a workspace and a session enforce | done |
+| G6 | the rules a workspace and a session enforce | done `d19b68d` |
+| G7 | the review of the review: four more, in the same class | done |
 
 ### How A5 landed
 
@@ -260,6 +261,25 @@ history write fails does not start a turn, because `next_run_at` is the only
 thing that bounds a re-fire; one tick at a time; and `await_turn` treats a
 failed read as "still going" and backs its poll off to five seconds, so a turn
 parked on an approval costs a read every few seconds instead of ten a second.
+
+A second review, of those fixes, found four more in the same class — a fix that
+re-reads one thing is a fix that still trusts the others:
+
+- `fire` re-read the session but still used the *routine* the sweep had read.
+  A routine deleted or switched off in that window still woke its agent, and
+  the fire wrote a schedule back onto a row the user had just turned off — the
+  same drift the previous round fixed one layer up.
+- `await_turn` folded "the session is gone" in with "the read failed", so
+  deleting an agent mid-run left a thread polling for ever.
+- `run_now` fired without the lock a sweep takes, so a manual run and a tick
+  that came due together woke the agent twice for one routine.
+- `finish_run` pushed the finished entry back onto the front of the history,
+  above runs that started later, and resurrected one that had already aged off
+  the end.
+
+And a hardening: the clock is armed *before* a sweep, not after it. A fire that
+never returned used to stop it for good, because the heartbeat that would have
+healed it was armed by the tick that never finished.
 
 Still open, deliberately: `await_turn` watches the session, not the turn it
 started. An agent that loops into a second turn keeps the run marked `running`

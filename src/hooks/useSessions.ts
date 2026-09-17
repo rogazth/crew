@@ -27,6 +27,9 @@ export function useSessions(workspaceId: string | null) {
       .listSessions(workspaceId)
       .then(reconcile)
       .then((list) => {
+        // Before the render that shows them, not in an effect after it: a tool
+        // row painted with an empty map keeps its uuid for the life of the mount.
+        rememberAgents(list);
         if (!cancelled) setSessions(list);
       });
     return () => {
@@ -34,8 +37,8 @@ export function useSessions(workspaceId: string | null) {
     };
   }, [workspaceId]);
 
-  // A chat shows the name an id belongs to, and every way a session is made,
-  // renamed or loaded ends here.
+  // The backstop, for the ways a session is made or renamed that do not go
+  // through the load above.
   useEffect(() => rememberAgents(sessions), [sessions]);
 
   // The agent runtime keeps going while a tab is closed; its status and resume

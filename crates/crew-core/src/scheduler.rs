@@ -87,19 +87,25 @@ impl Scheduler {
         if self.stopped.load(Ordering::Relaxed) {
             return;
         }
-        // Only the rows a tick would actually fire. A disabled row that still
-        // carries a time would otherwise arm a timer that fires nothing, and
-        // the next arm would find the same row, at once, forever.
-        let due = routine::list(&self.store)
+        let generation = self.generation.fetch_add(1, Ordering::Relaxed) + 1;
+        let due = self.due_at();
+        let wait = wait_for(due, now_millis()) as u64;
+        let scheduler = self.clone();
+        self.after(Duration::from_millis(wait), move || scheduler.tick(generation));
+    }
+
+    /// The earliest time a tick would act on.
+    ///
+    /// Only the rows a tick would actually fire. A disabled row that still
+    /// carries a time would otherwise arm a timer that fires nothing, and the
+    /// next arm would find the same row, at once, forever.
+    fn due_at(&self) -> Option<i64> {
+        routine::list(&self.store)
             .unwrap_or_default()
             .iter()
             .filter(|row| row.routine.enabled)
             .filter_map(|row| row.routine.next_run_at)
-            .min();
-        let generation = self.generation.fetch_add(1, Ordering::Relaxed) + 1;
-        let wait = wait_for(due, now_millis()) as u64;
-        let scheduler = self.clone();
-        self.after(Duration::from_millis(wait), move || scheduler.tick(generation));
+            .min()
     }
 
     /// The daemon is going away; timers still asleep do nothing when they wake.
@@ -114,7 +120,13 @@ impl Scheduler {
         }
         let row = routine::scheduled(&self.store, routine_id.clone())?
             .ok_or_else(|| format!("No routine {routine_id}"))?;
-        self.fire(row, RunTrigger::Manual);
+        {
+            // The same door a sweep goes through. Without it, Run now and a
+            // tick that came due at the same moment both read a row nobody has
+            // written yet and the agent is woken twice for one routine.
+            let _one_at_a_time = self.ticking.lock().unwrap_or_else(|e| e.into_inner());
+            self.fire(row, RunTrigger::Manual);
+        }
         self.arm();
         Ok(())
     }
@@ -125,11 +137,17 @@ impl Scheduler {
         {
             return;
         }
+        // Before the sweep, not after it: a fire that never returns would
+        // otherwise stop the clock for good, and the heartbeat that would have
+        // healed it is armed by the tick that never finished.
+        self.arm();
         {
-            // Held across the whole sweep. An arm from an RPC can start a
-            // second tick while this one is between its read and its writes,
-            // and both would see the same row still due.
-            let _one_at_a_time = self.ticking.lock().unwrap_or_else(|e| e.into_inner());
+            // One sweep at a time. A second tick that arrives mid-sweep would
+            // read the same rows, still due, and fire them again; it has
+            // already armed the next timer, so it can simply leave.
+            let Ok(_one_at_a_time) = self.ticking.try_lock() else {
+                return;
+            };
             let now = now_millis();
             for row in routine::list(&self.store).unwrap_or_default() {
                 if row.routine.enabled && row.routine.next_run_at.is_some_and(|at| at <= now) {
@@ -141,6 +159,16 @@ impl Scheduler {
     }
 
     fn fire(&self, row: ScheduledRoutine, trigger: RunTrigger) {
+        // The row as it is now, not as the sweep read it. Firing the routine
+        // ahead of this one takes as long as a process spawn, and a save or a
+        // delete in that window is the user's word — more recent than ours,
+        // and about to be written over by the schedule this fire computes.
+        let Ok(Some(row)) = routine::scheduled(&self.store, row.routine.id.clone()) else {
+            return;
+        };
+        if trigger == RunTrigger::Schedule && !row.routine.enabled {
+            return;
+        }
         let started = now_millis();
         // An unreadable schedule reads as the app's default rather than as no
         // schedule at all, so a fired routine always gets a next time.
@@ -232,10 +260,13 @@ impl Scheduler {
             if self.stopped.load(Ordering::Relaxed) {
                 return None;
             }
-            // A read that failed says nothing about the turn; only a row that
-            // came back and is no longer working ends the run.
-            let Ok(Some(live)) = session::get(&self.store, session_id.to_string()) else {
-                continue;
+            // A read that failed says nothing about the turn. A row that is
+            // gone says everything: the agent was deleted, and the turn with
+            // it. Only the failure is worth waiting through.
+            let live = match session::get(&self.store, session_id.to_string()) {
+                Ok(Some(live)) => live,
+                Ok(None) => return Some(false),
+                Err(_) => continue,
             };
             if live.status != "working" && live.status != "needs-input" {
                 return Some(live.status != "error");
@@ -598,20 +629,129 @@ print(json.dumps({"type":"step_finish","sessionID":sid,"part":{"id":"s1","type":
     }
 
     /// "Last run" is for runs that ran. A skip moves the clock forward — a
-    /// routine left past due fires again on the next tick — and nothing else.
+    /// routine left past due fires again on the next tick — and leaves the
+    /// last real run where it was.
     #[test]
     fn a_skip_moves_the_clock_but_not_the_last_run() {
         let world = world();
         let coder = world.agent("Coder");
         let due = now_millis() - 1_000;
         let routine = world.routine(&coder, "Standup", Some(due));
+        world.tick();
+        world.settled_run(&routine.id);
+        let ran_at = world.reload(&routine.id).last_run_at.expect("the first run");
+
+        // Now it comes due again while the agent is busy with something else.
+        routine::record_run(world.store(), &routine.id, None, Some(due), &RoutineRun {
+            id: "seed".into(),
+            started_at: ran_at,
+            finished_at: Some(ran_at),
+            status: RunStatus::Ok,
+            trigger: RunTrigger::Schedule,
+        })
+        .expect("seed");
         session::set_status(world.store(), coder.id.clone(), "working".into()).expect("status");
 
         world.tick();
 
         let after = world.reload(&routine.id);
-        assert_eq!(after.last_run_at, None, "a skip claimed to be the last run");
+        assert_eq!(after.last_run_at, Some(ran_at), "a skip claimed to be the last run");
         assert!(after.next_run_at.is_some_and(|at| at > due), "a skip left the routine past due");
+        assert_eq!(world.runs(&routine.id)[0].status, RunStatus::Skipped);
+    }
+
+    /// The row `arm` waits for is the row `tick` would fire. A row one counts
+    /// and the other refuses is a timer that fires nothing and arms another
+    /// just like it.
+    #[test]
+    fn a_disabled_row_is_not_a_time_to_wait_for() {
+        let world = world();
+        let coder = world.agent("Coder");
+        let routine = world.routine(&coder, "Standup", Some(now_millis() - 60_000));
+        assert!(world.scheduler.due_at().is_some(), "an enabled routine was not waited for");
+
+        routine::upsert(
+            world.store(),
+            Some(routine.id.clone()),
+            coder.id.clone(),
+            "Standup".into(),
+            false,
+            "check the board".into(),
+            Schedule::Interval { minutes: 30 }.to_json(),
+            Some(now_millis() - 60_000),
+            None,
+        )
+        .expect("disable");
+
+        assert_eq!(world.scheduler.due_at(), None, "a disabled row still armed the timer");
+    }
+
+    /// Firing the routine before this one takes as long as a process spawn.
+    /// What the user did in that window is newer than what the sweep read.
+    #[test]
+    fn a_routine_deleted_between_the_sweep_and_the_fire_wakes_nobody() {
+        let world = world();
+        let coder = world.agent("Coder");
+        let routine = world.routine(&coder, "Standup", Some(now_millis() - 1_000));
+        let row = routine::scheduled(world.store(), routine.id.clone())
+            .expect("scheduled")
+            .expect("routine");
+        routine::delete(world.store(), routine.id.clone()).expect("delete");
+
+        world.scheduler.fire(row, RunTrigger::Schedule);
+
+        assert!(world.blocks(&coder.id).is_empty(), "a deleted routine woke its agent");
+    }
+
+    #[test]
+    fn a_routine_switched_off_between_the_sweep_and_the_fire_stays_off() {
+        let world = world();
+        let coder = world.agent("Coder");
+        let routine = world.routine(&coder, "Standup", Some(now_millis() - 1_000));
+        let row = routine::scheduled(world.store(), routine.id.clone())
+            .expect("scheduled")
+            .expect("routine");
+        routine::upsert(
+            world.store(),
+            Some(routine.id.clone()),
+            coder.id.clone(),
+            "Standup".into(),
+            false,
+            "check the board".into(),
+            Schedule::Interval { minutes: 30 }.to_json(),
+            None,
+            None,
+        )
+        .expect("disable");
+
+        world.scheduler.fire(row, RunTrigger::Schedule);
+
+        assert!(world.blocks(&coder.id).is_empty(), "a routine switched off still fired");
+        assert_eq!(
+            world.reload(&routine.id).next_run_at,
+            None,
+            "the fire wrote a schedule back onto a routine the user had just switched off"
+        );
+    }
+
+    /// The agent was deleted while its turn ran. The turn went with it, and the
+    /// thread watching for its end has to notice rather than poll for ever.
+    #[test]
+    fn a_session_that_is_gone_ends_the_run() {
+        let world = world();
+        let coder = world.agent("Coder");
+        session::delete(world.store(), coder.id.clone()).expect("delete");
+
+        // On its own thread with a deadline: the bug this pins is a loop that
+        // never ends, and a test that hangs says less than one that fails.
+        let (done, heard) = std::sync::mpsc::channel();
+        let watcher = world.scheduler.clone();
+        let id = coder.id.clone();
+        thread::spawn(move || done.send(watcher.await_turn(&id)));
+
+        let ended = heard.recv_timeout(Duration::from_secs(5));
+        world.scheduler.stop();
+        assert_eq!(ended.ok(), Some(Some(false)), "the watcher never noticed the agent was gone");
     }
 
     /// A turn can outlast the row that started it. What the user saved while it

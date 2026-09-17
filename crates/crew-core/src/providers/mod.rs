@@ -128,7 +128,8 @@ mod tests {
     }
 
     /// The user asked for a harness that does not tell the model how to talk.
-    /// Whatever else this prompt says, it does not say that.
+    /// This is a blocklist, not the property: it catches the house style that
+    /// used to be here coming back, which is the thing worth catching.
     #[test]
     fn the_persona_does_not_dictate_a_voice() {
         let prompt = persona_prompt("Planner", "You keep the roadmap.", None).to_lowercase();
