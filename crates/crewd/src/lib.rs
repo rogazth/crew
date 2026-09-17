@@ -780,11 +780,6 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
             block(move || session::set_status(&store, id, status)).await?;
             Ok(Value::Null)
         }
-        "session_get_blocks" => {
-            let Id { id } = parse(params)?;
-            let store = hosts.store.clone();
-            json(block(move || session::get_blocks(&store, id)).await?)
-        }
         "routine_list_for_session" => {
             let SessionId { session_id } = parse(params)?;
             let store = hosts.store.clone();

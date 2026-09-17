@@ -136,7 +136,7 @@ cargo test        # rust
 | A4 | `messages_search` with bm25, dates, sessions, sort | done `801b6b8` |
 | B1 | mailbox + `message_agent` + delivery callback | done `3e5319d` |
 | B2 | incoming agent messages render on the left, named | done `3e5319d` |
-| B3 | `from_agent` on `TurnStart`; drain the box when a turn ends | **blocked on C: both live in `turns.rs`** |
+| B3 | `from_agent` on a turn; the box drains when a turn ends | done `10265f4` |
 | B3 | `from_agent` on a turn; the box drains when a turn ends | done `10265f4` |
 | B4 | agents are disposable; a self-message is the loop | done `10265f4` |
 | C1 | opencode protocol capture + adapter | done `ea3d732` |
@@ -149,7 +149,8 @@ cargo test        # rust
 | E4 | the client folds `detail` too, so a live row shows its command | done `f0ff62d` |
 | F3 | Claude keeps a finished row's command; Write stops claiming −0 | done `de1ba7e` |
 | F4 | the loop cap pauses instead of eating the agent's own note | done `925386f` |
-| A5 | the chat holds a window, with a page of history a click away | done |
+| A5 | the chat holds a window, with a page of history a click away | done `f4cc523` |
+| A6 | rows are the only store; the blob stops being rewritten every flush | done |
 
 ### How A5 landed
 
@@ -163,9 +164,27 @@ test flips SQLite to `query_only` before applying a block to prove it.
 answered windows; the table is the search index, and `messages::all` is how the
 flush path reads rows back.
 
-What this does *not* fix: the daemon still hydrates every block of every open
-session into memory. The wire and the renderer now hold a page; `crewd` holds
-the transcript. That is the next one.
+What A5 did not fix, and A6 did: the flush rewrote `sessions.blocks_json` —
+the whole transcript, serialised — every 600 ms during a turn. The `messages`
+table already held the same blocks as rows and wrote only the ones that moved,
+so the column was a second copy that cost more than the first. The hub now
+hydrates from the rows and the column is dropped in migration 13.
+
+Measured on a 2000-block transcript, one delta then a flush:
+
+| | per flush |
+| --- | --- |
+| before | 35.6 ms |
+| rows only | 6.1 ms |
+| fingerprint borrows instead of cloning | **4.8 ms** |
+
+The remaining cost is fingerprinting every block on every flush, which is what
+makes the write cheap; it is now the floor rather than a rounding error next to
+the blob. The timing tests are `#[ignore]`d instruments — `cargo test --
+--ignored --nocapture` — because they starve tests that wait on a timeout.
+
+Still open: the daemon hydrates every block of every open session into memory.
+The wire and the renderer hold a page; `crewd` holds the transcript.
 
 ## Seeing it work
 

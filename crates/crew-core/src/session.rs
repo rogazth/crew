@@ -212,23 +212,6 @@ pub fn delete(store: &Store, id: String) -> Result<(), String> {
     Ok(())
 }
 
-pub fn get_blocks(store: &Store, id: String) -> Result<String, String> {
-    store.with(|conn| {
-        conn.prepare_cached("SELECT blocks_json FROM sessions WHERE id = ?1")?
-            .query_row(params![id], |row| row.get::<_, String>(0))
-    })
-}
-
-pub fn set_blocks(store: &Store, id: String, blocks_json: String) -> Result<(), String> {
-    store.with(|conn| {
-        conn.prepare_cached(
-            "UPDATE sessions SET blocks_json = ?2, updated_at = ?3 WHERE id = ?1",
-        )?
-        .execute(params![id, blocks_json, now_millis()])
-    })?;
-    Ok(())
-}
-
 pub fn set_provider_session(
     store: &Store,
     id: String,

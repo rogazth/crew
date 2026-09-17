@@ -89,6 +89,22 @@ CREATE TABLE IF NOT EXISTS send_nonces (
 /// Cheap content fingerprint. Blocks are append-mostly and only the tail
 /// mutates, so a flush compares hashes and writes the handful of rows that
 /// actually changed instead of rewriting the transcript every 600 ms.
+/// Feeds serde straight into the hasher. The payload is only ever hashed, so
+/// building the string first is a megabyte of allocation per flush that nobody
+/// reads.
+struct HashSink<'a>(&'a mut DefaultHasher);
+
+impl std::io::Write for HashSink<'_> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.write(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
 pub fn fingerprint(block: &Block) -> u64 {
     let mut hasher = DefaultHasher::new();
     block.id.hash(&mut hasher);
@@ -99,22 +115,42 @@ pub fn fingerprint(block: &Block) -> u64 {
     block.at.hash(&mut hasher);
     // The variable parts of a live row: a tool going from pending to completed,
     // an approval being decided, a question being answered.
-    serde_json::to_string(&extra_of(block))
-        .unwrap_or_default()
-        .hash(&mut hasher);
+    let _ = serde_json::to_writer(HashSink(&mut hasher), &extra_of(block));
     hasher.finish()
 }
 
-fn extra_of(block: &Block) -> Extra {
-    Extra {
+/// The same shape as `Extra`, borrowed. A flush fingerprints every block, and
+/// cloning each one's payload to do it copies the whole transcript.
+#[derive(Serialize)]
+struct ExtraRef<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    hidden: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    streaming: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    files: Option<&'a Vec<AttachedFile>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool: Option<&'a BlockTool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    approval: Option<&'a BlockApproval>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    question: Option<&'a BlockQuestion>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    usage: Option<&'a TurnUsage>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    from_agent: Option<&'a AgentRef>,
+}
+
+fn extra_of(block: &Block) -> ExtraRef<'_> {
+    ExtraRef {
         hidden: block.hidden,
         streaming: block.streaming,
-        files: block.files.clone(),
-        tool: block.tool.clone(),
-        approval: block.approval.clone(),
-        question: block.question.clone(),
-        usage: block.usage.clone(),
-        from_agent: block.from_agent.clone(),
+        files: block.files.as_ref(),
+        tool: block.tool.as_ref(),
+        approval: block.approval.as_ref(),
+        question: block.question.as_ref(),
+        usage: block.usage.as_ref(),
+        from_agent: block.from_agent.as_ref(),
     }
 }
 
@@ -367,6 +403,28 @@ pub fn all(conn: &Connection, session_id: &str) -> rusqlite::Result<Vec<Block>> 
 /// hydrated does not rewrite a whole transcript on its first flush.
 pub fn fingerprints(conn: &Connection, session_id: &str) -> rusqlite::Result<Vec<u64>> {
     Ok(all(conn, session_id)?.iter().map(fingerprint).collect())
+}
+
+/// Top up any session whose rows fell behind the column, before the column
+/// goes away. A sync that failed and was never retried is the case this exists
+/// for; everything else is already a no-op by fingerprint.
+pub fn backfill_missing(conn: &Connection) -> rusqlite::Result<usize> {
+    let mut stmt = conn.prepare("SELECT id, blocks_json FROM sessions")?;
+    let sessions = stmt
+        .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    drop(stmt);
+    let mut repaired = 0;
+    for (id, raw) in sessions {
+        let blocks = crate::blocks::parse_blocks(Some(&raw));
+        if blocks.len() as i64 <= count(conn, &id)? {
+            continue;
+        }
+        let mut prior = fingerprints(conn, &id)?;
+        sync(conn, &id, &blocks, &mut prior)?;
+        repaired += 1;
+    }
+    Ok(repaired)
 }
 
 /// Fill the table from the `blocks_json` of every session. Runs once, inside
@@ -940,7 +998,11 @@ mod review_tests {
     /// block's optional payload to JSON just to hash it, on top of the
     /// `blocks_json` dump. This is the cost of a 600 ms debounce tick on a long
     /// transcript in which nothing changed.
+    /// An instrument, not an assertion: `cargo test -- --ignored --nocapture`.
+    /// Left out of the default run because it starves the tests that wait on a
+    /// timeout.
     #[test]
+    #[ignore]
     fn the_no_op_comparison_costs_a_full_json_pass() {
         let blocks: Vec<Block> = (0..2000)
             .map(|n| {
@@ -990,7 +1052,9 @@ mod plan_tests {
             .expect("plan")
     }
 
+    /// An instrument, not an assertion: `cargo test -- --ignored --nocapture`.
     #[test]
+    #[ignore]
     fn print_the_plans() {
         let store = store();
         let root = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
@@ -1112,7 +1176,12 @@ mod plan_tests {
         .unwrap();
         store
             .with(|conn| {
-                conn.execute_batch("DELETE FROM messages")?;
+                // The column is gone from the current schema; the backfill only
+                // ever runs while it still exists, so put it back to measure it.
+                conn.execute_batch(
+                    "DELETE FROM messages;
+                     ALTER TABLE sessions ADD COLUMN blocks_json TEXT NOT NULL DEFAULT '[]';",
+                )?;
                 let mut stmt = conn.prepare("UPDATE sessions SET blocks_json = ?1")?;
                 stmt.execute(rusqlite::params![raw])?;
                 Ok(())

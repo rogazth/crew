@@ -216,6 +216,16 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
             params![now_millis()],
         )?;
     }
+    if current < 13 {
+        // The rows become the only copy, so make sure they are complete first:
+        // a session whose sync fell behind would otherwise lose the difference.
+        crate::messages::backfill_missing(conn)?;
+        conn.execute_batch("ALTER TABLE sessions DROP COLUMN blocks_json;")?;
+        conn.execute(
+            "INSERT INTO schema_migrations (version, applied_at) VALUES (13, ?1)",
+            params![now_millis()],
+        )?;
+    }
     Ok(())
 }
 
@@ -270,25 +280,25 @@ pub fn set_order(conn: &Connection, table: &str, ids: &[String]) -> rusqlite::Re
     }
 }
 
+/// A turn that was running when the daemon stopped left tool rows spinning.
 fn settle_open_turns(conn: &Connection) -> rusqlite::Result<()> {
-    let mut stmt = conn.prepare(
-        "SELECT id, blocks_json FROM sessions WHERE status IN ('working', 'needs-input')",
-    )?;
-    let rows = stmt
-        .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?
+    let mut stmt =
+        conn.prepare("SELECT id FROM sessions WHERE status IN ('working', 'needs-input')")?;
+    let ids = stmt
+        .query_map([], |row| row.get::<_, String>(0))?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     drop(stmt);
-    for (id, raw) in rows {
+    for id in ids {
         let settled = crate::blocks::settle_turn(
-            crate::blocks::parse_blocks(Some(&raw)),
+            crate::messages::all(conn, &id)?,
             crew_protocol::ToolStatus::Interrupted,
         );
-        let json = serde_json::to_string(&settled).unwrap_or_else(|_| "[]".into());
+        let mut prior = crate::messages::fingerprints(conn, &id)?;
+        crate::messages::sync(conn, &id, &settled, &mut prior)?;
         conn.execute(
-            "UPDATE sessions SET blocks_json = ?2, status = 'idle', updated_at = ?3 WHERE id = ?1",
-            params![id, json, now_millis()],
+            "UPDATE sessions SET status = 'idle', updated_at = ?2 WHERE id = ?1",
+            params![id, now_millis()],
         )?;
-        crate::messages::sync(conn, &id, &settled, &mut Vec::new())?;
     }
     Ok(())
 }

@@ -6,7 +6,7 @@ use std::time::Duration;
 use crew_protocol::{Block, HarnessEvent, MessagePage};
 use tokio::task::AbortHandle;
 
-use crate::blocks::{apply_event, parse_blocks};
+use crate::blocks::apply_event;
 use crate::session;
 use crate::store::{now_millis, Store};
 
@@ -78,7 +78,10 @@ impl TranscriptHub {
     }
 
     fn hydrate(&self, session_id: &str) -> Live {
-        let raw = session::get_blocks(&self.store, session_id.to_string()).unwrap_or_else(|_| "[]".into());
+        let blocks = self
+            .store
+            .with(|conn| crate::messages::all(conn, session_id))
+            .unwrap_or_default();
         let status = session::get(&self.store, session_id.to_string())
             .ok()
             .flatten()
@@ -89,7 +92,7 @@ impl TranscriptHub {
             .with(|conn| crate::messages::fingerprints(conn, session_id))
             .unwrap_or_default();
         Live {
-            blocks: parse_blocks(Some(&raw)),
+            blocks,
             working: status == "working" || status == "needs-input",
             status,
             synced,
@@ -276,8 +279,6 @@ impl TranscriptHub {
             row.save_gen += 1;
             (row.blocks.clone(), std::mem::take(&mut row.synced))
         };
-        let json = serde_json::to_string(&blocks).unwrap_or_else(|_| "[]".into());
-        let _ = session::set_blocks(&self.store, session_id.to_string(), json);
         let written = self
             .store
             .with(|conn| crate::messages::sync(conn, session_id, &blocks, &mut synced))
@@ -395,8 +396,10 @@ mod tests {
         assert_eq!(seq, 3);
         let snap = hub.window(&session.id, None, None);
         assert_eq!(snap.blocks.iter().filter(|b| b.role == BlockRole::Assistant).count(), 1);
-        let raw = crate::session::get_blocks(&store, session.id).unwrap();
-        assert!(raw.contains("ok"));
+        let stored = store
+            .with(|conn| crate::messages::all(conn, &session.id))
+            .expect("read back");
+        assert!(stored.iter().any(|block| block.text == "ok"));
     }
 }
 
@@ -405,13 +408,13 @@ mod review_tests {
     use super::*;
     use crate::store::Store;
 
-    fn tmp_store() -> Store {
+    pub(super) fn tmp_store() -> Store {
         let dir = std::env::temp_dir().join(format!("crew-flush-{}", uuid::Uuid::new_v4()));
         let _ = std::fs::create_dir_all(&dir);
         Store::open(dir.join("crew.sqlite3")).expect("store")
     }
 
-    fn agent(store: &Store) -> String {
+    pub(super) fn agent(store: &Store) -> String {
         let root = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
         let _ = std::fs::create_dir_all(&root);
         let workspace =
@@ -459,11 +462,9 @@ mod review_tests {
         // An explicit limit: the default window is a page, and this compares
         // everything the hub holds against everything that landed.
         let live = hub.window(&id, Some(MAX_WINDOW), None).blocks.len();
-        let stored = parse_blocks(Some(&session::get_blocks(&store, id.clone()).unwrap())).len();
         let rows = store
             .with(|conn| crate::messages::count(conn, &id))
             .expect("count") as usize;
-        assert_eq!(stored, live, "blocks_json lost {} blocks", live.saturating_sub(stored));
         assert_eq!(rows, live, "the messages table holds {rows} of {live} blocks");
     }
 
@@ -486,7 +487,9 @@ mod review_tests {
             .expect("writable");
 
         hub.flush(&id);
-        let stored = parse_blocks(Some(&session::get_blocks(&store, id.clone()).unwrap()));
+        let stored = store
+            .with(|conn| crate::messages::all(conn, &id))
+            .expect("read back");
         assert!(
             stored.iter().any(|block| block.text == "second"),
             "the block whose write failed is gone from disk for good: {:?}",
@@ -508,7 +511,7 @@ mod window_tests {
         Store::open(dir.join("crew.sqlite3")).expect("store")
     }
 
-    fn agent(store: &Store) -> String {
+    pub(super) fn agent(store: &Store) -> String {
         let root = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
         let _ = std::fs::create_dir_all(&root);
         let workspace =
@@ -558,12 +561,9 @@ mod window_tests {
         let blocks: Vec<Block> = (1..=250)
             .map(|n| new_block(BlockRole::Assistant, format!("line {n}")))
             .collect();
-        crate::session::set_blocks(
-            &store,
-            id.clone(),
-            serde_json::to_string(&blocks).expect("json"),
-        )
-        .expect("blocks");
+        store
+            .with(|conn| crate::messages::sync(conn, &id, &blocks, &mut Vec::new()))
+            .expect("seed");
 
         let hub = TranscriptHub::new(store);
         let page = hub.window(&id, None, None);
@@ -688,5 +688,55 @@ mod window_tests {
         assert_eq!(done.status, "idle");
         assert!(!done.working);
         assert_eq!(done.seq, seq, "reading a window is not an event");
+    }
+}
+
+#[cfg(test)]
+mod cost_tests {
+    use super::*;
+    use super::review_tests::{agent, tmp_store};
+    use crew_protocol::{BlockTool, ToolDetail, ToolStatus};
+
+    fn tool_block(n: usize) -> Block {
+        let mut block = crate::blocks::new_block(crew_protocol::BlockRole::Tool, format!("bash {n}"));
+        block.tool = Some(BlockTool {
+            call_id: format!("c{n}"),
+            name: "Bash".into(),
+            title: format!("bash {n}"),
+            status: ToolStatus::Completed,
+            detail: Some(ToolDetail::Command {
+                command: format!("echo {n}"),
+                exit_code: Some(0),
+                output: Some("x".repeat(2048)),
+            }),
+        });
+        block
+    }
+
+    /// What one streamed delta costs on a long transcript. `blocks_json` is
+    /// rewritten whole every flush, so this is the number to beat.
+    #[test]
+    fn what_a_flush_costs_on_a_long_transcript() {
+        let store = tmp_store();
+        let id = agent(&store);
+        let hub = TranscriptHub::new(store.clone());
+        {
+            let mut map = hub.lock();
+            let row = map.entry(id.clone()).or_insert_with(|| hub.hydrate(&id));
+            row.blocks = (0..500).map(tool_block).collect();
+            row.dirty = true;
+        }
+        hub.flush(&id);
+
+        let start = std::time::Instant::now();
+        for n in 0..5 {
+            hub.apply(&id, HarnessEvent::MessageDelta { text: format!("{n}") });
+            hub.flush(&id);
+        }
+        let each = start.elapsed() / 5;
+        println!("flush after one delta, 500-block transcript: {each:?}");
+        // Not an assertion on the number — machines differ — but a wall against
+        // the whole transcript being rewritten on every delta again.
+        assert!(each < Duration::from_millis(250), "a flush took {each:?}");
     }
 }
