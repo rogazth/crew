@@ -29,14 +29,40 @@ await new Promise((resolve, reject) => {
 const browser = await chromium.launch();
 const page = await browser.newPage({ viewport: { width: 1280, height: 900 }, deviceScaleFactor: 2 });
 page.on("console", (message) => message.type() === "error" && console.log(`[page] ${message.text()}`));
-await page.goto(`http://localhost:${PORT}/`, { waitUntil: "networkidle" });
+// `SHOT=history` seeds a long transcript so the window's affordance shows.
+const query = process.env.SHOT === "history" ? "?history=400" : "";
+await page.goto(`http://localhost:${PORT}/${query}`, { waitUntil: "networkidle" });
 
 const shot = process.env.SHOT ?? "chat";
 // The first key after load lands before the shell is listening; give it focus.
 await page.mouse.click(900, 700);
 await page.waitForTimeout(300);
 
-if (shot === "search") {
+if (shot === "history") {
+  await page.locator('[data-sidebar="sidebar"] button').filter({ hasText: "Planner" }).first().click();
+  await page.waitForTimeout(1500);
+  const earlier = page.locator('button', { hasText: "Earlier messages" }).first();
+  if ((await earlier.count()) === 0) throw new Error("a 400-block transcript offered no earlier messages");
+  await earlier.scrollIntoViewIfNeeded();
+  await page.waitForTimeout(400);
+
+  // Loading history must not move the line being read. The anchor is the
+  // distance to the bottom, because everything above it is about to grow.
+  const distance = () =>
+    page.evaluate(() => {
+      const el = document.querySelector('[data-selectable="blocks"]');
+      return el ? el.scrollHeight - el.scrollTop : -1;
+    });
+  const before = await distance();
+  await earlier.click();
+  await page.waitForTimeout(900);
+  const after = await distance();
+  if (Math.abs(after - before) > 4) {
+    throw new Error(`loading earlier moved the view by ${after - before}px`);
+  }
+  const grew = await page.locator('[data-selectable="blocks"] .crew-bubble').count();
+  console.log(`earlier messages loaded: ${grew} bubbles in view, anchor held within ${Math.abs(after - before)}px`);
+} else if (shot === "search") {
   await page.keyboard.press("Control+Shift+F");
   await page.waitForTimeout(600);
   await page.keyboard.type("sidebar");

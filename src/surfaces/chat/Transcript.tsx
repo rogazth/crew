@@ -19,6 +19,10 @@ type Speaker = "user" | "agent" | "meta";
 type Props = {
   blocks: Block[];
   working: boolean;
+  /** Older blocks exist before the first one held; the header offers them. */
+  more: boolean;
+  loadingEarlier: boolean;
+  onLoadEarlier: () => void;
   onApprove: (requestId: number, decision: ApprovalDecision) => void;
   onAnswer: (requestId: number, answers: Answers | null) => void;
 };
@@ -92,9 +96,19 @@ function showThinking(blocks: Block[], working: boolean): boolean {
 }
 
 /** Stick-to-bottom scroller. Same 16px threshold as R1. */
-export function Transcript({ blocks, working, onApprove, onAnswer }: Props) {
+export function Transcript({
+  blocks,
+  working,
+  more,
+  loadingEarlier,
+  onLoadEarlier,
+  onApprove,
+  onAnswer,
+}: Props) {
   const scroller = useRef<HTMLDivElement>(null);
   const pinned = useRef(true);
+  /** Distance from the bottom, held across a prepend so the page does not jump. */
+  const anchor = useRef<number | null>(null);
   const rows = useMemo(() => groupRows(blocks), [blocks]);
   const thinking = showThinking(blocks, working);
 
@@ -104,10 +118,22 @@ export function Transcript({ blocks, working, onApprove, onAnswer }: Props) {
     pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight <= NEAR_BOTTOM_PX;
   };
 
+  const earlier = () => {
+    const el = scroller.current;
+    anchor.current = el ? el.scrollHeight - el.scrollTop : null;
+    onLoadEarlier();
+  };
+
   useLayoutEffect(() => {
     const el = scroller.current;
-    if (!el || !pinned.current) return;
-    el.scrollTop = el.scrollHeight;
+    if (!el) return;
+    if (anchor.current !== null) {
+      // History arrived above: keep the line being read where it was.
+      el.scrollTop = el.scrollHeight - anchor.current;
+      anchor.current = null;
+      return;
+    }
+    if (pinned.current) el.scrollTop = el.scrollHeight;
   }, [blocks, thinking]);
 
   return (
@@ -118,6 +144,18 @@ export function Transcript({ blocks, working, onApprove, onAnswer }: Props) {
       className="min-h-0 flex-1 overflow-y-auto"
     >
       <div className="crew-prose px-6 pt-5 pb-7">
+        {more && (
+          <div className="mb-4 flex justify-center">
+            <button
+              type="button"
+              disabled={loadingEarlier}
+              onClick={earlier}
+              className="rounded-chrome px-2.5 py-1 text-[11px] text-text-muted transition-colors hover:bg-hover hover:text-text disabled:text-placeholder"
+            >
+              {loadingEarlier ? "Loading…" : "Earlier messages"}
+            </button>
+          </div>
+        )}
         {rows.map((row, index) => {
           const className = gapBefore(rows[index - 1], row);
           if (row.kind === "activity") {

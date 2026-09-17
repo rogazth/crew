@@ -19,7 +19,7 @@ use crew_protocol::{
     self as proto, Auth, Cwd, DaemonInfo, Id, IdName, IdStatus, Ids, Key, KeyValue, Name, NamePath,
     OptionalId, PathArg, PathContents, PtyAck, PtyAttach, PtyAttached, PtyKill, PtyResize, PtySpawn, PtyWrite,
     Request, RoutineMark, RoutineUpsert, SessionCreate, SessionCreated, SessionId, SessionUpdate, TempFile,
-    SearchQuery, TranscriptApply, TranscriptSince, TranscriptTail, TurnAnswer, TurnRespond,
+    SearchQuery, TranscriptApply, TranscriptTail, TurnAnswer, TurnRespond,
     TurnStart, TurnStarted, WorkspaceId,
 };
 use futures_util::{SinkExt, StreamExt};
@@ -922,20 +922,10 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
             block(move || turns.answer(&session_id, request_id, answers)).await?;
             Ok(Value::Null)
         }
-        "transcript_get" => {
-            let SessionId { session_id } = parse(params)?;
-            let turns = hosts.turns.clone();
-            json(block(move || Ok(turns.transcripts().get(&session_id))).await?)
-        }
         "transcript_tail" => {
             let TranscriptTail { session_id, limit, before_pos } = parse(params)?;
-            let store = hosts.store.clone();
-            json(block(move || messages::tail(&store, session_id, limit, before_pos)).await?)
-        }
-        "transcript_since" => {
-            let TranscriptSince { session_id, pos } = parse(params)?;
-            let store = hosts.store.clone();
-            json(block(move || messages::since(&store, session_id, pos)).await?)
+            let turns = hosts.turns.clone();
+            json(block(move || Ok(turns.transcripts().window(&session_id, limit, before_pos))).await?)
         }
         "messages_search" => {
             let query: SearchQuery = parse(params)?;
@@ -1583,17 +1573,7 @@ print(json.dumps({"type":"turn.failed","error":{"message":"Codex exploded"}}), f
         .await;
         assert!(wait_response(&mut ws, 4).await.ok);
         tokio::time::sleep(std::time::Duration::from_millis(800)).await;
-        send_json(
-            &mut ws,
-            &Request {
-                id: 5,
-                method: "transcript_get".into(),
-                params: serde_json::json!({ "sessionId": session_id }),
-            },
-        )
-        .await;
-        let snap: proto::TranscriptSnapshot =
-            serde_json::from_value(wait_response(&mut ws, 5).await.result.expect("snap")).expect("snapshot");
+        let snap = transcript_of(&mut ws, 5, &session_id).await;
         let approval = snap.blocks.iter().find(|b| b.approval.is_some());
         let row = approval.expect("approval block").approval.as_ref().expect("approval");
         assert_eq!(row.decided, Some(proto::ApprovalDecision::Allow));
@@ -1696,20 +1676,20 @@ print(json.dumps({"type":"turn.failed","error":{"message":"Codex exploded"}}), f
         }
     }
 
-    async fn transcript_of(ws: &mut Ws, id: u32, session_id: &str) -> proto::TranscriptSnapshot {
+    async fn transcript_of(ws: &mut Ws, id: u32, session_id: &str) -> proto::MessagePage {
         send_json(
             ws,
             &Request {
                 id,
-                method: "transcript_get".into(),
+                method: "transcript_tail".into(),
                 params: serde_json::json!({ "sessionId": session_id }),
             },
         )
         .await;
-        serde_json::from_value(wait_response(ws, id).await.result.expect("snap")).expect("snapshot")
+        serde_json::from_value(wait_response(ws, id).await.result.expect("page")).expect("page")
     }
 
-    fn system_errors(snap: &proto::TranscriptSnapshot) -> Vec<&str> {
+    fn system_errors(snap: &proto::MessagePage) -> Vec<&str> {
         snap.blocks
             .iter()
             .filter(|b| b.role == proto::BlockRole::System)

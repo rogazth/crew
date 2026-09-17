@@ -70,11 +70,11 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 async function settle(sessionId, seconds = 180) {
   const until = Date.now() + seconds * 1000;
   while (Date.now() < until) {
-    const snapshot = await rpc("transcript_get", { sessionId });
+    const snapshot = await rpc("transcript_tail", { sessionId, limit: 500 });
     if (!snapshot.working && snapshot.status !== "working" && snapshot.status !== "needs-input") {
       // Give a drained letter a moment to start the next turn.
       await sleep(600);
-      const again = await rpc("transcript_get", { sessionId });
+      const again = await rpc("transcript_tail", { sessionId, limit: 500 });
       if (!again.working) return again;
       continue;
     }

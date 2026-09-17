@@ -14,10 +14,10 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
 use crew_protocol::{
-    AgentRef, AttachedFile, Block, BlockApproval, BlockQuestion, BlockRole, BlockTool, MessagePage,
+    AgentRef, AttachedFile, Block, BlockApproval, BlockQuestion, BlockRole, BlockTool,
     SearchHit, SearchQuery, SearchSort, TurnUsage,
 };
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 
 use crate::store::{now_millis, Store};
@@ -225,67 +225,6 @@ pub fn sync(
     }
 }
 
-/// The last `limit` blocks, oldest first. `before_pos` pages backwards.
-pub fn tail(
-    store: &Store,
-    session_id: String,
-    limit: Option<u32>,
-    before_pos: Option<i64>,
-) -> Result<MessagePage, String> {
-    let limit = limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT) as i64;
-    store.with(|conn| {
-        let before = before_pos.unwrap_or(i64::MAX);
-        let mut stmt = conn.prepare_cached(&format!(
-            "SELECT {BLOCK_COLUMNS}, pos FROM messages
-             WHERE session_id = ?1 AND pos < ?2
-             ORDER BY pos DESC LIMIT ?3"
-        ))?;
-        let mut rows = stmt
-            .query_map(params![session_id, before, limit], |row| {
-                Ok((row.get::<_, i64>(5)?, row_to_block(row, 0)?))
-            })?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-        rows.reverse();
-        let from_pos = rows.first().map(|(pos, _)| *pos).unwrap_or(0);
-        let to_pos = rows.last().map(|(pos, _)| *pos).unwrap_or(0);
-        let more = from_pos > 1;
-        Ok(MessagePage {
-            blocks: rows.into_iter().map(|(_, block)| block).collect(),
-            from_pos,
-            to_pos,
-            more,
-        })
-    })
-}
-
-/// Everything after `pos`. What a client asks for when it reconnects holding a
-/// stale transcript.
-pub fn since(store: &Store, session_id: String, pos: i64) -> Result<MessagePage, String> {
-    store.with(|conn| {
-        let mut stmt = conn.prepare_cached(&format!(
-            "SELECT {BLOCK_COLUMNS}, pos FROM messages
-             WHERE session_id = ?1 AND pos > ?2
-             ORDER BY pos ASC LIMIT ?3"
-        ))?;
-        let rows = stmt
-            .query_map(params![session_id, pos, MAX_LIMIT], |row| {
-                Ok((row.get::<_, i64>(5)?, row_to_block(row, 0)?))
-            })?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-        // A full page means there is more behind it. Saying otherwise would
-        // leave a client that fell far behind quietly missing the rest.
-        let more = rows.len() as u32 == MAX_LIMIT;
-        let from_pos = rows.first().map(|(pos, _)| *pos).unwrap_or(0);
-        let to_pos = rows.last().map(|(pos, _)| *pos).unwrap_or(0);
-        Ok(MessagePage {
-            blocks: rows.into_iter().map(|(_, block)| block).collect(),
-            from_pos,
-            to_pos,
-            more,
-        })
-    })
-}
-
 /// Turn what someone typed into an FTS5 expression. Everything is quoted, so a
 /// stray paren or `AND` is searched for instead of parsed, and the last word
 /// gets a prefix star so the results move while you type.
@@ -414,15 +353,20 @@ pub fn count(conn: &Connection, session_id: &str) -> rusqlite::Result<i64> {
         .query_row(params![session_id], |row| row.get(0))
 }
 
-/// Read back the fingerprints of what is already stored, so a hub that just
-/// hydrated does not rewrite a whole transcript on its first flush.
-pub fn fingerprints(conn: &Connection, session_id: &str) -> rusqlite::Result<Vec<u64>> {
+/// Every block of a session, in order. Nothing in production pages the table —
+/// the hub answers windows from memory — so this is the one way to read it.
+pub fn all(conn: &Connection, session_id: &str) -> rusqlite::Result<Vec<Block>> {
     let mut stmt = conn.prepare_cached(&format!(
         "SELECT {BLOCK_COLUMNS} FROM messages WHERE session_id = ?1 ORDER BY pos ASC"
     ))?;
     let rows = stmt.query_map(params![session_id], |row| row_to_block(row, 0))?;
-    rows.map(|block| block.map(|block| fingerprint(&block)))
-        .collect()
+    rows.collect()
+}
+
+/// Read back the fingerprints of what is already stored, so a hub that just
+/// hydrated does not rewrite a whole transcript on its first flush.
+pub fn fingerprints(conn: &Connection, session_id: &str) -> rusqlite::Result<Vec<u64>> {
+    Ok(all(conn, session_id)?.iter().map(fingerprint).collect())
 }
 
 /// Fill the table from the `blocks_json` of every session. Runs once, inside
@@ -443,17 +387,6 @@ pub fn backfill(conn: &Connection) -> rusqlite::Result<usize> {
         written += blocks.len();
     }
     Ok(written)
-}
-
-/// The last time each session produced a block. It walks the session's rows by
-/// primary key, which is the order they were written in.
-pub fn last_activity(store: &Store, session_id: String) -> Result<Option<i64>, String> {
-    store.with(|conn| {
-        conn.prepare_cached("SELECT MAX(at) FROM messages WHERE session_id = ?1")?
-            .query_row(params![session_id], |row| row.get::<_, Option<i64>>(0))
-            .optional()
-            .map(Option::flatten)
-    })
 }
 
 #[cfg(test)]
@@ -516,12 +449,10 @@ mod tests {
         let blocks = vec![say(BlockRole::User, "hola"), tool];
         write(&store, &id, &blocks);
 
-        let page = tail(&store, id, None, None).expect("tail");
-        assert_eq!(page.blocks.len(), 2);
-        assert_eq!(page.from_pos, 1);
-        assert_eq!(page.to_pos, 2);
-        assert!(!page.more);
-        let detail = page.blocks[1].tool.as_ref().unwrap().detail.as_ref().unwrap();
+        let stored = store.with(|conn| all(conn, &id)).expect("read back");
+        assert_eq!(stored.len(), 2);
+        assert_eq!(stored[0].text, "hola");
+        let detail = stored[1].tool.as_ref().unwrap().detail.as_ref().unwrap();
         assert_eq!(detail.summary(), "ls -la");
     }
 
@@ -549,8 +480,8 @@ mod tests {
             .expect("third");
         assert_ne!(before[1], prior[1]);
         assert_eq!(before[0], prior[0]);
-        let page = tail(&store, id, None, None).expect("tail");
-        assert_eq!(page.blocks[1].text, "two and a half");
+        let stored = store.with(|conn| all(conn, &id)).expect("read back");
+        assert_eq!(stored[1].text, "two and a half");
     }
 
     #[test]
@@ -565,55 +496,10 @@ mod tests {
         store
             .with(|conn| sync(conn, &id, &blocks[..1], &mut prior))
             .expect("shrink");
-        let page = tail(&store, id.clone(), None, None).expect("tail");
-        assert_eq!(page.blocks.len(), 1);
         let left = store.with(|conn| count(conn, &id)).expect("count");
         assert_eq!(left, 1);
-    }
-
-    #[test]
-    fn tail_pages_backwards_and_reports_more() {
-        let store = store();
-        let id = session(&store, "d");
-        let blocks: Vec<Block> = (1..=10)
-            .map(|n| say(BlockRole::Assistant, &format!("line {n}")))
-            .collect();
-        write(&store, &id, &blocks);
-
-        let last = tail(&store, id.clone(), Some(3), None).expect("tail");
-        assert_eq!(last.blocks.len(), 3);
-        assert_eq!(last.blocks[0].text, "line 8");
-        assert_eq!(last.from_pos, 8);
-        assert!(last.more);
-
-        let earlier = tail(&store, id, Some(3), Some(last.from_pos)).expect("page");
-        assert_eq!(earlier.blocks[0].text, "line 5");
-        assert_eq!(earlier.to_pos, 7);
-        assert!(earlier.more);
-    }
-
-    #[test]
-    fn tail_of_the_first_page_says_there_is_nothing_older() {
-        let store = store();
-        let id = session(&store, "e");
-        write(&store, &id, &[say(BlockRole::User, "only")]);
-        let page = tail(&store, id, Some(10), None).expect("tail");
-        assert!(!page.more);
-        assert_eq!(page.from_pos, 1);
-    }
-
-    #[test]
-    fn since_returns_what_a_reconnecting_client_missed() {
-        let store = store();
-        let id = session(&store, "f");
-        let blocks: Vec<Block> = (1..=5)
-            .map(|n| say(BlockRole::Assistant, &format!("line {n}")))
-            .collect();
-        write(&store, &id, &blocks);
-        let page = since(&store, id, 3).expect("since");
-        assert_eq!(page.blocks.len(), 2);
-        assert_eq!(page.blocks[0].text, "line 4");
-        assert_eq!(page.from_pos, 4);
+        let stored = store.with(|conn| all(conn, &id)).expect("read back");
+        assert_eq!(stored.len(), 1, "the row the shorter transcript dropped is still there");
     }
 
     #[test]
@@ -956,27 +842,6 @@ mod review_tests {
         assert!(appended < 20, "appending one block wrote {appended} rows");
     }
 
-    /// `transcript_since` is "everything after pos", capped at MAX_LIMIT and
-    /// reporting `more: false` unconditionally. A client that was away for more
-    /// than 500 blocks is handed 500 and told that is all there was.
-    #[test]
-    fn since_does_not_quietly_swallow_what_it_could_not_fit() {
-        let store = store();
-        let id = session(&store, "long");
-        let blocks: Vec<Block> = (1..=(MAX_LIMIT as usize + 10))
-            .map(|n| say(BlockRole::Assistant, &format!("line {n}")))
-            .collect();
-        write(&store, &id, &blocks);
-
-        let page = since(&store, id, 0).expect("since");
-        assert_eq!(page.blocks.len(), MAX_LIMIT as usize, "sanity: the cap bites");
-        assert!(
-            page.more,
-            "{} blocks were left behind and the page says there are none",
-            blocks.len() - page.blocks.len()
-        );
-    }
-
     /// FTS5 external-content tables corrupt silently if a 'delete' command is
     /// given text other than what was indexed. The upsert path churns rows;
     /// check the index still agrees with the table afterwards.
@@ -1194,15 +1059,6 @@ mod plan_tests {
             "SELECT id, role, text, at, extra_json, pos FROM messages
              WHERE session_id = ?1 AND pos < ?2 ORDER BY pos DESC LIMIT ?3",
             &[ids[0].clone().into(), i64::MAX.into(), 50i64.into()],
-        ) {
-            println!("  {line}");
-        }
-        println!("--- since ---");
-        for line in plan(
-            &store,
-            "SELECT id, role, text, at, extra_json, pos FROM messages
-             WHERE session_id = ?1 AND pos > ?2 ORDER BY pos ASC LIMIT ?3",
-            &[ids[0].clone().into(), 0i64.into(), 500i64.into()],
         ) {
             println!("  {line}");
         }

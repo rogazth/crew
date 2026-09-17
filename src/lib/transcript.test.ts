@@ -13,8 +13,17 @@ function remote(): (payload: unknown) => void {
   return hook[1] as (payload: unknown) => void;
 }
 
-function snapshot(blocks: Block[], seq: number, working = false) {
-  return { blocks, working, status: working ? "working" : "idle", seq };
+function page(blocks: Block[], seq: number, options: { from?: number; more?: boolean; working?: boolean } = {}) {
+  const from = options.from ?? 1;
+  return {
+    blocks,
+    fromPos: blocks.length > 0 ? from : 0,
+    toPos: blocks.length > 0 ? from + blocks.length - 1 : 0,
+    more: options.more ?? false,
+    working: options.working ?? false,
+    status: options.working ? "working" : "idle",
+    seq,
+  };
 }
 
 const said = (text: string): Block => ({ id: text, role: "assistant", text });
@@ -28,33 +37,33 @@ async function load(id: string) {
   return transcript;
 }
 
-describe("transcript", () => {
-  beforeEach(() => {
-    vi.resetModules();
-    request.mockReset();
-    on.mockReset();
-    onReconnect.mockReset();
-    frames = [];
-    // The store paints through window, and vitest runs this file in node.
-    vi.stubGlobal("window", {
-      requestAnimationFrame: (fn: () => void) => {
-        frames.push(fn);
-        return frames.length;
-      },
-      cancelAnimationFrame: (handle: number) => {
-        frames[handle - 1] = () => undefined;
-      },
-    });
+beforeEach(() => {
+  vi.resetModules();
+  request.mockReset();
+  on.mockReset();
+  onReconnect.mockReset();
+  frames = [];
+  // The store paints through window, and vitest runs this file in node.
+  vi.stubGlobal("window", {
+    requestAnimationFrame: (fn: () => void) => {
+      frames.push(fn);
+      return frames.length;
+    },
+    cancelAnimationFrame: (handle: number) => {
+      frames[handle - 1] = () => undefined;
+    },
   });
+});
 
-  function paint() {
-    const queued = frames;
-    frames = [];
-    for (const frame of queued) frame();
-  }
+function paint() {
+  const queued = frames;
+  frames = [];
+  for (const frame of queued) frame();
+}
 
+describe("transcript", () => {
   it("opens a thread from the daemon and publishes it once", async () => {
-    request.mockResolvedValue(snapshot([said("hello")], 4));
+    request.mockResolvedValue(page([said("hello")], 4));
     const transcript = await load("s1");
     expect(transcript.read("s1").blocks).toHaveLength(1);
     expect(transcript.isReady("s1")).toBe(true);
@@ -62,14 +71,14 @@ describe("transcript", () => {
   });
 
   it("does not ask twice for a thread it already has", async () => {
-    request.mockResolvedValue(snapshot([], 0));
+    request.mockResolvedValue(page([], 0));
     const transcript = await load("s1");
     await transcript.load("s1");
     expect(request).toHaveBeenCalledTimes(1);
   });
 
   it("keeps what it had when the daemon refuses", async () => {
-    request.mockResolvedValue(snapshot([said("kept")], 1));
+    request.mockResolvedValue(page([said("kept")], 1));
     const transcript = await load("s1");
     request.mockRejectedValueOnce(new Error("gone"));
     await transcript.reload("s1");
@@ -77,7 +86,7 @@ describe("transcript", () => {
   });
 
   it("applies the next event in sequence", async () => {
-    request.mockResolvedValue(snapshot([], 7));
+    request.mockResolvedValue(page([], 7));
     const transcript = await load("s1");
     remote()({ sessionId: "s1", seq: 8, event: { type: "message.delta", text: "hi" } });
     paint();
@@ -85,9 +94,9 @@ describe("transcript", () => {
   });
 
   it("resyncs instead of guessing when an event is missing", async () => {
-    request.mockResolvedValue(snapshot([], 7));
+    request.mockResolvedValue(page([], 7));
     const transcript = await load("s1");
-    request.mockResolvedValue(snapshot([said("caught up")], 12));
+    request.mockResolvedValue(page([said("caught up")], 12));
 
     // seq 10 with 7 in hand: something was lost on the way.
     remote()({ sessionId: "s1", seq: 10, event: { type: "message.delta", text: "dropped" } });
@@ -106,7 +115,7 @@ describe("transcript", () => {
   });
 
   it("paints once for a burst of deltas", async () => {
-    request.mockResolvedValue(snapshot([], 0));
+    request.mockResolvedValue(page([], 0));
     const transcript = await load("s1");
     let paints = 0;
     transcript.subscribe("s1", () => (paints += 1));
@@ -120,7 +129,7 @@ describe("transcript", () => {
   });
 
   it("hands out a new snapshot object per paint, so React sees the change", async () => {
-    request.mockResolvedValue(snapshot([], 0));
+    request.mockResolvedValue(page([], 0));
     const transcript = await load("s1");
     const before = transcript.read("s1");
     transcript.apply("s1", { type: "message.delta", text: "x" });
@@ -129,7 +138,7 @@ describe("transcript", () => {
   });
 
   it("forgets a thread and stops painting it", async () => {
-    request.mockResolvedValue(snapshot([said("old")], 1));
+    request.mockResolvedValue(page([said("old")], 1));
     const transcript = await load("s1");
     transcript.apply("s1", { type: "message.delta", text: "pending" });
     transcript.forget("s1");
@@ -139,11 +148,77 @@ describe("transcript", () => {
   });
 
   it("reloads every open thread when the socket comes back", async () => {
-    request.mockResolvedValue(snapshot([], 1));
+    request.mockResolvedValue(page([], 1));
     await load("s1");
     const reconnect = onReconnect.mock.calls[0]?.[0] as () => void;
     request.mockClear();
     reconnect();
     await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
+  });
+});
+
+describe("the window", () => {
+  it("opens on the last page and says there is more behind it", async () => {
+    request.mockResolvedValue(page([said("recent")], 3, { from: 41, more: true }));
+    const transcript = await load("s1");
+    expect(transcript.read("s1").more).toBe(true);
+    expect(request).toHaveBeenCalledWith("transcript_tail", { sessionId: "s1", limit: 200 });
+  });
+
+  it("prepends the page before the one it holds", async () => {
+    request.mockResolvedValue(page([said("recent")], 3, { from: 41, more: true }));
+    const transcript = await load("s1");
+    request.mockResolvedValue(page([said("older")], 3, { from: 21, more: true }));
+
+    await transcript.loadEarlier("s1");
+    expect(request).toHaveBeenLastCalledWith("transcript_tail", {
+      sessionId: "s1",
+      limit: 200,
+      beforePos: 41,
+    });
+    expect(transcript.read("s1").blocks.map((block) => block.text)).toEqual(["older", "recent"]);
+  });
+
+  it("stops offering earlier messages once the first page is in", async () => {
+    request.mockResolvedValue(page([said("recent")], 3, { from: 11, more: true }));
+    const transcript = await load("s1");
+    request.mockResolvedValue(page([said("first")], 3, { from: 1, more: false }));
+    await transcript.loadEarlier("s1");
+    expect(transcript.read("s1").more).toBe(false);
+  });
+
+  it("does not ask twice while a page is in flight", async () => {
+    request.mockResolvedValue(page([said("recent")], 3, { from: 41, more: true }));
+    const transcript = await load("s1");
+    request.mockReset();
+    request.mockImplementation(
+      () => new Promise((resolve) => setTimeout(() => resolve(page([said("older")], 3, { from: 21 })), 10)),
+    );
+    const first = transcript.loadEarlier("s1");
+    await transcript.loadEarlier("s1");
+    await first;
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  it("asks for nothing older when there is nothing older", async () => {
+    request.mockResolvedValue(page([said("all of it")], 1));
+    const transcript = await load("s1");
+    request.mockClear();
+    await transcript.loadEarlier("s1");
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it("keeps the history a reader already opened when it resyncs", async () => {
+    request.mockResolvedValue(page([said("a"), said("b")], 5, { from: 41, more: true }));
+    const transcript = await load("s1");
+    request.mockResolvedValue(page([said("older"), said("a"), said("b")], 5, { from: 21, more: true }));
+    await transcript.loadEarlier("s1");
+
+    request.mockClear();
+    request.mockResolvedValue(page([said("older"), said("a"), said("b")], 9, { from: 21, more: true }));
+    await transcript.reload("s1");
+    // Three blocks in hand, so the resync must not shrink the window to one page.
+    expect(request).toHaveBeenCalledWith("transcript_tail", { sessionId: "s1", limit: 200 });
+    expect(transcript.read("s1").blocks).toHaveLength(3);
   });
 });

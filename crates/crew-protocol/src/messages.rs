@@ -5,6 +5,8 @@ use crate::{Block, BlockRole};
 
 /// A window of a transcript. `more` says whether older blocks exist before
 /// `fromPos`, so the UI knows whether to keep a "load earlier" affordance.
+/// `working`, `status` and `seq` are the live state of the session, so one
+/// window is everything a chat needs to open.
 #[derive(Serialize, Deserialize, Clone, Debug, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
@@ -15,6 +17,12 @@ pub struct MessagePage {
     #[ts(type = "number")]
     pub to_pos: i64,
     pub more: bool,
+    pub working: bool,
+    pub status: String,
+    /// The live event counter, so a client can order the transcript-apply
+    /// events that arrive while the window is in flight.
+    #[ts(type = "number")]
+    pub seq: u64,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, TS)]
@@ -87,13 +95,4 @@ pub struct TranscriptTail {
     #[serde(default)]
     #[ts(optional, type = "number")]
     pub before_pos: Option<i64>,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
-pub struct TranscriptSince {
-    pub session_id: String,
-    #[ts(type = "number")]
-    pub pos: i64,
 }

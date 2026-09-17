@@ -9,6 +9,10 @@ export type ChatSurfaceProps = {
   blocks: Block[];
   working: boolean;
   ready: boolean;
+  /** The chat holds a window; older blocks are a click away. */
+  more: boolean;
+  loadingEarlier: boolean;
+  onLoadEarlier: () => void;
   draft: string;
   files: AttachedFile[];
   over: boolean;

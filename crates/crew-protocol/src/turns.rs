@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use crate::{AgentRef, ApprovalDecision, AttachedFile, Block, HarnessEvent, Session};
+use crate::{AgentRef, ApprovalDecision, AttachedFile, HarnessEvent, Session};
 
 #[derive(Serialize, Deserialize, Clone, Debug, TS)]
 #[serde(rename_all = "camelCase")]
@@ -59,17 +59,6 @@ pub struct TurnAnswer {
     #[ts(type = "number")]
     pub request_id: u64,
     pub answers: Option<HashMap<String, String>>,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
-pub struct TranscriptSnapshot {
-    pub blocks: Vec<Block>,
-    pub working: bool,
-    pub status: String,
-    #[ts(type = "number")]
-    pub seq: u64,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, TS)]

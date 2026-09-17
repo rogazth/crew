@@ -165,26 +165,21 @@ const commands: Record<string, (args: Row) => unknown> = {
   pty_attach: () => ({ start: 0, emitted: 0 }),
   agent_resolve_claude: () => ({ path: "/mock/bin/claude" }),
   agent_resolve: ({ name }) => ({ path: `/mock/bin/${name}` }),
-  transcript_get: ({ sessionId }) => {
-    const row = thread(sessionId as string);
-    return { blocks: row.blocks, working: row.working, status: row.status, seq: row.seq };
-  },
   transcript_tail: ({ sessionId, limit, beforePos }) => {
-    const blocks = thread(sessionId as string).blocks;
-    const before = (beforePos as number | undefined) ?? blocks.length + 1;
-    const end = Math.max(0, Math.min(blocks.length, before - 1));
-    const start = Math.max(0, end - ((limit as number | undefined) ?? 50));
+    const row = thread(sessionId as string);
+    const before = (beforePos as number | undefined) ?? row.blocks.length + 1;
+    const end = Math.max(0, Math.min(row.blocks.length, before - 1));
+    const start = Math.max(0, end - ((limit as number | undefined) ?? 200));
+    const blocks = row.blocks.slice(start, end);
     return {
-      blocks: blocks.slice(start, end),
-      fromPos: start + 1,
-      toPos: end,
+      blocks,
+      fromPos: blocks.length > 0 ? start + 1 : 0,
+      toPos: blocks.length > 0 ? end : 0,
       more: start > 0,
+      working: row.working,
+      status: row.status,
+      seq: row.seq,
     };
-  },
-  transcript_since: ({ sessionId, pos }) => {
-    const blocks = thread(sessionId as string).blocks;
-    const from = (pos as number) ?? 0;
-    return { blocks: blocks.slice(from), fromPos: from + 1, toPos: blocks.length, more: false };
   },
   messages_search: (args) => search(args),
   turn_start: (args) => {
@@ -380,11 +375,30 @@ type TranscriptRow = { blocks: Row[]; seq: number; working: boolean; status: str
 const agents = new Map<string, MockAgent>();
 const transcripts = new Map<string, TranscriptRow>();
 
+/**
+ * `?history=400` seeds that many older lines in front of the seed, so the
+ * window's "earlier messages" path and a long transcript can be looked at
+ * without waiting for one to happen.
+ */
+function backfill(): Row[] {
+  const asked = Number(new URLSearchParams(location.search).get("history") ?? 0);
+  const count = Number.isFinite(asked) ? Math.min(Math.max(asked, 0), 5000) : 0;
+  return Array.from({ length: count }, (_, index) => ({
+    id: `old${index}`,
+    role: index % 2 === 0 ? "user" : "assistant",
+    at: now - (count - index) * 60e3 - 48 * 3600e3,
+    text:
+      index % 2 === 0
+        ? `Older question ${index + 1}: where did the sidebar grouping end up?`
+        : `Older answer ${index + 1}. It lives in groupSessions, memoised per render input.`,
+  }));
+}
+
 function thread(id: string): TranscriptRow {
   let row = transcripts.get(id);
   if (!row) {
     row = {
-      blocks: id === "s1" ? (SEED_BLOCKS as Row[]).map((block) => ({ ...block })) : [],
+      blocks: id === "s1" ? [...backfill(), ...(SEED_BLOCKS as Row[]).map((block) => ({ ...block }))] : [],
       seq: 0,
       working: id === "s1",
       status: id === "s1" ? "needs-input" : "idle",

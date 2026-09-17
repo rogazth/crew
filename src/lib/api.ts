@@ -78,10 +78,6 @@ export const transcriptTail = (params: {
   beforePos?: number;
 }): Promise<MessagePage> => client.request("transcript_tail", params);
 
-/** What arrived while this client was away. */
-export const transcriptSince = (sessionId: string, pos: number): Promise<MessagePage> =>
-  client.request("transcript_since", { sessionId, pos });
-
 export const searchMessages = (query: SearchQuery): Promise<SearchHit[]> =>
   client.request("messages_search", query);
 

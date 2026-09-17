@@ -137,7 +137,6 @@ cargo test        # rust
 | B1 | mailbox + `message_agent` + delivery callback | done `3e5319d` |
 | B2 | incoming agent messages render on the left, named | done `3e5319d` |
 | B3 | `from_agent` on `TurnStart`; drain the box when a turn ends | **blocked on C: both live in `turns.rs`** |
-| A5 | the chat loads from `transcript_tail` instead of the whole blob | pending |
 | B3 | `from_agent` on a turn; the box drains when a turn ends | done `10265f4` |
 | B4 | agents are disposable; a self-message is the loop | done `10265f4` |
 | C1 | opencode protocol capture + adapter | done `ea3d732` |
@@ -150,16 +149,23 @@ cargo test        # rust
 | E4 | the client folds `detail` too, so a live row shows its command | done `f0ff62d` |
 | F3 | Claude keeps a finished row's command; Write stops claiming −0 | done `de1ba7e` |
 | F4 | the loop cap pauses instead of eating the agent's own note | done `925386f` |
-| A5 | the chat loads from `transcript_tail` instead of the whole blob | **next** |
+| A5 | the chat holds a window, with a page of history a click away | done |
 
-### Why A5 is still open
+### How A5 landed
 
-`transcript_get` answers from the hub's memory, so opening a chat is already
-fast; what the tail saves is the wire payload and the renderer's list. The real
-ceiling is that the *daemon* holds every block of every live session in memory,
-and moving the client to a tail does not move that. Doing it properly means
-pagination in `lib/transcript.ts` plus a "load earlier" affordance, and it
-touches the streaming path — worth doing awake, with the app open.
+The window is served by the **hub, not the table**. A streaming turn holds
+blocks that have not been flushed, and a tail read from `messages` would be up
+to 600 ms stale — so `transcript_tail` slices the hub's in-memory list, and a
+test flips SQLite to `query_only` before applying a block to prove it.
+
+`transcript_get` and `transcript_since` are gone: one way to read a transcript.
+`messages::tail` went with them, because nothing called it once the hub
+answered windows; the table is the search index, and `messages::all` is how the
+flush path reads rows back.
+
+What this does *not* fix: the daemon still hydrates every block of every open
+session into memory. The wire and the renderer now hold a page; `crewd` holds
+the transcript. That is the next one.
 
 ## Seeing it work
 

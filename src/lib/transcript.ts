@@ -1,12 +1,21 @@
 import { client } from "./client";
 import { applyEvent, type Block, type HarnessEvent } from "./blocks";
-import type { TranscriptApply, TranscriptSnapshot } from "./protocol";
+import type { MessagePage, TranscriptApply } from "./protocol";
+
+/**
+ * How many blocks a chat opens with. A year of conversation is not something a
+ * window has to hold to be useful, and everything older is one click away.
+ */
+const PAGE = 200;
 
 /** What a chat surface reads. One object per session; a new one each publish. */
 export type ThreadSnapshot = {
   blocks: Block[];
   ready: boolean;
   working: boolean;
+  /** Older blocks exist before the first one held here. */
+  more: boolean;
+  loadingEarlier: boolean;
 };
 
 type Thread = {
@@ -14,13 +23,23 @@ type Thread = {
   ready: boolean;
   working: boolean;
   seq: number;
+  /** Position of `blocks[0]` in the daemon's transcript, 1-based. */
+  fromPos: number;
+  more: boolean;
+  loadingEarlier: boolean;
   snapshot: ThreadSnapshot;
   loading: Promise<void> | null;
   listeners: Set<() => void>;
   frame: number | null;
 };
 
-const EMPTY: ThreadSnapshot = { blocks: [], ready: false, working: false };
+const EMPTY: ThreadSnapshot = {
+  blocks: [],
+  ready: false,
+  working: false,
+  more: false,
+  loadingEarlier: false,
+};
 
 const threads = new Map<string, Thread>();
 let hooked = false;
@@ -47,6 +66,9 @@ function thread(id: string): Thread {
       ready: false,
       working: false,
       seq: 0,
+      fromPos: 0,
+      more: false,
+      loadingEarlier: false,
       snapshot: EMPTY,
       loading: null,
       listeners: new Set(),
@@ -92,15 +114,48 @@ export async function reload(id: string): Promise<void> {
   ensureBridge();
   const row = thread(id);
   try {
-    const snap = await client.request<TranscriptSnapshot>("transcript_get", { sessionId: id });
-    row.blocks = snap.blocks;
-    row.working = snap.working;
-    row.seq = snap.seq;
+    // Keep whatever window the reader had opened: a resync in the middle of
+    // reading history should not throw them back to the last page.
+    const limit = Math.max(PAGE, row.blocks.length);
+    const page = await client.request<MessagePage>("transcript_tail", { sessionId: id, limit });
+    take(row, page);
   } catch {
     /* keep whatever we already have */
   }
   row.ready = true;
   row.loading = null;
+  publish(row);
+}
+
+function take(row: Thread, page: MessagePage): void {
+  row.blocks = page.blocks;
+  row.working = page.working;
+  row.seq = page.seq;
+  row.fromPos = page.fromPos;
+  row.more = page.more;
+}
+
+/** The page before the one in hand, prepended. */
+export async function loadEarlier(id: string): Promise<void> {
+  const row = threads.get(id);
+  if (!row || !row.ready || !row.more || row.loadingEarlier) return;
+  row.loadingEarlier = true;
+  publish(row);
+  try {
+    const page = await client.request<MessagePage>("transcript_tail", {
+      sessionId: id,
+      limit: PAGE,
+      beforePos: row.fromPos,
+    });
+    // A turn that landed while this was in flight only appended, so the older
+    // page still sits in front of what is here.
+    row.blocks = [...page.blocks, ...row.blocks];
+    row.fromPos = page.fromPos;
+    row.more = page.more;
+  } catch {
+    /* the button stays; the reader can try again */
+  }
+  row.loadingEarlier = false;
   publish(row);
 }
 
@@ -151,6 +206,12 @@ function schedule(row: Thread): void {
 }
 
 function publish(row: Thread): void {
-  row.snapshot = { blocks: row.blocks, ready: row.ready, working: row.working };
+  row.snapshot = {
+    blocks: row.blocks,
+    ready: row.ready,
+    working: row.working,
+    more: row.more,
+    loadingEarlier: row.loadingEarlier,
+  };
   for (const listener of row.listeners) listener();
 }

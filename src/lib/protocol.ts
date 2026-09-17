@@ -63,8 +63,15 @@ export type KeyValue = { key: string, value: string, };
 /**
  * A window of a transcript. `more` says whether older blocks exist before
  * `fromPos`, so the UI knows whether to keep a "load earlier" affordance.
+ * `working`, `status` and `seq` are the live state of the session, so one
+ * window is everything a chat needs to open.
  */
-export type MessagePage = { blocks: Array<Block>, fromPos: number, toPos: number, more: boolean, };
+export type MessagePage = { blocks: Array<Block>, fromPos: number, toPos: number, more: boolean, working: boolean, status: string, 
+/**
+ * The live event counter, so a client can order the transcript-apply
+ * events that arrive while the window is in flight.
+ */
+seq: number, };
 
 export type Name = { name: string, };
 
@@ -165,10 +172,6 @@ export type ToolDetail = { "kind": "command", command: string, exitCode?: number
 export type ToolStatus = "pending" | "completed" | "failed" | "interrupted";
 
 export type TranscriptApply = { sessionId: string, seq: number, event: HarnessEvent, };
-
-export type TranscriptSince = { sessionId: string, pos: number, };
-
-export type TranscriptSnapshot = { blocks: Array<Block>, working: boolean, status: string, seq: number, };
 
 export type TranscriptTail = { sessionId: string, limit?: number, 
 /**

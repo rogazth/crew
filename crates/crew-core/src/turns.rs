@@ -2201,7 +2201,7 @@ print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type
     }
 
     fn blocks(world: &World, session_id: &str) -> Vec<crew_protocol::Block> {
-        world.host.transcripts().get(session_id).blocks
+        world.host.transcripts().window(session_id, Some(500), None).blocks
     }
 
     /// A provider that starts and says nothing must not leave the agent

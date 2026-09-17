@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use crew_protocol::{Block, HarnessEvent, TranscriptSnapshot};
+use crew_protocol::{Block, HarnessEvent, MessagePage};
 use tokio::task::AbortHandle;
 
 use crate::blocks::{apply_event, parse_blocks};
@@ -11,6 +11,13 @@ use crate::session;
 use crate::store::{now_millis, Store};
 
 const SAVE_MS: u64 = 600;
+/// A chat opens on one window, so it asks for more than the fifty rows
+/// `messages::tail` defaults to: two hundred blocks is several screens of
+/// scrollback, and the "load earlier" affordance fetches the rest.
+const WINDOW_LIMIT: u32 = 200;
+/// The ceiling `messages::tail` uses, for the same reason: past this a window
+/// is no cheaper than the whole transcript.
+const MAX_WINDOW: u32 = 500;
 
 pub trait TranscriptEvents: Send + Sync {
     fn apply(&self, session_id: &str, seq: u64, event: &HarnessEvent);
@@ -123,10 +130,26 @@ impl TranscriptHub {
         created
     }
 
-    pub fn get(&self, session_id: &str) -> TranscriptSnapshot {
+    pub fn window(
+        &self,
+        session_id: &str,
+        limit: Option<u32>,
+        before_pos: Option<i64>,
+    ) -> MessagePage {
+        let limit = limit.unwrap_or(WINDOW_LIMIT).clamp(1, MAX_WINDOW) as usize;
         let row = self.live(session_id);
-        TranscriptSnapshot {
-            blocks: row.blocks,
+        let end = match before_pos {
+            Some(pos) => (pos.max(1) as usize - 1).min(row.blocks.len()),
+            None => row.blocks.len(),
+        };
+        let start = end.saturating_sub(limit);
+        let blocks = row.blocks[start..end].to_vec();
+        let from_pos = if blocks.is_empty() { 0 } else { start as i64 + 1 };
+        MessagePage {
+            to_pos: if blocks.is_empty() { 0 } else { end as i64 },
+            blocks,
+            from_pos,
+            more: from_pos > 1,
             working: row.working,
             status: row.status,
             seq: row.seq,
@@ -370,7 +393,7 @@ mod tests {
         );
         let seq = hub.apply(&session.id, HarnessEvent::TurnCompleted { usage: None });
         assert_eq!(seq, 3);
-        let snap = hub.get(&session.id);
+        let snap = hub.window(&session.id, None, None);
         assert_eq!(snap.blocks.iter().filter(|b| b.role == BlockRole::Assistant).count(), 1);
         let raw = crate::session::get_blocks(&store, session.id).unwrap();
         assert!(raw.contains("ok"));
@@ -433,12 +456,14 @@ mod review_tests {
         }
         hub.flush(&id);
 
-        let live = hub.get(&id).blocks.len();
+        // An explicit limit: the default window is a page, and this compares
+        // everything the hub holds against everything that landed.
+        let live = hub.window(&id, Some(MAX_WINDOW), None).blocks.len();
         let stored = parse_blocks(Some(&session::get_blocks(&store, id.clone()).unwrap())).len();
         let rows = store
             .with(|conn| crate::messages::count(conn, &id))
             .expect("count") as usize;
-        assert_eq!(stored, live, "blocks_json lost {} blocks", live - stored);
+        assert_eq!(stored, live, "blocks_json lost {} blocks", live.saturating_sub(stored));
         assert_eq!(rows, live, "the messages table holds {rows} of {live} blocks");
     }
 
@@ -467,5 +492,201 @@ mod review_tests {
             "the block whose write failed is gone from disk for good: {:?}",
             stored.iter().map(|b| b.text.clone()).collect::<Vec<_>>()
         );
+    }
+}
+
+#[cfg(test)]
+mod window_tests {
+    use super::*;
+    use crate::blocks::new_block;
+    use crate::store::Store;
+    use crew_protocol::BlockRole;
+
+    fn tmp_store() -> Store {
+        let dir = std::env::temp_dir().join(format!("crew-window-{}", uuid::Uuid::new_v4()));
+        let _ = std::fs::create_dir_all(&dir);
+        Store::open(dir.join("crew.sqlite3")).expect("store")
+    }
+
+    fn agent(store: &Store) -> String {
+        let root = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
+        let _ = std::fs::create_dir_all(&root);
+        let workspace =
+            crate::workspace::create(store, "w".into(), root.to_string_lossy().into()).unwrap();
+        crate::session::create(
+            store,
+            workspace.id,
+            "agent".into(),
+            "A".into(),
+            "claude".into(),
+            "m".into(),
+            "".into(),
+            "ask".into(),
+        )
+        .unwrap()
+        .id
+    }
+
+    fn lines(hub: &TranscriptHub, session_id: &str, count: usize) {
+        for n in 1..=count {
+            hub.append_system(session_id, &format!("line {n}"));
+        }
+    }
+
+    fn texts(page: &MessagePage) -> Vec<String> {
+        page.blocks.iter().map(|block| block.text.clone()).collect()
+    }
+
+    #[test]
+    fn a_window_is_the_last_blocks_with_their_positions() {
+        let store = tmp_store();
+        let id = agent(&store);
+        let hub = TranscriptHub::new(store);
+        lines(&hub, &id, 10);
+
+        let page = hub.window(&id, Some(3), None);
+        assert_eq!(texts(&page), vec!["line 8", "line 9", "line 10"]);
+        assert_eq!(page.from_pos, 8);
+        assert_eq!(page.to_pos, 10);
+        assert!(page.more, "seven blocks sit before the window");
+    }
+
+    #[test]
+    fn the_default_window_is_the_last_two_hundred_blocks() {
+        let store = tmp_store();
+        let id = agent(&store);
+        let blocks: Vec<Block> = (1..=250)
+            .map(|n| new_block(BlockRole::Assistant, format!("line {n}")))
+            .collect();
+        crate::session::set_blocks(
+            &store,
+            id.clone(),
+            serde_json::to_string(&blocks).expect("json"),
+        )
+        .expect("blocks");
+
+        let hub = TranscriptHub::new(store);
+        let page = hub.window(&id, None, None);
+        assert_eq!(page.blocks.len(), 200);
+        assert_eq!(page.from_pos, 51);
+        assert_eq!(page.to_pos, 250);
+        assert!(page.more);
+    }
+
+    #[test]
+    fn a_window_pages_backwards_without_a_gap_or_an_overlap() {
+        let store = tmp_store();
+        let id = agent(&store);
+        let hub = TranscriptHub::new(store);
+        lines(&hub, &id, 10);
+
+        let last = hub.window(&id, Some(4), None);
+        let earlier = hub.window(&id, Some(4), Some(last.from_pos));
+        assert_eq!(earlier.to_pos + 1, last.from_pos, "the two pages do not meet");
+        assert_eq!(texts(&earlier), vec!["line 3", "line 4", "line 5", "line 6"]);
+        assert!(earlier.more);
+
+        let first = hub.window(&id, Some(4), Some(earlier.from_pos));
+        assert_eq!(texts(&first), vec!["line 1", "line 2"]);
+        assert_eq!(first.from_pos, 1);
+        assert!(!first.more);
+
+        let walked: Vec<String> = texts(&first)
+            .into_iter()
+            .chain(texts(&earlier))
+            .chain(texts(&last))
+            .collect();
+        assert_eq!(walked, texts(&hub.window(&id, Some(10), None)));
+    }
+
+    #[test]
+    fn a_transcript_shorter_than_the_limit_says_there_is_nothing_older() {
+        let store = tmp_store();
+        let id = agent(&store);
+        let hub = TranscriptHub::new(store);
+        lines(&hub, &id, 2);
+
+        let page = hub.window(&id, Some(50), None);
+        assert_eq!(page.blocks.len(), 2);
+        assert_eq!(page.from_pos, 1);
+        assert_eq!(page.to_pos, 2);
+        assert!(!page.more);
+    }
+
+    #[test]
+    fn an_empty_transcript_answers_an_empty_page() {
+        let store = tmp_store();
+        let id = agent(&store);
+        let hub = TranscriptHub::new(store);
+
+        let page = hub.window(&id, None, None);
+        assert!(page.blocks.is_empty());
+        assert_eq!(page.from_pos, 0);
+        assert_eq!(page.to_pos, 0);
+        assert!(!page.more);
+
+        // And so does a page asked for from before the first block.
+        let nothing_older = hub.window(&id, None, Some(1));
+        assert!(nothing_older.blocks.is_empty());
+        assert!(!nothing_older.more);
+    }
+
+    /// The reason the window is served from the hub: a turn in flight holds
+    /// blocks that will not reach `messages` for up to `SAVE_MS`. Writing is
+    /// turned off here, so a window read from the table could not hold the
+    /// streamed block by any timing.
+    #[test]
+    fn the_window_shows_a_block_that_has_not_reached_the_table() {
+        let store = tmp_store();
+        let id = agent(&store);
+        let hub = TranscriptHub::new(store.clone());
+        hub.append_system(&id, "flushed");
+
+        store
+            .with(|conn| conn.pragma_update(None, "query_only", true))
+            .expect("read only");
+        hub.apply(
+            &id,
+            HarnessEvent::MessageDelta {
+                text: "still streaming".into(),
+            },
+        );
+
+        let page = hub.window(&id, None, None);
+        assert_eq!(texts(&page), vec!["flushed", "still streaming"]);
+        assert_eq!(page.to_pos, 2);
+        let stored = store
+            .with(|conn| crate::messages::count(conn, &id))
+            .expect("count");
+        assert_eq!(stored, 1, "sanity: the table already holds the unflushed block");
+
+        store
+            .with(|conn| conn.pragma_update(None, "query_only", false))
+            .expect("writable");
+    }
+
+    #[test]
+    fn the_window_carries_the_live_state_the_hub_holds() {
+        let store = tmp_store();
+        let id = agent(&store);
+        let hub = TranscriptHub::new(store);
+        hub.set_status(&id, "working", None);
+        let seq = hub.apply(
+            &id,
+            HarnessEvent::MessageDelta {
+                text: "thinking".into(),
+            },
+        );
+
+        let page = hub.window(&id, Some(1), None);
+        assert_eq!(page.seq, seq);
+        assert_eq!(page.status, "working");
+        assert!(page.working);
+
+        hub.set_status(&id, "idle", None);
+        let done = hub.window(&id, Some(1), None);
+        assert_eq!(done.status, "idle");
+        assert!(!done.working);
+        assert_eq!(done.seq, seq, "reading a window is not an event");
     }
 }

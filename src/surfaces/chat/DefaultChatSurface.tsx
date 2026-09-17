@@ -6,6 +6,9 @@ export function DefaultChatSurface({
   session,
   blocks,
   working,
+  more,
+  loadingEarlier,
+  onLoadEarlier,
   ready,
   draft,
   files,
@@ -33,7 +36,15 @@ export function DefaultChatSurface({
       {blocks.length === 0 ? (
         <div className="min-h-0 flex-[5]" />
       ) : (
-        <Transcript blocks={blocks} working={working} onApprove={onApprove} onAnswer={onAnswer} />
+        <Transcript
+          blocks={blocks}
+          working={working}
+          more={more}
+          loadingEarlier={loadingEarlier}
+          onLoadEarlier={onLoadEarlier}
+          onApprove={onApprove}
+          onAnswer={onAnswer}
+        />
       )}
       <Composer
         centered={blocks.length === 0}
