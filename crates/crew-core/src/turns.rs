@@ -32,9 +32,9 @@ use crate::providers::codex::{
     CodexSpawn,
 };
 use crate::providers::cursor::{
-    assistant_delta_text, build_cursor_spawn_args, parse_tool_call, persona_prompt as cursor_persona,
+    assistant_delta_text, build_cursor_prompt, build_cursor_spawn_args, parse_tool_call,
     session_id_from_event, tool_status as cursor_tool_status, turn_failed as cursor_turn_failed,
-    turn_usage as cursor_turn_usage, with_attached_files, with_persona, CursorSpawn, ToolPhase,
+    turn_usage as cursor_turn_usage, CursorSpawn, ToolPhase,
 };
 use crate::providers::opencode::{
     opencode_config, step_failure as opencode_step_failure,
@@ -53,10 +53,6 @@ const INIT_TIMEOUT: Duration = Duration::from_secs(15);
 /// How long a provider may stay silent before its first line.
 const FIRST_OUTPUT_TIMEOUT: Duration = Duration::from_secs(120);
 const INTERRUPT_GRACE: Duration = Duration::from_millis(1500);
-/// An agent is disposable: it wakes on a message, works, and lets its CLI go.
-/// The window is only wide enough that an agent which writes itself back does
-/// not pay a cold start on every lap of its loop.
-const IDLE_KILL: Duration = Duration::from_secs(5);
 /// A self-addressed letter is how an agent keeps working. This many laps in a
 /// row without anyone else speaking is a runaway, not a plan.
 const MAX_SELF_TURNS: u32 = 25;
@@ -144,9 +140,6 @@ struct InFlightTool {
 }
 
 struct ClaudeLive {
-    cwd: String,
-    autonomy: Autonomy,
-    model: String,
     claude_session_id: String,
     approvals: HashMap<u64, PendingApproval>,
     questions: HashMap<u64, PendingQuestion>,
@@ -162,7 +155,6 @@ struct ClaudeLive {
     turn_tx: Option<oneshot::Sender<TurnOutcome>>,
     emitted_assistant: String,
     stderr: Vec<String>,
-    idle_gen: u64,
 }
 
 struct StreamLive {
@@ -641,7 +633,6 @@ impl TurnHost {
             files: None,
             mentions: None,
             hidden: None,
-            fresh: None,
             from_agent: Some(letter.from.clone()),
             nonce: None,
         });
@@ -678,7 +669,12 @@ impl TurnHost {
         }
     }
 
-    fn run_claude(&self, session: crate::session::Session, params: TurnStart) -> TurnOutcome {
+    fn run_claude(
+        &self,
+        session: crate::session::Session,
+        params: TurnStart,
+        history: Option<String>,
+    ) -> TurnOutcome {
         let session_id = session.id.clone();
         if self.stop_requested(&session_id) {
             return TurnOutcome::Stopped;
@@ -711,7 +707,6 @@ impl TurnHost {
             live.emitted_assistant.clear();
             live.tools_by_index.clear();
             live.tools_by_id.clear();
-            live.idle_gen += 1;
             let (tx, rx) = oneshot::channel();
             live.turn_tx = Some(tx);
             (rx, live.claude_session_id.clone())
@@ -719,7 +714,13 @@ impl TurnHost {
         let images = crate::files::load_inline_images(params.files.as_deref().unwrap_or(&[]));
         let inline: HashSet<String> = images.iter().map(|image| image.path.clone()).collect();
         let files = path_list(&params, &inline);
-        let message = build_claude_user_message(&claude_session_id, params.text.trim(), &files, &images);
+        let message = build_claude_user_message(
+            &claude_session_id,
+            history.as_deref(),
+            params.text.trim(),
+            &files,
+            &images,
+        );
         if let Err(error) = self
             .agents
             .write(&session_id, &serde_json::to_string(&message).unwrap_or_default())
@@ -729,10 +730,15 @@ impl TurnHost {
         let outcome = self
             .block_on(turn_rx)
             .unwrap_or(TurnOutcome::Failed("Turn channel closed".into()));
-        self.schedule_claude_idle(&session_id);
+        // The agent is disposable: the turn is over, so the CLI goes. What it
+        // knew is in the transcript, and the next turn is handed the tail.
+        self.agents.kill(&session_id);
+        self.detach(&session_id);
         outcome
     }
 
+    /// A turn gets its own Claude session, every time. What the agent remembers
+    /// is the tail Crew hands it, not whatever the CLI kept.
     fn ensure_claude(&self, session: &crate::session::Session, params: &TurnStart) -> Result<(), String> {
         let session_id = session.id.clone();
         let autonomy = if session.autonomy == "full" {
@@ -740,46 +746,13 @@ impl TurnHost {
         } else {
             Autonomy::Ask
         };
-        let moved = {
-            let map = self.lock();
-            match map.get(&session_id) {
-                Some(Live::Claude(live)) => {
-                    if !params.fresh.unwrap_or(false)
-                        && live.cwd == params.cwd
-                        && live.autonomy == autonomy
-                        && live.model == session.model
-                    {
-                        return Ok(());
-                    }
-                    live.cwd != params.cwd
-                        || live.autonomy != autonomy
-                        || live.model != session.model
-                }
-                _ => false,
-            }
-        };
-        if params.fresh.unwrap_or(false) || self.lock().contains_key(&session_id) {
+        if self.lock().contains_key(&session_id) {
             self.agents.kill(&session_id);
             self.detach(&session_id);
         }
-        if moved {
-            let _ = session::set_provider_session(&self.store, session_id.clone(), String::new());
-        }
-
-        let stored = session.provider_session_id.clone().filter(|id| !id.is_empty());
-        let resume = if moved || params.fresh.unwrap_or(false) {
-            None
-        } else {
-            stored
-        };
-        let claude_session_id = resume
-            .clone()
-            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        let claude_session_id = uuid::Uuid::new_v4().to_string();
 
         let live = ClaudeLive {
-            cwd: params.cwd.clone(),
-            autonomy: autonomy.clone(),
-            model: session.model.clone(),
             claude_session_id: claude_session_id.clone(),
             approvals: HashMap::new(),
             questions: HashMap::new(),
@@ -795,7 +768,6 @@ impl TurnHost {
             turn_tx: None,
             emitted_assistant: String::new(),
             stderr: Vec::new(),
-            idle_gen: 0,
         };
         self.lock().insert(session_id.clone(), Live::Claude(Box::new(live)));
         if self.stop_requested(&session_id) {
@@ -809,12 +781,7 @@ impl TurnHost {
         let persona = claude_persona(&session.name, &session.description, hint.as_deref());
         let spawn = ClaudeSpawn {
             model: Some(session.model.clone()).filter(|m| !m.is_empty()),
-            resume: resume.clone(),
-            session_id: if resume.is_none() {
-                Some(claude_session_id.clone())
-            } else {
-                None
-            },
+            session_id: Some(claude_session_id.clone()),
             system_prompt: Some(persona),
             autonomy,
             mcp_config: mcp.map(|(command, args)| {
@@ -890,38 +857,14 @@ impl TurnHost {
         Ok(())
     }
 
-    fn schedule_claude_idle(&self, session_id: &str) {
-        let gen = {
-            let map = self.lock();
-            match map.get(session_id) {
-                Some(Live::Claude(live)) => live.idle_gen,
-                _ => return,
-            }
-        };
-        let host = self.clone();
-        let id = session_id.to_string();
-        self.after(IDLE_KILL, move || {
-            let mut map = host.lock();
-            let Some(Live::Claude(live)) = map.get_mut(&id) else {
-                return;
-            };
-            if live.active || live.idle_gen != gen {
-                return;
-            }
-            drop(map);
-            host.agents.kill(&id);
-            host.detach(&id);
-        });
-    }
-
-    fn run_codex(&self, session: crate::session::Session, params: TurnStart) -> TurnOutcome {
+    fn run_codex(
+        &self,
+        session: crate::session::Session,
+        params: TurnStart,
+        history: Option<String>,
+    ) -> TurnOutcome {
         let session_id = session.id.clone();
         self.agents.kill(&session_id);
-        let resume = if params.fresh.unwrap_or(false) {
-            None
-        } else {
-            session.provider_session_id.clone().filter(|id| !id.is_empty())
-        };
         let (turn_rx, _) = match self.install_stream(&session_id, params.cwd.clone(), Live::Codex) {
             Ok(pair) => pair,
             Err(error) => return TurnOutcome::Failed(error),
@@ -933,11 +876,11 @@ impl TurnHost {
         let mcp = self.mcp();
         let hint = mcp.as_ref().map(|_| mcp_tools_hint());
         let prompt = build_codex_prompt(
-            if resume.is_some() { "" } else { &session.name },
-            if resume.is_some() { "" } else { &session.description },
+            &session.name,
+            &session.description,
+            history.as_deref(),
             &params.text,
             &path_list(&params, &HashSet::new()),
-            resume.is_none(),
             hint.as_deref(),
         );
         if let Err(error) = self.agents.spawn(
@@ -946,7 +889,6 @@ impl TurnHost {
             build_codex_spawn_args(&CodexSpawn {
                 prompt,
                 model: Some(session.model.clone()).filter(|m| !m.is_empty()),
-                resume: resume.clone(),
                 cwd: Some(params.cwd.clone()),
                 autonomy: if session.autonomy == "full" {
                     Autonomy::Full
@@ -961,14 +903,6 @@ impl TurnHost {
             return TurnOutcome::Failed(error);
         }
         self.agents.close_stdin(&session_id);
-        if let Some(resume) = resume {
-            self.transcripts.apply(
-                &session_id,
-                HarnessEvent::SessionProviderBound {
-                    provider_session_id: resume,
-                },
-            );
-        }
         self.transcripts
             .apply(&session_id, HarnessEvent::SessionStarted {});
         let outcome = self
@@ -979,13 +913,13 @@ impl TurnHost {
         outcome
     }
 
-    fn run_cursor(&self, session: crate::session::Session, params: TurnStart) -> TurnOutcome {
+    fn run_cursor(
+        &self,
+        session: crate::session::Session,
+        params: TurnStart,
+        history: Option<String>,
+    ) -> TurnOutcome {
         let session_id = session.id.clone();
-        let resume = if params.fresh.unwrap_or(false) {
-            None
-        } else {
-            session.provider_session_id.clone().filter(|id| !id.is_empty())
-        };
         let (turn_rx, _) = match self.install_stream(&session_id, params.cwd.clone(), Live::Cursor) {
             Ok(pair) => pair,
             Err(error) => return TurnOutcome::Failed(error),
@@ -995,22 +929,22 @@ impl TurnHost {
             Err(error) => return TurnOutcome::Failed(error),
         };
         let mcp = self.mcp();
-        let body = with_attached_files(params.text.trim(), &path_list(&params, &HashSet::new()));
         // Cursor takes no MCP config, so the bridge is a command it runs.
         let hint = mcp.as_ref().map(|(exe, _)| shell_tools_hint(exe));
-        let persona = if resume.is_some() {
-            None
-        } else {
-            Some(cursor_persona(&session.name, &session.description, hint.as_deref()))
-        };
-        let prompt = with_persona(&body, persona.as_deref());
+        let prompt = build_cursor_prompt(
+            &session.name,
+            &session.description,
+            history.as_deref(),
+            &params.text,
+            &path_list(&params, &HashSet::new()),
+            hint.as_deref(),
+        );
         if let Err(error) = self.agents.spawn(
             session_id.clone(),
             path,
             build_cursor_spawn_args(&CursorSpawn {
                 prompt,
                 model: Some(session.model.clone()).filter(|m| !m.is_empty()),
-                resume: resume.clone(),
                 autonomy: if session.autonomy == "full" {
                     Autonomy::Full
                 } else {
@@ -1022,14 +956,6 @@ impl TurnHost {
         ) {
             return TurnOutcome::Failed(error);
         }
-        if let Some(resume) = resume {
-            self.transcripts.apply(
-                &session_id,
-                HarnessEvent::SessionProviderBound {
-                    provider_session_id: resume,
-                },
-            );
-        }
         self.transcripts
             .apply(&session_id, HarnessEvent::SessionStarted {});
         let outcome = self
@@ -1040,14 +966,14 @@ impl TurnHost {
         outcome
     }
 
-    fn run_opencode(&self, session: crate::session::Session, params: TurnStart) -> TurnOutcome {
+    fn run_opencode(
+        &self,
+        session: crate::session::Session,
+        params: TurnStart,
+        history: Option<String>,
+    ) -> TurnOutcome {
         let session_id = session.id.clone();
         let mcp = self.mcp();
-        let resume = if params.fresh.unwrap_or(false) {
-            None
-        } else {
-            session.provider_session_id.clone().filter(|id| !id.is_empty())
-        };
         let (turn_rx, _) = match self.install_stream(&session_id, params.cwd.clone(), Live::Opencode) {
             Ok(pair) => pair,
             Err(error) => return TurnOutcome::Failed(error),
@@ -1058,17 +984,17 @@ impl TurnHost {
         };
         let hint = mcp.as_ref().map(|_| opencode_tools_hint());
         let prompt = build_opencode_prompt(
-            if resume.is_some() { "" } else { &session.name },
-            if resume.is_some() { "" } else { &session.description },
+            &session.name,
+            &session.description,
+            history.as_deref(),
             &params.text,
             &path_list(&params, &HashSet::new()),
-            resume.is_none(),
             hint.as_deref(),
         );
         // opencode has no approval channel: without --auto it falls back to the
         // user's own permission config, which Crew cannot answer for. Saying so
         // once beats an "ask" that silently never asks.
-        if resume.is_none() && session.autonomy != "full" {
+        if history.is_none() && session.autonomy != "full" {
             self.transcripts.append_system(
                 &session_id,
                 "opencode decides its own permissions: it has no way to ask Crew, so it runs under your opencode config.",
@@ -1083,7 +1009,6 @@ impl TurnHost {
             path,
             build_opencode_spawn_args(&OpencodeSpawn {
                 model: Some(session.model.clone()).filter(|m| !m.is_empty()),
-                resume: resume.clone(),
                 autonomy: if session.autonomy == "full" {
                     Autonomy::Full
                 } else {
@@ -1099,14 +1024,6 @@ impl TurnHost {
             return TurnOutcome::Failed(error);
         }
         self.agents.close_stdin(&session_id);
-        if let Some(resume) = resume {
-            self.transcripts.apply(
-                &session_id,
-                HarnessEvent::SessionProviderBound {
-                    provider_session_id: resume,
-                },
-            );
-        }
         self.transcripts
             .apply(&session_id, HarnessEvent::SessionStarted {});
         let outcome = self
@@ -1142,11 +1059,10 @@ impl TurnHost {
         Ok((rx, ()))
     }
 
-    /// A provider that has not said one word is not working, it is stuck — a
-    /// resumed opencode session whose directory moved hangs exactly this way,
-    /// with no output and no exit. Once anything arrives the turn is its own
-    /// business: a long tool call is silent too, and killing that would be
-    /// worse than waiting.
+    /// A provider that has not said one word is not working, it is stuck: no
+    /// output and no exit. Once anything arrives the turn is its own business —
+    /// a long tool call is silent too, and killing that would be worse than
+    /// waiting.
     fn watch_for_silence(&self, session_id: &str) {
         let host = self.clone();
         let id = session_id.to_string();
@@ -1164,7 +1080,7 @@ impl TurnHost {
                 host.signal(
                     &id,
                     TurnOutcome::Failed(format!(
-                        "No answer in {}s. The CLI started and said nothing; if it was resumed, its session may belong to another directory — send again to start fresh.",
+                        "No answer in {}s. The CLI started and said nothing.",
                         FIRST_OUTPUT_TIMEOUT.as_secs()
                     )),
                 );
@@ -2098,9 +2014,6 @@ impl TurnHost {
         self.lock().insert(
             id.to_string(),
             Live::Claude(Box::new(ClaudeLive {
-                cwd: String::new(),
-                autonomy: Autonomy::Full,
-                model: String::new(),
                 claude_session_id: String::new(),
                 approvals: HashMap::new(),
                 questions: HashMap::new(),
@@ -2116,7 +2029,6 @@ impl TurnHost {
                 turn_tx: None,
                 emitted_assistant: String::new(),
                 stderr: Vec::new(),
-                idle_gen: 0,
             })),
         );
     }
@@ -2276,7 +2188,6 @@ print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type
                 files: None,
                 mentions: None,
                 hidden: None,
-                fresh: None,
                 from_agent: None,
                 nonce: None,
             })
@@ -2313,7 +2224,6 @@ print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type
                 files: None,
                 mentions: None,
                 hidden: None,
-                fresh: None,
                 from_agent: None,
                 nonce: None,
             })
@@ -2356,6 +2266,34 @@ print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type
         assert_eq!(
             mailbox::waiting_count(world.host.test_store(), &cuddles.id).expect("count"),
             0
+        );
+    }
+
+    /// The turn is the whole prompt: every turn is a new provider session, so
+    /// nothing an agent knows survives except what Crew hands it back.
+    #[test]
+    fn a_second_turn_is_handed_the_first_one() {
+        let world = world();
+        let seen = world.dir.join("prompt.txt");
+        world
+            .host
+            .override_binary("opencode", fake_opencode_recording(&world.dir, &seen));
+        let ws = workspace(&world);
+        let coder = agent(&world, &ws, "Coder");
+
+        turn(&world, &coder, "el parser se cae con tabs");
+        let first = std::fs::read_to_string(&seen).expect("the provider was never spawned");
+        assert!(!first.contains("## The conversation so far"), "{first}");
+
+        turn(&world, &coder, "y ahora?");
+        let second = std::fs::read_to_string(&seen).expect("the provider was never spawned");
+        assert!(second.starts_with("You are Coder."), "the persona is on every turn: {second}");
+        assert!(second.contains("[user] el parser se cae con tabs"), "{second}");
+        assert!(second.contains("[you] ok"), "the reply is in the tail too: {second}");
+        assert!(second.trim_end().ends_with("y ahora?"), "{second}");
+        assert!(
+            second.find("[user] el parser").unwrap() < second.find("## This turn").unwrap(),
+            "{second}"
         );
     }
 
@@ -2497,7 +2435,6 @@ print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type
                 files: None,
                 mentions: None,
                 hidden: None,
-                fresh: None,
                 from_agent: None,
                 nonce: None,
             })

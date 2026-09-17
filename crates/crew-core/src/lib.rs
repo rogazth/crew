@@ -16,4 +16,5 @@ pub mod store;
 pub mod tools;
 pub mod transcript;
 pub mod turns;
+pub mod working_set;
 pub mod workspace;

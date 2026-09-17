@@ -228,7 +228,6 @@ impl Scheduler {
             files: None,
             mentions: None,
             hidden: Some(true),
-            fresh: None,
             from_agent: None,
             nonce: None,
         });

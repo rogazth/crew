@@ -20,7 +20,7 @@ Crew is the roster product, self-hosted, and it is not a chat companion: it is a
 - **Routines**: standing orders that wake an agent on a schedule. The daemon fires them, so they do not need the window open.
 - **Terminals**, for the times you want the CLI yourself.
 
-Agents are disposable. A turn ends and the CLI goes; what persists is the transcript and the provider's own resume token.
+Agents are disposable. A turn ends and the CLI goes; what persists is the transcript. Nothing is resumed — the next turn opens a clean provider session and Crew hands it the conversation back.
 
 ## Running it
 
@@ -43,6 +43,15 @@ node scripts/shot.mjs               # a screenshot of the chat against the mock
 
 ## How context works
 
+Every turn is a new provider session, so the prompt is built here, not kept there:
+
+```
+persona + rules + the tool sheet + today's date
+the tail of the transcript, rendered the way the chat renders it folded
+## This turn
+what was just said, its attachments, and who wrote it
+```
+
 Three stores, never one blob:
 
 | Store | Role | In the model? |
@@ -51,7 +60,11 @@ Three stores, never one blob:
 | **Working set** | This turn: persona, the last K messages, this turn's tools | Yes, budgeted |
 | **Memory** | Durable facts (“ignore Icebox”, “standup at 8”) | A capped slice, always |
 
-Live systems (Jira, Gmail) are queried, not memorized. Compact is an emergency valve on a fat episode, not the architecture.
+The tail is built in `crates/crew-core/src/working_set.rs`: sixty blocks or 20k
+characters, whichever runs out first, dropping the oldest and saying how many it
+dropped. A tool is the one line it did, never its output — that is what
+`search_messages` is for. Live systems (Jira, Gmail) are queried, not memorized.
+Compact is an emergency valve on a fat episode, not the architecture.
 
 ## The tools an agent gets
 

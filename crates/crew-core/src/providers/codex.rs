@@ -9,7 +9,6 @@ pub use super::parse_json_line;
 pub struct CodexSpawn {
     pub prompt: String,
     pub model: Option<String>,
-    pub resume: Option<String>,
     pub cwd: Option<String>,
     pub autonomy: Autonomy,
     pub mcp: Option<(String, Vec<String>)>,
@@ -28,21 +27,6 @@ pub fn build_codex_spawn_args(input: &CodexSpawn) -> Vec<String> {
             "mcp_servers.crew.args={}",
             serde_json::to_string(mcp_args).unwrap_or_else(|_| "[]".into())
         ));
-    }
-    if let Some(resume) = input.resume.as_deref().filter(|r| !r.is_empty()) {
-        args.push("resume".into());
-        args.push("--json".into());
-        args.push("--skip-git-repo-check".into());
-        if input.autonomy == Autonomy::Full {
-            args.push("--dangerously-bypass-approvals-and-sandbox".into());
-        }
-        if let Some(model) = input.model.as_deref().filter(|m| !m.is_empty()) {
-            args.push("-m".into());
-            args.push(model.into());
-        }
-        args.push(resume.into());
-        args.push(input.prompt.clone());
-        return args;
     }
     args.push("--json".into());
     args.push("--skip-git-repo-check".into());
@@ -64,24 +48,21 @@ pub fn build_codex_spawn_args(input: &CodexSpawn) -> Vec<String> {
     args
 }
 
+/// `codex exec` takes the whole prompt as one argument, so the turn is one
+/// document: persona, the tail of the conversation, then what is being asked.
 pub fn build_codex_prompt(
     name: &str,
     description: &str,
+    history: Option<&str>,
     text: &str,
     files: &[String],
-    with_persona: bool,
     tools: Option<&str>,
 ) -> String {
-    let body = with_attached_paths(text.trim(), files);
-    if !with_persona {
-        return body;
-    }
-    let persona = persona_prompt(name, description, tools);
-    if body.is_empty() {
-        persona
-    } else {
-        format!("{persona}\n\n{body}")
-    }
+    super::assemble(
+        persona_prompt(name, description, tools),
+        history,
+        &with_attached_paths(text.trim(), files),
+    )
 }
 
 pub use super::persona_prompt;

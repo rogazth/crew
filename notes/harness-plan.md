@@ -83,7 +83,8 @@ its own migration.
 
 `opencode run --format json --auto -m <provider>/<model> [--session <id>]`.
 Events: `step_start`, `text`, `tool`, `step_finish` with `tokens`/`cost`.
-`sessionID` on every line is the resume token → `provider_session_id`.
+`sessionID` on every line is recorded as `provider_session_id` — the id of that
+run, not a token anything picks back up. See "Every turn is a clean session".
 Free models need no credentials, which makes it the one provider we can test
 end to end in CI.
 
@@ -174,7 +175,8 @@ cargo test        # rust
 | G7 | the review of the review: four more, in the same class | done `d8ed0e2` |
 | E8 | a turn's cost is the turn's, not the last thing it said | done `8b34973` |
 | D2 | the tool sheet names tools the way each provider takes them | done `b41fb3e` |
-| D3 | a refusal says what the tool takes | done |
+| D3 | a refusal says what the tool takes | done `b41fb3e` |
+| H1 | every turn is a clean session, and Crew builds the prompt | done |
 
 ### How A5 landed
 
@@ -226,6 +228,74 @@ which is what happened when the reply was above the window.
 The grouping that decides all of this moved to `src/lib/transcriptRows.ts`,
 because it was in a `.tsx` where the project's own rule says it could not be
 tested. Thirteen tests came with it.
+
+## Every turn is a clean session
+
+The plan always said the working set was persona + the last K messages + this
+turn's tools. It was never built. All four providers resumed instead — `resume`
+was `session.provider_session_id` unless `params.fresh`, and nothing in the
+repo ever set `fresh`, so the clean branch was dead code from the day it was
+written.
+
+That is not a tidiness problem. Codex, Cursor and opencode were handed the
+persona *only when they were not being resumed*: `build_codex_prompt` got `""`
+for the name and the description and `with_persona: false` on every turn but
+the first. An agent on its fortieth turn had last seen its own job description,
+Crew's rules and the tool sheet on the day it was created — and the tool sheet
+is the one thing `D2` proved an agent goes wrong without. Claude escaped the
+worst of it, because `--append-system-prompt` rode on every spawn, but it did
+not respawn at all: `ensure_claude` returned early while the cwd, the autonomy
+and the model held, so the same process answered turn after turn and the
+persona went out once per process, not once per turn.
+
+What the model saw came from the provider's own session file. Crew's `messages`
+table, its FTS5 index and the paged window built in A5 were an index nothing
+read back into a prompt.
+
+Now every turn is:
+
+```
+persona + rules + the tool sheet + today's date   ← every turn, not the first
+the tail of the transcript                        ← working_set.rs
+## This turn
+the text, its attachments, and the envelope if an agent wrote it
+```
+
+`working_set.rs` renders the tail the way the chat renders it folded: text as
+text, a tool as the one line it did — `ran: cargo test → 0`, `edited:
+parser.rs +12 −3` — and never its output, which is stored and searchable and
+would be the thing that stops a tail fitting. It walks back from the newest
+block, drops whole blocks when the budget runs out, and says how many it
+dropped and that `search_messages` reaches them. Reasoning blocks are left out:
+the model's thinking belongs to the session that produced it.
+
+The date is in the persona for the same reason the persona is on every turn. A
+model with no conversation behind it has no way to know what day it is.
+
+What went with it:
+
+- `--resume` / `resume` / `--session` are gone from all four spawn builders,
+  and `TurnStart.fresh` is gone from the protocol: a flag meaning "start clean"
+  in a world where everything starts clean is a trap.
+- `IDLE_KILL` and `schedule_claude_idle` are gone. They kept a Claude process
+  alive for five seconds so a self-message loop would not pay a cold start with
+  its context intact; the context now comes from the tail, so the process dies
+  when the turn does, like the other three.
+- `ClaudeLive` lost `cwd`, `autonomy` and `model` — they existed only for the
+  reuse check that is no longer there.
+- `provider_session_id` still gets written from the provider's own events. It
+  is the id of the last run now, not a token; nothing reads it back.
+
+The price, named: a cold start per turn, and a loop of twenty-five self-turns
+pays it twenty-five times. The tail is re-sent every turn, which resume also
+did on the provider's side — the difference is that the size is now Crew's to
+choose. The budget is in blocks and characters rather than tokens on purpose: a
+prefix whose length moves every turn is a prefix no provider caches.
+
+Measured end to end on `scripts/drive.mjs`, all four scenarios, on opencode and
+on Claude. `SCENARIO=loop` is the one that proves it: the agent writes
+`step1.txt`, messages itself, and the second turn — a new process, a new
+session — knows that `step1.txt` exists because the tail told it.
 
 ## Routines belong to the daemon
 

@@ -11,7 +11,6 @@ pub use super::{parse_json_line, try_parse_json_record};
 #[derive(Clone, Debug, PartialEq)]
 pub struct ClaudeSpawn {
     pub model: Option<String>,
-    pub resume: Option<String>,
     pub session_id: Option<String>,
     pub system_prompt: Option<String>,
     pub autonomy: Autonomy,
@@ -46,10 +45,7 @@ pub fn build_claude_spawn_args(input: &ClaudeSpawn) -> Vec<String> {
         args.push("--append-system-prompt".into());
         args.push(prompt.into());
     }
-    if let Some(resume) = input.resume.as_deref().filter(|r| !r.is_empty()) {
-        args.push("--resume".into());
-        args.push(resume.into());
-    } else if let Some(session_id) = input.session_id.as_deref().filter(|s| !s.is_empty()) {
+    if let Some(session_id) = input.session_id.as_deref().filter(|s| !s.is_empty()) {
         args.push("--session-id".into());
         args.push(session_id.into());
     }
@@ -62,13 +58,16 @@ pub fn build_claude_spawn_args(input: &ClaudeSpawn) -> Vec<String> {
 
 pub use super::persona_prompt;
 
+/// Claude takes its system prompt on argv and the turn on stdin, so the tail of
+/// the conversation rides in the user message, above what is being asked now.
 pub fn build_claude_user_message(
     session_id: &str,
+    history: Option<&str>,
     text: &str,
     files: &[String],
     images: &[InlineImage],
 ) -> Value {
-    let body = with_attached_paths(text.trim(), files);
+    let body = super::assemble(String::new(), history, &with_attached_paths(text.trim(), files));
     let mut content: Vec<Value> = images
         .iter()
         .map(|image| {

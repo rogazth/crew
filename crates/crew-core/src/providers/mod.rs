@@ -55,6 +55,36 @@ pub fn persona_prompt(name: &str, description: &str, tools: Option<&str>) -> Str
     }
 }
 
+/// The prompt a turn is: what the agent is, what has been said, then what is
+/// being asked now.
+///
+/// The turn goes last because it is the instruction, and the tail above it is
+/// memory. Reversed, the newest thing the user said sits behind a wall of what
+/// they said before.
+pub fn assemble(system: String, history: Option<&str>, turn: &str) -> String {
+    let history = history.map(str::trim).filter(|tail| !tail.is_empty());
+    let turn = turn.trim();
+    let mut out = system;
+    let mut push = |part: &str| {
+        if !out.is_empty() {
+            out.push_str("\n\n");
+        }
+        out.push_str(part);
+    };
+    if let Some(history) = history {
+        push(history);
+        // The header earns its place as a separator; with nothing above it, it
+        // is a heading over the user's own message.
+        if !turn.is_empty() {
+            push("## This turn");
+        }
+    }
+    if !turn.is_empty() {
+        push(turn);
+    }
+    out
+}
+
 /// The machine's own date, the way a person here would write it.
 fn today() -> String {
     const DAYS: [&str; 7] = [
@@ -175,6 +205,125 @@ mod tests {
         let today = today();
         assert!(prompt.contains(&format!("Today is {today}.")), "{prompt}");
         assert!(today.contains(", "), "the date reads as a date: {today}");
+    }
+
+    const TAIL: &str = "## The conversation so far\n\n[user] hola\n[you] hola a ti";
+
+    fn turn_prompts(history: Option<&str>) -> Vec<String> {
+        vec![
+            codex::build_codex_prompt(
+                "Planner",
+                "You keep the roadmap.",
+                history,
+                "y ahora?",
+                &[],
+                Some("You have: `mcp__crew__message_agent`."),
+            ),
+            opencode::build_opencode_prompt(
+                "Planner",
+                "You keep the roadmap.",
+                history,
+                "y ahora?",
+                &[],
+                Some("You have: `mcp__crew__message_agent`."),
+            ),
+            cursor::build_cursor_prompt(
+                "Planner",
+                "You keep the roadmap.",
+                history,
+                "y ahora?",
+                &[],
+                Some("You have: `mcp__crew__message_agent`."),
+            ),
+        ]
+    }
+
+    /// The bug this replaced: every provider was resumed, so the persona and the
+    /// tool sheet reached an agent once, on the turn it was created. By its
+    /// fortieth turn it was running on whatever its CLI happened to have kept.
+    #[test]
+    fn every_provider_sends_the_persona_and_the_tail_on_every_turn() {
+        for prompt in turn_prompts(Some(TAIL)) {
+            assert!(prompt.starts_with("You are Planner. You keep the roadmap."), "{prompt}");
+            assert!(prompt.contains("`mcp__crew__message_agent`"), "{prompt}");
+            assert!(prompt.contains("[you] hola a ti"), "{prompt}");
+            assert!(prompt.trim_end().ends_with("y ahora?"), "{prompt}");
+            assert!(
+                prompt.find("[user] hola") < prompt.find("y ahora?"),
+                "this turn goes under the tail, not above it: {prompt}"
+            );
+        }
+    }
+
+    /// A first turn has nothing behind it, so the separator would be a heading
+    /// over the user's own message.
+    #[test]
+    fn a_first_turn_is_the_persona_and_the_message() {
+        for prompt in turn_prompts(None) {
+            assert!(!prompt.contains("## This turn"), "{prompt}");
+            assert!(prompt.trim_end().ends_with("y ahora?"), "{prompt}");
+        }
+    }
+
+    /// Claude takes the same three parts through two channels: the persona on
+    /// argv, the tail on stdin above the turn.
+    #[test]
+    fn claude_splits_the_same_prompt_across_its_two_channels() {
+        let persona = persona_prompt("Planner", "You keep the roadmap.", Some("You have: x."));
+        let args = claude::build_claude_spawn_args(&claude::ClaudeSpawn {
+            model: Some("claude-haiku-4-5-20251001".into()),
+            session_id: Some("sid".into()),
+            system_prompt: Some(persona.clone()),
+            autonomy: Autonomy::Full,
+            mcp_config: None,
+        });
+        assert!(
+            args.windows(2).any(|pair| pair[0] == "--append-system-prompt" && pair[1] == persona),
+            "{args:?}"
+        );
+        let message = claude::build_claude_user_message("sid", Some(TAIL), "y ahora?", &[], &[]);
+        let text = message["message"]["content"][0]["text"].as_str().unwrap_or_default();
+        assert!(text.starts_with("## The conversation so far"), "{text}");
+        assert!(text.trim_end().ends_with("y ahora?"), "{text}");
+    }
+
+    /// The whole point: an agent's memory is the tail Crew hands it, so nothing
+    /// asks a CLI to pick a conversation back up.
+    #[test]
+    fn no_provider_asks_its_cli_to_resume_anything() {
+        let runs = [
+            claude::build_claude_spawn_args(&claude::ClaudeSpawn {
+                model: None,
+                session_id: Some("sid".into()),
+                system_prompt: Some("persona".into()),
+                autonomy: Autonomy::Ask,
+                mcp_config: None,
+            }),
+            codex::build_codex_spawn_args(&codex::CodexSpawn {
+                prompt: "hi".into(),
+                model: None,
+                cwd: Some("/tmp".into()),
+                autonomy: Autonomy::Ask,
+                mcp: None,
+            }),
+            cursor::build_cursor_spawn_args(&cursor::CursorSpawn {
+                prompt: "hi".into(),
+                model: None,
+                autonomy: Autonomy::Ask,
+            }),
+            opencode::build_opencode_spawn_args(&opencode::OpencodeSpawn {
+                model: None,
+                autonomy: Autonomy::Ask,
+            }),
+        ];
+        for args in runs {
+            for arg in &args {
+                assert!(
+                    !matches!(arg.as_str(), "resume" | "--resume" | "--session" | "--continue"),
+                    "{args:?}"
+                );
+            }
+        }
     }
 
     #[test]

@@ -21,9 +21,6 @@ pub struct TurnStart {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub hidden: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub fresh: Option<bool>,
     /// Set when this turn is another agent's message, not yours.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]

@@ -103,7 +103,7 @@ CREATE INDEX sessions_workspace_updated_idx
 
 Tres decisiones que vienen de R1 y hay que respetar:
 
-1. **`provider_session_id` es opaco.** Crew nunca lo parsea. Es el token de resume del proveedor.
+1. **`provider_session_id` es opaco.** Crew nunca lo parsea. Es el id que el proveedor le puso a su última corrida: se guarda para poder rastrearla, no para reanudarla. Ningún turno se reanuda — cada uno abre una sesión limpia y recibe el tail que arma `working_set.rs`.
 2. **`blocks_json` era el transcript entero en una columna.** Aguantó hasta que hizo falta búsqueda transversal; desde la migración 10 los mismos bloques viven además como filas en `messages` con un índice FTS5 (`crates/crew-core/src/messages.rs`). La columna sigue escribiéndose: es lo que el hub hidrata al abrir una sesión. Las filas son para buscar, paginar y filtrar por fecha.
 3. **`schema_migrations` desde el día uno.** `store.rs` corre migraciones numeradas al abrir.
 
@@ -221,8 +221,8 @@ escribiendo el transcript en SQLite, y al arrancar `reconcile()` mata huérfanos
 Rust agrupa las líneas de stdout por evento IPC (8 ms de coalescing, tope de
 256 líneas / 64 KiB) y las descarta si el proceso ya no es el dueño de la sesión.
 
-Un `claude` parado son ~200 MB de node: el runtime lo mata tras 10 min sin
-turnos y lo vuelve a levantar con `--resume`.
+Un `claude` parado son ~200 MB de node: el proceso muere al terminar el turno,
+y el siguiente arranca con un `--session-id` nuevo.
 
 ## Editor
 

@@ -183,7 +183,7 @@ export type TurnAnswer = { sessionId: string, requestId: number, answers: { [key
 
 export type TurnRespond = { sessionId: string, requestId: number, decision: ApprovalDecision, };
 
-export type TurnStart = { sessionId: string, cwd: string, text: string, files?: Array<AttachedFile>, mentions?: Array<string>, hidden?: boolean, fresh?: boolean, 
+export type TurnStart = { sessionId: string, cwd: string, text: string, files?: Array<AttachedFile>, mentions?: Array<string>, hidden?: boolean, 
 /**
  * Set when this turn is another agent's message, not yours.
  */

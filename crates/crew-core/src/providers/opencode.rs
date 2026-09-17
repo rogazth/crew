@@ -8,7 +8,6 @@ pub use super::parse_json_line;
 
 pub struct OpencodeSpawn {
     pub model: Option<String>,
-    pub resume: Option<String>,
     pub autonomy: Autonomy,
 }
 
@@ -22,37 +21,27 @@ pub fn build_opencode_spawn_args(input: &OpencodeSpawn) -> Vec<String> {
         args.push("-m".into());
         args.push(model.into());
     }
-    if let Some(resume) = input.resume.as_deref().filter(|r| !r.is_empty()) {
-        args.push("--session".into());
-        args.push(resume.into());
-    }
     if input.autonomy == Autonomy::Full {
         args.push("--auto".into());
     }
     args
 }
 
+/// opencode reads the whole prompt from stdin, so the turn is one document:
+/// persona, the tail of the conversation, then what is being asked now.
 pub fn build_opencode_prompt(
     name: &str,
     description: &str,
+    history: Option<&str>,
     text: &str,
     files: &[String],
-    with_persona: bool,
     tools: Option<&str>,
 ) -> String {
-    let body = with_attached_paths(text.trim(), files);
-    if !with_persona {
-        return body;
-    }
     let persona = match tools {
         Some(hint) => format!("{}\n\n{hint}", persona_prompt(name, description, None)),
         None => persona_prompt(name, description, None),
     };
-    if body.is_empty() {
-        persona
-    } else {
-        format!("{persona}\n\n{body}")
-    }
+    super::assemble(persona, history, &with_attached_paths(text.trim(), files))
 }
 
 /// opencode takes no MCP server on the command line, only through config. It

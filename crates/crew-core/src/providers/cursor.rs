@@ -9,7 +9,6 @@ pub use super::parse_json_line;
 pub struct CursorSpawn {
     pub prompt: String,
     pub model: Option<String>,
-    pub resume: Option<String>,
     pub autonomy: Autonomy,
 }
 
@@ -24,10 +23,6 @@ pub fn build_cursor_spawn_args(input: &CursorSpawn) -> Vec<String> {
     if let Some(model) = input.model.as_deref().filter(|m| !m.is_empty()) {
         args.push("--model".into());
         args.push(model.into());
-    }
-    if let Some(resume) = input.resume.as_deref().filter(|r| !r.is_empty()) {
-        args.push("--resume".into());
-        args.push(resume.into());
     }
     if input.autonomy == Autonomy::Full {
         args.push("-f".into());
@@ -55,12 +50,21 @@ pub fn with_attached_files(text: &str, files: &[String]) -> String {
 
 pub use super::persona_prompt;
 
-pub fn with_persona(body: &str, persona: Option<&str>) -> String {
-    match persona.filter(|p| !p.is_empty()) {
-        None => body.to_string(),
-        Some(persona) if body.is_empty() => persona.to_string(),
-        Some(persona) => format!("{persona}\n\n{body}"),
-    }
+/// `cursor-agent -p` takes the whole prompt as one argument, so the turn is one
+/// document: persona, the tail of the conversation, then what is being asked.
+pub fn build_cursor_prompt(
+    name: &str,
+    description: &str,
+    history: Option<&str>,
+    text: &str,
+    files: &[String],
+    tools: Option<&str>,
+) -> String {
+    super::assemble(
+        persona_prompt(name, description, tools),
+        history,
+        &with_attached_files(text.trim(), files),
+    )
 }
 
 pub fn session_id_from_event(rec: &Map<String, Value>) -> Option<String> {
