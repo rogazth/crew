@@ -1,6 +1,6 @@
 # Crew como daemon + cliente — arquitectura y fases
 
-Estado: **fases 1, 2 y 4 mezcladas en master el 2026-09-04; ver §10.** Este documento deja por escrito qué requisito rompe qué, qué evidencia lo respalda y en qué orden se construye, para no volver a discutirlo desde cero.
+**Ejecutado.** Estado: **fases 1, 2 y 4 mezcladas en master el 2026-09-04; ver §10.** Este documento deja por escrito qué requisito rompe qué, qué evidencia lo respalda y en qué orden se construye, para no volver a discutirlo desde cero.
 
 Decisiones tomadas el 2026-09-04:
 

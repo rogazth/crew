@@ -208,11 +208,11 @@ src/lib/agentTools.ts    los tools que un agente tiene sobre Crew (agentes, ruti
 src/hooks/useThread.ts   useSyncExternalStore sobre transcript.ts
 ```
 
-Los agentes llegan a Crew por `bridge.rs`: `crew --mcp` (Claude, Codex) o
-`crew call` (Cursor) escriben una línea JSON en el socket, Rust la emite como
-evento `agent-tool`, `agentTools.ts` la resuelve con `api.ts` y el scheduler, y
-`bridge_reply` devuelve la respuesta. Rust no interpreta ninguna llamada. Ver
-`notes/agent-tools-plan.md`.
+Los agentes llegan a Crew por `bridge.rs`: `crew --mcp` (Claude, Codex,
+opencode) o `crew call` (Cursor) escriben una línea JSON en el socket UNIX, y
+`crew_core::tools::handle` la resuelve contra el store (`crewd/src/lib.rs:286`).
+El catálogo, el ranking de `find_tool` y cada handler viven en
+`crates/crew-core/src/tools.rs`; el renderer no participa.
 
 Un tab cerrado o un reload del webview no pierden el turno: el runtime sigue
 escribiendo el transcript en SQLite, y al arrancar `reconcile()` mata huérfanos

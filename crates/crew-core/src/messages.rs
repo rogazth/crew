@@ -964,7 +964,7 @@ mod review_tests {
     }
 
     /// The upsert is keyed by `pos`, not by the block id the plan specified
-    /// (notes/harness-plan.md, `messages_id_idx`). The cheap path is therefore
+    /// (docs/plans/2026-09-17-harness.md, `messages_id_idx`). The cheap path is therefore
     /// only correct and only cheap while blocks are strictly append-only:
     /// one block arriving anywhere else renumbers everything after it.
     #[test]

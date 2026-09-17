@@ -479,7 +479,7 @@ mod tests {
         );
     }
 
-    /// The shell call of `notes/cursor-protocol.jsonl`, with the exit code
+    /// The shell call of `docs/protocols/cursor.jsonl`, with the exit code
     /// turned non-zero.
     #[test]
     fn a_failed_shell_call_carries_its_exit_code_and_output() {
@@ -517,7 +517,7 @@ mod tests {
         );
     }
 
-    /// The read of `notes/cursor-protocol.jsonl`: `limit: 3` on the way in, a
+    /// The read of `docs/protocols/cursor.jsonl`: `limit: 3` on the way in, a
     /// `readRange` on the way back.
     #[test]
     fn a_read_carries_the_window_it_returned() {
@@ -549,7 +549,7 @@ mod tests {
         );
     }
 
-    /// The failed read of `notes/cursor-protocol.jsonl`: an error result repeats
+    /// The failed read of `docs/protocols/cursor.jsonl`: an error result repeats
     /// no arguments, so the row keeps the detail it already had.
     #[test]
     fn a_failed_call_adds_no_detail() {

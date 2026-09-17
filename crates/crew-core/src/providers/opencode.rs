@@ -400,7 +400,7 @@ mod tests {
     }
 
     /// The `sleep 3 && ls /definitely-not-here-xyz` call of
-    /// `notes/opencode-streaming.jsonl`: it reported once, three seconds in,
+    /// `docs/protocols/opencode-streaming.jsonl`: it reported once, three seconds in,
     /// `completed` with the exit code on the side.
     #[test]
     fn a_failed_shell_call_carries_its_exit_code_and_output() {
@@ -447,7 +447,7 @@ mod tests {
         );
     }
 
-    /// The `have.txt` read of `notes/opencode-streaming.jsonl`, with the path
+    /// The `have.txt` read of `docs/protocols/opencode-streaming.jsonl`, with the path
     /// shortened.
     #[test]
     fn a_read_carries_the_window_it_returned() {
@@ -541,7 +541,7 @@ mod tests {
         );
     }
 
-    /// The missing-file read of `notes/opencode-streaming.jsonl`: a tool that
+    /// The missing-file read of `docs/protocols/opencode-streaming.jsonl`: a tool that
     /// threw has no metadata and no output, only the message.
     #[test]
     fn a_tool_that_threw_shows_its_error() {
