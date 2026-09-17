@@ -20,13 +20,11 @@ import { useWorkspaces } from "./hooks/useWorkspaces";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./lib/providers";
 import { fileTabId, sessionTabId, stubTabId } from "./lib/tabs";
 import type { ProjectFile, Session, StubKind } from "./lib/types";
-import { SETTINGS_DEFAULT, type SettingsSectionId } from "./lib/settings";
+import { SETTINGS_DEFAULT } from "./lib/settings";
 import { startScheduler } from "./lib/scheduler";
-import { newRoutineDraft, type RoutineDraft } from "./lib/routines";
 import { nextSessionName } from "./lib/workspaces";
-import { RoutinesView } from "./surfaces/RoutinesView";
-import { SearchView } from "./surfaces/SearchView";
-import { SettingsView } from "./surfaces/SettingsView";
+import { Pages } from "./surfaces/Pages";
+import { usePages } from "./hooks/usePages";
 import { WorkspacePanes } from "./surfaces/WorkspacePanes";
 
 type Sheet = { session: Session | null };
@@ -35,12 +33,6 @@ type Sheet = { session: Session | null };
  * Pages take over the main area; only settings swaps the sidebar too. They stack over
  * the tabs, so anything that opens or picks a tab has to leave the page first.
  */
-type View =
-  | { kind: "workspace" }
-  | { kind: "settings"; section: SettingsSectionId }
-  | { kind: "routines"; draft: RoutineDraft | null }
-  | { kind: "search" };
-
 export function App() {
   useEffect(startScheduler, []);
   useSelectAllScope();
@@ -76,25 +68,25 @@ export function App() {
   const [sheet, setSheet] = useState<Sheet | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [view, setView] = useState<View>({ kind: "workspace" });
-  const settings = view.kind === "settings" ? view.section : null;
-  const closeView = useCallback(() => setView({ kind: "workspace" }), []);
+  // Destructured: the hook returns a fresh object each render, and these
+  // callbacks are dependencies of half the shell.
+  const { page, settings, isWorkspace, isRoutines, close: closePage, toggle: togglePage, openSettings, openRoutines } = usePages();
 
   /** Wraps a tab action so it lands in view instead of behind whatever page is up. */
   const inTabs = useCallback(
     (act: () => void) => () => {
-      closeView();
+      closePage();
       act();
     },
-    [closeView],
+    [closePage],
   );
 
   const openSession = useCallback(
     (session: Session) => {
-      closeView();
+      closePage();
       tabs.open({ id: sessionTabId(session.id), kind: "session", sessionId: session.id });
     },
-    [closeView, tabs],
+    [closePage, tabs],
   );
 
   /** A message from another agent names its sender; the name opens its tab. */
@@ -108,11 +100,11 @@ export function App() {
 
   const openFile = useCallback(
     (file: ProjectFile) => {
-      closeView();
+      closePage();
       tabs.open({ id: fileTabId(file.path), kind: "file", path: file.path, relative: file.relative });
       setPalette(null);
     },
-    [closeView, tabs],
+    [closePage, tabs],
   );
 
   // Sessions open straight away; the name is derived, never prompted.
@@ -130,8 +122,8 @@ export function App() {
   const newAgent = useCallback(() => setSheet({ session: null }), []);
 
   const newRoutineFor = useCallback(
-    (session: Session) => () => setView({ kind: "routines", draft: newRoutineDraft(session.id) }),
-    [],
+    (session: Session) => () => openRoutines(session.id),
+    [openRoutines],
   );
 
   const changeModel = useCallback(
@@ -142,10 +134,10 @@ export function App() {
 
   const openStub = useCallback(
     (stub: StubKind, title: string) => {
-      closeView();
+      closePage();
       tabs.open({ id: stubTabId(stub), kind: "stub", stub, title });
     },
-    [closeView, tabs],
+    [closePage, tabs],
   );
 
   const launch = useCallback(
@@ -204,16 +196,9 @@ export function App() {
     "toggle-sidebar": () => setSidebarOpen((open) => !open),
     "new-agent": newAgent,
     "new-session": () => void newSession(),
-    "search-messages": () =>
-      setView((open) => (open.kind === "search" ? { kind: "workspace" } : { kind: "search" })),
-    "open-routines": () =>
-      setView((open) =>
-        open.kind === "routines" ? { kind: "workspace" } : { kind: "routines", draft: null },
-      ),
-    "open-settings": () =>
-      setView((open) =>
-        open.kind === "settings" ? { kind: "workspace" } : { kind: "settings", section: SETTINGS_DEFAULT },
-      ),
+    "search-messages": () => togglePage({ kind: "search" }),
+    "open-routines": () => togglePage({ kind: "routines", draft: null }),
+    "open-settings": () => togglePage({ kind: "settings", section: SETTINGS_DEFAULT }),
     "reopen-tab": inTabs(tabs.reopen),
     "next-tab": inTabs(() => tabs.step(1)),
     "prev-tab": inTabs(() => tabs.step(-1)),
@@ -229,7 +214,7 @@ export function App() {
     close: () => {
       if (palette) setPalette(null);
       else if (sheet) setSheet(null);
-      else if (view.kind !== "workspace") closeView();
+      else if (!isWorkspace) closePage();
       else if (tabs.active) closeTab(tabs.active.id);
     },
   });
@@ -260,8 +245,8 @@ export function App() {
       {active && (
         <AppSidebar
           settings={settings}
-          onSelectSettings={(section) => setView({ kind: "settings", section })}
-          onCloseSettings={closeView}
+          onSelectSettings={openSettings}
+          onCloseSettings={closePage}
           sessions={{
             workspace: active,
             workspaces: workspaces.workspaces,
@@ -275,12 +260,12 @@ export function App() {
             sessions,
             activeSessionId,
             settingsOpen: settings !== null,
-            routinesOpen: view.kind === "routines",
+            routinesOpen: isRoutines,
             onSelect: openSession,
             onNewAgent: newAgent,
             onNewSession: newSession,
-            onOpenRoutines: () => setView({ kind: "routines", draft: null }),
-            onOpenSettings: () => setView({ kind: "settings", section: SETTINGS_DEFAULT }),
+            onOpenRoutines: () => openRoutines(),
+            onOpenSettings: () => openSettings(),
             onEdit: (session) => setSheet({ session }),
             onRename: (session, name) => void rename(session.id, name),
             onRemove: confirms.askSession,
@@ -291,27 +276,16 @@ export function App() {
       )}
 
       <main className="flex min-w-0 flex-1 flex-col bg-canvas">
-        {settings && <SettingsView section={settings} />}
-        {view.kind === "routines" && active && (
-          <RoutinesView
-            // A draft arriving from the agent drawer has to reopen the editor even
-            // when the page is already up.
-            key={view.draft?.key ?? "routines"}
-            draft={view.draft}
-            workspaces={workspaces.workspaces}
-            activeWorkspaceId={active.id}
-            agents={sessions.filter((session) => session.kind === "agent")}
-            onConfirm={confirms.ask}
-          />
-        )}
-        {view.kind === "search" && (
-          <SearchView
-            agents={sessions.filter((session) => session.kind === "agent")}
-            onOpenSession={openSessionById}
-          />
-        )}
+        <Pages
+          page={page}
+          workspaces={workspaces.workspaces}
+          activeWorkspace={active}
+          sessions={sessions}
+          onConfirm={confirms.ask}
+          onOpenSession={openSessionById}
+        />
         {/* Hidden, not unmounted: agent and terminal processes stay alive. */}
-        <div hidden={view.kind !== "workspace"} className="flex min-h-0 flex-1 flex-col">
+        <div hidden={!isWorkspace} className="flex min-h-0 flex-1 flex-col">
           <TabBar
             inset={!sidebarOpen}
             tabs={tabs.tabs}
