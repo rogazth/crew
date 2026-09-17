@@ -287,3 +287,143 @@ pub fn wake_prompt(
         prompt.trim()
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::schedule::Schedule;
+
+    fn store() -> Store {
+        let dir = std::env::temp_dir().join(format!("crew-routine-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        Store::open(dir.join("crew.sqlite3")).expect("store")
+    }
+
+    fn a_routine(store: &Store) -> Routine {
+        let root = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
+        std::fs::create_dir_all(&root).expect("root");
+        let workspace = crate::workspace::create(store, "w".into(), root.to_string_lossy().into())
+            .expect("workspace");
+        let agent = crate::session::create(
+            store,
+            workspace.id,
+            "agent".into(),
+            "Coder".into(),
+            "claude".into(),
+            "m".into(),
+            "".into(),
+            "ask".into(),
+        )
+        .expect("session");
+        upsert(
+            store,
+            None,
+            agent.id,
+            "Standup".into(),
+            true,
+            "check the board".into(),
+            Schedule::Interval { minutes: 30 }.to_json(),
+            Some(1_000),
+            None,
+        )
+        .expect("routine")
+    }
+
+    fn run(id: &str, status: RunStatus) -> RoutineRun {
+        RoutineRun {
+            id: id.into(),
+            started_at: 1,
+            finished_at: None,
+            status,
+            trigger: RunTrigger::Schedule,
+        }
+    }
+
+    fn history(store: &Store, id: &str) -> Vec<RoutineRun> {
+        parse_runs(&scheduled(store, id.to_string()).unwrap().unwrap().routine.runs_json)
+    }
+
+    /// The history is one column, and a writer holding a copy of it from before
+    /// another writer's line would delete that line on the way out. Both of
+    /// these read it back themselves.
+    #[test]
+    fn two_writers_do_not_lose_each_others_runs() {
+        let store = store();
+        let routine = a_routine(&store);
+
+        record_run(&store, &routine.id, Some(1), Some(2), &run("a", RunStatus::Running)).unwrap();
+        record_run(&store, &routine.id, None, Some(3), &run("b", RunStatus::Skipped)).unwrap();
+        assert_eq!(history(&store, &routine.id).len(), 2, "the second write dropped the first");
+
+        finish_run(&store, &routine.id, &run("a", RunStatus::Ok)).unwrap();
+
+        let runs = history(&store, &routine.id);
+        assert_eq!(runs.len(), 2, "a run was lost: {runs:?}");
+        assert_eq!(runs.iter().find(|row| row.id == "a").map(|row| row.status), Some(RunStatus::Ok));
+        assert_eq!(runs.iter().find(|row| row.id == "b").map(|row| row.status), Some(RunStatus::Skipped));
+    }
+
+    /// A turn can outlast the row that started it. What the user saved while it
+    /// ran is the row that stands.
+    #[test]
+    fn finishing_a_run_leaves_the_schedule_alone() {
+        let store = store();
+        let routine = a_routine(&store);
+        record_run(&store, &routine.id, Some(1), Some(2), &run("a", RunStatus::Running)).unwrap();
+
+        finish_run(&store, &routine.id, &run("a", RunStatus::Ok)).unwrap();
+
+        let after = scheduled(&store, routine.id.clone()).unwrap().unwrap().routine;
+        assert_eq!(after.next_run_at, Some(2));
+        assert_eq!(after.last_run_at, Some(1));
+    }
+
+    /// A skip moves the clock — otherwise the routine stays past due and fires
+    /// again at once — but it is not a run, so it is not the last one.
+    #[test]
+    fn a_run_that_did_not_happen_does_not_become_the_last_one() {
+        let store = store();
+        let routine = a_routine(&store);
+        record_run(&store, &routine.id, Some(10), Some(20), &run("a", RunStatus::Ok)).unwrap();
+
+        record_run(&store, &routine.id, None, Some(30), &run("b", RunStatus::Skipped)).unwrap();
+
+        let after = scheduled(&store, routine.id.clone()).unwrap().unwrap().routine;
+        assert_eq!(after.last_run_at, Some(10), "a skip claimed to be the last run");
+        assert_eq!(after.next_run_at, Some(30), "a skip left the routine past due");
+    }
+
+    #[test]
+    fn the_history_is_newest_first_and_capped() {
+        let store = store();
+        let routine = a_routine(&store);
+        for i in 0..MAX_RUNS + 3 {
+            record_run(&store, &routine.id, None, Some(1), &run(&format!("r{i}"), RunStatus::Ok)).unwrap();
+        }
+
+        let runs = history(&store, &routine.id);
+        assert_eq!(runs.len(), MAX_RUNS);
+        assert_eq!(runs[0].id, format!("r{}", MAX_RUNS + 2));
+        assert!(!runs.iter().any(|row| row.id == "r0"), "the oldest run survived the cap");
+    }
+
+    /// A line the daemon cannot read is a line it drops, never a history it
+    /// loses: the column holds whatever an older version of Crew wrote.
+    #[test]
+    fn a_line_that_cannot_be_read_does_not_take_the_others_with_it() {
+        let runs = parse_runs(
+            r#"[{"id":"a","startedAt":1,"finishedAt":null,"status":"ok","trigger":"schedule"},
+                {"id":"b","status":"from the future"},
+                {"id":"c","startedAt":2,"finishedAt":3,"status":"error","trigger":"manual"}]"#,
+        );
+        assert_eq!(runs.iter().map(|row| row.id.as_str()).collect::<Vec<_>>(), vec!["a", "c"]);
+        assert!(parse_runs("not json").is_empty());
+        assert!(parse_runs("{}").is_empty());
+    }
+
+    #[test]
+    fn a_routine_that_is_gone_is_not_an_error() {
+        let store = store();
+        assert!(scheduled(&store, "nobody".into()).unwrap().is_none());
+    }
+}

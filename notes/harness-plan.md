@@ -158,7 +158,8 @@ cargo test        # rust
 | E7 | a message row names the agent instead of its uuid | done `c46b4f2` |
 | G2 | the scheduler review's ten findings | done `2241ae5` |
 | G3 | the schedule math is pinned on both sides of the duplication | done `41b5826` |
-| G4 | the client runtime has tests: the retry, the badge, the notifications | done |
+| G4 | the client runtime has tests: the retry, the badge, the notifications | done `34f7d01` |
+| G5 | cron and the routine store, tested where they are written | done |
 
 ### How A5 landed
 

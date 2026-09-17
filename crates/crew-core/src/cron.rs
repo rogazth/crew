@@ -214,3 +214,99 @@ fn set_clock(ms: i64, hour: u32, minute: u32) -> i64 {
     tm.tm_sec = 0;
     from_tm(tm)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Local wall clock: a cron line is read in the user's own day.
+    fn at(year: i32, month: i32, day: i32, hour: i32, minute: i32) -> i64 {
+        let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+        tm.tm_year = year - 1900;
+        tm.tm_mon = month - 1;
+        tm.tm_mday = day;
+        tm.tm_hour = hour;
+        tm.tm_min = minute;
+        from_tm(tm)
+    }
+
+    fn next(expression: &str, from: i64) -> Option<i64> {
+        next_cron(&parse_cron(expression).expect("valid cron"), from)
+    }
+
+    /// These are the cases `src/lib/cron.test.ts` asserts. Cron is written twice
+    /// — the editor validates what you type, the daemon fires what it stored —
+    /// so the two answer the same or the routine runs at a time nobody chose.
+    #[test]
+    fn parse_cron_takes_five_fields_and_nothing_else() {
+        assert!(parse_cron("* * * *").is_none());
+        assert!(parse_cron("0 0 * * * *").is_none());
+        assert!(parse_cron("").is_none());
+    }
+
+    #[test]
+    fn a_field_out_of_range_is_not_a_cron() {
+        for bad in ["60 * * * *", "* 24 * * *", "* * 0 * *", "*/0 * * * *", "5-1 * * * *", "a * * * *"] {
+            assert!(!is_valid_cron(bad), "{bad} passed");
+        }
+    }
+
+    #[test]
+    fn steps_ranges_and_lists_expand() {
+        assert_eq!(parse_cron("*/15 * * * *").unwrap().minute, vec![0, 15, 30, 45]);
+        assert_eq!(parse_cron("0 9-11 * * *").unwrap().hour, vec![9, 10, 11]);
+        assert_eq!(parse_cron("0,30 * * * *").unwrap().minute, vec![0, 30]);
+        assert_eq!(parse_cron("0 0 1 */3 *").unwrap().month, vec![1, 4, 7, 10]);
+    }
+
+    #[test]
+    fn day_and_month_names_read_as_numbers() {
+        assert_eq!(parse_cron("0 9 * * mon-fri").unwrap().dow, vec![1, 2, 3, 4, 5]);
+        assert_eq!(parse_cron("0 0 1 jan,jul *").unwrap().month, vec![1, 7]);
+        // Both spellings of Sunday.
+        assert_eq!(parse_cron("0 0 * * 7").unwrap().dow, vec![0]);
+    }
+
+    #[test]
+    fn next_cron_fires_strictly_after_the_moment_it_was_given() {
+        // Wed Sep 3 2025, 09:00 exactly.
+        assert_eq!(next("0 9 * * *", at(2025, 9, 3, 9, 0)), Some(at(2025, 9, 4, 9, 0)));
+        assert_eq!(next("0 9 * * *", at(2025, 9, 3, 8, 59)), Some(at(2025, 9, 3, 9, 0)));
+    }
+
+    #[test]
+    fn next_cron_walks_to_the_next_matching_weekday() {
+        assert_eq!(next("30 7 * * mon", at(2025, 9, 3, 12, 0)), Some(at(2025, 9, 8, 7, 30)));
+    }
+
+    #[test]
+    fn next_cron_takes_the_earliest_hour_and_minute_of_a_matching_day() {
+        assert_eq!(next("*/20 9,17 * * *", at(2025, 9, 3, 9, 25)), Some(at(2025, 9, 3, 9, 40)));
+        assert_eq!(next("*/20 9,17 * * *", at(2025, 9, 3, 9, 45)), Some(at(2025, 9, 3, 17, 0)));
+    }
+
+    /// The 1st of the month or any Monday, whichever comes first — cron's one
+    /// genuinely surprising rule.
+    #[test]
+    fn next_cron_matches_either_day_field_when_both_are_restricted() {
+        assert_eq!(next("0 0 1 * mon", at(2025, 9, 3, 12, 0)), Some(at(2025, 9, 8, 0, 0)));
+        assert_eq!(next("0 0 1 * mon", at(2025, 9, 29, 12, 0)), Some(at(2025, 10, 1, 0, 0)));
+    }
+
+    #[test]
+    fn next_cron_reaches_a_leap_day_years_out() {
+        assert_eq!(next("0 0 29 2 *", at(2025, 9, 3, 0, 0)), Some(at(2028, 2, 29, 0, 0)));
+    }
+
+    #[test]
+    fn next_cron_crosses_the_year_boundary() {
+        assert_eq!(next("0 0 1 1 *", at(2025, 12, 31, 23, 59)), Some(at(2026, 1, 1, 0, 0)));
+    }
+
+    /// Nothing matches February 30th, and the search has to stop rather than
+    /// walk forward for ever.
+    #[test]
+    fn a_date_that_never_comes_answers_with_nothing() {
+        assert_eq!(next("0 0 30 2 *", at(2025, 9, 3, 0, 0)), None);
+    }
+}
