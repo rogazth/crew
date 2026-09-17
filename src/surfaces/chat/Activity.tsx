@@ -14,13 +14,16 @@ import {
   XIcon,
   type Icon,
 } from "@phosphor-icons/react";
-import { createElement, memo, useEffect, useMemo, useState } from "react";
+import { createElement, memo, useEffect, useMemo, useState, type ReactNode } from "react";
 import {
+  FOLD_AT,
+  activityDigest,
   buildActivity,
   phaseFailed,
   phaseLabel,
   phaseOpen,
   summarize,
+  type ActivityDigest,
   type Phase,
   type PhaseKind,
 } from "../../lib/activity";
@@ -48,6 +51,8 @@ const KIND_ICON: Record<PhaseKind, Icon> = {
   run: TerminalIcon,
   other: WrenchIcon,
 };
+
+const DIGEST_ICON: Record<ActivityDigest["kind"], Icon> = { ...KIND_ICON, thought: SparkleIcon };
 
 /** A row wears what it did, not what its phase was called. */
 const DETAIL_ICON: Record<string, Icon> = {
@@ -95,7 +100,7 @@ export const ActivityGroup = memo(function ActivityGroup({
   const items = useMemo(() => buildActivity(blocks), [blocks]);
   // Keys go to one card: the newest thing waiting on the user.
   const hot = live ? blocks.filter(isOpen).at(-1)?.id : undefined;
-  return (
+  const rows = (
     <div className="flex flex-col">
       {items.map((item, index) => {
         if (item.kind === "question") {
@@ -122,7 +127,82 @@ export const ActivityGroup = memo(function ActivityGroup({
       })}
     </div>
   );
+  if (items.length < FOLD_AT) return rows;
+  return (
+    <RunShell blocks={blocks} items={items} live={live} focusId={focusId} marked={marked}>
+      {rows}
+    </RunShell>
+  );
 }, sameBlocks);
+
+/**
+ * Whether the reader has pinned this thing open or shut. Moving on clears the
+ * pin, so the next turn's rows start folded again instead of inheriting a
+ * decision made about work that is over.
+ */
+function useFold(live: boolean): [boolean | null, (next: boolean) => void] {
+  const [pinned, setPinned] = useState<boolean | null>(null);
+  useEffect(() => {
+    if (!live) setPinned(null);
+  }, [live]);
+  return [pinned, setPinned];
+}
+
+/**
+ * A long run of thinking and calls behind one line. Open while the agent is in
+ * it, or while something in it needs an answer; folds when the turn moves on,
+ * and a click pins it either way. Short runs never get here: three rows read
+ * faster than a line you have to open.
+ */
+function RunShell({
+  blocks,
+  items,
+  live,
+  focusId,
+  marked,
+  children,
+}: {
+  blocks: Block[];
+  items: ReturnType<typeof buildActivity>;
+  live: boolean;
+  focusId: string | null;
+  marked: string | null;
+  children: ReactNode;
+}) {
+  const waiting = blocks.some(isOpen);
+  const failed = blocks.some((block) => block.tool?.status === "failed");
+  // A row nobody can see is a row nobody can be sent to, and the mark outlives
+  // the request, so the run stays open after the reader has been taken there.
+  const sent = (id: string | null) => id !== null && blocks.some((block) => block.id === id);
+  const holds = sent(focusId) || sent(marked);
+  const [pinned, setPinned] = useFold(live);
+  const open = waiting || (pinned ?? (holds || live));
+  const digest = useMemo(() => activityDigest(items), [items]);
+
+  return (
+    <Collapsible.Root open={open} onOpenChange={(next) => setPinned(next)}>
+      <Collapsible.Trigger className="group flex min-h-5 w-full items-center gap-2 py-0.5 text-left text-[13px] leading-[18px]">
+        <span className="relative flex size-3.5 shrink-0 items-center justify-center text-kumo-subtle">
+          {createElement(DIGEST_ICON[digest.kind], {
+            className: `size-3.5 transition-opacity group-hover:opacity-0${failed ? " text-danger" : ""}`,
+          })}
+          <CaretRightIcon
+            weight="bold"
+            className={`absolute size-3 opacity-0 transition-[opacity,transform] duration-150 group-hover:opacity-100 ${open ? "rotate-90" : ""}`}
+          />
+        </span>
+        <span className={waiting ? "crew-shimmer" : "text-text-muted transition-colors group-hover:text-text"}>
+          {digest.label}
+        </span>
+        {/* A folded run hides its rows; a failure inside it may not hide too. */}
+        {failed && !waiting ? <span className="shrink-0 text-[11px] text-danger">failed</span> : null}
+      </Collapsible.Trigger>
+      <Collapsible.Panel className="crew-phase-panel">
+        <div className="crew-phase-steps">{children}</div>
+      </Collapsible.Panel>
+    </Collapsible.Root>
+  );
+}
 
 /**
  * Open while the agent is in it or something in it needs an answer; folds
@@ -149,11 +229,7 @@ function PhaseRow({
   // the request, so the phase stays open after the reader has been taken there.
   const sent = (id: string | null) => id !== null && phase.blocks.some((block) => block.id === id);
   const holds = sent(focusId) || sent(marked);
-  const [pinned, setPinned] = useState<boolean | null>(null);
-  // Moving on clears the pin so the next turn's phases start folded again.
-  useEffect(() => {
-    if (!live) setPinned(null);
-  }, [live]);
+  const [pinned, setPinned] = useFold(live);
   const open = waiting || (pinned ?? (holds || live));
   const single = phase.blocks.length === 1 && !waiting;
 

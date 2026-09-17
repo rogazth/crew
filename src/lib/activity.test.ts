@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildActivity, phaseFailed, phaseKind, phaseLabel, summarize, type Phase } from "./activity";
+import { activityDigest, buildActivity, phaseFailed, phaseKind, phaseLabel, summarize, type Phase } from "./activity";
 import type { Block, ToolStatus } from "./blocks";
 
 function tool(name: string, title: string, status: ToolStatus = "completed"): Block {
@@ -171,5 +171,52 @@ describe("REVIEW: what the detail branch of phaseKind actually buys", () => {
     const items = buildActivity([tool("read", "read"), tool("grep", "grep")]);
     expect(items).toHaveLength(1);
     expect(phase(items).kind).toBe("research");
+  });
+});
+
+describe("activityDigest", () => {
+  it("counts a kind across the phases thinking split it into", () => {
+    const items = buildActivity([
+      tool("Bash", "npm test"),
+      tool("Bash", "npm lint"),
+      { id: "r", role: "reasoning", text: "hmm" },
+      tool("Bash", "npm build"),
+    ]);
+    expect(activityDigest(items)).toEqual({ kind: "run", label: "Ran 3 commands" });
+  });
+
+  it("carries the two biggest kinds, the second in lower case", () => {
+    const items = buildActivity([
+      tool("Bash", "npm test"),
+      tool("Read", "Read a.ts"),
+      tool("Bash", "npm lint"),
+      tool("Read", "Read b.ts"),
+      tool("Bash", "npm build"),
+    ]);
+    expect(activityDigest(items)).toEqual({ kind: "run", label: "Ran 3 commands, read 2 files" });
+  });
+
+  it("drops the third kind rather than running the line long", () => {
+    const items = buildActivity([
+      tool("Bash", "npm test"),
+      tool("Bash", "npm lint"),
+      tool("Read", "Read a.ts"),
+      tool("Edit", "Edit a.ts"),
+    ]);
+    expect(activityDigest(items).label).toBe("Ran 2 commands, read a.ts");
+  });
+
+  it("names a run of pure thinking", () => {
+    const items = buildActivity([
+      { id: "a", role: "reasoning", text: "one" },
+      { id: "b", role: "reasoning", text: "two" },
+      { id: "c", role: "reasoning", text: "three" },
+    ]);
+    expect(activityDigest(items)).toEqual({ kind: "thought", label: "Thought 3 times" });
+  });
+
+  it("stays in the present while a call is still open", () => {
+    const items = buildActivity([tool("Bash", "npm test"), tool("Bash", "npm lint", "pending")]);
+    expect(activityDigest(items).label).toBe("Running 2 commands");
   });
 });

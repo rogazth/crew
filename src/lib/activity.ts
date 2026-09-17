@@ -137,6 +137,53 @@ export function phaseLabel(phase: Phase): string {
   }
 }
 
+/**
+ * How many rows a run has to reach before it folds behind one line. Two rows
+ * fold to one plus a click to get them back, which is not a trade worth making.
+ */
+export const FOLD_AT = 3;
+
+/** What a folded run says it was: its line, and the glyph that line wears. */
+export type ActivityDigest = { label: string; kind: PhaseKind | "thought" };
+
+/**
+ * One line for a whole run of activity. Phases of the same kind are counted
+ * together however often thinking split them up, and the two biggest kinds
+ * carry the line: "Ran 8 commands, read 2 files".
+ */
+export function activityDigest(items: ActivityItem[]): ActivityDigest {
+  const byKind = new Map<PhaseKind, Block[]>();
+  let thoughts = 0;
+  for (const item of items) {
+    if (item.kind === "reasoning") {
+      thoughts += 1;
+      continue;
+    }
+    if (item.kind === "question") continue;
+    const held = byKind.get(item.phase.kind);
+    if (held) held.push(...item.phase.blocks);
+    else byKind.set(item.phase.kind, [...item.phase.blocks]);
+  }
+  if (byKind.size === 0) {
+    return { kind: "thought", label: thoughts === 1 ? "Thought" : `Thought ${thoughts} times` };
+  }
+  // Ties keep the order the kinds first appeared in: sort is stable, and a Map
+  // iterates in insertion order.
+  const ranked = [...byKind]
+    .sort(([, a], [, b]) => b.length - a.length)
+    .slice(0, 2)
+    .map(([kind, blocks]) => ({ kind, label: phaseLabel({ id: blocks[0]!.id, kind, blocks }) }));
+  const [first, second] = ranked;
+  return {
+    kind: first!.kind,
+    label: second ? `${first!.label}, ${decap(second.label)}` : first!.label,
+  };
+}
+
+function decap(label: string): string {
+  return label.charAt(0).toLowerCase() + label.slice(1);
+}
+
 /** The first line of a thought, markdown noise stripped, for the folded row. */
 export function summarize(text: string, max = 96): string {
   const line =
