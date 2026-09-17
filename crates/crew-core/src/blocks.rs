@@ -2,7 +2,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crew_protocol::{
     ApprovalDecision, ApprovalResolution, Block, BlockApproval, BlockQuestion, BlockRole, BlockTool,
-    HarnessEvent, ToolStatus,
+    HarnessEvent, ToolDetail, ToolStatus,
 };
 
 pub fn new_block(role: BlockRole, text: impl Into<String>) -> Block {
@@ -118,6 +118,7 @@ pub fn apply_event(blocks: Vec<Block>, event: HarnessEvent) -> Vec<Block> {
             call_id,
             name,
             title,
+            detail,
         } => {
             let settled = settle_streaming(blocks);
             let mut tool = new_block(BlockRole::Tool, title.clone());
@@ -126,6 +127,7 @@ pub fn apply_event(blocks: Vec<Block>, event: HarnessEvent) -> Vec<Block> {
                 name,
                 title: title.clone(),
                 status: ToolStatus::Pending,
+                detail: detail.map(ToolDetail::clipped),
             });
             // The approval row was this same call asking first; one line, not two.
             if let Some(last) = settled.last() {
@@ -148,6 +150,7 @@ pub fn apply_event(blocks: Vec<Block>, event: HarnessEvent) -> Vec<Block> {
             call_id,
             title,
             status,
+            detail,
         } => blocks
             .into_iter()
             .map(|mut block| {
@@ -163,6 +166,11 @@ pub fn apply_event(blocks: Vec<Block>, event: HarnessEvent) -> Vec<Block> {
                 }
                 if let Some(status) = status.clone() {
                     tool.status = status;
+                }
+                // An update that carries no detail is a status change, not an
+                // erasure: the command a row already showed stays on it.
+                if let Some(detail) = detail.clone() {
+                    tool.detail = Some(detail.clipped());
                 }
                 block
             })

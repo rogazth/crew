@@ -105,6 +105,128 @@ pub struct TurnUsage {
     pub duration_ms: Option<u64>,
 }
 
+/// What a tool actually did, normalized across providers. A transcript line
+/// reads the same whether it came from Claude's `Bash`, Codex's `exec_command`
+/// or opencode's `bash`: the adapters translate into this, and the UI renders
+/// one shape instead of four.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, TS)]
+#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
+#[ts(
+    export,
+    export_to = "../../../src/lib/protocol.ts",
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum ToolDetail {
+    /// A shell command. `exitCode` is absent while it runs.
+    Command {
+        command: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional, type = "number")]
+        exit_code: Option<i32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        output: Option<String>,
+    },
+    /// A file the agent read, with the window it looked at.
+    File {
+        path: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional, type = "number")]
+        line_start: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional, type = "number")]
+        line_end: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        preview: Option<String>,
+    },
+    /// A file the agent wrote. The diff itself rides on the approval block.
+    Edit {
+        path: String,
+        #[ts(type = "number")]
+        added: u32,
+        #[ts(type = "number")]
+        removed: u32,
+    },
+    Search {
+        query: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional, type = "number")]
+        matches: Option<u32>,
+    },
+    Fetch {
+        url: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        title: Option<String>,
+    },
+    /// One of Crew's own tools: a message to another agent.
+    Message { to: String, text: String },
+    /// Anything else: the result text, clipped.
+    Output { text: String },
+}
+
+/// Transcripts are persisted, indexed and shipped over the websocket on every
+/// reconnect, so a tool line keeps a readable excerpt, never the whole output.
+pub const TOOL_TEXT_LIMIT: usize = 4096;
+
+/// Clip on a char boundary and say how much was dropped, so the UI never has to
+/// guess whether it is looking at everything.
+pub fn clip(text: &str, limit: usize) -> String {
+    if text.len() <= limit {
+        return text.to_string();
+    }
+    let mut end = limit;
+    while end > 0 && !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    let dropped = text.len() - end;
+    format!("{}\n… {dropped} more bytes", &text[..end])
+}
+
+impl ToolDetail {
+    /// Every detail that carries provider output goes through here before it is
+    /// stored.
+    pub fn clipped(self) -> Self {
+        match self {
+            ToolDetail::Command { command, exit_code, output } => ToolDetail::Command {
+                command: clip(&command, TOOL_TEXT_LIMIT),
+                exit_code,
+                output: output.map(|text| clip(&text, TOOL_TEXT_LIMIT)),
+            },
+            ToolDetail::File { path, line_start, line_end, preview } => ToolDetail::File {
+                path,
+                line_start,
+                line_end,
+                preview: preview.map(|text| clip(&text, TOOL_TEXT_LIMIT)),
+            },
+            ToolDetail::Message { to, text } => ToolDetail::Message {
+                to,
+                text: clip(&text, TOOL_TEXT_LIMIT),
+            },
+            ToolDetail::Output { text } => ToolDetail::Output {
+                text: clip(&text, TOOL_TEXT_LIMIT),
+            },
+            other => other,
+        }
+    }
+
+    /// The one line a collapsed row shows. Never the output.
+    pub fn summary(&self) -> String {
+        match self {
+            ToolDetail::Command { command, .. } => command.lines().next().unwrap_or("").to_string(),
+            ToolDetail::File { path, .. } => path.clone(),
+            ToolDetail::Edit { path, .. } => path.clone(),
+            ToolDetail::Search { query, .. } => query.clone(),
+            ToolDetail::Fetch { url, .. } => url.clone(),
+            ToolDetail::Message { to, .. } => to.clone(),
+            ToolDetail::Output { text } => text.lines().next().unwrap_or("").to_string(),
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
@@ -113,6 +235,9 @@ pub struct BlockTool {
     pub name: String,
     pub title: String,
     pub status: ToolStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub detail: Option<ToolDetail>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, TS)]
@@ -241,6 +366,9 @@ pub enum HarnessEvent {
         call_id: String,
         name: String,
         title: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        detail: Option<ToolDetail>,
     },
     #[serde(rename = "tool.updated")]
     #[ts(rename = "tool.updated")]
@@ -253,6 +381,9 @@ pub enum HarnessEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         status: Option<ToolStatus>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        detail: Option<ToolDetail>,
     },
     #[serde(rename = "approval.requested")]
     #[ts(rename = "approval.requested")]
@@ -290,4 +421,49 @@ pub enum HarnessEvent {
         request_id: u64,
         answers: Option<HashMap<String, String>>,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clip_keeps_short_text_intact() {
+        assert_eq!(clip("echo hi", TOOL_TEXT_LIMIT), "echo hi");
+    }
+
+    #[test]
+    fn clip_never_splits_a_multibyte_char() {
+        // A limit that lands mid-character: the cut walks back to the boundary
+        // instead of panicking on a slice.
+        let text = "áéíóú".repeat(4);
+        let clipped = clip(&text, 5);
+        assert!(text.starts_with(clipped.split('\n').next().unwrap()));
+        assert!(clipped.contains("more bytes"));
+    }
+
+    #[test]
+    fn clipped_trims_command_output_but_keeps_the_exit_code() {
+        let detail = ToolDetail::Command {
+            command: "ls".into(),
+            exit_code: Some(0),
+            output: Some("x".repeat(TOOL_TEXT_LIMIT * 2)),
+        }
+        .clipped();
+        let ToolDetail::Command { output, exit_code, .. } = detail else {
+            panic!("kind changed");
+        };
+        assert_eq!(exit_code, Some(0));
+        assert!(output.unwrap().len() < TOOL_TEXT_LIMIT + 64);
+    }
+
+    #[test]
+    fn summary_is_the_first_line_of_a_command() {
+        let detail = ToolDetail::Command {
+            command: "git status\ngit log".into(),
+            exit_code: None,
+            output: None,
+        };
+        assert_eq!(detail.summary(), "git status");
+    }
 }

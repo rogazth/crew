@@ -20,7 +20,7 @@ export type BlockQuestion = { requestId: number, questions: Array<Question>, ans
 
 export type BlockRole = "user" | "assistant" | "reasoning" | "tool" | "approval" | "question" | "system";
 
-export type BlockTool = { callId: string, name: string, title: string, status: ToolStatus, };
+export type BlockTool = { callId: string, name: string, title: string, status: ToolStatus, detail?: ToolDetail, };
 
 export type BridgeInfo = { socketPath: string, token: string, exe: string, };
 
@@ -32,7 +32,7 @@ export type Event = { event: string, payload: unknown, };
 
 export type FileBytes = { mime: string, data: string, };
 
-export type HarnessEvent = { "type": "session.started", } | { "type": "session.ended", code?: number | null, } | { "type": "session.error", message: string, } | { "type": "session.note", message: string, } | { "type": "user.message", text: string, hidden?: boolean, files?: Array<AttachedFile>, } | { "type": "system.message", text: string, } | { "type": "session.providerBound", providerSessionId: string, } | { "type": "message.delta", text: string, } | { "type": "message.completed", } | { "type": "reasoning.delta", text: string, } | { "type": "turn.completed", usage?: TurnUsage, } | { "type": "tool.started", callId: string, name: string, title: string, } | { "type": "tool.updated", callId: string, title?: string, status?: ToolStatus, } | { "type": "approval.requested", requestId: number, name: string, title: string, input?: Record<string, unknown>, } | { "type": "approval.resolved", requestId: number, decision: ApprovalResolution, } | { "type": "question.requested", requestId: number, questions: Array<Question>, } | { "type": "question.resolved", requestId: number, answers: { [key in string]: string } | null, };
+export type HarnessEvent = { "type": "session.started", } | { "type": "session.ended", code?: number | null, } | { "type": "session.error", message: string, } | { "type": "session.note", message: string, } | { "type": "user.message", text: string, hidden?: boolean, files?: Array<AttachedFile>, } | { "type": "system.message", text: string, } | { "type": "session.providerBound", providerSessionId: string, } | { "type": "message.delta", text: string, } | { "type": "message.completed", } | { "type": "reasoning.delta", text: string, } | { "type": "turn.completed", usage?: TurnUsage, } | { "type": "tool.started", callId: string, name: string, title: string, detail?: ToolDetail, } | { "type": "tool.updated", callId: string, title?: string, status?: ToolStatus, detail?: ToolDetail, } | { "type": "approval.requested", requestId: number, name: string, title: string, input?: Record<string, unknown>, } | { "type": "approval.resolved", requestId: number, decision: ApprovalResolution, } | { "type": "question.requested", requestId: number, questions: Array<Question>, } | { "type": "question.resolved", requestId: number, answers: { [key in string]: string } | null, };
 
 export type Id = { id: string, };
 
@@ -113,6 +113,14 @@ export type SessionUpdate = { id: string, name: string, provider: string, model:
 export type TempFile = { extension: string, base64Contents: string, };
 
 export type ToolCall = { id: number, sessionId: string, method: string, params: unknown, };
+
+/**
+ * What a tool actually did, normalized across providers. A transcript line
+ * reads the same whether it came from Claude's `Bash`, Codex's `exec_command`
+ * or opencode's `bash`: the adapters translate into this, and the UI renders
+ * one shape instead of four.
+ */
+export type ToolDetail = { "kind": "command", command: string, exitCode?: number, output?: string, } | { "kind": "file", path: string, lineStart?: number, lineEnd?: number, preview?: string, } | { "kind": "edit", path: string, added: number, removed: number, } | { "kind": "search", query: string, matches?: number, } | { "kind": "fetch", url: string, title?: string, } | { "kind": "message", to: string, text: string, } | { "kind": "output", text: string, };
 
 export type ToolStatus = "pending" | "completed" | "failed" | "interrupted";
 

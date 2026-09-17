@@ -978,6 +978,7 @@ impl TurnHost {
                         } else {
                             ToolStatus::Completed
                         }),
+                        detail: None,
                     });
                 }
             } else if type_name.as_deref() == Some("result") {
@@ -1257,6 +1258,7 @@ impl TurnHost {
                     call_id: call_id.clone(),
                     name: codex_tool_name(&item),
                     title: title.clone(),
+                    detail: None,
                 },
             );
         } else {
@@ -1266,6 +1268,7 @@ impl TurnHost {
                     call_id: call_id.clone(),
                     title: Some(title),
                     status: None,
+                    detail: None,
                 },
             );
         }
@@ -1276,6 +1279,7 @@ impl TurnHost {
                     call_id,
                     title: None,
                     status: Some(completed_tool_status(&item)),
+                    detail: None,
                 },
             );
         }
@@ -1389,6 +1393,7 @@ impl TurnHost {
                         call_id: call.call_id.clone(),
                         name: call.name,
                         title: call.title,
+                        detail: None,
                     },
                 );
             }
@@ -1399,6 +1404,7 @@ impl TurnHost {
                         call_id: call.call_id,
                         title: None,
                         status: Some(cursor_tool_status(call.failed)),
+                        detail: None,
                     },
                 );
             }
@@ -1475,6 +1481,7 @@ fn claude_stream(live: &mut ClaudeLive, rec: &Map<String, Value>, events: &mut V
             call_id: started.id,
             name: started.name.clone(),
             title: claude_tool_label(&started.name, &started.input),
+            detail: None,
         });
         return;
     }
@@ -1493,6 +1500,7 @@ fn claude_stream(live: &mut ClaudeLive, rec: &Map<String, Value>, events: &mut V
         call_id: tool.id.clone(),
         title: Some(claude_tool_label(&tool.name, &parsed)),
         status: None,
+        detail: None,
     });
 }
 
@@ -1529,6 +1537,7 @@ fn claude_assistant(live: &mut ClaudeLive, rec: &Map<String, Value>, events: &mu
             call_id: use_.id,
             name: use_.name.clone(),
             title: claude_tool_label(&use_.name, &use_.input),
+            detail: None,
         });
     }
 }
