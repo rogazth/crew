@@ -153,7 +153,9 @@ cargo test        # rust
 | A6 | rows are the only store; the blob stops being rewritten every flush | done `9b392af` |
 | E5 | a search hit opens the agent on that line and marks it | done `befaf99` |
 | F5 | the second review's ten findings | done |
-| G1 | routines fire in the daemon, not in the window | done |
+| G1 | routines fire in the daemon, not in the window | done `641a2bf` |
+| E6 | the persona stops telling the model how to talk | done `c23c6e0` |
+| E7 | a message row names the agent instead of its uuid | done `c46b4f2` |
 
 ### How A5 landed
 
