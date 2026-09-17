@@ -25,6 +25,12 @@ struct Tool {
     name: &'static str,
     description: &'static str,
     schema: Value,
+    /// Words someone would search for that the name and description miss.
+    keywords: &'static [&'static str],
+    /// Listed to every agent on every turn. Everything else is found with
+    /// `find_tool`: a roster of a hundred tools would cost more prompt than the
+    /// conversation, and most turns need none of them.
+    core: bool,
 }
 
 fn catalog() -> Vec<Tool> {
@@ -46,6 +52,8 @@ fn catalog() -> Vec<Tool> {
             name: "list_agents",
             description: "List the agents in this workspace, including yourself.",
             schema: json!({ "type": "object", "properties": {} }),
+            keywords: &["roster", "team", "who", "agents"],
+            core: true,
         },
         Tool {
             name: "create_agent",
@@ -61,6 +69,8 @@ fn catalog() -> Vec<Tool> {
                 },
                 "required": ["name", "description"]
             }),
+            keywords: &["new", "hire", "spawn", "agent"],
+            core: false,
         },
         Tool {
             name: "message_agent",
@@ -73,6 +83,24 @@ fn catalog() -> Vec<Tool> {
                 },
                 "required": ["to", "text"]
             }),
+            keywords: &["send", "tell", "ask", "dm", "reply", "message"],
+            core: true,
+        },
+        Tool {
+            name: "search_messages",
+            description: "Search every message in this workspace: yours, the user's, and other agents'. Use it before asking the user something they may already have said.",
+            schema: json!({
+                "type": "object",
+                "properties": {
+                    "query": { "type": "string", "description": "Words to look for." },
+                    "agent_id": { "type": "string", "description": "Only this agent's conversation. Omit for all of them." },
+                    "days": { "type": "integer", "minimum": 1, "description": "Only the last N days. Omit for all of time." },
+                    "limit": { "type": "integer", "minimum": 1, "maximum": 50 }
+                },
+                "required": ["query"]
+            }),
+            keywords: &["find", "grep", "history", "transcript", "said"],
+            core: true,
         },
         Tool {
             name: "list_routines",
@@ -81,6 +109,8 @@ fn catalog() -> Vec<Tool> {
                 "type": "object",
                 "properties": { "agent_id": { "type": "string", "description": "Omit for yourself." } }
             }),
+            keywords: &["schedule", "cron", "standing", "orders"],
+            core: false,
         },
         Tool {
             name: "upsert_routine",
@@ -96,6 +126,8 @@ fn catalog() -> Vec<Tool> {
                     "enabled": { "type": "boolean" }
                 }
             }),
+            keywords: &["schedule", "cron", "every", "daily", "remind"],
+            core: false,
         },
         Tool {
             name: "delete_routine",
@@ -105,8 +137,115 @@ fn catalog() -> Vec<Tool> {
                 "properties": { "routine_id": { "type": "string" } },
                 "required": ["routine_id"]
             }),
+            keywords: &["schedule", "cron", "stop", "remove"],
+            core: false,
         },
     ]
+}
+
+/// The two tools that stand in for everything not listed. They are described
+/// so an agent reaches for them instead of guessing a name.
+fn gateway() -> Vec<Tool> {
+    vec![
+        Tool {
+            name: "find_tool",
+            description: "Search the tools Crew gives you beyond the few always listed. Returns each match with its arguments, ready to call. Try it before deciding something is impossible here.",
+            schema: json!({
+                "type": "object",
+                "properties": {
+                    "query": { "type": "string", "description": "What you are trying to do, in your own words." },
+                    "limit": { "type": "integer", "minimum": 1, "maximum": 20 }
+                },
+                "required": ["query"]
+            }),
+            keywords: &[],
+            core: false,
+        },
+        Tool {
+            name: "call_tool",
+            description: "Run a tool that find_tool returned.",
+            schema: json!({
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string" },
+                    "arguments": { "type": "object" }
+                },
+                "required": ["name"]
+            }),
+            keywords: &[],
+            core: false,
+        },
+    ]
+}
+
+fn describe(tool: &Tool) -> Value {
+    json!({
+        "name": tool.name,
+        "description": tool.description,
+        "inputSchema": tool.schema
+    })
+}
+
+/// How well a tool answers what someone typed. Zero means it does not.
+///
+/// A hundred tools scored in memory is microseconds; an index would be a table
+/// to keep in step with the catalog for no gain at this size.
+const MATCH_FLOOR: u32 = 10;
+
+fn score(tool: &Tool, tokens: &[String]) -> u32 {
+    let name = tool.name.to_lowercase();
+    let description = tool.description.to_lowercase();
+    let mut total = 0;
+    for token in tokens {
+        if name == *token {
+            total += 100;
+        } else if name.split('_').any(|part| part == token) {
+            total += 50;
+        } else if name.contains(token.as_str()) {
+            total += 30;
+        }
+        if tool.keywords.iter().any(|word| word == token) {
+            total += 20;
+        }
+        if description.contains(token.as_str()) {
+            total += 5;
+        }
+    }
+    total
+}
+
+fn find_tool(args: &Value) -> Result<Value, String> {
+    let query = text(args.get("query")).ok_or_else(|| "query is required".to_string())?;
+    let limit = args.get("limit").and_then(Value::as_u64).unwrap_or(5).clamp(1, 20) as usize;
+    // Two letters carry no intent and match half the catalog by accident.
+    let tokens: Vec<String> = query
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|word| word.len() > 2)
+        .map(str::to_lowercase)
+        .collect();
+
+    let mut ranked: Vec<(u32, Tool)> = catalog()
+        .into_iter()
+        .map(|tool| (score(&tool, &tokens), tool))
+        // One passing word in a description is a coincidence, not a match:
+        // "order a pizza" should not surface the routine tools.
+        .filter(|(points, _)| *points >= MATCH_FLOOR)
+        .collect();
+    ranked.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.name.cmp(b.1.name)));
+    ranked.truncate(limit);
+
+    if ranked.is_empty() {
+        return Ok(json!({
+            "matches": [],
+            "note": format!(
+                "Nothing here does that. Everything Crew offers: {}",
+                catalog().iter().map(|tool| tool.name).collect::<Vec<_>>().join(", ")
+            )
+        }));
+    }
+    Ok(json!({
+        "matches": ranked.iter().map(|(_, tool)| describe(tool)).collect::<Vec<_>>()
+    }))
 }
 
 /// Hand a letter to its reader: start a turn on it, or say it could not.
@@ -127,11 +266,12 @@ pub fn handle(
         .ok_or_else(|| "This session no longer exists in Crew".to_string())?;
     match method {
         "tools/list" => Ok(json!({
-            "tools": catalog().into_iter().map(|tool| json!({
-                "name": tool.name,
-                "description": tool.description,
-                "inputSchema": tool.schema
-            })).collect::<Vec<_>>()
+            "tools": catalog()
+                .iter()
+                .filter(|tool| tool.core)
+                .chain(gateway().iter())
+                .map(describe)
+                .collect::<Vec<_>>()
         })),
         "tools/call" => {
             let name = params.get("name").and_then(Value::as_str).unwrap_or("");
@@ -169,6 +309,16 @@ fn run(
         "list_agents" => list_agents(store, caller),
         "create_agent" => create_agent(store, transcripts, on_created, caller, args),
         "message_agent" => message_agent(store, deliver, caller, args),
+        "search_messages" => search_messages(store, caller, args),
+        "find_tool" => find_tool(args),
+        "call_tool" => {
+            let inner = text(args.get("name")).ok_or_else(|| "name is required".to_string())?;
+            if inner == "call_tool" || inner == "find_tool" {
+                return Err(format!("{inner} cannot call itself. Name a tool find_tool returned."));
+            }
+            let inner_args = args.get("arguments").cloned().unwrap_or_else(|| json!({}));
+            run(store, transcripts, on_created, deliver, caller, &inner, &inner_args)
+        }
         "list_routines" => list_routines(store, caller, args),
         "upsert_routine" => upsert_routine(store, transcripts, caller, args),
         "delete_routine" => delete_routine(store, transcripts, caller, args),
@@ -260,6 +410,45 @@ fn message_agent(
             format!("{} is busy; it will read this when its turn ends.", target.name)
         }
     }))
+}
+
+fn search_messages(store: &Store, caller: &Session, args: &Value) -> Result<Value, String> {
+    let query = text(args.get("query")).ok_or_else(|| "query is required".to_string())?;
+    let limit = args.get("limit").and_then(Value::as_u64).unwrap_or(10).clamp(1, 50) as u32;
+    let days = args.get("days").and_then(Value::as_u64);
+    let session_ids = match text(args.get("agent_id")) {
+        Some(who) => vec![find_agent(store, caller, &who)?.id],
+        None => session::list(store, caller.workspace_id.clone())?
+            .into_iter()
+            .filter(|row| row.kind == "agent")
+            .map(|row| row.id)
+            .collect(),
+    };
+    let hits = crate::messages::search(
+        store,
+        crew_protocol::SearchQuery {
+            query,
+            session_ids,
+            from: days.map(|days| now_millis() - (days as i64) * 86_400_000),
+            to: None,
+            limit: Some(limit),
+            offset: None,
+            sort: None,
+        },
+    )?;
+    let rows: Vec<Value> = hits
+        .into_iter()
+        .map(|hit| {
+            json!({
+                "agent": hit.session_name,
+                "when": when(hit.at),
+                "role": format!("{:?}", hit.role).to_lowercase(),
+                // The marks are for painting a UI; a model reads the words.
+                "text": hit.snippet.replace(crate::messages::MARK_OPEN, "").replace(crate::messages::MARK_CLOSE, "")
+            })
+        })
+        .collect();
+    Ok(Value::Array(rows))
 }
 
 fn create_agent(
@@ -589,10 +778,162 @@ mod tests {
         result["isError"].as_bool().unwrap_or(false)
     }
 
+    fn listed(store: &Store, transcripts: &TranscriptHub, caller: &Session) -> Vec<String> {
+        let postman = Postman::default();
+        let out = handle(
+            store,
+            transcripts,
+            &|_| {},
+            &|target, letter| postman.deliver(target, letter),
+            &caller.id,
+            "tools/list",
+            json!({}),
+        )
+        .expect("list");
+        out["tools"]
+            .as_array()
+            .expect("tools")
+            .iter()
+            .map(|tool| tool["name"].as_str().unwrap_or_default().to_string())
+            .collect()
+    }
+
     #[test]
-    fn message_agent_is_offered_to_every_agent() {
-        let names: Vec<&str> = catalog().into_iter().map(|tool| tool.name).collect();
-        assert!(names.contains(&"message_agent"));
+    fn the_listing_is_the_few_tools_worth_every_prompt() {
+        let store = store();
+        let transcripts = TranscriptHub::new(store.clone());
+        let ws = workspace(&store);
+        let coder = agent(&store, &ws, "Coder");
+        let names = listed(&store, &transcripts, &coder);
+
+        for core in ["list_agents", "message_agent", "search_messages", "find_tool", "call_tool"] {
+            assert!(names.contains(&core.to_string()), "{core} missing from {names:?}");
+        }
+        // The rest is reachable, not listed.
+        assert!(!names.contains(&"upsert_routine".to_string()));
+        assert!(!names.contains(&"create_agent".to_string()));
+    }
+
+    #[test]
+    fn find_tool_answers_with_something_callable() {
+        let out = find_tool(&json!({ "query": "run something every morning" })).expect("find");
+        let names: Vec<&str> = out["matches"]
+            .as_array()
+            .expect("matches")
+            .iter()
+            .map(|row| row["name"].as_str().unwrap_or_default())
+            .collect();
+        assert!(names.contains(&"upsert_routine"), "{names:?}");
+        let first = &out["matches"][0];
+        assert!(first["inputSchema"]["properties"].is_object(), "no schema to call with");
+    }
+
+    #[test]
+    fn find_tool_ranks_the_name_over_a_passing_mention() {
+        let out = find_tool(&json!({ "query": "create_agent" })).expect("find");
+        assert_eq!(out["matches"][0]["name"], "create_agent");
+    }
+
+    #[test]
+    fn find_tool_says_so_when_nothing_fits() {
+        let out = find_tool(&json!({ "query": "order a pizza" })).expect("find");
+        assert!(out["matches"].as_array().expect("matches").is_empty());
+        assert!(out["note"].as_str().unwrap_or_default().contains("list_agents"));
+    }
+
+    #[test]
+    fn find_tool_honours_its_limit() {
+        let out = find_tool(&json!({ "query": "agent routine message", "limit": 2 })).expect("find");
+        assert_eq!(out["matches"].as_array().expect("matches").len(), 2);
+    }
+
+    #[test]
+    fn call_tool_runs_what_was_found() {
+        let store = store();
+        let transcripts = TranscriptHub::new(store.clone());
+        let ws = workspace(&store);
+        let coder = agent(&store, &ws, "Coder");
+        agent(&store, &ws, "Cuddles");
+        let postman = Postman::default();
+        let out = call(
+            &store,
+            &transcripts,
+            &postman,
+            &coder,
+            "call_tool",
+            json!({ "name": "message_agent", "arguments": { "to": "Cuddles", "text": "via gateway" } }),
+        )
+        .expect("call");
+        assert!(!is_error(&out));
+        assert_eq!(postman.handed.borrow()[0].1, "via gateway");
+    }
+
+    #[test]
+    fn call_tool_refuses_to_call_itself() {
+        let store = store();
+        let transcripts = TranscriptHub::new(store.clone());
+        let ws = workspace(&store);
+        let coder = agent(&store, &ws, "Coder");
+        let postman = Postman::default();
+        let out = call(&store, &transcripts, &postman, &coder, "call_tool", json!({ "name": "call_tool" }))
+            .expect("call");
+        assert!(is_error(&out));
+    }
+
+    #[test]
+    fn an_agent_can_search_what_was_said() {
+        let store = store();
+        let transcripts = TranscriptHub::new(store.clone());
+        let ws = workspace(&store);
+        let coder = agent(&store, &ws, "Coder");
+        let cuddles = agent(&store, &ws, "Cuddles");
+        transcripts.append_user(&cuddles.id, "the staging password is in 1password", false, None);
+        transcripts.flush(&cuddles.id);
+
+        let postman = Postman::default();
+        let out = call(
+            &store,
+            &transcripts,
+            &postman,
+            &coder,
+            "search_messages",
+            json!({ "query": "staging password" }),
+        )
+        .expect("call");
+        assert!(!is_error(&out), "{}", body(&out));
+        let text = body(&out);
+        assert!(text.contains("1password"), "{text}");
+        assert!(text.contains("Cuddles"), "{text}");
+        // The UI's hit markers never reach a model.
+        assert!(!text.contains(crate::messages::MARK_OPEN));
+    }
+
+    #[test]
+    fn a_search_can_be_narrowed_to_one_agent() {
+        let store = store();
+        let transcripts = TranscriptHub::new(store.clone());
+        let ws = workspace(&store);
+        let coder = agent(&store, &ws, "Coder");
+        let cuddles = agent(&store, &ws, "Cuddles");
+        let other = agent(&store, &ws, "Other");
+        transcripts.append_user(&cuddles.id, "shared secret", false, None);
+        transcripts.flush(&cuddles.id);
+        transcripts.append_user(&other.id, "shared secret", false, None);
+        transcripts.flush(&other.id);
+
+        let postman = Postman::default();
+        let out = call(
+            &store,
+            &transcripts,
+            &postman,
+            &coder,
+            "search_messages",
+            json!({ "query": "shared", "agent_id": "Cuddles" }),
+        )
+        .expect("call");
+        let text = body(&out);
+        assert!(text.contains("Cuddles"));
+        assert!(!text.contains("Other"), "{text}");
     }
 
     #[test]
