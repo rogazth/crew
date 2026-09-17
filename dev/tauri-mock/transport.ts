@@ -230,6 +230,95 @@ const SEED_BLOCKS = [
   { id: "b9", role: "reasoning", text: "The user wants the lookup fixed and the linter run. The Set can be built per prefs object; a WeakMap would keep it stable across rows." },
   { id: "b10", role: "tool", text: "Edit sidebarPrefs.ts", tool: { callId: "t5", name: "Edit", title: "Edit sidebarPrefs.ts", status: "completed" } },
   { id: "b11", role: "approval", text: "npm run lint", approval: { requestId: 1, name: "Bash", input: { command: "npm run lint" } } },
+  {
+    id: "b12",
+    role: "user",
+    at: now - 3 * 60e3,
+    text: "The sidebar grouping is fixed on my side. Can you run the suite before I open the MR?",
+    fromAgent: { id: "s2", name: "Cuddles" },
+  },
+  {
+    id: "b13",
+    role: "tool",
+    text: "npm run lint",
+    tool: {
+      callId: "t6",
+      name: "Bash",
+      title: "npm run lint",
+      status: "completed",
+      detail: { kind: "command", command: "npm run lint", exitCode: 0, output: "> crew@0.1.0 lint\n> eslint src\n\n19 problems (0 errors, 19 warnings)" },
+    },
+  },
+  {
+    id: "b14",
+    role: "tool",
+    text: "npm test",
+    tool: {
+      callId: "t7",
+      name: "Bash",
+      title: "npm test",
+      status: "failed",
+      detail: {
+        kind: "command",
+        command: "npm test -- sidebarPrefs",
+        exitCode: 1,
+        output: "FAIL  src/lib/sidebarPrefs.test.ts\n  × hides a session the user collapsed\n    expected true to be false\n\nTests  1 failed | 11 passed",
+      },
+    },
+  },
+  {
+    id: "b15",
+    role: "tool",
+    text: "Read sidebarPrefs.ts",
+    tool: {
+      callId: "t8",
+      name: "Read",
+      title: "Read sidebarPrefs.ts",
+      status: "completed",
+      detail: {
+        kind: "file",
+        path: "/Users/me/Developer/crew/src/lib/sidebarPrefs.ts",
+        lineStart: 38,
+        lineEnd: 44,
+        preview: "export function shows(prefs: SidebarPrefs, key: string): boolean {\n  return !hiddenSet(prefs).has(key);\n}",
+      },
+    },
+  },
+  {
+    id: "b16",
+    role: "tool",
+    text: "Edit sidebarPrefs.ts",
+    tool: {
+      callId: "t9",
+      name: "Edit",
+      title: "Edit sidebarPrefs.ts",
+      status: "completed",
+      detail: { kind: "edit", path: "src/lib/sidebarPrefs.ts", added: 6, removed: 2 },
+    },
+  },
+  {
+    id: "b17",
+    role: "tool",
+    text: "Crew message agent Cuddles",
+    tool: {
+      callId: "t10",
+      name: "mcp__crew__message_agent",
+      title: "Crew message agent Cuddles",
+      status: "completed",
+      detail: {
+        kind: "message",
+        to: "Cuddles",
+        text: "Suite is green after the fix: one test was asserting the old lookup. Lint has 19 warnings, all pre-existing. Go ahead with the MR.",
+      },
+    },
+  },
+  {
+    id: "b18",
+    role: "assistant",
+    at: now - 60e3,
+    text: "Green. One test was pinned to the old lookup, so I updated it with the fix and told Cuddles to open the MR.",
+    usage: { inputTokens: 18400, outputTokens: 180, costUsd: 0.024, durationMs: 21600 },
+  },
 ];
 
 type MockAgent = { sessionId: string; stage: "idle" | "question" | "approval" };

@@ -9,3 +9,6 @@ target/
 # Reference checkouts: read-only architecture material, not part of the build.
 reference/
 
+
+# Screenshots from scripts/shot.mjs
+out/

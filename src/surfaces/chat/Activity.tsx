@@ -3,7 +3,10 @@ import {
   CaretRightIcon,
   ChatCircleDotsIcon,
   CircleNotchIcon,
+  FileTextIcon,
+  GlobeSimpleIcon,
   MagnifyingGlassIcon,
+  PaperPlaneTiltIcon,
   PencilSimpleIcon,
   SparkleIcon,
   TerminalIcon,
@@ -12,9 +15,17 @@ import {
   type Icon,
 } from "@phosphor-icons/react";
 import { createElement, memo, useEffect, useMemo, useState } from "react";
-import { buildActivity, phaseLabel, phaseOpen, summarize, type Phase, type PhaseKind } from "../../lib/activity";
+import {
+  buildActivity,
+  phaseFailed,
+  phaseLabel,
+  phaseOpen,
+  summarize,
+  type Phase,
+  type PhaseKind,
+} from "../../lib/activity";
 import { isOpen, type Answers, type ApprovalDecision, type Block } from "../../lib/blocks";
-import { hasBody, toolLine } from "../../lib/toolDetail";
+import { glyphKind, hasBody, toolLine } from "../../lib/toolDetail";
 import { ApprovalCard } from "./ApprovalCard";
 import { QuestionCard, answerSummary } from "./QuestionCard";
 import { ToolBody } from "./ToolBody";
@@ -33,6 +44,21 @@ const KIND_ICON: Record<PhaseKind, Icon> = {
   run: TerminalIcon,
   other: WrenchIcon,
 };
+
+/** A row wears what it did, not what its phase was called. */
+const DETAIL_ICON: Record<string, Icon> = {
+  command: TerminalIcon,
+  file: FileTextIcon,
+  edit: PencilSimpleIcon,
+  search: MagnifyingGlassIcon,
+  fetch: GlobeSimpleIcon,
+  message: PaperPlaneTiltIcon,
+};
+
+function iconFor(block: Block, fallback: Icon | undefined): Icon | undefined {
+  const kind = glyphKind(block);
+  return (kind && DETAIL_ICON[kind]) ?? fallback;
+}
 
 /**
  * The transcript regroups its rows every frame a turn streams, so `blocks` is a
@@ -93,6 +119,7 @@ function PhaseRow({
   onApprove: (requestId: number, decision: ApprovalDecision) => void;
 }) {
   const waiting = phaseOpen(phase);
+  const failed = phaseFailed(phase);
   const [pinned, setPinned] = useState<boolean | null>(null);
   // Moving on clears the pin so the next turn's phases start folded again.
   useEffect(() => {
@@ -103,7 +130,8 @@ function PhaseRow({
   const single = phase.blocks.length === 1 && !waiting;
 
   if (single) {
-    return <ToolRow block={phase.blocks[0]!} hot={hot} onApprove={onApprove} icon={KIND_ICON[phase.kind]} />;
+    const block = phase.blocks[0]!;
+    return <ToolRow block={block} hot={hot} onApprove={onApprove} icon={iconFor(block, KIND_ICON[phase.kind])} />;
   }
 
   return (
@@ -114,7 +142,9 @@ function PhaseRow({
             <CircleNotchIcon className="size-3.5 animate-spin text-kumo-warning" weight="bold" />
           ) : (
             <>
-              {createElement(KIND_ICON[phase.kind], { className: "size-3.5 transition-opacity group-hover:opacity-0" })}
+              {createElement(failed ? XIcon : KIND_ICON[phase.kind], {
+                className: `size-3.5 transition-opacity group-hover:opacity-0${failed ? " text-danger" : ""}`,
+              })}
               <CaretRightIcon
                 weight="bold"
                 className={`absolute size-3 opacity-0 transition-[opacity,transform] duration-150 group-hover:opacity-100 ${open ? "rotate-90" : ""}`}
@@ -125,6 +155,8 @@ function PhaseRow({
         <span className={waiting ? "crew-shimmer" : "text-text-muted transition-colors group-hover:text-text"}>
           {label}
         </span>
+        {/* A folded phase hides its rows; a failure inside it may not hide too. */}
+        {failed && !waiting ? <span className="shrink-0 text-[11px] text-danger">failed</span> : null}
       </Collapsible.Trigger>
       <Collapsible.Panel className="crew-phase-panel">
         <div className="crew-phase-steps">
@@ -212,7 +244,7 @@ function ToolRow({
   hot: string | undefined;
   onApprove: (requestId: number, decision: ApprovalDecision) => void;
   /** Standalone rows carry the kind glyph; inside a phase the rail is the bullet. */
-  icon?: Icon;
+  icon?: Icon | undefined;
 }) {
   const [open, setOpen] = useState(false);
   if (block.role === "approval" && isOpen(block)) {

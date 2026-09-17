@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildActivity, phaseKind, phaseLabel, summarize, type Phase } from "./activity";
+import { buildActivity, phaseFailed, phaseKind, phaseLabel, summarize, type Phase } from "./activity";
 import type { Block, ToolStatus } from "./blocks";
 
 function tool(name: string, title: string, status: ToolStatus = "completed"): Block {
@@ -143,5 +143,17 @@ describe("phaseKind", () => {
       },
     };
     expect(phaseLabel(phase(buildActivity([edit])))).toBe("Edited src/lib/tabs.ts");
+  });
+});
+
+describe("phaseFailed", () => {
+  it("is true when any call in the phase failed", () => {
+    const items = buildActivity([tool("Bash", "npm run lint"), tool("Bash", "npm test", "failed")]);
+    expect(phaseFailed(phase(items))).toBe(true);
+  });
+
+  it("is false when every call came back fine", () => {
+    const items = buildActivity([tool("Bash", "npm run lint"), tool("Bash", "npm test")]);
+    expect(phaseFailed(phase(items))).toBe(false);
   });
 });

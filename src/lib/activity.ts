@@ -80,6 +80,11 @@ export function phaseOpen(phase: Phase): boolean {
   return phase.blocks.some(isOpen);
 }
 
+/** A folded phase must still say that something in it went wrong. */
+export function phaseFailed(phase: Phase): boolean {
+  return phase.blocks.some((block) => block.tool?.status === "failed");
+}
+
 /** "Read sidebarPrefs.ts" → the file; "npm run lint" → nothing. */
 function targetOf(block: Block): string | null {
   const detail = detailOf(block);

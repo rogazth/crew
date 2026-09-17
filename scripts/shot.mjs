@@ -1,0 +1,60 @@
+// Screenshots the chrome against the in-memory mock, so a change to the chat can
+// be looked at without a machine with a screen.
+//
+//   node scripts/shot.mjs            → out/shot.png
+//   SHOT=search node scripts/shot.mjs
+//
+// Needs a browser once: npx playwright-core install chromium
+import { spawn } from "node:child_process";
+import { mkdirSync } from "node:fs";
+import { chromium } from "playwright-core";
+
+const PORT = 1421;
+const OUT = new URL("../out/", import.meta.url).pathname;
+mkdirSync(OUT, { recursive: true });
+
+const vite = spawn("npx", ["vite", "--port", String(PORT), "--strictPort"], {
+  cwd: new URL("..", import.meta.url).pathname,
+  env: { ...process.env, CREW_MOCK: "1" },
+  stdio: ["ignore", "pipe", "pipe"],
+});
+vite.stderr.on("data", (chunk) => process.stderr.write(`[vite] ${chunk}`));
+await new Promise((resolve, reject) => {
+  vite.stdout.on("data", (chunk) => String(chunk).includes("ready in") && resolve());
+  vite.on("exit", (code) => reject(new Error(`vite exited ${code}`)));
+  setTimeout(() => reject(new Error("vite never came up")), 60_000);
+});
+
+const browser = await chromium.launch();
+const page = await browser.newPage({ viewport: { width: 1280, height: 900 }, deviceScaleFactor: 2 });
+page.on("console", (message) => message.type() === "error" && console.log(`[page] ${message.text()}`));
+await page.goto(`http://localhost:${PORT}/`, { waitUntil: "networkidle" });
+
+const shot = process.env.SHOT ?? "chat";
+if (shot === "search") {
+  await page.keyboard.press("Control+Shift+F");
+  await page.waitForTimeout(400);
+  await page.keyboard.type("sidebar");
+  await page.waitForTimeout(800);
+} else {
+  // The seeded transcript belongs to the first agent in the sidebar.
+  await page.locator('[data-sidebar="sidebar"] button').filter({ hasText: "Planner" }).first().click();
+  await page.waitForTimeout(1500);
+  await page.mouse.wheel(0, 20000);
+  await page.waitForTimeout(800);
+  // Open the failed command so its output is in the shot.
+  const failed = page.locator('button', { hasText: "npm test -- sidebarPrefs" }).first();
+  if (await failed.count()) {
+    await failed.click();
+    await page.waitForTimeout(600);
+    await page.mouse.wheel(0, 2000);
+    await page.waitForTimeout(400);
+  }
+}
+
+const file = `${OUT}${shot}.png`;
+await page.screenshot({ path: file });
+console.log(`wrote ${file}`);
+await browser.close();
+vite.kill("SIGTERM");
+process.exit(0);

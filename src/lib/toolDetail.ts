@@ -113,6 +113,24 @@ export function hasBody(block: Block): boolean {
   }
 }
 
+/** What kind of glyph a row wears, read off the detail rather than the name. */
+export type ToolGlyphKind = "command" | "file" | "edit" | "search" | "fetch" | "message" | null;
+
+export function glyphKind(block: Block): ToolGlyphKind {
+  const detail = detailOf(block);
+  switch (detail?.kind) {
+    case "command":
+    case "file":
+    case "edit":
+    case "search":
+    case "fetch":
+    case "message":
+      return detail.kind;
+    default:
+      return null;
+  }
+}
+
 /** The clip marker the daemon appends when a payload was cut. */
 const CLIPPED = /\n… (\d+) more bytes$/;
 
