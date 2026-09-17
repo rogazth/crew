@@ -24,6 +24,8 @@ npm run app
 
 `npm run app` builds `crewd`, starts Vite and opens the window. The daemon is spawned by the app and its data lives in the Electron user-data directory; closing the app stops it and kills every child process it started.
 
+That is the only way to open Crew. `open -a Crew` and Spotlight go through LaunchServices, which resolves `com.relay.crew` to whatever bundle it saw last — a stale `release/` build, or the Tauri one that used to sit in `target/release/bundle/`.
+
 To build the app itself (macOS arm64):
 
 ```bash

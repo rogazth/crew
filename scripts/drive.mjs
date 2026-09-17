@@ -159,7 +159,10 @@ const SCENARIOS = {
       const made = (await rpc("session_list", { workspaceId: workspace.id })).find(
         (s) => s.name === "Scout",
       );
-      const asked = coderEnd.blocks.filter((b) => b.tool?.name?.includes("create_agent"));
+      // Through the gateway or straight at it: either way, one round.
+      const asked = coderEnd.blocks.filter((b) =>
+        ["create_agent", "call_tool"].some((name) => b.tool?.name?.includes(name)),
+      );
       return [
         ["the agent was created at all", Boolean(made), made ? `${made.provider}/${made.model}` : "no Scout"],
         [
@@ -167,7 +170,7 @@ const SCENARIOS = {
           made?.provider === "cursor" && made?.model?.includes("grok-4.6"),
           made ? `${made.provider}/${made.model}` : "",
         ],
-        ["it did not need more than one try", asked.length <= 1, `${asked.length} create_agent calls`],
+        ["it got there in one call", asked.length === 1, `${asked.length} calls`],
       ];
     },
   },

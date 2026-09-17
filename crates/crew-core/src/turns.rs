@@ -892,6 +892,10 @@ impl TurnHost {
         };
         let mcp = self.mcp();
         let hint = mcp.as_ref().map(|_| mcp_tools_hint());
+        // Minted once and used twice: the agent's own shell gets it, and so
+        // does the MCP server codex starts for it. A second mint would retire
+        // the first.
+        let env = self.agent_env(&session_id);
         let prompt = build_codex_prompt(
             &session.name,
             &session.description,
@@ -913,9 +917,10 @@ impl TurnHost {
                     Autonomy::Ask
                 },
                 mcp,
+                mcp_env: env.clone().into_iter().collect(),
             }),
             params.cwd,
-            Some(self.agent_env(&session_id)),
+            Some(env),
         ) {
             return TurnOutcome::Failed(error);
         }

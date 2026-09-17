@@ -305,6 +305,7 @@ mod tests {
                 cwd: Some("/tmp".into()),
                 autonomy: Autonomy::Ask,
                 mcp: None,
+                mcp_env: Vec::new(),
             }),
             cursor::build_cursor_spawn_args(&cursor::CursorSpawn {
                 prompt: "hi".into(),

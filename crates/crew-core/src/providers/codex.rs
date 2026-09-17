@@ -12,6 +12,14 @@ pub struct CodexSpawn {
     pub cwd: Option<String>,
     pub autonomy: Autonomy,
     pub mcp: Option<(String, Vec<String>)>,
+    /// What `crew --mcp` needs in its own environment to reach the bridge.
+    ///
+    /// Codex does not hand an MCP server the environment it was started with —
+    /// its own servers declare `env` in config.toml for the same reason — and
+    /// `crew --mcp` exits at once without CREW_SOCKET. Measured, not guessed:
+    /// the agent had CREW_TOKEN in its shell, no Crew tools at all, and sent a
+    /// message by piping the bridge's own JSON into `nc`.
+    pub mcp_env: Vec<(String, String)>,
 }
 
 pub fn build_codex_spawn_args(input: &CodexSpawn) -> Vec<String> {
@@ -27,6 +35,18 @@ pub fn build_codex_spawn_args(input: &CodexSpawn) -> Vec<String> {
             "mcp_servers.crew.args={}",
             serde_json::to_string(mcp_args).unwrap_or_else(|_| "[]".into())
         ));
+        if !input.mcp_env.is_empty() {
+            let pairs = input
+                .mcp_env
+                .iter()
+                .map(|(key, value)| {
+                    format!("{key}={}", serde_json::to_string(value).unwrap_or_else(|_| "\"\"".into()))
+                })
+                .collect::<Vec<_>>()
+                .join(",");
+            args.push("-c".into());
+            args.push(format!("mcp_servers.crew.env={{{pairs}}}"));
+        }
     }
     args.push("--json".into());
     args.push("--skip-git-repo-check".into());
@@ -66,6 +86,49 @@ pub fn build_codex_prompt(
 }
 
 pub use super::persona_prompt;
+
+#[cfg(test)]
+mod spawn_tests {
+    use super::*;
+
+    /// The server codex starts does not inherit the agent's environment, so the
+    /// address of the bridge has to travel in the config with it.
+    #[test]
+    fn the_mcp_server_is_told_how_to_reach_the_bridge() {
+        let args = build_codex_spawn_args(&CodexSpawn {
+            prompt: "hi".into(),
+            model: None,
+            cwd: None,
+            autonomy: Autonomy::Ask,
+            mcp: Some(("/bin/crewd".into(), vec!["--mcp".into()])),
+            mcp_env: vec![
+                ("CREW_SOCKET".into(), "/tmp/crew.sock".into()),
+                ("CREW_TOKEN".into(), "t-1".into()),
+            ],
+        });
+        let env = args
+            .iter()
+            .find(|arg| arg.starts_with("mcp_servers.crew.env="))
+            .expect("the server was started without the bridge in its environment");
+        assert_eq!(
+            env,
+            "mcp_servers.crew.env={CREW_SOCKET=\"/tmp/crew.sock\",CREW_TOKEN=\"t-1\"}"
+        );
+    }
+
+    #[test]
+    fn no_mcp_means_no_env_for_it() {
+        let args = build_codex_spawn_args(&CodexSpawn {
+            prompt: "hi".into(),
+            model: None,
+            cwd: None,
+            autonomy: Autonomy::Ask,
+            mcp: None,
+            mcp_env: vec![("CREW_SOCKET".into(), "/tmp/crew.sock".into())],
+        });
+        assert!(!args.iter().any(|arg| arg.contains("mcp_servers")), "{args:?}");
+    }
+}
 
 fn with_attached_paths(text: &str, files: &[String]) -> String {
     if files.is_empty() {
