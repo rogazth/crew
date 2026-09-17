@@ -88,6 +88,9 @@ export async function send(
     ...(options.mentions && options.mentions.length > 0 ? { mentions: options.mentions } : {}),
     ...(options.hidden ? { hidden: true } : {}),
     ...(options.fresh ? { fresh: true } : {}),
+    // Survives a reconnect mid-send: the daemon accepts this id once, so a
+    // retry answers with the turn that already started instead of a second one.
+    nonce: crypto.randomUUID(),
   };
   try {
     await api.turnStart(params);

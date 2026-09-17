@@ -31,6 +31,9 @@ struct Live {
     dirty: bool,
     save_gen: u64,
     save: Option<AbortHandle>,
+    /// Fingerprints of the rows already in `messages`, so a flush writes the
+    /// blocks that moved instead of the whole transcript.
+    synced: Vec<u64>,
 }
 
 #[derive(Clone)]
@@ -74,10 +77,15 @@ impl TranscriptHub {
             .flatten()
             .map(|row| row.status)
             .unwrap_or_else(|| "idle".into());
+        let synced = self
+            .store
+            .with(|conn| crate::messages::fingerprints(conn, session_id))
+            .unwrap_or_default();
         Live {
             blocks: parse_blocks(Some(&raw)),
             working: status == "working" || status == "needs-input",
             status,
+            synced,
             seq: 0,
             dirty: false,
             save_gen: 0,
@@ -96,6 +104,7 @@ impl TranscriptHub {
                 dirty: row.dirty,
                 save_gen: row.save_gen,
                 save: None,
+                synced: Vec::new(),
             };
         }
         drop(map);
@@ -109,6 +118,7 @@ impl TranscriptHub {
             dirty: false,
             save_gen: 0,
             save: None,
+            synced: created.synced.clone(),
         });
         created
     }
@@ -214,7 +224,7 @@ impl TranscriptHub {
     }
 
     pub fn flush(&self, session_id: &str) {
-        let blocks = {
+        let (blocks, mut synced) = {
             let mut map = self.lock();
             let Some(row) = map.get_mut(session_id) else {
                 return;
@@ -227,10 +237,21 @@ impl TranscriptHub {
             }
             row.dirty = false;
             row.save_gen += 1;
-            row.blocks.clone()
+            (row.blocks.clone(), std::mem::take(&mut row.synced))
         };
         let json = serde_json::to_string(&blocks).unwrap_or_else(|_| "[]".into());
         let _ = session::set_blocks(&self.store, session_id.to_string(), json);
+        let written = self
+            .store
+            .with(|conn| crate::messages::sync(conn, session_id, &blocks, &mut synced))
+            .is_ok();
+        // A failed write leaves the cache empty, so the next flush rewrites
+        // every row instead of trusting fingerprints for rows that never landed.
+        if let Some(row) = self.lock().get_mut(session_id) {
+            if written {
+                row.synced = synced;
+            }
+        }
     }
 
     pub fn flush_all(&self) {

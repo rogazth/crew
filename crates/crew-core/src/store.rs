@@ -191,6 +191,15 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
             params![now_millis()],
         )?;
     }
+    if current < 10 {
+        conn.execute_batch(crate::messages::MIGRATION_V10)?;
+        // The transcripts that already exist are the ones worth searching.
+        crate::messages::backfill(conn)?;
+        conn.execute(
+            "INSERT INTO schema_migrations (version, applied_at) VALUES (10, ?1)",
+            params![now_millis()],
+        )?;
+    }
     Ok(())
 }
 
@@ -263,6 +272,7 @@ fn settle_open_turns(conn: &Connection) -> rusqlite::Result<()> {
             "UPDATE sessions SET blocks_json = ?2, status = 'idle', updated_at = ?3 WHERE id = ?1",
             params![id, json, now_millis()],
         )?;
+        crate::messages::sync(conn, &id, &settled, &mut Vec::new())?;
     }
     Ok(())
 }

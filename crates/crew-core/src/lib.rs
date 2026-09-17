@@ -5,6 +5,7 @@ pub mod cron;
 pub mod providers;
 pub mod files;
 pub mod mcp;
+pub mod messages;
 pub mod pty;
 pub mod routine;
 pub mod schedule;

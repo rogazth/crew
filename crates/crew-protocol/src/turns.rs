@@ -24,6 +24,11 @@ pub struct TurnStart {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub fresh: Option<bool>,
+    /// One id per Enter, replayed unchanged by a retry. The daemon accepts it
+    /// once; a second arrival is answered without starting a second turn.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub nonce: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, TS)]

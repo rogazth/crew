@@ -7,6 +7,7 @@ use std::time::Duration;
 use crew_core::agent::{AgentEvents, AgentHost};
 use crew_core::bridge::{Bridge, ToolHost};
 use crew_core::files;
+use crew_core::messages;
 use crew_core::pty::{PtyEvents, PtyHost};
 use crew_core::routine;
 use crew_core::session;
@@ -18,7 +19,8 @@ use crew_protocol::{
     self as proto, Auth, Cwd, DaemonInfo, Id, IdName, IdStatus, Ids, Key, KeyValue, Name, NamePath,
     OptionalId, PathArg, PathContents, PtyAck, PtyAttach, PtyAttached, PtyKill, PtyResize, PtySpawn, PtyWrite,
     Request, RoutineMark, RoutineUpsert, SessionCreate, SessionCreated, SessionId, SessionUpdate, TempFile,
-    TranscriptApply, TurnAnswer, TurnRespond, TurnStart, WorkspaceId,
+    SearchQuery, TranscriptApply, TranscriptSince, TranscriptTail, TurnAnswer, TurnRespond,
+    TurnStart, TurnStarted, WorkspaceId,
 };
 use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
@@ -854,6 +856,25 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
         }
         "turn_start" => {
             let p: TurnStart = parse(params)?;
+            if let Some(nonce) = p.nonce.clone() {
+                let store = hosts.store.clone();
+                let session_id = p.session_id.clone();
+                let accepted = block(move || {
+                    let fresh = messages::claim_nonce(&store, &session_id, &nonce)?;
+                    if fresh {
+                        return Ok(None);
+                    }
+                    // A retry of a send that already landed. Answer with the
+                    // state the first one produced instead of running it twice.
+                    let working = session::get(&store, session_id)?
+                        .is_some_and(|row| row.status == "working" || row.status == "needs-input");
+                    Ok(Some(TurnStarted { working }))
+                })
+                .await?;
+                if let Some(started) = accepted {
+                    return json(started);
+                }
+            }
             let turns = hosts.turns.clone();
             json(block(move || turns.start(p)).await?)
         }
@@ -879,6 +900,21 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
             let SessionId { session_id } = parse(params)?;
             let turns = hosts.turns.clone();
             json(block(move || Ok(turns.transcripts().get(&session_id))).await?)
+        }
+        "transcript_tail" => {
+            let TranscriptTail { session_id, limit, before_pos } = parse(params)?;
+            let store = hosts.store.clone();
+            json(block(move || messages::tail(&store, session_id, limit, before_pos)).await?)
+        }
+        "transcript_since" => {
+            let TranscriptSince { session_id, pos } = parse(params)?;
+            let store = hosts.store.clone();
+            json(block(move || messages::since(&store, session_id, pos)).await?)
+        }
+        "messages_search" => {
+            let query: SearchQuery = parse(params)?;
+            let store = hosts.store.clone();
+            json(block(move || messages::search(&store, query)).await?)
         }
         _ => Err(format!("Unknown method: {method}")),
     }

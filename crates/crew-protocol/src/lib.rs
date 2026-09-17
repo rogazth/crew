@@ -3,8 +3,10 @@ use serde_json::Value;
 use ts_rs::TS;
 
 mod blocks;
+mod messages;
 mod turns;
 pub use blocks::*;
+pub use messages::*;
 pub use turns::*;
 
 #[derive(Serialize, Deserialize, Clone, Debug, TS)]

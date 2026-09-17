@@ -1,6 +1,7 @@
 import { client } from "./client";
 import { open } from "./host";
 import type { RoutineRow, ScheduledRoutine } from "./routines";
+import type { MessagePage, SearchHit, SearchQuery } from "./protocol";
 import type { Autonomy, ProjectFile, Session, SessionKind, SessionStatus, Workspace } from "./types";
 
 /** Native picker. No filters: any document the agent can read. */
@@ -67,7 +68,22 @@ export const turnStart = (params: {
   mentions?: string[];
   hidden?: boolean;
   fresh?: boolean;
+  nonce?: string;
 }): Promise<{ working: boolean }> => client.request("turn_start", params);
+
+/** The last blocks of a transcript. `beforePos` pages towards the start. */
+export const transcriptTail = (params: {
+  sessionId: string;
+  limit?: number;
+  beforePos?: number;
+}): Promise<MessagePage> => client.request("transcript_tail", params);
+
+/** What arrived while this client was away. */
+export const transcriptSince = (sessionId: string, pos: number): Promise<MessagePage> =>
+  client.request("transcript_since", { sessionId, pos });
+
+export const searchMessages = (query: SearchQuery): Promise<SearchHit[]> =>
+  client.request("messages_search", query);
 
 export const turnStop = (sessionId: string): Promise<void> =>
   client.request("turn_stop", { sessionId });
