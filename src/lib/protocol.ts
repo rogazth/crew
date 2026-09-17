@@ -32,8 +32,6 @@ export type BlockRole = "user" | "assistant" | "reasoning" | "tool" | "approval"
 
 export type BlockTool = { callId: string, name: string, title: string, status: ToolStatus, detail?: ToolDetail, };
 
-export type BridgeInfo = { socketPath: string, token: string, exe: string, };
-
 export type Cwd = { cwd: string, };
 
 export type DaemonInfo = { url: string, token: string, };

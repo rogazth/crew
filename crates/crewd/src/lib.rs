@@ -789,6 +789,9 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
         "session_delete" => {
             let Id { id } = parse(params)?;
             let store = hosts.store.clone();
+            // Its process may still be running with a token in its environment;
+            // a session that no longer exists should not still be able to call.
+            hosts.bridge.revoke(&id);
             block(move || session::delete(&store, id)).await?;
             Ok(Value::Null)
         }
@@ -889,10 +892,6 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
             let Name { name } = parse(params)?;
             json(block(move || AgentHost::resolve(&name)).await?)
         }
-        "bridge_info" => {
-            let bridge = hosts.bridge.clone();
-            json(block(move || bridge.info()).await?)
-        }
         "turn_start" => {
             let p: TurnStart = parse(params)?;
             if let Some(nonce) = p.nonce.clone() {
@@ -991,13 +990,22 @@ mod tests {
     }
 
     fn test_serve(dir: &std::path::Path) -> Handle {
-        serve(Config {
+        test_serve_bridged(dir).0
+    }
+
+    /// The bridge too, for a test that has to hold a session's token. Nothing
+    /// hands one out over the wire: it is minted when a turn starts, and a test
+    /// that never runs a turn has to ask the bridge itself.
+    fn test_serve_bridged(dir: &std::path::Path) -> (Handle, Bridge) {
+        let bridge = Bridge::start(dir.to_path_buf()).expect("bridge");
+        let handle = serve(Config {
             pty: PtyHost::new(),
             store: Store::open(dir.join("crew.sqlite3")).expect("store"),
             agents: AgentHost::new(),
-            bridge: Bridge::start(dir.to_path_buf()).expect("bridge"),
+            bridge: bridge.clone(),
         })
-        .expect("serve")
+        .expect("serve");
+        (handle, bridge)
     }
 
     async fn connect_authed(handle: &Handle) -> Ws {
@@ -1252,24 +1260,13 @@ mod tests {
     #[tokio::test]
     async fn list_agents_runs_without_a_window() {
         let dir = test_dir("tool-headless");
-        let handle = test_serve(&dir);
+        let (handle, bridge) = test_serve_bridged(&dir);
         let mut ws = connect_authed(&handle).await;
         let session_id = seed_agent(&mut ws, dir.to_str().unwrap()).await;
-        send_json(
-            &mut ws,
-            &Request {
-                id: 3,
-                method: "bridge_info".into(),
-                params: serde_json::json!({}),
-            },
-        )
-        .await;
-        let info: proto::BridgeInfo =
-            serde_json::from_value(wait_response(&mut ws, 3).await.result.expect("info")).expect("BridgeInfo");
+        let info = bridge.info().expect("info");
         drop(ws);
         let payload = serde_json::json!({
-            "token": info.token,
-            "sessionId": session_id,
+            "token": bridge.mint(&session_id),
             "method": "tools/call",
             "params": { "name": "list_agents", "arguments": {} }
         });
@@ -1279,26 +1276,50 @@ mod tests {
         handle.shutdown();
     }
 
+    /// The token is the identity. An agent's shell inherits CREW_SOCKET and
+    /// CREW_TOKEN, and used to be able to name any session on the request and
+    /// be believed — which, with a child inheriting its creator's autonomy, is
+    /// how an `ask` agent would have had a `full` one built for it.
+    #[tokio::test]
+    async fn a_token_speaks_only_for_the_session_it_was_minted_for() {
+        let dir = test_dir("tool-identity");
+        let (handle, bridge) = test_serve_bridged(&dir);
+        let mut ws = connect_authed(&handle).await;
+        let mine = seed_agent(&mut ws, dir.to_str().unwrap()).await;
+        let info = bridge.info().expect("info");
+        drop(ws);
+
+        // The old shape of the request, with somebody else's id on it.
+        let forged = serde_json::json!({
+            "token": bridge.mint(&mine),
+            "sessionId": "somebody-else",
+            "method": "tools/call",
+            "params": { "name": "list_agents", "arguments": {} }
+        });
+        let reply = unix_call(&info.socket_path, &forged);
+        let text = reply["result"]["content"][0]["text"].as_str().unwrap_or("");
+        assert!(text.contains(&mine), "the id on the wire was believed: {reply}");
+
+        // And a token nobody minted is nobody.
+        let stranger = serde_json::json!({
+            "token": "not-a-token-anybody-minted",
+            "method": "tools/call",
+            "params": { "name": "list_agents", "arguments": {} }
+        });
+        let reply = unix_call(&info.socket_path, &stranger);
+        assert_eq!(reply["error"].as_str(), Some("Bad token"), "reply: {reply}");
+        handle.shutdown();
+    }
+
     #[tokio::test]
     async fn create_agent_emits_session_created() {
         let dir = test_dir("tool-created");
-        let handle = test_serve(&dir);
+        let (handle, bridge) = test_serve_bridged(&dir);
         let mut ws = connect_authed(&handle).await;
         let session_id = seed_agent(&mut ws, dir.to_str().unwrap()).await;
-        send_json(
-            &mut ws,
-            &Request {
-                id: 3,
-                method: "bridge_info".into(),
-                params: serde_json::json!({}),
-            },
-        )
-        .await;
-        let info: proto::BridgeInfo =
-            serde_json::from_value(wait_response(&mut ws, 3).await.result.expect("info")).expect("BridgeInfo");
+        let info = bridge.info().expect("info");
         let payload = serde_json::json!({
-            "token": info.token,
-            "sessionId": session_id,
+            "token": bridge.mint(&session_id),
             "method": "tools/call",
             "params": { "name": "create_agent", "arguments": { "name": "B", "description": "does B" } }
         });

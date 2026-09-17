@@ -118,9 +118,7 @@ export const upsertRoutine = (input: {
 
 export const deleteRoutine = (id: string): Promise<void> => client.request("routine_delete", { id });
 
-export type BridgeInfo = { socketPath: string; token: string; exe: string };
 
-export const bridgeInfo = (): Promise<BridgeInfo> => client.request("bridge_info");
 
 export const stateGet = (key: string): Promise<string | null> => client.request("state_get", { key });
 

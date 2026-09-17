@@ -15,8 +15,10 @@ const PROTOCOL_VERSION: &str = "2025-06-18";
 
 struct Link {
     socket: String,
+    /// Who this process is, as far as the daemon is concerned. Crew minted it
+    /// for this session when the turn started; the session id is not sent and
+    /// would not be believed.
     token: String,
-    session_id: String,
 }
 
 impl Link {
@@ -27,7 +29,6 @@ impl Link {
         Ok(Self {
             socket: var("CREW_SOCKET")?,
             token: var("CREW_TOKEN")?,
-            session_id: var("CREW_SESSION_ID")?,
         })
     }
 
@@ -38,7 +39,6 @@ impl Link {
         let _ = stream.set_read_timeout(Some(CALL_TIMEOUT));
         let mut line = json!({
             "token": self.token,
-            "sessionId": self.session_id,
             "method": method,
             "params": params,
         })

@@ -1511,12 +1511,13 @@ mod tests {
         assert!(postman.handed.borrow().is_empty(), "the nested call went through");
     }
 
-    /// The gateway hides tools from `tools/list`; it does not gate them. The
-    /// caller identity is whatever session id arrives on the request, and the
-    /// bridge authenticates one daemon-wide token that every agent process is
-    /// handed in `CREW_TOKEN`. So one agent's shell can act as another agent.
+    /// `handle` believes the session id it is given: it is a function, and the
+    /// caller is an argument. Establishing who that is belongs to the bridge,
+    /// which resolves it from a token it minted for one session and ignores any
+    /// id on the request — see
+    /// `crewd::tests::a_token_speaks_only_for_the_session_it_was_minted_for`.
     #[test]
-    fn review_the_caller_is_not_the_session_that_asked() {
+    fn the_caller_is_whoever_the_bridge_says_it_is() {
         let store = store();
         let transcripts = TranscriptHub::new(store.clone());
         let ws = workspace(&store);
@@ -1525,8 +1526,7 @@ mod tests {
         let victim = agent(&store, &ws, "Victim");
         // Busy, so the letter queues and its sender can be read back.
         let postman = Postman { busy: true, ..Postman::default() };
-        // Coder's bash tool inherits CREW_SOCKET/CREW_TOKEN and simply names
-        // Cuddles' session id on the wire. `handle` believes it.
+        // Handed Cuddles as the caller, the letter is from Cuddles.
         let out = handle(
             &store,
             &transcripts,
@@ -1547,7 +1547,7 @@ mod tests {
         assert_eq!(
             waiting.first().map(|letter| letter.from.name.as_str()),
             Some("Cuddles"),
-            "the request named Cuddles and was believed: any holder of CREW_TOKEN speaks as any session"
+            "the caller handed in is who the letter is from"
         );
     }
     /// An agent that guessed one field name has usually guessed the others.

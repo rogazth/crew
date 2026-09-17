@@ -551,8 +551,10 @@ impl TurnHost {
         };
         HashMap::from([
             ("CREW_SOCKET".into(), info.socket_path),
-            ("CREW_TOKEN".into(), info.token),
-            ("CREW_SESSION_ID".into(), session_id.into()),
+            // Minted for this session, here, every turn. It is what says who is
+            // calling: the id no longer travels on the wire, so a shell that
+            // inherited this cannot speak as another agent.
+            ("CREW_TOKEN".into(), self.bridge.mint(session_id)),
         ])
     }
 

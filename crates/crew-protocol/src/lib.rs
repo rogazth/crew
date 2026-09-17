@@ -412,15 +412,6 @@ pub struct FileBytes {
     pub data: String,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
-pub struct BridgeInfo {
-    pub socket_path: String,
-    pub token: String,
-    pub exe: String,
-}
-
 pub fn event(event: impl Into<String>, payload: impl Serialize) -> Result<Event, serde_json::Error> {
     Ok(Event {
         event: event.into(),
