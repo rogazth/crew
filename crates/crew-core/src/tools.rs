@@ -243,6 +243,21 @@ pub(crate) fn catalog() -> Vec<Tool> {
     ]
 }
 
+/// The names behind the gateway, for the sheet to list.
+///
+/// Names only, never schemas — the schemas are what the gateway exists to keep
+/// out of the prompt, and `create_agent` alone now carries the whole model
+/// catalogue. But an agent that is told only that "everything else" exists has
+/// no reason to go looking: asked to create an agent, a codex one reached for
+/// its own `spawn_agent`, which sounds exactly like the job and is not Crew's.
+pub fn hidden_names() -> Vec<&'static str> {
+    catalog()
+        .into_iter()
+        .filter(|tool| !tool.core)
+        .map(|tool| tool.name)
+        .collect()
+}
+
 /// Exactly what `tools/list` answers with, and exactly what the sheet in an
 /// agent's prompt names: the two have to agree or the agent is told about a
 /// tool it cannot call.

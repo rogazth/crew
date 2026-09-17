@@ -77,8 +77,9 @@ fn tools_hint(lead: &str, spell: &dyn Fn(&str) -> String) -> String {
          does not fit in one turn.\n\
          - {} — look up what was already said in this conversation. It does not reach anybody \
          else's; what another agent knows, you ask it for.\n\
-         - {} and {} — everything else Crew offers, searched and then called. Reach for them \
-         before deciding something is not possible here.\n\n\
+         - {} and {} — the rest of what Crew offers, searched and then called: {}. One of your \
+         own tools whose name sounds like one of those is not Crew's and does not reach this \
+         workspace.\n\n\
          A turn that opens with `## Message` was written by another agent, not by the user. \
          What you write in the chat is read by the user and does not reach that agent; {} to \
          the id on that line is what does.",
@@ -88,6 +89,7 @@ fn tools_hint(lead: &str, spell: &dyn Fn(&str) -> String) -> String {
         spell("search_messages"),
         spell("find_tool"),
         spell("call_tool"),
+        crate::tools::hidden_names().join(", "),
         spell("message_agent"),
     )
 }
@@ -2563,6 +2565,22 @@ print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type
         for sheet in [mcp_tools_hint(), opencode_tools_hint(), shell_tools_hint("crew")] {
             for tool in crate::tools::standing() {
                 assert!(sheet.contains(tool.name), "{} is not on the sheet: {sheet}", tool.name);
+            }
+        }
+    }
+
+    /// And the ones behind the gateway are named too, by name alone.
+    ///
+    /// Measured, not guessed: asked to create an agent, a codex agent did not
+    /// find `create_agent` in `tools/list` — it is behind `find_tool` — saw its
+    /// own `spawn_agent`, which sounds exactly like the job, and used that. Then
+    /// it drove the app's window. "Everything else Crew offers" gave it no
+    /// reason to look.
+    #[test]
+    fn a_tool_sheet_names_what_is_behind_the_gateway() {
+        for sheet in [mcp_tools_hint(), opencode_tools_hint(), shell_tools_hint("crew")] {
+            for name in crate::tools::hidden_names() {
+                assert!(sheet.contains(name), "{name} is not on the sheet: {sheet}");
             }
         }
     }
