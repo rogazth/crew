@@ -20,6 +20,8 @@ const SORTS: { value: SearchSort; label: string }[] = [
 
 /** Long enough that a held key does not fire a query per character. */
 const DEBOUNCE_MS = 120;
+/** What the page shows. One more is asked for, to know whether to say "+". */
+const PAGE = 100;
 
 /**
  * Every message every agent wrote, searchable. The daemon answers from an FTS5
@@ -52,7 +54,7 @@ export function SearchView({ agents, onOpenSession }: Props) {
         sessionIds: inSession ? [inSession] : [],
         ...(from === undefined ? {} : { from }),
         sort,
-        limit: 100,
+        limit: PAGE + 1,
       })
         .then((rows) => {
           if (latest.current !== ticket) return;
@@ -115,7 +117,7 @@ export function SearchView({ agents, onOpenSession }: Props) {
           />
           {showing !== null && (
             <span className="ml-auto text-[11px] text-placeholder tabular-nums">
-              {showing.length === 1 ? "1 result" : `${showing.length} results`}
+              {countLabel(showing.length)}
             </span>
           )}
         </div>
@@ -127,7 +129,7 @@ export function SearchView({ agents, onOpenSession }: Props) {
           <p className="py-16 text-center text-[13px] text-text-muted">Nothing matches {`"${text}"`}.</p>
         ) : (
           <div className="flex flex-col">
-            {showing.map((hit) => (
+            {showing.slice(0, PAGE).map((hit) => (
               <HitRow key={`${hit.sessionId}:${hit.pos}`} hit={hit} onOpen={onOpenSession} />
             ))}
           </div>
@@ -135,6 +137,12 @@ export function SearchView({ agents, onOpenSession }: Props) {
       </div>
     </div>
   );
+}
+
+/** Never claim a count the page did not actually reach. */
+function countLabel(found: number): string {
+  if (found > PAGE) return `${PAGE}+ results`;
+  return found === 1 ? "1 result" : `${found} results`;
 }
 
 function HitRow({ hit, onOpen }: { hit: SearchHit; onOpen: (sessionId: string) => void }) {
