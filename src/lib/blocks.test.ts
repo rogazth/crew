@@ -93,6 +93,13 @@ describe("daemon appends", () => {
     expect(blocks[0]?.hidden).toBe(true);
   });
 
+  it("keeps the sender on a row another agent wrote", () => {
+    const blocks = run([
+      { type: "user.message", text: "ping", fromAgent: { id: "a1", name: "Crew" } },
+    ]);
+    expect(blocks[0]?.fromAgent).toEqual({ id: "a1", name: "Crew" });
+  });
+
   it("projects a system row from system.message", () => {
     const blocks = run([{ type: "system.message", text: "Stopped" }]);
     expect(blocks.map((b) => [b.role, b.text])).toEqual([["system", "Stopped"]]);

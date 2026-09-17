@@ -213,6 +213,7 @@ export function applyEvent(blocks: Block[], event: HarnessEvent): Block[] {
         ...newBlock("user", event.text),
         ...(event.hidden ? { hidden: true } : {}),
         ...(event.files && event.files.length > 0 ? { files: event.files } : {}),
+        ...(event.fromAgent ? { fromAgent: event.fromAgent } : {}),
       };
       return [...blocks, block];
     }

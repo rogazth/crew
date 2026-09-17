@@ -116,6 +116,14 @@ describe("spacing", () => {
     expect(gapBefore(note, reply)).toBe("mt-3");
   });
 
+  it("does not count another agent's letter as you talking", () => {
+    const letter: Row = {
+      kind: "message",
+      block: { ...block("user", "ping"), fromAgent: { id: "a1", name: "Crew" } },
+    };
+    expect(speaker(letter)).toBe("meta");
+  });
+
   it("counts a group and a footer as the agent talking", () => {
     expect(speaker({ kind: "activity", id: "a", blocks: [] })).toBe("agent");
     expect(speaker({ kind: "footer", id: "f", usage: COST })).toBe("agent");

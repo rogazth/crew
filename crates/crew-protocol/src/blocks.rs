@@ -351,8 +351,10 @@ pub enum HarnessEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         files: Option<Vec<AttachedFile>>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
+        // Named as the block is: one spelling on the wire, so a reducer that
+        // reads it off the event cannot miss it.
+        #[serde(default, rename = "fromAgent", skip_serializing_if = "Option::is_none")]
+        #[ts(optional, rename = "fromAgent")]
         from_agent: Option<AgentRef>,
     },
     #[serde(rename = "system.message")]
