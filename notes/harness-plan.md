@@ -157,7 +157,8 @@ cargo test        # rust
 | E6 | the persona stops telling the model how to talk | done `c23c6e0` |
 | E7 | a message row names the agent instead of its uuid | done `c46b4f2` |
 | G2 | the scheduler review's ten findings | done `2241ae5` |
-| G3 | the schedule math is pinned on both sides of the duplication | done |
+| G3 | the schedule math is pinned on both sides of the duplication | done `41b5826` |
+| G4 | the client runtime has tests: the retry, the badge, the notifications | done |
 
 ### How A5 landed
 
