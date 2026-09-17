@@ -104,10 +104,55 @@ CREATE INDEX sessions_workspace_updated_idx
 Tres decisiones que vienen de R1 y hay que respetar:
 
 1. **`provider_session_id` es opaco.** Crew nunca lo parsea. Es el token de resume del proveedor.
-2. **`blocks_json` es el transcript entero en una columna.** Sin tabla `messages`. Aguanta hasta que necesites búsqueda transversal; ahí agregas FTS5, no antes.
+2. **`blocks_json` era el transcript entero en una columna.** Aguantó hasta que hizo falta búsqueda transversal; desde la migración 10 los mismos bloques viven además como filas en `messages` con un índice FTS5 (`crates/crew-core/src/messages.rs`). La columna sigue escribiéndose: es lo que el hub hidrata al abrir una sesión. Las filas son para buscar, paginar y filtrar por fecha.
 3. **`schema_migrations` desde el día uno.** `store.rs` corre migraciones numeradas al abrir.
 
 `kind` distingue tus dos elementos: `agent` abre `AgentChat`, `terminal` abre `TerminalView`.
+
+### Lo que se agregó después (migraciones 10 y 11)
+
+```sql
+-- 10: el transcript como filas, más el índice y la dedupe de envíos
+CREATE TABLE messages (session_id, pos, id, role, text, at, extra_json, PRIMARY KEY (session_id, pos));
+CREATE VIRTUAL TABLE messages_fts USING fts5(text, content='messages', content_rowid='rowid');
+CREATE TABLE send_nonces (session_id, nonce, at, PRIMARY KEY (session_id, nonce));
+
+-- 11: el buzón entre agentes
+CREATE TABLE mailbox (id PRIMARY KEY, to_session, from_session, from_name, text, at, delivered_at);
+```
+
+`pos` es la posición del bloque en el transcript, no el `seq` del `TranscriptHub`
+—ese cuenta eventos vivos, y diez bloques pueden ser mil deltas—. El flush no
+reescribe el transcript: compara huellas por bloque y escribe solo las filas que
+se movieron.
+
+## Agentes desechables y el buzón
+
+Un agente no es un proceso que vive: despierta con un mensaje, trabaja, y suelta
+su CLI. Los cuatro proveedores corren un proceso por turno (Claude tenía uno
+persistente; su ventana de gracia son cinco segundos, lo justo para que un
+agente en loop no pague arranque en frío cada vuelta).
+
+Los agentes no se llaman entre sí. `message_agent` deja una carta en el buzón
+del otro; el daemon le arranca un turno con el remitente puesto, y la respuesta
+vuelve igual. Nunca bloquea: esperar la respuesta trabaría el caso obvio —dos
+agentes que se escriben—. Si el destinatario está ocupado, la carta espera; el
+turno que termina drena el buzón (`TurnHost::drain_mailbox`).
+
+**Escribirse a uno mismo es el loop.** Un agente que deja una nota a su propio
+nombre la recibe como turno nuevo apenas termina el actual. Veinticinco vueltas
+seguidas sin que hable nadie más lo cortan y lo dicen en el transcript.
+
+## Las tools que Crew le da al agente
+
+`tools/list` devuelve cinco: `list_agents`, `message_agent`, `search_messages`,
+`find_tool` y `call_tool`. El resto del catálogo se descubre con `find_tool`,
+que rankea por nombre, keywords y descripción y contesta con el schema listo
+para llamar. Cien tools costarían más prompt que la conversación, y la mayoría
+de los turnos no necesita ninguna.
+
+Cursor llega al bridge por `crew call` sin MCP, así que `tools/list_changed` no
+es una opción; el gateway es la respuesta portable.
 
 ## El seam multi-provider
 
@@ -216,6 +261,10 @@ Lo que separa esto de las referencias que envejecieron mal.
 | 7 | Persistencia del transcript y resume | ✅ runtime fuera de React, reconcile al arrancar |
 | 8 | Autonomía por agente, notificaciones nativas, routines | ✅ |
 | 9 | Adapters Codex y Cursor (un proceso por turno, sin approvals) | ✅ |
+| 10 | Transcript como filas + FTS5, tail, búsqueda con fecha y orden | ✅ |
+| 11 | Buzón entre agentes, agentes desechables, loop por auto-mensaje | ✅ |
+| 12 | Adapter opencode (modelos gratis, sin credenciales) | ✅ |
+| 13 | Gateway de tools (`find_tool` / `call_tool`) | ✅ |
 
 Del 1 al 4 es andamiaje conocido. El 5 y 6 son el producto.
 
