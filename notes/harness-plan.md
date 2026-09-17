@@ -339,6 +339,12 @@ The default provider is opencode on its free models, which need no credentials.
   rewrites the rows after it.
 - `from_agent` rides inside `extra_json`, so "everything agent X wrote" is not
   a SQL query yet.
+- Cursor reaches the bridge through `crew call` rather than MCP, so a message
+  it sends another agent shows in its own transcript as the shell command that
+  sent it, not as a message row. The receiving side is unaffected: the letter
+  arrives with the sender's name on it like any other. Measured with
+  `PROVIDER=cursor node scripts/drive.mjs`, where the sender-side check is the
+  one that fails.
 - `tests/cli.rs` watches real processes start and die, so `exits_on_sigterm`
   fails under enough load: roughly one run in ten when something else is
   building, and clean six runs in a row when nothing is. It predates the
