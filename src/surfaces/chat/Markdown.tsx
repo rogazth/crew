@@ -1,10 +1,20 @@
 import { CheckCircleIcon, CircleIcon } from "@phosphor-icons/react";
-import { cloneElement, isValidElement, memo, useMemo, type ComponentProps, type ReactNode } from "react";
+import {
+  cloneElement,
+  isValidElement,
+  memo,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  type ComponentProps,
+  type ReactNode,
+} from "react";
 import { Streamdown, type Components } from "streamdown";
 import "streamdown/styles.css";
 import { FileTypeIcon, extensionOf } from "../../chrome/FileTypeIcon";
 import { openExternal } from "../../lib/external";
 import { groupRuns, isHeadingOnly } from "../../lib/markdownRuns";
+import { VEIL_EMA_SEED_MS, veilDurationMs, veilEmaNext } from "../../lib/veil";
 import { CodeBlock } from "./CodeBlock";
 import { useChatActions } from "./context";
 import { CopyButton } from "./CopyButton";
@@ -99,19 +109,54 @@ function runClass(kind: "prose" | "wide", text: string): string {
 export const Markdown = memo(function Markdown({ text, streaming }: Props) {
   const runs = useMemo(() => groupRuns(text), [text]);
   const last = runs.length - 1;
+  const host = useVeilCadence(text, streaming === true);
   return (
-    <div className="crew-md">
+    <div ref={host} className="crew-md">
       {runs.map((run, index) => (
         <MarkdownRun
           key={index}
           kind={run.kind}
           text={run.text}
+          veiled={streaming === true}
           animating={streaming === true && index === last}
         />
       ))}
     </div>
   );
 });
+
+/**
+ * Stable: a new object here would rebuild streamdown's timeline mid-turn and
+ * re-fade the whole message, so the length rides a CSS variable instead.
+ * Streamdown settles a word's fade as soon as the next token lands; the rule
+ * below overrides that duration, which is what keeps several chunks dissolving
+ * at once instead of each one snapping after a frame.
+ */
+const VEIL = { animation: "fadeIn", sep: "word", stagger: 28, maxBacklogMs: 320 } as const;
+
+/**
+ * Times how fast the text is arriving and hands the fade length to the CSS
+ * below as a variable on the turn's root. It is written straight to the node
+ * rather than kept in state: the cadence is a property of the paint, and a
+ * render per token to carry it would cost more than the fade is worth.
+ */
+function useVeilCadence(text: string, streaming: boolean) {
+  const host = useRef<HTMLDivElement>(null);
+  const seen = useRef({ text: "", at: 0, ema: VEIL_EMA_SEED_MS });
+  useLayoutEffect(() => {
+    const state = seen.current;
+    if (streaming && text !== state.text) {
+      const now = performance.now();
+      if (state.at !== 0 && text.startsWith(state.text)) {
+        state.ema = veilEmaNext(state.ema, now - state.at);
+      }
+      state.at = now;
+      state.text = text;
+    }
+    host.current?.style.setProperty("--crew-veil-ms", `${veilDurationMs(state.ema)}ms`);
+  }, [text, streaming]);
+  return host;
+}
 
 /**
  * A turn re-splits its whole text on every token, so every settled run comes
@@ -121,16 +166,24 @@ export const Markdown = memo(function Markdown({ text, streaming }: Props) {
 const MarkdownRun = memo(function MarkdownRun({
   kind,
   text,
+  veiled,
   animating,
 }: {
   kind: "prose" | "wide";
   text: string;
+  veiled: boolean;
   animating: boolean;
 }) {
   const className = runClass(kind, text);
   const body = (
     <div className={className}>
-      <Streamdown className="crew-md-flow" controls={false} components={COMPONENTS} isAnimating={animating}>
+      <Streamdown
+        className="crew-md-flow"
+        controls={false}
+        components={COMPONENTS}
+        isAnimating={animating}
+        {...(veiled ? { animated: VEIL } : {})}
+      >
         {text}
       </Streamdown>
     </div>
