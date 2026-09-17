@@ -109,7 +109,7 @@ pub(crate) fn catalog() -> Vec<Tool> {
                     "name": { "type": "string" },
                     "description": { "type": "string", "description": "Its job, written as instructions to it." },
                     "provider": { "type": "string", "enum": ["claude", "cursor", "codex", "opencode"] },
-                    "model": { "type": "string" }
+                    "model": { "type": "string", "description": "Models belong to a provider, and the same one is spelled differently by each. Name it however you know it: a model this does not have is answered with where it is and how it is spelled." }
                 },
                 "required": ["name", "description"]
             }),
@@ -625,10 +625,7 @@ fn create_agent(
     let requested = text(args.get("model"));
     if let Some(requested) = &requested {
         if !models.contains(&requested.as_str()) {
-            return Err(format!(
-                "Unknown model \"{requested}\" for {provider}. One of: {}",
-                models.join(", ")
-            ));
+            return Err(unknown_model(requested, &provider, &models));
         }
     }
     let model = requested.unwrap_or_else(|| {
@@ -817,6 +814,61 @@ fn parse_runs(raw: &str) -> Vec<(String, i64)> {
         })
         .map(|(status, started, _)| (status, started))
         .collect()
+}
+
+/// Everything that could be the model somebody asked for, wherever it lives.
+///
+/// The same model is spelled differently by every provider — Grok 4.6 is
+/// `cursor-grok-4.6-high` under cursor and does not exist under codex — so a
+/// caller who knows it as "grok 4.6" has no way to reach it by guessing.
+/// Matching on letters and digits alone forgives the spacing, the dashes and
+/// the case, which is all the difference usually is.
+fn like(wanted: &str) -> Vec<(&'static str, &'static str)> {
+    let squash = |text: &str| {
+        text.chars()
+            .filter(|c| c.is_alphanumeric())
+            .flat_map(char::to_lowercase)
+            .collect::<String>()
+    };
+    let wanted = squash(wanted);
+    if wanted.is_empty() {
+        return Vec::new();
+    }
+    PROVIDERS
+        .iter()
+        .flat_map(|(provider, models)| models.iter().map(move |model| (*provider, *model)))
+        .filter(|(_, model)| {
+            let model = squash(model);
+            model.contains(&wanted) || wanted.contains(&model)
+        })
+        .collect()
+}
+
+/// A refusal that ends the guessing: where the model actually is, or the whole
+/// catalogue when it is nowhere. Paid once, on a miss.
+fn unknown_model(wanted: &str, provider: &str, models: &[&str]) -> String {
+    let found = like(wanted);
+    if !found.is_empty() {
+        let where_ = found
+            .iter()
+            .map(|(provider, model)| format!("{model} (provider {provider})"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        return format!(
+            "No model \"{wanted}\" under {provider}. Spelled this way it is: {where_}. \
+             Pass provider and model together."
+        );
+    }
+    let catalogue = PROVIDERS
+        .iter()
+        .map(|(provider, models)| format!("{provider}: {}", models.join(", ")))
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!(
+        "No model \"{wanted}\" anywhere, under {provider} or elsewhere. {provider} has: {}.\n\
+         Everything there is:\n{catalogue}",
+        models.join(", ")
+    )
 }
 
 fn provider_models(id: &str) -> Option<Vec<&'static str>> {
@@ -1422,6 +1474,71 @@ mod tests {
     /// opencode agent inherits its own provider as the default and is told it
     /// does not exist. It cannot create any agent at all without naming someone
     /// else's provider, and nobody can create an opencode agent.
+    /// Measured, not guessed: a codex agent asked for "grok-4.6", `create_agent`
+    /// defaulted the provider to its own, and the refusal listed five codex
+    /// models. The agent reported back that Grok was not available here. It is
+    /// — under cursor, spelled `cursor-grok-4.6-high`.
+    #[test]
+    fn a_model_that_lives_under_another_provider_says_where_it_is() {
+        let store = store();
+        let transcripts = TranscriptHub::new(store.clone());
+        let ws = workspace(&store);
+        let luna = session::create(
+            &store,
+            ws.clone(),
+            "agent".into(),
+            "Luna".into(),
+            "codex".into(),
+            "gpt-5.6-luna".into(),
+            "".into(),
+            "ask".into(),
+        )
+        .expect("agent");
+        let postman = Postman::default();
+
+        for asked in ["grok-4.6", "Grok 4.6", "grok_4_6"] {
+            let out = call(
+                &store,
+                &transcripts,
+                &postman,
+                &luna,
+                "create_agent",
+                json!({ "name": "Grok", "description": "You think.", "model": asked }),
+            )
+            .expect("call");
+            assert!(is_error(&out), "{asked} was accepted: {}", body(&out));
+            let said = body(&out);
+            assert!(said.contains("cursor-grok-4.6-high"), "{asked}: {said}");
+            assert!(said.contains("provider cursor"), "{asked}: {said}");
+        }
+    }
+
+    /// And when it really is nowhere, the answer is the whole catalogue rather
+    /// than one provider's corner of it.
+    #[test]
+    fn a_model_that_is_nowhere_answers_with_everything_there_is() {
+        let store = store();
+        let transcripts = TranscriptHub::new(store.clone());
+        let ws = workspace(&store);
+        let coder = agent(&store, &ws, "Coder");
+        let postman = Postman::default();
+
+        let out = call(
+            &store,
+            &transcripts,
+            &postman,
+            &coder,
+            "create_agent",
+            json!({ "name": "X", "description": "You do X.", "model": "llama-9" }),
+        )
+        .expect("call");
+        assert!(is_error(&out), "{}", body(&out));
+        let said = body(&out);
+        for provider in ["claude:", "cursor:", "codex:", "opencode:"] {
+            assert!(said.contains(provider), "{provider} missing: {said}");
+        }
+    }
+
     #[test]
     fn an_agent_cannot_create_one_that_is_allowed_more_than_it_is() {
         let store = store();
