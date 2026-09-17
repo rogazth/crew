@@ -321,7 +321,7 @@ mod tests {
     }
 
     fn detail(line: &Value) -> Option<ToolDetail> {
-        events(&[line.clone()]).into_iter().find_map(|event| match event {
+        events(std::slice::from_ref(line)).into_iter().find_map(|event| match event {
             HarnessEvent::ToolUpdated { detail, .. } | HarnessEvent::ToolStarted { detail, .. } => detail,
             _ => None,
         })

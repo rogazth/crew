@@ -1,5 +1,5 @@
 /** Provider + model registry. Adding a provider is a row here, never an `if`. */
-export type ProviderId = "claude" | "cursor" | "codex";
+export type ProviderId = "claude" | "cursor" | "codex" | "opencode";
 
 export type Model = { id: string; label: string; note?: string };
 
@@ -39,6 +39,19 @@ export const PROVIDERS: ProviderDef[] = [
     models: [
       { id: "gpt-5.6-codex", label: "GPT-5.6 Codex" },
       { id: "gpt-5.6", label: "GPT-5.6" },
+    ],
+  },
+  {
+    id: "opencode",
+    label: "opencode",
+    binary: "opencode",
+    /** opencode's own models, which answer without any login. */
+    models: [
+      { id: "opencode/ling-3.0-flash-fin-free", label: "Ling 3.0 Flash", note: "Free" },
+      { id: "opencode/nemotron-3.5-lightning-free", label: "Nemotron 3.5 Lightning", note: "Free" },
+      { id: "opencode/nemotron-3-ultra-free", label: "Nemotron 3 Ultra", note: "Free" },
+      { id: "opencode/mimo-v2.5-free", label: "MiMo v2.5", note: "Free" },
+      { id: "opencode/muse-spark-1.3-contributor-free", label: "Muse Spark 1.3", note: "Free" },
     ],
   },
 ];
