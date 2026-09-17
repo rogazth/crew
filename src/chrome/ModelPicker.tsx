@@ -76,7 +76,7 @@ export function ModelPicker({ provider, model, trigger = "field", disabled = fal
               ))}
             </div>
 
-            <div className="max-h-56 overflow-y-auto p-1">
+            <div className="max-h-80 overflow-y-auto p-1">
               {modelsOf(tab).map((m) => {
                 const current = tab === provider && m.id === model;
                 return (
