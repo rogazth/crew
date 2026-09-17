@@ -25,6 +25,7 @@ import { startScheduler } from "./lib/scheduler";
 import { newRoutineDraft, type RoutineDraft } from "./lib/routines";
 import { nextSessionName } from "./lib/workspaces";
 import { RoutinesView } from "./surfaces/RoutinesView";
+import { SearchView } from "./surfaces/SearchView";
 import { SettingsView } from "./surfaces/SettingsView";
 import { WorkspacePanes } from "./surfaces/WorkspacePanes";
 
@@ -37,7 +38,8 @@ type Sheet = { session: Session | null };
 type View =
   | { kind: "workspace" }
   | { kind: "settings"; section: SettingsSectionId }
-  | { kind: "routines"; draft: RoutineDraft | null };
+  | { kind: "routines"; draft: RoutineDraft | null }
+  | { kind: "search" };
 
 export function App() {
   useEffect(startScheduler, []);
@@ -202,6 +204,8 @@ export function App() {
     "toggle-sidebar": () => setSidebarOpen((open) => !open),
     "new-agent": newAgent,
     "new-session": () => void newSession(),
+    "search-messages": () =>
+      setView((open) => (open.kind === "search" ? { kind: "workspace" } : { kind: "search" })),
     "open-routines": () =>
       setView((open) =>
         open.kind === "routines" ? { kind: "workspace" } : { kind: "routines", draft: null },
@@ -298,6 +302,12 @@ export function App() {
             activeWorkspaceId={active.id}
             agents={sessions.filter((session) => session.kind === "agent")}
             onConfirm={confirms.ask}
+          />
+        )}
+        {view.kind === "search" && (
+          <SearchView
+            agents={sessions.filter((session) => session.kind === "agent")}
+            onOpenSession={openSessionById}
           />
         )}
         {/* Hidden, not unmounted: agent and terminal processes stay alive. */}

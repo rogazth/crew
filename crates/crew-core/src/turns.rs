@@ -8,7 +8,7 @@ use std::time::Duration;
 use tokio::sync::oneshot;
 
 use crew_protocol::{
-    ApprovalDecision, ApprovalResolution, HarnessEvent, ToolStatus, TurnStart, TurnStarted,
+    ApprovalDecision, ApprovalResolution, HarnessEvent, ToolStatus, TurnStart, TurnStarted, TurnUsage,
 };
 use serde_json::{json, Map, Value};
 
@@ -35,6 +35,11 @@ use crate::providers::cursor::{
     assistant_delta_text, build_cursor_spawn_args, parse_tool_call, persona_prompt as cursor_persona,
     session_id_from_event, tool_status as cursor_tool_status, turn_failed as cursor_turn_failed,
     turn_usage as cursor_turn_usage, with_attached_files, with_persona, CursorSpawn, ToolPhase,
+};
+use crate::providers::opencode::{
+    add_step_usage, build_opencode_prompt, build_opencode_spawn_args,
+    parse_tool_call as parse_opencode_tool_call, session_id_from_event as opencode_session_id,
+    stream_error_message as opencode_error_message, text_part, turn_ended, OpencodeSpawn, OpencodeText,
 };
 use crate::providers::{string_field, Autonomy};
 use crate::session;
@@ -110,12 +115,17 @@ struct StreamLive {
     stderr: Vec<String>,
     saw_text: bool,
     settled: bool,
+    /// opencode's text parts are snapshots: the id says which one is growing.
+    text_part: String,
+    /// opencode counts every step apart, so the turn's usage adds up here.
+    usage: Option<TurnUsage>,
 }
 
 enum Live {
     Claude(Box<ClaudeLive>),
     Codex(StreamLive),
     Cursor(StreamLive),
+    Opencode(StreamLive),
 }
 
 #[derive(Clone)]
@@ -221,7 +231,7 @@ impl TurnHost {
             let map = self.lock();
             if map.get(&params.session_id).is_some_and(|live| match live {
                 Live::Claude(row) => row.active,
-                Live::Codex(row) | Live::Cursor(row) => row.active,
+                Live::Codex(row) | Live::Cursor(row) | Live::Opencode(row) => row.active,
             }) {
                 return Err("Turn already running".into());
             }
@@ -278,7 +288,7 @@ impl TurnHost {
             if let Some(live) = map.get_mut(session_id) {
                 let stderr = match live {
                     Live::Claude(row) => &mut row.stderr,
-                    Live::Codex(row) | Live::Cursor(row) => &mut row.stderr,
+                    Live::Codex(row) | Live::Cursor(row) | Live::Opencode(row) => &mut row.stderr,
                 };
                 for line in lines {
                     stderr.push(line);
@@ -299,6 +309,12 @@ impl TurnHost {
         let Some(live) = map.get_mut(session_id) else {
             return;
         };
+        let provider = match live {
+            Live::Claude(_) => "Claude Code",
+            Live::Codex(_) => "Codex",
+            Live::Cursor(_) => "Cursor Agent",
+            Live::Opencode(_) => "opencode",
+        };
         match live {
             Live::Claude(row) => {
                 let mid = row.active;
@@ -313,20 +329,15 @@ impl TurnHost {
                         session_id,
                         HarnessEvent::SessionEnded { code },
                     );
-                    self.signal(session_id, TurnOutcome::Failed(exit_message("Claude Code", code, &stderr)));
+                    self.signal(session_id, TurnOutcome::Failed(exit_message(provider, code, &stderr)));
                 }
             }
-            Live::Codex(row) | Live::Cursor(row) => {
+            Live::Codex(row) | Live::Cursor(row) | Live::Opencode(row) => {
                 if row.cancelled || row.settled {
                     return;
                 }
                 let mid = row.active;
                 let stderr = row.stderr.clone();
-                let provider = if matches!(live, Live::Codex(_)) {
-                    "Codex"
-                } else {
-                    "Cursor Agent"
-                };
                 if mid {
                     drop(map);
                     self.transcripts.apply(session_id, HarnessEvent::SessionEnded { code });
@@ -346,7 +357,7 @@ impl TurnHost {
                         let _ = tx.send(outcome);
                     }
                 }
-                Live::Codex(row) | Live::Cursor(row) => {
+                Live::Codex(row) | Live::Cursor(row) | Live::Opencode(row) => {
                     row.active = false;
                     row.settled = true;
                     if let Some(tx) = row.turn_tx.take() {
@@ -386,7 +397,7 @@ impl TurnHost {
                             let _ = tx.send(TurnOutcome::Stopped);
                         }
                     }
-                    Live::Codex(row) | Live::Cursor(row) => {
+                    Live::Codex(row) | Live::Cursor(row) | Live::Opencode(row) => {
                         row.cancelled = true;
                         row.active = false;
                         row.settled = true;
@@ -458,6 +469,7 @@ impl TurnHost {
             "claude" => self.run_claude(session, params),
             "codex" => self.run_codex(session, params),
             "cursor" => self.run_cursor(session, params),
+            "opencode" => self.run_opencode(session, params),
             other => TurnOutcome::Failed(format!(
                 "{other} agents are not wired up yet. Pick Claude for now."
             )),
@@ -732,7 +744,7 @@ impl TurnHost {
         } else {
             session.provider_session_id.clone().filter(|id| !id.is_empty())
         };
-        let (turn_rx, _) = match self.install_stream(&session_id, params.cwd.clone(), true) {
+        let (turn_rx, _) = match self.install_stream(&session_id, params.cwd.clone(), Live::Codex) {
             Ok(pair) => pair,
             Err(error) => return TurnOutcome::Failed(error),
         };
@@ -795,7 +807,7 @@ impl TurnHost {
         } else {
             session.provider_session_id.clone().filter(|id| !id.is_empty())
         };
-        let (turn_rx, _) = match self.install_stream(&session_id, params.cwd.clone(), false) {
+        let (turn_rx, _) = match self.install_stream(&session_id, params.cwd.clone(), Live::Cursor) {
             Ok(pair) => pair,
             Err(error) => return TurnOutcome::Failed(error),
         };
@@ -851,11 +863,72 @@ impl TurnHost {
         outcome
     }
 
+    fn run_opencode(&self, session: crate::session::Session, params: TurnStart) -> TurnOutcome {
+        let session_id = session.id.clone();
+        let resume = if params.fresh.unwrap_or(false) {
+            None
+        } else {
+            session.provider_session_id.clone().filter(|id| !id.is_empty())
+        };
+        let (turn_rx, _) = match self.install_stream(&session_id, params.cwd.clone(), Live::Opencode) {
+            Ok(pair) => pair,
+            Err(error) => return TurnOutcome::Failed(error),
+        };
+        let path = match self.resolve_bin("opencode") {
+            Ok(path) => path,
+            Err(error) => return TurnOutcome::Failed(error),
+        };
+        let prompt = build_opencode_prompt(
+            if resume.is_some() { "" } else { &session.name },
+            if resume.is_some() { "" } else { &session.description },
+            &params.text,
+            &path_list(&params, &HashSet::new()),
+            resume.is_none(),
+        );
+        if let Err(error) = self.agents.spawn(
+            session_id.clone(),
+            path,
+            build_opencode_spawn_args(&OpencodeSpawn {
+                model: Some(session.model.clone()).filter(|m| !m.is_empty()),
+                resume: resume.clone(),
+                autonomy: if session.autonomy == "full" {
+                    Autonomy::Full
+                } else {
+                    Autonomy::Ask
+                },
+            }),
+            params.cwd,
+            Some(self.agent_env(&session_id)),
+        ) {
+            return TurnOutcome::Failed(error);
+        }
+        if let Err(error) = self.agents.write(&session_id, &prompt) {
+            return TurnOutcome::Failed(error);
+        }
+        self.agents.close_stdin(&session_id);
+        if let Some(resume) = resume {
+            self.transcripts.apply(
+                &session_id,
+                HarnessEvent::SessionProviderBound {
+                    provider_session_id: resume,
+                },
+            );
+        }
+        self.transcripts
+            .apply(&session_id, HarnessEvent::SessionStarted {});
+        let outcome = self
+            .block_on(turn_rx)
+            .unwrap_or(TurnOutcome::Failed("Turn channel closed".into()));
+        self.agents.kill(&session_id);
+        self.detach(&session_id);
+        outcome
+    }
+
     fn install_stream(
         &self,
         session_id: &str,
         _cwd: String,
-        _codex: bool,
+        wrap: fn(StreamLive) -> Live,
     ) -> Result<(oneshot::Receiver<TurnOutcome>, ()), String> {
         let (tx, rx) = oneshot::channel();
         let live = StreamLive {
@@ -867,16 +940,10 @@ impl TurnHost {
             stderr: Vec::new(),
             saw_text: false,
             settled: false,
+            text_part: String::new(),
+            usage: None,
         };
-        let mut map = self.lock();
-        map.insert(
-            session_id.to_string(),
-            if _codex {
-                Live::Codex(live)
-            } else {
-                Live::Cursor(live)
-            },
-        );
+        self.lock().insert(session_id.to_string(), wrap(live));
         Ok((rx, ()))
     }
 
@@ -887,6 +954,7 @@ impl TurnHost {
                 Some(Live::Claude(_)) => "claude",
                 Some(Live::Codex(_)) => "codex",
                 Some(Live::Cursor(_)) => "cursor",
+                Some(Live::Opencode(_)) => "opencode",
                 None => return,
             }
         };
@@ -894,6 +962,7 @@ impl TurnHost {
             "claude" => self.handle_claude_line(session_id, line),
             "codex" => self.handle_codex_line(session_id, line),
             "cursor" => self.handle_cursor_line(session_id, line),
+            "opencode" => self.handle_opencode_line(session_id, line),
             _ => {}
         }
     }
@@ -1453,6 +1522,120 @@ impl TurnHost {
             self.signal(session_id, TurnOutcome::Completed);
         }
     }
+
+    pub(crate) fn handle_opencode_line(&self, session_id: &str, line: &str) {
+        let Some(rec) = parse_json_line(line) else {
+            return;
+        };
+        if let Some(provider_session_id) = opencode_session_id(&rec) {
+            self.transcripts.apply(
+                session_id,
+                HarnessEvent::SessionProviderBound { provider_session_id },
+            );
+        }
+        let blocked = {
+            let map = self.lock();
+            matches!(
+                map.get(session_id),
+                Some(Live::Opencode(row)) if row.settled || row.cancelled
+            )
+        };
+        if blocked {
+            return;
+        }
+        let type_name = string_field(Some(&rec), "type");
+        if type_name.as_deref() == Some("text") {
+            if let Some(part) = text_part(&rec) {
+                self.opencode_text(session_id, &part);
+            }
+            return;
+        }
+        if type_name.as_deref() == Some("tool_use") {
+            let Some(call) = parse_opencode_tool_call(&rec) else {
+                return;
+            };
+            let first = {
+                let mut map = self.lock();
+                let Some(Live::Opencode(live)) = map.get_mut(session_id) else {
+                    return;
+                };
+                live.seen_tools.insert(call.call_id.clone())
+            };
+            if first {
+                self.transcripts.apply(
+                    session_id,
+                    HarnessEvent::ToolStarted {
+                        call_id: call.call_id.clone(),
+                        name: call.name,
+                        title: call.title,
+                        detail: call.detail.clone(),
+                    },
+                );
+            }
+            self.transcripts.apply(
+                session_id,
+                HarnessEvent::ToolUpdated {
+                    call_id: call.call_id,
+                    title: None,
+                    status: Some(call.status),
+                    detail: call.detail,
+                },
+            );
+            return;
+        }
+        if type_name.as_deref() == Some("error") {
+            self.signal(session_id, TurnOutcome::Failed(opencode_error_message(&rec)));
+            return;
+        }
+        if type_name.as_deref() != Some("step_finish") {
+            return;
+        }
+        let usage = {
+            let mut map = self.lock();
+            let Some(Live::Opencode(live)) = map.get_mut(session_id) else {
+                return;
+            };
+            live.usage = Some(add_step_usage(live.usage.as_ref(), &rec));
+            live.usage.clone()
+        };
+        // Nothing is printed when the session goes idle, so the step that stops
+        // calling tools is the only word that the turn is over.
+        if !turn_ended(&rec) {
+            return;
+        }
+        self.transcripts
+            .apply(session_id, HarnessEvent::MessageCompleted {});
+        self.transcripts
+            .apply(session_id, HarnessEvent::TurnCompleted { usage });
+        self.signal(session_id, TurnOutcome::Completed);
+    }
+
+    fn opencode_text(&self, session_id: &str, part: &OpencodeText) {
+        let extra = {
+            let mut map = self.lock();
+            let Some(Live::Opencode(live)) = map.get_mut(session_id) else {
+                return;
+            };
+            if live.text_part != part.id {
+                live.text_part = part.id.clone();
+                live.emitted_assistant.clear();
+            }
+            let extra = part
+                .text
+                .strip_prefix(live.emitted_assistant.as_str())
+                .unwrap_or(&part.text)
+                .to_string();
+            live.emitted_assistant = part.text.clone();
+            extra
+        };
+        if extra.is_empty() {
+            return;
+        }
+        self.transcripts
+            .apply(session_id, HarnessEvent::MessageDelta { text: extra });
+        self.transcripts
+            .apply(session_id, HarnessEvent::MessageCompleted {});
+    }
 }
 
 fn claude_stream(live: &mut ClaudeLive, rec: &Map<String, Value>, events: &mut Vec<HarnessEvent>) {
@@ -1661,11 +1844,15 @@ impl TurnHost {
     }
 
     pub(crate) fn test_install_codex(&self, id: &str) {
-        let _ = self.install_stream(id, String::new(), true);
+        let _ = self.install_stream(id, String::new(), Live::Codex);
     }
 
     pub(crate) fn test_install_cursor(&self, id: &str) {
-        let _ = self.install_stream(id, String::new(), false);
+        let _ = self.install_stream(id, String::new(), Live::Cursor);
+    }
+
+    pub(crate) fn test_install_opencode(&self, id: &str) {
+        let _ = self.install_stream(id, String::new(), Live::Opencode);
     }
 }
 

@@ -55,6 +55,19 @@ pub struct SearchQuery {
     #[serde(default)]
     #[ts(optional, type = "number")]
     pub offset: Option<u32>,
+    #[serde(default)]
+    #[ts(optional)]
+    pub sort: Option<SearchSort>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
+pub enum SearchSort {
+    /// What FTS5 thinks answers the query best.
+    #[default]
+    Relevance,
+    Newest,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, TS)]

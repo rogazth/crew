@@ -127,7 +127,9 @@ sessionIds: Array<string>, from?: number, to?: number, limit?: number,
  * Skip this many hits. Paging a search is rare, so an offset beats a
  * cursor that would have to encode a bm25 score.
  */
-offset?: number, };
+offset?: number, sort?: SearchSort, };
+
+export type SearchSort = "relevance" | "newest";
 
 export type Session = { id: string, workspaceId: string, kind: string, name: string, provider: string, model: string, providerSessionId: string | null, description: string, notifications: boolean, autonomy: string, status: string, createdAt: number, updatedAt: number, };
 

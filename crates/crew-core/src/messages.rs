@@ -15,7 +15,7 @@ use std::hash::{Hash, Hasher};
 
 use crew_protocol::{
     AgentRef, AttachedFile, Block, BlockApproval, BlockQuestion, BlockRole, BlockTool, MessagePage,
-    SearchHit, SearchQuery, TurnUsage,
+    SearchHit, SearchQuery, SearchSort, TurnUsage,
 };
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -334,8 +334,14 @@ pub fn search(store: &Store, query: SearchQuery) -> Result<Vec<SearchHit>, Strin
     }
     binds.push(limit.into());
     binds.push(offset.into());
+    // Relevance still falls back to recency, because two lines that match a
+    // one-word query equally well are best answered newest first.
+    let order = match query.sort.unwrap_or_default() {
+        SearchSort::Relevance => "bm25(messages_fts) ASC, m.at DESC",
+        SearchSort::Newest => "m.at DESC",
+    };
     sql.push_str(&format!(
-        " ORDER BY bm25(messages_fts) ASC, m.at DESC LIMIT ?{} OFFSET ?{}",
+        " ORDER BY {order} LIMIT ?{} OFFSET ?{}",
         binds.len() - 1,
         binds.len()
     ));
@@ -706,6 +712,32 @@ mod tests {
         assert_eq!(fts_query("foo(bar)"), Some("\"foo(bar)\"*".into()));
         assert_eq!(fts_query("say \"hi\""), Some("\"say\" \"\"\"hi\"\"\"*".into()));
         assert_eq!(fts_query("   "), None);
+    }
+
+    #[test]
+    fn newest_first_ignores_how_well_a_line_matches() {
+        let store = store();
+        let id = session(&store, "sorted");
+        let mut strong = say(BlockRole::Assistant, "deploy deploy deploy");
+        strong.at = Some(1_000);
+        let mut recent = say(BlockRole::Assistant, "a deploy happened here today somewhere");
+        recent.at = Some(9_000);
+        write(&store, &id, &[strong, recent]);
+
+        let best = search(&store, SearchQuery { query: "deploy".into(), ..Default::default() })
+            .expect("relevance");
+        assert_eq!(best[0].at, 1_000, "bm25 should favour the denser line");
+
+        let newest = search(
+            &store,
+            SearchQuery {
+                query: "deploy".into(),
+                sort: Some(SearchSort::Newest),
+                ..Default::default()
+            },
+        )
+        .expect("newest");
+        assert_eq!(newest[0].at, 9_000);
     }
 
     #[test]

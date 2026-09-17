@@ -56,6 +56,7 @@ export const COMMANDS = {
 
   "toggle-sidebar": { label: "Toggle Sidebar", keys: "Mod+B" },
   "open-routines": { label: "Routines", keys: "Mod+Shift+R" },
+  "search-messages": { label: "Search Messages", keys: "Mod+Shift+F" },
   "open-settings": { label: "Settings", keys: "Mod+," },
   "save-file": { label: "Save File", keys: "Mod+S" },
 } as const satisfies Record<string, { label: string; keys: RegisterableHotkey }>;
