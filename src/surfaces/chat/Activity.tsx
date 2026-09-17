@@ -34,6 +34,10 @@ type Props = {
   blocks: Block[];
   /** This group is the agent's current work; its last phase stays open. */
   live: boolean;
+  /** A row the reader was sent to: the phase holding it has to open. */
+  focusId: string | null;
+  /** The row to light up, once the reader has been taken there. */
+  marked: string | null;
   onApprove: (requestId: number, decision: ApprovalDecision) => void;
   onAnswer: (requestId: number, answers: Answers | null) => void;
 };
@@ -66,7 +70,13 @@ function iconFor(block: Block, fallback: Icon | undefined): Icon | undefined {
  * settled group sit out the turn instead of rebuilding its phases 60 times a second.
  */
 function sameBlocks(prev: Props, next: Props): boolean {
-  if (prev.live !== next.live || prev.onApprove !== next.onApprove || prev.onAnswer !== next.onAnswer) {
+  if (
+    prev.live !== next.live ||
+    prev.focusId !== next.focusId ||
+    prev.marked !== next.marked ||
+    prev.onApprove !== next.onApprove ||
+    prev.onAnswer !== next.onAnswer
+  ) {
     return false;
   }
   if (prev.blocks.length !== next.blocks.length) return false;
@@ -74,7 +84,14 @@ function sameBlocks(prev: Props, next: Props): boolean {
 }
 
 /** Tool calls fold into phases; a thought or a question is a row of its own. */
-export const ActivityGroup = memo(function ActivityGroup({ blocks, live, onApprove, onAnswer }: Props) {
+export const ActivityGroup = memo(function ActivityGroup({
+  blocks,
+  live,
+  focusId,
+  marked,
+  onApprove,
+  onAnswer,
+}: Props) {
   const items = useMemo(() => buildActivity(blocks), [blocks]);
   // Keys go to one card: the newest thing waiting on the user.
   const hot = live ? blocks.filter(isOpen).at(-1)?.id : undefined;
@@ -88,13 +105,17 @@ export const ActivityGroup = memo(function ActivityGroup({ blocks, live, onAppro
             <AnsweredRow key={item.block.id} block={item.block} />
           );
         }
-        if (item.kind === "reasoning") return <ReasoningRow key={item.block.id} block={item.block} />;
+        if (item.kind === "reasoning") {
+          return <ReasoningRow key={item.block.id} block={item.block} marked={marked} />;
+        }
         return (
           <PhaseRow
             key={item.phase.id}
             phase={item.phase}
             live={live && index === items.length - 1}
             hot={hot}
+            focusId={focusId}
+            marked={marked}
             onApprove={onApprove}
           />
         );
@@ -111,57 +132,53 @@ function PhaseRow({
   phase,
   live,
   hot,
+  focusId,
+  marked,
   onApprove,
 }: {
   phase: Phase;
   live: boolean;
   hot: string | undefined;
+  focusId: string | null;
+  marked: string | null;
   onApprove: (requestId: number, decision: ApprovalDecision) => void;
 }) {
   const waiting = phaseOpen(phase);
   const failed = phaseFailed(phase);
+  // A row nobody can see is a row nobody can be sent to, and the mark outlives
+  // the request, so the phase stays open after the reader has been taken there.
+  const sent = (id: string | null) => id !== null && phase.blocks.some((block) => block.id === id);
+  const holds = sent(focusId) || sent(marked);
   const [pinned, setPinned] = useState<boolean | null>(null);
   // Moving on clears the pin so the next turn's phases start folded again.
   useEffect(() => {
     if (!live) setPinned(null);
   }, [live]);
-  const open = waiting || (pinned ?? live);
-  const label = phaseLabel(phase);
+  const open = waiting || (pinned ?? (holds || live));
   const single = phase.blocks.length === 1 && !waiting;
 
   if (single) {
     const block = phase.blocks[0]!;
-    return <ToolRow block={block} hot={hot} onApprove={onApprove} icon={iconFor(block, KIND_ICON[phase.kind])} />;
+    return (
+      <ToolRow
+        block={block}
+        hot={hot}
+        marked={marked}
+        onApprove={onApprove}
+        icon={iconFor(block, KIND_ICON[phase.kind])}
+      />
+    );
   }
 
   return (
     <Collapsible.Root open={open} onOpenChange={(next) => setPinned(next)}>
       <Collapsible.Trigger className="group flex min-h-5 w-full items-center gap-2 py-0.5 text-left text-[13px] leading-[18px]">
-        <span className="relative flex size-3.5 shrink-0 items-center justify-center text-kumo-subtle">
-          {waiting ? (
-            <CircleNotchIcon className="size-3.5 animate-spin text-kumo-warning" weight="bold" />
-          ) : (
-            <>
-              {createElement(failed ? XIcon : KIND_ICON[phase.kind], {
-                className: `size-3.5 transition-opacity group-hover:opacity-0${failed ? " text-danger" : ""}`,
-              })}
-              <CaretRightIcon
-                weight="bold"
-                className={`absolute size-3 opacity-0 transition-[opacity,transform] duration-150 group-hover:opacity-100 ${open ? "rotate-90" : ""}`}
-              />
-            </>
-          )}
-        </span>
-        <span className={waiting ? "crew-shimmer" : "text-text-muted transition-colors group-hover:text-text"}>
-          {label}
-        </span>
-        {/* A folded phase hides its rows; a failure inside it may not hide too. */}
-        {failed && !waiting ? <span className="shrink-0 text-[11px] text-danger">failed</span> : null}
+        <PhaseLine phase={phase} waiting={waiting} failed={failed} open={open} />
       </Collapsible.Trigger>
       <Collapsible.Panel className="crew-phase-panel">
         <div className="crew-phase-steps">
           {phase.blocks.map((block) => (
-            <ToolRow key={block.id} block={block} hot={hot} onApprove={onApprove} />
+            <ToolRow key={block.id} block={block} hot={hot} marked={marked} onApprove={onApprove} />
           ))}
         </div>
       </Collapsible.Panel>
@@ -169,7 +186,50 @@ function PhaseRow({
   );
 }
 
+/** What a folded phase says: a glyph, its one line, and whether it went wrong. */
+function PhaseLine({
+  phase,
+  waiting,
+  failed,
+  open,
+}: {
+  phase: Phase;
+  waiting: boolean;
+  failed: boolean;
+  open: boolean;
+}) {
+  return (
+    <>
+      <span className="relative flex size-3.5 shrink-0 items-center justify-center text-kumo-subtle">
+        {waiting ? (
+          <CircleNotchIcon className="size-3.5 animate-spin text-kumo-warning" weight="bold" />
+        ) : (
+          <>
+            {createElement(failed ? XIcon : KIND_ICON[phase.kind], {
+              className: `size-3.5 transition-opacity group-hover:opacity-0${failed ? " text-danger" : ""}`,
+            })}
+            <CaretRightIcon
+              weight="bold"
+              className={`absolute size-3 opacity-0 transition-[opacity,transform] duration-150 group-hover:opacity-100 ${open ? "rotate-90" : ""}`}
+            />
+          </>
+        )}
+      </span>
+      <span className={waiting ? "crew-shimmer" : "text-text-muted transition-colors group-hover:text-text"}>
+        {phaseLabel(phase)}
+      </span>
+      {/* A folded phase hides its rows; a failure inside it may not hide too. */}
+      {failed && !waiting ? <span className="shrink-0 text-[11px] text-danger">failed</span> : null}
+    </>
+  );
+}
+
 const ROW = "group flex min-h-5 items-center gap-2 py-0.5 text-[13px] leading-[18px]";
+
+/** The row a search hit sent the reader to. */
+function lit(id: string, marked: string | null): string {
+  return id === marked ? " crew-found" : "";
+}
 
 /** Spinner while it runs, cross when it failed, caret when it can open. */
 function ToolGlyph({
@@ -237,11 +297,13 @@ function ToolLine({
 function ToolRow({
   block,
   hot,
+  marked,
   onApprove,
   icon,
 }: {
   block: Block;
   hot: string | undefined;
+  marked: string | null;
   onApprove: (requestId: number, decision: ApprovalDecision) => void;
   /** Standalone rows carry the kind glyph; inside a phase the rail is the bullet. */
   icon?: Icon | undefined;
@@ -252,14 +314,14 @@ function ToolRow({
   }
   if (!hasBody(block)) {
     return (
-      <div className={ROW}>
+      <div className={`${ROW}${lit(block.id, marked)}`} data-block={block.id}>
         <ToolLine block={block} open={false} openable={false} icon={icon} />
       </div>
     );
   }
   return (
     <Collapsible.Root open={open} onOpenChange={setOpen}>
-      <Collapsible.Trigger className={`${ROW} w-full text-left`}>
+      <Collapsible.Trigger className={`${ROW} w-full text-left${lit(block.id, marked)}`} data-block={block.id}>
         <ToolLine block={block} open={open} openable icon={icon} />
       </Collapsible.Trigger>
       <Collapsible.Panel className="crew-phase-panel">
@@ -272,14 +334,17 @@ function ToolRow({
 }
 
 /** Folded to its first line. Opens while streaming; never opened by the group around it. */
-function ReasoningRow({ block }: { block: Block }) {
+function ReasoningRow({ block, marked }: { block: Block; marked: string | null }) {
   const streaming = block.streaming === true;
   const [pinned, setPinned] = useState<boolean | null>(null);
   const open = pinned ?? streaming;
   const summary = summarize(block.text);
   return (
     <Collapsible.Root open={open} onOpenChange={(next) => setPinned(next)}>
-      <Collapsible.Trigger className="group flex min-h-5 w-full items-center gap-2 py-0.5 text-left text-[13px] leading-[18px]">
+      <Collapsible.Trigger
+        data-block={block.id}
+        className={`group flex min-h-5 w-full items-center gap-2 py-0.5 text-left text-[13px] leading-[18px]${lit(block.id, marked)}`}
+      >
         <span className="relative flex size-3.5 shrink-0 items-center justify-center text-kumo-subtle">
           <SparkleIcon className="size-3.5 transition-opacity group-hover:opacity-0" />
           <CaretRightIcon

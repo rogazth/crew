@@ -76,6 +76,19 @@ export function settleTurn(blocks: Block[], tools: "completed" | "interrupted"):
   });
 }
 
+function lastIndex(blocks: Block[], match: (block: Block) => boolean): number {
+  for (let index = blocks.length - 1; index >= 0; index -= 1) {
+    if (match(blocks[index]!)) return index;
+  }
+  return -1;
+}
+
+function replaceAt(blocks: Block[], at: number, block: Block): Block[] {
+  const next = blocks.slice();
+  next[at] = block;
+  return next;
+}
+
 export function applyEvent(blocks: Block[], event: HarnessEvent): Block[] {
   switch (event.type) {
     case "message.delta":
@@ -140,18 +153,22 @@ export function applyEvent(blocks: Block[], event: HarnessEvent): Block[] {
           },
         },
       ];
-    case "approval.resolved":
-      return blocks.map((block) =>
-        block.approval?.requestId === event.requestId
-          ? {
-              ...block,
-              approval: {
-                ...block.approval,
-                decided: event.decision === "cancelled" ? "deny" : event.decision,
-              },
-            }
-          : block,
+    case "approval.resolved": {
+      // Request ids restart with every turn, so the id alone names an approval
+      // in every turn that ever ran. Only the newest one still waiting can be
+      // the one being answered.
+      const at = lastIndex(
+        blocks,
+        (block) => block.approval?.requestId === event.requestId && block.approval.decided === undefined,
       );
+      if (at < 0) return blocks;
+      const block = blocks[at]!;
+      const decided = event.decision === "cancelled" ? "deny" : event.decision;
+      return replaceAt(blocks, at, {
+        ...block,
+        approval: { ...block.approval!, decided },
+      });
+    }
     case "question.requested": {
       const settled = settleStreaming(blocks);
       const first = event.questions[0];
@@ -165,18 +182,24 @@ export function applyEvent(blocks: Block[], event: HarnessEvent): Block[] {
       }
       return [...settled, card];
     }
-    case "question.resolved":
-      return blocks.map((block) =>
-        block.question?.requestId === event.requestId
-          ? {
-              ...block,
-              question: {
-                ...block.question,
-                ...(event.answers ? { answers: event.answers } : { dismissed: true }),
-              },
-            }
-          : block,
+    case "question.resolved": {
+      const at = lastIndex(
+        blocks,
+        (block) =>
+          block.question?.requestId === event.requestId &&
+          block.question.answers === undefined &&
+          block.question.dismissed !== true,
       );
+      if (at < 0) return blocks;
+      const block = blocks[at]!;
+      return replaceAt(blocks, at, {
+        ...block,
+        question: {
+          ...block.question!,
+          ...(event.answers ? { answers: event.answers } : { dismissed: true }),
+        },
+      });
+    }
     case "session.error":
       return [...settleTurn(blocks, "interrupted"), newBlock("system", event.message)];
     case "session.ended":

@@ -10,7 +10,6 @@ export function DefaultChatSurface({
   loadingEarlier,
   onLoadEarlier,
   focusId,
-  onFocused,
   ready,
   draft,
   files,
@@ -45,7 +44,6 @@ export function DefaultChatSurface({
           loadingEarlier={loadingEarlier}
           onLoadEarlier={onLoadEarlier}
           focusId={focusId}
-          onFocused={onFocused}
           onApprove={onApprove}
           onAnswer={onAnswer}
         />

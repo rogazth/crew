@@ -1,12 +1,12 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import { isOpen, type Answers, type ApprovalDecision, type Block, type TurnUsage } from "../../lib/blocks";
 import { dayLabel } from "../../lib/time";
 import { ActivityGroup, ThinkingLine } from "./Activity";
 import { AssistantMessage, DateBreak, Note, TurnFooter, UserMessage } from "./Message";
 
 const NEAR_BOTTOM_PX = 16;
-/** Long enough to catch the eye, short enough not to become decoration. */
-const MARK_MS = 2600;
+/** How many frames to wait for a folded phase to mount the row it holds. */
+const FOCUS_FRAMES = 20;
 /** A gap this long between messages gets a date line, like a chat app. */
 const DATE_BREAK_MS = 30 * 60_000;
 
@@ -25,9 +25,9 @@ type Props = {
   more: boolean;
   loadingEarlier: boolean;
   onLoadEarlier: () => void;
-  /** A block the reader was sent to; scrolled to and marked, once. */
+  /** The last block a search hit sent the reader to: scrolled to once, and
+   *  left marked so the phase holding it stays open. */
   focusId: string | null;
-  onFocused: () => void;
   onApprove: (requestId: number, decision: ApprovalDecision) => void;
   onAnswer: (requestId: number, answers: Answers | null) => void;
 };
@@ -108,14 +108,14 @@ export function Transcript({
   loadingEarlier,
   onLoadEarlier,
   focusId,
-  onFocused,
   onApprove,
   onAnswer,
 }: Props) {
   const scroller = useRef<HTMLDivElement>(null);
   const pinned = useRef(true);
-  /** Distance from the bottom, held across a prepend so the page does not jump. */
-  const anchor = useRef<number | null>(null);
+  /** Where the reader is, measured from the bottom: everything that arrives
+   *  arrives above them, so this is the number that must not change. */
+  const fromBottom = useRef(0);
   const rows = useMemo(() => groupRows(blocks), [blocks]);
   const thinking = showThinking(blocks, working);
 
@@ -123,51 +123,52 @@ export function Transcript({
     const el = scroller.current;
     if (!el) return;
     pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight <= NEAR_BOTTOM_PX;
-  };
-
-  const earlier = () => {
-    const el = scroller.current;
-    anchor.current = el ? el.scrollHeight - el.scrollTop : null;
-    onLoadEarlier();
+    fromBottom.current = el.scrollHeight - el.scrollTop;
   };
 
   useLayoutEffect(() => {
     const el = scroller.current;
     if (!el) return;
-    if (anchor.current !== null) {
-      // History arrived above: keep the line being read where it was.
-      el.scrollTop = el.scrollHeight - anchor.current;
-      anchor.current = null;
+    if (pinned.current) {
+      el.scrollTop = el.scrollHeight;
       return;
     }
-    if (pinned.current) el.scrollTop = el.scrollHeight;
+    // Reading something further up: history loading above, or a resync
+    // trimming it, must leave that line where it was.
+    el.scrollTop = el.scrollHeight - fromBottom.current;
   }, [blocks, thinking]);
 
-  // Where to scroll is the store's business and happens once; how long the mark
-  // stays is this component's, because clearing the one clears the other.
-  const [marked, setMarked] = useState<string | null>(null);
-
-  useLayoutEffect(() => {
-    if (!focusId) return;
-    const target = scroller.current?.querySelector(`[data-block="${focusId}"]`);
-    if (!target) return;
-    // The reader came from a search hit: stop following the bottom and show it.
-    pinned.current = false;
-    target.scrollIntoView({ block: "center" });
-    setMarked(focusId);
-    onFocused();
-  }, [focusId, onFocused]);
+  // Scrolled to once. The mark is the focus itself, so it survives until the
+  // next hit — the animation fades it, and keeping it is what holds open the
+  // phase the row lives in.
+  const scrolled = useRef<string | null>(null);
 
   useEffect(() => {
-    if (!marked) return;
-    const timer = window.setTimeout(() => setMarked(null), MARK_MS);
-    return () => window.clearTimeout(timer);
-  }, [marked]);
+    if (!focusId || scrolled.current === focusId) return;
+    let frames = 0;
+    let handle = 0;
+    // The row may live in a folded phase that opens on this render and mounts
+    // its panel on the next one, so this looks again for a few frames.
+    const look = () => {
+      const target = scroller.current?.querySelector(`[data-block="${focusId}"]`);
+      if (target) {
+        scrolled.current = focusId;
+        pinned.current = false;
+        target.scrollIntoView({ block: "center" });
+        return;
+      }
+      frames += 1;
+      if (frames <= FOCUS_FRAMES) handle = window.requestAnimationFrame(look);
+    };
+    look();
+    return () => window.cancelAnimationFrame(handle);
+  }, [focusId]);
 
   return (
     <div
       ref={scroller}
       data-selectable="blocks"
+      data-focus={focusId ?? ""}
       onScroll={onScroll}
       className="min-h-0 flex-1 overflow-y-auto"
     >
@@ -177,7 +178,7 @@ export function Transcript({
             <button
               type="button"
               disabled={loadingEarlier}
-              onClick={earlier}
+              onClick={onLoadEarlier}
               className="rounded-chrome px-2.5 py-1 text-[11px] text-text-muted transition-colors hover:bg-hover hover:text-text disabled:text-placeholder"
             >
               {loadingEarlier ? "Loading…" : "Earlier messages"}
@@ -192,6 +193,8 @@ export function Transcript({
                 <ActivityGroup
                   blocks={row.blocks}
                   live={working && index === rows.length - 1}
+                  focusId={focusId}
+                  marked={focusId}
                   onApprove={onApprove}
                   onAnswer={onAnswer}
                 />
@@ -217,7 +220,7 @@ export function Transcript({
             <div
               key={block.id}
               data-block={block.id}
-              className={`${className}${block.id === marked ? " crew-found" : ""}`}
+              className={`${className}${block.id === focusId ? " crew-found" : ""}`}
             >
               {block.role === "user" ? (
                 <UserMessage block={block} />

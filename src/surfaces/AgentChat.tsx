@@ -28,8 +28,7 @@ type Props = {
 };
 
 export function AgentChat({ session, cwd, active, onModel }: Props) {
-  const { blocks, ready, working, more, loadingEarlier, loadEarlier, focusId, onFocused } =
-    useThread(session.id);
+  const { blocks, ready, working, more, loadingEarlier, loadEarlier, focusId } = useThread(session.id);
   const [draft, setDraft] = useState("");
   const [files, setFiles] = useState<AttachedFile[]>([]);
   const field = useRef<HTMLTextAreaElement>(null);
@@ -103,7 +102,6 @@ export function AgentChat({ session, cwd, active, onModel }: Props) {
         loadingEarlier={loadingEarlier}
         onLoadEarlier={loadEarlier}
         focusId={focusId}
-        onFocused={onFocused}
         draft={draft}
         files={files}
         over={over}

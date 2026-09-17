@@ -83,6 +83,25 @@ if (shot === "history") {
     throw new Error(`the hit opened the agent but did not mark the line (blocks=${blocks}, tab=${tab})`);
   }
   console.log(`hit opened and marked one of ${await hits.count()} blocks`);
+
+  // A tool row is a hit too — finding the command you ran is the point — and it
+  // only works because activity rows carry the same anchor as messages.
+  await page.keyboard.press("Control+Shift+F");
+  await page.waitForTimeout(500);
+  await page.keyboard.type("sidebarPrefs");
+  await page.waitForTimeout(900);
+  const toolHit = page.locator("button", { hasText: "Read sidebarPrefs.ts" }).first();
+  if ((await toolHit.count()) === 0) throw new Error("no tool row among the hits");
+  await toolHit.click();
+  await page.waitForTimeout(1200);
+  if ((await page.locator(".crew-found").count()) === 0) {
+    throw new Error("a tool row hit opened the agent but could not be scrolled to");
+  }
+  console.log("a tool row hit lands on the row");
+  await page.keyboard.press("Control+Shift+F");
+  await page.waitForTimeout(500);
+  await page.keyboard.type("sidebar");
+  await page.waitForTimeout(900);
 } else {
   // The seeded transcript belongs to the first agent in the sidebar.
   await page.locator('[data-sidebar="sidebar"] button').filter({ hasText: "Planner" }).first().click();

@@ -87,10 +87,9 @@ impl TranscriptHub {
             .flatten()
             .map(|row| row.status)
             .unwrap_or_else(|| "idle".into());
-        let synced = self
-            .store
-            .with(|conn| crate::messages::fingerprints(conn, session_id))
-            .unwrap_or_default();
+        // From the blocks just read, not a second pass over the same rows:
+        // fingerprints() re-runs the whole SELECT and re-parses every payload.
+        let synced = blocks.iter().map(crate::messages::fingerprint).collect();
         Live {
             blocks,
             working: status == "working" || status == "needs-input",
@@ -728,15 +727,136 @@ mod cost_tests {
         }
         hub.flush(&id);
 
+        let before = store.with(|conn| Ok(conn.total_changes())).expect("changes");
         let start = std::time::Instant::now();
         for n in 0..5 {
             hub.apply(&id, HarnessEvent::MessageDelta { text: format!("{n}") });
             hub.flush(&id);
         }
         let each = start.elapsed() / 5;
-        println!("flush after one delta, 500-block transcript: {each:?}");
-        // Not an assertion on the number — machines differ — but a wall against
-        // the whole transcript being rewritten on every delta again.
-        assert!(each < Duration::from_millis(250), "a flush took {each:?}");
+        let incremental = store.with(|conn| Ok(conn.total_changes())).expect("changes") - before;
+
+        // What the same five flushes would cost if the diff stopped working.
+        // The count includes what the FTS triggers write, which is why this
+        // compares the two shapes rather than asserting an exact number.
+        let blocks = hub.window(&id, Some(MAX_WINDOW), None).blocks;
+        let before = store.with(|conn| Ok(conn.total_changes())).expect("changes");
+        for _ in 0..5 {
+            store
+                .with(|conn| crate::messages::sync(conn, &id, &blocks, &mut Vec::new()))
+                .expect("rewrite");
+        }
+        let full = store.with(|conn| Ok(conn.total_changes())).expect("changes") - before;
+
+        println!(
+            "five flushes on a 500-block transcript: {each:?} each, {incremental} rows against \
+             {full} for the same five as a full rewrite"
+        );
+        // Rows, not wall clock: a clock is too loose to tell a whole-transcript
+        // rewrite from an incremental one, and too tight on a loaded machine.
+        assert!(
+            incremental * 10 < full,
+            "a flush wrote {incremental} rows where a full rewrite writes {full}: the diff is not working"
+        );
     }
+}
+
+/// Adversarial review of A5/A6. Added by review; no production code is touched.
+#[cfg(test)]
+mod window_review {
+    use super::review_tests::{agent, tmp_store};
+    use super::*;
+    use crew_protocol::{BlockTool, ToolDetail, ToolStatus};
+
+    fn tool_block(n: usize) -> Block {
+        let mut block =
+            crate::blocks::new_block(crew_protocol::BlockRole::Tool, format!("bash {n}"));
+        block.tool = Some(BlockTool {
+            call_id: format!("c{n}"),
+            name: "Bash".into(),
+            title: format!("bash {n}"),
+            status: ToolStatus::Completed,
+            detail: Some(ToolDetail::Command {
+                command: format!("echo {n}"),
+                exit_code: Some(0),
+                output: Some("x".repeat(2048)),
+            }),
+        });
+        block
+    }
+
+    fn seed(store: &Store, id: &str, count: usize) -> Vec<Block> {
+        let blocks: Vec<Block> = (0..count).map(tool_block).collect();
+        store
+            .with(|conn| crate::messages::sync(conn, id, &blocks, &mut Vec::new()))
+            .expect("seed");
+        blocks
+    }
+
+    /// A window bigger than the ceiling comes back truncated — that is what a
+    /// ceiling is — but it has to say where it actually starts and that there
+    /// is more, because that is what a caller pages from. A reader who walked
+    /// back through history and then resyncs depends on it.
+    #[test]
+    fn a_window_larger_than_the_ceiling_says_where_it_starts() {
+        let store = tmp_store();
+        let id = agent(&store);
+        seed(&store, &id, 1000);
+        let hub = TranscriptHub::new(store);
+
+        let page = hub.window(&id, Some(600), None);
+        assert_eq!(page.blocks.len(), MAX_WINDOW as usize);
+        assert_eq!(page.from_pos, 501, "the page does not say where it begins");
+        assert_eq!(page.to_pos, 1000);
+        assert!(page.more, "500 blocks sit before it and the page denies it");
+        // Which is enough to walk back to what was asked for.
+        let earlier = hub.window(&id, Some(600), Some(page.from_pos));
+        assert_eq!(earlier.to_pos, 500);
+    }
+
+    /// `hydrate` used to read every row into blocks and then call
+    /// `fingerprints`, which is `all()` a second time: opening one chat parsed
+    /// the whole transcript twice. It cannot be as cheap as a single read —
+    /// it still has to fingerprint what it read — but it must be cheaper than
+    /// reading twice.
+    #[test]
+    fn hydrating_a_session_reads_the_transcript_once() {
+        let store = tmp_store();
+        let id = agent(&store);
+        seed(&store, &id, 2000);
+        let hub = TranscriptHub::new(store.clone());
+
+        // Warm the page cache for both.
+        let _ = store.with(|conn| crate::messages::all(conn, &id)).expect("warm");
+        let start = std::time::Instant::now();
+        let once = store.with(|conn| crate::messages::all(conn, &id)).expect("all");
+        let read_once = start.elapsed();
+        assert_eq!(once.len(), 2000);
+
+        let start = std::time::Instant::now();
+        let row = hub.hydrate(&id);
+        let hydrated = start.elapsed();
+        assert_eq!(row.blocks.len(), 2000);
+
+        // What the old shape cost: the read, then the same read again to
+        // fingerprint it.
+        let start = std::time::Instant::now();
+        let _ = store.with(|conn| crate::messages::all(conn, &id)).expect("all");
+        let _ = store
+            .with(|conn| crate::messages::fingerprints(conn, &id))
+            .expect("fingerprints");
+        let read_twice = start.elapsed();
+
+        println!(
+            "2000 blocks — one read: {read_once:?}; hydrate: {hydrated:?}; read twice: {read_twice:?}"
+        );
+        // The saving is exactly one read of the rows; the hashing that remains
+        // is what makes the write path cheap and is not what this guards.
+        assert!(
+            hydrated + read_once / 2 < read_twice,
+            "hydrate cost {hydrated:?} against {read_twice:?} for reading the same rows twice, \
+             so it did not save the duplicate read of {read_once:?}"
+        );
+    }
+
 }

@@ -151,7 +151,8 @@ cargo test        # rust
 | F4 | the loop cap pauses instead of eating the agent's own note | done `925386f` |
 | A5 | the chat holds a window, with a page of history a click away | done `f4cc523` |
 | A6 | rows are the only store; the blob stops being rewritten every flush | done `9b392af` |
-| E5 | a search hit opens the agent on that line and marks it | done |
+| E5 | a search hit opens the agent on that line and marks it | done `befaf99` |
+| F5 | the second review's ten findings | done |
 
 ### How A5 landed
 
@@ -184,8 +185,15 @@ makes the write cheap; it is now the floor rather than a rounding error next to
 the blob. The timing tests are `#[ignore]`d instruments — `cargo test --
 --ignored --nocapture` — because they starve tests that wait on a timeout.
 
-Still open: the daemon hydrates every block of every open session into memory.
-The wire and the renderer hold a page; `crewd` holds the transcript.
+Still open: the daemon hydrates every block of every open session into memory,
+and `window()` clones that list before slicing a page out of it. The wire and
+the renderer hold a page; `crewd` holds the transcript. Measured at roughly
+5 MB for a heavy session, which is why it is still open and not urgent.
+
+Also still open, and pre-existing: an agentic run with more tool calls than a
+window can hold loses its cost footer on the client until the reader loads the
+page above, because `turn.completed` attaches usage to the last assistant block
+and the window may not contain one.
 
 ## Seeing it work
 

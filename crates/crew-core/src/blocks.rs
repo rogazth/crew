@@ -203,17 +203,22 @@ pub fn apply_event(blocks: Vec<Block>, event: HarnessEvent) -> Vec<Block> {
                 ApprovalResolution::Always => ApprovalDecision::Always,
                 ApprovalResolution::Deny => ApprovalDecision::Deny,
             };
-            blocks
-                .into_iter()
-                .map(|mut block| {
-                    if let Some(approval) = block.approval.as_mut() {
-                        if approval.request_id == request_id {
-                            approval.decided = Some(decided.clone());
-                        }
-                    }
-                    block
-                })
-                .collect()
+            // Request ids restart with every turn, so the id alone names an
+            // approval in every turn that ever ran. Only the newest one still
+            // waiting can be the one being answered.
+            let mut next = blocks;
+            let waiting = next.iter().rposition(|block| {
+                block
+                    .approval
+                    .as_ref()
+                    .is_some_and(|approval| approval.request_id == request_id && approval.decided.is_none())
+            });
+            if let Some(index) = waiting {
+                if let Some(approval) = next[index].approval.as_mut() {
+                    approval.decided = Some(decided);
+                }
+            }
+            next
         }
         HarnessEvent::QuestionRequested {
             request_id,
@@ -260,23 +265,26 @@ pub fn apply_event(blocks: Vec<Block>, event: HarnessEvent) -> Vec<Block> {
         HarnessEvent::QuestionResolved {
             request_id,
             answers,
-        } => blocks
-            .into_iter()
-            .map(|mut block| {
-                let Some(question) = block.question.as_mut() else {
-                    return block;
-                };
-                if question.request_id != request_id {
-                    return block;
+        } => {
+            // Same as an approval: the id is only unique within its turn.
+            let mut next = blocks;
+            let waiting = next.iter().rposition(|block| {
+                block.question.as_ref().is_some_and(|question| {
+                    question.request_id == request_id
+                        && question.answers.is_none()
+                        && question.dismissed != Some(true)
+                })
+            });
+            if let Some(index) = waiting {
+                if let Some(question) = next[index].question.as_mut() {
+                    match answers {
+                        Some(answers) => question.answers = Some(answers),
+                        None => question.dismissed = Some(true),
+                    }
                 }
-                if let Some(answers) = answers.clone() {
-                    question.answers = Some(answers);
-                } else {
-                    question.dismissed = Some(true);
-                }
-                block
-            })
-            .collect(),
+            }
+            next
+        }
         HarnessEvent::SessionError { message } => {
             let mut next = settle_turn(blocks, ToolStatus::Interrupted);
             next.push(new_block(BlockRole::System, message));
@@ -689,5 +697,60 @@ mod tests {
         let rust = run(fixture.events, fixture.start);
         let typescript = fold_typescript(payload);
         assert_eq!(canon(&rust), canon(&typescript));
+    }
+}
+
+/// Adversarial review. Added by review; no production code is touched.
+#[cfg(test)]
+mod id_reuse_review {
+    use super::*;
+    use crew_protocol::{ApprovalDecision, ApprovalResolution, HarnessEvent};
+
+    /// `ApprovalResolved` rewrites every block in the transcript carrying that
+    /// `request_id`, and `request_id` is `ClaudeLive::next_ui`, which is set
+    /// back to 1 at the start of every turn (crates/crew-core/src/turns.rs:723).
+    /// So the second turn's first approval rewrites the first turn's — and now
+    /// that "Earlier messages" puts old turns back in the reader's hands, this
+    /// is something they can watch happen.
+    #[test]
+    fn resolving_an_approval_does_not_rewrite_the_last_turns() {
+        let events = vec![
+            // Turn one: approval 1, denied.
+            HarnessEvent::ApprovalRequested {
+                request_id: 1,
+                name: "Bash".into(),
+                title: "rm -rf /".into(),
+                input: None,
+            },
+            HarnessEvent::ApprovalResolved {
+                request_id: 1,
+                decision: ApprovalResolution::Deny,
+            },
+            HarnessEvent::TurnCompleted { usage: None },
+            // Turn two: the counter started over, so this is approval 1 too.
+            HarnessEvent::ApprovalRequested {
+                request_id: 1,
+                name: "Bash".into(),
+                title: "ls".into(),
+                input: None,
+            },
+            HarnessEvent::ApprovalResolved {
+                request_id: 1,
+                decision: ApprovalResolution::Allow,
+            },
+        ];
+        let blocks = events
+            .into_iter()
+            .fold(Vec::<Block>::new(), apply_event);
+        let decisions: Vec<Option<ApprovalDecision>> = blocks
+            .iter()
+            .filter(|block| block.role == BlockRole::Approval)
+            .map(|block| block.approval.as_ref().and_then(|row| row.decided.clone()))
+            .collect();
+        assert_eq!(
+            decisions,
+            vec![Some(ApprovalDecision::Deny), Some(ApprovalDecision::Allow)],
+            "the transcript now says `rm -rf /` was allowed"
+        );
     }
 }

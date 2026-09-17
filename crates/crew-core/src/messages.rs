@@ -293,7 +293,10 @@ pub fn search(store: &Store, query: SearchQuery) -> Result<Vec<SearchHit>, Strin
          FROM messages_fts
          JOIN messages m ON m.rowid = messages_fts.rowid
          JOIN sessions s ON s.id = m.session_id
-         WHERE messages_fts MATCH ?1",
+         WHERE messages_fts MATCH ?1
+           -- A hidden block is not part of the conversation anyone reads: a
+           -- routine's wake-up prompt is sent that way.
+           AND json_extract(m.extra_json, '$.hidden') IS NOT 1",
         MARK_OPEN, MARK_CLOSE
     );
     let mut binds: Vec<rusqlite::types::Value> = vec![expression.into()];
@@ -1273,7 +1276,7 @@ mod drop_column_review {
         rows[1].text = "The plan is to ship A, then B, then C.".to_string();
         with_column(&store, &id, &rows);
 
-        let repaired = store.with(|conn| backfill_missing(conn)).expect("backfill");
+        let repaired = store.with(backfill_missing).expect("backfill");
         let kept = store.with(|conn| all(conn, &id)).expect("read back");
         assert_eq!(
             kept[1].text, "The plan is to ship A, then B, then C.",
@@ -1346,15 +1349,14 @@ mod drop_column_review {
             },
         )
         .expect("search");
-        let offered: Vec<String> = hits
-            .iter()
-            .map(|hit| format!("{:?}", hit.role))
-            .collect();
+        let roles: Vec<String> = hits.iter().map(|hit| format!("{:?}", hit.role)).collect();
         assert!(
-            hits.is_empty(),
-            "search offered {} hits the chat cannot take the reader to: {offered:?}",
-            hits.len()
+            !roles.contains(&"User".to_string()),
+            "search offered a hidden block, which the chat does not render: {roles:?}"
         );
+        // The other two are reachable: a tool row and a thought both carry a
+        // `data-block` anchor, and finding the command you ran is the point.
+        assert_eq!(hits.len(), 2, "{roles:?}");
     }
 
     /// The same one-sided test in the other direction: rows that outnumber the
@@ -1374,7 +1376,7 @@ mod drop_column_review {
             .expect("rows");
         with_column(&store, &id, &blocks[..1]);
 
-        store.with(|conn| backfill_missing(conn)).expect("backfill");
+        store.with(backfill_missing).expect("backfill");
         let kept = store.with(|conn| all(conn, &id)).expect("read back");
         assert_eq!(
             kept.len(),

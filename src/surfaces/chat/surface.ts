@@ -13,9 +13,8 @@ export type ChatSurfaceProps = {
   more: boolean;
   loadingEarlier: boolean;
   onLoadEarlier: () => void;
-  /** A block to take the reader to, from a search hit. */
+  /** The last block a search hit sent the reader to. */
   focusId: string | null;
-  onFocused: () => void;
   draft: string;
   files: AttachedFile[];
   over: boolean;

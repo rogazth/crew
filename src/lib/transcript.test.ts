@@ -252,12 +252,69 @@ describe("focus", () => {
     expect(transcript.read("s1").focusId).toBeNull();
   });
 
-  it("forgets the mark once the chat has shown it", async () => {
-    request.mockResolvedValue(page([said("a")], 2, { from: 1 }));
+  it("keeps the last line it was sent to, and moves it on the next hit", async () => {
+    request.mockResolvedValue(page([said("a"), said("b")], 2, { from: 1 }));
     const transcript = await load("s1");
     await transcript.focus("s1", 1);
     expect(transcript.read("s1").focusId).toBe("a");
-    transcript.clearFocus("s1");
-    expect(transcript.read("s1").focusId).toBeNull();
+    // The chat scrolls once and leaves the mark; only another hit moves it.
+    await transcript.focus("s1", 2);
+    expect(transcript.read("s1").focusId).toBe("b");
+  });
+});
+
+/**
+ * Added by review. Nothing in production is changed; these are the cases the
+ * suite above does not reach.
+ */
+describe("review: the window against live events", () => {
+  it("focuses the line a search hit names, on a thread that was empty when it opened", async () => {
+    // A brand new agent: the chat opens on an empty transcript, so the daemon
+    // answers fromPos 0 (MessagePage::from_pos is 0 for an empty page), and
+    // everything after it arrives as live events.
+    request.mockResolvedValue(page([], 0));
+    const transcript = await load("s1");
+    for (const [n, text] of ["one", "two", "three"].entries()) {
+      remote()({ sessionId: "s1", seq: n + 1, event: { type: "system.message", text } });
+    }
+    paint();
+    expect(transcript.read("s1").blocks.map((block) => block.text)).toEqual(["one", "two", "three"]);
+
+    // "two" is the second block of the transcript, so messages_search reports
+    // pos 2 for it (pos is 1-based).
+    await transcript.focus("s1", 2);
+    const hit = transcript.read("s1").blocks.find((block) => block.id === transcript.read("s1").focusId);
+    expect(hit?.text).toBe("two");
+  });
+
+  it("keeps the block a reader was looking at when a dropped event forces a resync", async () => {
+    // A faithful stand-in for TranscriptHub::window, ceiling and all.
+    const MAX_WINDOW = 500;
+    const all = Array.from({ length: 1000 }, (_, n) => said(`line ${n + 1}`));
+    request.mockImplementation((_method: string, args: { limit?: number; beforePos?: number }) => {
+      const limit = Math.min(args.limit ?? 200, MAX_WINDOW);
+      const end = args.beforePos === undefined ? all.length : Math.max(0, args.beforePos - 1);
+      const start = Math.max(0, end - limit);
+      const blocks = all.slice(start, end);
+      return Promise.resolve({
+        blocks,
+        fromPos: blocks.length > 0 ? start + 1 : 0,
+        toPos: blocks.length > 0 ? end : 0,
+        more: start > 0,
+        working: false,
+        status: "idle",
+        seq: 7,
+      });
+    });
+
+    const transcript = await load("s1");
+    await transcript.loadEarlier("s1"); // 601..1000
+    await transcript.loadEarlier("s1"); // 401..1000, the reader is reading "line 401"
+    expect(transcript.read("s1").blocks[0]?.text).toBe("line 401");
+
+    // A transcript-apply event goes missing; the store resyncs. `reload` is
+    // what applyRemote reaches for, so await it rather than racing it.
+    await transcript.reload("s1");
+    expect(transcript.read("s1").blocks[0]?.text).toBe("line 401");
   });
 });

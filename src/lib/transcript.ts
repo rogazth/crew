@@ -16,7 +16,8 @@ export type ThreadSnapshot = {
   /** Older blocks exist before the first one held here. */
   more: boolean;
   loadingEarlier: boolean;
-  /** A block the reader asked to be taken to, from a search hit. */
+  /** The last block a search hit sent the reader to. Kept, not consumed: the
+   *  chat scrolls to it once and leaves it marked. */
   focusId: string | null;
 };
 
@@ -118,11 +119,9 @@ export function load(id: string): Promise<void> {
 export async function reload(id: string): Promise<void> {
   ensureBridge();
   const row = thread(id);
+  const held = row.fromPos;
   try {
-    // Keep whatever window the reader had opened: a resync in the middle of
-    // reading history should not throw them back to the last page.
-    const limit = Math.max(PAGE, row.blocks.length);
-    const page = await client.request<MessagePage>("transcript_tail", { sessionId: id, limit });
+    const page = await client.request<MessagePage>("transcript_tail", { sessionId: id, limit: PAGE });
     take(row, page);
   } catch {
     /* keep whatever we already have */
@@ -130,17 +129,26 @@ export async function reload(id: string): Promise<void> {
   row.ready = true;
   row.loading = null;
   publish(row);
+  // Walk back to the history the reader had opened. Asking for it in one page
+  // does not work: the daemon caps a window, and silently handing back less
+  // than was asked for is what throws them out of what they were reading.
+  for (let page = 0; page < FOCUS_PAGES && row.fromPos > held && held > 0 && row.more; page += 1) {
+    await loadEarlier(id);
+  }
 }
 
 function take(row: Thread, page: MessagePage): void {
   row.blocks = page.blocks;
   row.working = page.working;
   row.seq = page.seq;
-  row.fromPos = page.fromPos;
+  // An empty page has no first block to report a position for, and the thread
+  // then grows from live events alone: the next block lands at 1, and leaving
+  // this at 0 puts every later position one line out.
+  row.fromPos = page.fromPos > 0 ? page.fromPos : page.toPos + 1;
   row.more = page.more;
 }
 
-/** How many pages back a search hit is worth chasing before giving up. */
+/** How many pages back a search hit — or a resync — is worth chasing. */
 const FOCUS_PAGES = 5;
 
 /**
@@ -156,14 +164,6 @@ export async function focus(id: string, pos: number): Promise<void> {
     await loadEarlier(id);
   }
   row.focusId = row.blocks[pos - row.fromPos]?.id ?? null;
-  publish(row);
-}
-
-/** The reader has been taken there; stop asking for it. */
-export function clearFocus(id: string): void {
-  const row = threads.get(id);
-  if (!row || row.focusId === null) return;
-  row.focusId = null;
   publish(row);
 }
 
