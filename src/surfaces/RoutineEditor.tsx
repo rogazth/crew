@@ -44,6 +44,7 @@ export function RoutineEditor({
   const [agents, setAgents] = useState<Session[]>([]);
   const [saving, setSaving] = useState(false);
   const [running, setRunning] = useState(false);
+  const [runError, setRunError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -84,8 +85,11 @@ export function RoutineEditor({
   async function run() {
     if (!onRunNow || running) return;
     setRunning(true);
+    setRunError(null);
     try {
       await onRunNow();
+    } catch (error) {
+      setRunError(error instanceof Error ? error.message : String(error));
     } finally {
       setRunning(false);
     }
@@ -124,6 +128,12 @@ export function RoutineEditor({
             />
           )}
         </div>
+
+        {runError && (
+          <p className="text-[13px] text-danger" role="alert">
+            {runError}
+          </p>
+        )}
 
         <div className="flex flex-col gap-6">
           <Input

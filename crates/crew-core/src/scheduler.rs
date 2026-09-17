@@ -15,22 +15,35 @@ use std::time::Duration;
 use crew_protocol::TurnStart;
 
 use crate::routine::{
-    self, push_run, runs_json, wake_prompt, Routine, RoutineRun, RunStatus, RunTrigger, ScheduledRoutine,
+    self, wake_prompt, Routine, RoutineRun, RunStatus, RunTrigger, ScheduledRoutine,
 };
 use crate::schedule::{next_run, parse_schedule, Schedule};
 use crate::session::{self, Session};
 use crate::store::{now_millis, Store};
 use crate::turns::TurnHost;
 
-/// Timers drift across sleep; a short cap keeps a due run from waiting until tomorrow.
+/// The bounds on one sleep; see `wait_for`.
 const MAX_WAIT_MS: i64 = 60_000;
+const MIN_WAIT_MS: i64 = 1_000;
 /// How often the tail of a fire looks at the agent it woke.
 const SETTLE_POLL: Duration = Duration::from_millis(100);
+/// …backing off to this, so a turn waiting on the user costs a read every few seconds.
+const SETTLE_MAX: Duration = Duration::from_secs(5);
 
 /// A fire is the one thing that changes a routine without a client asking, so
 /// it is the one thing the routines screen cannot learn any other way.
 pub trait RoutineEvents: Send + Sync {
     fn routines_changed(&self);
+}
+
+/// How long to sleep before the next tick.
+///
+/// Nothing due still arms: a minute's heartbeat is what makes a lost write or a
+/// failed read heal itself instead of stopping the clock. And the floor is what
+/// keeps a timer that fires nothing from becoming a spin — whatever disagreement
+/// arms it, it costs one read a second rather than a core.
+fn wait_for(due: Option<i64>, now: i64) -> i64 {
+    due.map(|at| at - now).unwrap_or(MAX_WAIT_MS).clamp(MIN_WAIT_MS, MAX_WAIT_MS)
 }
 
 #[derive(Clone)]
@@ -39,6 +52,9 @@ pub struct Scheduler {
     turns: TurnHost,
     runtime: Arc<Mutex<Option<tokio::runtime::Handle>>>,
     events: Arc<Mutex<Option<Arc<dyn RoutineEvents>>>>,
+    /// One tick at a time: two that overlap read the same due rows and fire
+    /// the same routine twice.
+    ticking: Arc<Mutex<()>>,
     /// Bumped on every arm: a timer that wakes with a stale one was replaced.
     generation: Arc<AtomicU64>,
     stopped: Arc<AtomicBool>,
@@ -51,6 +67,7 @@ impl Scheduler {
             turns,
             runtime: Arc::new(Mutex::new(None)),
             events: Arc::new(Mutex::new(None)),
+            ticking: Arc::new(Mutex::new(())),
             generation: Arc::new(AtomicU64::new(0)),
             stopped: Arc::new(AtomicBool::new(false)),
         }
@@ -70,12 +87,17 @@ impl Scheduler {
         if self.stopped.load(Ordering::Relaxed) {
             return;
         }
-        let rows = routine::list(&self.store).unwrap_or_default();
-        let Some(due) = rows.iter().filter_map(|row| row.routine.next_run_at).min() else {
-            return;
-        };
+        // Only the rows a tick would actually fire. A disabled row that still
+        // carries a time would otherwise arm a timer that fires nothing, and
+        // the next arm would find the same row, at once, forever.
+        let due = routine::list(&self.store)
+            .unwrap_or_default()
+            .iter()
+            .filter(|row| row.routine.enabled)
+            .filter_map(|row| row.routine.next_run_at)
+            .min();
         let generation = self.generation.fetch_add(1, Ordering::Relaxed) + 1;
-        let wait = (due - now_millis()).clamp(0, MAX_WAIT_MS) as u64;
+        let wait = wait_for(due, now_millis()) as u64;
         let scheduler = self.clone();
         self.after(Duration::from_millis(wait), move || scheduler.tick(generation));
     }
@@ -87,6 +109,9 @@ impl Scheduler {
 
     /// "Run now" on the routines screen, down the same path a due one takes.
     pub fn run_now(&self, routine_id: String) -> Result<(), String> {
+        if self.stopped.load(Ordering::Relaxed) {
+            return Err("The daemon is shutting down.".into());
+        }
         let row = routine::scheduled(&self.store, routine_id.clone())?
             .ok_or_else(|| format!("No routine {routine_id}"))?;
         self.fire(row, RunTrigger::Manual);
@@ -100,10 +125,16 @@ impl Scheduler {
         {
             return;
         }
-        let now = now_millis();
-        for row in routine::list(&self.store).unwrap_or_default() {
-            if row.routine.enabled && row.routine.next_run_at.is_some_and(|at| at <= now) {
-                self.fire(row, RunTrigger::Schedule);
+        {
+            // Held across the whole sweep. An arm from an RPC can start a
+            // second tick while this one is between its read and its writes,
+            // and both would see the same row still due.
+            let _one_at_a_time = self.ticking.lock().unwrap_or_else(|e| e.into_inner());
+            let now = now_millis();
+            for row in routine::list(&self.store).unwrap_or_default() {
+                if row.routine.enabled && row.routine.next_run_at.is_some_and(|at| at <= now) {
+                    self.fire(row, RunTrigger::Schedule);
+                }
             }
         }
         self.arm();
@@ -123,20 +154,33 @@ impl Scheduler {
         } else {
             None
         };
+        // The status now, not the one the tick's snapshot read: an earlier
+        // routine in this same sweep may already have woken this agent.
+        let busy = match session::get(&self.store, row.session.id.clone()) {
+            Ok(Some(live)) => live.status == "working" || live.status == "needs-input",
+            // A session we cannot read is one we will not start a turn on.
+            _ => true,
+        };
         let run = RoutineRun {
             id: uuid::Uuid::new_v4().to_string(),
             started_at: started,
-            finished_at: None,
-            status: RunStatus::Running,
+            finished_at: if busy { Some(started) } else { None },
+            status: if busy { RunStatus::Skipped } else { RunStatus::Running },
             trigger,
         };
-        let runs = push_run(&routine::parse_runs(&row.routine.runs_json), run.clone());
-        self.mark(&row.routine.id, started, next, &runs);
-
-        // The agent is mid-turn: a routine waits for the next time round rather
-        // than queueing behind whatever it is doing.
-        if row.session.status == "working" || row.session.status == "needs-input" {
-            self.finish(&row.routine, started, next, &runs, &run, RunStatus::Skipped);
+        // The clock moves either way — a routine left past due fires again on
+        // the next tick, and the next — but "last run" is for runs that ran.
+        let moved = routine::record_run(
+            &self.store,
+            &row.routine.id,
+            if busy { None } else { Some(started) },
+            next,
+            &run,
+        );
+        self.changed();
+        // Without a written next_run_at nothing bounds a re-fire, so a history
+        // we could not write is a turn we do not start.
+        if moved.is_err() || busy {
             return;
         }
         self.turns
@@ -161,7 +205,7 @@ impl Scheduler {
             nonce: None,
         });
         if started_turn.is_err() {
-            self.finish(&row.routine, started, next, &runs, &run, RunStatus::Error);
+            self.finish(&row.routine.id, &run, RunStatus::Error);
             return;
         }
         // The run is over when the agent is, so the history keeps saying
@@ -170,51 +214,50 @@ impl Scheduler {
         thread::spawn(move || {
             if let Some(ok) = scheduler.await_turn(&row.session.id) {
                 let status = if ok { RunStatus::Ok } else { RunStatus::Error };
-                scheduler.finish(&row.routine, started, next, &runs, &run, status);
+                scheduler.finish(&row.routine.id, &run, status);
             }
         });
     }
 
     /// Whether the turn ended well, or None when the daemon went away first: a
     /// run whose end nobody saw stays "running" rather than claiming it failed.
+    ///
+    /// A turn parked on an approval can last as long as the user takes, so the
+    /// poll backs off: the first seconds are worth 100 ms, an afternoon is not.
     fn await_turn(&self, session_id: &str) -> Option<bool> {
+        let mut wait = SETTLE_POLL;
         loop {
-            thread::sleep(SETTLE_POLL);
+            thread::sleep(wait);
+            wait = (wait * 2).min(SETTLE_MAX);
             if self.stopped.load(Ordering::Relaxed) {
                 return None;
             }
-            let status = session::get(&self.store, session_id.to_string())
-                .ok()
-                .flatten()
-                .map(|row| row.status)
-                .unwrap_or_default();
-            if status != "working" && status != "needs-input" {
-                return Some(status != "error");
+            // A read that failed says nothing about the turn; only a row that
+            // came back and is no longer working ends the run.
+            let Ok(Some(live)) = session::get(&self.store, session_id.to_string()) else {
+                continue;
+            };
+            if live.status != "working" && live.status != "needs-input" {
+                return Some(live.status != "error");
             }
         }
     }
 
-    fn finish(
-        &self,
-        routine: &Routine,
-        started: i64,
-        next: Option<i64>,
-        runs: &[RoutineRun],
-        run: &RoutineRun,
-        status: RunStatus,
-    ) {
+    /// The end of a run, and only that. The schedule this fire computed is
+    /// already written; a turn can outlast the row that started it, and the
+    /// one the user saved in between is the one that stands.
+    fn finish(&self, routine_id: &str, run: &RoutineRun, status: RunStatus) {
         let done = RoutineRun {
             finished_at: Some(now_millis()),
             status,
             ..run.clone()
         };
-        self.mark(&routine.id, started, next, &push_run(runs, done));
+        let _ = routine::finish_run(&self.store, routine_id, &done);
+        self.changed();
     }
 
-    /// A history nobody could write is a run that still happened; the turn is
-    /// the point, so a failed write is not worth failing the fire over.
-    fn mark(&self, id: &str, started: i64, next: Option<i64>, runs: &[RoutineRun]) {
-        let _ = routine::mark_run(&self.store, id.to_string(), started, next, runs_json(runs));
+    /// The history moved, and no client asked for it.
+    fn changed(&self) {
         let events = self.events.lock().unwrap_or_else(|e| e.into_inner()).clone();
         if let Some(events) = events {
             events.routines_changed();
@@ -361,6 +404,18 @@ print(json.dumps({"type":"step_finish","sessionID":sid,"part":{"id":"s1","type":
 
         fn blocks(&self, session_id: &str) -> Vec<crew_protocol::Block> {
             self.host.transcripts().window(session_id, Some(500), None).blocks
+        }
+
+        /// A history from before this test, written the way the column holds it.
+        fn seed_runs(&self, routine_id: &str, runs: &[RoutineRun]) {
+            self.store()
+                .with(|conn| {
+                    conn.execute(
+                        "UPDATE routines SET runs_json = ?2 WHERE id = ?1",
+                        rusqlite::params![routine_id, routine::runs_json(runs)],
+                    )
+                })
+                .expect("seed");
         }
 
         fn runs(&self, routine_id: &str) -> Vec<RoutineRun> {
@@ -522,6 +577,167 @@ print(json.dumps({"type":"step_finish","sessionID":sid,"part":{"id":"s1","type":
         assert!(world.blocks(&coder.id).is_empty(), "a busy agent was woken anyway");
     }
 
+    /// A tick reads every routine once and then fires them one after another,
+    /// so the second routine on an agent holds a status from before the first
+    /// one woke it. Trusting it appends a note for a turn that never starts.
+    #[test]
+    fn a_fire_reads_the_status_now_not_the_one_the_tick_read() {
+        let world = world();
+        let coder = world.agent("Coder");
+        let routine = world.routine(&coder, "Standup", Some(now_millis() - 1_000));
+        let row = routine::scheduled(world.store(), routine.id.clone())
+            .expect("scheduled")
+            .expect("routine");
+        assert_eq!(row.session.status, "idle", "the snapshot should be the stale one");
+        session::set_status(world.store(), coder.id.clone(), "working".into()).expect("status");
+
+        world.scheduler.fire(row, RunTrigger::Schedule);
+
+        assert!(world.blocks(&coder.id).is_empty(), "it woke an agent that was working");
+        assert_eq!(world.runs(&routine.id)[0].status, RunStatus::Skipped);
+    }
+
+    /// "Last run" is for runs that ran. A skip moves the clock forward — a
+    /// routine left past due fires again on the next tick — and nothing else.
+    #[test]
+    fn a_skip_moves_the_clock_but_not_the_last_run() {
+        let world = world();
+        let coder = world.agent("Coder");
+        let due = now_millis() - 1_000;
+        let routine = world.routine(&coder, "Standup", Some(due));
+        session::set_status(world.store(), coder.id.clone(), "working".into()).expect("status");
+
+        world.tick();
+
+        let after = world.reload(&routine.id);
+        assert_eq!(after.last_run_at, None, "a skip claimed to be the last run");
+        assert!(after.next_run_at.is_some_and(|at| at > due), "a skip left the routine past due");
+    }
+
+    /// A turn can outlast the row that started it. What the user saved while it
+    /// ran is the row that stands; the watcher only closes its own entry.
+    #[test]
+    fn the_end_of_a_run_does_not_write_back_the_schedule_it_started_with() {
+        let world = world();
+        let coder = world.agent("Coder");
+        let routine = world.routine(&coder, "Standup", Some(now_millis() - 1_000));
+        let run = RoutineRun {
+            id: "run-1".into(),
+            started_at: now_millis(),
+            finished_at: None,
+            status: RunStatus::Running,
+            trigger: RunTrigger::Schedule,
+        };
+        routine::record_run(world.store(), &routine.id, Some(run.started_at), Some(1), &run)
+            .expect("start");
+
+        // The user edits the routine mid-run: every two minutes from now.
+        let saved = now_millis() + 120_000;
+        routine::upsert(
+            world.store(),
+            Some(routine.id.clone()),
+            coder.id.clone(),
+            "Standup".into(),
+            true,
+            "check the board".into(),
+            Schedule::Interval { minutes: 2 }.to_json(),
+            Some(saved),
+            None,
+        )
+        .expect("save");
+        // And a second run is recorded while the first is still going.
+        let other = RoutineRun { id: "run-2".into(), status: RunStatus::Skipped, ..run.clone() };
+        routine::record_run(world.store(), &routine.id, None, Some(saved), &other).expect("skip");
+
+        world.scheduler.finish(&routine.id, &run, RunStatus::Ok);
+
+        let after = world.reload(&routine.id);
+        assert_eq!(after.next_run_at, Some(saved), "the watcher wrote back the old schedule");
+        let runs = world.runs(&routine.id);
+        assert_eq!(runs.len(), 2, "the watcher dropped a run written while it waited");
+        assert_eq!(
+            runs.iter().find(|row| row.id == "run-1").map(|row| row.status),
+            Some(RunStatus::Ok)
+        );
+    }
+
+    /// A timer that arms for a row no tick will fire is a timer that arms
+    /// again the moment it wakes: the same row, still past due, still refused.
+    #[test]
+    fn a_disabled_row_that_is_past_due_does_not_spin_the_timer() {
+        let world = world();
+        let coder = world.agent("Coder");
+        routine::upsert(
+            world.store(),
+            None,
+            coder.id.clone(),
+            "Standup".into(),
+            false,
+            "check the board".into(),
+            Schedule::Interval { minutes: 30 }.to_json(),
+            Some(now_millis() - 60_000),
+            None,
+        )
+        .expect("routine");
+
+        world.scheduler.arm();
+        thread::sleep(Duration::from_millis(1_200));
+        let arms = world.scheduler.generation.load(Ordering::Relaxed);
+        world.scheduler.stop();
+
+        assert!(arms < 10, "the timer armed {arms} times in a second");
+    }
+
+    /// The heartbeat: with nothing to wait for the scheduler still wakes, so a
+    /// write that failed or a read that did is one minute of lost time, not all
+    /// of it.
+    #[test]
+    fn the_wait_never_stops_the_clock_and_never_spins_it() {
+        // Nothing due: wake anyway, so a lost write costs a minute, not the day.
+        assert_eq!(wait_for(None, 0), MAX_WAIT_MS);
+        // Long past due: soon, but never immediately.
+        assert_eq!(wait_for(Some(-600_000), 0), MIN_WAIT_MS);
+        assert_eq!(wait_for(Some(5_000), 0), 5_000);
+        // Tomorrow: timers drift across a suspend, so look again in a minute.
+        assert_eq!(wait_for(Some(86_400_000), 0), MAX_WAIT_MS);
+    }
+
+    /// Every arm replaces the timer before it. The one it replaced has to wake
+    /// to nothing, or a routine written twice fires twice.
+    #[test]
+    fn a_timer_that_was_replaced_fires_nothing() {
+        let world = world();
+        let coder = world.agent("Coder");
+        let routine = world.routine(&coder, "Standup", Some(now_millis() - 1_000));
+        let stale = world.scheduler.generation.load(Ordering::Relaxed);
+        world.scheduler.arm();
+
+        world.scheduler.tick(stale);
+
+        assert!(world.blocks(&coder.id).is_empty(), "a replaced timer still fired");
+        assert!(world.runs(&routine.id).is_empty(), "a replaced timer wrote history");
+        world.scheduler.stop();
+    }
+
+    /// Shutting down stops the clock: a timer already asleep wakes to nothing,
+    /// and nothing new is armed.
+    #[test]
+    fn a_stopped_scheduler_does_not_fire_or_arm() {
+        let world = world();
+        let coder = world.agent("Coder");
+        let routine = world.routine(&coder, "Standup", Some(now_millis() - 1_000));
+        world.scheduler.stop();
+        let armed = world.scheduler.generation.load(Ordering::Relaxed);
+
+        world.scheduler.arm();
+        world.tick();
+
+        assert_eq!(world.scheduler.generation.load(Ordering::Relaxed), armed, "it armed after stop");
+        assert!(world.blocks(&coder.id).is_empty(), "it fired after stop");
+        assert!(world.runs(&routine.id).is_empty());
+        assert!(world.scheduler.run_now(routine.id).is_err(), "run now started after stop");
+    }
+
     #[test]
     fn the_wake_prompt_says_who_set_the_routine_up() {
         let world = world();
@@ -606,14 +822,7 @@ print(json.dumps({"type":"step_finish","sessionID":sid,"part":{"id":"s1","type":
                 trigger: RunTrigger::Schedule,
             })
             .collect();
-        routine::mark_run(
-            world.store(),
-            routine.id.clone(),
-            0,
-            Some(now_millis() - 1_000),
-            routine::runs_json(&old),
-        )
-        .expect("history");
+        world.seed_runs(&routine.id, &old);
 
         world.tick();
 

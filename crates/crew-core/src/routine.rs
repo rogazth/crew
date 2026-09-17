@@ -144,21 +144,56 @@ pub fn delete(store: &Store, id: String) -> Result<(), String> {
     Ok(())
 }
 
-pub fn mark_run(
+/// The clock the scheduler moves when a routine comes due, with the run that
+/// moved it. `last_run_at` stays put on a skip: nothing ran.
+///
+/// Read-modify-write under the store's lock, because the history is a column
+/// and two writers with a stale copy of it lose each other's lines.
+pub fn record_run(
     store: &Store,
-    id: String,
-    last_run_at: i64,
+    id: &str,
+    last_run_at: Option<i64>,
     next_run_at: Option<i64>,
-    runs_json: String,
+    run: &RoutineRun,
 ) -> Result<(), String> {
     store.with(|conn| {
-        conn.execute(
-            "UPDATE routines SET last_run_at = ?2, next_run_at = ?3, runs_json = ?4, updated_at = ?5
+        let runs = read_runs(conn, id)?;
+        conn.prepare_cached(
+            "UPDATE routines
+             SET last_run_at = COALESCE(?2, last_run_at), next_run_at = ?3,
+                 runs_json = ?4, updated_at = ?5
              WHERE id = ?1",
-            params![id, last_run_at, next_run_at, runs_json, now_millis()],
-        )
+        )?
+        .execute(params![
+            id,
+            last_run_at,
+            next_run_at,
+            runs_json(&push_run(&runs, run.clone())),
+            now_millis()
+        ])
     })?;
     Ok(())
+}
+
+/// The end of a run, and nothing else. A turn can outlast the schedule that
+/// started it: the user edits the routine while it works, and the row they
+/// saved is the one that stands.
+pub fn finish_run(store: &Store, id: &str, run: &RoutineRun) -> Result<(), String> {
+    store.with(|conn| {
+        let runs = read_runs(conn, id)?;
+        conn.prepare_cached("UPDATE routines SET runs_json = ?2 WHERE id = ?1")?
+            .execute(params![id, runs_json(&push_run(&runs, run.clone()))])
+    })?;
+    Ok(())
+}
+
+fn read_runs(conn: &rusqlite::Connection, id: &str) -> rusqlite::Result<Vec<RoutineRun>> {
+    let raw: String = conn
+        .prepare_cached("SELECT runs_json FROM routines WHERE id = ?1")?
+        .query_row(params![id], |row| row.get(0))
+        .optional()?
+        .unwrap_or_else(|| "[]".into());
+    Ok(parse_runs(&raw))
 }
 
 /// Newest first, capped, so the JSON column never grows past a screen of history.

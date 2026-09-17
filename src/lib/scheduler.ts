@@ -22,10 +22,18 @@ function changed(): void {
   for (const listener of listeners) listener();
 }
 
-/** "Run now" on the routines screen; the daemon fires it the same way it fires a due one. */
+/**
+ * "Run now" on the routines screen; the daemon fires it the same way it fires a
+ * due one. A refusal — a routine that is gone, a daemon on its way down — is
+ * the caller's to show: a button that clears its spinner and says nothing reads
+ * as a run that happened.
+ */
 export async function runRoutineNow(routineId: string): Promise<void> {
-  await api.runRoutineNow(routineId).catch(() => {});
-  changed();
+  try {
+    await api.runRoutineNow(routineId);
+  } finally {
+    changed();
+  }
 }
 
 /** One routine, persisted. Returns the id so a new draft can keep editing itself. */

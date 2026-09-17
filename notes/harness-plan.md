@@ -156,6 +156,7 @@ cargo test        # rust
 | G1 | routines fire in the daemon, not in the window | done `641a2bf` |
 | E6 | the persona stops telling the model how to talk | done `c23c6e0` |
 | E7 | a message row names the agent instead of its uuid | done `c46b4f2` |
+| G2 | the scheduler review's ten findings | done |
 
 ### How A5 landed
 
@@ -228,6 +229,39 @@ from `running` a moment later.
 history now, so an RPC that let a client write it was a second writer for the
 one thing the daemon owns.
 
+### What the review of it found
+
+Ten findings, all real, all fixed. The four that mattered:
+
+- **A tick's snapshot is stale by the time it fires.** Two routines on one
+  agent: the first starts a turn, the second still reads `idle` from the row
+  the tick read, appends `Routine · <name>` and then fails to start. The
+  transcript claimed a wake-up that never happened. `fire` re-reads the status.
+- **The watcher rewrote the whole history column from a copy it took at the
+  start.** Anything written while the turn ran — another run, a skip — was
+  gone when it landed, and a schedule the user saved in between was undone.
+  The end of a run now reads, replaces its own entry, and writes; it does not
+  touch `next_run_at` at all, because a turn can outlast the row that started it.
+- **A disabled routine could spin the daemon.** `arm` took the minimum over
+  every routine while `tick` only fired enabled ones, so a row one counted and
+  the other refused armed a zero-length timer that armed another. Measured at
+  ~3000 arms a second. `arm` now filters the way `tick` does, and no wait is
+  ever shorter than a second or longer than a minute — the cap doubles as a
+  heartbeat, so a failed write costs a minute rather than the day.
+- **A skip moved "last run".** Nothing ran. The clock still moves, or the
+  routine stays past due and fires again immediately.
+
+The rest: `run_now` refuses once the daemon is stopping; a fire whose first
+history write fails does not start a turn, because `next_run_at` is the only
+thing that bounds a re-fire; one tick at a time; and `await_turn` treats a
+failed read as "still going" and backs its poll off to five seconds, so a turn
+parked on an approval costs a read every few seconds instead of ten a second.
+
+Still open, deliberately: `await_turn` watches the session, not the turn it
+started. An agent that loops into a second turn keeps the run marked `running`
+until it finally stops — which is arguably the honest answer, and the fix is a
+turn token `TurnHost::start` does not hand out yet.
+
 Known duplication, pre-existing: the schedule math exists in both languages,
 because the UI computes the next run when it saves and the daemon computes it
 when it fires. They read the same `Schedule` JSON and both have tests.
@@ -277,6 +311,7 @@ The default provider is opencode on its free models, which need no credentials.
   rewrites the rows after it.
 - `from_agent` rides inside `extra_json`, so "everything agent X wrote" is not
   a SQL query yet.
-- `tests/cli.rs` watches real processes start and die, so it fails under enough
-  load — seen once with a `cargo clippy` building alongside it. Five runs on
-  their own are clean.
+- `tests/cli.rs` watches real processes start and die, so `exits_on_sigterm`
+  fails under enough load: roughly one run in ten when something else is
+  building, and clean six runs in a row when nothing is. It predates the
+  scheduler work.
