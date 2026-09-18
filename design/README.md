@@ -53,7 +53,7 @@ should look, not about what it does.
 ## `design/shared` — the fake daemon, and the real one
 
 Prototypes import everything from `@crew/fixtures` (a Vite alias to `shared/src`).
-`npm test` there runs 139 tests over the parts worth porting back into the app.
+`npm test` there runs 157 tests over the parts worth porting back into the app.
 
 **Data.** 3 workspaces, 13 sessions, 75 project files, 6 routines, terminal buffers,
 file bodies and patches, and transcripts covering every case the brief asks for: long
@@ -98,10 +98,10 @@ Once per machine: `cd design/tools && npx playwright install chromium`.
 
 ```bash
 node design/tools/smoke.mjs --all        # tsc + build + walk every route for errors
-node design/tools/shoot.mjs --all        # screenshots, 12 routes × 2 themes
+node design/tools/shoot.mjs --all        # screenshots, 16 routes × 2 themes
 node design/tools/contact-sheet.mjs      # shots.html — the three, side by side
 node design/tools/stress.mjs --all       # long tasks, frame times, heap, DOM size
-cd design/shared && npm test             # 139 tests on the shared layer
+cd design/shared && npm test             # 157 tests on the shared layer
 ```
 
 ## Layout
