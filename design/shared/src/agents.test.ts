@@ -131,6 +131,29 @@ describe("letters — a message exists twice and must be counted once", () => {
     expect(all[0]!.state).toBe("delivered");
   });
 
+  it("borrows the body from the delivery when the gateway dropped it", () => {
+    const blob: Block = {
+      id: "s1",
+      role: "tool",
+      text: "Crew call tool message_agent",
+      at: NOW,
+      tool: {
+        callId: "c",
+        name: "crew_call_tool",
+        title: "Crew call tool message_agent",
+        status: "completed",
+        detail: { kind: "output", text: JSON.stringify({ delivered: true, to: "Beta" }) },
+      },
+    };
+    const roster = rosterFrom([A, B], {
+      a: [blob],
+      b: [got("r1", { id: "a", name: "Alpha" }, "the words the gateway threw away", NOW + MIN)],
+    });
+    const [letter] = letters(roster);
+    expect(letter!.state).toBe("delivered");
+    expect(letter!.text).toBe("the words the gateway threw away");
+  });
+
   it("recovers a letter the adapter dropped, from the gateway's own result", () => {
     const blob: Block = {
       id: "s1",

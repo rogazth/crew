@@ -209,7 +209,10 @@ export function letters(roster: Roster): Letter[] {
   for (const sent of outbound) {
     const mark = fingerprint(sent.text);
     // The receiver's copy carries an envelope header above the body, so the
-    // inbound text contains the outbound one rather than equalling it.
+    // inbound text contains the outbound one rather than equalling it. A letter
+    // the gateway stripped has no body to match on, so it falls back to the
+    // nearest delivery from that peer — the best available guess, and why the
+    // window below is bounded in both directions.
     let best = -1;
     let bestGap = Infinity;
     unmatched.forEach((got, index) => {
@@ -228,7 +231,10 @@ export function letters(roster: Roster): Letter[] {
       id: sent.blockId,
       from: refOf(roster, sent.selfId),
       to: refOf(roster, sent.peerId),
-      text: sent.text,
+      // A letter routed through `call_tool` reaches the sender's transcript with
+      // no body — the gateway's result names the target and nothing else. The
+      // receiver's copy has the words, so a paired letter borrows them.
+      text: sent.text || twin?.text || "",
       at: sent.at,
       state: twin ? "delivered" : "waiting",
       sentBlockId: sent.blockId,

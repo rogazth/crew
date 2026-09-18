@@ -41,9 +41,16 @@ async function loadModel() {
       join(here, "../shared/src/index.ts"),
     )};`,
   );
+  // `design/tools` carries its own esbuild, so a fresh clone does not need the
+  // host repo's `npm install` before this script will run.
+  const bundler = [
+    join(here, "node_modules/.bin/esbuild"),
+    join(repoRoot, "node_modules/.bin/esbuild"),
+  ].find((candidate) => existsSync(candidate));
+  if (!bundler) throw new Error("no esbuild — run design/install.sh");
   await new Promise((ok, fail) => {
     const child = spawn(
-      join(repoRoot, "node_modules/.bin/esbuild"),
+      bundler,
       [entry, "--bundle", "--platform=node", "--format=esm", `--outfile=${out}`, "--log-level=error"],
       { stdio: ["ignore", "pipe", "pipe"] },
     );
