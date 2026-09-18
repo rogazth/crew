@@ -35,7 +35,11 @@ Switches (same in all three):
 
 Checks:
 
-  cd design/shared && npm test          154 tests on the shared layer
+  cd design/shared && npm test          tests on the shared layer
   node design/tools/check-all.mjs       typecheck + build, everything
-  node design/tools/smoke.mjs           every route, both themes, in a browser
+
+The browser tools — smoke, screenshots, stress, live-smoke — drive a headless
+Chromium that Playwright keeps outside the repo. Once per machine:
+
+  cd design/tools && npx playwright install chromium
 DONE

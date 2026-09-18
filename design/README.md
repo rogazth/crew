@@ -93,6 +93,9 @@ cd design/live-check && npm run dev     # DataSource check in a browser, both so
 
 ## Tooling
 
+The browser tools need a headless Chromium, which Playwright keeps outside the repo.
+Once per machine: `cd design/tools && npx playwright install chromium`.
+
 ```bash
 node design/tools/smoke.mjs --all        # tsc + build + walk every route for errors
 node design/tools/shoot.mjs --all        # screenshots, 12 routes × 2 themes
