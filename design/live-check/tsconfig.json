@@ -13,5 +13,5 @@
     "baseUrl": ".",
     "paths": { "@crew/fixtures": ["../shared/src/index.ts"] }
   },
-  "include": ["src", "vite.config.ts", "../shared/src", "../tools/vite-crewd.ts"]
+  "include": ["src"]
 }
