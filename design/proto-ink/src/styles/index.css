@@ -1,0 +1,388 @@
+@import "tailwindcss";
+@import "./tokens.css";
+
+/* Tailwind reads the live custom properties, so a theme flip is one attribute. */
+@theme inline {
+  --color-canvas: var(--surface-canvas);
+  --color-chrome: var(--surface-chrome);
+  --color-recessed: var(--surface-recessed);
+  --color-sunken: var(--surface-sunken);
+
+  --color-primary: var(--text-primary);
+  --color-secondary: var(--text-secondary);
+  --color-tertiary: var(--text-tertiary);
+  --color-quaternary: var(--text-quaternary);
+
+  --color-icon: var(--icon-secondary);
+  --color-icon-strong: var(--icon-primary);
+  --color-icon-faint: var(--icon-tertiary);
+
+  --color-line: var(--stroke-secondary);
+  --color-line-soft: var(--stroke-tertiary);
+  --color-line-strong: var(--stroke-primary);
+
+  --color-fill-1: var(--fill-primary);
+  --color-fill-2: var(--fill-secondary);
+  --color-fill-3: var(--fill-tertiary);
+  --color-fill-4: var(--fill-quaternary);
+
+  --color-accent: var(--accent);
+  --color-accent-contrast: var(--accent-contrast);
+  --color-accent-fill: var(--accent-fill);
+  --color-attention: var(--status-attention);
+  --color-danger: var(--status-danger);
+  --color-success: var(--status-success);
+
+  --font-sans: var(--font-sans);
+  --font-mono: var(--font-mono);
+
+  --text-micro: var(--text-micro);
+  --text-micro--line-height: var(--leading-micro);
+  --text-small: var(--text-small);
+  --text-small--line-height: var(--leading-small);
+  --text-body: var(--text-body);
+  --text-body--line-height: var(--leading-body);
+  --text-prose: var(--text-prose);
+  --text-prose--line-height: var(--leading-prose);
+  --text-title: var(--text-title);
+  --text-title--line-height: var(--leading-title);
+
+  --radius-xs: var(--radius-xs);
+  --radius-sm: var(--radius-sm);
+  --radius-md: var(--radius-md);
+  --radius-row: var(--radius-row);
+  --radius-card: var(--radius-card);
+  --radius-composer: var(--radius-composer);
+
+  --shadow-e1: var(--elev-1);
+  --shadow-e2: var(--elev-2);
+  --shadow-e3: var(--elev-3);
+  --shadow-hairline: var(--hairline);
+  --shadow-hairline-soft: var(--hairline-soft);
+
+  --ease-enter: var(--ease-enter);
+}
+
+@layer base {
+  * {
+    border-color: var(--stroke-secondary);
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+    overflow: hidden;
+  }
+
+  body {
+    margin: 0;
+    background: var(--surface-sunken);
+    color: var(--text-primary);
+    font-family: var(--font-sans);
+    font-size: var(--text-body);
+    line-height: var(--leading-body);
+    font-weight: var(--weight-normal);
+    font-variation-settings: "wght" 420;
+    letter-spacing: var(--tracking-ink);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  /* Anything that can change under the reader gets tabular figures. */
+  time,
+  .tnum,
+  [data-tnum] {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum" 1;
+  }
+
+  button,
+  input,
+  textarea,
+  select {
+    font: inherit;
+    letter-spacing: inherit;
+    color: inherit;
+  }
+
+  :focus {
+    outline: none;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: 1px;
+    border-radius: var(--radius-sm);
+  }
+
+  ::selection {
+    background: color-mix(in oklch, var(--accent) 24%, transparent);
+  }
+
+  ::placeholder {
+    color: var(--text-quaternary);
+  }
+}
+
+@layer components {
+  /* -- elevation ---------------------------------------------------------- */
+  .e0 { box-shadow: var(--elev-0); }
+  .e1 { box-shadow: var(--elev-1); }
+  .e2 { box-shadow: var(--elev-2); }
+  .e3 { box-shadow: var(--elev-3); }
+  .hairline { box-shadow: var(--hairline); }
+  .hairline-soft { box-shadow: var(--hairline-soft); }
+
+  /* -- popover / menu / dialog entrance ----------------------------------- */
+  .ink-pop {
+    transform-origin: var(--transform-origin, center);
+    transition:
+      opacity var(--dur-2) var(--ease-enter),
+      transform var(--dur-2) var(--ease-enter);
+  }
+  .ink-pop[data-starting-style],
+  .ink-pop[data-ending-style] {
+    opacity: 0;
+    transform: translate3d(0, -2px, 0) scale(0.98);
+  }
+  .ink-pop[data-ending-style] {
+    transition-timing-function: var(--ease-leave);
+  }
+
+  .ink-backdrop {
+    background: color-mix(in oklch, var(--surface-sunken) 52%, transparent);
+    backdrop-filter: blur(2px);
+    transition: opacity var(--dur-3) var(--ease-enter);
+  }
+  .ink-backdrop[data-starting-style],
+  .ink-backdrop[data-ending-style] {
+    opacity: 0;
+  }
+
+  .ink-sheet {
+    transition: transform var(--dur-4) var(--ease-enter), opacity var(--dur-4) var(--ease-enter);
+  }
+  .ink-sheet[data-starting-style],
+  .ink-sheet[data-ending-style] {
+    transform: translate3d(12px, 0, 0);
+    opacity: 0;
+  }
+
+  /* -- status: one animation in the whole app ------------------------------ */
+  .ink-dot {
+    position: relative;
+    display: inline-flex;
+    width: 8px;
+    height: 8px;
+    flex: none;
+    align-items: center;
+    justify-content: center;
+  }
+  .ink-dot-core {
+    width: 8px;
+    height: 8px;
+    border-radius: var(--radius-full);
+    background: var(--dot);
+  }
+  .ink-dot[data-status="working"] .ink-dot-core {
+    animation: ink-breathe 1800ms var(--ease-enter) infinite;
+  }
+  .ink-dot-halo {
+    position: absolute;
+    inset: -5px;
+    border-radius: var(--radius-full);
+    background: var(--dot);
+    opacity: 0.18;
+    animation: ink-halo 1800ms var(--ease-enter) infinite;
+  }
+  .ink-dot[data-status="needs-input"] .ink-dot-core {
+    width: 5px;
+    height: 5px;
+  }
+  .ink-dot-ring {
+    position: absolute;
+    inset: -2px;
+    border-radius: var(--radius-full);
+    box-shadow: inset 0 0 0 1.5px var(--dot);
+  }
+
+  @keyframes ink-breathe {
+    0%, 100% { transform: scale(1); }
+    50% { transform: scale(1.18); }
+  }
+  @keyframes ink-halo {
+    0%, 100% { transform: scale(0.7); opacity: 0.1; }
+    50% { transform: scale(1); opacity: 0.22; }
+  }
+
+  /* The sidebar's answer to the spinner: a hairline that sweeps the row. */
+  .ink-sweep::after {
+    content: "";
+    position: absolute;
+    inset-inline: 6px;
+    bottom: 0;
+    height: 1px;
+    border-radius: var(--radius-full);
+    background: linear-gradient(
+      90deg,
+      transparent 0%,
+      var(--status-attention) 35%,
+      var(--status-attention) 65%,
+      transparent 100%
+    );
+    opacity: 0.55;
+    mask-image: linear-gradient(90deg, #000, #000);
+    animation: ink-sweep 2200ms linear infinite;
+  }
+  @keyframes ink-sweep {
+    0% { transform: translateX(-70%) scaleX(0.45); }
+    50% { transform: translateX(0%) scaleX(0.7); }
+    100% { transform: translateX(70%) scaleX(0.45); }
+  }
+
+  /* -- streaming text ------------------------------------------------------ */
+  .ink-fade-in {
+    animation: ink-fade var(--fade-dur, 260ms) var(--ease-enter) both;
+  }
+  @keyframes ink-fade {
+    from { opacity: 0; filter: blur(2px); }
+    to { opacity: 1; filter: blur(0); }
+  }
+
+  .ink-caret::after {
+    content: "";
+    display: inline-block;
+    width: 6px;
+    height: 13px;
+    margin-left: 2px;
+    vertical-align: -2px;
+    border-radius: 1px;
+    background: var(--text-quaternary);
+    animation: ink-blink 1100ms steps(2, jump-none) infinite;
+  }
+  @keyframes ink-blink {
+    0%, 49% { opacity: 1; }
+    50%, 100% { opacity: 0.15; }
+  }
+
+  /* A search hit that just scrolled into view. */
+  .ink-flash {
+    animation: ink-flash 1600ms var(--ease-leave) both;
+  }
+  @keyframes ink-flash {
+    0%, 30% { background: var(--accent-fill); }
+    100% { background: transparent; }
+  }
+
+  /* -- scrollbars ---------------------------------------------------------- */
+  .ink-scroll {
+    scrollbar-width: thin;
+    scrollbar-color: var(--stroke-primary) transparent;
+    overscroll-behavior: contain;
+  }
+  .ink-scroll::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  .ink-scroll::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .ink-scroll::-webkit-scrollbar-thumb {
+    background: var(--stroke-secondary);
+    border-radius: var(--radius-full);
+    border: 3px solid transparent;
+    background-clip: content-box;
+  }
+  .ink-scroll::-webkit-scrollbar-thumb:hover {
+    background: var(--stroke-primary);
+    background-clip: content-box;
+  }
+  .ink-scroll-none {
+    scrollbar-width: none;
+  }
+  .ink-scroll-none::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* An overflowing box says so with a masked edge instead of a shadow. */
+  .ink-mask-x {
+    mask-image: linear-gradient(90deg, transparent 0, #000 12px, #000 calc(100% - 20px), transparent 100%);
+  }
+
+  /* Long lists stay cheap: the browser skips layout and paint for rows that are
+     not on screen, and the reserved size keeps the scrollbar honest. */
+  .ink-skip {
+    content-visibility: auto;
+  }
+
+  .ink-fade-top[data-scrolled] {
+    mask-image: linear-gradient(to bottom, transparent 0, #000 10px);
+  }
+
+  .ink-mono {
+    font-family: var(--font-mono);
+    font-size: var(--text-small);
+    line-height: var(--leading-small);
+    letter-spacing: 0;
+    font-variant-ligatures: none;
+  }
+
+  /* -- syntax -------------------------------------------------------------- */
+  .tok-keyword { color: var(--syn-keyword); }
+  .tok-string { color: var(--syn-string); }
+  .tok-number { color: var(--syn-number); }
+  .tok-comment { color: var(--syn-comment); font-style: italic; }
+  .tok-function { color: var(--syn-function); }
+  .tok-type { color: var(--syn-type); }
+  .tok-variable { color: var(--syn-variable); }
+  .tok-property { color: var(--syn-property); }
+  .tok-tag { color: var(--syn-tag); }
+  .tok-attribute { color: var(--syn-attribute); }
+  .tok-punctuation { color: var(--syn-punctuation); }
+  .tok-regexp { color: var(--syn-regexp); }
+  .tok-plain { color: var(--text-primary); }
+
+  /* -- transcript selection scope ------------------------------------------ */
+  .ink-noselect {
+    user-select: none;
+    -webkit-user-select: none;
+  }
+}
+
+/* The appearance settings write these two attributes; the rules that read them
+   live here so a density or motion change is one repaint, not a re-render. */
+:root[data-density="compact"] {
+  --leading-prose: 21px;
+  --leading-body: 17px;
+}
+
+:root[data-motion="reduced"] *,
+:root[data-motion="reduced"] *::before,
+:root[data-motion="reduced"] *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
+}
+:root[data-motion="reduced"] .ink-dot[data-status="working"] .ink-dot-core,
+:root[data-motion="reduced"] .ink-dot-halo,
+:root[data-motion="reduced"] .ink-sweep::after {
+  animation: none !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+  .ink-dot[data-status="working"] .ink-dot-core,
+  .ink-dot-halo,
+  .ink-sweep::after {
+    animation: none !important;
+  }
+  .ink-dot-halo { opacity: 0.18; }
+}

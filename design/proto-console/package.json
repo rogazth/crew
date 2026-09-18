@@ -1,0 +1,35 @@
+{
+  "name": "crew-proto-console",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --port 5182 --strictPort",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview --port 5182 --strictPort",
+    "check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@base-ui/react": "^1.7.0",
+    "@dicebear/collection": "^9.2.2",
+    "@dicebear/core": "^9.2.2",
+    "boring-avatars": "^2.0.2",
+    "clsx": "^2.1.1",
+    "lucide-react": "^0.563.0",
+    "@phosphor-icons/react": "^2.1.10",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1",
+    "shiki": "^4.4.3"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.1.14",
+    "@types/react": "^19.2.2",
+    "@types/react-dom": "^19.2.1",
+    "@vitejs/plugin-react": "^5.1.0",
+    "tailwindcss": "^4.1.14",
+    "typescript": "~5.9.3",
+    "vite": "^7.1.12"
+  }
+}

@@ -1,0 +1,293 @@
+@import "tailwindcss";
+@import "./tokens.css";
+
+/* Tailwind's utility names, pointed at the token set. `inline` makes a utility
+   emit the token's own var, so redefining it under [data-theme] just works. */
+@theme inline {
+  --color-bg: var(--bg);
+  --color-raised: var(--raised);
+  --color-sunken: var(--sunken);
+  --color-rule: var(--rule);
+  --color-rule-soft: var(--rule-soft);
+  --color-rule-strong: var(--rule-strong);
+
+  --color-ink: var(--ink);
+  --color-ink-2: var(--ink-2);
+  --color-ink-3: var(--ink-3);
+  --color-ink-4: var(--ink-4);
+  --color-on-ink: var(--on-ink);
+
+  --color-accent: var(--accent);
+  --color-accent-ink: var(--accent-ink);
+  --color-accent-wash: var(--accent-wash);
+  --color-accent-on: var(--accent-on);
+  --color-amber: var(--amber);
+  --color-amber-ink: var(--amber-ink);
+  --color-red: var(--red);
+  --color-red-ink: var(--red-ink);
+  --color-red-wash: var(--red-wash);
+  --color-green: var(--green);
+  --color-green-ink: var(--green-ink);
+  --color-green-wash: var(--green-wash);
+  --color-done: var(--done);
+  --color-mark: var(--mark);
+  --color-add-bg: var(--add-bg);
+  --color-del-bg: var(--del-bg);
+
+  --font-sans: var(--font-sans);
+  --font-mono: var(--font-mono);
+
+  --text-xs: var(--t-xs);
+  --text-xs--line-height: var(--lh-xs);
+  --text-sm: var(--t-sm);
+  --text-sm--line-height: var(--lh-sm);
+  --text-md: var(--t-md);
+  --text-md--line-height: var(--lh-md);
+  --text-lg: var(--t-lg);
+  --text-lg--line-height: var(--lh-lg);
+  --text-xl: var(--t-xl);
+  --text-xl--line-height: var(--lh-xl);
+
+  --radius-DEFAULT: var(--r);
+  --radius-sm: var(--r);
+  --radius-md: var(--r);
+  --radius-lg: var(--r);
+
+  --spacing-1: var(--s1);
+  --spacing-2: var(--s2);
+  --spacing-3: var(--s3);
+  --spacing-4: var(--s4);
+  --spacing-5: var(--s5);
+  --spacing-6: var(--s6);
+}
+
+@layer base {
+  * {
+    border-color: var(--rule);
+    /* Radius is 3 or 0; nothing in the app sets its own. */
+    border-radius: 0;
+    min-width: 0;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+    overflow: hidden;
+  }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--font-sans);
+    font-size: var(--t-md);
+    line-height: var(--lh-md);
+    font-variant-numeric: tabular-nums;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  ::selection {
+    background: var(--select);
+  }
+
+  button,
+  input,
+  textarea,
+  select {
+    font: inherit;
+    color: inherit;
+    background: none;
+    border: 0;
+    padding: 0;
+    margin: 0;
+  }
+
+  button {
+    cursor: default;
+  }
+
+  :focus {
+    outline: none;
+  }
+
+  /* One focus treatment for the whole app: a 1px accent ring, 1px offset. */
+  :focus-visible {
+    outline: 1px solid var(--accent);
+    outline-offset: 1px;
+    border-radius: var(--r);
+  }
+
+  [hidden] {
+    display: none !important;
+  }
+}
+
+@layer components {
+  /* --- the one floating layer ---------------------------------------- */
+  .float {
+    background: var(--bg);
+    box-shadow: var(--float);
+    border-radius: var(--r);
+  }
+
+  /* --- scrollbars: thin, greyscale, always the same ------------------- */
+  .scroll {
+    overflow: auto;
+    scrollbar-width: thin;
+    scrollbar-color: var(--rule-strong) transparent;
+    overscroll-behavior: contain;
+  }
+  .scroll::-webkit-scrollbar {
+    width: 9px;
+    height: 9px;
+  }
+  .scroll::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .scroll::-webkit-scrollbar-thumb {
+    background: var(--rule-strong);
+    border: 3px solid transparent;
+    background-clip: padding-box;
+    border-radius: 999px;
+  }
+  .scroll::-webkit-scrollbar-thumb:hover {
+    background: var(--ink-4);
+    background-clip: padding-box;
+  }
+  .scroll::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+
+  /* --- a group rule with its label sitting on it ---------------------- */
+  .grouprule {
+    display: flex;
+    align-items: center;
+    gap: var(--s2);
+    color: var(--ink-4);
+    font-family: var(--font-mono);
+    font-size: var(--t-xs);
+    line-height: var(--lh-xs);
+  }
+  .grouprule::after {
+    content: "";
+    flex: 1;
+    height: 1px;
+    background: var(--rule);
+  }
+
+  /* --- syntax ---------------------------------------------------------- */
+  .tok-kw { color: var(--syn-kw); }
+  .tok-str { color: var(--syn-str); }
+  .tok-num { color: var(--syn-num); }
+  .tok-com { color: var(--syn-com); font-style: italic; }
+  .tok-fn { color: var(--syn-fn); }
+  .tok-type { color: var(--syn-type); }
+  .tok-punct { color: var(--syn-punct); }
+  .tok-attr { color: var(--syn-attr); }
+  .tok-meta { color: var(--syn-meta); }
+  .tok-plain { color: inherit; }
+
+  /* --- streaming ------------------------------------------------------- */
+  .fade-word {
+    animation: fade-word var(--fade, 200ms) var(--ease) both;
+  }
+
+  /* --- the working mark: three cells marching ------------------------- */
+  .bars {
+    display: inline-flex;
+    align-items: flex-end;
+    gap: 1px;
+    height: 9px;
+    vertical-align: -1px;
+  }
+  .bars > i {
+    display: block;
+    width: 2px;
+    background: currentColor;
+    animation: bar-march 1.5s steps(1, end) infinite;
+  }
+  .bars > i:nth-child(1) { animation-delay: 0ms; }
+  .bars > i:nth-child(2) { animation-delay: 500ms; }
+  .bars > i:nth-child(3) { animation-delay: 1000ms; }
+
+  /* --- the sidebar busy rule: fills left to right, resets ------------- */
+  .progress-rule::after {
+    content: "";
+    position: absolute;
+    left: 0;
+    bottom: 0;
+    height: 1px;
+    background: var(--amber);
+    animation: rule-fill 1.6s var(--ease) infinite;
+  }
+
+  .caret::after {
+    content: "";
+    display: inline-block;
+    width: 0.6em;
+    height: 1.05em;
+    background: currentColor;
+    vertical-align: -0.18em;
+    animation: blink 1.06s steps(1, end) infinite;
+  }
+
+  .hl-flash {
+    animation: hl-flash 1.8s var(--ease) both;
+  }
+}
+
+@keyframes fade-word {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes bar-march {
+  0% { height: 2px; }
+  33% { height: 5px; }
+  66% { height: 9px; }
+  100% { height: 2px; }
+}
+
+@keyframes rule-fill {
+  0% { width: 0; opacity: 1; }
+  70% { width: 100%; opacity: 1; }
+  100% { width: 100%; opacity: 0; }
+}
+
+@keyframes blink {
+  0%, 50% { opacity: 1; }
+  51%, 100% { opacity: 0; }
+}
+
+@keyframes hl-flash {
+  0%, 45% { background: var(--mark); }
+  100% { background: transparent; }
+}
+
+@keyframes slide-up {
+  from { opacity: 0; transform: translateY(3px); }
+  to { opacity: 1; transform: none; }
+}
+
+@keyframes slide-left {
+  from { transform: translateX(100%); }
+  to { transform: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+  }
+  .bars > i {
+    height: 5px !important;
+  }
+  .caret::after {
+    opacity: 1 !important;
+  }
+}

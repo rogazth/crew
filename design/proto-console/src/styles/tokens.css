@@ -1,0 +1,201 @@
+/* ---------------------------------------------------------------------------
+ * Console — the whole token set.
+ *
+ * Rules this file encodes, in case they are ever separated from TOKENS.md:
+ *   - Greys carry the interface. Hue appears only where it is information.
+ *   - Four ink steps. Not five.
+ *   - Radius is 3px or 0. Nothing else.
+ *   - Elevation is zero; only a floating layer gets a shadow.
+ * ------------------------------------------------------------------------ */
+
+:root {
+  /* --- surfaces ------------------------------------------------------- */
+  --bg: oklch(0.985 0.002 250);
+  --raised: oklch(0.965 0.003 250);
+  --sunken: oklch(0.945 0.004 250);
+  --rule: oklch(0.9 0.005 250);
+  --rule-soft: oklch(0.93 0.004 250);
+  --rule-strong: oklch(0.82 0.006 250);
+
+  /* --- ink, four steps ------------------------------------------------ */
+  --ink: oklch(0.22 0.008 250);
+  --ink-2: color-mix(in oklab, var(--ink) 68%, transparent);
+  --ink-3: color-mix(in oklab, var(--ink) 46%, transparent);
+  --ink-4: color-mix(in oklab, var(--ink) 32%, transparent);
+  /* Text laid on an inverted chip. */
+  --on-ink: var(--bg);
+
+  /* --- hue is data ----------------------------------------------------- */
+  --accent: oklch(0.55 0.15 255);
+  --accent-ink: oklch(0.44 0.16 255);
+  --accent-wash: color-mix(in oklab, var(--accent) 12%, transparent);
+  --accent-on: oklch(0.99 0.002 250);
+
+  --amber: oklch(0.68 0.14 72);
+  --amber-ink: oklch(0.52 0.13 68);
+  --red: oklch(0.56 0.18 25);
+  --red-ink: oklch(0.5 0.19 25);
+  --red-wash: color-mix(in oklab, var(--red) 10%, transparent);
+  --green: oklch(0.58 0.13 150);
+  --green-ink: oklch(0.48 0.12 150);
+  --green-wash: color-mix(in oklab, var(--green) 12%, transparent);
+  --done: oklch(0.62 0.07 250);
+
+  --select: color-mix(in oklab, var(--accent) 18%, transparent);
+  --mark: color-mix(in oklab, var(--amber) 34%, transparent);
+
+  /* Identity tints: the hue comes from the seed, every other channel from here. */
+  --id-l: 0.42;
+  --id-c: 0.1;
+  --id-bg-l: 0.68;
+  --id-bg-a: 0.2;
+
+  /* --- diff ------------------------------------------------------------ */
+  --add-bg: color-mix(in oklab, var(--green) 12%, transparent);
+  --add-gut: color-mix(in oklab, var(--green) 40%, transparent);
+  --del-bg: color-mix(in oklab, var(--red) 10%, transparent);
+  --del-gut: color-mix(in oklab, var(--red) 38%, transparent);
+
+  /* --- syntax, code only ----------------------------------------------- */
+  --syn-kw: oklch(0.48 0.13 300);
+  --syn-str: oklch(0.47 0.11 150);
+  --syn-num: oklch(0.5 0.12 40);
+  --syn-com: color-mix(in oklab, var(--ink) 40%, transparent);
+  --syn-fn: oklch(0.48 0.12 255);
+  --syn-type: oklch(0.5 0.1 200);
+  --syn-punct: color-mix(in oklab, var(--ink) 55%, transparent);
+  --syn-attr: oklch(0.52 0.1 75);
+  --syn-meta: oklch(0.5 0.09 330);
+
+  /* --- terminal tones --------------------------------------------------- */
+  --term-default: var(--ink-2);
+  --term-dim: var(--ink-4);
+  --term-added: var(--green-ink);
+  --term-removed: var(--red-ink);
+  --term-prompt: var(--green-ink);
+  --term-path: var(--accent-ink);
+  --term-ok: var(--green-ink);
+  --term-warn: var(--amber-ink);
+  --term-error: var(--red-ink);
+  --term-accent: var(--syn-meta);
+
+  /* --- type ------------------------------------------------------------- */
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue",
+    sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "Menlo", "Cascadia Mono", "Consolas",
+    "Liberation Mono", monospace;
+
+  --t-xs: 11px;
+  --lh-xs: 15px;
+  --t-sm: 12.5px;
+  --lh-sm: 18px;
+  --t-md: 13px;
+  --lh-md: 18px;
+  --t-lg: 15px;
+  --lh-lg: 22px;
+  --t-xl: 18px;
+  --lh-xl: 24px;
+
+  /* --- space, radius ---------------------------------------------------- */
+  --s1: 4px;
+  --s2: 8px;
+  --s3: 12px;
+  --s4: 16px;
+  --s5: 24px;
+  --s6: 32px;
+  --r: 3px;
+
+  /* --- density ---------------------------------------------------------- */
+  --row-h: 28px;
+  --row-pad-x: 8px;
+  --control-h: 26px;
+  --log-lead: 6px;
+
+  /* --- chrome ----------------------------------------------------------- */
+  --h-header: 28px;
+  --h-tabs: 26px;
+  --h-status: 22px;
+  --traffic: 78px;
+  --sidebar-w: 268px;
+
+  /* --- the log ---------------------------------------------------------- */
+  --log-gutter: 164px;
+  --log-measure: 600px;
+  --log-pad: 16px;
+
+  /* --- the one shadow --------------------------------------------------- */
+  --float-ring: 0 0 0 1px var(--rule-strong);
+  --float-shadow: 0 4px 16px rgb(0 0 0 / 0.12);
+  --float: var(--float-ring), var(--float-shadow);
+
+  /* --- motion ----------------------------------------------------------- */
+  --fast: 90ms;
+  --base: 140ms;
+  --slow: 220ms;
+  --ease: cubic-bezier(0.32, 0.72, 0.3, 1);
+
+  color-scheme: light;
+}
+
+[data-density="compact"] {
+  --row-h: 22px;
+  --row-pad-x: 6px;
+  --control-h: 22px;
+  --log-lead: 4px;
+  --log-gutter: 146px;
+  --log-measure: 560px;
+  --log-pad: 12px;
+  --t-md: 12.5px;
+  --lh-md: 17px;
+  --lh-sm: 17px;
+}
+
+[data-theme="dark"] {
+  --bg: oklch(0.17 0.006 255);
+  --raised: oklch(0.205 0.007 255);
+  --sunken: oklch(0.145 0.006 255);
+  --rule: oklch(0.3 0.008 255);
+  --rule-soft: oklch(0.255 0.007 255);
+  --rule-strong: oklch(0.4 0.01 255);
+
+  --ink: oklch(0.92 0.006 255);
+  --on-ink: var(--bg);
+
+  --accent: oklch(0.66 0.14 255);
+  --accent-ink: oklch(0.74 0.13 255);
+  --accent-wash: color-mix(in oklab, var(--accent) 20%, transparent);
+  --accent-on: oklch(0.16 0.01 255);
+
+  --amber: oklch(0.76 0.14 74);
+  --amber-ink: oklch(0.8 0.13 74);
+  --red: oklch(0.65 0.18 24);
+  --red-ink: oklch(0.72 0.17 24);
+  --green: oklch(0.7 0.14 152);
+  --green-ink: oklch(0.76 0.13 152);
+  --done: oklch(0.62 0.07 255);
+
+  --select: color-mix(in oklab, var(--accent) 26%, transparent);
+  --mark: color-mix(in oklab, var(--amber) 30%, transparent);
+
+  --id-l: 0.82;
+  --id-c: 0.09;
+  --id-bg-l: 0.6;
+  --id-bg-a: 0.22;
+
+  --add-bg: color-mix(in oklab, var(--green) 14%, transparent);
+  --del-bg: color-mix(in oklab, var(--red) 14%, transparent);
+
+  --syn-kw: oklch(0.74 0.12 300);
+  --syn-str: oklch(0.76 0.11 150);
+  --syn-num: oklch(0.78 0.11 60);
+  --syn-com: color-mix(in oklab, var(--ink) 42%, transparent);
+  --syn-fn: oklch(0.76 0.11 255);
+  --syn-type: oklch(0.78 0.09 200);
+  --syn-punct: color-mix(in oklab, var(--ink) 58%, transparent);
+  --syn-attr: oklch(0.8 0.1 80);
+  --syn-meta: oklch(0.76 0.1 330);
+
+  --float-shadow: 0 6px 20px rgb(0 0 0 / 0.5);
+
+  color-scheme: dark;
+}

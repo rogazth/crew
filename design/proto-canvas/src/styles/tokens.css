@@ -1,0 +1,193 @@
+/*
+ * Canvas tokens. Every value the prototype paints with lives here; components
+ * name tokens, never values.
+ *
+ * Two hard rules encoded below:
+ *  - surfaces are real steps (base < raised < overlay), because a shadow needs
+ *    something to sit on;
+ *  - elevation is a five-rung ladder and nothing may invent a sixth.
+ */
+
+:root {
+  color-scheme: light;
+
+  /* --- surfaces ------------------------------------------------------- */
+  --base: oklch(0.975 0.004 85);
+  --base-sunken: oklch(0.952 0.005 85);
+  --raised: oklch(1 0 0);
+  --raised-2: oklch(0.993 0.002 85);
+  --overlay: oklch(1 0 0);
+  --scrim: oklch(0.22 0.01 265 / 0.32);
+
+  /* --- ink ------------------------------------------------------------ */
+  --ink: oklch(0.22 0.01 265);
+  --ink-100: var(--ink);
+  --ink-70: oklch(0.22 0.01 265 / 0.7);
+  --ink-52: oklch(0.22 0.01 265 / 0.52);
+  --ink-38: oklch(0.22 0.01 265 / 0.38);
+  --ink-on-accent: oklch(1 0 0);
+
+  /* --- lines: they define a card's edge under its shadow --------------- */
+  --line: color-mix(in oklab, var(--ink) 10%, transparent);
+  --line-soft: color-mix(in oklab, var(--ink) 6%, transparent);
+  --line-strong: color-mix(in oklab, var(--ink) 16%, transparent);
+
+  /* --- accent: one hue, used with intent ------------------------------ */
+  --accent-h: 265;
+  --accent: oklch(0.55 0.17 var(--accent-h));
+  --accent-hover: oklch(0.51 0.18 var(--accent-h));
+  --accent-press: oklch(0.47 0.18 var(--accent-h));
+  --accent-ink: oklch(0.99 0.01 var(--accent-h));
+  --accent-soft: oklch(0.55 0.17 var(--accent-h) / 0.1);
+  --accent-soft-hover: oklch(0.55 0.17 var(--accent-h) / 0.16);
+  --accent-line: oklch(0.55 0.17 var(--accent-h) / 0.28);
+  --accent-text: oklch(0.47 0.16 var(--accent-h));
+  --ring: oklch(0.55 0.17 var(--accent-h) / 0.45);
+
+  /* --- status --------------------------------------------------------- */
+  --status-working: oklch(0.72 0.16 72);
+  --status-attention: oklch(0.72 0.16 72);
+  --status-unread: var(--accent);
+  --status-error: oklch(0.58 0.2 25);
+  --status-ok: oklch(0.6 0.15 150);
+
+  /* --- semantic tones ------------------------------------------------- */
+  --danger: oklch(0.55 0.2 25);
+  --danger-soft: oklch(0.55 0.2 25 / 0.1);
+  --danger-ink: oklch(1 0 0);
+  --warn: oklch(0.62 0.15 72);
+  --warn-soft: oklch(0.75 0.15 72 / 0.16);
+  --ok: oklch(0.52 0.14 150);
+  --ok-soft: oklch(0.6 0.14 150 / 0.14);
+
+  --added-bg: oklch(0.6 0.14 150 / 0.12);
+  --added-ink: oklch(0.42 0.12 150);
+  --removed-bg: oklch(0.58 0.2 25 / 0.1);
+  --removed-ink: oklch(0.46 0.16 25);
+  --mark-bg: oklch(0.85 0.16 95);
+  --mark-ink: oklch(0.28 0.06 80);
+
+  /* --- code ----------------------------------------------------------- */
+  --code-bg: oklch(0.965 0.004 85);
+  --code-ink: oklch(0.3 0.02 265);
+  --term-bg: oklch(0.985 0.003 85);
+
+  /* syntax: one ramp, low chroma, tuned to sit on --code-bg */
+  --syn-keyword: oklch(0.52 0.16 300);
+  --syn-string: oklch(0.48 0.12 150);
+  --syn-comment: oklch(0.6 0.02 265);
+  --syn-number: oklch(0.52 0.14 50);
+  --syn-type: oklch(0.5 0.12 230);
+  --syn-fn: oklch(0.5 0.14 265);
+  --syn-punct: oklch(0.45 0.02 265);
+
+  /* --- elevation ------------------------------------------------------ */
+  --shadow-ink: 24 24 34;
+  --e0: none;
+  --e1: 0 1px 2px rgb(var(--shadow-ink) / 0.05), 0 0 0 1px var(--line-soft);
+  --e1-hover: 0 2px 5px rgb(var(--shadow-ink) / 0.06), 0 0 0 1px var(--line);
+  --e2:
+    0 2px 4px rgb(var(--shadow-ink) / 0.06), 0 1px 2px rgb(var(--shadow-ink) / 0.04),
+    0 0 0 1px var(--line);
+  --e2-hover:
+    0 5px 12px rgb(var(--shadow-ink) / 0.08), 0 1px 2px rgb(var(--shadow-ink) / 0.04),
+    0 0 0 1px var(--line);
+  --e2-press: 0 1px 1px rgb(var(--shadow-ink) / 0.05), 0 0 0 1px var(--line-strong);
+  --e3: 0 8px 20px rgb(var(--shadow-ink) / 0.1), 0 2px 6px rgb(var(--shadow-ink) / 0.06), 0 0 0 1px var(--line);
+  --e4: 0 24px 56px rgb(var(--shadow-ink) / 0.16), 0 4px 12px rgb(var(--shadow-ink) / 0.08), 0 0 0 1px var(--line);
+  --inset-hi: 0 0 0 0 transparent;
+
+  /* --- radius --------------------------------------------------------- */
+  --r-chip: 6px;
+  --r-control: 10px;
+  --r-card: 14px;
+  --r-panel: 20px;
+
+  /* --- motion --------------------------------------------------------- */
+  --ease-out: cubic-bezier(0.2, 0.9, 0.3, 1);
+  --dur-hover: 120ms;
+  --dur-enter: 180ms;
+  --dur-drawer: 280ms;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --base: oklch(0.185 0.006 265);
+  --base-sunken: oklch(0.162 0.006 265);
+  --raised: oklch(0.215 0.007 265);
+  --raised-2: oklch(0.232 0.007 265);
+  --overlay: oklch(0.245 0.008 265);
+  --scrim: oklch(0.12 0.01 265 / 0.55);
+
+  --ink: oklch(0.96 0 0);
+  --ink-70: oklch(0.96 0 0 / 0.7);
+  --ink-52: oklch(0.96 0 0 / 0.52);
+  --ink-38: oklch(0.96 0 0 / 0.38);
+  --ink-on-accent: oklch(0.16 0.01 265);
+
+  --line: color-mix(in oklab, var(--ink) 12%, transparent);
+  --line-soft: color-mix(in oklab, var(--ink) 7%, transparent);
+  --line-strong: color-mix(in oklab, var(--ink) 20%, transparent);
+
+  --accent: oklch(0.74 0.14 var(--accent-h));
+  --accent-hover: oklch(0.78 0.14 var(--accent-h));
+  --accent-press: oklch(0.7 0.14 var(--accent-h));
+  --accent-ink: oklch(0.18 0.03 var(--accent-h));
+  --accent-soft: oklch(0.74 0.14 var(--accent-h) / 0.16);
+  --accent-soft-hover: oklch(0.74 0.14 var(--accent-h) / 0.24);
+  --accent-line: oklch(0.74 0.14 var(--accent-h) / 0.34);
+  --accent-text: oklch(0.82 0.11 var(--accent-h));
+  --ring: oklch(0.74 0.14 var(--accent-h) / 0.55);
+
+  --status-working: oklch(0.8 0.15 75);
+  --status-attention: oklch(0.8 0.15 75);
+  --status-error: oklch(0.68 0.18 25);
+  --status-ok: oklch(0.72 0.15 150);
+
+  --danger: oklch(0.62 0.19 25);
+  --danger-soft: oklch(0.68 0.18 25 / 0.16);
+  --danger-ink: oklch(0.99 0 0);
+  --warn: oklch(0.8 0.14 75);
+  --warn-soft: oklch(0.8 0.14 75 / 0.16);
+  --ok: oklch(0.75 0.14 150);
+  --ok-soft: oklch(0.75 0.14 150 / 0.16);
+
+  --added-bg: oklch(0.72 0.15 150 / 0.16);
+  --added-ink: oklch(0.82 0.13 150);
+  --removed-bg: oklch(0.68 0.18 25 / 0.16);
+  --removed-ink: oklch(0.78 0.14 25);
+  --mark-bg: oklch(0.72 0.16 95 / 0.42);
+  --mark-ink: oklch(0.97 0.03 95);
+
+  --code-bg: oklch(0.16 0.006 265);
+  --code-ink: oklch(0.9 0.01 265);
+  --term-bg: oklch(0.155 0.006 265);
+
+  --syn-keyword: oklch(0.78 0.13 300);
+  --syn-string: oklch(0.8 0.12 150);
+  --syn-comment: oklch(0.6 0.02 265);
+  --syn-number: oklch(0.82 0.12 60);
+  --syn-type: oklch(0.8 0.1 230);
+  --syn-fn: oklch(0.8 0.1 265);
+  --syn-punct: oklch(0.7 0.02 265);
+
+  /* Black shadow on a black surface does nothing; the top highlight carries
+     the separation instead. */
+  --shadow-ink: 0 0 0;
+  --e1: 0 1px 2px rgb(var(--shadow-ink) / 0.3), 0 0 0 1px var(--line-soft), inset 0 1px 0 oklch(1 0 0 / 0.04);
+  --e1-hover: 0 2px 6px rgb(var(--shadow-ink) / 0.34), 0 0 0 1px var(--line), inset 0 1px 0 oklch(1 0 0 / 0.05);
+  --e2:
+    0 2px 4px rgb(var(--shadow-ink) / 0.32), 0 1px 2px rgb(var(--shadow-ink) / 0.24),
+    0 0 0 1px var(--line), inset 0 1px 0 oklch(1 0 0 / 0.06);
+  --e2-hover:
+    0 6px 14px rgb(var(--shadow-ink) / 0.4), 0 1px 2px rgb(var(--shadow-ink) / 0.24),
+    0 0 0 1px var(--line), inset 0 1px 0 oklch(1 0 0 / 0.08);
+  --e2-press: 0 1px 1px rgb(var(--shadow-ink) / 0.3), 0 0 0 1px var(--line-strong);
+  --e3:
+    0 10px 24px rgb(var(--shadow-ink) / 0.46), 0 2px 6px rgb(var(--shadow-ink) / 0.3),
+    0 0 0 1px var(--line), inset 0 1px 0 oklch(1 0 0 / 0.06);
+  --e4:
+    0 28px 64px rgb(var(--shadow-ink) / 0.58), 0 4px 12px rgb(var(--shadow-ink) / 0.36),
+    0 0 0 1px var(--line), inset 0 1px 0 oklch(1 0 0 / 0.07);
+}

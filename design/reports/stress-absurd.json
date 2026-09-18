@@ -1,0 +1,113 @@
+{
+  "preset": "absurd",
+  "at": "2026-09-18T12:45:53.287Z",
+  "report": {
+    "proto-ink": [
+      {
+        "scenario": "boot",
+        "nodes": 1566,
+        "heapMb": 11,
+        "longTasks": 2,
+        "longTotalMs": 167,
+        "longestMs": 105,
+        "cls": 0.0001,
+        "frameP50": 0,
+        "frameP95": 0,
+        "janky": 0,
+        "scrolled": 0,
+        "rendered": true,
+        "errors": []
+      },
+      {
+        "scenario": "long-thread",
+        "nodes": 591,
+        "heapMb": 8,
+        "longTasks": 2,
+        "longTotalMs": 167,
+        "longestMs": 105,
+        "cls": 0.0001,
+        "frameP50": 0,
+        "frameP95": 0,
+        "janky": 0,
+        "scrolled": 0,
+        "rendered": true,
+        "errors": []
+      },
+      {
+        "scenario": "stress-thread",
+        "nodes": 2204,
+        "heapMb": 61,
+        "longTasks": 2,
+        "longTotalMs": 314,
+        "longestMs": 218,
+        "cls": 0.0001,
+        "frameP50": 17,
+        "frameP95": 18,
+        "janky": 1,
+        "scrolled": 4060,
+        "rendered": true,
+        "errors": []
+      },
+      {
+        "scenario": "sidebar",
+        "nodes": 1420,
+        "heapMb": 67,
+        "longTasks": 3,
+        "longTotalMs": 510,
+        "longestMs": 218,
+        "cls": 0.0001,
+        "frameP50": 0,
+        "frameP95": 0,
+        "janky": 0,
+        "scrolled": 0,
+        "rendered": true,
+        "errors": []
+      },
+      {
+        "scenario": "palette",
+        "nodes": 2926,
+        "heapMb": 91,
+        "longTasks": 4,
+        "longTotalMs": 628,
+        "longestMs": 218,
+        "cls": 0.0001,
+        "frameP50": 0,
+        "frameP95": 0,
+        "janky": 0,
+        "scrolled": 0,
+        "rendered": true,
+        "errors": []
+      },
+      {
+        "scenario": "search",
+        "nodes": 2965,
+        "heapMb": 32,
+        "longTasks": 5,
+        "longTotalMs": 696,
+        "longestMs": 218,
+        "cls": 0.0001,
+        "frameP50": 0,
+        "frameP95": 0,
+        "janky": 0,
+        "scrolled": 0,
+        "rendered": true,
+        "errors": []
+      },
+      {
+        "scenario": "routines",
+        "nodes": 1566,
+        "heapMb": 45,
+        "longTasks": 1,
+        "longTotalMs": 68,
+        "longestMs": 68,
+        "cls": 0.0001,
+        "frameP50": 0,
+        "frameP95": 0,
+        "janky": 0,
+        "scrolled": 0,
+        "rendered": true,
+        "errors": []
+      }
+    ]
+  }
+}
