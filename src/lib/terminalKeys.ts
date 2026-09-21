@@ -1,5 +1,5 @@
 /**
- * What a key chord means inside the terminal, before xterm sees it. R2's map:
+ * What a key chord means inside the terminal, before xterm sees it:
  * ⌘ chords spell the readline line-editing keys so the terminal edits like a
  * native macOS text field, ⌥ arrows and ⌥B/F/D move by word, and every other
  * ⌘ chord belongs to the app. Everything else is xterm's.
@@ -41,7 +41,7 @@ export function resolveTerminalKey(
     switch (key) {
       case "a":
         return { type: "select-all" };
-      // ⌘C over nothing is the interrupt, as in R2; over a selection it copies.
+      // ⌘C over nothing is the interrupt; over a selection it copies.
       case "c":
         return hasSelection ? APP : INPUT("\x03");
       case "Backspace":
