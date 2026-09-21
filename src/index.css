@@ -648,17 +648,17 @@ body:has(button[data-sidebar="resize-handle"]:active) * {
   margin-top: 10px;
 }
 /* The streaming veil: a word lands in place and dissolves in — opacity only,
-   so nothing the reader is already looking at shifts. The ramp is the fade
-   curve R4 paints (alpha = 1 - (1 - p)^1.6) and the length follows the
-   stream's own cadence, set on .crew-md. */
+   so nothing the reader is already looking at shifts. The ramp is an ease-out
+   on alpha (1 - (1 - p)^1.5) and the length follows the stream's own cadence,
+   set on .crew-md. */
 .crew-md-flow [data-sd-animate] {
-  animation-duration: var(--crew-veil-ms, 240ms);
+  animation-duration: var(--crew-veil-ms, 210ms);
   animation-timing-function: linear(
-    0, 0.155, 0.3, 0.435, 0.558, 0.67, 0.769, 0.854, 0.924, 0.975, 1
+    0, 0.146, 0.284, 0.414, 0.535, 0.646, 0.747, 0.836, 0.911, 0.968, 1
   );
 }
 .crew-md-flow [data-sd-animate-marker]::marker {
-  animation-duration: var(--crew-veil-ms, 240ms);
+  animation-duration: var(--crew-veil-ms, 210ms);
 }
 @media (prefers-reduced-motion: reduce) {
   .crew-md-flow [data-sd-animate],

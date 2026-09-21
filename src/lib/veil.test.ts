@@ -26,6 +26,6 @@ describe("veil cadence", () => {
 
   it("serves the duration in steps so a running fade keeps its timing", () => {
     expect(veilDurationMs(70)).toBe(veilDurationMs(72));
-    expect(veilDurationMs(70)).toBe(200);
+    expect(veilDurationMs(70)).toBe(180);
   });
 });
