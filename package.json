@@ -68,7 +68,7 @@
     "esbuild@0.28.2": true
   },
   "build": {
-    "appId": "com.relay.crew",
+    "appId": "rogazth.crew",
     "productName": "Crew",
     "directories": {
       "output": "release",
