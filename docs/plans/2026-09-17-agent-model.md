@@ -53,7 +53,7 @@ Creation leaves a trace on both sides:
 
 | | creator's chat | child's chat |
 | --- | --- | --- |
-| `create_agent` | `Created agent R1 (7b2e…)` — new | `Created by Crew` — exists, `tools.rs:542` |
+| `create_agent` | `Created agent Scout (7b2e…)` — new | `Created by Crew` — exists, `tools.rs:542` |
 
 ### 3 · It hands over the work
 

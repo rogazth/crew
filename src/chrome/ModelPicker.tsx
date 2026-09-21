@@ -19,7 +19,7 @@ type Props = {
   onChange: (provider: ProviderId, model: string) => void;
 };
 
-/** Provider tabs over a model list, following reference/R1 ModelPicker. */
+/** Provider tabs over a model list. */
 export function ModelPicker({ provider, model, trigger = "field", disabled = false, onChange }: Props) {
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState<ProviderId>(provider as ProviderId);

@@ -61,7 +61,7 @@ export function menuFromEvent(event: MouseEvent): MenuPoint {
 }
 
 /**
- * Right-click popover at the cursor, like R1's ExplorerMenu / TabGroupMenu.
+ * Right-click popover at the cursor.
  * Optional `rename` is an autofocused field in the popover, not a row replacement.
  */
 export function ActionMenu({ point, actions, onPick, onClose, rename }: Props) {

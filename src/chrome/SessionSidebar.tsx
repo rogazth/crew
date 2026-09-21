@@ -357,7 +357,7 @@ function Group({
   );
 }
 
-/** R1's SessionCard minus its third row; what it prints is the Show preference. */
+/** A session row without its third line; what it prints is the Show preference. */
 function Card({
   session,
   prefs,

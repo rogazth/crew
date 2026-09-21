@@ -52,7 +52,7 @@ function showThinking(blocks: Block[], working: boolean): boolean {
   return true;
 }
 
-/** Stick-to-bottom scroller. Same 16px threshold as R1. */
+/** Stick-to-bottom scroller, with a 16px threshold. */
 export function Transcript({
   blocks,
   working,

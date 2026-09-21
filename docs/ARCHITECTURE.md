@@ -2,7 +2,7 @@
 
 App de escritorio para manejar agentes de código. Workspaces, agentes con chat propio, terminales del proveedor, y un file explorer rápido.
 
-Nada aquí es invención: cada decisión apunta a un archivo concreto en `reference/`.
+Cada decisión se contrastó contra clientes de escritorio para agentes que ya existen. Se citan como **R1** (cliente Tauri + Rust), **R2** (IDE Electron) y **R3** (harness de agentes remoto); los checkouts viven fuera del repo.
 
 ## Corrección de premisa
 
@@ -11,7 +11,7 @@ Nada aquí es invención: cada decisión apunta a un archivo concreto en `refere
 La búsqueda de R1 **no es Rust**. Es esto:
 
 ```rust
-// reference/R1/src-tauri/src/fs.rs:97
+// R1 — src-tauri/src/fs.rs:97
 fn git_ls_files(root: &Path) -> Option<Vec<ProjectFile>> {
     Command::new("git").arg("-C").arg(root)
         .args(["ls-files", "-co", "--exclude-standard", "-z"]).output()
@@ -26,7 +26,7 @@ Esa velocidad se reproduce en TypeScript puro.
 
 ## Stack
 
-Copiar R1 casi literal. Está probado, es chico, y lo tienes en el disco.
+Seguir la forma de R1: probada, chica, y resuelve el mismo problema.
 
 | Capa | Elección | Evidencia |
 | --- | --- | --- |
@@ -178,7 +178,7 @@ es una opción; el gateway es la respuesta portable.
 R1 lo resuelve con la abstracción más barata posible: **Rust no sabe qué es un proveedor.** Solo resuelve un path y supervisa un proceso.
 
 ```rust
-// reference/R1/src-tauri/src/harness.rs:245
+// R1 — src-tauri/src/harness.rs:245
 pub fn harness_resolve_claude() -> Result<CursorBinary, String>
 pub fn harness_spawn(session_id, command, args, cwd) -> Result<(), String>
 pub fn harness_write(session_id, data) -> Result<(), String>
@@ -226,7 +226,7 @@ y el siguiente arranca con un `--session-id` nuevo.
 
 ## Editor
 
-R2 usa Monaco: 2338 referencias en su `app.asar`, con `createDiffEditor` y `DiffEditorWidget` para diffs. No lo copiamos — `monaco-editor` pesa 97.9 MB desempaquetado. R2 lo absorbe porque es Electron con un asar de 136 MB; una app Tauri que existe por su huella chica, no.
+R2 usa Monaco: 2338 referencias en su bundle, con `createDiffEditor` y `DiffEditorWidget` para diffs. No lo copiamos — `monaco-editor` pesa 97.9 MB desempaquetado. R2 lo absorbe porque es Electron con un bundle de 136 MB; una app Tauri que existe por su huella chica, no.
 
 | | Monaco | CodeMirror 6 | `@pierre/diffs` |
 | --- | --- | --- | --- |

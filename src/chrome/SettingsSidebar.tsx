@@ -28,7 +28,7 @@ type Props = {
   onClose: () => void;
 };
 
-/** Replaces the session list while settings are open; R1's SettingsRail. */
+/** Replaces the session list while settings are open. */
 export function SettingsSidebar({ section, onSelect, onClose }: Props) {
   return (
     <>

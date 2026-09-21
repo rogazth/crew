@@ -11,14 +11,14 @@ Decisiones tomadas el 2026-09-04:
 
 ## 0. Los dos disparadores
 
-1. **Navegador embebido** con tabs que pueden ser conducidos por agentes o sesiones, con lock para que dos agentes —o un agente y el usuario— no se pisen. Además: DevTools embebido y selector de elementos tipo R2.
+1. **Navegador embebido** con tabs que pueden ser conducidos por agentes o sesiones, con lock para que dos agentes —o un agente y el usuario— no se pisen. Además: DevTools embebido y selector de elementos como el de R2.
 2. **Modo remoto.** El MVP corre todo en el Mac. Después, `crewd` se instala en un servidor y la app en el Mac es solo consumidor: los recursos que usan los agentes son los de la VM.
 
 El primero saca al navegador de "un pane más" y obliga a cambiar de motor. El segundo obliga a que el backend sea un proceso propio con un protocolo de red, y descarta cargar el Rust dentro del proceso de Electron.
 
 ## 1. Por qué el navegador exige Chromium
 
-Contrastado contra `reference/R2/source` (Electron 43.4.1, R2 1.4.197).
+Contrastado contra R2, un IDE Electron para agentes (Electron 43.4.1). El checkout vive fuera del repo.
 
 | Requisito | WKWebView (wry / Tauri hoy) | Chromium + CDP |
 | --- | --- | --- |
@@ -37,7 +37,7 @@ Los dos primeros deciden: **no hay camino a DevTools embebido ni a input confiab
 | **Quedarse en wry / WKWebView** | Muere en los dos requisitos de arriba. No es cuestión de esfuerzo: no existe la API |
 | **CEF en Tauri** | Hay bindings, incluso de la org de Tauri, pero nadie los usa en producción en macOS. Helpers firmados a mano y un framework de 200 MB que igual se paga. Sería Electron con más trabajo y menos gente que lo haya sufrido antes |
 | **Ventana Chromium superpuesta sobre la ventana Tauri** | macOS no permite reparentar vistas entre procesos. Sincronizar posiciones y pelear con el foco |
-| **Chromium externo + screencast CDP dentro de Tauri** | Es el `stream-remote` de R2 usado donde no fue diseñado. Sirve para agentes, no para un humano que navega: scroll con latencia, sin video decente |
+| **Chromium externo + screencast CDP dentro de Tauri** | Es el modo screencast remoto de R2 usado donde no fue diseñado. Sirve para agentes, no para un humano que navega: scroll con latencia, sin video decente |
 | **Fork de Chromium** | Build de 1–4 h, ~100 GB, rebase cada ~4 semanas. Ni Vivaldi ni Brave escriben su UI en C++. No arregla nada de Crew |
 
 ### El costo real de la feature, verificado en R2
@@ -209,7 +209,7 @@ Crear `crates/crew-protocol` con los tipos de los cinco comandos de `pty.rs` y s
 
 ## 10. Estado del port — 2026-09-04
 
-Fases 1, 2 y 4 de §5 mezcladas en `master` en 67 commits (tres worktrees de R2 con grok 4.6, tres rondas de revisión adversarial cada uno). Sin navegador ni modo remoto todavía.
+Fases 1, 2 y 4 de §5 mezcladas en `master` en 67 commits (tres worktrees en paralelo con Grok 4.6, tres rondas de revisión adversarial cada uno). Sin navegador ni modo remoto todavía.
 
 - `crates/crew-core`, `crates/crew-protocol` (ts-rs → `src/lib/protocol.ts`), `crates/crewd` (binario con handshake JSON, `--data-dir`, `--mcp`/`call`, teardown por SIGTERM/SIGHUP/stdin EOF).
 - El daemon es dueño de turnos, parseo de providers, transcripts (seq + `transcript-apply`), tools de Crew e imágenes inline. El renderer es proyección.
