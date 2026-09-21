@@ -1,4 +1,3 @@
-
 {"type":"user","message":{"role":"user","content":[{"type":"text","text":"Reply with the single word pong"}]},"session_id":"71536dc2-3115-416c-98f4-af6ea6d5be32"}
 {"type":"thinking","subtype":"delta","text":"The user requested a","session_id":"71536dc2-3115-416c-98f4-af6ea6d5be32","timestamp_ms":1788462950342}
 {"type":"thinking","subtype":"delta","text":" single-word reply: ","session_id":"71536dc2-3115-416c-98f4-af6ea6d5be32","timestamp_ms":1788462950343}
@@ -7,7 +6,6 @@
 {"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"pong"}]},"session_id":"71536dc2-3115-416c-98f4-af6ea6d5be32","timestamp_ms":1788462950344}
 {"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"pong"}]},"session_id":"71536dc2-3115-416c-98f4-af6ea6d5be32"}
 {"type":"result","subtype":"success","duration_ms":5051,"duration_api_ms":5051,"is_error":false,"result":"pong","session_id":"71536dc2-3115-416c-98f4-af6ea6d5be32","request_id":"7964f783-4ec2-4d5c-9062-07913e238a41","usage":{"inputTokens":20026,"outputTokens":34,"cacheReadTokens":0,"cacheWriteTokens":0}}
-
 {"type":"user","message":{"role":"user","content":[{"type":"text","text":"Read the first 3 lines of package.json using your tools, then run the command echo hello-from-cursor. Reply with the quoted first line and the command stdout only."}]},"session_id":"f634856f-0a91-48d7-924d-0c884fce6bb1"}
 {"type":"thinking","subtype":"delta","text":"Reading the first three","session_id":"f634856f-0a91-48d7-924d-0c884fce6bb1","timestamp_ms":1788463007496}
 {"type":"thinking","subtype":"delta","text":" lines of package.json","session_id":"f634856f-0a91-48d7-924d-0c884fce6bb1","timestamp_ms":1788463007498}
@@ -38,7 +36,6 @@
 {"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"`{`\nhello-from-cursor"}]},"session_id":"f634856f-0a91-48d7-924d-0c884fce6bb1","timestamp_ms":1788463023616}
 {"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"`{`\nhello-from-cursor"}]},"session_id":"f634856f-0a91-48d7-924d-0c884fce6bb1"}
 {"type":"result","subtype":"success","duration_ms":22803,"duration_api_ms":22803,"is_error":false,"result":"I'll read the first three lines of `package.json` and run the echo command.The first attempt failed, so I'm retrying both.`{`\nhello-from-cursor","session_id":"f634856f-0a91-48d7-924d-0c884fce6bb1","request_id":"cfd70d15-fc15-4abf-a3d7-3e1e01eca0cd","usage":{"inputTokens":20546,"outputTokens":355,"cacheReadTokens":40256,"cacheWriteTokens":0}}
-
 {"type":"user","message":{"role":"user","content":[{"type":"text","text":"What single word did I ask you to reply with last time? Reply with only that word."}]},"session_id":"71536dc2-3115-416c-98f4-af6ea6d5be32"}
 {"type":"thinking","subtype":"delta","text":"The requested word is","session_id":"71536dc2-3115-416c-98f4-af6ea6d5be32","timestamp_ms":1788463100882}
 {"type":"thinking","subtype":"delta","text":" \"pong\".","session_id":"71536dc2-3115-416c-98f4-af6ea6d5be32","timestamp_ms":1788463100883}
