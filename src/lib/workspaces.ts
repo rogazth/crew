@@ -68,7 +68,7 @@ export function shortenPath(path: string): string {
   return path.replace(/^\/(?:Users|home)\/[^/]+(?=\/|$)/, "~");
 }
 
-/** Up to two initials from the folder name: `storefront-api` → FA, `crew` → C. */
+/** Up to two initials from the folder name: `storefront-api` → SA, `crew` → C. */
 export function workspaceMark(name: string): string {
   const words = name.split(/[\s\-_.]+/).filter(Boolean);
   const initials = words.slice(0, 2).map((word) => word[0] ?? "");
