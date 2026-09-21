@@ -9,8 +9,8 @@ everywhere, so nothing reads as an accident. This is also the direction that tak
 multi-agent nature of Crew seriously: agents are *people* in this room, so they have
 faces, and the conversations between them are conversations, not folded tool calls.
 
-Nearest spirit: R3's roster and message groups, Linear's surfaces, Raycast's
-depth — with a workbench underneath.
+Nearest spirit: Linear's surfaces, Raycast's depth — with a roster, message
+groups and a workbench underneath.
 
 ---
 

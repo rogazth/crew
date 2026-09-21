@@ -174,7 +174,7 @@ arrive. Settled paragraphs must not re-animate.
 ### 5.6 Agent-to-agent messages — **redesign this properly**
 
 Today a message from another agent is `role=user` + `fromAgent`, rendered as a
-one-line expandable "X messaged you". It was a patch. The target (per R3):
+one-line expandable "X messaged you". It was a patch. The target:
 
 - Consecutive messages from the same agent **group**: "2 messages with Relay".
 - Several agents in one run group as "3 messages with 2 agents".
