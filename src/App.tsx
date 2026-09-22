@@ -44,14 +44,36 @@ export function App() {
   const workspaces = useWorkspaces();
   const sidebar = useSidebarWidth();
   const active = workspaces.active;
-  const { sessions, create, update, rename, remove, reorder, setStatus } =
-    useSessions(active?.id ?? null);
+  const {
+    sessions,
+    all,
+    create,
+    update,
+    rename,
+    remove,
+    reorder,
+    setStatus,
+    dropWorkspace: forgetSessions,
+  } = useSessions(active?.id ?? null);
   const tabs = useTabs(active?.id ?? null);
   const files = useProjectFiles(active?.path ?? null);
+
+  // Its panes go first: dropping them is what stops the terminals it was running.
+  const { dropWorkspace: forgetTabs } = tabs;
+  const { remove: deleteWorkspace } = workspaces;
+  const removeWorkspace = useCallback(
+    async (id: string) => {
+      forgetTabs(id);
+      forgetSessions(id);
+      await deleteWorkspace(id);
+    },
+    [deleteWorkspace, forgetSessions, forgetTabs],
+  );
+
   const confirms = useConfirmations({
     closeTabsFor: tabs.closeForSession,
     removeSession: remove,
-    removeWorkspace: workspaces.remove,
+    removeWorkspace,
   });
 
   const closeTab = useCallback(
@@ -306,8 +328,9 @@ export function App() {
 
           <WorkspacePanes
             tab={tabs.active}
-            tabs={tabs.tabs}
-            sessions={sessions}
+            panes={tabs.panes}
+            workspaces={workspaces.workspaces}
+            sessions={all}
             cwd={active?.path ?? null}
             hasWorkspace={active !== null}
             onCreateWorkspace={workspaces.create}

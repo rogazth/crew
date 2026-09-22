@@ -1,38 +1,42 @@
-import { useEffect } from "react";
-import { AgentChat } from "./AgentChat";
-import { setForeground } from "../lib/agentRuntime";
-import type { ProviderId } from "../lib/providers";
-import { isAgentTab } from "../lib/tabs";
-import type { Session, Tab } from "../lib/types";
+import { useEffect } from 'react';
+import { AgentChat } from './AgentChat';
+import { setForeground } from '../lib/agentRuntime';
+import type { ProviderId } from '../lib/providers';
+import { isAgentTab } from '../lib/tabs';
+import type { MountedPane } from './WorkspacePanes';
+import type { Session } from '../lib/types';
 
 type Props = {
-  tabs: Tab[];
-  activeId: string | null;
+  panes: MountedPane[];
   sessions: Session[];
-  cwd: string;
   onModel: (session: Session, provider: ProviderId, model: string) => void;
 };
 
 /**
- * Open agent tabs stay mounted so a switch keeps scroll position and draft.
- * The turn itself lives in the runtime, so unmounting would lose nothing.
+ * Open agent tabs stay mounted, across workspaces too, so a switch keeps the
+ * draft and the scroll position. The turn itself lives in the runtime, which is
+ * why closing an agent tab costs nothing.
  */
-export function Agents({ tabs, activeId, sessions, cwd, onModel }: Props) {
-  const active = tabs.find((tab) => tab.id === activeId) ?? null;
-  const foreground = isAgentTab(active, sessions) && active?.kind === "session" ? active.sessionId : null;
+export function Agents({ panes, sessions, onModel }: Props) {
+  const shown = panes.find((pane) => pane.visible) ?? null;
+  const foreground =
+    shown && isAgentTab(shown.tab, sessions) && shown.tab.kind === 'session'
+      ? shown.tab.sessionId
+      : null;
 
   useEffect(() => {
     setForeground(foreground);
     return () => setForeground(null);
   }, [foreground]);
 
-  return tabs.map((tab) => {
-    if (!isAgentTab(tab, sessions) || tab.kind !== "session") return null;
+  return panes.map((pane) => {
+    const { tab, cwd, visible } = pane;
+    if (!isAgentTab(tab, sessions) || tab.kind !== 'session') return null;
     const session = sessions.find((row) => row.id === tab.sessionId);
     if (!session) return null;
     return (
-      <div key={tab.id} hidden={tab.id !== activeId} className="absolute inset-0">
-        <AgentChat session={session} cwd={cwd} active={tab.id === activeId} onModel={onModel} />
+      <div key={pane.id} hidden={!visible} className="absolute inset-0">
+        <AgentChat session={session} cwd={cwd} active={visible} onModel={onModel} />
       </div>
     );
   });

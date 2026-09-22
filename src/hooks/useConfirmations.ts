@@ -1,5 +1,6 @@
 import { useCallback, useState } from "react";
 import type { Confirm } from "../chrome/ConfirmDialog";
+import { isBusy } from "../lib/terminalBusy";
 import type { Session, SessionStatus, Workspace } from "../lib/types";
 
 const RUNNING: Record<string, string> = {
@@ -66,8 +67,17 @@ export function useConfirmations({ closeTabsFor, removeSession, removeWorkspace 
     [removeWorkspace],
   );
 
+  /**
+   * An agent turn belongs to the daemon, so its tab closes without a word and
+   * the turn runs on. A terminal *is* its process: closing the tab ends it, and
+   * the status cannot answer that — a watched tab reads idle whatever it runs —
+   * so this asks the terminal itself.
+   */
   const askCloseTab = useCallback((session: Session, onConfirm: () => void) => {
-    const label = runningLabel(session.status);
+    const label =
+      session.kind === "terminal"
+        ? (runningLabel(session.status) ?? (isBusy(session.id) ? "is still working" : null))
+        : null;
     if (!label) {
       onConfirm();
       return;

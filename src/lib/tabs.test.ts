@@ -8,6 +8,7 @@ import {
   isTerminalTab,
   openTab,
   parseTabs,
+  panesOf,
   relativeTo,
   reopenTab,
   selectTab,
@@ -181,5 +182,30 @@ describe("relativeTo", () => {
   it("leaves a path outside it alone", () => {
     expect(relativeTo("/w", "/etc/hosts")).toBe("/etc/hosts");
     expect(relativeTo("/w", "/workspace-other/a.ts")).toBe("/workspace-other/a.ts");
+  });
+});
+
+describe("panesOf", () => {
+  const stub: Tab = { id: "stub:terminal", kind: "stub", stub: "terminal", title: "Terminal" };
+  const registry = {
+    one: { tabs: [sessionTab("a"), stub], activeId: "stub:terminal", closed: [] },
+    two: { tabs: [stub], activeId: "stub:terminal", closed: [] },
+  };
+
+  it("mounts every tab of every restored workspace", () => {
+    expect(panesOf(registry, "one").map((pane) => pane.id)).toEqual([
+      "one/session:a",
+      "one/stub:terminal",
+      "two/stub:terminal",
+    ]);
+  });
+
+  it("shows only the active tab of the active workspace", () => {
+    const visible = panesOf(registry, "one").filter((pane) => pane.visible);
+    expect(visible.map((pane) => pane.id)).toEqual(["one/stub:terminal"]);
+  });
+
+  it("shows nothing while no workspace is active", () => {
+    expect(panesOf(registry, null).some((pane) => pane.visible)).toBe(false);
   });
 });

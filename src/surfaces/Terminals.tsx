@@ -1,34 +1,34 @@
-import { lazy, Suspense, useCallback, useEffect, useState } from "react";
-import { homeDir } from "../lib/host";
-import { useCommands } from "../hooks/useCommand";
-import { useSessionActivity } from "../hooks/useSessionActivity";
-import { useTerminalPrefs } from "../hooks/useTerminalPrefs";
-import * as api from "../lib/api";
-import { transcriptPath } from "../lib/claudeStorage";
-import { sessionCommand } from "../lib/sessionCommand";
-import { isTerminalTab, relativeTo } from "../lib/tabs";
-import { activeTerminal } from "../lib/terminalFocus";
-import { clamp, DEFAULT_TERMINAL_PREFS, LIMITS } from "../lib/terminalPrefs";
-import type { ProjectFile, Session, SessionStatus, Tab } from "../lib/types";
+import { lazy, Suspense, useCallback, useEffect, useState } from 'react';
+import { homeDir } from '../lib/host';
+import { useCommands } from '../hooks/useCommand';
+import { useSessionActivity } from '../hooks/useSessionActivity';
+import { useTerminalPrefs } from '../hooks/useTerminalPrefs';
+import * as api from '../lib/api';
+import { transcriptPath } from '../lib/claudeStorage';
+import { sessionCommand } from '../lib/sessionCommand';
+import { isTerminalTab, relativeTo } from '../lib/tabs';
+import { activeTerminal } from '../lib/terminalFocus';
+import { clamp, DEFAULT_TERMINAL_PREFS, LIMITS } from '../lib/terminalPrefs';
+import type { MountedPane } from './WorkspacePanes';
+import type { ProjectFile, Session, SessionStatus } from '../lib/types';
 
 /** xterm and its addons are ~800 kB of the bundle; the window opens without them. */
-const TerminalView = lazy(() => import("./TerminalView").then((m) => ({ default: m.TerminalView })));
+const TerminalView = lazy(() => import('./TerminalView').then((m) => ({ default: m.TerminalView })));
 
 type Props = {
-  tabs: Tab[];
-  activeId: string | null;
+  panes: MountedPane[];
   sessions: Session[];
-  cwd: string;
   onStatus: (id: string, status: SessionStatus) => void;
   onOpenFile: (file: ProjectFile) => void;
 };
 
 /**
- * Every open terminal tab stays mounted, shown or not: unmounting a terminal
- * kills its process, and a tab switch must not end a claude session.
+ * Every open terminal tab stays mounted, shown or not, and of every workspace:
+ * unmounting a terminal kills its process, so neither a tab switch nor a
+ * workspace switch may end a claude session. Only closing the tab does.
  */
-export function Terminals({ tabs, activeId, sessions, cwd, onStatus, onOpenFile }: Props) {
-  const focused = tabs.find((tab) => tab.id === activeId) ?? null;
+export function Terminals({ panes, sessions, onStatus, onOpenFile }: Props) {
+  const focused = panes.find((pane) => pane.visible) ?? null;
   const { prefs, update } = useTerminalPrefs();
   const zoom = (delta: number) =>
     update({
@@ -41,47 +41,53 @@ export function Terminals({ tabs, activeId, sessions, cwd, onStatus, onOpenFile 
 
   // Bound to the terminal filling the active tab, so ⌘F reaches the pane you see.
   useCommands(
-    isTerminalTab(focused, sessions)
+    isTerminalTab(focused?.tab ?? null, sessions)
       ? {
-          "find-in-terminal": () => activeTerminal()?.find(),
-          "zoom-in": () => zoom(1),
-          "zoom-out": () => zoom(-1),
-          "zoom-reset": () => zoom(0),
+          'find-in-terminal': () => activeTerminal()?.find(),
+          'zoom-in': () => zoom(1),
+          'zoom-out': () => zoom(-1),
+          'zoom-reset': () => zoom(0),
         }
       : {},
   );
 
   const openPath = useCallback(
-    (path: string) =>
+    (cwd: string, path: string) =>
       onOpenFile({
-        name: path.split("/").pop() ?? path,
+        name: path.split('/').pop() ?? path,
         path,
         relative: relativeTo(cwd, path),
       }),
-    [cwd, onOpenFile],
+    [onOpenFile],
   );
 
-  return tabs.map((tab) => {
-    const active = tab.id === activeId;
-    if (tab.kind === "stub" && tab.stub === "terminal") {
+  return panes.map((pane) => {
+    const { tab, cwd, visible } = pane;
+    if (tab.kind === 'stub' && tab.stub === 'terminal') {
       return (
-        <Pane key={tab.id} active={active}>
-          <TerminalView id={tab.id} cwd={cwd} command={[]} active={active} onOpenPath={openPath} />
+        <Pane key={pane.id} active={visible}>
+          <TerminalView
+            id={pane.id}
+            cwd={cwd}
+            command={[]}
+            active={visible}
+            onOpenPath={(path) => openPath(cwd, path)}
+          />
         </Pane>
       );
     }
-    if (tab.kind !== "session") return null;
+    if (tab.kind !== 'session') return null;
     const session = sessions.find((s) => s.id === tab.sessionId);
-    if (!session || session.kind !== "terminal") return null;
+    if (!session || session.kind !== 'terminal') return null;
     return (
-      <Pane key={tab.id} active={active}>
+      <Pane key={pane.id} active={visible}>
         <SessionTerminal
-          tabId={tab.id}
+          paneId={pane.id}
           session={session}
           cwd={cwd}
-          active={active}
+          active={visible}
           onStatus={onStatus}
-          onOpenPath={openPath}
+          onOpenPath={(path) => openPath(cwd, path)}
         />
       </Pane>
     );
@@ -97,10 +103,10 @@ function Pane({ active, children }: { active: boolean; children: React.ReactNode
   );
 }
 
-const DARK_SCHEME = window.matchMedia("(prefers-color-scheme: dark)");
+const DARK_SCHEME = window.matchMedia('(prefers-color-scheme: dark)');
 
 type SessionProps = {
-  tabId: string;
+  paneId: string;
   session: Session;
   cwd: string;
   active: boolean;
@@ -109,7 +115,7 @@ type SessionProps = {
 };
 
 /** Resolves whether the provider already holds a transcript before the first spawn. */
-function SessionTerminal({ tabId, session, cwd, active, onStatus, onOpenPath }: SessionProps) {
+function SessionTerminal({ paneId, session, cwd, active, onStatus, onOpenPath }: SessionProps) {
   const [command, setCommand] = useState<string[] | null>(null);
   const { onBell, onActivity, onExit } = useSessionActivity(session, active, onStatus);
 
@@ -120,7 +126,7 @@ function SessionTerminal({ tabId, session, cwd, active, onStatus, onOpenPath }: 
       .catch(() => false)
       .then((resume) => {
         if (cancelled) return;
-        const theme = DARK_SCHEME.matches ? "dark" : "light";
+        const theme = DARK_SCHEME.matches ? 'dark' : 'light';
         setCommand(sessionCommand(session, { resume, theme }));
       });
     return () => {
@@ -133,7 +139,7 @@ function SessionTerminal({ tabId, session, cwd, active, onStatus, onOpenPath }: 
   if (!command) return null;
   return (
     <TerminalView
-      id={tabId}
+      id={paneId}
       cwd={cwd}
       command={command}
       active={active}

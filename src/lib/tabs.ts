@@ -124,3 +124,27 @@ export function tabTitle(tab: Tab, sessions: Session[]): string {
   if (tab.kind === "file") return tab.relative.split("/").pop() ?? tab.relative;
   return sessions.find((s) => s.id === tab.sessionId)?.name ?? "Untitled";
 }
+
+/** Every workspace whose tabs this window has restored, not just the one on screen. */
+export type TabRegistry = Record<string, TabState>;
+
+/**
+ * A pane outlives the workspace switch that hides it, so two workspaces can
+ * hold a tab of the same id — `stub:terminal` does — and the pty behind it is
+ * keyed by this, not by the tab.
+ */
+export const paneId = (workspaceId: string, tabId: string) => `${workspaceId}/${tabId}`;
+
+export type Pane = { id: string; workspaceId: string; tab: Tab; visible: boolean };
+
+/** Every open tab of every restored workspace. Only one of them is on screen. */
+export function panesOf(registry: TabRegistry, activeWorkspaceId: string | null): Pane[] {
+  return Object.entries(registry).flatMap(([workspaceId, state]) =>
+    state.tabs.map((tab) => ({
+      id: paneId(workspaceId, tab.id),
+      workspaceId,
+      tab,
+      visible: workspaceId === activeWorkspaceId && tab.id === state.activeId,
+    })),
+  );
+}
