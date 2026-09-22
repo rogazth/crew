@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
 import * as api from '../lib/api';
-import { transcriptPath } from '../lib/claudeStorage';
+import { claudeSessionId, transcriptPath } from '../lib/claudeStorage';
 import { homeDir } from '../lib/host';
 import type { Session } from '../lib/types';
 import { isDerivedSessionName } from '../lib/workspaces';
@@ -60,7 +60,7 @@ export function useSessionTitle(
 }
 
 function readTitle(session: Session, home: string, cwd: string): Promise<string | null> {
-  if (session.provider === 'claude') return api.claudeTitle(transcriptPath(home, cwd, session.id));
+  if (session.provider === 'claude') return api.claudeTitle(transcriptPath(home, cwd, claudeSessionId(session)));
   if (!session.providerSessionId) return Promise.resolve(null);
   return api.providerTitle(session.provider, session.providerSessionId);
 }

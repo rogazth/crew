@@ -1,3 +1,10 @@
+import type { Session } from "./types";
+
+/** `/clear` moves Claude to a new session, which Crew learns and binds. */
+export function claudeSessionId(session: Session): string {
+  return session.providerSessionId ?? session.id;
+}
+
 /**
  * Where Claude Code keeps a conversation. `--resume` fails when it is missing
  * and `--session-id` fails when it exists, so the launcher has to look first.

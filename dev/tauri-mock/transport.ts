@@ -174,6 +174,7 @@ const commands: Record<string, (args: Row) => unknown> = {
   agent_installed: ({ names }) => names,
   session_provider_create: () => "mock-chat",
   session_provider_discover: () => null,
+  session_claude_rebind: () => null,
   transcript_tail: ({ sessionId, limit, beforePos }) => {
     const row = thread(sessionId as string);
     const before = (beforePos as number | undefined) ?? row.blocks.length + 1;

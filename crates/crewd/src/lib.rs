@@ -684,6 +684,19 @@ fn discover_provider_session(
     Ok(Some(found))
 }
 
+/// The new id when Claude moved to another session since the last look.
+fn rebind_claude_session(store: &Store, id: String) -> Result<Option<String>, String> {
+    let Some(found) = provider_session::claude_bound(&id) else {
+        return Ok(None);
+    };
+    let row = session::get(store, id.clone())?.ok_or("Session not found")?;
+    if found == row.provider_session_id.unwrap_or_else(|| id.clone()) {
+        return Ok(None);
+    }
+    session::set_provider_session(store, id, found.clone())?;
+    Ok(Some(found))
+}
+
 async fn block<T: Send + 'static>(
     work: impl FnOnce() -> Result<T, String> + Send + 'static,
 ) -> Result<T, String> {
@@ -858,6 +871,11 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
             let ProviderDiscover { id, cwd, since } = parse(params)?;
             let store = hosts.store.clone();
             json(block(move || discover_provider_session(&store, id, &cwd, since)).await?)
+        }
+        "session_claude_rebind" => {
+            let Id { id } = parse(params)?;
+            let store = hosts.store.clone();
+            json(block(move || rebind_claude_session(&store, id)).await?)
         }
         "session_mark_read" => {
             let Id { id } = parse(params)?;

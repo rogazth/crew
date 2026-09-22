@@ -165,6 +165,10 @@ export const createProviderSession = (id: string): Promise<string> =>
   client.request("session_provider_create", { id });
 
 /** codex, opencode: the session they started in `cwd` since `since`, bound once found. */
+/** Claude's new session id when `/clear` moved it since the last look. */
+export const rebindClaudeSession = (id: string): Promise<string | null> =>
+  client.request("session_claude_rebind", { id });
+
 export const discoverProviderSession = (id: string, cwd: string, since: number): Promise<string | null> =>
   client.request("session_provider_discover", { id, cwd, since });
 

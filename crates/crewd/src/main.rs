@@ -28,6 +28,10 @@ fn main() -> ExitCode {
 
 fn run(args: &[String]) -> Result<(), String> {
     let dir = data_dir(args);
+    // Set before any thread starts; every terminal inherits it.
+    let bind = dir.join("claude-bind");
+    std::fs::create_dir_all(&bind).map_err(|e| format!("{}: {e}", bind.display()))?;
+    std::env::set_var(crew_core::provider_session::CLAUDE_BIND_ENV, &bind);
     crew_core::shell_path::prewarm();
     let pty = PtyHost::new();
     let agents = AgentHost::new();

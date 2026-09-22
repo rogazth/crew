@@ -59,6 +59,26 @@ fn is_chat_id(id: &str) -> bool {
     !id.is_empty() && id.len() <= 64 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
 }
 
+/// Claude starts a new session on `/clear` without a word to its terminal. The
+/// SessionStart hook Crew passes it drops the hook's stdin in this folder, one
+/// file per Crew session, and that record is the only place the new id shows.
+pub const CLAUDE_BIND_ENV: &str = "CREW_CLAUDE_BIND_DIR";
+
+/// The Claude session the hook last reported for Crew session `crew_id`.
+pub fn claude_bound(crew_id: &str) -> Option<String> {
+    if !is_chat_id(crew_id) {
+        return None;
+    }
+    let dir = PathBuf::from(std::env::var_os(CLAUDE_BIND_ENV)?);
+    parse_claude_bind(&std::fs::read_to_string(dir.join(format!("{crew_id}.json"))).ok()?)
+}
+
+fn parse_claude_bind(record: &str) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_str(record).ok()?;
+    let id = value.get("session_id")?.as_str()?;
+    is_chat_id(id).then(|| id.to_string())
+}
+
 /// The session a CLI that names its own sessions started in `cwd` at or after
 /// `since_ms`, skipping ids another Crew session already holds. Codex and
 /// opencode only write a session once the first message is sent, so callers
@@ -449,6 +469,14 @@ mod tests {
         assert!(!cursor_has_conversation(&root, "opened"));
         assert!(!cursor_has_conversation(&root, "reserved"));
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn claude_bind_reads_the_hook_payload() {
+        let payload = r#"{"session_id":"60eb4dd5-1c2a","transcript_path":"/t.jsonl","source":"clear"}"#;
+        assert_eq!(parse_claude_bind(payload).as_deref(), Some("60eb4dd5-1c2a"));
+        assert_eq!(parse_claude_bind(r#"{"session_id":"../x"}"#), None);
+        assert_eq!(parse_claude_bind(r#"{"session_id":"60eb"#), None);
     }
 
     #[test]

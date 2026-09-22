@@ -23,13 +23,26 @@ const argv = (patch: Partial<Session>, resume = false) =>
   sessionCommand({ ...base, ...patch }, { resume, theme: "dark" });
 
 describe("sessionCommand", () => {
+  const settings = (a: string[]) => JSON.parse(a[a.indexOf("--settings") + 1] ?? "");
+
   it("leaves the model to Claude's own config when none is picked", () => {
-    expect(argv({})).toEqual(["claude", "--settings", '{"theme":"dark"}', "--session-id", "crew-1"]);
+    expect(argv({}).slice(3)).toEqual(["--session-id", "crew-1"]);
     expect(argv({ model: "claude-opus-5-5" })).toContain("--model");
   });
 
-  it("resumes Claude by Crew's own id", () => {
-    expect(argv({}, true)).toEqual(["claude", "--settings", '{"theme":"dark"}', "--resume", "crew-1"]);
+  it("resumes Claude by Crew's own id until a /clear moves it", () => {
+    expect(argv({}, true).slice(3)).toEqual(["--resume", "crew-1"]);
+    expect(argv({ providerSessionId: "cleared" }, true).slice(3)).toEqual(["--resume", "cleared"]);
+    expect(argv({ providerSessionId: "cleared" }).slice(3)).toEqual(["--session-id", "cleared"]);
+  });
+
+  it("has Claude report every session it moves to, silently", () => {
+    const { theme, hooks } = settings(argv({}));
+    expect(theme).toBe("dark");
+    const [command] = hooks.SessionStart[0].hooks;
+    expect(command.type).toBe("command");
+    expect(command.command).toContain('cat > "$CREW_CLAUDE_BIND_DIR/crew-1.json"');
+    expect(hooks.SessionStart[0].matcher).toBeUndefined();
   });
 
   it("resumes the others by the id their CLI handed out", () => {
