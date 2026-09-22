@@ -154,8 +154,6 @@ const commands: Record<string, (args: Row) => unknown> = {
   read_text_file: () => "export const answer = 42;\n",
   write_text_file: () => undefined,
   path_exists: () => false,
-  claude_title: () => null,
-  provider_title: () => null,
   read_file_base64: () => ({ mime: "image/png", data: MOCK_PNG }),
   write_temp_file: () => "/tmp/crew/mock.png",
   pty_spawn: ({ id }) => {
@@ -175,6 +173,7 @@ const commands: Record<string, (args: Row) => unknown> = {
   session_provider_create: () => "mock-chat",
   session_provider_discover: () => null,
   session_claude_rebind: () => null,
+  session_sync_title: () => null,
   transcript_tail: ({ sessionId, limit, beforePos }) => {
     const row = thread(sessionId as string);
     const before = (beforePos as number | undefined) ?? row.blocks.length + 1;

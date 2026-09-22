@@ -21,6 +21,22 @@ pub fn read(path: &str) -> Option<String> {
     Some(scan(&String::from_utf8_lossy(&bytes), clipped)).flatten()
 }
 
+/// Where Claude Code keeps a conversation, observed from ~/.claude/projects.
+/// Claude is JavaScript and replaces each UTF-16 unit, so a character outside
+/// the BMP becomes two dashes.
+pub fn transcript_path(cwd: &str, session_id: &str) -> Option<String> {
+    let home = std::env::var("HOME").ok().filter(|h| !h.is_empty())?;
+    let mut slug = String::with_capacity(cwd.len());
+    for c in cwd.chars() {
+        if c.is_ascii_alphanumeric() {
+            slug.push(c);
+        } else {
+            slug.extend(std::iter::repeat_n('-', c.len_utf16()));
+        }
+    }
+    Some(format!("{}/.claude/projects/{slug}/{session_id}.jsonl", home.trim_end_matches('/')))
+}
+
 fn scan(tail: &str, clipped: bool) -> Option<String> {
     let mut lines = tail.lines();
     // The seek lands inside a record, and half a line is not parseable JSON.
@@ -52,7 +68,15 @@ fn text(record: &Value, key: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::scan;
+    use super::{scan, transcript_path};
+
+    #[test]
+    fn transcript_slug_matches_claude() {
+        let path = transcript_path("/Users/me/my repo.v2", "abc").unwrap();
+        assert!(path.ends_with("/.claude/projects/-Users-me-my-repo-v2/abc.jsonl"), "{path}");
+        let emoji = transcript_path("/a😀", "abc").unwrap();
+        assert!(emoji.ends_with("/-a--/abc.jsonl"), "{emoji}");
+    }
 
     #[test]
     fn a_rename_outranks_the_generated_name() {

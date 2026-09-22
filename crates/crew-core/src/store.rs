@@ -249,6 +249,13 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
             }
         }
     }
+    if current < 14 {
+        conn.execute_batch("ALTER TABLE sessions ADD COLUMN provider_title TEXT;")?;
+        conn.execute(
+            "INSERT INTO schema_migrations (version, applied_at) VALUES (14, ?1)",
+            params![now_millis()],
+        )?;
+    }
     Ok(())
 }
 

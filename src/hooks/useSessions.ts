@@ -117,6 +117,12 @@ export function useSessions(workspaceId: string | null) {
     [patchSession],
   );
 
+  /** The daemon already stored it; this only catches the list up. */
+  const adoptName = useCallback(
+    (id: string, name: string) => patchSession(id, (session) => ({ ...session, name })),
+    [patchSession],
+  );
+
   const reorder = useCallback(
     (ids: string[]) => {
       if (ids.length === 0 || !workspaceId) return;
@@ -168,5 +174,5 @@ export function useSessions(workspaceId: string | null) {
   }, []);
 
   const sessions = (workspaceId ? registry[workspaceId] : undefined) ?? NONE;
-  return { sessions, all, create, update, rename, remove, reorder, setStatus, dropWorkspace };
+  return { sessions, all, create, update, rename, adoptName, remove, reorder, setStatus, dropWorkspace };
 }

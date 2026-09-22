@@ -150,11 +150,9 @@ export const writeTextFile = (path: string, contents: string): Promise<void> =>
 export const pathExists = (path: string): Promise<boolean> => client.request("path_exists", { path });
 
 /** The name Claude Code gave the session behind this transcript, if it named it. */
-export const claudeTitle = (path: string): Promise<string | null> =>
-  client.request("claude_title", { path });
-
-export const providerTitle = (provider: string, id: string): Promise<string | null> =>
-  client.request("provider_title", { provider, id });
+/** The provider's new title for the session, once adopted as its name. */
+export const syncSessionTitle = (id: string): Promise<string | null> =>
+  client.request("session_sync_title", { id });
 
 /** The subset of `names` found on the user's PATH. */
 export const installedBinaries = (names: string[]): Promise<string[]> =>

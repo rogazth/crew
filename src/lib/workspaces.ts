@@ -51,11 +51,6 @@ export function filterSessions(sessions: Session[], query: string): Session[] {
   return scored.map((entry) => entry.session);
 }
 
-/** Whether a name is still one `nextSessionName` derived and nobody has replaced. */
-export function isDerivedSessionName(name: string, base: string): boolean {
-  const suffix = name.startsWith(`${base} `) ? name.slice(base.length + 1) : null;
-  return name === base || (suffix !== null && /^\d+$/.test(suffix));
-}
 
 /** Sessions open without prompting, so the name is derived: claude, claude 2, … */
 export function nextSessionName(sessions: Session[], base: string): string {

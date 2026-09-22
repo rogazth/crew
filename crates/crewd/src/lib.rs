@@ -6,7 +6,6 @@ use std::time::Duration;
 
 use crew_core::agent::{AgentEvents, AgentHost};
 use crew_core::bridge::{Bridge, ToolHost};
-use crew_core::claude_title;
 use crew_core::files;
 use crew_core::messages;
 use crew_core::provider_session;
@@ -19,7 +18,7 @@ use crew_core::transcript::TranscriptEvents;
 use crew_core::turns::TurnHost;
 use crew_core::workspace;
 use crew_protocol::{
-    self as proto, Auth, Cwd, DaemonInfo, Id, IdName, IdStatus, Ids, Key, KeyValue, Name, NamePath, Names, ProviderDiscover, ProviderTitle,
+    self as proto, Auth, Cwd, DaemonInfo, Id, IdName, IdStatus, Ids, Key, KeyValue, Name, NamePath, Names, ProviderDiscover,
     OptionalId, PathArg, PathContents, PtyAck, PtyAttach, PtyAttached, PtyKill, PtyResize, PtySpawn, PtyWrite,
     Request, RoutineRunNow, RoutineUpsert, SessionCreate, SessionCreated, SessionId, SessionUpdate, TempFile,
     SearchQuery, TranscriptApply, TranscriptTail, TurnAnswer, TurnRespond,
@@ -877,6 +876,11 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
             let store = hosts.store.clone();
             json(block(move || rebind_claude_session(&store, id)).await?)
         }
+        "session_sync_title" => {
+            let Id { id } = parse(params)?;
+            let store = hosts.store.clone();
+            json(block(move || session::sync_title(&store, id)).await?)
+        }
         "session_mark_read" => {
             let Id { id } = parse(params)?;
             let store = hosts.store.clone();
@@ -954,14 +958,6 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
         "path_exists" => {
             let PathArg { path } = parse(params)?;
             Ok(Value::from(files::exists(&path)))
-        }
-        "claude_title" => {
-            let PathArg { path } = parse(params)?;
-            json(block(move || Ok::<_, String>(claude_title::read(&path))).await?)
-        }
-        "provider_title" => {
-            let ProviderTitle { provider, id } = parse(params)?;
-            json(block(move || Ok::<_, String>(provider_session::title(&provider, &id))).await?)
         }
         "read_file_base64" => {
             let PathArg { path } = parse(params)?;

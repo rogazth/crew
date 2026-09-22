@@ -53,12 +53,13 @@ export function App() {
     create,
     update,
     rename,
+    adoptName,
     remove,
     reorder,
     setStatus,
     dropWorkspace: forgetSessions,
   } = useSessions(active?.id ?? null);
-  useSessionTitle(sessions, active?.path ?? null, rename);
+  useSessionTitle(sessions, adoptName);
   const tabs = useTabs(active?.id ?? null);
   const files = useProjectFiles(active?.path ?? null);
 

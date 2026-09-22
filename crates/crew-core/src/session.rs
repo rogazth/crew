@@ -1,6 +1,7 @@
 use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
+use crate::claude_title;
 use crate::provider_session;
 use crate::store::{now_millis, set_order, Store};
 
@@ -179,7 +180,8 @@ pub fn update(
             "UPDATE sessions
              SET name = ?2, provider = ?3, model = ?4, description = ?5,
                  notifications = ?6, updated_at = ?7, autonomy = ?8,
-                 provider_session_id = CASE WHEN provider = ?3 THEN provider_session_id END
+                 provider_session_id = CASE WHEN provider = ?3 THEN provider_session_id END,
+                 provider_title = CASE WHEN provider = ?3 THEN provider_title END
              WHERE id = ?1",
             params![id, name, provider, model, description, notifications, now_millis(), autonomy],
         )
@@ -207,6 +209,66 @@ pub fn rename(store: &Store, id: String, name: String) -> Result<(), String> {
         )
     })?;
     Ok(())
+}
+
+/// Adopts the name the provider gave the session each time it changes: its
+/// first title, a `/rename`, a fresh one after `/clear`. A name typed in Crew
+/// stands until the provider comes up with another. Returns the adopted name.
+pub fn sync_title(store: &Store, id: String) -> Result<Option<String>, String> {
+    let row = get(store, id)?.ok_or("Session not found")?;
+    if row.kind != "terminal" {
+        return Ok(None);
+    }
+    let Some(workspace) = crate::workspace::get(store, row.workspace_id.clone())? else {
+        return Ok(None);
+    };
+    match provider_title(&row, &workspace.path) {
+        Some(title) => adopt_title(store, &row, title),
+        None => Ok(None),
+    }
+}
+
+fn provider_title(row: &Session, cwd: &str) -> Option<String> {
+    let bound = row.provider_session_id.as_deref();
+    match row.provider.as_str() {
+        "claude" => claude_title::read(&claude_title::transcript_path(cwd, bound.unwrap_or(&row.id))?),
+        other => provider_session::title(other, bound?),
+    }
+}
+
+fn adopt_title(store: &Store, row: &Session, title: String) -> Result<Option<String>, String> {
+    let last: Option<String> = store.with(|conn| {
+        conn.prepare_cached("SELECT provider_title FROM sessions WHERE id = ?1")?
+            .query_row(params![row.id], |r| r.get(0))
+    })?;
+    if last.as_deref() == Some(title.as_str()) {
+        return Ok(None);
+    }
+    // With nothing seen yet, a name other than the placeholder may predate the
+    // tracking and be one the user typed.
+    let adopt = (last.is_some() || is_placeholder_name(&row.name, &row.provider)) && row.name != title;
+    store.with(|conn| {
+        if adopt {
+            conn.execute(
+                "UPDATE sessions SET provider_title = ?2, name = ?2, updated_at = ?3 WHERE id = ?1",
+                params![row.id, title, now_millis()],
+            )
+        } else {
+            conn.execute("UPDATE sessions SET provider_title = ?2 WHERE id = ?1", params![row.id, title])
+        }
+    })?;
+    Ok(adopt.then_some(title))
+}
+
+/// `claude`, `claude 2`, …: what Crew names a session before its provider does.
+fn is_placeholder_name(name: &str, provider: &str) -> bool {
+    match name.strip_prefix(provider) {
+        Some("") => true,
+        Some(rest) => rest
+            .strip_prefix(' ')
+            .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit())),
+        None => false,
+    }
 }
 
 pub fn delete(store: &Store, id: String) -> Result<(), String> {
@@ -366,6 +428,47 @@ mod tests {
             "".into(),
             autonomy.into(),
         )
+    }
+
+    fn adopt(store: &Store, id: &str, title: &str) -> Option<String> {
+        let row = get(store, id.into()).expect("get").expect("row");
+        adopt_title(store, &row, title.into()).expect("adopt")
+    }
+
+    fn name_of(store: &Store, id: &str) -> String {
+        get(store, id.into()).expect("get").expect("row").name
+    }
+
+    #[test]
+    fn each_new_provider_title_is_adopted() {
+        let (store, workspace) = world();
+        let s = terminal(&store, &workspace, "claude 3", "claude");
+        assert_eq!(adopt(&store, &s.id, "Generated").as_deref(), Some("Generated"));
+        assert_eq!(adopt(&store, &s.id, "Generated"), None);
+        rename(&store, s.id.clone(), "Mine".into()).expect("rename");
+        assert_eq!(adopt(&store, &s.id, "Generated"), None);
+        assert_eq!(name_of(&store, &s.id), "Mine");
+        assert_eq!(adopt(&store, &s.id, "Renamed in claude").as_deref(), Some("Renamed in claude"));
+    }
+
+    #[test]
+    fn a_name_from_before_tracking_stands_until_the_title_changes() {
+        let (store, workspace) = world();
+        let s = terminal(&store, &workspace, "Typed by hand", "claude");
+        assert_eq!(adopt(&store, &s.id, "Generated"), None);
+        assert_eq!(name_of(&store, &s.id), "Typed by hand");
+        assert_eq!(adopt(&store, &s.id, "After /clear").as_deref(), Some("After /clear"));
+    }
+
+    #[test]
+    fn placeholder_names_are_the_provider_and_a_number() {
+        assert!(is_placeholder_name("claude", "claude"));
+        assert!(is_placeholder_name("claude 13", "claude"));
+        assert!(!is_placeholder_name("claude 1a", "claude"));
+        assert!(!is_placeholder_name("claude 2 notes", "claude"));
+        assert!(!is_placeholder_name("claude ", "claude"));
+        assert!(!is_placeholder_name("claudette", "claude"));
+        assert!(!is_placeholder_name("codex 2", "claude"));
     }
 
     #[test]
