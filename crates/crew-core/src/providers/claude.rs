@@ -686,7 +686,7 @@ mod tests {
     use serde_json::json;
 
     /// The command Claude asked to run in capture 2 of
-    /// `docs/protocols/claude-permissions.jsonl`.
+    /// `crates/crew-core/tests/fixtures/protocols/claude-permissions.jsonl`.
     const CURL: &str = "curl -s -o /dev/null -w '%{http_code}' https://example.com";
     const CALL: &str = "toolu_01NXryc1w4bSyP5MGzDE8Hbe";
 

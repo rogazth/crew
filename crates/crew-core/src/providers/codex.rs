@@ -632,7 +632,7 @@ mod tests {
         );
     }
 
-    /// Both captures come from `docs/protocols/codex.jsonl`: an MCP call says
+    /// Both captures come from `crates/crew-core/tests/fixtures/protocols/codex.jsonl`: an MCP call says
     /// nothing until it answers.
     #[test]
     fn an_mcp_call_says_nothing_until_it_answers() {
