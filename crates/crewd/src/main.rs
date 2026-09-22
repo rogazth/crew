@@ -28,6 +28,7 @@ fn main() -> ExitCode {
 
 fn run(args: &[String]) -> Result<(), String> {
     let dir = data_dir(args);
+    crew_core::shell_path::prewarm();
     let pty = PtyHost::new();
     let agents = AgentHost::new();
     let bridge = Bridge::start(dir.clone())?;

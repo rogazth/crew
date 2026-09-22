@@ -9,6 +9,7 @@ use crew_core::bridge::{Bridge, ToolHost};
 use crew_core::claude_title;
 use crew_core::files;
 use crew_core::messages;
+use crew_core::provider_session;
 use crew_core::pty::{PtyEvents, PtyHost};
 use crew_core::routine;
 use crew_core::scheduler::Scheduler;
@@ -18,7 +19,7 @@ use crew_core::transcript::TranscriptEvents;
 use crew_core::turns::TurnHost;
 use crew_core::workspace;
 use crew_protocol::{
-    self as proto, Auth, Cwd, DaemonInfo, Id, IdName, IdStatus, Ids, Key, KeyValue, Name, NamePath,
+    self as proto, Auth, Cwd, DaemonInfo, Id, IdName, IdStatus, Ids, Key, KeyValue, Name, NamePath, Names, ProviderDiscover,
     OptionalId, PathArg, PathContents, PtyAck, PtyAttach, PtyAttached, PtyKill, PtyResize, PtySpawn, PtyWrite,
     Request, RoutineRunNow, RoutineUpsert, SessionCreate, SessionCreated, SessionId, SessionUpdate, TempFile,
     SearchQuery, TranscriptApply, TranscriptTail, TurnAnswer, TurnRespond,
@@ -648,6 +649,38 @@ async fn attach_pty(hosts: &Hosts, hub: &Arc<Hub>, client_id: u64, req_id: u32, 
     }
 }
 
+/// Providers that can hand out an id before the terminal starts get one now.
+fn bind_new_provider_session(store: &Store, id: String) -> Result<String, String> {
+    let row = session::get(store, id.clone())?.ok_or("Session not found")?;
+    if let Some(bound) = row.provider_session_id {
+        return Ok(bound);
+    }
+    let created = match row.provider.as_str() {
+        "cursor" => provider_session::cursor_create_chat()?,
+        other => return Err(format!("{other} does not create sessions ahead of time")),
+    };
+    session::set_provider_session(store, id, created.clone())?;
+    Ok(created)
+}
+
+fn discover_provider_session(
+    store: &Store,
+    id: String,
+    cwd: &str,
+    since: i64,
+) -> Result<Option<String>, String> {
+    let row = session::get(store, id.clone())?.ok_or("Session not found")?;
+    if row.provider_session_id.is_some() {
+        return Ok(row.provider_session_id);
+    }
+    let claimed = session::claimed_provider_sessions(store, &id)?;
+    let Some(found) = provider_session::discover(&row.provider, cwd, since, &claimed) else {
+        return Ok(None);
+    };
+    session::set_provider_session(store, id, found.clone())?;
+    Ok(Some(found))
+}
+
 async fn block<T: Send + 'static>(
     work: impl FnOnce() -> Result<T, String> + Send + 'static,
 ) -> Result<T, String> {
@@ -808,6 +841,16 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
             block(move || session::set_status(&store, id, status)).await?;
             Ok(Value::Null)
         }
+        "session_provider_create" => {
+            let Id { id } = parse(params)?;
+            let store = hosts.store.clone();
+            json(block(move || bind_new_provider_session(&store, id)).await?)
+        }
+        "session_provider_discover" => {
+            let ProviderDiscover { id, cwd, since } = parse(params)?;
+            let store = hosts.store.clone();
+            json(block(move || discover_provider_session(&store, id, &cwd, since)).await?)
+        }
         "session_mark_read" => {
             let Id { id } = parse(params)?;
             let store = hosts.store.clone();
@@ -902,6 +945,10 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
         "agent_resolve" => {
             let Name { name } = parse(params)?;
             json(block(move || AgentHost::resolve(&name)).await?)
+        }
+        "agent_installed" => {
+            let Names { names } = parse(params)?;
+            json(block(move || Ok::<_, String>(AgentHost::installed(names))).await?)
         }
         "turn_start" => {
             let p: TurnStart = parse(params)?;

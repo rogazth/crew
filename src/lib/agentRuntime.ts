@@ -232,6 +232,11 @@ function finishWaiters(id: string, ok: boolean) {
   for (const resolve of list) resolve(ok);
 }
 
+/** A terminal learned which provider session it is running. */
+export function bindProviderSession(id: string, providerSessionId: string): void {
+  patch(id, { providerSessionId });
+}
+
 function patch(id: string, change: SessionPatch): void {
   for (const listener of patchListeners) listener(id, change);
 }

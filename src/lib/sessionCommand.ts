@@ -4,7 +4,7 @@ import type { Session } from "./types";
 export type ClaudeTheme = "light" | "dark";
 
 type Options = {
-  /** The provider already has a transcript for this id. */
+  /** Claude already has a transcript for this id. Other providers resume by `providerSessionId`. */
   resume: boolean;
   theme: ClaudeTheme;
 };
@@ -18,9 +18,17 @@ type Options = {
  * the theme is forced to match the app.
  */
 export function sessionCommand(session: Session, { resume, theme }: Options): string[] {
-  const binary = providerOf(session.provider)?.binary ?? session.provider;
-  if (session.provider !== "claude") return [binary];
-  const argv = [binary, "--settings", JSON.stringify({ theme })];
+  const provider = providerOf(session.provider);
+  if (!provider) return [session.provider];
+  if (provider.binding !== "own") {
+    const bound = session.providerSessionId;
+    return [
+      provider.binary,
+      ...(bound ? provider.resumeArgs(bound) : []),
+      ...(session.model ? [provider.modelFlag, session.model] : []),
+    ];
+  }
+  const argv = [provider.binary, "--settings", JSON.stringify({ theme })];
   if (resume) return [...argv, "--resume", session.id];
   argv.push("--session-id", session.id);
   if (session.model) argv.push("--model", session.model);

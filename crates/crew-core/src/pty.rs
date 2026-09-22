@@ -527,23 +527,8 @@ fn default_shell() -> (String, Vec<String>) {
     (shell, args)
 }
 
-/// The app inherits launchd's PATH, not the user's shell PATH, so the places
-/// agent CLIs install themselves go in front.
 fn apply_path(cmd: &mut std::process::Command) {
-    let mut parts: Vec<String> = Vec::new();
-    if let Some(home) = home_dir() {
-        parts.push(format!("{home}/.local/bin"));
-        parts.push(format!("{home}/.cargo/bin"));
-        parts.push(format!("{home}/.npm-global/bin"));
-    }
-    parts.push("/opt/homebrew/bin".into());
-    parts.push("/usr/local/bin".into());
-    parts.push("/usr/bin".into());
-    parts.push("/bin".into());
-    if let Ok(existing) = std::env::var("PATH") {
-        parts.push(existing);
-    }
-    cmd.env("PATH", parts.join(":"));
+    cmd.env("PATH", crate::shell_path::joined());
 }
 
 /// The child was started with setsid(), so its pid is also its process group.

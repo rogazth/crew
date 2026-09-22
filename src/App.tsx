@@ -18,13 +18,14 @@ import { useTabs } from "./hooks/useTabs";
 import { AgentThemeProvider } from "./hooks/useAgentTheme";
 import { TerminalPrefsProvider } from "./hooks/useTerminalPrefs";
 import { useWorkspaces } from "./hooks/useWorkspaces";
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./lib/providers";
+import { DEFAULT_MODEL, type ProviderId } from "./lib/providers";
 import { fileTabId, sessionTabId, stubTabId } from "./lib/tabs";
 import type { ProjectFile, Session, StubKind } from "./lib/types";
 import { SETTINGS_DEFAULT } from "./lib/settings";
 import { nextSessionName } from "./lib/workspaces";
 import { Pages } from "./surfaces/Pages";
 import { usePages } from "./hooks/usePages";
+import { useDefaultAgent } from "./hooks/useDefaultAgent";
 import { boot } from "./lib/agentRuntime";
 import { focus as focusBlock } from "./lib/transcript";
 import { WorkspacePanes } from "./surfaces/WorkspacePanes";
@@ -144,17 +145,23 @@ export function App() {
     [closePage, tabs],
   );
 
+  const { effective: defaultAgent } = useDefaultAgent();
+
   // Sessions open straight away; the name is derived, never prompted.
-  const newSession = useCallback(async () => {
-    const session = await create("terminal", {
-      name: nextSessionName(sessions, DEFAULT_PROVIDER),
-      provider: DEFAULT_PROVIDER,
-      model: DEFAULT_MODEL,
-      description: "",
-      autonomy: "ask",
-    });
-    if (session) openSession(session);
-  }, [create, openSession, sessions]);
+  const newSession = useCallback(
+    async (provider: ProviderId = defaultAgent.provider) => {
+      const model = provider === defaultAgent.provider ? defaultAgent.model : DEFAULT_MODEL;
+      const session = await create("terminal", {
+        name: nextSessionName(sessions, provider),
+        provider,
+        model,
+        description: "",
+        autonomy: "ask",
+      });
+      if (session) openSession(session);
+    },
+    [create, defaultAgent, openSession, sessions],
+  );
 
   const newAgent = useCallback(() => setSheet({ session: null }), []);
 
@@ -181,7 +188,7 @@ export function App() {
     (item: Launch) => {
       if (item.kind === "stub") openStub(item.stub, item.title);
       if (item.kind === "new-agent") newAgent();
-      if (item.kind === "new-session") void newSession();
+      if (item.kind === "new-session") void newSession(item.provider);
       if (item.kind === "session") openSession(item.session);
     },
     [newAgent, newSession, openSession, openStub],
@@ -291,7 +298,7 @@ export function App() {
             routinesOpen: isRoutines,
             onSelect: openSession,
             onNewAgent: newAgent,
-            onNewSession: newSession,
+            onNewSession: () => void newSession(),
             onOpenRoutines: () => openRoutines(),
             onOpenSettings: () => openSettings(),
             onEdit: (session) => setSheet({ session }),

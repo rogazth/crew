@@ -1,8 +1,12 @@
 import { Select } from "@cloudflare/kumo";
+import { ModelPicker } from "../chrome/ModelPicker";
+import { ProviderIcon } from "../chrome/ProviderIcon";
 import { SettingsRow, SettingsSection } from "../chrome/SettingsRow";
 import { useAgentTheme } from "../hooks/useAgentTheme";
+import { useDefaultAgent } from "../hooks/useDefaultAgent";
 import { AGENT_THEMES, type AgentThemeId } from "../lib/agentTheme";
 import { COMMANDS, COMMAND_IDS, commandKeys } from "../lib/commands";
+import { PROVIDERS } from "../lib/providers";
 import { settingsSection, type SettingsSectionId } from "../lib/settings";
 import { TerminalSettings } from "./TerminalSettings";
 
@@ -18,7 +22,11 @@ export function SettingsView({ section }: { section: SettingsSectionId }) {
           {section === "appearance" && <Appearance />}
           {section === "keybindings" && <Keybindings />}
           {section === "terminal" && <TerminalSettings />}
-          {section !== "appearance" && section !== "keybindings" && section !== "terminal" && (
+          {section === "providers" && <Providers />}
+          {section !== "appearance" &&
+            section !== "keybindings" &&
+            section !== "terminal" &&
+            section !== "providers" && (
             <Pending label={meta.label} />
           )}
         </div>
@@ -42,6 +50,41 @@ function Appearance() {
         />
       </SettingsRow>
     </SettingsSection>
+  );
+}
+
+function Providers() {
+  const { preferred, installed, update } = useDefaultAgent();
+  return (
+    <>
+      <SettingsSection title="New sessions">
+        <SettingsRow
+          label="Default agent"
+          description={`What ${commandKeys("new-session")} opens. Default runs the model the CLI is configured with.`}
+        >
+          <div className="w-72">
+            <ModelPicker
+              provider={preferred.provider}
+              model={preferred.model}
+              onChange={(provider, model) => update({ provider, model })}
+            />
+          </div>
+        </SettingsRow>
+      </SettingsSection>
+      <SettingsSection title="Installed">
+        {PROVIDERS.map((provider) => {
+          const found = installed.includes(provider);
+          return (
+            <SettingsRow key={provider.id} label={provider.label} description={provider.binary}>
+              <ProviderIcon provider={provider.id} className="size-4" />
+              <span className={found ? "text-kumo-default" : "text-kumo-subtle"}>
+                {found ? "Installed" : "Not found"}
+              </span>
+            </SettingsRow>
+          );
+        })}
+      </SettingsSection>
+    </>
   );
 }
 

@@ -75,6 +75,8 @@ export type Name = { name: string, };
 
 export type NamePath = { name: string, path: string, };
 
+export type Names = { names: Array<string>, };
+
 export type OptionalId = { id: string | null, };
 
 export type PathArg = { path: string, };
@@ -82,6 +84,11 @@ export type PathArg = { path: string, };
 export type PathContents = { path: string, contents: string, };
 
 export type ProjectFile = { name: string, path: string, relative: string, };
+
+/**
+ * Look for the provider session a terminal started in `cwd` since `since`.
+ */
+export type ProviderDiscover = { id: string, cwd: string, since: number, };
 
 export type PtyAck = { id: string, processed: number, };
 

@@ -5,6 +5,8 @@ import { useSessionActivity } from '../hooks/useSessionActivity';
 import { useTerminalPrefs } from '../hooks/useTerminalPrefs';
 import * as api from '../lib/api';
 import { transcriptPath } from '../lib/claudeStorage';
+import { bindProviderSession } from '../lib/agentRuntime';
+import { providerOf } from '../lib/providers';
 import { sessionCommand } from '../lib/sessionCommand';
 import { isTerminalTab, relativeTo } from '../lib/tabs';
 import { activeTerminal } from '../lib/terminalFocus';
@@ -104,6 +106,27 @@ function Pane({ active, children }: { active: boolean; children: React.ReactNode
 }
 
 const DARK_SCHEME = window.matchMedia('(prefers-color-scheme: dark)');
+/** codex and opencode write their session only once the first message is sent. */
+const DISCOVER_MS = 3000;
+
+async function launchCommand(session: Session, cwd: string): Promise<string[]> {
+  const theme = DARK_SCHEME.matches ? 'dark' : 'light';
+  const binding = providerOf(session.provider)?.binding;
+  if (binding === 'own') {
+    const resume = await homeDir()
+      .then((home) => api.pathExists(transcriptPath(home, cwd, session.id)))
+      .catch(() => false);
+    return sessionCommand(session, { resume, theme });
+  }
+  if (binding === 'before' && !session.providerSessionId) {
+    const created = await api.createProviderSession(session.id).catch(() => null);
+    if (created) {
+      bindProviderSession(session.id, created);
+      return sessionCommand({ ...session, providerSessionId: created }, { resume: true, theme });
+    }
+  }
+  return sessionCommand(session, { resume: false, theme });
+}
 
 type SessionProps = {
   paneId: string;
@@ -114,27 +137,43 @@ type SessionProps = {
   onOpenPath: (path: string) => void;
 };
 
-/** Resolves whether the provider already holds a transcript before the first spawn. */
+/** Settles which provider session to resume before the first spawn, and learns it after when the CLI names its own. */
 function SessionTerminal({ paneId, session, cwd, active, onStatus, onOpenPath }: SessionProps) {
   const [command, setCommand] = useState<string[] | null>(null);
+  const [startedAt, setStartedAt] = useState(0);
   const { onBell, onActivity, onExit } = useSessionActivity(session, active, onStatus);
 
   useEffect(() => {
     let cancelled = false;
-    homeDir()
-      .then((home) => api.pathExists(transcriptPath(home, cwd, session.id)))
-      .catch(() => false)
-      .then((resume) => {
-        if (cancelled) return;
-        const theme = DARK_SCHEME.matches ? 'dark' : 'light';
-        setCommand(sessionCommand(session, { resume, theme }));
-      });
+    launchCommand(session, cwd).then((argv) => {
+      if (cancelled) return;
+      setStartedAt(Date.now());
+      setCommand(argv);
+    });
     return () => {
       cancelled = true;
     };
     // The session row changes on rename; the process is already running by then.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session.id, cwd]);
+
+  const learns = providerOf(session.provider)?.binding === 'after' && !session.providerSessionId;
+  useEffect(() => {
+    if (!learns || !startedAt) return;
+    let busy = false;
+    const timer = window.setInterval(() => {
+      if (busy) return;
+      busy = true;
+      api
+        .discoverProviderSession(session.id, cwd, startedAt)
+        .then((found) => found && bindProviderSession(session.id, found))
+        .catch(() => {})
+        .finally(() => {
+          busy = false;
+        });
+    }, DISCOVER_MS);
+    return () => window.clearInterval(timer);
+  }, [learns, startedAt, session.id, cwd]);
 
   if (!command) return null;
   return (

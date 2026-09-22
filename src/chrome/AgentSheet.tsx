@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Kbd } from "./Kbd";
 import { ModelPicker } from "./ModelPicker";
 import { ProviderIcon } from "./ProviderIcon";
+import { useDefaultAgent } from "../hooks/useDefaultAgent";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER, type ProviderId } from "../lib/providers";
 import type { Autonomy, Session } from "../lib/types";
 
@@ -56,6 +57,14 @@ export function AgentSheet({ session, existingNames, onNewRoutine, onSave, onClo
     if (closeTimer.current !== null) clearTimeout(closeTimer.current);
   }, []);
 
+  // Read when the sheet opens, not tracked: the CLI probe landing mid-edit
+  // must not wipe what was typed.
+  const { effective } = useDefaultAgent();
+  const fresh = useRef(effective);
+  useEffect(() => {
+    fresh.current = effective;
+  });
+
   useEffect(() => {
     setSubmitted(false);
     setDraft(
@@ -68,7 +77,7 @@ export function AgentSheet({ session, existingNames, onNewRoutine, onSave, onClo
             notifications: session.notifications,
             autonomy: session.autonomy,
           }
-        : EMPTY,
+        : { ...EMPTY, ...fresh.current },
     );
   }, [session]);
 

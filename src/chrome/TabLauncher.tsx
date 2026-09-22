@@ -6,12 +6,13 @@ import {
   PlusIcon,
   RobotIcon,
   TerminalWindowIcon,
-  type Icon,
 } from "@phosphor-icons/react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ProviderIcon } from "./ProviderIcon";
 import { StatusDot } from "./StatusDot";
+import { useDefaultAgent } from "../hooks/useDefaultAgent";
 import { commandKeys } from "../lib/commands";
+import type { ProviderDef, ProviderId } from "../lib/providers";
 import { fuzzyMatch } from "../lib/fuzzy";
 import type { Session, SessionStatus, StubKind } from "../lib/types";
 import { filterSessions } from "../lib/workspaces";
@@ -19,43 +20,54 @@ import { filterSessions } from "../lib/workspaces";
 export type Launch =
   | { kind: "stub"; stub: StubKind; title: string }
   | { kind: "new-agent" }
-  | { kind: "new-session" }
+  | { kind: "new-session"; provider?: ProviderId }
   | { kind: "session"; session: Session };
 
-type Action = { id: string; label: string; icon: Icon; launch: Launch };
+type Action = { id: string; label: string; icon: React.ReactNode; launch: Launch; hint?: string };
 
-const ACTIONS: Action[] = [
-  {
-    id: "terminal",
-    label: "Terminal",
-    icon: TerminalWindowIcon,
-    launch: { kind: "stub", stub: "terminal", title: "Terminal" },
-  },
-  { id: "new-agent", label: "New Agent", icon: RobotIcon, launch: { kind: "new-agent" } },
-  {
-    id: "new-session",
-    label: "New Session",
-    icon: PlusIcon,
-    launch: { kind: "new-session" },
-  },
+const ICON = "size-4 shrink-0 text-kumo-subtle";
+
+const TERMINAL: Action = {
+  id: "terminal",
+  label: "Terminal",
+  icon: <TerminalWindowIcon className={ICON} />,
+  launch: { kind: "stub", stub: "terminal", title: "Terminal" },
+};
+
+const NEW_AGENT: Action = {
+  id: "new-agent",
+  label: "New Agent",
+  icon: <RobotIcon className={ICON} />,
+  launch: { kind: "new-agent" },
+  hint: commandKeys("new-agent"),
+};
+
+const TRAILING: Action[] = [
   {
     id: "browser",
     label: "Browser",
-    icon: GlobeIcon,
+    icon: <GlobeIcon className={ICON} />,
     launch: { kind: "stub", stub: "browser", title: "Browser" },
   },
   {
     id: "sidechat",
     label: "New Side Chat",
-    icon: ChatCircleIcon,
+    icon: <ChatCircleIcon className={ICON} />,
     launch: { kind: "stub", stub: "sidechat", title: "Side Chat" },
   },
 ];
 
-const KEYS: Record<string, string> = {
-  "new-agent": commandKeys("new-agent"),
-  "new-session": commandKeys("new-session"),
-};
+/** One row per installed CLI, the ⌘N one first. */
+function sessionActions(installed: ProviderDef[], preferred: ProviderId): Action[] {
+  const ordered = [...installed].sort((a, b) => Number(b.id === preferred) - Number(a.id === preferred));
+  return ordered.map((provider) => ({
+    id: `new-session:${provider.id}`,
+    label: `New ${provider.label} Session`,
+    icon: <ProviderIcon provider={provider.id} className="size-4 shrink-0" />,
+    launch: { kind: "new-session", provider: provider.id },
+    ...(provider.id === preferred ? { hint: commandKeys("new-session") } : {}),
+  }));
+}
 
 type Props = {
   open: boolean;
@@ -70,10 +82,12 @@ export function TabLauncher({ open, onOpenChange, sessions, onLaunch }: Props) {
   const list = useRef<HTMLDivElement>(null);
   const [cursor, setCursor] = useState(0);
 
+  const { effective, installed } = useDefaultAgent(open);
   const actions = useMemo(() => {
-    if (!query.trim()) return ACTIONS;
-    return ACTIONS.filter((action) => fuzzyMatch(query, action.label));
-  }, [query]);
+    const all = [TERMINAL, NEW_AGENT, ...sessionActions(installed, effective.provider), ...TRAILING];
+    if (!query.trim()) return all;
+    return all.filter((action) => fuzzyMatch(query, action.label));
+  }, [query, installed, effective.provider]);
 
   // Empty query is the common case: offer what was touched last instead of nothing.
   const matches = useMemo(
@@ -160,9 +174,9 @@ export function TabLauncher({ open, onOpenChange, sessions, onLaunch }: Props) {
                   active={index === cursor}
                   onHover={() => setCursor(index)}
                   onPick={() => pick(action.launch)}
-                  icon={<action.icon className="size-4 shrink-0 text-kumo-subtle" />}
+                  icon={action.icon}
                   label={action.label}
-                  hint={KEYS[action.id]}
+                  hint={action.hint}
                 />
               ))}
 

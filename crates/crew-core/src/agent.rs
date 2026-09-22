@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
-use std::os::unix::fs::PermissionsExt;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
@@ -9,6 +8,8 @@ use std::thread;
 use std::time::Duration;
 
 use serde::Serialize;
+
+use crate::shell_path;
 
 const STDOUT_EVENT: &str = "agent-stdout";
 const STDERR_EVENT: &str = "agent-stderr";
@@ -160,7 +161,7 @@ impl AgentHost {
     /// Resolve `claude` the way a terminal would. Finder-launched apps inherit
     /// launchd's PATH, so Homebrew / `~/.local/bin` would otherwise look missing.
     pub fn resolve_claude() -> Result<AgentBinary, String> {
-        resolve_binary("claude")
+        shell_path::resolve("claude")
             .map(|path| AgentBinary {
                 path: path.to_string_lossy().into_owned(),
             })
@@ -174,11 +175,20 @@ impl AgentHost {
         if name.is_empty() || name.contains('/') {
             return Err(format!("Not a binary name: {name}"));
         }
-        resolve_binary(name)
+        shell_path::resolve(name)
             .map(|path| AgentBinary {
                 path: path.to_string_lossy().into_owned(),
             })
             .ok_or_else(|| format!("`{name}` was not found on your PATH."))
+    }
+
+    /// The names found on the search path. A filesystem probe, so it is cheap
+    /// enough to ask again and pick up a CLI installed mid-session.
+    pub fn installed(names: Vec<String>) -> Vec<String> {
+        names
+            .into_iter()
+            .filter(|name| !name.contains('/') && shell_path::resolve(name).is_some())
+            .collect()
     }
 
     pub fn spawn(
@@ -371,44 +381,8 @@ fn prepare_child(cmd: &mut Command) {
     }
 }
 
-fn search_dirs() -> Vec<PathBuf> {
-    let mut dirs: Vec<PathBuf> = Vec::new();
-    if let Some(home) = home_dir().map(PathBuf::from) {
-        dirs.push(home.join(".local/bin"));
-        dirs.push(home.join(".claude/local"));
-        dirs.push(home.join(".cargo/bin"));
-        dirs.push(home.join(".npm-global/bin"));
-    }
-    dirs.push(PathBuf::from("/opt/homebrew/bin"));
-    dirs.push(PathBuf::from("/usr/local/bin"));
-    dirs.push(PathBuf::from("/usr/bin"));
-    dirs.push(PathBuf::from("/bin"));
-    if let Ok(path) = std::env::var("PATH") {
-        dirs.extend(path.split(':').filter(|dir| !dir.is_empty()).map(PathBuf::from));
-    }
-    dirs
-}
-
 fn apply_path(cmd: &mut Command) {
-    let joined = search_dirs()
-        .iter()
-        .map(|dir| dir.to_string_lossy().into_owned())
-        .collect::<Vec<_>>()
-        .join(":");
-    cmd.env("PATH", joined);
-}
-
-fn resolve_binary(name: &str) -> Option<PathBuf> {
-    search_dirs()
-        .into_iter()
-        .map(|dir| dir.join(name))
-        .find(|path| is_executable(path))
-}
-
-fn is_executable(path: &Path) -> bool {
-    std::fs::metadata(path)
-        .map(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
-        .unwrap_or(false)
+    cmd.env("PATH", shell_path::joined());
 }
 
 fn home_dir() -> Option<String> {
@@ -449,6 +423,7 @@ fn kill_group(pid: u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::fs::PermissionsExt;
 
     struct Collect(Mutex<Vec<String>>);
 

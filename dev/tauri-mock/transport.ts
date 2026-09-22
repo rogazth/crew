@@ -169,6 +169,9 @@ const commands: Record<string, (args: Row) => unknown> = {
   pty_attach: () => ({ start: 0, emitted: 0 }),
   agent_resolve_claude: () => ({ path: "/mock/bin/claude" }),
   agent_resolve: ({ name }) => ({ path: `/mock/bin/${name}` }),
+  agent_installed: ({ names }) => names,
+  session_provider_create: () => "mock-chat",
+  session_provider_discover: () => null,
   transcript_tail: ({ sessionId, limit, beforePos }) => {
     const row = thread(sessionId as string);
     const before = (beforePos as number | undefined) ?? row.blocks.length + 1;

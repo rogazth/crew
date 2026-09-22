@@ -177,7 +177,8 @@ pub fn update(
         conn.execute(
             "UPDATE sessions
              SET name = ?2, provider = ?3, model = ?4, description = ?5,
-                 notifications = ?6, updated_at = ?7, autonomy = ?8
+                 notifications = ?6, updated_at = ?7, autonomy = ?8,
+                 provider_session_id = CASE WHEN provider = ?3 THEN provider_session_id END
              WHERE id = ?1",
             params![id, name, provider, model, description, notifications, now_millis(), autonomy],
         )
@@ -224,6 +225,18 @@ pub fn set_provider_session(
         .execute(params![id, provider_session_id, now_millis()])
     })?;
     Ok(())
+}
+
+/// Provider sessions some Crew session other than `except` is bound to.
+pub fn claimed_provider_sessions(store: &Store, except: &str) -> Result<Vec<String>, String> {
+    store.with(|conn| {
+        conn.prepare_cached(
+            "SELECT provider_session_id FROM sessions
+             WHERE provider_session_id IS NOT NULL AND id != ?1",
+        )?
+        .query_map(params![except], |row| row.get(0))?
+        .collect()
+    })
 }
 
 /// The runtime owns this; the UI only renders whatever the last writer left.
@@ -278,6 +291,24 @@ mod tests {
             "".into(),
             autonomy.into(),
         )
+    }
+
+    #[test]
+    fn switching_provider_drops_the_old_providers_session() {
+        let (store, workspace) = world();
+        let a = agent(&store, &workspace, "a", "ask").expect("a");
+        let b = agent(&store, &workspace, "b", "ask").expect("b");
+        set_provider_session(&store, a.id.clone(), "claude-1".into()).expect("bind");
+        set_provider_session(&store, b.id.clone(), "claude-2".into()).expect("bind");
+        assert_eq!(claimed_provider_sessions(&store, &a.id).expect("claimed"), vec!["claude-2"]);
+
+        let edit = |provider: &str| {
+            update(&store, a.id.clone(), "a".into(), provider.into(), "".into(), "".into(), true, "ask".into())
+                .expect("update");
+            get(&store, a.id.clone()).expect("get").expect("row").provider_session_id
+        };
+        assert_eq!(edit("claude").as_deref(), Some("claude-1"));
+        assert_eq!(edit("codex"), None);
     }
 
     #[test]

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Popover } from "@base-ui/react/popover";
 import { CaretDownIcon, CheckIcon } from "@phosphor-icons/react";
 import { ProviderIcon } from "./ProviderIcon";
+import { useInstalledProviders } from "../hooks/useInstalledProviders";
 import {
   PROVIDERS,
   modelLabel,
@@ -24,6 +25,9 @@ export function ModelPicker({ provider, model, trigger = "field", disabled = fal
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState<ProviderId>(provider as ProviderId);
   const chip = trigger === "chip";
+  const installed = useInstalledProviders(open);
+  // The session's own provider stays reachable even after its CLI is gone.
+  const tabs = PROVIDERS.filter((p) => p.id === provider || installed.includes(p));
 
   useEffect(() => setTab(provider as ProviderId), [provider, open]);
 
@@ -55,7 +59,7 @@ export function ModelPicker({ provider, model, trigger = "field", disabled = fal
             className={`${chip ? "w-[280px]" : "w-(--anchor-width)"} origin-(--transform-origin) overflow-hidden rounded-lg bg-kumo-control text-kumo-default shadow-lg ring ring-kumo-line outline-none transition-[opacity,scale] duration-100 data-starting-style:scale-95 data-starting-style:opacity-0 data-ending-style:scale-95 data-ending-style:opacity-0`}
           >
             <div role="tablist" className="flex border-b border-kumo-line">
-              {PROVIDERS.map((p) => (
+              {tabs.map((p) => (
                 <button
                   key={p.id}
                   type="button"

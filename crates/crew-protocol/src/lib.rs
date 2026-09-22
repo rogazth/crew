@@ -200,6 +200,12 @@ pub struct Name {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, TS)]
+#[ts(export, export_to = "../../../src/lib/protocol.ts")]
+pub struct Names {
+    pub names: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
 pub struct WorkspaceId {
@@ -251,6 +257,16 @@ pub struct IdStatus {
 pub struct IdBlocks {
     pub id: String,
     pub blocks_json: String,
+}
+
+/// Look for the provider session a terminal started in `cwd` since `since`.
+#[derive(Serialize, Deserialize, Clone, Debug, TS)]
+#[ts(export, export_to = "../../../src/lib/protocol.ts")]
+pub struct ProviderDiscover {
+    pub id: String,
+    pub cwd: String,
+    #[ts(type = "number")]
+    pub since: i64,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, TS)]

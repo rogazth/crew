@@ -149,6 +149,18 @@ export const pathExists = (path: string): Promise<boolean> => client.request("pa
 export const claudeTitle = (path: string): Promise<string | null> =>
   client.request("claude_title", { path });
 
+/** The subset of `names` found on the user's PATH. */
+export const installedBinaries = (names: string[]): Promise<string[]> =>
+  client.request("agent_installed", { names });
+
+/** cursor-agent: a chat created and bound before the terminal starts. */
+export const createProviderSession = (id: string): Promise<string> =>
+  client.request("session_provider_create", { id });
+
+/** codex, opencode: the session they started in `cwd` since `since`, bound once found. */
+export const discoverProviderSession = (id: string, cwd: string, since: number): Promise<string | null> =>
+  client.request("session_provider_discover", { id, cwd, since });
+
 export const readFileBase64 = (path: string): Promise<{ mime: string; data: string }> =>
   client.request("read_file_base64", { path });
 
