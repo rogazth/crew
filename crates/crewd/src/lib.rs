@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use crew_core::agent::{AgentEvents, AgentHost};
 use crew_core::bridge::{Bridge, ToolHost};
+use crew_core::claude_title;
 use crew_core::files;
 use crew_core::messages;
 use crew_core::pty::{PtyEvents, PtyHost};
@@ -878,6 +879,10 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
         "path_exists" => {
             let PathArg { path } = parse(params)?;
             Ok(Value::from(files::exists(&path)))
+        }
+        "claude_title" => {
+            let PathArg { path } = parse(params)?;
+            json(block(move || Ok::<_, String>(claude_title::read(&path))).await?)
         }
         "read_file_base64" => {
             let PathArg { path } = parse(params)?;

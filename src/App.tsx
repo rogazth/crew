@@ -7,6 +7,7 @@ import { ConfirmDialog } from "./chrome/ConfirmDialog";
 import { AppSidebar } from "./chrome/AppSidebar";
 import { TabBar } from "./chrome/TabBar";
 import type { Launch } from "./chrome/TabLauncher";
+import { useClaudeTitle } from "./hooks/useClaudeTitle";
 import { useCommands } from "./hooks/useCommand";
 import { useConfirmations } from "./hooks/useConfirmations";
 import { useProjectFiles } from "./hooks/useProjectFiles";
@@ -55,6 +56,7 @@ export function App() {
     setStatus,
     dropWorkspace: forgetSessions,
   } = useSessions(active?.id ?? null);
+  useClaudeTitle(sessions, active?.path ?? null, rename);
   const tabs = useTabs(active?.id ?? null);
   const files = useProjectFiles(active?.path ?? null);
 

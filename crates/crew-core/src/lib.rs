@@ -1,6 +1,7 @@
 pub mod agent;
 pub mod blocks;
 pub mod bridge;
+pub mod claude_title;
 pub mod cron;
 pub mod providers;
 pub mod files;
