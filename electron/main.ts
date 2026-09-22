@@ -4,7 +4,9 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { app, BrowserWindow, dialog, ipcMain, Menu, Notification, session, shell } from "electron";
+import { sha } from "./build-info";
 import { buildMenu } from "./menu";
+import { watchForUpdates } from "./update";
 
 type DaemonInfo = { url: string; token: string };
 type OpenOptions = { multiple?: boolean; directory?: boolean };
@@ -240,6 +242,7 @@ function registerIpc(): void {
 }
 
 app.setName("Crew");
+app.setAboutPanelOptions({ applicationName: "Crew", applicationVersion: app.getVersion(), version: sha });
 
 app.whenReady().then(async () => {
   session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
@@ -260,6 +263,7 @@ app.whenReady().then(async () => {
     return;
   }
   createWindow();
+  watchForUpdates();
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });

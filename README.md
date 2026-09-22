@@ -31,8 +31,23 @@ Use `npm run app` while developing. `open -a Crew` and Spotlight go through Laun
 To build the app itself (macOS arm64):
 
 ```bash
-npm run app:build        # → release/
+npm run app:build        # → release/, unpacked and fast
+npm run release          # → tags, builds the zip, publishes the GitHub release
 ```
+
+## Install and update
+
+`npm run release` builds `Crew-<version>-arm64.zip` and a `latest.json` next to it — version, download url, sha256 — and publishes both to a GitHub release. Install by unzipping into `/Applications`:
+
+```bash
+ditto -x -k release/Crew-0.1.0-arm64.zip /Applications
+```
+
+From there Crew updates itself. It reads `latest.json` from the newest release fifteen seconds after launch and every six hours, and asks in a dialog; `Crew › Check for Updates…` asks on demand. The zip is checked against the manifest's sha256 before anything touches the disk, the bundle is swapped by a detached shell once the app has exited, and the app reopens. A checkout build never updates itself.
+
+Releasing needs `gh` logged in, a clean working tree, and the same version in `package.json` and `Cargo.toml` — the script refuses otherwise.
+
+The bundle is ad-hoc signed (`identity: "-"`): that is what arm64 needs to launch at all, and it keeps the updater free of Apple's signing requirements. It is not notarized, so anyone who downloads the zip in a browser has to clear Gatekeeper by hand.
 
 ## Development
 

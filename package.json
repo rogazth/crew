@@ -18,7 +18,8 @@
     "doctor:changed": "react-doctor src --scope changed --no-score",
     "check": "npm run lint && tsc --noEmit && npm run test && npm run doctor",
     "test": "vitest run",
-    "protocol": "cargo test -p crew-protocol"
+    "protocol": "cargo test -p crew-protocol",
+    "release": "node scripts/release.mjs"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",
@@ -71,6 +72,7 @@
   "build": {
     "appId": "rogazth.crew",
     "productName": "Crew",
+    "artifactName": "Crew-${version}-${arch}.${ext}",
     "directories": {
       "output": "release",
       "buildResources": "build"
@@ -93,12 +95,18 @@
           "arch": [
             "arm64"
           ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "arm64"
+          ]
         }
       ],
       "category": "public.app-category.developer-tools",
       "hardenedRuntime": false,
       "gatekeeperAssess": false,
-      "identity": null
+      "identity": "-"
     }
   }
 }

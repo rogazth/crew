@@ -1,4 +1,13 @@
+import { execFileSync } from "node:child_process";
 import { build } from "esbuild";
+
+function sha() {
+  try {
+    return execFileSync("git", ["rev-parse", "--short", "HEAD"], { encoding: "utf8" }).trim();
+  } catch {
+    return "unknown";
+  }
+}
 
 export async function compileElectron() {
   await build({
@@ -13,6 +22,7 @@ export async function compileElectron() {
     format: "cjs",
     target: "node20",
     external: ["electron"],
+    define: { __CREW_SHA__: JSON.stringify(sha()) },
     logLevel: "warning",
   });
 }
