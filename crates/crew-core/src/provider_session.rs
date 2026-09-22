@@ -91,6 +91,51 @@ pub fn title(provider: &str, id: &str) -> Option<String> {
     (!title.is_empty()).then(|| title.to_string())
 }
 
+/// Whether anything was said in the terminal session `crew_id` of `provider`,
+/// run in `cwd`. A provider Crew cannot read counts as having spoken, so its
+/// sessions are never taken for empty.
+pub fn has_conversation(provider: &str, crew_id: &str, bound: Option<&str>, cwd: &str) -> bool {
+    let Some(home) = home() else { return true };
+    match provider {
+        "claude" => claude_has_turn(&claude_transcript(&home, cwd, crew_id)),
+        "cursor" => bound.is_some_and(|id| cursor_has_conversation(&home.join(".cursor/chats"), id)),
+        "codex" | "opencode" => bound.is_some(),
+        _ => true,
+    }
+}
+
+fn claude_transcript(home: &Path, cwd: &str, id: &str) -> PathBuf {
+    let slug: String = cwd.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect();
+    home.join(".claude/projects").join(slug).join(format!("{id}.jsonl"))
+}
+
+/// Claude writes titles and remote-control records before the first prompt, so
+/// a transcript on disk is not yet a conversation.
+fn claude_has_turn(transcript: &Path) -> bool {
+    let Ok(file) = std::fs::File::open(transcript) else { return false };
+    BufReader::new(file)
+        .lines()
+        .map_while(Result::ok)
+        .filter(|line| line.contains("\"user\""))
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(&line).ok())
+        .any(|record| record.get("type").and_then(|t| t.as_str()) == Some("user"))
+}
+
+/// `create-chat` writes nothing; the TUI writes `hasConversation: false` on
+/// open and flips it with the first message.
+fn cursor_has_conversation(chats: &Path, id: &str) -> bool {
+    if !is_chat_id(id) {
+        return false;
+    }
+    sorted_dirs(chats).into_iter().any(|folder| {
+        std::fs::read_to_string(folder.join(id).join("meta.json"))
+            .ok()
+            .and_then(|meta| serde_json::from_str::<serde_json::Value>(&meta).ok())
+            .and_then(|meta| meta.get("hasConversation")?.as_bool())
+            .unwrap_or(false)
+    })
+}
+
 /// Append-only: a `/rename` lands as a later line for the same id.
 fn codex_title(index: &Path, id: &str) -> Option<String> {
     let text = std::fs::read_to_string(index).ok()?;
@@ -363,6 +408,46 @@ mod tests {
         drop(conn);
         assert_eq!(opencode_title(&db, "named").as_deref(), Some("Friendly greeting"));
         assert_eq!(opencode_title(&db, "fresh"), None);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_claude_transcript_of_records_alone_is_no_conversation() {
+        let root = temp_dir("claude-turn");
+        let transcript = claude_transcript(&root, "/Users/me/my.app", "s");
+        assert!(transcript.ends_with(".claude/projects/-Users-me-my-app/s.jsonl"));
+        assert!(!claude_has_turn(&transcript));
+        std::fs::create_dir_all(transcript.parent().unwrap()).unwrap();
+        std::fs::write(
+            &transcript,
+            [
+                r#"{"type":"bridge-session","sessionId":"s"}"#,
+                r#"{"type":"ai-title","aiTitle":"About the \"user\" table"}"#,
+            ]
+            .join("\n"),
+        )
+        .unwrap();
+        assert!(!claude_has_turn(&transcript));
+        let mut text = std::fs::read_to_string(&transcript).unwrap();
+        text.push_str("\n{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"hi\"}}\n");
+        std::fs::write(&transcript, text).unwrap();
+        assert!(claude_has_turn(&transcript));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_cursor_chat_counts_once_its_meta_says_so() {
+        let root = temp_dir("cursor-conversation");
+        let write = |id: &str, meta: &str| {
+            let chat = root.join("0eaad84c").join(id);
+            std::fs::create_dir_all(&chat).unwrap();
+            std::fs::write(chat.join("meta.json"), meta).unwrap();
+        };
+        write("spoken", r#"{"hasConversation":true}"#);
+        write("opened", r#"{"hasConversation":false}"#);
+        assert!(cursor_has_conversation(&root, "spoken"));
+        assert!(!cursor_has_conversation(&root, "opened"));
+        assert!(!cursor_has_conversation(&root, "reserved"));
         let _ = std::fs::remove_dir_all(&root);
     }
 

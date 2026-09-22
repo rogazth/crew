@@ -138,6 +138,7 @@ const commands: Record<string, (args: Row) => unknown> = {
   bridge_info: () => ({ socketPath: "/mock/crew.sock", token: "mock", exe: "/mock/bin/crew" }),
   session_rename: ({ id, name }) => void Object.assign(sessions.find((s) => s.id === id) ?? {}, { name }),
   session_delete: ({ id }) => void sessions.splice(sessions.findIndex((s) => s.id === id) >>> 0, 1),
+  session_is_disposable: () => false,
   session_reorder: () => undefined,
   session_set_status: ({ id, status }) => void Object.assign(sessions.find((s) => s.id === id) ?? {}, { status }),
   session_mark_read: ({ id }) =>

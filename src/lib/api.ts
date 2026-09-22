@@ -57,6 +57,10 @@ export const renameSession = (id: string, name: string): Promise<void> =>
 export const deleteSession = (id: string): Promise<void> =>
   client.request("session_delete", { id });
 
+/** An unnamed terminal nothing was said in: closing its tab can delete it. */
+export const isSessionDisposable = (id: string): Promise<boolean> =>
+  client.request("session_is_disposable", { id });
+
 export const setSessionStatus = (id: string, status: SessionStatus): Promise<void> =>
   client.request("session_set_status", { id, status });
 

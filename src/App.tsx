@@ -27,6 +27,7 @@ import { Pages } from "./surfaces/Pages";
 import { usePages } from "./hooks/usePages";
 import { useDefaultAgent } from "./hooks/useDefaultAgent";
 import { boot } from "./lib/agentRuntime";
+import * as api from "./lib/api";
 import { focus as focusBlock } from "./lib/transcript";
 import { WorkspacePanes } from "./surfaces/WorkspacePanes";
 
@@ -88,9 +89,16 @@ export function App() {
         tabs.close(id);
         return;
       }
-      confirms.askCloseTab(session, () => tabs.close(id));
+      confirms.askCloseTab(session, async () => {
+        if (await api.isSessionDisposable(session.id).catch(() => false)) {
+          tabs.closeForSession(session.id);
+          await remove(session.id);
+        } else {
+          tabs.close(id);
+        }
+      });
     },
-    [confirms, sessions, tabs],
+    [confirms, remove, sessions, tabs],
   );
 
   const [palette, setPalette] = useState<PaletteMode | null>(null);

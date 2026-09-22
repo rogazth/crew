@@ -1,6 +1,7 @@
 use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
+use crate::provider_session;
 use crate::store::{now_millis, set_order, Store};
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -265,6 +266,80 @@ pub fn reorder(store: &Store, ids: Vec<String>) -> Result<(), String> {
     store.with(|conn| set_order(conn, "sessions", &ids))
 }
 
+/// A terminal nobody named and nothing was said in: dropping it loses nothing.
+pub fn is_disposable(store: &Store, id: String) -> Result<bool, String> {
+    let Some(session) = get(store, id)? else { return Ok(false) };
+    let Some(workspace) = crate::workspace::get(store, session.workspace_id.clone())? else {
+        return Ok(false);
+    };
+    Ok(disposable(&session, &workspace.path))
+}
+
+/// Deletes the disposable terminals no tab holds: the ones closed before the
+/// window checked, or left behind by a crash. A tab restored on launch still
+/// needs its row, so those wait for the tab to close.
+pub fn sweep_disposable(store: &Store) -> Result<usize, String> {
+    let (terminals, tabs) = store.with(|conn| {
+        let terminals = conn
+            .prepare(&format!(
+                "SELECT {SESSION_COLUMNS}, w.path FROM sessions s
+                 JOIN workspaces w ON w.id = s.workspace_id
+                 WHERE s.kind = 'terminal'"
+            ))?
+            .query_map([], |row| Ok((row_to_session(row, 0)?, row.get::<_, String>(13)?)))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let tabs = conn
+            .prepare("SELECT value FROM app_state WHERE key LIKE 'tabs:%'")?
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok((terminals, tabs))
+    })?;
+    let open: Vec<String> = tabs.iter().flat_map(|raw| tab_sessions(raw)).collect();
+    let mut swept = 0;
+    for (session, cwd) in terminals {
+        if !open.contains(&session.id) && disposable(&session, &cwd) {
+            delete(store, session.id)?;
+            swept += 1;
+        }
+    }
+    Ok(swept)
+}
+
+fn disposable(session: &Session, cwd: &str) -> bool {
+    session.kind == "terminal"
+        && is_derived_name(&session.name, &session.provider)
+        && !provider_session::has_conversation(
+            &session.provider,
+            &session.id,
+            session.provider_session_id.as_deref(),
+            cwd,
+        )
+}
+
+/// Mirrors `isDerivedSessionName` in the window: claude, claude 2, …
+fn is_derived_name(name: &str, base: &str) -> bool {
+    match name.strip_prefix(base) {
+        Some("") => true,
+        Some(rest) => rest
+            .strip_prefix(' ')
+            .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit())),
+        None => false,
+    }
+}
+
+/// The session ids in a `tabs:<workspace>` entry the window saved. One it can
+/// no longer parse holds nothing, same as the window reads it.
+fn tab_sessions(raw: &str) -> Vec<String> {
+    let Ok(state) = serde_json::from_str::<serde_json::Value>(raw) else { return Vec::new() };
+    state
+        .get("tabs")
+        .and_then(|tabs| tabs.as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|tab| tab.get("sessionId")?.as_str().map(str::to_string))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -382,6 +457,55 @@ mod tests {
         let names: Vec<String> = list(&store, workspace).unwrap().into_iter().map(|s| s.name).collect();
         assert_eq!(names, vec!["Planner"]);
         assert_eq!(list_all(&store).unwrap().len(), 2, "the sweep missed a workspace");
+    }
+
+    fn terminal(store: &Store, workspace: &str, name: &str, provider: &str) -> Session {
+        create(
+            store,
+            workspace.to_string(),
+            "terminal".into(),
+            name.into(),
+            provider.into(),
+            "m".into(),
+            "".into(),
+            "ask".into(),
+        )
+        .expect("terminal")
+    }
+
+    #[test]
+    fn only_derived_names_read_as_unnamed() {
+        assert!(is_derived_name("codex", "codex"));
+        assert!(is_derived_name("codex 12", "codex"));
+        assert!(!is_derived_name("codex 2b", "codex"));
+        assert!(!is_derived_name("codex ", "codex"));
+        assert!(!is_derived_name("codexer", "codex"));
+        assert!(!is_derived_name("Refactor", "codex"));
+    }
+
+    #[test]
+    fn the_sweep_keeps_what_was_named_spoken_in_or_open() {
+        let (store, workspace) = world();
+        let empty = terminal(&store, &workspace, "codex", "codex");
+        let named = terminal(&store, &workspace, "Refactor", "codex");
+        let spoken = terminal(&store, &workspace, "codex 2", "codex");
+        set_provider_session(&store, spoken.id.clone(), "rollout".into()).expect("bind");
+        let open = terminal(&store, &workspace, "codex 3", "codex");
+        let unread = terminal(&store, &workspace, "grok", "grok");
+        let planner = agent(&store, &workspace, "codex", "ask").expect("agent");
+        crate::store::set(
+            &store,
+            format!("tabs:{workspace}"),
+            format!(r#"{{"tabs":[{{"kind":"session","sessionId":"{}"}}],"activeId":null}}"#, open.id),
+        )
+        .expect("tabs");
+
+        assert!(is_disposable(&store, empty.id.clone()).unwrap());
+        assert_eq!(sweep_disposable(&store).unwrap(), 1);
+        assert!(get(&store, empty.id).unwrap().is_none());
+        for kept in [named.id, spoken.id, open.id, unread.id, planner.id] {
+            assert!(get(&store, kept).unwrap().is_some());
+        }
     }
 
     #[test]

@@ -362,6 +362,9 @@ pub fn serve(config: Config) -> Result<Handle, String> {
     // messages it: only the end of a turn looks in a box.
     turns.deliver_waiting();
 
+    // Before the window can list them, or it would show rows already gone.
+    let _ = session::sweep_disposable(&config.store);
+
     let (ready_tx, ready_rx) = std_mpsc::channel();
     let (stop_tx, stop_rx) = tokio::sync::oneshot::channel();
     let hosts = Hosts {
@@ -828,6 +831,11 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
             hosts.bridge.revoke(&id);
             block(move || session::delete(&store, id)).await?;
             Ok(Value::Null)
+        }
+        "session_is_disposable" => {
+            let Id { id } = parse(params)?;
+            let store = hosts.store.clone();
+            json(block(move || session::is_disposable(&store, id)).await?)
         }
         "session_reorder" => {
             let Ids { ids } = parse(params)?;
