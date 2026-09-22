@@ -13,7 +13,6 @@ import {
   selectTab,
   sessionTabId,
   stepTab,
-  tabHotkey,
   tabTitle,
   type TabState,
 } from "./tabs";
@@ -112,18 +111,6 @@ describe("activateTab", () => {
   it("keeps the state object when the index is out of range", () => {
     const state = opened("a");
     expect(activateTab(state, 7)).toBe(state);
-  });
-});
-
-describe("tabHotkey", () => {
-  it("gives the first eight tabs their own digit", () => {
-    expect(tabHotkey(0, 12)).toBe("tab-1");
-    expect(tabHotkey(7, 12)).toBe("tab-8");
-  });
-
-  it("gives the ninth key to the last tab, however many there are", () => {
-    expect(tabHotkey(11, 12)).toBe("last-tab");
-    expect(tabHotkey(8, 12)).toBeNull();
   });
 });
 

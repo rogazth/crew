@@ -215,15 +215,6 @@ export function App() {
     "reopen-tab": inTabs(tabs.reopen),
     "next-tab": inTabs(() => tabs.step(1)),
     "prev-tab": inTabs(() => tabs.step(-1)),
-    "tab-1": inTabs(() => tabs.activate(0)),
-    "tab-2": inTabs(() => tabs.activate(1)),
-    "tab-3": inTabs(() => tabs.activate(2)),
-    "tab-4": inTabs(() => tabs.activate(3)),
-    "tab-5": inTabs(() => tabs.activate(4)),
-    "tab-6": inTabs(() => tabs.activate(5)),
-    "tab-7": inTabs(() => tabs.activate(6)),
-    "tab-8": inTabs(() => tabs.activate(7)),
-    "last-tab": inTabs(() => tabs.activate(-1)),
     close: () => {
       if (palette) setPalette(null);
       else if (sheet) setSheet(null);

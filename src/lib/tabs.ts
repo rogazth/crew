@@ -1,4 +1,3 @@
-import type { CommandId } from "./commands";
 import { STUB_KINDS } from "./types";
 import type { Session, StubKind, Tab } from "./types";
 
@@ -67,15 +66,6 @@ function neighbourId(tabs: Tab[], closingId: string): string | null {
   const index = tabs.findIndex((t) => t.id === closingId);
   if (index === -1) return null;
   return tabs[index + 1]?.id ?? tabs[index - 1]?.id ?? null;
-}
-
-/**
- * Which shortcut jumps to the tab at `index`, browser-style: the first eight get
- * their own digit, and the ninth is always the last tab, however many there are.
- */
-export function tabHotkey(index: number, total: number): CommandId | null {
-  if (index < 8) return `tab-${index + 1}` as CommandId;
-  return index === total - 1 ? "last-tab" : null;
 }
 
 /** Restores what `state_set` wrote. Anything that no longer parses is dropped, not thrown. */

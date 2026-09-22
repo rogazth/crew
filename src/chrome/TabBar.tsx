@@ -3,17 +3,14 @@ import { CaretLeftIcon, CaretRightIcon, RobotIcon } from "@phosphor-icons/react"
 import { useEffect, useState } from "react";
 import { X } from "./icons";
 import { FileTypeIcon } from "./FileTypeIcon";
-import { Kbd } from "./Kbd";
 import { ProviderIcon } from "./ProviderIcon";
 import { StatusDot } from "./StatusDot";
 import { StubIcon } from "./StubIcon";
 import { TabLauncher, type Launch } from "./TabLauncher";
 import { useCommand } from "../hooks/useCommand";
-import { useModKeyHeld } from "../hooks/useModKeyHeld";
 import { useTabOverflow } from "../hooks/useTabOverflow";
-import { commandKeys } from "../lib/commands";
 import { IS_MAC } from "../lib/hotkey";
-import { tabHotkey, tabTitle } from "../lib/tabs";
+import { tabTitle } from "../lib/tabs";
 import type { Session, Tab } from "../lib/types";
 
 type Props = {
@@ -30,7 +27,6 @@ type Props = {
 /** One 40px row of pill tabs, plus on the end. Every slot in a pill is fixed width. */
 export function TabBar({ inset, tabs, activeId, sessions, onSelect, onClose, onLaunch }: Props) {
   const [launcher, setLauncher] = useState(false);
-  const modHeld = useModKeyHeld();
   const strip = useTabOverflow(tabs.map((tab) => tab.id).join("|"));
 
   useCommand("open-launcher", () => setLauncher((value) => !value));
@@ -62,11 +58,9 @@ export function TabBar({ inset, tabs, activeId, sessions, onSelect, onClose, onL
           className="no-scrollbar flex h-full min-w-0 flex-1 items-center gap-1 overflow-x-auto overflow-y-hidden px-1.5 scroll-px-10"
         >
           <Tabs.List className="flex h-full shrink-0 items-center gap-1">
-            {tabs.map((tab, index) => {
+            {tabs.map((tab) => {
               const active = tab.id === activeId;
-              const hotkey = tabHotkey(index, tabs.length);
               const status = tabStatus(tab, sessions);
-              const hint = modHeld && Boolean(hotkey);
               return (
                 <Tabs.Tab
                   key={tab.id}
@@ -87,16 +81,12 @@ export function TabBar({ inset, tabs, activeId, sessions, onSelect, onClose, onL
                 >
                   <TabIcon tab={tab} sessions={sessions} />
                   <span className="min-w-0 flex-1 truncate">{tabTitle(tab, sessions)}</span>
-                  {/* One fixed slot for three things that never coexist: the status
-                      light, the close button it yields to on hover, and the jump hint
-                      the modifier raises over both. Stacked, so no swap resizes the tab. */}
+                  {/* One fixed slot for two things that never coexist: the status light
+                      and the close button it yields to on hover. Stacked, so the swap
+                      never resizes the tab. */}
                   <span className="relative flex h-5 w-6 shrink-0 items-center justify-end">
                     {status && (
-                      <span
-                        className={`absolute inset-0 flex items-center justify-center transition-opacity ${
-                          hint ? "opacity-0" : "opacity-100 group-hover:opacity-0"
-                        }`}
-                      >
+                      <span className="absolute inset-0 flex items-center justify-center transition-opacity group-hover:opacity-0">
                         <StatusDot status={status} />
                       </span>
                     )}
@@ -107,25 +97,12 @@ export function TabBar({ inset, tabs, activeId, sessions, onSelect, onClose, onL
                         onClose(tab.id);
                       }}
                       aria-label="Close tab"
-                      tabIndex={hint ? -1 : 0}
                       className={`absolute right-0 flex size-5 items-center justify-center rounded-full text-text-muted transition-colors hover:bg-selected hover:text-text focus-visible:opacity-100 ${
-                        hint
-                          ? "pointer-events-none opacity-0"
-                          : active && !status
-                            ? "opacity-100"
-                            : "opacity-0 group-hover:opacity-100"
+                        active && !status ? "opacity-100" : "opacity-0 group-hover:opacity-100"
                       }`}
                     >
                       <X className="size-3" />
                     </button>
-                    {hotkey && (
-                      <Kbd
-                        keys={commandKeys(hotkey)}
-                        className={`pointer-events-none absolute right-0 whitespace-nowrap transition-opacity ${
-                          hint ? "opacity-100" : "opacity-0"
-                        }`}
-                      />
-                    )}
                   </span>
                 </Tabs.Tab>
               );
