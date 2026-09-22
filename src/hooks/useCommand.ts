@@ -3,9 +3,9 @@ import { useHotkeys } from "@tanstack/react-hotkeys";
 import { keysFor, registerCommand, type CommandId } from "../lib/commands";
 
 /**
- * requireReset re-arms on releasing the key *or* a modifier, and on a non-US layout the
- * bracket keyup reports a character that never matches `]`. Cycling would then fire once
- * per ⌘⇧ hold instead of once per tap, so these two keep the repeat.
+ * Auto-repeat is dropped via `event.repeat`, not requireReset: requireReset re-arms on
+ * keyup, and macOS sends no keyup for keys pressed while ⌘ is held, so ⌘1 ⌘3 ⌘1 in one
+ * hold would ignore the second ⌘1.
  */
 const REPEATABLE = new Set<CommandId>(["next-tab", "prev-tab"]);
 
@@ -34,8 +34,10 @@ export function useCommands(map: { [K in CommandId]?: () => void }) {
       () =>
         ids.map((id) => ({
           hotkey: keysFor(id),
-          callback: () => mapRef.current[id]?.(),
-          options: { requireReset: !REPEATABLE.has(id) },
+          callback: (event: KeyboardEvent) => {
+            if (event.repeat && !REPEATABLE.has(id)) return;
+            mapRef.current[id]?.();
+          },
         })),
       // eslint-disable-next-line react-hooks/exhaustive-deps
       [key],
