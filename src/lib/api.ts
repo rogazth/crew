@@ -60,6 +60,9 @@ export const deleteSession = (id: string): Promise<void> =>
 export const setSessionStatus = (id: string, status: SessionStatus): Promise<void> =>
   client.request("session_set_status", { id, status });
 
+export const markSessionRead = (id: string): Promise<void> =>
+  client.request("session_mark_read", { id });
+
 export const turnStart = (params: {
   sessionId: string;
   cwd: string;

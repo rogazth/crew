@@ -178,6 +178,7 @@ function onStatus(event: SessionStatusEvent) {
   if (status === "idle" || status === "working" || status === "error") seenDone.delete(id);
   transcript.setWorking(id, status === "working" || status === "needs-input");
   const display = status === "done" && foreground === id ? "idle" : status;
+  if (display !== status) void api.markSessionRead(id).catch(() => {});
   patch(id, {
     status: display,
     updatedAt: event.updatedAt,
@@ -198,7 +199,8 @@ function onStatus(event: SessionStatusEvent) {
 
 function markIdle(id: string) {
   transcript.setWorking(id, false);
-  patch(id, { status: "idle", updatedAt: Date.now() });
+  patch(id, { status: "idle" });
+  void api.markSessionRead(id).catch(() => {});
 }
 
 function remember(session: Session) {

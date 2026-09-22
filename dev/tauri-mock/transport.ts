@@ -140,6 +140,8 @@ const commands: Record<string, (args: Row) => unknown> = {
   session_delete: ({ id }) => void sessions.splice(sessions.findIndex((s) => s.id === id) >>> 0, 1),
   session_reorder: () => undefined,
   session_set_status: ({ id, status }) => void Object.assign(sessions.find((s) => s.id === id) ?? {}, { status }),
+  session_mark_read: ({ id }) =>
+    void sessions.filter((s) => s.id === id && s.status === "done").forEach((s) => (s.status = "idle")),
   state_get: ({ key }) => state.get(key as string) ?? null,
   state_set: ({ key, value }) => void state.set(key as string, value as string),
   list_project_files: () =>

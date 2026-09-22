@@ -808,6 +808,12 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
             block(move || session::set_status(&store, id, status)).await?;
             Ok(Value::Null)
         }
+        "session_mark_read" => {
+            let Id { id } = parse(params)?;
+            let store = hosts.store.clone();
+            block(move || session::mark_read(&store, id)).await?;
+            Ok(Value::Null)
+        }
         "routine_list_for_session" => {
             let SessionId { session_id } = parse(params)?;
             let store = hosts.store.clone();

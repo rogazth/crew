@@ -239,6 +239,15 @@ pub fn set_status(store: &Store, id: String, status: String) -> Result<(), Strin
     Ok(())
 }
 
+/// A turn that already started must keep its status, so only a finished one is cleared.
+pub fn mark_read(store: &Store, id: String) -> Result<(), String> {
+    store.with(|conn| {
+        conn.prepare_cached("UPDATE sessions SET status = 'idle' WHERE id = ?1 AND status = 'done'")?
+            .execute(params![id])
+    })?;
+    Ok(())
+}
+
 pub fn reorder(store: &Store, ids: Vec<String>) -> Result<(), String> {
     store.with(|conn| set_order(conn, "sessions", &ids))
 }
@@ -301,6 +310,20 @@ mod tests {
 
     /// The runtime owns status. A value the UI invented would render as nothing
     /// and, worse, read as "not working" to everything that asks.
+    #[test]
+    fn reading_clears_only_a_finished_turn_and_keeps_its_place() {
+        let (store, workspace) = world();
+        let made = agent(&store, &workspace, "Planner", "ask").expect("agent");
+        set_status(&store, made.id.clone(), "done".into()).expect("done");
+        let finished = get(&store, made.id.clone()).unwrap().unwrap().updated_at;
+        mark_read(&store, made.id.clone()).expect("read");
+        let read = get(&store, made.id.clone()).unwrap().unwrap();
+        assert_eq!((read.status.as_str(), read.updated_at), ("idle", finished));
+        set_status(&store, made.id.clone(), "working".into()).expect("working");
+        mark_read(&store, made.id.clone()).expect("read");
+        assert_eq!(get(&store, made.id).unwrap().unwrap().status, "working");
+    }
+
     #[test]
     fn only_the_statuses_the_runtime_writes_are_accepted() {
         let (store, workspace) = world();
