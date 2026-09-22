@@ -125,6 +125,7 @@ export function TerminalView({
       cursorBlink: true,
       cursorStyle: "bar",
       scrollback: 5000,
+      scrollSensitivity: 1.15,
       smoothScrollDuration: 0,
       // Option composes accents, as in Terminal.app; word motions are spelled out in terminalKeys.
       macOptionIsMeta: false,
