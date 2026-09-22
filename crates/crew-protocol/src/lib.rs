@@ -269,6 +269,14 @@ pub struct ProviderDiscover {
     pub since: i64,
 }
 
+/// The name a provider CLI gave one of its own sessions.
+#[derive(Serialize, Deserialize, Clone, Debug, TS)]
+#[ts(export, export_to = "../../../src/lib/protocol.ts")]
+pub struct ProviderTitle {
+    pub provider: String,
+    pub id: String,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]

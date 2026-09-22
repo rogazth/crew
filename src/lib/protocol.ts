@@ -90,6 +90,11 @@ export type ProjectFile = { name: string, path: string, relative: string, };
  */
 export type ProviderDiscover = { id: string, cwd: string, since: number, };
 
+/**
+ * The name a provider CLI gave one of its own sessions.
+ */
+export type ProviderTitle = { provider: string, id: string, };
+
 export type PtyAck = { id: string, processed: number, };
 
 export type PtyAttach = { id: string, from: number, };

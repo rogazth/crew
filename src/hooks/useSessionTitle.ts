@@ -5,16 +5,17 @@ import { homeDir } from '../lib/host';
 import type { Session } from '../lib/types';
 import { isDerivedSessionName } from '../lib/workspaces';
 
-/** Claude names a session on its first turn and revises it as the work turns. */
+/** Providers name a session on its first turn and may revise it as the work turns. */
 const SWEEP_MS = 15_000;
 
 /**
- * Claude Code names its own sessions, in a record it appends to the transcript.
- * Crew's derived `claude 3` is a placeholder for exactly that name, so it is
- * adopted as soon as it lands. A name the user typed is theirs and stays put;
- * a name Crew adopted is still Claude's to revise, which is what `taken` holds.
+ * Every provider CLI names its own sessions: Claude in its transcript, the
+ * others in their own storage once their session id is known. Crew's derived
+ * `claude 3` is a placeholder for exactly that name, so it is adopted as soon
+ * as it lands. A name the user typed is theirs and stays put; a name Crew
+ * adopted is still the provider's to revise, which is what `taken` holds.
  */
-export function useClaudeTitle(
+export function useSessionTitle(
   sessions: Session[],
   cwd: string | null,
   rename: (id: string, name: string) => Promise<void>,
@@ -37,14 +38,12 @@ export function useClaudeTitle(
       if (!home) return;
       for (const session of latest.current) {
         if (stopped) return;
-        if (session.kind !== 'terminal' || session.provider !== 'claude') continue;
+        if (session.kind !== 'terminal') continue;
         const ours =
           isDerivedSessionName(session.name, session.provider) ||
           taken.current.get(session.id) === session.name;
         if (!ours) continue;
-        const title = await api
-          .claudeTitle(transcriptPath(home, cwd, session.id))
-          .catch(() => null);
+        const title = await readTitle(session, home, cwd).catch(() => null);
         if (stopped || !title || title === session.name) continue;
         taken.current.set(session.id, title);
         await rename(session.id, title);
@@ -58,4 +57,10 @@ export function useClaudeTitle(
       clearInterval(timer);
     };
   }, [cwd, rename]);
+}
+
+function readTitle(session: Session, home: string, cwd: string): Promise<string | null> {
+  if (session.provider === 'claude') return api.claudeTitle(transcriptPath(home, cwd, session.id));
+  if (!session.providerSessionId) return Promise.resolve(null);
+  return api.providerTitle(session.provider, session.providerSessionId);
 }

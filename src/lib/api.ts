@@ -149,6 +149,9 @@ export const pathExists = (path: string): Promise<boolean> => client.request("pa
 export const claudeTitle = (path: string): Promise<string | null> =>
   client.request("claude_title", { path });
 
+export const providerTitle = (provider: string, id: string): Promise<string | null> =>
+  client.request("provider_title", { provider, id });
+
 /** The subset of `names` found on the user's PATH. */
 export const installedBinaries = (names: string[]): Promise<string[]> =>
   client.request("agent_installed", { names });

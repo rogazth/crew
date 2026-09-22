@@ -19,7 +19,7 @@ use crew_core::transcript::TranscriptEvents;
 use crew_core::turns::TurnHost;
 use crew_core::workspace;
 use crew_protocol::{
-    self as proto, Auth, Cwd, DaemonInfo, Id, IdName, IdStatus, Ids, Key, KeyValue, Name, NamePath, Names, ProviderDiscover,
+    self as proto, Auth, Cwd, DaemonInfo, Id, IdName, IdStatus, Ids, Key, KeyValue, Name, NamePath, Names, ProviderDiscover, ProviderTitle,
     OptionalId, PathArg, PathContents, PtyAck, PtyAttach, PtyAttached, PtyKill, PtyResize, PtySpawn, PtyWrite,
     Request, RoutineRunNow, RoutineUpsert, SessionCreate, SessionCreated, SessionId, SessionUpdate, TempFile,
     SearchQuery, TranscriptApply, TranscriptTail, TurnAnswer, TurnRespond,
@@ -932,6 +932,10 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
         "claude_title" => {
             let PathArg { path } = parse(params)?;
             json(block(move || Ok::<_, String>(claude_title::read(&path))).await?)
+        }
+        "provider_title" => {
+            let ProviderTitle { provider, id } = parse(params)?;
+            json(block(move || Ok::<_, String>(provider_session::title(&provider, &id))).await?)
         }
         "read_file_base64" => {
             let PathArg { path } = parse(params)?;

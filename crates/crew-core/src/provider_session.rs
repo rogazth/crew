@@ -78,6 +78,54 @@ pub fn discover(provider: &str, cwd: &str, since_ms: i64, claimed: &[String]) ->
         .map(|s| s.id)
 }
 
+/// The name the CLI gave a session once the first exchange settles it; the
+/// placeholder each one shows before that is not a name.
+pub fn title(provider: &str, id: &str) -> Option<String> {
+    let title = match provider {
+        "codex" => codex_title(&codex_home()?.join("session_index.jsonl"), id),
+        "cursor" => cursor_title(&home()?.join(".cursor/chats"), id),
+        "opencode" => opencode_title(&opencode_db()?, id),
+        _ => None,
+    }?;
+    let title = title.trim();
+    (!title.is_empty()).then(|| title.to_string())
+}
+
+/// Append-only: a `/rename` lands as a later line for the same id.
+fn codex_title(index: &Path, id: &str) -> Option<String> {
+    let text = std::fs::read_to_string(index).ok()?;
+    text.lines()
+        .rev()
+        .filter(|line| line.contains(id))
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .find(|entry| entry.get("id").and_then(|v| v.as_str()) == Some(id))
+        .and_then(|entry| entry.get("thread_name")?.as_str().map(str::to_string))
+}
+
+/// Chats sit under a folder hashed from the cwd, so the id alone finds them.
+fn cursor_title(chats: &Path, id: &str) -> Option<String> {
+    if !is_chat_id(id) {
+        return None;
+    }
+    sorted_dirs(chats).into_iter().find_map(|folder| {
+        let meta = std::fs::read_to_string(folder.join(id).join("meta.json")).ok()?;
+        let value: serde_json::Value = serde_json::from_str(&meta).ok()?;
+        value.get("title")?.as_str().map(str::to_string)
+    })
+}
+
+fn opencode_title(db: &Path, id: &str) -> Option<String> {
+    if !db.exists() {
+        return None;
+    }
+    let conn = Connection::open_with_flags(db, OpenFlags::SQLITE_OPEN_READ_ONLY).ok()?;
+    conn.busy_timeout(Duration::from_millis(500)).ok()?;
+    let title: String = conn
+        .query_row("SELECT title FROM session WHERE id = ?1", params![id], |row| row.get(0))
+        .ok()?;
+    (!title.starts_with("New session - ")).then_some(title)
+}
+
 #[derive(Debug)]
 struct Found {
     id: String,
@@ -265,6 +313,56 @@ mod tests {
         drop(conn);
         let ids: Vec<String> = opencode_sessions(&db, 15).into_iter().map(|s| s.id).collect();
         assert_eq!(ids, vec!["new".to_string()]);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn codex_title_takes_the_latest_name_for_the_id() {
+        let root = temp_dir("codex-title");
+        let index = root.join("session_index.jsonl");
+        std::fs::write(
+            &index,
+            [
+                r#"{"id":"a","thread_name":"First"}"#,
+                r#"{"id":"b","thread_name":"Other"}"#,
+                r#"{"id":"a","thread_name":"Renamed"}"#,
+            ]
+            .join("\n"),
+        )
+        .unwrap();
+        assert_eq!(codex_title(&index, "a").as_deref(), Some("Renamed"));
+        assert_eq!(codex_title(&index, "missing"), None);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn cursor_title_finds_the_chat_in_any_folder() {
+        let root = temp_dir("cursor-title");
+        let chat = root.join("0eaad84c/5e047119-f117");
+        std::fs::create_dir_all(&chat).unwrap();
+        std::fs::write(chat.join("meta.json"), r#"{"title":"Spanish Project"}"#).unwrap();
+        std::fs::create_dir_all(root.join("0eaad84c/untitled")).unwrap();
+        std::fs::write(root.join("0eaad84c/untitled/meta.json"), r#"{"hasConversation":false}"#).unwrap();
+        assert_eq!(cursor_title(&root, "5e047119-f117").as_deref(), Some("Spanish Project"));
+        assert_eq!(cursor_title(&root, "untitled"), None);
+        assert_eq!(cursor_title(&root, "../escape"), None);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn opencode_title_skips_the_placeholder() {
+        let root = temp_dir("opencode-title");
+        let db = root.join("opencode.db");
+        let conn = Connection::open(&db).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE session (id TEXT, title TEXT);
+             INSERT INTO session VALUES ('named', 'Friendly greeting');
+             INSERT INTO session VALUES ('fresh', 'New session - 2026-09-17T17:59:15.722Z');",
+        )
+        .unwrap();
+        drop(conn);
+        assert_eq!(opencode_title(&db, "named").as_deref(), Some("Friendly greeting"));
+        assert_eq!(opencode_title(&db, "fresh"), None);
         let _ = std::fs::remove_dir_all(&root);
     }
 
