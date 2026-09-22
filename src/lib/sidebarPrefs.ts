@@ -18,7 +18,7 @@ export type SidebarPrefs = {
 /** The defaults reproduce the two fixed sections the sidebar shipped with. */
 export const DEFAULT_PREFS: SidebarPrefs = {
   grouping: "kind",
-  ordering: "manual",
+  ordering: "updated",
   show: ["provider", "updated", "status", "avatar"],
   hiddenKinds: [],
   hiddenProviders: [],
@@ -64,7 +64,7 @@ export function parsePrefs(raw: string | null): SidebarPrefs {
     const parsed = JSON.parse(raw) as Partial<SidebarPrefs>;
     return {
       grouping: pick(parsed.grouping, ["none", "kind", "provider", "status"], "kind"),
-      ordering: pick(parsed.ordering, ["manual", "updated", "name"], "manual"),
+      ordering: pick(parsed.ordering, ["manual", "updated", "name"], "updated"),
       show: Array.isArray(parsed.show)
         ? (parsed.show.filter((d) => DEFAULT_PREFS.show.includes(d as Detail)) as Detail[])
         : DEFAULT_PREFS.show,

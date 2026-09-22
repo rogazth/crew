@@ -233,8 +233,8 @@ pub fn set_status(store: &Store, id: String, status: String) -> Result<(), Strin
         return Err(format!("Unknown session status: {status}"));
     }
     store.with(|conn| {
-        conn.prepare_cached("UPDATE sessions SET status = ?2 WHERE id = ?1")?
-            .execute(params![id, status])
+        conn.prepare_cached("UPDATE sessions SET status = ?2, updated_at = ?3 WHERE id = ?1")?
+            .execute(params![id, status, now_millis()])
     })?;
     Ok(())
 }
