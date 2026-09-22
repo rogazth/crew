@@ -4,6 +4,8 @@ import type { Session, SessionStatus } from '../lib/types';
 
 /** Claude's spinner repaints every ~100ms; a gap this long means the turn ended. */
 const QUIET_AFTER = 1500;
+/** Losing focus makes TUIs repaint; that burst is the switch echoing back, not work. */
+const SETTLE_AFTER_LEAVING = 1000;
 
 /**
  * The tab indicator speaks for the sessions you are not looking at: output means
@@ -24,6 +26,7 @@ export function useSessionActivity(
   // Read when the quiet timer fires, not when it was set: the tab may have come
   // to the front in between, and a tab you are watching shows no indicator.
   const watched = useRef(active);
+  const leftAt = useRef(0);
 
   const stopWaiting = () => {
     if (quiet.current) clearTimeout(quiet.current);
@@ -42,6 +45,7 @@ export function useSessionActivity(
   useEffect(() => {
     watched.current = active;
     if (active) push('idle');
+    else leftAt.current = Date.now();
   }, [active, push]);
 
   const id = session.id;
@@ -65,12 +69,14 @@ export function useSessionActivity(
     }, [id, push]),
     onActivity: useCallback(() => {
       setBusy(id, true);
-      if (!watched.current && !claimed()) push('working');
+      const settled = Date.now() - leftAt.current > SETTLE_AFTER_LEAVING;
+      if (!watched.current && !claimed() && settled) push('working');
       stopWaiting();
       quiet.current = setTimeout(() => {
         quiet.current = null;
         setBusy(id, false);
-        if (!watched.current && !claimed()) push('done');
+        // Only work seen from the background is unread; output you watched start was already read.
+        if (sent.current === 'working') push('done');
       }, QUIET_AFTER);
     }, [id, push]),
     onExit: useCallback(
