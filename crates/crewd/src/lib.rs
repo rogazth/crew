@@ -2095,4 +2095,70 @@ print(json.dumps({"type":"turn.failed","error":{"message":"Codex exploded"}}), f
             retry.result
         );
     }
+
+    #[tokio::test]
+    async fn two_floods_never_cross_streams() {
+        let dir = test_dir("pty-cross");
+        let handle = test_serve(&dir);
+        let mut ws = connect_authed(&handle).await;
+        let script = |mark: char| {
+            format!(
+                "import sys,threading\ndef rd():\n    for l in sys.stdin:\n        sys.stdout.write('IN'+l.strip()+'\\n'); sys.stdout.flush()\nthreading.Thread(target=rd,daemon=True).start()\nwhile True:\n    sys.stdout.write('{mark}'*200+'\\n'); sys.stdout.flush()\n"
+            )
+        };
+        let mut streams = HashMap::new();
+        for (req, (pty, mark)) in [("a", 'P'), ("b", 'Q')].into_iter().enumerate() {
+            let req = req as u32 + 1;
+            send_json(
+                &mut ws,
+                &Request {
+                    id: req,
+                    method: "pty_spawn".into(),
+                    params: serde_json::to_value(PtySpawn {
+                        id: pty.into(),
+                        cwd: std::env::temp_dir().to_string_lossy().into_owned(),
+                        command: vec!["/usr/bin/python3".into(), "-c".into(), script(mark)],
+                        cols: 80,
+                        rows: 24,
+                    })
+                    .unwrap(),
+                },
+            )
+            .await;
+            let stream = wait_response(&mut ws, req).await.result.and_then(|v| v.as_u64()).expect("stream") as u32;
+            streams.insert(stream, pty);
+            attach_pty(&mut ws, req + 10, pty, 0).await;
+        }
+        let mut got: HashMap<&str, Vec<u8>> = HashMap::new();
+        let mut processed: HashMap<&str, u64> = HashMap::new();
+        let mut req = 100u32;
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(8);
+        let mut sent = 0;
+        while got.values().map(Vec::len).sum::<usize>() < 8 * 1024 * 1024 {
+            let Ok(Some(Ok(msg))) = tokio::time::timeout_at(deadline, ws.next()).await else { break };
+            let Message::Binary(frame) = msg else { continue };
+            let stream = u32::from_le_bytes(frame[..4].try_into().unwrap());
+            let pty = streams[&stream];
+            got.entry(pty).or_default().extend_from_slice(&frame[4..]);
+            let done = processed.entry(pty).or_default();
+            *done += (frame.len() - 4) as u64;
+            req += 1;
+            send_json(&mut ws, &Request { id: req, method: "pty_ack".into(), params: serde_json::json!({ "id": pty, "processed": *done }) }).await;
+            if sent < 200 && req % 20 == 0 {
+                for (s, p) in &streams {
+                    let tag = if *p == "a" { "xa" } else { "yb" };
+                    let mut f = Vec::from(s.to_le_bytes());
+                    f.extend_from_slice(format!("{tag}{sent}\n").as_bytes());
+                    ws.send(Message::Binary(f.into())).await.unwrap();
+                }
+                sent += 1;
+            }
+        }
+        let a = &got["a"];
+        let b = &got["b"];
+        assert!(!a.contains(&b'Q') && !a.windows(2).any(|w| w == b"yb"), "b leaked into a");
+        assert!(!b.contains(&b'P') && !b.windows(2).any(|w| w == b"xa"), "a leaked into b");
+        assert!(a.windows(4).any(|w| w == b"INxa") && b.windows(4).any(|w| w == b"INyb"), "input did not arrive");
+        handle.shutdown();
+    }
 }
