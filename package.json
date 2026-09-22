@@ -12,6 +12,7 @@
     "preview": "vite preview",
     "app": "node scripts/app.mjs",
     "app:build": "node scripts/app-build.mjs",
+    "icon": "node scripts/icon.mjs",
     "prepare": "husky",
     "lint": "eslint src",
     "doctor": "react-doctor src --no-score",
