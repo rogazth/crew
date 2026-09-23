@@ -53,6 +53,10 @@ impl Store {
             .map_err(|e| e.to_string())?;
         conn.pragma_update(None, "foreign_keys", "ON")
             .map_err(|e| e.to_string())?;
+        // 8 MiB instead of 2: browser history at its cap is just over the default,
+        // and every suggestion scan re-read it from the OS.
+        conn.pragma_update(None, "cache_size", -8192)
+            .map_err(|e| e.to_string())?;
         migrate(&conn).map_err(|e| e.to_string())?;
         settle_open_turns(&conn).map_err(|e| e.to_string())?;
         Ok(Self {
@@ -255,6 +259,27 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
             "INSERT INTO schema_migrations (version, applied_at) VALUES (14, ?1)",
             params![now_millis()],
         )?;
+    }
+    // From here on each step is all or nothing, like 13: dying between the
+    // DDL and its version row must not leave a step applied but unrecorded.
+    // The transaction rolls back when dropped on an error.
+    if current < 15 {
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch(crate::browser::MIGRATION_V15)?;
+        tx.execute(
+            "INSERT INTO schema_migrations (version, applied_at) VALUES (15, ?1)",
+            params![now_millis()],
+        )?;
+        tx.commit()?;
+    }
+    if current < 16 {
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch(crate::browser::MIGRATION_V16)?;
+        tx.execute(
+            "INSERT INTO schema_migrations (version, applied_at) VALUES (16, ?1)",
+            params![now_millis()],
+        )?;
+        tx.commit()?;
     }
     Ok(())
 }

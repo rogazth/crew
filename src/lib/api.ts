@@ -1,7 +1,7 @@
 import { client } from "./client";
 import { open } from "./host";
 import type { RoutineRow, ScheduledRoutine } from "./routines";
-import type { MessagePage, SearchHit, SearchQuery } from "./protocol";
+import type { HistoryEntry, HistoryList, MessagePage, PageSnapshot, SearchHit, SearchQuery } from "./protocol";
 import type { Autonomy, ProjectFile, Session, SessionKind, SessionStatus, Workspace } from "./types";
 
 /** Native picker. No filters: any document the agent can read. */
@@ -184,5 +184,37 @@ export async function writeTempFile(file: File): Promise<string> {
   const extension = file.type.split("/")[1] ?? file.name.split(".").pop() ?? "bin";
   return client.request("write_temp_file", { extension, base64Contents: btoa(binary) });
 }
+
+/** A committed main-frame navigation. The daemon drops anything that is not http(s). */
+export const browserHistoryVisit = (url: string, title: string, workspaceId?: string): Promise<void> =>
+  client.request("browser_history_visit", { url, title, workspaceId });
+
+/** A title that arrived after its visit. It never counts as one. */
+export const browserHistoryTitle = (url: string, title: string): Promise<void> =>
+  client.request("browser_history_title", { url, title });
+
+/** Address-bar suggestions, best first. Empty text answers the most recent. */
+export const browserHistorySuggest = (text: string, limit: number): Promise<HistoryEntry[]> =>
+  client.request("browser_history_suggest", { text, limit });
+
+/** The History page, newest first. `before` is the last shown row's `lastVisitedAt`. */
+export const browserHistoryList = (params: HistoryList): Promise<HistoryEntry[]> =>
+  client.request("browser_history_list", params);
+
+export const browserHistoryDelete = (urlKey: string): Promise<void> =>
+  client.request("browser_history_delete", { urlKey });
+
+/** `since` clears from that moment on; without it, everything goes. */
+export const browserHistoryClear = (since?: number): Promise<void> =>
+  client.request("browser_history_clear", { since });
+
+export const browserPageSave = (pageId: string, entriesJson: string, activeIndex: number): Promise<void> =>
+  client.request("browser_page_save", { pageId, entriesJson, activeIndex });
+
+export const browserPageGet = (pageId: string): Promise<PageSnapshot | null> =>
+  client.request("browser_page_get", { pageId });
+
+export const browserPageDelete = (pageId: string): Promise<void> =>
+  client.request("browser_page_delete", { pageId });
 
 export { ackPty, killPty, resizePty, spawnPty, writePty } from "./pty";

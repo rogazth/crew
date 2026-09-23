@@ -1,6 +1,7 @@
 pub mod agent;
 pub mod blocks;
 pub mod bridge;
+pub mod browser;
 pub mod claude_title;
 pub mod cron;
 pub mod provider_session;

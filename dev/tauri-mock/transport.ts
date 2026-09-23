@@ -89,6 +89,60 @@ const routines: Row[] = [
   },
 ];
 
+/**
+ * Browser history and tab stacks. The daemon normalizes in Rust and ranks by
+ * host, title and frecency; `URL` and a substring match, newest first, are
+ * enough to see the screens.
+ */
+const history = new Map<string, Row>();
+const pages = new Map<string, Row>();
+
+function historyKey(raw: string): { urlKey: string; url: URL } | null {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+  url.username = "";
+  url.password = "";
+  url.hash = "";
+  const path = url.pathname === "/" && !url.search ? "" : url.pathname;
+  return { urlKey: `${url.protocol}//${url.host}${path}${url.search}`, url };
+}
+
+function visitHistory(raw: string, title: string, workspaceId: string | null, at: number) {
+  const found = historyKey(raw);
+  if (!found) return;
+  const row = history.get(found.urlKey);
+  history.set(found.urlKey, {
+    urlKey: found.urlKey,
+    url: found.url.href,
+    host: found.url.hostname.replace(/^www\./, ""),
+    title: title || (row?.title ?? ""),
+    visitCount: ((row?.visitCount as number | undefined) ?? 0) + 1,
+    lastVisitedAt: at,
+    workspaceId,
+  });
+}
+
+function historyRows(text: unknown): Row[] {
+  const needle = String(text ?? "").trim().toLowerCase();
+  return [...history.values()]
+    .filter((row) => !needle || `${String(row.url)} ${String(row.title)}`.toLowerCase().includes(needle))
+    .sort((a, b) => (b.lastVisitedAt as number) - (a.lastVisitedAt as number));
+}
+
+for (const [url, title, ago] of [
+  ["https://github.com/crew-dev/crew/pulls", "Pull requests · crew-dev/crew", 5 * 60e3],
+  ["https://docs.rs/tokio/latest/tokio/", "tokio - Rust", 3600e3],
+  ["http://localhost:5173/", "Crew", 2 * 3600e3],
+  ["https://www.electronjs.org/docs/latest/api/webview-tag", "<webview> Tag | Electron", 26 * 3600e3],
+] as const) {
+  visitHistory(url, title, "w1", now - ago);
+}
+
 function session(
   id: string,
   workspaceId: string,
@@ -242,6 +296,27 @@ const commands: Record<string, (args: Row) => unknown> = {
     emit("routines-changed", {});
     return undefined;
   },
+  browser_history_visit: ({ url, title, workspaceId }) =>
+    void visitHistory(url as string, title as string, (workspaceId as string | undefined) ?? null, Date.now()),
+  browser_history_title: ({ url, title }) => {
+    const row = history.get(historyKey(url as string)?.urlKey ?? "");
+    if (row && title) row.title = title;
+  },
+  browser_history_suggest: ({ text, limit }) => historyRows(text).slice(0, limit as number),
+  browser_history_list: ({ text, before, limit }) =>
+    historyRows(text)
+      .filter((row) => before == null || (row.lastVisitedAt as number) < (before as number))
+      .slice(0, limit as number),
+  browser_history_delete: ({ urlKey }) => void history.delete(urlKey as string),
+  browser_history_clear: ({ since }) => {
+    for (const [key, row] of history) {
+      if (since == null || (row.lastVisitedAt as number) >= (since as number)) history.delete(key);
+    }
+  },
+  browser_page_save: ({ pageId, entriesJson, activeIndex }) =>
+    void pages.set(pageId as string, { pageId, entriesJson, activeIndex, updatedAt: Date.now() }),
+  browser_page_get: ({ pageId }) => pages.get(pageId as string) ?? null,
+  browser_page_delete: ({ pageId }) => void pages.delete(pageId as string),
 };
 
 /** 160×100 gradient; any image the mock is asked for is this one. */

@@ -434,3 +434,112 @@ pub fn event(event: impl Into<String>, payload: impl Serialize) -> Result<Event,
         payload: serde_json::to_value(payload)?,
     })
 }
+
+/// One row of browser history: every visit to the same normalized URL lands
+/// here, with the exact URL of the latest one.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
+pub struct HistoryEntry {
+    pub url_key: String,
+    pub url: String,
+    /// Lowercase, without the port or a leading `www.`: what typing matches.
+    pub host: String,
+    pub title: String,
+    #[ts(type = "number")]
+    pub visit_count: i64,
+    #[ts(type = "number")]
+    pub last_visited_at: i64,
+    /// The workspace of the latest visit. It may since have been removed.
+    pub workspace_id: Option<String>,
+}
+
+/// A browser tab's back/forward stack, kept so a tab that was discarded or
+/// closed comes back with more than its URL.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
+pub struct PageSnapshot {
+    pub page_id: String,
+    /// The renderer's own JSON; the daemon only stores it.
+    pub entries_json: String,
+    #[ts(type = "number")]
+    pub active_index: i64,
+    #[ts(type = "number")]
+    pub updated_at: i64,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
+pub struct HistoryVisit {
+    pub url: String,
+    pub title: String,
+    #[serde(default)]
+    #[ts(optional)]
+    pub workspace_id: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
+pub struct HistoryTitle {
+    pub url: String,
+    pub title: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
+pub struct HistorySuggest {
+    pub text: String,
+    pub limit: u32,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
+pub struct HistoryList {
+    #[serde(default)]
+    #[ts(optional)]
+    pub text: Option<String>,
+    /// Page backwards: only rows visited strictly before this moment.
+    #[serde(default)]
+    #[ts(optional, type = "number")]
+    pub before: Option<i64>,
+    pub limit: u32,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
+pub struct UrlKey {
+    pub url_key: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
+pub struct HistoryClear {
+    /// Only what was visited from this moment on. Absent clears everything.
+    #[serde(default)]
+    #[ts(optional, type = "number")]
+    pub since: Option<i64>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
+pub struct PageSave {
+    pub page_id: String,
+    pub entries_json: String,
+    #[ts(type = "number")]
+    pub active_index: i64,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
+pub struct PageId {
+    pub page_id: String,
+}

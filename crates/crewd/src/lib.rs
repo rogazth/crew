@@ -1039,6 +1039,60 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
             let store = hosts.store.clone();
             json(block(move || messages::search(&store, query)).await?)
         }
+        "browser_history_visit" => {
+            let proto::HistoryVisit { url, title, workspace_id } = parse(params)?;
+            let store = hosts.store.clone();
+            let now = app_state::now_millis();
+            block(move || crew_core::browser::visit(&store, &url, &title, workspace_id.as_deref(), now)).await?;
+            Ok(Value::Null)
+        }
+        "browser_history_title" => {
+            let proto::HistoryTitle { url, title } = parse(params)?;
+            let store = hosts.store.clone();
+            block(move || crew_core::browser::set_title(&store, &url, &title)).await?;
+            Ok(Value::Null)
+        }
+        "browser_history_suggest" => {
+            let proto::HistorySuggest { text, limit } = parse(params)?;
+            let store = hosts.store.clone();
+            let now = app_state::now_millis();
+            json(block(move || crew_core::browser::suggest(&store, &text, limit, now)).await?)
+        }
+        "browser_history_list" => {
+            let proto::HistoryList { text, before, limit } = parse(params)?;
+            let store = hosts.store.clone();
+            json(block(move || crew_core::browser::list(&store, text.as_deref(), before, limit)).await?)
+        }
+        "browser_history_delete" => {
+            let proto::UrlKey { url_key } = parse(params)?;
+            let store = hosts.store.clone();
+            block(move || crew_core::browser::delete(&store, &url_key)).await?;
+            Ok(Value::Null)
+        }
+        "browser_history_clear" => {
+            let proto::HistoryClear { since } = parse(params)?;
+            let store = hosts.store.clone();
+            block(move || crew_core::browser::clear(&store, since)).await?;
+            Ok(Value::Null)
+        }
+        "browser_page_save" => {
+            let proto::PageSave { page_id, entries_json, active_index } = parse(params)?;
+            let store = hosts.store.clone();
+            let now = app_state::now_millis();
+            block(move || crew_core::browser::page_save(&store, &page_id, &entries_json, active_index, now)).await?;
+            Ok(Value::Null)
+        }
+        "browser_page_get" => {
+            let proto::PageId { page_id } = parse(params)?;
+            let store = hosts.store.clone();
+            json(block(move || crew_core::browser::page_get(&store, &page_id)).await?)
+        }
+        "browser_page_delete" => {
+            let proto::PageId { page_id } = parse(params)?;
+            let store = hosts.store.clone();
+            block(move || crew_core::browser::page_delete(&store, &page_id)).await?;
+            Ok(Value::Null)
+        }
         _ => Err(format!("Unknown method: {method}")),
     }
 }

@@ -42,6 +42,38 @@ export type FileBytes = { mime: string, data: string, };
 
 export type HarnessEvent = { "type": "session.started", } | { "type": "session.ended", code?: number | null, } | { "type": "session.error", message: string, } | { "type": "session.note", message: string, } | { "type": "user.message", text: string, hidden?: boolean, files?: Array<AttachedFile>, fromAgent?: AgentRef, } | { "type": "system.message", text: string, } | { "type": "session.providerBound", providerSessionId: string, } | { "type": "message.delta", text: string, } | { "type": "message.completed", } | { "type": "reasoning.delta", text: string, } | { "type": "turn.completed", usage?: TurnUsage, } | { "type": "tool.started", callId: string, name: string, title: string, detail?: ToolDetail, } | { "type": "tool.updated", callId: string, title?: string, status?: ToolStatus, detail?: ToolDetail, } | { "type": "approval.requested", requestId: number, name: string, title: string, input?: Record<string, unknown>, } | { "type": "approval.resolved", requestId: number, decision: ApprovalResolution, } | { "type": "question.requested", requestId: number, questions: Array<Question>, } | { "type": "question.resolved", requestId: number, answers: { [key in string]: string } | null, };
 
+export type HistoryClear = { 
+/**
+ * Only what was visited from this moment on. Absent clears everything.
+ */
+since?: number, };
+
+/**
+ * One row of browser history: every visit to the same normalized URL lands
+ * here, with the exact URL of the latest one.
+ */
+export type HistoryEntry = { urlKey: string, url: string, 
+/**
+ * Lowercase, without the port or a leading `www.`: what typing matches.
+ */
+host: string, title: string, visitCount: number, lastVisitedAt: number, 
+/**
+ * The workspace of the latest visit. It may since have been removed.
+ */
+workspaceId: string | null, };
+
+export type HistoryList = { text?: string, 
+/**
+ * Page backwards: only rows visited strictly before this moment.
+ */
+before?: number, limit: number, };
+
+export type HistorySuggest = { text: string, limit: number, };
+
+export type HistoryTitle = { url: string, title: string, };
+
+export type HistoryVisit = { url: string, title: string, workspaceId?: string, };
+
 export type Id = { id: string, };
 
 export type IdBlocks = { id: string, blocksJson: string, };
@@ -78,6 +110,20 @@ export type NamePath = { name: string, path: string, };
 export type Names = { names: Array<string>, };
 
 export type OptionalId = { id: string | null, };
+
+export type PageId = { pageId: string, };
+
+export type PageSave = { pageId: string, entriesJson: string, activeIndex: number, };
+
+/**
+ * A browser tab's back/forward stack, kept so a tab that was discarded or
+ * closed comes back with more than its URL.
+ */
+export type PageSnapshot = { pageId: string, 
+/**
+ * The renderer's own JSON; the daemon only stores it.
+ */
+entriesJson: string, activeIndex: number, updatedAt: number, };
 
 export type PathArg = { path: string, };
 
@@ -207,6 +253,8 @@ nonce?: string, };
 export type TurnStarted = { working: boolean, };
 
 export type TurnUsage = { inputTokens?: number, outputTokens?: number, costUsd?: number, durationMs?: number, };
+
+export type UrlKey = { urlKey: string, };
 
 export type Workspace = { id: string, name: string, path: string, createdAt: number, };
 
