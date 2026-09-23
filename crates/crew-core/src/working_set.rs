@@ -374,4 +374,246 @@ mod tests {
         let out = render(&[block], TAIL_BUDGET).expect("history");
         assert!(unstamped(&out).contains("[user] mira esto (attached: /tmp/shot.png)"), "{out}");
     }
+
+    fn undated(role: BlockRole, text: &str) -> Block {
+        let mut block = new_block(role, text);
+        block.at = None;
+        block
+    }
+
+    fn with(mut block: Block, edit: impl FnOnce(&mut Block)) -> Block {
+        edit(&mut block);
+        block
+    }
+
+    fn attached(paths: &[&str]) -> Option<Vec<crew_protocol::AttachedFile>> {
+        Some(
+            paths
+                .iter()
+                .map(|path| crew_protocol::AttachedFile {
+                    name: path.rsplit('/').next().unwrap_or_default().into(),
+                    path: (*path).into(),
+                    kind: None,
+                    size: None,
+                })
+                .collect(),
+        )
+    }
+
+    fn approval(decided: Option<ApprovalDecision>) -> Option<crew_protocol::BlockApproval> {
+        Some(crew_protocol::BlockApproval { request_id: 1, name: "Bash".into(), input: None, decided })
+    }
+
+    fn question(
+        questions: Vec<&str>,
+        answers: Option<Vec<(&str, &str)>>,
+        dismissed: Option<bool>,
+    ) -> Option<crew_protocol::BlockQuestion> {
+        Some(crew_protocol::BlockQuestion {
+            request_id: 1,
+            questions: questions
+                .into_iter()
+                .map(|text| crew_protocol::Question {
+                    question: text.into(),
+                    header: "H".into(),
+                    multi_select: false,
+                    options: Vec::new(),
+                })
+                .collect(),
+            answers: answers.map(|pairs| pairs.into_iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()),
+            dismissed,
+        })
+    }
+
+    /// One row per kind of block, undated so the line is exactly who and what.
+    #[test]
+    fn every_kind_of_block_reads_back_as_one_line_or_none() {
+        let long = "palabra ".repeat(80);
+        let cases: Vec<(&str, Block, Option<String>)> = vec![
+            ("reasoning is the session's own", undated(BlockRole::Reasoning, "hm"), None),
+            ("a user message", undated(BlockRole::User, "hola"), Some("[user] hola".into())),
+            (
+                "a user message with files",
+                with(undated(BlockRole::User, "mira"), |b| b.files = attached(&["/w/a.png", "/w/b.rs"])),
+                Some("[user] mira (attached: /w/a.png, /w/b.rs)".into()),
+            ),
+            (
+                "files and no words",
+                with(undated(BlockRole::User, "  "), |b| b.files = attached(&["/w/a.png"])),
+                Some("[user] (attached: /w/a.png)".into()),
+            ),
+            (
+                "an empty file list says nothing",
+                with(undated(BlockRole::User, "hola"), |b| b.files = attached(&[])),
+                Some("[user] hola".into()),
+            ),
+            (
+                "an agent with no id is still named",
+                with(undated(BlockRole::User, "hola"), |b| {
+                    b.from_agent = Some(AgentRef { id: String::new(), name: "Cuddles".into() })
+                }),
+                Some("[Cuddles] hola".into()),
+            ),
+            (
+                "a long user message is clipped",
+                undated(BlockRole::User, &long),
+                Some(format!("[user] {}…", &long.trim_end()[..MESSAGE_LIMIT - 1])),
+            ),
+            ("an empty reply", undated(BlockRole::Assistant, " \n "), None),
+            ("a reply over lines", undated(BlockRole::Assistant, "uno\n\ndos"), Some("[you] uno dos".into())),
+            ("a system note", undated(BlockRole::System, "Stopped"), Some("[crew] Stopped".into())),
+            ("an empty system note", undated(BlockRole::System, ""), None),
+            ("a tool row with no tool", undated(BlockRole::Tool, "Bash"), None),
+            (
+                "a tool with no detail uses its title",
+                with(undated(BlockRole::Tool, "TodoWrite"), |b| {
+                    b.tool = Some(BlockTool {
+                        call_id: "c1".into(),
+                        name: "TodoWrite".into(),
+                        title: "TodoWrite\n3 items".into(),
+                        status: ToolStatus::Pending,
+                        detail: None,
+                    })
+                }),
+                Some("[tool] TodoWrite 3 items (never finished)".into()),
+            ),
+            ("an approval row with no approval", undated(BlockRole::Approval, "rm"), None),
+            (
+                "an approval still waiting",
+                with(undated(BlockRole::Approval, "rm"), |b| b.approval = approval(None)),
+                None,
+            ),
+            (
+                "an allowed approval",
+                with(undated(BlockRole::Approval, "rm"), |b| b.approval = approval(Some(ApprovalDecision::Allow))),
+                None,
+            ),
+            (
+                "an always approval",
+                with(undated(BlockRole::Approval, "rm"), |b| b.approval = approval(Some(ApprovalDecision::Always))),
+                None,
+            ),
+            (
+                "a denied approval",
+                with(undated(BlockRole::Approval, "rm"), |b| b.approval = approval(Some(ApprovalDecision::Deny))),
+                Some("[tool] Bash — you were denied this".into()),
+            ),
+            ("a question row with no question", undated(BlockRole::Question, "Q"), None),
+            (
+                "a question with nothing asked",
+                with(undated(BlockRole::Question, "Q"), |b| b.question = question(vec![], None, None)),
+                None,
+            ),
+            (
+                "an answered question",
+                with(undated(BlockRole::Question, "Color"), |b| {
+                    b.question = question(vec!["Pick a\ncolor", "Pick size"], Some(vec![("Pick a color", "Red")]), None)
+                }),
+                Some("[you asked] Pick a color → Red".into()),
+            ),
+            (
+                "a dismissed question",
+                with(undated(BlockRole::Question, "Color"), |b| {
+                    b.question = question(vec!["Pick a color"], None, Some(true))
+                }),
+                Some("[you asked] Pick a color → dismissed".into()),
+            ),
+        ];
+        for (name, block, expected) in cases {
+            assert_eq!(line(&block), expected, "{name}");
+        }
+    }
+
+    #[test]
+    fn every_tool_detail_is_the_one_line_it_did() {
+        let long_url = format!("https://example.com/{}", "x".repeat(300));
+        let cases: Vec<(ToolDetail, String)> = vec![
+            (
+                ToolDetail::Command { command: "cargo test".into(), exit_code: Some(101), output: Some("x".into()) },
+                "ran: cargo test → 101".into(),
+            ),
+            (
+                ToolDetail::Command { command: "cargo\n  test".into(), exit_code: None, output: None },
+                "ran: cargo test".into(),
+            ),
+            (
+                ToolDetail::File { path: "/w/a.rs".into(), line_start: Some(4), line_end: Some(9), preview: None },
+                "read: /w/a.rs:4-9".into(),
+            ),
+            (
+                ToolDetail::File {
+                    path: "/w/a.rs".into(),
+                    line_start: Some(4),
+                    line_end: None,
+                    preview: Some("x".into()),
+                },
+                "read: /w/a.rs".into(),
+            ),
+            (
+                ToolDetail::File { path: "/w/a.rs".into(), line_start: None, line_end: None, preview: None },
+                "read: /w/a.rs".into(),
+            ),
+            (ToolDetail::Edit { path: "a.rs".into(), added: Some(0), removed: Some(2) }, "edited: a.rs +0 −2".into()),
+            (ToolDetail::Edit { path: "a.rs".into(), added: Some(5), removed: None }, "edited: a.rs".into()),
+            (ToolDetail::Search { query: "TODO".into(), matches: Some(3) }, "searched: TODO → 3 match(es)".into()),
+            (ToolDetail::Search { query: "fn\tmain".into(), matches: None }, "searched: fn main".into()),
+            (
+                ToolDetail::Fetch { url: long_url.clone(), title: Some("Example".into()) },
+                format!("fetched: {}…", &long_url[..LINE_LIMIT - 1]),
+            ),
+            (
+                ToolDetail::Message { to: "Ada".into(), text: "hola\nqué tal".into() },
+                "wrote to Ada: hola qué tal".into(),
+            ),
+            (ToolDetail::Output { text: "line one\nline two".into() }, "line one line two".into()),
+        ];
+        for (detail, expected) in cases {
+            assert_eq!(detail_line(&detail), expected, "{detail:?}");
+        }
+    }
+
+    #[test]
+    fn a_tool_that_did_not_finish_says_how() {
+        let cases = [
+            (ToolStatus::Completed, ""),
+            (ToolStatus::Failed, " (failed)"),
+            (ToolStatus::Interrupted, " (interrupted)"),
+            (ToolStatus::Pending, " (never finished)"),
+        ];
+        for (status, expected) in cases {
+            assert_eq!(outcome(&status), expected, "{status:?}");
+        }
+    }
+
+    #[test]
+    fn clip_flattens_whitespace_and_cuts_on_a_char_boundary() {
+        let cases: Vec<(&str, usize, &str)> = vec![
+            ("", 5, ""),
+            ("  a \n\t b  ", 10, "a b"),
+            ("exact", 5, "exact"),
+            ("toolong", 5, "tool…"),
+            ("ñandú über", 6, "ñandú…"),
+            ("🦀 🦀 🦀", 3, "🦀 …"),
+            ("x", 1, "x"),
+            ("xy", 1, "…"),
+        ];
+        for (text, limit, expected) in cases {
+            assert_eq!(clip(text, limit), expected, "clip({text:?}, {limit})");
+        }
+    }
+
+    /// A block that renders to nothing is not a block the budget dropped, so it
+    /// does not count as a missing message.
+    #[test]
+    fn a_silent_block_is_not_counted_as_dropped() {
+        let blocks = vec![
+            undated(BlockRole::User, "hola"),
+            undated(BlockRole::Reasoning, "hm"),
+            undated(BlockRole::Approval, "rm"),
+            undated(BlockRole::Assistant, "hola a ti"),
+        ];
+        let out = history(&blocks).expect("history");
+        assert!(!out.contains("earlier message(s)"), "{out}");
+        assert!(out.ends_with("\n\n[user] hola\n[you] hola a ti"), "{out}");
+    }
 }

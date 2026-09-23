@@ -177,7 +177,6 @@ pub fn leaf(path: &str) -> String {
 mod tests {
     use super::*;
 
-    #[test]
     /// Measured, not guessed: codex reports `crew.message_agent`, and the row
     /// it produced carried a dump of the tool's result where the chat wanted
     /// "wrote to Cuddles: the branch is green".
@@ -352,5 +351,107 @@ mod tests {
         let with = persona_prompt("Planner", "", Some("You have: message_agent."));
         assert!(with.ends_with("\n\nYou have: message_agent."), "{with}");
         assert_eq!(persona_prompt("Planner", "", Some("")), persona_prompt("Planner", "", None));
+    }
+
+    #[test]
+    fn only_a_json_object_on_a_line_is_a_record() {
+        let cases: Vec<(&str, Option<Value>)> = vec![
+            ("", None),
+            ("   ", None),
+            ("Reading prompt from stdin...", None),
+            ("[1, 2]", None),
+            ("{\"type\":", None),
+            ("{\"type\": \"x\"} trailing", None),
+            ("{}", Some(serde_json::json!({}))),
+            ("  {\"type\": \"x\", \"n\": 1}\r\n", Some(serde_json::json!({ "type": "x", "n": 1 }))),
+        ];
+        for (line, expected) in cases {
+            let expected = expected.and_then(|value| value.as_object().cloned());
+            assert_eq!(parse_json_line(line), expected, "line {line:?}");
+        }
+    }
+
+    #[test]
+    fn clip_keeps_the_first_line_and_cuts_on_a_char_boundary() {
+        let cases: Vec<(&str, usize, &str)> = vec![
+            ("", 5, ""),
+            ("short", 5, "short"),
+            ("exactly10!", 10, "exactly10!"),
+            ("one too long", 11, "one too lo…"),
+            ("first\nsecond line that is long", 8, "first"),
+            ("a much longer first line\nsecond", 6, "a muc…"),
+            ("ñandú über café", 6, "ñandú…"),
+            ("🦀🦀🦀🦀", 3, "🦀🦀…"),
+            ("日本語のテキスト", 4, "日本語…"),
+            ("anything", 1, "…"),
+        ];
+        for (text, max, expected) in cases {
+            assert_eq!(clip(text, max), expected, "clip({text:?}, {max})");
+        }
+    }
+
+    #[test]
+    fn leaf_is_the_last_segment_of_either_kind_of_path() {
+        let cases = [
+            ("/w/src/lib.rs", "lib.rs"),
+            ("C:\\w\\src\\main.rs", "main.rs"),
+            ("lib.rs", "lib.rs"),
+            ("/w/src/", "/w/src/"),
+            ("", ""),
+        ];
+        for (path, expected) in cases {
+            assert_eq!(leaf(path), expected, "leaf({path:?})");
+        }
+    }
+
+    #[test]
+    fn string_fields_are_trimmed_and_empty_ones_are_absent() {
+        let rec = serde_json::json!({ "a": "  x  ", "b": "   ", "c": 3, "d": null });
+        let rec = rec.as_object();
+        let cases = [("a", Some("x")), ("b", None), ("c", None), ("d", None), ("missing", None)];
+        for (key, expected) in cases {
+            assert_eq!(string_field(rec, key).as_deref(), expected, "key {key}");
+        }
+        assert_eq!(string_field(None, "a"), None);
+    }
+
+    #[test]
+    fn numbers_and_records_are_read_only_from_the_right_json_kinds() {
+        let cases: Vec<(Option<Value>, Option<f64>)> = vec![
+            (None, None),
+            (Some(serde_json::json!(3)), Some(3.0)),
+            (Some(serde_json::json!(2.5)), Some(2.5)),
+            (Some(serde_json::json!("3")), None),
+            (Some(Value::Null), None),
+        ];
+        for (value, expected) in cases {
+            assert_eq!(finite_number(value.as_ref()), expected, "{value:?}");
+        }
+        assert_eq!(try_parse_json_record("{\"a\":1}").map(|rec| rec.len()), Some(1));
+        assert_eq!(try_parse_json_record("[1]"), None);
+        assert_eq!(try_parse_json_record("not json"), None);
+    }
+
+    #[test]
+    fn a_message_detail_needs_someone_to_send_it_to() {
+        let input = |value: Value| value.as_object().cloned().unwrap_or_default();
+        let cases = vec![
+            (
+                "mcp__crew__message_agent",
+                input(serde_json::json!({ "to": "Cuddles", "text": " hi " })),
+                Some(crew_protocol::ToolDetail::Message { to: "Cuddles".into(), text: "hi".into() }),
+            ),
+            (
+                "crew_message_agent",
+                input(serde_json::json!({ "to": "Cuddles" })),
+                Some(crew_protocol::ToolDetail::Message { to: "Cuddles".into(), text: String::new() }),
+            ),
+            ("crew.message_agent", input(serde_json::json!({ "text": "to nobody" })), None),
+            ("crew.list_agents", input(serde_json::json!({ "to": "Cuddles" })), None),
+            ("Bash", input(serde_json::json!({ "to": "Cuddles" })), None),
+        ];
+        for (name, input, expected) in cases {
+            assert_eq!(crew_tool_detail(name, &input), expected, "{name} {input:?}");
+        }
     }
 }

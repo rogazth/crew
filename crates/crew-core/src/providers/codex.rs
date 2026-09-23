@@ -187,6 +187,123 @@ mod spawn_tests {
         });
         assert!(!args.iter().any(|arg| arg.contains("mcp_servers")), "{args:?}");
     }
+
+    fn spawn(
+        autonomy: Autonomy,
+        model: Option<&str>,
+        cwd: Option<&str>,
+        mcp: bool,
+        env: &[(&str, &str)],
+    ) -> CodexSpawn {
+        CodexSpawn {
+            prompt: "hi there".into(),
+            model: model.map(str::to_string),
+            cwd: cwd.map(str::to_string),
+            autonomy,
+            mcp: mcp.then(|| ("/opt/Crew App/crewd".to_string(), vec!["--mcp".to_string()])),
+            mcp_env: env.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
+        }
+    }
+
+    #[test]
+    fn spawn_args_spell_out_each_combination() {
+        let cases: Vec<(&str, CodexSpawn, Vec<&str>)> = vec![
+            (
+                "ask, nothing else",
+                spawn(Autonomy::Ask, None, None, false, &[]),
+                vec!["exec", "--json", "--skip-git-repo-check", "--sandbox", "workspace-write", "hi there"],
+            ),
+            (
+                "empty model and cwd are no flags",
+                spawn(Autonomy::Ask, Some(""), Some(""), false, &[]),
+                vec!["exec", "--json", "--skip-git-repo-check", "--sandbox", "workspace-write", "hi there"],
+            ),
+            (
+                "full, with a model and a cwd",
+                spawn(Autonomy::Full, Some("gpt-5-codex"), Some("/w"), false, &[]),
+                vec![
+                    "exec",
+                    "--json",
+                    "--skip-git-repo-check",
+                    "-m",
+                    "gpt-5-codex",
+                    "--dangerously-bypass-approvals-and-sandbox",
+                    "-C",
+                    "/w",
+                    "hi there",
+                ],
+            ),
+            (
+                "an mcp server with no environment",
+                spawn(Autonomy::Ask, None, None, true, &[]),
+                vec![
+                    "exec",
+                    "-c",
+                    "mcp_servers.crew.command=\"/opt/Crew App/crewd\"",
+                    "-c",
+                    "mcp_servers.crew.args=[\"--mcp\"]",
+                    "--json",
+                    "--skip-git-repo-check",
+                    "--sandbox",
+                    "workspace-write",
+                    "hi there",
+                ],
+            ),
+            (
+                "an environment value is quoted as TOML would",
+                spawn(Autonomy::Full, None, Some("/w"), true, &[("CREW_TOKEN", "a\"b\\c")]),
+                vec![
+                    "exec",
+                    "-c",
+                    "mcp_servers.crew.command=\"/opt/Crew App/crewd\"",
+                    "-c",
+                    "mcp_servers.crew.args=[\"--mcp\"]",
+                    "-c",
+                    "mcp_servers.crew.env={CREW_TOKEN=\"a\\\"b\\\\c\"}",
+                    "--json",
+                    "--skip-git-repo-check",
+                    "--dangerously-bypass-approvals-and-sandbox",
+                    "-C",
+                    "/w",
+                    "hi there",
+                ],
+            ),
+        ];
+        for (name, input, expected) in cases {
+            assert_eq!(build_codex_spawn_args(&input), expected, "{name}");
+        }
+    }
+
+    #[test]
+    fn every_combination_keeps_the_prompt_last_and_sets_only_what_was_asked() {
+        let values = [None, Some(""), Some("value")];
+        let bridges: [(bool, &[(&str, &str)]); 3] = [(false, &[]), (true, &[]), (true, &[("CREW_SOCKET", "/s")])];
+        let mut combos = Vec::new();
+        for autonomy in [Autonomy::Ask, Autonomy::Full] {
+            for model in values {
+                for cwd in values {
+                    for (mcp, env) in bridges {
+                        combos.push((autonomy.clone(), model, cwd, mcp, env));
+                    }
+                }
+            }
+        }
+        for (autonomy, model, cwd, mcp, env) in combos {
+            let full = autonomy == Autonomy::Full;
+            let case = format!("{autonomy:?} model={model:?} cwd={cwd:?} mcp={mcp} env={env:?}");
+            let args = build_codex_spawn_args(&spawn(autonomy, model, cwd, mcp, env));
+            let after = |flag: &str| args.windows(2).find(|pair| pair[0] == flag).map(|pair| pair[1].clone());
+            assert_eq!(args.first().map(String::as_str), Some("exec"), "{case}");
+            assert_eq!(args.last().map(String::as_str), Some("hi there"), "{case}");
+            assert_eq!(after("-m").as_deref(), model.filter(|m| !m.is_empty()), "{case}");
+            assert_eq!(after("-C").as_deref(), cwd.filter(|c| !c.is_empty()), "{case}");
+            let bypass = args.iter().any(|arg| arg == "--dangerously-bypass-approvals-and-sandbox");
+            assert_eq!(bypass, full, "{case}");
+            assert_eq!(after("--sandbox").as_deref(), (!full).then_some("workspace-write"), "{case}");
+            let configs = args.iter().filter(|arg| arg.starts_with("mcp_servers.crew.")).count();
+            assert_eq!(configs, if !mcp { 0 } else if env.is_empty() { 2 } else { 3 }, "{case}");
+        }
+    }
 }
 
 fn with_attached_paths(text: &str, files: &[String]) -> String {
@@ -687,5 +804,308 @@ mod tests {
                 provider_session_id: "thr_1".into(),
             })
         );
+    }
+
+    fn obj(value: Value) -> Map<String, Value> {
+        value.as_object().cloned().unwrap_or_default()
+    }
+
+    #[test]
+    fn attached_files_are_listed_under_the_prompt() {
+        let cases: Vec<(&str, Vec<String>, &str)> = vec![
+            ("mira", vec![], "mira"),
+            ("", vec![], ""),
+            ("mira", vec!["/w/a.rs".into(), "/w/b c.png".into()], "mira\n\nAttached files:\n- /w/a.rs\n- /w/b c.png"),
+            ("", vec!["/w/a.rs".into()], "Attached files:\n- /w/a.rs"),
+        ];
+        for (text, files, expected) in cases {
+            assert_eq!(with_attached_paths(text, &files), expected, "{text:?} {files:?}");
+        }
+        let prompt = build_codex_prompt("Planner", "", None, "  mira  ", &["/w/a.rs".into()], None);
+        assert!(prompt.ends_with("mira\n\nAttached files:\n- /w/a.rs"), "{prompt}");
+    }
+
+    #[test]
+    fn only_item_events_carry_an_item() {
+        let cases = vec![
+            (json!({ "item": { "type": "agent_message" } }), None),
+            (json!({ "type": "turn.started", "item": { "type": "agent_message" } }), None),
+            (json!({ "type": "item.started", "item": { "type": "reasoning" } }), Some(json!({ "type": "reasoning" }))),
+            (json!({ "type": "item.updated", "item": { "id": "i1" } }), Some(json!({ "id": "i1" }))),
+            (json!({ "type": "item.completed", "item": { "id": "i2" } }), Some(json!({ "id": "i2" }))),
+            (json!({ "type": "item.completed", "item": "not an object" }), None),
+            (json!({ "type": "item.completed" }), None),
+        ];
+        for (rec, expected) in cases {
+            assert_eq!(item_from_event(&obj(rec.clone())), expected.map(obj), "{rec}");
+        }
+    }
+
+    #[test]
+    fn a_message_or_an_error_is_read_only_off_its_own_item_type() {
+        let cases = vec![
+            (json!({ "type": "agent_message", "text": " hola " }), Some(" hola "), None),
+            (json!({ "type": "agent_message" }), None, None),
+            (json!({ "type": "reasoning", "text": "hm" }), None, None),
+            (json!({ "type": "error", "message": "stream disconnected" }), None, Some("stream disconnected")),
+            (
+                json!({ "type": "error", "message": "{\"error\":{\"message\":\"Rate limit reached\"}}" }),
+                None,
+                Some("Rate limit reached"),
+            ),
+            (json!({ "type": "error" }), None, None),
+        ];
+        for (item, text, error) in cases {
+            let item_rec = obj(item.clone());
+            assert_eq!(agent_message_text(&item_rec).as_deref(), text, "text of {item}");
+            assert_eq!(item_error_message(&item_rec).as_deref(), error, "error of {item}");
+        }
+    }
+
+    /// Codex nests the API's own JSON error inside its message; the reader
+    /// wants the sentence, not the envelope.
+    #[test]
+    fn a_stream_error_is_unwrapped_to_its_sentence() {
+        let cases = vec![
+            ("no type", json!({ "message": "boom" }), None),
+            ("another event", json!({ "type": "turn.completed", "message": "boom" }), None),
+            ("a plain error", json!({ "type": "error", "message": "boom" }), Some("boom")),
+            ("an error with no message", json!({ "type": "error" }), None),
+            (
+                "a wrapped error",
+                json!({ "type": "error", "message": "{\"error\":{\"message\":\"The model is overloaded\"}}" }),
+                Some("The model is overloaded"),
+            ),
+            (
+                "a wrapped message",
+                json!({ "type": "error", "message": "{\"message\":\"Unauthorized\"}" }),
+                Some("Unauthorized"),
+            ),
+            (
+                "json that says nothing stays as it came",
+                json!({ "type": "error", "message": "{\"status\":500}" }),
+                Some("{\"status\":500}"),
+            ),
+            ("a failed turn", json!({ "type": "turn.failed", "error": { "message": "quota" } }), Some("quota")),
+            ("a failed turn with a flat message", json!({ "type": "turn.failed", "message": "flat" }), Some("flat")),
+            ("a failed turn that says nothing", json!({ "type": "turn.failed", "error": {} }), None),
+        ];
+        for (name, rec, expected) in cases {
+            assert_eq!(stream_error_message(&obj(rec)).as_deref(), expected, "{name}");
+        }
+    }
+
+    #[test]
+    fn usage_needs_at_least_one_count() {
+        let usage = |input, output| TurnUsage {
+            input_tokens: input,
+            output_tokens: output,
+            cost_usd: None,
+            duration_ms: None,
+        };
+        let cases = vec![
+            (json!({ "type": "turn.completed" }), None),
+            (json!({ "usage": "lots" }), None),
+            (json!({ "usage": { "cached_input_tokens": 5 } }), None),
+            (json!({ "usage": { "input_tokens": 3 } }), Some(usage(Some(3), None))),
+            (json!({ "usage": { "output_tokens": 4 } }), Some(usage(None, Some(4)))),
+            (json!({ "usage": { "input_tokens": 3, "output_tokens": "4" } }), Some(usage(Some(3), None))),
+        ];
+        for (rec, expected) in cases {
+            assert_eq!(turn_usage(&obj(rec.clone())), expected, "{rec}");
+        }
+    }
+
+    /// One row per item: whether it is a tool, the name it runs under, and the
+    /// title the chat shows for it.
+    #[test]
+    fn every_item_type_is_named_and_titled() {
+        let long = format!("echo {}", "é".repeat(100));
+        let cases: Vec<(Value, bool, &str, String)> = vec![
+            (json!({ "type": "command_execution", "command": "ls -la" }), true, "bash", "ls -la".into()),
+            (
+                json!({ "type": "command_execution", "command": long }),
+                true,
+                "bash",
+                format!("echo {}…", "é".repeat(66)),
+            ),
+            (json!({ "type": "command_execution" }), true, "bash", "Command".into()),
+            (
+                json!({ "type": "file_change", "changes": [{ "path": "/w/foo.ts", "kind": "add" }] }),
+                true,
+                "edit",
+                "Write foo.ts".into(),
+            ),
+            (
+                json!({ "type": "file_change", "changes": [{ "path": "/w/foo.ts", "kind": "delete" }] }),
+                true,
+                "edit",
+                "Delete foo.ts".into(),
+            ),
+            (
+                json!({ "type": "file_change", "changes": [{ "path": "/w/foo.ts", "kind": "update" }] }),
+                true,
+                "edit",
+                "Edit foo.ts".into(),
+            ),
+            (
+                json!({
+                    "type": "file_change",
+                    "changes": [{ "path": "/w/a.ts", "kind": "add" }, { "path": "/w/b.ts" }]
+                }),
+                true,
+                "edit",
+                "Write 2 files".into(),
+            ),
+            (json!({ "type": "file_change", "changes": [{ "kind": "delete" }] }), true, "edit", "Delete".into()),
+            (json!({ "type": "file_change" }), true, "edit", "Edit".into()),
+            (
+                json!({
+                    "type": "mcp_tool_call",
+                    "server": "cua",
+                    "tool": "js",
+                    "arguments": { "title": "Open terminal" }
+                }),
+                true,
+                "js",
+                "Open terminal".into(),
+            ),
+            (json!({ "type": "mcp_tool_call", "server": "cua", "tool": "js" }), true, "js", "cua.js".into()),
+            (json!({ "type": "mcp_tool_call", "tool": "js", "arguments": "x" }), true, "js", "js".into()),
+            (json!({ "type": "mcp_tool_call", "server": "cua" }), true, "mcp", "cua".into()),
+            (json!({ "type": "mcp_tool_call" }), true, "mcp", "MCP".into()),
+            (json!({ "type": "web_search", "query": "ts-rs" }), true, "websearch", "Search ts-rs".into()),
+            (json!({ "type": "web_search" }), true, "websearch", "Search".into()),
+            (json!({ "type": "collab_tool_call", "tool": "spawn" }), true, "spawn", "spawn".into()),
+            (json!({ "type": "collab_tool_call" }), true, "collab", "Collab".into()),
+            (json!({ "type": "reasoning" }), false, "reasoning", "reasoning".into()),
+            (json!({ "type": "agent_message", "text": "hi" }), false, "agent_message", "agent_message".into()),
+            (json!({ "id": "i1" }), false, "tool", "tool".into()),
+        ];
+        for (item, is_tool, name, title) in cases {
+            let rec = obj(item.clone());
+            assert_eq!(is_tool_item(&rec), is_tool, "is_tool_item {item}");
+            assert_eq!(tool_name(&rec), name, "tool_name {item}");
+            assert_eq!(tool_label(&rec), title, "tool_label {item}");
+        }
+        assert_eq!(tool_call_id(&obj(json!({ "id": " c1 " }))).as_deref(), Some("c1"));
+        assert_eq!(tool_call_id(&obj(json!({}))), None);
+        assert_eq!(thread_id_from_event(&obj(json!({ "thread_id": "thr_1" }))).as_deref(), Some("thr_1"));
+    }
+
+    #[test]
+    fn every_item_type_has_the_detail_it_can_back_up() {
+        let cases: Vec<(&str, Value, Option<ToolDetail>)> = vec![
+            (
+                "a command still running",
+                json!({ "type": "command_execution", "command": "ls" }),
+                Some(ToolDetail::Command { command: "ls".into(), exit_code: None, output: None }),
+            ),
+            (
+                "a command that finished with output",
+                json!({ "type": "command_execution", "command": "ls", "exit_code": 2, "aggregated_output": "nope\n" }),
+                Some(ToolDetail::Command { command: "ls".into(), exit_code: Some(2), output: Some("nope\n".into()) }),
+            ),
+            (
+                "an empty output is no output",
+                json!({ "type": "command_execution", "command": "true", "exit_code": 0, "aggregated_output": "" }),
+                Some(ToolDetail::Command { command: "true".into(), exit_code: Some(0), output: None }),
+            ),
+            (
+                "an output that is neither text nor blocks",
+                json!({ "type": "command_execution", "command": "ls", "aggregated_output": 5 }),
+                Some(ToolDetail::Command { command: "ls".into(), exit_code: None, output: None }),
+            ),
+            ("a command with no command", json!({ "type": "command_execution", "exit_code": 0 }), None),
+            (
+                "a change to one file",
+                json!({ "type": "file_change", "changes": [{ "path": "/w/a.rs", "kind": "update" }] }),
+                Some(ToolDetail::Edit { path: "/w/a.rs".into(), added: None, removed: None }),
+            ),
+            ("a change with no path", json!({ "type": "file_change", "changes": [{ "kind": "add" }] }), None),
+            ("a change with no changes", json!({ "type": "file_change", "changes": [] }), None),
+            ("a change with no list", json!({ "type": "file_change" }), None),
+            (
+                "a crew message",
+                json!({
+                    "type": "mcp_tool_call",
+                    "server": "crew",
+                    "tool": "message_agent",
+                    "arguments": { "to": "Ada", "text": "hi" }
+                }),
+                Some(ToolDetail::Message { to: "Ada".into(), text: "hi".into() }),
+            ),
+            (
+                "a crew message with no recipient shows its answer",
+                json!({
+                    "type": "mcp_tool_call",
+                    "server": "crew",
+                    "tool": "message_agent",
+                    "arguments": { "text": "hi" },
+                    "result": { "content": [{ "type": "text", "text": "missing `to`" }] }
+                }),
+                Some(ToolDetail::Output { text: "missing `to`".into() }),
+            ),
+            (
+                "a crew call with no arguments",
+                json!({
+                    "type": "mcp_tool_call",
+                    "server": "crew",
+                    "tool": "message_agent",
+                    "result": { "content": "sent" }
+                }),
+                Some(ToolDetail::Output { text: "sent".into() }),
+            ),
+            (
+                "a result in several blocks",
+                json!({
+                    "type": "mcp_tool_call",
+                    "server": "cua",
+                    "tool": "js",
+                    "result": {
+                        "content": [{ "type": "text", "text": "one" }, { "type": "image" }, "x", { "text": "two" }]
+                    }
+                }),
+                Some(ToolDetail::Output { text: "one\ntwo".into() }),
+            ),
+            (
+                "a result with no text in it",
+                json!({ "type": "mcp_tool_call", "tool": "js", "result": { "content": [{ "type": "image" }] } }),
+                None,
+            ),
+            (
+                "a result whose content is a number",
+                json!({ "type": "mcp_tool_call", "tool": "js", "result": { "content": 3 } }),
+                None,
+            ),
+            ("a call with no result yet", json!({ "type": "mcp_tool_call", "tool": "js", "result": null }), None),
+            (
+                "a web search",
+                json!({ "type": "web_search", "query": "rust" }),
+                Some(ToolDetail::Search { query: "rust".into(), matches: None }),
+            ),
+            ("a web search with no query", json!({ "type": "web_search" }), None),
+            ("a collab call", json!({ "type": "collab_tool_call", "tool": "spawn" }), None),
+            ("not a tool", json!({ "type": "agent_message", "text": "hi" }), None),
+        ];
+        for (name, item, expected) in cases {
+            assert_eq!(tool_detail(&obj(item)), expected, "{name}");
+        }
+    }
+
+    #[test]
+    fn a_finished_item_failed_when_it_says_so_or_its_exit_code_does() {
+        let cases = vec![
+            (json!({ "status": "failed" }), ToolStatus::Failed),
+            (json!({ "status": "declined", "exit_code": 0 }), ToolStatus::Failed),
+            (json!({ "status": "completed", "exit_code": 1 }), ToolStatus::Completed),
+            (json!({ "status": "in_progress", "exit_code": 127 }), ToolStatus::Failed),
+            (json!({ "exit_code": 0 }), ToolStatus::Completed),
+            (json!({ "exit_code": "1" }), ToolStatus::Completed),
+            (json!({}), ToolStatus::Completed),
+        ];
+        for (item, expected) in cases {
+            assert_eq!(completed_tool_status(&obj(item.clone())), expected, "{item}");
+        }
     }
 }

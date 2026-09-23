@@ -1100,4 +1100,979 @@ mod tests {
             None
         );
     }
+
+    fn obj(value: Value) -> Map<String, Value> {
+        value.as_object().cloned().unwrap_or_default()
+    }
+
+    fn flag<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
+        args.windows(2).find(|pair| pair[0] == name).map(|pair| pair[1].as_str())
+    }
+
+    #[test]
+    fn spawn_args_open_with_the_stream_json_contract() {
+        let args = build_claude_spawn_args(&ClaudeSpawn {
+            model: None,
+            session_id: None,
+            system_prompt: None,
+            autonomy: Autonomy::Ask,
+            mcp_config: None,
+        });
+        assert_eq!(
+            args,
+            vec![
+                "--output-format",
+                "stream-json",
+                "--verbose",
+                "--input-format",
+                "stream-json",
+                "--include-partial-messages",
+                "--setting-sources=project,local",
+                "--settings",
+                "{\"autoMemoryEnabled\":false}",
+                "--permission-prompt-tool",
+                "stdio",
+            ]
+        );
+    }
+
+    /// Every autonomy, model, session, persona and MCP combination, empty
+    /// strings included: an empty value is no flag, never a flag with "" after it.
+    #[test]
+    fn spawn_args_carry_exactly_the_options_that_were_set() {
+        fn set(value: &Option<String>) -> Option<&str> {
+            value.as_deref().filter(|v| !v.is_empty())
+        }
+        let values = [None, Some(""), Some("value")];
+        let mut spawns = Vec::new();
+        for autonomy in [Autonomy::Ask, Autonomy::Full] {
+            for model in values {
+                for session in values {
+                    for prompt in values {
+                        for mcp in values {
+                            spawns.push(ClaudeSpawn {
+                                model: model.map(str::to_string),
+                                session_id: session.map(str::to_string),
+                                system_prompt: prompt.map(str::to_string),
+                                autonomy: autonomy.clone(),
+                                mcp_config: mcp.map(str::to_string),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        for spawn in spawns {
+            let args = build_claude_spawn_args(&spawn);
+            let case = format!("{spawn:?}");
+            assert_eq!(flag(&args, "--model"), set(&spawn.model), "{case}");
+            assert_eq!(flag(&args, "--session-id"), set(&spawn.session_id), "{case}");
+            assert_eq!(flag(&args, "--append-system-prompt"), set(&spawn.system_prompt), "{case}");
+            assert_eq!(flag(&args, "--mcp-config"), set(&spawn.mcp_config), "{case}");
+            let full = spawn.autonomy == Autonomy::Full;
+            assert_eq!(args.iter().any(|a| a == "--dangerously-skip-permissions"), full, "{case}");
+            assert_eq!(flag(&args, "--permission-prompt-tool"), (!full).then_some("stdio"), "{case}");
+            assert!(!args.iter().any(|a| a.is_empty()), "an empty argument went out: {case}");
+        }
+    }
+
+    #[test]
+    fn a_full_spawn_lists_its_options_in_order() {
+        let args = build_claude_spawn_args(&ClaudeSpawn {
+            model: Some("claude-opus-4-1".into()),
+            session_id: Some("sid".into()),
+            system_prompt: Some("You are Planner.".into()),
+            autonomy: Autonomy::Full,
+            mcp_config: Some("{\"mcpServers\":{}}".into()),
+        });
+        assert_eq!(
+            args[9..],
+            [
+                "--dangerously-skip-permissions",
+                "--model",
+                "claude-opus-4-1",
+                "--append-system-prompt",
+                "You are Planner.",
+                "--session-id",
+                "sid",
+                "--mcp-config",
+                "{\"mcpServers\":{}}",
+            ]
+        );
+    }
+
+    fn image(media_type: &str, data: &str) -> InlineImage {
+        InlineImage {
+            path: "/tmp/shot".into(),
+            media_type: media_type.into(),
+            data: data.into(),
+        }
+    }
+
+    fn image_block(media_type: &str, data: &str) -> Value {
+        json!({ "type": "image", "source": { "type": "base64", "media_type": media_type, "data": data } })
+    }
+
+    /// Images travel inline, every other attachment as a path the agent can
+    /// open, and the text block is left out only when an image says it all.
+    #[test]
+    fn a_user_message_carries_the_text_the_files_and_the_images() {
+        let note = "Attached files. Read them if you need their contents:";
+        /// Name, tail, text, files, images, and the content blocks they make.
+        type Case = (&'static str, Option<&'static str>, &'static str, Vec<String>, Vec<InlineImage>, Value);
+        let cases: Vec<Case> = vec![
+            ("plain text is trimmed", None, "  hola  ", vec![], vec![], json!([{ "type": "text", "text": "hola" }])),
+            (
+                "files are listed under the text",
+                None,
+                "mira",
+                vec!["/w/a.rs".into(), "/w/b c.rs".into()],
+                vec![],
+                json!([{ "type": "text", "text": format!("mira\n\n{note}\n- /w/a.rs\n- /w/b c.rs") }]),
+            ),
+            (
+                "files with no text are the whole message",
+                None,
+                "",
+                vec!["/w/a.rs".into()],
+                vec![],
+                json!([{ "type": "text", "text": format!("{note}\n- /w/a.rs") }]),
+            ),
+            (
+                "an image with no text is only the image",
+                None,
+                "   ",
+                vec![],
+                vec![image("image/png", "iVBOR")],
+                json!([image_block("image/png", "iVBOR")]),
+            ),
+            (
+                "images go above the text, in order",
+                None,
+                "what is this?",
+                vec![],
+                vec![image("image/png", "AAA"), image("image/jpeg", "BBB")],
+                json!([
+                    image_block("image/png", "AAA"),
+                    image_block("image/jpeg", "BBB"),
+                    { "type": "text", "text": "what is this?" }
+                ]),
+            ),
+            (
+                "an image and a file",
+                None,
+                "",
+                vec!["/w/notes.md".into()],
+                vec![image("image/gif", "R0lG")],
+                json!([
+                    image_block("image/gif", "R0lG"),
+                    { "type": "text", "text": format!("{note}\n- /w/notes.md") }
+                ]),
+            ),
+            ("nothing at all is still a message", None, "", vec![], vec![], json!([{ "type": "text", "text": "" }])),
+            (
+                "the tail rides above the turn",
+                Some("## The conversation so far\n\n[user] hola"),
+                "y ahora?",
+                vec![],
+                vec![],
+                json!([{
+                    "type": "text",
+                    "text": "## The conversation so far\n\n[user] hola\n\n## This turn\n\ny ahora?"
+                }]),
+            ),
+            (
+                "a tail with only an image under it",
+                Some("## tail"),
+                "",
+                vec![],
+                vec![image("image/png", "AAA")],
+                json!([image_block("image/png", "AAA"), { "type": "text", "text": "## tail" }]),
+            ),
+            (
+                "a blank tail is no tail",
+                Some("  \n "),
+                "hola",
+                vec![],
+                vec![],
+                json!([{ "type": "text", "text": "hola" }]),
+            ),
+        ];
+        for (name, history, text, files, images, content) in cases {
+            let message = build_claude_user_message("sid-1", history, text, &files, &images);
+            assert_eq!(
+                message,
+                json!({
+                    "type": "user",
+                    "session_id": "sid-1",
+                    "parent_tool_use_id": null,
+                    "message": { "role": "user", "content": content },
+                }),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn control_frames_wrap_the_request_and_the_response() {
+        assert_eq!(
+            build_control_request("req_1", json!({ "subtype": "interrupt" })),
+            json!({ "type": "control_request", "request_id": "req_1", "request": { "subtype": "interrupt" } })
+        );
+        assert_eq!(
+            build_control_response("c909", json!({ "behavior": "allow" })),
+            json!({
+                "type": "control_response",
+                "response": { "subtype": "success", "request_id": "c909", "response": { "behavior": "allow" } }
+            })
+        );
+    }
+
+    #[test]
+    fn a_decision_becomes_the_permission_result_claude_expects() {
+        let rule = |tool: &str, content: Option<&str>| {
+            let rule = match content {
+                Some(content) => json!({ "toolName": tool, "ruleContent": content }),
+                None => json!({ "toolName": tool }),
+            };
+            json!([{ "type": "addRules", "rules": [rule], "behavior": "allow", "destination": "session" }])
+        };
+        let cases = vec![
+            (
+                "deny",
+                ApprovalDecision::Deny,
+                "Bash",
+                json!({ "command": "rm -rf /" }),
+                json!({ "behavior": "deny", "message": "User declined tool execution." }),
+            ),
+            (
+                "allow echoes the input",
+                ApprovalDecision::Allow,
+                "Edit",
+                json!({ "file_path": "/w/a.rs", "old_string": "a", "new_string": "b" }),
+                json!({
+                    "behavior": "allow",
+                    "updatedInput": { "file_path": "/w/a.rs", "old_string": "a", "new_string": "b" }
+                }),
+            ),
+            (
+                "always on a shell names its program",
+                ApprovalDecision::Always,
+                "Bash",
+                json!({ "command": "  git   status --short" }),
+                json!({
+                    "behavior": "allow",
+                    "updatedInput": { "command": "  git   status --short" },
+                    "updatedPermissions": rule("Bash", Some("git:*")),
+                }),
+            ),
+            (
+                "the shell tool is matched whatever its case",
+                ApprovalDecision::Always,
+                "bash",
+                json!({ "command": "npm test" }),
+                json!({
+                    "behavior": "allow",
+                    "updatedInput": { "command": "npm test" },
+                    "updatedPermissions": rule("bash", Some("npm:*")),
+                }),
+            ),
+            (
+                "a shell call with no command names the tool",
+                ApprovalDecision::Always,
+                "Bash",
+                json!({ "command": "   " }),
+                json!({
+                    "behavior": "allow",
+                    "updatedInput": { "command": "   " },
+                    "updatedPermissions": rule("Bash", None),
+                }),
+            ),
+            (
+                "a command on another tool is not a program",
+                ApprovalDecision::Always,
+                "mcp__solo__run",
+                json!({ "command": "ls" }),
+                json!({
+                    "behavior": "allow",
+                    "updatedInput": { "command": "ls" },
+                    "updatedPermissions": rule("mcp__solo__run", None),
+                }),
+            ),
+        ];
+        for (name, decision, tool, input, expected) in cases {
+            assert_eq!(to_permission_result(decision, &obj(input), tool), expected, "{name}");
+        }
+    }
+
+    #[test]
+    fn a_malformed_question_is_skipped_and_the_rest_are_kept() {
+        let option = |label: &str| QuestionOption { label: label.into(), description: None };
+        let plain = |text: &str, label: &str| Question {
+            question: text.into(),
+            header: text.into(),
+            multi_select: false,
+            options: vec![option(label)],
+        };
+        let cases: Vec<(&str, Value, Vec<Question>)> = vec![
+            ("no questions", json!({}), vec![]),
+            ("questions is not a list", json!({ "questions": "Pick one" }), vec![]),
+            ("a question that is not an object", json!({ "questions": [3, null, "Q"] }), vec![]),
+            ("no question text", json!({ "questions": [{ "options": [{ "label": "A" }] }] }), vec![]),
+            (
+                "blank question text",
+                json!({ "questions": [{ "question": "  ", "options": [{ "label": "A" }] }] }),
+                vec![],
+            ),
+            ("no options", json!({ "questions": [{ "question": "Q" }] }), vec![]),
+            (
+                "options is not a list",
+                json!({ "questions": [{ "question": "Q", "options": { "label": "A" } }] }),
+                vec![],
+            ),
+            (
+                "no option has a label",
+                json!({ "questions": [{
+                    "question": "Q",
+                    "options": ["A", { "description": "d" }, { "label": " " }]
+                }] }),
+                vec![],
+            ),
+            (
+                "unlabelled options are dropped, the rest kept",
+                json!({ "questions": [{ "question": "Q", "options": ["A", { "label": "B" }, { "label": "" }] }] }),
+                vec![plain("Q", "B")],
+            ),
+            (
+                "multiSelect must be a real true",
+                json!({ "questions": [{ "question": "Q", "multiSelect": "true", "options": [{ "label": "A" }] }] }),
+                vec![plain("Q", "A")],
+            ),
+            (
+                "a blank header falls back to the question",
+                json!({ "questions": [{
+                    "question": "Q",
+                    "header": " ",
+                    "options": [{ "label": "A", "description": "A" }]
+                }] }),
+                vec![plain("Q", "A")],
+            ),
+            (
+                "a broken question between two good ones",
+                json!({ "questions": [
+                    {
+                        "question": "First",
+                        "header": "One",
+                        "multiSelect": true,
+                        "options": [{ "label": "A", "description": "Do A" }]
+                    },
+                    { "question": "Broken", "options": [] },
+                    { "question": "Second", "options": [{ "label": "B" }] }
+                ] }),
+                vec![
+                    Question {
+                        question: "First".into(),
+                        header: "One".into(),
+                        multi_select: true,
+                        options: vec![QuestionOption { label: "A".into(), description: Some("Do A".into()) }],
+                    },
+                    plain("Second", "B"),
+                ],
+            ),
+        ];
+        for (name, input, expected) in cases {
+            assert_eq!(parse_questions(&obj(input)), expected, "{name}");
+        }
+    }
+
+    #[test]
+    fn a_control_request_is_read_from_either_nesting() {
+        let request = |request_id: &str, subtype: &str, tool: Option<&str>, input: Value, tool_use_id: Option<&str>| {
+            Some(ClaudeControlRequest {
+                request_id: request_id.into(),
+                subtype: subtype.into(),
+                tool_name: tool.map(str::to_string),
+                input: obj(input),
+                tool_use_id: tool_use_id.map(str::to_string),
+            })
+        };
+        let cases = vec![
+            ("not a control frame", json!({ "type": "assistant", "request_id": "1" }), None),
+            ("no type at all", json!({ "request_id": "1", "request": { "subtype": "can_use_tool" } }), None),
+            ("no request id", json!({ "type": "control_request", "request": { "subtype": "can_use_tool" } }), None),
+            ("no subtype", json!({ "type": "control_request", "request_id": "1", "request": {} }), None),
+            (
+                "the sdk spelling, with the id and the input nested",
+                json!({
+                    "type": "sdk_control_request",
+                    "request": {
+                        "request_id": "r7",
+                        "subtype": "can_use_tool",
+                        "tool_name": "Bash",
+                        "tool_input": { "command": "ls" }
+                    }
+                }),
+                request("r7", "can_use_tool", Some("Bash"), json!({ "command": "ls" }), None),
+            ),
+            (
+                "everything at the top level",
+                json!({
+                    "type": "control_request",
+                    "request_id": "r8",
+                    "subtype": "can_use_tool",
+                    "tool_name": "Edit",
+                    "tool_use_id": "toolu_2",
+                    "input": { "file_path": "/w/a.rs" }
+                }),
+                request("r8", "can_use_tool", Some("Edit"), json!({ "file_path": "/w/a.rs" }), Some("toolu_2")),
+            ),
+            (
+                "an input that is not an object is an empty one",
+                json!({
+                    "type": "control_request",
+                    "request_id": "r9",
+                    "request": { "subtype": "can_use_tool", "input": "ls" }
+                }),
+                request("r9", "can_use_tool", None, json!({}), None),
+            ),
+        ];
+        for (name, rec, expected) in cases {
+            assert_eq!(parse_control_request(&obj(rec)), expected, "{name}");
+        }
+    }
+
+    #[test]
+    fn a_cancel_names_the_request_it_withdraws() {
+        let cases = vec![
+            ("no type", json!({ "request_id": "c1" }), None),
+            ("a request, not a cancel", json!({ "type": "control_request", "request_id": "c1" }), None),
+            ("top level id", json!({ "type": "control_cancel_request", "request_id": "c1" }), Some("c1")),
+            (
+                "nested id, sdk spelling",
+                json!({ "type": "sdk_control_cancel_request", "request": { "request_id": "c2" } }),
+                Some("c2"),
+            ),
+            ("a cancel with no id", json!({ "type": "control_cancel_request", "request": {} }), None),
+        ];
+        for (name, rec, expected) in cases {
+            assert_eq!(parse_control_cancel_id(&obj(rec)).as_deref(), expected, "{name}");
+        }
+    }
+
+    /// Hook frames carry the session of whatever ran the hook, which is not
+    /// necessarily this one.
+    #[test]
+    fn a_hook_frame_never_names_the_session() {
+        let cases = vec![
+            ("init", json!({ "type": "system", "subtype": "init", "session_id": "s1" }), Some("s1")),
+            ("a hook", json!({ "type": "system", "subtype": "hook_started", "session_id": "s2" }), None),
+            (
+                "hook-ish subtype on another frame",
+                json!({ "type": "assistant", "subtype": "hook_x", "session_id": "s3" }),
+                Some("s3"),
+            ),
+            ("system without a subtype", json!({ "type": "system", "session_id": "s4" }), Some("s4")),
+            ("no session id", json!({ "type": "result" }), None),
+        ];
+        for (name, rec, expected) in cases {
+            assert_eq!(session_id_from_message(&obj(rec)).as_deref(), expected, "{name}");
+        }
+    }
+
+    fn stream(event: Value) -> Map<String, Value> {
+        obj(json!({ "type": "stream_event", "event": event, "session_id": "s" }))
+    }
+
+    #[test]
+    fn only_a_text_delta_streams_text() {
+        let cases = vec![
+            ("no event", obj(json!({ "type": "stream_event" })), None),
+            ("another event", stream(json!({ "type": "message_start" })), None),
+            ("no delta", stream(json!({ "type": "content_block_delta", "index": 0 })), None),
+            (
+                "a json delta",
+                stream(json!({
+                    "type": "content_block_delta",
+                    "delta": { "type": "input_json_delta", "partial_json": "{" }
+                })),
+                None,
+            ),
+            (
+                "an empty text delta",
+                stream(json!({ "type": "content_block_delta", "delta": { "type": "text_delta", "text": "" } })),
+                None,
+            ),
+            (
+                "text keeps its whitespace",
+                stream(json!({ "type": "content_block_delta", "delta": { "type": "text_delta", "text": " hola\n" } })),
+                Some(" hola\n"),
+            ),
+        ];
+        for (name, rec, expected) in cases {
+            assert_eq!(stream_text_delta(&rec).as_deref(), expected, "{name}");
+        }
+    }
+
+    #[test]
+    fn a_tool_opens_on_its_content_block_start() {
+        let start = |block: Value| stream(json!({ "type": "content_block_start", "index": 2, "content_block": block }));
+        let tool = |index: i64, id: &str, name: &str, input: Value| {
+            Some(ToolStart { index, id: id.into(), name: name.into(), input: obj(input) })
+        };
+        let cases = vec![
+            ("no event", obj(json!({})), None),
+            ("a delta, not a start", stream(json!({ "type": "content_block_delta", "index": 2 })), None),
+            ("no content block", stream(json!({ "type": "content_block_start", "index": 2 })), None),
+            ("a text block", start(json!({ "type": "text", "text": "" })), None),
+            ("a block with no type", start(json!({ "id": "t", "name": "Bash" })), None),
+            ("a tool with no id", start(json!({ "type": "tool_use", "name": "Bash" })), None),
+            ("a tool with no name", start(json!({ "type": "tool_use", "id": "t1" })), None),
+            (
+                "a tool use",
+                start(json!({ "type": "tool_use", "id": "t1", "name": "Bash", "input": {} })),
+                tool(2, "t1", "Bash", json!({})),
+            ),
+            (
+                "a server tool with its input",
+                start(json!({
+                    "type": "server_tool_use",
+                    "id": "t2",
+                    "name": "web_search",
+                    "input": { "query": "rust" }
+                })),
+                tool(2, "t2", "web_search", json!({ "query": "rust" })),
+            ),
+            (
+                "an mcp tool with no index and a bad input",
+                stream(json!({
+                    "type": "content_block_start",
+                    "content_block": {
+                        "type": "mcp_tool_use",
+                        "id": "t3",
+                        "name": "mcp__crew__list_agents",
+                        "input": [1]
+                    }
+                })),
+                tool(-1, "t3", "mcp__crew__list_agents", json!({})),
+            ),
+        ];
+        for (name, rec, expected) in cases {
+            assert_eq!(tool_start_from_event(&rec), expected, "{name}");
+        }
+    }
+
+    #[test]
+    fn a_partial_input_is_a_json_delta_with_something_in_it() {
+        let delta = |delta: Value| stream(json!({ "type": "content_block_delta", "index": 1, "delta": delta }));
+        let cases = vec![
+            ("no event", obj(json!({})), None),
+            ("a start, not a delta", stream(json!({ "type": "content_block_start", "index": 1 })), None),
+            ("no delta", stream(json!({ "type": "content_block_delta", "index": 1 })), None),
+            ("a text delta", delta(json!({ "type": "text_delta", "text": "hi" })), None),
+            ("no partial json", delta(json!({ "type": "input_json_delta" })), None),
+            ("an empty partial", delta(json!({ "type": "input_json_delta", "partial_json": "" })), None),
+            (
+                "a partial",
+                delta(json!({ "type": "input_json_delta", "partial_json": "{\"command\":" })),
+                Some((1, "{\"command\":".to_string())),
+            ),
+            (
+                "a partial with no index",
+                stream(json!({
+                    "type": "content_block_delta",
+                    "delta": { "type": "input_json_delta", "partial_json": "}" }
+                })),
+                Some((-1, "}".to_string())),
+            ),
+        ];
+        for (name, rec, expected) in cases {
+            assert_eq!(input_json_delta_from_event(&rec), expected, "{name}");
+        }
+    }
+
+    #[test]
+    fn frames_are_classified_by_their_markers() {
+        let cases = vec![
+            (json!({ "type": "stream_event", "event": { "type": "message_start" } }), true, false, false),
+            (json!({ "type": "stream_event", "event": { "type": "message_stop" } }), false, false, false),
+            (json!({ "type": "stream_event", "event": "message_start" }), false, false, false),
+            (json!({ "type": "assistant", "parent_tool_use_id": "toolu_1" }), false, true, false),
+            (json!({ "type": "assistant", "parent_tool_use_id": "" }), false, false, false),
+            (json!({ "type": "assistant", "parent_tool_use_id": null }), false, false, false),
+            (json!({ "type": "system", "subtype": "compact_boundary" }), false, false, true),
+            (json!({ "type": "system", "subtype": "init" }), false, false, false),
+            (json!({ "type": "user", "subtype": "compact_boundary" }), false, false, false),
+            (json!({ "subtype": "compact_boundary" }), false, false, false),
+        ];
+        for (rec, start, subagent, compact) in cases {
+            let rec = obj(rec);
+            assert_eq!(is_message_start(&rec), start, "message start: {rec:?}");
+            assert_eq!(is_subagent_message(&rec), subagent, "subagent: {rec:?}");
+            assert_eq!(is_compact_boundary(&rec), compact, "compact boundary: {rec:?}");
+        }
+    }
+
+    fn message(content: Value) -> Map<String, Value> {
+        obj(json!({ "type": "assistant", "message": { "role": "assistant", "content": content } }))
+    }
+
+    #[test]
+    fn assistant_text_is_its_text_blocks_joined() {
+        let cases = vec![
+            ("no message", obj(json!({ "type": "assistant" })), ""),
+            ("a message that is a string", obj(json!({ "message": "hi" })), ""),
+            ("content that is not a list", message(json!("hi")), ""),
+            ("no blocks", message(json!([])), ""),
+            (
+                "text around a tool and junk",
+                message(json!([
+                    { "type": "text", "text": "Voy a " },
+                    { "type": "tool_use", "id": "t1", "name": "Bash", "input": {} },
+                    "loose string",
+                    { "type": "text" },
+                    { "type": "thinking", "thinking": "hm" },
+                    { "type": "text", "text": "mirar." }
+                ])),
+                "Voy a mirar.",
+            ),
+        ];
+        for (name, rec, expected) in cases {
+            assert_eq!(assistant_text_blocks(&rec), expected, "{name}");
+        }
+    }
+
+    #[test]
+    fn assistant_tool_uses_are_every_well_formed_call() {
+        let call = |id: &str, name: &str, input: Value| AssistantToolUse {
+            id: id.into(),
+            name: name.into(),
+            input: obj(input),
+        };
+        let cases = vec![
+            ("no message", obj(json!({})), vec![]),
+            ("content that is not a list", message(json!({ "type": "tool_use" })), vec![]),
+            (
+                "every kind of call, and the malformed ones dropped",
+                message(json!([
+                    { "type": "text", "text": "running" },
+                    { "type": "tool_use", "id": "t1", "name": "Bash", "input": { "command": "ls" } },
+                    { "type": "server_tool_use", "id": "t2", "name": "web_search" },
+                    { "type": "mcp_tool_use", "id": "t3", "name": "mcp__crew__list_agents", "input": "bad" },
+                    { "type": "tool_use", "name": "NoId" },
+                    { "type": "tool_use", "id": "t4" },
+                    { "id": "t5", "name": "NoType" },
+                    42
+                ])),
+                vec![
+                    call("t1", "Bash", json!({ "command": "ls" })),
+                    call("t2", "web_search", json!({})),
+                    call("t3", "mcp__crew__list_agents", json!({})),
+                ],
+            ),
+        ];
+        for (name, rec, expected) in cases {
+            assert_eq!(assistant_tool_uses(&rec), expected, "{name}");
+        }
+    }
+
+    #[test]
+    fn tool_results_read_string_and_block_content() {
+        let result = |id: &str, is_error: bool, content: &str| ToolResult {
+            tool_use_id: id.into(),
+            is_error,
+            content: content.into(),
+        };
+        let cases = vec![
+            ("no message", obj(json!({ "type": "user" })), vec![]),
+            ("content that is not a list", obj(json!({ "message": { "content": "hi" } })), vec![]),
+            (
+                "every shape of result",
+                obj(json!({ "type": "user", "message": { "role": "user", "content": [
+                    { "type": "tool_result", "tool_use_id": "t1", "content": "200" },
+                    { "type": "tool_result", "tool_use_id": "t2", "is_error": true, "content": "Exit code 1" },
+                    { "type": "tool_result", "tool_use_id": "t3", "content": [
+                        { "type": "text", "text": "line one" },
+                        { "type": "image", "source": {} },
+                        "stray",
+                        { "type": "text", "text": "line two" }
+                    ] },
+                    { "type": "tool_result", "tool_use_id": "t4", "is_error": "true", "content": null },
+                    { "type": "tool_result", "tool_use_id": "t5", "content": { "text": "an object" } },
+                    { "type": "tool_result", "content": "no id" },
+                    { "type": "text", "text": "not a result" },
+                    7
+                ] } })),
+                vec![
+                    result("t1", false, "200"),
+                    result("t2", true, "Exit code 1"),
+                    result("t3", false, "line one\nline two"),
+                    result("t4", false, ""),
+                    result("t5", false, ""),
+                ],
+            ),
+        ];
+        for (name, rec, expected) in cases {
+            assert_eq!(tool_results_from_user_message(&rec), expected, "{name}");
+        }
+    }
+
+    /// The input a model reads includes what the cache served it, so the
+    /// count adds the cache back in.
+    #[test]
+    fn usage_counts_the_cache_as_input() {
+        let usage = |input, output, cost, duration| TurnUsage {
+            input_tokens: input,
+            output_tokens: output,
+            cost_usd: cost,
+            duration_ms: duration,
+        };
+        let cases = vec![
+            ("nothing reported", json!({ "type": "result" }), usage(None, None, None, None)),
+            (
+                "the whole result",
+                json!({
+                    "type": "result",
+                    "total_cost_usd": 0.0123,
+                    "duration_ms": 4200,
+                    "usage": {
+                        "input_tokens": 10,
+                        "output_tokens": 250,
+                        "cache_read_input_tokens": 1000,
+                        "cache_creation_input_tokens": 300
+                    }
+                }),
+                usage(Some(1310), Some(250), Some(0.0123), Some(4200)),
+            ),
+            (
+                "a cache with no input count is no input count",
+                json!({ "usage": { "cache_read_input_tokens": 1000, "output_tokens": 5 } }),
+                usage(None, Some(5), None, None),
+            ),
+            (
+                "numbers that are strings are not numbers",
+                json!({ "usage": { "input_tokens": "10", "output_tokens": 2 }, "total_cost_usd": "0.1" }),
+                usage(None, Some(2), None, None),
+            ),
+            (
+                "a usage that is not an object",
+                json!({ "usage": [1, 2], "duration_ms": 9.7 }),
+                usage(None, None, None, Some(9)),
+            ),
+        ];
+        for (name, rec, expected) in cases {
+            assert_eq!(turn_usage(&obj(rec)), expected, "{name}");
+        }
+    }
+
+    #[test]
+    fn a_failed_turn_says_why_in_the_best_words_it_has() {
+        let cases = vec![
+            ("a success", json!({ "type": "result", "subtype": "success", "result": "done" }), None),
+            ("no subtype and no error flag", json!({ "type": "result", "result": "done" }), None),
+            ("is_error must be a real true", json!({ "subtype": "success", "is_error": "true" }), None),
+            (
+                "the first real error wins over the result",
+                json!({
+                    "subtype": "error_during_execution",
+                    "is_error": true,
+                    "errors": ["[ede_diagnostic] noise", 42, "API Error: 529 Overloaded", "later"],
+                    "result": "fallback"
+                }),
+                Some("API Error: 529 Overloaded"),
+            ),
+            (
+                "only diagnostics fall back to the result",
+                json!({
+                    "subtype": "success",
+                    "is_error": true,
+                    "errors": ["[ede_diagnostic] x"],
+                    "result": "  Prompt is too long  "
+                }),
+                Some("Prompt is too long"),
+            ),
+            ("errors that are not a list", json!({ "is_error": true, "errors": "boom", "result": "why" }), Some("why")),
+            ("nothing to say", json!({ "subtype": "error_max_turns" }), Some("Claude turn failed.")),
+            ("a blank result", json!({ "is_error": true, "result": "   " }), Some("Claude turn failed.")),
+        ];
+        for (name, rec, expected) in cases {
+            assert_eq!(turn_failed(&obj(rec)).as_deref(), expected, "{name}");
+        }
+    }
+
+    #[test]
+    fn a_row_title_names_what_the_call_did() {
+        let long_command = format!("echo {}", "x".repeat(100));
+        let cases: Vec<(&str, Value, String)> = vec![
+            ("mcp__crew__message_agent", json!({ "to": "Cuddles", "text": "hi" }), "Crew message agent Cuddles".into()),
+            ("mcp__crew__spawn_agent", json!({ "name": "Planner" }), "Crew spawn agent Planner".into()),
+            ("mcp__crew__run_routine", json!({ "routine_id": "r-1" }), "Crew run routine r-1".into()),
+            ("mcp__crew__stop_agent", json!({ "agent_id": "a-1" }), "Crew stop agent a-1".into()),
+            ("mcp__crew__list_agents", json!({}), "Crew list agents".into()),
+            (
+                "mcp__crew__message_agent",
+                json!({ "to": "ñ".repeat(50) }),
+                format!("Crew message agent {}…", "ñ".repeat(39)),
+            ),
+            ("mcp__crew__", json!({}), "mcp__crew__".into()),
+            ("mcp__crew__bad-verb", json!({ "to": "x", "command": "ls" }), "ls".into()),
+            ("Bash", json!({ "command": "  npm test\nnpm run lint" }), "npm test".into()),
+            ("Bash", json!({ "command": long_command }), format!("echo {}…", "x".repeat(66))),
+            ("exec", json!({ "cmd": "cargo build" }), "cargo build".into()),
+            ("Bash", json!({ "command": "ls", "file_path": "/w/a.rs" }), "ls".into()),
+            ("Read", json!({ "file_path": "/w/src/lib.rs" }), "Read lib.rs".into()),
+            ("read", json!({ "path": "C:\\w\\main.rs" }), "Read main.rs".into()),
+            ("Write", json!({ "target_file": "/w/new.ts" }), "Write new.ts".into()),
+            ("Edit", json!({ "filePath": "/w/a.ts", "pattern": "x" }), "Edit a.ts".into()),
+            ("MultiEdit", json!({ "file_path": "/w/b.ts" }), "Edit b.ts".into()),
+            ("Glob", json!({ "pattern": "**/*.rs" }), "Glob **/*.rs".into()),
+            ("Grep", json!({ "pattern": "a".repeat(60) }), format!("Grep {}…", "a".repeat(39))),
+            ("Grep", json!({ "regex": "fn \\w+" }), "Grep fn \\w+".into()),
+            ("WebSearch", json!({ "query": "rust ts-rs" }), "Search rust ts-rs".into()),
+            ("mcp__search__websearch", json!({ "glob": "*.md" }), "Search *.md".into()),
+            ("WebFetch", json!({ "url": "https://example.com" }), "WebFetch".into()),
+            ("TodoWrite", json!({ "todos": [] }), "TodoWrite".into()),
+            ("Task", json!({ "command": "   " }), "Task".into()),
+        ];
+        for (name, input, expected) in cases {
+            assert_eq!(tool_label(name, &obj(input.clone())), expected, "{name} {input}");
+        }
+    }
+
+    #[test]
+    fn a_row_detail_is_read_off_the_input_of_every_known_tool() {
+        let file = |path: &str, start: Option<u32>, end: Option<u32>| ToolDetail::File {
+            path: path.into(),
+            line_start: start,
+            line_end: end,
+            preview: None,
+        };
+        let edit = |path: &str, added: Option<u32>, removed: Option<u32>| ToolDetail::Edit {
+            path: path.into(),
+            added,
+            removed,
+        };
+        let search = |query: &str| ToolDetail::Search { query: query.into(), matches: None };
+        let cases: Vec<(&str, Value, Option<ToolDetail>)> = vec![
+            (
+                "mcp__crew__message_agent",
+                json!({ "to": "Cuddles", "text": "hola" }),
+                Some(ToolDetail::Message { to: "Cuddles".into(), text: "hola".into() }),
+            ),
+            ("mcp__crew__message_agent", json!({ "text": "to nobody" }), None),
+            ("mcp__crew__list_agents", json!({}), None),
+            (
+                "BASH",
+                json!({ "command": "ls -la" }),
+                Some(ToolDetail::Command { command: "ls -la".into(), exit_code: None, output: None }),
+            ),
+            ("Bash", json!({ "description": "no command" }), None),
+            ("Read", json!({ "file_path": "/w/a.rs" }), Some(file("/w/a.rs", None, None))),
+            (
+                "Read",
+                json!({ "file_path": "/w/a.rs", "offset": 40, "limit": 12 }),
+                Some(file("/w/a.rs", Some(40), Some(51))),
+            ),
+            ("Read", json!({ "file_path": "/w/a.rs", "limit": 20 }), Some(file("/w/a.rs", Some(1), Some(20)))),
+            ("Read", json!({ "file_path": "/w/a.rs", "offset": 7 }), Some(file("/w/a.rs", Some(7), None))),
+            (
+                "Read",
+                json!({ "file_path": "/w/a.rs", "offset": 7, "limit": 0 }),
+                Some(file("/w/a.rs", Some(7), Some(7))),
+            ),
+            ("Read", json!({ "file_path": "/w/a.rs", "offset": "7", "limit": -3 }), Some(file("/w/a.rs", None, None))),
+            ("Read", json!({ "path": "/w/a.rs" }), None),
+            (
+                "Edit",
+                json!({ "file_path": "/w/a.rs", "old_string": "a\nb\nc", "new_string": "" }),
+                Some(edit("/w/a.rs", Some(0), Some(3))),
+            ),
+            ("Edit", json!({ "file_path": "/w/a.rs" }), Some(edit("/w/a.rs", Some(0), Some(0)))),
+            ("Edit", json!({ "old_string": "a", "new_string": "b" }), None),
+            (
+                "Write",
+                json!({ "file_path": "/w/new.rs", "content": "one\ntwo\n" }),
+                Some(edit("/w/new.rs", Some(2), None)),
+            ),
+            ("Write", json!({ "content": "x" }), None),
+            (
+                "MultiEdit",
+                json!({ "file_path": "/w/b.rs", "edits": [{ "old_string": "a" }] }),
+                Some(edit("/w/b.rs", None, None)),
+            ),
+            ("MultiEdit", json!({ "edits": [] }), None),
+            ("Glob", json!({ "pattern": "**/*.rs" }), Some(search("**/*.rs"))),
+            ("Grep", json!({ "pattern": "ToolDetail", "path": "crates" }), Some(search("ToolDetail"))),
+            ("Grep", json!({ "query": "no pattern" }), None),
+            (
+                "WebFetch",
+                json!({ "url": "https://example.com" }),
+                Some(ToolDetail::Fetch { url: "https://example.com".into(), title: None }),
+            ),
+            ("WebFetch", json!({ "prompt": "no url" }), None),
+            ("WebSearch", json!({ "query": "ts-rs enums" }), Some(search("ts-rs enums"))),
+            ("WebSearch", json!({}), None),
+            ("TodoWrite", json!({ "todos": [] }), None),
+        ];
+        for (name, input, expected) in cases {
+            assert_eq!(tool_detail(name, &obj(input.clone())), expected, "{name} {input}");
+        }
+    }
+
+    #[test]
+    fn a_result_adds_output_only_where_the_row_has_room_for_it() {
+        let cases: Vec<(&str, Value, &str, Option<ToolDetail>)> = vec![
+            ("mcp__crew__message_agent", json!({ "to": "Cuddles", "text": "hi" }), "{\"delivered\":true}", None),
+            (
+                "Bash",
+                json!({ "command": "ls" }),
+                "a.rs\n",
+                Some(ToolDetail::Command { command: "ls".into(), exit_code: None, output: Some("a.rs\n".into()) }),
+            ),
+            (
+                "Bash",
+                json!({ "command": "true" }),
+                "",
+                Some(ToolDetail::Command { command: "true".into(), exit_code: None, output: None }),
+            ),
+            (
+                "Read",
+                json!({ "file_path": "/w/a.rs", "limit": 2 }),
+                "1→fn main() {}",
+                Some(ToolDetail::File {
+                    path: "/w/a.rs".into(),
+                    line_start: Some(1),
+                    line_end: Some(2),
+                    preview: Some("1→fn main() {}".into()),
+                }),
+            ),
+            ("Edit", json!({ "file_path": "/w/a.rs" }), "The file has been updated.", None),
+            ("Grep", json!({ "pattern": "x" }), "3 matches", None),
+            ("TodoWrite", json!({}), "Todos updated", Some(ToolDetail::Output { text: "Todos updated".into() })),
+            ("TodoWrite", json!({}), "", None),
+        ];
+        for (name, input, content, expected) in cases {
+            assert_eq!(tool_result_detail(name, &obj(input.clone()), content), expected, "{name} {input} {content:?}");
+        }
+    }
+
+    #[test]
+    fn a_tool_name_is_shown_the_way_the_chat_spells_it() {
+        let cases = [
+            ("bash", "Bash"),
+            ("READ", "Read"),
+            ("write", "Write"),
+            ("Edit", "Edit"),
+            ("multiedit", "Edit"),
+            ("glob", "Glob"),
+            ("GREP", "Grep"),
+            ("WebSearch", "Search"),
+            ("mcp__brave__websearch", "Search"),
+            ("WebFetch", "WebFetch"),
+            ("TodoWrite", "TodoWrite"),
+            ("", ""),
+        ];
+        for (name, expected) in cases {
+            assert_eq!(pretty_tool(name), expected, "pretty_tool({name:?})");
+        }
+    }
 }

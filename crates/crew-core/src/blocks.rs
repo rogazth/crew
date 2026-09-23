@@ -833,6 +833,497 @@ mod tests {
         let typescript = fold_typescript(payload);
         assert_eq!(canon(&rust), canon(&typescript));
     }
+
+    #[test]
+    fn parse_blocks_keeps_only_well_formed_rows() {
+        let tool = r#"{"callId":"c1","name":"bash","title":"ls","status":"completed"}"#;
+        let every_wrong_row = format!(
+            r#"[
+                {{"id":"ok1","role":"user","text":"hi"}},
+                "a string",
+                {{"role":"user","text":"no id"}},
+                {{"id":7,"role":"user","text":"id is a number"}},
+                {{"id":"x","text":"no role"}},
+                {{"id":"x","role":5,"text":"role is a number"}},
+                {{"id":"x","role":"user"}},
+                {{"id":"x","role":"user","text":5}},
+                {{"id":"x","role":"robot","text":"unknown role"}},
+                {{"id":"x","role":"user","text":"bad flag","hidden":"yes"}},
+                {{"id":"ok2","role":"tool","text":"ls","tool":{tool}}}
+            ]"#
+        );
+        let cases: Vec<(&str, Option<&str>, Vec<&str>)> = vec![
+            ("nothing stored", None, vec![]),
+            ("an empty string", Some(""), vec![]),
+            ("not json", Some("[{\"id\":"), vec![]),
+            ("an object, not a list", Some(r#"{"id":"a","role":"user","text":"hi"}"#), vec![]),
+            ("every way a row can be wrong, between two good ones", Some(&every_wrong_row), vec!["ok1", "ok2"]),
+        ];
+        for (name, raw, ids) in cases {
+            let got: Vec<String> = parse_blocks(raw).into_iter().map(|block| block.id).collect();
+            assert_eq!(got, ids, "{name}");
+        }
+    }
+
+    fn tool_block(status: ToolStatus) -> Block {
+        let mut block = new_block(BlockRole::Tool, "ls");
+        block.tool = Some(BlockTool {
+            call_id: "c1".into(),
+            name: "bash".into(),
+            title: "ls".into(),
+            status,
+            detail: None,
+        });
+        block
+    }
+
+    fn approval_block(decided: Option<ApprovalDecision>) -> Block {
+        let mut block = new_block(BlockRole::Approval, "rm");
+        block.approval = Some(BlockApproval { request_id: 1, name: "Bash".into(), input: None, decided });
+        block
+    }
+
+    fn question_block(answered: bool, dismissed: Option<bool>) -> Block {
+        let mut block = new_block(BlockRole::Question, "Color");
+        block.question = Some(BlockQuestion {
+            request_id: 1,
+            questions: questions(),
+            answers: answered.then(|| [("Pick a color".to_string(), "Red".to_string())].into_iter().collect()),
+            dismissed,
+        });
+        block
+    }
+
+    fn streaming_reply() -> Block {
+        let mut block = new_block(BlockRole::Assistant, "typing");
+        block.streaming = Some(true);
+        block
+    }
+
+    #[test]
+    fn a_block_is_open_while_it_waits_for_someone() {
+        let cases: Vec<(&str, Block, bool)> = vec![
+            ("a pending tool", tool_block(ToolStatus::Pending), true),
+            ("a finished tool", tool_block(ToolStatus::Completed), false),
+            ("a tool row with no tool", new_block(BlockRole::Tool, "ls"), false),
+            ("an approval waiting", approval_block(None), true),
+            ("an approval answered", approval_block(Some(ApprovalDecision::Allow)), false),
+            ("an approval row with no approval", new_block(BlockRole::Approval, "rm"), false),
+            ("a question waiting", question_block(false, None), true),
+            ("a question not dismissed", question_block(false, Some(false)), true),
+            ("a question answered", question_block(true, None), false),
+            ("a question dismissed", question_block(false, Some(true)), false),
+            ("a question row with no question", new_block(BlockRole::Question, "Q"), false),
+            ("a streaming reply", streaming_reply(), false),
+            ("a user message", new_block(BlockRole::User, "hi"), false),
+            ("a system note", new_block(BlockRole::System, "note"), false),
+        ];
+        for (name, block, open) in cases {
+            assert_eq!(is_open(&block), open, "{name}");
+        }
+    }
+
+    /// What settling left on a block: streaming, tool status, approval
+    /// decision, question dismissed, question answered.
+    type Settled = (Option<bool>, Option<ToolStatus>, Option<ApprovalDecision>, Option<bool>, bool);
+
+    fn settled(block: &Block) -> Settled {
+        (
+            block.streaming,
+            block.tool.as_ref().map(|tool| tool.status.clone()),
+            block.approval.as_ref().and_then(|approval| approval.decided.clone()),
+            block.question.as_ref().and_then(|question| question.dismissed),
+            block.question.as_ref().is_some_and(|question| question.answers.is_some()),
+        )
+    }
+
+    #[test]
+    fn settling_a_turn_closes_whatever_is_still_open() {
+        use ToolStatus::{Completed, Failed, Interrupted, Pending};
+        let tool = |status| (None, Some(status), None, None, false);
+        let approval = |decided| (None, None, Some(decided), None, false);
+        let question_left = |dismissed, answered| (None, None, None, dismissed, answered);
+        let cases: Vec<(&str, Block, ToolStatus, Settled)> = vec![
+            ("a pending tool is interrupted", tool_block(Pending), Interrupted, tool(Interrupted)),
+            ("a pending tool is completed", tool_block(Pending), Completed, tool(Completed)),
+            ("a failed tool stays failed", tool_block(Failed), Completed, tool(Failed)),
+            ("a waiting approval is denied", approval_block(None), Completed, approval(ApprovalDecision::Deny)),
+            (
+                "an allowed approval stays allowed",
+                approval_block(Some(ApprovalDecision::Always)),
+                Interrupted,
+                approval(ApprovalDecision::Always),
+            ),
+            (
+                "a waiting question is dismissed",
+                question_block(false, None),
+                Completed,
+                question_left(Some(true), false),
+            ),
+            (
+                "a question not dismissed yet is",
+                question_block(false, Some(false)),
+                Completed,
+                question_left(Some(true), false),
+            ),
+            ("an answered question keeps its answer", question_block(true, None), Completed, question_left(None, true)),
+            ("a streaming reply stops streaming", streaming_reply(), Completed, (Some(false), None, None, None, false)),
+            (
+                "a user message is left alone",
+                new_block(BlockRole::User, "hi"),
+                Completed,
+                (None, None, None, None, false),
+            ),
+        ];
+        for (name, block, tools, expected) in cases {
+            let after = settle_turn(vec![block], tools);
+            assert_eq!(settled(&after[0]), expected, "{name}");
+        }
+    }
+
+    fn question(text: &str, header: &str) -> Question {
+        Question { question: text.into(), header: header.into(), multi_select: false, options: Vec::new() }
+    }
+
+    fn tool_started(call_id: &str, name: &str, title: &str) -> HarnessEvent {
+        HarnessEvent::ToolStarted { call_id: call_id.into(), name: name.into(), title: title.into(), detail: None }
+    }
+
+    fn asked(request_id: u64, title: &str) -> HarnessEvent {
+        HarnessEvent::ApprovalRequested { request_id, name: "Bash".into(), title: title.into(), input: None }
+    }
+
+    fn resolved(request_id: u64, decision: ApprovalResolution) -> HarnessEvent {
+        HarnessEvent::ApprovalResolved { request_id, decision }
+    }
+
+    fn ask_questions(request_id: u64, questions: Vec<Question>) -> HarnessEvent {
+        HarnessEvent::QuestionRequested { request_id, questions }
+    }
+
+    fn user_message(text: &str, files: Option<Vec<crew_protocol::AttachedFile>>) -> HarnessEvent {
+        HarnessEvent::UserMessage { text: text.into(), hidden: None, files, from_agent: None }
+    }
+
+    fn pending(call_id: &str, name: &str, title: &str) -> serde_json::Value {
+        json!({ "callId": call_id, "name": name, "title": title, "status": "pending" })
+    }
+
+    /// A question block with nothing asked in it, as `canon` prints it.
+    fn open_question(id: &str, request_id: u64) -> serde_json::Value {
+        json!({ "id": id, "role": "question", "text": "Question", "at": 0,
+                "question": { "requestId": request_id, "questions": [] } })
+    }
+
+    /// Each event against a transcript, compared with ids numbered in order of
+    /// appearance and every timestamp zeroed.
+    #[test]
+    fn each_event_folds_into_the_transcript_it_should() {
+        let usage = TurnUsage { input_tokens: Some(3), output_tokens: Some(4), cost_usd: None, duration_ms: None };
+        let from = crew_protocol::AgentRef { id: "a1".into(), name: "Cuddles".into() };
+        let file = crew_protocol::AttachedFile {
+            name: "a.png".into(),
+            path: "/w/a.png".into(),
+            kind: None,
+            size: Some(9),
+        };
+        let one_answer: std::collections::HashMap<String, String> =
+            [("q".to_string(), "a".to_string())].into_iter().collect();
+        let failed_ls = ToolDetail::Command { command: "ls -la".into(), exit_code: Some(2), output: None };
+        let cases: Vec<(&str, Vec<Block>, Vec<HarnessEvent>, serde_json::Value)> = vec![
+            (
+                "a cancelled approval reads as a denial",
+                vec![],
+                vec![asked(1, "rm -rf dist"), resolved(1, ApprovalResolution::Cancelled)],
+                json!([{ "id": "id-0", "role": "approval", "text": "rm -rf dist", "at": 0,
+                         "approval": { "requestId": 1, "name": "Bash", "decided": "deny" } }]),
+            ),
+            (
+                "an answer to an approval nobody asked for changes nothing",
+                vec![],
+                vec![
+                    HarnessEvent::ApprovalRequested {
+                        request_id: 1,
+                        name: "Bash".into(),
+                        title: "ls".into(),
+                        input: Some(json!({ "command": "ls" })),
+                    },
+                    resolved(2, ApprovalResolution::Allow),
+                ],
+                json!([{ "id": "id-0", "role": "approval", "text": "ls", "at": 0,
+                         "approval": { "requestId": 1, "name": "Bash", "input": { "command": "ls" } } }]),
+            ),
+            (
+                "a question with no header is titled by its question",
+                vec![],
+                vec![ask_questions(1, vec![question("Pick one", "")])],
+                json!([{ "id": "id-0", "role": "question", "text": "Pick one", "at": 0,
+                         "question": { "requestId": 1, "questions": [
+                             { "question": "Pick one", "header": "", "multiSelect": false, "options": [] }
+                         ] } }]),
+            ),
+            (
+                "a question with neither is just a question",
+                vec![],
+                vec![ask_questions(1, vec![question("", "")])],
+                json!([{ "id": "id-0", "role": "question", "text": "Question", "at": 0,
+                         "question": { "requestId": 1, "questions": [
+                             { "question": "", "header": "", "multiSelect": false, "options": [] }
+                         ] } }]),
+            ),
+            (
+                "a question with nothing asked is still a question",
+                vec![],
+                vec![ask_questions(1, vec![])],
+                json!([open_question("id-0", 1)]),
+            ),
+            (
+                "a question answered twice keeps the first answer",
+                vec![],
+                vec![
+                    ask_questions(1, vec![]),
+                    HarnessEvent::QuestionResolved { request_id: 1, answers: Some(one_answer) },
+                    HarnessEvent::QuestionResolved { request_id: 1, answers: None },
+                ],
+                json!([{ "id": "id-0", "role": "question", "text": "Question", "at": 0,
+                         "question": { "requestId": 1, "questions": [], "answers": { "q": "a" } } }]),
+            ),
+            (
+                "an answer to another question changes nothing",
+                vec![],
+                vec![ask_questions(1, vec![]), HarnessEvent::QuestionResolved { request_id: 9, answers: None }],
+                json!([open_question("id-0", 1)]),
+            ),
+            (
+                "a question after an ask that already finished is its own row",
+                vec![],
+                vec![
+                    tool_started("t1", "AskUserQuestion", "Ask"),
+                    HarnessEvent::ToolUpdated {
+                        call_id: "t1".into(),
+                        title: None,
+                        status: Some(ToolStatus::Completed),
+                        detail: None,
+                    },
+                    ask_questions(1, vec![]),
+                ],
+                json!([
+                    { "id": "id-0", "role": "tool", "text": "Ask", "at": 0,
+                      "tool": { "callId": "t1", "name": "AskUserQuestion", "title": "Ask", "status": "completed" } },
+                    open_question("id-1", 1)
+                ]),
+            ),
+            (
+                "a question after another tool is its own row",
+                vec![],
+                vec![tool_started("t1", "Bash", "ls"), ask_questions(1, vec![])],
+                json!([
+                    { "id": "id-0", "role": "tool", "text": "ls", "at": 0, "tool": pending("t1", "Bash", "ls") },
+                    open_question("id-1", 1)
+                ]),
+            ),
+            (
+                "a tool after an approval for something else is its own row",
+                vec![],
+                vec![
+                    asked(1, "npm test"),
+                    resolved(1, ApprovalResolution::Allow),
+                    tool_started("t1", "Bash", "npm run lint"),
+                ],
+                json!([
+                    { "id": "id-0", "role": "approval", "text": "npm test", "at": 0,
+                      "approval": { "requestId": 1, "name": "Bash", "decided": "allow" } },
+                    { "id": "id-1", "role": "tool", "text": "npm run lint", "at": 0,
+                      "tool": pending("t1", "Bash", "npm run lint") }
+                ]),
+            ),
+            (
+                "a letter keeps its files and its sender, and a false hidden is left off",
+                vec![],
+                vec![HarnessEvent::UserMessage {
+                    text: "mira".into(),
+                    hidden: Some(false),
+                    files: Some(vec![file]),
+                    from_agent: Some(from),
+                }],
+                json!([{ "id": "id-0", "role": "user", "text": "mira", "at": 0,
+                         "files": [{ "name": "a.png", "path": "/w/a.png", "size": 9 }],
+                         // canon renumbers every id, the sender's too
+                         "fromAgent": { "id": "id-1", "name": "Cuddles" } }]),
+            ),
+            (
+                "an empty file list is no files",
+                vec![],
+                vec![user_message("hola", Some(vec![]))],
+                json!([{ "id": "id-0", "role": "user", "text": "hola", "at": 0 }]),
+            ),
+            (
+                "usage on an empty transcript has nowhere to go",
+                vec![],
+                vec![HarnessEvent::TurnCompleted { usage: Some(usage.clone()) }],
+                json!([]),
+            ),
+            (
+                "the end of a turn settles everything still open",
+                vec![],
+                vec![
+                    HarnessEvent::MessageDelta { text: "ok".into() },
+                    tool_started("c1", "bash", "ls"),
+                    asked(2, "rm"),
+                    ask_questions(3, vec![]),
+                    HarnessEvent::TurnCompleted { usage: Some(usage.clone()) },
+                ],
+                json!([
+                    { "id": "id-0", "role": "assistant", "text": "ok", "at": 0, "streaming": false },
+                    { "id": "id-1", "role": "tool", "text": "ls", "at": 0,
+                      "tool": { "callId": "c1", "name": "bash", "title": "ls", "status": "completed" } },
+                    { "id": "id-2", "role": "approval", "text": "rm", "at": 0,
+                      "approval": { "requestId": 2, "name": "Bash", "decided": "deny" } },
+                    { "id": "id-3", "role": "question", "text": "Question", "at": 0,
+                      "question": { "requestId": 3, "questions": [], "dismissed": true },
+                      "usage": { "inputTokens": 3, "outputTokens": 4 } }
+                ]),
+            ),
+            (
+                "a session error interrupts what was running and says why",
+                vec![],
+                vec![tool_started("c1", "bash", "ls"), HarnessEvent::SessionError { message: "boom".into() }],
+                json!([
+                    { "id": "id-0", "role": "tool", "text": "ls", "at": 0,
+                      "tool": { "callId": "c1", "name": "bash", "title": "ls", "status": "interrupted" } },
+                    { "id": "id-1", "role": "system", "text": "boom", "at": 0 }
+                ]),
+            ),
+            (
+                "a session that ends interrupts without a word",
+                vec![],
+                vec![tool_started("c1", "bash", "ls"), HarnessEvent::SessionEnded { code: Some(137) }],
+                json!([{ "id": "id-0", "role": "tool", "text": "ls", "at": 0,
+                         "tool": { "callId": "c1", "name": "bash", "title": "ls", "status": "interrupted" } }]),
+            ),
+            (
+                "a note settles the reply and adds a line",
+                vec![],
+                vec![
+                    HarnessEvent::MessageDelta { text: "a".into() },
+                    HarnessEvent::SessionNote { message: "compacted".into() },
+                ],
+                json!([
+                    { "id": "id-0", "role": "assistant", "text": "a", "at": 0, "streaming": false },
+                    { "id": "id-1", "role": "system", "text": "compacted", "at": 0 }
+                ]),
+            ),
+            (
+                "starting and binding a session change nothing",
+                vec![new_block(BlockRole::User, "hi")],
+                vec![
+                    HarnessEvent::SessionStarted {},
+                    HarnessEvent::SessionProviderBound { provider_session_id: "p1".into() },
+                ],
+                json!([{ "id": "id-0", "role": "user", "text": "hi", "at": 0 }]),
+            ),
+            (
+                "an update renames and details only its own call",
+                vec![],
+                vec![
+                    tool_started("c1", "bash", "ls"),
+                    tool_started("c2", "bash", "pwd"),
+                    HarnessEvent::ToolUpdated {
+                        call_id: "c1".into(),
+                        title: Some("ls -la".into()),
+                        status: Some(ToolStatus::Failed),
+                        detail: Some(failed_ls),
+                    },
+                ],
+                json!([
+                    { "id": "id-0", "role": "tool", "text": "ls -la", "at": 0,
+                      "tool": { "callId": "c1", "name": "bash", "title": "ls -la", "status": "failed",
+                                "detail": { "kind": "command", "command": "ls -la", "exitCode": 2 } } },
+                    { "id": "id-1", "role": "tool", "text": "pwd", "at": 0, "tool": pending("c2", "bash", "pwd") }
+                ]),
+            ),
+            (
+                "an update that says nothing changes nothing",
+                vec![new_block(BlockRole::User, "hi")],
+                vec![
+                    tool_started("c1", "bash", "ls"),
+                    HarnessEvent::ToolUpdated { call_id: "c1".into(), title: None, status: None, detail: None },
+                ],
+                json!([
+                    { "id": "id-0", "role": "user", "text": "hi", "at": 0 },
+                    { "id": "id-1", "role": "tool", "text": "ls", "at": 0, "tool": pending("c1", "bash", "ls") }
+                ]),
+            ),
+            (
+                "reasoning between two replies starts a block each time",
+                vec![],
+                vec![
+                    HarnessEvent::MessageDelta { text: "a".into() },
+                    HarnessEvent::ReasoningDelta { text: "b".into() },
+                    HarnessEvent::MessageDelta { text: "c".into() },
+                ],
+                json!([
+                    { "id": "id-0", "role": "assistant", "text": "a", "at": 0, "streaming": false },
+                    { "id": "id-1", "role": "reasoning", "text": "b", "at": 0, "streaming": false },
+                    { "id": "id-2", "role": "assistant", "text": "c", "at": 0, "streaming": true }
+                ]),
+            ),
+            (
+                "a reply after a settled one is a new reply",
+                vec![],
+                vec![
+                    HarnessEvent::MessageDelta { text: "a".into() },
+                    HarnessEvent::MessageCompleted {},
+                    HarnessEvent::MessageDelta { text: "b".into() },
+                ],
+                json!([
+                    { "id": "id-0", "role": "assistant", "text": "a", "at": 0, "streaming": false },
+                    { "id": "id-1", "role": "assistant", "text": "b", "at": 0, "streaming": true }
+                ]),
+            ),
+        ];
+        for (name, start, events, expected) in cases {
+            assert_eq!(canon(&run(events, start)), expected, "{name}");
+        }
+    }
+
+    /// Provider output is stored clipped, whether it arrives with the call or
+    /// with its result.
+    #[test]
+    fn a_tool_detail_is_clipped_on_the_way_in() {
+        let huge = "x".repeat(crew_protocol::TOOL_TEXT_LIMIT * 2);
+        let clipped = crew_protocol::clip(&huge, crew_protocol::TOOL_TEXT_LIMIT);
+        let output = |blocks: &[Block]| {
+            let detail = blocks.last().and_then(|block| block.tool.as_ref()).and_then(|tool| tool.detail.clone());
+            match detail {
+                Some(ToolDetail::Output { text }) => text,
+                other => panic!("expected an output detail, got {other:?}"),
+            }
+        };
+        let started = run(
+            vec![HarnessEvent::ToolStarted {
+                call_id: "c1".into(),
+                name: "mcp".into(),
+                title: "mcp".into(),
+                detail: Some(ToolDetail::Output { text: huge.clone() }),
+            }],
+            vec![],
+        );
+        assert_eq!(output(&started), clipped);
+        let updated = run(
+            vec![
+                tool_started("c1", "mcp", "mcp"),
+                HarnessEvent::ToolUpdated {
+                    call_id: "c1".into(),
+                    title: None,
+                    status: None,
+                    detail: Some(ToolDetail::Output { text: huge.clone() }),
+                },
+            ],
+            vec![],
+        );
+        assert_eq!(output(&updated), clipped);
+    }
 }
 
 /// Adversarial review. Added by review; no production code is touched.

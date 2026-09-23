@@ -489,4 +489,111 @@ mod tests {
         };
         assert_eq!(detail.summary(), "git status");
     }
+
+    #[test]
+    fn a_summary_is_the_one_line_each_detail_is_known_by() {
+        let cases = vec![
+            (
+                ToolDetail::Command {
+                    command: "git status\ngit log".into(),
+                    exit_code: Some(0),
+                    output: Some("clean".into()),
+                },
+                "git status",
+            ),
+            (ToolDetail::Command { command: String::new(), exit_code: None, output: None }, ""),
+            (
+                ToolDetail::File {
+                    path: "/w/a.rs".into(),
+                    line_start: Some(1),
+                    line_end: Some(9),
+                    preview: Some("fn".into()),
+                },
+                "/w/a.rs",
+            ),
+            (ToolDetail::Edit { path: "/w/b.rs".into(), added: Some(1), removed: None }, "/w/b.rs"),
+            (ToolDetail::Search { query: "TODO".into(), matches: Some(3) }, "TODO"),
+            (
+                ToolDetail::Fetch { url: "https://example.com".into(), title: Some("Example".into()) },
+                "https://example.com",
+            ),
+            (ToolDetail::Message { to: "Cuddles".into(), text: "the branch is green".into() }, "Cuddles"),
+            (ToolDetail::Output { text: "first\nsecond".into() }, "first"),
+            (ToolDetail::Output { text: String::new() }, ""),
+        ];
+        for (detail, expected) in cases {
+            assert_eq!(detail.summary(), expected, "{detail:?}");
+        }
+    }
+
+    #[test]
+    fn clip_cuts_at_the_limit_or_the_char_boundary_before_it() {
+        let cases: Vec<(&str, usize, &str)> = vec![
+            ("", 0, ""),
+            ("abc", 3, "abc"),
+            ("abcd", 3, "abc\n… 1 more bytes"),
+            ("ab", 0, "\n… 2 more bytes"),
+            ("aé", 2, "a\n… 2 more bytes"),
+            ("🦀🦀", 5, "🦀\n… 4 more bytes"),
+            ("🦀🦀", 4, "🦀\n… 4 more bytes"),
+            ("🦀🦀", 3, "\n… 8 more bytes"),
+        ];
+        for (text, limit, expected) in cases {
+            assert_eq!(clip(text, limit), expected, "clip({text:?}, {limit})");
+        }
+    }
+
+    /// Only text that came back from a provider is clipped; a path, a query or
+    /// a url is what the row is about and is kept whole.
+    #[test]
+    fn clipped_trims_provider_text_and_nothing_else() {
+        let long = "y".repeat(TOOL_TEXT_LIMIT + 10);
+        let short = clip(&long, TOOL_TEXT_LIMIT);
+        let cases = vec![
+            (
+                "a command",
+                ToolDetail::Command { command: long.clone(), exit_code: None, output: None },
+                ToolDetail::Command { command: short.clone(), exit_code: None, output: None },
+            ),
+            (
+                "a file preview, not its path",
+                ToolDetail::File {
+                    path: long.clone(),
+                    line_start: Some(1),
+                    line_end: None,
+                    preview: Some(long.clone()),
+                },
+                ToolDetail::File {
+                    path: long.clone(),
+                    line_start: Some(1),
+                    line_end: None,
+                    preview: Some(short.clone()),
+                },
+            ),
+            (
+                "a message",
+                ToolDetail::Message { to: "Ada".into(), text: long.clone() },
+                ToolDetail::Message { to: "Ada".into(), text: short.clone() },
+            ),
+            ("an output", ToolDetail::Output { text: long.clone() }, ToolDetail::Output { text: short.clone() }),
+            (
+                "an edit",
+                ToolDetail::Edit { path: long.clone(), added: None, removed: None },
+                ToolDetail::Edit { path: long.clone(), added: None, removed: None },
+            ),
+            (
+                "a search",
+                ToolDetail::Search { query: long.clone(), matches: None },
+                ToolDetail::Search { query: long.clone(), matches: None },
+            ),
+            (
+                "a fetch",
+                ToolDetail::Fetch { url: long.clone(), title: Some(long.clone()) },
+                ToolDetail::Fetch { url: long.clone(), title: Some(long.clone()) },
+            ),
+        ];
+        for (name, detail, expected) in cases {
+            assert_eq!(detail.clipped(), expected, "{name}");
+        }
+    }
 }

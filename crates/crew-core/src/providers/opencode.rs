@@ -784,4 +784,377 @@ mod tests {
             );
         }
     }
+
+    fn obj(value: Value) -> Map<String, Value> {
+        value.as_object().cloned().unwrap_or_default()
+    }
+
+    #[test]
+    fn spawn_args_carry_only_the_model_and_the_autonomy() {
+        let cases: Vec<(Autonomy, Option<&str>, Vec<&str>)> = vec![
+            (Autonomy::Ask, None, vec!["run", "--format", "json"]),
+            (Autonomy::Ask, Some(""), vec!["run", "--format", "json"]),
+            (
+                Autonomy::Ask,
+                Some("anthropic/claude-sonnet-4"),
+                vec!["run", "--format", "json", "-m", "anthropic/claude-sonnet-4"],
+            ),
+            (Autonomy::Full, None, vec!["run", "--format", "json", "--auto"]),
+            (Autonomy::Full, Some("openai/gpt-5"), vec!["run", "--format", "json", "-m", "openai/gpt-5", "--auto"]),
+        ];
+        for (autonomy, model, expected) in cases {
+            let case = format!("{autonomy:?} {model:?}");
+            let args = build_opencode_spawn_args(&OpencodeSpawn { model: model.map(str::to_string), autonomy });
+            assert_eq!(args, expected, "{case}");
+        }
+    }
+
+    #[test]
+    fn the_bridge_rides_in_inline_config_only_when_there_is_one() {
+        assert_eq!(opencode_config(None), None);
+        let config = opencode_config(Some(&("/opt/Crew App/crewd".into(), vec!["--mcp".into()])))
+            .expect("config for a bridge");
+        assert_eq!(
+            serde_json::from_str::<Value>(&config).expect("json"),
+            json!({
+                "$schema": "https://opencode.ai/config.json",
+                "mcp": { "crew": { "type": "local", "command": ["/opt/Crew App/crewd", "--mcp"], "enabled": true } }
+            })
+        );
+    }
+
+    #[test]
+    fn the_prompt_is_persona_tools_tail_then_turn() {
+        let persona = persona_prompt("Planner", "You keep the roadmap.", None);
+        /// Tail, tool sheet, text, files, and the prompt they make.
+        type Case = (Option<&'static str>, Option<&'static str>, &'static str, Vec<String>, String);
+        let cases: Vec<Case> = vec![
+            (None, None, "hola", vec![], format!("{persona}\n\nhola")),
+            (None, Some("You have: x."), "hola", vec![], format!("{persona}\n\nYou have: x.\n\nhola")),
+            (None, None, "", vec![], persona.clone()),
+            (
+                Some("## tail"),
+                None,
+                " mira ",
+                vec!["/w/a.rs".into(), "/w/b.png".into()],
+                format!("{persona}\n\n## tail\n\n## This turn\n\nmira\n\nAttached files:\n- /w/a.rs\n- /w/b.png"),
+            ),
+            (None, None, "", vec!["/w/a.rs".into()], format!("{persona}\n\nAttached files:\n- /w/a.rs")),
+        ];
+        for (history, tools, text, files, expected) in cases {
+            assert_eq!(
+                build_opencode_prompt("Planner", "You keep the roadmap.", history, text, &files, tools),
+                expected,
+                "history={history:?} tools={tools:?} text={text:?} files={files:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn only_a_finished_text_part_with_an_id_is_text() {
+        let cases = vec![
+            ("no part", json!({ "type": "text" }), None),
+            ("a part that is not an object", json!({ "part": "hola" }), None),
+            ("a tool part", json!({ "part": { "type": "tool", "id": "p1", "text": "x" } }), None),
+            ("an empty text", json!({ "part": { "type": "text", "id": "p1", "text": "" } }), None),
+            ("no id", json!({ "part": { "type": "text", "text": "hola" } }), None),
+            (
+                "a text part",
+                json!({ "part": { "type": "text", "id": "p1", "text": " hola\n" } }),
+                Some(("p1", " hola\n")),
+            ),
+        ];
+        for (name, rec, expected) in cases {
+            let got = text_part(&obj(rec)).map(|part| (part.id, part.text));
+            assert_eq!(got, expected.map(|(id, text)| (id.to_string(), text.to_string())), "{name}");
+        }
+    }
+
+    fn tool_part(tool: Option<&str>, state: Option<Value>) -> Value {
+        let mut part = json!({ "type": "tool", "callID": "call_1" });
+        if let Some(tool) = tool {
+            part["tool"] = json!(tool);
+        }
+        if let Some(state) = state {
+            part["state"] = state;
+        }
+        json!({ "type": "tool_use", "part": part })
+    }
+
+    #[test]
+    fn a_tool_part_becomes_one_settled_row() {
+        type Row = (String, String, String, Option<ToolDetail>, ToolStatus);
+        let row = |name: &str, title: &str, detail: Option<ToolDetail>, status: ToolStatus| -> Option<Row> {
+            Some(("call_1".into(), name.into(), title.into(), detail, status))
+        };
+        let cases = vec![
+            ("no part", json!({ "type": "tool_use" }), None),
+            ("a text part", json!({ "part": { "type": "text", "callID": "call_1" } }), None),
+            ("no call id", json!({ "part": { "type": "tool", "tool": "bash" } }), None),
+            ("no tool name and no state", tool_part(None, None), row("tool", "Tool", None, ToolStatus::Completed)),
+            (
+                "no tool name, with output",
+                tool_part(None, Some(json!({ "status": "completed", "output": "done" }))),
+                row("tool", "Tool", Some(ToolDetail::Output { text: "done".into() }), ToolStatus::Completed),
+            ),
+            (
+                "a shell call with no state yet",
+                tool_part(Some("bash"), None),
+                row("bash", "Bash", None, ToolStatus::Completed),
+            ),
+            (
+                "a shell call that exited non-zero",
+                tool_part(
+                    Some("bash"),
+                    Some(json!({ "status": "completed", "input": { "command": "false" }, "metadata": { "exit": 1 } })),
+                ),
+                row(
+                    "bash",
+                    "false",
+                    Some(ToolDetail::Command { command: "false".into(), exit_code: Some(1), output: None }),
+                    ToolStatus::Failed,
+                ),
+            ),
+        ];
+        for (name, rec, expected) in cases {
+            let got =
+                parse_tool_call(&obj(rec)).map(|call| (call.call_id, call.name, call.title, call.detail, call.status));
+            assert_eq!(got, expected, "{name}");
+        }
+    }
+
+    #[test]
+    fn a_call_failed_when_it_threw_exited_non_zero_or_was_invalid() {
+        let cases = vec![
+            ("bash", None, ToolStatus::Completed),
+            ("bash", Some(json!({ "status": "completed" })), ToolStatus::Completed),
+            ("bash", Some(json!({ "status": "completed", "metadata": { "exit": 0 } })), ToolStatus::Completed),
+            ("bash", Some(json!({ "status": "completed", "metadata": { "exit": 127 } })), ToolStatus::Failed),
+            ("bash", Some(json!({ "status": "completed", "metadata": { "exit": "1" } })), ToolStatus::Completed),
+            ("bash", Some(json!({ "status": "completed", "metadata": "exit 1" })), ToolStatus::Completed),
+            ("read", Some(json!({ "status": "error", "error": "gone" })), ToolStatus::Failed),
+            ("invalid", Some(json!({ "status": "completed" })), ToolStatus::Failed),
+        ];
+        for (name, state, expected) in cases {
+            let state = state.map(obj);
+            assert_eq!(tool_status(name, state.as_ref()), expected, "{name} {state:?}");
+        }
+    }
+
+    #[test]
+    fn a_row_detail_comes_from_the_input_and_the_metadata() {
+        let file = |path: &str, start: Option<u32>, end: Option<u32>, preview: Option<&str>| ToolDetail::File {
+            path: path.into(),
+            line_start: start,
+            line_end: end,
+            preview: preview.map(str::to_string),
+        };
+        let edit = |path: &str| ToolDetail::Edit { path: path.into(), added: None, removed: None };
+        let output = |text: &str| ToolDetail::Output { text: text.into() };
+        let cases: Vec<(&str, Value, Option<Value>, Option<ToolDetail>)> = vec![
+            (
+                "crew_message_agent",
+                json!({ "to": "Ada", "text": "hola" }),
+                Some(json!({ "status": "error", "error": "no such agent" })),
+                Some(ToolDetail::Message { to: "Ada".into(), text: "hola".into() }),
+            ),
+            (
+                "read",
+                json!({ "filePath": "/nope" }),
+                Some(json!({ "status": "error", "error": "File not found" })),
+                Some(output("File not found")),
+            ),
+            ("read", json!({ "filePath": "/nope" }), Some(json!({ "status": "error" })), None),
+            (
+                "bash",
+                json!({ "command": "ls" }),
+                Some(json!({ "output": "state out", "metadata": { "exit": 0, "output": "  meta out" } })),
+                Some(ToolDetail::Command {
+                    command: "ls".into(),
+                    exit_code: Some(0),
+                    output: Some("  meta out".into()),
+                }),
+            ),
+            (
+                "bash",
+                json!({ "command": "ls" }),
+                Some(json!({ "output": "state out", "metadata": { "output": "" } })),
+                Some(ToolDetail::Command { command: "ls".into(), exit_code: None, output: Some("state out".into()) }),
+            ),
+            ("bash", json!({}), Some(json!({ "output": "x" })), None),
+            (
+                "read",
+                json!({ "filePath": "have.txt" }),
+                Some(json!({ "metadata": {
+                    "preview": "meta preview",
+                    "display": { "path": "/w/have.txt", "text": "display text", "lineStart": 4, "lineEnd": 6 }
+                } })),
+                Some(file("/w/have.txt", Some(4), Some(6), Some("meta preview"))),
+            ),
+            (
+                "read",
+                json!({ "filePath": "have.txt" }),
+                Some(json!({ "metadata": { "display": { "text": "display text", "lineStart": -1 } } })),
+                Some(file("have.txt", None, None, Some("display text"))),
+            ),
+            ("read", json!({ "filePath": "have.txt" }), None, Some(file("have.txt", None, None, None))),
+            ("read", json!({}), Some(json!({ "metadata": { "display": {} } })), None),
+            (
+                "write",
+                json!({ "filePath": "a.txt" }),
+                Some(json!({ "metadata": { "filepath": "/w/a.txt" } })),
+                Some(edit("/w/a.txt")),
+            ),
+            ("edit", json!({ "filePath": "/w/b.txt" }), None, Some(edit("/w/b.txt"))),
+            ("patch", json!({ "filePath": "/w/c.txt" }), Some(json!({ "metadata": {} })), Some(edit("/w/c.txt"))),
+            ("write", json!({ "content": "x" }), None, None),
+            (
+                "grep",
+                json!({ "pattern": "TODO" }),
+                Some(json!({ "metadata": { "matches": 3 } })),
+                Some(ToolDetail::Search { query: "TODO".into(), matches: Some(3) }),
+            ),
+            (
+                "glob",
+                json!({ "pattern": "**/*.rs" }),
+                Some(json!({ "metadata": { "matches": "many" } })),
+                Some(ToolDetail::Search { query: "**/*.rs".into(), matches: None }),
+            ),
+            ("grep", json!({ "path": "/w" }), None, None),
+            (
+                "webfetch",
+                json!({ "url": "https://example.com", "format": "markdown" }),
+                Some(json!({ "output": "# Example" })),
+                Some(ToolDetail::Fetch { url: "https://example.com".into(), title: None }),
+            ),
+            ("webfetch", json!({ "format": "markdown" }), None, None),
+            ("todowrite", json!({}), Some(json!({ "output": "  2 todos" })), Some(output("  2 todos"))),
+            ("todowrite", json!({}), Some(json!({ "output": "" })), None),
+            ("task", json!({}), None, None),
+        ];
+        for (name, input, state, expected) in cases {
+            let state = state.map(obj);
+            assert_eq!(tool_detail(name, &obj(input.clone()), state.as_ref()), expected, "{name} {input} {state:?}");
+        }
+    }
+
+    #[test]
+    fn a_row_title_names_what_the_call_did() {
+        let cases: Vec<(&str, Value, String)> = vec![
+            ("crew_message_agent", json!({ "to": "Cuddles", "text": "hi" }), "Crew message agent Cuddles".into()),
+            ("crew.spawn_agent", json!({ "name": "Planner" }), "Crew spawn agent Planner".into()),
+            ("mcp__crew__search_messages", json!({ "query": "invoice" }), "Crew search messages invoice".into()),
+            ("crew_list_agents", json!({}), "Crew list agents".into()),
+            ("crew_message_agent", json!({ "to": "ö".repeat(45) }), format!("Crew message agent {}…", "ö".repeat(39))),
+            ("bash", json!({ "command": "sleep 3 && ls\necho done" }), "sleep 3 && ls".into()),
+            ("bash", json!({ "command": "y".repeat(90) }), format!("{}…", "y".repeat(71))),
+            ("read", json!({ "filePath": "/w/have.txt", "pattern": "x" }), "Read have.txt".into()),
+            ("list", json!({ "path": "/w/src/" }), "List /w/src/".into()),
+            ("grep", json!({ "pattern": "TODO" }), "Grep TODO".into()),
+            (
+                "webfetch",
+                json!({ "url": "https://example.com/a/very/long/path/that/goes/on" }),
+                "Fetch https://example.com/a/very/long/path/th…".into(),
+            ),
+            ("task", json!({ "description": "explore the repo" }), "Task explore the repo".into()),
+            ("todowrite", json!({ "todos": [] }), "Todo".into()),
+            ("todoread", json!({}), "Todo".into()),
+            ("", json!({}), "Tool".into()),
+        ];
+        for (name, input, expected) in cases {
+            assert_eq!(tool_label(name, &obj(input.clone())), expected, "{name} {input}");
+        }
+    }
+
+    #[test]
+    fn a_tool_name_is_capitalized_unless_it_has_a_better_one() {
+        let cases = [
+            ("webfetch", "Fetch"),
+            ("todowrite", "Todo"),
+            ("todoread", "Todo"),
+            ("bash", "Bash"),
+            ("Read", "Read"),
+            ("ñandú", "Ñandú"),
+            ("ß", "SS"),
+            ("", "Tool"),
+        ];
+        for (name, expected) in cases {
+            assert_eq!(pretty_tool(name), expected, "pretty_tool({name:?})");
+        }
+    }
+
+    #[test]
+    fn only_a_step_that_called_tools_keeps_the_turn_going() {
+        let step = |reason: Option<&str>| match reason {
+            Some(reason) => json!({ "type": "step_finish", "part": { "type": "step-finish", "reason": reason } }),
+            None => json!({ "type": "step_finish", "part": { "type": "step-finish" } }),
+        };
+        let cases = vec![
+            (json!({ "type": "step_finish" }), None, true),
+            (step(None), None, true),
+            (step(Some("stop")), None, true),
+            (step(Some("tool-calls")), None, false),
+            (step(Some("length")), Some("The model ran out of room mid-answer."), true),
+            (step(Some("content-filter")), Some("The provider stopped the answer."), true),
+            (step(Some("error")), Some("The turn ended early: error."), true),
+        ];
+        for (rec, failure, ended) in cases {
+            let rec_map = obj(rec.clone());
+            assert_eq!(step_failure(&rec_map).as_deref(), failure, "step_failure {rec}");
+            assert_eq!(turn_ended(&rec_map), ended, "turn_ended {rec}");
+        }
+    }
+
+    #[test]
+    fn step_usage_adds_up_and_ignores_what_is_not_a_count() {
+        let usage = |input, output, cost: f64| TurnUsage {
+            input_tokens: Some(input),
+            output_tokens: Some(output),
+            cost_usd: Some(cost),
+            duration_ms: None,
+        };
+        let prev = usage(100, 10, 0.5);
+        let cases = vec![
+            ("no part, nothing before", None, json!({ "type": "step_finish" }), usage(0, 0, 0.0)),
+            ("no part keeps what came before", Some(&prev), json!({}), usage(100, 10, 0.5)),
+            (
+                "a step on top of another",
+                Some(&prev),
+                json!({ "part": {
+                    "tokens": { "input": 5, "output": 6, "reasoning": 7, "cache": { "read": 8, "write": 9 } },
+                    "cost": 0.25
+                } }),
+                usage(122, 23, 0.75),
+            ),
+            (
+                "negative and non-numeric counts are zero",
+                None,
+                json!({ "part": { "tokens": { "input": -5, "output": "6", "cache": "none" }, "cost": "free" } }),
+                usage(0, 0, 0.0),
+            ),
+        ];
+        for (name, prev, rec, expected) in cases {
+            assert_eq!(add_step_usage(prev, &obj(rec)), expected, "{name}");
+        }
+    }
+
+    #[test]
+    fn a_stream_error_says_the_most_specific_thing_it_has() {
+        let cases = vec![
+            (
+                json!({ "error": { "name": "ProviderAuthError", "data": { "message": "no credentials" } } }),
+                "no credentials",
+            ),
+            (json!({ "error": { "name": "ProviderAuthError", "data": { "message": " " } } }), "ProviderAuthError"),
+            (json!({ "error": { "name": "UnknownError", "data": "text" } }), "UnknownError"),
+            (json!({ "error": {} }), "opencode turn failed."),
+            (json!({ "error": "boom" }), "opencode turn failed."),
+            (json!({ "type": "error" }), "opencode turn failed."),
+        ];
+        for (rec, expected) in cases {
+            assert_eq!(stream_error_message(&obj(rec.clone())), expected, "{rec}");
+        }
+        assert_eq!(session_id_from_event(&obj(json!({ "sessionID": "ses_1" }))).as_deref(), Some("ses_1"));
+        assert_eq!(session_id_from_event(&obj(json!({ "sessionId": "ses_1" }))), None);
+    }
 }

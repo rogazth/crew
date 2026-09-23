@@ -598,4 +598,422 @@ mod tests {
             })
         );
     }
+
+    fn obj(value: Value) -> Map<String, Value> {
+        value.as_object().cloned().unwrap_or_default()
+    }
+
+    #[test]
+    fn spawn_args_spell_out_each_combination() {
+        let base = ["-p", "--output-format", "stream-json", "--stream-partial-output", "--trust"];
+        let cases: Vec<(Autonomy, Option<&str>, Vec<&str>)> = vec![
+            (Autonomy::Ask, None, vec!["hi"]),
+            (Autonomy::Ask, Some(""), vec!["hi"]),
+            (Autonomy::Ask, Some("gpt-5"), vec!["--model", "gpt-5", "hi"]),
+            (Autonomy::Full, None, vec!["-f", "hi"]),
+            (Autonomy::Full, Some(""), vec!["-f", "hi"]),
+            (Autonomy::Full, Some("sonnet-4"), vec!["--model", "sonnet-4", "-f", "hi"]),
+        ];
+        for (autonomy, model, tail) in cases {
+            let case = format!("{autonomy:?} {model:?}");
+            let args = build_cursor_spawn_args(&CursorSpawn {
+                prompt: "hi".into(),
+                model: model.map(str::to_string),
+                autonomy,
+            });
+            let expected: Vec<&str> = base.iter().copied().chain(tail).collect();
+            assert_eq!(args, expected, "{case}");
+        }
+    }
+
+    #[test]
+    fn attached_files_are_listed_under_the_prompt() {
+        let cases: Vec<(&str, Vec<String>, &str)> = vec![
+            ("mira", vec![], "mira"),
+            ("mira", vec!["/w/a.rs".into(), "/w/shot.png".into()], "mira\n\nAttached files:\n- /w/a.rs\n- /w/shot.png"),
+            ("", vec!["/w/a.rs".into()], "Attached files:\n- /w/a.rs"),
+        ];
+        for (text, files, expected) in cases {
+            assert_eq!(with_attached_files(text, &files), expected, "{text:?} {files:?}");
+        }
+        let prompt = build_cursor_prompt("Planner", "", None, " mira ", &["/w/a.rs".into()], None);
+        assert!(prompt.ends_with("mira\n\nAttached files:\n- /w/a.rs"), "{prompt}");
+    }
+
+    #[test]
+    fn assistant_text_is_its_text_blocks_joined() {
+        let cases = vec![
+            (json!({ "type": "assistant" }), ""),
+            (json!({ "message": "hi" }), ""),
+            (json!({ "message": { "content": "hi" } }), ""),
+            (
+                json!({ "message": { "content": [
+                    { "type": "text", "text": "uno " },
+                    { "type": "tool_use", "text": "not text" },
+                    "loose",
+                    { "type": "text" },
+                    { "type": "text", "text": "dos" }
+                ] } }),
+                "uno dos",
+            ),
+        ];
+        for (rec, expected) in cases {
+            assert_eq!(assistant_text(&obj(rec.clone())), expected, "{rec}");
+        }
+    }
+
+    /// A delta is a timestamped assistant frame; the one with a model call id
+    /// repeats the whole message at the end and would print it twice.
+    #[test]
+    fn only_a_timestamped_partial_is_a_delta() {
+        let content = json!({ "content": [{ "type": "text", "text": "hola" }] });
+        let cases = vec![
+            ("not an assistant frame", json!({ "type": "user", "timestamp_ms": 1, "message": content }), None),
+            ("no timestamp", json!({ "type": "assistant", "message": content }), None),
+            (
+                "a timestamp that is a string",
+                json!({ "type": "assistant", "timestamp_ms": "1", "message": content }),
+                None,
+            ),
+            (
+                "the closing full message",
+                json!({ "type": "assistant", "timestamp_ms": 1, "model_call_id": "mc_1", "message": content }),
+                None,
+            ),
+            (
+                "a partial with no text",
+                json!({ "type": "assistant", "timestamp_ms": 1, "message": { "content": [] } }),
+                None,
+            ),
+            ("a partial", json!({ "type": "assistant", "timestamp_ms": 1, "message": content }), Some("hola")),
+        ];
+        for (name, rec, expected) in cases {
+            assert_eq!(assistant_delta_text(&obj(rec)).as_deref(), expected, "{name}");
+        }
+    }
+
+    #[test]
+    fn a_tool_call_frame_becomes_a_row() {
+        let call = |name: &str, title: &str, detail: Option<ToolDetail>, phase: ToolPhase, failed: bool| {
+            Some(CursorToolCall {
+                call_id: "t1".into(),
+                name: name.into(),
+                title: title.into(),
+                detail,
+                phase,
+                failed,
+            })
+        };
+        let frame = |subtype: &str, tool_call: Value| {
+            json!({ "type": "tool_call", "subtype": subtype, "call_id": "t1", "tool_call": tool_call })
+        };
+        let cases = vec![
+            ("not a tool call", json!({ "type": "assistant", "call_id": "t1" }), None),
+            ("an unknown phase", json!({ "type": "tool_call", "subtype": "updated", "call_id": "t1" }), None),
+            ("no phase", json!({ "type": "tool_call", "call_id": "t1" }), None),
+            ("no call id", json!({ "type": "tool_call", "subtype": "started" }), None),
+            (
+                "no envelope",
+                json!({ "type": "tool_call", "subtype": "started", "call_id": "t1" }),
+                call("tool", "tool", None, ToolPhase::Started, false),
+            ),
+            (
+                "an envelope with no tool in it",
+                frame("started", json!({ "description": "x", "other": {} })),
+                call("tool", "tool", None, ToolPhase::Started, false),
+            ),
+            (
+                "a function call with its arguments as a string",
+                frame("started", json!({ "function": { "name": "grep", "arguments": "{\"pattern\":\"TODO\"}" } })),
+                call(
+                    "grep",
+                    "Grep TODO",
+                    Some(ToolDetail::Search { query: "TODO".into(), matches: None }),
+                    ToolPhase::Started,
+                    false,
+                ),
+            ),
+            (
+                "a function call with arguments that do not parse",
+                frame("started", json!({ "function": { "name": "grep", "arguments": "{\"pattern\":" } })),
+                call("grep", "Grep", None, ToolPhase::Started, false),
+            ),
+            (
+                "a function call with no name or arguments",
+                frame("completed", json!({ "function": { "result": { "success": {} } } })),
+                call("function", "function", None, ToolPhase::Completed, false),
+            ),
+            (
+                "a function call whose arguments are a list",
+                frame("started", json!({ "function": { "name": "ls", "arguments": ["/w"] } })),
+                call("ls", "Ls", None, ToolPhase::Started, false),
+            ),
+            (
+                "a failed read keeps no detail",
+                frame("completed", json!({ "readToolCall": { "result": { "error": { "errorMessage": "gone" } } } })),
+                call("Read", "Read", None, ToolPhase::Completed, true),
+            ),
+            (
+                "a start never counts as failed",
+                frame(
+                    "started",
+                    json!({ "readToolCall": { "args": { "path": "/w/a.rs" }, "result": { "error": {} } } }),
+                ),
+                call(
+                    "Read",
+                    "Read a.rs",
+                    Some(ToolDetail::File { path: "/w/a.rs".into(), line_start: None, line_end: None, preview: None }),
+                    ToolPhase::Started,
+                    false,
+                ),
+            ),
+            (
+                "a tool whose body is not an object is passed over",
+                frame(
+                    "started",
+                    json!({ "aaaToolCall": "junk", "notes": 1, "shellToolCall": { "args": { "command": "ls" } } }),
+                ),
+                call(
+                    "Shell",
+                    "ls",
+                    Some(ToolDetail::Command { command: "ls".into(), exit_code: None, output: None }),
+                    ToolPhase::Started,
+                    false,
+                ),
+            ),
+        ];
+        for (name, rec, expected) in cases {
+            assert_eq!(parse_tool_call(&obj(rec)), expected, "{name}");
+        }
+    }
+
+    #[test]
+    fn usage_counts_the_cache_as_input() {
+        let usage = |input, output, duration| TurnUsage {
+            input_tokens: input,
+            output_tokens: output,
+            cost_usd: None,
+            duration_ms: duration,
+        };
+        let cases = vec![
+            ("nothing", json!({ "type": "result" }), usage(None, None, None)),
+            (
+                "everything",
+                json!({
+                    "duration_ms": 1500,
+                    "usage": { "inputTokens": 10, "outputTokens": 20, "cacheReadTokens": 100, "cacheWriteTokens": 5 }
+                }),
+                usage(Some(115), Some(20), Some(1500)),
+            ),
+            ("only the cache", json!({ "usage": { "cacheReadTokens": 100 } }), usage(Some(100), None, None)),
+            ("a zero cache and no input", json!({ "usage": { "cacheReadTokens": 0 } }), usage(None, None, None)),
+            (
+                "counts that are strings",
+                json!({ "usage": { "inputTokens": "1", "outputTokens": 2 } }),
+                usage(None, Some(2), None),
+            ),
+        ];
+        for (name, rec, expected) in cases {
+            assert_eq!(turn_usage(&obj(rec)), expected, "{name}");
+        }
+    }
+
+    #[test]
+    fn a_failed_turn_says_why() {
+        let cases = vec![
+            (json!({ "type": "result", "subtype": "success", "result": "ok" }), None),
+            (json!({ "type": "result", "result": "ok" }), None),
+            (json!({ "subtype": "success", "is_error": true, "result": " Cursor exploded " }), Some("Cursor exploded")),
+            (json!({ "subtype": "error" }), Some("Cursor turn failed.")),
+            (json!({ "is_error": true, "result": "" }), Some("Cursor turn failed.")),
+        ];
+        for (rec, expected) in cases {
+            assert_eq!(turn_failed(&obj(rec.clone())).as_deref(), expected, "{rec}");
+        }
+    }
+
+    #[test]
+    fn a_row_title_names_what_the_call_did() {
+        let cases: Vec<(&str, Value, String)> = vec![
+            ("Shell", json!({ "command": "npm test\nnpm run lint" }), "npm test".into()),
+            ("Shell", json!({ "command": "x".repeat(80) }), format!("{}…", "x".repeat(71))),
+            ("run", json!({ "cmd": "make", "path": "/w" }), "make".into()),
+            ("Read", json!({ "path": "/w/src/lib.rs" }), "Read lib.rs".into()),
+            ("write", json!({ "file_path": "/w/a.ts" }), "Write a.ts".into()),
+            ("Edit", json!({ "target_file": "C:\\w\\b.ts" }), "Edit b.ts".into()),
+            ("MultiEdit", json!({ "filePath": "/w/c.ts" }), "Edit c.ts".into()),
+            ("Delete", json!({ "path": "/w/old.ts" }), "Delete old.ts".into()),
+            ("Glob", json!({ "glob": "**/*.ts" }), "Glob **/*.ts".into()),
+            ("Grep", json!({ "pattern": "ü".repeat(50) }), format!("Grep {}…", "ü".repeat(39))),
+            ("grep", json!({ "regex": "fn\\s+main" }), "Grep fn\\s+main".into()),
+            ("WebSearch", json!({ "query": "cursor agent" }), "Search cursor agent".into()),
+            ("ls", json!({}), "Ls".into()),
+            ("todo", json!({ "command": "  " }), "todo".into()),
+        ];
+        for (name, input, expected) in cases {
+            assert_eq!(tool_label(name, &obj(input.clone())), expected, "{name} {input}");
+        }
+    }
+
+    #[test]
+    fn a_row_detail_comes_from_the_arguments_and_the_success() {
+        let file = |path: &str, start: Option<u32>, end: Option<u32>, preview: Option<&str>| ToolDetail::File {
+            path: path.into(),
+            line_start: start,
+            line_end: end,
+            preview: preview.map(str::to_string),
+        };
+        let edit = |path: &str| ToolDetail::Edit { path: path.into(), added: None, removed: None };
+        let search = |query: &str| ToolDetail::Search { query: query.into(), matches: None };
+        let cases: Vec<(&str, Value, Option<Value>, Option<ToolDetail>)> = vec![
+            (
+                "Shell",
+                json!({ "command": "ls" }),
+                Some(json!({ "success": { "exitCode": 0, "stdout": "a\n", "interleavedOutput": "a\nwarn\n" } })),
+                Some(ToolDetail::Command {
+                    command: "ls".into(),
+                    exit_code: Some(0),
+                    output: Some("a\nwarn\n".into()),
+                }),
+            ),
+            (
+                "bash",
+                json!({ "command": "ls" }),
+                Some(json!({ "success": { "exitCode": 1, "stdout": "  a\n", "interleavedOutput": "" } })),
+                Some(ToolDetail::Command { command: "ls".into(), exit_code: Some(1), output: Some("  a\n".into()) }),
+            ),
+            (
+                "shell",
+                json!({ "command": "ls" }),
+                None,
+                Some(ToolDetail::Command { command: "ls".into(), exit_code: None, output: None }),
+            ),
+            ("shell", json!({}), Some(json!({ "success": { "exitCode": 0 } })), None),
+            (
+                "Read",
+                json!({ "path": "/w/a.rs" }),
+                Some(json!({ "success": { "content": "  fn a()", "readRange": { "startLine": 3, "endLine": 9 } } })),
+                Some(file("/w/a.rs", Some(3), Some(9), Some("  fn a()"))),
+            ),
+            (
+                "read",
+                json!({}),
+                Some(json!({ "success": { "path": "/w/b.rs", "readRange": { "startLine": "3" } } })),
+                Some(file("/w/b.rs", None, None, None)),
+            ),
+            ("read", json!({}), Some(json!({ "error": { "errorMessage": "gone" } })), None),
+            ("Write", json!({ "path": "/w/a.rs" }), None, Some(edit("/w/a.rs"))),
+            ("edit", json!({ "file_path": "/w/b.rs" }), None, Some(edit("/w/b.rs"))),
+            ("MultiEdit", json!({ "target_file": "/w/c.rs" }), None, Some(edit("/w/c.rs"))),
+            ("edit", json!({ "filePath": "/w/d.rs" }), None, Some(edit("/w/d.rs"))),
+            ("write", json!({ "content": "x" }), None, None),
+            ("Glob", json!({ "glob": "*.rs" }), None, Some(search("*.rs"))),
+            ("grep", json!({ "pattern": "TODO", "query": "ignored" }), None, Some(search("TODO"))),
+            ("grep", json!({ "query": "q" }), None, Some(search("q"))),
+            ("grep", json!({ "regex": "r+" }), None, Some(search("r+"))),
+            ("grep", json!({}), None, None),
+            ("ls", json!({ "path": "/w" }), Some(json!({ "success": {} })), None),
+        ];
+        for (name, args, result, expected) in cases {
+            let result = result.map(obj);
+            assert_eq!(tool_detail(name, &obj(args.clone()), result.as_ref()), expected, "{name} {args} {result:?}");
+        }
+    }
+
+    #[test]
+    fn a_tool_key_is_named_after_its_prefix() {
+        let cases = [
+            ("shellToolCall", "Shell"),
+            ("readToolCall", "Read"),
+            ("mcpToolCall", "Mcp"),
+            ("écrireToolCall", "Écrire"),
+            ("ToolCall", "ToolCall"),
+            ("grep", "Grep"),
+        ];
+        for (key, expected) in cases {
+            assert_eq!(tool_name_from_key(key), expected, "{key}");
+        }
+    }
+
+    #[test]
+    fn a_payload_is_found_in_either_envelope() {
+        let payload = |envelope: Option<Value>| {
+            let envelope = envelope.map(obj);
+            tool_payload(envelope.as_ref()).map(|p| (p.name, Value::Object(p.args), p.result.map(Value::Object)))
+        };
+        let cases = vec![
+            ("no envelope", None, None),
+            ("an empty envelope", Some(json!({})), None),
+            ("only junk", Some(json!({ "readToolCall": 3, "notes": {} })), None),
+            (
+                "a function with object arguments",
+                Some(json!({
+                    "function": { "name": "read", "arguments": { "path": "/a" }, "result": { "success": {} } }
+                })),
+                Some(("read".to_string(), json!({ "path": "/a" }), Some(json!({ "success": {} })))),
+            ),
+            (
+                "a function with no arguments",
+                Some(json!({ "function": { "name": "read" } })),
+                Some(("read".to_string(), json!({}), None)),
+            ),
+            (
+                "a keyed tool",
+                Some(json!({ "grepToolCall": { "args": { "pattern": "x" }, "result": "not an object" } })),
+                Some(("Grep".to_string(), json!({ "pattern": "x" }), None)),
+            ),
+        ];
+        for (name, envelope, expected) in cases {
+            assert_eq!(payload(envelope), expected, "{name}");
+        }
+    }
+
+    #[test]
+    fn a_call_failed_when_its_result_says_so() {
+        let cases = vec![
+            (None, false),
+            (Some(json!({})), false),
+            (Some(json!({ "error": null })), false),
+            (Some(json!({ "error": { "errorMessage": "x" } })), true),
+            (Some(json!({ "spawnError": "ENOENT" })), true),
+            (Some(json!({ "rejected": {} })), true),
+            (Some(json!({ "denied": { "reason": "policy" } })), true),
+            (Some(json!({ "rejected": null, "denied": null, "spawnError": null })), false),
+            (Some(json!({ "success": { "exitCode": 0 } })), false),
+            (Some(json!({ "success": { "exitCode": 2 } })), true),
+            (Some(json!({ "success": { "exitCode": "2" } })), false),
+            (Some(json!({ "success": {} })), false),
+            (Some(json!({ "success": "yes" })), false),
+        ];
+        for (result, expected) in cases {
+            let rec = result.clone().map(obj);
+            assert_eq!(tool_failed(rec.as_ref()), expected, "{result:?}");
+            if rec.is_some() {
+                assert_eq!(tool_status(expected), if expected { ToolStatus::Failed } else { ToolStatus::Completed });
+            }
+        }
+    }
+
+    #[test]
+    fn a_tool_name_is_shown_the_way_the_chat_spells_it() {
+        let cases = [
+            ("bash", "Bash"),
+            ("SHELL", "Shell"),
+            ("read", "Read"),
+            ("Write", "Write"),
+            ("edit", "Edit"),
+            ("MultiEdit", "Edit"),
+            ("delete", "Delete"),
+            ("glob", "Glob"),
+            ("Grep", "Grep"),
+            ("LS", "Ls"),
+            ("webSearch", "Search"),
+            ("mcp_websearch_brave", "Search"),
+            ("Todo", "Todo"),
+            ("", ""),
+        ];
+        for (name, expected) in cases {
+            assert_eq!(pretty_tool(name), expected, "pretty_tool({name:?})");
+        }
+    }
 }
