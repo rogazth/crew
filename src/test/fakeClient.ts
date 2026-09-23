@@ -15,9 +15,12 @@ export type FakeRequest = {
  * with a responder answer on the next microtask; the rest wait in `requests`
  * until the test settles them. Install it in a test file with
  *
- *   vi.mock("../lib/client", async () => ({ client: (await import("../test/fakeClient")).fake.client }));
+ *   const { fake } = await vi.hoisted(() => import("../test/fakeClient"));
+ *   vi.mock("../lib/client", () => ({ client: fake.client }));
  *
- * and call `fake.reset()` in `beforeEach`.
+ * and call `fake.reset()` in `beforeEach`. Hoisting the import keeps one fake
+ * even when a test calls `vi.resetModules()`; importing it inside the mock
+ * factory instead would hand the code under test a second copy.
  */
 function createFakeClient() {
   const requests: FakeRequest[] = [];
