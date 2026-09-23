@@ -18,6 +18,7 @@ import { useSessions } from "./hooks/useSessions";
 import { useSidebarWidth } from "./hooks/useSidebarWidth";
 import { useTabs } from "./hooks/useTabs";
 import { AgentThemeProvider } from "./hooks/useAgentTheme";
+import { BrowserPrefsProvider } from "./hooks/useBrowserPrefs";
 import { TerminalPrefsProvider } from "./hooks/useTerminalPrefs";
 import { useWorkspaces } from "./hooks/useWorkspaces";
 import type { Session } from "./lib/types";
@@ -127,6 +128,7 @@ export function App() {
 
   return (
     <TerminalPrefsProvider>
+    <BrowserPrefsProvider>
     <AgentThemeProvider>
     <Sidebar.Provider
       contained
@@ -242,6 +244,7 @@ export function App() {
       <AgentSheetHost sheet={sheet} sessions={sessions} onNewRoutine={openRoutines} />
     </Sidebar.Provider>
     </AgentThemeProvider>
+    </BrowserPrefsProvider>
     </TerminalPrefsProvider>
   );
 }

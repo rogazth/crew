@@ -1,6 +1,7 @@
 import { Sidebar } from "@cloudflare/kumo";
 import {
   ArrowLeftIcon,
+  GlobeIcon,
   InfoIcon,
   KeyboardIcon,
   PaletteIcon,
@@ -17,6 +18,7 @@ const ICONS: Record<SettingsSectionId, Icon> = {
   general: SlidersHorizontalIcon,
   appearance: PaletteIcon,
   terminal: TerminalWindowIcon,
+  browser: GlobeIcon,
   providers: RobotIcon,
   keybindings: KeyboardIcon,
   about: InfoIcon,

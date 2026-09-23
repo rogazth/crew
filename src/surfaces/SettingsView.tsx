@@ -3,8 +3,10 @@ import { ModelPicker } from "../chrome/ModelPicker";
 import { ProviderIcon } from "../chrome/ProviderIcon";
 import { SettingsRow, SettingsSection } from "../chrome/SettingsRow";
 import { useAgentTheme } from "../hooks/useAgentTheme";
+import { useBrowserPrefs } from "../hooks/useBrowserPrefs";
 import { useDefaultAgent } from "../hooks/useDefaultAgent";
 import { AGENT_THEMES, type AgentThemeId } from "../lib/agentTheme";
+import { KEEP_CHOICES, SEARCH_ENGINES } from "../lib/browserPrefs";
 import { COMMANDS, COMMAND_IDS, commandKeys } from "../lib/commands";
 import { PROVIDERS } from "../lib/providers";
 import { settingsSection, type SettingsSectionId } from "../lib/settings";
@@ -22,10 +24,12 @@ export function SettingsView({ section }: { section: SettingsSectionId }) {
           {section === "appearance" && <Appearance />}
           {section === "keybindings" && <Keybindings />}
           {section === "terminal" && <TerminalSettings />}
+          {section === "browser" && <Browser />}
           {section === "providers" && <Providers />}
           {section !== "appearance" &&
             section !== "keybindings" &&
             section !== "terminal" &&
+            section !== "browser" &&
             section !== "providers" && (
             <Pending label={meta.label} />
           )}
@@ -47,6 +51,40 @@ function Appearance() {
           value={theme}
           onValueChange={(value) => value && update(value as AgentThemeId)}
           items={AGENT_THEMES.map((item) => ({ value: item.id, label: item.label }))}
+        />
+      </SettingsRow>
+    </SettingsSection>
+  );
+}
+
+function Browser() {
+  const { prefs, update } = useBrowserPrefs();
+  return (
+    <SettingsSection title="Pages">
+      <SettingsRow label="Search engine" description="Where the address bar sends anything that isn't an address.">
+        <Select
+          aria-label="Search engine"
+          size="sm"
+          className="w-40"
+          value={prefs.searchTemplate}
+          onValueChange={(value) => value && update({ ...prefs, searchTemplate: value })}
+          items={SEARCH_ENGINES.map((engine): { value: string; label: string } => ({
+            value: engine.template,
+            label: engine.label,
+          }))}
+        />
+      </SettingsRow>
+      <SettingsRow
+        label="Background pages"
+        description="Hidden tabs that stay loaded for an instant switch back. Each one is a process; the rest reload when shown."
+      >
+        <Select
+          aria-label="Background pages"
+          size="sm"
+          className="w-40"
+          value={String(prefs.keep)}
+          onValueChange={(value) => value && update({ ...prefs, keep: Number(value) })}
+          items={KEEP_CHOICES.map((keep) => ({ value: String(keep), label: String(keep) }))}
         />
       </SettingsRow>
     </SettingsSection>

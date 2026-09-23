@@ -435,6 +435,11 @@ body:has(button[data-sidebar="resize-handle"]:active) * {
   .animate-status-pulse { animation: none; }
 }
 
+/* A drag that starts in the app keeps its pointer when it crosses a page. */
+.crew-dragging webview {
+  pointer-events: none;
+}
+
 /* A page is loading: a sliver sweeps under the toolbar instead of a spinner in the way. */
 @keyframes browser-progress {
   from { transform: translateX(-100%); }

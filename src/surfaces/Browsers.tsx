@@ -1,9 +1,9 @@
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { useBrowserPrefs } from "../hooks/useBrowserPrefs";
 import { useCommands } from "../hooks/useCommand";
 import { paneHandle } from "../lib/browser/handles";
 import { pages } from "../lib/browser/pageStore";
-import { DEFAULT_KEEP, liveGuests, touch } from "../lib/browser/retention";
-import { DEFAULT_SEARCH } from "../lib/browser/url";
+import { liveGuests, touch } from "../lib/browser/retention";
 import { browserHost } from "../lib/host";
 import { newBrowserTab, paneId } from "../lib/tabs";
 import type { Tab } from "../lib/types";
@@ -29,6 +29,7 @@ const isBrowser = (pane: MountedPane): pane is BrowserMount => pane.tab.kind ===
  * a live guest; the rest go cold until they are looked at again.
  */
 export function Browsers({ panes, onPatch, onOpenTab }: Props) {
+  const { prefs } = useBrowserPrefs();
   const browsers = panes.filter(isBrowser);
   const visible = browsers.find((pane) => pane.visible) ?? null;
   const visibleId = visible?.id ?? null;
@@ -44,7 +45,7 @@ export function Browsers({ panes, onPatch, onOpenTab }: Props) {
   const live = liveGuests({
     order: order.filter((id) => ids.has(id)),
     visible: visibleId,
-    keep: DEFAULT_KEEP,
+    keep: prefs.keep,
     pinned: new Set([...pinned].filter((id) => ids.has(id))),
   });
 
@@ -61,6 +62,30 @@ export function Browsers({ panes, onPatch, onOpenTab }: Props) {
         }
       : {},
   );
+
+  // A guest swallows every pointer event over it, so a drag that starts in the
+  // app (the sidebar's edge, a sortable row) would stall the moment it crossed
+  // a page. While a button is held, pages let the pointer through.
+  const hasPages = browsers.length > 0;
+  useEffect(() => {
+    if (!hasPages) return;
+    const root = document.documentElement;
+    const hold = (event: PointerEvent) => {
+      if (event.button === 0) root.classList.add("crew-dragging");
+    };
+    const release = () => root.classList.remove("crew-dragging");
+    window.addEventListener("pointerdown", hold, true);
+    window.addEventListener("pointerup", release, true);
+    window.addEventListener("pointercancel", release, true);
+    window.addEventListener("blur", release);
+    return () => {
+      window.removeEventListener("pointerdown", hold, true);
+      window.removeEventListener("pointerup", release, true);
+      window.removeEventListener("pointercancel", release, true);
+      window.removeEventListener("blur", release);
+      release();
+    };
+  }, [hasPages]);
 
   // A closed tab's live state goes with it. Runs after the pane's own cleanup, which writes to it last.
   const known = useRef(new Set<string>());
@@ -97,7 +122,7 @@ export function Browsers({ panes, onPatch, onOpenTab }: Props) {
           url={pane.tab.url}
           live={live.has(pane.id)}
           visible={pane.visible}
-          searchTemplate={DEFAULT_SEARCH}
+          searchTemplate={prefs.searchTemplate}
           onPatch={(patch) => onPatch(pane.workspaceId, pane.tab.id, patch)}
           onPinned={(on) =>
             setPinned((current) => {
