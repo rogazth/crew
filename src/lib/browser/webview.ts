@@ -98,12 +98,22 @@ export function createGuest(container: HTMLElement, src: string, on: GuestEvents
   const listen = (name: string, handler: (event: AnyEvent) => void) =>
     view.addEventListener(name, (event) => handler(event as AnyEvent));
 
-  listen("did-attach", () => {
+  /**
+   * The id is not always readable yet when did-attach fires, and every call to
+   * main (snapshot, DevTools, favicon ownership) needs it, so it is asked for
+   * again until it answers.
+   */
+  const learnId = () => {
+    if (id !== null) return id;
     id = safely(() => view.getWebContentsId(), null);
     if (id !== null) on.attach(id);
-  });
+    return id;
+  };
+
+  listen("did-attach", learnId);
   listen("dom-ready", () => {
     ready = true;
+    learnId();
   });
   listen("did-start-navigation", (event) => {
     if (event.isMainFrame && !event.isInPlace) on.start(String(event.url));
@@ -155,7 +165,7 @@ export function createGuest(container: HTMLElement, src: string, on: GuestEvents
 
   return {
     element: view,
-    webContentsId: () => id,
+    webContentsId: learnId,
     navigate: (url) => {
       if (!ready) {
         view.setAttribute("src", url);
