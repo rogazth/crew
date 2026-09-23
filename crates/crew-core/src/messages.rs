@@ -951,6 +951,25 @@ mod tests {
         assert_eq!(page(None, None), [5, 4, 3, 2, 1]);
     }
 
+    #[test]
+    fn a_search_never_answers_more_than_five_hundred_hits() {
+        let (dir, store) = temp_store();
+        let id = agent_in(&dir, &store, "many").id;
+        let blocks: Vec<Block> = (1..=520).map(|n| at(BlockRole::User, "flood", n)).collect();
+        write(&store, &id, &blocks);
+        let found = hits(
+            &store,
+            SearchQuery {
+                query: "flood".into(),
+                limit: Some(u32::MAX),
+                sort: Some(SearchSort::Newest),
+                ..Default::default()
+            },
+        );
+        assert_eq!(found.len(), 500);
+        assert_eq!(found.first().map(|hit| hit.at), Some(520));
+    }
+
     /// Whatever FTS5 would read as syntax is searched for as text: the words
     /// around it still find the line, and none of it is an error.
     #[test]

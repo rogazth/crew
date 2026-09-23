@@ -232,7 +232,15 @@ impl Scheduler {
             sent_at: None,
             nonce: None,
         });
-        if started_turn.is_err() {
+        if let Err(error) = started_turn {
+            // The note above already went out; the chat must not be left
+            // claiming a run that never started.
+            let transcripts = self.turns.transcripts();
+            transcripts.append_system(
+                &row.session.id,
+                &format!("Routine · {} did not run: {error}", row.routine.name),
+            );
+            transcripts.flush(&row.session.id);
             self.finish(&row.routine.id, &run, RunStatus::Error);
             return;
         }
@@ -1121,6 +1129,28 @@ print(json.dumps({"type":"step_finish","sessionID":sid,"part":{"id":"s1","type":
         assert_eq!(runs.len(), 1);
         assert_eq!(runs[0].status, RunStatus::Error);
         assert!(runs[0].finished_at.is_some(), "an error that never finished");
+    }
+
+    #[test]
+    fn a_routine_that_will_not_start_says_so_in_the_chat() {
+        let world = world();
+        let coder = world.agent("Coder");
+        world.routine(&coder, "Standup", Some(1_000));
+        world.host.test_install_claude(&coder.id);
+
+        world.tick();
+
+        world.scheduler.stop();
+        let notes: Vec<String> = world
+            .blocks(&coder.id)
+            .into_iter()
+            .filter(|block| block.role == BlockRole::System)
+            .map(|block| block.text)
+            .collect();
+        assert_eq!(
+            notes,
+            ["Routine · Standup", "Routine · Standup did not run: Turn already running"],
+        );
     }
 
     /// `next_run_at` is the only thing that bounds a re-fire. A fire that could

@@ -127,20 +127,19 @@ function parseField(
       if (parsedLo === null) return null;
       lo = parsedLo;
       if (toText === undefined) {
-        hi = step === undefined ? lo : max;
+        // `7/2` is just Sunday; `mon/2` still stops at Saturday.
+        hi = step === undefined ? lo : Math.max(max, lo);
       } else {
         const parsedHi = named(toText, names, nameBase);
         if (parsedHi === null) return null;
         hi = parsedHi;
       }
     }
-    // `7` is Sunday in the day-of-week field, and only there.
-    if (names === DAYS) {
-      if (lo === 7) lo = 0;
-      if (hi === 7) hi = 0;
-    }
-    if (lo < min || hi > max || lo > hi) return null;
-    for (let value = lo; value <= hi; value += by) values.add(value);
+    // `7` is Sunday in the day-of-week field, and only there: written out, it
+    // may start or end a range, as in `5-7` or `1-7`.
+    const top = names === DAYS ? 7 : max;
+    if (lo < min || hi > top || lo > hi) return null;
+    for (let value = lo; value <= hi; value += by) values.add(names === DAYS && value === 7 ? 0 : value);
   }
   return values.size === 0 ? null : [...values].sort((a, b) => a - b);
 }

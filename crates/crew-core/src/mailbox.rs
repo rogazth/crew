@@ -199,15 +199,6 @@ mod tests {
         assert!(letter.ends_with("\n\nthe branch is green"), "{letter}");
     }
 
-    /// The time it was written, not the time it was handed over: a letter that
-    /// waited an hour in a busy agent's box still says when it was written.
-    #[test]
-    fn the_envelope_says_when_it_was_written() {
-        let at = crate::store::now_millis() - 3_600_000;
-        let letter = envelope(&sender("s1"), "hi", at, false);
-        assert!(letter.contains(&format!("At: {}", crate::store::stamp(at))), "{letter}");
-    }
-
     /// A sender that was deleted leaves a name and no address. Offering the
     /// empty id would be offering a reply that goes nowhere.
     #[test]

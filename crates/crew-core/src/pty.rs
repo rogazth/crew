@@ -452,8 +452,26 @@ fn spawn_unix(
     let pid = child.id();
 
     set_cloexec(master);
-    let reader = unsafe { File::from_raw_fd(dup_fd(master)?) };
-    let writer = unsafe { File::from_raw_fd(dup_fd(master)?) };
+    // The child is already running: a failure here must not leave it, or the
+    // master, behind with nobody holding them.
+    let fds = dup_fd(master).and_then(|reader| {
+        dup_fd(master).map(|writer| (reader, writer)).inspect_err(|_| close_fd(reader))
+    });
+    let (reader, writer) = match fds {
+        Ok(fds) => fds,
+        Err(err) => {
+            // setsid made it a group leader; whatever it started goes too.
+            unsafe {
+                libc::kill(-(pid as i32), libc::SIGKILL);
+            }
+            let _ = child.kill();
+            let _ = child.wait();
+            close_fd(master);
+            return Err(err);
+        }
+    };
+    let reader = unsafe { File::from_raw_fd(reader) };
+    let writer = unsafe { File::from_raw_fd(writer) };
 
     let stream_id = host.inner.next_stream.fetch_add(1, Ordering::Relaxed);
     let live = Arc::new(LivePty::new(Box::new(writer), master, pid, stream_id));

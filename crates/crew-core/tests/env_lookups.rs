@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use crew_core::agent::AgentHost;
+use crew_core::agent::{AgentEvents, AgentHost};
 use crew_core::pty::{PtyEvents, PtyHost};
 use crew_core::{provider_session, shell_path};
 use rusqlite::Connection;
@@ -44,6 +44,13 @@ impl Sandbox {
             "CLICOLOR",
         ] {
             std::env::remove_var(key);
+        }
+        // The suite itself may run inside a Claude Code session.
+        for (key, _) in std::env::vars_os() {
+            let key = key.to_string_lossy().into_owned();
+            if key == "CLAUDECODE" || key.starts_with("CLAUDE_CODE_") {
+                std::env::remove_var(key);
+            }
         }
         // Settles the login-shell part of the search path while SHELL is unset,
         // so no test's fake shell is ever asked for it.
@@ -373,3 +380,90 @@ fn a_shell_crew_does_not_know_gets_no_login_flag_and_keeps_its_settings() {
     );
 }
 
+
+/// What Claude Code sets in its own children, and what a parent that turned
+/// colour off for its logs sets, plus one variable that is nobody's business.
+fn inherit_claude_and_colour() {
+    std::env::set_var("CLAUDECODE", "1");
+    std::env::set_var("CLAUDE_CODE_ENTRYPOINT", "cli");
+    std::env::set_var("CLAUDE_CODE_SSE_PORT", "4242");
+    std::env::set_var("CLAUDE_CONFIG_DIR", "/tmp/claude-config");
+    std::env::set_var("NO_COLOR", "1");
+    std::env::set_var("FORCE_COLOR", "0");
+    std::env::set_var("CREW_TEST_KEEP", "kept");
+}
+
+fn names(env_lines: &str) -> Vec<String> {
+    env_lines
+        .lines()
+        .filter_map(|line| line.trim_end_matches('\r').split_once('='))
+        .map(|(name, _)| name.to_string())
+        .collect()
+}
+
+#[test]
+fn a_terminal_does_not_inherit_the_claude_session_or_the_colour_switches() {
+    let _env = Sandbox::new();
+    inherit_claude_and_colour();
+    let host = PtyHost::new();
+    let screen = Arc::new(Screen::default());
+    host.set_events(screen.clone());
+    host.spawn(
+        "t".into(),
+        "/".into(),
+        vec!["/bin/sh".into(), "-c".into(), "/usr/bin/env; echo END-OF-ENV".into()],
+        80,
+        24,
+    )
+    .unwrap();
+    let text = || String::from_utf8_lossy(&screen.0.lock().unwrap_or_else(|e| e.into_inner())).into_owned();
+    eventually("the child's environment", || text().contains("END-OF-ENV"));
+    host.kill("t");
+
+    let seen = names(&text());
+    for gone in ["CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_SSE_PORT", "NO_COLOR", "FORCE_COLOR"] {
+        assert!(!seen.iter().any(|name| name == gone), "{gone} reached the terminal: {seen:?}");
+    }
+    for kept in ["CREW_TEST_KEEP", "CLAUDE_CONFIG_DIR"] {
+        assert!(seen.iter().any(|name| name == kept), "{kept} was dropped: {seen:?}");
+    }
+}
+
+#[derive(Default)]
+struct Output {
+    lines: Mutex<Vec<String>>,
+    exited: Mutex<bool>,
+}
+
+impl AgentEvents for Output {
+    fn lines(&self, _event: &str, _session_id: &str, lines: Vec<String>) {
+        self.lines.lock().unwrap_or_else(|e| e.into_inner()).extend(lines);
+    }
+    fn exit(&self, _session_id: &str, _code: Option<i32>, _pid: u32) {
+        *self.exited.lock().unwrap_or_else(|e| e.into_inner()) = true;
+    }
+}
+
+#[test]
+fn an_agent_does_not_inherit_the_claude_session_it_was_launched_from() {
+    let _env = Sandbox::new();
+    inherit_claude_and_colour();
+    let host = AgentHost::new();
+    let output = Arc::new(Output::default());
+    host.set_events(output.clone());
+    let given = std::collections::HashMap::from([("CREW_TOKEN".to_string(), "t".to_string())]);
+    host.spawn("a".into(), "/usr/bin/env".into(), Vec::new(), "/".into(), Some(given)).unwrap();
+    eventually("the agent to exit", || *output.exited.lock().unwrap_or_else(|e| e.into_inner()));
+    // Its stdout reader may still be handing over the last batch.
+    eventually("the agent's output", || {
+        output.lines.lock().unwrap_or_else(|e| e.into_inner()).iter().any(|l| l.starts_with("CREW_TEST_KEEP="))
+    });
+
+    let seen = names(&output.lines.lock().unwrap_or_else(|e| e.into_inner()).join("\n"));
+    for gone in ["CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_SSE_PORT"] {
+        assert!(!seen.iter().any(|name| name == gone), "{gone} reached the agent: {seen:?}");
+    }
+    for kept in ["CREW_TEST_KEEP", "CLAUDE_CONFIG_DIR", "CREW_TOKEN"] {
+        assert!(seen.iter().any(|name| name == kept), "{kept} was dropped: {seen:?}");
+    }
+}

@@ -93,7 +93,7 @@ fn parse_field(
             Some(step) => step.parse().ok().filter(|n| *n >= 1)?,
             None => 1,
         };
-        let (mut lo, mut hi) = if range == "*" {
+        let (lo, hi) = if range == "*" {
             (min, max)
         } else {
             let mut bits = range.split('-');
@@ -105,25 +105,21 @@ fn parse_field(
             let parsed_lo = named(from_text, names, name_base)?;
             let parsed_hi = match to_text {
                 None if step.is_none() => parsed_lo,
-                None => max,
+                // `7/2` is just Sunday; `mon/2` still stops at Saturday.
+                None => max.max(parsed_lo),
                 Some(to_text) => named(to_text, names, name_base)?,
             };
             (parsed_lo, parsed_hi)
         };
-        if names == Some(DAYS) {
-            if lo == 7 {
-                lo = 0;
-            }
-            if hi == 7 {
-                hi = 0;
-            }
-        }
-        if lo < min || hi > max || lo > hi {
+        // `7` is Sunday in the day-of-week field, and only there: written out,
+        // it may start or end a range, as in `5-7` or `1-7`.
+        let top = if names == Some(DAYS) { 7 } else { max };
+        if lo < min || hi > top || lo > hi {
             return None;
         }
         let mut value = lo;
         while value <= hi {
-            values.insert(value);
+            values.insert(if names == Some(DAYS) && value == 7 { 0 } else { value });
             value = value.saturating_add(by);
             if by == 0 {
                 break;
@@ -308,6 +304,16 @@ mod tests {
         assert_eq!(next("0 0 1 1 *", at(2025, 12, 31, 23, 59)), Some(at(2026, 1, 1, 0, 0)));
     }
 
+    /// Wed 3 Sep 2025; the 7th is the Sunday after.
+    #[test]
+    fn seven_in_the_day_of_week_field_fires_on_sunday() {
+        assert_eq!(next("0 9 * * 7", at(2025, 9, 3, 12, 0)), Some(at(2025, 9, 7, 9, 0)));
+        assert_eq!(next("0 9 * * 5-7", at(2025, 9, 6, 10, 0)), Some(at(2025, 9, 7, 9, 0)));
+        assert_eq!(next("0 9 * * 5-7", at(2025, 9, 7, 10, 0)), Some(at(2025, 9, 12, 9, 0)));
+        assert_eq!(next("0 9 * * 1-7", at(2025, 9, 6, 10, 0)), Some(at(2025, 9, 7, 9, 0)));
+        assert_eq!(next("0 9 * * 1-7", at(2025, 9, 7, 10, 0)), Some(at(2025, 9, 8, 9, 0)));
+    }
+
     /// Nothing matches February 30th, and the search has to stop rather than
     /// walk forward for ever.
     #[test]
@@ -347,7 +353,15 @@ mod tests {
             ("0 0 * * sun,sat", dow, vec![0, 6]),
             ("0 0 * * MON-FRI", dow, vec![1, 2, 3, 4, 5]),
             ("0 0 * * 1-5/2", dow, vec![1, 3, 5]),
-            ("0 0 * * sun-7", dow, vec![0]),
+            // 7 is Sunday too, and may end or start a range.
+            ("0 0 * * sun-7", dow, vec![0, 1, 2, 3, 4, 5, 6]),
+            ("0 0 * * 0-7", dow, vec![0, 1, 2, 3, 4, 5, 6]),
+            ("0 0 * * 1-7", dow, vec![0, 1, 2, 3, 4, 5, 6]),
+            ("0 0 * * 5-7", dow, vec![0, 5, 6]),
+            ("0 0 * * sat-7", dow, vec![0, 6]),
+            ("0 0 * * 1-7/2", dow, vec![0, 1, 3, 5]),
+            ("0 0 * * 7/2", dow, vec![0]),
+            ("0 0 * * mon/2", dow, vec![1, 3, 5]),
             ("0 0 7 * *", dom, vec![7]),
             ("  0\t9  *  *  *  ", hour, vec![9]),
         ];

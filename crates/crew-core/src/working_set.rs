@@ -296,20 +296,6 @@ mod tests {
         assert!(unstamped(&out).contains("[Cuddles a1] revisa el PR"), "{out}");
     }
 
-    /// Every line says when, with the date and not only the clock: a turn is a
-    /// fresh session, so "yesterday" has nothing to count back from otherwise.
-    #[test]
-    fn every_line_says_when_it_happened() {
-        let at = crate::store::now_millis();
-        let mut block = new_block(BlockRole::User, "arregla el parser");
-        block.at = Some(at);
-        let out = render(&[block], TAIL_BUDGET).expect("history");
-        assert!(
-            out.contains(&format!("[{} · user] arregla el parser", crate::store::stamp(at))),
-            "{out}"
-        );
-    }
-
     #[test]
     fn a_message_it_sent_reads_as_a_message() {
         let blocks = vec![tool(

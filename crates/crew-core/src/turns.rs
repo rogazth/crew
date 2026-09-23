@@ -2478,6 +2478,34 @@ print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type
     }
 
     #[test]
+    fn a_letter_from_another_agent_gives_the_loop_a_fresh_budget() {
+        let world = world();
+        let ws = workspace(&world);
+        let coder = agent(&world, &ws, "Coder");
+        let me = AgentRef { id: coder.id.clone(), name: "Coder".into() };
+        let lead = AgentRef { id: agent(&world, &ws, "Lead").id, name: "Lead".into() };
+        for _ in 0..5 {
+            mailbox::enqueue(world.host.test_store(), &coder.id, &me, "before").expect("enqueue");
+        }
+        mailbox::enqueue(world.host.test_store(), &coder.id, &lead, "keep going").expect("enqueue");
+        for _ in 0..MAX_SELF_TURNS {
+            mailbox::enqueue(world.host.test_store(), &coder.id, &me, "after").expect("enqueue");
+        }
+
+        turn(&world, &coder, "start");
+        settle(&world, &coder.id);
+
+        let rows = blocks(&world, &coder.id);
+        let laps = rows.iter().filter(|block| block.text == "after").count() as u32;
+        assert_eq!(laps, MAX_SELF_TURNS, "the loop ran {laps} times after the letter");
+        assert!(
+            !rows.iter().any(|block| block.text.starts_with("Stopped after")),
+            "the letter from Lead did not reset the budget"
+        );
+        assert_eq!(mailbox::waiting_count(world.host.test_store(), &coder.id).expect("count"), 0);
+    }
+
+    #[test]
     fn a_stopped_turn_leaves_the_box_alone() {
         let world = world();
         let ws = workspace(&world);

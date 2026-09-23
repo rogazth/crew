@@ -49,6 +49,17 @@ describe("parseCron", () => {
     expect(parseCron("0 0 1 jan,jul *")?.month).toEqual([1, 7]);
     expect(parseCron("0 0 * * 7")?.dow).toEqual([0]);
   });
+
+  it("takes 7 as Sunday at either end of a day range", () => {
+    expect(parseCron("0 0 * * 5-7")?.dow).toEqual([0, 5, 6]);
+    expect(parseCron("0 0 * * 1-7")?.dow).toEqual([0, 1, 2, 3, 4, 5, 6]);
+    expect(parseCron("0 0 * * sun-7")?.dow).toEqual([0, 1, 2, 3, 4, 5, 6]);
+    expect(parseCron("0 0 * * 1-7/2")?.dow).toEqual([0, 1, 3, 5]);
+    expect(parseCron("0 0 * * 7/2")?.dow).toEqual([0]);
+    expect(parseCron("0 0 * * 7-sat")).toBeNull();
+    expect(parseCron("0 7-8 * * *")?.hour).toEqual([7, 8]);
+    expect(parseCron("0 0 1 7-13 *")).toBeNull();
+  });
 });
 
 describe("parity with the daemon", () => {
@@ -68,6 +79,15 @@ describe("nextCron", () => {
 
   it("walks to the next matching weekday", () => {
     expect(next("30 7 * * mon", at(2025, 9, 3, 12, 0))).toBe(at(2025, 9, 8, 7, 30));
+  });
+
+  it("fires 7 on Sunday", () => {
+    // Wed Sep 3 2025; the 7th is the Sunday after.
+    expect(next("0 9 * * 7", at(2025, 9, 3, 12, 0))).toBe(at(2025, 9, 7, 9, 0));
+    expect(next("0 9 * * 5-7", at(2025, 9, 6, 10, 0))).toBe(at(2025, 9, 7, 9, 0));
+    expect(next("0 9 * * 5-7", at(2025, 9, 7, 10, 0))).toBe(at(2025, 9, 12, 9, 0));
+    expect(next("0 9 * * 1-7", at(2025, 9, 6, 10, 0))).toBe(at(2025, 9, 7, 9, 0));
+    expect(next("0 9 * * 1-7", at(2025, 9, 7, 10, 0))).toBe(at(2025, 9, 8, 9, 0));
   });
 
   it("takes the earliest hour and minute of a matching day", () => {
