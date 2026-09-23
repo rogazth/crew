@@ -17,8 +17,9 @@
     "lint": "eslint src",
     "doctor": "react-doctor src --no-score",
     "doctor:changed": "react-doctor src --scope changed --no-score",
-    "check": "npm run lint && tsc --noEmit && npm run test && npm run doctor",
+    "check": "npm run lint && tsc --noEmit && tsc --noEmit -p tsconfig.electron.json && npm run test && npm run doctor",
     "test": "vitest run",
+    "e2e": "node scripts/e2e.mjs",
     "protocol": "cargo test -p crew-protocol",
     "release": "node scripts/release.mjs"
   },

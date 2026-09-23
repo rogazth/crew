@@ -1,18 +1,21 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn, type ChildProcessByStdio } from "node:child_process";
 import { createInterface } from "node:readline";
 import { homedir } from "node:os";
 import path from "node:path";
+import type { Readable, Writable } from "node:stream";
 import { pathToFileURL } from "node:url";
-import { app, BrowserWindow, dialog, ipcMain, Menu, Notification, session, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, Notification, session, shell, type OpenDialogOptions } from "electron";
 import { sha } from "./build-info";
 import { buildMenu } from "./menu";
 import { watchForUpdates } from "./update";
 
 type DaemonInfo = { url: string; token: string };
 type OpenOptions = { multiple?: boolean; directory?: boolean };
+// stderr is inherited, so the handle has no stream for it.
+type Daemon = ChildProcessByStdio<Writable, Readable, null>;
 
 let win: BrowserWindow | null = null;
-let child: ChildProcessWithoutNullStreams | null = null;
+let child: Daemon | null = null;
 let info: DaemonInfo | null = null;
 let stopping = false;
 let restarts = 0;
@@ -23,13 +26,17 @@ function crewdPath(): string {
   return path.join(app.getAppPath(), "target/debug/crewd");
 }
 
+// e2e loads the built renderer, so it never depends on (or talks to) whatever
+// dev server holds port 1420, and it runs under the packaged app's policy.
+const fromDist = app.isPackaged || process.env.CREW_RENDERER === "dist";
+
 function csp(): string {
-  const connect = app.isPackaged
+  const connect = fromDist
     ? "ws://127.0.0.1:*"
     : "http://localhost:1420 ws://localhost:1420 ws://127.0.0.1:*";
   return [
     "default-src 'self'",
-    app.isPackaged ? "script-src 'self'" : "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
+    fromDist ? "script-src 'self'" : "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
     "style-src 'self' 'unsafe-inline'",
     "img-src 'self' data: blob: https://www.google.com",
     "font-src 'self' data:",
@@ -54,7 +61,7 @@ const DEV_ORIGIN = "http://127.0.0.1:1420";
 function allowedNavigation(url: string): boolean {
   try {
     const parsed = new URL(url);
-    if (!app.isPackaged) return parsed.origin === DEV_ORIGIN;
+    if (!fromDist) return parsed.origin === DEV_ORIGIN;
     if (parsed.protocol !== "file:") return false;
     const root = pathToFileURL(path.join(app.getAppPath(), "dist")).href;
     return parsed.href === root || parsed.href.startsWith(`${root}/`);
@@ -73,12 +80,12 @@ function parseInfo(line: string): DaemonInfo | null {
   return null;
 }
 
-function ignoreStdout(proc: ChildProcessWithoutNullStreams): void {
+function ignoreStdout(proc: Daemon): void {
   proc.stdout.removeAllListeners();
   proc.stdout.resume();
 }
 
-function readInfo(proc: ChildProcessWithoutNullStreams): Promise<DaemonInfo> {
+function readInfo(proc: Daemon): Promise<DaemonInfo> {
   return new Promise((resolve, reject) => {
     const lines = createInterface({ input: proc.stdout });
     let settled = false;
@@ -199,7 +206,7 @@ function createWindow(): void {
   win.webContents.on("will-redirect", (event) => {
     if (!allowedNavigation(event.url)) event.preventDefault();
   });
-  if (app.isPackaged) {
+  if (fromDist) {
     void win.loadFile(path.join(app.getAppPath(), "dist/index.html"));
   } else {
     void win.loadURL("http://127.0.0.1:1420");
@@ -216,12 +223,12 @@ function registerIpc(): void {
   });
   ipcMain.handle("dialog-open", async (event, opts: OpenOptions = {}) => {
     const target = BrowserWindow.fromWebContents(event.sender) ?? win ?? undefined;
-    const options = {
+    const options: OpenDialogOptions = {
       properties: opts.directory
-        ? (["openDirectory"] as const)
+        ? ["openDirectory"]
         : opts.multiple
-          ? (["openFile", "multiSelections"] as const)
-          : (["openFile"] as const),
+          ? ["openFile", "multiSelections"]
+          : ["openFile"],
     };
     const { canceled, filePaths } = target
       ? await dialog.showOpenDialog(target, options)
