@@ -160,6 +160,7 @@ pub fn waiting_count(store: &Store, to_session: &str) -> Result<i64, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::temp_store;
 
     fn store() -> Store {
         let dir = std::env::temp_dir().join(format!("crew-mailbox-{}", uuid::Uuid::new_v4()));
@@ -298,5 +299,106 @@ mod tests {
         enqueue(&store, &to, &sender(&from), "gone").expect("enqueue");
         crate::session::delete(&store, to.clone()).expect("delete");
         assert_eq!(waiting_count(&store, &to).expect("count"), 0);
+    }
+
+    /// Two agents in one workspace on a folder inside the store's directory.
+    fn pair(dir: &tempfile::TempDir, store: &Store) -> (String, String) {
+        let workspace =
+            crate::workspace::create(store, "w".into(), dir.path().to_string_lossy().into())
+                .expect("workspace");
+        let agent = |name: &str| {
+            crate::session::create(
+                store,
+                workspace.id.clone(),
+                "agent".into(),
+                name.into(),
+                "claude".into(),
+                "m".into(),
+                "".into(),
+                "ask".into(),
+            )
+            .expect("session")
+            .id
+        };
+        (agent("to"), agent("from"))
+    }
+
+    fn texts(letters: Vec<Letter>) -> Vec<String> {
+        letters.into_iter().map(|letter| letter.text).collect()
+    }
+
+    #[test]
+    fn a_letter_to_an_agent_that_does_not_exist_is_refused() {
+        let (dir, store) = temp_store();
+        let (_, from) = pair(&dir, &store);
+
+        assert!(enqueue(&store, "nobody", &sender(&from), "hello?").is_err());
+
+        assert_eq!(waiting_count(&store, "nobody").expect("count"), 0);
+        assert!(waiting(&store, "nobody").expect("waiting").is_empty());
+    }
+
+    /// Looking at the box is not reading it: the letters stay until claimed,
+    /// in the order they came, with what the sender wrote.
+    #[test]
+    fn looking_at_the_box_leaves_every_letter_waiting() {
+        let (dir, store) = temp_store();
+        let (to, from) = pair(&dir, &store);
+        let sent = enqueue(&store, &to, &sender(&from), "first").expect("enqueue");
+        enqueue(&store, &to, &sender(&from), "second").expect("enqueue");
+
+        let seen = waiting(&store, &to).expect("waiting");
+
+        assert_eq!(seen[0], sent);
+        assert_eq!(texts(seen), ["first", "second"]);
+        assert_eq!(texts(waiting(&store, &to).expect("again")), ["first", "second"]);
+        assert_eq!(waiting_count(&store, &to).expect("count"), 2);
+    }
+
+    #[test]
+    fn letters_written_in_the_same_millisecond_come_out_in_the_order_they_went_in() {
+        let (dir, store) = temp_store();
+        let (to, from) = pair(&dir, &store);
+        for text in ["one", "two", "three"] {
+            enqueue(&store, &to, &sender(&from), text).expect("enqueue");
+        }
+        store.with(|conn| conn.execute("UPDATE mailbox SET at = 42", [])).expect("one moment");
+
+        assert_eq!(texts(waiting(&store, &to).expect("waiting")), ["one", "two", "three"]);
+        let claimed: Vec<String> = (0..3)
+            .map(|_| claim(&store, &to).expect("claim").expect("letter").text)
+            .collect();
+        assert_eq!(claimed, ["one", "two", "three"]);
+    }
+
+    #[test]
+    fn each_box_counts_only_what_is_still_waiting_for_it() {
+        let (dir, store) = temp_store();
+        let (to, from) = pair(&dir, &store);
+        enqueue(&store, &to, &sender(&from), "for to").expect("enqueue");
+        enqueue(&store, &to, &sender(&from), "for to, again").expect("enqueue");
+        enqueue(&store, &from, &sender(&to), "for from").expect("enqueue");
+
+        claim(&store, &to).expect("claim");
+
+        assert_eq!(waiting_count(&store, &to).expect("to"), 1);
+        assert_eq!(waiting_count(&store, &from).expect("from"), 1);
+        release(&store, "no-such-letter").expect("releasing nothing is not an error");
+        assert_eq!(waiting_count(&store, &to).expect("to"), 1);
+    }
+
+    /// A box that cannot be read says so. Answering "nothing waiting" would
+    /// strand every letter in it without a word.
+    #[test]
+    fn a_box_that_cannot_be_read_is_an_error_not_an_empty_box() {
+        let (dir, store) = temp_store();
+        let (to, from) = pair(&dir, &store);
+        store.with(|conn| conn.execute_batch("DROP TABLE mailbox;")).expect("break the schema");
+
+        assert!(enqueue(&store, &to, &sender(&from), "lost").is_err());
+        assert!(claim(&store, &to).is_err());
+        assert!(waiting(&store, &to).is_err());
+        assert!(waiting_count(&store, &to).is_err());
+        assert!(release(&store, "any").is_err());
     }
 }

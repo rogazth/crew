@@ -215,6 +215,16 @@ pub fn rename(store: &Store, id: String, name: String) -> Result<(), String> {
 /// first title, a `/rename`, a fresh one after `/clear`. A name typed in Crew
 /// stands until the provider comes up with another. Returns the adopted name.
 pub fn sync_title(store: &Store, id: String) -> Result<Option<String>, String> {
+    sync_title_in(store, id, claude_title::transcript_path)
+}
+
+/// `sync_title` with the place Claude keeps a transcript passed in: it is
+/// under HOME, which a test must not read.
+fn sync_title_in(
+    store: &Store,
+    id: String,
+    claude_transcript: impl FnOnce(&str, &str) -> Option<String>,
+) -> Result<Option<String>, String> {
     let row = get(store, id)?.ok_or("Session not found")?;
     if row.kind != "terminal" {
         return Ok(None);
@@ -222,16 +232,20 @@ pub fn sync_title(store: &Store, id: String) -> Result<Option<String>, String> {
     let Some(workspace) = crate::workspace::get(store, row.workspace_id.clone())? else {
         return Ok(None);
     };
-    match provider_title(&row, &workspace.path) {
+    match provider_title(&row, &workspace.path, claude_transcript) {
         Some(title) => adopt_title(store, &row, title),
         None => Ok(None),
     }
 }
 
-fn provider_title(row: &Session, cwd: &str) -> Option<String> {
+fn provider_title(
+    row: &Session,
+    cwd: &str,
+    claude_transcript: impl FnOnce(&str, &str) -> Option<String>,
+) -> Option<String> {
     let bound = row.provider_session_id.as_deref();
     match row.provider.as_str() {
-        "claude" => claude_title::read(&claude_title::transcript_path(cwd, bound.unwrap_or(&row.id))?),
+        "claude" => claude_title::read(&claude_transcript(cwd, bound.unwrap_or(&row.id))?),
         other => provider_session::title(other, bound?),
     }
 }
@@ -405,6 +419,7 @@ fn tab_sessions(raw: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::{temp_dir, temp_store};
 
     fn world() -> (Store, String) {
         let dir = std::env::temp_dir().join(format!("crew-session-{}", uuid::Uuid::new_v4()));
@@ -609,6 +624,299 @@ mod tests {
         for kept in [named.id, spoken.id, open.id, unread.id, planner.id] {
             assert!(get(&store, kept).unwrap().is_some());
         }
+    }
+
+    /// A store in its own directory, with one workspace on a folder inside it.
+    fn temp_world() -> (tempfile::TempDir, Store, crate::workspace::Workspace) {
+        let (dir, store) = temp_store();
+        let folder = dir.path().join("project");
+        std::fs::create_dir(&folder).expect("folder");
+        let workspace =
+            crate::workspace::create(&store, "w".into(), folder.to_string_lossy().into())
+                .expect("workspace");
+        (dir, store, workspace)
+    }
+
+    /// Deletes a workspace row and leaves its sessions behind, which only
+    /// happens to a database written with foreign keys off.
+    fn orphan(store: &Store, workspace: &str) {
+        store
+            .with(|conn| {
+                conn.execute_batch("PRAGMA foreign_keys = OFF;")?;
+                conn.execute("DELETE FROM workspaces WHERE id = ?1", params![workspace])?;
+                conn.execute_batch("PRAGMA foreign_keys = ON;")
+            })
+            .expect("orphan");
+    }
+
+    fn names(sessions: Vec<Session>) -> Vec<String> {
+        sessions.into_iter().map(|s| s.name).collect()
+    }
+
+    fn provider_title_of(store: &Store, id: &str) -> Option<String> {
+        store
+            .with(|conn| {
+                conn.query_row("SELECT provider_title FROM sessions WHERE id = ?1", params![id], |r| {
+                    r.get(0)
+                })
+            })
+            .expect("provider_title")
+    }
+
+    #[test]
+    fn the_busy_list_is_the_sessions_mid_turn_longest_waiting_first() {
+        let (_dir, store, workspace) = temp_world();
+        for (status, updated_at) in
+            [("idle", 1), ("working", 20), ("needs-input", 10), ("done", 2), ("error", 3)]
+        {
+            let made = agent(&store, &workspace.id, status, "ask").expect("agent");
+            set_status(&store, made.id.clone(), status.into()).expect("status");
+            store
+                .with(|conn| {
+                    conn.execute(
+                        "UPDATE sessions SET updated_at = ?2 WHERE id = ?1",
+                        params![made.id, updated_at],
+                    )
+                })
+                .expect("updated_at");
+        }
+
+        assert_eq!(names(list_busy(&store).expect("busy")), ["needs-input", "working"]);
+    }
+
+    #[test]
+    fn an_update_rewrites_the_settings_and_keeps_what_the_same_provider_bound() {
+        let (_dir, store, workspace) = temp_world();
+        let made = agent(&store, &workspace.id, "Planner", "full").expect("agent");
+        set_provider_session(&store, made.id.clone(), "p1".into()).expect("bind");
+        store
+            .with(|conn| {
+                conn.execute(
+                    "UPDATE sessions SET provider_title = 'Seen', updated_at = 0 WHERE id = ?1",
+                    params![made.id],
+                )
+            })
+            .expect("seed");
+
+        update(
+            &store,
+            made.id.clone(),
+            "  Architect  ".into(),
+            "claude".into(),
+            "opus".into(),
+            "plans things".into(),
+            false,
+            "full".into(),
+        )
+        .expect("update");
+
+        let row = get(&store, made.id.clone()).unwrap().unwrap();
+        assert_eq!(
+            (row.name.as_str(), row.model.as_str(), row.description.as_str(), row.autonomy.as_str()),
+            ("Architect", "opus", "plans things", "full")
+        );
+        assert!(!row.notifications);
+        assert!(row.updated_at > 0);
+        assert_eq!(row.provider_session_id.as_deref(), Some("p1"));
+        assert_eq!(provider_title_of(&store, &made.id).as_deref(), Some("Seen"));
+
+        update(
+            &store,
+            made.id.clone(),
+            "Architect".into(),
+            "codex".into(),
+            "gpt".into(),
+            "".into(),
+            true,
+            "unattended".into(),
+        )
+        .expect("switch provider");
+
+        let row = get(&store, made.id.clone()).unwrap().unwrap();
+        assert_eq!((row.provider.as_str(), row.autonomy.as_str()), ("codex", "ask"));
+        assert_eq!(row.provider_session_id, None);
+        assert_eq!(provider_title_of(&store, &made.id), None);
+    }
+
+    #[test]
+    fn an_update_without_a_name_changes_nothing() {
+        let (_dir, store, workspace) = temp_world();
+        let made = agent(&store, &workspace.id, "Planner", "ask").expect("agent");
+
+        let empty = update(
+            &store,
+            made.id.clone(),
+            "   ".into(),
+            "codex".into(),
+            "gpt".into(),
+            "".into(),
+            false,
+            "full".into(),
+        );
+
+        assert!(empty.is_err_and(|e| e.contains("Name is required")));
+        let row = get(&store, made.id).unwrap().unwrap();
+        assert_eq!((row.name.as_str(), row.provider.as_str()), ("Planner", "claude"));
+    }
+
+    #[test]
+    fn a_rename_is_trimmed_and_an_empty_one_changes_nothing() {
+        let (_dir, store, workspace) = temp_world();
+        let made = agent(&store, &workspace.id, "Planner", "ask").expect("agent");
+
+        rename(&store, made.id.clone(), "  Coder  ".into()).expect("rename");
+        assert_eq!(name_of(&store, &made.id), "Coder");
+
+        let empty = rename(&store, made.id.clone(), "   ".into());
+        assert!(empty.is_err_and(|e| e.contains("Name is required")));
+        assert_eq!(name_of(&store, &made.id), "Coder");
+
+        rename(&store, "nobody".into(), "Ghost".into()).expect("renaming nothing is not an error");
+        assert_eq!(names(list(&store, workspace.id).unwrap()), ["Coder"]);
+    }
+
+    #[test]
+    fn reorder_lists_sessions_in_the_order_given_and_passes_over_unknown_ids() {
+        let (_dir, store, workspace) = temp_world();
+        let ids: Vec<String> = ["a", "b", "c"]
+            .iter()
+            .map(|name| agent(&store, &workspace.id, name, "ask").expect("agent").id)
+            .collect();
+
+        reorder(&store, vec![ids[2].clone(), "gone".into(), ids[0].clone(), ids[1].clone()])
+            .expect("reorder");
+
+        assert_eq!(names(list(&store, workspace.id).unwrap()), ["c", "a", "b"]);
+    }
+
+    /// What keeps a provider session to one Crew session: discovery skips every
+    /// id another session holds, so each holder has to be listed, and a
+    /// session's own binding is never held against it.
+    #[test]
+    fn every_provider_session_another_crew_session_holds_is_claimed() {
+        let (_dir, store, workspace) = temp_world();
+        let a = agent(&store, &workspace.id, "a", "ask").expect("a").id;
+        let b = agent(&store, &workspace.id, "b", "ask").expect("b").id;
+        let c = agent(&store, &workspace.id, "c", "ask").expect("c").id;
+        let claimed = |except: &str| {
+            let mut ids = claimed_provider_sessions(&store, except).expect("claimed");
+            ids.sort();
+            ids
+        };
+        assert!(claimed(&c).is_empty());
+
+        set_provider_session(&store, a.clone(), "p1".into()).expect("bind a");
+        set_provider_session(&store, b.clone(), "p2".into()).expect("bind b");
+        assert_eq!(claimed(&a), ["p2"]);
+        assert_eq!(claimed(&c), ["p1", "p2"]);
+
+        set_provider_session(&store, a.clone(), "p3".into()).expect("rebind a");
+        assert_eq!(claimed(&b), ["p3"], "the session a let go of is still held");
+
+        delete(&store, b).expect("delete b");
+        set_provider_session(&store, "nobody".into(), "p9".into()).expect("binding nothing");
+        assert!(claimed(&a).is_empty());
+    }
+
+    /// An error must not read as an empty answer: nothing claimed would let
+    /// discovery hand one provider session to two Crew sessions, and nothing
+    /// busy would leave a turn spinning after a crash.
+    #[test]
+    fn a_read_that_fails_is_an_error_never_an_empty_list() {
+        let (_dir, store, workspace) = temp_world();
+        let made = agent(&store, &workspace.id, "a", "ask").expect("agent");
+        store
+            .with(|conn| conn.execute_batch("ALTER TABLE sessions DROP COLUMN provider_session_id;"))
+            .expect("break the schema");
+
+        assert!(claimed_provider_sessions(&store, "other").is_err());
+        assert!(list_busy(&store).is_err());
+        assert!(set_provider_session(&store, made.id, "p1".into()).is_err());
+    }
+
+    #[test]
+    fn syncing_the_title_of_a_session_that_is_gone_is_an_error() {
+        let (_dir, store, _workspace) = temp_world();
+
+        let gone = sync_title(&store, "nobody".into());
+
+        assert!(gone.is_err_and(|e| e.contains("Session not found")));
+    }
+
+    #[test]
+    fn a_session_with_no_readable_provider_title_keeps_its_name() {
+        let (_dir, store, workspace) = temp_world();
+        let planner = agent(&store, &workspace.id, "claude", "ask").expect("agent");
+        let unbound = terminal(&store, &workspace.id, "codex", "codex");
+        let unknown = terminal(&store, &workspace.id, "grok", "grok");
+        set_provider_session(&store, unknown.id.clone(), "g1".into()).expect("bind");
+        let homeless = {
+            let other = temp_dir();
+            let folder = other.path().to_string_lossy().into_owned();
+            let elsewhere = crate::workspace::create(&store, "gone".into(), folder).expect("ws");
+            let made = terminal(&store, &elsewhere.id, "claude", "claude");
+            orphan(&store, &elsewhere.id);
+            made
+        };
+
+        for session in [&planner, &unbound, &unknown, &homeless] {
+            assert_eq!(sync_title(&store, session.id.clone()).expect("sync"), None, "{}", session.name);
+            assert_eq!(name_of(&store, &session.id), session.name);
+        }
+    }
+
+    /// Claude keeps a conversation under the id it was bound to, or under the
+    /// Crew id before anything is bound, and the title in it becomes the name.
+    #[test]
+    fn a_claude_terminal_takes_the_title_from_the_transcript_it_is_bound_to() {
+        let (dir, store, workspace) = temp_world();
+        let made = terminal(&store, &workspace.id, "claude", "claude");
+        let transcripts = dir.path().join("transcripts");
+        std::fs::create_dir(&transcripts).expect("transcripts");
+        let transcript = |id: &str, record: &str| {
+            std::fs::write(transcripts.join(format!("{id}.jsonl")), format!("{record}\n"))
+                .expect("transcript")
+        };
+        transcript(&made.id, r#"{"type":"ai-title","aiTitle":"Fix the build"}"#);
+        transcript("after-clear", r#"{"type":"custom-title","customTitle":"Ship it"}"#);
+        let located = |cwd: &str, id: &str| {
+            assert_eq!(cwd, workspace.path, "looked for the transcript of another folder");
+            Some(transcripts.join(format!("{id}.jsonl")).to_string_lossy().into_owned())
+        };
+
+        let first = sync_title_in(&store, made.id.clone(), located).expect("sync");
+        assert_eq!(first.as_deref(), Some("Fix the build"));
+        assert_eq!(name_of(&store, &made.id), "Fix the build");
+        assert_eq!(sync_title_in(&store, made.id.clone(), located).expect("again"), None);
+
+        set_provider_session(&store, made.id.clone(), "after-clear".into()).expect("bind");
+        let bound = sync_title_in(&store, made.id.clone(), located).expect("sync");
+        assert_eq!(bound.as_deref(), Some("Ship it"));
+
+        set_provider_session(&store, made.id.clone(), "no-transcript".into()).expect("bind");
+        assert_eq!(sync_title_in(&store, made.id.clone(), located).expect("sync"), None);
+        assert_eq!(sync_title_in(&store, made.id.clone(), |_: &str, _: &str| None).expect("sync"), None);
+        assert_eq!(name_of(&store, &made.id), "Ship it");
+    }
+
+    #[test]
+    fn only_an_unnamed_terminal_nothing_was_said_in_is_disposable() {
+        let (_dir, store, workspace) = temp_world();
+        let empty = terminal(&store, &workspace.id, "codex", "codex");
+        let planner = agent(&store, &workspace.id, "codex", "ask").expect("agent");
+        let homeless = {
+            let other = temp_dir();
+            let folder = other.path().to_string_lossy().into_owned();
+            let elsewhere = crate::workspace::create(&store, "gone".into(), folder).expect("ws");
+            let made = terminal(&store, &elsewhere.id, "codex", "codex");
+            orphan(&store, &elsewhere.id);
+            made
+        };
+
+        assert!(is_disposable(&store, empty.id).expect("empty"));
+        assert!(!is_disposable(&store, planner.id).expect("agent"));
+        assert!(!is_disposable(&store, homeless.id).expect("no workspace"));
+        assert!(!is_disposable(&store, "nobody".into()).expect("unknown"));
     }
 
     #[test]

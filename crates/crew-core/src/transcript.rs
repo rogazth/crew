@@ -355,6 +355,7 @@ impl TranscriptHub {
 mod tests {
     use super::*;
     use crate::store::Store;
+    use crate::test_support::temp_store;
     use crew_protocol::BlockRole;
 
     fn tmp_store() -> Store {
@@ -394,6 +395,186 @@ mod tests {
             .with(|conn| crate::messages::all(conn, &session.id))
             .expect("read back");
         assert!(stored.iter().any(|block| block.text == "ok"));
+    }
+
+    /// An agent in a workspace on a folder inside the store's directory.
+    fn agent_in(dir: &tempfile::TempDir, store: &Store, name: &str) -> String {
+        let folder = dir.path().join(name);
+        std::fs::create_dir(&folder).expect("folder");
+        let workspace =
+            crate::workspace::create(store, name.into(), folder.to_string_lossy().into())
+                .expect("workspace");
+        crate::session::create(
+            store,
+            workspace.id,
+            "agent".into(),
+            name.into(),
+            "claude".into(),
+            "m".into(),
+            "".into(),
+            "ask".into(),
+        )
+        .expect("agent")
+        .id
+    }
+
+    fn stored(store: &Store, id: &str) -> Vec<String> {
+        store
+            .with(|conn| crate::messages::all(conn, id))
+            .expect("read back")
+            .into_iter()
+            .map(|block| block.text)
+            .collect()
+    }
+
+    fn writes(store: &Store) -> u64 {
+        store.with(|conn| Ok(conn.total_changes())).expect("changes")
+    }
+
+    fn delta(text: &str) -> HarnessEvent {
+        HarnessEvent::MessageDelta { text: text.into() }
+    }
+
+    fn texts(page: &MessagePage) -> Vec<String> {
+        page.blocks.iter().map(|block| block.text.clone()).collect()
+    }
+
+    /// A stream is saved once it pauses for `SAVE_MS`, not on every delta:
+    /// each delta pushes the save back.
+    #[tokio::test(start_paused = true)]
+    async fn a_stream_is_saved_once_it_pauses() {
+        let (dir, store) = temp_store();
+        let id = agent_in(&dir, &store, "a");
+        let hub = TranscriptHub::new(store.clone());
+        hub.set_runtime(tokio::runtime::Handle::current());
+        let pause = Duration::from_millis(SAVE_MS);
+
+        hub.apply(&id, delta("one"));
+        tokio::time::sleep(pause - Duration::from_millis(100)).await;
+        hub.apply(&id, delta(" two"));
+        tokio::time::sleep(pause - Duration::from_millis(1)).await;
+        assert!(stored(&store, &id).is_empty(), "saved while the stream was still going");
+
+        tokio::time::sleep(Duration::from_millis(2)).await;
+        assert_eq!(stored(&store, &id), ["one two"]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_turn_end_saves_at_once_and_the_pending_save_writes_nothing_more() {
+        let (dir, store) = temp_store();
+        let id = agent_in(&dir, &store, "a");
+        let hub = TranscriptHub::new(store.clone());
+        hub.set_runtime(tokio::runtime::Handle::current());
+        hub.apply(&id, delta("done"));
+
+        hub.apply(&id, HarnessEvent::TurnCompleted { usage: None });
+
+        assert_eq!(stored(&store, &id), ["done"]);
+        let saved = writes(&store);
+        tokio::time::sleep(Duration::from_millis(SAVE_MS * 3)).await;
+        assert_eq!(writes(&store), saved, "the debounced save wrote the turn again");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn flush_all_saves_every_session_that_has_unsaved_blocks() {
+        let (dir, store) = temp_store();
+        let (a, b) = (agent_in(&dir, &store, "a"), agent_in(&dir, &store, "b"));
+        let hub = TranscriptHub::new(store.clone());
+        hub.set_runtime(tokio::runtime::Handle::current());
+        hub.apply(&a, delta("from a"));
+        hub.apply(&b, delta("from b"));
+        assert!(stored(&store, &a).is_empty() && stored(&store, &b).is_empty());
+
+        hub.flush_all();
+
+        assert_eq!(stored(&store, &a), ["from a"]);
+        assert_eq!(stored(&store, &b), ["from b"]);
+        let saved = writes(&store);
+        hub.flush_all();
+        tokio::time::sleep(Duration::from_millis(SAVE_MS * 3)).await;
+        assert_eq!(writes(&store), saved, "a clean session was written again");
+    }
+
+    #[test]
+    fn flushing_a_session_the_hub_never_loaded_writes_nothing() {
+        let (dir, store) = temp_store();
+        let id = agent_in(&dir, &store, "a");
+        let hub = TranscriptHub::new(store.clone());
+        let before = writes(&store);
+
+        hub.flush(&id);
+        hub.flush("nobody");
+        hub.flush_all();
+
+        assert_eq!(writes(&store), before);
+    }
+
+    #[test]
+    fn a_page_asked_for_past_either_end_is_kept_in_bounds() {
+        let (dir, store) = temp_store();
+        let id = agent_in(&dir, &store, "a");
+        let hub = TranscriptHub::new(store);
+        for n in 1..=5 {
+            hub.append_system(&id, &format!("line {n}"));
+        }
+
+        let past_the_end = hub.window(&id, Some(2), Some(99));
+        assert_eq!(texts(&past_the_end), ["line 4", "line 5"]);
+        assert_eq!((past_the_end.from_pos, past_the_end.to_pos), (4, 5));
+        assert!(past_the_end.more);
+
+        for before in [0, -3] {
+            let page = hub.window(&id, Some(2), Some(before));
+            assert!(page.blocks.is_empty(), "before {before}");
+            assert_eq!((page.from_pos, page.to_pos, page.more), (0, 0, false));
+        }
+
+        assert_eq!(texts(&hub.window(&id, Some(0), None)), ["line 5"]);
+        assert_eq!(texts(&hub.window(&id, None, Some(3))), ["line 1", "line 2"]);
+    }
+
+    #[derive(Default)]
+    struct Recorder {
+        applied: Mutex<Vec<(String, u64)>>,
+        statuses: Mutex<Vec<(String, String, Option<String>)>>,
+    }
+
+    impl TranscriptEvents for Recorder {
+        fn apply(&self, session_id: &str, seq: u64, _event: &HarnessEvent) {
+            self.applied.lock().unwrap().push((session_id.into(), seq));
+        }
+
+        fn status(&self, session_id: &str, status: &str, provider: Option<&str>, _at: i64) {
+            let row = (session_id.into(), status.into(), provider.map(str::to_string));
+            self.statuses.lock().unwrap().push(row);
+        }
+    }
+
+    #[test]
+    fn every_event_and_status_reaches_the_sink_in_order() {
+        let (dir, store) = temp_store();
+        let id = agent_in(&dir, &store, "a");
+        let hub = TranscriptHub::new(store.clone());
+        let sink = Arc::new(Recorder::default());
+        hub.set_events(sink.clone());
+
+        hub.append_system(&id, "one");
+        hub.set_status(&id, "working", Some("p1"));
+        hub.append_system(&id, "two");
+        hub.set_status(&id, "idle", None);
+
+        let applied = sink.applied.lock().unwrap().clone();
+        assert_eq!(applied, [(id.clone(), 1), (id.clone(), 2)]);
+        let statuses = sink.statuses.lock().unwrap().clone();
+        assert_eq!(
+            statuses,
+            [
+                (id.clone(), "working".into(), Some("p1".into())),
+                (id.clone(), "idle".into(), None)
+            ]
+        );
+        let row = crate::session::get(&store, id).expect("get").expect("row");
+        assert_eq!(row.status, "idle");
     }
 }
 

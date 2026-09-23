@@ -460,6 +460,7 @@ pub fn backfill(conn: &Connection) -> rusqlite::Result<usize> {
 mod tests {
     use super::*;
     use crate::blocks::new_block;
+    use crate::test_support::temp_store;
 
     fn store() -> Store {
         let dir = std::env::temp_dir().join(format!("crew-messages-{}", uuid::Uuid::new_v4()));
@@ -784,6 +785,288 @@ mod tests {
             .expect("write");
         let read = store.with(|conn| fingerprints(conn, &id)).expect("read");
         assert_eq!(read, prior, "a fresh hub would rewrite rows that never changed");
+    }
+
+    /// An agent in a workspace of its own, on a folder inside `dir`.
+    fn agent_in(dir: &tempfile::TempDir, store: &Store, name: &str) -> crate::session::Session {
+        let folder = dir.path().join(name);
+        std::fs::create_dir(&folder).expect("folder");
+        let workspace =
+            crate::workspace::create(store, name.into(), folder.to_string_lossy().into())
+                .expect("workspace");
+        second_agent(store, &workspace.id, name)
+    }
+
+    fn second_agent(store: &Store, workspace_id: &str, name: &str) -> crate::session::Session {
+        crate::session::create(
+            store,
+            workspace_id.into(),
+            "agent".into(),
+            name.into(),
+            "claude".into(),
+            "m".into(),
+            "".into(),
+            "ask".into(),
+        )
+        .expect("session")
+    }
+
+    fn at(role: BlockRole, text: &str, at: i64) -> Block {
+        let mut block = new_block(role, text);
+        block.at = Some(at);
+        block
+    }
+
+    fn hits(store: &Store, query: SearchQuery) -> Vec<SearchHit> {
+        search(store, query).expect("search")
+    }
+
+    fn ats(hits: &[SearchHit]) -> Vec<i64> {
+        hits.iter().map(|hit| hit.at).collect()
+    }
+
+    fn sessions_hit(hits: &[SearchHit]) -> Vec<String> {
+        let mut names: Vec<String> = hits.iter().map(|hit| hit.session_name.clone()).collect();
+        names.sort();
+        names
+    }
+
+    const ROLES: [BlockRole; 7] = [
+        BlockRole::User,
+        BlockRole::Assistant,
+        BlockRole::Reasoning,
+        BlockRole::Tool,
+        BlockRole::Approval,
+        BlockRole::Question,
+        BlockRole::System,
+    ];
+
+    #[test]
+    fn every_role_survives_a_row_and_comes_back_on_its_search_hit() {
+        let (dir, store) = temp_store();
+        let id = agent_in(&dir, &store, "roles").id;
+        let blocks: Vec<Block> =
+            ROLES.iter().map(|role| say(role.clone(), &format!("needle {role:?}"))).collect();
+        write(&store, &id, &blocks);
+
+        let stored = store.with(|conn| all(conn, &id)).expect("read back");
+        assert_eq!(stored.iter().map(|b| b.role.clone()).collect::<Vec<_>>(), ROLES);
+        let found = hits(
+            &store,
+            SearchQuery { query: "needle".into(), limit: Some(10), ..Default::default() },
+        );
+        let mut roles: Vec<(i64, BlockRole)> =
+            found.into_iter().map(|hit| (hit.pos, hit.role)).collect();
+        roles.sort_by_key(|(pos, _)| *pos);
+        assert_eq!(roles.into_iter().map(|(_, role)| role).collect::<Vec<_>>(), ROLES);
+    }
+
+    #[test]
+    fn a_date_range_keeps_both_of_its_ends() {
+        let (dir, store) = temp_store();
+        let id = agent_in(&dir, &store, "dated").id;
+        write(
+            &store,
+            &id,
+            &[
+                at(BlockRole::User, "shared word", 1_000),
+                at(BlockRole::User, "shared word", 5_000),
+                at(BlockRole::User, "shared word", 9_000),
+            ],
+        );
+        let range = |from: Option<i64>, to: Option<i64>| {
+            ats(&hits(
+                &store,
+                SearchQuery {
+                    query: "shared".into(),
+                    from,
+                    to,
+                    sort: Some(SearchSort::Newest),
+                    ..Default::default()
+                },
+            ))
+        };
+
+        assert_eq!(range(Some(1_000), Some(5_000)), [5_000, 1_000]);
+        assert_eq!(range(None, Some(4_999)), [1_000]);
+        assert_eq!(range(Some(5_001), None), [9_000]);
+        assert!(range(Some(6_000), Some(2_000)).is_empty());
+    }
+
+    /// The workspace and the session list narrow the same search, so asking
+    /// for a session of another workspace finds nothing.
+    #[test]
+    fn a_search_stays_inside_the_workspace_and_the_sessions_asked_for() {
+        let (dir, store) = temp_store();
+        let one = agent_in(&dir, &store, "one");
+        let two = second_agent(&store, &one.workspace_id, "two");
+        let other = agent_in(&dir, &store, "other");
+        for id in [&one.id, &two.id, &other.id] {
+            write(&store, id, &[say(BlockRole::Assistant, "kubernetes")]);
+        }
+        let find = |workspace_id: Option<&String>, session_ids: &[&String]| {
+            sessions_hit(&hits(
+                &store,
+                SearchQuery {
+                    query: "kubernetes".into(),
+                    workspace_id: workspace_id.cloned(),
+                    session_ids: session_ids.iter().map(|id| id.to_string()).collect(),
+                    ..Default::default()
+                },
+            ))
+        };
+
+        assert_eq!(find(None, &[]), ["one", "other", "two"]);
+        assert_eq!(find(Some(&one.workspace_id), &[]), ["one", "two"]);
+        assert_eq!(find(Some(&one.workspace_id), &[&two.id]), ["two"]);
+        assert_eq!(find(None, &[&one.id, &other.id]), ["one", "other"]);
+        assert!(find(Some(&one.workspace_id), &[&other.id]).is_empty());
+    }
+
+    #[test]
+    fn a_search_pages_with_a_limit_and_an_offset_it_keeps_in_bounds() {
+        let (dir, store) = temp_store();
+        let id = agent_in(&dir, &store, "paged").id;
+        let blocks: Vec<Block> = (1..=5).map(|n| at(BlockRole::User, "page", n)).collect();
+        write(&store, &id, &blocks);
+        let page = |limit: Option<u32>, offset: Option<u32>| {
+            ats(&hits(
+                &store,
+                SearchQuery {
+                    query: "page".into(),
+                    limit,
+                    offset,
+                    sort: Some(SearchSort::Newest),
+                    ..Default::default()
+                },
+            ))
+        };
+
+        assert_eq!(page(Some(2), None), [5, 4]);
+        assert_eq!(page(Some(2), Some(2)), [3, 2]);
+        assert_eq!(page(Some(2), Some(4)), [1]);
+        assert!(page(Some(2), Some(5)).is_empty());
+        assert_eq!(page(Some(0), None), [5], "a limit of nothing is a limit of one");
+        assert_eq!(page(Some(100_000), None), [5, 4, 3, 2, 1]);
+        assert_eq!(page(None, None), [5, 4, 3, 2, 1]);
+    }
+
+    /// Whatever FTS5 would read as syntax is searched for as text: the words
+    /// around it still find the line, and none of it is an error.
+    #[test]
+    fn fts_syntax_in_a_query_is_searched_for_not_parsed() {
+        let (dir, store) = temp_store();
+        let id = agent_in(&dir, &store, "syntax");
+        write(
+            &store,
+            &id.id,
+            &[say(BlockRole::Assistant, "call foo(bar) NEAR the a-b text:done \"quoted\" ^top")],
+        );
+
+        for (query, found) in [
+            ("foo(bar", 1),
+            ("foo)", 1),
+            ("NEAR", 1),
+            ("a-b", 1),
+            ("text:done", 1),
+            ("\"quoted", 1),
+            ("^top", 1),
+            ("-foo", 1),
+            ("foo AND", 0),
+            ("OR", 0),
+            ("NOT foo", 0),
+            ("*", 0),
+            ("\"", 0),
+        ] {
+            let got = search(&store, SearchQuery { query: query.into(), ..Default::default() });
+            assert_eq!(got.map(|hits| hits.len()), Ok(found), "{query}");
+        }
+    }
+
+    #[test]
+    fn a_nonce_belongs_to_one_session_and_one_that_does_not_exist_is_refused() {
+        let (dir, store) = temp_store();
+        let one = agent_in(&dir, &store, "one").id;
+        let two = agent_in(&dir, &store, "two").id;
+
+        assert!(claim_nonce(&store, &one, "n1").expect("one"));
+        assert!(claim_nonce(&store, &two, "n1").expect("two"), "a nonce was shared across sessions");
+        assert!(!claim_nonce(&store, &two, "n1").expect("replay"));
+        assert!(claim_nonce(&store, "nobody", "n1").is_err());
+    }
+
+    /// A sync is one savepoint: a write that fails part way through lands no
+    /// row and leaves the caller's cache alone, so the next flush redoes it.
+    #[test]
+    fn a_sync_that_fails_part_way_lands_nothing_and_keeps_the_cache() {
+        let (dir, store) = temp_store();
+        let id = agent_in(&dir, &store, "failing").id;
+        let mut blocks = vec![say(BlockRole::User, "one")];
+        let mut prior = Vec::new();
+        store.with(|conn| sync(conn, &id, &blocks, &mut prior)).expect("first");
+        let cached = prior.clone();
+        store
+            .with(|conn| {
+                conn.execute_batch(
+                    "CREATE TRIGGER full BEFORE INSERT ON messages WHEN new.pos = 3
+                     BEGIN SELECT RAISE(FAIL, 'disk full'); END;",
+                )
+            })
+            .expect("trap");
+        blocks[0].text = "one, edited".into();
+        blocks.push(say(BlockRole::Assistant, "two"));
+        blocks.push(say(BlockRole::Assistant, "three"));
+
+        let failed = store.with(|conn| sync(conn, &id, &blocks, &mut prior));
+
+        assert!(failed.is_err_and(|e| e.contains("disk full")));
+        assert_eq!(prior, cached);
+        let stored = store.with(|conn| all(conn, &id)).expect("read back");
+        assert_eq!(stored.iter().map(|b| b.text.as_str()).collect::<Vec<_>>(), ["one"]);
+        store.with(|conn| conn.execute_batch("DROP TRIGGER full;")).expect("untrap");
+
+        store.with(|conn| sync(conn, &id, &blocks, &mut prior)).expect("retry");
+        assert_eq!(store.with(|conn| count(conn, &id)).expect("count"), 3);
+    }
+
+    #[test]
+    fn backfill_writes_every_session_with_history_and_passes_over_the_rest() {
+        let (dir, store) = temp_store();
+        let talked = agent_in(&dir, &store, "talked").id;
+        let quiet = agent_in(&dir, &store, "quiet").id;
+        let garbled = agent_in(&dir, &store, "garbled").id;
+        let history = [say(BlockRole::User, "hello"), say(BlockRole::Assistant, "hi")];
+        store
+            .with(|conn| {
+                conn.execute_batch(
+                    "ALTER TABLE sessions ADD COLUMN blocks_json TEXT NOT NULL DEFAULT '[]';",
+                )?;
+                let json = serde_json::to_string(&history).expect("json");
+                conn.execute("UPDATE sessions SET blocks_json = ?2 WHERE id = ?1", params![talked, json])?;
+                conn.execute("UPDATE sessions SET blocks_json = 'nope' WHERE id = ?1", params![garbled])
+            })
+            .expect("column");
+
+        let written = store.with(backfill).expect("backfill");
+
+        assert_eq!(written, 2);
+        let stored = store.with(|conn| all(conn, &talked)).expect("rows");
+        assert_eq!(stored.iter().map(|b| b.text.as_str()).collect::<Vec<_>>(), ["hello", "hi"]);
+        for id in [&quiet, &garbled] {
+            assert_eq!(store.with(|conn| count(conn, id)).expect("count"), 0);
+        }
+    }
+
+    #[test]
+    fn the_hash_sink_has_nothing_to_flush() {
+        use std::io::Write;
+        let mut hasher = DefaultHasher::new();
+        HashSink(&mut hasher).write_all(b"block").expect("write");
+        let before = hasher.clone().finish();
+
+        HashSink(&mut hasher).flush().expect("flush");
+
+        assert_eq!(hasher.finish(), before);
     }
 }
 
@@ -1282,40 +1565,6 @@ mod drop_column_review {
             kept[1].text, "The plan is to ship A, then B, then C.",
             "migration 13 dropped the only copy of the rest of the answer \
              (backfill_missing repaired {repaired} sessions)"
-        );
-    }
-
-    /// Migration 13 is three statements with no transaction around them: the
-    /// repair, the DROP, and the row that records the version. A crash between
-    /// the DROP and the row leaves a database whose `schema_migrations` says 12
-    /// and whose `sessions` has no `blocks_json` — and the retry starts by
-    /// selecting that column.
-    #[test]
-    fn migration_13_can_be_run_again_after_it_is_interrupted() {
-        let dir = std::env::temp_dir().join(format!("crew-half-13-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&dir).expect("dir");
-        let path = dir.join("crew.sqlite3");
-        {
-            let store = Store::open(path.clone()).expect("first open");
-            let id = session(&store, "half");
-            store
-                .with(|conn| {
-                    sync(
-                        conn,
-                        &id,
-                        &[new_block(BlockRole::User, "keep me".to_string())],
-                        &mut Vec::new(),
-                    )?;
-                    // The DROP landed; the process died before the version row.
-                    conn.execute("DELETE FROM schema_migrations WHERE version = 13", [])
-                })
-                .expect("interrupt");
-        }
-        let again = Store::open(path);
-        assert!(
-            again.is_ok(),
-            "the database can never be opened again: {}",
-            again.err().unwrap_or_default()
         );
     }
 

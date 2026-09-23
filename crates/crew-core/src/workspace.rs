@@ -126,6 +126,7 @@ pub fn active_set(store: &Store, id: Option<String>) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::temp_store;
 
     fn store() -> Store {
         let dir = std::env::temp_dir().join(format!("crew-ws-{}", uuid::Uuid::new_v4()));
@@ -171,5 +172,133 @@ mod tests {
         let again = create(&store, "crew again".into(), path);
 
         assert!(again.is_err_and(|e| e.contains("Already open as \"crew\"")), "the folder opened twice");
+    }
+
+    /// A workspace per folder, each folder inside the store's own directory.
+    fn open(store: &Store, dir: &tempfile::TempDir, names: &[&str]) -> Vec<String> {
+        names
+            .iter()
+            .map(|name| {
+                let folder = dir.path().join(name);
+                std::fs::create_dir(&folder).expect("folder");
+                create(store, name.to_string(), folder.to_string_lossy().into())
+                    .expect("workspace")
+                    .id
+            })
+            .collect()
+    }
+
+    fn listed(store: &Store) -> Vec<String> {
+        list(store).expect("list").into_iter().map(|w| w.name).collect()
+    }
+
+    #[test]
+    fn every_workspace_lists_with_what_it_was_made_with() {
+        let (dir, store) = temp_store();
+        assert!(list(&store).expect("empty").is_empty());
+        let made = create(&store, "crew".into(), dir.path().to_string_lossy().into()).expect("made");
+
+        let all = list(&store).expect("list");
+
+        assert_eq!(all.len(), 1);
+        let got = &all[0];
+        assert_eq!(
+            (&got.id, &got.name, &got.path, got.created_at),
+            (&made.id, &made.name, &made.path, made.created_at)
+        );
+        assert_eq!(get(&store, made.id).expect("get").expect("row").name, "crew");
+        assert!(get(&store, "nobody".into()).expect("get").is_none());
+    }
+
+    #[test]
+    fn reorder_lists_workspaces_in_the_order_given() {
+        let (dir, store) = temp_store();
+        let ids = open(&store, &dir, &["a", "b", "c"]);
+
+        reorder(&store, vec![ids[2].clone(), ids[0].clone(), ids[1].clone()]).expect("reorder");
+        assert_eq!(listed(&store), ["c", "a", "b"]);
+
+        reorder(&store, vec![ids[1].clone(), ids[2].clone(), ids[0].clone()]).expect("reorder");
+        assert_eq!(listed(&store), ["b", "c", "a"]);
+    }
+
+    /// A drag can race a delete in another window: the id that is gone is
+    /// passed over and the rest still take their places.
+    #[test]
+    fn reorder_passes_over_ids_it_does_not_know() {
+        let (dir, store) = temp_store();
+        let ids = open(&store, &dir, &["a", "b"]);
+
+        reorder(&store, vec!["gone".into(), ids[1].clone(), ids[0].clone()]).expect("reorder");
+
+        assert_eq!(listed(&store), ["b", "a"]);
+    }
+
+    #[test]
+    fn a_rename_is_trimmed_and_an_empty_one_changes_nothing() {
+        let (dir, store) = temp_store();
+        let id = open(&store, &dir, &["crew"]).remove(0);
+
+        rename(&store, id.clone(), "  harness  ".into()).expect("rename");
+        assert_eq!(get(&store, id.clone()).unwrap().unwrap().name, "harness");
+
+        let empty = rename(&store, id.clone(), "   ".into());
+        assert!(empty.is_err_and(|e| e.contains("Workspace name is required")));
+        assert_eq!(get(&store, id).unwrap().unwrap().name, "harness");
+
+        rename(&store, "nobody".into(), "ghost".into()).expect("renaming nothing is not an error");
+        assert_eq!(listed(&store), ["harness"]);
+    }
+
+    #[test]
+    fn deleting_a_workspace_leaves_the_others_and_frees_its_folder() {
+        let (dir, store) = temp_store();
+        let ids = open(&store, &dir, &["a", "b"]);
+
+        delete(&store, ids[0].clone()).expect("delete");
+
+        assert_eq!(listed(&store), ["b"]);
+        let folder = dir.path().join("a").to_string_lossy().into_owned();
+        create(&store, "a again".into(), folder).expect("the folder opens again");
+    }
+
+    #[test]
+    fn the_active_workspace_is_remembered_replaced_and_cleared() {
+        let (dir, store) = temp_store();
+        let ids = open(&store, &dir, &["a", "b"]);
+        assert_eq!(active_get(&store).expect("get"), None);
+
+        active_set(&store, Some(ids[0].clone())).expect("set");
+        active_set(&store, Some(ids[1].clone())).expect("replace");
+        assert_eq!(active_get(&store).expect("get"), Some(ids[1].clone()));
+
+        active_set(&store, None).expect("clear");
+        assert_eq!(active_get(&store).expect("get"), None);
+    }
+
+    /// A sidebar that cannot be read is an error, not a sidebar with nothing
+    /// in it.
+    #[test]
+    fn workspaces_that_cannot_be_read_are_an_error_not_an_empty_list() {
+        let (dir, store) = temp_store();
+        let id = open(&store, &dir, &["a"]).remove(0);
+        store
+            .with(|conn| conn.execute_batch("ALTER TABLE workspaces RENAME TO elsewhere;"))
+            .expect("break the schema");
+
+        assert!(list(&store).is_err());
+        assert!(get(&store, id).is_err());
+    }
+
+    #[test]
+    fn the_active_workspace_survives_a_restart() {
+        let (dir, store) = temp_store();
+        let id = open(&store, &dir, &["a"]).remove(0);
+        active_set(&store, Some(id.clone())).expect("set");
+        drop(store);
+
+        let store = Store::open(dir.path().join("crew.sqlite3")).expect("reopen");
+
+        assert_eq!(active_get(&store).expect("get"), Some(id));
     }
 }
