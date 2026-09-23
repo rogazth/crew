@@ -1,8 +1,8 @@
 import { PointerActivationConstraints } from "@dnd-kit/dom";
-import { move } from "@dnd-kit/helpers";
 import { DragDropProvider, PointerSensor } from "@dnd-kit/react";
 import { useSortable } from "@dnd-kit/react/sortable";
 import { memo, type ReactNode } from "react";
+import { droppedOrder } from "../lib/sortable";
 
 const SENSORS = [
   PointerSensor.configure({
@@ -23,10 +23,8 @@ export function SortableList({ ids, disabled, onReorder, children }: ListProps) 
     <DragDropProvider
       sensors={SENSORS}
       onDragEnd={(event) => {
-        if (event.canceled || disabled) return;
-        const next = move(ids, event);
-        if (next.length === ids.length && next.every((id, index) => id === ids[index])) return;
-        onReorder(next);
+        const next = droppedOrder(ids, event, disabled);
+        if (next) onReorder(next);
       }}
     >
       {children}

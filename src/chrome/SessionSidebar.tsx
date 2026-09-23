@@ -8,7 +8,7 @@ import {
 } from "@phosphor-icons/react";
 import { useMemo, useState, type KeyboardEvent, type MouseEvent } from "react";
 import { ActionMenu } from "./ActionMenu";
-import { DELETE, EDIT, RENAME, menuFromEvent, type MenuPoint } from "../lib/menu";
+import { menuFromEvent, type MenuPoint } from "../lib/menu";
 import { ProviderIcon } from "./ProviderIcon";
 import { RenameRow } from "./RenameRow";
 import { Section } from "./Section";
@@ -19,7 +19,7 @@ import { StatusDot } from "./StatusDot";
 import { WorkspacePicker } from "./WorkspacePicker";
 import { useSidebarPrefs } from "../hooks/useSidebarPrefs";
 import { commandKeys } from "../lib/commands";
-import { IS_MAC, isDeleteChord } from "../lib/hotkey";
+import { IS_MAC } from "../lib/hotkey";
 import { providerLine } from "../lib/providers";
 import {
   NO_SELECTION,
@@ -28,6 +28,13 @@ import {
   type ClickModifiers,
   type Selection,
 } from "../lib/selection";
+import {
+  actsOnSelection,
+  clickModifiers,
+  groupAdd,
+  rowKeyAction,
+  rowMenuActions,
+} from "../lib/sessionSidebar";
 import {
   canReorder,
   groupSessions,
@@ -65,10 +72,6 @@ export type SessionSidebarProps = {
 };
 
 type Menu = { point: MenuPoint; session: Session };
-
-function modifiersOf(event: { metaKey: boolean; ctrlKey: boolean; shiftKey: boolean }): ClickModifiers {
-  return { toggle: IS_MAC ? event.metaKey : event.ctrlKey, range: event.shiftKey };
-}
 
 /** The sidebar's default view: workspace switcher, actions, session list, settings row. */
 export function SessionSidebar(props: SessionSidebarProps) {
@@ -117,9 +120,8 @@ export function SessionSidebar(props: SessionSidebarProps) {
     setSelection((current) => selectClick(pruneSelection(current, order), order, session.id, modifiers));
   };
 
-  // A row inside a multi-selection acts for the whole selection; any other row acts alone.
   const removeFrom = (session: Session) => {
-    if (selected.size > 1 && selected.has(session.id)) props.onRemoveMany(selectedSessions());
+    if (actsOnSelection(session, selected)) props.onRemoveMany(selectedSessions());
     else props.onRemove(session);
   };
 
@@ -238,13 +240,7 @@ export function SessionSidebar(props: SessionSidebarProps) {
         <ActionMenu
           key={menu.session.id}
           point={menu.point}
-          actions={
-            selected.size > 1 && selected.has(menu.session.id)
-              ? [{ ...DELETE, label: `Delete ${selected.size} items` }]
-              : menu.session.kind === "agent"
-                ? [EDIT, DELETE]
-                : [RENAME, DELETE]
-          }
+          actions={rowMenuActions(menu.session, selected)}
           onPick={(id) => {
             const session = menu.session;
             setMenu(null);
@@ -262,12 +258,10 @@ export function SessionSidebar(props: SessionSidebarProps) {
   );
 }
 
-/** Only a group that holds one kind knows what its plus would create. */
 function addFor(group: SessionGroup, props: SessionSidebarProps) {
-  if (group.kind === "agent") return { onAdd: props.onNewAgent, hint: `New agent ${commandKeys("new-agent")}` };
-  if (group.kind === "terminal")
-    return { onAdd: props.onNewSession, hint: `New session ${commandKeys("new-session")}` };
-  return null;
+  const add = groupAdd(group);
+  if (!add) return null;
+  return { onAdd: add.command === "new-agent" ? props.onNewAgent : props.onNewSession, hint: add.hint };
 }
 
 type GroupProps = {
@@ -327,7 +321,7 @@ function Group({
                 prefs={prefs}
                 active={session.id === activeSessionId}
                 selected={selected.has(session.id)}
-                onSelect={(event) => on.onPick(session, modifiersOf(event))}
+                onSelect={(event) => on.onPick(session, clickModifiers(event))}
                 onContextMenu={(event) => on.onMenu(menuFromEvent(event), session)}
                 onClearSelection={on.onClearSelection}
                 onRemove={() => on.onRemove(session)}
@@ -384,19 +378,12 @@ function Card({
   const meta = shows(prefs, "provider");
 
   function onKeyDown(event: KeyboardEvent<HTMLButtonElement>) {
-    if (event.key === "F2" && onRename) {
-      event.preventDefault();
-      onRename();
-      return;
-    }
-    if (event.key === "Escape") {
-      onClearSelection();
-      return;
-    }
-    if (isDeleteChord(event)) {
-      event.preventDefault();
-      onRemove();
-    }
+    const action = rowKeyAction(event, onRename !== undefined);
+    if (action === "clear") return onClearSelection();
+    if (!action) return;
+    event.preventDefault();
+    if (action === "rename") onRename?.();
+    else onRemove();
   }
 
   return (

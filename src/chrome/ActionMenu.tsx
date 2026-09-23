@@ -9,8 +9,9 @@ import {
 } from "@phosphor-icons/react";
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
 import { createPortal } from "react-dom";
-import { isDeleteChord } from "../lib/hotkey";
+import { actionForKey, placeMenu } from "../lib/actionMenu";
 import type { MenuAction, MenuIcon, MenuPoint } from "../lib/menu";
+import { renamedTo } from "../lib/rename";
 
 const ICONS: Record<MenuIcon, Icon> = {
   edit: PencilSimpleIcon,
@@ -30,10 +31,6 @@ type Props = {
   rename?: { initial: string; onCommit: (name: string) => void };
 };
 
-function keyOf(action: MenuAction): string {
-  return action.hotkey.toLowerCase();
-}
-
 /**
  * Right-click popover at the cursor.
  * Optional `rename` is an autofocused field in the popover, not a row replacement.
@@ -47,12 +44,10 @@ export function ActionMenu({ point, actions, onPick, onClose, rename }: Props) {
   useLayoutEffect(() => {
     const el = surface.current;
     if (!el || !point) return;
-    const { innerWidth, innerHeight } = window;
-    const rect = el.getBoundingClientRect();
-    let left = point.x;
-    let top = point.y;
-    if (left + rect.width > innerWidth - 8) left = Math.max(8, innerWidth - rect.width - 8);
-    if (top + rect.height > innerHeight - 8) top = Math.max(8, point.y - rect.height);
+    const { left, top } = placeMenu(point, el.getBoundingClientRect(), {
+      width: window.innerWidth,
+      height: window.innerHeight,
+    });
     el.style.left = `${left}px`;
     el.style.top = `${top}px`;
   }, [point]);
@@ -86,8 +81,8 @@ export function ActionMenu({ point, actions, onPick, onClose, rename }: Props) {
   }, [onClose]);
 
   function commitRename() {
-    const next = name.trim();
-    if (rename && next && next !== rename.initial) rename.onCommit(next);
+    const next = rename ? renamedTo(rename.initial, name) : null;
+    if (rename && next) rename.onCommit(next);
   }
 
   function onMenuKey(event: KeyboardEvent<HTMLDivElement>) {
@@ -99,10 +94,8 @@ export function ActionMenu({ point, actions, onPick, onClose, rename }: Props) {
       }
       return;
     }
-    const hit = isDeleteChord(event)
-      ? actions.find((action) => action.id === "delete")
-      : actions.find((action) => keyOf(action) === event.key.toLowerCase());
-    if (!hit || hit.disabled) return;
+    const hit = actionForKey(actions, event);
+    if (!hit) return;
     event.preventDefault();
     onPick(hit.id);
   }

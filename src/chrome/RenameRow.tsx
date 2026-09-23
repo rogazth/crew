@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { renamedTo } from "../lib/rename";
 
 type Props = {
   initial: string;
@@ -23,8 +24,8 @@ export function RenameRow({ initial, onCommit, onCancel, className = "" }: Props
   function finish(commit: boolean) {
     if (done.current) return;
     done.current = true;
-    const name = value.trim();
-    if (commit && name && name !== initial) onCommit(name);
+    const name = commit ? renamedTo(initial, value) : null;
+    if (name) onCommit(name);
     else onCancel();
   }
 

@@ -1,16 +1,14 @@
 import { Select } from "@cloudflare/kumo";
 import { ClockIcon } from "@phosphor-icons/react";
-import { isValidCron } from "../lib/cron";
+import { clockOf, triggerOf, WEEKDAYS, type Schedule } from "../lib/routines";
 import {
-  clockOf,
-  describeSchedule,
-  nextRun,
-  triggerOf,
-  withTrigger,
-  TRIGGERS,
-  WEEKDAYS,
-  type Schedule,
-} from "../lib/routines";
+  WEEK_ORDER,
+  atTime,
+  pickTrigger,
+  runOutlook,
+  toggleDay,
+  triggerMenu,
+} from "../lib/routineTrigger";
 import { dayLabel } from "../lib/time";
 
 type Props = {
@@ -21,37 +19,13 @@ type Props = {
 const FIELD =
   "h-8 rounded-md bg-kumo-control px-2 text-kumo-default ring ring-kumo-line outline-none focus-visible:ring-[1.5px] focus-visible:ring-kumo-focus/50";
 
-/** Weeks read Monday-first here; the stored numbers stay Date#getDay. */
-const WEEK_ORDER = [1, 2, 3, 4, 5, 6, 0];
-
-const PRESET_MINUTES = new Set([30, 60, 180]);
-
-/** Stands for an interval an agent set that no preset spells; picking it changes nothing. */
-const KEEP = "keep";
-
 /** When the routine fires: a cadence, plus whatever that cadence still needs. */
 export function RoutineTrigger({ schedule, onChange }: Props) {
   const trigger = triggerOf(schedule);
-  const valid = schedule.kind !== "cron" || isValidCron(schedule.expression);
-  const next = valid ? nextRun(schedule) : null;
-  const offPreset = schedule.kind === "interval" && !PRESET_MINUTES.has(schedule.minutes);
-  const items = TRIGGERS.map((item) => ({ value: item.id as string, label: item.label }));
-  if (offPreset) items.unshift({ value: KEEP, label: describeSchedule(schedule) });
-
-  const pickTime = (value: string) => {
-    if (schedule.kind !== "daily") return;
-    const [hour, minute] = value.split(":").map(Number);
-    if (hour === undefined || minute === undefined || Number.isNaN(hour) || Number.isNaN(minute)) return;
-    onChange({ ...schedule, hour, minute });
-  };
-
-  // A week with no day selected would never fire, so the last one cannot be dropped.
-  const toggleDay = (day: number) => {
-    if (schedule.kind !== "daily") return;
-    const days = schedule.days.includes(day)
-      ? schedule.days.filter((value) => value !== day)
-      : [...schedule.days, day];
-    if (days.length > 0) onChange({ ...schedule, days });
+  const { valid, next } = runOutlook(schedule);
+  const menu = triggerMenu(schedule);
+  const change = (updated: Schedule | null) => {
+    if (updated) onChange(updated);
   };
 
   return (
@@ -61,18 +35,16 @@ export function RoutineTrigger({ schedule, onChange }: Props) {
           aria-label="Trigger"
           size="sm"
           className="w-44"
-          value={offPreset ? KEEP : trigger}
-          onValueChange={(value) =>
-            value && value !== KEEP && onChange(withTrigger(schedule, value as typeof trigger))
-          }
-          items={items}
+          value={menu.value}
+          onValueChange={(value) => change(pickTrigger(schedule, value))}
+          items={menu.items}
         />
         {schedule.kind === "daily" && (
           <input
             type="time"
             aria-label="Time"
             value={clockOf(schedule)}
-            onChange={(event) => pickTime(event.target.value)}
+            onChange={(event) => change(atTime(schedule, event.target.value))}
             className={`${FIELD} w-[112px] tabular-nums`}
           />
         )}
@@ -97,7 +69,7 @@ export function RoutineTrigger({ schedule, onChange }: Props) {
                 key={day}
                 type="button"
                 aria-pressed={on}
-                onClick={() => toggleDay(day)}
+                onClick={() => change(toggleDay(schedule, day))}
                 className={`h-7 w-11 rounded-md text-[12px] transition-colors ${
                   on ? "bg-kumo-brand text-kumo-inverse" : "bg-kumo-control text-kumo-subtle hover:bg-hover"
                 }`}

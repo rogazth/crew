@@ -5,6 +5,7 @@ import {
   modelLabel,
   modelsOf,
   parseAgentChoice,
+  pickerTabs,
   pickProvider,
   providerLine,
   providerOf,
@@ -88,5 +89,26 @@ describe("parseAgentChoice", () => {
     expect(parseAgentChoice('"claude"')).toBeNull();
     expect(parseAgentChoice("{nope")).toBeNull();
     expect(parseAgentChoice('{"provider":5}')).toBeNull();
+  });
+});
+
+const only = (...ids: string[]) => PROVIDERS.filter((p) => ids.includes(p.id));
+const ids = (list: { id: string }[]) => list.map((p) => p.id);
+
+describe("pickerTabs", () => {
+  it("offers the installed providers, in registry order", () => {
+    expect(ids(pickerTabs("claude", only("codex", "claude")))).toEqual(["claude", "codex"]);
+  });
+
+  it("keeps the current provider after its CLI is gone", () => {
+    expect(ids(pickerTabs("cursor", only("claude")))).toEqual(["claude", "cursor"]);
+  });
+
+  it("offers only the current provider when nothing is installed", () => {
+    expect(ids(pickerTabs("opencode", []))).toEqual(["opencode"]);
+  });
+
+  it("adds no tab for a provider the registry does not know", () => {
+    expect(ids(pickerTabs("gemini", only("claude")))).toEqual(["claude"]);
   });
 });

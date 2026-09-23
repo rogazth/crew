@@ -9,8 +9,9 @@ import { useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { ActionMenu } from "./ActionMenu";
 import { SortableItem, SortableList } from "./SortableList";
 import { commandKeys, type CommandId } from "../lib/commands";
-import { isDeleteChord } from "../lib/hotkey";
 import { DELETE, menuFromEvent, type MenuPoint } from "../lib/menu";
+import { moveCursor } from "../lib/picker";
+import { digitRow, isSearchable, jumpCommand, workspaceRowKey } from "../lib/workspacePicker";
 import { filterWorkspaces, shortenPath, workspaceMark } from "../lib/workspaces";
 import type { Workspace } from "../lib/types";
 
@@ -27,14 +28,6 @@ type Props = {
 };
 
 type Menu = { point: MenuPoint; workspace: Workspace };
-
-/** Past this many the list stops fitting in one glance and earns a search field. */
-const SEARCHABLE_FROM = 8;
-
-/** ⌃⌘1‥9 jump straight to a row; the hint on the row teaches the chord. */
-function jumpCommand(index: number): CommandId | null {
-  return index < 9 ? (`workspace-${index + 1}` as CommandId) : null;
-}
 
 /**
  * The whole workspace surface: switch, search, reorder, rename, remove. The
@@ -126,7 +119,7 @@ function WorkspacePopup({
   const [cursor, setCursor] = useState(0);
   const search = useRef<HTMLInputElement>(null);
   const list = useRef<HTMLDivElement>(null);
-  const searchable = workspaces.length >= SEARCHABLE_FROM;
+  const searchable = isSearchable(workspaces.length);
   const filtering = query.trim().length > 0;
   const visible = useMemo(() => filterWorkspaces(workspaces, query), [workspaces, query]);
   const ids = useMemo(() => visible.map((workspace) => workspace.id), [visible]);
@@ -134,12 +127,12 @@ function WorkspacePopup({
   function onKeyDown(event: KeyboardEvent<HTMLDivElement>) {
     if (event.key === "ArrowDown") {
       event.preventDefault();
-      setCursor((c) => Math.min(c + 1, visible.length - 1));
+      setCursor((c) => moveCursor(c, 1, visible.length));
       return;
     }
     if (event.key === "ArrowUp") {
       event.preventDefault();
-      setCursor((c) => Math.max(c - 1, 0));
+      setCursor((c) => moveCursor(c, -1, visible.length));
       return;
     }
     if (event.key === "Enter") {
@@ -148,13 +141,11 @@ function WorkspacePopup({
       if (workspace) onPick(workspace.id);
       return;
     }
-    // Bare digits pick a row while the list, not a search field, holds focus.
-    if (!filtering && /^[1-9]$/.test(event.key) && !event.metaKey && !event.ctrlKey) {
-      const workspace = visible[Number(event.key) - 1];
-      if (workspace) {
-        event.preventDefault();
-        onPick(workspace.id);
-      }
+    const row = digitRow(event, filtering);
+    const workspace = row === null ? undefined : visible[row];
+    if (workspace) {
+      event.preventDefault();
+      onPick(workspace.id);
     }
   }
 
@@ -266,16 +257,12 @@ function Row({
   onRemove: () => void;
 }) {
   function onKeyDown(event: KeyboardEvent<HTMLButtonElement>) {
-    if (event.key === "F2") {
-      event.preventDefault();
-      const rect = event.currentTarget.getBoundingClientRect();
-      onOpenMenu({ x: rect.left, y: rect.bottom });
-      return;
-    }
-    if (isDeleteChord(event)) {
-      event.preventDefault();
-      onRemove();
-    }
+    const action = workspaceRowKey(event);
+    if (!action) return;
+    event.preventDefault();
+    if (action === "remove") return onRemove();
+    const rect = event.currentTarget.getBoundingClientRect();
+    onOpenMenu({ x: rect.left, y: rect.bottom });
   }
 
   return (

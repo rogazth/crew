@@ -148,3 +148,8 @@ export function parseAgentChoice(raw: string | null): AgentChoice | null {
     return null;
   }
 }
+
+/** Installed providers, plus the current one: a session's provider stays reachable after its CLI is gone. */
+export function pickerTabs(provider: string, installed: ProviderDef[]): ProviderDef[] {
+  return PROVIDERS.filter((p) => p.id === provider || installed.includes(p));
+}

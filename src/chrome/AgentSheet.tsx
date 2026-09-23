@@ -6,17 +6,17 @@ import { ModelPicker } from "./ModelPicker";
 import { ProviderIcon } from "./ProviderIcon";
 import type { useAgentSheet } from "../hooks/useAgentSheet";
 import { useDefaultAgent } from "../hooks/useDefaultAgent";
-import { DEFAULT_MODEL, DEFAULT_PROVIDER, type ProviderId } from "../lib/providers";
-import type { Autonomy, Session } from "../lib/types";
+import {
+  agentNames,
+  draftOf,
+  nameError,
+  shownError,
+  type AgentDraft,
+} from "../lib/agentSheet";
+import type { ProviderId } from "../lib/providers";
+import type { Session } from "../lib/types";
 
-export type AgentDraft = {
-  name: string;
-  provider: string;
-  model: string;
-  description: string;
-  notifications: boolean;
-  autonomy: Autonomy;
-};
+export type { AgentDraft } from "../lib/agentSheet";
 
 type Props = {
   /** null = creating. */
@@ -28,29 +28,8 @@ type Props = {
   onClose: () => void;
 };
 
-const EMPTY: AgentDraft = {
-  name: "",
-  provider: DEFAULT_PROVIDER,
-  model: DEFAULT_MODEL,
-  description: "",
-  notifications: true,
-  autonomy: "ask",
-};
-
 /** Must match .sheet-panel-out in index.css. */
 const CLOSE_MS = 150;
-
-function draftOf(session: Session | null, fallback: Partial<AgentDraft>): AgentDraft {
-  if (!session) return { ...EMPTY, ...fallback };
-  return {
-    name: session.name,
-    provider: session.provider,
-    model: session.model || DEFAULT_MODEL,
-    description: session.description,
-    notifications: session.notifications,
-    autonomy: session.autonomy,
-  };
-}
 
 /** The open sheet, keyed so switching between agents starts a fresh draft. */
 export function AgentSheetHost({
@@ -68,19 +47,12 @@ export function AgentSheetHost({
     <AgentSheet
       key={editing?.id ?? "new"}
       session={editing}
-      existingNames={sessions.flatMap((s) => (s.kind === "agent" ? [s.name] : []))}
+      existingNames={agentNames(sessions)}
       onNewRoutine={editing ? () => onNewRoutine(editing.id) : null}
       onSave={sheet.save}
       onClose={sheet.close}
     />
   );
-}
-
-function nameError(name: string, existingNames: string[], current: string | undefined) {
-  if (!name) return { taken: false, error: "Name is required" };
-  const lower = name.toLowerCase();
-  const taken = existingNames.some((n) => n.toLowerCase() === lower && n !== current);
-  return { taken, error: taken ? "An agent with this name already exists" : null };
 }
 
 export function AgentSheet({ session, existingNames, onNewRoutine, onSave, onClose }: Props) {
@@ -122,8 +94,7 @@ export function AgentSheet({ session, existingNames, onNewRoutine, onSave, onClo
 
   // Saving adds the name to existingNames, so validation would flash "already
   // exists" over the agent we just created while the sheet plays its exit.
-  const live = taken || submitted;
-  const showError = saving || closing || !live ? undefined : (error ?? undefined);
+  const showError = shownError({ error, taken, submitted, busy: saving || closing });
 
   // Window-level so Escape works after clicking non-focusable content in the drawer.
   useEffect(() => {

@@ -3,13 +3,7 @@ import { Popover } from "@base-ui/react/popover";
 import { CaretDownIcon, CheckIcon } from "@phosphor-icons/react";
 import { ProviderIcon } from "./ProviderIcon";
 import { useInstalledProviders } from "../hooks/useInstalledProviders";
-import {
-  PROVIDERS,
-  modelLabel,
-  modelsOf,
-  providerOf,
-  type ProviderId,
-} from "../lib/providers";
+import { modelLabel, modelsOf, pickerTabs, providerOf, type ProviderId } from "../lib/providers";
 
 type Props = {
   provider: string;
@@ -26,8 +20,7 @@ export function ModelPicker({ provider, model, trigger = "field", disabled = fal
   const [tab, setTab] = useState<ProviderId>(provider as ProviderId);
   const chip = trigger === "chip";
   const installed = useInstalledProviders(open);
-  // The session's own provider stays reachable even after its CLI is gone.
-  const tabs = PROVIDERS.filter((p) => p.id === provider || installed.includes(p));
+  const tabs = pickerTabs(provider, installed);
 
   function openChange(next: boolean) {
     if (next) setTab(provider as ProviderId);

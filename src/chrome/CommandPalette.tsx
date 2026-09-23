@@ -17,28 +17,21 @@ import { FileTypeIcon } from "./FileTypeIcon";
 import { Kbd } from "./Kbd";
 import { StatusDot } from "./StatusDot";
 import { listedCommands, runCommand, type CommandId } from "../lib/commands";
-import { fuzzyMatch } from "../lib/fuzzy";
+import {
+  PALETTE_MODES,
+  groupStarts,
+  itemFace,
+  paletteActions,
+  paletteGroups,
+  readQuery,
+  stepMode,
+  type PaletteItem as Item,
+  type PaletteMode,
+} from "../lib/palette";
+import { moveCursor } from "../lib/picker";
 import type { ProjectFile, Session, Workspace } from "../lib/types";
 
-export type PaletteMode = "all" | "agents" | "sessions" | "files" | "actions";
-
-const MODES: { id: PaletteMode; label: string }[] = [
-  { id: "all", label: "All" },
-  { id: "agents", label: "Agents" },
-  { id: "sessions", label: "Sessions" },
-  { id: "files", label: "Files" },
-  { id: "actions", label: "Actions" },
-];
-
-const FILE_LIMIT = 50;
-
-type Item =
-  | { key: string; kind: "session"; session: Session }
-  | { key: string; kind: "file"; file: ProjectFile }
-  | { key: string; kind: "action"; id: CommandId; label: string; keys: string }
-  | { key: string; kind: "workspace"; workspace: Workspace };
-
-type Group = { label: string; items: Item[] };
+export type { PaletteMode } from "../lib/palette";
 
 type Props = {
   mode: PaletteMode;
@@ -73,56 +66,20 @@ export function CommandPalette({
   const listRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
 
-  const forcedActions = raw.startsWith(">");
-  const query = forcedActions ? raw.slice(1) : raw;
-  const shown = forcedActions ? "actions" : mode;
+  const { query, shown } = readQuery(raw, mode);
 
-  const actions: Item[] = useMemo(() => {
-    const commands = listedCommands().map(
-      (command): Item => ({ key: `action:${command.id}`, kind: "action", ...command }),
-    );
-    const switches = workspaces.flatMap((workspace): Item[] =>
-      workspace.id === activeWorkspaceId ? [] : [{ key: `ws:${workspace.id}`, kind: "workspace", workspace }],
-    );
-    return [...commands, ...switches];
-  }, [activeWorkspaceId, workspaces]);
+  const actions: Item[] = useMemo(
+    () => paletteActions(listedCommands(), workspaces, activeWorkspaceId),
+    [activeWorkspaceId, workspaces],
+  );
 
-  const groups: Group[] = useMemo(() => {
-    const agents = sessions.filter((session) => session.kind === "agent");
-    const terminals = sessions.filter((session) => session.kind === "terminal");
-    const asItem = (session: Session): Item => ({
-      key: `session:${session.id}`,
-      kind: "session",
-      session,
-    });
-
-    if (shown === "agents") return [group("Agents", rank(agents.map(asItem), query))];
-    if (shown === "sessions") return [group("Sessions", rank(terminals.map(asItem), query))];
-    if (shown === "actions") return [group("Actions", rank(actions, query))];
-    if (shown === "files") {
-      const items = files.map((file): Item => ({ key: `file:${file.path}`, kind: "file", file }));
-      return [group("Files", rank(items, query).slice(0, FILE_LIMIT))];
-    }
-
-    // An empty All is the cold-open case: offer what was touched last, not the whole workspace.
-    if (!query.trim()) {
-      const recent = [...sessions]
-        .sort((a, b) => b.updatedAt - a.updatedAt)
-        .slice(0, 5)
-        .map(asItem);
-      return [group("Recent", recent), group("Actions", actions.slice(0, 5))];
-    }
-
-    const fileItems = files.map((file): Item => ({ key: `file:${file.path}`, kind: "file", file }));
-    return [
-      group("Agents", rank(agents.map(asItem), query)),
-      group("Sessions", rank(terminals.map(asItem), query)),
-      group("Files", rank(fileItems, query).slice(0, 10)),
-      group("Actions", rank(actions, query)),
-    ];
-  }, [actions, files, query, sessions, shown]);
+  const groups = useMemo(
+    () => paletteGroups({ shown, query, sessions, files, actions }),
+    [actions, files, query, sessions, shown],
+  );
 
   const flat = useMemo(() => groups.flatMap((entry) => entry.items), [groups]);
+  const starts = useMemo(() => groupStarts(groups), [groups]);
 
   useEffect(() => searchRef.current?.focus(), []);
   useEffect(() => {
@@ -153,8 +110,7 @@ export function CommandPalette({
   }
 
   function step(delta: number) {
-    const at = MODES.findIndex((entry) => entry.id === mode);
-    switchMode(MODES[(at + delta + MODES.length) % MODES.length]!.id);
+    switchMode(stepMode(mode, delta));
     setRaw((value) => (value.startsWith(">") ? value.slice(1) : value));
   }
 
@@ -166,11 +122,11 @@ export function CommandPalette({
     }
     if (event.key === "ArrowDown") {
       event.preventDefault();
-      return setCursor((c) => Math.min(c + 1, flat.length - 1));
+      return setCursor((c) => moveCursor(c, 1, flat.length));
     }
     if (event.key === "ArrowUp") {
       event.preventDefault();
-      return setCursor((c) => Math.max(c - 1, 0));
+      return setCursor((c) => moveCursor(c, -1, flat.length));
     }
     if (event.key === "Enter") {
       event.preventDefault();
@@ -178,8 +134,6 @@ export function CommandPalette({
       if (item) pick(item);
     }
   }
-
-  let index = -1;
 
   return (
     <div
@@ -212,7 +166,7 @@ export function CommandPalette({
         </div>
 
         <div className="flex shrink-0 items-center gap-1 border-b border-border px-2.5 py-1.5">
-          {MODES.map((entry) => (
+          {PALETTE_MODES.map((entry) => (
             <button
               key={entry.id}
               type="button"
@@ -230,20 +184,20 @@ export function CommandPalette({
 
         <div ref={listRef} className="min-h-0 flex-1 overflow-y-auto p-1">
           {flat.length === 0 && <p className="px-3 py-8 text-center text-placeholder">No matches</p>}
-          {groups.map((entry) =>
+          {groups.map((entry, g) =>
             entry.items.length === 0 ? null : (
               <div key={entry.label}>
                 <p className="px-2.5 pt-3 pb-1 text-[11px] font-semibold tracking-[0.06em] text-text-muted uppercase">
                   {entry.label}
                 </p>
-                {entry.items.map((item) => {
-                  index += 1;
+                {entry.items.map((item, i) => {
+                  const at = starts[g]! + i;
                   return (
                     <Row
                       key={item.key}
                       item={item}
-                      active={index === cursor}
-                      at={index}
+                      active={at === cursor}
+                      at={at}
                       onHover={setCursor}
                       onPick={() => pick(item)}
                     />
@@ -325,32 +279,15 @@ function Row({
 }
 
 function describe(item: Item): { icon: React.ReactNode; label: string; detail?: string } {
-  if (item.kind === "file") {
-    return {
-      icon: <FileTypeIcon name={item.file.name} />,
-      label: item.file.name,
-      detail: item.file.relative,
-    };
-  }
-  if (item.kind === "session") {
-    const kind = item.session.kind === "agent" ? "agents" : "sessions";
-    const Glyph = KIND_ICONS[kind];
-    return {
-      icon: <Glyph className="size-4 shrink-0 text-text-muted" />,
-      label: item.session.name,
-      detail: item.session.provider,
-    };
-  }
-  if (item.kind === "workspace") {
-    const Glyph = KIND_ICONS.workspace;
-    return {
-      icon: <Glyph className="size-4 shrink-0 text-text-muted" />,
-      label: `Switch to ${item.workspace.name}`,
-      detail: item.workspace.path,
-    };
-  }
-  const Glyph = ACTION_ICONS[item.id] ?? CommandIcon;
-  return { icon: <Glyph className="size-4 shrink-0 text-text-muted" />, label: item.label };
+  const face = itemFace(item);
+  if (item.kind === "file") return { icon: <FileTypeIcon name={item.file.name} />, ...face };
+  const Glyph =
+    item.kind === "session"
+      ? KIND_ICONS[item.session.kind === "agent" ? "agents" : "sessions"]
+      : item.kind === "workspace"
+        ? KIND_ICONS.workspace
+        : (ACTION_ICONS[item.id] ?? CommandIcon);
+  return { icon: <Glyph className="size-4 shrink-0 text-text-muted" />, ...face };
 }
 
 function Hint({ keys, label }: { keys: string; label: string }) {
@@ -360,26 +297,4 @@ function Hint({ keys, label }: { keys: string; label: string }) {
       {label}
     </span>
   );
-}
-
-function group(label: string, items: Item[]): Group {
-  return { label, items };
-}
-
-function rank(items: Item[], query: string): Item[] {
-  if (!query.trim()) return items;
-  const scored: { item: Item; score: number }[] = [];
-  for (const item of items) {
-    const hit = fuzzyMatch(query, searchText(item));
-    if (hit) scored.push({ item, score: hit.score });
-  }
-  scored.sort((a, b) => b.score - a.score);
-  return scored.map((entry) => entry.item);
-}
-
-function searchText(item: Item): string {
-  if (item.kind === "file") return item.file.relative;
-  if (item.kind === "session") return item.session.name;
-  if (item.kind === "workspace") return item.workspace.name;
-  return item.label;
 }
