@@ -150,6 +150,9 @@ test module never breaks another's build.
   - `on()` started a connection without catching its rejection.
 - `host.ts`: the browser folder-pick fallback returned the parent of the
   picked folder. Fixed (T2).
+- `useSelectAllScope`: the hook cleared the selection before reading the
+  region it falls back to, so Cmd/Ctrl+A in the transcript, which can't take
+  focus, selected nothing. Fixed (T4).
 - **Latent, not reached today:**
   - `transport.ts`: closing an old handle for a stream id after it was
     reopened silences the new handler.
@@ -157,6 +160,22 @@ test module never breaks another's build.
     close each other's stream on unsubscribe.
   - `routines.ts`: `parseSchedule` accepts a weekday such as 9, which then
     renders blank.
+  - `useTerminalSearch` re-runs forever if `dark` is a new function on every
+    render. The app passes a stable one.
+- **Open, small:**
+  - `useAgentTheme` and `useTerminalPrefs`: a change made before the saved
+    value loads is overwritten when it lands.
+  - `useSidebarWidth` drops the save still pending at unmount, so the last
+    200 ms of a drag can be lost.
+  - `electron/update.ts` leaves its `crew-update-*` temp folder behind when
+    an install fails.
+  - `electron/main.ts` accepts a handshake URL with any scheme. Quitting
+    while crewd is still starting waits for the handshake or the 10 s
+    timeout before sending SIGTERM, and still creates the window.
+  - `electron/` isn't type-checked. Under the repo's strict options it has
+    three type errors (the handle's stderr type under `stdio: "inherit"`,
+    readonly dialog `properties`, a `ReadableStream` cast). None of them
+    matters at runtime.
 - **Open:** `useTabs` reads `tabs:<workspace>` once. If that read fails, it
   falls back to no tabs and never retries, so the next save writes the empty
   list over the saved tabs. A daemon hiccup at startup can wipe a workspace's
@@ -168,11 +187,11 @@ test module never breaks another's build.
 | ID | Status |
 |---|---|
 | Infra | done |
-| T1 | pending |
+| T1 | done |
 | T2 | done |
 | T3 | done |
-| T4 | pending |
-| T5 | pending |
+| T4 | done |
+| T5 | done |
 | T6 | pending |
 | T7 | pending |
 | R1 | pending |
