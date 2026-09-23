@@ -59,7 +59,12 @@ pub fn next_cron(spec: &CronSpec, from_ms: i64) -> Option<i64> {
                     if hour == floor_hour && minute < floor_minute {
                         continue;
                     }
-                    return Some(set_clock(cursor, hour, minute));
+                    // In the hour a clock repeats, a local time can settle on
+                    // its first occurrence, which is behind `from_ms`.
+                    let at = set_clock(cursor, hour, minute);
+                    if at > from_ms {
+                        return Some(at);
+                    }
                 }
             }
         }
@@ -308,5 +313,146 @@ mod tests {
     #[test]
     fn a_date_that_never_comes_answers_with_nothing() {
         assert_eq!(next("0 0 30 2 *", at(2025, 9, 3, 0, 0)), None);
+    }
+
+    /// Which of the five fields a case reads back.
+    type Pick = fn(CronSpec) -> Vec<u32>;
+
+    fn field(expression: &str, pick: Pick) -> Vec<u32> {
+        pick(parse_cron(expression).unwrap_or_else(|| panic!("{expression} did not parse")))
+    }
+
+    #[test]
+    fn every_way_of_writing_a_field_expands_to_the_values_it_means() {
+        let minute = |spec: CronSpec| spec.minute;
+        let hour = |spec: CronSpec| spec.hour;
+        let dom = |spec: CronSpec| spec.dom;
+        let month = |spec: CronSpec| spec.month;
+        let dow = |spec: CronSpec| spec.dow;
+        let cases: Vec<(&str, Pick, Vec<u32>)> = vec![
+            ("7 * * * *", minute, vec![7]),
+            ("0 9-12 * * *", hour, vec![9, 10, 11, 12]),
+            ("0-30/10 * * * *", minute, vec![0, 10, 20, 30]),
+            // A start with a step and no end runs to the top of the field.
+            ("5/15 * * * *", minute, vec![5, 20, 35, 50]),
+            ("0 */6 * * *", hour, vec![0, 6, 12, 18]),
+            ("0-5/10 * * * *", minute, vec![0]),
+            ("0 0 */10 * *", dom, vec![1, 11, 21, 31]),
+            // Lists are sorted and deduplicated, and may mix ranges and values.
+            ("30,0,15-16,0 * * * *", minute, vec![0, 15, 16, 30]),
+            ("0 0 1 jan-mar *", month, vec![1, 2, 3]),
+            ("0 0 1 dec *", month, vec![12]),
+            ("0 0 1 1,feb *", month, vec![1, 2]),
+            ("0 0 1 7 *", month, vec![7]),
+            ("0 0 * * sun,sat", dow, vec![0, 6]),
+            ("0 0 * * MON-FRI", dow, vec![1, 2, 3, 4, 5]),
+            ("0 0 * * 1-5/2", dow, vec![1, 3, 5]),
+            ("0 0 * * sun-7", dow, vec![0]),
+            ("0 0 7 * *", dom, vec![7]),
+            ("  0\t9  *  *  *  ", hour, vec![9]),
+        ];
+        for (expression, pick, expected) in cases {
+            assert_eq!(field(expression, pick), expected, "{expression}");
+        }
+    }
+
+    #[test]
+    fn a_field_that_is_not_well_formed_is_not_a_cron() {
+        for bad in [
+            // Out of range, field by field.
+            "60 * * * *",
+            "0 24 * * *",
+            "0 0 0 * *",
+            "0 0 32 * *",
+            "0 0 1 0 *",
+            "0 0 1 13 *",
+            "0 0 * * 8",
+            "0-60 * * * *",
+            // Empty pieces.
+            "*/ * * * *",
+            "/5 * * * *",
+            "1,,2 * * * *",
+            "1, * * * *",
+            "-5 * * * *",
+            "5- * * * *",
+            // Too many dashes, bad steps, words that are not numbers.
+            "1-2-3 * * * *",
+            "*/x * * * *",
+            "*/-1 * * * *",
+            "1-x * * * *",
+            "x-1 * * * *",
+            "*-5 * * * *",
+            "1.5 * * * *",
+            // Names only mean something in their own field.
+            "0 0 * mon *",
+            "0 0 * * jan",
+            "mon 0 * * *",
+        ] {
+            assert!(parse_cron(bad).is_none(), "{bad} parsed");
+        }
+    }
+
+    #[test]
+    fn seconds_are_dropped_before_the_next_minute_is_counted() {
+        let from = at(2026, 3, 10, 10, 0) + 30_000;
+        assert_eq!(next("* * * * *", from), Some(at(2026, 3, 10, 10, 1)));
+    }
+
+    #[test]
+    fn a_day_the_month_does_not_have_is_skipped_to_a_month_that_has_it() {
+        assert_eq!(next("0 0 31 * *", at(2026, 4, 1, 0, 0)), Some(at(2026, 5, 31, 0, 0)));
+    }
+
+    #[test]
+    fn a_weekday_cron_on_a_friday_evening_waits_for_monday() {
+        // Fri Jan 30 2026, and the week turns over into February.
+        assert_eq!(next("0 9 * * 1-5", at(2026, 1, 30, 18, 0)), Some(at(2026, 2, 2, 9, 0)));
+    }
+
+    /// Every instant in the coming year where the local offset moves: summer
+    /// time starting and ending. None at all in a zone without it.
+    fn clock_changes(from: i64) -> Vec<i64> {
+        let offset = |ms: i64| local_tm(ms).tm_gmtoff;
+        let hour = 3_600_000;
+        let mut changes = Vec::new();
+        let mut at = from;
+        while at < from + 400 * 24 * hour {
+            if offset(at) != offset(at + hour) {
+                let mut minute = at;
+                while offset(minute) == offset(at) {
+                    minute += 60_000;
+                }
+                changes.push(minute);
+            }
+            at += hour;
+        }
+        changes
+    }
+
+    /// The hour a clock repeats when summer time ends is where a local-time
+    /// round trip lands on the first of the two, an hour early. A next run
+    /// from inside it must still be after the moment it was asked about, or the
+    /// routine is past due the instant it is written and fires every tick
+    /// until the hour is over.
+    #[test]
+    fn a_next_run_across_a_change_of_the_clock_is_still_in_the_future() {
+        for change in clock_changes(at(2026, 1, 1, 0, 0)) {
+            let mut from = change - 3 * 3_600_000;
+            while from < change + 3 * 3_600_000 {
+                for expression in ["* * * * *", "*/10 * * * *", "30 23 * * *", "0 0 * * *", "30 0 * * *"] {
+                    // mktime settles a repeated hour towards the offset it last
+                    // used, so ask once after a call from each side of the change.
+                    for side in [change - 86_400_000, change + 86_400_000] {
+                        floor_minute(side);
+                        let answer = next(expression, from);
+                        assert!(
+                            answer.is_some_and(|at| at > from),
+                            "{expression} from {from} answered {answer:?}"
+                        );
+                    }
+                }
+                from += 5 * 60_000;
+            }
+        }
     }
 }

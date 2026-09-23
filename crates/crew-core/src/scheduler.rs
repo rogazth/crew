@@ -260,17 +260,24 @@ impl Scheduler {
             if self.stopped.load(Ordering::Relaxed) {
                 return None;
             }
-            // A read that failed says nothing about the turn. A row that is
-            // gone says everything: the agent was deleted, and the turn with
-            // it. Only the failure is worth waiting through.
-            let live = match session::get(&self.store, session_id.to_string()) {
-                Ok(Some(live)) => live,
-                Ok(None) => return Some(false),
-                Err(_) => continue,
-            };
-            if live.status != "working" && live.status != "needs-input" {
-                return Some(live.status != "error");
+            if let Some(ok) = self.turn_ended(session_id) {
+                return Some(ok);
             }
+        }
+    }
+
+    /// One look at the agent: whether its turn ended well, or None while it is
+    /// still going.
+    ///
+    /// A read that failed says nothing about the turn. A row that is gone says
+    /// everything: the agent was deleted, and the turn with it. Only the
+    /// failure is worth waiting through.
+    fn turn_ended(&self, session_id: &str) -> Option<bool> {
+        match session::get(&self.store, session_id.to_string()) {
+            Ok(Some(live)) if live.status == "working" || live.status == "needs-input" => None,
+            Ok(Some(live)) => Some(live.status != "error"),
+            Ok(None) => Some(false),
+            Err(_) => None,
         }
     }
 
@@ -340,16 +347,23 @@ mod tests {
     /// An opencode that answers once and stops: enough for a turn to end, which
     /// is when a run stops being "running".
     fn fake_opencode(dir: &std::path::Path) -> String {
-        let path = dir.join("fake-opencode");
+        opencode_after(dir, "fake-opencode", 0.0)
+    }
+
+    /// The same, after `seconds` of thinking.
+    fn opencode_after(dir: &std::path::Path, name: &str, seconds: f32) -> String {
+        let path = dir.join(name);
         std::fs::write(
             &path,
             r#"#!/usr/bin/env python3
-import json, sys
+import json, sys, time
 sys.stdin.read()
+time.sleep(SECONDS)
 sid = "ses_test"
 print(json.dumps({"type":"text","sessionID":sid,"part":{"id":"p1","type":"text","text":"ok"}}), flush=True)
 print(json.dumps({"type":"step_finish","sessionID":sid,"part":{"id":"s1","type":"step-finish","reason":"stop","tokens":{"input":1,"output":1,"reasoning":0,"cache":{"read":0,"write":0}},"cost":0}}), flush=True)
-"#,
+"#
+            .replace("SECONDS", &seconds.to_string()),
         )
         .expect("write fake");
         use std::os::unix::fs::PermissionsExt;
@@ -374,23 +388,23 @@ print(json.dumps({"type":"step_finish","sessionID":sid,"part":{"id":"s1","type":
         scheduler: Scheduler,
         host: TurnHost,
         workspace: String,
+        dir: tempfile::TempDir,
     }
 
     fn world() -> World {
         let host = TurnHost::test_new();
         host.test_agents().set_events(Arc::new(Fanout(host.clone())));
-        let dir = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
-        std::fs::create_dir_all(&dir).expect("dir");
-        host.override_binary("opencode", fake_opencode(&dir));
+        let dir = crate::test_support::temp_dir();
+        host.override_binary("opencode", fake_opencode(dir.path()));
         let workspace = crate::workspace::create(
             host.test_store(),
             "w".into(),
-            dir.to_string_lossy().into_owned(),
+            dir.path().to_string_lossy().into_owned(),
         )
         .expect("workspace")
         .id;
         let scheduler = Scheduler::new(host.test_store().clone(), host.clone());
-        World { scheduler, host, workspace }
+        World { scheduler, host, workspace, dir }
     }
 
     impl World {
@@ -803,8 +817,8 @@ print(json.dumps({"type":"step_finish","sessionID":sid,"part":{"id":"s1","type":
 
     /// A timer that arms for a row no tick will fire is a timer that arms
     /// again the moment it wakes: the same row, still past due, still refused.
-    #[test]
-    fn a_disabled_row_that_is_past_due_does_not_spin_the_timer() {
+    #[tokio::test(start_paused = true)]
+    async fn a_disabled_row_that_is_past_due_does_not_spin_the_timer() {
         let world = world();
         let coder = world.agent("Coder");
         routine::upsert(
@@ -815,17 +829,20 @@ print(json.dumps({"type":"step_finish","sessionID":sid,"part":{"id":"s1","type":
             false,
             "check the board".into(),
             Schedule::Interval { minutes: 30 }.to_json(),
-            Some(now_millis() - 60_000),
+            Some(1_000),
             None,
         )
         .expect("routine");
+        world.scheduler.set_runtime(tokio::runtime::Handle::current());
 
         world.scheduler.arm();
-        thread::sleep(Duration::from_millis(1_200));
+        tokio::time::sleep(Duration::from_secs(10)).await;
         let arms = world.scheduler.generation.load(Ordering::Relaxed);
         world.scheduler.stop();
 
-        assert!(arms < 10, "the timer armed {arms} times in a second");
+        // Counting it would arm twice a second at the floor, and without the
+        // floor it would arm without end.
+        assert!(arms < 10, "the timer armed {arms} times in ten seconds");
     }
 
     /// The heartbeat: with nothing to wait for the scheduler still wakes, so a
@@ -990,5 +1007,277 @@ print(json.dumps({"type":"step_finish","sessionID":sid,"part":{"id":"s1","type":
             routine::runs_json(&[run]),
             r#"[{"id":"r1","startedAt":1,"finishedAt":null,"status":"skipped","trigger":"manual"}]"#
         );
+    }
+
+    fn working(world: &World, agent: &Session) {
+        session::set_status(world.store(), agent.id.clone(), "working".into()).expect("status");
+    }
+
+    /// A second tick that lands mid-sweep would read the same rows, still due,
+    /// and fire them again. It leaves them to the sweep already running.
+    #[test]
+    fn a_tick_that_arrives_mid_sweep_fires_nothing() {
+        let world = world();
+        let coder = world.agent("Coder");
+        let routine = world.routine(&coder, "Standup", Some(1_000));
+        let sweeping = world.scheduler.ticking.lock().expect("lock");
+
+        world.tick();
+
+        drop(sweeping);
+        world.scheduler.stop();
+        assert!(world.runs(&routine.id).is_empty(), "the second tick fired a routine mid-sweep");
+        assert!(world.blocks(&coder.id).is_empty());
+    }
+
+    #[test]
+    fn a_routine_fires_once_each_time_it_comes_due() {
+        let world = world();
+        let coder = world.agent("Coder");
+        working(&world, &coder);
+        let routine = world.routine(&coder, "Standup", Some(1_000));
+
+        world.tick();
+        world.tick();
+
+        world.scheduler.stop();
+        assert_eq!(world.runs(&routine.id).len(), 1, "one due time fired twice");
+    }
+
+    /// The daemon was down while the routine came due, several times over. It
+    /// fires once, not once per missed time, and the schedule starts again from
+    /// that run rather than from the time it missed.
+    #[test]
+    fn a_routine_that_came_due_while_the_daemon_was_down_fires_once() {
+        let world = world();
+        let coder = world.agent("Coder");
+        // Due in 1970: every half hour since has been missed.
+        let routine = world.routine(&coder, "Standup", Some(1_000));
+
+        world.tick();
+
+        let run = world.settled_run(&routine.id);
+        assert_eq!(world.runs(&routine.id).len(), 1);
+        let wakes = world
+            .blocks(&coder.id)
+            .into_iter()
+            .filter(|block| block.role == BlockRole::User && block.text.starts_with("[routine]"))
+            .count();
+        assert_eq!(wakes, 1, "the agent was woken once per missed time");
+        assert_eq!(world.reload(&routine.id).next_run_at, Some(run.started_at + 30 * 60_000));
+        world.scheduler.stop();
+    }
+
+    /// Run now is how a switched-off routine is tried out. It runs, and it
+    /// stays off: a manual run does not put it back on the clock.
+    #[test]
+    fn run_now_on_a_switched_off_routine_runs_it_and_leaves_it_off() {
+        let world = world();
+        let coder = world.agent("Coder");
+        let routine = routine::upsert(
+            world.store(),
+            None,
+            coder.id.clone(),
+            "Standup".into(),
+            false,
+            "check the board".into(),
+            Schedule::Interval { minutes: 30 }.to_json(),
+            None,
+            None,
+        )
+        .expect("routine");
+
+        world.scheduler.run_now(routine.id.clone()).expect("run now");
+
+        let run = world.settled_run(&routine.id);
+        assert_eq!((run.trigger, run.status), (RunTrigger::Manual, RunStatus::Ok));
+        let after = world.reload(&routine.id);
+        assert!(!after.enabled);
+        assert_eq!(after.next_run_at, None, "a manual run put a switched-off routine on the clock");
+        world.scheduler.stop();
+    }
+
+    #[test]
+    fn run_now_on_a_routine_that_is_gone_says_so() {
+        let world = world();
+        let error = world.scheduler.run_now("gone".into()).expect_err("ran nothing");
+        assert!(error.contains("gone"), "{error}");
+    }
+
+    /// The row says idle, but the agent already has a turn in flight: the
+    /// start is refused. The run ends there, as an error, rather than staying
+    /// "running" for a turn that never began.
+    #[test]
+    fn a_turn_that_will_not_start_ends_the_run_as_an_error() {
+        let world = world();
+        let coder = world.agent("Coder");
+        let routine = world.routine(&coder, "Standup", Some(1_000));
+        world.host.test_install_claude(&coder.id);
+
+        world.tick();
+
+        world.scheduler.stop();
+        let runs = world.runs(&routine.id);
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].status, RunStatus::Error);
+        assert!(runs[0].finished_at.is_some(), "an error that never finished");
+    }
+
+    /// `next_run_at` is the only thing that bounds a re-fire. A fire that could
+    /// not write it would wake the agent now and again on every tick after.
+    #[test]
+    fn a_history_that_cannot_be_written_starts_no_turn() {
+        let world = world();
+        let coder = world.agent("Coder");
+        let routine = world.routine(&coder, "Standup", Some(1_000));
+        world
+            .store()
+            .with(|conn| {
+                conn.execute_batch(
+                    "CREATE TEMP TRIGGER full_disk BEFORE UPDATE ON routines
+                     BEGIN SELECT RAISE(ABORT, 'disk full'); END;",
+                )
+            })
+            .expect("trigger");
+
+        world.tick();
+
+        world.scheduler.stop();
+        assert!(world.blocks(&coder.id).is_empty(), "it woke the agent without writing the next time");
+        assert_eq!(world.reload(&routine.id).next_run_at, Some(1_000));
+    }
+
+    #[test]
+    fn a_turn_is_over_when_the_agent_stops_working() {
+        let world = world();
+        let coder = world.agent("Coder");
+        for (status, ended) in [
+            ("working", None),
+            ("needs-input", None),
+            ("idle", Some(true)),
+            ("error", Some(false)),
+        ] {
+            session::set_status(world.store(), coder.id.clone(), status.into()).expect("status");
+            assert_eq!(world.scheduler.turn_ended(&coder.id), ended, "{status}");
+        }
+        session::delete(world.store(), coder.id.clone()).expect("delete");
+        assert_eq!(world.scheduler.turn_ended(&coder.id), Some(false), "a deleted agent");
+    }
+
+    /// A read that failed says nothing about the turn, so the watcher keeps
+    /// watching, and sees the end once the store answers again.
+    #[test]
+    fn a_read_that_fails_is_not_the_end_of_the_turn() {
+        let world = world();
+        let coder = world.agent("Coder");
+        let rename = |from: &str, to: &str| {
+            world
+                .store()
+                .with(|conn| conn.execute_batch(&format!("ALTER TABLE {from} RENAME TO {to}")))
+                .expect("rename");
+        };
+
+        rename("sessions", "sessions_away");
+        assert_eq!(world.scheduler.turn_ended(&coder.id), None);
+        rename("sessions_away", "sessions");
+        assert_eq!(world.scheduler.turn_ended(&coder.id), Some(true));
+    }
+
+    #[test]
+    fn a_stopped_scheduler_stops_watching() {
+        let world = world();
+        let coder = world.agent("Coder");
+        working(&world, &coder);
+        world.scheduler.stop();
+
+        assert_eq!(world.scheduler.await_turn(&coder.id), None);
+    }
+
+    /// The daemon went away mid-turn. Nobody saw the end, so the run says it is
+    /// still running rather than claiming it failed.
+    #[test]
+    fn a_run_whose_end_nobody_saw_stays_running() {
+        let world = world();
+        let slow = crate::test_support::fake_cli(world.dir.path(), "slow-opencode", "sleep 2");
+        world.host.override_binary("opencode", slow.to_string_lossy());
+        let coder = world.agent("Coder");
+        let routine = world.routine(&coder, "Standup", Some(1_000));
+        let row = routine::scheduled(world.store(), routine.id.clone())
+            .expect("scheduled")
+            .expect("routine");
+        // Each watcher holds a clone of the scheduler; this is how many there
+        // are without one.
+        let unwatched = Arc::strong_count(&world.scheduler.stopped);
+
+        world.scheduler.fire(row, RunTrigger::Schedule);
+        assert!(Arc::strong_count(&world.scheduler.stopped) > unwatched, "nobody is watching the turn");
+        world.scheduler.stop();
+
+        crate::test_support::eventually("the watcher lets go", || {
+            Arc::strong_count(&world.scheduler.stopped) == unwatched
+        });
+        assert_eq!(world.runs(&routine.id)[0].status, RunStatus::Running);
+    }
+
+    /// A turn longer than the first look is watched to its end, not given up
+    /// on because it was still going.
+    #[test]
+    fn a_turn_that_outlasts_the_first_look_is_watched_to_its_end() {
+        let world = world();
+        world.host.override_binary("opencode", opencode_after(world.dir.path(), "slow-opencode", 0.3));
+        let coder = world.agent("Coder");
+        let routine = world.routine(&coder, "Standup", Some(1_000));
+
+        world.tick();
+
+        assert_eq!(world.settled_run(&routine.id).status, RunStatus::Ok);
+        world.scheduler.stop();
+    }
+
+    /// On the daemon's runtime the timer is a tokio sleep: a routine long past
+    /// due still waits out the one-second floor, then fires.
+    #[tokio::test(start_paused = true)]
+    async fn on_the_runtime_a_past_due_routine_fires_after_the_floor() {
+        let world = world();
+        let coder = world.agent("Coder");
+        // Busy, so the fire is a skip: the timer is the point here, not the turn.
+        working(&world, &coder);
+        let routine = world.routine(&coder, "Standup", Some(1_000));
+        world.scheduler.set_runtime(tokio::runtime::Handle::current());
+
+        world.scheduler.arm();
+
+        tokio::time::sleep(Duration::from_millis(MIN_WAIT_MS as u64 - 1)).await;
+        assert!(world.runs(&routine.id).is_empty(), "it fired inside the floor");
+        crate::test_support::within("the timer to fire", async {
+            while world.runs(&routine.id).is_empty() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await;
+        world.scheduler.stop();
+        assert_eq!(world.runs(&routine.id)[0].status, RunStatus::Skipped);
+    }
+
+    /// With nothing due the clock still ticks once a minute, so a lost write
+    /// costs a minute rather than the day.
+    #[tokio::test(start_paused = true)]
+    async fn with_nothing_due_the_timer_still_wakes_every_minute() {
+        let world = world();
+        world.scheduler.set_runtime(tokio::runtime::Handle::current());
+        let generation = || world.scheduler.generation.load(Ordering::Relaxed);
+
+        world.scheduler.arm();
+        let armed = generation();
+
+        tokio::time::sleep(Duration::from_millis(MAX_WAIT_MS as u64 - 1)).await;
+        assert_eq!(generation(), armed, "it woke before the minute was up");
+        crate::test_support::within("the heartbeat", async {
+            while generation() == armed {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await;
+        world.scheduler.stop();
     }
 }

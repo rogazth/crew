@@ -337,4 +337,198 @@ mod tests {
         assert!(validate_schedule(&json!({ "kind": "weekly" })).is_err());
         assert!(validate_schedule(&json!("daily")).is_err());
     }
+
+    const MINUTES: &str = "minutes must be a whole number of at least 1.";
+    const HOUR: &str = "hour must be 0-23.";
+    const MINUTE: &str = "minute must be 0-59.";
+    const DAYS: &str = "days must be a list of 0-6 (Sunday to Saturday).";
+    const CRON: &str = "expression must be five cron fields: minute hour day-of-month month day-of-week";
+
+    /// What an agent gets back is what it has to fix, so every refusal names
+    /// the field, and all but cron's carry the whole shape to copy from.
+    #[test]
+    fn every_schedule_that_cannot_run_is_refused_with_what_to_fix() {
+        let cases: Vec<(Value, &str)> = vec![
+            (json!("daily"), SCHEDULE_HELP),
+            (json!(null), SCHEDULE_HELP),
+            (json!([{ "kind": "daily", "hour": 9 }]), SCHEDULE_HELP),
+            (json!({}), SCHEDULE_HELP),
+            (json!({ "kind": "once", "at": 0 }), SCHEDULE_HELP),
+            (json!({ "kind": "weekly", "hour": 9 }), SCHEDULE_HELP),
+            (json!({ "kind": 5 }), SCHEDULE_HELP),
+            (json!({ "kind": "Daily", "hour": 9 }), SCHEDULE_HELP),
+            (json!({ "kind": "interval" }), MINUTES),
+            (json!({ "kind": "interval", "minutes": 0 }), MINUTES),
+            (json!({ "kind": "interval", "minutes": -5 }), MINUTES),
+            (json!({ "kind": "interval", "minutes": 1.5 }), MINUTES),
+            (json!({ "kind": "interval", "minutes": "30" }), MINUTES),
+            (json!({ "kind": "interval", "minutes": null }), MINUTES),
+            (json!({ "kind": "interval", "minutes": 4_294_967_296_u64 }), MINUTES),
+            (json!({ "kind": "daily" }), HOUR),
+            (json!({ "kind": "daily", "hour": 24 }), HOUR),
+            (json!({ "kind": "daily", "hour": -1 }), HOUR),
+            (json!({ "kind": "daily", "hour": "9" }), HOUR),
+            (json!({ "kind": "daily", "hour": 9.5 }), HOUR),
+            (json!({ "kind": "daily", "hour": 9, "minute": 60 }), MINUTE),
+            (json!({ "kind": "daily", "hour": 9, "minute": -1 }), MINUTE),
+            (json!({ "kind": "daily", "hour": 9, "minute": "0" }), MINUTE),
+            (json!({ "kind": "daily", "hour": 9, "minute": null }), MINUTE),
+            (json!({ "kind": "daily", "hour": 9, "days": [7] }), DAYS),
+            (json!({ "kind": "daily", "hour": 9, "days": [1, -1] }), DAYS),
+            (json!({ "kind": "daily", "hour": 9, "days": ["mon"] }), DAYS),
+            (json!({ "kind": "daily", "hour": 9, "days": [1.5] }), DAYS),
+            (json!({ "kind": "daily", "hour": 9, "days": "1,2" }), DAYS),
+            (json!({ "kind": "daily", "hour": 9, "days": 1 }), DAYS),
+            (json!({ "kind": "daily", "hour": 9, "days": null }), DAYS),
+            (json!({ "kind": "cron" }), CRON),
+            (json!({ "kind": "cron", "expression": "" }), CRON),
+            (json!({ "kind": "cron", "expression": "   " }), CRON),
+            (json!({ "kind": "cron", "expression": 5 }), CRON),
+            (json!({ "kind": "cron", "expression": "0 9 * *" }), CRON),
+            (json!({ "kind": "cron", "expression": "61 9 * * *" }), CRON),
+            (json!({ "kind": "cron", "expression": "every morning" }), CRON),
+        ];
+        for (input, starts) in cases {
+            let error = validate_schedule(&input).expect_err(&input.to_string());
+            assert!(error.starts_with(starts), "{input}: {error}");
+            if starts != CRON && starts != SCHEDULE_HELP {
+                assert!(error.ends_with(SCHEDULE_HELP), "{input}: {error}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_schedule_that_can_run_is_read_as_it_was_meant() {
+        let cases: Vec<(Value, Schedule)> = vec![
+            (json!({ "kind": "interval", "minutes": 1 }), Schedule::Interval { minutes: 1 }),
+            (
+                json!({ "kind": "interval", "minutes": 4_294_967_295_u64 }),
+                Schedule::Interval { minutes: u32::MAX },
+            ),
+            (
+                json!({ "kind": "daily", "hour": 0, "minute": 0, "days": [] }),
+                Schedule::Daily { hour: 0, minute: 0, days: vec![] },
+            ),
+            (
+                json!({ "kind": "daily", "hour": 23, "minute": 59, "days": [6, 0, 6] }),
+                Schedule::Daily { hour: 23, minute: 59, days: vec![0, 6] },
+            ),
+            (
+                json!({ "kind": "daily", "hour": 9, "extra": true }),
+                Schedule::Daily { hour: 9, minute: 0, days: vec![] },
+            ),
+            (
+                json!({ "kind": "cron", "expression": "  0 9 * * 1-5  " }),
+                Schedule::Cron { expression: "0 9 * * 1-5".into() },
+            ),
+        ];
+        for (input, expected) in cases {
+            assert_eq!(validate_schedule(&input), Ok(expected), "{input}");
+        }
+    }
+
+    /// The column holds this JSON and the screen parses it back, so it has to
+    /// read the same on the way out as on the way in.
+    #[test]
+    fn every_kind_is_stored_as_json_that_reads_back_the_same() {
+        let cases = [
+            (Schedule::Interval { minutes: 45 }, json!({ "kind": "interval", "minutes": 45 })),
+            (
+                Schedule::Daily { hour: 7, minute: 5, days: vec![1, 3] },
+                json!({ "kind": "daily", "hour": 7, "minute": 5, "days": [1, 3] }),
+            ),
+            (
+                Schedule::Cron { expression: "0 9 * * mon-fri".into() },
+                json!({ "kind": "cron", "expression": "0 9 * * mon-fri" }),
+            ),
+        ];
+        for (schedule, stored) in cases {
+            let json = schedule.to_json();
+            assert_eq!(serde_json::from_str::<Value>(&json).expect("json"), stored);
+            assert_eq!(parse_schedule(&json), Some(schedule));
+        }
+    }
+
+    /// The text an agent and the routines screen read a schedule as.
+    #[test]
+    fn every_schedule_describes_itself_the_way_the_screen_does() {
+        let daily = |hour, minute, days: &[u32]| Schedule::Daily { hour, minute, days: days.to_vec() };
+        let cases = [
+            (Schedule::Interval { minutes: 45 }, "Every 45 minutes"),
+            (Schedule::Interval { minutes: 90 }, "Every 90 minutes"),
+            (Schedule::Interval { minutes: 60 }, "Every hour"),
+            (Schedule::Interval { minutes: 120 }, "Every 2 hours"),
+            (Schedule::Interval { minutes: 1440 }, "Every 24 hours"),
+            (daily(9, 0, &[]), "Every day at 09:00"),
+            (daily(9, 5, &[0, 1, 2, 3, 4, 5, 6]), "Every day at 09:05"),
+            (daily(8, 30, &[1, 2, 3, 4, 5]), "Weekdays at 08:30"),
+            (daily(10, 0, &[0, 6]), "Weekends at 10:00"),
+            (daily(0, 0, &[1]), "Mon at 00:00"),
+            (daily(23, 59, &[0]), "Sun at 23:59"),
+            (daily(7, 0, &[1, 3, 5]), "Mon, Wed, Fri at 07:00"),
+            (daily(7, 0, &[2, 4, 6]), "Tue, Thu, Sat at 07:00"),
+            (Schedule::Cron { expression: "0 9 * * 1-5".into() }, "Cron 0 9 * * 1-5"),
+        ];
+        for (schedule, expected) in cases {
+            assert_eq!(describe_schedule(&schedule), expected, "{schedule:?}");
+        }
+    }
+
+    #[test]
+    fn next_run_carries_across_the_end_of_a_day_a_week_a_month_and_a_year() {
+        let nine = |days: &[u32]| Schedule::Daily { hour: 9, minute: 0, days: days.to_vec() };
+        let cases: Vec<(&str, Schedule, i64, i64)> = vec![
+            (
+                "an interval runs past midnight",
+                Schedule::Interval { minutes: 30 },
+                at(2026, 9, 17, 23, 50),
+                at(2026, 9, 18, 0, 20),
+            ),
+            ("the last day of a month", nine(&[]), at(2026, 1, 31, 10, 0), at(2026, 2, 1, 9, 0)),
+            ("the last day of a year", nine(&[]), at(2026, 12, 31, 10, 0), at(2027, 1, 1, 9, 0)),
+            ("into a leap day", nine(&[]), at(2028, 2, 28, 10, 0), at(2028, 2, 29, 9, 0)),
+            ("over a leap day", nine(&[]), at(2028, 2, 29, 10, 0), at(2028, 3, 1, 9, 0)),
+            // Fri Jan 30 2026: the next Monday is in February.
+            ("a Monday in the next month", nine(&[1]), at(2026, 1, 30, 10, 0), at(2026, 2, 2, 9, 0)),
+            // Sat Sep 19 2026.
+            ("Saturday to Sunday", nine(&[0, 6]), at(2026, 9, 19, 10, 0), at(2026, 9, 20, 9, 0)),
+            ("Sunday to Saturday", nine(&[0, 6]), at(2026, 9, 20, 10, 0), at(2026, 9, 26, 9, 0)),
+            ("the same weekday, a week out", nine(&[4]), at(2026, 9, 17, 9, 0), at(2026, 9, 24, 9, 0)),
+            ("later the same day", nine(&[4]), at(2026, 9, 17, 8, 59), at(2026, 9, 17, 9, 0)),
+            (
+                "a cron across the year",
+                Schedule::Cron { expression: "0 0 1 1 *".into() },
+                at(2026, 12, 31, 23, 59),
+                at(2027, 1, 1, 0, 0),
+            ),
+        ];
+        for (what, schedule, from, expected) in cases {
+            assert_eq!(next_run(&schedule, from), Some(expected), "{what}");
+        }
+    }
+
+    /// Nine every morning is nine on the clock, on the day summer time starts
+    /// or ends as on any other: a day there is 23 or 25 hours long, not 24.
+    /// Walks a whole year, so a zone with summer time crosses both changes.
+    #[test]
+    fn a_daily_time_stays_on_the_local_clock_every_day_of_a_year() {
+        let schedule = Schedule::Daily { hour: 9, minute: 0, days: vec![] };
+        // mktime carries January 32nd into February, and so on through the year.
+        for day in 1..=366 {
+            assert_eq!(
+                next_run(&schedule, at(2026, 1, day, 10, 0)),
+                Some(at(2026, 1, day + 1, 9, 0)),
+                "day {day} of the year"
+            );
+        }
+    }
+
+    /// Only a schedule built by hand can name no real weekday; the one the
+    /// column holds went through `validate_schedule`. It still answers with a
+    /// time rather than none, the same one the screen gives.
+    #[test]
+    fn a_day_set_with_no_real_weekday_still_answers_with_a_time() {
+        let schedule = Schedule::Daily { hour: 9, minute: 0, days: vec![7] };
+        assert_eq!(next_run(&schedule, at(2026, 9, 17, 10, 0)), Some(at(2026, 9, 26, 9, 0)));
+    }
 }

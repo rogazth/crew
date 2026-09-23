@@ -128,6 +128,7 @@ pub fn upsert(
                (id, session_id, name, enabled, prompt, schedule, next_run_at, created_by, created_at, updated_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?9, ?8, ?8)
              ON CONFLICT(id) DO UPDATE SET
+               session_id = excluded.session_id,
                name = excluded.name, enabled = excluded.enabled, prompt = excluded.prompt,
                schedule = excluded.schedule, next_run_at = excluded.next_run_at,
                created_by = COALESCE(routines.created_by, excluded.created_by),
@@ -466,5 +467,244 @@ mod tests {
     fn a_routine_that_is_gone_is_not_an_error() {
         let store = store();
         assert!(scheduled(&store, "nobody".into()).unwrap().is_none());
+    }
+
+    /// A store with one workspace, in a directory removed when it drops.
+    fn desk() -> (tempfile::TempDir, Store, String) {
+        let (dir, store) = crate::test_support::temp_store();
+        let workspace = crate::workspace::create(&store, "w".into(), dir.path().to_string_lossy().into())
+            .expect("workspace")
+            .id;
+        (dir, store, workspace)
+    }
+
+    fn agent(store: &Store, workspace: &str, name: &str) -> Session {
+        crate::session::create(
+            store,
+            workspace.into(),
+            "agent".into(),
+            name.into(),
+            "claude".into(),
+            "m".into(),
+            "".into(),
+            "ask".into(),
+        )
+        .expect("agent")
+    }
+
+    fn save(store: &Store, id: Option<&str>, owner: &Session, name: &str, by: Option<&str>) -> Result<Routine, String> {
+        upsert(
+            store,
+            id.map(str::to_string),
+            owner.id.clone(),
+            name.into(),
+            true,
+            "check the board".into(),
+            Schedule::Interval { minutes: 30 }.to_json(),
+            Some(1_000),
+            by.map(str::to_string),
+        )
+    }
+
+    fn ids(rows: &[Routine]) -> Vec<&str> {
+        rows.iter().map(|row| row.id.as_str()).collect()
+    }
+
+    #[test]
+    fn each_agent_lists_only_its_own_routines_oldest_first() {
+        let (_dir, store, ws) = desk();
+        let coder = agent(&store, &ws, "Coder");
+        let cuddles = agent(&store, &ws, "Cuddles");
+        let standup = save(&store, None, &coder, "Standup", None).unwrap();
+        let review = save(&store, None, &cuddles, "Review", None).unwrap();
+        let retro = save(&store, None, &coder, "Retro", None).unwrap();
+        store
+            .with(|conn| {
+                conn.execute("UPDATE routines SET created_at = 2 WHERE id = ?1", params![standup.id])?;
+                conn.execute("UPDATE routines SET created_at = 1 WHERE id = ?1", params![retro.id])
+            })
+            .unwrap();
+
+        assert_eq!(ids(&list_for_session(&store, coder.id.clone()).unwrap()), vec![&retro.id, &standup.id]);
+        assert_eq!(ids(&list_for_session(&store, cuddles.id.clone()).unwrap()), vec![&review.id]);
+        assert!(list_for_session(&store, "nobody".into()).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_new_routine_gets_an_id_and_an_empty_history() {
+        let (_dir, store, ws) = desk();
+        let coder = agent(&store, &ws, "Coder");
+
+        let made = save(&store, None, &coder, "Standup", None).unwrap();
+
+        assert!(uuid::Uuid::parse_str(&made.id).is_ok(), "{}", made.id);
+        assert_eq!(made.session_id, coder.id);
+        assert_eq!(made.name, "Standup");
+        assert!(made.enabled);
+        assert_eq!(made.prompt, "check the board");
+        assert_eq!(made.schedule, r#"{"kind":"interval","minutes":30}"#);
+        assert_eq!((made.last_run_at, made.next_run_at), (None, Some(1_000)));
+        assert!(parse_runs(&made.runs_json).is_empty());
+        assert_eq!(made.created_by, None);
+    }
+
+    /// An edit is the user's word on what the routine does; what it has done
+    /// already, its history and its last run, is not the editor's to reset.
+    #[test]
+    fn saving_an_existing_id_rewrites_the_routine_and_keeps_its_history() {
+        let (_dir, store, ws) = desk();
+        let coder = agent(&store, &ws, "Coder");
+        let made = save(&store, None, &coder, "Standup", None).unwrap();
+        record_run(&store, &made.id, Some(5), Some(6), &run("a", RunStatus::Ok)).unwrap();
+
+        let saved = upsert(
+            &store,
+            Some(made.id.clone()),
+            coder.id.clone(),
+            "Standup v2".into(),
+            false,
+            "check the pull requests".into(),
+            Schedule::Daily { hour: 9, minute: 0, days: vec![] }.to_json(),
+            None,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(saved.id, made.id);
+        assert_eq!(saved.name, "Standup v2");
+        assert!(!saved.enabled);
+        assert_eq!(saved.prompt, "check the pull requests");
+        assert_eq!(saved.schedule, r#"{"kind":"daily","hour":9,"minute":0,"days":[]}"#);
+        assert_eq!(saved.next_run_at, None);
+        assert_eq!(saved.last_run_at, Some(5), "an edit wiped the last run");
+        assert_eq!(ids_of_runs(&saved), vec!["a"], "an edit wiped the history");
+        assert_eq!(list_for_session(&store, coder.id.clone()).unwrap().len(), 1, "an edit made a second routine");
+    }
+
+    fn ids_of_runs(routine: &Routine) -> Vec<String> {
+        parse_runs(&routine.runs_json).into_iter().map(|row| row.id).collect()
+    }
+
+    /// The wake prompt names whoever set the routine up. A later edit by
+    /// somebody else does not rewrite who that was, but one that fills in a
+    /// creator nobody recorded does.
+    #[test]
+    fn the_first_creator_on_record_stays_the_creator() {
+        let (_dir, store, ws) = desk();
+        let coder = agent(&store, &ws, "Coder");
+        let by_cuddles = save(&store, None, &coder, "Standup", Some("cuddles")).unwrap();
+        let by_nobody = save(&store, None, &coder, "Retro", None).unwrap();
+
+        let edited = save(&store, Some(&by_cuddles.id), &coder, "Standup", Some("coder")).unwrap();
+        let filled = save(&store, Some(&by_nobody.id), &coder, "Retro", Some("coder")).unwrap();
+
+        assert_eq!(edited.created_by.as_deref(), Some("cuddles"));
+        assert_eq!(filled.created_by.as_deref(), Some("coder"));
+    }
+
+    /// The routine editor has an agent picker, and it stays live on a routine
+    /// that already exists. Saving there with another agent is a move.
+    #[test]
+    fn saving_a_routine_under_another_agent_moves_it_there() {
+        let (_dir, store, ws) = desk();
+        let coder = agent(&store, &ws, "Coder");
+        let cuddles = agent(&store, &ws, "Cuddles");
+        let made = save(&store, None, &coder, "Standup", None).unwrap();
+
+        let moved = save(&store, Some(&made.id), &cuddles, "Standup", None).unwrap();
+
+        assert_eq!(moved.session_id, cuddles.id, "the save answered with the old agent");
+        assert!(list_for_session(&store, coder.id.clone()).unwrap().is_empty());
+        assert_eq!(ids(&list_for_session(&store, cuddles.id.clone()).unwrap()), vec![&made.id]);
+    }
+
+    #[test]
+    fn a_routine_for_an_agent_that_does_not_exist_is_refused() {
+        let (_dir, store, ws) = desk();
+        let coder = agent(&store, &ws, "Coder");
+        let ghost = Session { id: "ghost".into(), ..coder };
+
+        assert!(save(&store, None, &ghost, "Standup", None).is_err());
+        assert!(list_for_session(&store, "ghost".into()).unwrap().is_empty());
+    }
+
+    /// The fire reads the row first, but a delete can still land in between.
+    #[test]
+    fn a_run_recorded_for_a_routine_that_is_gone_writes_nothing() {
+        let (_dir, store, _ws) = desk();
+
+        record_run(&store, "gone", Some(1), Some(2), &run("a", RunStatus::Ok)).unwrap();
+
+        assert!(scheduled(&store, "gone".into()).unwrap().is_none());
+    }
+
+    #[test]
+    fn the_same_run_recorded_twice_is_one_line_at_the_top() {
+        let (_dir, store, ws) = desk();
+        let coder = agent(&store, &ws, "Coder");
+        let made = save(&store, None, &coder, "Standup", None).unwrap();
+        record_run(&store, &made.id, None, Some(1), &run("a", RunStatus::Running)).unwrap();
+        record_run(&store, &made.id, None, Some(1), &run("b", RunStatus::Ok)).unwrap();
+
+        record_run(&store, &made.id, None, Some(1), &run("a", RunStatus::Error)).unwrap();
+
+        let runs = history(&store, &made.id);
+        assert_eq!(runs.iter().map(|row| row.id.as_str()).collect::<Vec<_>>(), vec!["a", "b"]);
+        assert_eq!(runs[0].status, RunStatus::Error);
+    }
+
+    const TAIL: &str = "\nWhat you saved to do each time:\ncheck the board\n\nCarry it out now. Report what matters in one short message. If nothing changed and the instruction does not ask for a report, end without filler.";
+
+    /// Word for word, because the agent reads it: who is talking, when the
+    /// routine runs, and that silence is allowed.
+    #[test]
+    fn the_wake_prompt_is_the_whole_standing_order() {
+        assert_eq!(
+            wake_prompt(
+                "Standup",
+                &Schedule::Interval { minutes: 30 },
+                RunTrigger::Schedule,
+                "  check the board \n",
+                None
+            ),
+            format!(
+                "[routine] \"Standup\" is due (every 30 minutes). This is your own standing order firing on schedule, not a message the user just typed.{TAIL}"
+            )
+        );
+        assert_eq!(
+            wake_prompt("Standup", &Schedule::Interval { minutes: 30 }, RunTrigger::Manual, "check the board", Some("Cuddles")),
+            format!(
+                "[routine] \"Standup\" was run on demand. The user pressed Run now in the app; it normally runs every 30 minutes.{TAIL}"
+            )
+        );
+    }
+
+    #[test]
+    fn the_wake_prompt_says_when_the_routine_runs_in_a_sentence() {
+        let daily = |days: &[u32]| Schedule::Daily { hour: 8, minute: 30, days: days.to_vec() };
+        let cases = [
+            (Schedule::Interval { minutes: 60 }, "is due (every hour)"),
+            (Schedule::Interval { minutes: 180 }, "is due (every 3 hours)"),
+            (daily(&[]), "is due (every day at 08:30)"),
+            (daily(&[1, 2, 3, 4, 5]), "is due (Weekdays at 08:30)"),
+            (daily(&[1, 3]), "is due (Mon, Wed at 08:30)"),
+            (Schedule::Cron { expression: "0 9 * * 1-5".into() }, "is due (on the cron schedule 0 9 * * 1-5)"),
+        ];
+        for (schedule, expected) in cases {
+            let text = wake_prompt("Standup", &schedule, RunTrigger::Schedule, "check the board", None);
+            assert!(text.contains(expected), "{schedule:?}: {text}");
+        }
+    }
+
+    #[test]
+    fn a_routine_another_agent_set_up_says_whose_order_it_is() {
+        let text = wake_prompt(
+            "Standup",
+            &Schedule::Interval { minutes: 30 },
+            RunTrigger::Schedule,
+            "check the board",
+            Some("Cuddles"),
+        );
+        assert!(text.contains("This is a standing order Cuddles set up for you firing on schedule"), "{text}");
     }
 }
