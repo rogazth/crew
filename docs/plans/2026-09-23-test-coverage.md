@@ -1,6 +1,8 @@
 # Test coverage plan
 
-**In progress.** The status table at the end is the record.
+**Shipped.** Every workstream landed; the status table at the end is the
+record. Kept for the reasoning and the findings, some of which are still
+open.
 
 ## Goal
 
@@ -20,7 +22,28 @@ tests, markup snapshots, smoke/sanity checks, regression suites.
 | `src/hooks`, `src/chrome`, `src/surfaces`, `electron/` | 0 | 0% |
 | Frontend total | | 15.5% |
 
-The frontend gap is structural. Vitest only collects `src/lib/**/*.test.ts`
+## Result
+
+| Part | Tests | Lines | Functions |
+|---|---|---|---|
+| Rust workspace | 838 | 97.6% | none never run |
+| `src/lib` | | 100% | 100% |
+| `src/hooks` | | 100% | 100% |
+| `electron/` | | 100% | 100% |
+| `src/chrome`, `src/surfaces` | | 80% / 59–79% | contracts, not a number |
+| Frontend total | 1912 | 85.3% | 93.2% |
+
+`npm test` runs in about 16 s on this machine while other work shares the
+CPU. `cargo test --workspace` takes about 11 s once built; its largest
+binary, crew-core's lib tests, takes about 6.5 s. `npm run coverage` fails
+if logic in `src/lib`, `src/hooks` or `electron/` drops below 100% of
+functions or 95% of lines.
+
+What remains uncovered is presentation (icons, layout, badges), OS failures
+a test can't cause, and races between two statements. Each workstream's
+report lists its lines and the reason.
+
+The frontend gap was structural. Vitest only collects `src/lib/**/*.test.ts`
 and runs in `node`, so no hook, component or main-process code can be tested
 today.
 
@@ -160,6 +183,30 @@ test module never breaks another's build.
 - `useSelectAllScope`: the hook cleared the selection before reading the
   region it falls back to, so Cmd/Ctrl+A in the transcript, which can't take
   focus, selected nothing. Fixed (T4).
+- `turns.rs` (R3), six ways a turn could get stuck:
+  - A codex, cursor or opencode CLI that couldn't start, or an opencode
+    prompt that couldn't be sent, left the turn marked running for
+    2 minutes.
+  - A Claude message that couldn't be written did the same, until a
+    restart.
+  - A Claude CLI that never answered `initialize` was left running.
+  - The kill a stop schedules 1.5 s later hit whichever turn was running by
+    then.
+  - A stop during a pending approval was undone by the refusal that
+    followed it.
+  - A stop that landed before a codex, cursor or opencode runner started
+    was lost.
+- `pty.rs`: a spawn that failed to duplicate the slave fd leaked both PTY
+  descriptors (R7).
+- `cron.rs`: in the repeated hour when summer time ends, `next_cron` could
+  return a time in the past, so a routine refired every second (R6).
+- `routine.rs`: saving a routine with a different agent silently kept the
+  old agent (R6).
+- `tools.rs`: `search_messages` overflowed on a huge `days` (R6).
+- `Composer`: the `@` file picker never closed on Escape or blur, and
+  Escape's keyup reopened it (T7).
+- `CommandPalette` and `WorkspacePicker`: ArrowDown on an empty list left the
+  cursor at -1, so Enter did nothing once results arrived (T6).
 - **Latent, not reached today:**
   - `transport.ts`: closing an old handle for a stream id after it was
     reopened silences the new handler.
@@ -170,6 +217,19 @@ test module never breaks another's build.
   - `useTerminalSearch` re-runs forever if `dark` is a new function on every
     render. The app passes a stable one.
 - **Open, small:**
+  - `src/lib/cron.ts` has the same repeated-hour issue as the Rust parser
+    had. It also accepts crons the daemon rejects (`-5 * * * *`, `0x1f`,
+    `1e1`), so a routine saved with one fires once, then falls back to daily
+    09:00.
+  - `RoutineEditor` `save()` swallows a rejected save into an unhandled
+    rejection, and `FileEditor` replaces the editor with the error after a
+    failed write, so there is no way to retry. Both need a decision on how
+    to show the error.
+  - When a turn refuses to start, the "Routine · name" note is already in
+    the chat.
+  - Both cron parsers reject 7 as Sunday in the day-of-week field.
+  - The pty spawn path leaks the child if `dup_fd(master)` fails after a
+    successful spawn. A test can't reach this.
   - `useAgentTheme` and `useTerminalPrefs`: a change made before the saved
     value loads is overwritten when it lands.
   - `useSidebarWidth` drops the save still pending at unmount, so the last
@@ -206,12 +266,12 @@ test module never breaks another's build.
 | T3 | done |
 | T4 | done |
 | T5 | done |
-| T6 | pending |
-| T7 | pending |
-| R1 | pending |
+| T6 | done |
+| T7 | done |
+| R1 | done |
 | R2 | done |
-| R3 | pending |
+| R3 | done |
 | R4 | done |
 | R5 | done |
-| R6 | pending |
-| R7 | pending |
+| R6 | done |
+| R7 | done |

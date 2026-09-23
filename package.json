@@ -20,7 +20,7 @@
     "check": "npm run lint && tsc --noEmit && npm run test && npm run doctor",
     "test": "vitest run",
     "coverage": "vitest run --coverage",
-    "coverage:rust": "cargo llvm-cov --workspace --summary-only",
+    "coverage:rust": "cargo llvm-cov --workspace --summary-only --fail-under-lines 95",
     "protocol": "cargo test -p crew-protocol",
     "release": "node scripts/release.mjs"
   },

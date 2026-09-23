@@ -28,9 +28,16 @@ export default defineConfig({
     coverage: {
       provider: "v8",
       include: ["src/**/*.{ts,tsx}", "electron/**/*.ts"],
-      exclude: ["**/*.test.{ts,tsx}", "src/test/**", "src/lib/protocol.ts", "src/vite-env.d.ts"],
+      exclude: ["**/*.test.{ts,tsx}", "src/test/**", "src/lib/protocol.ts", "src/vite-env.d.ts", "src/main.tsx"],
       reporter: ["text", "json-summary"],
       reportsDirectory: "coverage",
+      // Logic lives here and is held to every function. Components are held to
+      // their interactive contracts instead, so they carry no number.
+      thresholds: {
+        "src/lib/**": { functions: 100, lines: 95 },
+        "src/hooks/**": { functions: 100, lines: 95 },
+        "electron/**": { functions: 100, lines: 95 },
+      },
     },
   },
   clearScreen: false,
