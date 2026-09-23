@@ -2,6 +2,7 @@ import type { Confirm } from "../chrome/ConfirmDialog";
 import type { RoutineDraft } from "../lib/routines";
 import type { SettingsSectionId } from "../lib/settings";
 import type { Session, Workspace } from "../lib/types";
+import { HistoryView } from "./HistoryView";
 import { RoutinesView } from "./RoutinesView";
 import { SearchView } from "./SearchView";
 import { SettingsView } from "./SettingsView";
@@ -11,7 +12,8 @@ export type Page =
   | { kind: "workspace" }
   | { kind: "settings"; section: SettingsSectionId }
   | { kind: "routines"; draft: RoutineDraft | null }
-  | { kind: "search" };
+  | { kind: "search" }
+  | { kind: "history" };
 
 type Props = {
   page: Page;
@@ -20,6 +22,7 @@ type Props = {
   sessions: Session[];
   onConfirm: (confirm: Confirm) => void;
   onOpenHit: (sessionId: string, pos: number) => void;
+  onOpenUrl: (url: string) => void;
 };
 
 /**
@@ -33,10 +36,12 @@ export function Pages({
   sessions,
   onConfirm,
   onOpenHit,
+  onOpenUrl,
 }: Props) {
   const agents = sessions.filter((session) => session.kind === "agent");
   if (page.kind === "settings") return <SettingsView section={page.section} />;
   if (page.kind === "search") return <SearchView agents={agents} onOpenHit={onOpenHit} />;
+  if (page.kind === "history") return <HistoryView onOpen={onOpenUrl} onConfirm={onConfirm} />;
   if (page.kind === "routines" && activeWorkspace) {
     return (
       <RoutinesView

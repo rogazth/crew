@@ -185,6 +185,7 @@ export function App() {
           sessions={sessions}
           onConfirm={confirms.ask}
           onOpenHit={nav.openHit}
+          onOpenUrl={nav.openUrl}
         />
         {/* Hidden, not unmounted: agent and terminal processes stay alive. */}
         <div hidden={!isWorkspace} className="flex min-h-0 flex-1 flex-col">

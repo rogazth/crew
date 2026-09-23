@@ -1,12 +1,12 @@
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { useCommands } from "../hooks/useCommand";
+import { paneHandle } from "../lib/browser/handles";
 import { pages } from "../lib/browser/pageStore";
 import { DEFAULT_KEEP, liveGuests, touch } from "../lib/browser/retention";
 import { DEFAULT_SEARCH } from "../lib/browser/url";
 import { browserHost } from "../lib/host";
 import { newBrowserTab, paneId } from "../lib/tabs";
 import type { Tab } from "../lib/types";
-import type { PaneHandle } from "./browser/BrowserPane";
 import type { MountedPane } from "./WorkspacePanes";
 
 /** The toolbar, the address bar and the guest wiring load with the first page, not with the window. */
@@ -48,8 +48,7 @@ export function Browsers({ panes, onPatch, onOpenTab }: Props) {
     pinned: new Set([...pinned].filter((id) => ids.has(id))),
   });
 
-  const handles = useRef(new Map<string, PaneHandle>());
-  const active = () => (visibleId ? handles.current.get(visibleId) : undefined);
+  const active = () => (visible ? paneHandle(visible.tab.id) : undefined);
   // Bound only while a page fills the active tab, so ⌘[ and ⌘R mean nothing anywhere else.
   useCommands(
     visible
@@ -93,13 +92,6 @@ export function Browsers({ panes, onPatch, onOpenTab }: Props) {
     <div key={pane.id} hidden={!pane.visible} className="absolute inset-0">
       <Suspense fallback={null}>
         <BrowserPane
-          ref={(handle: PaneHandle | null) => {
-            if (!handle) return;
-            handles.current.set(pane.id, handle);
-            return () => {
-              handles.current.delete(pane.id);
-            };
-          }}
           pageId={pane.tab.id}
           workspaceId={pane.workspaceId}
           url={pane.tab.url}

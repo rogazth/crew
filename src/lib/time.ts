@@ -8,16 +8,19 @@ export function clock(at: number): string {
   return CLOCK.format(at);
 }
 
-/** "Today 5:40 PM", "Yesterday …", "Tuesday …", "Mar 3 …": the transcript's date breaks. */
-export function dayLabel(at: number, now = Date.now()): string {
+/** "Today", "Yesterday", "Tuesday", "Mar 3", "Mar 3, 2025": how far back a day reads. */
+export function dayName(at: number, now = Date.now()): string {
   const day = new Date(at);
   const today = new Date(now);
   const startOf = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
   const days = Math.round((startOf(today) - startOf(day)) / 86_400_000);
-  const when =
-    days === 0 ? "Today" : days === 1 ? "Yesterday" : days < 7 ? WEEKDAY.format(day)
+  return days === 0 ? "Today" : days === 1 ? "Yesterday" : days < 7 ? WEEKDAY.format(day)
     : day.getFullYear() === today.getFullYear() ? DAY.format(day) : DAY_YEAR.format(day);
-  return `${when} ${CLOCK.format(at)}`;
+}
+
+/** "Today 5:40 PM", "Yesterday …", "Tuesday …", "Mar 3 …": the transcript's date breaks. */
+export function dayLabel(at: number, now = Date.now()): string {
+  return `${dayName(at, now)} ${CLOCK.format(at)}`;
 }
 
 /** "9s", "3m 12s", "1h 4m": how long the agent worked. */

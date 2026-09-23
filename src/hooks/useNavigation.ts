@@ -1,5 +1,6 @@
 import { useCallback } from "react";
 import * as api from "../lib/api";
+import { paneHandle } from "../lib/browser/handles";
 import { fileTabId, newBrowserTab, sessionTabId, stubTabId } from "../lib/tabs";
 import { focus as focusBlock } from "../lib/transcript";
 import type { ProjectFile, Session, StubKind } from "../lib/types";
@@ -79,6 +80,17 @@ export function useNavigation({ tabs, sessions, confirms, removeSession, closePa
     [closePage, tabs],
   );
 
+  /** A URL from outside a page: the browser tab underneath takes it, else a new one does. */
+  const openUrl = useCallback(
+    (url: string) => {
+      closePage();
+      const handle = tabs.active?.kind === "browser" ? paneHandle(tabs.active.id) : undefined;
+      if (handle) handle.navigate(url);
+      else tabs.open(newBrowserTab(url));
+    },
+    [closePage, tabs],
+  );
+
   const closeTab = useCallback(
     (id: string) => {
       const tab = tabs.tabs.find((t) => t.id === id);
@@ -100,5 +112,5 @@ export function useNavigation({ tabs, sessions, confirms, removeSession, closePa
     [confirms, removeSession, sessions, tabs],
   );
 
-  return { inTabs, openSession, openSessionById, openHit, openFile, openStub, openBrowser, closeTab };
+  return { inTabs, openSession, openSessionById, openHit, openFile, openStub, openBrowser, openUrl, closeTab };
 }

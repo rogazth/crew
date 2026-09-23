@@ -1,7 +1,8 @@
-import { useEffect, useImperativeHandle, useRef, useState, type Ref } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useBrowserPage } from "../../hooks/useBrowserPage";
 import * as api from "../../lib/api";
 import { RESTORE_PREFIX } from "../../lib/browser/bridge";
+import { holdPane, type PaneHandle } from "../../lib/browser/handles";
 import { classifyLoadFailure } from "../../lib/browser/loadError";
 import { pages } from "../../lib/browser/pageStore";
 import { isWebUrl, sameDocument } from "../../lib/browser/url";
@@ -11,18 +12,7 @@ import { BrowserError } from "./BrowserError";
 import { BrowserToolbar } from "./BrowserToolbar";
 import type { AddressBarHandle } from "./AddressBar";
 
-/** What the pane answers to from outside: the browser commands and the history page. */
-export type PaneHandle = {
-  back(): void;
-  forward(): void;
-  reload(): void;
-  focusAddress(): void;
-  toggleDevTools(): void;
-  navigate(url: string): void;
-};
-
 type Props = {
-  ref: Ref<PaneHandle>;
   pageId: string;
   workspaceId: string;
   /** What the tab restores to when the page has no saved stack. */
@@ -59,7 +49,6 @@ async function source(pageId: string, url: string): Promise<string> {
 }
 
 export function BrowserPane({
-  ref,
   pageId,
   workspaceId,
   url,
@@ -238,7 +227,23 @@ export function BrowserPane({
       guest.current?.focus();
     },
   };
-  useImperativeHandle(ref, () => handle);
+  // Held through a ref, so the registry keeps one entry per mount however often this renders.
+  const current = useRef(handle);
+  useEffect(() => {
+    current.current = handle;
+  });
+  useEffect(
+    () =>
+      holdPane(pageId, {
+        back: () => current.current.back(),
+        forward: () => current.current.forward(),
+        reload: () => current.current.reload(),
+        focusAddress: () => current.current.focusAddress(),
+        toggleDevTools: () => current.current.toggleDevTools(),
+        navigate: (url) => current.current.navigate(url),
+      }),
+    [pageId],
+  );
 
   const restart = () => {
     pages.update(pageId, { crashed: false, error: null });

@@ -46,6 +46,7 @@ export function useAppCommands(deps: Deps) {
     "new-agent": deps.newAgent,
     "new-session": deps.newSession,
     "search-messages": () => pages.toggle({ kind: "search" }),
+    "open-history": () => pages.toggle({ kind: "history" }),
     "open-routines": () => pages.toggle({ kind: "routines", draft: null }),
     "open-settings": () => pages.toggle({ kind: "settings", section: SETTINGS_DEFAULT }),
     "reopen-tab": inTabs(tabs.reopen),
