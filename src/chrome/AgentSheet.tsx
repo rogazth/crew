@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Kbd } from "./Kbd";
 import { ModelPicker } from "./ModelPicker";
 import { ProviderIcon } from "./ProviderIcon";
+import type { useAgentSheet } from "../hooks/useAgentSheet";
 import { useDefaultAgent } from "../hooks/useDefaultAgent";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER, type ProviderId } from "../lib/providers";
 import type { Autonomy, Session } from "../lib/types";
@@ -49,6 +50,30 @@ function draftOf(session: Session | null, fallback: Partial<AgentDraft>): AgentD
     notifications: session.notifications,
     autonomy: session.autonomy,
   };
+}
+
+/** The open sheet, keyed so switching between agents starts a fresh draft. */
+export function AgentSheetHost({
+  sheet,
+  sessions,
+  onNewRoutine,
+}: {
+  sheet: ReturnType<typeof useAgentSheet>;
+  sessions: Session[];
+  onNewRoutine: (sessionId: string) => void;
+}) {
+  if (!sheet.sheet) return null;
+  const editing = sheet.sheet.session;
+  return (
+    <AgentSheet
+      key={editing?.id ?? "new"}
+      session={editing}
+      existingNames={sessions.flatMap((s) => (s.kind === "agent" ? [s.name] : []))}
+      onNewRoutine={editing ? () => onNewRoutine(editing.id) : null}
+      onSave={sheet.save}
+      onClose={sheet.close}
+    />
+  );
 }
 
 function nameError(name: string, existingNames: string[], current: string | undefined) {

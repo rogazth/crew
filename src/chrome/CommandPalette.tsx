@@ -130,7 +130,10 @@ export function CommandPalette({
   }, [cursor]);
 
   function pick(item: Item) {
-    if (item.kind === "file") return onOpenFile(item.file);
+    if (item.kind === "file") {
+      onOpenFile(item.file);
+      return onClose();
+    }
     if (item.kind === "session") {
       onOpenSession(item.session);
       return onClose();
