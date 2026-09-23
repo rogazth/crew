@@ -1,4 +1,4 @@
-import type { OpenTabRequest } from "./browser/bridge";
+import type { DownloadActivity, OpenTabRequest } from "./browser/bridge";
 import type { NavSnapshot } from "./browser/snapshot";
 import type { LiveCommand } from "./keymap";
 
@@ -21,6 +21,7 @@ export type BrowserHost = {
   setCommands(list: LiveCommand[]): void;
   onCommand(cb: (id: string) => void): () => void;
   onOpenTab(cb: (request: OpenTabRequest) => void): () => void;
+  onDownload(cb: (activity: DownloadActivity) => void): () => void;
   /** Resolves whether DevTools are open afterwards. */
   toggleDevTools(webContentsId: number): Promise<boolean>;
   snapshot(webContentsId: number): Promise<NavSnapshot | null>;

@@ -105,6 +105,7 @@ export function BrowserPane({
     const saveStack = () => {
       clearTimeout(snapshotTimer);
       snapshotTimer = setTimeout(() => {
+        snapshotTimer = undefined;
         const id = built?.webContentsId();
         const host = browserHost();
         if (id == null || !host) return;
@@ -207,7 +208,20 @@ export function BrowserPane({
 
     return () => {
       cancelled = true;
-      clearTimeout(snapshotTimer);
+      // A navigation still waiting to be saved is saved now, or ⌘⇧T brings back a stack without it.
+      if (snapshotTimer !== undefined) {
+        clearTimeout(snapshotTimer);
+        const id = built?.webContentsId();
+        const host = browserHost();
+        if (id != null && host) {
+          void host
+            .snapshot(id)
+            .then((snapshot) =>
+              snapshot ? api.browserPageSave(pageId, JSON.stringify(snapshot.entries), snapshot.index) : undefined,
+            )
+            .catch(() => {});
+        }
+      }
       // A title or URL still waiting to be written is written now; the tab outlives its guest.
       clearTimeout(patchTimer);
       if (pending.url !== undefined || pending.title !== undefined) latest.current.onPatch(pending);

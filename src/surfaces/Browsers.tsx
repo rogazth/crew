@@ -41,12 +41,14 @@ export function Browsers({ panes, onPatch, onOpenTab }: Props) {
     if (visibleId) setOrder((current) => touch(current, visibleId));
   }
   const [pinned, setPinned] = useState<ReadonlySet<string>>(() => new Set());
+  // Downloads in flight per page, by its pane: counted, since one page can run several.
+  const [downloads, setDownloads] = useState<ReadonlyMap<string, number>>(() => new Map());
   const ids = new Set(browsers.map((pane) => pane.id));
   const live = liveGuests({
     order: order.filter((id) => ids.has(id)),
     visible: visibleId,
     keep: prefs.keep,
-    pinned: new Set([...pinned].filter((id) => ids.has(id))),
+    pinned: new Set([...pinned, ...downloads.keys()].filter((id) => ids.has(id))),
   });
 
   const active = () => (visible ? paneHandle(visible.tab.id) : undefined);
@@ -113,6 +115,22 @@ export function Browsers({ panes, onPatch, onOpenTab }: Props) {
         openTab(opener.workspaceId, tab, { after: opener.tab.id, background: request.background });
         // A tab opened behind the current one still loads, the way a middle-click does.
         setOrder((current) => touch(current, paneId(opener.workspaceId, tab.id)));
+      }),
+    [],
+  );
+
+  useEffect(
+    () =>
+      browserHost()?.onDownload(({ webContentsId, active }) => {
+        const pane = latest.current.browsers.find((p) => pages.get(p.tab.id).webContentsId === webContentsId);
+        if (!pane) return;
+        setDownloads((current) => {
+          const next = new Map(current);
+          const count = (next.get(pane.id) ?? 0) + (active ? 1 : -1);
+          if (count > 0) next.set(pane.id, count);
+          else next.delete(pane.id);
+          return next;
+        });
       }),
     [],
   );

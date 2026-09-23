@@ -55,10 +55,22 @@ function configureSession(): Session {
   ses.setUserAgent(browserUserAgent(ses.getUserAgent()));
   ses.setPermissionRequestHandler((_wc, permission, callback) => callback(permissionAllowed(permission)));
   ses.setPermissionCheckHandler((_wc, permission) => permissionAllowed(permission));
-  ses.on("will-download", (_event, item) => {
+  // Downloads need no gesture, so a page could fill the disk; a burst past this is cancelled.
+  const allowDownload = createRateLimiter(10, 60_000);
+  ses.on("will-download", (_event, item, contents) => {
+    if (!allowDownload()) {
+      item.cancel();
+      return;
+    }
+    const owner = contents ? guests.get(contents.id)?.host : undefined;
+    const report = (active: boolean) => {
+      if (owner && !owner.isDestroyed()) owner.send(CHANNELS.download, { webContentsId: contents.id, active });
+    };
+    report(true);
     const target = uniquePath(app.getPath("downloads"), path.basename(item.getFilename()) || "download");
     item.setSavePath(target);
     item.once("done", (_e, state) => {
+      report(false);
       if (state !== "completed" || !Notification.isSupported()) return;
       const note = new Notification({ title: "Download complete", body: path.basename(target) });
       note.on("click", () => shell.showItemInFolder(target));
@@ -199,11 +211,12 @@ function windowOpen(
   allowOpen: () => boolean,
 ): WindowOpenHandlerResponse {
   const verdict = popupVerdict(details);
+  // The mail app counts against the same budget, or a page could spam it.
+  if (verdict.action === "deny" || !allowOpen()) return { action: "deny" };
   if (verdict.action === "external") {
     void shell.openExternal(verdict.url);
     return { action: "deny" };
   }
-  if (verdict.action === "deny" || !allowOpen()) return { action: "deny" };
   if (verdict.action === "tab") {
     openTab(host, { url: verdict.url, background: verdict.background, openerId });
     return { action: "deny" };
@@ -224,9 +237,11 @@ function windowOpen(
   };
 }
 
+/** Applies to a popup's own popups too, however deep: a window with no handler would open unguarded. */
 function guardPopup(host: WebContents, openerId: number, popup: WebContents, allowOpen: () => boolean): void {
   guardNavigation(popup);
   popup.setWindowOpenHandler((details) => windowOpen(host, openerId, details, allowOpen));
+  popup.on("did-create-window", (child) => guardPopup(host, openerId, child.webContents, allowOpen));
 }
 
 function guardNavigation(contents: WebContents): void {

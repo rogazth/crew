@@ -22,6 +22,10 @@ export const CHANNELS = {
   prepareRestore: "browser:prepare-restore",
   /** The window's CSP keeps remote images out, so main fetches a page's icon and hands back a data: URL. */
   favicon: "browser:favicon",
+  /** main → window: a page's download started or ended; its guest must not be discarded meanwhile. */
+  download: "browser:download",
 } as const;
+
+export type DownloadActivity = { webContentsId: number; active: boolean };
 
 export type OpenTabRequest = { url: string; background: boolean; openerId: number };

@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from "electron";
-import { CHANNELS, type OpenTabRequest } from "../src/lib/browser/bridge";
+import { CHANNELS, type DownloadActivity, type OpenTabRequest } from "../src/lib/browser/bridge";
 
 function listen<T>(channel: string, cb: (value: T) => void): () => void {
   const handler = (_event: IpcRendererEvent, value: T) => cb(value);
@@ -20,6 +20,7 @@ contextBridge.exposeInMainWorld("crewHost", {
     setCommands: (list: unknown) => ipcRenderer.send(CHANNELS.commands, list),
     onCommand: (cb: (id: string) => void) => listen(CHANNELS.command, cb),
     onOpenTab: (cb: (request: OpenTabRequest) => void) => listen(CHANNELS.openTab, cb),
+    onDownload: (cb: (activity: DownloadActivity) => void) => listen(CHANNELS.download, cb),
     toggleDevTools: (webContentsId: number) => ipcRenderer.invoke(CHANNELS.devtools, webContentsId),
     snapshot: (webContentsId: number) => ipcRenderer.invoke(CHANNELS.snapshot, webContentsId),
     prepareRestore: (token: string, entriesJson: string, index: number) =>

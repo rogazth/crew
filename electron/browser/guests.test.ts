@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { LiveCommand } from "../../src/lib/keymap";
 
 const electron = vi.hoisted(() => ({
+  sessionHandlers: new Map<string, (...args: unknown[]) => void>(),
   templates: [] as unknown[][],
   openExternal: vi.fn(),
   writeText: vi.fn(),
@@ -40,7 +41,7 @@ vi.mock("electron", () => {
     getUserAgent: () => "Mozilla/5.0 Chrome/140 Electron/44.2.0 crew/0.1.4",
     setPermissionRequestHandler: vi.fn(),
     setPermissionCheckHandler: vi.fn(),
-    on: vi.fn(),
+    on: (name: string, handler: (...args: unknown[]) => void) => electron.sessionHandlers.set(name, handler),
   };
   return {
     app: { on: vi.fn(), getPath: () => "/tmp" },
@@ -222,6 +223,26 @@ describe("popups and navigation", () => {
     expect(host.sent.filter(([channel]) => channel === "browser:open-tab")).toHaveLength(4);
   });
 
+  it("guards a popup's own popups, however deep", () => {
+    willAttach({ ...PAGE, src: "https://a.com" });
+    const guest = didAttach();
+    const first = new FakeContents();
+    guest.emit("did-create-window", { webContents: first });
+    const second = new FakeContents();
+    first.emit("did-create-window", { webContents: second });
+    expect(second.openHandler).not.toBeNull();
+    const event = { url: "file:///etc/passwd", prevented: false, preventDefault() { this.prevented = true; } };
+    second.emit("will-navigate", event);
+    expect(event.prevented).toBe(true);
+  });
+
+  it("holds mailto to the same budget as windows", () => {
+    willAttach({ ...PAGE, src: "https://a.com" });
+    const guest = didAttach();
+    for (let i = 0; i < 10; i++) open(guest, "mailto:a@b.c");
+    expect(electron.openExternal).toHaveBeenCalledTimes(4);
+  });
+
   it("blocks navigations off the web, in the page and in its popups", () => {
     willAttach({ ...PAGE, src: "https://a.com" });
     const guest = didAttach();
@@ -273,6 +294,35 @@ describe("the context menu", () => {
     expect(labels()).toEqual(
       expect.arrayContaining(["cut", "copy", "paste", "selectAll", "Back", "Forward", "Reload", "Inspect Element"]),
     );
+  });
+});
+
+describe("downloads", () => {
+  const fakeItem = () => {
+    const item = new EventEmitter() as EventEmitter & Record<string, unknown>;
+    Object.assign(item, { getFilename: () => "../../evil.sh", setSavePath: vi.fn(), cancel: vi.fn() });
+    return item;
+  };
+
+  it("tells the window a page's download started and ended, and saves under Downloads", () => {
+    willAttach({ ...PAGE, src: "https://a.com" });
+    const guest = didAttach();
+    const item = fakeItem();
+    electron.sessionHandlers.get("will-download")?.({}, item, guest);
+    expect(item.setSavePath).toHaveBeenCalledWith("/tmp/evil.sh");
+    item.emit("done", {}, "completed");
+    expect(host.sent.filter(([channel]) => channel === "browser:download")).toEqual([
+      ["browser:download", { webContentsId: guest.id, active: true }],
+      ["browser:download", { webContentsId: guest.id, active: false }],
+    ]);
+  });
+
+  it("cancels a burst of downloads", () => {
+    willAttach({ ...PAGE, src: "https://a.com" });
+    const guest = didAttach();
+    const items = Array.from({ length: 15 }, fakeItem);
+    for (const item of items) electron.sessionHandlers.get("will-download")?.({}, item, guest);
+    expect(items.filter((item) => (item.cancel as ReturnType<typeof vi.fn>).mock.calls.length > 0)).toHaveLength(5);
   });
 });
 
