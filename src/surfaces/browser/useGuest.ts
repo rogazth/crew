@@ -4,6 +4,7 @@ import { RESTORE_PREFIX } from "../../lib/browser/bridge";
 import { classifyLoadFailure } from "../../lib/browser/loadError";
 import { pages } from "../../lib/browser/pageStore";
 import { isWebUrl, sameDocument } from "../../lib/browser/url";
+import { openingSrc } from "../../lib/browser/opening";
 import { createGuest, type Guest } from "../../lib/browser/webview";
 import { browserHost } from "../../lib/host";
 import type { AddressBarHandle } from "./AddressBar";
@@ -110,12 +111,59 @@ export function useGuest(options: Options): RefObject<Guest | null> {
     });
     const pin = () => latest.current.onPinned(devtools || playing);
 
-    void source(pageId, latest.current.url).then((src) => {
+    // The bar is usable while source() waits on the daemon. A URL typed then is
+    // kept here, and the guest is built as soon as one arrives instead of after
+    // the wait. Focus asked for in that gap is applied once the page exists.
+    let queued: string | null = null;
+    let focusWhenReady = false;
+    let notifyTyped: (() => void) | undefined;
+    const typed = new Promise<void>((resolve) => {
+      notifyTyped = resolve;
+    });
+    const facade: Guest = {
+      get element() {
+        if (!built) throw new Error("The page is not attached yet.");
+        return built.element;
+      },
+      webContentsId: () => built?.webContentsId() ?? null,
+      navigate: (url) => {
+        if (built) {
+          built.navigate(url);
+          return;
+        }
+        queued = url;
+        notifyTyped?.();
+      },
+      back: () => built?.back(),
+      forward: () => built?.forward(),
+      reload: () => built?.reload(),
+      stop: () => built?.stop(),
+      canGoBack: () => built?.canGoBack() ?? false,
+      canGoForward: () => built?.canGoForward() ?? false,
+      find: (text, next) => (next ? built?.find(text, next) : built?.find(text)),
+      stopFind: () => built?.stopFind(),
+      zoom: () => built?.zoom() ?? 1,
+      setZoom: (factor) => built?.setZoom(factor),
+      focus: () => {
+        if (built) built.focus();
+        else focusWhenReady = true;
+      },
+      release: () => built?.release(),
+      destroy: () => built?.destroy(),
+    };
+    guest.current = facade;
+
+    void (async () => {
+      // A keystroke resolves `typed` and skips the rest of the wait. The fetch
+      // still finishes; its token simply expires unused.
+      const restored = await Promise.race([source(pageId, latest.current.url), typed.then(() => null)]);
       const host = container.current;
       if (cancelled || !host) return;
+      const open = openingSrc(restored, queued);
+      queued = null;
       // A restored stack re-commits its page; that is the same visit, not a new one.
-      let restoring = src.startsWith(RESTORE_PREFIX);
-      built = createGuest(host, src, {
+      let restoring = open.restoring;
+      built = createGuest(host, open.src, {
         attach: (webContentsId) => update({ webContentsId, crashed: false }),
         start: (next) => {
           const current = pages.get(pageId);
@@ -183,9 +231,18 @@ export function useGuest(options: Options): RefObject<Guest | null> {
         found: ({ activeMatchOrdinal, matches }) =>
           latest.current.onFound({ index: Math.max(0, activeMatchOrdinal - 1), count: matches }),
       });
-      built.element.style.visibility = isWebUrl(src) || src.startsWith(RESTORE_PREFIX) ? "" : "hidden";
-      guest.current = built;
-    });
+      // A second URL can land while the element is being created. It is a navigation, not a restore.
+      let show = isWebUrl(open.src) || open.restoring;
+      if (queued) {
+        const extra = queued;
+        queued = null;
+        restoring = false;
+        built.navigate(extra);
+        show = isWebUrl(extra);
+      }
+      built.element.style.visibility = show ? "" : "hidden";
+      if (focusWhenReady) built.focus();
+    })();
 
     return () => {
       cancelled = true;
@@ -207,7 +264,7 @@ export function useGuest(options: Options): RefObject<Guest | null> {
       clearTimeout(patchTimer);
       if (pending.url !== undefined || pending.title !== undefined) latest.current.onPatch(pending);
       built?.destroy();
-      if (guest.current === built) guest.current = null;
+      if (guest.current === facade) guest.current = null;
       if (devtools || playing) latest.current.onPinned(false);
       update({ webContentsId: null, loading: false, devtools: false });
     };
