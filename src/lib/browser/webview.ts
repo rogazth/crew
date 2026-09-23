@@ -173,7 +173,8 @@ export function createGuest(container: HTMLElement, src: string, on: GuestEvents
     find: (text, next) =>
       safely(
         () =>
-          void view.findInPage(text, next ? { forward: next.forward, findNext: true } : { findNext: false }),
+          // Electron's findNext means "start a new session", the opposite of what it reads like.
+          void view.findInPage(text, next ? { forward: next.forward, findNext: false } : { findNext: true }),
         undefined,
       ),
     stopFind: () => safely(() => view.stopFindInPage("clearSelection"), undefined),
