@@ -1,5 +1,6 @@
 import type { Confirm } from "../chrome/ConfirmDialog";
 import type { RoutineDraft } from "../lib/routines";
+import { agentsOf } from "../lib/surface";
 import type { SettingsSectionId } from "../lib/settings";
 import type { Session, Workspace } from "../lib/types";
 import { RoutinesView } from "./RoutinesView";
@@ -34,7 +35,7 @@ export function Pages({
   onConfirm,
   onOpenHit,
 }: Props) {
-  const agents = sessions.filter((session) => session.kind === "agent");
+  const agents = agentsOf(sessions);
   if (page.kind === "settings") return <SettingsView section={page.section} />;
   if (page.kind === "search") return <SearchView agents={agents} onOpenHit={onOpenHit} />;
   if (page.kind === "routines" && activeWorkspace) {

@@ -1,4 +1,5 @@
 import { lazy, memo, Suspense, useEffect, useRef } from "react";
+import { approvalHeadline, approvalKey } from "../../lib/approval";
 import type { ApprovalDecision, Block } from "../../lib/blocks";
 
 /** The diff renderer is ~300 kB and most turns never raise a card; it loads with the first one. */
@@ -10,13 +11,6 @@ type Props = {
   hot?: boolean;
   onApprove: (requestId: number, decision: ApprovalDecision) => void;
 };
-
-const EDIT = /^(edit|multiedit|write|notebookedit)$/i;
-
-function str(input: Record<string, unknown> | undefined, key: string): string | undefined {
-  const value = input?.[key];
-  return typeof value === "string" ? value : undefined;
-}
 
 /**
  * The call, shown as what it will do: a diff for an edit, the command for a
@@ -36,16 +30,11 @@ export const ApprovalCard = memo(function ApprovalCard({ block, hot = false, onA
   useEffect(() => {
     if (!hot || requestId == null) return;
     const onKey = (event: KeyboardEvent) => {
-      if (event.metaKey || event.ctrlKey || event.altKey) return;
       const target = event.target as HTMLElement | null;
-      if (target?.matches("input, textarea, [contenteditable]")) return;
-      if (event.key === "Enter") {
-        event.preventDefault();
-        onApprove(requestId, "allow");
-      } else if (event.key === "Escape") {
-        event.preventDefault();
-        onApprove(requestId, "deny");
-      }
+      const decision = approvalKey(event, target?.matches("input, textarea, [contenteditable]") ?? false);
+      if (!decision) return;
+      event.preventDefault();
+      onApprove(requestId, decision);
     };
     document.addEventListener("keydown", onKey, true);
     return () => document.removeEventListener("keydown", onKey, true);
@@ -55,7 +44,7 @@ export const ApprovalCard = memo(function ApprovalCard({ block, hot = false, onA
 
   return (
     <div ref={card} tabIndex={-1} className="crew-card my-1.5 outline-none">
-      <p className="text-[13px] leading-[18px] text-text-muted">{headline(name, input, block.text)}</p>
+      <p className="text-[13px] leading-[18px] text-text-muted">{approvalHeadline(name, input, block.text)}</p>
       <Suspense fallback={null}>
         <ApprovalBody name={name} input={input} />
       </Suspense>
@@ -73,12 +62,3 @@ export const ApprovalCard = memo(function ApprovalCard({ block, hot = false, onA
     </div>
   );
 });
-
-function headline(name: string, input: Record<string, unknown> | undefined, title: string): string {
-  const path = str(input, "file_path") ?? str(input, "path");
-  const leaf = path?.split("/").pop();
-  if (EDIT.test(name)) return leaf ? `Wants to edit ${leaf}` : "Wants to edit a file";
-  if (/^bash$/i.test(name)) return "Wants to run a command";
-  if (/^read$/i.test(name)) return leaf ? `Wants to read ${leaf}` : "Wants to read a file";
-  return `Wants to use ${name}: ${title}`;
-}

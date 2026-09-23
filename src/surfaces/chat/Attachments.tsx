@@ -4,7 +4,8 @@ import { useEffect, useState } from "react";
 import { FileTypeIcon } from "../../chrome/FileTypeIcon";
 import { X } from "../../chrome/icons";
 import { useImageSrc } from "../../hooks/useImageSrc";
-import { formatBytes, isImage } from "../../lib/attachments";
+import { lightboxStep, splitAttachments, wrapIndex } from "../../lib/attachmentView";
+import { formatBytes } from "../../lib/attachments";
 import type { AttachedFile } from "../../lib/blocks";
 
 type Props = {
@@ -16,8 +17,7 @@ type Props = {
 
 /** Images as thumbnails that open a viewer; other files as chips. One strip for the composer and the sent turn. */
 export function AttachmentStrip({ files, onRemove, onInk }: Props) {
-  const images = files.filter(isImage);
-  const others = files.filter((file) => !isImage(file));
+  const { images, others } = splitAttachments(files);
   const [open, setOpen] = useState<number | null>(null);
   if (files.length === 0) return null;
   return (
@@ -121,14 +121,14 @@ function Lightbox({
   const file = images[index]!;
   const src = useImageSrc(file.path);
   const many = images.length > 1;
-  const prev = () => onIndex((index - 1 + images.length) % images.length);
-  const next = () => onIndex((index + 1) % images.length);
+  const prev = () => onIndex(wrapIndex(index, -1, images.length));
+  const next = () => onIndex(wrapIndex(index, 1, images.length));
 
   useEffect(() => {
     if (!many) return;
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "ArrowLeft") prev();
-      if (event.key === "ArrowRight") next();
+      const step = lightboxStep(event.key);
+      if (step !== 0) onIndex(wrapIndex(index, step, images.length));
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);

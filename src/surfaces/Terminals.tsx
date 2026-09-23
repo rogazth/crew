@@ -1,16 +1,12 @@
 import { lazy, Suspense, useCallback, useEffect, useState } from 'react';
-import { homeDir } from '../lib/host';
 import { useCommands } from '../hooks/useCommand';
 import { useSessionActivity } from '../hooks/useSessionActivity';
 import { useTerminalPrefs } from '../hooks/useTerminalPrefs';
-import * as api from '../lib/api';
-import { claudeSessionId, transcriptPath } from '../lib/claudeStorage';
-import { bindProviderSession } from '../lib/agentRuntime';
-import { providerOf } from '../lib/providers';
-import { sessionCommand } from '../lib/sessionCommand';
-import { isTerminalTab, relativeTo } from '../lib/tabs';
+import { isTerminalTab } from '../lib/tabs';
 import { activeTerminal } from '../lib/terminalFocus';
-import { clamp, DEFAULT_TERMINAL_PREFS, LIMITS } from '../lib/terminalPrefs';
+import { zoomed } from '../lib/terminalSettingsView';
+import { projectFileAt } from '../lib/terminalPaths';
+import { launchCommand, learnMode, watchProviderSession } from '../lib/terminalViewLaunch';
 import type { MountedPane } from './WorkspacePanes';
 import type { ProjectFile, Session, SessionStatus } from '../lib/types';
 
@@ -32,14 +28,7 @@ type Props = {
 export function Terminals({ panes, sessions, onStatus, onOpenFile }: Props) {
   const focused = panes.find((pane) => pane.visible) ?? null;
   const { prefs, update } = useTerminalPrefs();
-  const zoom = (delta: number) =>
-    update({
-      ...prefs,
-      fontSize:
-        delta === 0
-          ? DEFAULT_TERMINAL_PREFS.fontSize
-          : clamp(prefs.fontSize + delta, LIMITS.fontSize),
-    });
+  const zoom = (delta: number) => update(zoomed(prefs, delta));
 
   // Bound to the terminal filling the active tab, so ⌘F reaches the pane you see.
   useCommands(
@@ -54,12 +43,7 @@ export function Terminals({ panes, sessions, onStatus, onOpenFile }: Props) {
   );
 
   const openPath = useCallback(
-    (cwd: string, path: string) =>
-      onOpenFile({
-        name: path.split('/').pop() ?? path,
-        path,
-        relative: relativeTo(cwd, path),
-      }),
+    (cwd: string, path: string) => onOpenFile(projectFileAt(cwd, path)),
     [onOpenFile],
   );
 
@@ -106,27 +90,6 @@ function Pane({ active, children }: { active: boolean; children: React.ReactNode
 }
 
 const DARK_SCHEME = window.matchMedia('(prefers-color-scheme: dark)');
-/** codex and opencode write their session only once the first message is sent; Claude moves to a new one on `/clear`. */
-const DISCOVER_MS = 3000;
-
-async function launchCommand(session: Session, cwd: string): Promise<string[]> {
-  const theme = DARK_SCHEME.matches ? 'dark' : 'light';
-  const binding = providerOf(session.provider)?.binding;
-  if (binding === 'own') {
-    const resume = await homeDir()
-      .then((home) => api.pathExists(transcriptPath(home, cwd, claudeSessionId(session))))
-      .catch(() => false);
-    return sessionCommand(session, { resume, theme });
-  }
-  if (binding === 'before' && !session.providerSessionId) {
-    const created = await api.createProviderSession(session.id).catch(() => null);
-    if (created) {
-      bindProviderSession(session.id, created);
-      return sessionCommand({ ...session, providerSessionId: created }, { resume: true, theme });
-    }
-  }
-  return sessionCommand(session, { resume: false, theme });
-}
 
 type SessionProps = {
   paneId: string;
@@ -145,7 +108,7 @@ function SessionTerminal({ paneId, session, cwd, active, onStatus, onOpenPath }:
 
   useEffect(() => {
     let cancelled = false;
-    launchCommand(session, cwd).then((argv) => {
+    launchCommand(session, cwd, DARK_SCHEME.matches ? 'dark' : 'light').then((argv) => {
       if (cancelled) return;
       setStartedAt(Date.now());
       setCommand(argv);
@@ -157,27 +120,11 @@ function SessionTerminal({ paneId, session, cwd, active, onStatus, onOpenPath }:
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session.id, cwd]);
 
-  const binding = providerOf(session.provider)?.binding;
-  const learns = binding === 'own' || (binding === 'after' && !session.providerSessionId);
+  const mode = learnMode(session);
   useEffect(() => {
-    if (!learns || !startedAt) return;
-    const learn = () =>
-      binding === 'own'
-        ? api.rebindClaudeSession(session.id)
-        : api.discoverProviderSession(session.id, cwd, startedAt);
-    let busy = false;
-    const timer = window.setInterval(() => {
-      if (busy) return;
-      busy = true;
-      learn()
-        .then((found) => found && bindProviderSession(session.id, found))
-        .catch(() => {})
-        .finally(() => {
-          busy = false;
-        });
-    }, DISCOVER_MS);
-    return () => window.clearInterval(timer);
-  }, [learns, binding, startedAt, session.id, cwd]);
+    if (!mode || !startedAt) return;
+    return watchProviderSession(mode, session.id, cwd, startedAt);
+  }, [mode, startedAt, session.id, cwd]);
 
   if (!command) return null;
   return (

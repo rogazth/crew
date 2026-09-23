@@ -1,9 +1,8 @@
 import { useCallback, useEffect, useRef, useState, type ComponentType } from "react";
 import { useThread } from "../hooks/useThread";
 import { answer, respond, send, stop } from "../lib/agentRuntime";
+import { addAttachments, outgoing, pastedPaths } from "../lib/agentChat";
 import { pickFiles, writeTempFile } from "../lib/api";
-import { attachedFrom } from "../lib/attachments";
-import { mentionedFiles } from "../lib/mentions";
 import { useChatActions } from "./chat/context";
 import { useFileDrop } from "../hooks/useFileDrop";
 import type { Answers, ApprovalDecision, AttachedFile } from "../lib/blocks";
@@ -43,16 +42,7 @@ export function AgentChat({ session, cwd, active, onModel }: Props) {
 
   const addPaths = useCallback((paths: string[]) => {
     if (paths.length === 0) return;
-    setFiles((prev) => {
-      const seen = new Set(prev.map((file) => file.path));
-      const next: AttachedFile[] = [];
-      for (const path of paths) {
-        if (seen.has(path)) continue;
-        seen.add(path);
-        next.push(attachedFrom(path));
-      }
-      return [...prev, ...next];
-    });
+    setFiles((prev) => addAttachments(prev, paths));
     field.current?.focus();
   }, []);
 
@@ -61,9 +51,7 @@ export function AgentChat({ session, cwd, active, onModel }: Props) {
   // A pasted screenshot has no path; it gets one in the temp dir, like the terminal does.
   const pasteFiles = useCallback(
     (pasted: File[]) => {
-      void Promise.all(pasted.map((file) => writeTempFile(file).catch(() => null))).then((paths) =>
-        addPaths(paths.filter((path): path is string => path !== null)),
-      );
+      void pastedPaths(pasted, writeTempFile).then(addPaths);
     },
     [addPaths],
   );
@@ -71,13 +59,11 @@ export function AgentChat({ session, cwd, active, onModel }: Props) {
   const over = useFileDrop(pane, addPaths);
 
   const submit = useCallback(() => {
-    const text = draft.trim();
-    if ((!text && files.length === 0) || working || !ready) return;
-    const attached = files;
-    const mentions = mentionedFiles(text, projectFiles).map((file) => file.path);
+    const message = outgoing(draft, files, projectFiles, working, ready);
+    if (!message) return;
     setDraft("");
     setFiles([]);
-    void send(session, cwd, text, attached, mentions.length > 0 ? { mentions } : {});
+    void send(session, cwd, message.text, message.files, message.options);
   }, [cwd, draft, files, projectFiles, ready, session, working]);
 
   const approve = useCallback(

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { findPaths, quotePath, quotePaths, resolvePath } from "./terminalPaths";
+import { findPaths, projectFileAt, quotePath, quotePaths, resolvePath } from "./terminalPaths";
 
 const flush = () => new Promise((resolve) => setImmediate(resolve));
 
@@ -135,5 +135,19 @@ describe("homePath", () => {
     const { homePath } = await import("./terminalPaths");
     await flush();
     expect(homePath()).toBe("");
+  });
+});
+
+describe("projectFileAt", () => {
+  it("names a linked path relative to the pane's directory", () => {
+    expect(projectFileAt("/w/app/", "/w/app/src/main.ts")).toEqual({
+      name: "main.ts",
+      path: "/w/app/src/main.ts",
+      relative: "src/main.ts",
+    });
+  });
+
+  it("keeps a path outside the directory whole", () => {
+    expect(projectFileAt("/w/app", "/etc/hosts")).toEqual({ name: "hosts", path: "/etc/hosts", relative: "/etc/hosts" });
   });
 });

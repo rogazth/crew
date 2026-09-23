@@ -1,6 +1,7 @@
 import { agentLabel } from "../../lib/agentNames";
 import { memo } from "react";
 import type { Block } from "../../lib/blocks";
+import { commandBoxes, langOf } from "../../lib/toolBody";
 import { detailOf, splitClip } from "../../lib/toolDetail";
 import { CodeBlock } from "./CodeBlock";
 import { CopyButton } from "./CopyButton";
@@ -26,12 +27,6 @@ function Pre({ head, text, danger }: { head: string; text: string; danger?: bool
   );
 }
 
-function langProp(path: string): { lang?: string } {
-  const name = path.split("/").pop() ?? "";
-  const dot = name.lastIndexOf(".");
-  return dot > 0 ? { lang: name.slice(dot + 1) } : {};
-}
-
 /**
  * What the row shows when it is opened. Only the kinds that carry something
  * worth a box get one; `hasBody` in `lib/toolDetail` is the same decision, made
@@ -43,24 +38,20 @@ export const ToolBody = memo(function ToolBody({ block }: { block: Block }) {
 
   switch (detail.kind) {
     case "command": {
-      const failed = detail.exitCode !== undefined && detail.exitCode !== 0;
+      const { command, output } = commandBoxes(detail);
       return (
         <>
-          {detail.command.includes("\n") ? <Pre head="command" text={detail.command} /> : null}
-          {detail.output?.trim() ? (
-            <Pre
-              head={detail.exitCode === undefined ? "output" : `exit ${detail.exitCode}`}
-              text={detail.output}
-              danger={failed}
-            />
-          ) : null}
+          {command ? <Pre head={command.head} text={command.text} /> : null}
+          {output ? <Pre head={output.head} text={output.text} danger={output.danger} /> : null}
         </>
       );
     }
-    case "file":
+    case "file": {
+      const lang = langOf(detail.path);
       return detail.preview?.trim() ? (
-        <CodeBlock code={splitClip(detail.preview).body} {...langProp(detail.path)} />
+        <CodeBlock code={splitClip(detail.preview).body} {...(lang !== undefined ? { lang } : {})} />
       ) : null;
+    }
     case "message":
       return <Pre head={`to ${agentLabel(detail.to)}`} text={detail.text} />;
     case "output":

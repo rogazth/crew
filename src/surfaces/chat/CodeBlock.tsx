@@ -1,5 +1,6 @@
 import { memo, useEffect, useState } from "react";
-import { highlightInline, resolveLang } from "../../lib/shiki";
+import { codeLanguage, isDiffLang } from "../../lib/codeBlock";
+import { highlightInline } from "../../lib/shiki";
 import { CopyButton } from "./CopyButton";
 import { DiffFence } from "./DiffView";
 
@@ -11,12 +12,11 @@ type Props = {
 };
 
 const SETTLE_MS = 150;
-const DIFF = /^(?:diff|patch)$/i;
 
 /** One box: language and copy on top, code below. Plain text until shiki answers. */
 export const CodeBlock = memo(function CodeBlock({ code, lang, streaming }: Props) {
-  const diff = lang !== undefined && DIFF.test(lang);
-  const language = diff ? null : resolveLang(lang);
+  const diff = isDiffLang(lang);
+  const language = codeLanguage(lang);
   const [html, setHtml] = useState<{ code: string; html: string } | null>(null);
 
   useEffect(() => {

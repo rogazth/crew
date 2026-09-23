@@ -8,10 +8,12 @@ import { AGENT_THEMES, type AgentThemeId } from "../lib/agentTheme";
 import { COMMANDS, COMMAND_IDS, commandKeys } from "../lib/commands";
 import { PROVIDERS } from "../lib/providers";
 import { settingsSection, type SettingsSectionId } from "../lib/settings";
+import { settingsBody } from "../lib/settingsView";
 import { TerminalSettings } from "./TerminalSettings";
 
 export function SettingsView({ section }: { section: SettingsSectionId }) {
   const meta = settingsSection(section);
+  const body = settingsBody(section);
   return (
     <div className="h-full overflow-y-auto">
       <div className="mx-auto flex max-w-3xl flex-col gap-6 px-10 py-12">
@@ -19,16 +21,11 @@ export function SettingsView({ section }: { section: SettingsSectionId }) {
           {meta.label}
         </h1>
         <div className="flex flex-col gap-8">
-          {section === "appearance" && <Appearance />}
-          {section === "keybindings" && <Keybindings />}
-          {section === "terminal" && <TerminalSettings />}
-          {section === "providers" && <Providers />}
-          {section !== "appearance" &&
-            section !== "keybindings" &&
-            section !== "terminal" &&
-            section !== "providers" && (
-            <Pending label={meta.label} />
-          )}
+          {body === "appearance" && <Appearance />}
+          {body === "keybindings" && <Keybindings />}
+          {body === "terminal" && <TerminalSettings />}
+          {body === "providers" && <Providers />}
+          {body === "pending" && <Pending label={meta.label} />}
         </div>
       </div>
     </div>

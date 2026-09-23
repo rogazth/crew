@@ -7,7 +7,7 @@ import { splitMentions } from "../../lib/mentions";
 import { AttachmentStrip } from "./Attachments";
 import { useChatActions } from "./context";
 import { CopyButton } from "./CopyButton";
-import { clock, duration } from "../../lib/time";
+import { firstLine, footerLine, usageDetail } from "../../lib/transcriptView";
 
 /** streamdown and its parsers are half a megabyte; the window opens without them. */
 const Markdown = lazy(() => import("./Markdown").then((m) => ({ default: m.Markdown })));
@@ -52,7 +52,7 @@ export const UserMessage = memo(function UserMessage({ block }: { block: Block }
 function AgentMessage({ block, from }: { block: Block; from: AgentRef }) {
   const { openSession } = useChatActions();
   const [open, setOpen] = useState(false);
-  const first = block.text.split("\n").find((line) => line.trim() !== "") ?? "";
+  const first = firstLine(block.text);
   return (
     <Collapsible.Root open={open} onOpenChange={setOpen}>
       <Collapsible.Trigger
@@ -151,13 +151,12 @@ export const DateBreak = memo(function DateBreak({ label }: { label: string }) {
  * tooltip on each streamed token.
  */
 export const TurnFooter = memo(function TurnFooter({ usage, at }: { usage: TurnUsage; at?: number }) {
-  const worked = usage.durationMs !== undefined ? `Worked for ${duration(usage.durationMs)}` : null;
-  const parts = [worked, at !== undefined ? clock(at) : null].filter((p): p is string => p !== null);
-  if (parts.length === 0) return null;
+  const text = footerLine(usage, at);
+  if (text === null) return null;
   const detail = usageDetail(usage);
   const line = (
     <span className="cursor-default text-[11px] leading-4 text-placeholder tabular-nums">
-      {parts.join(" · ")}
+      {text}
     </span>
   );
   return (
@@ -172,18 +171,3 @@ export const TurnFooter = memo(function TurnFooter({ usage, at }: { usage: TurnU
     </div>
   );
 });
-
-function usageDetail(usage: TurnUsage): string | null {
-  const parts: string[] = [];
-  if (usage.inputTokens !== undefined || usage.outputTokens !== undefined) {
-    parts.push(`${compact(usage.inputTokens ?? 0)} in · ${compact(usage.outputTokens ?? 0)} out`);
-  }
-  if (usage.costUsd !== undefined) parts.push(`$${usage.costUsd.toFixed(usage.costUsd < 0.1 ? 3 : 2)}`);
-  return parts.length > 0 ? parts.join(" · ") : null;
-}
-
-function compact(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(n >= 10_000 ? 0 : 1)}k`;
-  return String(n);
-}

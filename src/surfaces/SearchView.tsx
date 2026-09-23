@@ -3,7 +3,8 @@ import { MagnifyingGlassIcon } from "@phosphor-icons/react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { searchMessages } from "../lib/api";
 import type { SearchHit, SearchSort } from "../lib/protocol";
-import { RANGES, rangeStart, roleLabel, snippetRuns, type Range } from "../lib/search";
+import { RANGES, roleLabel, snippetRuns, type Range } from "../lib/search";
+import { countLabel, failureText, SEARCH_PAGE, searchQuery } from "../lib/searchView";
 import { dayLabel } from "../lib/time";
 import type { Session } from "../lib/types";
 
@@ -21,8 +22,6 @@ const SORTS: { value: SearchSort; label: string }[] = [
 
 /** Long enough that a held key does not fire a query per character. */
 const DEBOUNCE_MS = 120;
-/** What the page shows. One more is asked for, to know whether to say "+". */
-const PAGE = 100;
 
 /**
  * Every message every agent wrote, searchable. The daemon answers from an FTS5
@@ -49,14 +48,7 @@ export function SearchView({ agents, onOpenHit }: Props) {
     const ticket = latest.current + 1;
     latest.current = ticket;
     const timer = window.setTimeout(() => {
-      const from = rangeStart(range, Date.now());
-      searchMessages({
-        query: text,
-        sessionIds: inSession ? [inSession] : [],
-        ...(from === undefined ? {} : { from }),
-        sort,
-        limit: PAGE + 1,
-      })
+      searchMessages(searchQuery(text, range, sort, inSession, Date.now()))
         .then((rows) => {
           if (latest.current !== ticket) return;
           setHits(rows);
@@ -64,7 +56,7 @@ export function SearchView({ agents, onOpenHit }: Props) {
         })
         .catch((reason: unknown) => {
           if (latest.current !== ticket) return;
-          setError(reason instanceof Error ? reason.message : String(reason));
+          setError(failureText(reason));
           setHits([]);
         });
     }, DEBOUNCE_MS);
@@ -130,7 +122,7 @@ export function SearchView({ agents, onOpenHit }: Props) {
           <p className="py-16 text-center text-[13px] text-text-muted">Nothing matches {`"${text}"`}.</p>
         ) : (
           <div className="flex flex-col">
-            {showing.slice(0, PAGE).map((hit) => (
+            {showing.slice(0, SEARCH_PAGE).map((hit) => (
               <HitRow key={`${hit.sessionId}:${hit.pos}`} hit={hit} onOpen={onOpenHit} />
             ))}
           </div>
@@ -138,12 +130,6 @@ export function SearchView({ agents, onOpenHit }: Props) {
       </div>
     </div>
   );
-}
-
-/** Never claim a count the page did not actually reach. */
-function countLabel(found: number): string {
-  if (found > PAGE) return `${PAGE}+ results`;
-  return found === 1 ? "1 result" : `${found} results`;
 }
 
 function HitRow({

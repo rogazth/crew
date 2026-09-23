@@ -20,13 +20,23 @@ import { resolveTerminalKey } from "../lib/terminalKeys";
 import { activateZwjUnicode } from "../lib/terminalUnicode";
 import { quotePath, quotePaths } from "../lib/terminalPaths";
 import { fontStack, ligaturesEnabled } from "../lib/terminalPrefs";
+import { isOscColorQuery, oscColorReply } from "../lib/terminalColors";
 import {
-  ANSI_DARK,
-  ANSI_LIGHT,
-  isOscColorQuery,
-  oscColorReply,
-  rgbToHex,
-} from "../lib/terminalColors";
+  activityDue,
+  applyTerminalKey,
+  createAckFlow,
+  exitBanner,
+  gridSettled,
+  isOsc777Notification,
+  isOsc9Notification,
+  kittyParam,
+  palette as themePalette,
+  pastePayload,
+  proposeGrid,
+  sizeStep,
+  spawnErrorLine,
+  type Grid,
+} from "../lib/terminalView";
 import { TerminalSearch } from "./TerminalSearch";
 import "@xterm/xterm/css/xterm.css";
 
@@ -46,39 +56,10 @@ type Props = {
   onOpenPath?: ((path: string) => void) | undefined;
 };
 
-const ACTIVITY_INTERVAL = 400;
-const ACK_FLUSH_MS = 4;
-/** Frames the proposed grid may keep changing before it is applied anyway. */
-const MAX_STABILITY_FRAMES = 8;
-
 const DARK_SCHEME = window.matchMedia("(prefers-color-scheme: dark)");
 
-function cssColor(expr: string, fallback: string): string {
-  const probe = document.createElement("span");
-  probe.style.color = expr;
-  document.body.appendChild(probe);
-  const color = getComputedStyle(probe).color;
-  probe.remove();
-  return rgbToHex(color || fallback);
-}
-
-/** The terminal is the canvas: same background, same text colour, ANSI tuned to it. */
-function palette() {
-  const dark = DARK_SCHEME.matches;
-  const background = cssColor("var(--color-canvas)", dark ? "#1a1a1a" : "#ffffff");
-  const foreground = cssColor("var(--color-text)", dark ? "#e8eef2" : "#2e2e2e");
-  return {
-    background,
-    foreground,
-    cursor: cssColor("var(--color-accent)", foreground),
-    cursorAccent: background,
-    selectionBackground: dark ? "rgba(255,255,255,0.22)" : "rgba(0,0,0,0.16)",
-    selectionInactiveBackground: dark ? "rgba(255,255,255,0.1)" : "rgba(0,0,0,0.07)",
-    ...(dark ? ANSI_DARK : ANSI_LIGHT),
-  };
-}
-
 const isDark = () => DARK_SCHEME.matches;
+const palette = () => themePalette(isDark());
 
 export function TerminalView({
   id,
@@ -158,15 +139,14 @@ export function TerminalView({
     let closed = false;
     let spawned = false;
     /** Only the first spawn is size-driven; a dead pane must not resize back to life. */
-    let started = false;
+    let last: Grid | null = null;
     let shellFallback = false;
-    let lastCols = 0;
-    let lastRows = 0;
     let lastActivity = 0;
-    let processed = 0;
-    let ackTimer = 0;
     // xterm keeps the kitty flags private, so they are mirrored off the output stream.
     let kittyFlags = 0;
+    const write = (data: string) => {
+      if (spawned) void api.writePty(id, data);
+    };
 
     // ⌘V reaches the paste listener below and ⌘C the copy one; the rest of the
     // ⌘ chords are the app's hotkeys, which must bubble to the document.
@@ -176,23 +156,7 @@ export function TerminalView({
         hasSelection: term.hasSelection(),
         kittyKeyboard: kittyFlags !== 0,
       });
-      switch (action.type) {
-        case "xterm":
-          return true;
-        case "app":
-          return false;
-        case "select-all":
-          term.selectAll();
-          return false;
-        case "scroll":
-          if (action.to === "top") term.scrollToTop();
-          else term.scrollToBottom();
-          return false;
-        case "input":
-          if (spawned) void api.writePty(id, action.data);
-          event.preventDefault();
-          return false;
-      }
+      return applyTerminalKey(action, term, event, write);
     });
 
     const onCopy = (event: ClipboardEvent) => {
@@ -202,19 +166,15 @@ export function TerminalView({
       event.preventDefault();
     };
     const onPaste = (event: ClipboardEvent) => {
-      const text = event.clipboardData?.getData("text/plain");
-      if (text) {
-        event.preventDefault();
-        term.paste(text);
+      const payload = pastePayload(event.clipboardData);
+      if (!payload) return;
+      event.preventDefault();
+      if (payload.kind === "text") {
+        term.paste(payload.text);
         return;
       }
-      const image = [...(event.clipboardData?.files ?? [])].find((file) =>
-        file.type.startsWith("image/"),
-      );
-      if (!image) return;
-      event.preventDefault();
       void api
-        .writeTempFile(image)
+        .writeTempFile(payload.file)
         .then((path) => {
           term.paste(quotePath(path));
           term.focus();
@@ -224,19 +184,15 @@ export function TerminalView({
     host.addEventListener("copy", onCopy);
     host.addEventListener("paste", onPaste);
 
-    const flushAck = () => {
-      ackTimer = 0;
+    const ack = createAckFlow((processed) => {
       if (spawned) void api.ackPty(id, processed);
-    };
+    });
     const unsubscribe = subscribePty(
       id,
       (bytes) => {
-        term.write(bytes, () => {
-          processed += bytes.length;
-          if (!ackTimer) ackTimer = window.setTimeout(flushAck, ACK_FLUSH_MS);
-        });
+        term.write(bytes, () => ack.parsed(bytes.length));
         const now = Date.now();
-        if (now - lastActivity < ACTIVITY_INTERVAL) return;
+        if (!activityDue(now, lastActivity)) return;
         lastActivity = now;
         latest.current.onActivity?.();
       },
@@ -244,7 +200,7 @@ export function TerminalView({
         if (closed) return;
         spawned = false;
         kittyFlags = 0;
-        term.writeln(`\r\n\x1b[2m[process exited${code == null ? "" : ` (${code})`}]\x1b[0m`);
+        term.writeln(exitBanner(code));
         latest.current.onExit?.(code);
         // The shell replaces the agent once; when the user exits that shell too,
         // the pane stays dead instead of looping a new prompt forever.
@@ -252,9 +208,7 @@ export function TerminalView({
         shellFallback = true;
         spawn([]);
       },
-      (start) => {
-        processed = start;
-      },
+      (start) => ack.reset(start),
     );
 
     const reply = (code: 10 | 11 | 12, hex: string) => {
@@ -269,12 +223,9 @@ export function TerminalView({
       term.parser.registerOscHandler(10, (d) => isOscColorQuery(d) && reply(10, colors.foreground)),
       term.parser.registerOscHandler(11, (d) => isOscColorQuery(d) && reply(11, colors.background)),
       term.parser.registerOscHandler(12, (d) => isOscColorQuery(d) && reply(12, colors.cursor)),
-      // OSC 9 is a notification unless it opens with `4;`, which is progress.
-      term.parser.registerOscHandler(9, (d) => !d.startsWith("4;") && ring()),
-      term.parser.registerOscHandler(777, (d) => d.startsWith("notify") && ring()),
+      term.parser.registerOscHandler(9, (d) => isOsc9Notification(d) && ring()),
+      term.parser.registerOscHandler(777, (d) => isOsc777Notification(d) && ring()),
     ];
-    const kittyParam = (params: (number | number[])[]) =>
-      typeof params[0] === "number" ? params[0] : 0;
     // Returning false leaves the sequence to xterm; the handlers only observe.
     const csi = [
       term.parser.registerCsiHandler({ prefix: ">", final: "u" }, (params) => {
@@ -294,15 +245,13 @@ export function TerminalView({
     const links = term.registerLinkProvider(
       filePathProvider(term, cwd, (path) => latest.current.onOpenPath?.(path)),
     );
-    const input = term.onData((data) => {
-      if (spawned) void api.writePty(id, data);
-    });
+    const input = term.onData(write);
 
     const spawn = (command: string[]) => {
       spawned = true;
       void api.spawnPty(id, cwd, command, term.cols, term.rows).catch((error: unknown) => {
         spawned = false;
-        term.writeln(`\x1b[31m${error instanceof Error ? error.message : String(error)}\x1b[0m`);
+        term.writeln(spawnErrorLine(error));
       });
     };
 
@@ -313,27 +262,15 @@ export function TerminalView({
       const { cols, rows } = term;
       // The first spawn must not ride on a size change: a pane that measures the
       // same twice would never start, and its later kill would find nothing.
-      if (!started) {
-        started = true;
-        lastCols = cols;
-        lastRows = rows;
-        spawn(latest.current.command);
-        return;
-      }
-      if (cols === lastCols && rows === lastRows) return;
-      lastCols = cols;
-      lastRows = rows;
-      void api.resizePty(id, cols, rows);
+      const step = sizeStep(last, { cols, rows });
+      if (step === "same") return;
+      last = { cols, rows };
+      if (step === "spawn") spawn(latest.current.command);
+      else void api.resizePty(id, cols, rows);
     };
     fitRef.current = applySize;
 
-    const propose = () => {
-      try {
-        return fit.proposeDimensions() ?? null;
-      } catch {
-        return null;
-      }
-    };
+    const propose = () => proposeGrid(fit);
     // The grid is applied once two frames agree on it (or it already matches),
     // so a scrollbar wobble mid-resize does not turn into a SIGWINCH loop that
     // makes full-screen TUIs repaint and shake.
@@ -348,12 +285,7 @@ export function TerminalView({
           if (closed || !visible()) return;
           const next = propose();
           frames += 1;
-          const settled =
-            !next ||
-            (next.cols === term.cols && next.rows === term.rows) ||
-            (previous?.cols === next.cols && previous?.rows === next.rows) ||
-            frames >= MAX_STABILITY_FRAMES;
-          if (settled) {
+          if (gridSettled(next, { cols: term.cols, rows: term.rows }, previous, frames)) {
             applySize();
             return;
           }
@@ -376,7 +308,7 @@ export function TerminalView({
     return () => {
       closed = true;
       if (raf) cancelAnimationFrame(raf);
-      if (ackTimer) clearTimeout(ackTimer);
+      ack.cancel();
       observer.disconnect();
       DARK_SCHEME.removeEventListener("change", onScheme);
       host.removeEventListener("copy", onCopy);
@@ -388,7 +320,7 @@ export function TerminalView({
       for (const handler of osc) handler.dispose();
       for (const handler of csi) handler.dispose();
       unsubscribe();
-      if (started) void api.killPty(id);
+      if (last) void api.killPty(id);
       term.dispose();
       ligaturesRef.current = null;
       termRef.current = null;

@@ -1,4 +1,6 @@
 import { homeDir } from "./host";
+import { relativeTo } from "./tabs";
+import type { ProjectFile } from "./types";
 
 /** Everything else would be re-read by the shell, so it travels quoted. */
 const BARE = /^[A-Za-z0-9_@%+=:,./-]+$/;
@@ -57,3 +59,8 @@ void homeDir()
 
 /** Empty until the first resolve lands; `~` paths simply stay unlinked until then. */
 export const homePath = (): string => home;
+
+/** A path the terminal linked, as the file tab it opens. */
+export function projectFileAt(cwd: string, path: string): ProjectFile {
+  return { name: path.split("/").pop() ?? path, path, relative: relativeTo(cwd, path) };
+}

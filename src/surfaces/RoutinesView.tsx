@@ -4,7 +4,17 @@ import { useMemo, useState } from "react";
 import { RoutineCard } from "../chrome/RoutineCard";
 import type { Confirm } from "../chrome/ConfirmDialog";
 import { useRoutines, type RoutineEntry } from "../hooks/useRoutines";
-import { newRoutineDraft, toDraft, type RoutineDraft } from "../lib/routines";
+import { toDraft, type RoutineDraft } from "../lib/routines";
+import {
+  cardWorkspace,
+  deleteConfirm,
+  emptyLine,
+  filterRoutines,
+  initialOpen,
+  newRoutineOpen,
+  type RoutineFilter,
+  type RoutineOpen,
+} from "../lib/routinesView";
 import { removeRoutine, runRoutineNow, saveRoutine } from "../lib/scheduler";
 import type { Session, Workspace } from "../lib/types";
 import { RoutineEditor } from "./RoutineEditor";
@@ -19,50 +29,29 @@ type Props = {
   onConfirm: (confirm: Confirm) => void;
 };
 
-type Filter = "all" | "active" | "paused";
-
-const FILTERS: Array<{ value: Filter; label: string }> = [
+const FILTERS: Array<{ value: RoutineFilter; label: string }> = [
   { value: "all", label: "All" },
   { value: "active", label: "Active" },
   { value: "paused", label: "Paused" },
 ];
 
-type Open = { kind: "new"; draft: RoutineDraft; workspaceId: string } | { kind: "edit"; id: string };
-
 /** The routines screen: every standing order in the app, and one editor for them. */
 export function RoutinesView({ draft, workspaces, activeWorkspaceId, agents, onConfirm }: Props) {
   const entries = useRoutines();
-  const [open, setOpen] = useState<Open | null>(() =>
-    draft && activeWorkspaceId ? { kind: "new", draft, workspaceId: activeWorkspaceId } : null,
-  );
-  const [filter, setFilter] = useState<Filter>("all");
+  const [open, setOpen] = useState<RoutineOpen | null>(() => initialOpen(draft, activeWorkspaceId));
+  const [filter, setFilter] = useState<RoutineFilter>("all");
 
   const editing = open?.kind === "edit" ? entries?.find((entry) => entry.routine.id === open.id) : null;
 
-  const shown = useMemo(
-    () =>
-      (entries ?? []).filter((entry) =>
-        filter === "all" ? true : filter === "active" ? entry.routine.enabled : !entry.routine.enabled,
-      ),
-    [entries, filter],
-  );
+  const shown = useMemo(() => filterRoutines(entries, filter), [entries, filter]);
 
   const startNew = () => {
-    const agent = agents[0];
-    if (!agent || !activeWorkspaceId) return;
-    setOpen({ kind: "new", draft: newRoutineDraft(agent.id), workspaceId: activeWorkspaceId });
+    const next = newRoutineOpen(agents, activeWorkspaceId);
+    if (next) setOpen(next);
   };
 
   const confirmDelete = (entry: RoutineEntry) =>
-    onConfirm({
-      title: `Delete routine "${entry.routine.name}"?`,
-      description: `${entry.session.name} stops running it. Its history goes with it.`,
-      action: "Delete",
-      onConfirm: async () => {
-        setOpen(null);
-        await removeRoutine(entry.routine.id);
-      },
-    });
+    onConfirm(deleteConfirm(entry, () => setOpen(null), removeRoutine));
 
   if (open?.kind === "new") {
     return (
@@ -124,7 +113,7 @@ export function RoutinesView({ draft, workspaces, activeWorkspaceId, agents, onC
             className="self-start"
             tabs={FILTERS}
             value={filter}
-            onValueChange={(value) => setFilter(value as Filter)}
+            onValueChange={(value) => setFilter(value as RoutineFilter)}
           />
         )}
 
@@ -136,11 +125,7 @@ export function RoutinesView({ draft, workspaces, activeWorkspaceId, agents, onC
               <RoutineCard
                 key={entry.routine.id}
                 entry={entry}
-                workspace={
-                  entry.session.workspaceId === activeWorkspaceId
-                    ? null
-                    : (workspaces.find((w) => w.id === entry.session.workspaceId)?.name ?? null)
-                }
+                workspace={cardWorkspace(entry, activeWorkspaceId, workspaces)}
                 onOpen={() => setOpen({ kind: "edit", id: entry.routine.id })}
               />
             ))}
@@ -151,12 +136,8 @@ export function RoutinesView({ draft, workspaces, activeWorkspaceId, agents, onC
   );
 }
 
-function Empty({ hasAny, hasAgents, filter }: { hasAny: boolean; hasAgents: boolean; filter: Filter }) {
-  const line = hasAny
-    ? `No ${filter} routines.`
-    : hasAgents
-      ? "No routines yet. A routine wakes an agent on a schedule with a saved instruction."
-      : "Routines run inside an agent's conversation. Create an agent first.";
+function Empty({ hasAny, hasAgents, filter }: { hasAny: boolean; hasAgents: boolean; filter: RoutineFilter }) {
+  const line = emptyLine(hasAny, hasAgents, filter);
   return (
     <p className="rounded-xl border border-dashed border-border px-4 py-8 text-center text-kumo-subtle">
       {line}

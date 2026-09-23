@@ -23,6 +23,7 @@ import type { Session } from "./lib/types";
 import { Pages } from "./surfaces/Pages";
 import { usePages } from "./hooks/usePages";
 import { boot } from "./lib/agentRuntime";
+import { activeSessionIdOf, removeWorkspaceInOrder, togglePaletteMode, withModel } from "./lib/app";
 import { WorkspacePanes } from "./surfaces/WorkspacePanes";
 
 /**
@@ -60,11 +61,7 @@ export function App() {
   const { dropWorkspace: forgetTabs } = tabs;
   const { remove: deleteWorkspace } = workspaces;
   const removeWorkspace = useCallback(
-    async (id: string) => {
-      forgetTabs(id);
-      forgetSessions(id);
-      await deleteWorkspace(id);
-    },
+    (id: string) => removeWorkspaceInOrder(id, { forgetTabs, forgetSessions, deleteWorkspace }),
     [deleteWorkspace, forgetSessions, forgetTabs],
   );
 
@@ -93,7 +90,7 @@ export function App() {
 
   const changeModel = useCallback(
     (session: Session, provider: string, model: string) =>
-      void update(session.id, { ...session, provider, model }),
+      void update(session.id, withModel(session, provider, model)),
     [update],
   );
 
@@ -102,7 +99,7 @@ export function App() {
     tabs,
     pages: { isWorkspace, close: closePage, toggle: togglePage },
     palette,
-    togglePalette: (mode: PaletteMode) => setPalette((open) => (open === mode ? null : mode)),
+    togglePalette: (mode: PaletteMode) => setPalette((open) => togglePaletteMode(open, mode)),
     closePalette: () => setPalette(null),
     sheetOpen: sheet.sheet !== null,
     closeSheet: sheet.close,
@@ -120,7 +117,7 @@ export function App() {
 
   if (workspaces.loading || sidebar.width === null) return <div className="h-full" />;
 
-  const activeSessionId = tabs.active?.kind === "session" ? tabs.active.sessionId : null;
+  const activeSessionId = activeSessionIdOf(tabs.active);
 
   return (
     <TerminalPrefsProvider>

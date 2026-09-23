@@ -12,6 +12,7 @@ import {
 import { ModelPicker } from "../../chrome/ModelPicker";
 import { Plus, Send, Square } from "../../chrome/icons";
 import type { AttachedFile } from "../../lib/blocks";
+import { canSend as sendable, composerKey, stepActive, submitAction } from "../../lib/composer";
 import { completeMention, mentionAt, searchFiles, splitMentions } from "../../lib/mentions";
 import type { ProviderId } from "../../lib/providers";
 import type { ProjectFile, Session } from "../../lib/types";
@@ -61,12 +62,13 @@ export function Composer({
   const overlay = useRef<HTMLDivElement>(null);
   useImperativeHandle(ref, () => field.current as HTMLTextAreaElement);
   const { files: projectFiles } = useChatActions();
-  const canSend = ready && (draft.trim().length > 0 || files.length > 0) && !working;
+  const canSend = sendable(ready, draft, files, working);
 
   // The caret is what decides whether an `@` is being typed; it moves without the text changing.
   const [cursor, setCursor] = useState(0);
   const [active, setActive] = useState(0);
-  const mention = mentionAt(draft, cursor);
+  // -1 is "no caret" (blurred, or dismissed); mentionAt would read it as "all but the last character".
+  const mention = cursor < 0 ? null : mentionAt(draft, cursor);
   const results = useMemo(
     () => (mention ? searchFiles(mention.query, projectFiles) : []),
     [mention?.query, projectFiles], // eslint-disable-line react-hooks/exhaustive-deps
@@ -101,10 +103,15 @@ export function Composer({
     });
   };
 
+  const act = () => {
+    const action = submitAction(working, canSend);
+    if (action === "stop") onStop();
+    else if (action === "send") onSend();
+  };
+
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    if (working) onStop();
-    else if (canSend) onSend();
+    act();
   };
 
   const onPaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
@@ -115,28 +122,16 @@ export function Composer({
   };
 
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (mention && results.length > 0) {
-      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-        event.preventDefault();
-        const step = event.key === "ArrowDown" ? 1 : -1;
-        setActive((index) => (index + step + results.length) % results.length);
-        return;
-      }
-      if (event.key === "Enter" || event.key === "Tab") {
-        event.preventDefault();
-        pick(results[Math.min(active, results.length - 1)]!);
-        return;
-      }
-      if (event.key === "Escape") {
-        event.preventDefault();
-        setCursor(-1);
-        return;
-      }
-    }
-    if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
+    const action = composerKey(
+      { key: event.key, shiftKey: event.shiftKey, isComposing: event.nativeEvent.isComposing },
+      mention !== null && results.length > 0,
+    );
+    if (!action) return;
     event.preventDefault();
-    if (working) onStop();
-    else if (canSend) onSend();
+    if (action.kind === "move") setActive((index) => stepActive(index, action.step, results.length));
+    else if (action.kind === "pick") pick(results[Math.min(active, results.length - 1)]!);
+    else if (action.kind === "dismiss") setCursor(-1);
+    else act();
   };
 
   return (
@@ -175,7 +170,8 @@ export function Composer({
               setActive(0);
             }}
             onSelect={syncCursor}
-            onKeyUp={syncCursor}
+            // Escape's keyup would put the caret back inside the mention it just dismissed.
+            onKeyUp={(event) => event.key !== "Escape" && syncCursor()}
             onClick={syncCursor}
             onBlur={() => setCursor(-1)}
             onScroll={(event) => {

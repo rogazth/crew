@@ -4,6 +4,7 @@ import { CodeView, EditProvider } from "@pierre/diffs/react";
 import { useCommand } from "../hooks/useCommand";
 import { commandKeys } from "../lib/commands";
 import * as api from "../lib/api";
+import { editorItems, fileName, isDirty } from "../lib/fileEditor";
 import {
   THEME,
   TOKENIZE_MAX_LENGTH,
@@ -28,8 +29,8 @@ export function FileEditor({ path, relative }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
-  const name = relative.split("/").pop() ?? relative;
-  const dirty = loaded !== null && contents !== saved;
+  const name = fileName(relative);
+  const dirty = isDirty(loaded, saved, contents);
 
   useEffect(() => {
     let cancelled = false;
@@ -62,24 +63,9 @@ export function FileEditor({ path, relative }: Props) {
 
   useCommand("save-file", () => void save());
 
-  // One item, so CodeView is really "a virtualized File". A stable cacheKey and
-  // id are what let the editor persist per-file state across tab switches.
   // `contents` stays the text as read from disk: the editor owns the document from
   // here, and feeding it a new value without bumping `version` resets the session.
-  const items = useMemo(
-    () =>
-      loaded === null
-        ? []
-        : [
-            {
-              id: path,
-              type: "file" as const,
-              file: { name, contents: loaded, cacheKey: path },
-              edit: true,
-            },
-          ],
-    [loaded, name, path],
-  );
+  const items = useMemo(() => editorItems(path, name, loaded), [loaded, name, path]);
 
   if (error) return <p className="p-4 text-red-600">{error}</p>;
   if (loaded === null) {

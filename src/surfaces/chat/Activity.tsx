@@ -27,6 +27,7 @@ import {
   type Phase,
   type PhaseKind,
 } from "../../lib/activity";
+import { anyFailed, foldOpen, holdsRow, hotBlockId, reasoningLabel, sameGroup } from "../../lib/activityView";
 import { answerSummary, isOpen, type Answers, type ApprovalDecision, type Block } from "../../lib/blocks";
 import { glyphKind, hasBody, toolLine } from "../../lib/toolDetail";
 import { ApprovalCard } from "./ApprovalCard";
@@ -69,25 +70,6 @@ function iconFor(block: Block, fallback: Icon | undefined): Icon | undefined {
   return (kind && DETAIL_ICON[kind]) ?? fallback;
 }
 
-/**
- * The transcript regroups its rows every frame a turn streams, so `blocks` is a
- * fresh array holding the same blocks. Comparing it by element is what lets a
- * settled group sit out the turn instead of rebuilding its phases 60 times a second.
- */
-function sameBlocks(prev: Props, next: Props): boolean {
-  if (
-    prev.live !== next.live ||
-    prev.focusId !== next.focusId ||
-    prev.marked !== next.marked ||
-    prev.onApprove !== next.onApprove ||
-    prev.onAnswer !== next.onAnswer
-  ) {
-    return false;
-  }
-  if (prev.blocks.length !== next.blocks.length) return false;
-  return prev.blocks.every((block, index) => block === next.blocks[index]);
-}
-
 /** Tool calls fold into phases; a thought or a question is a row of its own. */
 export const ActivityGroup = memo(function ActivityGroup({
   blocks,
@@ -99,7 +81,7 @@ export const ActivityGroup = memo(function ActivityGroup({
 }: Props) {
   const items = useMemo(() => buildActivity(blocks), [blocks]);
   // Keys go to one card: the newest thing waiting on the user.
-  const hot = live ? blocks.filter(isOpen).at(-1)?.id : undefined;
+  const hot = hotBlockId(blocks, live);
   const rows = (
     <div className="flex flex-col">
       {items.map((item, index) => {
@@ -133,7 +115,7 @@ export const ActivityGroup = memo(function ActivityGroup({
       {rows}
     </RunShell>
   );
-}, sameBlocks);
+}, sameGroup);
 
 /**
  * Whether the reader has pinned this thing open or shut. Moving on clears the
@@ -172,13 +154,9 @@ function RunShell({
   children: ReactNode;
 }) {
   const waiting = blocks.some(isOpen);
-  const failed = blocks.some((block) => block.tool?.status === "failed");
-  // A row nobody can see is a row nobody can be sent to, and the mark outlives
-  // the request, so the run stays open after the reader has been taken there.
-  const sent = (id: string | null) => id !== null && blocks.some((block) => block.id === id);
-  const holds = sent(focusId) || sent(marked);
+  const failed = anyFailed(blocks);
   const [pinned, setPinned] = useFold(live);
-  const open = waiting || (pinned ?? (holds || live));
+  const open = foldOpen(waiting, pinned, holdsRow(blocks, focusId, marked), live);
   const digest = useMemo(() => activityDigest(items), [items]);
 
   return (
@@ -227,12 +205,8 @@ function PhaseRow({
 }) {
   const waiting = phaseOpen(phase);
   const failed = phaseFailed(phase);
-  // A row nobody can see is a row nobody can be sent to, and the mark outlives
-  // the request, so the phase stays open after the reader has been taken there.
-  const sent = (id: string | null) => id !== null && phase.blocks.some((block) => block.id === id);
-  const holds = sent(focusId) || sent(marked);
   const [pinned, setPinned] = useFold(live);
-  const open = waiting || (pinned ?? (holds || live));
+  const open = foldOpen(waiting, pinned, holdsRow(phase.blocks, focusId, marked), live);
   const single = phase.blocks.length === 1 && !waiting;
 
   if (single) {
@@ -431,7 +405,7 @@ function ReasoningRow({ block, marked }: { block: Block; marked: string | null }
           />
         </span>
         <span className={`min-w-0 truncate ${streaming ? "crew-shimmer" : "text-text-muted transition-colors group-hover:text-text"}`}>
-          {streaming ? "Thinking" : summary || "Thought"}
+          {reasoningLabel(streaming, summary)}
         </span>
       </Collapsible.Trigger>
       <Collapsible.Panel className="crew-phase-panel">

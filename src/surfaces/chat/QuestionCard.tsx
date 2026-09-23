@@ -1,6 +1,17 @@
 import { Checkbox, Radio } from "@cloudflare/kumo";
 import { useEffect, useRef, useState } from "react";
 import type { Answers, Block, Question } from "../../lib/blocks";
+import {
+  EMPTY_PICK,
+  allAnswered,
+  answered,
+  choose as chooseIn,
+  optionLetter,
+  questionKey,
+  shapeAnswers,
+  type Pick,
+  type Picks,
+} from "../../lib/question";
 
 type Props = {
   block: Block;
@@ -8,16 +19,6 @@ type Props = {
   hot?: boolean;
   onAnswer: (requestId: number, answers: Answers | null) => void;
 };
-
-type Pick = { chosen: string[]; other: string };
-type Picks = Record<string, Pick>;
-
-const LETTERS = "ABCDEFGHIJ";
-const EMPTY: Pick = { chosen: [], other: "" };
-
-function answered(pick: Pick | undefined): boolean {
-  return pick !== undefined && (pick.chosen.length > 0 || pick.other.trim().length > 0);
-}
 
 /** One question at a time; Submit sends the whole set the way Claude Code expects it. */
 export function QuestionCard({ block, hot = false, onAnswer }: Props) {
@@ -28,9 +29,9 @@ export function QuestionCard({ block, hot = false, onAnswer }: Props) {
 
   const questions = ask?.questions ?? [];
   const current = questions[step];
-  const pick = current ? (picks[current.question] ?? EMPTY) : EMPTY;
+  const pick = current ? (picks[current.question] ?? EMPTY_PICK) : EMPTY_PICK;
   const last = step === questions.length - 1;
-  const complete = questions.every((q) => answered(picks[q.question]));
+  const complete = allAnswered(questions, picks);
 
   const set = (next: Pick) => {
     if (!current) return;
@@ -39,24 +40,12 @@ export function QuestionCard({ block, hot = false, onAnswer }: Props) {
 
   const choose = (label: string) => {
     if (!current) return;
-    if (current.multiSelect) {
-      const chosen = pick.chosen.includes(label) ? pick.chosen.filter((item) => item !== label) : [...pick.chosen, label];
-      set({ ...pick, chosen });
-    } else {
-      set({ ...pick, chosen: [label] });
-    }
+    set(chooseIn(pick, label, current.multiSelect));
   };
 
   const submit = () => {
     if (!ask || !complete) return;
-    const answers: Answers = {};
-    for (const q of questions) {
-      const p = picks[q.question] ?? EMPTY;
-      const parts = [...p.chosen];
-      if (p.other.trim()) parts.push(p.other.trim());
-      answers[q.question] = parts.join(", ");
-    }
-    onAnswer(ask.requestId, answers);
+    onAnswer(ask.requestId, shapeAnswers(questions, picks));
   };
 
   const advance = () => {
@@ -75,26 +64,17 @@ export function QuestionCard({ block, hot = false, onAnswer }: Props) {
     const onKey = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
       const typing = target?.matches("input, textarea, [contenteditable]") ?? false;
-      if (event.metaKey || event.ctrlKey || event.altKey) return;
-      if (event.key === "Escape") {
-        event.preventDefault();
-        onAnswer(ask!.requestId, null);
-        return;
-      }
-      if (event.key === "Enter" && !event.shiftKey) {
-        if (typing && !card.current?.contains(target)) return;
-        if (answered(picks[current.question])) {
-          event.preventDefault();
-          advance();
-        }
-        return;
-      }
-      if (typing) return;
-      const index = LETTERS.indexOf(event.key.toUpperCase());
-      if (index >= 0 && index < current.options.length && event.key.length === 1) {
-        event.preventDefault();
-        choose(current.options[index]!.label);
-      }
+      const action = questionKey(event, {
+        typing,
+        inCard: card.current?.contains(target) ?? false,
+        answered: answered(picks[current.question]),
+        options: current.options.length,
+      });
+      if (!action) return;
+      event.preventDefault();
+      if (action.kind === "dismiss") onAnswer(ask!.requestId, null);
+      else if (action.kind === "advance") advance();
+      else choose(current.options[action.index]!.label);
     };
     document.addEventListener("keydown", onKey, true);
     return () => document.removeEventListener("keydown", onKey, true);
@@ -183,7 +163,7 @@ function Options({
 function OptionLabel({ option, index }: { option: Question["options"][number]; index: number }) {
   return (
     <span className="flex items-start gap-2">
-      <kbd className="crew-keycap mt-px">{LETTERS[index] ?? "·"}</kbd>
+      <kbd className="crew-keycap mt-px">{optionLetter(index)}</kbd>
       <span className="flex min-w-0 flex-col">
         <span>{option.label}</span>
         {option.description && <span className="text-[12px] leading-4 text-text-muted">{option.description}</span>}

@@ -11,8 +11,9 @@ import {
 import { useEffect, useState } from "react";
 import { RoutineTrigger } from "../chrome/RoutineTrigger";
 import * as api from "../lib/api";
-import { isValidCron } from "../lib/cron";
+import { routineValid, runFailure, withAgentFrom } from "../lib/routineEditor";
 import { type RoutineDraft, type RoutineRun } from "../lib/routines";
+import { agentsOf } from "../lib/surface";
 import { dayLabel, duration } from "../lib/time";
 import type { Session, Workspace } from "../lib/types";
 
@@ -52,14 +53,9 @@ export function RoutineEditor({
       .listSessions(workspaceId)
       .then((list) => {
         if (cancelled) return;
-        const found = list.filter((session) => session.kind === "agent");
+        const found = agentsOf(list);
         setAgents(found);
-        // Moving the routine to another workspace hands it to that workspace's first agent.
-        setDraft((prev) =>
-          found.some((agent) => agent.id === prev.sessionId)
-            ? prev
-            : { ...prev, sessionId: found[0]?.id ?? "" },
-        );
+        setDraft((prev) => withAgentFrom(prev, found));
       })
       .catch(() => {
         if (!cancelled) setAgents([]);
@@ -69,8 +65,7 @@ export function RoutineEditor({
     };
   }, [workspaceId]);
 
-  const cronOk = draft.schedule.kind !== "cron" || isValidCron(draft.schedule.expression);
-  const valid = draft.name.trim() !== "" && draft.prompt.trim() !== "" && draft.sessionId !== "" && cronOk;
+  const valid = routineValid(draft);
 
   async function save() {
     if (!valid || saving) return;
@@ -89,7 +84,7 @@ export function RoutineEditor({
     try {
       await onRunNow();
     } catch (error) {
-      setRunError(error instanceof Error ? error.message : String(error));
+      setRunError(runFailure(error));
     } finally {
       setRunning(false);
     }

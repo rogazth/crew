@@ -4,14 +4,8 @@ import { useMemo, useState } from "react";
 import { SettingsRow, SettingsSection } from "../chrome/SettingsRow";
 import { useTerminalPrefs } from "../hooks/useTerminalPrefs";
 import { installedMonoFonts } from "../lib/fonts";
-import {
-  clamp,
-  DEFAULT_TERMINAL_PREFS,
-  LIMITS,
-  ligaturesEnabled,
-  type Ligatures,
-  type TerminalPrefs,
-} from "../lib/terminalPrefs";
+import { DEFAULT_TERMINAL_PREFS, LIMITS, type Ligatures, type TerminalPrefs } from "../lib/terminalPrefs";
+import { commitStep, ligaturesNote, nudge as nudged } from "../lib/terminalSettingsView";
 
 const LIGATURES: { value: Ligatures; label: string }[] = [
   { value: "auto", label: "Auto" },
@@ -47,9 +41,7 @@ export function TerminalSettings() {
     </>
   );
 
-  const autoNote = ligaturesEnabled({ ...prefs, ligatures: "auto" })
-    ? `Auto turns them on for "${prefs.fontFamily}".`
-    : `Auto leaves them off for "${prefs.fontFamily}".`;
+  const autoNote = ligaturesNote(prefs);
 
   return (
     <>
@@ -112,11 +104,6 @@ function Reset({ hidden, onClick }: { hidden: boolean; onClick: () => void }) {
   );
 }
 
-/** Float steps (0.1) accumulate noise; snapping through toFixed keeps 1.2 as "1.2". */
-function snap(value: number, step: number, limits: { min: number; max: number }) {
-  return clamp(Number((Math.round(value / step) * step).toFixed(3)), limits);
-}
-
 /**
  * Typed edits stay local until blur or Enter, then clamp into range; Escape restores.
  * Callers key it by the committed value so an outside change (reset) drops the draft.
@@ -137,16 +124,11 @@ function Stepper({
   const [draft, setDraft] = useState(String(value));
 
   const commit = () => {
-    const parsed = Number(draft);
-    if (!Number.isFinite(parsed)) {
-      setDraft(String(value));
-      return;
-    }
-    const next = snap(parsed, step, limits);
-    setDraft(String(next));
-    if (next !== value) onCommit(next);
+    const next = commitStep(draft, value, step, limits);
+    setDraft(next.draft);
+    if (next.commit !== null) onCommit(next.commit);
   };
-  const nudge = (direction: 1 | -1) => onCommit(snap(value + direction * step, step, limits));
+  const nudge = (direction: 1 | -1) => onCommit(nudged(value, direction, step, limits));
 
   return (
     <div className="flex h-7 items-center rounded-md bg-kumo-control ring ring-kumo-line has-[input:focus]:ring-[1.5px] has-[input:focus]:ring-kumo-focus/50">

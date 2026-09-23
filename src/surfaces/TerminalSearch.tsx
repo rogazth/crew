@@ -1,5 +1,6 @@
 import { CaretDownIcon, CaretUpIcon, XIcon } from "@phosphor-icons/react";
 import { useEffect, useRef, type KeyboardEvent } from "react";
+import { matchLabel, searchKey } from "../lib/terminalSearchView";
 
 type Props = {
   query: string;
@@ -20,17 +21,14 @@ export function TerminalSearch({ query, results, focusToken, onQuery, onStep, on
   }, [focusToken]);
 
   function onKeyDown(event: KeyboardEvent<HTMLInputElement>) {
-    if (event.key === "Escape") {
-      event.preventDefault();
-      onClose();
-      return;
-    }
-    if (event.key !== "Enter") return;
+    const action = searchKey(event.key, event.shiftKey);
+    if (!action) return;
     event.preventDefault();
-    onStep(event.shiftKey ? -1 : 1);
+    if (action.kind === "close") onClose();
+    else onStep(action.delta);
   }
 
-  const label = results.count > 0 ? `${results.index + 1} of ${results.count}` : "";
+  const label = matchLabel(results);
 
   return (
     <div className="absolute top-2 right-4 z-10 flex items-center gap-1 rounded-lg bg-kumo-control p-1 shadow-lg ring ring-kumo-line">

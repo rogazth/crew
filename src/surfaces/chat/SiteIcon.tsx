@@ -16,6 +16,7 @@ import {
   YoutubeLogoIcon,
 } from "@phosphor-icons/react";
 import { useState, type ReactElement } from "react";
+import { faviconUrl, isPlaceholderFavicon, siteDomain, siteHost } from "../../lib/siteIcon";
 
 /** A brand mark reads as itself only filled; bold leaves it an outline. */
 const mark = { weight: "fill", className: "crew-site-icon", "aria-hidden": true } as const;
@@ -45,19 +46,11 @@ const SITES: Record<string, ReactElement> = {
 
 const GLOBE = <GlobeSimpleIcon className="crew-site-icon" aria-hidden />;
 
-function hostOf(url: string): string {
-  try {
-    return new URL(url).hostname.replace(/^www\./, "").toLowerCase();
-  } catch {
-    return "";
-  }
-}
+const DOMAINS = Object.keys(SITES);
 
 function glyphFor(host: string): ReactElement {
-  for (const [domain, glyph] of Object.entries(SITES)) {
-    if (host === domain || host.endsWith(`.${domain}`)) return glyph;
-  }
-  return GLOBE;
+  const domain = siteDomain(host, DOMAINS);
+  return domain ? SITES[domain]! : GLOBE;
 }
 
 /**
@@ -67,18 +60,18 @@ function glyphFor(host: string): ReactElement {
  * way a local glyph takes over.
  */
 export function SiteIcon({ url }: { url: string }) {
-  const host = hostOf(url);
+  const host = siteHost(url);
   const [failed, setFailed] = useState(false);
   if (!host || failed) return glyphFor(host);
   return (
     <img
-      src={`https://www.google.com/s2/favicons?domain=${encodeURIComponent(host)}&sz=64`}
+      src={faviconUrl(host)}
       className="crew-site-icon"
       alt=""
       loading="lazy"
       onError={() => setFailed(true)}
       onLoad={(event) => {
-        if (event.currentTarget.naturalWidth <= 16) setFailed(true);
+        if (isPlaceholderFavicon(event.currentTarget.naturalWidth)) setFailed(true);
       }}
     />
   );

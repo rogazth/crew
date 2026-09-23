@@ -1,8 +1,8 @@
 import { useEffect } from 'react';
 import { AgentChat } from './AgentChat';
+import { agentSessionOf, foregroundAgent } from '../lib/agentChat';
 import { setForeground } from '../lib/agentRuntime';
 import type { ProviderId } from '../lib/providers';
-import { isAgentTab } from '../lib/tabs';
 import type { MountedPane } from './WorkspacePanes';
 import type { Session } from '../lib/types';
 
@@ -18,11 +18,7 @@ type Props = {
  * why closing an agent tab costs nothing.
  */
 export function Agents({ panes, sessions, onModel }: Props) {
-  const shown = panes.find((pane) => pane.visible) ?? null;
-  const foreground =
-    shown && isAgentTab(shown.tab, sessions) && shown.tab.kind === 'session'
-      ? shown.tab.sessionId
-      : null;
+  const foreground = foregroundAgent(panes, sessions);
 
   useEffect(() => {
     setForeground(foreground);
@@ -31,8 +27,7 @@ export function Agents({ panes, sessions, onModel }: Props) {
 
   return panes.map((pane) => {
     const { tab, cwd, visible } = pane;
-    if (!isAgentTab(tab, sessions) || tab.kind !== 'session') return null;
-    const session = sessions.find((row) => row.id === tab.sessionId);
+    const session = agentSessionOf(tab, sessions);
     if (!session) return null;
     return (
       <div key={pane.id} hidden={!visible} className="absolute inset-0">

@@ -7,14 +7,13 @@ import {
   useMemo,
   useRef,
   type ComponentProps,
-  type ReactNode,
 } from "react";
 import { Streamdown, type Components } from "streamdown";
 import "streamdown/styles.css";
 import { FileTypeIcon } from "../../chrome/FileTypeIcon";
-import { extensionOf } from "../../lib/attachments";
 import { openExternal } from "../../lib/external";
-import { groupRuns, isHeadingOnly } from "../../lib/markdownRuns";
+import { codeText, fenceLang, isFileLike, linkTarget, runKind } from "../../lib/markdown";
+import { groupRuns } from "../../lib/markdownRuns";
 import { VEIL_EMA_SEED_MS, veilDurationMs, veilEmaNext } from "../../lib/veil";
 import { CodeBlock } from "./CodeBlock";
 import { useChatActions } from "./context";
@@ -23,22 +22,15 @@ import { SiteIcon } from "./SiteIcon";
 
 type Props = { text: string; streaming?: boolean };
 
-/** `src/lib/tabs.ts`, `README.md`, `./x.css`: a path with an extension and no spaces. */
-const PATH_LIKE = /^(?:[\w@.-]+\/)*[\w@-][\w@.-]*\.[a-z0-9]{1,8}$/i;
-
-function codeText(children: ReactNode): string {
-  return typeof children === "string" ? children : Array.isArray(children) ? children.join("") : String(children ?? "");
-}
-
 type CodeProps = ComponentProps<"code"> & { node?: unknown; "data-block"?: unknown };
 
 function Code({ className, children, node: _node, ...rest }: CodeProps) {
   const text = codeText(children);
   if ("data-block" in rest) {
-    const lang = /language-([\w+-]+)/.exec(className ?? "")?.[1];
+    const lang = fenceLang(className);
     return <CodeBlock code={text.replace(/\n$/, "")} {...(lang ? { lang } : {})} />;
   }
-  if (PATH_LIKE.test(text) && extensionOf(text)) return <FileChip path={text} />;
+  if (isFileLike(text)) return <FileChip path={text} />;
   return <code className="crew-inline-code">{children}</code>;
 }
 
@@ -58,9 +50,7 @@ type LinkProps = ComponentProps<"a"> & { node?: unknown };
 /** Links leave for the default browser; the URL shows on hover instead of in a dialog. */
 function Link({ href, children, node: _node, ...rest }: LinkProps) {
   // A footnote's ref and backref are `#ids` into this same message, not the web.
-  const anchor = href?.startsWith("#") ? href.slice(1) : undefined;
-  const url = href && anchor === undefined && !href.startsWith("streamdown:") ? href : undefined;
-  const web = url && /^https?:\/\//i.test(url) ? url : undefined;
+  const { url, anchor, web } = linkTarget(href);
   return (
     <a
       {...rest}
@@ -97,10 +87,7 @@ const COMPONENTS: Components = {
     isValidElement(children) ? cloneElement(children, { "data-block": true } as object) : <>{children}</>,
 };
 
-function runClass(kind: "prose" | "wide", text: string): string {
-  if (kind === "wide") return "crew-md-wide";
-  return isHeadingOnly(text) ? "crew-md-label" : "crew-md-prose";
-}
+const RUN_CLASS = { wide: "crew-md-wide", label: "crew-md-label", prose: "crew-md-prose" } as const;
 
 /**
  * Prose sits in a bubble on the left; code, quotes and tables take the column.
@@ -176,7 +163,8 @@ const MarkdownRun = memo(function MarkdownRun({
   veiled: boolean;
   animating: boolean;
 }) {
-  const className = runClass(kind, text);
+  const style = runKind(kind, text);
+  const className = RUN_CLASS[style];
   const body = (
     <div className={className}>
       <Streamdown
@@ -194,7 +182,7 @@ const MarkdownRun = memo(function MarkdownRun({
   return (
     <div className="crew-md-row">
       {body}
-      {className === "crew-md-prose" && (
+      {style === "prose" && (
         <CopyButton text={text.trim()} className="crew-copy crew-copy-aside" />
       )}
     </div>

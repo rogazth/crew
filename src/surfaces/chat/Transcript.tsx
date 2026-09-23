@@ -1,11 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from "react";
-import {
-  isOpen,
-  type Answers,
-  type ApprovalDecision,
-  type Block,
-} from "../../lib/blocks";
+import type { Answers, ApprovalDecision, Block } from "../../lib/blocks";
 import { gapBefore, groupRows, speaker } from "../../lib/transcriptRows";
+import { isPinned, placeScroll, showThinking } from "../../lib/transcriptView";
 import { dayLabel } from "../../lib/time";
 import { ActivityGroup, ThinkingLine } from "./Activity";
 import {
@@ -16,7 +12,6 @@ import {
   UserMessage,
 } from "./Message";
 
-const NEAR_BOTTOM_PX = 16;
 /** How close to the top the reader gets before the page behind it is fetched. */
 const PREFETCH_PX = 600;
 /** How many frames to wait for a folded phase to mount the row it holds. */
@@ -36,21 +31,6 @@ type Props = {
   onApprove: (requestId: number, decision: ApprovalDecision) => void;
   onAnswer: (requestId: number, answers: Answers | null) => void;
 };
-
-/** The pending tool row already is the live state; Thinking only fills a true gap. */
-function showThinking(blocks: Block[], working: boolean): boolean {
-  if (!working) return false;
-  const last = blocks.at(-1);
-  if (!last) return true;
-  if (
-    (last.role === "assistant" || last.role === "reasoning") &&
-    last.streaming &&
-    last.text
-  )
-    return false;
-  if (isOpen(last)) return false;
-  return true;
-}
 
 /** Stick-to-bottom scroller, with a 16px threshold. */
 export function Transcript({
@@ -77,24 +57,15 @@ export function Transcript({
   const onScroll = () => {
     const el = scroller.current;
     if (!el) return;
-    pinned.current =
-      el.scrollHeight - el.scrollTop - el.clientHeight <= NEAR_BOTTOM_PX;
+    pinned.current = isPinned(el);
     fromBottom.current = el.scrollHeight - el.scrollTop;
   };
 
   const place = useCallback(() => {
     const el = scroller.current;
-    // A tab behind another one is display:none, where every measurement reads
-    // 0; writing one there is what lands the reader at the top of a year of
-    // history the moment the tab is shown.
-    if (!el || el.clientHeight === 0) return;
-    if (pinned.current) {
-      el.scrollTop = el.scrollHeight;
-      return;
-    }
-    // Reading something further up: history loading above, or a resync
-    // trimming it, must leave that line where it was.
-    el.scrollTop = el.scrollHeight - fromBottom.current;
+    if (!el) return;
+    const top = placeScroll(el, pinned.current, fromBottom.current);
+    if (top !== null) el.scrollTop = top;
   }, []);
 
   useLayoutEffect(place, [place, blocks, thinking, active]);
