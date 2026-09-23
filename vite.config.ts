@@ -20,6 +20,11 @@ export default defineConfig({
     // `// @vitest-environment happy-dom` first line.
     environment: "node",
     pool: "threads",
+    deps: {
+      optimizer: {
+        web: { enabled: true, include: ["@phosphor-icons/react", "@cloudflare/kumo"] },
+      },
+    },
     coverage: {
       provider: "v8",
       include: ["src/**/*.{ts,tsx}", "electron/**/*.ts"],
