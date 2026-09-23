@@ -7,7 +7,8 @@ import {
   TerminalWindowIcon,
 } from "@phosphor-icons/react";
 import { useMemo, useState, type KeyboardEvent, type MouseEvent } from "react";
-import { ActionMenu, DELETE, EDIT, RENAME, menuFromEvent, type MenuPoint } from "./ActionMenu";
+import { ActionMenu } from "./ActionMenu";
+import { DELETE, EDIT, RENAME, menuFromEvent, type MenuPoint } from "../lib/menu";
 import { ProviderIcon } from "./ProviderIcon";
 import { RenameRow } from "./RenameRow";
 import { Section } from "./Section";

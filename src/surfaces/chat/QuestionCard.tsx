@@ -155,24 +155,16 @@ function Options({
   chosen: string[];
   onChoose: (label: string) => void;
 }) {
-  const label = (option: Question["options"][number], index: number) => (
-    <span className="flex items-start gap-2">
-      <kbd className="crew-keycap mt-px">{LETTERS[index] ?? "·"}</kbd>
-      <span className="flex min-w-0 flex-col">
-        <span>{option.label}</span>
-        {option.description && <span className="text-[12px] leading-4 text-text-muted">{option.description}</span>}
-      </span>
-    </span>
-  );
   if (question.multiSelect) {
+    const picked = new Set(chosen);
     return (
       <div role="group" aria-label={question.question} className="crew-options flex flex-col">
         {question.options.map((option, index) => (
           <Checkbox
             key={option.label}
-            checked={chosen.includes(option.label)}
+            checked={picked.has(option.label)}
             onCheckedChange={() => onChoose(option.label)}
-            label={label(option, index)}
+            label={<OptionLabel option={option} index={index} />}
           />
         ))}
       </div>
@@ -182,17 +174,20 @@ function Options({
     <Radio.Group value={chosen[0] ?? ""} onValueChange={(next) => onChoose(String(next))} className="crew-options">
       <Radio.Legend className="sr-only">{question.question}</Radio.Legend>
       {question.options.map((option, index) => (
-        <Radio.Item key={option.label} value={option.label} label={label(option, index)} />
+        <Radio.Item key={option.label} value={option.label} label={<OptionLabel option={option} index={index} />} />
       ))}
     </Radio.Group>
   );
 }
 
-/** What was chosen, once the card has done its job. */
-export function answerSummary(block: Block): string {
-  const ask = block.question;
-  if (!ask) return "";
-  if (ask.dismissed) return "Dismissed";
-  if (!ask.answers) return "";
-  return ask.questions.map((q) => ask.answers?.[q.question] ?? "").filter(Boolean).join(" · ");
+function OptionLabel({ option, index }: { option: Question["options"][number]; index: number }) {
+  return (
+    <span className="flex items-start gap-2">
+      <kbd className="crew-keycap mt-px">{LETTERS[index] ?? "·"}</kbd>
+      <span className="flex min-w-0 flex-col">
+        <span>{option.label}</span>
+        {option.description && <span className="text-[12px] leading-4 text-text-muted">{option.description}</span>}
+      </span>
+    </span>
+  );
 }

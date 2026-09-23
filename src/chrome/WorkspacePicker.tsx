@@ -5,11 +5,12 @@ import {
   FolderPlusIcon,
   MagnifyingGlassIcon,
 } from "@phosphor-icons/react";
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
-import { ActionMenu, DELETE, menuFromEvent, type MenuPoint } from "./ActionMenu";
+import { useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { ActionMenu } from "./ActionMenu";
 import { SortableItem, SortableList } from "./SortableList";
 import { commandKeys, type CommandId } from "../lib/commands";
 import { isDeleteChord } from "../lib/hotkey";
+import { DELETE, menuFromEvent, type MenuPoint } from "../lib/menu";
 import { filterWorkspaces, shortenPath, workspaceMark } from "../lib/workspaces";
 import type { Workspace } from "../lib/types";
 
@@ -40,55 +41,12 @@ function jumpCommand(index: number): CommandId | null {
  * trigger is the sidebar's identity row, Linear-style: mark, name, chevron.
  */
 export function WorkspacePicker(props: Props) {
-  const [query, setQuery] = useState("");
-  const [cursor, setCursor] = useState(0);
   const [menu, setMenu] = useState<Menu | null>(null);
-  const search = useRef<HTMLInputElement>(null);
-  const list = useRef<HTMLDivElement>(null);
   const active = props.workspaces.find((workspace) => workspace.id === props.activeId);
-  const searchable = props.workspaces.length >= SEARCHABLE_FROM;
-  const filtering = query.trim().length > 0;
-  const visible = useMemo(
-    () => filterWorkspaces(props.workspaces, query),
-    [props.workspaces, query],
-  );
-  const ids = useMemo(() => visible.map((workspace) => workspace.id), [visible]);
-
-  useEffect(() => setCursor(0), [query]);
-  useEffect(() => {
-    if (!props.open) setQuery("");
-  }, [props.open]);
 
   function pick(id: string) {
     props.onSelect(id);
     props.onOpenChange(false);
-  }
-
-  function onKeyDown(event: KeyboardEvent<HTMLDivElement>) {
-    if (event.key === "ArrowDown") {
-      event.preventDefault();
-      setCursor((c) => Math.min(c + 1, visible.length - 1));
-      return;
-    }
-    if (event.key === "ArrowUp") {
-      event.preventDefault();
-      setCursor((c) => Math.max(c - 1, 0));
-      return;
-    }
-    if (event.key === "Enter") {
-      event.preventDefault();
-      const workspace = visible[cursor];
-      if (workspace) pick(workspace.id);
-      return;
-    }
-    // Bare digits pick a row while the list, not a search field, holds focus.
-    if (!filtering && /^[1-9]$/.test(event.key) && !event.metaKey && !event.ctrlKey) {
-      const workspace = visible[Number(event.key) - 1];
-      if (workspace) {
-        event.preventDefault();
-        pick(workspace.id);
-      }
-    }
   }
 
   return (
@@ -110,76 +68,18 @@ export function WorkspacePicker(props: Props) {
 
       <Popover.Portal>
         <Popover.Positioner side="bottom" align="start" sideOffset={4} className="z-50">
-          <Popover.Popup
-            initialFocus={searchable ? search : list}
-            onKeyDown={onKeyDown}
-            className="w-[280px] origin-(--transform-origin) overflow-hidden rounded-xl bg-kumo-control text-kumo-default shadow-xl ring ring-kumo-line outline-none transition-[opacity,scale] duration-100 data-starting-style:scale-[0.98] data-starting-style:opacity-0 data-ending-style:scale-[0.98] data-ending-style:opacity-0"
-          >
-            {searchable && (
-              <div className="flex h-9 items-center gap-2.5 border-b border-kumo-line px-3">
-                <MagnifyingGlassIcon className="size-3.5 shrink-0 text-kumo-subtle" />
-                <input
-                  ref={search}
-                  value={query}
-                  placeholder="Search workspaces"
-                  aria-label="Search workspaces"
-                  spellCheck={false}
-                  onChange={(event) => setQuery(event.target.value)}
-                  className="h-full min-w-0 flex-1 bg-transparent outline-none"
-                />
-              </div>
-            )}
-
-            <div
-              ref={list}
-              tabIndex={-1}
-              aria-label="Workspaces"
-              className="max-h-80 overflow-y-auto p-1.5 outline-none"
-            >
-              <SortableList ids={ids} disabled={filtering} onReorder={props.onReorder}>
-                {visible.map((workspace, index) => (
-                  <SortableItem
-                    key={workspace.id}
-                    id={workspace.id}
-                    index={index}
-                    group="workspace"
-                    disabled={filtering}
-                  >
-                    <Row
-                      workspace={workspace}
-                      active={workspace.id === props.activeId}
-                      hovered={index === cursor}
-                      jump={filtering ? null : jumpCommand(index)}
-                      onSelect={() => pick(workspace.id)}
-                      onHover={() => setCursor(index)}
-                      onOpenMenu={(point) => setMenu({ point, workspace })}
-                      onRemove={() => props.onRemove(workspace)}
-                    />
-                  </SortableItem>
-                ))}
-              </SortableList>
-              {visible.length === 0 && (
-                <p className="px-2.5 py-6 text-center text-placeholder">No matches</p>
-              )}
-            </div>
-
-            <div className="border-t border-kumo-line p-1.5">
-              <button
-                type="button"
-                onClick={() => {
-                  props.onCreate();
-                  props.onOpenChange(false);
-                }}
-                className="flex h-8 w-full items-center gap-2.5 rounded-md px-2 text-left transition-colors hover:bg-hover"
-              >
-                <FolderPlusIcon className="size-4 shrink-0 text-kumo-subtle" />
-                <span className="min-w-0 flex-1 truncate">Open workspace…</span>
-                <span className="shrink-0 text-[11px] text-kumo-subtle">
-                  {commandKeys("open-workspace")}
-                </span>
-              </button>
-            </div>
-          </Popover.Popup>
+          <WorkspacePopup
+            workspaces={props.workspaces}
+            activeId={props.activeId}
+            onPick={pick}
+            onCreate={() => {
+              props.onCreate();
+              props.onOpenChange(false);
+            }}
+            onReorder={props.onReorder}
+            onOpenMenu={(point, workspace) => setMenu({ point, workspace })}
+            onRemove={props.onRemove}
+          />
         </Popover.Positioner>
       </Popover.Portal>
 
@@ -201,6 +101,134 @@ export function WorkspacePicker(props: Props) {
         />
       )}
     </Popover.Root>
+  );
+}
+
+/** Mounted only while open, so every open starts from an empty search. */
+function WorkspacePopup({
+  workspaces,
+  activeId,
+  onPick,
+  onCreate,
+  onReorder,
+  onOpenMenu,
+  onRemove,
+}: {
+  workspaces: Workspace[];
+  activeId: string | null;
+  onPick: (id: string) => void;
+  onCreate: () => void;
+  onReorder: (ids: string[]) => void;
+  onOpenMenu: (point: MenuPoint, workspace: Workspace) => void;
+  onRemove: (workspace: Workspace) => void;
+}) {
+  const [query, setQuery] = useState("");
+  const [cursor, setCursor] = useState(0);
+  const search = useRef<HTMLInputElement>(null);
+  const list = useRef<HTMLDivElement>(null);
+  const searchable = workspaces.length >= SEARCHABLE_FROM;
+  const filtering = query.trim().length > 0;
+  const visible = useMemo(() => filterWorkspaces(workspaces, query), [workspaces, query]);
+  const ids = useMemo(() => visible.map((workspace) => workspace.id), [visible]);
+
+  function onKeyDown(event: KeyboardEvent<HTMLDivElement>) {
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      setCursor((c) => Math.min(c + 1, visible.length - 1));
+      return;
+    }
+    if (event.key === "ArrowUp") {
+      event.preventDefault();
+      setCursor((c) => Math.max(c - 1, 0));
+      return;
+    }
+    if (event.key === "Enter") {
+      event.preventDefault();
+      const workspace = visible[cursor];
+      if (workspace) onPick(workspace.id);
+      return;
+    }
+    // Bare digits pick a row while the list, not a search field, holds focus.
+    if (!filtering && /^[1-9]$/.test(event.key) && !event.metaKey && !event.ctrlKey) {
+      const workspace = visible[Number(event.key) - 1];
+      if (workspace) {
+        event.preventDefault();
+        onPick(workspace.id);
+      }
+    }
+  }
+
+  return (
+    <Popover.Popup
+      initialFocus={searchable ? search : list}
+      onKeyDown={onKeyDown}
+      className="w-[280px] origin-(--transform-origin) overflow-hidden rounded-xl bg-kumo-control text-kumo-default shadow-xl ring ring-kumo-line outline-none transition-[opacity,scale] duration-100 data-starting-style:scale-[0.98] data-starting-style:opacity-0 data-ending-style:scale-[0.98] data-ending-style:opacity-0"
+    >
+      {searchable && (
+        <div className="flex h-9 items-center gap-2.5 border-b border-kumo-line px-3">
+          <MagnifyingGlassIcon className="size-3.5 shrink-0 text-kumo-subtle" />
+          <input
+            ref={search}
+            value={query}
+            placeholder="Search workspaces"
+            aria-label="Search workspaces"
+            spellCheck={false}
+            onChange={(event) => {
+              setQuery(event.target.value);
+              setCursor(0);
+            }}
+            className="h-full min-w-0 flex-1 bg-transparent outline-none"
+          />
+        </div>
+      )}
+
+      <div
+        ref={list}
+        tabIndex={-1}
+        aria-label="Workspaces"
+        className="max-h-80 overflow-y-auto p-1.5 outline-none"
+      >
+        <SortableList ids={ids} disabled={filtering} onReorder={onReorder}>
+          {visible.map((workspace, index) => (
+            <SortableItem
+              key={workspace.id}
+              id={workspace.id}
+              index={index}
+              group="workspace"
+              disabled={filtering}
+            >
+              <Row
+                workspace={workspace}
+                active={workspace.id === activeId}
+                hovered={index === cursor}
+                jump={filtering ? null : jumpCommand(index)}
+                onSelect={() => onPick(workspace.id)}
+                onHover={() => setCursor(index)}
+                onOpenMenu={(point) => onOpenMenu(point, workspace)}
+                onRemove={() => onRemove(workspace)}
+              />
+            </SortableItem>
+          ))}
+        </SortableList>
+        {visible.length === 0 && (
+          <p className="px-2.5 py-6 text-center text-placeholder">No matches</p>
+        )}
+      </div>
+
+      <div className="border-t border-kumo-line p-1.5">
+        <button
+          type="button"
+          onClick={onCreate}
+          className="flex h-8 w-full items-center gap-2.5 rounded-md px-2 text-left transition-colors hover:bg-hover"
+        >
+          <FolderPlusIcon className="size-4 shrink-0 text-kumo-subtle" />
+          <span className="min-w-0 flex-1 truncate">Open workspace…</span>
+          <span className="shrink-0 text-[11px] text-kumo-subtle">
+            {commandKeys("open-workspace")}
+          </span>
+        </button>
+      </div>
+    </Popover.Popup>
   );
 }
 

@@ -58,6 +58,8 @@ export function canReorder(prefs: SidebarPrefs, filtering: boolean): boolean {
   return !filtering && prefs.ordering === "manual" && prefs.grouping === "kind";
 }
 
+const KNOWN_DETAILS = new Set<unknown>(DEFAULT_PREFS.show);
+
 export function parsePrefs(raw: string | null): SidebarPrefs {
   if (!raw) return DEFAULT_PREFS;
   try {
@@ -66,7 +68,7 @@ export function parsePrefs(raw: string | null): SidebarPrefs {
       grouping: pick(parsed.grouping, ["none", "kind", "provider", "status"], "kind"),
       ordering: pick(parsed.ordering, ["manual", "updated", "name"], "updated"),
       show: Array.isArray(parsed.show)
-        ? (parsed.show.filter((d) => DEFAULT_PREFS.show.includes(d as Detail)) as Detail[])
+        ? (parsed.show.filter((d) => KNOWN_DETAILS.has(d)) as Detail[])
         : DEFAULT_PREFS.show,
       hiddenKinds: Array.isArray(parsed.hiddenKinds)
         ? (parsed.hiddenKinds.filter((k) => k === "agent" || k === "terminal") as SessionKind[])

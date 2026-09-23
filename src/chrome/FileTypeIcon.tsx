@@ -1,3 +1,5 @@
+import { extensionOf } from "../lib/attachments";
+
 /** Extension-coloured file glyph. A dot keeps the palette readable at 14px. */
 const COLORS: Record<string, string> = {
   ts: "#3178c6", tsx: "#3178c6", js: "#f0db4f", jsx: "#f0db4f",
@@ -8,11 +10,6 @@ const COLORS: Record<string, string> = {
   md: "#519aba", sql: "#e38c00", sh: "#89e051", lock: "#8a8a8f",
   png: "#a074c4", jpg: "#a074c4", jpeg: "#a074c4", svg: "#ffb13b",
 };
-
-export function extensionOf(name: string): string {
-  const index = name.lastIndexOf(".");
-  return index > 0 ? name.slice(index + 1).toLowerCase() : "";
-}
 
 export function FileTypeIcon({
   name,

@@ -90,9 +90,9 @@ const UNLISTED =
 
 /** Live commands worth offering in the palette, in declaration order. */
 export function listedCommands(): { id: CommandId; label: string; keys: string }[] {
-  return COMMAND_IDS.filter((id) => handlers.has(id) && !UNLISTED.test(id)).map((id) => ({
-    id,
-    label: COMMANDS[id].label,
-    keys: commandKeys(id),
-  }));
+  return COMMAND_IDS.flatMap((id) =>
+    handlers.has(id) && !UNLISTED.test(id)
+      ? [{ id, label: COMMANDS[id].label, keys: commandKeys(id) }]
+      : [],
+  );
 }

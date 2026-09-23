@@ -380,8 +380,9 @@ export function App() {
 
       {sheet && (
         <AgentSheet
+          key={sheet.session?.id ?? "new"}
           session={sheet.session}
-          existingNames={sessions.filter((s) => s.kind === "agent").map((s) => s.name)}
+          existingNames={sessions.flatMap((s) => (s.kind === "agent" ? [s.name] : []))}
           onNewRoutine={sheet.session ? newRoutineFor(sheet.session) : null}
           onSave={saveSheet}
           onClose={() => setSheet(null)}

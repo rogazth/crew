@@ -134,6 +134,7 @@ export async function reload(id: string): Promise<void> {
   // does not work: the daemon caps a window, and silently handing back less
   // than was asked for is what throws them out of what they were reading.
   for (let page = 0; page < FOCUS_PAGES && row.fromPos > held && held > 0 && row.more; page += 1) {
+    // react-doctor-disable-next-line react-doctor/async-await-in-loop -- each page starts where the previous one ended
     await loadEarlier(id);
   }
 }
@@ -162,6 +163,7 @@ export async function focus(id: string, pos: number): Promise<void> {
   const row = threads.get(id);
   if (!row) return;
   for (let page = 0; page < FOCUS_PAGES && row.fromPos > pos && row.more; page += 1) {
+    // react-doctor-disable-next-line react-doctor/async-await-in-loop -- each page starts where the previous one ended
     await loadEarlier(id);
   }
   row.focusId = row.blocks[pos - row.fromPos]?.id ?? null;

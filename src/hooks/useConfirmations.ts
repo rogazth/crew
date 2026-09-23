@@ -46,10 +46,8 @@ export function useConfirmations({ closeTabsFor, removeSession, removeWorkspace 
         description: "Their history is removed from this workspace. This cannot be undone.",
         action: "Delete",
         onConfirm: async () => {
-          for (const session of list) {
-            closeTabsFor(session.id);
-            await removeSession(session.id);
-          }
+          for (const session of list) closeTabsFor(session.id);
+          await Promise.all(list.map((session) => removeSession(session.id)));
         },
       });
     },

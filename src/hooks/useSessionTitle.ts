@@ -21,14 +21,14 @@ export function useSessionTitle(sessions: Session[], adopt: (id: string, name: s
 
   useEffect(() => {
     let stopped = false;
-    const sweep = async () => {
-      for (const session of latest.current) {
-        if (stopped) return;
-        if (session.kind !== 'terminal') continue;
-        const name = await api.syncSessionTitle(session.id).catch(() => null);
-        if (!stopped && name) adopt(session.id, name);
-      }
-    };
+    const sweep = () =>
+      Promise.all(
+        latest.current.map(async (session) => {
+          if (session.kind !== 'terminal') return;
+          const name = await api.syncSessionTitle(session.id).catch(() => null);
+          if (!stopped && name) adopt(session.id, name);
+        }),
+      );
     void sweep();
     const timer = setInterval(() => void sweep(), SWEEP_MS);
     return () => {

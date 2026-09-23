@@ -39,8 +39,30 @@ const EMPTY: AgentDraft = {
 /** Must match .sheet-panel-out in index.css. */
 const CLOSE_MS = 150;
 
+function draftOf(session: Session | null, fallback: Partial<AgentDraft>): AgentDraft {
+  if (!session) return { ...EMPTY, ...fallback };
+  return {
+    name: session.name,
+    provider: session.provider,
+    model: session.model || DEFAULT_MODEL,
+    description: session.description,
+    notifications: session.notifications,
+    autonomy: session.autonomy,
+  };
+}
+
+function nameError(name: string, existingNames: string[], current: string | undefined) {
+  if (!name) return { taken: false, error: "Name is required" };
+  const lower = name.toLowerCase();
+  const taken = existingNames.some((n) => n.toLowerCase() === lower && n !== current);
+  return { taken, error: taken ? "An agent with this name already exists" : null };
+}
+
 export function AgentSheet({ session, existingNames, onNewRoutine, onSave, onClose }: Props) {
-  const [draft, setDraft] = useState<AgentDraft>(EMPTY);
+  // Seeded once per mount (the parent keys us by session): the CLI probe landing
+  // mid-edit must not wipe what was typed.
+  const { effective } = useDefaultAgent();
+  const [draft, setDraft] = useState<AgentDraft>(() => draftOf(session, effective));
   const [submitted, setSubmitted] = useState(false);
   const [saving, setSaving] = useState(false);
   const [closing, setClosing] = useState(false);
@@ -57,39 +79,8 @@ export function AgentSheet({ session, existingNames, onNewRoutine, onSave, onClo
     if (closeTimer.current !== null) clearTimeout(closeTimer.current);
   }, []);
 
-  // Read when the sheet opens, not tracked: the CLI probe landing mid-edit
-  // must not wipe what was typed.
-  const { effective } = useDefaultAgent();
-  const fresh = useRef(effective);
-  useEffect(() => {
-    fresh.current = effective;
-  });
-
-  useEffect(() => {
-    setSubmitted(false);
-    setDraft(
-      session
-        ? {
-            name: session.name,
-            provider: session.provider,
-            model: session.model || DEFAULT_MODEL,
-            description: session.description,
-            notifications: session.notifications,
-            autonomy: session.autonomy,
-          }
-        : { ...EMPTY, ...fresh.current },
-    );
-  }, [session]);
-
   const name = draft.name.trim();
-  const taken = existingNames.some(
-    (n) => n.toLowerCase() === name.toLowerCase() && n !== session?.name,
-  );
-  const error = !name
-    ? "Name is required"
-    : taken
-      ? "An agent with this name already exists"
-      : null;
+  const { taken, error } = nameError(name, existingNames, session?.name);
 
   async function submit() {
     setSubmitted(true);
@@ -121,6 +112,7 @@ export function AgentSheet({ session, existingNames, onNewRoutine, onSave, onClo
 
   return (
     <div
+      role="presentation"
       className={`fixed inset-0 z-40 flex justify-end ${closing ? "pointer-events-none" : ""}`}
       onClick={requestClose}
     >
@@ -148,78 +140,7 @@ export function AgentSheet({ session, existingNames, onNewRoutine, onSave, onClo
         </header>
 
         <div className="min-h-0 flex-1 space-y-5 overflow-y-auto p-4">
-          <div className="flex justify-center pt-2 pb-1">
-            <div className="flex size-16 items-center justify-center rounded-2xl border border-border bg-sidebar">
-              <ProviderIcon provider={draft.provider} className="size-7" />
-            </div>
-          </div>
-
-          <Input
-            autoFocus
-            label="Name"
-            className="w-full"
-            value={draft.name}
-            placeholder="e.g. research"
-            {...(showError ? { error: showError } : {})}
-            variant={showError ? "error" : "default"}
-            onChange={(e) => setDraft({ ...draft, name: e.target.value })}
-          />
-
-          <div className="flex flex-col gap-1.5">
-            <Label>Model</Label>
-            <ModelPicker
-              provider={draft.provider}
-              model={draft.model}
-              onChange={(provider: ProviderId, model) =>
-                setDraft({ ...draft, provider, model })
-              }
-            />
-          </div>
-
-          <InputArea
-            label="Description"
-            className="w-full"
-            rows={4}
-            value={draft.description}
-            placeholder="What this agent is for, and how it should work"
-            onChange={(e) => setDraft({ ...draft, description: e.target.value })}
-          />
-
-          <div className="rounded-xl border border-border bg-sidebar p-3">
-            <Switch
-              variant="neutral"
-              controlFirst={false}
-              checked={draft.autonomy === "full"}
-              onCheckedChange={(checked) =>
-                setDraft({ ...draft, autonomy: checked ? "full" : "ask" })
-              }
-              label={
-                <span className="block">
-                  <span className="block font-medium">Run autonomously</span>
-                  <span className="mt-0.5 block font-normal text-kumo-subtle">
-                    Tools run without asking. Off means every edit and command waits for Allow
-                  </span>
-                </span>
-              }
-            />
-          </div>
-
-          <div className="rounded-xl border border-border bg-sidebar p-3">
-            <Switch
-              variant="neutral"
-              controlFirst={false}
-              checked={draft.notifications}
-              onCheckedChange={(checked) => setDraft({ ...draft, notifications: checked })}
-              label={
-                <span className="block">
-                  <span className="block font-medium">Notifications</span>
-                  <span className="mt-0.5 block font-normal text-kumo-subtle">
-                    Get notified when this agent finishes or needs input
-                  </span>
-                </span>
-              }
-            />
-          </div>
+          <AgentFields draft={draft} error={showError} onChange={setDraft} />
 
           {onNewRoutine && (
             <Button
@@ -247,5 +168,89 @@ export function AgentSheet({ session, existingNames, onNewRoutine, onSave, onClo
         </footer>
       </aside>
     </div>
+  );
+}
+
+function AgentFields({
+  draft,
+  error,
+  onChange,
+}: {
+  draft: AgentDraft;
+  error: string | undefined;
+  onChange: (draft: AgentDraft) => void;
+}) {
+  const update = (patch: Partial<AgentDraft>) => onChange({ ...draft, ...patch });
+  return (
+    <>
+      <div className="flex justify-center pt-2 pb-1">
+        <div className="flex size-16 items-center justify-center rounded-2xl border border-border bg-sidebar">
+          <ProviderIcon provider={draft.provider} className="size-7" />
+        </div>
+      </div>
+
+      <Input
+        autoFocus
+        label="Name"
+        className="w-full"
+        value={draft.name}
+        placeholder="e.g. research"
+        {...(error ? { error } : {})}
+        variant={error ? "error" : "default"}
+        onChange={(e) => update({ name: e.target.value })}
+      />
+
+      <div className="flex flex-col gap-1.5">
+        <Label>Model</Label>
+        <ModelPicker
+          provider={draft.provider}
+          model={draft.model}
+          onChange={(provider: ProviderId, model) => update({ provider, model })}
+        />
+      </div>
+
+      <InputArea
+        label="Description"
+        className="w-full"
+        rows={4}
+        value={draft.description}
+        placeholder="What this agent is for, and how it should work"
+        onChange={(e) => update({ description: e.target.value })}
+      />
+
+      <div className="rounded-xl border border-border bg-sidebar p-3">
+        <Switch
+          variant="neutral"
+          controlFirst={false}
+          checked={draft.autonomy === "full"}
+          onCheckedChange={(checked) => update({ autonomy: checked ? "full" : "ask" })}
+          label={
+            <span className="block">
+              <span className="block font-medium">Run autonomously</span>
+              <span className="mt-0.5 block font-normal text-kumo-subtle">
+                Tools run without asking. Off means every edit and command waits for Allow
+              </span>
+            </span>
+          }
+        />
+      </div>
+
+      <div className="rounded-xl border border-border bg-sidebar p-3">
+        <Switch
+          variant="neutral"
+          controlFirst={false}
+          checked={draft.notifications}
+          onCheckedChange={(checked) => update({ notifications: checked })}
+          label={
+            <span className="block">
+              <span className="block font-medium">Notifications</span>
+              <span className="mt-0.5 block font-normal text-kumo-subtle">
+                Get notified when this agent finishes or needs input
+              </span>
+            </span>
+          }
+        />
+      </div>
+    </>
   );
 }

@@ -5,34 +5,14 @@ import {
   PencilSimpleIcon,
   SelectionAllIcon,
   TrashIcon,
+  type Icon,
 } from "@phosphor-icons/react";
-import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type MouseEvent } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
 import { createPortal } from "react-dom";
-import { IS_MAC, isDeleteChord } from "../lib/hotkey";
+import { isDeleteChord } from "../lib/hotkey";
+import type { MenuAction, MenuIcon, MenuPoint } from "../lib/menu";
 
-export type MenuAction = {
-  id: string;
-  label: string;
-  icon: keyof typeof ICONS;
-  /** Single key that fires the action while the menu is open; shown as the shortcut. */
-  hotkey: string;
-  danger?: boolean;
-  disabled?: boolean;
-};
-
-export type MenuPoint = { x: number; y: number };
-
-export const RENAME: MenuAction = { id: "rename", label: "Rename", icon: "edit", hotkey: "R" };
-export const EDIT: MenuAction = { id: "edit", label: "Edit", icon: "edit", hotkey: "E" };
-export const DELETE: MenuAction = {
-  id: "delete",
-  label: "Delete",
-  icon: "delete",
-  hotkey: IS_MAC ? "⌘⌫" : "Del",
-  danger: true,
-};
-
-const ICONS = {
+const ICONS: Record<MenuIcon, Icon> = {
   edit: PencilSimpleIcon,
   delete: TrashIcon,
   copy: CopyIcon,
@@ -52,12 +32,6 @@ type Props = {
 
 function keyOf(action: MenuAction): string {
   return action.hotkey.toLowerCase();
-}
-
-export function menuFromEvent(event: MouseEvent): MenuPoint {
-  event.preventDefault();
-  event.stopPropagation();
-  return { x: event.clientX, y: event.clientY };
 }
 
 /**

@@ -78,11 +78,39 @@ type Props = {
 
 /** The plus next to the tabs: fixed surfaces on top, the workspace's own agents and sessions below. */
 export function TabLauncher({ open, onOpenChange, sessions, onLaunch }: Props) {
+  function pick(launch: Launch) {
+    onLaunch(launch);
+    onOpenChange(false);
+  }
+
+  return (
+    <Popover.Root open={open} onOpenChange={onOpenChange} modal={false}>
+      <Popover.Trigger
+        data-tauri-drag-region="false"
+        aria-label={`New tab ${commandKeys("open-launcher")}`}
+        title={`New tab ${commandKeys("open-launcher")}`}
+        className="flex size-7 shrink-0 items-center justify-center rounded-md text-text-muted outline-none transition-colors hover:bg-hover hover:text-text data-popup-open:bg-hover data-popup-open:text-text"
+      >
+        <PlusIcon className="size-4" />
+      </Popover.Trigger>
+
+      <Popover.Portal>
+        <Popover.Positioner side="bottom" align="start" sideOffset={2} className="z-50">
+          <LauncherPopup sessions={sessions} onPick={pick} />
+        </Popover.Positioner>
+      </Popover.Portal>
+    </Popover.Root>
+  );
+}
+
+/** Mounted only while open, so every open starts from an empty query. */
+function LauncherPopup({ sessions, onPick }: { sessions: Session[]; onPick: (launch: Launch) => void }) {
   const [query, setQuery] = useState("");
+  const search = useRef<HTMLInputElement>(null);
   const list = useRef<HTMLDivElement>(null);
   const [cursor, setCursor] = useState(0);
 
-  const { effective, installed } = useDefaultAgent(open);
+  const { effective, installed } = useDefaultAgent();
   const actions = useMemo(() => {
     const all = [TERMINAL, NEW_AGENT, ...sessionActions(installed, effective.provider), ...TRAILING];
     if (!query.trim()) return all;
@@ -107,20 +135,9 @@ export function TabLauncher({ open, onOpenChange, sessions, onLaunch }: Props) {
     [actions, matches],
   );
 
-  useEffect(() => setCursor(0), [query]);
-  useEffect(() => {
-    if (open) return;
-    setQuery("");
-    setCursor(0);
-  }, [open]);
   useEffect(() => {
     list.current?.querySelector('[data-active="true"]')?.scrollIntoView({ block: "nearest" });
   }, [cursor]);
-
-  function pick(launch: Launch) {
-    onLaunch(launch);
-    onOpenChange(false);
-  }
 
   function onKeyDown(event: React.KeyboardEvent) {
     if (event.key === "ArrowDown") {
@@ -134,87 +151,76 @@ export function TabLauncher({ open, onOpenChange, sessions, onLaunch }: Props) {
     if (event.key === "Enter") {
       event.preventDefault();
       const item = items[cursor];
-      if (item) pick(item);
+      if (item) onPick(item);
     }
   }
 
   return (
-    <Popover.Root open={open} onOpenChange={onOpenChange} modal={false}>
-      <Popover.Trigger
-        data-tauri-drag-region="false"
-        aria-label={`New tab ${commandKeys("open-launcher")}`}
-        title={`New tab ${commandKeys("open-launcher")}`}
-        className="flex size-7 shrink-0 items-center justify-center rounded-md text-text-muted outline-none transition-colors hover:bg-hover hover:text-text data-popup-open:bg-hover data-popup-open:text-text"
-      >
-        <PlusIcon className="size-4" />
-      </Popover.Trigger>
+    <Popover.Popup
+      initialFocus={search}
+      onKeyDown={onKeyDown}
+      className="w-[380px] origin-(--transform-origin) overflow-hidden rounded-xl bg-kumo-control text-kumo-default shadow-xl ring ring-kumo-line outline-none transition-[opacity,scale] duration-100 data-starting-style:scale-95 data-starting-style:opacity-0 data-ending-style:scale-95 data-ending-style:opacity-0"
+    >
+      <div className="flex items-center gap-2 border-b border-kumo-line px-3">
+        <MagnifyingGlassIcon className="size-4 shrink-0 text-kumo-subtle" />
+        <input
+          ref={search}
+          value={query}
+          placeholder="Open an agent, a session, …"
+          aria-label="Open a tab"
+          onChange={(event) => {
+            setQuery(event.target.value);
+            setCursor(0);
+          }}
+          className="min-w-0 flex-1 bg-transparent py-3 outline-none"
+        />
+      </div>
 
-      <Popover.Portal>
-        <Popover.Positioner side="bottom" align="start" sideOffset={2} className="z-50">
-          <Popover.Popup
-            onKeyDown={onKeyDown}
-            className="w-[380px] origin-(--transform-origin) overflow-hidden rounded-xl bg-kumo-control text-kumo-default shadow-xl ring ring-kumo-line outline-none transition-[opacity,scale] duration-100 data-starting-style:scale-95 data-starting-style:opacity-0 data-ending-style:scale-95 data-ending-style:opacity-0"
-          >
-            <div className="flex items-center gap-2 border-b border-kumo-line px-3">
-              <MagnifyingGlassIcon className="size-4 shrink-0 text-kumo-subtle" />
-              <input
-                autoFocus
-                value={query}
-                placeholder="Open an agent, a session, …"
-                aria-label="Open a tab"
-                onChange={(event) => setQuery(event.target.value)}
-                className="min-w-0 flex-1 bg-transparent py-3 outline-none"
-              />
-            </div>
+      <div ref={list} className="max-h-80 overflow-y-auto p-1">
+        {actions.map((action, index) => (
+          <Row
+            key={action.id}
+            active={index === cursor}
+            onHover={() => setCursor(index)}
+            onPick={() => onPick(action.launch)}
+            icon={action.icon}
+            label={action.label}
+            hint={action.hint}
+          />
+        ))}
 
-            <div ref={list} className="max-h-80 overflow-y-auto p-1">
-              {actions.map((action, index) => (
-                <Row
-                  key={action.id}
-                  active={index === cursor}
-                  onHover={() => setCursor(index)}
-                  onPick={() => pick(action.launch)}
-                  icon={action.icon}
-                  label={action.label}
-                  hint={action.hint}
-                />
-              ))}
+        {matches.length > 0 && (
+          <p className="px-2.5 pt-3 pb-1 text-[11px] font-semibold tracking-[0.06em] text-kumo-subtle uppercase">
+            {heading}
+          </p>
+        )}
+        {matches.map((session, index) => {
+          const at = actions.length + index;
+          return (
+            <Row
+              key={session.id}
+              active={at === cursor}
+              onHover={() => setCursor(at)}
+              onPick={() => onPick({ kind: "session", session })}
+              icon={
+                session.kind === "agent" ? (
+                  <RobotIcon className="size-4 shrink-0 text-kumo-subtle" />
+                ) : (
+                  <ProviderIcon provider={session.provider} className="size-4 shrink-0" />
+                )
+              }
+              label={session.name}
+              status={session.status}
+              hint={session.kind === "agent" ? "Agent" : "Session"}
+            />
+          );
+        })}
 
-              {matches.length > 0 && (
-                <p className="px-2.5 pt-3 pb-1 text-[11px] font-semibold tracking-[0.06em] text-kumo-subtle uppercase">
-                  {heading}
-                </p>
-              )}
-              {matches.map((session, index) => {
-                const at = actions.length + index;
-                return (
-                  <Row
-                    key={session.id}
-                    active={at === cursor}
-                    onHover={() => setCursor(at)}
-                    onPick={() => pick({ kind: "session", session })}
-                    icon={
-                      session.kind === "agent" ? (
-                        <RobotIcon className="size-4 shrink-0 text-kumo-subtle" />
-                      ) : (
-                        <ProviderIcon provider={session.provider} className="size-4 shrink-0" />
-                      )
-                    }
-                    label={session.name}
-                    status={session.status}
-                    hint={session.kind === "agent" ? "Agent" : "Session"}
-                  />
-                );
-              })}
-
-              {items.length === 0 && (
-                <p className="px-3 py-6 text-center text-placeholder">No matches</p>
-              )}
-            </div>
-          </Popover.Popup>
-        </Popover.Positioner>
-      </Popover.Portal>
-    </Popover.Root>
+        {items.length === 0 && (
+          <p className="px-3 py-6 text-center text-placeholder">No matches</p>
+        )}
+      </div>
+    </Popover.Popup>
   );
 }
 

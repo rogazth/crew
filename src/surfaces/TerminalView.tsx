@@ -7,7 +7,7 @@ import { WebglAddon } from "@xterm/addon-webgl";
 import { Terminal } from "@xterm/xterm";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { TerminalMenu } from "../chrome/TerminalMenu";
-import { menuFromEvent, type MenuPoint } from "../chrome/ActionMenu";
+import { menuFromEvent, type MenuPoint } from "../lib/menu";
 import { useFileDrop } from "../hooks/useFileDrop";
 import { useTerminalPrefs } from "../hooks/useTerminalPrefs";
 import { useTerminalSearch } from "../hooks/useTerminalSearch";

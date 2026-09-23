@@ -1,4 +1,5 @@
-import { ActionMenu, type MenuAction, type MenuPoint } from "./ActionMenu";
+import { ActionMenu } from "./ActionMenu";
+import type { MenuAction, MenuPoint } from "../lib/menu";
 import { IS_MAC } from "../lib/hotkey";
 
 const MOD = IS_MAC ? "⌘" : "Ctrl+";

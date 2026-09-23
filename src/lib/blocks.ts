@@ -235,3 +235,12 @@ function appendStreaming(blocks: Block[], role: "assistant" | "reasoning", text:
   }
   return [...settleStreaming(blocks), { ...newBlock(role, text), streaming: true }];
 }
+
+/** What was chosen, once the card has done its job. */
+export function answerSummary(block: Block): string {
+  const ask = block.question;
+  if (!ask) return "";
+  if (ask.dismissed) return "Dismissed";
+  if (!ask.answers) return "";
+  return ask.questions.flatMap((q) => ask.answers?.[q.question] || []).join(" · ");
+}

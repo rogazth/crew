@@ -33,8 +33,6 @@ export function FileEditor({ path, relative }: Props) {
 
   useEffect(() => {
     let cancelled = false;
-    setLoaded(null);
-    setError(null);
     api
       .readTextFile(path)
       .then((text) => {

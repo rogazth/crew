@@ -11,12 +11,22 @@ export function CopyButton({ text, className }: Props) {
     const timer = window.setTimeout(() => setDone(false), 1500);
     return () => window.clearTimeout(timer);
   }, [done]);
+
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(text);
+      setDone(true);
+    } catch {
+      setDone(false);
+    }
+  }
+
   return (
     <button
       type="button"
       aria-label={done ? "Copied" : "Copy"}
       title="Copy"
-      onClick={() => void navigator.clipboard.writeText(text).then(() => setDone(true))}
+      onClick={() => void copy()}
       className={className ?? "crew-copy"}
       {...(done ? { "data-done": "" } : {})}
     >

@@ -11,7 +11,8 @@ import {
 } from "react";
 import { Streamdown, type Components } from "streamdown";
 import "streamdown/styles.css";
-import { FileTypeIcon, extensionOf } from "../../chrome/FileTypeIcon";
+import { FileTypeIcon } from "../../chrome/FileTypeIcon";
+import { extensionOf } from "../../lib/attachments";
 import { openExternal } from "../../lib/external";
 import { groupRuns, isHeadingOnly } from "../../lib/markdownRuns";
 import { VEIL_EMA_SEED_MS, veilDurationMs, veilEmaNext } from "../../lib/veil";
@@ -113,6 +114,7 @@ export const Markdown = memo(function Markdown({ text, streaming }: Props) {
   return (
     <div ref={host} className="crew-md">
       {runs.map((run, index) => (
+        // react-doctor-disable-next-line react-doctor/no-array-index-as-key -- runs only grow at the end while streaming; a content key would remount every chunk
         <MarkdownRun
           key={index}
           kind={run.kind}

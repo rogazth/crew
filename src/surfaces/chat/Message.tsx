@@ -104,6 +104,7 @@ function MentionText({ text }: { text: string }) {
     <>
       {segments.map((segment, index) =>
         segment.kind === "mention" ? (
+          // react-doctor-disable-next-line react-doctor/no-array-index-as-key -- segments of a sent message never reorder
           <button
             key={index}
             type="button"

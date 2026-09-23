@@ -71,6 +71,7 @@ export function CommandPalette({
   const [raw, setRaw] = useState("");
   const [cursor, setCursor] = useState(0);
   const listRef = useRef<HTMLDivElement>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
 
   const forcedActions = raw.startsWith(">");
   const query = forcedActions ? raw.slice(1) : raw;
@@ -80,9 +81,9 @@ export function CommandPalette({
     const commands = listedCommands().map(
       (command): Item => ({ key: `action:${command.id}`, kind: "action", ...command }),
     );
-    const switches = workspaces
-      .filter((workspace) => workspace.id !== activeWorkspaceId)
-      .map((workspace): Item => ({ key: `ws:${workspace.id}`, kind: "workspace", workspace }));
+    const switches = workspaces.flatMap((workspace): Item[] =>
+      workspace.id === activeWorkspaceId ? [] : [{ key: `ws:${workspace.id}`, kind: "workspace", workspace }],
+    );
     return [...commands, ...switches];
   }, [activeWorkspaceId, workspaces]);
 
@@ -123,7 +124,7 @@ export function CommandPalette({
 
   const flat = useMemo(() => groups.flatMap((entry) => entry.items), [groups]);
 
-  useEffect(() => setCursor(0), [raw, shown]);
+  useEffect(() => searchRef.current?.focus(), []);
   useEffect(() => {
     listRef.current?.querySelector('[data-active="true"]')?.scrollIntoView({ block: "nearest" });
   }, [cursor]);
@@ -143,9 +144,14 @@ export function CommandPalette({
     runCommand(item.id);
   }
 
+  function switchMode(next: PaletteMode) {
+    setMode(next);
+    setCursor(0);
+  }
+
   function step(delta: number) {
     const at = MODES.findIndex((entry) => entry.id === mode);
-    setMode(MODES[(at + delta + MODES.length) % MODES.length]!.id);
+    switchMode(MODES[(at + delta + MODES.length) % MODES.length]!.id);
     setRaw((value) => (value.startsWith(">") ? value.slice(1) : value));
   }
 
@@ -174,10 +180,14 @@ export function CommandPalette({
 
   return (
     <div
+      role="presentation"
       className="fixed inset-0 z-50 flex justify-center bg-black/20 pt-[15vh] backdrop-blur-[1px]"
       onClick={onClose}
     >
       <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="Command palette"
         onClick={(event) => event.stopPropagation()}
         onKeyDown={onKeyDown}
         className="flex h-fit max-h-[60vh] w-[580px] flex-col overflow-hidden rounded-2xl border border-border bg-canvas shadow-2xl"
@@ -185,12 +195,15 @@ export function CommandPalette({
         <div className="flex shrink-0 items-center gap-2.5 border-b border-border px-4">
           <MagnifyingGlassIcon className="size-4 shrink-0 text-text-muted" />
           <input
-            autoFocus
+            ref={searchRef}
             value={raw}
             placeholder={PLACEHOLDERS[shown]}
             aria-label="Search"
             spellCheck={false}
-            onChange={(event) => setRaw(event.target.value)}
+            onChange={(event) => {
+              setRaw(event.target.value);
+              setCursor(0);
+            }}
             className="min-w-0 flex-1 bg-transparent py-3.5 outline-none"
           />
         </div>
@@ -200,7 +213,7 @@ export function CommandPalette({
             <button
               key={entry.id}
               type="button"
-              onClick={() => setMode(entry.id)}
+              onClick={() => switchMode(entry.id)}
               className={`rounded-full px-2.5 py-1 transition-colors ${
                 entry.id === shown
                   ? "bg-selected text-text"

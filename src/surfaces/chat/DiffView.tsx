@@ -53,8 +53,8 @@ export const DiffFence = memo(function DiffFence({ code }: { code: string }) {
   const files = useMemo(() => fromFence(code), [code]);
   return (
     <>
-      {files.map((fileDiff, index) => (
-        <FileDiff key={index} fileDiff={fileDiff} options={DIFF_OPTIONS} disableWorkerPool className="crew-diff" />
+      {files.map((fileDiff) => (
+        <FileDiff key={fileDiff.name} fileDiff={fileDiff} options={DIFF_OPTIONS} disableWorkerPool className="crew-diff" />
       ))}
     </>
   );

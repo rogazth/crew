@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Popover } from "@base-ui/react/popover";
 import { CaretDownIcon, CheckIcon } from "@phosphor-icons/react";
 import { ProviderIcon } from "./ProviderIcon";
@@ -29,10 +29,13 @@ export function ModelPicker({ provider, model, trigger = "field", disabled = fal
   // The session's own provider stays reachable even after its CLI is gone.
   const tabs = PROVIDERS.filter((p) => p.id === provider || installed.includes(p));
 
-  useEffect(() => setTab(provider as ProviderId), [provider, open]);
+  function openChange(next: boolean) {
+    if (next) setTab(provider as ProviderId);
+    setOpen(next);
+  }
 
   return (
-    <Popover.Root open={open} onOpenChange={setOpen} modal={false}>
+    <Popover.Root open={open} onOpenChange={openChange} modal={false}>
       {chip ? (
         <Popover.Trigger
           disabled={disabled}

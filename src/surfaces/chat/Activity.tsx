@@ -14,7 +14,7 @@ import {
   XIcon,
   type Icon,
 } from "@phosphor-icons/react";
-import { createElement, memo, useEffect, useMemo, useState, type ReactNode } from "react";
+import { createElement, memo, useMemo, useState, type ReactNode } from "react";
 import {
   FOLD_AT,
   activityDigest,
@@ -27,10 +27,10 @@ import {
   type Phase,
   type PhaseKind,
 } from "../../lib/activity";
-import { isOpen, type Answers, type ApprovalDecision, type Block } from "../../lib/blocks";
+import { answerSummary, isOpen, type Answers, type ApprovalDecision, type Block } from "../../lib/blocks";
 import { glyphKind, hasBody, toolLine } from "../../lib/toolDetail";
 import { ApprovalCard } from "./ApprovalCard";
-import { QuestionCard, answerSummary } from "./QuestionCard";
+import { QuestionCard } from "./QuestionCard";
 import { ToolBody } from "./ToolBody";
 
 type Props = {
@@ -142,9 +142,11 @@ export const ActivityGroup = memo(function ActivityGroup({
  */
 function useFold(live: boolean): [boolean | null, (next: boolean) => void] {
   const [pinned, setPinned] = useState<boolean | null>(null);
-  useEffect(() => {
+  const [wasLive, setWasLive] = useState(live);
+  if (live !== wasLive) {
+    setWasLive(live);
     if (!live) setPinned(null);
-  }, [live]);
+  }
   return [pinned, setPinned];
 }
 

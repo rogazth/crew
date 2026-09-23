@@ -10,13 +10,13 @@ const INLINE_IMAGE: Record<string, string> = {
   webp: "image/webp",
 };
 
-function extension(name: string): string {
+export function extensionOf(name: string): string {
   const index = name.lastIndexOf(".");
   return index > 0 ? name.slice(index + 1).toLowerCase() : "";
 }
 
 export function imageMime(name: string): string | null {
-  return INLINE_IMAGE[extension(name)] ?? null;
+  return INLINE_IMAGE[extensionOf(name)] ?? null;
 }
 
 export function isImage(file: AttachedFile): boolean {
@@ -38,8 +38,8 @@ export type InlineImage = { path: string; mediaType: string; data: string };
 /** Base64 for the images the provider will get inline; unreadable ones fall back to the path. */
 export async function loadInlineImages(files: AttachedFile[]): Promise<InlineImage[]> {
   const images = await Promise.all(
-    files.filter(isImage).map(async (file) => {
-      const mediaType = imageMime(file.name);
+    files.map(async (file) => {
+      const mediaType = isImage(file) ? imageMime(file.name) : null;
       if (!mediaType) return null;
       try {
         const { data } = await readFileBase64(file.path);

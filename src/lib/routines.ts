@@ -198,8 +198,9 @@ export function nextRun(schedule: Schedule, from = Date.now()): number | null {
   at.setSeconds(0, 0);
   at.setHours(schedule.hour, schedule.minute, 0, 0);
   if (at.getTime() <= from) at.setDate(at.getDate() + 1);
+  const days = new Set(schedule.days);
   for (let i = 0; i < 8; i += 1) {
-    if (schedule.days.length === 0 || schedule.days.includes(at.getDay())) return at.getTime();
+    if (days.size === 0 || days.has(at.getDay())) return at.getTime();
     at.setDate(at.getDate() + 1);
   }
   return at.getTime();

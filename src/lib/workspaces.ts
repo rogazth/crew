@@ -54,9 +54,7 @@ export function filterSessions(sessions: Session[], query: string): Session[] {
 
 /** Sessions open without prompting, so the name is derived: claude, claude 2, … */
 export function nextSessionName(sessions: Session[], base: string): string {
-  const taken = new Set(
-    sessions.filter((s) => s.kind === "terminal").map((s) => s.name),
-  );
+  const taken = new Set(sessions.flatMap((s) => (s.kind === "terminal" ? [s.name] : [])));
   if (!taken.has(base)) return base;
   for (let i = 2; ; i++) {
     const candidate = `${base} ${i}`;
