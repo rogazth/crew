@@ -26,12 +26,12 @@ tests, markup snapshots, smoke/sanity checks, regression suites.
 
 | Part | Tests | Lines | Functions |
 |---|---|---|---|
-| Rust workspace | 839 | 97.6% | none never run |
+| Rust workspace | 850 | 97.6% | none never run |
 | `src/lib` | | 100% | 100% |
 | `src/hooks` | | 100% | 100% |
 | `electron/` | | 100% | 100% |
 | `src/chrome`, `src/surfaces` | | 80% / 59–79% | contracts, not a number |
-| Frontend total | 1932 | 85.3% | 93.2% |
+| Frontend total | 1946 | 85.3% | 93.2% |
 
 `npm test` runs in about 16 s on this machine while other work shares the
 CPU. `cargo test --workspace` takes about 11 s once built; its largest
@@ -221,38 +221,27 @@ test module never breaks another's build.
   - `transport.ts`: a stale stream handle's close no longer silences a
     reopened stream.
   - `pty.ts`: an unsubscribe only tears down the stream it still owns.
-- **Latent, not reached today:**
-  - `useTerminalSearch` re-runs forever if `dark` is a new function on every
-    render. The app passes a stable one.
-- **Open, small:**
-  - `RoutineEditor` `save()` swallows a rejected save into an unhandled
-    rejection, and `FileEditor` replaces the editor with the error after a
-    failed write, so there is no way to retry. Both need a decision on how
-    to show the error.
-  - When a turn refuses to start, the "Routine · name" note is already in
-    the chat.
-  - Both cron parsers reject 7 as Sunday in the day-of-week field.
-  - The pty spawn path leaks the child if `dup_fd(master)` fails after a
-    successful spawn. A test can't reach this.
-  - `electron/main.ts` accepts a handshake URL with any scheme. Quitting
-    while crewd is still starting waits for the handshake or the 10 s
-    timeout before sending SIGTERM, and still creates the window.
-  - `electron/` isn't type-checked. Under the repo's strict options it has
-    three type errors (the handle's stderr type under `stdio: "inherit"`,
-    readonly dialog `properties`, a `ReadableStream` cast). None of them
-    matters at runtime.
-- **Open, serious:** in `store.rs` `migrate()`, steps 3, 4, 5, 6, 9 and 14
-  add a column and record the version as two statements with no transaction.
-  A crash, or a failed version write, between them makes every later open fail
-  with "duplicate column name", and the database never opens again. Only
-  step 13 is atomic. The fix is to wrap each step in a transaction, or to
-  guard each ADD COLUMN with `has_column`. `migrate()` is being edited on the
-  `browser` branch, so the fix lands there or right after it merges (R5).
-- **Open:** `useTabs` reads `tabs:<workspace>` once. If that read fails, it
-  falls back to no tabs and never retries, so the next save writes the empty
-  list over the saved tabs. A daemon hiccup at startup can wipe a workspace's
-  tabs. Fixing it means choosing between retrying the read and holding writes
-  until a read succeeds. That is a design decision, left for a follow-up.
+- Closed at the end (mutation sampling, then the open list):
+  - Mutation sampling: 73 mutants. The tests killed 29 of 30 in TS and 37 of
+    42 non-equivalent ones in Rust. The six gaps it found now have tests
+    that kill them: the transport buffer's exact cap, the self-loop budget
+    reset, exact `stamp()` output, the 500-hit search cap, `CLAUDECODE`
+    stripping, and Claude rebind from a hook record.
+  - `store.rs` migrations: every ADD COLUMN goes through `add_column`, which
+    skips a column that is already there. A step that died after its ALTER
+    no longer locks the database.
+  - `useTabs` writes nothing until a read succeeds, retries on show and
+    reconnect, and merges restored tabs with the live ones.
+  - `RoutineEditor` and `FileEditor` show save errors inline and keep the
+    edit so it can be saved again.
+  - `useTerminalSearch` reads `dark` through a ref.
+  - `electron/main.ts` only accepts a loopback `ws://` handshake, and
+    quitting during startup kills crewd at once.
+  - A routine that couldn't start says so in the chat.
+  - Both cron parsers take 7 as Sunday, including inside ranges.
+  - A pty child whose master dup failed is killed and reaped.
+  - `electron/` type errors are fixed on `feat/browser`, which adds
+    `tsconfig.electron.json`.
 
 ## Status
 
