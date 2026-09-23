@@ -392,6 +392,25 @@ mod tests {
         }
     }
 
+    #[derive(serde::Deserialize)]
+    struct Parity {
+        expression: String,
+        valid: bool,
+    }
+
+    /// `src/lib/cron.test.ts` reads the same table. An expression the editor
+    /// takes and the daemon refuses fires once, then falls back to 09:00 every
+    /// day, so the two parsers answer every row alike.
+    #[test]
+    fn parse_cron_answers_the_table_the_editor_shares() {
+        let cases: Vec<Parity> = serde_json::from_str(include_str!("../tests/fixtures/cron-parity.json"))
+            .expect("parse fixture");
+        assert!(cases.len() > 100, "the table went missing");
+        for case in cases {
+            assert_eq!(is_valid_cron(&case.expression), case.valid, "{:?}", case.expression);
+        }
+    }
+
     #[test]
     fn seconds_are_dropped_before_the_next_minute_is_counted() {
         let from = at(2026, 3, 10, 10, 0) + 30_000;

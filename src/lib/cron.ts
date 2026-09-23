@@ -20,8 +20,21 @@ const DAYS = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
 /** Five years of days: enough for `0 0 29 2 *` to land on a leap year. */
 const SEARCH_DAYS = 1830;
 
+/**
+ * Whitespace as Rust's `char::is_whitespace` has it, which is not quite `\s`:
+ * U+0085 is in and U+FEFF is out. The daemon splits the line the same way.
+ */
+const WHITESPACE = /[\t\n\v\f\r \u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]+/;
+
+/**
+ * Reads exactly what the daemon's `parse_cron` reads. `cron-parity.json` in
+ * crew-core's test fixtures holds both parsers to it.
+ */
 export function parseCron(expression: string): CronSpec | null {
-  const parts = expression.trim().toLowerCase().split(/\s+/);
+  const parts = expression
+    .replace(/[A-Z]+/g, (upper) => upper.toLowerCase())
+    .split(WHITESPACE)
+    .filter((part) => part !== "");
   if (parts.length !== 5) return null;
   const [minute, hour, dom, month, dow] = parts as [string, string, string, string, string];
   const fields = [
@@ -62,9 +75,11 @@ export function nextCron(spec: CronSpec, from: number): number | null {
         if (hour < floorHour) continue;
         for (const minute of spec.minute) {
           if (hour === floorHour && minute < floorMinute) continue;
+          // In the hour a clock repeats, a local time settles on its first
+          // occurrence, which can be behind `from`.
           const at = new Date(cursor);
           at.setHours(hour, minute, 0, 0);
-          return at.getTime();
+          if (at.getTime() > from) return at.getTime();
         }
       }
     }
@@ -93,10 +108,12 @@ function parseField(
 ): number[] | null {
   const values = new Set<number>();
   for (const part of field.split(",")) {
-    const [range, step] = part.split("/");
-    if (range === undefined || range === "" || (step !== undefined && step === "")) return null;
-    const by = step === undefined ? 1 : Number(step);
-    if (!Number.isInteger(by) || by < 1) return null;
+    const slash = part.indexOf("/");
+    const range = slash < 0 ? part : part.slice(0, slash);
+    const step = slash < 0 ? undefined : part.slice(slash + 1);
+    if (range === "" || step === "") return null;
+    const by = step === undefined ? 1 : whole(step);
+    if (by === null || by < 1) return null;
 
     let lo: number;
     let hi: number;
@@ -131,6 +148,15 @@ function parseField(
 function named(text: string, names: string[] | undefined, base: number): number | null {
   const index = names?.indexOf(text) ?? -1;
   if (index >= 0) return index + base;
+  return whole(text);
+}
+
+/**
+ * A u32 as Rust's `str::parse` reads it: an optional `+`, then decimal digits.
+ * `Number` would also take "", hex, exponents and "1.0".
+ */
+function whole(text: string): number | null {
+  if (!/^\+?[0-9]+$/.test(text)) return null;
   const value = Number(text);
-  return Number.isInteger(value) ? value : null;
+  return value <= 0xffff_ffff ? value : null;
 }
