@@ -71,6 +71,16 @@ fn has_column(conn: &Connection, table: &str, column: &str) -> rusqlite::Result<
         .exists(params![table, column])
 }
 
+/// Adds a column unless it is there already. A step that died after its ALTER
+/// but before its version row runs again on the next open, and a second ADD
+/// COLUMN would fail every open after it.
+fn add_column(conn: &Connection, table: &str, column: &str, decl: &str) -> rusqlite::Result<()> {
+    if !has_column(conn, table, column)? {
+        conn.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {column} {decl};"))?;
+    }
+    Ok(())
+}
+
 fn migrate(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute(
         "CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -101,20 +111,18 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         )?;
     }
     if current < 3 {
-        conn.execute_batch(
-            "ALTER TABLE sessions ADD COLUMN description TEXT NOT NULL DEFAULT '';
-             ALTER TABLE sessions ADD COLUMN notifications INTEGER NOT NULL DEFAULT 1;",
-        )?;
+        add_column(conn, "sessions", "description", "TEXT NOT NULL DEFAULT ''")?;
+        add_column(conn, "sessions", "notifications", "INTEGER NOT NULL DEFAULT 1")?;
         conn.execute(
             "INSERT INTO schema_migrations (version, applied_at) VALUES (3, ?1)",
             params![now_millis()],
         )?;
     }
     if current < 4 {
+        add_column(conn, "sessions", "sort_order", "INTEGER NOT NULL DEFAULT 0")?;
+        add_column(conn, "workspaces", "sort_order", "INTEGER NOT NULL DEFAULT 0")?;
         conn.execute_batch(
-            "ALTER TABLE sessions ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0;
-             UPDATE sessions SET sort_order = created_at;
-             ALTER TABLE workspaces ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0;
+            "UPDATE sessions SET sort_order = created_at;
              UPDATE workspaces SET sort_order = created_at;",
         )?;
         conn.execute(
@@ -123,18 +131,14 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         )?;
     }
     if current < 5 {
-        conn.execute_batch(
-            "ALTER TABLE sessions ADD COLUMN status TEXT NOT NULL DEFAULT 'idle';",
-        )?;
+        add_column(conn, "sessions", "status", "TEXT NOT NULL DEFAULT 'idle'")?;
         conn.execute(
             "INSERT INTO schema_migrations (version, applied_at) VALUES (5, ?1)",
             params![now_millis()],
         )?;
     }
     if current < 6 {
-        conn.execute_batch(
-            "ALTER TABLE sessions ADD COLUMN autonomy TEXT NOT NULL DEFAULT 'ask';",
-        )?;
+        add_column(conn, "sessions", "autonomy", "TEXT NOT NULL DEFAULT 'ask'")?;
         conn.execute(
             "INSERT INTO schema_migrations (version, applied_at) VALUES (6, ?1)",
             params![now_millis()],
@@ -190,7 +194,7 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         )?;
     }
     if current < 9 {
-        conn.execute("ALTER TABLE routines ADD COLUMN created_by TEXT", [])?;
+        add_column(conn, "routines", "created_by", "TEXT")?;
         conn.execute(
             "INSERT INTO schema_migrations (version, applied_at) VALUES (9, ?1)",
             params![now_millis()],
@@ -250,7 +254,7 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         }
     }
     if current < 14 {
-        conn.execute_batch("ALTER TABLE sessions ADD COLUMN provider_title TEXT;")?;
+        add_column(conn, "sessions", "provider_title", "TEXT")?;
         conn.execute(
             "INSERT INTO schema_migrations (version, applied_at) VALUES (14, ?1)",
             params![now_millis()],
@@ -979,6 +983,33 @@ mod tests {
         let conn = raw(&db_path(&dir));
         assert!(version(&conn) >= 13);
         assert_eq!(texts(&conn, "s1"), ["kept"]);
+    }
+
+    /// The steps that add a column: dying after the ALTER and before the
+    /// version row must not lock the database, because the next open runs the
+    /// step again over the column it already added.
+    #[test]
+    fn a_step_that_died_after_adding_its_column_runs_again() {
+        for step in [3, 4, 5, 6, 9, 14] {
+            let dir = temp_dir();
+            let conn = at_version(&db_path(&dir), step - 1);
+            conn.execute_batch(&format!(
+                "CREATE TRIGGER trap BEFORE INSERT ON schema_migrations WHEN new.version = {step}
+                 BEGIN SELECT RAISE(FAIL, 'died before the version row'); END;"
+            ))
+            .expect("trap");
+            drop(conn);
+
+            let died = Store::open(db_path(&dir));
+            assert!(died.is_err(), "step {step} did not reach its version row");
+            let conn = raw(&db_path(&dir));
+            assert_eq!(version(&conn), step as i64 - 1, "step {step}");
+            conn.execute_batch("DROP TRIGGER trap;").expect("untrap");
+            drop(conn);
+
+            Store::open(db_path(&dir)).unwrap_or_else(|e| panic!("step {step} locked the database: {e}"));
+            assert!(version(&raw(&db_path(&dir))) >= step as i64, "step {step} was not recorded");
+        }
     }
 
     #[test]
