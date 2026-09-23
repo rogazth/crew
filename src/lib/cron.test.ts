@@ -23,6 +23,16 @@ describe("parseCron", () => {
     expect(isValidCron("*/0 * * * *")).toBe(false);
     expect(isValidCron("5-1 * * * *")).toBe(false);
     expect(isValidCron("a * * * *")).toBe(false);
+    expect(isValidCron("*/ * * * *")).toBe(false);
+    expect(isValidCron(",5 * * * *")).toBe(false);
+    expect(isValidCron("1-2-3 * * * *")).toBe(false);
+    expect(isValidCron("1-x * * * *")).toBe(false);
+    expect(isValidCron("0 0 * * mon-xyz")).toBe(false);
+  });
+
+  it("runs a step from a single start value to the end of the field", () => {
+    expect(parseCron("5/15 * * * *")?.minute).toEqual([5, 20, 35, 50]);
+    expect(parseCron("0 0 * * mon/2")?.dow).toEqual([1, 3, 5]);
   });
 
   it("expands steps, ranges and lists", () => {
@@ -63,6 +73,11 @@ describe("nextCron", () => {
 
   it("reaches a leap day years out", () => {
     expect(next("0 0 29 2 *", at(2025, 9, 3))).toBe(at(2028, 2, 29));
+  });
+
+  it("answers null for a date that never comes", () => {
+    expect(next("0 0 31 2 *", at(2025, 9, 3))).toBeNull();
+    expect(next("0 0 30 feb *", at(2025, 9, 3))).toBeNull();
   });
 
   it("crosses the year boundary", () => {

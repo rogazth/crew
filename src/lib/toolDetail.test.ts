@@ -2,7 +2,7 @@ import { rememberAgents } from "./agentNames";
 import { describe, expect, it } from "vitest";
 import { applyEvent, newBlock } from "./blocks";
 import type { Block, ToolDetail, ToolStatus } from "./protocol";
-import { hasBody, splitClip, toolLine } from "./toolDetail";
+import { glyphKind, hasBody, splitClip, toolLine } from "./toolDetail";
 
 function tool(detail: ToolDetail | undefined, status: ToolStatus = "completed", title = "Bash"): Block {
   const block = newBlock("tool", title);
@@ -101,7 +101,38 @@ describe("toolLine", () => {
   });
 });
 
+describe("toolLine for output and odd rows", () => {
+  it("shows the first line of plain output as prose", () => {
+    expect(toolLine(tool({ kind: "output", text: "\nAda\nGrace" }))).toEqual({ text: "Ada", mono: false, failed: false });
+  });
+
+  it("shows an empty line for a command that is only blank lines", () => {
+    expect(toolLine(tool({ kind: "command", command: "\n  \n" })).text).toBe("");
+  });
+
+  it("uses the block's own text when it carries no tool at all", () => {
+    const approval: Block = { ...newBlock("approval", "npm run lint"), approval: { requestId: 1, name: "Bash" } };
+    expect(toolLine(approval)).toEqual({ text: "npm run lint", mono: false, failed: false });
+  });
+});
+
 describe("hasBody", () => {
+  it("opens a file read that came back with a preview", () => {
+    expect(hasBody(tool({ kind: "file", path: "a.ts", preview: "line 1" }))).toBe(true);
+    expect(hasBody(tool({ kind: "file", path: "a.ts", preview: "  \n" }))).toBe(false);
+    expect(hasBody(tool({ kind: "file", path: "a.ts" }))).toBe(false);
+  });
+
+  it("opens output and messages that run past one line", () => {
+    expect(hasBody(tool({ kind: "output", text: "Ada\nGrace" }))).toBe(true);
+    expect(hasBody(tool({ kind: "message", to: "A", text: "one\ntwo" }))).toBe(true);
+  });
+
+  it("never opens a search or a fetch", () => {
+    expect(hasBody(tool({ kind: "search", query: "x", matches: 3 }))).toBe(false);
+    expect(hasBody(tool({ kind: "fetch", url: "https://example.com" }))).toBe(false);
+  });
+
   it("opens a command that produced output", () => {
     expect(hasBody(tool({ kind: "command", command: "ls", exitCode: 0, output: "a\nb" }))).toBe(true);
   });
@@ -124,6 +155,32 @@ describe("hasBody", () => {
 
   it("has nothing to open without a detail", () => {
     expect(hasBody(tool(undefined))).toBe(false);
+  });
+});
+
+describe("glyphKind", () => {
+  it("reads the glyph off the detail", () => {
+    const details: ToolDetail[] = [
+      { kind: "command", command: "ls" },
+      { kind: "file", path: "a.ts" },
+      { kind: "edit", path: "a.ts" },
+      { kind: "search", query: "x" },
+      { kind: "fetch", url: "https://example.com" },
+      { kind: "message", to: "A", text: "hi" },
+    ];
+    expect(details.map((detail) => glyphKind(tool(detail)))).toEqual([
+      "command",
+      "file",
+      "edit",
+      "search",
+      "fetch",
+      "message",
+    ]);
+  });
+
+  it("wears no glyph for plain output or a call with no detail", () => {
+    expect(glyphKind(tool({ kind: "output", text: "x" }))).toBeNull();
+    expect(glyphKind(tool(undefined))).toBeNull();
   });
 });
 

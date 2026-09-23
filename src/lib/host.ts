@@ -168,13 +168,14 @@ function browserPath(file: File): string {
 function directoryOf(file: File): string {
   const path = pathForFile(file);
   const relative = file.webkitRelativePath;
-  if (path && relative && path.endsWith(relative)) {
-    return path.slice(0, -relative.length).replace(/\/$/, "") || path;
+  // The relative path starts with the picked folder's own name.
+  const root = relative.indexOf("/");
+  if (path && root > 0 && path.endsWith(relative)) {
+    return path.slice(0, path.length - relative.length + root);
   }
   if (path) {
     const slash = path.lastIndexOf("/");
     return slash > 0 ? path.slice(0, slash) : path;
   }
-  const slash = relative.indexOf("/");
-  return slash === -1 ? file.name : relative.slice(0, slash);
+  return root === -1 ? file.name : relative.slice(0, root);
 }

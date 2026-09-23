@@ -63,6 +63,10 @@ describe("sessionCommand", () => {
     ]);
   });
 
+  it("runs an unknown provider as a bare command", () => {
+    expect(argv({ provider: "gemini", model: "pro", providerSessionId: "x" })).toEqual(["gemini"]);
+  });
+
   it("starts fresh until an id is known", () => {
     expect(argv({ provider: "codex", model: "gpt-6-astra" })).toEqual(["codex", "-m", "gpt-6-astra"]);
     expect(argv({ provider: "opencode" })).toEqual(["opencode"]);

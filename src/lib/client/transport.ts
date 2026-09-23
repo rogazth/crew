@@ -83,6 +83,7 @@ function onMessage(event: MessageEvent) {
       handler(payload);
       return;
     }
+    if (payload.byteLength > BUFFER_MAX_BYTES) return;
     const queue = buffered.get(id) ?? [];
     let size = bufferedBytes.get(id) ?? 0;
     while (queue.length > 0 && size + payload.byteLength > BUFFER_MAX_BYTES) {
@@ -90,14 +91,19 @@ function onMessage(event: MessageEvent) {
       if (!old) break;
       size -= old.byteLength;
     }
-    if (size + payload.byteLength > BUFFER_MAX_BYTES) return;
     queue.push(payload);
     buffered.set(id, queue);
     bufferedBytes.set(id, size + payload.byteLength);
     return;
   }
 
-  const message = JSON.parse(event.data) as Response | Event;
+  let message: Response | Event | null;
+  try {
+    message = JSON.parse(event.data) as Response | Event | null;
+  } catch {
+    return;
+  }
+  if (!message || typeof message !== "object") return;
   if ("event" in message && message.event) {
     for (const listener of listeners.get(message.event) ?? []) listener(message.payload);
     return;
@@ -122,7 +128,7 @@ async function request<T>(method: string, params: object = {}): Promise<T> {
 }
 
 function on(event: string, listener: Listener): () => void {
-  void connect();
+  void connect().catch(() => {});
   const set = listeners.get(event) ?? new Set();
   set.add(listener);
   listeners.set(event, set);

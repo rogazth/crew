@@ -4,6 +4,7 @@ import {
   activateTab,
   closeSessionTab,
   closeTab,
+  fileTabId,
   isAgentTab,
   isTerminalTab,
   openTab,
@@ -14,6 +15,7 @@ import {
   selectTab,
   sessionTabId,
   stepTab,
+  stubTabId,
   tabTitle,
   type TabState,
 } from "./tabs";
@@ -70,6 +72,11 @@ describe("closeTab", () => {
     expect(state.activeId).toBe("session:b");
   });
 
+  it("has nothing to reopen before anything was closed", () => {
+    const before = opened("a");
+    expect(reopenTab(before)).toBe(before);
+  });
+
   it("keeps only the last ten closed tabs", () => {
     let state = opened(...Array.from({ length: 12 }, (_, n) => `s${n}`));
     for (let n = 0; n < 12; n += 1) state = closeTab(state, `session:s${n}`);
@@ -99,6 +106,20 @@ describe("stepTab", () => {
 
   it("does nothing without tabs", () => {
     expect(stepTab(NO_TABS, 1)).toBe(NO_TABS);
+  });
+
+  it("lands on the first tab when none was active", () => {
+    const state = selectTab(opened("a", "b"), null);
+    expect(stepTab(state, 1).activeId).toBe("session:a");
+    expect(stepTab(state, -1).activeId).toBe("session:a");
+  });
+});
+
+describe("selectTab", () => {
+  it("keeps the state object when the tab is already active", () => {
+    const state = opened("a", "b");
+    expect(selectTab(state, "session:b")).toBe(state);
+    expect(selectTab(state, "session:a").activeId).toBe("session:a");
   });
 });
 
@@ -141,6 +162,39 @@ describe("parseTabs", () => {
     expect(parseTabs("[]")).toEqual(NO_TABS);
   });
 
+  it("answers with nothing for JSON that is not an object", () => {
+    expect(parseTabs("5")).toEqual(NO_TABS);
+    expect(parseTabs("null")).toEqual(NO_TABS);
+    expect(parseTabs('{"tabs":"a"}')).toEqual(NO_TABS);
+  });
+
+  it("restores file and stub tabs alongside session ones", () => {
+    const file: Tab = { id: fileTabId("/w/src/a.ts"), kind: "file", path: "/w/src/a.ts", relative: "src/a.ts" };
+    const stub: Tab = { id: stubTabId("browser"), kind: "stub", stub: "browser", title: "Browser" };
+    const raw = JSON.stringify({ tabs: [sessionTab("a"), file, stub], activeId: stub.id });
+    expect(parseTabs(raw)).toEqual({ tabs: [sessionTab("a"), file, stub], activeId: "stub:browser", closed: [] });
+  });
+
+  it("drops a stub it no longer knows and a tab of an unknown kind", () => {
+    const raw = JSON.stringify({
+      tabs: [
+        { id: "stub:gone", kind: "stub", stub: "gone", title: "Gone" },
+        { id: "stub:terminal", kind: "stub", stub: "terminal" },
+        { id: "x", kind: "diff" },
+        "session:a",
+        null,
+        sessionTab("b"),
+      ],
+      activeId: "stub:gone",
+    });
+    expect(parseTabs(raw).tabs.map((tab) => tab.id)).toEqual(["session:b"]);
+  });
+
+  it("has no active tab when no tab survived", () => {
+    const raw = JSON.stringify({ tabs: [{ kind: "session" }], activeId: "session:a" });
+    expect(parseTabs(raw)).toEqual({ tabs: [], activeId: null, closed: [] });
+  });
+
   it("never restores the reopen stack", () => {
     const raw = JSON.stringify({ tabs: [sessionTab("a")], activeId: null, closed: [sessionTab("b")] });
     expect(parseTabs(raw).closed).toEqual([]);
@@ -154,6 +208,19 @@ describe("what a tab is", () => {
     expect(isAgentTab(sessionTab("a"), sessions)).toBe(true);
     expect(isAgentTab(sessionTab("t"), sessions)).toBe(false);
     expect(isTerminalTab(sessionTab("t"), sessions)).toBe(true);
+  });
+
+  it("says no when there is no tab, or it is a file", () => {
+    const file: Tab = { id: fileTabId("/w/a.ts"), kind: "file", path: "/w/a.ts", relative: "a.ts" };
+    expect(isAgentTab(null, sessions)).toBe(false);
+    expect(isTerminalTab(null, sessions)).toBe(false);
+    expect(isTerminalTab(file, sessions)).toBe(false);
+    expect(isAgentTab(file, sessions)).toBe(false);
+  });
+
+  it("does not count a browser stub as a terminal", () => {
+    const stub: Tab = { id: stubTabId("browser"), kind: "stub", stub: "browser", title: "Browser" };
+    expect(isTerminalTab(stub, sessions)).toBe(false);
   });
 
   it("counts the terminal stub as a terminal", () => {
@@ -170,6 +237,19 @@ describe("what a tab is", () => {
 
   it("says Untitled for a session that is gone", () => {
     expect(tabTitle(sessionTab("ghost"), sessions)).toBe("Untitled");
+  });
+});
+
+describe("tab ids", () => {
+  it("keeps a session, a file and a stub apart even when they share a name", () => {
+    const ids = [sessionTabId("terminal"), fileTabId("terminal"), stubTabId("terminal")];
+    expect(new Set(ids).size).toBe(3);
+  });
+
+  it("opens the same file once however often it is asked for", () => {
+    const tab = (): Tab => ({ id: fileTabId("/w/a.ts"), kind: "file", path: "/w/a.ts", relative: "a.ts" });
+    const state = openTab(openTab(opened("a"), tab()), tab());
+    expect(state.tabs.map((t) => t.id)).toEqual(["session:a", "file:/w/a.ts"]);
   });
 });
 

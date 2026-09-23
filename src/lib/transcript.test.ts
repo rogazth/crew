@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { deferred } from "../test/deferred";
 import type { Block } from "./protocol";
 
 const request = vi.fn();
@@ -117,6 +118,55 @@ describe("transcript", () => {
     expect(request).not.toHaveBeenCalled();
   });
 
+  it("asks once when two callers open the same thread together", async () => {
+    const tail = deferred<ReturnType<typeof page>>();
+    request.mockReturnValue(tail.promise);
+    const transcript = await import("./transcript");
+    const first = transcript.load("s1");
+    const second = transcript.load("s1");
+    tail.resolve(page([said("hello")], 1));
+    await Promise.all([first, second]);
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(transcript.isReady("s1")).toBe(true);
+  });
+
+  it("stops telling a listener once it unsubscribes", async () => {
+    request.mockResolvedValue(page([], 0));
+    const transcript = await load("s1");
+    let paints = 0;
+    const off = transcript.subscribe("s1", () => (paints += 1));
+    transcript.apply("s1", { type: "message.delta", text: "a" });
+    paint();
+    off();
+    transcript.apply("s1", { type: "message.delta", text: "b" });
+    paint();
+    expect(paints).toBe(1);
+    expect(transcript.read("s1").blocks.at(-1)?.text).toBe("ab");
+  });
+
+  it("appends a block the client made itself, on the next paint", async () => {
+    request.mockResolvedValue(page([said("hello")], 1));
+    const transcript = await load("s1");
+    transcript.append("s1", said("local"));
+    expect(transcript.read("s1").blocks.map((block) => block.text)).toEqual(["hello"]);
+    paint();
+    expect(transcript.read("s1").blocks.map((block) => block.text)).toEqual(["hello", "local"]);
+  });
+
+  it("paints a change of working once, and not at all when nothing changed", async () => {
+    request.mockResolvedValue(page([], 0));
+    const transcript = await load("s1");
+    let paints = 0;
+    transcript.subscribe("s1", () => (paints += 1));
+    transcript.setWorking("s1", false);
+    paint();
+    expect(paints).toBe(0);
+    transcript.setWorking("s1", true);
+    paint();
+    expect(paints).toBe(1);
+    expect(transcript.read("s1").working).toBe(true);
+  });
+
   it("paints once for a burst of deltas", async () => {
     request.mockResolvedValue(page([], 0));
     const transcript = await load("s1");
@@ -194,13 +244,30 @@ describe("the window", () => {
     request.mockResolvedValue(page([said("recent")], 3, { from: 41, more: true }));
     const transcript = await load("s1");
     request.mockReset();
-    request.mockImplementation(
-      () => new Promise((resolve) => setTimeout(() => resolve(page([said("older")], 3, { from: 21 })), 10)),
-    );
+    const older = deferred<ReturnType<typeof page>>();
+    request.mockReturnValue(older.promise);
     const first = transcript.loadEarlier("s1");
+    expect(transcript.read("s1").loadingEarlier).toBe(true);
     await transcript.loadEarlier("s1");
+    older.resolve(page([said("older")], 3, { from: 21 }));
     await first;
     expect(request).toHaveBeenCalledTimes(1);
+    expect(transcript.read("s1").loadingEarlier).toBe(false);
+  });
+
+  it("keeps the window and the offer to load more when the page fails", async () => {
+    request.mockResolvedValue(page([said("recent")], 3, { from: 41, more: true }));
+    const transcript = await load("s1");
+    request.mockRejectedValueOnce(new Error("gone"));
+    await transcript.loadEarlier("s1");
+    expect(transcript.read("s1")).toMatchObject({ more: true, loadingEarlier: false });
+    expect(transcript.read("s1").blocks.map((block) => block.text)).toEqual(["recent"]);
+  });
+
+  it("asks for nothing older on a thread it never opened", async () => {
+    const transcript = await import("./transcript");
+    await transcript.loadEarlier("s1");
+    expect(request).not.toHaveBeenCalled();
   });
 
   it("asks for nothing older when there is nothing older", async () => {
@@ -253,6 +320,18 @@ describe("focus", () => {
     // Five pages, then it stops and leaves them where it got to.
     expect(request).toHaveBeenCalledTimes(5);
     expect(transcript.read("s1").focusId).toBeNull();
+  });
+
+  it("does nothing for a thread forgotten while it loaded", async () => {
+    const tail = deferred<ReturnType<typeof page>>();
+    request.mockReturnValue(tail.promise);
+    const transcript = await import("./transcript");
+    const focusing = transcript.focus("s1", 1);
+    transcript.forget("s1");
+    tail.resolve(page([said("a")], 1));
+    await focusing;
+    expect(transcript.read("s1").focusId).toBeNull();
+    expect(transcript.isReady("s1")).toBe(false);
   });
 
   it("keeps the last line it was sent to, and moves it on the next hit", async () => {

@@ -89,6 +89,11 @@ describe("the cost of a turn", () => {
     expect(rows[1]?.kind).toBe("footer");
   });
 
+  it("carries the time of the block it is under", () => {
+    const rows = groupRows([block("assistant", "green", { usage: COST, at: 1_000 })]);
+    expect(rows[1]).toEqual({ kind: "footer", id: `footer-${(rows[0] as { block: Block }).block.id}`, usage: COST, at: 1_000 });
+  });
+
   it("waits for the reply to settle before it says anything", () => {
     const rows = groupRows([block("assistant", "green", { usage: COST, streaming: true })]);
     expect(kinds(rows)).toEqual(["message"]);
@@ -96,6 +101,10 @@ describe("the cost of a turn", () => {
 });
 
 describe("spacing", () => {
+  it("puts no gap above the first row", () => {
+    expect(gapBefore(undefined, { kind: "message", block: block("user", "hi") })).toBe("");
+  });
+
   it("hugs the footer to what it is about", () => {
     const reply: Row = { kind: "message", block: block("assistant", "green") };
     const footer: Row = { kind: "footer", id: "f", usage: COST };

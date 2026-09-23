@@ -141,6 +141,27 @@ test module never breaks another's build.
   SIGHUP handlers. A SIGTERM in that window killed it without
   `pty.kill_all()`, `agents.kill_all()` or `bridge.shutdown()`, leaving
   orphaned PTYs and agents. The handlers are now installed first (R2).
+- `client/transport.ts`: fixed three bugs (T2).
+  - A text frame that wasn't JSON, or was `null` or a number, threw inside the
+    socket's message handler.
+  - A single binary chunk over the 256 KiB buffer cap emptied the stream's
+    buffer without updating its byte count. Later chunks that would fit were
+    then dropped.
+  - `on()` started a connection without catching its rejection.
+- `host.ts`: the browser folder-pick fallback returned the parent of the
+  picked folder. Fixed (T2).
+- **Latent, not reached today:**
+  - `transport.ts`: closing an old handle for a stream id after it was
+    reopened silences the new handler.
+  - `pty.ts`: two terminals subscribed to the same session at once would
+    close each other's stream on unsubscribe.
+  - `routines.ts`: `parseSchedule` accepts a weekday such as 9, which then
+    renders blank.
+- **Open:** `useTabs` reads `tabs:<workspace>` once. If that read fails, it
+  falls back to no tabs and never retries, so the next save writes the empty
+  list over the saved tabs. A daemon hiccup at startup can wipe a workspace's
+  tabs. Fixing it means choosing between retrying the read and holding writes
+  until a read succeeds. That is a design decision, left for a follow-up.
 
 ## Status
 
@@ -148,8 +169,8 @@ test module never breaks another's build.
 |---|---|
 | Infra | done |
 | T1 | pending |
-| T2 | pending |
-| T3 | pending |
+| T2 | done |
+| T3 | done |
 | T4 | pending |
 | T5 | pending |
 | T6 | pending |

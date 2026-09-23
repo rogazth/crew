@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  clockOf,
   describeSchedule,
   fromRow,
+  newRoutineDraft,
   nextRun,
   parseRuns,
   parseSchedule,
@@ -15,6 +17,7 @@ import {
   type RoutineRow,
   type RoutineRun,
   type Schedule,
+  type TriggerId,
 } from "./routines";
 
 /** Local wall clock, because a routine is set in the user's own day. */
@@ -89,6 +92,12 @@ describe("nextRun", () => {
     expect(nextRun({ kind: "cron", expression: "not a cron" })).toBeNull();
   });
 
+  it("gives up a week and a day out when no listed day exists", () => {
+    // Day 9 is no weekday; parseSchedule lets a stray number through.
+    const schedule = parseSchedule('{"kind":"daily","hour":9,"minute":0,"days":[9]}');
+    expect(nextRun(schedule, at(2026, 9, 17, 8, 0))).toBe(at(2026, 9, 25, 9, 0));
+  });
+
   it("never answers with a time that has already passed", () => {
     const from = at(2026, 9, 17, 23, 59);
     for (const { schedule } of AGREED) {
@@ -132,6 +141,15 @@ describe("validateSchedule", () => {
     expect(() => validateSchedule("daily")).toThrow(/interval/);
   });
 
+  it("refuses a cron expression that is not text", () => {
+    expect(() => validateSchedule({ kind: "cron", expression: 5 })).toThrow(/five cron fields/);
+    expect(() => validateSchedule({ kind: "cron" })).toThrow(/five cron fields/);
+  });
+
+  it("refuses days that are not a list", () => {
+    expect(() => validateSchedule({ kind: "daily", hour: 9, days: "mon" })).toThrow(/0-6/);
+  });
+
   it("refuses a fraction of a minute", () => {
     expect(() => validateSchedule({ kind: "interval", minutes: 1.5 })).toThrow();
   });
@@ -153,6 +171,22 @@ describe("parseSchedule", () => {
     expect(parseSchedule('{"kind":"interval","minutes":0}')).toEqual(fallback);
     expect(parseSchedule('{"kind":"cron","expression":"nope"}')).toEqual(fallback);
     expect(parseSchedule("[]")).toEqual(fallback);
+  });
+
+  it("reads back a valid cron", () => {
+    expect(parseSchedule('{"kind":"cron","expression":"*/5 * * * *"}')).toEqual({
+      kind: "cron",
+      expression: "*/5 * * * *",
+    });
+  });
+
+  it("treats days that are not a list as every day", () => {
+    expect(parseSchedule('{"kind":"daily","hour":7,"minute":30,"days":"mon"}')).toEqual({
+      kind: "daily",
+      hour: 7,
+      minute: 30,
+      days: [],
+    });
   });
 
   it("drops a day that is not a number instead of the whole schedule", () => {
@@ -187,12 +221,57 @@ describe("describeSchedule", () => {
     );
   });
 
+  it("says every day for all seven of them", () => {
+    expect(describeSchedule({ kind: "daily", hour: 7, minute: 0, days: [0, 1, 2, 3, 4, 5, 6] })).toBe(
+      "Every day at 07:00",
+    );
+  });
+
   it("shows a cron as itself, because nothing shorter is true", () => {
     expect(describeSchedule({ kind: "cron", expression: "0 9 * * 1" })).toBe("Cron 0 9 * * 1");
   });
 });
 
+describe("clockOf", () => {
+  it("has a clock only for a daily schedule", () => {
+    expect(clockOf({ kind: "daily", hour: 7, minute: 5, days: [] })).toBe("07:05");
+    expect(clockOf({ kind: "interval", minutes: 30 })).toBe("");
+    expect(clockOf({ kind: "cron", expression: "0 9 * * 1" })).toBe("");
+  });
+});
+
+describe("newRoutineDraft", () => {
+  it("starts enabled, unsaved and every day at nine", () => {
+    const draft = newRoutineDraft("s1");
+    expect(draft).toEqual({
+      key: expect.any(String),
+      sessionId: "s1",
+      name: "",
+      enabled: true,
+      prompt: "",
+      schedule: { kind: "daily", hour: 9, minute: 0, days: [] },
+      runs: [],
+    });
+    expect(draft.id).toBeUndefined();
+  });
+
+  it("gives every draft its own key", () => {
+    expect(newRoutineDraft("s1").key).not.toBe(newRoutineDraft("s1").key);
+  });
+});
+
 describe("triggerOf and withTrigger", () => {
+  it("falls back to every day for a trigger it does not know, keeping the clock", () => {
+    const daily: Schedule = { kind: "daily", hour: 18, minute: 45, days: [3] };
+    expect(withTrigger(daily, "monthly" as TriggerId)).toEqual({ kind: "daily", hour: 18, minute: 45, days: [] });
+    expect(withTrigger({ kind: "interval", minutes: 30 }, "monthly" as TriggerId)).toEqual({
+      kind: "daily",
+      hour: 9,
+      minute: 0,
+      days: [],
+    });
+  });
+
   it("round-trips every trigger the editor offers", () => {
     const schedules: Schedule[] = [
       { kind: "interval", minutes: 30 },

@@ -1,6 +1,16 @@
 import { describe, expect, it } from "vitest";
-import { activityDigest, buildActivity, phaseFailed, phaseKind, phaseLabel, summarize, type Phase } from "./activity";
+import {
+  activityDigest,
+  buildActivity,
+  kindOf,
+  phaseFailed,
+  phaseKind,
+  phaseLabel,
+  summarize,
+  type Phase,
+} from "./activity";
 import type { Block, ToolStatus } from "./blocks";
+import type { ToolDetail } from "./toolDetail";
 
 function tool(name: string, title: string, status: ToolStatus = "completed"): Block {
   return { id: `${name}-${title}`, role: "tool", text: title, tool: { callId: title, name, title, status } };
@@ -70,7 +80,39 @@ describe("phaseLabel", () => {
   });
 });
 
+describe("phaseLabel for everything else", () => {
+  it("says the one tool's own title, and counts many", () => {
+    expect(phaseLabel(phase(buildActivity([tool("Task", "Plan the refactor")])))).toBe("Plan the refactor");
+    expect(phaseLabel(phase(buildActivity([tool("Task", "a"), tool("TodoWrite", "b")])))).toBe("Ran 2 tools");
+    expect(phaseLabel(phase(buildActivity([tool("Task", "a"), tool("TodoWrite", "b", "pending")])))).toBe(
+      "Running 2 tools",
+    );
+  });
+
+  it("falls back to the block's text for a lone row with no tool", () => {
+    const note: Block = { id: "n", role: "system", text: "Compacted" };
+    expect(phaseLabel(phase(buildActivity([note])))).toBe("Compacted");
+  });
+
+  it("says edited without a file when it cannot tell which", () => {
+    expect(phaseLabel(phase(buildActivity([tool("NotebookEdit", "NotebookEdit")])))).toBe("Edited");
+    expect(phaseLabel(phase(buildActivity([tool("NotebookEdit", "NotebookEdit", "pending")])))).toBe("Editing");
+    expect(phaseLabel(phase(buildActivity([tool("Edit", "Edit a.ts", "pending")])))).toBe("Editing a.ts");
+  });
+
+  it("keeps research in the present while a search is still open", () => {
+    expect(phaseLabel(phase(buildActivity([tool("Grep", "Grep foo", "pending")])))).toBe("Searching the project");
+    expect(phaseLabel(phase(buildActivity([tool("Grep", "Grep foo", "pending"), tool("Read", "Read a.ts")])))).toBe(
+      "Exploring the project",
+    );
+  });
+});
+
 describe("summarize", () => {
+  it("is empty for a thought with nothing in it", () => {
+    expect(summarize("\n  \n**")).toBe("");
+  });
+
   it("takes the first non-empty line without markdown", () => {
     expect(summarize("\n## **Plan**\n- do the thing")).toBe("Plan");
     expect(summarize("x".repeat(120), 10)).toBe("xxxxxxxxx…");
@@ -96,6 +138,23 @@ describe("phaseKind", () => {
 
   it("falls back to the tool name when no detail arrived", () => {
     expect(phaseKind(tool("Grep", "Grep foo"))).toBe("research");
+  });
+
+  it("counts a message to another agent and plain output as other work", () => {
+    const withDetail = (detail: ToolDetail): Block => ({
+      ...tool("Bash", "x"),
+      tool: { callId: "1", name: "Bash", title: "x", status: "completed", detail },
+    });
+    expect(phaseKind(withDetail({ kind: "message", to: "a1", text: "hi" }))).toBe("other");
+    expect(phaseKind(withDetail({ kind: "output", text: "done" }))).toBe("other");
+  });
+
+  it("classifies a tool name it only half knows by what it mentions", () => {
+    expect(kindOf("read_file")).toBe("research");
+    expect(kindOf("web_fetch")).toBe("research");
+    expect(kindOf("semantic_search")).toBe("research");
+    expect(kindOf("Task")).toBe("other");
+    expect(kindOf("")).toBe("other");
   });
 
   it("groups a file read and a search into one research phase", () => {
@@ -213,6 +272,14 @@ describe("activityDigest", () => {
       { id: "c", role: "reasoning", text: "three" },
     ]);
     expect(activityDigest(items)).toEqual({ kind: "thought", label: "Thought 3 times" });
+  });
+
+  it("says a single thought once, and leaves questions out of the count", () => {
+    const items = buildActivity([
+      { id: "a", role: "reasoning", text: "one" },
+      { id: "q", role: "question", text: "Color", question: { requestId: 1, questions: [] } },
+    ]);
+    expect(activityDigest(items)).toEqual({ kind: "thought", label: "Thought" });
   });
 
   it("stays in the present while a call is still open", () => {
