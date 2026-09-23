@@ -78,8 +78,12 @@ fn login_path() -> &'static Option<String> {
 /// interactive shells. The markers skip whatever the rc files print.
 fn read_login_path() -> Option<String> {
     let shell = std::env::var("SHELL").ok().filter(|shell| !shell.is_empty())?;
+    login_shell_path(&shell, LOGIN_TIMEOUT)
+}
+
+fn login_shell_path(shell: &str, timeout: Duration) -> Option<String> {
     let script = format!("printf '{MARKER}%s{MARKER}' \"$PATH\"");
-    let mut child = Command::new(&shell)
+    let mut child = Command::new(shell)
         .args(["-ilc", &script])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -87,7 +91,7 @@ fn read_login_path() -> Option<String> {
         .process_group(0)
         .spawn()
         .ok()?;
-    let deadline = Instant::now() + LOGIN_TIMEOUT;
+    let deadline = Instant::now() + timeout;
     loop {
         match child.try_wait() {
             Ok(Some(_)) => break,
@@ -95,7 +99,7 @@ fn read_login_path() -> Option<String> {
             _ => {
                 unsafe { libc::kill(-(child.id() as i32), libc::SIGKILL) };
                 let _ = child.wait();
-                eprintln!("[path] {shell} -ilc did not answer in {LOGIN_TIMEOUT:?}");
+                eprintln!("[path] {shell} -ilc did not answer in {timeout:?}");
                 return None;
             }
         }
@@ -114,6 +118,7 @@ fn parse_marked(out: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::{fake_cli, temp_dir};
 
     #[test]
     fn parse_marked_skips_rc_noise() {
@@ -125,5 +130,66 @@ mod tests {
     fn parse_marked_rejects_missing_or_empty() {
         assert_eq!(parse_marked("no markers"), None);
         assert_eq!(parse_marked(&format!("{MARKER}{MARKER}")), None);
+    }
+
+    #[test]
+    fn only_regular_files_with_an_exec_bit_are_executable() {
+        let dir = temp_dir();
+        let tool = fake_cli(dir.path(), "tool", "exit 0");
+        let plain = dir.path().join("plain");
+        std::fs::write(&plain, "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(&plain, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(&tool, &link).unwrap();
+        let dangling = dir.path().join("dangling");
+        std::os::unix::fs::symlink(dir.path().join("gone"), &dangling).unwrap();
+
+        assert!(is_executable(&tool));
+        assert!(is_executable(&link));
+        assert!(!is_executable(&plain));
+        assert!(!is_executable(dir.path()));
+        assert!(!is_executable(&dangling));
+        assert!(!is_executable(&dir.path().join("missing")));
+    }
+
+    #[test]
+    fn the_login_shell_path_is_read_between_the_markers() {
+        let dir = temp_dir();
+        // Stands in for `zsh -ilc <script>`: rc noise first, then the script
+        // run with the PATH the rc files built.
+        let shell = fake_cli(
+            dir.path(),
+            "zsh",
+            "echo 'Using Node for alias default'\nPATH=/from/login:/usr/bin exec /bin/sh -c \"$2\"",
+        );
+        let path = login_shell_path(shell.to_str().unwrap(), Duration::from_secs(2));
+        assert_eq!(path.as_deref(), Some("/from/login:/usr/bin"));
+    }
+
+    #[test]
+    fn a_login_shell_that_hangs_is_given_up_on() {
+        let dir = temp_dir();
+        let shell = fake_cli(dir.path(), "zsh", "sleep 5");
+        let started = Instant::now();
+        assert_eq!(
+            login_shell_path(shell.to_str().unwrap(), Duration::from_millis(100)),
+            None
+        );
+        assert!(started.elapsed() < Duration::from_secs(4), "it waited for the shell");
+    }
+
+    #[test]
+    fn a_login_shell_that_cannot_start_gives_no_path() {
+        assert_eq!(login_shell_path("/nonexistent/zsh", Duration::from_secs(1)), None);
+    }
+
+    #[test]
+    fn prewarming_keeps_the_search_dirs_deduplicated() {
+        prewarm();
+        let dirs = search_dirs();
+        assert!(dirs.contains(&PathBuf::from("/usr/bin")));
+        let unique: std::collections::HashSet<_> = dirs.iter().collect();
+        assert_eq!(unique.len(), dirs.len());
+        assert_eq!(joined().split(':').count(), dirs.len());
     }
 }

@@ -68,7 +68,8 @@ fn text(record: &Value, key: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{scan, transcript_path};
+    use super::{read, scan, transcript_path, TAIL_BYTES};
+    use crate::test_support::temp_dir;
 
     #[test]
     fn transcript_slug_matches_claude() {
@@ -111,5 +112,55 @@ mod tests {
     #[test]
     fn a_transcript_without_a_name_has_none() {
         assert_eq!(scan(r#"{"type":"user","message":{}}"#, false), None);
+    }
+
+    #[test]
+    fn the_name_is_read_off_the_transcript_file() {
+        let dir = temp_dir();
+        let path = dir.path().join("s.jsonl");
+        std::fs::write(
+            &path,
+            [
+                r#"{"type":"user","message":{"content":"rename the page-title"}}"#,
+                r#"{"type":"ai-title","aiTitle":"  Page titles  "}"#,
+                r#"{"type":"assistant","message":{"content":"done"}}"#,
+            ]
+            .join("\n"),
+        )
+        .unwrap();
+        assert_eq!(read(path.to_str().unwrap()).as_deref(), Some("Page titles"));
+    }
+
+    #[test]
+    fn a_missing_transcript_has_no_name() {
+        let dir = temp_dir();
+        assert_eq!(read(dir.path().join("nope.jsonl").to_str().unwrap()), None);
+    }
+
+    #[test]
+    fn a_record_cut_off_mid_write_is_skipped() {
+        let dir = temp_dir();
+        let path = dir.path().join("s.jsonl");
+        std::fs::write(
+            &path,
+            "{\"type\":\"ai-title\",\"aiTitle\":\"Settled\"}\n{\"type\":\"custom-title\",\"customTitle\":\"Half",
+        )
+        .unwrap();
+        assert_eq!(read(path.to_str().unwrap()).as_deref(), Some("Settled"));
+    }
+
+    #[test]
+    fn only_the_tail_of_a_long_transcript_is_read() {
+        let dir = temp_dir();
+        let path = dir.path().join("s.jsonl");
+        let filler = format!("{{\"type\":\"user\",\"message\":\"{}\"}}\n", "x".repeat(1000));
+        let mut text = String::from("{\"type\":\"custom-title\",\"customTitle\":\"Too far back\"}\n");
+        while (text.len() as u64) < TAIL_BYTES + 4096 {
+            text.push_str(&filler);
+        }
+        text.push_str("{\"type\":\"ai-title\",\"aiTitle\":\"Recent\"}\n");
+        std::fs::write(&path, &text).unwrap();
+        // The rename would outrank this name if the whole file were read.
+        assert_eq!(read(path.to_str().unwrap()).as_deref(), Some("Recent"));
     }
 }

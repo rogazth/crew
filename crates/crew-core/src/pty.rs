@@ -377,13 +377,23 @@ fn spawn_unix(
         None => default_shell(),
     };
     let (master, slave) = open_pty(cols, rows)?;
+    // Out of descriptors, a dup fails; the pair must not leak with it.
+    let stdio = dup_stdio(slave).and_then(|stdin| Ok((stdin, dup_stdio(slave)?, dup_stdio(slave)?)));
+    let (stdin, stdout, stderr) = match stdio {
+        Ok(stdio) => stdio,
+        Err(err) => {
+            close_fd(master);
+            close_fd(slave);
+            return Err(err);
+        }
+    };
 
     let mut cmd = Command::new(&program);
     cmd.args(&args)
         .current_dir(&workdir)
-        .stdin(dup_stdio(slave)?)
-        .stdout(dup_stdio(slave)?)
-        .stderr(dup_stdio(slave)?)
+        .stdin(stdin)
+        .stdout(stdout)
+        .stderr(stderr)
         .env("TERM", "xterm-256color")
         .env("COLORTERM", "truecolor")
         .env("TERM_PROGRAM", "Crew")
@@ -670,6 +680,72 @@ fn wait_readable(fd: i32, timeout: Duration) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::eventually;
+
+    #[derive(Default)]
+    struct Received {
+        bytes: Mutex<Vec<u8>>,
+        exits: Mutex<Vec<(String, Option<i32>)>>,
+    }
+
+    impl PtyEvents for Received {
+        fn data(&self, _stream_id: u32, bytes: &[u8]) {
+            self.bytes
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .extend_from_slice(bytes);
+        }
+        fn exit(&self, id: &str, code: Option<i32>) {
+            self.exits
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push((id.to_string(), code));
+        }
+    }
+
+    impl Received {
+        fn bytes(&self) -> Vec<u8> {
+            self.bytes.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        }
+
+        fn len(&self) -> u64 {
+            self.bytes.lock().unwrap_or_else(|e| e.into_inner()).len() as u64
+        }
+
+        fn text(&self) -> String {
+            String::from_utf8_lossy(&self.bytes()).into_owned()
+        }
+
+        fn exits(&self) -> Vec<(String, Option<i32>)> {
+            self.exits.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        }
+    }
+
+    fn received(host: &PtyHost) -> Arc<Received> {
+        let got = Arc::new(Received::default());
+        host.set_events(got.clone());
+        got
+    }
+
+    fn sh(host: &PtyHost, id: &str, script: &str) -> u32 {
+        let command = vec!["/bin/sh".to_string(), "-c".to_string(), script.to_string()];
+        host.spawn(id.to_string(), "/".to_string(), command, 80, 24).expect("spawn")
+    }
+
+    /// The pid a child printed as its first line.
+    fn printed_pid(got: &Received) -> u32 {
+        eventually("the child's pid", || got.text().contains('\n'));
+        got.text().lines().next().unwrap().trim().parse().expect("a pid")
+    }
+
+    /// Dead, or a zombie its new parent has yet to reap.
+    fn gone(pid: u32) -> bool {
+        if unsafe { libc::kill(pid as i32, 0) } != 0 {
+            return true;
+        }
+        std::fs::read_to_string(format!("/proc/{pid}/stat"))
+            .is_ok_and(|stat| stat.rsplit(')').next().is_some_and(|rest| rest.trim_start().starts_with('Z')))
+    }
 
     fn marker_children(marker: &str) -> usize {
         let out = std::process::Command::new("pgrep")
@@ -804,5 +880,165 @@ mod tests {
         assert!(host.get("term").is_some());
         assert!(host.remove_if_pid("term", 42).is_some());
         assert!(host.get("term").is_none());
+    }
+
+    /// A terminal whose child prints far more than the ring holds, then waits.
+    fn flood(host: &PtyHost) -> Arc<Received> {
+        let got = received(host);
+        sh(host, "flood", "echo $$; seq 1 200000; echo DONE; read line");
+        got
+    }
+
+    #[test]
+    fn a_flooding_terminal_pauses_at_high_water_until_acked_below_low() {
+        let host = PtyHost::new();
+        let got = flood(&host);
+        let pid = printed_pid(&got);
+
+        eventually("the high-water mark", || got.len() >= FLOW_HIGH);
+        // Nothing is acked yet, so the reader stops after the emit that crossed it.
+        let paused_at = got.len();
+        assert!(
+            paused_at < FLOW_HIGH + 2 * READ_CHUNK as u64,
+            "{paused_at} bytes in flight"
+        );
+        // Past the reader's own poll, so only an ack could have released it.
+        let settle = FLOW_POLL + Duration::from_millis(100);
+        thread::sleep(settle);
+        assert_eq!(got.len(), paused_at, "the reader kept draining past high water");
+
+        host.ack("flood", paused_at - FLOW_LOW);
+        thread::sleep(settle);
+        assert_eq!(got.len(), paused_at, "the reader resumed at low water");
+        let acked = paused_at - FLOW_LOW + 1;
+        host.ack("flood", acked);
+        eventually("the reader to resume below low water", || got.len() > paused_at);
+
+        eventually("high water again", || got.len() - acked >= FLOW_HIGH);
+        host.kill("flood");
+        eventually("the paused terminal's child to die", || gone(pid));
+    }
+
+    #[test]
+    fn the_replay_ring_keeps_only_the_newest_bytes_of_a_flood() {
+        let host = PtyHost::new();
+        let got = flood(&host);
+        eventually("the whole flood", || {
+            host.ack("flood", got.len());
+            got.bytes().trim_ascii_end().ends_with(b"DONE")
+        });
+        let all = got.bytes();
+        assert!(all.len() > 4 * RING_CAP);
+
+        let mut replay = Vec::new();
+        let attached = host
+            .attach("flood", 0, |_, _, tail| replay.extend_from_slice(tail))
+            .unwrap();
+        host.kill("flood");
+
+        assert_eq!(attached.emitted, all.len() as u64);
+        assert_eq!(attached.start, (all.len() - RING_CAP) as u64);
+        assert!(
+            replay == all[all.len() - RING_CAP..],
+            "the ring kept something other than the tail"
+        );
+    }
+
+    #[test]
+    fn an_empty_chunk_leaves_the_ring_alone() {
+        let mut ring = Ring::default();
+        ring.push(&[]);
+        assert_eq!((ring.start, ring.buf.len()), (0, 0));
+    }
+
+    #[test]
+    fn a_terminal_takes_input_and_follows_resizes() {
+        let host = PtyHost::default();
+        let got = received(&host);
+        let stream = host.spawn("t".into(), "/".into(), vec!["/bin/sh".into()], 80, 24).unwrap();
+        assert_eq!(host.session_of_stream(stream).as_deref(), Some("t"));
+
+        // Input can beat the prompt, so an answer may follow it on its line.
+        let answered = |size: &str| {
+            let tail = format!(" {size}");
+            got.text().split("\r\n").any(|line| line == size || line.ends_with(&tail))
+        };
+        host.write("t", b"stty size\n").unwrap();
+        eventually("the first size", || answered("24 80"));
+        host.resize("t", 100, 40).unwrap();
+        host.write_stream(stream, b"stty size\n").unwrap();
+        eventually("the new size", || answered("40 100"));
+        host.resize("t", 0, 0).unwrap();
+        host.write("t", b"stty size\n").unwrap();
+        eventually("the smallest size", || answered("2 2"));
+
+        host.kill("t");
+        assert_eq!(host.session_of_stream(stream), None);
+    }
+
+    #[test]
+    fn a_terminal_that_is_not_running_refuses_input() {
+        let host = PtyHost::new();
+        let gone = Err("Terminal is not running".to_string());
+        assert_eq!(host.write("t", b"ls\n"), gone);
+        assert_eq!(host.write_stream(99, b"ls\n"), gone);
+        assert_eq!(host.resize("t", 80, 24), gone);
+        assert_eq!(host.session_of_stream(99), None);
+        host.kill("t");
+    }
+
+    #[test]
+    fn a_terminal_that_exits_reports_its_code_and_is_forgotten() {
+        let host = PtyHost::new();
+        let got = received(&host);
+        let stream = sh(&host, "t", "exit 7");
+        eventually("the exit", || !got.exits().is_empty());
+        assert_eq!(got.exits(), [("t".to_string(), Some(7))]);
+        assert_eq!(host.session_of_stream(stream), None);
+        assert!(host.write("t", b"x").is_err());
+    }
+
+    #[test]
+    fn a_program_that_cannot_start_is_reported() {
+        let host = PtyHost::new();
+        let err = host
+            .spawn("t".into(), "/".into(), vec!["/nonexistent/prog".into()], 80, 24)
+            .unwrap_err();
+        assert!(err.starts_with("Failed to start /nonexistent/prog: "), "{err}");
+        assert!(host.write("t", b"x").is_err());
+    }
+
+    #[test]
+    fn a_terminal_that_ignores_hangup_is_killed_after_the_grace_period() {
+        let host = PtyHost::new();
+        let got = received(&host);
+        sh(&host, "t", "trap '' HUP TERM; echo $$; while :; do sleep 1; done");
+        let pid = printed_pid(&got);
+
+        let killed = Instant::now();
+        host.kill("t");
+        assert!(!gone(pid), "the child was meant to survive SIGHUP and SIGTERM");
+        eventually("the SIGKILL", || gone(pid));
+        assert!(killed.elapsed() >= KILL_ESCALATE);
+    }
+
+    #[test]
+    fn kill_all_ends_every_terminal() {
+        let host = PtyHost::new();
+        let first = received(&host);
+        let a = sh(&host, "a", "echo $$; exec sleep 30");
+        let a_pid = printed_pid(&first);
+        let second = received(&host);
+        let b = sh(&host, "b", "echo $$; exec sleep 30");
+        let b_pid = printed_pid(&second);
+
+        host.kill_all();
+        assert_eq!((host.session_of_stream(a), host.session_of_stream(b)), (None, None));
+        eventually("every child to die", || gone(a_pid) && gone(b_pid));
+    }
+
+    #[test]
+    fn a_spent_coalesce_window_does_not_poll() {
+        assert!(!wait_readable(-1, Duration::ZERO));
     }
 }

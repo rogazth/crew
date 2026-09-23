@@ -18,8 +18,11 @@ const CODEX_DAYS: usize = 2;
 /// A chat cursor-agent can `--resume` before anything was said in it, so the
 /// id is known before the terminal starts.
 pub fn cursor_create_chat() -> Result<String, String> {
-    let binary = shell_path::resolve("cursor-agent")
-        .ok_or_else(|| "`cursor-agent` was not found on your PATH.".to_string())?;
+    create_chat(shell_path::resolve("cursor-agent"), CREATE_TIMEOUT)
+}
+
+fn create_chat(binary: Option<PathBuf>, timeout: Duration) -> Result<String, String> {
+    let binary = binary.ok_or_else(|| "`cursor-agent` was not found on your PATH.".to_string())?;
     let mut child = Command::new(binary)
         .arg("create-chat")
         .env("PATH", shell_path::joined())
@@ -28,7 +31,7 @@ pub fn cursor_create_chat() -> Result<String, String> {
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| format!("cursor-agent create-chat: {e}"))?;
-    let deadline = Instant::now() + CREATE_TIMEOUT;
+    let deadline = Instant::now() + timeout;
     let status = loop {
         match child.try_wait().map_err(|e| e.to_string())? {
             Some(status) => break status,
@@ -317,6 +320,7 @@ fn opencode_sessions(db: &Path, since_ms: i64) -> Vec<Found> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::{fake_cli, temp_dir as scratch};
 
     fn temp_dir(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("crew-provider-session-{name}-{}", std::process::id()));
@@ -484,5 +488,124 @@ mod tests {
         assert!(is_chat_id("5e047119-f117-40d3-9552-3c77cfffe071"));
         assert!(!is_chat_id(""));
         assert!(!is_chat_id("Error: not logged in"));
+    }
+
+    #[test]
+    fn create_chat_returns_the_id_the_cli_prints() {
+        let dir = scratch();
+        let cli = fake_cli(
+            dir.path(),
+            "cursor-agent",
+            "[ \"$1\" = create-chat ] || exit 3\necho '  5e047119-f117-40d3  '",
+        );
+        assert_eq!(
+            create_chat(Some(cli), Duration::from_secs(2)).as_deref(),
+            Ok("5e047119-f117-40d3")
+        );
+    }
+
+    #[test]
+    fn create_chat_without_the_cli_says_it_is_missing() {
+        assert_eq!(
+            create_chat(None, Duration::from_secs(2)),
+            Err("`cursor-agent` was not found on your PATH.".to_string())
+        );
+    }
+
+    #[test]
+    fn create_chat_reports_a_cli_that_cannot_start() {
+        let dir = scratch();
+        let err = create_chat(Some(dir.path().join("cursor-agent")), Duration::from_secs(2)).unwrap_err();
+        assert!(err.starts_with("cursor-agent create-chat: "), "{err}");
+    }
+
+    #[test]
+    fn a_failed_create_chat_carries_the_cli_stderr() {
+        let dir = scratch();
+        let cli = fake_cli(dir.path(), "cursor-agent", "echo 'Error: not logged in' >&2\nexit 1");
+        assert_eq!(
+            create_chat(Some(cli), Duration::from_secs(2)),
+            Err("cursor-agent create-chat failed: Error: not logged in".to_string())
+        );
+    }
+
+    #[test]
+    fn create_chat_output_that_is_not_an_id_is_a_failure() {
+        let dir = scratch();
+        let cli = fake_cli(dir.path(), "cursor-agent", "echo 'Welcome to Cursor Agent'");
+        assert_eq!(
+            create_chat(Some(cli), Duration::from_secs(2)),
+            Err("cursor-agent create-chat failed: ".to_string())
+        );
+    }
+
+    #[test]
+    fn a_create_chat_that_hangs_is_given_up_on() {
+        let dir = scratch();
+        let cli = fake_cli(dir.path(), "cursor-agent", "exec sleep 5");
+        let started = Instant::now();
+        assert_eq!(
+            create_chat(Some(cli), Duration::from_millis(100)),
+            Err("cursor-agent create-chat did not answer".to_string())
+        );
+        assert!(started.elapsed() < Duration::from_secs(4));
+    }
+
+    #[test]
+    fn a_cursor_id_that_is_not_a_token_never_counts_as_spoken() {
+        let dir = scratch();
+        let chat = dir.path().join("0eaad84c/x");
+        std::fs::create_dir_all(&chat).unwrap();
+        std::fs::write(chat.join("meta.json"), r#"{"hasConversation":true}"#).unwrap();
+        assert!(cursor_has_conversation(dir.path(), "x"));
+        // The same meta.json reached by walking out of the chat folder.
+        assert!(!cursor_has_conversation(dir.path(), "../0eaad84c/x"));
+    }
+
+    #[test]
+    fn opencode_without_a_database_has_no_title_or_sessions() {
+        let dir = scratch();
+        let db = dir.path().join("opencode.db");
+        assert_eq!(opencode_title(&db, "any"), None);
+        assert!(opencode_sessions(&db, 0).is_empty());
+        assert!(!db.exists(), "a read opened a database into existence");
+    }
+
+    #[test]
+    fn an_opencode_database_without_sessions_yields_none() {
+        let dir = scratch();
+        let db = dir.path().join("opencode.db");
+        Connection::open(&db)
+            .unwrap()
+            .execute_batch("CREATE TABLE other (id TEXT);")
+            .unwrap();
+        assert!(opencode_sessions(&db, 0).is_empty());
+        assert_eq!(opencode_title(&db, "any"), None);
+    }
+
+    #[test]
+    fn codex_discovery_reads_only_recent_rollouts_of_the_two_latest_days() {
+        let dir = scratch();
+        let root = dir.path();
+        let rollout = |day: &str, file: &str, id: &str| {
+            let folder = root.join("sessions").join(day);
+            std::fs::create_dir_all(&folder).unwrap();
+            let meta = serde_json::json!({
+                "type": "session_meta",
+                "payload": { "id": id, "cwd": "/w", "source": "cli" }
+            });
+            std::fs::write(folder.join(file), format!("{meta}\n")).unwrap();
+        };
+        rollout("2026/09/20", "rollout-old.jsonl", "too-old");
+        rollout("2026/09/21", "rollout-y.jsonl", "yesterday");
+        rollout("2026/09/22", "rollout-t.jsonl", "today");
+        rollout("2026/09/22", "notes.txt", "not-a-rollout");
+        std::fs::write(root.join("sessions/2026/09/22/rollout-empty.jsonl"), "").unwrap();
+
+        let mut ids: Vec<String> = codex_sessions(root, 0).into_iter().map(|s| s.id).collect();
+        ids.sort();
+        assert_eq!(ids, ["today", "yesterday"]);
+        let later = born_ms(&root.join("sessions/2026/09/22/rollout-t.jsonl")).unwrap() + 60_000;
+        assert!(codex_sessions(root, later).is_empty());
     }
 }
