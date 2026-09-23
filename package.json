@@ -19,6 +19,7 @@
     "doctor:changed": "react-doctor src --scope changed --no-score",
     "check": "npm run lint && tsc --noEmit && tsc --noEmit -p tsconfig.electron.json && npm run test && npm run doctor",
     "test": "vitest run",
+    "stress": "vitest run stress && cargo test -p crew-core --release -- --ignored browser",
     "protocol": "cargo test -p crew-protocol",
     "release": "node scripts/release.mjs"
   },

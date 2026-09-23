@@ -46,16 +46,15 @@ export function patchBrowserTab(
   id: string,
   patch: { url?: string; title?: string },
 ): TabState {
-  let changed = false;
-  const tabs = state.tabs.map((tab) => {
-    if (tab.id !== id || tab.kind !== "browser") return tab;
-    const url = patch.url ?? tab.url;
-    const title = patch.title ?? tab.title;
-    if (url === tab.url && title === tab.title) return tab;
-    changed = true;
-    return { ...tab, url, title };
-  });
-  return changed ? { ...state, tabs } : state;
+  const index = state.tabs.findIndex((tab) => tab.id === id);
+  const tab = state.tabs[index];
+  if (!tab || tab.kind !== "browser") return state;
+  const url = patch.url ?? tab.url;
+  const title = patch.title ?? tab.title;
+  if (url === tab.url && title === tab.title) return state;
+  const tabs = state.tabs.slice();
+  tabs[index] = { ...tab, url, title };
+  return { ...state, tabs };
 }
 
 function withoutTab(state: TabState, id: string, closed: Tab[]): TabState {

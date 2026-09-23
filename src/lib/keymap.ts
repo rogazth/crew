@@ -10,7 +10,27 @@ export type ChordSpec =
   | string
   | { key: string; mod?: boolean; ctrl?: boolean; shift?: boolean; alt?: boolean; meta?: boolean };
 
-type Chord = { key: string; meta: boolean; ctrl: boolean; alt: boolean; shift: boolean };
+type Chord = {
+  key: string;
+  /** The key upper-cased and its physical code, worked out once instead of per key pressed. */
+  upper: string;
+  code: string | undefined;
+  meta: boolean;
+  ctrl: boolean;
+  alt: boolean;
+  shift: boolean;
+};
+
+/** What a key event says about itself, read once however many chords it is checked against. */
+type Pressed = {
+  input: ChordInput;
+  key: string;
+  upper: string;
+  dead: boolean;
+  /** A one-character letter, and whether it is a plain a–z one. */
+  letter: boolean;
+  ascii: boolean;
+};
 type Modifier = "mod" | "meta" | "ctrl" | "alt" | "shift";
 
 const MODIFIERS = new Map<string, Modifier>([
@@ -40,7 +60,34 @@ const PUNCTUATION_CODES = new Map([
   ["=", "Equal"],
 ]);
 
+/**
+ * The main process matches every key pressed in a page against every live
+ * command, so a spec is parsed once, not per key. Object specs are cached by
+ * identity: the live list keeps the same objects until the window republishes.
+ */
+const parsedStrings = new Map<string, Chord>();
+const parsedObjects = [new WeakMap<object, Chord>(), new WeakMap<object, Chord>()] as const;
+
 function chordOf(spec: ChordSpec, isMac: boolean): Chord {
+  if (typeof spec === "string") {
+    const key = `${isMac ? "m" : "o"}${spec}`;
+    let chord = parsedStrings.get(key);
+    if (!chord) {
+      chord = parse(spec, isMac);
+      parsedStrings.set(key, chord);
+    }
+    return chord;
+  }
+  const cache = parsedObjects[isMac ? 0 : 1];
+  let chord = cache.get(spec);
+  if (!chord) {
+    chord = parse(spec, isMac);
+    cache.set(spec, chord);
+  }
+  return chord;
+}
+
+function parse(spec: ChordSpec, isMac: boolean): Chord {
   const flags = { mod: false, meta: false, ctrl: false, alt: false, shift: false };
   let key: string;
   if (typeof spec === "string") {
@@ -61,6 +108,8 @@ function chordOf(spec: ChordSpec, isMac: boolean): Chord {
   }
   return {
     key,
+    upper: key.toUpperCase(),
+    code: codeOf(key.toUpperCase()),
     meta: flags.meta || (flags.mod && isMac),
     ctrl: flags.ctrl || (flags.mod && !isMac),
     alt: flags.alt,
@@ -74,33 +123,41 @@ function codeOf(key: string): string | undefined {
   return PUNCTUATION_CODES.get(key);
 }
 
-function keyMatches(want: string, input: ChordInput): boolean {
-  if (!want) return false;
+function pressed(input: ChordInput): Pressed {
   const key = input.key === " " ? "Space" : input.key;
-  const dead = key === "Dead";
-  const single = key.length === 1 && want.length === 1;
+  const letter = key.length === 1 && /^\p{L}$/u.test(key);
+  return { input, key, upper: key.toUpperCase(), dead: key === "Dead", letter, ascii: letter && /^[A-Za-z]$/.test(key) };
+}
+
+function keyMatches(chord: Chord, press: Pressed): boolean {
+  if (!chord.key) return false;
+  const single = press.key.length === 1 && chord.key.length === 1;
   if (single) {
-    if (key.toUpperCase() === want.toUpperCase()) return true;
+    if (press.upper === chord.upper) return true;
     // A letter is the layout speaking: Dvorak's ⌘Y is ⌘Y wherever that key
     // sits. Only ⌥ turns a letter into another one (ˆ, å), and then the
     // physical key decides.
-    if (/^\p{L}$/u.test(key) && (/^[A-Za-z]$/.test(key) || !input.alt)) return false;
+    if (press.letter && (press.ascii || !press.input.alt)) return false;
   }
   // ⇧ punctuation, ⌥ characters and dead keys: fall back to the physical key.
-  if (input.code && (dead || single)) return codeOf(want.toUpperCase()) === input.code;
-  return key.toLowerCase() === want.toLowerCase();
+  if (press.input.code && (press.dead || single)) return chord.code === press.input.code;
+  return press.upper === chord.upper;
 }
 
-/** Whether a key event is this chord. `Mod` is ⌘ on macOS and Ctrl elsewhere; modifiers must match exactly. */
-export function matchChord(spec: ChordSpec, input: ChordInput, isMac: boolean): boolean {
-  const chord = chordOf(spec, isMac);
+function matches(chord: Chord, press: Pressed): boolean {
+  const { input } = press;
   return (
     input.meta === chord.meta &&
     input.ctrl === chord.ctrl &&
     input.alt === chord.alt &&
     input.shift === chord.shift &&
-    keyMatches(chord.key, input)
+    keyMatches(chord, press)
   );
+}
+
+/** Whether a key event is this chord. `Mod` is ⌘ on macOS and Ctrl elsewhere; modifiers must match exactly. */
+export function matchChord(spec: ChordSpec, input: ChordInput, isMac: boolean): boolean {
+  return matches(chordOf(spec, isMac), pressed(input));
 }
 
 /** A command the window can run right now, as it publishes them to the main process. */
@@ -128,8 +185,9 @@ export function resolveForward(
   if (input.type !== "keyDown") return null;
   // ⌥ alone composes characters and bare keys type; only ⌘ and Ctrl chords are the app's.
   if (!input.meta && !input.ctrl) return null;
-  if (EDITING.some((spec) => matchChord(spec, input, isMac))) return null;
-  const command = commands.find((c) => matchChord(c.keys, input, isMac));
+  const press = pressed(input);
+  if (EDITING.some((spec) => matches(chordOf(spec, isMac), press))) return null;
+  const command = commands.find((c) => matches(chordOf(c.keys, isMac), press));
   if (!command) return null;
   return { id: command.id, run: command.repeat || !input.isAutoRepeat };
 }
