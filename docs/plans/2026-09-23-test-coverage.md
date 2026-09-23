@@ -207,6 +207,12 @@ test module never breaks another's build.
   Escape's keyup reopened it (T7).
 - `CommandPalette` and `WorkspacePicker`: ArrowDown on an empty list left the
   cursor at -1, so Enter did nothing once results arrived (T6).
+- Fixed after the workstreams (F2):
+  - `useAgentTheme` and `useTerminalPrefs` no longer let a late load
+    overwrite a change made before it.
+  - `useSidebarWidth` saves at unmount instead of dropping the pending save.
+  - `electron/update.ts` removes its temp folder when an install fails, and
+    waits for the swap shell to start before quitting.
 - **Latent, not reached today:**
   - `transport.ts`: closing an old handle for a stream id after it was
     reopened silences the new handler.
@@ -230,12 +236,6 @@ test module never breaks another's build.
   - Both cron parsers reject 7 as Sunday in the day-of-week field.
   - The pty spawn path leaks the child if `dup_fd(master)` fails after a
     successful spawn. A test can't reach this.
-  - `useAgentTheme` and `useTerminalPrefs`: a change made before the saved
-    value loads is overwritten when it lands.
-  - `useSidebarWidth` drops the save still pending at unmount, so the last
-    200 ms of a drag can be lost.
-  - `electron/update.ts` leaves its `crew-update-*` temp folder behind when
-    an install fails.
   - `electron/main.ts` accepts a handshake URL with any scheme. Quitting
     while crewd is still starting waits for the handshake or the 10 s
     timeout before sending SIGTERM, and still creates the window.
