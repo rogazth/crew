@@ -7,6 +7,7 @@ import { AppSidebar } from "./chrome/AppSidebar";
 import { TabBar } from "./chrome/TabBar";
 import { useAgentSheet } from "./hooks/useAgentSheet";
 import { useAppCommands } from "./hooks/useAppCommands";
+import { useBrowserBridge } from "./hooks/useBrowserBridge";
 import { useSessionTitle } from "./hooks/useSessionTitle";
 import { useConfirmations } from "./hooks/useConfirmations";
 import { useLaunch } from "./hooks/useLaunch";
@@ -35,6 +36,7 @@ export function App() {
   // opens rather than from the first thing the user sends.
   useEffect(() => void boot(), []);
   useSelectAllScope();
+  useBrowserBridge();
 
   const workspaces = useWorkspaces();
   const sidebar = useSidebarWidth();
@@ -212,6 +214,8 @@ export function App() {
             onModel={changeModel}
             onOpenFile={nav.openFile}
             onOpenSession={nav.openSessionById}
+            onPatchBrowser={tabs.patchBrowser}
+            onOpenBrowserTab={tabs.openIn}
             files={files}
           />
         </div>

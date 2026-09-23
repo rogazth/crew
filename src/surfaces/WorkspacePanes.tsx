@@ -1,5 +1,6 @@
 import { useMemo } from 'react';
 import { Agents } from './Agents';
+import { Browsers } from './Browsers';
 import { DiffsPool } from './DiffsPool';
 import { ChatContext, type ChatActions } from './chat/context';
 import { Surface } from './Surface';
@@ -23,10 +24,12 @@ type Props = {
   onModel: (session: Session, provider: ProviderId, model: string) => void;
   onOpenFile: (file: ProjectFile) => void;
   onOpenSession: (sessionId: string) => void;
+  onPatchBrowser: (workspaceId: string, tabId: string, patch: { url?: string; title?: string }) => void;
+  onOpenBrowserTab: (workspaceId: string, tab: Tab, opts: { after: string; background: boolean }) => void;
   files: ProjectFile[];
 };
 
-/** Active surface plus the mounted agent/terminal overlays, of every workspace. */
+/** Active surface plus the mounted agent, terminal and page overlays, of every workspace. */
 export function WorkspacePanes({
   tab,
   panes,
@@ -39,6 +42,8 @@ export function WorkspacePanes({
   onModel,
   onOpenFile,
   onOpenSession,
+  onPatchBrowser,
+  onOpenBrowserTab,
   files,
 }: Props) {
   const mounted = useMemo(
@@ -81,6 +86,7 @@ export function WorkspacePanes({
         onStatus={onStatus}
         onOpenFile={onOpenFile}
       />
+      <Browsers panes={mounted} onPatch={onPatchBrowser} onOpenTab={onOpenBrowserTab} />
       <ChatContext value={chat}>
         <Agents panes={mounted} sessions={sessions} onModel={onModel} />
       </ChatContext>

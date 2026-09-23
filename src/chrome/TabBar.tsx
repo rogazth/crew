@@ -1,5 +1,5 @@
 import { Tabs } from "@base-ui/react/tabs";
-import { CaretLeftIcon, CaretRightIcon, GlobeIcon, RobotIcon } from "@phosphor-icons/react";
+import { CaretLeftIcon, CaretRightIcon, CircleNotchIcon, GlobeIcon, RobotIcon } from "@phosphor-icons/react";
 import { useEffect, useState } from "react";
 import { X } from "./icons";
 import { FileTypeIcon } from "./FileTypeIcon";
@@ -7,10 +7,11 @@ import { ProviderIcon } from "./ProviderIcon";
 import { StatusDot } from "./StatusDot";
 import { StubIcon } from "./StubIcon";
 import { TabLauncher, type Launch } from "./TabLauncher";
+import { useBrowserPage } from "../hooks/useBrowserPage";
 import { useCommand } from "../hooks/useCommand";
 import { useTabOverflow } from "../hooks/useTabOverflow";
 import { IS_MAC } from "../lib/hotkey";
-import { tabTitle } from "../lib/tabs";
+import { browserTitle, tabTitle } from "../lib/tabs";
 import type { Session, Tab } from "../lib/types";
 
 type Props = {
@@ -79,8 +80,14 @@ export function TabBar({ inset, tabs, activeId, sessions, onSelect, onClose, onL
                       : "bg-card text-text-muted ring-transparent hover:bg-hover [--tab-shadow:transparent]"
                   }`}
                 >
-                  <TabIcon tab={tab} sessions={sessions} />
-                  <span className="min-w-0 flex-1 truncate">{tabTitle(tab, sessions)}</span>
+                  {tab.kind === "browser" ? (
+                    <BrowserTabFace tab={tab} />
+                  ) : (
+                    <>
+                      <TabIcon tab={tab} sessions={sessions} />
+                      <span className="min-w-0 flex-1 truncate">{tabTitle(tab, sessions)}</span>
+                    </>
+                  )}
                   {/* One fixed slot for two things that never coexist: the status light
                       and the close button it yields to on hover. Stacked, so the swap
                       never resizes the tab. */}
@@ -188,4 +195,31 @@ function TabIcon({ tab, sessions }: { tab: Tab; sessions: Session[] }) {
     );
   };
   return <span className="flex size-3.5 shrink-0 items-center justify-center">{icon()}</span>;
+}
+
+/**
+ * A page's pill reads its live state, so a navigation re-renders this pill and
+ * nothing else in the strip. A cold page has no live state yet and falls back
+ * to what its tab saved.
+ */
+function BrowserTabFace({ tab }: { tab: Extract<Tab, { kind: "browser" }> }) {
+  const page = useBrowserPage(tab.id);
+  const [broken, setBroken] = useState<string | null>(null);
+  const live = page.webContentsId !== null;
+  const title = live ? browserTitle(page.title, page.url) : browserTitle(tab.title, tab.url);
+  const icon = page.favicon && page.favicon !== broken ? page.favicon : null;
+  return (
+    <>
+      <span className="flex size-3.5 shrink-0 items-center justify-center">
+        {page.loading ? (
+          <CircleNotchIcon className="size-3.5 animate-spin text-text-muted" weight="bold" />
+        ) : icon ? (
+          <img src={icon} alt="" className="size-3.5" onError={() => setBroken(icon)} />
+        ) : (
+          <GlobeIcon className="size-3.5 text-text-muted" />
+        )}
+      </span>
+      <span className="min-w-0 flex-1 truncate">{title}</span>
+    </>
+  );
 }

@@ -1,0 +1,123 @@
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { useCommands } from "../hooks/useCommand";
+import { pages } from "../lib/browser/pageStore";
+import { DEFAULT_KEEP, liveGuests, touch } from "../lib/browser/retention";
+import { DEFAULT_SEARCH } from "../lib/browser/url";
+import { browserHost } from "../lib/host";
+import { newBrowserTab, paneId } from "../lib/tabs";
+import type { Tab } from "../lib/types";
+import type { PaneHandle } from "./browser/BrowserPane";
+import type { MountedPane } from "./WorkspacePanes";
+
+/** The toolbar, the address bar and the guest wiring load with the first page, not with the window. */
+const BrowserPane = lazy(() => import("./browser/BrowserPane").then((m) => ({ default: m.BrowserPane })));
+
+type BrowserTab = Extract<Tab, { kind: "browser" }>;
+type BrowserMount = MountedPane & { tab: BrowserTab };
+
+type Props = {
+  panes: MountedPane[];
+  onPatch: (workspaceId: string, tabId: string, patch: { url?: string; title?: string }) => void;
+  onOpenTab: (workspaceId: string, tab: Tab, opts: { after: string; background: boolean }) => void;
+};
+
+const isBrowser = (pane: MountedPane): pane is BrowserMount => pane.tab.kind === "browser";
+
+/**
+ * Every open page stays mounted, shown or not, like the terminals: a guest
+ * that leaves the DOM loses its page. Only the most recently shown ones keep
+ * a live guest; the rest go cold until they are looked at again.
+ */
+export function Browsers({ panes, onPatch, onOpenTab }: Props) {
+  const browsers = panes.filter(isBrowser);
+  const visible = browsers.find((pane) => pane.visible) ?? null;
+  const visibleId = visible?.id ?? null;
+
+  const [order, setOrder] = useState<readonly string[]>([]);
+  const [shown, setShown] = useState<string | null>(null);
+  if (shown !== visibleId) {
+    setShown(visibleId);
+    if (visibleId) setOrder((current) => touch(current, visibleId));
+  }
+  const [pinned, setPinned] = useState<ReadonlySet<string>>(() => new Set());
+  const ids = new Set(browsers.map((pane) => pane.id));
+  const live = liveGuests({
+    order: order.filter((id) => ids.has(id)),
+    visible: visibleId,
+    keep: DEFAULT_KEEP,
+    pinned: new Set([...pinned].filter((id) => ids.has(id))),
+  });
+
+  const handles = useRef(new Map<string, PaneHandle>());
+  const active = () => (visibleId ? handles.current.get(visibleId) : undefined);
+  // Bound only while a page fills the active tab, so ⌘[ and ⌘R mean nothing anywhere else.
+  useCommands(
+    visible
+      ? {
+          "browser-back": () => active()?.back(),
+          "browser-forward": () => active()?.forward(),
+          "browser-reload": () => active()?.reload(),
+          "browser-focus-address": () => active()?.focusAddress(),
+          "browser-devtools": () => active()?.toggleDevTools(),
+        }
+      : {},
+  );
+
+  // A closed tab's live state goes with it. Runs after the pane's own cleanup, which writes to it last.
+  const known = useRef(new Set<string>());
+  useEffect(() => {
+    const now = new Set(browsers.map((pane) => pane.tab.id));
+    for (const id of known.current) if (!now.has(id)) pages.drop(id);
+    known.current = now;
+  });
+
+  const latest = useRef({ browsers, visible, onOpenTab });
+  useEffect(() => {
+    latest.current = { browsers, visible, onOpenTab };
+  });
+  useEffect(
+    () =>
+      browserHost()?.onOpenTab((request) => {
+        const { browsers: open, visible: front, onOpenTab: openTab } = latest.current;
+        const opener = open.find((pane) => pages.get(pane.tab.id).webContentsId === request.openerId) ?? front;
+        if (!opener) return;
+        const tab = newBrowserTab(request.url);
+        openTab(opener.workspaceId, tab, { after: opener.tab.id, background: request.background });
+        // A tab opened behind the current one still loads, the way a middle-click does.
+        setOrder((current) => touch(current, paneId(opener.workspaceId, tab.id)));
+      }),
+    [],
+  );
+
+  return browsers.map((pane) => (
+    <div key={pane.id} hidden={!pane.visible} className="absolute inset-0">
+      <Suspense fallback={null}>
+        <BrowserPane
+          ref={(handle: PaneHandle | null) => {
+            if (!handle) return;
+            handles.current.set(pane.id, handle);
+            return () => {
+              handles.current.delete(pane.id);
+            };
+          }}
+          pageId={pane.tab.id}
+          workspaceId={pane.workspaceId}
+          url={pane.tab.url}
+          live={live.has(pane.id)}
+          visible={pane.visible}
+          searchTemplate={DEFAULT_SEARCH}
+          onPatch={(patch) => onPatch(pane.workspaceId, pane.tab.id, patch)}
+          onPinned={(on) =>
+            setPinned((current) => {
+              if (current.has(pane.id) === on) return current;
+              const next = new Set(current);
+              if (on) next.add(pane.id);
+              else next.delete(pane.id);
+              return next;
+            })
+          }
+        />
+      </Suspense>
+    </div>
+  ));
+}

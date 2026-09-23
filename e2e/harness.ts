@@ -300,13 +300,13 @@ export async function countEvents(
 export async function waitFor<T>(
   fn: () => T | Promise<T>,
   { timeout = 5000, interval = 50 }: { timeout?: number; interval?: number } = {},
-): Promise<T> {
+): Promise<NonNullable<T>> {
   const until = Date.now() + timeout;
   let last: unknown;
   for (;;) {
     try {
       const value = await fn();
-      if (value) return value;
+      if (value) return value as NonNullable<T>;
       last = value;
     } catch (error) {
       last = error;

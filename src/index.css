@@ -435,6 +435,27 @@ body:has(button[data-sidebar="resize-handle"]:active) * {
   .animate-status-pulse { animation: none; }
 }
 
+/* A page is loading: a sliver sweeps under the toolbar instead of a spinner in the way. */
+@keyframes browser-progress {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(340%); }
+}
+.browser-progress {
+  overflow: hidden;
+  background: color-mix(in srgb, var(--color-accent) 12%, transparent);
+}
+.browser-progress::after {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 30%;
+  background: var(--color-accent);
+  animation: browser-progress 1.1s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .browser-progress::after { animation: none; width: 100%; opacity: 0.5; }
+}
+
 .crew-terminal .xterm-viewport {
   background: transparent !important;
 }
