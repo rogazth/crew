@@ -3,6 +3,7 @@ dist/
 electron-dist/
 release/
 target/
+coverage/
 .DS_Store
 *.local
 

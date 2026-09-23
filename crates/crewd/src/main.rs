@@ -43,6 +43,11 @@ fn run(args: &[String]) -> Result<(), String> {
         bridge: bridge.clone(),
     })?;
 
+    // Before the handshake line: the parent may signal as soon as it reads it,
+    // and a signal that lands before the handlers exist kills the daemon
+    // without the cleanup below.
+    let exit = exit_watch();
+
     let info = DaemonInfo {
         url: handle.url().to_string(),
         token: handle.token().to_string(),
@@ -56,7 +61,7 @@ fn run(args: &[String]) -> Result<(), String> {
     .map_err(|e| e.to_string())?;
     stdout.flush().map_err(|e| e.to_string())?;
 
-    wait_for_exit();
+    let _ = exit.recv();
 
     pty.kill_all();
     agents.kill_all();
@@ -81,8 +86,12 @@ fn data_dir(args: &[String]) -> PathBuf {
     std::env::temp_dir().join(format!("crewd-{}", std::process::id()))
 }
 
-fn wait_for_exit() {
+/// Starts the watchers that end the daemon: stdin closing (the parent died) or
+/// SIGTERM/SIGINT/SIGHUP. Returns once the signal handlers are installed; the
+/// receiver yields when either fires.
+fn exit_watch() -> mpsc::Receiver<()> {
     let (tx, rx) = mpsc::channel();
+    let (installed_tx, installed) = mpsc::channel::<()>();
 
     thread::Builder::new()
         .name("crewd-stdin".into())
@@ -128,6 +137,7 @@ fn wait_for_exit() {
                     else {
                         return;
                     };
+                    let _ = installed_tx.send(());
                     tokio::select! {
                         _ = sigterm.recv() => {}
                         _ = sigint.recv() => {}
@@ -136,6 +146,7 @@ fn wait_for_exit() {
                 }
                 #[cfg(not(unix))]
                 {
+                    let _ = installed_tx.send(());
                     let _ = tokio::signal::ctrl_c().await;
                 }
             });
@@ -143,5 +154,7 @@ fn wait_for_exit() {
         })
         .expect("signal watcher");
 
-    let _ = rx.recv();
+    // An error here means the watcher gave up installing; stdin still ends us.
+    let _ = installed.recv();
+    rx
 }

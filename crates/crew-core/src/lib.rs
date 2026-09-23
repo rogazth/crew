@@ -16,6 +16,8 @@ pub mod scheduler;
 pub mod session;
 pub mod shell_path;
 pub mod store;
+#[cfg(test)]
+pub(crate) mod test_support;
 pub mod tools;
 pub mod transcript;
 pub mod turns;
