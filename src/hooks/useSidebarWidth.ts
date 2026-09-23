@@ -8,6 +8,7 @@ const DEFAULT = 264;
 export function useSidebarWidth() {
   const [width, setWidth] = useState<number | null>(null);
   const timer = useRef<number | undefined>(undefined);
+  const pending = useRef<number | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -24,15 +25,25 @@ export function useSidebarWidth() {
     };
   }, []);
 
-  // The drag fires on every frame; the store only needs where it stopped.
-  const commit = useCallback((next: number) => {
+  const save = useCallback(() => {
     window.clearTimeout(timer.current);
-    timer.current = window.setTimeout(() => {
-      void api.stateSet(KEY, String(Math.round(next))).catch(() => {});
-    }, 200);
+    const next = pending.current;
+    pending.current = null;
+    if (next !== null) void api.stateSet(KEY, String(Math.round(next))).catch(() => {});
   }, []);
 
-  useEffect(() => () => window.clearTimeout(timer.current), []);
+  // The drag fires on every frame; the store only needs where it stopped.
+  const commit = useCallback(
+    (next: number) => {
+      pending.current = next;
+      window.clearTimeout(timer.current);
+      timer.current = window.setTimeout(save, 200);
+    },
+    [save],
+  );
+
+  // Unmounting mid-debounce saves at once, or the end of the drag is lost.
+  useEffect(() => save, [save]);
 
   return { width, commit };
 }

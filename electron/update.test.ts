@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
-import { access, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { deferred } from "../src/test/deferred";
@@ -56,6 +56,7 @@ const fetchMock = vi.fn<(url: string, init?: RequestInit) => Promise<Response>>(
 let routes: Map<string, () => Response | Promise<Response>>;
 let children: Array<{ command: string; args: string[]; options: object; child: FakeChild }>;
 let ditto: (child: FakeChild, args: string[]) => Promise<void>;
+let shell: (child: FakeChild) => void;
 
 function reply(status: number, body: () => Promise<unknown>): Response {
   return { ok: status >= 200 && status < 300, status, json: body } as Response;
@@ -71,6 +72,15 @@ async function unpack(child: FakeChild, args: string[]): Promise<void> {
   await mkdir(contents, { recursive: true });
   await writeFile(path.join(contents, "Info.plist"), "<plist/>");
   child.emit("exit", 0);
+}
+
+function brokenStream(): ReadableStream<Uint8Array> {
+  return new ReadableStream({
+    start(controller) {
+      controller.enqueue(bytes);
+      controller.error(new Error("socket hang up"));
+    },
+  });
 }
 
 function shown(): MessageBox[] {
@@ -95,10 +105,12 @@ beforeEach(() => {
   routes = new Map();
   children = [];
   ditto = unpack;
+  shell = (child) => queueMicrotask(() => child.emit("spawn"));
   mocks.spawn.mockImplementation((command, args, options) => {
     const child = new FakeChild();
     children.push({ command, args, options, child });
     if (command === "/usr/bin/ditto") void Promise.resolve().then(() => ditto(child, args));
+    if (command === "/bin/sh") shell(child);
     return child;
   });
   fetchMock.mockImplementation(async (url) => {
@@ -368,6 +380,67 @@ describe("installing an update", () => {
     expect(mocks.app.quit).toHaveBeenCalledTimes(1);
     const spawnedAt = mocks.spawn.mock.invocationCallOrder[1] ?? Infinity;
     expect(spawnedAt).toBeLessThan(mocks.app.quit.mock.invocationCallOrder[0] ?? 0);
+  });
+
+  it("quits only once the swap shell has started", async () => {
+    const spawned = deferred<FakeChild>();
+    shell = (child) => spawned.resolve(child);
+    serve(release("0.2.0"));
+    const { checkForUpdates } = await load();
+    const check = checkForUpdates(true);
+    const swap = await spawned.promise;
+    expect(mocks.app.quit).not.toHaveBeenCalled();
+    swap.emit("spawn");
+    await check;
+    expect(mocks.app.quit).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves the staged update for the swap script, which removes it after the swap", async () => {
+    serve(release("0.2.0"));
+    const { checkForUpdates } = await load();
+    await checkForUpdates(true);
+    const stage = children[1]?.args.at(-1) ?? "";
+    expect(await readdir(mocks.tmp.root)).toEqual([path.basename(stage)]);
+    expect((await readdir(stage)).sort()).toEqual(["Crew-0.2.0-mac-arm64.zip", "swap.sh", "unpacked"]);
+    const script = await readFile(path.join(stage, "swap.sh"), "utf8");
+    expect(script.trimEnd().split("\n").at(-1)).toBe('/bin/rm -rf "$stage"');
+  });
+
+  it.each<[string, () => void]>([
+    ["the checksum does not match", () => serve({ ...release("0.2.0"), sha256: "0".repeat(64) })],
+    ["the zip is not served", () => serve(release("0.2.0"), () => new Response("gone", { status: 404 }))],
+    ["the zip has no body", () => serve(release("0.2.0"), () => new Response(null))],
+    ["the download breaks off", () => serve(release("0.2.0"), () => new Response(brokenStream()))],
+    ["ditto cannot unpack the zip", () => (ditto = async (child) => void child.emit("exit", 1))],
+    ["ditto cannot start", () => (ditto = async (child) => void child.emit("error", new Error("spawn ENOENT")))],
+    ["the zip does not hold a Crew.app", () => (ditto = async (child) => void child.emit("exit", 0))],
+    [
+      "the swap script cannot be written",
+      () =>
+        (ditto = async (child, args) => {
+          await mkdir(path.join(path.dirname(args[2] ?? ""), "swap.sh"));
+          await unpack(child, args);
+        }),
+    ],
+    [
+      "the swap shell cannot be spawned",
+      () =>
+        (shell = () => {
+          throw new Error("spawn EINVAL");
+        }),
+    ],
+    [
+      "the swap shell fails to start",
+      () => (shell = (child) => queueMicrotask(() => child.emit("error", new Error("spawn /bin/sh ENOENT")))),
+    ],
+  ])("removes its temp folder when %s", async (_name, arrange) => {
+    serve(release("0.2.0"));
+    arrange();
+    const { checkForUpdates } = await load();
+    await checkForUpdates(true);
+    expect(shown().at(-1)).toMatchObject({ type: "error", message: "Could not update Crew" });
+    expect(mocks.app.quit).not.toHaveBeenCalled();
+    expect(await readdir(mocks.tmp.root)).toEqual([]);
   });
 
   it("refuses a download whose sha256 does not match the manifest", async () => {

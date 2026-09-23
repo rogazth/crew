@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 import { createElement, type ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { deferred } from "../test/deferred";
 import { fake } from "../test/fakeClient";
 import { act, renderHook } from "../test/renderHook";
 import { AgentThemeProvider, useAgentTheme } from "./useAgentTheme";
@@ -71,6 +72,18 @@ describe("useAgentTheme", () => {
     const hook = renderHook(() => useAgentTheme(), provider);
     await act(async () => fake.take("state_get").resolve("default"));
     act(() => hook.result.current.update("timeline"));
+    expect(hook.result.current.theme).toBe("timeline");
+    expect(document.documentElement.dataset.agentTheme).toBe("timeline");
+    expect(fake.sent("state_set")).toEqual([{ key: "agent:theme", value: "timeline" }]);
+    hook.unmount();
+  });
+
+  it("keeps and saves a theme picked before the saved one loads", async () => {
+    const saved = deferred<string | null>();
+    fake.respond("state_get", () => saved.promise);
+    const hook = renderHook(() => useAgentTheme(), provider);
+    act(() => hook.result.current.update("timeline"));
+    await act(async () => saved.resolve("default"));
     expect(hook.result.current.theme).toBe("timeline");
     expect(document.documentElement.dataset.agentTheme).toBe("timeline");
     expect(fake.sent("state_set")).toEqual([{ key: "agent:theme", value: "timeline" }]);

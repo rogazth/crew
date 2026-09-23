@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { createHash, type Hash } from "node:crypto";
 import { createWriteStream } from "node:fs";
-import { access, mkdtemp, writeFile } from "node:fs/promises";
+import { access, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
@@ -111,19 +111,30 @@ fi
 
 async function install(manifest: Manifest, target: string): Promise<void> {
   const stage = await mkdtemp(path.join(tmpdir(), "crew-update-"));
-  const zip = path.join(stage, path.basename(manifest.zip));
-  await download(manifest.zip, zip, manifest.sha256);
-  const unpacked = path.join(stage, "unpacked");
-  await run("/usr/bin/ditto", ["-x", "-k", zip, unpacked]);
-  const staged = path.join(unpacked, path.basename(target));
-  await access(path.join(staged, "Contents", "Info.plist"));
-  const script = path.join(stage, "swap.sh");
-  await writeFile(script, SWAP, { mode: 0o755 });
-  const swap = spawn("/bin/sh", [script, String(process.pid), target, staged, stage], {
-    detached: true,
-    stdio: "ignore",
-  });
-  swap.unref();
+  try {
+    const zip = path.join(stage, path.basename(manifest.zip));
+    await download(manifest.zip, zip, manifest.sha256);
+    const unpacked = path.join(stage, "unpacked");
+    await run("/usr/bin/ditto", ["-x", "-k", zip, unpacked]);
+    const staged = path.join(unpacked, path.basename(target));
+    await access(path.join(staged, "Contents", "Info.plist"));
+    const script = path.join(stage, "swap.sh");
+    await writeFile(script, SWAP, { mode: 0o755 });
+    const swap = spawn("/bin/sh", [script, String(process.pid), target, staged, stage], {
+      detached: true,
+      stdio: "ignore",
+    });
+    swap.unref();
+    // Quitting before the shell runs would leave Crew closed and not updated.
+    await new Promise<void>((resolve, reject) => {
+      swap.once("spawn", () => resolve());
+      swap.once("error", reject);
+    });
+  } catch (error) {
+    await rm(stage, { recursive: true, force: true }).catch(() => {});
+    throw error;
+  }
+  // From here the stage belongs to the swap script, which removes it last.
   app.quit();
 }
 

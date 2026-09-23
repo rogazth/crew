@@ -2,6 +2,7 @@
 import { createElement, type ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_TERMINAL_PREFS, type TerminalPrefs } from "../lib/terminalPrefs";
+import { deferred } from "../test/deferred";
 import { fake } from "../test/fakeClient";
 import { act, renderHook } from "../test/renderHook";
 import { TerminalPrefsProvider, useTerminalPrefs } from "./useTerminalPrefs";
@@ -91,6 +92,17 @@ describe("useTerminalPrefs", () => {
     const hook = renderHook(() => useTerminalPrefs(), provider);
     await act(async () => fake.take("state_get").resolve(null));
     act(() => hook.result.current.update(custom));
+    expect(hook.result.current.prefs).toEqual(custom);
+    expect(fake.sent("state_set")).toEqual([{ key: "terminal:prefs", value: JSON.stringify(custom) }]);
+    hook.unmount();
+  });
+
+  it("keeps and saves prefs changed before the saved ones load", async () => {
+    const saved = deferred<string | null>();
+    fake.respond("state_get", () => saved.promise);
+    const hook = renderHook(() => useTerminalPrefs(), provider);
+    act(() => hook.result.current.update(custom));
+    await act(async () => saved.resolve(JSON.stringify({ ...custom, fontSize: 20 })));
     expect(hook.result.current.prefs).toEqual(custom);
     expect(fake.sent("state_set")).toEqual([{ key: "terminal:prefs", value: JSON.stringify(custom) }]);
     hook.unmount();

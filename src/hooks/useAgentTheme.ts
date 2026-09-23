@@ -10,13 +10,16 @@ const Context = createContext<Value>({ theme: DEFAULT_AGENT_THEME, update: () =>
 
 /** Picks which chat surface every agent tab renders; the settings page writes here. */
 export function AgentThemeProvider({ children }: { children: React.ReactNode }) {
-  const [theme, setTheme] = useState(DEFAULT_AGENT_THEME);
+  const [saved, setSaved] = useState(DEFAULT_AGENT_THEME);
+  // A pick made before the saved theme arrives wins over it.
+  const [picked, setPicked] = useState<AgentThemeId | null>(null);
+  const theme = picked ?? saved;
 
   useEffect(() => {
     let cancelled = false;
     api
       .stateGet(KEY)
-      .then((raw) => !cancelled && setTheme(parseAgentTheme(raw)))
+      .then((raw) => !cancelled && setSaved(parseAgentTheme(raw)))
       .catch(() => {});
     return () => {
       cancelled = true;
@@ -29,7 +32,7 @@ export function AgentThemeProvider({ children }: { children: React.ReactNode }) 
   }, [theme]);
 
   const update = useCallback((next: AgentThemeId) => {
-    setTheme(next);
+    setPicked(next);
     void api.stateSet(KEY, next).catch(() => {});
   }, []);
 

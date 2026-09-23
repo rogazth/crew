@@ -104,12 +104,23 @@ describe("useSidebarWidth", () => {
     second.unmount();
   });
 
-  it("drops a pending save on unmount", async () => {
+  it("saves where the drag stopped at once when the sidebar unmounts mid-debounce", async () => {
+    const hook = await loaded("264");
+    hook.result.current.commit(280);
+    hook.result.current.commit(300.4);
+    hook.unmount();
+    expect(fake.sent("state_set")).toEqual([{ key: "sidebar:width", value: "300" }]);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(fake.sent("state_set")).toHaveLength(1);
+  });
+
+  it("saves nothing more on unmount once the drag has been saved", async () => {
     const hook = await loaded("264");
     hook.result.current.commit(300);
+    await vi.advanceTimersByTimeAsync(200);
     hook.unmount();
     await vi.advanceTimersByTimeAsync(500);
-    expect(fake.sent("state_set")).toEqual([]);
+    expect(fake.sent("state_set")).toEqual([{ key: "sidebar:width", value: "300" }]);
   });
 
   it("swallows a failed save", async () => {
