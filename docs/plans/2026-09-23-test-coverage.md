@@ -98,6 +98,8 @@ Rust gaps, by module: the MCP shim (11%), file helpers (44%), workspace CRUD
   probes that are run by hand. They stay ignored.
 - `npm run coverage:rust` runs `cargo llvm-cov` for anyone who has it
   installed.
+- The Rust sources are not rustfmt-formatted, so new test code matches the
+  file around it by hand. Running `cargo fmt` would rewrite whole files.
 
 ## Workstreams
 
@@ -150,6 +152,11 @@ test module never breaks another's build.
   - `on()` started a connection without catching its rejection.
 - `host.ts`: the browser folder-pick fallback returned the parent of the
   picked folder. Fixed (T2).
+- `mcp.rs`: `initialize` echoed back any `protocolVersion` a client sent,
+  including versions the shim doesn't know. It now answers with a version it
+  supports (2024-11-05, 2025-03-26 or 2025-06-18), as MCP requires. A client
+  that asks for a newer revision gets 2025-06-18 and decides whether to
+  continue (R2).
 - `useSelectAllScope`: the hook cleared the selection before reading the
   region it falls back to, so Cmd/Ctrl+A in the transcript, which can't take
   focus, selected nothing. Fixed (T4).
@@ -195,7 +202,7 @@ test module never breaks another's build.
 | T6 | pending |
 | T7 | pending |
 | R1 | pending |
-| R2 | pending |
+| R2 | done |
 | R3 | pending |
 | R4 | pending |
 | R5 | pending |
