@@ -183,6 +183,13 @@ test module never breaks another's build.
     three type errors (the handle's stderr type under `stdio: "inherit"`,
     readonly dialog `properties`, a `ReadableStream` cast). None of them
     matters at runtime.
+- **Open, serious:** in `store.rs` `migrate()`, steps 3, 4, 5, 6, 9 and 14
+  add a column and record the version as two statements with no transaction.
+  A crash, or a failed version write, between them makes every later open fail
+  with "duplicate column name", and the database never opens again. Only
+  step 13 is atomic. The fix is to wrap each step in a transaction, or to
+  guard each ADD COLUMN with `has_column`. `migrate()` is being edited on the
+  `browser` branch, so the fix lands there or right after it merges (R5).
 - **Open:** `useTabs` reads `tabs:<workspace>` once. If that read fails, it
   falls back to no tabs and never retries, so the next save writes the empty
   list over the saved tabs. A daemon hiccup at startup can wipe a workspace's
@@ -205,6 +212,6 @@ test module never breaks another's build.
 | R2 | done |
 | R3 | pending |
 | R4 | pending |
-| R5 | pending |
+| R5 | done |
 | R6 | pending |
 | R7 | pending |
