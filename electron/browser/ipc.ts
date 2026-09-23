@@ -1,0 +1,81 @@
+import { ipcMain, session } from "electron";
+import type { LiveCommand } from "../../src/lib/keymap";
+import { capSnapshot, parseSnapshot } from "../../src/lib/browser/snapshot";
+import { CHANNELS, PARTITION } from "../../src/lib/browser/bridge";
+import { ownedGuest, prepareRestore, setLiveCommands } from "./guests";
+
+const TOKEN = /^[A-Za-z0-9-]{1,64}$/;
+const FAVICON_BYTES = 128 * 1024;
+const FAVICON_CACHE = 256;
+/** Insertion-ordered, so the oldest entry is the first key. */
+const favicons = new Map<string, Promise<string | null>>();
+
+/** Fetched through the pages' own session, so an icon behind a login comes back the same as in the page. */
+async function fetchFavicon(url: string): Promise<string | null> {
+  if (url.startsWith("data:image/")) return url.length <= FAVICON_BYTES * 2 ? url : null;
+  if (!/^https?:\/\//i.test(url)) return null;
+  const response = await session.fromPartition(PARTITION).fetch(url);
+  const type = response.headers.get("content-type")?.split(";")[0]?.trim() ?? "";
+  if (!response.ok || !type.startsWith("image/")) return null;
+  const body = Buffer.from(await response.arrayBuffer());
+  if (body.byteLength > FAVICON_BYTES) return null;
+  return `data:${type};base64,${body.toString("base64")}`;
+}
+
+function favicon(url: string): Promise<string | null> {
+  const cached = favicons.get(url);
+  if (cached) return cached;
+  const pending = fetchFavicon(url).catch(() => null);
+  favicons.set(url, pending);
+  if (favicons.size > FAVICON_CACHE) favicons.delete(favicons.keys().next().value as string);
+  return pending;
+}
+
+/** Keeps only well-formed entries: this list arrives from the renderer. */
+function commandList(value: unknown): LiveCommand[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item: unknown) => {
+    if (typeof item !== "object" || item === null) return [];
+    const { id, keys, repeat } = item as Partial<LiveCommand>;
+    if (typeof id !== "string") return [];
+    const chord = typeof keys === "string" || (typeof keys === "object" && keys !== null && typeof keys.key === "string");
+    if (!chord) return [];
+    return [{ id, keys, repeat: repeat === true }];
+  });
+}
+
+export function registerBrowserIpc(): void {
+  ipcMain.on(CHANNELS.commands, (event, list: unknown) => setLiveCommands(event.sender, commandList(list)));
+
+  /** Toggles, and answers whether DevTools are open afterwards. */
+  ipcMain.handle(CHANNELS.devtools, (event, id: unknown) => {
+    const guest = typeof id === "number" ? ownedGuest(event.sender, id) : null;
+    if (!guest) return false;
+    if (guest.isDevToolsOpened()) {
+      guest.closeDevTools();
+      return false;
+    }
+    guest.openDevTools({ mode: "detach" });
+    return true;
+  });
+
+  ipcMain.handle(CHANNELS.snapshot, (event, id: unknown) => {
+    const guest = typeof id === "number" ? ownedGuest(event.sender, id) : null;
+    if (!guest) return null;
+    const history = guest.navigationHistory;
+    return capSnapshot({ entries: history.getAllEntries(), index: history.getActiveIndex() });
+  });
+
+  ipcMain.handle(CHANNELS.favicon, (_event, url: unknown) => (typeof url === "string" ? favicon(url) : null));
+
+  /** Takes the daemon's row as-is; parsing it here means main never trusts a renderer-built stack. */
+  ipcMain.handle(CHANNELS.prepareRestore, (_event, token: unknown, entriesJson: unknown, index: unknown) => {
+    if (typeof token !== "string" || !TOKEN.test(token)) return false;
+    if (typeof entriesJson !== "string" || typeof index !== "number") return false;
+    const parsed = parseSnapshot(entriesJson, index);
+    const safe = parsed && capSnapshot(parsed);
+    if (!safe) return false;
+    prepareRestore(token, safe);
+    return true;
+  });
+}

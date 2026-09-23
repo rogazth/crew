@@ -5,6 +5,7 @@ import path from "node:path";
 import type { Readable, Writable } from "node:stream";
 import { pathToFileURL } from "node:url";
 import { app, BrowserWindow, dialog, ipcMain, Menu, Notification, session, shell, type OpenDialogOptions } from "electron";
+import { installBrowser, registerBrowserIpc } from "./browser";
 import { sha } from "./build-info";
 import { buildMenu } from "./menu";
 import { watchForUpdates } from "./update";
@@ -197,8 +198,12 @@ function createWindow(): void {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      // Pages are <webview>s so the app's own overlays can sit on top of them.
+      // Each one is vetted and hardened in installBrowser before it attaches.
+      webviewTag: true,
     },
   });
+  installBrowser(win);
   win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   win.webContents.on("will-navigate", (event) => {
     if (!allowedNavigation(event.url)) event.preventDefault();
@@ -246,6 +251,7 @@ function registerIpc(): void {
     if (!Notification.isSupported()) return;
     new Notification({ title: payload.title, body: payload.body }).show();
   });
+  registerBrowserIpc();
 }
 
 app.setName("Crew");

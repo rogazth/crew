@@ -1,3 +1,7 @@
+import type { OpenTabRequest } from "./browser/bridge";
+import type { NavSnapshot } from "./browser/snapshot";
+import type { LiveCommand } from "./keymap";
+
 export type OpenOptions = { multiple?: boolean; directory?: boolean };
 
 export type DaemonInfo = { url: string; token: string };
@@ -9,6 +13,19 @@ type CrewHost = {
   openUrl(url: string): Promise<void>;
   notify(title: string, body: string): Promise<void>;
   pathForFile(file: File): string;
+  browser: BrowserHost;
+};
+
+/** The browser's main-process half. Absent outside Electron (the mock, the screenshot build). */
+export type BrowserHost = {
+  setCommands(list: LiveCommand[]): void;
+  onCommand(cb: (id: string) => void): () => void;
+  onOpenTab(cb: (request: OpenTabRequest) => void): () => void;
+  /** Resolves whether DevTools are open afterwards. */
+  toggleDevTools(webContentsId: number): Promise<boolean>;
+  snapshot(webContentsId: number): Promise<NavSnapshot | null>;
+  prepareRestore(token: string, entriesJson: string, index: number): Promise<boolean>;
+  favicon(url: string): Promise<string | null>;
 };
 
 export type HostDragDrop =
@@ -24,6 +41,10 @@ declare global {
 
 function crewHost(): CrewHost | undefined {
   return typeof window !== "undefined" ? window.crewHost : undefined;
+}
+
+export function browserHost(): BrowserHost | null {
+  return crewHost()?.browser ?? null;
 }
 
 export async function daemonInfo(): Promise<DaemonInfo> {
