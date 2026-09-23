@@ -26,12 +26,12 @@ tests, markup snapshots, smoke/sanity checks, regression suites.
 
 | Part | Tests | Lines | Functions |
 |---|---|---|---|
-| Rust workspace | 838 | 97.6% | none never run |
+| Rust workspace | 839 | 97.6% | none never run |
 | `src/lib` | | 100% | 100% |
 | `src/hooks` | | 100% | 100% |
 | `electron/` | | 100% | 100% |
 | `src/chrome`, `src/surfaces` | | 80% / 59–79% | contracts, not a number |
-| Frontend total | 1912 | 85.3% | 93.2% |
+| Frontend total | 1932 | 85.3% | 93.2% |
 
 `npm test` runs in about 16 s on this machine while other work shares the
 CPU. `cargo test --workspace` takes about 11 s once built; its largest
@@ -213,20 +213,18 @@ test module never breaks another's build.
   - `useSidebarWidth` saves at unmount instead of dropping the pending save.
   - `electron/update.ts` removes its temp folder when an install fails, and
     waits for the swap shell to start before quitting.
+- Fixed after the workstreams (F1):
+  - `src/lib/cron.ts` accepts exactly what the daemon's parser does. Both
+    answer one shared table, `crew-core/tests/fixtures/cron-parity.json`.
+    Its `nextCron` skips the repeated hour's past candidates.
+  - `routines.ts` drops stored weekdays outside 0-6.
+  - `transport.ts`: a stale stream handle's close no longer silences a
+    reopened stream.
+  - `pty.ts`: an unsubscribe only tears down the stream it still owns.
 - **Latent, not reached today:**
-  - `transport.ts`: closing an old handle for a stream id after it was
-    reopened silences the new handler.
-  - `pty.ts`: two terminals subscribed to the same session at once would
-    close each other's stream on unsubscribe.
-  - `routines.ts`: `parseSchedule` accepts a weekday such as 9, which then
-    renders blank.
   - `useTerminalSearch` re-runs forever if `dark` is a new function on every
     render. The app passes a stable one.
 - **Open, small:**
-  - `src/lib/cron.ts` has the same repeated-hour issue as the Rust parser
-    had. It also accepts crons the daemon rejects (`-5 * * * *`, `0x1f`,
-    `1e1`), so a routine saved with one fires once, then falls back to daily
-    09:00.
   - `RoutineEditor` `save()` swallows a rejected save into an unhandled
     rejection, and `FileEditor` replaces the editor with the error after a
     failed write, so there is no way to retry. Both need a decision on how
