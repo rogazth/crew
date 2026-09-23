@@ -44,11 +44,11 @@ export const COMMANDS = {
   "new-agent": { label: "New Agent", keys: "Mod+Shift+N" },
   "new-session": { label: "New Session", keys: "Mod+N" },
 
-  // Terminal — bound only while a terminal fills the active tab.
-  "find-in-terminal": { label: "Find in Terminal", keys: "Mod+F" },
-  "zoom-in": { label: "Increase Terminal Font", keys: { key: "=", mod: true } },
-  "zoom-out": { label: "Decrease Terminal Font", keys: { key: "-", mod: true } },
-  "zoom-reset": { label: "Reset Terminal Font", keys: "Mod+0" },
+  // Find and zoom — bound by whatever fills the active tab, a terminal or a page.
+  find: { label: "Find", keys: "Mod+F" },
+  "zoom-in": { label: "Zoom In", keys: { key: "=", mod: true } },
+  "zoom-out": { label: "Zoom Out", keys: { key: "-", mod: true } },
+  "zoom-reset": { label: "Actual Size", keys: "Mod+0" },
 
   // Browser — bound only while a page fills the active tab. History is always there.
   "browser-back": { label: "Back", keys: { key: "[", mod: true } },

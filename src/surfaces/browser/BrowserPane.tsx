@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { FindBar } from "../../chrome/FindBar";
 import { useBrowserPage } from "../../hooks/useBrowserPage";
 import * as api from "../../lib/api";
 import { RESTORE_PREFIX } from "../../lib/browser/bridge";
@@ -6,6 +7,7 @@ import { holdPane, type PaneHandle } from "../../lib/browser/handles";
 import { classifyLoadFailure } from "../../lib/browser/loadError";
 import { pages } from "../../lib/browser/pageStore";
 import { isWebUrl, sameDocument } from "../../lib/browser/url";
+import { stepZoom } from "../../lib/browser/zoom";
 import { createGuest, type Guest } from "../../lib/browser/webview";
 import { browserHost } from "../../lib/host";
 import { BrowserError } from "./BrowserError";
@@ -64,6 +66,9 @@ export function BrowserPane({
   const guest = useRef<Guest | null>(null);
   // Bumped to throw a dead guest away and build a new one.
   const [generation, setGeneration] = useState(0);
+  // The find bar: null while closed; the token re-selects the field on a second ⌘F.
+  const [finding, setFinding] = useState<{ query: string; token: number } | null>(null);
+  const [found, setFound] = useState({ index: 0, count: 0 });
 
   // Read at build time only: a navigation must never rebuild the guest.
   const latest = useRef({ url, workspaceId, onPatch, onPinned });
@@ -127,7 +132,13 @@ export function BrowserPane({
           update({ error: null, ...(origin(next) !== origin(current.url) ? { favicon: null } : {}) });
         },
         navigate: (next, inPage) => {
-          update({ url: next, crashed: false, ...history() });
+          // Chromium keeps zoom per origin, so a new page may land at another one.
+          update({ url: next, crashed: false, zoom: built?.zoom() ?? 1, ...history() });
+          // Matches belong to the page they were found in.
+          if (!inPage) {
+            setFinding(null);
+            setFound({ index: 0, count: 0 });
+          }
           // A blank page shows the canvas underneath, not the guest's white.
           if (built) built.element.style.visibility = isWebUrl(next) ? "" : "hidden";
           if (!isWebUrl(next)) return;
@@ -177,6 +188,8 @@ export function BrowserPane({
           pin();
         },
         focus: () => address.current?.dismiss(),
+        found: ({ activeMatchOrdinal, matches }) =>
+          setFound({ index: Math.max(0, activeMatchOrdinal - 1), count: matches }),
       });
       built.element.style.visibility = isWebUrl(src) || src.startsWith(RESTORE_PREFIX) ? "" : "hidden";
       guest.current = built;
@@ -226,6 +239,27 @@ export function BrowserPane({
       guest.current?.navigate(next);
       guest.current?.focus();
     },
+    find: () => setFinding((open) => ({ query: open?.query ?? "", token: (open?.token ?? 0) + 1 })),
+    zoom: (direction) => {
+      const factor = stepZoom(pages.get(pageId).zoom, direction);
+      guest.current?.setZoom(factor);
+      pages.update(pageId, { zoom: factor });
+    },
+  };
+
+  const search = (query: string) => {
+    setFinding((open) => ({ query, token: open?.token ?? 0 }));
+    if (query) guest.current?.find(query);
+    else {
+      guest.current?.stopFind();
+      setFound({ index: 0, count: 0 });
+    }
+  };
+  const closeFind = () => {
+    guest.current?.stopFind();
+    setFinding(null);
+    setFound({ index: 0, count: 0 });
+    guest.current?.focus();
   };
   // Held through a ref, so the registry keeps one entry per mount however often this renders.
   const current = useRef(handle);
@@ -241,6 +275,8 @@ export function BrowserPane({
         focusAddress: () => current.current.focusAddress(),
         toggleDevTools: () => current.current.toggleDevTools(),
         navigate: (url) => current.current.navigate(url),
+        find: () => current.current.find(),
+        zoom: (direction) => current.current.zoom(direction),
       }),
     [pageId],
   );
@@ -261,12 +297,24 @@ export function BrowserPane({
         onReload={handle.reload}
         onStop={() => guest.current?.stop()}
         onDevTools={handle.toggleDevTools}
+        onZoomReset={() => handle.zoom(0)}
         onNavigate={handle.navigate}
         onLeaveAddress={() => guest.current?.focus()}
       />
       <div className="relative min-h-0 flex-1">
         {/* React never renders into this one: the guest is appended by hand and must never move. */}
         <div ref={viewport} className="absolute inset-0" />
+        {finding && (
+          <FindBar
+            label="Find in page"
+            query={finding.query}
+            results={found}
+            focusToken={finding.token}
+            onQuery={search}
+            onStep={(delta) => finding.query && guest.current?.find(finding.query, { forward: delta > 0 })}
+            onClose={closeFind}
+          />
+        )}
         {page.crashed ? (
           <BrowserError kind="crash" onRetry={restart} />
         ) : (

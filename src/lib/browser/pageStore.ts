@@ -14,6 +14,8 @@ export type PageState = {
   error: LoadError | null;
   crashed: boolean;
   devtools: boolean;
+  /** Chromium keeps zoom per origin, so this is read back after each navigation. */
+  zoom: number;
   webContentsId: number | null;
 };
 
@@ -27,6 +29,7 @@ export const BLANK_PAGE: PageState = Object.freeze({
   error: null,
   crashed: false,
   devtools: false,
+  zoom: 1,
   webContentsId: null,
 });
 

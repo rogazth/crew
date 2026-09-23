@@ -13,7 +13,13 @@ type WebviewElement = HTMLElement & {
   reload(): void;
   stop(): void;
   loadURL(url: string): Promise<void>;
+  findInPage(text: string, options?: { forward?: boolean; findNext?: boolean }): number;
+  stopFindInPage(action: "clearSelection" | "keepSelection" | "activateSelection"): void;
+  getZoomFactor(): number;
+  setZoomFactor(factor: number): void;
 };
+
+export type FindResult = { activeMatchOrdinal: number; matches: number };
 
 export type LoadFailure = {
   errorCode: number;
@@ -37,6 +43,7 @@ export type GuestEvents = {
   devtools(open: boolean): void;
   media(playing: boolean): void;
   focus(): void;
+  found(result: FindResult): void;
 };
 
 export type Guest = {
@@ -49,6 +56,11 @@ export type Guest = {
   stop(): void;
   canGoBack(): boolean;
   canGoForward(): boolean;
+  /** `next` walks the current matches; without it the search starts over. */
+  find(text: string, next?: { forward: boolean }): void;
+  stopFind(): void;
+  zoom(): number;
+  setZoom(factor: number): void;
   focus(): void;
   /** Hands focus back to the window; a hidden guest that keeps it makes macOS activate another app. */
   release(): void;
@@ -125,6 +137,12 @@ export function createGuest(container: HTMLElement, src: string, on: GuestEvents
   listen("media-started-playing", () => on.media(true));
   listen("media-paused", () => on.media(false));
   listen("focus", () => on.focus());
+  listen("found-in-page", (event) => {
+    const result = event.result as Partial<FindResult> | undefined;
+    if (result && typeof result.matches === "number") {
+      on.found({ activeMatchOrdinal: result.activeMatchOrdinal ?? 0, matches: result.matches });
+    }
+  });
 
   view.setAttribute("src", src);
   container.appendChild(view);
@@ -152,6 +170,15 @@ export function createGuest(container: HTMLElement, src: string, on: GuestEvents
     stop: () => safely(() => view.stop(), undefined),
     canGoBack: () => safely(() => view.canGoBack(), false),
     canGoForward: () => safely(() => view.canGoForward(), false),
+    find: (text, next) =>
+      safely(
+        () =>
+          void view.findInPage(text, next ? { forward: next.forward, findNext: true } : { findNext: false }),
+        undefined,
+      ),
+    stopFind: () => safely(() => view.stopFindInPage("clearSelection"), undefined),
+    zoom: () => safely(() => view.getZoomFactor(), 1),
+    setZoom: (factor) => safely(() => view.setZoomFactor(factor), undefined),
     focus: () => safely(() => view.focus(), undefined),
     release,
     destroy: () => {

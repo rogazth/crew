@@ -45,7 +45,7 @@ export function Terminals({ panes, sessions, onStatus, onOpenFile }: Props) {
   useCommands(
     isTerminalTab(focused?.tab ?? null, sessions)
       ? {
-          'find-in-terminal': () => activeTerminal()?.find(),
+          find: () => activeTerminal()?.find(),
           'zoom-in': () => zoom(1),
           'zoom-out': () => zoom(-1),
           'zoom-reset': () => zoom(0),

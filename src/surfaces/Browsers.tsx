@@ -59,6 +59,10 @@ export function Browsers({ panes, onPatch, onOpenTab }: Props) {
           "browser-reload": () => active()?.reload(),
           "browser-focus-address": () => active()?.focusAddress(),
           "browser-devtools": () => active()?.toggleDevTools(),
+          find: () => active()?.find(),
+          "zoom-in": () => active()?.zoom(1),
+          "zoom-out": () => active()?.zoom(-1),
+          "zoom-reset": () => active()?.zoom(0),
         }
       : {},
   );

@@ -2,6 +2,7 @@ import { ArrowClockwiseIcon, ArrowLeftIcon, ArrowRightIcon, BracketsAngleIcon, X
 import type { ReactNode, Ref } from "react";
 import { commandKeys, type CommandId } from "../../lib/commands";
 import type { PageState } from "../../lib/browser/pageStore";
+import { zoomLabel } from "../../lib/browser/zoom";
 import { AddressBar, type AddressBarHandle } from "./AddressBar";
 
 type Props = {
@@ -13,6 +14,7 @@ type Props = {
   onReload: () => void;
   onStop: () => void;
   onDevTools: () => void;
+  onZoomReset: () => void;
   onNavigate: (url: string) => void;
   onLeaveAddress: () => void;
 };
@@ -27,6 +29,7 @@ export function BrowserToolbar({
   onReload,
   onStop,
   onDevTools,
+  onZoomReset,
   onNavigate,
   onLeaveAddress,
 }: Props) {
@@ -56,6 +59,17 @@ export function BrowserToolbar({
           onLeave={onLeaveAddress}
         />
       </div>
+      {page.zoom !== 1 && (
+        <button
+          type="button"
+          title={`Zoomed to ${zoomLabel(page.zoom)}. Reset to actual size (${commandKeys("zoom-reset")})`}
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={onZoomReset}
+          className="h-6 shrink-0 rounded-md px-1.5 text-[11px] text-text-muted tabular-nums transition-colors hover:bg-hover hover:text-text"
+        >
+          {zoomLabel(page.zoom)}
+        </button>
+      )}
       <Tool label="Developer Tools" command="browser-devtools" active={page.devtools} onClick={onDevTools}>
         <BracketsAngleIcon className="size-4" />
       </Tool>

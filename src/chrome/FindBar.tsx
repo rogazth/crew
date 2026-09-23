@@ -2,6 +2,8 @@ import { CaretDownIcon, CaretUpIcon, XIcon } from "@phosphor-icons/react";
 import { useEffect, useRef, type KeyboardEvent } from "react";
 
 type Props = {
+  /** What the field is for, read out by assistive tech: "Find in terminal". */
+  label: string;
   query: string;
   results: { index: number; count: number };
   /** Bumped by the shortcut so a second press re-selects the field. */
@@ -11,7 +13,8 @@ type Props = {
   onClose: () => void;
 };
 
-export function TerminalSearch({ query, results, focusToken, onQuery, onStep, onClose }: Props) {
+/** The find field that floats over a terminal or a page. */
+export function FindBar({ label, query, results, focusToken, onQuery, onStep, onClose }: Props) {
   const input = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -30,14 +33,14 @@ export function TerminalSearch({ query, results, focusToken, onQuery, onStep, on
     onStep(event.shiftKey ? -1 : 1);
   }
 
-  const label = results.count > 0 ? `${results.index + 1} of ${results.count}` : "";
+  const count = results.count > 0 ? `${results.index + 1} of ${results.count}` : "";
 
   return (
     <div className="absolute top-2 right-4 z-10 flex items-center gap-1 rounded-lg bg-kumo-control p-1 shadow-lg ring ring-kumo-line">
       <input
         ref={input}
         value={query}
-        aria-label="Find in terminal"
+        aria-label={label}
         placeholder="Find"
         spellCheck={false}
         onChange={(event) => onQuery(event.target.value)}
@@ -45,7 +48,7 @@ export function TerminalSearch({ query, results, focusToken, onQuery, onStep, on
         className="h-7 w-48 bg-transparent px-2 text-[13px] text-kumo-default caret-kumo-default outline-none"
       />
       <span className="min-w-12 px-1 text-right text-[11px] tabular-nums text-kumo-subtle">
-        {label}
+        {count}
       </span>
       <Step label="Previous match" onClick={() => onStep(-1)}>
         <CaretUpIcon className="size-4" />

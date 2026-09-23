@@ -6,6 +6,9 @@ export type PaneHandle = {
   focusAddress(): void;
   toggleDevTools(): void;
   navigate(url: string): void;
+  find(): void;
+  /** -1 out, 1 in, 0 back to actual size. */
+  zoom(direction: -1 | 0 | 1): void;
 };
 
 const handles = new Map<string, PaneHandle>();

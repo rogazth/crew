@@ -27,7 +27,7 @@ import {
   oscColorReply,
   rgbToHex,
 } from "../lib/terminalColors";
-import { TerminalSearch } from "./TerminalSearch";
+import { FindBar } from "../chrome/FindBar";
 import "@xterm/xterm/css/xterm.css";
 
 type Props = {
@@ -456,7 +456,8 @@ export function TerminalView({
       <div ref={hostRef} className="h-full min-h-0 w-full min-w-0 overflow-hidden" />
 
       {search.open && (
-        <TerminalSearch
+        <FindBar
+          label="Find in terminal"
           query={search.query}
           results={search.results}
           focusToken={search.open.token}
