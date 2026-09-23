@@ -1,4 +1,11 @@
-import { ArrowClockwiseIcon, ArrowLeftIcon, ArrowRightIcon, BracketsAngleIcon, XIcon } from "@phosphor-icons/react";
+import {
+  ArrowClockwiseIcon,
+  ArrowLeftIcon,
+  ArrowRightIcon,
+  BracketsAngleIcon,
+  DeviceMobileIcon,
+  XIcon,
+} from "@phosphor-icons/react";
 import type { ReactNode, Ref } from "react";
 import { commandKeys, type CommandId } from "../../lib/commands";
 import type { PageState } from "../../lib/browser/pageStore";
@@ -15,6 +22,8 @@ type Props = {
   onStop: () => void;
   onDevTools: () => void;
   onZoomReset: () => void;
+  responsive: boolean;
+  onResponsive: () => void;
   onNavigate: (url: string) => void;
   onLeaveAddress: () => void;
 };
@@ -30,6 +39,8 @@ export function BrowserToolbar({
   onStop,
   onDevTools,
   onZoomReset,
+  responsive,
+  onResponsive,
   onNavigate,
   onLeaveAddress,
 }: Props) {
@@ -70,6 +81,9 @@ export function BrowserToolbar({
           {zoomLabel(page.zoom)}
         </button>
       )}
+      <Tool label="Responsive View" active={responsive} onClick={onResponsive}>
+        <DeviceMobileIcon className="size-4" />
+      </Tool>
       <Tool label="Developer Tools" command="browser-devtools" active={page.devtools} onClick={onDevTools}>
         <BracketsAngleIcon className="size-4" />
       </Tool>

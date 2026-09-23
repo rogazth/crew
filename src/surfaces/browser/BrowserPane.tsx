@@ -7,11 +7,13 @@ import { holdPane, type PaneHandle } from "../../lib/browser/handles";
 import { classifyLoadFailure } from "../../lib/browser/loadError";
 import { pages } from "../../lib/browser/pageStore";
 import { isWebUrl, sameDocument } from "../../lib/browser/url";
+import { preset, type Viewport } from "../../lib/browser/viewport";
 import { stepZoom } from "../../lib/browser/zoom";
 import { createGuest, type Guest } from "../../lib/browser/webview";
 import { browserHost } from "../../lib/host";
 import { BrowserError } from "./BrowserError";
 import { BrowserToolbar } from "./BrowserToolbar";
+import { ResponsiveBar } from "./ResponsiveBar";
 import type { AddressBarHandle } from "./AddressBar";
 
 type Props = {
@@ -61,7 +63,7 @@ export function BrowserPane({
   onPinned,
 }: Props) {
   const page = useBrowserPage(pageId);
-  const viewport = useRef<HTMLDivElement>(null);
+  const container = useRef<HTMLDivElement>(null);
   const address = useRef<AddressBarHandle>(null);
   const guest = useRef<Guest | null>(null);
   // Bumped to throw a dead guest away and build a new one.
@@ -69,6 +71,8 @@ export function BrowserPane({
   // The find bar: null while closed; the token re-selects the field on a second ⌘F.
   const [finding, setFinding] = useState<{ query: string; token: number } | null>(null);
   const [found, setFound] = useState({ index: 0, count: 0 });
+  // A fixed page size to check a layout at; null fills the pane.
+  const [viewport, setViewport] = useState<Viewport | null>(null);
 
   // Read at build time only: a navigation must never rebuild the guest.
   const latest = useRef({ url, workspaceId, onPatch, onPinned });
@@ -121,9 +125,9 @@ export function BrowserPane({
     const pin = () => latest.current.onPinned(devtools || playing);
 
     void source(pageId, latest.current.url).then((src) => {
-      const container = viewport.current;
-      if (cancelled || !container) return;
-      built = createGuest(container, src, {
+      const host = container.current;
+      if (cancelled || !host) return;
+      built = createGuest(host, src, {
         attach: (webContentsId) => update({ webContentsId, crashed: false }),
         start: (next) => {
           const current = pages.get(pageId);
@@ -298,12 +302,20 @@ export function BrowserPane({
         onStop={() => guest.current?.stop()}
         onDevTools={handle.toggleDevTools}
         onZoomReset={() => handle.zoom(0)}
+        responsive={viewport !== null}
+        onResponsive={() => setViewport((current) => (current ? null : preset("phone")))}
         onNavigate={handle.navigate}
         onLeaveAddress={() => guest.current?.focus()}
       />
-      <div className="relative min-h-0 flex-1">
-        {/* React never renders into this one: the guest is appended by hand and must never move. */}
-        <div ref={viewport} className="absolute inset-0" />
+      {viewport && <ResponsiveBar viewport={viewport} onChange={setViewport} onClose={() => setViewport(null)} />}
+      <div className={`relative min-h-0 flex-1 ${viewport ? "overflow-auto bg-sidebar" : ""}`}>
+        {/* React never renders into this one: the guest is appended by hand and must never move.
+            A fixed size restyles it in place; moving it into a frame would destroy the page. */}
+        <div
+          ref={container}
+          className={viewport ? "relative mx-auto my-4 shrink-0 bg-canvas shadow-sm ring-1 ring-hairline" : "absolute inset-0"}
+          style={viewport ? { width: viewport.width, height: viewport.height } : undefined}
+        />
         {finding && (
           <FindBar
             label="Find in page"
