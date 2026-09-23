@@ -155,7 +155,10 @@ function openStream(id: number, onBytes: (bytes: Uint8Array) => void): () => voi
     for (const chunk of queue) onBytes(chunk);
   }
   return () => {
-    if (streams.get(id) === onBytes) streams.delete(id);
+    // A handle whose id was opened again since is not this one to close.
+    const current = streams.get(id);
+    if (current !== undefined && current !== onBytes) return;
+    streams.delete(id);
     buffered.delete(id);
     bufferedBytes.delete(id);
     markClosed(id);

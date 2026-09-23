@@ -161,6 +161,17 @@ describe("events", () => {
     expect(first.data).toEqual([]);
     expect(second.data).toEqual(["hi"]);
   });
+
+  it("leaves the second subscriber's stream open when the first unsubscribes", async () => {
+    const first = terminal();
+    const second = terminal();
+    const stopFirst = pty.subscribePty("s1", first.onData, first.onExit);
+    await spawn("s1", 7);
+    pty.subscribePty("s1", second.onData, second.onExit);
+    stopFirst();
+    fake.push(7, encode("hi"));
+    expect(second.data).toEqual(["hi"]);
+  });
 });
 
 describe("reconnecting", () => {

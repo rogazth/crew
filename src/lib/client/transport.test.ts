@@ -367,6 +367,20 @@ describe("streams", () => {
     expect(after.chunks).toEqual(["fresh"]);
   });
 
+  it("keeps a reopened stream when the old handle closes late", async () => {
+    const transport = await load();
+    transport.on("x", () => {});
+    const socket = await opened();
+    const before = collect();
+    const after = collect();
+    const closeOld = transport.openStream(6, before.onBytes);
+    transport.openStream(6, after.onBytes);
+    closeOld();
+    socket.frame(6, "still here");
+    expect(before.chunks).toEqual([]);
+    expect(after.chunks).toEqual(["still here"]);
+  });
+
   it("remembers only the last 1024 closed stream ids", async () => {
     const transport = await load();
     transport.on("x", () => {});

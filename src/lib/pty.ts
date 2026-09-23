@@ -59,8 +59,10 @@ export function subscribePty(
   return () => {
     stopExit();
     stopError();
-    if (dataHandlers.get(id) === onData) dataHandlers.delete(id);
     if (attachHandlers.get(id) === onAttach) attachHandlers.delete(id);
+    // A later subscriber for the same session owns the stream now.
+    if (dataHandlers.get(id) !== onData) return;
+    dataHandlers.delete(id);
     streams.get(id)?.stop();
     streams.delete(id);
     delivered.delete(id);

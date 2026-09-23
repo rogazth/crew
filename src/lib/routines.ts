@@ -175,7 +175,10 @@ export function parseSchedule(raw: string): Schedule {
         kind: "daily",
         hour: value.hour,
         minute: value.minute,
-        days: Array.isArray(value.days) ? value.days.filter((d): d is number => typeof d === "number") : [],
+        // The daemon refuses a day outside 0-6; one that got stored anyway is no day.
+        days: Array.isArray(value.days)
+          ? value.days.filter((d): d is number => Number.isInteger(d) && d >= 0 && d <= 6)
+          : [],
       };
     }
     if (value.kind === "cron" && typeof value.expression === "string" && isValidCron(value.expression)) {

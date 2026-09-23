@@ -93,9 +93,14 @@ describe("nextRun", () => {
   });
 
   it("gives up a week and a day out when no listed day exists", () => {
-    // Day 9 is no weekday; parseSchedule lets a stray number through.
-    const schedule = parseSchedule('{"kind":"daily","hour":9,"minute":0,"days":[9]}');
+    const schedule = { kind: "daily" as const, hour: 9, minute: 0, days: [9] };
     expect(nextRun(schedule, at(2026, 9, 17, 8, 0))).toBe(at(2026, 9, 25, 9, 0));
+  });
+
+  it("drops stored days that are no weekday", () => {
+    const schedule = parseSchedule('{"kind":"daily","hour":9,"minute":0,"days":[1,9,-1,2.5,3]}');
+    expect(schedule).toEqual({ kind: "daily", hour: 9, minute: 0, days: [1, 3] });
+    expect(describeSchedule(schedule)).not.toMatch(/, {2}|^,/);
   });
 
   it("never answers with a time that has already passed", () => {
