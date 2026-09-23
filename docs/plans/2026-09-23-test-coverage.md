@@ -211,7 +211,7 @@ test module never breaks another's build.
 | R1 | pending |
 | R2 | done |
 | R3 | pending |
-| R4 | pending |
+| R4 | done |
 | R5 | done |
 | R6 | pending |
 | R7 | pending |
