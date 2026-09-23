@@ -46,6 +46,8 @@ export function RoutineEditor({
   const [saving, setSaving] = useState(false);
   const [running, setRunning] = useState(false);
   const [runError, setRunError] = useState<string | null>(null);
+  // Tied to the draft that failed: an edit makes a new draft, which hides it.
+  const [saveError, setSaveError] = useState<{ draft: RoutineDraft; message: string } | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -72,6 +74,9 @@ export function RoutineEditor({
     setSaving(true);
     try {
       await onSave(draft);
+      setSaveError(null);
+    } catch (error) {
+      setSaveError({ draft, message: runFailure(error) });
     } finally {
       setSaving(false);
     }
@@ -123,6 +128,12 @@ export function RoutineEditor({
             />
           )}
         </div>
+
+        {saveError?.draft === draft && (
+          <p className="text-[13px] text-danger" role="alert">
+            {saveError.message}
+          </p>
+        )}
 
         {runError && (
           <p className="text-[13px] text-danger" role="alert">

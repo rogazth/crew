@@ -133,13 +133,38 @@ describe("useTerminalSearch", () => {
     hook.unmount();
   });
 
-  it("paints matches in the dark palette on a dark terminal, and repaints when it changes", () => {
+  it("paints matches in the dark palette on a dark terminal, and in the light one once it turns light", () => {
     const { addon, hook } = setup({ scheme: dark });
     act(() => hook.result.current.start());
     act(() => hook.result.current.setQuery("err"));
     expect(addon.findNext).toHaveBeenLastCalledWith("err", { incremental: true, decorations: DARK });
     hook.rerender({ scheme: light });
-    expect(addon.findNext).toHaveBeenLastCalledWith("err", { incremental: true, decorations: LIGHT });
+    act(() => hook.result.current.setQuery("erro"));
+    expect(addon.findNext).toHaveBeenLastCalledWith("erro", { incremental: true, decorations: LIGHT });
+    act(() => hook.result.current.step(-1));
+    expect(addon.findPrevious).toHaveBeenLastCalledWith("erro", { decorations: LIGHT });
+    hook.unmount();
+  });
+
+  it("searches once per keystroke when handed a new scheme function every render", () => {
+    const terminal = fakeTerminal();
+    const term = { current: terminal as unknown as Terminal };
+    const addon = fakeAddon();
+    // Without a bound, a search that re-runs on every render never stops.
+    const findNext = addon.findNext.getMockImplementation()!;
+    addon.findNext.mockImplementation((query, options) => {
+      if (addon.findNext.mock.calls.length > 20) throw new Error("search keeps re-running");
+      return findNext(query, options);
+    });
+    const hook = renderHook((props: { tick: number }) => useTerminalSearch(term, () => props.tick < 0), { tick: 0 });
+    act(() => void hook.result.current.attach(addon as unknown as SearchAddon));
+    act(() => hook.result.current.start());
+    act(() => hook.result.current.setQuery("err"));
+    expect(addon.findNext).toHaveBeenCalledTimes(1);
+    hook.rerender({ tick: 1 });
+    hook.rerender({ tick: 2 });
+    expect(addon.findNext).toHaveBeenCalledTimes(1);
+    expect(hook.result.current.results).toEqual({ index: 0, count: 3 });
     hook.unmount();
   });
 

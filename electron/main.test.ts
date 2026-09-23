@@ -411,11 +411,38 @@ describe("the crewd handshake", () => {
     expect(invoke("daemon-info")).toEqual(INFO);
   });
 
-  it("passes a url of any scheme through without checking it is a websocket", async () => {
+  it("takes only a loopback websocket url as the handshake", async () => {
     const crewd = await boot();
-    handshake(crewd, { url: "http://127.0.0.1:52100", token: "secret" });
+    for (const url of [
+      "http://127.0.0.1:52100",
+      "wss://127.0.0.1:52100",
+      "ws://example.com:52100",
+      "ws://10.0.0.1:52100",
+      "ws://127.0.0.1",
+      "ws://127.0.0.1:0",
+      "ws://127.0.0.1:70000",
+      "ws://127.0.0.1:52100/elsewhere",
+      "ws://user@127.0.0.1:52100",
+    ]) {
+      handshake(crewd, { url, token: "secret" });
+    }
+    await settle();
+    expect(windows()).toHaveLength(0);
+    expect(() => invoke("daemon-info")).toThrow("Crew daemon is not running");
+    handshake(crewd, { url: "ws://localhost:52100", token: "secret" });
     await until(() => windows().length === 1, "the window");
-    expect(invoke("daemon-info")).toEqual({ url: "http://127.0.0.1:52100", token: "secret" });
+    expect(invoke("daemon-info")).toEqual({ url: "ws://localhost:52100", token: "secret" });
+  });
+
+  it("treats a crewd that only prints foreign urls as one that never handshook", async () => {
+    const first = await boot();
+    handshake(first, { url: "http://127.0.0.1:52100", token: "secret" });
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(first.kill).toHaveBeenCalledWith("SIGTERM");
+    await until(() => procs.length === 2, "a second crewd");
+    handshake(proc(1));
+    await until(() => windows().length === 1, "the window");
+    expect(invoke("daemon-info")).toEqual(INFO);
   });
 
   it("joins a handshake split across chunks", async () => {
@@ -650,16 +677,21 @@ describe("quitting", () => {
     expect(quitRequest().preventDefault).not.toHaveBeenCalled();
   });
 
-  it("waits for a starting crewd to handshake before stopping it", async () => {
+  it("kills a starting crewd at once on quit and opens no window", async () => {
     const crewd = await boot();
     expect(quitRequest().preventDefault).toHaveBeenCalled();
     await settle();
-    expect(crewd.kill).not.toHaveBeenCalled();
-    handshake(crewd);
-    await until(() => crewd.kill.mock.calls.length === 1, "the SIGTERM");
     expect(crewd.kill).toHaveBeenCalledWith("SIGTERM");
+    // A handshake that races the SIGTERM changes nothing.
+    handshake(crewd);
+    await settle();
+    expect(electron.app.quit).not.toHaveBeenCalled();
     crewd.exit(null, "SIGTERM");
     await until(() => electron.app.quit.mock.calls.length === 1, "the quit");
+    await settle();
+    expect(windows()).toHaveLength(0);
+    expect(procs).toHaveLength(1);
+    expect(electron.dialog.showErrorBox).not.toHaveBeenCalled();
   });
 
   it("does not restart a crewd that dies while the app is quitting", async () => {

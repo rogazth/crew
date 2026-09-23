@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Tab } from '../lib/types';
+import { deferred } from '../test/deferred';
 import { fake } from '../test/fakeClient';
 import { act, renderHook } from '../test/renderHook';
 import { useTabs } from './useTabs';
@@ -76,19 +77,91 @@ describe('useTabs restoring', () => {
     hook.unmount();
   });
 
-  it('opens with no tabs when the read fails, and does not read again', async () => {
+  it('opens with no tabs when the read fails, and writes none over the saved ones', async () => {
     const hook = renderHook((id: string) => useTabs(id), 'w1');
     fake.take('state_get').reject(new Error('down'));
     await settle();
     act(() => hook.result.current.open(stub));
+    await settle();
     expect(tabIds(hook.result.current.tabs)).toEqual([stub.id]);
+    expect(fake.sent('state_set')).toEqual([]);
+    hook.unmount();
+  });
+
+  it('reads a failed workspace again when it is shown, then puts the saved tabs first', async () => {
+    const hook = renderHook((id: string) => useTabs(id), 'w1');
+    fake.take('state_get').reject(new Error('down'));
+    await settle();
+    act(() => hook.result.current.open(tab('b')));
+    act(() => hook.result.current.open(stub));
 
     hook.rerender('w2');
     await answer(null);
     hook.rerender('w1');
+    expect(fake.sent('state_get')).toEqual([{ key: 'tabs:w1' }, { key: 'tabs:w2' }, { key: 'tabs:w1' }]);
+    await answer(saved([tab('a'), tab('b')], 'session:a'));
+
+    expect(tabIds(hook.result.current.tabs)).toEqual(['session:a', 'session:b', stub.id]);
+    expect(hook.result.current.active).toEqual(stub);
+    expect(persisted()).toEqual({ tabs: [tab('a'), tab('b'), stub], activeId: stub.id });
+    hook.unmount();
+  });
+
+  it('retries a failed read on reconnect and keeps the live tabs if it fails again', async () => {
+    const reads = [deferred<string | null>(), deferred<string | null>(), deferred<string | null>()];
+    let next = 0;
+    fake.respond('state_get', () => reads[next++]?.promise);
+    const hook = renderHook(() => useTabs('w1'));
+    await act(async () => reads[0]?.reject(new Error('down')));
+    await settle();
+    act(() => hook.result.current.open(stub));
+
+    fake.reconnect();
+    await act(async () => reads[1]?.reject(new Error('still down')));
+    await settle();
+    expect(tabIds(hook.result.current.tabs)).toEqual([stub.id]);
+
+    fake.reconnect();
+    // The user closes what they opened while the read is in flight: nothing on screen.
+    act(() => hook.result.current.close(stub.id));
+    await act(async () => reads[2]?.resolve(saved([tab('a'), tab('b')], 'session:b')));
+    await settle();
+
+    expect(fake.sent('state_get')).toHaveLength(3);
+    expect(tabIds(hook.result.current.tabs)).toEqual(['session:a', 'session:b']);
+    expect(hook.result.current.active?.id).toBe('session:b');
+    expect(persisted()).toEqual({ tabs: [tab('a'), tab('b')], activeId: 'session:b' });
+    hook.unmount();
+  });
+
+  it('asks once while a retry is in flight', async () => {
+    const retry = deferred<string | null>();
+    const hook = renderHook((id: string) => useTabs(id), 'w1');
+    fake.take('state_get').reject(new Error('down'));
+    await settle();
+    fake.respond('state_get', () => retry.promise);
+
+    fake.reconnect();
+    hook.rerender('w2');
+    hook.rerender('w1');
+    fake.reconnect();
+    expect(fake.sent('state_get').filter((params) => params.key === 'tabs:w1')).toHaveLength(2);
+
+    await act(async () => retry.resolve(saved([file], file.id)));
+    await settle();
+    expect(hook.result.current.tabs).toEqual([file]);
+    hook.unmount();
+  });
+
+  it('never reads a workspace again after a read succeeds', async () => {
+    const hook = await mounted('w1', saved([stub], stub.id));
+    hook.rerender('w2');
+    await answer(null);
+    hook.rerender('w1');
+    fake.reconnect();
     await settle();
     expect(fake.sent('state_get')).toEqual([{ key: 'tabs:w1' }, { key: 'tabs:w2' }]);
-    expect(tabIds(hook.result.current.tabs)).toEqual([stub.id]);
+    expect(hook.result.current.tabs).toEqual([stub]);
     hook.unmount();
   });
 

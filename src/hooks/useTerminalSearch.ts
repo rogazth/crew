@@ -23,6 +23,12 @@ export function useTerminalSearch(term: RefObject<Terminal | null>, dark: () => 
   const [open, setOpen] = useState<{ token: number } | null>(null);
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchResults>(NO_RESULTS);
+  // Read through a ref so a caller passing a new function each render does not
+  // re-run the search each render, which reports results, which renders again.
+  const darkRef = useRef(dark);
+  useEffect(() => {
+    darkRef.current = dark;
+  });
 
   const attach = useCallback((search: SearchAddon) => {
     addon.current = search;
@@ -51,11 +57,11 @@ export function useTerminalSearch(term: RefObject<Terminal | null>, dark: () => 
   const step = useCallback(
     (delta: number) => {
       if (!addon.current || !query) return;
-      const options = { decorations: decorations(dark()) };
+      const options = { decorations: decorations(darkRef.current()) };
       if (delta < 0) addon.current.findPrevious(query, options);
       else addon.current.findNext(query, options);
     },
-    [dark, query],
+    [query],
   );
 
   // An open field re-runs on every keystroke; `incremental` holds the current match.
@@ -65,8 +71,8 @@ export function useTerminalSearch(term: RefObject<Terminal | null>, dark: () => 
       addon.current.clearDecorations();
       return;
     }
-    addon.current.findNext(query, { incremental: true, decorations: decorations(dark()) });
-  }, [dark, open, query]);
+    addon.current.findNext(query, { incremental: true, decorations: decorations(darkRef.current()) });
+  }, [open, query]);
 
   return { attach, open, query, setQuery, results, start, close, step };
 }

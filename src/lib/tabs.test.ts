@@ -7,6 +7,7 @@ import {
   fileTabId,
   isAgentTab,
   isTerminalTab,
+  mergeRestored,
   openTab,
   parseTabs,
   panesOf,
@@ -198,6 +199,21 @@ describe("parseTabs", () => {
   it("never restores the reopen stack", () => {
     const raw = JSON.stringify({ tabs: [sessionTab("a")], activeId: null, closed: [sessionTab("b")] });
     expect(parseTabs(raw).closed).toEqual([]);
+  });
+});
+
+describe("mergeRestored", () => {
+  it("puts the saved tabs first, then the new ones, and keeps the tab on screen", () => {
+    const live = closeTab(opened("b", "c"), sessionTabId("b"));
+    const merged = mergeRestored({ ...opened("a", "c"), activeId: sessionTabId("a") }, live);
+    expect(merged.tabs.map((tab) => tab.id)).toEqual([sessionTabId("a"), sessionTabId("c")]);
+    expect(merged.activeId).toBe(sessionTabId("c"));
+    expect(merged.closed).toEqual(live.closed);
+  });
+
+  it("takes the saved active tab when nothing is on screen", () => {
+    const merged = mergeRestored({ ...opened("a", "b"), activeId: sessionTabId("a") }, NO_TABS);
+    expect(merged.activeId).toBe(sessionTabId("a"));
   });
 });
 

@@ -153,6 +153,32 @@ describe("RoutineEditor", () => {
     expect(on.onSave).toHaveBeenCalledTimes(2);
   });
 
+  it("shows why a save failed, keeps the draft, and clears it once a retry saves", async () => {
+    on.onSave.mockRejectedValueOnce(new Error("schedule is invalid"));
+    render(BLANK);
+    await agents([session("a1")]);
+    fill("Digest", "Summarize the night");
+    await press(button("Save")!);
+    expect(view.container.querySelector('[role="alert"]')?.textContent).toBe("schedule is invalid");
+    expect(field("e.g. Morning digest").value).toBe("Digest");
+
+    await press(button("Save")!);
+    const edited = { ...BLANK, name: "Digest", prompt: "Summarize the night" };
+    expect(on.onSave.mock.calls).toEqual([[edited], [edited]]);
+    expect(view.container.querySelector('[role="alert"]')).toBeNull();
+  });
+
+  it("clears a save error once the routine is edited", async () => {
+    on.onSave.mockRejectedValueOnce(new Error("schedule is invalid"));
+    render(BLANK);
+    await agents([session("a1")]);
+    fill("Digest", "Summarize the night");
+    await press(button("Save")!);
+    expect(view.container.querySelector('[role="alert"]')?.textContent).toBe("schedule is invalid");
+    type(field("e.g. Morning digest"), "Digest 2");
+    expect(view.container.querySelector('[role="alert"]')).toBeNull();
+  });
+
   it("hands a routine whose agent is gone to the workspace's first agent", async () => {
     render({ ...BLANK, sessionId: "gone" });
     await agents([session("t1", "terminal"), session("b1"), session("b2")]);

@@ -27,6 +27,7 @@ export function FileEditor({ path, relative }: Props) {
   const [saved, setSaved] = useState("");
   const [contents, setContents] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [writeError, setWriteError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
   const name = fileName(relative);
@@ -54,8 +55,9 @@ export function FileEditor({ path, relative }: Props) {
     try {
       await api.writeTextFile(path, contents);
       setSaved(contents);
+      setWriteError(null);
     } catch (e) {
-      setError(String(e));
+      setWriteError(String(e));
     } finally {
       setSaving(false);
     }
@@ -82,6 +84,11 @@ export function FileEditor({ path, relative }: Props) {
           <span className="flex shrink-0 items-center gap-1 text-accent">
             <span className="size-1.5 rounded-full bg-accent" />
             Unsaved
+          </span>
+        )}
+        {writeError && (
+          <span className="min-w-0 truncate text-red-600" role="alert">
+            {writeError}
           </span>
         )}
         {plain && (

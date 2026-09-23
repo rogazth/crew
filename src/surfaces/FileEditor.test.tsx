@@ -106,12 +106,32 @@ describe("FileEditor", () => {
     expect(fake.sent("write_text_file")).toEqual([]);
   });
 
-  it("reports a write that failed", async () => {
+  it("reports a failed write without closing the editor, and keeps the edit to save again", async () => {
+    const mounted = await open();
+    edit("const a = 2;\n");
+    save();
+    view.items = [];
+    await settle(() => fake.take("write_text_file").reject(new Error("read-only file system")));
+    expect(mounted.container.querySelector('[role="alert"]')?.textContent).toContain("read-only file system");
+    expect(view.items.map((item) => item.id)).toEqual(["/w/src/a.ts"]);
+
+    save();
+    expect(fake.sent("write_text_file")).toEqual([
+      { path: "/w/src/a.ts", contents: "const a = 2;\n" },
+      { path: "/w/src/a.ts", contents: "const a = 2;\n" },
+    ]);
+  });
+
+  it("clears the write error once a save lands", async () => {
     const mounted = await open();
     edit("const a = 2;\n");
     save();
     await settle(() => fake.take("write_text_file").reject(new Error("read-only file system")));
-    expect(mounted.container.textContent).toContain("read-only file system");
+    save();
+    await settle(() => fake.take("write_text_file").resolve(undefined));
+    expect(mounted.container.querySelector('[role="alert"]')).toBeNull();
+    save();
+    expect(fake.sent("write_text_file")).toHaveLength(2);
   });
 
   it("reports a file it could not read", async () => {

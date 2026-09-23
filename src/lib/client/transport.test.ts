@@ -339,6 +339,18 @@ describe("streams", () => {
     expect(sink.chunks).toEqual([`2:${100 * KiB}`, `3:${56 * KiB}`, "4:1"]);
   });
 
+  it("keeps every buffered chunk when they total exactly 256 KiB", async () => {
+    const transport = await load();
+    transport.on("x", () => {});
+    const socket = await opened();
+    socket.frame(5, chunk(1, 100 * KiB));
+    socket.frame(5, chunk(2, 100 * KiB));
+    socket.frame(5, chunk(3, 56 * KiB));
+    const sink = collectSizes();
+    transport.openStream(5, sink.onBytes);
+    expect(sink.chunks).toEqual([`1:${100 * KiB}`, `2:${100 * KiB}`, `3:${56 * KiB}`]);
+  });
+
   it("drops a chunk bigger than the whole buffer without losing what is buffered", async () => {
     const transport = await load();
     transport.on("x", () => {});

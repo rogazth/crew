@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import * as api from '../lib/api';
+import { client } from '../lib/client';
 import {
   activateTab,
   closeSessionTab,
   closeTab,
+  mergeRestored,
   NO_TABS,
   openTab,
   panesOf,
@@ -23,25 +25,52 @@ import type { Tab } from '../lib/types';
  */
 export function useTabs(workspaceId: string | null) {
   const [registry, setRegistry] = useState<TabRegistry>({});
-  // A workspace is read once. Re-reading on every switch would hand back the
-  // saved tabs while the live ones are still on screen.
+  // A workspace is read once it has been read successfully. Re-reading on every
+  // switch would hand back the saved tabs while the live ones are still on screen.
+  // `asked` holds reads in flight and done, `loaded` the done ones, `failed` the
+  // ones to try again on the next show or reconnect.
   const asked = useRef(new Set<string>());
+  const loaded = useRef(new Set<string>());
+  const failed = useRef(new Set<string>());
+
+  const read = useCallback((id: string) => {
+    asked.current.add(id);
+    failed.current.delete(id);
+    void api.stateGet(`tabs:${id}`).then(
+      (raw) => {
+        if (loaded.current.has(id)) return;
+        loaded.current.add(id);
+        const restored = parseTabs(raw);
+        setRegistry((prev) => {
+          const live = prev[id];
+          return { ...prev, [id]: live ? mergeRestored(restored, live) : restored };
+        });
+      },
+      () => {
+        asked.current.delete(id);
+        failed.current.add(id);
+        // Tabs can still be opened, but none are written until a read succeeds.
+        setRegistry((prev) => (prev[id] ? prev : { ...prev, [id]: NO_TABS }));
+      },
+    );
+  }, []);
 
   useEffect(() => {
-    const id = workspaceId;
-    if (!id || asked.current.has(id)) return;
-    asked.current.add(id);
-    void api
-      .stateGet(`tabs:${id}`)
-      .then(parseTabs)
-      .catch(() => NO_TABS)
-      .then((restored) => setRegistry((prev) => (prev[id] ? prev : { ...prev, [id]: restored })));
-  }, [workspaceId]);
+    if (workspaceId && !asked.current.has(workspaceId)) read(workspaceId);
+  }, [workspaceId, read]);
+
+  useEffect(
+    () =>
+      client.onReconnect(() => {
+        for (const id of [...failed.current]) read(id);
+      }),
+    [read],
+  );
 
   const state = workspaceId ? registry[workspaceId] : undefined;
 
   useEffect(() => {
-    if (!workspaceId || !state) return;
+    if (!workspaceId || !state || !loaded.current.has(workspaceId)) return;
     const { tabs, activeId } = state;
     void api.stateSet(`tabs:${workspaceId}`, JSON.stringify({ tabs, activeId })).catch(() => {});
   }, [workspaceId, state]);
@@ -74,6 +103,8 @@ export function useTabs(workspaceId: string | null) {
   /** The workspace is gone: its panes unmount, which ends what they were running. */
   const dropWorkspace = useCallback((id: string) => {
     asked.current.delete(id);
+    loaded.current.delete(id);
+    failed.current.delete(id);
     setRegistry((prev) => {
       if (!prev[id]) return prev;
       const next = { ...prev };

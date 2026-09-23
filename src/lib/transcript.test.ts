@@ -392,9 +392,9 @@ describe("review: the window against live events", () => {
     const transcript = await load("s1");
     await transcript.loadEarlier("s1");
     await transcript.loadEarlier("s1");
-    // Two pages back from the tail, whatever a page is worth.
+    // The tail page plus two earlier pages of 80: lines 761 to 1000.
     const oldest = transcript.read("s1").blocks[0]?.text;
-    expect(oldest).toBeDefined();
+    expect(oldest).toBe("line 761");
 
     // A transcript-apply event goes missing; the store resyncs. `reload` is
     // what applyRemote reaches for, so await it rather than racing it.

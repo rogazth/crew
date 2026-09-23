@@ -63,10 +63,17 @@ function allowedNavigation(url: string): boolean {
   }
 }
 
+/** crewd listens on loopback only; anything else is not its handshake. */
+function localDaemonUrl(url: string): boolean {
+  const port = Number(/^ws:\/\/(?:127\.0\.0\.1|localhost):(\d{1,5})$/.exec(url)?.[1]);
+  return port >= 1 && port <= 65535;
+}
+
 function parseInfo(line: string): DaemonInfo | null {
   try {
     const parsed = JSON.parse(line) as DaemonInfo;
-    if (typeof parsed.url === "string" && typeof parsed.token === "string") return parsed;
+    if (typeof parsed.url === "string" && typeof parsed.token === "string" && localDaemonUrl(parsed.url))
+      return parsed;
   } catch {
     return null;
   }
@@ -159,8 +166,8 @@ async function startDaemon(): Promise<void> {
 }
 
 async function stopDaemon(): Promise<void> {
+  // A crewd still starting is killed at once: its handshake no longer matters.
   stopping = true;
-  if (starting) await starting.catch(() => {});
   const proc = child;
   if (!proc) return;
   return new Promise((resolve) => {
@@ -262,6 +269,7 @@ app.whenReady().then(async () => {
     app.quit();
     return;
   }
+  if (stopping) return;
   createWindow();
   watchForUpdates();
   app.on("activate", () => {

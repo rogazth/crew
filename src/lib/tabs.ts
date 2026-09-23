@@ -68,6 +68,20 @@ function neighbourId(tabs: Tab[], closingId: string): string | null {
   return tabs[index + 1]?.id ?? tabs[index - 1]?.id ?? null;
 }
 
+/**
+ * A read that lands after the user already opened tabs: the saved tabs come
+ * first, then the new ones they don't already hold. The tab on screen stays on
+ * screen; with none, the saved active tab takes over.
+ */
+export function mergeRestored(restored: TabState, live: TabState): TabState {
+  const held = new Set(restored.tabs.map((tab) => tab.id));
+  return {
+    tabs: [...restored.tabs, ...live.tabs.filter((tab) => !held.has(tab.id))],
+    activeId: live.activeId ?? restored.activeId,
+    closed: live.closed,
+  };
+}
+
 /** Restores what `state_set` wrote. Anything that no longer parses is dropped, not thrown. */
 export function parseTabs(raw: string | null): TabState {
   if (!raw) return NO_TABS;
