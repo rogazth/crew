@@ -1,6 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  ArrowClockwiseIcon,
   ArrowCounterClockwiseIcon,
+  ArrowLeftIcon,
+  ArrowRightIcon,
+  BracketsAngleIcon,
+  ClockCounterClockwiseIcon,
   CommandIcon,
   FloppyDiskIcon,
   FolderIcon,
@@ -288,6 +293,11 @@ const ACTION_ICONS: Partial<Record<CommandId, Icon>> = {
   "new-session": TerminalWindowIcon,
   "open-settings": GearIcon,
   "save-file": FloppyDiskIcon,
+  "browser-back": ArrowLeftIcon,
+  "browser-forward": ArrowRightIcon,
+  "browser-reload": ArrowClockwiseIcon,
+  "browser-devtools": BracketsAngleIcon,
+  "open-history": ClockCounterClockwiseIcon,
 };
 
 function Row({
