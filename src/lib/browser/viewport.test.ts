@@ -1,11 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { clampSide, preset, presetOf, rotate, VIEWPORT_LIMITS } from "./viewport";
+import { clampSide, preset, presetOf, VIEWPORT_LIMITS } from "./viewport";
 
 describe("viewport", () => {
-  it("rotates and still knows its preset", () => {
-    const phone = preset("phone");
-    expect(rotate(phone)).toEqual({ width: 844, height: 390 });
-    expect(presetOf(rotate(phone))).toBe("phone");
+  it("knows the preset a size came from, and none for a typed one", () => {
+    expect(presetOf(preset("tablet"))).toBe("tablet");
+    expect(presetOf({ width: 844, height: 390 })).toBeNull();
     expect(presetOf({ width: 500, height: 500 })).toBeNull();
   });
 

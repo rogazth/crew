@@ -1,11 +1,10 @@
-import { DeviceMobileIcon, DeviceRotateIcon, DeviceTabletIcon, LaptopIcon, XIcon, type Icon } from "@phosphor-icons/react";
+import { DeviceMobileIcon, DeviceTabletIcon, LaptopIcon, XIcon, type Icon } from "@phosphor-icons/react";
 import { useRef, useState } from "react";
 import {
   VIEWPORT_PRESETS,
   clampSide,
   preset,
   presetOf,
-  rotate,
   type PresetId,
   type Viewport,
 } from "../../lib/browser/viewport";
@@ -18,7 +17,7 @@ type Props = {
   onClose: () => void;
 };
 
-/** Under the toolbar while the page is held to a fixed size: presets, the exact size, and a rotate. */
+/** Under the toolbar while the page is held to a fixed size: presets and the exact size. */
 export function ResponsiveBar({ viewport, onChange, onClose }: Props) {
   const active = presetOf(viewport);
   return (
@@ -45,15 +44,6 @@ export function ResponsiveBar({ viewport, onChange, onClose }: Props) {
       <Side label="Width" value={viewport.width} onCommit={(width) => onChange({ ...viewport, width })} />
       <span className="text-placeholder">×</span>
       <Side label="Height" value={viewport.height} onCommit={(height) => onChange({ ...viewport, height })} />
-      <button
-        type="button"
-        aria-label="Rotate"
-        title="Rotate"
-        onClick={() => onChange(rotate(viewport))}
-        className="flex size-6 items-center justify-center rounded-md text-text-muted transition-colors hover:bg-hover hover:text-text"
-      >
-        <DeviceRotateIcon className="size-3.5" />
-      </button>
       <span className="flex-1" />
       <button
         type="button"

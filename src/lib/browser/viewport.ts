@@ -22,16 +22,8 @@ export function clampSide(value: number, fallback: number): number {
   return Math.min(VIEWPORT_LIMITS.max, Math.max(VIEWPORT_LIMITS.min, Math.round(value)));
 }
 
-export function rotate(viewport: Viewport): Viewport {
-  return { width: viewport.height, height: viewport.width };
-}
-
-/** The preset a size came from, in either orientation, so its chip stays lit after a rotate. */
+/** The preset a size came from, so its chip stays lit; a typed size lights none. */
 export function presetOf(viewport: Viewport): PresetId | null {
-  const match = VIEWPORT_PRESETS.find(
-    (item) =>
-      (item.width === viewport.width && item.height === viewport.height) ||
-      (item.width === viewport.height && item.height === viewport.width),
-  );
+  const match = VIEWPORT_PRESETS.find((item) => item.width === viewport.width && item.height === viewport.height);
   return match?.id ?? null;
 }
