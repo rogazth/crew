@@ -14,7 +14,7 @@ export default defineConfig({
       "crew-client-transport": process.env.CREW_MOCK ? mockTransport : liveTransport,
     },
   },
-  test: { include: ["src/lib/**/*.test.ts"], environment: "node" },
+  test: { include: ["src/lib/**/*.test.ts", "electron/**/*.test.ts"], environment: "node" },
   clearScreen: false,
   // The diffs worker lazy-loads Shiki grammars, so it needs a code-splittable
   // format. Vite's IIFE default cannot split.
