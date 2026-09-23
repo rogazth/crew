@@ -22,6 +22,9 @@ type Wrapper = (children: ReactNode) => ReactNode;
  * Mounts `hook` in a probe component and exposes what it returns. Updates the
  * hook causes are flushed by wrapping the trigger in `act`, or by awaiting
  * `act(async () => …)` when a promise has to settle first.
+ *
+ * A function passed as the second argument is read as a wrapper, so a hook
+ * whose props are a function takes them inside an object.
  */
 export function renderHook<R>(hook: () => R, wrapper?: Wrapper): HookHandle<void, R>;
 export function renderHook<P, R>(
