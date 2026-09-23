@@ -1,5 +1,5 @@
 import { Tabs } from "@base-ui/react/tabs";
-import { CaretLeftIcon, CaretRightIcon, RobotIcon } from "@phosphor-icons/react";
+import { CaretLeftIcon, CaretRightIcon, GlobeIcon, RobotIcon } from "@phosphor-icons/react";
 import { useEffect, useState } from "react";
 import { X } from "./icons";
 import { FileTypeIcon } from "./FileTypeIcon";
@@ -178,6 +178,7 @@ function TabIcon({ tab, sessions }: { tab: Tab; sessions: Session[] }) {
   const icon = () => {
     if (tab.kind === "stub") return <StubIcon stub={tab.stub} className="size-3.5 text-text-muted" />;
     if (tab.kind === "file") return <FileTypeIcon name={tab.relative} className="size-3.5" />;
+    if (tab.kind === "browser") return <GlobeIcon className="size-3.5 text-text-muted" />;
     const session = sessions.find((s) => s.id === tab.sessionId);
     if (!session) return null;
     return session.kind === "agent" ? (

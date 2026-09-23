@@ -1,6 +1,6 @@
 import { useCallback } from "react";
 import * as api from "../lib/api";
-import { fileTabId, sessionTabId, stubTabId } from "../lib/tabs";
+import { fileTabId, newBrowserTab, sessionTabId, stubTabId } from "../lib/tabs";
 import { focus as focusBlock } from "../lib/transcript";
 import type { ProjectFile, Session, StubKind } from "../lib/types";
 import type { useConfirmations } from "./useConfirmations";
@@ -70,6 +70,15 @@ export function useNavigation({ tabs, sessions, confirms, removeSession, closePa
     [closePage, tabs],
   );
 
+  /** Every call is a new tab: pages have no natural key to dedupe on. */
+  const openBrowser = useCallback(
+    (url = "") => {
+      closePage();
+      tabs.open(newBrowserTab(url));
+    },
+    [closePage, tabs],
+  );
+
   const closeTab = useCallback(
     (id: string) => {
       const tab = tabs.tabs.find((t) => t.id === id);
@@ -91,5 +100,5 @@ export function useNavigation({ tabs, sessions, confirms, removeSession, closePa
     [confirms, removeSession, sessions, tabs],
   );
 
-  return { inTabs, openSession, openSessionById, openHit, openFile, openStub, closeTab };
+  return { inTabs, openSession, openSessionById, openHit, openFile, openStub, openBrowser, closeTab };
 }

@@ -19,6 +19,7 @@ import { filterSessions } from "../lib/workspaces";
 
 export type Launch =
   | { kind: "stub"; stub: StubKind; title: string }
+  | { kind: "browser" }
   | { kind: "new-agent" }
   | { kind: "new-session"; provider?: ProviderId }
   | { kind: "session"; session: Session };
@@ -47,7 +48,7 @@ const TRAILING: Action[] = [
     id: "browser",
     label: "Browser",
     icon: <GlobeIcon className={ICON} />,
-    launch: { kind: "stub", stub: "browser", title: "Browser" },
+    launch: { kind: "browser" },
   },
   {
     id: "sidechat",

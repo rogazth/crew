@@ -36,11 +36,13 @@ export type ProjectFile = {
 };
 
 /** Surfaces that have chrome but no runtime yet. One tab kind covers them all. */
-export const STUB_KINDS = ["terminal", "browser", "sidechat"] as const;
+export const STUB_KINDS = ["terminal", "sidechat"] as const;
 
 export type StubKind = (typeof STUB_KINDS)[number];
 
 export type Tab =
   | { id: string; kind: "session"; sessionId: string }
   | { id: string; kind: "file"; path: string; relative: string }
+  /** `url` and `title` are what a cold tab restores and labels itself with; the live page lives in `pages`. */
+  | { id: string; kind: "browser"; url: string; title: string }
   | { id: string; kind: "stub"; stub: StubKind; title: string };

@@ -32,6 +32,8 @@ export function Surface({ tab, sessions, hasWorkspace, onCreateWorkspace }: Prop
   if (tab.kind === "stub") {
     return tab.stub === "terminal" ? null : <StubView stub={tab.stub} title={tab.title} />;
   }
+  // Pages stay mounted in their own overlay, like terminals.
+  if (tab.kind === "browser") return null;
   if (tab.kind === "file") {
     // Keyed by path: CodeView keeps its previous item when only props change,
     // which rendered the old file's contents under the new tab's header.

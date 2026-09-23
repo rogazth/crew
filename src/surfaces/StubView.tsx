@@ -3,7 +3,6 @@ import type { StubKind } from "../lib/types";
 
 const NOTES: Record<StubKind, string> = {
   terminal: "A shell in the workspace directory. pty.rs is not wired yet.",
-  browser: "An embedded browser pane. Not built yet.",
   sidechat: "A chat alongside the current surface. Not built yet.",
 };
 

@@ -4,6 +4,12 @@ import type { Session, StubKind, Tab } from "./types";
 export const sessionTabId = (sessionId: string) => `session:${sessionId}`;
 export const fileTabId = (path: string) => `file:${path}`;
 export const stubTabId = (stub: StubKind) => `stub:${stub}`;
+/** Unlike the other kinds, a page has no natural key: two tabs can show the same URL. */
+export const browserTabId = () => `browser:${crypto.randomUUID()}`;
+
+export function newBrowserTab(url = ""): Tab {
+  return { id: browserTabId(), kind: "browser", url, title: "" };
+}
 
 export type TabState = { tabs: Tab[]; activeId: string | null; closed: Tab[] };
 
@@ -11,9 +17,45 @@ export const NO_TABS: TabState = { tabs: [], activeId: null, closed: [] };
 
 const CLOSED_LIMIT = 10;
 
-export function openTab(state: TabState, tab: Tab): TabState {
-  const tabs = state.tabs.some((t) => t.id === tab.id) ? state.tabs : [...state.tabs, tab];
-  return { ...state, tabs, activeId: tab.id };
+/**
+ * Opens a tab, or focuses it if it is already open. `after` places it next to
+ * the tab that asked for it, the way a link opened in a new tab lands beside
+ * its page; `background` leaves the active tab alone.
+ */
+export function openTab(
+  state: TabState,
+  tab: Tab,
+  { after, background = false }: { after?: string; background?: boolean } = {},
+): TabState {
+  const exists = state.tabs.some((t) => t.id === tab.id);
+  let tabs = state.tabs;
+  if (!exists) {
+    const anchor = after === undefined ? -1 : state.tabs.findIndex((t) => t.id === after);
+    tabs =
+      anchor === -1
+        ? [...state.tabs, tab]
+        : [...state.tabs.slice(0, anchor + 1), tab, ...state.tabs.slice(anchor + 1)];
+  }
+  const activeId = background && exists === false ? state.activeId : tab.id;
+  return tabs === state.tabs && activeId === state.activeId ? state : { ...state, tabs, activeId };
+}
+
+/** A page committed a navigation or changed its title. Same state back when nothing moved. */
+export function patchBrowserTab(
+  state: TabState,
+  id: string,
+  patch: { url?: string; title?: string },
+): TabState {
+  let changed = false;
+  const tabs = state.tabs.map((tab) => {
+    if (tab.id !== id || tab.kind !== "browser") return tab;
+    const url = patch.url ?? tab.url;
+    const title = patch.title ?? tab.title;
+    if (url === tab.url && title === tab.title) return tab;
+    changed = true;
+    return { ...tab, url, title };
+  });
+  return changed ? { ...state, tabs } : state;
 }
 
 function withoutTab(state: TabState, id: string, closed: Tab[]): TabState {
@@ -74,9 +116,16 @@ export function parseTabs(raw: string | null): TabState {
   try {
     const parsed: unknown = JSON.parse(raw);
     if (typeof parsed !== "object" || parsed === null) return NO_TABS;
-    const { tabs, activeId } = parsed as { tabs?: unknown; activeId?: unknown };
+    const { tabs, activeId: savedActive } = parsed as { tabs?: unknown; activeId?: unknown };
     if (!Array.isArray(tabs)) return NO_TABS;
-    const kept = tabs.filter(isTab);
+    let activeId = savedActive;
+    const kept = tabs.flatMap((value: unknown) => {
+      if (!isLegacyBrowserStub(value)) return isTab(value) ? [value] : [];
+      // The browser used to be a placeholder stub; it comes back as a blank page.
+      const tab = newBrowserTab();
+      if (activeId === value.id) activeId = tab.id;
+      return [tab];
+    });
     return {
       tabs: kept,
       activeId: kept.some((tab) => tab.id === activeId) ? (activeId as string) : (kept[0]?.id ?? null),
@@ -87,12 +136,20 @@ export function parseTabs(raw: string | null): TabState {
   }
 }
 
+function isLegacyBrowserStub(value: unknown): value is { id: string } {
+  if (typeof value !== "object" || value === null) return false;
+  const tab = value as { id?: unknown; kind?: unknown; stub?: unknown };
+  return tab.kind === "stub" && tab.stub === "browser" && typeof tab.id === "string";
+}
+
 function isTab(value: unknown): value is Tab {
   if (typeof value !== "object" || value === null) return false;
   const tab = value as Partial<Tab>;
   if (typeof tab.id !== "string") return false;
   if (tab.kind === "session") return typeof tab.sessionId === "string";
   if (tab.kind === "file") return typeof tab.path === "string" && typeof tab.relative === "string";
+  if (tab.kind === "browser")
+    return tab.id.startsWith("browser:") && typeof tab.url === "string" && typeof tab.title === "string";
   if (tab.kind === "stub")
     return (
       typeof tab.title === "string" && STUB_KINDS.includes(tab.stub as StubKind)
@@ -121,8 +178,21 @@ export function relativeTo(root: string, path: string): string {
 
 export function tabTitle(tab: Tab, sessions: Session[]): string {
   if (tab.kind === "stub") return tab.title;
+  if (tab.kind === "browser") return browserTitle(tab.title, tab.url);
   if (tab.kind === "file") return tab.relative.split("/").pop() ?? tab.relative;
   return sessions.find((s) => s.id === tab.sessionId)?.name ?? "Untitled";
+}
+
+/** What a page tab reads: its title, else its host, else what a blank tab is called. */
+export function browserTitle(title: string, url: string): string {
+  if (title.trim()) return title;
+  try {
+    const { protocol, host } = new URL(url);
+    if ((protocol === "http:" || protocol === "https:") && host) return host;
+  } catch {
+    // Not a URL yet: a blank tab.
+  }
+  return "New Tab";
 }
 
 /** Every workspace whose tabs this window has restored, not just the one on screen. */
