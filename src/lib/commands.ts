@@ -1,9 +1,13 @@
 import { formatForDisplay, type RegisterableHotkey } from "@tanstack/react-hotkeys";
+import type { LiveCommand } from "./keymap";
+
+type Command = { label: string; keys: RegisterableHotkey; repeat?: boolean };
 
 /**
  * App commands. The id is what handlers, menus, and settings share.
  * `keys` is the default binding; user overrides land here later.
  * A command only fires while something has registered a handler — that is the when.
+ * `repeat` lets a held chord keep firing; everything else fires once per press.
  */
 export const COMMANDS = {
   // Tabs — browser conventions, so the muscle memory transfers.
@@ -13,8 +17,8 @@ export const COMMANDS = {
   // TanStack's `Hotkey` string type excludes Shift+punctuation, so these two take the
   // object form. Matching still falls back to event.code, which is what puts tab
   // cycling on the same physical keys the browser uses on every layout.
-  "next-tab": { label: "Next Tab", keys: { key: "]", mod: true, shift: true } },
-  "prev-tab": { label: "Previous Tab", keys: { key: "[", mod: true, shift: true } },
+  "next-tab": { label: "Next Tab", keys: { key: "]", mod: true, shift: true }, repeat: true },
+  "prev-tab": { label: "Previous Tab", keys: { key: "[", mod: true, shift: true }, repeat: true },
 
   // Finding things — three doors into one palette, each opening a different filter.
   "open-palette": { label: "Command Palette", keys: "Mod+K" },
@@ -23,8 +27,9 @@ export const COMMANDS = {
   "open-workspace": { label: "Open Workspace", keys: "Mod+O" },
   "switch-workspace": { label: "Switch Workspace", keys: "Mod+Shift+O" },
   // The digits belong to workspaces; the tab strip keeps only the cycling pair.
-  "next-workspace": { label: "Next Workspace", keys: { key: "]", mod: true, ctrl: true } },
-  "prev-workspace": { label: "Previous Workspace", keys: { key: "[", mod: true, ctrl: true } },
+  // ⌃⌘ spelled out, not Mod+Ctrl: off macOS that collapses to Ctrl alone, which is Back and Forward.
+  "next-workspace": { label: "Next Workspace", keys: { key: "]", ctrl: true, meta: true } },
+  "prev-workspace": { label: "Previous Workspace", keys: { key: "[", ctrl: true, meta: true } },
   "workspace-1": { label: "Go to Workspace 1", keys: "Mod+1" },
   "workspace-2": { label: "Go to Workspace 2", keys: "Mod+2" },
   "workspace-3": { label: "Go to Workspace 3", keys: "Mod+3" },
@@ -45,18 +50,29 @@ export const COMMANDS = {
   "zoom-out": { label: "Decrease Terminal Font", keys: { key: "-", mod: true } },
   "zoom-reset": { label: "Reset Terminal Font", keys: "Mod+0" },
 
+  // Browser — bound only while a page fills the active tab. History is always there.
+  "browser-back": { label: "Back", keys: { key: "[", mod: true } },
+  "browser-forward": { label: "Forward", keys: { key: "]", mod: true } },
+  "browser-focus-address": { label: "Focus Address Bar", keys: "Mod+L" },
+  "browser-reload": { label: "Reload Page", keys: "Mod+R" },
+  "browser-devtools": { label: "Toggle Developer Tools", keys: "Mod+Alt+I" },
+  "open-history": { label: "History", keys: "Mod+Y" },
+
   "toggle-sidebar": { label: "Toggle Sidebar", keys: "Mod+B" },
   "open-routines": { label: "Routines", keys: "Mod+Shift+R" },
   "search-messages": { label: "Search Messages", keys: "Mod+Shift+F" },
   "open-settings": { label: "Settings", keys: "Mod+," },
   "save-file": { label: "Save File", keys: "Mod+S" },
-} as const satisfies Record<string, { label: string; keys: RegisterableHotkey }>;
+} as const satisfies Record<string, Command>;
 
 export type CommandId = keyof typeof COMMANDS;
 
 export const COMMAND_IDS = Object.keys(COMMANDS) as CommandId[];
 
 const handlers = new Map<CommandId, () => void>();
+const listeners = new Set<() => void>();
+let flushing = false;
+let published = "";
 
 export function isCommandId(id: string): id is CommandId {
   return id in COMMANDS;
@@ -70,10 +86,19 @@ export function commandKeys(id: CommandId): string {
   return formatForDisplay(keysFor(id));
 }
 
+export function repeatable(id: CommandId): boolean {
+  const command: Command = COMMANDS[id];
+  return command.repeat === true;
+}
+
 export function registerCommand(id: CommandId, handler: () => void): () => void {
+  // Swapping the handler of a live id leaves the set as it was.
+  if (!handlers.has(id)) changed();
   handlers.set(id, handler);
   return () => {
-    if (handlers.get(id) === handler) handlers.delete(id);
+    if (handlers.get(id) !== handler) return;
+    handlers.delete(id);
+    changed();
   };
 }
 
@@ -82,6 +107,37 @@ export function runCommand(id: CommandId): boolean {
   if (!handler) return false;
   handler();
   return true;
+}
+
+/**
+ * Tells `cb` the set of live commands changed, at most once per microtask: a
+ * render that unbinds and rebinds a dozen commands costs the main process one
+ * update, and none if the set came out the same.
+ */
+export function onCommandsChange(cb: () => void): () => void {
+  listeners.add(cb);
+  return () => {
+    listeners.delete(cb);
+  };
+}
+
+function changed(): void {
+  if (flushing) return;
+  flushing = true;
+  queueMicrotask(() => {
+    flushing = false;
+    const live = COMMAND_IDS.filter((id) => handlers.has(id)).join(" ");
+    if (live === published) return;
+    published = live;
+    for (const listener of listeners) listener();
+  });
+}
+
+/** Commands with a handler right now, in declaration order: what a focused page forwards. */
+export function liveCommands(): LiveCommand[] {
+  return COMMAND_IDS.flatMap((id) =>
+    handlers.has(id) ? [{ id, keys: keysFor(id), repeat: repeatable(id) }] : [],
+  );
 }
 
 /** Tab plumbing and the palette's own doors: bound, but noise in a command list. */

@@ -1,13 +1,6 @@
 import { useEffect, useMemo, useRef } from "react";
 import { useHotkeys } from "@tanstack/react-hotkeys";
-import { keysFor, registerCommand, type CommandId } from "../lib/commands";
-
-/**
- * Auto-repeat is dropped via `event.repeat`, not requireReset: requireReset re-arms on
- * keyup, and macOS sends no keyup for keys pressed while ⌘ is held, so ⌘1 ⌘3 ⌘1 in one
- * hold would ignore the second ⌘1.
- */
-const REPEATABLE = new Set<CommandId>(["next-tab", "prev-tab"]);
+import { keysFor, registerCommand, repeatable, type CommandId } from "../lib/commands";
 
 /**
  * Binds a command's keys and publishes its handler, so the palette can run the
@@ -35,7 +28,11 @@ export function useCommands(map: { [K in CommandId]?: () => void }) {
         ids.map((id) => ({
           hotkey: keysFor(id),
           callback: (event: KeyboardEvent) => {
-            if (event.repeat && !REPEATABLE.has(id)) return;
+            // Auto-repeat is dropped via `event.repeat`, not requireReset: requireReset
+            // re-arms on keyup, and macOS sends no keyup for keys pressed while ⌘ is held,
+            // so ⌘1 ⌘3 ⌘1 in one hold would ignore the second ⌘1. Only commands marked
+            // `repeat` keep firing while held.
+            if (event.repeat && !repeatable(id)) return;
             mapRef.current[id]?.();
           },
         })),
