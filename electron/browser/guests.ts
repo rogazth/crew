@@ -31,6 +31,11 @@ import {
 } from "./policy";
 
 const IS_MAC = process.platform === "darwin";
+/**
+ * Next to the bundled main. esbuild emits both into electron-dist, and Node's
+ * `__dirname` there is that directory. import.meta.url is empty in the cjs bundle.
+ */
+const GUEST_PRELOAD = path.join(__dirname, "guest-preload.cjs");
 /** A snapshot handed over for restore waits this long for its webview to attach. */
 const RESTORE_TTL_MS = 10_000;
 
@@ -114,7 +119,9 @@ export function installBrowser(win: BrowserWindow): void {
       event.preventDefault();
       return;
     }
-    hardenWebPreferences(prefs as Record<string, unknown>);
+    // The attribute is how a preload arrives; the merged prefs are what Electron uses.
+    delete params.preload;
+    hardenWebPreferences(prefs as Record<string, unknown>, GUEST_PRELOAD);
     const token = decision.restoreToken;
     if (token && pendingRestores.has(token)) {
       // restore() only works on a webContents that has never loaded anything.
@@ -222,6 +229,7 @@ function windowOpen(
     return { action: "deny" };
   }
   // A login popup keeps window.opener, so it gets a real window in the same partition.
+  // No close-guard preload: this window is supposed to be able to close itself.
   return {
     action: "allow",
     overrideBrowserWindowOptions: {

@@ -28,13 +28,18 @@ function isBlank(url: URL | null): boolean {
 }
 
 /**
- * Makes a guest's webPreferences safe whatever the webview element asked for:
- * no preload, no Node, isolated, sandboxed, same-origin enforced.
+ * Makes a guest's webPreferences safe whatever the webview element asked for.
+ * Electron copies the `partition` attribute and then spreads the `webpreferences`
+ * attribute over it, so the partition and the preload have to be written here,
+ * on the object the guest is actually created with. The only preload is the
+ * close guard: `window.close()` would otherwise destroy the tab.
  */
-export function hardenWebPreferences(prefs: Record<string, unknown>): void {
-  delete prefs.preload;
+export function hardenWebPreferences(prefs: Record<string, unknown>, guestPreload: string): void {
   delete prefs.preloadURL;
   delete prefs.enableBlinkFeatures;
+  delete prefs.additionalArguments;
+  prefs.preload = guestPreload;
+  prefs.partition = PARTITION;
   prefs.nodeIntegration = false;
   prefs.nodeIntegrationInSubFrames = false;
   prefs.contextIsolation = true;

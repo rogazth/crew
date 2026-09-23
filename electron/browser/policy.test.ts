@@ -12,11 +12,14 @@ import {
   popupVerdict,
 } from "./policy";
 
+const GUEST_PRELOAD = "/app/guest-preload.cjs";
+
 describe("hardenWebPreferences", () => {
   it("overrides whatever the webview asked for", () => {
     const prefs: Record<string, unknown> = {
       preload: "/tmp/evil.js",
       preloadURL: "file:///tmp/evil.js",
+      additionalArguments: ["--host-token"],
       nodeIntegration: true,
       nodeIntegrationInSubFrames: true,
       contextIsolation: false,
@@ -26,10 +29,13 @@ describe("hardenWebPreferences", () => {
       enableBlinkFeatures: "ExperimentalThing",
       disableBlinkFeatures: "SomethingElse",
       webviewTag: true,
-      partition: PARTITION,
+      // What Electron leaves after spreading webpreferences="partition=persist:evil".
+      partition: "persist:evil",
     };
-    hardenWebPreferences(prefs);
+    hardenWebPreferences(prefs, GUEST_PRELOAD);
     expect(prefs).toEqual({
+      preload: GUEST_PRELOAD,
+      partition: PARTITION,
       nodeIntegration: false,
       nodeIntegrationInSubFrames: false,
       contextIsolation: true,
@@ -38,16 +44,21 @@ describe("hardenWebPreferences", () => {
       allowRunningInsecureContent: false,
       disableBlinkFeatures: "",
       webviewTag: false,
-      partition: PARTITION,
     });
   });
 
   it("hardens an empty object the same way", () => {
     const prefs: Record<string, unknown> = {};
-    hardenWebPreferences(prefs);
-    expect(prefs).not.toHaveProperty("preload");
+    hardenWebPreferences(prefs, GUEST_PRELOAD);
+    expect(prefs).not.toHaveProperty("preloadURL");
     expect(prefs).not.toHaveProperty("enableBlinkFeatures");
-    expect(prefs).toMatchObject({ nodeIntegration: false, contextIsolation: true, sandbox: true });
+    expect(prefs).toMatchObject({
+      preload: GUEST_PRELOAD,
+      partition: PARTITION,
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: true,
+    });
   });
 });
 

@@ -65,8 +65,9 @@ let guests: Guests;
 let host: FakeContents;
 
 /** What Electron hands will-attach-webview, and whether the attach was refused. */
-function willAttach(params: { src?: string; partition?: string }) {
-  const prefs: Record<string, unknown> = { preload: "/evil.js", nodeIntegration: true };
+function willAttach(params: { src?: string; partition?: string; preload?: string }) {
+  // partition here is the merged webPreferences, after webpreferences= has spread over the attribute.
+  const prefs: Record<string, unknown> = { preload: "/evil.js", nodeIntegration: true, partition: "persist:evil" };
   const event = { prevented: false, preventDefault() { this.prevented = true; } };
   host.emit("will-attach-webview", event, prefs, params);
   return { prevented: event.prevented, prefs, params };
@@ -98,9 +99,16 @@ describe("attaching", () => {
   });
 
   it("hardens what the element asked for", () => {
-    const { prefs } = willAttach({ ...PAGE, src: "https://a.com" });
-    expect(prefs.preload).toBeUndefined();
-    expect(prefs).toMatchObject({ nodeIntegration: false, sandbox: true, contextIsolation: true });
+    const attached = willAttach({ ...PAGE, src: "https://a.com", preload: "/evil-attr.js" });
+    expect(attached.params.preload).toBeUndefined();
+    expect(attached.prefs.preload).toMatch(/guest-preload\.cjs$/);
+    expect(attached.prefs.preload).not.toBe("/evil.js");
+    expect(attached.prefs).toMatchObject({
+      partition: "persist:crew-browser",
+      nodeIntegration: false,
+      sandbox: true,
+      contextIsolation: true,
+    });
   });
 
   it("restores a stack on the guest the token came with, past refused attaches in between", () => {
@@ -213,6 +221,7 @@ describe("popups and navigation", () => {
       sandbox: true,
       nodeIntegration: false,
     });
+    expect(answer.overrideBrowserWindowOptions.webPreferences).not.toHaveProperty("preload");
   });
 
   it("stops a page that keeps opening windows", () => {
