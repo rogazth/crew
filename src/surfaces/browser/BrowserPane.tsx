@@ -127,6 +127,8 @@ export function BrowserPane({
     void source(pageId, latest.current.url).then((src) => {
       const host = container.current;
       if (cancelled || !host) return;
+      // A restored stack re-commits its page; that is the same visit, not a new one.
+      let restoring = src.startsWith(RESTORE_PREFIX);
       built = createGuest(host, src, {
         attach: (webContentsId) => update({ webContentsId, crashed: false }),
         start: (next) => {
@@ -150,6 +152,10 @@ export function BrowserPane({
           saveStack();
           if (inPage && sameDocument(next, recorded)) return;
           recorded = next;
+          if (restoring) {
+            restoring = false;
+            return;
+          }
           void api.browserHistoryVisit(next, "", latest.current.workspaceId).catch(() => {});
         },
         loading: (loading) => update({ loading, ...history() }),
@@ -166,8 +172,8 @@ export function BrowserPane({
           void browserHost()
             ?.favicon(icon)
             .then((data) => {
-              // A slow icon from the previous page must not land on this one.
-              if (ask === faviconAsk) update({ favicon: data });
+              // A slow icon from the previous page must not land on this one, nor on a closed tab.
+              if (ask === faviconAsk && !cancelled) update({ favicon: data });
             })
             .catch(() => {});
         },
