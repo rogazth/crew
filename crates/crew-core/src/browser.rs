@@ -160,7 +160,7 @@ pub fn visit(
     };
     // The first visit after a start prunes as well, so a daemon that never
     // sees a hundred visits still prunes once.
-    let prune_now = VISITS.fetch_add(1, Ordering::Relaxed).is_multiple_of(PRUNE_EVERY);
+    let prune_now = VISITS.fetch_add(1, Ordering::Relaxed) % PRUNE_EVERY == 0;
     store.with(|conn| {
         let tx = conn.unchecked_transaction()?;
         tx.prepare_cached(
