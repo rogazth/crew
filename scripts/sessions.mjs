@@ -12,7 +12,7 @@
 // Needs Node 23.6+ (for the TypeScript import) and the CLIs logged in; opencode
 // runs on a free model.
 import { spawn } from "node:child_process";
-import { mkdtempSync, mkdirSync, realpathSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { TerminalActivity } from "../src/lib/terminalStatus.ts";
@@ -28,6 +28,17 @@ const SWITCH_MS = 1700;
 /** Mirrors the terminal view: output reaches the indicator at most this often. */
 const ACTIVITY_INTERVAL = 400;
 
+/** The hooks src/lib/sessionCommand.ts hands Claude. */
+function claudeHooks(crewId) {
+  const at = (file) => `"$CREW_CLAUDE_BIND_DIR/${crewId}.${file}"`;
+  const bind = `if [ -n "$CREW_CLAUDE_BIND_DIR" ]; then cat > ${at("json")}; fi`;
+  const ask = `if [ -n "$CREW_CLAUDE_BIND_DIR" ]; then cat > ${at("attention.tmp")} && mv ${at("attention.tmp")} ${at("attention")}; fi`;
+  return {
+    SessionStart: [{ hooks: [{ type: "command", command: bind }] }],
+    Notification: [{ matcher: "permission_prompt|elicitation_dialog", hooks: [{ type: "command", command: ask }] }],
+  };
+}
+
 const LAUNCH = {
   claude: {
     model: process.env.CLAUDE_MODEL ?? "claude-haiku-4-5-20251001",
@@ -35,20 +46,7 @@ const LAUNCH = {
     argv: (session, model) => [
       "claude",
       "--settings",
-      JSON.stringify({
-        hooks: {
-          SessionStart: [
-            {
-              hooks: [
-                {
-                  type: "command",
-                  command: `if [ -n "$CREW_CLAUDE_BIND_DIR" ]; then cat > "$CREW_CLAUDE_BIND_DIR/${session.id}.json"; fi`,
-                },
-              ],
-            },
-          ],
-        },
-      }),
+      JSON.stringify({ hooks: claudeHooks(session.id) }),
       "--session-id",
       session.id,
       "--model",
@@ -224,7 +222,7 @@ async function type(tab, text) {
   await sleep(400);
   tab.activity.input();
   await tab.write("\r");
-  tab.promptedAt = Date.now();
+  tab.promptedAt ??= Date.now();
   log(`${tab.provider.padEnd(8)} prompted`);
 }
 
@@ -248,6 +246,16 @@ async function sweep(tab) {
   if (name) {
     session.name = name;
     log(`${tab.provider.padEnd(8)} titled "${name}"`);
+  }
+}
+
+/** Claude's permission prompts reach the tab through its Notification hook. */
+async function attention(tab) {
+  if (tab.provider !== "claude") return;
+  const asked = await rpc("session_claude_attention", { id: tab.session.id });
+  if (asked) {
+    log(`${tab.provider.padEnd(8)} asks: ${asked}`);
+    tab.activity.bell();
   }
 }
 
@@ -283,6 +291,7 @@ while (Date.now() < deadline) {
     lastSweep = now;
     await Promise.all(tabs.map((tab) => sweep(tab).catch((error) => log(`${tab.provider} sweep: ${error.message}`))));
   }
+  await Promise.all(tabs.map((tab) => attention(tab).catch(() => {})));
   for (const tab of tabs) tab.samples.push({ t: now, status: tab.status, watched: tab.watched });
   const settled = tabs.every((tab) => tab.answeredAt && now - tab.answeredAt > 5000);
   const named = tabs.every((tab) => tab.session.name !== tab.provider);
@@ -297,6 +306,30 @@ for (const tab of tabs) tab.samples.push({ t: Date.now(), status: tab.status, wa
 
 const results = [];
 const check = (provider, name, ok, detail = "") => results.push({ provider, name, ok, detail });
+
+// Claude stops to ask for a command it was not allowed: out of sight, that has
+// to read as waiting on you, and answering it has to read as working again.
+const claude = tabs.find((tab) => tab.provider === "claude");
+if (claude) {
+  show(tabs, claude);
+  await type(claude, "Use the Bash tool to run exactly: touch approved.txt");
+  show(tabs, null);
+  let asked = null;
+  for (const until = Date.now() + 30_000; Date.now() < until && !asked; await sleep(500)) {
+    await attention(claude);
+    if (claude.status === "needs-input") asked = Date.now();
+  }
+  check("claude", "a permission prompt out of sight reads needs-input", Boolean(asked), claude.status);
+  show(tabs, claude);
+  await sleep(1000);
+  claude.activity.input();
+  await claude.write("\r");
+  const file = join(workDir, "approved.txt");
+  for (const until = Date.now() + 30_000; Date.now() < until && !existsSync(file); ) await sleep(300);
+  check("claude", "the approved command ran", existsSync(file));
+  await sleep(4000);
+  check("claude", "an answered prompt no longer reads needs-input", claude.status === "idle", claude.status);
+}
 for (const tab of tabs) {
   const p = tab.provider;
   const early = tab.statuses.filter((s) => s.t < tab.promptedAt);
