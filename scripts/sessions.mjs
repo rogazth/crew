@@ -43,21 +43,18 @@ const LAUNCH = {
   claude: {
     model: process.env.CLAUDE_MODEL ?? "claude-haiku-4-5-20251001",
     // The app's argv (src/lib/sessionCommand.ts), plus leave to run the one command.
-    argv: (session, model) => [
+    argv: (session, model, resume) => [
       "claude",
       "--settings",
       JSON.stringify({ hooks: claudeHooks(session.id) }),
-      "--session-id",
-      session.id,
-      "--model",
-      model,
+      ...(resume ? ["--resume", session.providerSessionId ?? session.id] : ["--session-id", session.id, "--model", model]),
       "--allowedTools",
       "Bash(sleep:*)",
     ],
   },
   opencode: {
     model: process.env.OPENCODE_MODEL ?? "opencode/ling-3.0-flash-fin-free",
-    argv: (_session, model) => ["opencode", "-m", model],
+    argv: (session, model, resume) => ["opencode", ...(resume ? ["--session", session.providerSessionId] : []), "-m", model],
   },
   cursor: {
     model: process.env.CURSOR_MODEL ?? "",
@@ -138,33 +135,28 @@ const strip = (text) =>
     .replace(/\x1b./g, "");
 
 async function open(provider) {
-  const launch = LAUNCH[provider];
   let session = await rpc("session_create", {
     workspaceId: workspace.id,
     kind: "terminal",
     name: provider,
     provider,
-    model: launch.model,
+    model: LAUNCH[provider].model,
     description: "",
     autonomy: "ask",
   });
   if (provider === "cursor") session = { ...session, providerSessionId: await rpc("session_provider_create", { id: session.id }) };
 
-  const tab = {
-    provider,
-    session,
-    status: session.status,
-    statuses: [],
-    samples: [],
-    titles: [],
-    screen: "",
-    answeredAt: null,
-    promptedAt: null,
-    startedAt: Date.now(),
-    lastActivity: 0,
-    osc: "",
-  };
-  tab.activity = new TerminalActivity(session.status, false, {
+  const tab = { provider, session, status: session.status, samples: [], answeredAt: null, promptedAt: null };
+  await launch(tab, false);
+  return tab;
+}
+
+/** Spawns the tab's CLI in a PTY and wires it the way the terminal view does. */
+async function launch(tab, resume) {
+  const { provider, session } = tab;
+  Object.assign(tab, { statuses: [], titles: [], screen: "", startedAt: Date.now(), lastActivity: 0, osc: "", watched: false });
+  const argv = LAUNCH[provider].argv(session, LAUNCH[provider].model, resume);
+  tab.activity = new TerminalActivity(tab.status, false, {
     report: (status) => {
       tab.status = status;
       tab.statuses.push({ t: Date.now(), status });
@@ -173,7 +165,7 @@ async function open(provider) {
     },
   });
 
-  const streamId = await rpc("pty_spawn", { id: session.id, cwd: workDir, command: launch.argv(session, launch.model), cols: 120, rows: 40 });
+  const streamId = await rpc("pty_spawn", { id: session.id, cwd: workDir, command: argv, cols: 120, rows: 40 });
   const write = (data) => rpc("pty_write", { id: session.id, data }).catch(() => {});
   tab.write = write;
   let processed = 0;
@@ -219,8 +211,7 @@ async function open(provider) {
     }
   });
   await rpc("pty_attach", { id: session.id, from: 0 });
-  log(`${provider.padEnd(8)} spawned ${session.id}`);
-  return tab;
+  log(`${provider.padEnd(8)} ${resume ? "resumed" : "spawned"} ${session.id}`);
 }
 
 /** Pasted, as xterm does once the CLI turned bracketed paste on; all three do. */
@@ -376,10 +367,34 @@ for (const tab of tabs) {
 
 console.log("");
 let failed = 0;
+const printed = results.length;
 for (const { provider, name, ok, detail } of results) {
   if (!ok) failed += 1;
   console.log(`${ok ? "PASS" : "FAIL"}  ${provider.padEnd(8)} ${name}${detail ? `  (${detail})` : ""}`);
 }
+
+// The app relaunched: every tab resumes its session in the background. Drawing
+// the old conversation back is not a turn, and the name must hold.
+for (const tab of tabs) await rpc("pty_kill", { id: tab.session.id }).catch(() => {});
+await sleep(1500);
+const before = new Map(tabs.map((tab) => [tab, { status: tab.status, name: tab.session.name }]));
+for (const tab of tabs) await launch(tab, true);
+await sleep(15_000);
+for (const tab of tabs) {
+  const was = before.get(tab);
+  check(tab.provider, "a resumed tab out of sight keeps its indicator", tab.statuses.length === 0, `${was.status} → ${tab.statuses.map((s) => s.status).join(" → ")}`);
+  await sweep(tab);
+  check(tab.provider, "a resumed tab keeps its name", tab.session.name === was.name, tab.session.name);
+  check(tab.provider, "a resumed tab shows the old conversation", tab.screen.includes(ANSWER), strip(tab.screen).replace(/\s+/g, " ").slice(-200));
+}
+
+console.log("");
+failed = 0;
+for (const { provider, name, ok, detail } of results.slice(printed)) {
+  if (!ok) failed += 1;
+  console.log(`${ok ? "PASS" : "FAIL"}  ${provider.padEnd(8)} ${name}${detail ? `  (${detail})` : ""}`);
+}
+failed = results.filter((r) => !r.ok).length;
 
 for (const tab of tabs) await rpc("pty_kill", { id: tab.session.id }).catch(() => {});
 ws.close();
