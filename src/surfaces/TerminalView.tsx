@@ -141,7 +141,7 @@ export function TerminalView({
       macOptionClickForcesSelection: true,
       allowProposedApi: true,
       vtExtensions: { kittyKeyboard: true },
-      linkHandler: { activate: (_event, uri) => openLink(uri) },
+      linkHandler: { activate: (event, uri) => openLink(uri, event) },
       theme: colors,
     });
     const fit = new FitAddon();
@@ -158,7 +158,7 @@ export function TerminalView({
     }
     term.loadAddon(new Unicode11Addon());
     activateZwjUnicode(term);
-    term.loadAddon(new WebLinksAddon((_event, uri) => openLink(uri)));
+    term.loadAddon(new WebLinksAddon((event, uri) => openLink(uri, event)));
     const searchAddon = new SearchAddon();
     term.loadAddon(searchAddon);
     const detachSearch = attachSearch(searchAddon);
