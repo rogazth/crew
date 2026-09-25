@@ -10,6 +10,7 @@ import {
   patchBrowserTab,
   parseTabs,
   reopenTab,
+  reorderTabs,
   selectTab,
   stepTab,
   type TabRegistry,
@@ -80,6 +81,7 @@ export function useTabs(workspaceId: string | null) {
   const step = useCallback((delta: number) => mutate((s) => stepTab(s, delta)), [mutate]);
   const activate = useCallback((index: number) => mutate((s) => activateTab(s, index)), [mutate]);
   const select = useCallback((id: string | null) => mutate((s) => selectTab(s, id)), [mutate]);
+  const reorder = useCallback((ids: string[]) => mutate((s) => reorderTabs(s, ids)), [mutate]);
   /** A page asked for a tab: it lands in the page's own workspace, beside it. */
   const openIn = useCallback(
     (id: string, tab: Tab, opts?: { after?: string; background?: boolean }) =>
@@ -118,6 +120,7 @@ export function useTabs(workspaceId: string | null) {
     step,
     activate,
     select,
+    reorder,
     openIn,
     patchBrowser,
     dropWorkspace,

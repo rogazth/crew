@@ -102,6 +102,14 @@ export function selectTab(state: TabState, id: string | null): TabState {
   return state.activeId === id ? state : { ...state, activeId: id };
 }
 
+/** The strip was dragged into a new order. An order that no longer names exactly the open tabs is stale and dropped. */
+export function reorderTabs(state: TabState, ids: string[]): TabState {
+  const byId = new Map(state.tabs.map((tab) => [tab.id, tab]));
+  const tabs = ids.flatMap((id) => byId.get(id) ?? []);
+  if (tabs.length !== state.tabs.length || new Set(ids).size !== ids.length) return state;
+  return tabs.every((tab, index) => tab === state.tabs[index]) ? state : { ...state, tabs };
+}
+
 /** After closing the active tab, focus its right neighbour, else its left one. */
 function neighbourId(tabs: Tab[], closingId: string): string | null {
   const index = tabs.findIndex((t) => t.id === closingId);

@@ -11,6 +11,7 @@ import {
   panesOf,
   relativeTo,
   reopenTab,
+  reorderTabs,
   selectTab,
   sessionTabId,
   stepTab,
@@ -112,6 +113,28 @@ describe("activateTab", () => {
   it("keeps the state object when the index is out of range", () => {
     const state = opened("a");
     expect(activateTab(state, 7)).toBe(state);
+  });
+});
+
+describe("reorderTabs", () => {
+  const ids = (state: TabState) => state.tabs.map((tab) => tab.id);
+
+  it("takes the dragged order and keeps focus on the same tab", () => {
+    const state = reorderTabs(opened("a", "b", "c"), ["session:c", "session:a", "session:b"]);
+    expect(ids(state)).toEqual(["session:c", "session:a", "session:b"]);
+    expect(state.activeId).toBe("session:c");
+  });
+
+  it("keeps the state object when nothing moved", () => {
+    const state = opened("a", "b");
+    expect(reorderTabs(state, ["session:a", "session:b"])).toBe(state);
+  });
+
+  it("drops a stale order that misses, invents or repeats a tab", () => {
+    const state = opened("a", "b");
+    expect(reorderTabs(state, ["session:b"])).toBe(state);
+    expect(reorderTabs(state, ["session:b", "session:x"])).toBe(state);
+    expect(reorderTabs(state, ["session:b", "session:b", "session:a"])).toBe(state);
   });
 });
 

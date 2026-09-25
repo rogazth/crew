@@ -1,9 +1,13 @@
+import { RestrictToHorizontalAxis } from "@dnd-kit/abstract/modifiers";
+import { RestrictToElement } from "@dnd-kit/dom/modifiers";
+import { useSortable } from "@dnd-kit/react/sortable";
 import { Tabs } from "@base-ui/react/tabs";
 import { CaretLeftIcon, CaretRightIcon, CircleNotchIcon, GlobeIcon, RobotIcon } from "@phosphor-icons/react";
-import { useEffect, useState } from "react";
+import { memo, useEffect, useState } from "react";
 import { X } from "./icons";
 import { FileTypeIcon } from "./FileTypeIcon";
 import { ProviderIcon } from "./ProviderIcon";
+import { SortableList } from "./SortableList";
 import { StatusDot } from "./StatusDot";
 import { StubIcon } from "./StubIcon";
 import { TabLauncher, type Launch } from "./TabLauncher";
@@ -22,13 +26,32 @@ type Props = {
   sessions: Session[];
   onSelect: (id: string) => void;
   onClose: (id: string) => void;
+  onReorder: (ids: string[]) => void;
   onLaunch: (launch: Launch) => void;
 };
 
+/** A pill slides along the strip and stops at its ends; the strip scrolls under it. */
+const STRIP_MODIFIERS = [
+  RestrictToHorizontalAxis,
+  RestrictToElement.configure({
+    element: (operation) => operation.source?.element?.closest("[data-tab-strip]") ?? null,
+  }),
+];
+
 /** One 40px row of pill tabs, plus on the end. Every slot in a pill is fixed width. */
-export function TabBar({ inset, tabs, activeId, sessions, onSelect, onClose, onLaunch }: Props) {
+export function TabBar({
+  inset,
+  tabs,
+  activeId,
+  sessions,
+  onSelect,
+  onClose,
+  onReorder,
+  onLaunch,
+}: Props) {
   const [launcher, setLauncher] = useState(false);
-  const strip = useTabOverflow(tabs.map((tab) => tab.id).join("|"));
+  const ids = tabs.map((tab) => tab.id);
+  const strip = useTabOverflow(ids.join("|"));
 
   useCommand("open-launcher", () => setLauncher((value) => !value));
 
@@ -56,64 +79,22 @@ export function TabBar({ inset, tabs, activeId, sessions, onSelect, onClose, onL
             tab and sits flush left when there are none. */}
         <div
           ref={ref}
+          data-tab-strip
           className="no-scrollbar flex h-full min-w-0 flex-1 items-center gap-1 overflow-x-auto overflow-y-hidden px-1.5 scroll-px-10"
         >
           <Tabs.List className="flex h-full shrink-0 items-center gap-1">
-            {tabs.map((tab) => {
-              const active = tab.id === activeId;
-              const status = tabStatus(tab, sessions);
-              return (
-                <Tabs.Tab
+            <SortableList ids={ids} onReorder={onReorder} modifiers={STRIP_MODIFIERS}>
+              {tabs.map((tab, index) => (
+                <TabPill
                   key={tab.id}
-                  value={tab.id}
-                  nativeButton={false}
-                  render={<div />}
-                  data-tab-id={tab.id}
-                  data-tauri-drag-region="false"
-                  onAuxClick={(event) => event.button === 1 && onClose(tab.id)}
-                  title={tabTitle(tab, sessions)}
-                  /* The ring and the shadow are always drawn; only their colour moves,
-                     so the pill fades in instead of growing an edge. */
-                  className={`group relative flex h-7 w-fit max-w-[190px] min-w-[120px] shrink-0 items-center gap-1.5 rounded-chrome pr-1.5 pl-2.5 shadow-[0_1px_2px_var(--tab-shadow)] ring-1 outline-none transition-[color,background-color,box-shadow] duration-150 ${
-                    active
-                      ? "bg-canvas text-text ring-hairline [--tab-shadow:var(--color-hairline)]"
-                      : "bg-card text-text-muted ring-transparent hover:bg-hover [--tab-shadow:transparent]"
-                  }`}
-                >
-                  {tab.kind === "browser" ? (
-                    <BrowserTabFace tab={tab} />
-                  ) : (
-                    <>
-                      <TabIcon tab={tab} sessions={sessions} />
-                      <span className="min-w-0 flex-1 truncate">{tabTitle(tab, sessions)}</span>
-                    </>
-                  )}
-                  {/* One fixed slot for two things that never coexist: the status light
-                      and the close button it yields to on hover. Stacked, so the swap
-                      never resizes the tab. */}
-                  <span className="relative flex h-5 w-6 shrink-0 items-center justify-end">
-                    {status && (
-                      <span className="absolute inset-0 flex items-center justify-center transition-opacity group-hover:opacity-0">
-                        <StatusDot status={status} />
-                      </span>
-                    )}
-                    <button
-                      type="button"
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        onClose(tab.id);
-                      }}
-                      aria-label="Close tab"
-                      className={`absolute right-0 flex size-5 items-center justify-center rounded-full text-text-muted transition-colors hover:bg-selected hover:text-text focus-visible:opacity-100 ${
-                        active && !status ? "opacity-100" : "opacity-0 group-hover:opacity-100"
-                      }`}
-                    >
-                      <X className="size-3" />
-                    </button>
-                  </span>
-                </Tabs.Tab>
-              );
-            })}
+                  tab={tab}
+                  index={index}
+                  active={tab.id === activeId}
+                  sessions={sessions}
+                  onClose={onClose}
+                />
+              ))}
+            </SortableList>
           </Tabs.List>
 
           <div className="flex shrink-0 items-center">
@@ -140,6 +121,85 @@ export function TabBar({ inset, tabs, activeId, sessions, onSelect, onClose, onL
     </div>
   );
 }
+
+/**
+ * A pill drags along the strip only. dnd-kit moves the DOM while it is held, so
+ * the strip re-renders once, on drop, when the new order is saved.
+ */
+const TabPill = memo(function TabPill({
+  tab,
+  index,
+  active,
+  sessions,
+  onClose,
+}: {
+  tab: Tab;
+  index: number;
+  active: boolean;
+  sessions: Session[];
+  onClose: (id: string) => void;
+}) {
+  const { ref, isDragging } = useSortable({
+    id: tab.id,
+    index,
+    group: "tabs",
+    type: "tab",
+    accept: "tab",
+  });
+  const status = tabStatus(tab, sessions);
+  return (
+    <Tabs.Tab
+      ref={ref}
+      value={tab.id}
+      nativeButton={false}
+      render={<div />}
+      data-tab-id={tab.id}
+      data-tauri-drag-region="false"
+      onAuxClick={(event) => event.button === 1 && onClose(tab.id)}
+      title={tabTitle(tab, sessions)}
+      /* The ring and the shadow are always drawn; only their colour moves,
+         so the pill fades in instead of growing an edge. A held pill wears the
+         active face: the inactive one is translucent and would show its neighbours. */
+      className={`group relative flex h-7 touch-none w-fit max-w-[190px] min-w-[120px] shrink-0 items-center gap-1.5 rounded-chrome pr-1.5 pl-2.5 shadow-[0_1px_2px_var(--tab-shadow)] ring-1 outline-none transition-[color,background-color,box-shadow] duration-150 ${
+        active || isDragging
+          ? "bg-canvas text-text ring-hairline [--tab-shadow:var(--color-hairline)]"
+          : "bg-card text-text-muted ring-transparent hover:bg-hover [--tab-shadow:transparent]"
+      } ${isDragging ? "cursor-grabbing" : ""}`}
+    >
+      {tab.kind === "browser" ? (
+        <BrowserTabFace tab={tab} />
+      ) : (
+        <>
+          <TabIcon tab={tab} sessions={sessions} />
+          <span className="min-w-0 flex-1 truncate">{tabTitle(tab, sessions)}</span>
+        </>
+      )}
+      {/* One fixed slot for two things that never coexist: the status light
+          and the close button it yields to on hover. Stacked, so the swap
+          never resizes the tab. */}
+      <span className="relative flex h-5 w-6 shrink-0 items-center justify-end">
+        {status && (
+          <span className="absolute inset-0 flex items-center justify-center transition-opacity group-hover:opacity-0">
+            <StatusDot status={status} />
+          </span>
+        )}
+        <button
+          type="button"
+          onClick={(event) => {
+            event.stopPropagation();
+            onClose(tab.id);
+          }}
+          aria-label="Close tab"
+          className={`absolute right-0 flex size-5 items-center justify-center rounded-full text-text-muted transition-colors hover:bg-selected hover:text-text focus-visible:opacity-100 ${
+            active && !status ? "opacity-100" : "opacity-0 group-hover:opacity-100"
+          }`}
+        >
+          <X className="size-3" />
+        </button>
+      </span>
+    </Tabs.Tab>
+  );
+});
 
 /** kumo's Tabs overflow affordance: a gradient over the strip's edge with a caret on top. */
 function ScrollControl({

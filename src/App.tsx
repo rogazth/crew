@@ -200,6 +200,7 @@ export function App() {
             sessions={sessions}
             onSelect={tabs.select}
             onClose={nav.closeTab}
+            onReorder={tabs.reorder}
             onLaunch={launch}
           />
 

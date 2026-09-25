@@ -2,7 +2,7 @@ import { PointerActivationConstraints } from "@dnd-kit/dom";
 import { move } from "@dnd-kit/helpers";
 import { DragDropProvider, PointerSensor } from "@dnd-kit/react";
 import { useSortable } from "@dnd-kit/react/sortable";
-import { memo, type ReactNode } from "react";
+import { memo, type ComponentProps, type ReactNode } from "react";
 
 const SENSORS = [
   PointerSensor.configure({
@@ -14,14 +14,16 @@ type ListProps = {
   ids: string[];
   disabled?: boolean;
   onReorder: (ids: string[]) => void;
+  modifiers?: ComponentProps<typeof DragDropProvider>["modifiers"];
   children: ReactNode;
 };
 
 /** One sortable group. Visual reorder is optimistic; we persist the id list on drop. */
-export function SortableList({ ids, disabled, onReorder, children }: ListProps) {
+export function SortableList({ ids, disabled, onReorder, modifiers, children }: ListProps) {
   return (
     <DragDropProvider
       sensors={SENSORS}
+      {...(modifiers ? { modifiers } : {})}
       onDragEnd={(event) => {
         if (event.canceled || disabled) return;
         const next = move(ids, event);
