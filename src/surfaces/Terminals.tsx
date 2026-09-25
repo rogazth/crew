@@ -1,13 +1,15 @@
-import { lazy, Suspense, useCallback, useEffect, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { homeDir } from '../lib/host';
 import { useCommands } from '../hooks/useCommand';
 import { useSessionActivity } from '../hooks/useSessionActivity';
+import { nudgeTitle } from '../hooks/useSessionTitle';
 import { useTerminalPrefs } from '../hooks/useTerminalPrefs';
 import * as api from '../lib/api';
 import { claudeSessionId, transcriptPath } from '../lib/claudeStorage';
 import { bindProviderSession } from '../lib/agentRuntime';
 import { providerOf } from '../lib/providers';
 import { sessionCommand } from '../lib/sessionCommand';
+import { titleName } from '../lib/terminalStatus';
 import { isTerminalTab, relativeTo } from '../lib/tabs';
 import { activeTerminal } from '../lib/terminalFocus';
 import { clamp, DEFAULT_TERMINAL_PREFS, LIMITS } from '../lib/terminalPrefs';
@@ -144,6 +146,17 @@ function SessionTerminal({ paneId, session, cwd, active, onStatus, onOpenPath }:
   const [command, setCommand] = useState<string[] | null>(null);
   const [startedAt, setStartedAt] = useState(0);
   const { onBell, onActivity, onTitle, onInput, onResize, onExit } = useSessionActivity(session, active, onStatus);
+  const named = useRef('');
+  const retitled = useCallback(
+    (title: string) => {
+      onTitle(title);
+      const name = titleName(title);
+      if (name === named.current) return;
+      named.current = name;
+      nudgeTitle(session.id);
+    },
+    [onTitle, session.id],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -209,7 +222,7 @@ function SessionTerminal({ paneId, session, cwd, active, onStatus, onOpenPath }:
       onExit={onExit}
       onBell={onBell}
       onActivity={onActivity}
-      onTitle={onTitle}
+      onTitle={retitled}
       onInput={onInput}
       onResize={onResize}
       onOpenPath={onOpenPath}

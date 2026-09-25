@@ -40,6 +40,15 @@ export function titleBusy(title: string): boolean | null {
   return CLAUDE_BUSY.test(mark) ? true : null;
 }
 
+/**
+ * The title without Claude's mark: what changes when a CLI renames its session.
+ * Claude, opencode and cursor-agent all put the session's name in the title.
+ */
+export function titleName(title: string): string {
+  const [mark] = title;
+  return mark && titleBusy(title) !== null ? title.slice(mark.length + 1) : title;
+}
+
 export type Clock = {
   now: () => number;
   setTimeout: (run: () => void, ms: number) => unknown;

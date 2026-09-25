@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { QUIET_AFTER, SETTLE_WINDOW, TerminalActivity, titleBusy } from "./terminalStatus";
+import { QUIET_AFTER, SETTLE_WINDOW, TerminalActivity, titleBusy, titleName } from "./terminalStatus";
 import type { SessionStatus } from "./types";
 
 function track(initial: SessionStatus = "idle", watched = false) {
@@ -43,6 +43,14 @@ describe("titleBusy", () => {
     expect(titleBusy("Cursor Agent")).toBeNull();
     expect(titleBusy("✳")).toBeNull();
     expect(titleBusy("")).toBeNull();
+  });
+});
+
+describe("titleName", () => {
+  it("drops Claude's mark, and nothing else", () => {
+    expect(titleName("◐ Sleep command test")).toBe("Sleep command test");
+    expect(titleName("✳ Sleep command test")).toBe("Sleep command test");
+    expect(titleName("OC | 400 word story")).toBe("OC | 400 word story");
   });
 });
 
