@@ -1912,18 +1912,64 @@ print(json.dumps({"type":"turn.failed","error":{"message":"Codex exploded"}}), f
                 .expect("status timeout")
                 .expect("closed")
                 .expect("ws");
-            if let Message::Text(text) = msg {
-                if let Ok(event) = serde_json::from_str::<proto::Event>(text.as_ref()) {
-                    if event.event == "session-status" {
-                        if let Ok(status) = serde_json::from_value::<proto::SessionStatusEvent>(event.payload) {
-                            if status.session_id == session_id && status.status == want {
-                                return status;
-                            }
-                        }
+            if let Some(status) = status_in(&msg, session_id, want) {
+                return status;
+            }
+        }
+    }
+
+    fn status_in(msg: &Message, session_id: &str, want: &str) -> Option<proto::SessionStatusEvent> {
+        let Message::Text(text) = msg else {
+            return None;
+        };
+        let event = serde_json::from_str::<proto::Event>(text.as_ref()).ok()?;
+        if event.event != "session-status" {
+            return None;
+        }
+        let status = serde_json::from_value::<proto::SessionStatusEvent>(event.payload).ok()?;
+        (status.session_id == session_id && status.status == want).then_some(status)
+    }
+
+    /// Send a request whose work ends in `want`, and wait for both. The status
+    /// event is broadcast by the turn thread and the response is written by the
+    /// handler, so either can reach the socket first; waiting for the response
+    /// alone would read past, and drop, a status that beat it.
+    async fn request_until_status(ws: &mut Ws, request: &Request, session_id: &str, want: &str) -> proto::Response {
+        send_json(ws, request).await;
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut response = None;
+        let mut reached = false;
+        while response.is_none() || !reached {
+            let msg = tokio::time::timeout_at(deadline, ws.next())
+                .await
+                .expect(if response.is_none() { "rpc timeout" } else { "status timeout" })
+                .expect("closed")
+                .expect("ws");
+            if status_in(&msg, session_id, want).is_some() {
+                reached = true;
+            } else if let Message::Text(text) = &msg {
+                if let Ok(reply) = serde_json::from_str::<proto::Response>(text.as_ref()) {
+                    if reply.id == request.id {
+                        response = Some(reply);
                     }
                 }
             }
         }
+        response.unwrap()
+    }
+
+    /// `start_turn` for a turn that ends on its own, waiting until it has.
+    async fn start_turn_until(ws: &mut Ws, id: u32, session_id: &str, cwd: &str, want: &str) {
+        let request = Request {
+            id,
+            method: "turn_start".into(),
+            params: serde_json::json!({
+                "sessionId": session_id,
+                "cwd": cwd,
+                "text": "hi"
+            }),
+        };
+        assert!(request_until_status(ws, &request, session_id, want).await.ok);
     }
 
     async fn transcript_of(ws: &mut Ws, id: u32, session_id: &str) -> proto::MessagePage {
@@ -1956,17 +2002,12 @@ print(json.dumps({"type":"turn.failed","error":{"message":"Codex exploded"}}), f
         let mut ws = connect_authed(&handle).await;
         let session_id = seed_agent(&mut ws, dir.to_str().unwrap()).await;
         start_turn(&mut ws, 3, &session_id, dir.to_str().unwrap()).await;
-        send_json(
-            &mut ws,
-            &Request {
-                id: 4,
-                method: "turn_stop".into(),
-                params: serde_json::json!({ "sessionId": session_id }),
-            },
-        )
-        .await;
-        assert!(wait_response(&mut ws, 4).await.ok);
-        wait_status(&mut ws, &session_id, "idle").await;
+        let stop = Request {
+            id: 4,
+            method: "turn_stop".into(),
+            params: serde_json::json!({ "sessionId": session_id }),
+        };
+        assert!(request_until_status(&mut ws, &stop, &session_id, "idle").await.ok);
         let snap = transcript_of(&mut ws, 5, &session_id).await;
         assert_eq!(snap.status, "idle");
         assert!(!snap.working);
@@ -1988,8 +2029,7 @@ print(json.dumps({"type":"turn.failed","error":{"message":"Codex exploded"}}), f
         handle.override_agent_binary("claude", fake.to_string_lossy().into_owned());
         let mut ws = connect_authed(&handle).await;
         let session_id = seed_agent(&mut ws, dir.to_str().unwrap()).await;
-        start_turn(&mut ws, 3, &session_id, dir.to_str().unwrap()).await;
-        wait_status(&mut ws, &session_id, "error").await;
+        start_turn_until(&mut ws, 3, &session_id, dir.to_str().unwrap(), "error").await;
         let snap = transcript_of(&mut ws, 4, &session_id).await;
         assert_eq!(snap.status, "error");
         let errors = system_errors(&snap);
@@ -2005,8 +2045,7 @@ print(json.dumps({"type":"turn.failed","error":{"message":"Codex exploded"}}), f
         handle.override_agent_binary("codex", fake.to_string_lossy().into_owned());
         let mut ws = connect_authed(&handle).await;
         let session_id = seed_agent_provider(&mut ws, dir.to_str().unwrap(), "codex").await;
-        start_turn(&mut ws, 3, &session_id, dir.to_str().unwrap()).await;
-        wait_status(&mut ws, &session_id, "error").await;
+        start_turn_until(&mut ws, 3, &session_id, dir.to_str().unwrap(), "error").await;
         let snap = transcript_of(&mut ws, 4, &session_id).await;
         assert_eq!(snap.status, "error");
         let errors = system_errors(&snap);
