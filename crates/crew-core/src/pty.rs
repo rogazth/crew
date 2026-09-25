@@ -368,8 +368,6 @@ fn spawn_unix(
 ) -> Result<u32, String> {
     use std::fs::File;
     use std::os::unix::io::FromRawFd;
-    use std::os::unix::process::CommandExt;
-    use std::process::Command;
 
     let workdir = working_dir(&cwd);
     let (program, args) = match command.split_first() {
@@ -377,61 +375,14 @@ fn spawn_unix(
         None => default_shell(),
     };
     let (master, slave) = open_pty(cols, rows)?;
-
-    let mut cmd = Command::new(&program);
-    cmd.args(&args)
-        .current_dir(&workdir)
-        .stdin(dup_stdio(slave)?)
-        .stdout(dup_stdio(slave)?)
-        .stderr(dup_stdio(slave)?)
-        .env("TERM", "xterm-256color")
-        .env("COLORTERM", "truecolor")
-        .env("TERM_PROGRAM", "Crew")
-        .env("TERM_PROGRAM_VERSION", env!("CARGO_PKG_VERSION"))
-        // supports-hyperlinks only knows a few TERM_PROGRAM values, so without
-        // this CLIs print bare paths instead of the OSC 8 links xterm renders.
-        .env("FORCE_HYPERLINK", "1")
-        .env("PWD", &workdir);
-    // A GUI app inherits no locale from launchd; without UTF-8 the box drawing
-    // and emoji agents print come out as mojibake.
-    if std::env::var_os("LANG").is_none_or(|lang| lang.is_empty()) {
-        cmd.env("LANG", "en_US.UTF-8");
-    }
-    apply_path(&mut cmd);
-    if let Some(home) = home_dir() {
-        cmd.env("HOME", &home);
-    }
-    // Launched from inside a Claude Code session, the app would pass these on
-    // and claude would treat the terminal as a child session with no transcript.
-    for (key, _) in std::env::vars_os() {
-        let key = key.to_string_lossy();
-        if key == "CLAUDECODE" || key.starts_with("CLAUDE_CODE_") {
-            cmd.env_remove(key.as_ref());
+    let mut cmd = match pty_command(&program, &args, &workdir, slave) {
+        Ok(cmd) => cmd,
+        Err(err) => {
+            close_fd(master);
+            close_fd(slave);
+            return Err(err);
         }
-    }
-    // A parent that disabled colour for its own logs must not decide for the terminal.
-    cmd.env_remove("NO_COLOR");
-    for key in ["FORCE_COLOR", "CLICOLOR"] {
-        if std::env::var_os(key).is_some_and(|value| value == "0") {
-            cmd.env_remove(key);
-        }
-    }
-
-    // setsid() fails with EPERM if the child is already a group leader, so no
-    // process_group(0) before it.
-    let slave_fd = slave;
-    unsafe {
-        cmd.pre_exec(move || {
-            if libc::setsid() < 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-            let _ = libc::ioctl(0, libc::TIOCSCTTY as _, 0);
-            if slave_fd > 2 {
-                libc::close(slave_fd);
-            }
-            Ok(())
-        });
-    }
+    };
 
     let mut child = cmd.spawn().map_err(|e| {
         close_fd(master);
@@ -441,7 +392,6 @@ fn spawn_unix(
     close_fd(slave);
     let pid = child.id();
 
-    set_cloexec(master);
     let reader = unsafe { File::from_raw_fd(dup_fd(master)?) };
     let writer = unsafe { File::from_raw_fd(dup_fd(master)?) };
 
@@ -503,6 +453,83 @@ fn spawn_unix(
     Ok(stream_id)
 }
 
+/// The command for `program` with the PTY slave as its terminal. Whatever
+/// else crewd holds, other terminals' masters and what Electron handed it,
+/// stays behind: a CLI holding a master never sees its terminal hang up when
+/// crewd dies.
+fn pty_command(
+    program: &str,
+    args: &[String],
+    workdir: &std::path::Path,
+    slave: i32,
+) -> Result<std::process::Command, String> {
+    use std::os::unix::process::CommandExt;
+    use std::process::Command;
+
+    let mut cmd = Command::new(program);
+    cmd.args(args)
+        .current_dir(workdir)
+        .stdin(dup_stdio(slave)?)
+        .stdout(dup_stdio(slave)?)
+        .stderr(dup_stdio(slave)?)
+        .env("TERM", "xterm-256color")
+        .env("COLORTERM", "truecolor")
+        .env("TERM_PROGRAM", "Crew")
+        .env("TERM_PROGRAM_VERSION", env!("CARGO_PKG_VERSION"))
+        // supports-hyperlinks only knows a few TERM_PROGRAM values, so without
+        // this CLIs print bare paths instead of the OSC 8 links xterm renders.
+        .env("FORCE_HYPERLINK", "1")
+        .env("PWD", workdir);
+    // A GUI app inherits no locale from launchd; without UTF-8 the box drawing
+    // and emoji agents print come out as mojibake.
+    if std::env::var_os("LANG").is_none_or(|lang| lang.is_empty()) {
+        cmd.env("LANG", "en_US.UTF-8");
+    }
+    apply_path(&mut cmd);
+    if let Some(home) = home_dir() {
+        cmd.env("HOME", &home);
+    }
+    // Launched from inside a Claude Code session, the app would pass these on
+    // and claude would treat the terminal as a child session with no transcript.
+    for (key, _) in std::env::vars_os() {
+        let key = key.to_string_lossy();
+        if key == "CLAUDECODE" || key.starts_with("CLAUDE_CODE_") {
+            cmd.env_remove(key.as_ref());
+        }
+    }
+    // A parent that disabled colour for its own logs must not decide for the terminal.
+    cmd.env_remove("NO_COLOR");
+    for key in ["FORCE_COLOR", "CLICOLOR"] {
+        if std::env::var_os(key).is_some_and(|value| value == "0") {
+            cmd.env_remove(key);
+        }
+    }
+
+    // setsid() fails with EPERM if the child is already a group leader, so no
+    // process_group(0) before it.
+    let slave_fd = slave;
+    let fd_limit = fd_limit();
+    unsafe {
+        cmd.pre_exec(move || {
+            if libc::setsid() < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            let _ = libc::ioctl(0, libc::TIOCSCTTY as _, 0);
+            if slave_fd > 2 {
+                libc::close(slave_fd);
+            }
+            // std dup2s the slave copies onto 0/1/2, which clears their
+            // close-on-exec, except when a copy already sat on its target.
+            for fd in 0..=2 {
+                libc::fcntl(fd, libc::F_SETFD, 0);
+            }
+            cloexec_above_stderr(fd_limit);
+            Ok(())
+        });
+    }
+    Ok(cmd)
+}
+
 fn home_dir() -> Option<String> {
     std::env::var("HOME").ok().filter(|home| !home.is_empty())
 }
@@ -557,11 +584,21 @@ fn terminate(live: &Arc<LivePty>) -> Option<thread::JoinHandle<()>> {
     }))
 }
 
+/// Both ends are close-on-exec from the start: another terminal spawning on
+/// another thread must not carry this one's master into its CLI.
 fn open_pty(cols: u16, rows: u16) -> Result<(i32, i32), String> {
-    let master = unsafe { libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY) };
+    // glibc hands the flags to open(2); macOS rejects any beyond these two,
+    // so there the flag goes on right after, a window only a fork on another
+    // thread in those few instructions could hit, and pre_exec covers that.
+    #[cfg(target_os = "linux")]
+    let flags = libc::O_RDWR | libc::O_NOCTTY | libc::O_CLOEXEC;
+    #[cfg(not(target_os = "linux"))]
+    let flags = libc::O_RDWR | libc::O_NOCTTY;
+    let master = unsafe { libc::posix_openpt(flags) };
     if master < 0 {
         return Err(os_err("Failed to open terminal"));
     }
+    set_cloexec(master);
     if unsafe { libc::grantpt(master) } != 0 || unsafe { libc::unlockpt(master) } != 0 {
         close_fd(master);
         return Err(os_err("Failed to unlock terminal"));
@@ -571,7 +608,7 @@ fn open_pty(cols: u16, rows: u16) -> Result<(i32, i32), String> {
         close_fd(master);
         return Err(os_err("Failed to resolve terminal name"));
     }
-    let slave = unsafe { libc::open(name, libc::O_RDWR | libc::O_NOCTTY) };
+    let slave = unsafe { libc::open(name, libc::O_RDWR | libc::O_NOCTTY | libc::O_CLOEXEC) };
     if slave < 0 {
         close_fd(master);
         return Err(os_err("Failed to open terminal slave"));
@@ -598,7 +635,7 @@ fn resize_fd(fd: i32, cols: u16, rows: u16) -> Result<(), String> {
 }
 
 fn dup_fd(fd: i32) -> Result<i32, String> {
-    let next = unsafe { libc::dup(fd) };
+    let next = unsafe { libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, 0) };
     if next < 0 {
         return Err(os_err("Failed to duplicate terminal"));
     }
@@ -616,6 +653,43 @@ fn set_cloexec(fd: i32) {
         let flags = libc::fcntl(fd, libc::F_GETFD);
         if flags >= 0 {
             libc::fcntl(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC);
+        }
+    }
+}
+
+/// Where the child stops looking for descriptors to mark. Read before the
+/// fork: nothing between fork and exec may allocate or take a lock.
+fn fd_limit() -> i32 {
+    const FLOOR: i32 = 1024;
+    const CAP: i32 = 1 << 16;
+    let mut limit = libc::rlimit { rlim_cur: 0, rlim_max: 0 };
+    if unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) } != 0 {
+        return CAP;
+    }
+    i32::try_from(limit.rlim_cur).unwrap_or(CAP).clamp(FLOOR, CAP)
+}
+
+/// Marks every descriptor above stderr close-on-exec, in the forked child.
+/// Marked rather than closed: std reports a failed exec through a pipe of its
+/// own that has to stay open until the exec. Async-signal-safe, no allocation.
+fn cloexec_above_stderr(limit: i32) {
+    #[cfg(target_os = "linux")]
+    unsafe {
+        // Linux 5.11+. Older kernels answer ENOSYS or EINVAL and take the loop.
+        let all = libc::syscall(
+            libc::SYS_close_range,
+            3 as libc::c_uint,
+            libc::c_uint::MAX,
+            libc::CLOSE_RANGE_CLOEXEC,
+        );
+        if all == 0 {
+            return;
+        }
+    }
+    // macOS has no close_range; F_SETFD on a closed descriptor is a cheap EBADF.
+    for fd in 3..limit {
+        unsafe {
+            libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC);
         }
     }
 }
@@ -720,6 +794,81 @@ mod tests {
 
         assert_eq!(spawned, 1, "two concurrent spawns left {spawned} children");
         assert_eq!(survivors, 0, "kill left {survivors} children running");
+    }
+
+    fn pty_child(script: &str) -> (i32, std::process::Child) {
+        let (master, slave) = open_pty(80, 24).expect("open pty");
+        let args = vec!["-c".to_string(), script.to_string()];
+        let child = pty_command("/bin/sh", &args, std::path::Path::new("/"), slave)
+            .expect("command")
+            .spawn()
+            .expect("spawn");
+        close_fd(slave);
+        (master, child)
+    }
+
+    fn exits_within(child: &mut std::process::Child, limit: Duration) -> bool {
+        let deadline = Instant::now() + limit;
+        while Instant::now() < deadline {
+            if child.try_wait().expect("try_wait").is_some() {
+                return true;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        let _ = child.kill();
+        let _ = child.wait();
+        false
+    }
+
+    #[test]
+    fn a_pty_child_inherits_nothing_but_its_terminal() {
+        // Stands in for what Electron hands crewd: open, and not close-on-exec.
+        let inherited = unsafe { libc::open(c"/dev/null".as_ptr(), libc::O_RDONLY) };
+        assert!(inherited > 2);
+        // A second terminal open at the same time, as another tab's would be.
+        let (other_master, mut other) = pty_child("exec sleep 30");
+        let (master, mut child) = pty_child("exec ls /dev/fd");
+        let mut out = Vec::new();
+        let mut buf = [0_u8; 4096];
+        loop {
+            let n = unsafe { libc::read(master, buf.as_mut_ptr().cast(), buf.len()) };
+            if n <= 0 {
+                break;
+            }
+            out.extend_from_slice(&buf[..n as usize]);
+        }
+        let _ = child.wait();
+        close_fd(master);
+        close_fd(other_master);
+        let _ = other.kill();
+        let _ = other.wait();
+        close_fd(inherited);
+
+        let listing = String::from_utf8_lossy(&out).into_owned();
+        let fds: Vec<i32> = listing.split_whitespace().filter_map(|fd| fd.parse().ok()).collect();
+        assert!(fds.contains(&0) && fds.contains(&2), "no listing: {listing:?}");
+        // 3 is the directory ls itself opened to list /dev/fd.
+        assert!(fds.iter().all(|fd| *fd <= 3), "the child kept {fds:?}");
+    }
+
+    #[test]
+    fn closing_its_master_hangs_up_the_child_while_other_terminals_live() {
+        // Both masters are open while both children start, so each child
+        // could inherit the other's master as well as its own.
+        let (first_master, mut first) = pty_child("exec sleep 30");
+        let (second_master, mut second) = pty_child("exec sleep 30");
+        thread::sleep(Duration::from_millis(100));
+
+        // What a crewd crash does to the first terminal: its master goes away.
+        close_fd(first_master);
+        let first_hung_up = exits_within(&mut first, Duration::from_secs(5));
+        let second_alive = second.try_wait().expect("try_wait").is_none();
+        close_fd(second_master);
+        let second_hung_up = exits_within(&mut second, Duration::from_secs(5));
+
+        assert!(first_hung_up, "the child outlived its terminal's master");
+        assert!(second_alive, "closing one terminal hung up another");
+        assert!(second_hung_up, "the second child outlived its master");
     }
 
     #[test]
