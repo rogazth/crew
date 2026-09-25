@@ -15,7 +15,7 @@ import { spawn } from "node:child_process";
 import { existsSync, mkdtempSync, mkdirSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { TerminalActivity } from "../src/lib/terminalStatus.ts";
+import { TerminalActivity, titleName } from "../src/lib/terminalStatus.ts";
 
 const REPO = new URL("..", import.meta.url).pathname;
 const PROVIDERS = (process.env.PROVIDERS ?? "claude,opencode,cursor").split(",");
@@ -189,6 +189,14 @@ async function open(provider) {
     for (const [, title] of titles) {
       if (tab.titles.at(-1) !== title) tab.titles.push(title);
       tab.activity.title(title);
+      // As the app does: a new name on the terminal asks for the provider's.
+      const name = titleName(title);
+      if (name !== tab.osName) {
+        tab.osName = name;
+        tab.renamedAt = Date.now();
+        clearTimeout(tab.nudge);
+        tab.nudge = setTimeout(() => void sweep(tab).catch(() => {}), 800);
+      }
     }
     const open = scan.lastIndexOf("\x1b]");
     tab.osc = open >= 0 && !/\x07|\x1b\\/.test(scan.slice(open)) ? scan.slice(open) : "";
@@ -245,6 +253,7 @@ async function sweep(tab) {
   const name = await rpc("session_sync_title", { id: session.id });
   if (name) {
     session.name = name;
+    tab.adoptedAt = Date.now();
     log(`${tab.provider.padEnd(8)} titled "${name}"`);
   }
 }
@@ -287,7 +296,8 @@ while (Date.now() < deadline) {
     const open = tabs.filter((tab) => !tab.answeredAt);
     show(tabs, turn % 4 === 3 || open.length === 0 ? null : open[turn % open.length]);
   }
-  if (now - lastSweep > 3000) {
+  // The app's sweep; the nudges above are what should name a session.
+  if (now - lastSweep > 15_000) {
     lastSweep = now;
     await Promise.all(tabs.map((tab) => sweep(tab).catch((error) => log(`${tab.provider} sweep: ${error.message}`))));
   }
@@ -357,6 +367,8 @@ for (const tab of tabs) {
   check(p, "a turn finished out of sight ends unread", seen || end.status === "done", seen ? "watched after" : end.status);
   check(p, "the provider session is bound", Boolean(tab.session.providerSessionId) || p === "claude", tab.session.providerSessionId ?? "");
   check(p, "the provider's title replaced the placeholder", tab.session.name !== p, tab.session.name);
+  const lag = tab.adoptedAt && tab.renamedAt ? tab.adoptedAt - tab.renamedAt : null;
+  check(p, "the title lands soon after the CLI names it", lag !== null && lag < 3000, lag === null ? "never" : `${lag}ms after "${tab.osName}"`);
   const stored = await rpc("session_get", { id: tab.session.id });
   check(p, "the store holds the title", stored.name === tab.session.name, stored.name);
   if (p === "claude") check(p, "the title says whether it works", tab.titles.some((t) => /^[◐◓◑◒]/u.test(t)), tab.titles.slice(0, 4).join(" | "));
