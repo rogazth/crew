@@ -26,6 +26,11 @@ pub fn read(path: &str) -> Option<String> {
 /// the BMP becomes two dashes.
 pub fn transcript_path(cwd: &str, session_id: &str) -> Option<String> {
     let home = std::env::var("HOME").ok().filter(|h| !h.is_empty())?;
+    Some(format!("{}/.claude/projects/{}/{session_id}.jsonl", home.trim_end_matches('/'), project_slug(cwd)))
+}
+
+/// The folder name Claude files a project's sessions under.
+pub fn project_slug(cwd: &str) -> String {
     let mut slug = String::with_capacity(cwd.len());
     for c in cwd.chars() {
         if c.is_ascii_alphanumeric() {
@@ -34,7 +39,7 @@ pub fn transcript_path(cwd: &str, session_id: &str) -> Option<String> {
             slug.extend(std::iter::repeat_n('-', c.len_utf16()));
         }
     }
-    Some(format!("{}/.claude/projects/{slug}/{session_id}.jsonl", home.trim_end_matches('/')))
+    slug
 }
 
 fn scan(tail: &str, clipped: bool) -> Option<String> {

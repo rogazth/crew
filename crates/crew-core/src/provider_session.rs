@@ -138,7 +138,11 @@ pub fn title(provider: &str, id: &str) -> Option<String> {
 pub fn has_conversation(provider: &str, crew_id: &str, bound: Option<&str>, cwd: &str) -> bool {
     let Some(home) = home() else { return true };
     match provider {
-        "claude" => claude_has_turn(&claude_transcript(&home, cwd, crew_id)),
+        // Crew's id until a `/clear` moves Claude on; what was said before counts too.
+        "claude" => [Some(crew_id), bound]
+            .into_iter()
+            .flatten()
+            .any(|id| claude_has_turn(&claude_transcript(&home, cwd, id))),
         "cursor" => bound.is_some_and(|id| cursor_has_conversation(&home.join(".cursor/chats"), id)),
         "codex" | "opencode" => bound.is_some(),
         _ => true,
@@ -146,8 +150,7 @@ pub fn has_conversation(provider: &str, crew_id: &str, bound: Option<&str>, cwd:
 }
 
 fn claude_transcript(home: &Path, cwd: &str, id: &str) -> PathBuf {
-    let slug: String = cwd.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect();
-    home.join(".claude/projects").join(slug).join(format!("{id}.jsonl"))
+    home.join(".claude/projects").join(crate::claude_title::project_slug(cwd)).join(format!("{id}.jsonl"))
 }
 
 /// Claude writes titles and remote-control records before the first prompt, so
@@ -473,6 +476,15 @@ mod tests {
         text.push_str("\n{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"hi\"}}\n");
         std::fs::write(&transcript, text).unwrap();
         assert!(claude_has_turn(&transcript));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_claude_transcript_sits_where_the_title_is_read() {
+        let root = temp_dir("claude-slug");
+        let cwd = "/Users/me/a😀b";
+        let transcript = claude_transcript(&root, cwd, "s");
+        assert!(transcript.ends_with(".claude/projects/-Users-me-a--b/s.jsonl"), "{}", transcript.display());
         let _ = std::fs::remove_dir_all(&root);
     }
 
