@@ -2,7 +2,7 @@ use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
 use crate::schedule::{describe_schedule, Schedule};
-use crate::session::{row_to_session, Session, SESSION_COLUMNS};
+use crate::session::{row_to_session, Session, SESSION_COLUMNS, SESSION_COLUMN_COUNT};
 use crate::store::{now_millis, Store};
 
 /// A standing order for one agent. `schedule` and `runs_json` are JSON the UI
@@ -65,7 +65,7 @@ pub fn list_for_session(store: &Store, session_id: String) -> Result<Vec<Routine
 pub fn list(store: &Store) -> Result<Vec<ScheduledRoutine>, String> {
     store.with(|conn| {
         let sql = format!(
-            "SELECT {ROUTINE_COLUMNS}, {SESSION_COLUMNS}, w.path
+            "SELECT {ROUTINE_COLUMNS}, {SESSION_COLUMNS}, COALESCE(s.worktree, w.path)
              FROM routines r
              JOIN sessions s ON s.id = r.session_id
              JOIN workspaces w ON w.id = s.workspace_id
@@ -75,7 +75,7 @@ pub fn list(store: &Store) -> Result<Vec<ScheduledRoutine>, String> {
         let rows = stmt.query_map([], |row| {
             let routine = row_to_routine(row, 0)?;
             let session = row_to_session(row, ROUTINE_COLUMN_COUNT)?;
-            let cwd: String = row.get(ROUTINE_COLUMN_COUNT + 13)?;
+            let cwd: String = row.get(ROUTINE_COLUMN_COUNT + SESSION_COLUMN_COUNT)?;
             Ok(ScheduledRoutine {
                 routine,
                 session,
@@ -90,7 +90,7 @@ pub fn list(store: &Store) -> Result<Vec<ScheduledRoutine>, String> {
 pub fn scheduled(store: &Store, id: String) -> Result<Option<ScheduledRoutine>, String> {
     store.with(|conn| {
         let sql = format!(
-            "SELECT {ROUTINE_COLUMNS}, {SESSION_COLUMNS}, w.path
+            "SELECT {ROUTINE_COLUMNS}, {SESSION_COLUMNS}, COALESCE(s.worktree, w.path)
              FROM routines r
              JOIN sessions s ON s.id = r.session_id
              JOIN workspaces w ON w.id = s.workspace_id
@@ -101,7 +101,7 @@ pub fn scheduled(store: &Store, id: String) -> Result<Option<ScheduledRoutine>, 
                 Ok(ScheduledRoutine {
                     routine: row_to_routine(row, 0)?,
                     session: row_to_session(row, ROUTINE_COLUMN_COUNT)?,
-                    cwd: row.get(ROUTINE_COLUMN_COUNT + 13)?,
+                    cwd: row.get(ROUTINE_COLUMN_COUNT + SESSION_COLUMN_COUNT)?,
                 })
             })
             .optional()
@@ -460,6 +460,27 @@ mod tests {
         assert_eq!(runs.iter().map(|row| row.id.as_str()).collect::<Vec<_>>(), vec!["a", "c"]);
         assert!(parse_runs("not json").is_empty());
         assert!(parse_runs("{}").is_empty());
+    }
+
+    /// A routine fires where its agent works: the worktree when it has one,
+    /// the workspace folder otherwise.
+    #[test]
+    fn a_routine_runs_in_its_agents_worktree() {
+        let store = store();
+        let routine = a_routine(&store);
+        let before = scheduled(&store, routine.id.clone()).unwrap().unwrap();
+        assert_eq!(before.cwd, crate::session::cwd(&store, &before.session).unwrap());
+        store
+            .with(|conn| {
+                conn.execute(
+                    "UPDATE sessions SET worktree = '/wt/feat' WHERE id = ?1",
+                    params![routine.session_id],
+                )
+            })
+            .unwrap();
+
+        assert_eq!(scheduled(&store, routine.id.clone()).unwrap().unwrap().cwd, "/wt/feat");
+        assert_eq!(list(&store).unwrap()[0].cwd, "/wt/feat");
     }
 
     #[test]

@@ -1,6 +1,6 @@
-import { Button, Select } from "@cloudflare/kumo";
 import { ArrowCounterClockwiseIcon, MinusIcon, PlusIcon } from "@phosphor-icons/react";
 import { useMemo, useState } from "react";
+import { IconButton, Select, type Option } from "../chrome/kit";
 import { SettingsRow, SettingsSection } from "../chrome/SettingsRow";
 import { useTerminalPrefs } from "../hooks/useTerminalPrefs";
 import { installedMonoFonts } from "../lib/fonts";
@@ -13,7 +13,7 @@ import {
   type TerminalPrefs,
 } from "../lib/terminalPrefs";
 
-const LIGATURES: { value: Ligatures; label: string }[] = [
+const LIGATURES: Option<Ligatures>[] = [
   { value: "auto", label: "Auto" },
   { value: "on", label: "On" },
   { value: "off", label: "Off" },
@@ -63,12 +63,11 @@ export function TerminalSettings() {
             onClick={() => set("fontFamily", DEFAULT_TERMINAL_PREFS.fontFamily)}
           />
           <Select
-            aria-label="Font family"
-            size="sm"
+            label="Font family"
             className="w-56"
             value={prefs.fontFamily}
-            onValueChange={(value) => value && set("fontFamily", value)}
-            items={fonts.map((name) => ({ value: name, label: name }))}
+            onChange={(value) => set("fontFamily", value)}
+            options={fonts.map((name) => ({ value: name, label: name }))}
           />
         </SettingsRow>
       </SettingsSection>
@@ -85,12 +84,11 @@ export function TerminalSettings() {
         </SettingsRow>
         <SettingsRow label="Font ligatures" description={autoNote}>
           <Select
-            aria-label="Font ligatures"
-            size="sm"
+            label="Font ligatures"
             className="w-28"
             value={prefs.ligatures}
-            onValueChange={(value) => value && set("ligatures", value as Ligatures)}
-            items={LIGATURES}
+            onChange={(value) => set("ligatures", value)}
+            options={LIGATURES}
           />
         </SettingsRow>
       </SettingsSection>
@@ -100,13 +98,10 @@ export function TerminalSettings() {
 
 function Reset({ hidden, onClick }: { hidden: boolean; onClick: () => void }) {
   return (
-    <Button
-      variant="ghost"
-      shape="square"
-      size="sm"
+    <IconButton
       icon={ArrowCounterClockwiseIcon}
-      aria-label="Reset to default"
-      className={`text-kumo-subtle ${hidden ? "invisible" : ""}`}
+      label="Reset to default"
+      className={hidden ? "invisible" : ""}
       onClick={onClick}
     />
   );
@@ -149,7 +144,7 @@ function Stepper({
   const nudge = (direction: 1 | -1) => onCommit(snap(value + direction * step, step, limits));
 
   return (
-    <div className="flex h-7 items-center rounded-md bg-kumo-control ring ring-kumo-line has-[input:focus]:ring-[1.5px] has-[input:focus]:ring-kumo-focus/50">
+    <div className="flex h-8 items-center rounded-md bg-kumo-base px-0.5 ring ring-kumo-line transition-shadow has-[input:focus]:ring-[1.5px] has-[input:focus]:ring-kumo-focus/50">
       <StepButton
         icon={MinusIcon}
         label="Smaller"
@@ -198,7 +193,7 @@ function StepButton({
       aria-label={label}
       disabled={disabled}
       onClick={onClick}
-      className="flex size-7 items-center justify-center rounded-md text-kumo-subtle transition-colors hover:text-kumo-default disabled:text-kumo-placeholder"
+      className="flex size-7 items-center justify-center rounded-md text-kumo-subtle outline-none transition-colors hover:bg-hover hover:text-kumo-default focus-visible:ring-2 focus-visible:ring-kumo-focus/50 disabled:bg-transparent disabled:text-placeholder"
     >
       <Glyph className="size-3.5" />
     </button>

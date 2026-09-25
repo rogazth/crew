@@ -27,6 +27,31 @@ export function parseAgentAvatar(raw: string | null): AgentAvatarId {
     : DEFAULT_AGENT_AVATAR;
 }
 
+/** A face picked for one agent: a style other than everyone's, a seed other than its id, or both. */
+export type AgentFace = { style?: AgentAvatarId; seed?: string };
+export type AgentFaces = Record<string, AgentFace>;
+
+export function parseFaces(raw: string | null): AgentFaces {
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw) as Record<string, { style?: unknown; seed?: unknown }>;
+    const out: AgentFaces = {};
+    for (const [id, face] of Object.entries(parsed)) {
+      const style = AGENT_AVATARS.some((avatar) => avatar.id === face?.style) ? (face.style as AgentAvatarId) : undefined;
+      const seed = typeof face?.seed === "string" && face.seed ? face.seed : undefined;
+      if (style || seed) out[id] = { ...(style ? { style } : {}), ...(seed ? { seed } : {}) };
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+/** Fresh seeds to choose a face from; each shuffle deals a new hand. */
+export function dealSeeds(count: number): string[] {
+  return Array.from({ length: count }, () => crypto.randomUUID().slice(0, 8));
+}
+
 const styles = new Map<AgentAvatarId, Promise<Style<StyleDefinition>>>();
 
 /** One parsed style per id, shared by every avatar that draws from it. */

@@ -34,6 +34,7 @@ const agent = {
   provider: "claude",
   model: "m",
   providerSessionId: null,
+  worktree: null,
   description: "",
   notifications: true,
   autonomy: "ask" as const,

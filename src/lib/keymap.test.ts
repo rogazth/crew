@@ -324,7 +324,18 @@ describe("live commands", () => {
     expect(liveCommands()).toEqual([
       { id: "open-launcher", keys: "Mod+T", repeat: false },
       { id: "next-tab", keys: { key: "]", mod: true, shift: true }, repeat: true },
+      { id: "next-tab", keys: { key: "}", mod: true }, repeat: true },
     ]);
+  });
+
+  it("cycles tabs by the brace typed, wherever the layout puts it", () => {
+    bind("next-tab");
+    bind("prev-tab");
+    const commands = liveCommands();
+    // US: ⇧⌘] types }. Latin American: } is its own key, pressed with ⌘ alone.
+    expect(resolveForward(press("}", { meta: true, shift: true, code: "BracketRight" }), commands, true)?.id).toBe("next-tab");
+    expect(resolveForward(press("}", { meta: true, code: "Backslash" }), commands, true)?.id).toBe("next-tab");
+    expect(resolveForward(press("{", { meta: true, code: "Quote" }), commands, true)?.id).toBe("prev-tab");
   });
 
   it("leaves out a live command with no binding: a page has nothing to forward", () => {

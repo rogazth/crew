@@ -1,4 +1,3 @@
-import { Button, Input, InputArea, Label, Select, Switch } from "@cloudflare/kumo";
 import {
   CaretRightIcon,
   CheckIcon,
@@ -8,7 +7,8 @@ import {
   TrashIcon,
   XIcon,
 } from "@phosphor-icons/react";
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
+import { Button, Card, Field, IconButton, Select, TextArea, TextInput, Toggle } from "../chrome/kit";
 import { RoutineTrigger } from "../chrome/RoutineTrigger";
 import * as api from "../lib/api";
 import { isValidCron } from "../lib/cron";
@@ -110,23 +110,14 @@ export function RoutineEditor({
           <span className="min-w-0 truncate">{draft.name.trim() || "New routine"}</span>
           <span className="flex-1" />
           {onRunNow && (
-            <Button variant="secondary" size="sm" icon={PlayIcon} loading={running} onClick={() => void run()}>
+            <Button icon={PlayIcon} loading={running} onClick={() => void run()}>
               Run now
             </Button>
           )}
-          <Button variant="primary" size="sm" disabled={!valid} loading={saving} onClick={() => void save()}>
+          <Button variant="primary" disabled={!valid} loading={saving} onClick={() => void save()}>
             Save
           </Button>
-          {onDelete && (
-            <Button
-              variant="ghost"
-              size="sm"
-              shape="square"
-              icon={<TrashIcon className="size-4" />}
-              aria-label="Delete routine"
-              onClick={onDelete}
-            />
-          )}
+          {onDelete && <IconButton icon={TrashIcon} label="Delete routine" onClick={onDelete} />}
         </div>
 
         {runError && (
@@ -136,79 +127,64 @@ export function RoutineEditor({
         )}
 
         <div className="flex flex-col gap-6">
-          <Input
-            autoFocus
-            label="Title"
-            className="w-full"
-            value={draft.name}
-            placeholder="e.g. Morning digest"
-            onChange={(event) => setDraft({ ...draft, name: event.target.value })}
-          />
+          <Field label="Title">
+            <TextInput
+              autoFocus
+              value={draft.name}
+              placeholder="e.g. Morning digest"
+              onChange={(event) => setDraft({ ...draft, name: event.target.value })}
+            />
+          </Field>
 
-          <div className="flex flex-col gap-1.5">
-            <Label>Triggers</Label>
+          <Group label="Triggers">
             <RoutineTrigger
               schedule={draft.schedule}
               onChange={(schedule) => setDraft({ ...draft, schedule })}
             />
-          </div>
+          </Group>
 
-          <InputArea
-            label="Instructions"
-            className="w-full"
-            rows={10}
-            value={draft.prompt}
-            placeholder="What the agent should do every time this routine fires."
-            onChange={(event) => setDraft({ ...draft, prompt: event.target.value })}
-          />
+          <Field label="Instructions">
+            <TextArea
+              rows={10}
+              value={draft.prompt}
+              placeholder="What the agent should do every time this routine fires."
+              onChange={(event) => setDraft({ ...draft, prompt: event.target.value })}
+            />
+          </Field>
 
           <div className="grid grid-cols-2 gap-4">
-            <div className="flex flex-col gap-1.5">
-              <Label>Workspace</Label>
+            <Group label="Workspace">
               <Select
-                aria-label="Workspace"
-                size="sm"
+                label="Workspace"
+                className="w-full"
                 value={workspaceId}
-                onValueChange={(value) => value && setWorkspaceId(value)}
-                items={workspaces.map((workspace) => ({ value: workspace.id, label: workspace.name }))}
+                onChange={setWorkspaceId}
+                options={workspaces.map((workspace) => ({ value: workspace.id, label: workspace.name }))}
               />
-            </div>
-            <div className="flex flex-col gap-1.5">
-              <Label>Agent</Label>
-              <Select
-                aria-label="Agent"
-                size="sm"
-                disabled={agents.length === 0}
-                value={draft.sessionId}
-                onValueChange={(value) => value && setDraft({ ...draft, sessionId: value })}
-                items={
-                  agents.length === 0
-                    ? [{ value: "", label: "No agents in this workspace" }]
-                    : agents.map((agent) => ({ value: agent.id, label: agent.name }))
-                }
-              />
-            </div>
+            </Group>
+            <Group label="Agent">
+              {agents.length === 0 ? (
+                <TextInput disabled readOnly aria-label="Agent" value="No agents in this workspace" />
+              ) : (
+                <Select
+                  label="Agent"
+                  className="w-full"
+                  value={draft.sessionId}
+                  onChange={(sessionId) => setDraft({ ...draft, sessionId })}
+                  options={agents.map((agent) => ({ value: agent.id, label: agent.name }))}
+                />
+              )}
+            </Group>
           </div>
 
-          <div className="rounded-xl border border-border bg-sidebar p-3">
-            <Switch
-              variant="neutral"
-              controlFirst={false}
-              // kumo lays the labelled switch out as [auto, 1fr]; without this the
-              // control sits against the label instead of the card's edge.
-              className="justify-self-end"
+          <Card>
+            <Toggle
+              label="Enabled"
+              description="Off keeps the routine but stops the schedule. Run now still works"
               checked={draft.enabled}
-              onCheckedChange={(checked) => setDraft({ ...draft, enabled: checked })}
-              label={
-                <span className="block">
-                  <span className="block font-medium">Enabled</span>
-                  <span className="mt-0.5 block font-normal text-kumo-subtle">
-                    Off keeps the routine but stops the schedule. Run now still works
-                  </span>
-                </span>
-              }
+              onChange={(enabled) => setDraft({ ...draft, enabled })}
             />
-          </div>
+          </Card>
 
           {runs.length > 0 && <History runs={runs} />}
         </div>
@@ -217,16 +193,22 @@ export function RoutineEditor({
   );
 }
 
+/** A label over something that is not one control; Field's <label> would forward clicks into it. */
+function Group({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div role="group" aria-label={label} className="flex flex-col gap-1.5">
+      <span className="text-[12px] font-medium text-kumo-subtle">{label}</span>
+      {children}
+    </div>
+  );
+}
+
 function History({ runs }: { runs: RoutineRun[] }) {
   return (
-    <div className="flex flex-col gap-1.5">
-      <Label>Run history</Label>
-      <ul className="flex flex-col rounded-xl border border-border bg-sidebar">
+    <Group label="Run history">
+      <ul className="flex flex-col rounded-xl bg-card px-4 [&>*+*]:border-t [&>*+*]:border-hairline">
         {runs.map((run) => (
-          <li
-            key={run.id}
-            className="flex items-center gap-2.5 border-b border-border px-3 py-2 last:border-b-0"
-          >
+          <li key={run.id} className="flex h-9 items-center gap-2.5">
             <RunMark run={run} />
             <span className="min-w-0 flex-1 truncate">{dayLabel(run.startedAt)}</span>
             {run.trigger === "manual" && <span className="shrink-0 text-placeholder">manual</span>}
@@ -238,7 +220,7 @@ function History({ runs }: { runs: RoutineRun[] }) {
           </li>
         ))}
       </ul>
-    </div>
+    </Group>
   );
 }
 

@@ -230,6 +230,10 @@ pub struct SessionCreate {
     pub model: String,
     pub description: String,
     pub autonomy: String,
+    /// The git worktree the session runs in; absent means the workspace folder.
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub worktree: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, TS)]
@@ -327,6 +331,23 @@ pub struct PathArg {
     pub path: String,
 }
 
+/// A new worktree of the repo whose main checkout is `path`, on `branch`.
+#[derive(Serialize, Deserialize, Clone, Debug, TS)]
+#[ts(export, export_to = "../../../src/lib/protocol.ts")]
+pub struct WorktreeAdd {
+    pub path: String,
+    pub branch: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, TS)]
+#[ts(export, export_to = "../../../src/lib/protocol.ts")]
+pub struct WorktreeRemove {
+    pub path: String,
+    /// Discards uncommitted changes; without it a dirty worktree is refused.
+    #[serde(default)]
+    pub force: bool,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, TS)]
 #[ts(export, export_to = "../../../src/lib/protocol.ts")]
 pub struct PathContents {
@@ -385,6 +406,8 @@ pub struct Session {
     pub notifications: bool,
     pub autonomy: String,
     pub status: String,
+    /// The git worktree it runs in; `None` is the workspace folder.
+    pub worktree: Option<String>,
     #[ts(type = "number")]
     pub created_at: i64,
     #[ts(type = "number")]

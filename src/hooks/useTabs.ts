@@ -19,15 +19,19 @@ import {
 import type { Tab } from '../lib/types';
 
 /**
- * Tabs belong to a workspace and survive a restart. A workspace this window has
- * shown keeps its entry for the rest of the run: its panes stay mounted behind
- * the one on screen, which is what keeps their processes alive across a switch.
+ * Tabs belong to a context — a workspace, or one worktree of it when tabs are
+ * kept per worktree — and survive a restart. A context this window has shown
+ * keeps its entry for the rest of the run: its panes stay mounted behind the one
+ * on screen, which is what keeps their processes alive across a switch.
  */
 export function useTabs(workspaceId: string | null) {
   const [registry, setRegistry] = useState<TabRegistry>({});
   // A workspace is read once. Re-reading on every switch would hand back the
   // saved tabs while the live ones are still on screen.
   const asked = useRef(new Set<string>());
+  // Only a context whose saved tabs have been read may be written back: one
+  // seeded early would otherwise overwrite them before they are read.
+  const restoredIds = useRef(new Set<string>());
 
   useEffect(() => {
     const id = workspaceId;
@@ -37,7 +41,17 @@ export function useTabs(workspaceId: string | null) {
       .stateGet(`tabs:${id}`)
       .then(parseTabs)
       .catch(() => NO_TABS)
-      .then((restored) => setRegistry((prev) => (prev[id] ? prev : { ...prev, [id]: restored })));
+      // A tab opened into this context before its saved ones arrived joins them.
+      .then((restored) => {
+        restoredIds.current.add(id);
+        setRegistry((prev) => {
+          const early = prev[id];
+          if (!early) return { ...prev, [id]: restored };
+          const known = new Set(restored.tabs.map((tab) => tab.id));
+          const tabs = [...restored.tabs, ...early.tabs.filter((tab) => !known.has(tab.id))];
+          return { ...prev, [id]: { ...restored, tabs, activeId: early.activeId ?? restored.activeId } };
+        });
+      });
   }, [workspaceId]);
 
   const state = workspaceId ? registry[workspaceId] : undefined;
@@ -47,7 +61,7 @@ export function useTabs(workspaceId: string | null) {
   const saved = useRef<TabRegistry>({});
   useEffect(() => {
     for (const [id, next] of Object.entries(registry)) {
-      if (saved.current[id] === next) continue;
+      if (saved.current[id] === next || !restoredIds.current.has(id)) continue;
       saved.current[id] = next;
       const { tabs, activeId } = next;
       void api.stateSet(`tabs:${id}`, JSON.stringify({ tabs, activeId })).catch(() => {});
@@ -63,6 +77,15 @@ export function useTabs(workspaceId: string | null) {
     });
   }, []);
 
+  /** Like mutateIn, for a context that may not be restored yet: it starts empty and merges later. */
+  const seedIn = useCallback((id: string, step: (state: TabState) => TabState) => {
+    setRegistry((prev) => {
+      const current = prev[id] ?? NO_TABS;
+      const next = step(current);
+      return next === prev[id] ? prev : { ...prev, [id]: next };
+    });
+  }, []);
+
   /** Tab actions from the keyboard and the strip aim at the workspace on screen. */
   const mutate = useCallback(
     (step: (state: TabState) => TabState) => {
@@ -73,20 +96,30 @@ export function useTabs(workspaceId: string | null) {
 
   const open = useCallback((tab: Tab) => mutate((s) => openTab(s, tab)), [mutate]);
   const close = useCallback((id: string) => mutate((s) => closeTab(s, id)), [mutate]);
+  /** A session's tab can live in any context, so every one of them lets it go. */
   const closeForSession = useCallback(
-    (sessionId: string) => mutate((s) => closeSessionTab(s, sessionId)),
-    [mutate],
+    (sessionId: string) =>
+      setRegistry((prev) => {
+        let changed = false;
+        const next: TabRegistry = {};
+        for (const [id, state] of Object.entries(prev)) {
+          next[id] = closeSessionTab(state, sessionId);
+          if (next[id] !== state) changed = true;
+        }
+        return changed ? next : prev;
+      }),
+    [],
   );
   const reopen = useCallback(() => mutate(reopenTab), [mutate]);
   const step = useCallback((delta: number) => mutate((s) => stepTab(s, delta)), [mutate]);
   const activate = useCallback((index: number) => mutate((s) => activateTab(s, index)), [mutate]);
   const select = useCallback((id: string | null) => mutate((s) => selectTab(s, id)), [mutate]);
   const reorder = useCallback((ids: string[]) => mutate((s) => reorderTabs(s, ids)), [mutate]);
-  /** A page asked for a tab: it lands in the page's own workspace, beside it. */
+  /** A tab for a context other than the one on screen: a page's own, or the worktree about to show. */
   const openIn = useCallback(
     (id: string, tab: Tab, opts?: { after?: string; background?: boolean }) =>
-      mutateIn(id, (s) => openTab(s, tab, opts)),
-    [mutateIn],
+      seedIn(id, (s) => openTab(s, tab, opts)),
+    [seedIn],
   );
   const patchBrowser = useCallback(
     (id: string, tabId: string, patch: { url?: string; title?: string }) =>
@@ -94,14 +127,20 @@ export function useTabs(workspaceId: string | null) {
     [mutateIn],
   );
 
-  /** The workspace is gone: its panes unmount, which ends what they were running. */
+  /**
+   * The workspace, or one worktree of it, is gone: its panes unmount, which ends
+   * what they were running. A workspace takes its worktrees' strips with it.
+   */
   const dropWorkspace = useCallback((id: string) => {
-    asked.current.delete(id);
-    delete saved.current[id];
+    const gone = (key: string) => key === id || (!id.includes("@") && key.startsWith(`${id}@`));
+    for (const key of asked.current) if (gone(key)) asked.current.delete(key);
+    for (const key of restoredIds.current) if (gone(key)) restoredIds.current.delete(key);
+    for (const key of Object.keys(saved.current)) if (gone(key)) delete saved.current[key];
     setRegistry((prev) => {
-      if (!prev[id]) return prev;
+      const keys = Object.keys(prev).filter(gone);
+      if (keys.length === 0) return prev;
       const next = { ...prev };
-      delete next[id];
+      for (const key of keys) delete next[key];
       return next;
     });
   }, []);

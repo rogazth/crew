@@ -1,6 +1,6 @@
-import { Button, Tabs } from "@cloudflare/kumo";
 import { PlusIcon } from "@phosphor-icons/react";
 import { useMemo, useState } from "react";
+import { Button, Segmented, type Option } from "../chrome/kit";
 import { RoutineCard } from "../chrome/RoutineCard";
 import type { Confirm } from "../chrome/ConfirmDialog";
 import { useRoutines, type RoutineEntry } from "../hooks/useRoutines";
@@ -21,7 +21,7 @@ type Props = {
 
 type Filter = "all" | "active" | "paused";
 
-const FILTERS: Array<{ value: Filter; label: string }> = [
+const FILTERS: Option<Filter>[] = [
   { value: "all", label: "All" },
   { value: "active", label: "Active" },
   { value: "paused", label: "Paused" },
@@ -106,26 +106,15 @@ export function RoutinesView({ draft, workspaces, activeWorkspaceId, agents, onC
       <div className="mx-auto flex max-w-4xl flex-col gap-6 px-10 py-12">
         <div className="flex items-center justify-between gap-4">
           <h1 className="text-[20px] leading-tight font-semibold tracking-[-0.26px]">Routines</h1>
-          <Button
-            variant="primary"
-            size="sm"
-            icon={PlusIcon}
-            disabled={agents.length === 0}
-            onClick={startNew}
-          >
+          <Button variant="primary" icon={PlusIcon} disabled={agents.length === 0} onClick={startNew}>
             New routine
           </Button>
         </div>
 
         {entries !== null && entries.length > 0 && (
-          <Tabs
-            variant="segmented"
-            size="sm"
-            className="self-start"
-            tabs={FILTERS}
-            value={filter}
-            onValueChange={(value) => setFilter(value as Filter)}
-          />
+          <div className="self-start">
+            <Segmented label="Filter routines" value={filter} options={FILTERS} onChange={setFilter} />
+          </div>
         )}
 
         {entries !== null && shown.length === 0 ? (

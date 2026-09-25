@@ -1,4 +1,3 @@
-import { Select } from "@cloudflare/kumo";
 import { ClockIcon } from "@phosphor-icons/react";
 import { isValidCron } from "../lib/cron";
 import {
@@ -12,14 +11,12 @@ import {
   type Schedule,
 } from "../lib/routines";
 import { dayLabel } from "../lib/time";
+import { Select, TextInput, type Option } from "./kit";
 
 type Props = {
   schedule: Schedule;
   onChange: (schedule: Schedule) => void;
 };
-
-const FIELD =
-  "h-8 rounded-md bg-kumo-control px-2 text-kumo-default ring ring-kumo-line outline-none focus-visible:ring-[1.5px] focus-visible:ring-kumo-focus/50";
 
 /** Weeks read Monday-first here; the stored numbers stay Date#getDay. */
 const WEEK_ORDER = [1, 2, 3, 4, 5, 6, 0];
@@ -35,7 +32,7 @@ export function RoutineTrigger({ schedule, onChange }: Props) {
   const valid = schedule.kind !== "cron" || isValidCron(schedule.expression);
   const next = valid ? nextRun(schedule) : null;
   const offPreset = schedule.kind === "interval" && !PRESET_MINUTES.has(schedule.minutes);
-  const items = TRIGGERS.map((item) => ({ value: item.id as string, label: item.label }));
+  const items: Option<string>[] = TRIGGERS.map((item) => ({ value: item.id, label: item.label }));
   if (offPreset) items.unshift({ value: KEEP, label: describeSchedule(schedule) });
 
   const pickTime = (value: string) => {
@@ -55,36 +52,37 @@ export function RoutineTrigger({ schedule, onChange }: Props) {
   };
 
   return (
-    <div className="flex flex-col gap-3 rounded-xl border border-border bg-sidebar p-3">
+    <div className="flex flex-col gap-3 rounded-xl bg-card p-3">
       <div className="flex flex-wrap items-center gap-2">
         <Select
-          aria-label="Trigger"
-          size="sm"
-          className="w-44"
+          label="Trigger"
           value={offPreset ? KEEP : trigger}
-          onValueChange={(value) =>
-            value && value !== KEEP && onChange(withTrigger(schedule, value as typeof trigger))
-          }
-          items={items}
+          onChange={(value) => value !== KEEP && onChange(withTrigger(schedule, value as typeof trigger))}
+          options={items}
         />
+        {/* The kit's fields fill their row; these wrappers give them a width. */}
         {schedule.kind === "daily" && (
-          <input
-            type="time"
-            aria-label="Time"
-            value={clockOf(schedule)}
-            onChange={(event) => pickTime(event.target.value)}
-            className={`${FIELD} w-[112px] tabular-nums`}
-          />
+          <div className="w-[112px]">
+            <TextInput
+              type="time"
+              aria-label="Time"
+              value={clockOf(schedule)}
+              onChange={(event) => pickTime(event.target.value)}
+              className="tabular-nums"
+            />
+          </div>
         )}
         {schedule.kind === "cron" && (
-          <input
-            aria-label="Cron expression"
-            spellCheck={false}
-            value={schedule.expression}
-            placeholder="0 9 * * 1"
-            onChange={(event) => onChange({ kind: "cron", expression: event.target.value })}
-            className={`${FIELD} w-44 font-mono ${valid ? "" : "ring-danger"}`}
-          />
+          <div className="w-44">
+            <TextInput
+              aria-label="Cron expression"
+              aria-invalid={!valid}
+              value={schedule.expression}
+              placeholder="0 9 * * 1"
+              onChange={(event) => onChange({ kind: "cron", expression: event.target.value })}
+              className="font-mono"
+            />
+          </div>
         )}
       </div>
 
@@ -98,8 +96,10 @@ export function RoutineTrigger({ schedule, onChange }: Props) {
                 type="button"
                 aria-pressed={on}
                 onClick={() => toggleDay(day)}
-                className={`h-7 w-11 rounded-md text-[12px] transition-colors ${
-                  on ? "bg-kumo-brand text-kumo-inverse" : "bg-kumo-control text-kumo-subtle hover:bg-hover"
+                className={`h-7 w-11 rounded-md text-[12px] outline-none transition-colors focus-visible:ring-2 focus-visible:ring-kumo-focus/50 ${
+                  on
+                    ? "bg-kumo-brand text-kumo-inverse"
+                    : "bg-kumo-base text-kumo-subtle ring ring-kumo-line hover:text-kumo-default"
                 }`}
               >
                 {WEEKDAYS[day]}

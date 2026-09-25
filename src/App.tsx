@@ -3,6 +3,9 @@ import { useCallback, useEffect, useState, type CSSProperties } from "react";
 import { AgentSheetHost } from "./chrome/AgentSheet";
 import { CommandPalette, type PaletteMode } from "./chrome/CommandPalette";
 import { ConfirmDialog } from "./chrome/ConfirmDialog";
+import { NewWorktreeDialog } from "./chrome/NewWorktreeDialog";
+import { ShortcutsDialog } from "./chrome/ShortcutsDialog";
+import { SidebarToggle } from "./chrome/SidebarToggle";
 import { LinkRouter } from "./chrome/LinkRouter";
 import { AppSidebar } from "./chrome/AppSidebar";
 import { TabBar } from "./chrome/TabBar";
@@ -18,13 +21,16 @@ import { useProjectFiles } from "./hooks/useProjectFiles";
 import { useSelectAllScope } from "./hooks/useSelectAllScope";
 import { useSessions } from "./hooks/useSessions";
 import { useSidebarWidth } from "./hooks/useSidebarWidth";
-import { useTabs } from "./hooks/useTabs";
 import { AgentAvatarProvider } from "./hooks/useAgentAvatar";
 import { AgentThemeProvider } from "./hooks/useAgentTheme";
 import { BrowserPrefsProvider } from "./hooks/useBrowserPrefs";
 import { TerminalPrefsProvider } from "./hooks/useTerminalPrefs";
 import { useWorkspaces } from "./hooks/useWorkspaces";
+import { useWorkContext } from "./hooks/useWorkContext";
+import { focusSidebar } from "./hooks/useSpatialKeys";
+import * as api from "./lib/api";
 import type { Session } from "./lib/types";
+import { shortBranch, worktreeLabel } from "./lib/worktrees";
 import { Pages } from "./surfaces/Pages";
 import { usePages } from "./hooks/usePages";
 import { boot } from "./lib/agentRuntime";
@@ -54,14 +60,17 @@ export function App() {
     rename,
     adoptName,
     remove,
+    forget,
     reorder,
     setStatus,
     dropWorkspace: forgetSessions,
   } = useSessions(workspaceId);
   // Every workspace's: their terminals keep running, and renaming, out of sight.
   useSessionTitle(all, adoptName);
-  const tabs = useTabs(workspaceId);
-  const files = useProjectFiles(active?.path ?? null);
+  const work = useWorkContext(active, sessions);
+  const { tabs, worktrees, current } = work;
+  const treePath = current?.path ?? active?.path ?? null;
+  const files = useProjectFiles(treePath);
 
   // Its panes go first: dropping them is what stops the terminals it was running.
   const { dropWorkspace: forgetTabs } = tabs;
@@ -75,23 +84,36 @@ export function App() {
     [deleteWorkspace, forgetSessions, forgetTabs],
   );
 
+  // The daemon deletes its sessions with it; the strip it had goes the way a workspace's does.
+  const removeWorktree = useCallback(
+    async (tree: NonNullable<typeof current>, force: boolean) => {
+      const gone = sessions.filter((session) => work.pathOf(session) === tree.path).map((session) => session.id);
+      if (active) forgetTabs(`${active.id}@${tree.path}`);
+      await worktrees.remove(tree, force);
+      await forget(gone);
+    },
+    [active, forget, forgetTabs, sessions, work, worktrees],
+  );
+
   const confirms = useConfirmations({
     closeTabsFor: tabs.closeForSession,
     removeSession: remove,
     removeWorkspace,
+    removeWorktree,
   });
 
   const [palette, setPalette] = useState<PaletteMode | null>(null);
-  const [pickerOpen, setPickerOpen] = useState(false);
+  const [dialog, setDialog] = useState<"new-worktree" | "shortcuts" | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   // Destructured: the hook returns a fresh object each render, and these
   // callbacks are dependencies of half the shell.
   const { page, settings, isWorkspace, isRoutines, close: closePage, toggle: togglePage, openSettings, openRoutines } = usePages();
 
-  const nav = useNavigation({ tabs, sessions, confirms, removeSession: remove, closePage });
-  const sheet = useAgentSheet({ create, update, openSession: nav.openSession });
+  const nav = useNavigation({ tabs, sessions, confirms, removeSession: remove, closePage, route: work.route });
+  const sheet = useAgentSheet({ create, update, openSession: nav.openSession, createWorktree: worktrees.create });
   const { newSession, launch } = useLaunch({
     sessions,
+    worktree: work.placeIn,
     create,
     openSession: nav.openSession,
     openStub: nav.openStub,
@@ -115,20 +137,24 @@ export function App() {
     sheetOpen: sheet.sheet !== null,
     closeSheet: sheet.close,
     toggleSidebar: () => setSidebarOpen((open) => !open),
-    // The picker anchors to a sidebar row, so a hidden sidebar comes back first.
-    togglePicker: () => {
+    // A hidden sidebar comes back first; the focus waits for it to paint.
+    focusSidebar: (scope) => {
       setSidebarOpen(true);
-      setPickerOpen((open) => !open);
+      requestAnimationFrame(() => focusSidebar(scope));
     },
-    newAgent: sheet.newAgent,
+    newAgent: () => sheet.newAgent(),
     newSession: () => void newSession(),
     closeTab: nav.closeTab,
     inTabs: nav.inTabs,
+    worktrees: work,
+    newWorktree: () => setDialog("new-worktree"),
+    toggleShortcuts: () => setDialog((open) => (open === "shortcuts" ? null : "shortcuts")),
   });
 
   if (workspaces.loading || sidebar.width === null) return <div className="h-full" />;
 
   const activeSessionId = tabs.active?.kind === "session" ? tabs.active.sessionId : null;
+  const openPalette = (mode: PaletteMode) => setPalette(mode);
 
   return (
     <TerminalPrefsProvider>
@@ -157,25 +183,47 @@ export function App() {
           settings={settings}
           onSelectSettings={openSettings}
           onCloseSettings={closePage}
-          sessions={{
-            workspace: active,
+          rail={{
             workspaces: workspaces.workspaces,
-            pickerOpen,
-            onPickerOpenChange: setPickerOpen,
-            onSelectWorkspace: workspaces.activate,
-            onCreateWorkspace: workspaces.create,
-            onRenameWorkspace: workspaces.rename,
-            onRemoveWorkspace: confirms.askWorkspace,
-            onReorderWorkspaces: workspaces.reorder,
-            sessions,
-            activeSessionId,
+            activeId: active.id,
+            sessions: all,
             settingsOpen: settings !== null,
             routinesOpen: isRoutines,
+            // Picking a workspace is going back to it, out from under any page.
+            onSelect: (id) => {
+              closePage();
+              workspaces.activate(id);
+            },
+            onCreate: workspaces.create,
+            onRename: workspaces.rename,
+            onRemove: confirms.askWorkspace,
+            onReorder: workspaces.reorder,
+            onOpenRoutines: () => togglePage({ kind: "routines", draft: null }),
+            onOpenSettings: () => (settings ? closePage() : openSettings()),
+          }}
+          sessions={{
+            workspace: active,
+            worktrees: worktrees.list,
+            activeWorktree: current?.path ?? active.path,
+            sessions,
+            activeSessionId,
             onSelect: nav.openSession,
+            onSelectWorktree: (path) => {
+              closePage();
+              work.selectWorktree(path);
+            },
             onNewAgent: sheet.newAgent,
-            onNewSession: () => void newSession(),
-            onOpenRoutines: () => openRoutines(),
-            onOpenSettings: () => openSettings(),
+            // A worktree's own menu passes its path; the main checkout is stored as null.
+            onNewSession: (path) =>
+              void newSession(undefined, path === undefined ? work.placeIn : path === active.path ? null : path),
+            onToggleNotifications: (session) => void update(session.id, { ...session, notifications: !session.notifications }),
+            onMarkRead: (session) => {
+              void api.markSessionRead(session.id).catch(() => {});
+              setStatus(session.id, "idle");
+            },
+            onNewWorktree: () => setDialog("new-worktree"),
+            onRemoveWorktree: (tree) =>
+              confirms.askWorktree(tree, sessions.filter((session) => work.pathOf(session) === tree.path)),
             onEdit: sheet.editAgent,
             onRename: (session, name) => void rename(session.id, name),
             onRemove: confirms.askSession,
@@ -204,9 +252,27 @@ export function App() {
             sessions={sessions}
             onSelect={tabs.select}
             onClose={nav.closeTab}
+            onCloseMany={nav.closeTabs}
+            onReopen={tabs.reopen}
+            onEditSession={sheet.editAgent}
             onReorder={tabs.reorder}
             onLaunch={launch}
+            context={{
+              workspace: active?.name ?? "",
+              branch: current ? worktreeLabel(current) : "",
+              onSwitch: () => openPalette("context"),
+            }}
+            branchOf={
+              work.scope === "all" && active
+                ? (tab) => {
+                    const session = tab.kind === "session" ? sessions.find((s) => s.id === tab.sessionId) : undefined;
+                    const tree = session && worktrees.list.find((t) => t.path === work.pathOf(session));
+                    return tree ? { label: shortBranch(tree), hue: work.hues.get(tree.path) ?? 0 } : null;
+                  }
+                : null
+            }
           />
+
 
           {workspaces.error && (
             <div className="border-b border-border px-3 py-2 text-danger">{workspaces.error}</div>
@@ -217,7 +283,7 @@ export function App() {
             panes={tabs.panes}
             workspaces={workspaces.workspaces}
             sessions={all}
-            cwd={active?.path ?? null}
+            cwd={treePath}
             hasWorkspace={active !== null}
             onCreateWorkspace={workspaces.create}
             onStatus={setStatus}
@@ -239,18 +305,52 @@ export function App() {
           sessions={sessions}
           workspaces={workspaces.workspaces}
           activeWorkspaceId={active.id}
+          worktrees={worktrees.list}
+          activeWorktree={current?.path ?? active.path}
           onOpenFile={nav.openFile}
           onOpenSession={nav.openSession}
-          onSelectWorkspace={workspaces.activate}
+          onSelectWorkspace={(id) => {
+            closePage();
+            workspaces.activate(id);
+          }}
+          onSelectWorktree={(id, path) => {
+            closePage();
+            if (id === active.id) return work.selectWorktree(path);
+            worktrees.select(path, id);
+            workspaces.activate(id);
+          }}
           onClose={() => setPalette(null)}
         />
       )}
+
+      {dialog === "new-worktree" && active && (
+        <NewWorktreeDialog
+          workspace={active}
+          from={worktrees.list.find((tree) => tree.main)}
+          onClose={() => setDialog(null)}
+          onCreate={async (branch, withAgent) => {
+            const tree = await worktrees.create(branch);
+            setDialog(null);
+            closePage();
+            if (withAgent) sheet.newAgent(tree.path);
+          }}
+        />
+      )}
+      {dialog === "shortcuts" && <ShortcutsDialog onClose={() => setDialog(null)} />}
+
+      <SidebarToggle onClick={() => setSidebarOpen((open) => !open)} />
 
       <ConfirmDialog confirm={confirms.confirm} onClose={confirms.close} />
 
       <UpdateDialog />
 
-      <AgentSheetHost sheet={sheet} sessions={sessions} onNewRoutine={openRoutines} />
+      <AgentSheetHost
+        sheet={sheet}
+        sessions={sessions}
+        worktrees={worktrees.list}
+        activeWorktree={work.placeIn}
+        onNewRoutine={openRoutines}
+      />
     </Sidebar.Provider>
     </AgentAvatarProvider>
     </AgentThemeProvider>

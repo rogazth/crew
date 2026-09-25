@@ -281,6 +281,19 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         )?;
         tx.commit()?;
     }
+    if current < 17 {
+        // NULL is the workspace folder, which is where every session so far ran.
+        // A database wound back to an earlier version still has the column.
+        let tx = conn.unchecked_transaction()?;
+        if !has_column(&tx, "sessions", "worktree")? {
+            tx.execute_batch("ALTER TABLE sessions ADD COLUMN worktree TEXT;")?;
+        }
+        tx.execute(
+            "INSERT INTO schema_migrations (version, applied_at) VALUES (17, ?1)",
+            params![now_millis()],
+        )?;
+        tx.commit()?;
+    }
     Ok(())
 }
 
@@ -382,6 +395,52 @@ pub fn stamp(ms: i64) -> String {
         tm.tm_hour,
         tm.tm_min
     )
+}
+
+#[cfg(test)]
+mod migration_tests {
+    use super::*;
+
+    /// A database from before worktrees keeps every session, each one back in
+    /// the workspace folder it always ran in.
+    #[test]
+    fn sessions_from_before_worktrees_stay_in_the_workspace_folder() {
+        let dir = std::env::temp_dir().join(format!("crew-v17-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let path = dir.join("crew.sqlite3");
+        let id = {
+            let store = Store::open(path.clone()).expect("first open");
+            let workspace = crate::workspace::create(&store, "w".into(), dir.to_string_lossy().into())
+                .expect("workspace");
+            let session = crate::session::create(
+                &store,
+                workspace.id,
+                "agent".into(),
+                "Planner".into(),
+                "claude".into(),
+                "m".into(),
+                "".into(),
+                "ask".into(),
+            )
+            .expect("session");
+            // Back to a v16 database: no column, no version row.
+            store
+                .with(|conn| {
+                    conn.execute_batch(
+                        "ALTER TABLE sessions DROP COLUMN worktree;
+                         DELETE FROM schema_migrations WHERE version = 17;",
+                    )
+                })
+                .expect("downgrade");
+            session.id
+        };
+
+        let store = Store::open(path).expect("reopen");
+
+        let session = crate::session::get(&store, id).unwrap().expect("the session survived");
+        assert_eq!(session.worktree, None);
+        assert_eq!(crate::session::cwd(&store, &session).unwrap(), dir.to_string_lossy());
+    }
 }
 
 #[cfg(test)]

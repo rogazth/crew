@@ -21,18 +21,23 @@ pub struct Session {
     pub autonomy: String,
     /// "idle" | "working" | "needs-input" | "error". Set by the runtime, never by the UI.
     pub status: String,
+    /// Absolute path of the git worktree it runs in; `None` is the workspace
+    /// folder, the main checkout.
+    pub worktree: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
 }
 
-/// 13 columns, aliased on `s`, so a join can read a session at an offset.
+/// Aliased on `s`, so a join can read a session at an offset and whatever it
+/// joined at `SESSION_COLUMN_COUNT`.
 pub const SESSION_COLUMNS: &str = "s.id, s.workspace_id, s.kind, s.name, s.provider, s.model,
                                    s.provider_session_id, s.description, s.notifications,
-                                   s.status, s.created_at, s.updated_at, s.autonomy";
+                                   s.status, s.created_at, s.updated_at, s.autonomy, s.worktree";
+pub const SESSION_COLUMN_COUNT: usize = 14;
 
 const SELECT_BY_WORKSPACE: &str = "SELECT id, workspace_id, kind, name, provider, model,
                                           provider_session_id, description, notifications,
-                                          status, created_at, updated_at, autonomy
+                                          status, created_at, updated_at, autonomy, worktree
                                    FROM sessions
                                    WHERE workspace_id = ?1
                                    ORDER BY sort_order ASC, created_at ASC";
@@ -52,6 +57,7 @@ pub fn row_to_session(row: &rusqlite::Row, at: usize) -> rusqlite::Result<Sessio
         status: row.get(at + 9)?,
         created_at: row.get(at + 10)?,
         updated_at: row.get(at + 11)?,
+        worktree: row.get(at + 13)?,
     })
 }
 
@@ -79,7 +85,7 @@ pub fn list_busy(store: &Store) -> Result<Vec<Session>, String> {
         let mut stmt = conn.prepare_cached(
             "SELECT id, workspace_id, kind, name, provider, model,
                     provider_session_id, description, notifications,
-                    status, created_at, updated_at, autonomy
+                    status, created_at, updated_at, autonomy, worktree
              FROM sessions
              WHERE status IN ('working', 'needs-input')
              ORDER BY updated_at ASC",
@@ -97,6 +103,16 @@ pub fn get(store: &Store, id: String) -> Result<Option<Session>, String> {
     })
 }
 
+/// The folder a session works in: its worktree, or else its workspace's.
+pub fn cwd(store: &Store, session: &Session) -> Result<String, String> {
+    if let Some(worktree) = &session.worktree {
+        return Ok(worktree.clone());
+    }
+    crate::workspace::get(store, session.workspace_id.clone())?
+        .map(|workspace| workspace.path)
+        .ok_or_else(|| "Workspace not found".to_string())
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn create(
     store: &Store,
@@ -107,6 +123,21 @@ pub fn create(
     model: String,
     description: String,
     autonomy: String,
+) -> Result<Session, String> {
+    create_in_worktree(store, workspace_id, kind, name, provider, model, description, autonomy, None)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn create_in_worktree(
+    store: &Store,
+    workspace_id: String,
+    kind: String,
+    name: String,
+    provider: String,
+    model: String,
+    description: String,
+    autonomy: String,
+    worktree: Option<String>,
 ) -> Result<Session, String> {
     let name = name.trim().to_string();
     if name.is_empty() {
@@ -129,6 +160,7 @@ pub fn create(
         notifications: true,
         autonomy: autonomy_or_default(autonomy),
         status: "idle".into(),
+        worktree: worktree.filter(|path| !path.is_empty()),
         created_at: now,
         updated_at: now,
     };
@@ -137,8 +169,8 @@ pub fn create(
         conn.execute(
             "INSERT INTO sessions
                (id, workspace_id, kind, name, provider, model, description,
-                notifications, created_at, updated_at, sort_order, autonomy)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                notifications, created_at, updated_at, sort_order, autonomy, worktree)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
             params![
                 session.id,
                 session.workspace_id,
@@ -151,7 +183,8 @@ pub fn create(
                 session.created_at,
                 session.updated_at,
                 session.created_at,
-                session.autonomy
+                session.autonomy,
+                session.worktree
             ],
         )
     })?;
@@ -219,10 +252,10 @@ pub fn sync_title(store: &Store, id: String) -> Result<Option<String>, String> {
     if row.kind != "terminal" {
         return Ok(None);
     }
-    let Some(workspace) = crate::workspace::get(store, row.workspace_id.clone())? else {
+    let Ok(cwd) = cwd(store, &row) else {
         return Ok(None);
     };
-    match provider_title(&row, &workspace.path) {
+    match provider_title(&row, &cwd) {
         Some(title) => adopt_title(store, &row, title),
         None => Ok(None),
     }
@@ -274,6 +307,16 @@ fn is_placeholder_name(name: &str, provider: &str) -> bool {
 pub fn delete(store: &Store, id: String) -> Result<(), String> {
     store.with(|conn| conn.execute("DELETE FROM sessions WHERE id = ?1", params![id]))?;
     Ok(())
+}
+
+/// The sessions that ran in a worktree about to stop existing: they would
+/// otherwise start their next turn in a folder that is gone.
+pub fn in_worktree(store: &Store, worktree: &str) -> Result<Vec<String>, String> {
+    store.with(|conn| {
+        conn.prepare_cached("SELECT id FROM sessions WHERE worktree = ?1")?
+            .query_map(params![worktree], |row| row.get(0))?
+            .collect()
+    })
 }
 
 pub fn set_provider_session(
@@ -331,10 +374,10 @@ pub fn reorder(store: &Store, ids: Vec<String>) -> Result<(), String> {
 /// A terminal nobody named and nothing was said in: dropping it loses nothing.
 pub fn is_disposable(store: &Store, id: String) -> Result<bool, String> {
     let Some(session) = get(store, id)? else { return Ok(false) };
-    let Some(workspace) = crate::workspace::get(store, session.workspace_id.clone())? else {
+    let Ok(cwd) = cwd(store, &session) else {
         return Ok(false);
     };
-    Ok(disposable(&session, &workspace.path))
+    Ok(disposable(&session, &cwd))
 }
 
 /// Deletes the disposable terminals no tab holds: the ones closed before the
@@ -344,11 +387,11 @@ pub fn sweep_disposable(store: &Store) -> Result<usize, String> {
     let (terminals, tabs) = store.with(|conn| {
         let terminals = conn
             .prepare(&format!(
-                "SELECT {SESSION_COLUMNS}, w.path FROM sessions s
+                "SELECT {SESSION_COLUMNS}, COALESCE(s.worktree, w.path) FROM sessions s
                  JOIN workspaces w ON w.id = s.workspace_id
                  WHERE s.kind = 'terminal'"
             ))?
-            .query_map([], |row| Ok((row_to_session(row, 0)?, row.get::<_, String>(13)?)))?
+            .query_map([], |row| Ok((row_to_session(row, 0)?, row.get::<_, String>(SESSION_COLUMN_COUNT)?)))?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         let tabs = conn
             .prepare("SELECT value FROM app_state WHERE key LIKE 'tabs:%'")?
@@ -609,6 +652,82 @@ mod tests {
         for kept in [named.id, spoken.id, open.id, unread.id, planner.id] {
             assert!(get(&store, kept).unwrap().is_some());
         }
+    }
+
+    #[test]
+    fn a_session_works_in_its_worktree_or_else_the_workspace_folder() {
+        let (store, workspace) = world();
+        let root = crate::workspace::get(&store, workspace.clone()).unwrap().unwrap().path;
+        let main = agent(&store, &workspace, "Main", "ask").expect("agent");
+        let branched = create_in_worktree(
+            &store,
+            workspace.clone(),
+            "agent".into(),
+            "Branched".into(),
+            "claude".into(),
+            "m".into(),
+            "".into(),
+            "ask".into(),
+            Some("/wt/feat".into()),
+        )
+        .expect("agent");
+
+        assert_eq!(main.worktree, None);
+        assert_eq!(cwd(&store, &main).unwrap(), root);
+        let read = get(&store, branched.id.clone()).unwrap().unwrap();
+        assert_eq!(read.worktree.as_deref(), Some("/wt/feat"), "the worktree did not survive a read");
+        assert_eq!(cwd(&store, &read).unwrap(), "/wt/feat");
+        let listed = list(&store, workspace).unwrap();
+        assert_eq!(listed.iter().filter(|s| s.worktree.is_some()).count(), 1);
+    }
+
+    /// An empty path from the window is no path, not a folder named "".
+    #[test]
+    fn an_empty_worktree_is_the_workspace_folder() {
+        let (store, workspace) = world();
+        let made = create_in_worktree(
+            &store,
+            workspace,
+            "terminal".into(),
+            "claude".into(),
+            "claude".into(),
+            "m".into(),
+            "".into(),
+            "ask".into(),
+            Some(String::new()),
+        )
+        .expect("terminal");
+        assert_eq!(made.worktree, None);
+    }
+
+    #[test]
+    fn only_the_sessions_in_a_worktree_are_found_in_it() {
+        let (store, workspace) = world();
+        let make = |name: &str, worktree: Option<&str>| {
+            create_in_worktree(
+                &store,
+                workspace.clone(),
+                "agent".into(),
+                name.into(),
+                "claude".into(),
+                "m".into(),
+                "".into(),
+                "ask".into(),
+                worktree.map(Into::into),
+            )
+            .expect("agent")
+            .id
+        };
+        let a = make("A", Some("/wt/feat"));
+        let b = make("B", Some("/wt/feat"));
+        make("C", Some("/wt/other"));
+        make("D", None);
+
+        let mut found = in_worktree(&store, "/wt/feat").unwrap();
+        found.sort();
+        let mut wanted = vec![a, b];
+        wanted.sort();
+        assert_eq!(found, wanted);
     }
 
     #[test]

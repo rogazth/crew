@@ -11,7 +11,6 @@ import {
   type Icon,
 } from "@phosphor-icons/react";
 import { SidebarRow } from "./SidebarRow";
-import { IS_MAC } from "../lib/hotkey";
 import { SETTINGS_SECTIONS, type SettingsSectionId } from "../lib/settings";
 
 const ICONS: Record<SettingsSectionId, Icon> = {
@@ -30,15 +29,11 @@ type Props = {
   onClose: () => void;
 };
 
-/** Replaces the session list while settings are open. */
+/** Slides over the session panel while settings are open; the rail stays beside it. */
 export function SettingsSidebar({ section, onSelect, onClose }: Props) {
   return (
     <>
-      <Sidebar.Header data-tauri-drag-region className="h-10 shrink-0 border-b-0 p-0">
-        {IS_MAC && <div className="h-full w-[78px]" />}
-      </Sidebar.Header>
-
-      <div className="shrink-0 px-[11px] pb-3">
+      <div className="shrink-0 px-[11px] pt-2.5 pb-3">
         <SidebarRow label="Back" icon={ArrowLeftIcon} onClick={onClose} />
       </div>
 

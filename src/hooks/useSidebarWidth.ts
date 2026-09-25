@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import * as api from "../lib/api";
 
 const KEY = "sidebar:width";
-const DEFAULT = 264;
+const DEFAULT = 300;
 
 /** kumo reads its width once, so nothing renders until the stored value arrives. */
 export function useSidebarWidth() {

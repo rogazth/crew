@@ -45,15 +45,74 @@ const workspaces: Row[] = [
   { id: "w3", name: "ledger", path: "/Users/me/Developer/ledger", createdAt: now - 2e6 },
   { id: "w4", name: "dotfiles", path: "/Users/me/dotfiles", createdAt: now - 1e6 },
 ];
+const MOCK_WORKTREES = "/Users/me/.crew/worktrees";
+const AVATARS = `${MOCK_WORKTREES}/crew/feat-avatars`;
+const SOCKET_REPLAY = `${MOCK_WORKTREES}/crew/fix-socket-replay`;
 const sessions: Row[] = [
   session("s1", "w1", "agent", "Planner", "claude", "claude-opus-5", "needs-input"),
-  session("s2", "w1", "agent", "Reviewer", "codex", "gpt-5", "idle"),
+  session("s2", "w1", "agent", "Reviewer", "codex", "gpt-5", "idle", AVATARS),
   session("s3", "w1", "terminal", "claude", "claude", "claude-sonnet-5", "working"),
-  session("s4", "w1", "terminal", "claude 2", "claude", "claude-sonnet-5", "done"),
+  session("s4", "w1", "terminal", "claude 2", "claude", "claude-sonnet-5", "done", SOCKET_REPLAY),
   session("s5", "w2", "terminal", "claude", "claude", "", "idle"),
   session("s6", "w3", "agent", "Bookkeeper", "cursor", "cursor-grok-4.6", "idle"),
 ];
 const state = new Map<string, string>([["active_workspace_id", "w1"]]);
+
+/**
+ * The linked worktrees of each main checkout; the main one is derived on each
+ * listing. Only crew starts with any, the way a real repo would.
+ */
+const worktrees = new Map<string, Row[]>([
+  [
+    "/Users/me/Developer/experiments/crew",
+    [
+      { path: AVATARS, branch: "feat/avatars", main: false, add: 412, del: 37, dirty: 3 },
+      { path: SOCKET_REPLAY, branch: "fix/socket-replay", main: false, add: 18, del: 6, dirty: 0 },
+    ],
+  ],
+]);
+
+function worktreeList(path: string): Row[] {
+  return [{ path, branch: "master", main: true, add: 24, del: 9, dirty: 2 }, ...(worktrees.get(path) ?? [])];
+}
+
+function worktreeAdd(path: string, branch: string): Row {
+  const name = branch.trim();
+  if (!name) throw new Error("Branch name is required");
+  const trees = worktrees.get(path) ?? [];
+  if (trees.some((tree) => tree.branch === name)) {
+    throw new Error(`'${name}' is already checked out at '${trees.find((tree) => tree.branch === name)?.path}'`);
+  }
+  const repo = path.split("/").filter(Boolean).pop() ?? "repo";
+  const row = {
+    path: `${MOCK_WORKTREES}/${repo}/${name.replace(/[^A-Za-z0-9._-]/g, "-")}`,
+    branch: name,
+    main: false,
+    add: 0,
+    del: 0,
+    dirty: 0,
+  };
+  worktrees.set(path, [...trees, row]);
+  return row;
+}
+
+function worktreeRemove(path: string, force: boolean): void {
+  if (worktrees.has(path) || workspaces.some((w) => w.path === path)) {
+    throw new Error("The main checkout cannot be removed");
+  }
+  for (const [main, trees] of worktrees) {
+    const tree = trees.find((t) => t.path === path);
+    if (!tree) continue;
+    if ((tree.dirty as number) > 0 && !force) throw new Error(`${path} has uncommitted changes`);
+    worktrees.set(main, trees.filter((t) => t !== tree));
+    for (let i = sessions.length - 1; i >= 0; i--) {
+      if (sessions[i]?.worktree === path) sessions.splice(i, 1);
+    }
+    return;
+  }
+  throw new Error(`${path} is not a git worktree`);
+}
+
 const routines: Row[] = [
   {
     id: "r1", sessionId: "s1", name: "Morning digest", enabled: true,
@@ -151,6 +210,7 @@ function session(
   provider: string,
   model: string,
   status: string,
+  worktree: string | null = null,
 ): Row {
   return {
     id,
@@ -164,6 +224,7 @@ function session(
     notifications: true,
     autonomy: "ask",
     status,
+    worktree,
     createdAt: now - 6e5,
     updatedAt: now - 3e5,
   };
@@ -183,7 +244,7 @@ const commands: Record<string, (args: Row) => unknown> = {
   active_workspace_set: ({ id }) => void (id ? state.set("active_workspace_id", id as string) : state.delete("active_workspace_id")),
   session_list: ({ workspaceId }) => sessions.filter((s) => s.workspaceId === workspaceId),
   session_create: (args) => {
-    const row = session(`s${Date.now()}`, args.workspaceId as string, args.kind as string, args.name as string, args.provider as string, args.model as string, "idle");
+    const row = session(`s${Date.now()}`, args.workspaceId as string, args.kind as string, args.name as string, args.provider as string, args.model as string, "idle", (args.worktree as string | null | undefined) || null);
     sessions.push(row);
     return row;
   },
@@ -199,6 +260,9 @@ const commands: Record<string, (args: Row) => unknown> = {
     void sessions.filter((s) => s.id === id && s.status === "done").forEach((s) => (s.status = "idle")),
   state_get: ({ key }) => state.get(key as string) ?? null,
   state_set: ({ key, value }) => void state.set(key as string, value as string),
+  worktree_list: ({ path }) => worktreeList(path as string),
+  worktree_add: ({ path, branch }) => worktreeAdd(path as string, branch as string),
+  worktree_remove: ({ path, force }) => worktreeRemove(path as string, Boolean(force)),
   list_project_files: () =>
     ["src/App.tsx", "src/main.tsx", "src/lib/tabs.ts", "README.md", "docs/mock.png"].map((relative) => ({
       name: relative.split("/").pop(),
@@ -511,10 +575,10 @@ function search(args: Row): Row[] {
   const hits: Row[] = [];
   for (const session of sessions) {
     if (session.kind !== "agent") continue;
-    if (only.length > 0 && !only.includes(session.id)) continue;
+    if (only.length > 0 && !only.includes(session.id as string)) continue;
     // thread() materializes the seed; a search should not depend on
     // whether someone opened the chat first.
-    const blocks = thread(session.id).blocks;
+    const blocks = thread(session.id as string).blocks;
     blocks.forEach((block, index) => {
       const text = String(block.text ?? "");
       const at = (block.at as number | undefined) ?? Date.now();

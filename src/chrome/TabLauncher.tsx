@@ -3,12 +3,13 @@ import {
   ChatCircleIcon,
   ClockCounterClockwiseIcon,
   GlobeIcon,
-  MagnifyingGlassIcon,
   PlusIcon,
   RobotIcon,
   TerminalWindowIcon,
 } from "@phosphor-icons/react";
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { AgentAvatar } from "./AgentAvatar";
+import { Footer, GroupHeader } from "./kit";
 import { ProviderIcon } from "./ProviderIcon";
 import { StatusDot } from "./StatusDot";
 import { useDefaultAgent } from "../hooks/useDefaultAgent";
@@ -163,7 +164,7 @@ function LauncherPopup({ sessions, onPick }: { sessions: Session[]; onPick: (lau
         label: session.name,
         icon:
           session.kind === "agent" ? (
-            <RobotIcon className={ICON} />
+            <AgentAvatar seed={session.id} bare className="size-5" />
           ) : (
             <ProviderIcon provider={session.provider} className="size-4 shrink-0" />
           ),
@@ -223,34 +224,28 @@ function LauncherPopup({ sessions, onPick }: { sessions: Session[]; onPick: (lau
     <Popover.Popup
       initialFocus={search}
       onKeyDown={onKeyDown}
-      className="w-[380px] origin-(--transform-origin) overflow-hidden rounded-xl bg-kumo-control text-kumo-default shadow-xl ring ring-kumo-line outline-none transition-[opacity,scale] duration-100 data-starting-style:scale-95 data-starting-style:opacity-0 data-ending-style:scale-95 data-ending-style:opacity-0"
+      className="w-[420px] origin-(--transform-origin) overflow-hidden rounded-xl bg-kumo-control text-kumo-default shadow-2xl ring ring-kumo-line outline-none transition-[opacity,scale] duration-100 data-starting-style:scale-[0.98] data-starting-style:opacity-0 data-ending-style:scale-[0.98] data-ending-style:opacity-0"
     >
-      <div className="flex items-center gap-2 border-b border-kumo-line px-3">
-        <MagnifyingGlassIcon className="size-4 shrink-0 text-kumo-subtle" />
-        <input
-          ref={search}
-          value={query}
-          placeholder="Open an agent, a session, a URL…"
-          aria-label="Open a tab"
-          onChange={(event) => {
-            setQuery(event.target.value);
-            setCursor(0);
-            suggestPages(event.target.value);
-          }}
-          className="min-w-0 flex-1 bg-transparent py-3 outline-none"
-        />
-      </div>
+      <input
+        ref={search}
+        value={query}
+        placeholder="Open an agent, a session, a URL…"
+        aria-label="Open a tab"
+        spellCheck={false}
+        onChange={(event) => {
+          setQuery(event.target.value);
+          setCursor(0);
+          suggestPages(event.target.value);
+        }}
+        className="h-11 w-full border-b border-kumo-line bg-transparent px-4 text-[14px] outline-none"
+      />
 
-      <div ref={list} className="max-h-80 overflow-y-auto p-1">
+      <div ref={list} className="max-h-80 overflow-y-auto p-1.5">
         {groups.map((group, g) => {
           const start = groups.slice(0, g).reduce((n, prev) => n + prev.items.length, 0);
           return (
             <Fragment key={group.heading ?? "actions"}>
-              {group.heading && group.items.length > 0 && (
-                <p className="px-2.5 pt-3 pb-1 text-[11px] font-semibold tracking-[0.06em] text-kumo-subtle uppercase">
-                  {group.heading}
-                </p>
-              )}
+              {group.heading && group.items.length > 0 && <GroupHeader>{group.heading}</GroupHeader>}
               {group.items.map((item, index) => (
                 <Row
                   key={item.id}
@@ -271,6 +266,7 @@ function LauncherPopup({ sessions, onPick }: { sessions: Session[]; onPick: (lau
           <p className="px-3 py-6 text-center text-placeholder">No matches</p>
         )}
       </div>
+      <Footer hints={[["↑↓", "move"], ["↵", "open"], ["esc", "close"]]} />
     </Popover.Popup>
   );
 }
@@ -298,11 +294,9 @@ function Row({
       data-active={active}
       onMouseEnter={onHover}
       onClick={onPick}
-      className={`flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left ${
-        active ? "bg-hover text-kumo-default" : "text-kumo-default"
-      }`}
+      className={`flex h-9 w-full items-center gap-2.5 rounded-md px-2.5 text-left ${active ? "bg-hover" : ""}`}
     >
-      {icon}
+      <span className="grid size-5 shrink-0 place-items-center">{icon}</span>
       <span className="min-w-0 flex-1 truncate">{label}</span>
       {status && <StatusDot status={status} />}
       {hint && <span className="shrink-0 text-[11px] text-kumo-subtle">{hint}</span>}

@@ -1,8 +1,8 @@
-import { Button, Dialog, Loader, Meter } from "@cloudflare/kumo";
-import { useEffect, useState, type KeyboardEvent, type ReactNode } from "react";
+import { CircleNotchIcon } from "@phosphor-icons/react";
+import { useEffect, useState, type ReactNode } from "react";
 import { updateHost } from "../lib/host";
 import type { UpdateState } from "../lib/update";
-import { Kbd } from "./Kbd";
+import { Alert, Button, Footer } from "./kit";
 
 /** Follows the updater in main; a window opened mid-update picks up where it is. */
 function useUpdateState(): UpdateState {
@@ -28,30 +28,60 @@ function useUpdateState(): UpdateState {
 
 const megabytes = (bytes: number) => `${(bytes / 1_000_000).toFixed(1)} MB`;
 
-const keycap = "border-white/20 bg-white/10 text-white/80";
-const ENTER = <Kbd keys="⏎" className={keycap} />;
-
 /** `commit` runs on ⌘⏎, for an action that should not fire on a stray Enter. */
-type View = { title: string; body?: ReactNode; actions?: ReactNode; commit?: () => void };
+type View = {
+  title: string;
+  body?: ReactNode;
+  hints?: [string, string][];
+  actions?: ReactNode;
+  commit?: () => void;
+};
+
+function Working({ label }: { label: string }) {
+  return (
+    <div className="flex items-center gap-2">
+      <CircleNotchIcon className="size-4 shrink-0 animate-spin" />
+      {label}
+    </div>
+  );
+}
+
+function Progress({ received, total }: { received: number; total: number }) {
+  const percent = Math.min(100, (received / total) * 100);
+  const text = `${megabytes(received)} of ${megabytes(total)}`;
+  return (
+    <div className="flex flex-col gap-1.5 text-[12px]">
+      <div className="flex justify-between gap-4">
+        <span>Downloaded</span>
+        <span className="tabular-nums">{text}</span>
+      </div>
+      <div
+        role="progressbar"
+        aria-label="Downloaded"
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={Math.round(percent)}
+        aria-valuetext={text}
+        className="h-1.5 overflow-hidden rounded-full bg-selected"
+      >
+        <div className="h-full rounded-full bg-kumo-brand transition-[width]" style={{ width: `${percent}%` }} />
+      </div>
+    </div>
+  );
+}
 
 function view(state: UpdateState, host: NonNullable<ReturnType<typeof updateHost>>): View | null {
   const dismiss = () => void host.dismiss();
   const ok = (
-    <Button variant="primary" size="sm" autoFocus onClick={dismiss}>
-      OK {ENTER}
+    <Button variant="primary" keys="⏎" className="text-[12px]" onClick={dismiss}>
+      OK
     </Button>
-  );
-  const working = (label: string) => (
-    <div className="flex items-center gap-2 text-kumo-subtle">
-      <Loader size="sm" />
-      {label}
-    </div>
   );
   switch (state.phase) {
     case "idle":
       return null;
     case "checking":
-      return { title: "Checking for updates", body: working("Asking GitHub for the latest release…") };
+      return { title: "Checking for updates", body: <Working label="Asking GitHub for the latest release…" /> };
     case "latest":
       return { title: `Crew ${state.version} is the latest version`, actions: ok };
     case "unpackaged":
@@ -65,13 +95,14 @@ function view(state: UpdateState, host: NonNullable<ReturnType<typeof updateHost
       return {
         title: `Crew ${state.version} is available`,
         body: `You are on ${state.current}. Crew will replace itself and reopen.`,
+        hints: [["esc", "later"]],
         actions: (
           <>
-            <Button variant="secondary" size="sm" onClick={dismiss}>
-              Later <Kbd keys="Esc" />
+            <Button variant="ghost" className="text-[12px]" onClick={dismiss}>
+              Later
             </Button>
-            <Button variant="primary" size="sm" onClick={install}>
-              Update and Restart <Kbd keys="⌘⏎" className={keycap} />
+            <Button variant="primary" keys="⌘⏎" className="text-[12px]" onClick={install}>
+              Update and Restart
             </Button>
           </>
         ),
@@ -84,25 +115,22 @@ function view(state: UpdateState, host: NonNullable<ReturnType<typeof updateHost
         title: `Downloading Crew ${state.version}`,
         body:
           total === null ? (
-            working(megabytes(received))
+            <Working label={megabytes(received)} />
           ) : (
-            <Meter
-              label="Downloaded"
-              value={Math.min(100, (received / total) * 100)}
-              customValue={`${megabytes(received)} of ${megabytes(total)}`}
-            />
+            <Progress received={received} total={total} />
           ),
+        hints: [["esc", "cancel"]],
         actions: (
-          <Button variant="secondary" size="sm" onClick={() => void host.cancel()}>
-            Cancel <Kbd keys="Esc" />
+          <Button variant="ghost" className="text-[12px]" onClick={() => void host.cancel()}>
+            Cancel
           </Button>
         ),
       };
     }
     case "installing":
-      return { title: `Installing Crew ${state.version}`, body: working("Unpacking the new version…") };
+      return { title: `Installing Crew ${state.version}`, body: <Working label="Unpacking the new version…" /> };
     case "restarting":
-      return { title: `Restarting into Crew ${state.version}`, body: working("Closing sessions and reopening…") };
+      return { title: `Restarting into Crew ${state.version}`, body: <Working label="Closing sessions and reopening…" /> };
     case "error":
       return { title: "Could not update Crew", body: state.message, actions: ok };
   }
@@ -118,38 +146,24 @@ export function UpdateDialog() {
   const host = updateHost();
   const shown = host ? view(state, host) : null;
   return (
-    <Dialog.Root
-      role="alertdialog"
+    <Alert
       open={shown !== null}
-      onOpenChange={(open) => {
-        if (open || !host) return;
+      onDismiss={() => {
+        if (!host) return;
         if (state.phase === "downloading") void host.cancel();
         else if (state.phase !== "checking" && state.phase !== "installing" && state.phase !== "restarting") {
           void host.dismiss();
         }
       }}
+      title={shown?.title ?? ""}
+      description={shown?.body}
+      onKeyDown={(event) => {
+        if (!shown?.commit || event.key !== "Enter" || !event.metaKey) return;
+        event.preventDefault();
+        shown.commit();
+      }}
     >
-      {shown && (
-        // Centred like ConfirmDialog; the sm: override is needed or kumo's breakpoint wins.
-        // Without buttons the popup itself holds focus, and its ring is noise there.
-        <Dialog size="sm" className="top-1/2 sm:top-1/2 -translate-y-1/2 p-5 outline-none">
-          <div
-            onKeyDown={(event: KeyboardEvent<HTMLDivElement>) => {
-              if (!shown.commit || event.key !== "Enter" || !event.metaKey) return;
-              event.preventDefault();
-              shown.commit();
-            }}
-          >
-            <Dialog.Title className="text-base font-semibold">{shown.title}</Dialog.Title>
-            {shown.body && (
-              <Dialog.Description render={<div />} className="mt-2 break-words text-kumo-subtle">
-                {shown.body}
-              </Dialog.Description>
-            )}
-            {shown.actions && <div className="mt-5 flex justify-end gap-2">{shown.actions}</div>}
-          </div>
-        </Dialog>
-      )}
-    </Dialog.Root>
+      {shown?.actions && <Footer hints={shown.hints ?? []}>{shown.actions}</Footer>}
+    </Alert>
   );
 }

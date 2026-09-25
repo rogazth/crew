@@ -8,8 +8,12 @@ import { Terminals } from './Terminals';
 import type { ProviderId } from '../lib/providers';
 import type { Pane } from '../lib/tabs';
 import type { ProjectFile, Session, SessionStatus, Tab, Workspace } from '../lib/types';
+import { parseContext } from '../lib/worktrees';
 
-/** A pane with the workspace it belongs to resolved to a directory. */
+/**
+ * A pane with where it runs resolved to a directory: its session's worktree,
+ * else the worktree its strip belongs to, else the workspace folder.
+ */
 export type MountedPane = Pane & { cwd: string };
 
 type Props = {
@@ -46,14 +50,21 @@ export function WorkspacePanes({
   onOpenBrowserTab,
   files,
 }: Props) {
-  const mounted = useMemo(
-    () =>
-      panes.flatMap((pane) => {
-        const workspace = workspaces.find((w) => w.id === pane.workspaceId);
-        return workspace ? [{ ...pane, cwd: workspace.path }] : [];
-      }),
-    [panes, workspaces],
-  );
+  // Keyed on where each session runs, not on the sessions: a status change
+  // must not hand every mounted pane a fresh object.
+  const placement = sessions.map((s) => `${s.id}\t${s.worktree ?? ''}`).join('\n');
+  const mounted = useMemo(() => {
+    const where = new Map(placement.split('\n').map((line) => line.split('\t') as [string, string]));
+    return panes.flatMap((pane) => {
+      const context = parseContext(pane.workspaceId);
+      const workspace = workspaces.find((w) => w.id === context.workspaceId);
+      if (!workspace) return [];
+      const tab = pane.tab;
+      const worktree = tab.kind === 'session' ? where.get(tab.sessionId) : undefined;
+      const cwd = worktree || (tab.kind === 'session' ? workspace.path : (context.worktree ?? workspace.path));
+      return [{ ...pane, cwd }];
+    });
+  }, [panes, placement, workspaces]);
 
   // Bound to the workspace on screen, which is the only one a click can come
   // from: the panes behind it are hidden, so nothing there can reach these.

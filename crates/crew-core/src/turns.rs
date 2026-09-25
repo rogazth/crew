@@ -567,7 +567,6 @@ impl TurnHost {
 
     fn run_turn(&self, session: crate::session::Session, params: TurnStart, history: Option<String>) {
         let session_id = session.id.clone();
-        let workspace_id = session.workspace_id.clone();
         let outcome = match session.provider.as_str() {
             "claude" => self.run_claude(session, params, history),
             "codex" => self.run_codex(session, params, history),
@@ -601,7 +600,7 @@ impl TurnHost {
                 return;
             }
         }
-        self.drain_mailbox(&session_id, &workspace_id);
+        self.drain_mailbox(&session_id);
     }
 
     /// Hand over the next letter waiting for an agent that has just gone quiet.
@@ -610,7 +609,7 @@ impl TurnHost {
     ///
     /// The one place a letter is claimed, so two callers racing cannot lose one
     /// between them: the loser finds an empty box, which is the truth.
-    pub fn drain_mailbox(&self, session_id: &str, workspace_id: &str) -> bool {
+    pub fn drain_mailbox(&self, session_id: &str) -> bool {
         let Ok(Some(letter)) = mailbox::claim(&self.store, session_id) else {
             return false;
         };
@@ -637,10 +636,10 @@ impl TurnHost {
             self.transcripts.flush(session_id);
             return false;
         }
-        let cwd = crate::workspace::get(&self.store, workspace_id.to_string())
+        let cwd = crate::session::get(&self.store, session_id.to_string())
             .ok()
             .flatten()
-            .map(|row| row.path)
+            .and_then(|session| crate::session::cwd(&self.store, &session).ok())
             .unwrap_or_default();
         let started = self.start(TurnStart {
             session_id: session_id.to_string(),
@@ -666,7 +665,7 @@ impl TurnHost {
     /// Drain an agent's box by id, for a caller that has only that. Used when a
     /// letter has just been dropped in.
     pub fn deliver_to(&self, target: &crate::session::Session) -> bool {
-        self.drain_mailbox(&target.id, &target.workspace_id)
+        self.drain_mailbox(&target.id)
     }
 
     /// Letters left waiting for an idle agent — a delivery that raced a turn

@@ -203,9 +203,17 @@ offset?: number, sort?: SearchSort, };
 
 export type SearchSort = "relevance" | "newest";
 
-export type Session = { id: string, workspaceId: string, kind: string, name: string, provider: string, model: string, providerSessionId: string | null, description: string, notifications: boolean, autonomy: string, status: string, createdAt: number, updatedAt: number, };
+export type Session = { id: string, workspaceId: string, kind: string, name: string, provider: string, model: string, providerSessionId: string | null, description: string, notifications: boolean, autonomy: string, status: string, 
+/**
+ * The git worktree it runs in; `None` is the workspace folder.
+ */
+worktree: string | null, createdAt: number, updatedAt: number, };
 
-export type SessionCreate = { workspaceId: string, kind: string, name: string, provider: string, model: string, description: string, autonomy: string, };
+export type SessionCreate = { workspaceId: string, kind: string, name: string, provider: string, model: string, description: string, autonomy: string, 
+/**
+ * The git worktree the session runs in; absent means the workspace folder.
+ */
+worktree?: string | null, };
 
 export type SessionCreated = { session: Session, };
 
@@ -268,3 +276,14 @@ export type UrlKey = { urlKey: string, };
 export type Workspace = { id: string, name: string, path: string, createdAt: number, };
 
 export type WorkspaceId = { workspaceId: string, };
+
+/**
+ * A new worktree of the repo whose main checkout is `path`, on `branch`.
+ */
+export type WorktreeAdd = { path: string, branch: string, };
+
+export type WorktreeRemove = { path: string, 
+/**
+ * Discards uncommitted changes; without it a dirty worktree is refused.
+ */
+force: boolean, };

@@ -1,25 +1,30 @@
-import { Sidebar } from "@cloudflare/kumo";
-import {
-  ArrowsClockwiseIcon,
-  GearIcon,
-  MagnifyingGlassIcon,
-  RobotIcon,
-  TerminalWindowIcon,
-} from "@phosphor-icons/react";
-import { useMemo, useState, type KeyboardEvent, type MouseEvent } from "react";
+import { FolderIcon, GitBranchIcon, MagnifyingGlassIcon, PlusIcon, XIcon, type Icon } from "@phosphor-icons/react";
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent } from "react";
 import { ActionMenu } from "./ActionMenu";
 import { AgentAvatar } from "./AgentAvatar";
-import { DELETE, EDIT, RENAME, menuFromEvent, type MenuPoint } from "../lib/menu";
+import {
+  CHANGE_FACE,
+  COPY_NAME,
+  COPY_PATH,
+  DELETE,
+  EDIT,
+  MARK_READ,
+  OPEN,
+  RENAME,
+  SEPARATOR,
+  menuFromEvent,
+  tidy,
+  type MenuAction,
+  type MenuEntry,
+  type MenuPoint,
+} from "../lib/menu";
 import { ProviderIcon } from "./ProviderIcon";
 import { RenameRow } from "./RenameRow";
-import { Section } from "./Section";
 import { SidebarPrefsMenu } from "./SidebarPrefsMenu";
-import { SidebarRow } from "./SidebarRow";
 import { SortableItem, SortableList } from "./SortableList";
 import { StatusDot } from "./StatusDot";
-import { WorkspacePicker } from "./WorkspacePicker";
 import { useSidebarPrefs } from "../hooks/useSidebarPrefs";
-import { commandKeys } from "../lib/commands";
+import { commandKeys, type CommandId } from "../lib/commands";
 import { IS_MAC, isDeleteChord } from "../lib/hotkey";
 import { providerLine } from "../lib/providers";
 import {
@@ -29,35 +34,28 @@ import {
   type ClickModifiers,
   type Selection,
 } from "../lib/selection";
-import {
-  canReorder,
-  groupSessions,
-  shows,
-  type SessionGroup,
-  type SidebarPrefs,
-} from "../lib/sidebarPrefs";
+import { arrangeSessions, canReorder, shows, type Arranged, type SidebarPrefs } from "../lib/sidebarPrefs";
+import { STATUS_ORDER, statusLabel } from "../lib/status";
 import { elapsed } from "../lib/time";
-import type { Session, Workspace } from "../lib/types";
+import type { Session, SessionStatus, Workspace, Worktree } from "../lib/types";
+import { shortenPath } from "../lib/workspaces";
+import { sessionPath, worktreeLabel } from "../lib/worktrees";
 
 export type SessionSidebarProps = {
   workspace: Workspace;
-  workspaces: Workspace[];
-  pickerOpen: boolean;
-  onPickerOpenChange: (open: boolean) => void;
-  onSelectWorkspace: (id: string) => void;
-  onCreateWorkspace: () => void;
-  onRenameWorkspace: (id: string, name: string) => void;
-  onRemoveWorkspace: (workspace: Workspace) => void;
-  onReorderWorkspaces: (ids: string[]) => void;
+  worktrees: Worktree[];
+  /** Path of the worktree on screen. */
+  activeWorktree: string;
   sessions: Session[];
   activeSessionId: string | null;
-  settingsOpen: boolean;
-  routinesOpen: boolean;
   onSelect: (session: Session) => void;
-  onNewAgent: () => void;
-  onNewSession: () => void;
-  onOpenRoutines: () => void;
-  onOpenSettings: () => void;
+  onSelectWorktree: (path: string) => void;
+  onNewAgent: (worktree?: string) => void;
+  onNewSession: (worktree?: string) => void;
+  onToggleNotifications: (session: Session) => void;
+  onMarkRead: (session: Session) => void;
+  onNewWorktree: () => void;
+  onRemoveWorktree: (tree: Worktree) => void;
   onEdit: (session: Session) => void;
   onRename: (session: Session, name: string) => void;
   onRemove: (session: Session) => void;
@@ -65,27 +63,107 @@ export type SessionSidebarProps = {
   onReorder: (ids: string[]) => void;
 };
 
-type Menu = { point: MenuPoint; session: Session };
+type Menu =
+  | { kind: "session"; point: MenuPoint; session: Session }
+  | { kind: "worktree"; point: MenuPoint; tree: Worktree };
+
+const NEW_AGENT_HERE: MenuAction = { id: "new-agent", label: "New Agent Here", icon: "agent", hotkey: "A" };
+const NEW_SESSION_HERE: MenuAction = { id: "new-session", label: "New Session Here", icon: "terminal", hotkey: "S" };
+const COPY_BRANCH: MenuAction = { id: "copy-branch", label: "Copy Branch", icon: "branch", hotkey: "B" };
+const REMOVE_WORKTREE: MenuAction = { ...DELETE, id: "remove-worktree", label: "Remove Worktree…" };
+
+/** What a right-click on one session offers, loudest last. */
+function sessionActions(session: Session): MenuEntry[] {
+  if (session.kind === "terminal") return [OPEN, RENAME, COPY_NAME, SEPARATOR, DELETE];
+  return tidy([
+    OPEN,
+    EDIT,
+    CHANGE_FACE,
+    SEPARATOR,
+    { id: "notifications", label: "Notifications", icon: "bell", hotkey: "N", checked: session.notifications },
+    ...(session.status === "done" ? [MARK_READ] : []),
+    COPY_NAME,
+    SEPARATOR,
+    DELETE,
+  ]);
+}
+
+function worktreeActions(tree: Worktree): MenuEntry[] {
+  return tidy([
+    NEW_AGENT_HERE,
+    NEW_SESSION_HERE,
+    SEPARATOR,
+    COPY_PATH,
+    ...(tree.branch ? [COPY_BRANCH] : []),
+    SEPARATOR,
+    ...(tree.main ? [] : [REMOVE_WORKTREE]),
+  ]);
+}
 
 function modifiersOf(event: { metaKey: boolean; ctrlKey: boolean; shiftKey: boolean }): ClickModifiers {
   return { toggle: IS_MAC ? event.metaKey : event.ctrlKey, range: event.shiftKey };
 }
 
-/** The sidebar's default view: workspace switcher, actions, session list, settings row. */
+/** Where a keyboard-opened menu lands: under the item, as if right-clicked there. */
+function pointOf(element: HTMLElement): MenuPoint {
+  const rect = element.getBoundingClientRect();
+  return { x: rect.left + 8, y: rect.bottom };
+}
+
+/**
+ * The panel beside the rail: the workspace's name, then its worktrees. The one
+ * on screen opens as a card holding its agents as faces and its sessions as
+ * rows; the others fold to a line with who works there. Search and the view
+ * menu sit on the Worktrees line.
+ */
 export function SessionSidebar(props: SessionSidebarProps) {
   const [query, setQuery] = useState("");
+  const [searching, setSearching] = useState(false);
   const [prefs, setPrefs] = useSidebarPrefs();
   const [renaming, setRenaming] = useState<string | null>(null);
   const [menu, setMenu] = useState<Menu | null>(null);
+  const [opened, setOpened] = useState<Set<string>>(() => new Set());
+  const panel = useRef<HTMLDivElement>(null);
   const filtering = query.trim().length > 0;
 
-  const groups = useMemo(
-    () => (prefs ? groupSessions(props.sessions, prefs, query) : []),
-    [props.sessions, prefs, query],
+  // Each worktree's share of the arranged sessions; a session whose worktree is gone shows under the main checkout.
+  const placed = useMemo(() => {
+    const out = new Map<string, Arranged>();
+    for (const tree of props.worktrees) out.set(tree.path, { agents: [], terminals: [] });
+    if (!prefs) return out;
+    const main = props.worktrees.find((tree) => tree.main)?.path ?? props.workspace.path;
+    const { agents, terminals } = arrangeSessions(props.sessions, prefs, query);
+    const put = (session: Session, key: keyof Arranged) => {
+      const path = sessionPath(session, props.workspace);
+      (out.get(path) ?? out.get(main))?.[key].push(session);
+    };
+    for (const session of agents) put(session, "agents");
+    for (const session of terminals) put(session, "terminals");
+    return out;
+  }, [prefs, props.sessions, props.workspace, props.worktrees, query]);
+
+  const shown = useMemo(
+    () =>
+      props.worktrees.filter((tree) => {
+        const current = tree.path === props.activeWorktree;
+        const mine = placed.get(tree.path);
+        const count = (mine?.agents.length ?? 0) + (mine?.terminals.length ?? 0);
+        if (filtering) return current || count > 0;
+        if (prefs?.scope === "current") return current;
+        if (prefs?.scope === "busy")
+          return current || [...(mine?.agents ?? []), ...(mine?.terminals ?? [])].some((s) => s.status !== "idle");
+        return true;
+      }),
+    [filtering, placed, prefs?.scope, props.activeWorktree, props.worktrees],
   );
+
   const order = useMemo(
-    () => groups.flatMap((group) => group.sessions.map((session) => session.id)),
-    [groups],
+    () =>
+      shown.flatMap((tree) => {
+        const mine = placed.get(tree.path);
+        return [...(mine?.agents ?? []), ...(mine?.terminals ?? [])].map((session) => session.id);
+      }),
+    [placed, shown],
   );
 
   // The open session is the one-item selection. A multi-selection is held against
@@ -106,8 +184,7 @@ export function SessionSidebar(props: SessionSidebarProps) {
     });
   const selected = useMemo(() => new Set(pruneSelection(selection, order).ids), [selection, order]);
 
-  const selectedSessions = () =>
-    props.sessions.filter((session) => selected.has(session.id));
+  const selectedSessions = () => props.sessions.filter((session) => selected.has(session.id));
 
   const pick = (session: Session, modifiers: ClickModifiers) => {
     if (!modifiers.toggle && !modifiers.range) {
@@ -124,126 +201,174 @@ export function SessionSidebar(props: SessionSidebarProps) {
     else props.onRemove(session);
   };
 
-  const clearSelection = () => setHeld(null);
+  const openMenu = (point: MenuPoint, session: Session) => {
+    if (!selected.has(session.id)) setSelection({ ids: [session.id], anchor: session.id });
+    setMenu({ kind: "session", point, session });
+  };
+
+  const closeSearch = () => {
+    setQuery("");
+    setSearching(false);
+  };
+
+  const fold = (path: string, open: boolean) =>
+    setOpened((prev) => {
+      const next = new Set(prev);
+      if (open) next.add(path);
+      else next.delete(path);
+      return next;
+    });
+
+  // A press anywhere outside the panel puts the search away.
+  useEffect(() => {
+    if (!searching) return;
+    const onPointerDown = (event: PointerEvent) => {
+      if (panel.current?.contains(event.target as Node)) return;
+      setQuery("");
+      setSearching(false);
+    };
+    window.addEventListener("pointerdown", onPointerDown);
+    return () => window.removeEventListener("pointerdown", onPointerDown);
+  }, [searching]);
+
+  function onPanelKey(event: KeyboardEvent<HTMLDivElement>) {
+    if (event.key !== "/" || event.metaKey || event.ctrlKey) return;
+    if ((event.target as HTMLElement).closest("input, textarea")) return;
+    event.preventDefault();
+    setSearching(true);
+  }
+
+  const card = (session: Session) => ({
+    session,
+    prefs: prefs!,
+    active: session.id === props.activeSessionId,
+    selected: selected.has(session.id),
+    onSelect: (event: MouseEvent<HTMLButtonElement>) => pick(session, modifiersOf(event)),
+    onMenu: (point: MenuPoint) => openMenu(point, session),
+    onClearSelection: () => setHeld(null),
+    onRemove: () => removeFrom(session),
+  });
+
+  const draggable = prefs !== null && canReorder(prefs, filtering) && renaming === null;
+  const firstVisible = () => shown.flatMap((tree) => {
+    const mine = placed.get(tree.path);
+    return [...(mine?.agents ?? []), ...(mine?.terminals ?? [])];
+  })[0];
 
   return (
-    <>
-      {/* Only the traffic-light reserve lives up here; every action is a row below,
-          so the strip stays a drag region and no hairline cuts the rail. */}
-      <Sidebar.Header data-tauri-drag-region className="h-10 shrink-0 border-b-0 p-0">
-        {IS_MAC && <div className="h-full w-[78px]" />}
-      </Sidebar.Header>
-
-      {/* The identity row sits apart from the actions, so the sidebar reads top-down: where, then what. */}
-      <div className="shrink-0 px-[11px] pb-3">
-        <WorkspacePicker
-          workspaces={props.workspaces}
-          activeId={props.workspace.id}
-          open={props.pickerOpen}
-          onOpenChange={props.onPickerOpenChange}
-          onSelect={props.onSelectWorkspace}
-          onCreate={props.onCreateWorkspace}
-          onRename={props.onRenameWorkspace}
-          onRemove={props.onRemoveWorkspace}
-          onReorder={props.onReorderWorkspaces}
-        />
+    <div ref={panel} data-sidebar-panel onKeyDown={onPanelKey} className="flex min-h-0 flex-1 flex-col">
+      <div className="shrink-0 px-3 pt-3 pb-2" title={props.workspace.path}>
+        <div className="truncate text-[15px] font-semibold tracking-[-0.01em]">{props.workspace.name}</div>
+        <div className="truncate text-[11px] text-kumo-subtle">{shortenPath(props.workspace.path)}</div>
       </div>
 
-      <div className="flex shrink-0 flex-col gap-0.5 px-[11px] pb-3">
-        <SidebarRow
-          icon={RobotIcon}
-          label="New agent"
-          keys={commandKeys("new-agent")}
-          onClick={props.onNewAgent}
-        />
-        <SidebarRow
-          icon={TerminalWindowIcon}
-          label="New session"
-          keys={commandKeys("new-session")}
-          onClick={props.onNewSession}
-        />
-        <SidebarRow
-          icon={ArrowsClockwiseIcon}
-          label="Routines"
-          active={props.routinesOpen}
-          onClick={props.onOpenRoutines}
-        />
-      </div>
-
-      {/* The search belongs to the list under it, so the gap below is a beat, not a section break. */}
-      <div className="shrink-0 px-[11px]">
-        <div className="flex h-8 items-center gap-2.5 rounded-md bg-kumo-control pr-1 pl-2 ring ring-kumo-line has-[input:focus]:ring-[1.5px] has-[input:focus]:ring-kumo-focus/50">
-          <MagnifyingGlassIcon className="size-4 shrink-0 text-kumo-subtle" />
-          <input
-            value={query}
-            placeholder="Search"
-            aria-label="Find agents and sessions"
-            spellCheck={false}
-            onChange={(event) => setQuery(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key !== "Escape") return;
-              event.stopPropagation();
-              setQuery("");
-              event.currentTarget.blur();
+      <div className="shrink-0 px-2">
+        {searching ? (
+          <SearchField
+            query={query}
+            onChange={setQuery}
+            onClose={() => {
+              closeSearch();
+              panel.current?.querySelector<HTMLElement>("[data-nav][aria-current]")?.focus();
             }}
-            className="h-full min-w-0 flex-1 bg-transparent py-0 outline-none"
+            onEnter={() => {
+              const first = firstVisible();
+              if (first) props.onSelect(first);
+            }}
+            onDown={() => panel.current?.querySelector<HTMLElement>("[data-nav][data-session]")?.focus()}
           />
-          {prefs && <SidebarPrefsMenu prefs={prefs} onChange={setPrefs} />}
-        </div>
+        ) : (
+          <div className="flex h-8 items-center gap-0.5 pl-2">
+            <span className="min-w-0 flex-1 truncate text-kumo-subtle">Worktrees</span>
+            <HeaderButton icon={PlusIcon} label={`New worktree ${commandKeys("new-worktree")}`} onClick={props.onNewWorktree} />
+            <HeaderButton icon={MagnifyingGlassIcon} label="Find  /" onClick={() => setSearching(true)} />
+            {prefs && <SidebarPrefsMenu prefs={prefs} onChange={setPrefs} />}
+          </div>
+        )}
       </div>
 
-      <Sidebar.Content className="min-h-0 flex-1">
+      <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
         {prefs &&
-          groups.map((group) => (
-            <Group
-              key={group.id}
-              group={group}
-              prefs={prefs}
-              filtering={filtering}
-              renaming={renaming}
-              activeSessionId={props.activeSessionId}
-              selected={selected}
-              onAdd={addFor(group, props)}
-              onPick={pick}
-              onMenu={(point, session) => {
-                if (!selected.has(session.id))
-                  setSelection({ ids: [session.id], anchor: session.id });
-                setMenu({ point, session });
-              }}
-              onClearSelection={clearSelection}
-              onStartRename={setRenaming}
-              onRename={props.onRename}
-              onRemove={removeFrom}
-              onReorder={props.onReorder}
-            />
-          ))}
-        {prefs && groups.length === 0 && (
-          <p className="px-2 py-1.5 text-placeholder">
-            {filtering ? "No matches" : "Nothing here yet"}
-          </p>
-        )}
-      </Sidebar.Content>
+          shown.map((tree) => {
+            const index = props.worktrees.indexOf(tree);
+            const isCurrent = tree.path === props.activeWorktree;
+            const open = isCurrent || opened.has(tree.path) || filtering;
+            const mine = placed.get(tree.path) ?? { agents: [], terminals: [] };
+            const everyone = props.sessions.filter((session) => sessionPath(session, props.workspace) === tree.path);
+            return (
+              <div key={tree.path} className={`mt-1 rounded-xl ${isCurrent ? "bg-card ring-1 ring-hairline" : ""}`}>
+                <WorktreeHeader
+                  tree={tree}
+                  current={isCurrent}
+                  open={open}
+                  sessions={everyone}
+                  showDiff={shows(prefs, "diff")}
+                  keys={index < 9 ? commandKeys(`worktree-${index + 1}` as CommandId) : ""}
+                  onSelect={() => props.onSelectWorktree(tree.path)}
+                  onFold={(next) => fold(tree.path, next)}
+                  onAdd={() => props.onNewAgent(tree.path)}
+                  onMenu={(point) => setMenu({ kind: "worktree", point, tree })}
+                  onRemove={() => !tree.main && props.onRemoveWorktree(tree)}
+                />
+                {open && (
+                  <div className="px-1.5 pb-1.5">
+                    {mine.agents.length > 0 && (
+                      <div className="grid grid-cols-3 gap-0.5">
+                        <SortableList ids={mine.agents.map((s) => s.id)} disabled={!draggable} onReorder={props.onReorder}>
+                          {mine.agents.map((session, at) => (
+                            <SortableItem key={session.id} id={session.id} index={at} group={`agents:${tree.path}`} disabled={!draggable}>
+                              <Tile {...card(session)} onEdit={() => props.onEdit(session)} />
+                            </SortableItem>
+                          ))}
+                        </SortableList>
+                      </div>
+                    )}
+                    {mine.terminals.length > 0 && (
+                      <div className="flex flex-col gap-0.5 pt-0.5">
+                        <SortableList ids={mine.terminals.map((s) => s.id)} disabled={!draggable} onReorder={props.onReorder}>
+                          {mine.terminals.map((session, at) => (
+                            <SortableItem key={session.id} id={session.id} index={at} group={`terminals:${tree.path}`} disabled={!draggable}>
+                              {session.id === renaming ? (
+                                <RenameRow
+                                  className="h-8 px-2"
+                                  initial={session.name}
+                                  onCommit={(name) => {
+                                    props.onRename(session, name);
+                                    setRenaming(null);
+                                  }}
+                                  onCancel={() => setRenaming(null)}
+                                />
+                              ) : (
+                                <Row {...card(session)} onRename={() => setRenaming(session.id)} />
+                              )}
+                            </SortableItem>
+                          ))}
+                        </SortableList>
+                      </div>
+                    )}
+                    {mine.agents.length + mine.terminals.length === 0 && (
+                      <p className="px-2 py-1.5 text-[12px] text-placeholder">
+                        {filtering
+                          ? "No matches"
+                          : "No sessions yet"}
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+      </div>
 
-      <Sidebar.Footer className="h-auto shrink-0 flex-col items-stretch border-t-0 px-[11px] py-2">
-        <SidebarRow
-          icon={GearIcon}
-          label="Settings"
-          keys={commandKeys("open-settings")}
-          active={props.settingsOpen}
-          onClick={props.onOpenSettings}
-        />
-      </Sidebar.Footer>
-
-      {menu && (
+      {menu?.kind === "session" && (
         <ActionMenu
           key={menu.session.id}
           point={menu.point}
+          title={selected.size > 1 && selected.has(menu.session.id) ? `${selected.size} selected` : menu.session.name}
           actions={
             selected.size > 1 && selected.has(menu.session.id)
-              ? [{ ...DELETE, label: `Delete ${selected.size} items` }]
-              : menu.session.kind === "agent"
-                ? [EDIT, DELETE]
-                : [RENAME, DELETE]
+              ? [{ ...DELETE, label: `Delete ${selected.size} Items` }]
+              : sessionActions(menu.session)
           }
           onPick={(id) => {
             const session = menu.session;
@@ -252,188 +377,321 @@ export function SessionSidebar(props: SessionSidebarProps) {
               queueMicrotask(() => setRenaming(session.id));
               return;
             }
-            if (id === "edit") props.onEdit(session);
+            if (id === "open") props.onSelect(session);
+            if (id === "edit" || id === "face") props.onEdit(session);
+            if (id === "notifications") props.onToggleNotifications(session);
+            if (id === "mark-read") props.onMarkRead(session);
+            if (id === "copy-name") void navigator.clipboard.writeText(session.name);
             if (id === "delete") removeFrom(session);
           }}
           onClose={() => setMenu(null)}
         />
       )}
-    </>
+      {menu?.kind === "worktree" && (
+        <ActionMenu
+          key={menu.tree.path}
+          point={menu.point}
+          title={worktreeLabel(menu.tree)}
+          actions={worktreeActions(menu.tree)}
+          onPick={(id) => {
+            const tree = menu.tree;
+            setMenu(null);
+            if (id === "new-agent") props.onNewAgent(tree.path);
+            if (id === "new-session") props.onNewSession(tree.path);
+            if (id === "copy-path") void navigator.clipboard.writeText(tree.path);
+            if (id === "copy-branch" && tree.branch) void navigator.clipboard.writeText(tree.branch);
+            if (id === "remove-worktree") props.onRemoveWorktree(tree);
+          }}
+          onClose={() => setMenu(null)}
+        />
+      )}
+    </div>
   );
 }
 
-/** Only a group that holds one kind knows what its plus would create. */
-function addFor(group: SessionGroup, props: SessionSidebarProps) {
-  if (group.kind === "agent") return { onAdd: props.onNewAgent, hint: `New agent ${commandKeys("new-agent")}` };
-  if (group.kind === "terminal")
-    return { onAdd: props.onNewSession, hint: `New session ${commandKeys("new-session")}` };
-  return null;
-}
-
-type GroupProps = {
-  group: SessionGroup;
-  prefs: SidebarPrefs;
-  filtering: boolean;
-  renaming: string | null;
-  activeSessionId: string | null;
-  selected: Set<string>;
-  onAdd: { onAdd: () => void; hint: string } | null;
-  onPick: (session: Session, modifiers: ClickModifiers) => void;
-  onMenu: (point: MenuPoint, session: Session) => void;
-  onClearSelection: () => void;
-  onStartRename: (id: string | null) => void;
-  onRename: (session: Session, name: string) => void;
-  onRemove: (session: Session) => void;
-  onReorder: (ids: string[]) => void;
-};
-
-function Group({
-  group,
-  prefs,
-  filtering,
-  renaming,
-  activeSessionId,
-  selected,
-  onAdd,
-  ...on
-}: GroupProps) {
-  const ids = useMemo(() => group.sessions.map((session) => session.id), [group.sessions]);
-  const draggable = canReorder(prefs, filtering) && renaming === null;
-
-  const list = (
-    <SortableList ids={ids} disabled={!draggable} onReorder={on.onReorder}>
-      {group.sessions.map((session, index) => (
-        <SortableItem
-          key={session.id}
-          id={session.id}
-          index={index}
-          group={group.id}
-          disabled={!draggable}
-        >
-          <Sidebar.MenuItem>
-            {session.id === renaming ? (
-              <RenameRow
-                className="min-h-11.5 px-2"
-                initial={session.name}
-                onCommit={(name) => {
-                  on.onRename(session, name);
-                  on.onStartRename(null);
-                }}
-                onCancel={() => on.onStartRename(null)}
-              />
-            ) : (
-              <Card
-                session={session}
-                prefs={prefs}
-                active={session.id === activeSessionId}
-                selected={selected.has(session.id)}
-                onSelect={(event) => on.onPick(session, modifiersOf(event))}
-                onContextMenu={(event) => on.onMenu(menuFromEvent(event), session)}
-                onClearSelection={on.onClearSelection}
-                onRemove={() => on.onRemove(session)}
-                {...(session.kind === "terminal"
-                  ? { onRename: () => on.onStartRename(session.id) }
-                  : {})}
-              />
-            )}
-          </Sidebar.MenuItem>
-        </SortableItem>
-      ))}
-    </SortableList>
-  );
-
-  // Ungrouped is a flat list, not a group called "All".
-  if (prefs.grouping === "none") {
-    return (
-      <Sidebar.Group className="p-0">
-        <Sidebar.Menu className="gap-0.5">{list}</Sidebar.Menu>
-      </Sidebar.Group>
-    );
-  }
-
+function HeaderButton({ icon: Glyph, label, onClick }: { icon: Icon; label: string; onClick: () => void }) {
   return (
-    <Section label={group.label} onAdd={onAdd?.onAdd} addHint={onAdd?.hint}>
-      {list}
-    </Section>
+    <button
+      type="button"
+      aria-label={label}
+      title={label}
+      data-tauri-drag-region="false"
+      onClick={onClick}
+      className="grid size-6 shrink-0 place-items-center rounded-md text-kumo-subtle outline-none transition-colors hover:bg-hover hover:text-kumo-default focus-visible:bg-hover"
+    >
+      <Glyph className="size-4" />
+    </button>
   );
 }
 
-/** A session row without its third line; what it prints is the Show preference. */
-function Card({
-  session,
-  prefs,
-  active,
-  selected,
+/**
+ * A worktree's line. Clicked, it becomes the one on screen; ←/→ fold it; its
+ * plus starts an agent there. Folded, it shows who works there and how loud.
+ */
+function WorktreeHeader({
+  tree,
+  current,
+  open,
+  sessions,
+  showDiff,
+  keys,
   onSelect,
-  onContextMenu,
-  onClearSelection,
-  onRename,
+  onFold,
+  onAdd,
+  onMenu,
   onRemove,
 }: {
+  tree: Worktree;
+  current: boolean;
+  open: boolean;
+  sessions: Session[];
+  showDiff: boolean;
+  keys: string;
+  onSelect: () => void;
+  onFold: (open: boolean) => void;
+  onAdd: () => void;
+  onMenu: (point: MenuPoint) => void;
+  onRemove: () => void;
+}) {
+  const faces = sessions.filter((session) => session.kind === "agent").slice(0, 3);
+  function onKeyDown(event: KeyboardEvent<HTMLButtonElement>) {
+    if ((event.key === "ArrowLeft" || event.key === "ArrowRight") && !current) {
+      if ((event.key === "ArrowRight") === open) return;
+      event.preventDefault();
+      onFold(event.key === "ArrowRight");
+    } else if (event.key === "ContextMenu" || (event.key === "F10" && event.shiftKey)) {
+      event.preventDefault();
+      onMenu(pointOf(event.currentTarget));
+    } else if (isDeleteChord(event)) {
+      event.preventDefault();
+      onRemove();
+    }
+  }
+  return (
+    <div className="group/tree relative">
+      <button
+        type="button"
+        data-nav
+        data-tauri-drag-region="false"
+        aria-current={current ? "true" : undefined}
+        aria-expanded={open}
+        title={`${tree.path}${keys ? `  ${keys}` : ""}`}
+        onClick={onSelect}
+        onContextMenu={(event) => onMenu(menuFromEvent(event))}
+        onKeyDown={onKeyDown}
+        className="flex h-9 w-full items-center gap-2 rounded-xl px-2.5 text-left outline-none hover:bg-hover focus-visible:bg-hover focus-visible:ring-1 focus-visible:ring-border-strong"
+      >
+        {tree.branch || !tree.main ? (
+          <GitBranchIcon className={`size-4 shrink-0 ${current ? "" : "text-kumo-subtle"}`} />
+        ) : (
+          <FolderIcon className={`size-4 shrink-0 ${current ? "" : "text-kumo-subtle"}`} />
+        )}
+        <span className={`min-w-0 flex-1 truncate ${current ? "font-semibold" : ""}`}>{worktreeLabel(tree)}</span>
+        {!open && faces.length > 0 && (
+          <span className="flex -space-x-1.5">
+            {faces.map((session) => (
+              <AgentAvatar key={session.id} seed={session.id} bare className="size-5" />
+            ))}
+          </span>
+        )}
+        {open && showDiff && (tree.add > 0 || tree.del > 0) && (
+          <span className="shrink-0 text-[11px] tabular-nums group-hover/tree:opacity-0">
+            <span className="text-kumo-success">+{tree.add}</span>{" "}
+            <span className="text-kumo-danger">−{tree.del}</span>
+          </span>
+        )}
+        {!open && <StatusDot status={loudest(sessions)} />}
+      </button>
+      <button
+        type="button"
+        tabIndex={-1}
+        aria-label={`New agent in ${worktreeLabel(tree)}`}
+        title={`New agent in ${worktreeLabel(tree)}`}
+        onClick={onAdd}
+        className="absolute top-1.5 right-1.5 grid size-6 place-items-center rounded-md text-kumo-subtle opacity-0 transition-opacity group-hover/tree:opacity-100 hover:bg-hover hover:text-kumo-default"
+      >
+        <PlusIcon className="size-3.5" />
+      </button>
+    </div>
+  );
+}
+
+function loudest(sessions: Session[]): SessionStatus {
+  for (const status of STATUS_ORDER) if (sessions.some((session) => session.status === status)) return status;
+  return "idle";
+}
+
+function SearchField({
+  query,
+  onChange,
+  onClose,
+  onEnter,
+  onDown,
+}: {
+  query: string;
+  onChange: (query: string) => void;
+  onClose: () => void;
+  onEnter: () => void;
+  onDown: () => void;
+}) {
+  // Mounted by the click or key that asked for it, so it takes the keyboard at once.
+  const input = useCallback((node: HTMLInputElement | null) => node?.focus(), []);
+  return (
+    <div className="flex h-8 items-center gap-2 rounded-chrome bg-card pr-1 pl-2">
+      <MagnifyingGlassIcon className="size-3.5 shrink-0 text-kumo-subtle" />
+      <input
+        ref={input}
+        value={query}
+        placeholder="Find agents and sessions"
+        aria-label="Find agents and sessions"
+        spellCheck={false}
+        onChange={(event) => onChange(event.target.value)}
+        // Emptied and left, it has nothing to hold on to.
+        onBlur={() => !query.trim() && onClose()}
+        onKeyDown={(event) => {
+          if (event.key === "Escape") {
+            event.stopPropagation();
+            onClose();
+          } else if (event.key === "Enter") {
+            event.preventDefault();
+            onEnter();
+          } else if (event.key === "ArrowDown") {
+            event.preventDefault();
+            onDown();
+          }
+        }}
+        className="h-full min-w-0 flex-1 bg-transparent py-0 outline-none"
+      />
+      <button
+        type="button"
+        aria-label="Close search"
+        onMouseDown={(event) => event.preventDefault()}
+        onClick={onClose}
+        className="grid size-6 shrink-0 place-items-center rounded-md text-kumo-subtle hover:bg-hover hover:text-kumo-default"
+      >
+        <XIcon className="size-3.5" />
+      </button>
+    </div>
+  );
+}
+
+type CardProps = {
   session: Session;
   prefs: SidebarPrefs;
   active: boolean;
   selected: boolean;
   onSelect: (event: MouseEvent<HTMLButtonElement>) => void;
-  onContextMenu: (event: MouseEvent<HTMLButtonElement>) => void;
+  onMenu: (point: MenuPoint) => void;
   onClearSelection: () => void;
-  onRename?: () => void;
   onRemove: () => void;
-}) {
-  const avatar = session.kind === "agent" && shows(prefs, "avatar");
-  const meta = shows(prefs, "provider");
+};
 
-  function onKeyDown(event: KeyboardEvent<HTMLButtonElement>) {
-    if (event.key === "F2" && onRename) {
-      event.preventDefault();
-      onRename();
-      return;
-    }
-    if (event.key === "Escape") {
-      onClearSelection();
-      return;
-    }
-    if (isDeleteChord(event)) {
-      event.preventDefault();
-      onRemove();
-    }
-  }
+const SURFACE = (active: boolean, selected: boolean) =>
+  active ? "bg-selected" : selected ? "bg-selected/60" : "hover:bg-hover focus-visible:bg-hover";
 
+const FOCUS = "outline-none focus-visible:ring-1 focus-visible:ring-border-strong";
+
+/** F2, the menu key, delete and escape: the same keys on a tile and on a row. */
+function cardKeys(on: { rename?: (() => void) | undefined; menu: (point: MenuPoint) => void; clear: () => void; remove: () => void }) {
+  return (event: KeyboardEvent<HTMLButtonElement>) => {
+    if (event.key === "F2" && on.rename) {
+      event.preventDefault();
+      on.rename();
+    } else if (event.key === "ContextMenu" || (event.key === "F10" && event.shiftKey)) {
+      event.preventDefault();
+      on.menu(pointOf(event.currentTarget));
+    } else if (event.key === "Escape") {
+      on.clear();
+    } else if (isDeleteChord(event)) {
+      event.preventDefault();
+      on.remove();
+    }
+  };
+}
+
+/** An agent is its face and its name; what runs it is the tab's business, not the list's. */
+function Tile({ session, prefs, active, selected, onSelect, onMenu, onClearSelection, onRemove, onEdit }: CardProps & { onEdit: () => void }) {
   return (
     <button
       type="button"
+      data-nav
+      data-session
       data-tauri-drag-region="false"
       data-selected={selected || undefined}
       onClick={onSelect}
-      onContextMenu={onContextMenu}
-      onKeyDown={onKeyDown}
+      onContextMenu={(event) => onMenu(menuFromEvent(event))}
+      onKeyDown={cardKeys({ rename: onEdit, menu: onMenu, clear: onClearSelection, remove: onRemove })}
       title={session.description || session.name}
       aria-current={active ? "page" : undefined}
-      className={`flex w-full items-center gap-2.5 rounded-chrome px-2 py-1.5 text-left outline-none transition-colors duration-150 ease-out ${
-        active ? "bg-card" : selected ? "bg-selected" : "hover:bg-hover focus-visible:bg-hover"
-      }`}
+      aria-label={session.name}
+      className={`flex w-full min-w-0 flex-col items-center gap-1 rounded-xl px-1 pt-2 pb-1.5 transition-colors duration-150 ease-out ${SURFACE(active, selected)} ${FOCUS}`}
     >
-      {avatar && (
-        <AgentAvatar seed={session.id} />
-      )}
-      <span className="flex min-w-0 flex-1 flex-col">
-        <span className="flex items-baseline gap-2">
-          <span className="min-w-0 flex-1 truncate font-medium">{session.name}</span>
-          {shows(prefs, "updated") && (
-            <span className="shrink-0 text-[12px] text-kumo-subtle tabular-nums">
-              {elapsed(session.updatedAt)}
-            </span>
-          )}
-        </span>
-        {meta && (
-          <span className="flex items-center gap-1.5 text-[12px] text-kumo-subtle">
-            <ProviderIcon provider={session.provider} className="size-3.5" />
-            <span className="min-w-0 truncate">
-              {providerLine(session.provider, session.model)}
-            </span>
-          </span>
-        )}
+      <span className="relative">
+        <AgentAvatar seed={session.id} bare className="size-10" />
+        {shows(prefs, "status") && <Badge status={session.status} />}
       </span>
+      {shows(prefs, "names") && (
+        <span className={`w-full truncate text-center text-[12px] ${active ? "font-medium" : ""}`}>{session.name}</span>
+      )}
+    </button>
+  );
+}
+
+const BADGE: Partial<Record<SessionStatus, string>> = {
+  "needs-input": "bg-kumo-warning",
+  done: "bg-kumo-info",
+  error: "bg-kumo-danger",
+};
+
+/** Status rides the face's corner, like the unread dot on an app icon. */
+function Badge({ status }: { status: SessionStatus }) {
+  if (status === "idle") return null;
+  return (
+    <span
+      role="img"
+      aria-label={statusLabel(status)}
+      className="absolute -right-1 -bottom-1 grid size-4 place-items-center rounded-full bg-sidebar"
+    >
+      {status === "working" ? (
+        <StatusDot status={status} className="size-3" />
+      ) : (
+        <span className={`size-2.5 rounded-full ${BADGE[status]}`} />
+      )}
+    </span>
+  );
+}
+
+/** A session row: the provider it runs, its name, how long ago, its status. */
+function Row({
+  session,
+  prefs,
+  active,
+  selected,
+  onSelect,
+  onMenu,
+  onClearSelection,
+  onRemove,
+  onRename,
+}: CardProps & { onRename: () => void }) {
+  return (
+    <button
+      type="button"
+      data-nav
+      data-session
+      data-tauri-drag-region="false"
+      data-selected={selected || undefined}
+      onClick={onSelect}
+      onContextMenu={(event) => onMenu(menuFromEvent(event))}
+      onKeyDown={cardKeys({ rename: onRename, menu: onMenu, clear: onClearSelection, remove: onRemove })}
+      title={`${session.name} — ${providerLine(session.provider, session.model)}`}
+      aria-current={active ? "page" : undefined}
+      className={`flex h-8 w-full items-center gap-2.5 rounded-chrome px-2 text-left transition-colors duration-150 ease-out ${SURFACE(active, selected)} ${FOCUS}`}
+    >
+      <ProviderIcon provider={session.provider} className="size-4" />
+      <span className={`min-w-0 flex-1 truncate ${active ? "font-medium" : ""}`}>{session.name}</span>
+      {shows(prefs, "updated") && (
+        <span className="shrink-0 text-[12px] text-kumo-subtle tabular-nums">{elapsed(session.updatedAt)}</span>
+      )}
       {shows(prefs, "status") && <StatusDot status={session.status} />}
     </button>
   );

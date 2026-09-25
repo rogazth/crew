@@ -2,7 +2,7 @@ import { client } from "./client";
 import { open } from "./host";
 import type { RoutineRow, ScheduledRoutine } from "./routines";
 import type { HistoryEntry, HistoryList, MessagePage, PageSnapshot, SearchHit, SearchQuery } from "./protocol";
-import type { Autonomy, ProjectFile, Session, SessionKind, SessionStatus, Workspace } from "./types";
+import type { Autonomy, ProjectFile, Session, SessionKind, SessionStatus, Workspace, Worktree } from "./types";
 
 /** Native picker. No filters: any document the agent can read. */
 export async function pickFiles(): Promise<string[]> {
@@ -15,6 +15,17 @@ export const listWorkspaces = (): Promise<Workspace[]> => client.request("worksp
 
 export const createWorkspace = (name: string, path: string): Promise<Workspace> =>
   client.request("workspace_create", { name, path });
+
+export const listWorktrees = (path: string): Promise<Worktree[]> =>
+  client.request("worktree_list", { path });
+
+/** A new worktree for `branch`, beside the repo in crew's folder; the branch is made if it does not exist. */
+export const addWorktree = (path: string, branch: string): Promise<Worktree> =>
+  client.request("worktree_add", { path, branch });
+
+/** Refuses the main checkout, and uncommitted work unless forced. Its sessions go with it. */
+export const removeWorktree = (path: string, force: boolean): Promise<void> =>
+  client.request("worktree_remove", { path, force });
 
 export const renameWorkspace = (id: string, name: string): Promise<void> =>
   client.request("workspace_rename", { id, name });
@@ -36,7 +47,14 @@ export const listSessions = (workspaceId: string): Promise<Session[]> =>
 export const createSession = (
   workspaceId: string,
   kind: SessionKind,
-  input: { name: string; provider: string; model: string; description: string; autonomy: Autonomy },
+  input: {
+    name: string;
+    provider: string;
+    model: string;
+    description: string;
+    autonomy: Autonomy;
+    worktree?: string | null;
+  },
 ): Promise<Session> => client.request("session_create", { workspaceId, kind, ...input });
 
 export const updateSession = (

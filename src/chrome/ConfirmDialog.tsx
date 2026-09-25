@@ -1,6 +1,5 @@
-import { Button, Dialog } from "@cloudflare/kumo";
-import type { KeyboardEvent } from "react";
-import { Kbd } from "./Kbd";
+import { useRef } from "react";
+import { Alert, Button, Footer } from "./kit";
 
 export type Confirm = {
   title: string;
@@ -13,48 +12,35 @@ type Props = { confirm: Confirm | null; onClose: () => void };
 
 /** Destructive confirmation: Enter runs the action, Escape cancels. */
 export function ConfirmDialog({ confirm, onClose }: Props) {
+  const action = useRef<HTMLButtonElement>(null);
+  const run = () => {
+    if (!confirm) return;
+    void confirm.onConfirm();
+    onClose();
+  };
+
   return (
-    <Dialog.Root
-      role="alertdialog"
+    <Alert
       open={confirm !== null}
-      onOpenChange={(open) => !open && onClose()}
+      onDismiss={onClose}
+      title={confirm?.title ?? ""}
+      description={confirm?.description}
+      // Cancel comes first in the row, but focus starts on the button Enter presses.
+      initialFocus={action}
+      onKeyDown={(event) => {
+        if (event.key !== "Enter") return;
+        event.preventDefault();
+        run();
+      }}
     >
-      {confirm && (
-        // kumo anchors dialogs to top-8/sm:top-16; a short destructive prompt reads
-        // better centred, and the sm: override is needed or the breakpoint wins.
-        <Dialog size="sm" className="top-1/2 sm:top-1/2 -translate-y-1/2 p-5">
-          <div
-            onKeyDown={(event: KeyboardEvent<HTMLDivElement>) => {
-              if (event.key !== "Enter") return;
-              event.preventDefault();
-              void confirm.onConfirm();
-              onClose();
-            }}
-          >
-            <Dialog.Title className="text-base font-semibold">{confirm.title}</Dialog.Title>
-            <Dialog.Description className="mt-1.5 text-kumo-subtle">
-              {confirm.description}
-            </Dialog.Description>
-            <div className="mt-5 flex justify-end gap-2">
-              <Dialog.Close render={<Button variant="secondary" size="sm" />}>
-                Cancel <Kbd keys="Esc" />
-              </Dialog.Close>
-              <Button
-                variant="destructive"
-                size="sm"
-                autoFocus
-                onClick={() => {
-                  void confirm.onConfirm();
-                  onClose();
-                }}
-              >
-                {confirm.action}{" "}
-                <Kbd keys="⏎" className="border-white/20 bg-white/10 text-white/80" />
-              </Button>
-            </div>
-          </div>
-        </Dialog>
-      )}
-    </Dialog.Root>
+      <Footer hints={[["esc", "cancel"]]}>
+        <Button variant="ghost" className="text-[12px]" onClick={onClose}>
+          Cancel
+        </Button>
+        <Button ref={action} variant="danger" keys="⏎" className="text-[12px]" onClick={run}>
+          {confirm?.action}
+        </Button>
+      </Footer>
+    </Alert>
   );
 }

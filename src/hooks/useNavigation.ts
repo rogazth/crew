@@ -13,13 +13,18 @@ type Deps = {
   confirms: ReturnType<typeof useConfirmations>;
   removeSession: (id: string) => Promise<void>;
   closePage: () => void;
+  /**
+   * Where a session's tab belongs when that is not the strip on screen: its
+   * worktree is made current, and the tab goes to that worktree's strip.
+   */
+  route: (session: Session) => { context: string | null } | null;
 };
 
 /**
  * Everything that brings a tab to the front. Pages stack over the tabs, so each
  * of these leaves the page first.
  */
-export function useNavigation({ tabs, sessions, confirms, removeSession, closePage }: Deps) {
+export function useNavigation({ tabs, sessions, confirms, removeSession, closePage, route }: Deps) {
   /** Wraps a tab action so it lands in view instead of behind whatever page is up. */
   const inTabs = useCallback(
     (act: () => void) => () => {
@@ -32,9 +37,12 @@ export function useNavigation({ tabs, sessions, confirms, removeSession, closePa
   const openSession = useCallback(
     (session: Session) => {
       closePage();
-      tabs.open({ id: sessionTabId(session.id), kind: "session", sessionId: session.id });
+      const tab = { id: sessionTabId(session.id), kind: "session" as const, sessionId: session.id };
+      const elsewhere = route(session);
+      if (elsewhere?.context) tabs.openIn(elsewhere.context, tab);
+      else tabs.open(tab);
     },
-    [closePage, tabs],
+    [closePage, route, tabs],
   );
 
   /** A message from another agent names its sender; the name opens its tab. */
@@ -91,26 +99,48 @@ export function useNavigation({ tabs, sessions, confirms, removeSession, closePa
     [closePage, tabs],
   );
 
-  const closeTab = useCallback(
-    (id: string) => {
-      const tab = tabs.tabs.find((t) => t.id === id);
-      const session =
-        tab?.kind === "session" ? sessions.find((s) => s.id === tab.sessionId) : undefined;
-      if (!session) {
-        tabs.close(id);
-        return;
+  /**
+   * A session tab that never held a turn goes with its session; any other
+   * leaves the session in the sidebar. Running terminals ask first, once for
+   * the whole batch.
+   */
+  const closeTabs = useCallback(
+    (ids: string[]) => {
+      const wanted = new Set(ids);
+      const targets = tabs.tabs.filter((tab) => wanted.has(tab.id));
+      const byId = new Map(sessions.map((session) => [session.id, session]));
+      const owned = new Map<string, Session>();
+      for (const tab of targets) {
+        const session = tab.kind === "session" ? byId.get(tab.sessionId) : undefined;
+        if (session) owned.set(tab.id, session);
       }
-      confirms.askCloseTab(session, async () => {
-        if (await api.isSessionDisposable(session.id).catch(() => false)) {
-          tabs.closeForSession(session.id);
-          await removeSession(session.id);
-        } else {
-          tabs.close(id);
-        }
-      });
+      if (targets.length === 0) return;
+      confirms.askCloseTabs(
+        [...owned.values()],
+        targets.length,
+        () => {
+          for (const tab of targets) {
+            const session = owned.get(tab.id);
+            if (!session) {
+              tabs.close(tab.id);
+              continue;
+            }
+            void api
+              .isSessionDisposable(session.id)
+              .catch(() => false)
+              .then(async (disposable) => {
+                if (!disposable) return tabs.close(tab.id);
+                tabs.closeForSession(session.id);
+                await removeSession(session.id);
+              });
+          }
+        },
+      );
     },
     [confirms, removeSession, sessions, tabs],
   );
 
-  return { inTabs, openSession, openSessionById, openHit, openFile, openStub, openBrowser, openUrl, closeTab };
+  const closeTab = useCallback((id: string) => closeTabs([id]), [closeTabs]);
+
+  return { inTabs, openSession, openSessionById, openHit, openFile, openStub, openBrowser, openUrl, closeTab, closeTabs };
 }

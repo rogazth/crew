@@ -17,12 +17,13 @@ use crew_core::store::{self as app_state, Store};
 use crew_core::transcript::TranscriptEvents;
 use crew_core::turns::TurnHost;
 use crew_core::workspace;
+use crew_core::worktree;
 use crew_protocol::{
     self as proto, Auth, DaemonInfo, Id, IdName, IdStatus, Ids, Key, KeyValue, ListProjectFiles, Name, NamePath, Names, ProviderDiscover,
     OptionalId, PathArg, PathBytes, PathContents, PtyAck, PtyAttach, PtyAttached, PtyKill, PtyResize, PtySpawn, PtyWrite,
     Request, RoutineRunNow, RoutineUpsert, SessionCreate, SessionCreated, SessionId, SessionUpdate, TempFile,
     SearchQuery, TranscriptApply, TranscriptTail, TurnAnswer, TurnRespond,
-    TurnStart, TurnStarted, WorkspaceId,
+    TurnStart, TurnStarted, WorkspaceId, WorktreeAdd, WorktreeRemove,
 };
 use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
@@ -317,6 +318,7 @@ fn proto_session(row: &crew_core::session::Session) -> proto::Session {
         notifications: row.notifications,
         autonomy: row.autonomy.clone(),
         status: row.status.clone(),
+        worktree: row.worktree.clone(),
         created_at: row.created_at,
         updated_at: row.updated_at,
     }
@@ -704,6 +706,14 @@ async fn block<T: Send + 'static>(
         .map_err(|e| e.to_string())?
 }
 
+async fn delete_session(hosts: &Hosts, id: String) -> Result<(), String> {
+    let store = hosts.store.clone();
+    // Its process may still be running with a token in its environment;
+    // a session that no longer exists should not still be able to call.
+    hosts.bridge.revoke(&id);
+    block(move || session::delete(&store, id)).await
+}
+
 fn json(value: impl serde::Serialize) -> Result<Value, String> {
     serde_json::to_value(value).map_err(|e| e.to_string())
 }
@@ -798,7 +808,7 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
             let p: SessionCreate = parse(params)?;
             let store = hosts.store.clone();
             json(block(move || {
-                session::create(
+                session::create_in_worktree(
                     &store,
                     p.workspace_id,
                     p.kind,
@@ -807,6 +817,7 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
                     p.model,
                     p.description,
                     p.autonomy,
+                    p.worktree,
                 )
             })
             .await?)
@@ -837,11 +848,7 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
         }
         "session_delete" => {
             let Id { id } = parse(params)?;
-            let store = hosts.store.clone();
-            // Its process may still be running with a token in its environment;
-            // a session that no longer exists should not still be able to call.
-            hosts.bridge.revoke(&id);
-            block(move || session::delete(&store, id)).await?;
+            delete_session(hosts, id).await?;
             Ok(Value::Null)
         }
         "session_is_disposable" => {
@@ -949,6 +956,33 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
         "list_project_files" => {
             let ListProjectFiles { cwd, include } = parse(params)?;
             json(block(move || files::list(&cwd, &include)).await?)
+        }
+        "worktree_list" => {
+            let PathArg { path } = parse(params)?;
+            json(block(move || Ok::<_, String>(worktree::list(&path))).await?)
+        }
+        "worktree_add" => {
+            let WorktreeAdd { path, branch } = parse(params)?;
+            json(block(move || worktree::add(&path, &branch)).await?)
+        }
+        "worktree_remove" => {
+            let WorktreeRemove { path, force } = parse(params)?;
+            let store = hosts.store.clone();
+            let doomed = block(move || {
+                let listed = worktree::remove(&path, force)?;
+                // Stored as the window had it, which is how git lists it; the
+                // path asked for is looked up too, in case they differ.
+                let mut ids = session::in_worktree(&store, &listed)?;
+                if listed != path {
+                    ids.extend(session::in_worktree(&store, &path)?);
+                }
+                Ok::<_, String>(ids)
+            })
+            .await?;
+            for id in doomed {
+                delete_session(hosts, id).await?;
+            }
+            Ok(Value::Null)
         }
         "read_text_file" => {
             let PathArg { path } = parse(params)?;
@@ -2295,6 +2329,82 @@ print(json.dumps({"type":"turn.failed","error":{"message":"Codex exploded"}}), f
         assert!(!a.contains(&b'Q') && !a.windows(2).any(|w| w == b"yb"), "b leaked into a");
         assert!(!b.contains(&b'P') && !b.windows(2).any(|w| w == b"xa"), "a leaked into b");
         assert!(a.windows(4).any(|w| w == b"INxa") && b.windows(4).any(|w| w == b"INyb"), "input did not arrive");
+        handle.shutdown();
+    }
+
+    async fn rpc(ws: &mut Ws, id: u32, method: &str, params: Value) -> proto::Response {
+        send_json(ws, &Request { id, method: method.into(), params }).await;
+        wait_response(ws, id).await
+    }
+
+    fn git(dir: &std::path::Path, args: &[&str]) {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(["-c", "user.name=crew", "-c", "user.email=crew@test", "-c", "commit.gpgsign=false"])
+            .args(args)
+            .output()
+            .expect("git");
+        assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+    }
+
+    /// Removing a worktree takes the sessions that ran in it, and only those;
+    /// refused for unsaved work, it takes nothing.
+    #[tokio::test]
+    async fn removing_a_worktree_takes_its_sessions_with_it() {
+        let dir = std::fs::canonicalize(test_dir("worktree-remove")).expect("dir");
+        let repo = dir.join(format!("repo-{}", random_token()));
+        std::fs::create_dir_all(&repo).expect("repo");
+        git(&repo, &["init", "-q", "-b", "main"]);
+        std::fs::write(repo.join("a.txt"), "a\n").expect("file");
+        git(&repo, &["add", "."]);
+        git(&repo, &["commit", "-q", "-m", "init"]);
+        let tree = repo.with_extension("feat");
+        git(&repo, &["worktree", "add", "-q", "-b", "feat", &tree.to_string_lossy()]);
+        let handle = test_serve(&dir);
+        let mut ws = connect_authed(&handle).await;
+
+        let listed = rpc(&mut ws, 1, "worktree_list", serde_json::json!({ "path": repo })).await;
+        let listed = listed.result.expect("list");
+        assert_eq!(listed.as_array().map(Vec::len), Some(2), "{listed}");
+        let feat = listed[1]["path"].as_str().expect("path").to_string();
+        for field in ["add", "del", "dirty"] {
+            assert_eq!(listed[1][field], 0, "{field} in {listed}");
+        }
+        let made = rpc(&mut ws, 2, "workspace_create", serde_json::json!({ "name": "w", "path": repo })).await;
+        let workspace: proto::Workspace = serde_json::from_value(made.result.expect("ws")).expect("workspace");
+        let mut ids = Vec::new();
+        for (n, worktree) in [(3, Some(feat.clone())), (4, None)] {
+            let made = rpc(
+                &mut ws,
+                n,
+                "session_create",
+                serde_json::json!({
+                    "workspaceId": workspace.id, "kind": "agent", "name": "A", "provider": "claude",
+                    "model": "m", "description": "", "autonomy": "ask", "worktree": worktree
+                }),
+            )
+            .await;
+            let session: proto::Session = serde_json::from_value(made.result.expect("session")).expect("session");
+            assert_eq!(session.worktree, worktree);
+            ids.push(session.id);
+        }
+
+        std::fs::write(tree.join("a.txt"), "changed\n").expect("edit");
+        let refused = rpc(&mut ws, 5, "worktree_remove", serde_json::json!({ "path": feat, "force": false })).await;
+        assert!(refused.error.unwrap_or_default().contains("uncommitted"), "unsaved work was thrown away");
+        let kept = rpc(&mut ws, 6, "session_get", serde_json::json!({ "id": ids[0] })).await;
+        assert!(kept.result.is_some_and(|row| !row.is_null()), "a refused removal still took the session");
+
+        let removed = rpc(&mut ws, 7, "worktree_remove", serde_json::json!({ "path": feat, "force": true })).await;
+        assert!(removed.ok, "{}", removed.error.unwrap_or_default());
+        assert!(!tree.exists());
+        let gone = rpc(&mut ws, 8, "session_get", serde_json::json!({ "id": ids[0] })).await;
+        assert!(gone.ok && gone.result.is_none_or(|row| row.is_null()), "the worktree's session outlived it");
+        let main = rpc(&mut ws, 9, "session_get", serde_json::json!({ "id": ids[1] })).await;
+        assert!(main.result.is_some_and(|row| !row.is_null()), "the main checkout's session went too");
+        let main_removal = rpc(&mut ws, 10, "worktree_remove", serde_json::json!({ "path": repo, "force": true })).await;
+        assert!(main_removal.error.unwrap_or_default().contains("main checkout"));
         handle.shutdown();
     }
 }

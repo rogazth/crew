@@ -1,16 +1,27 @@
 import {
+  ArrowCounterClockwiseIcon,
+  ArrowSquareOutIcon,
+  BellIcon,
   BroomIcon,
+  CheckIcon,
+  ChecksIcon,
   ClipboardIcon,
   CopyIcon,
+  GearIcon,
+  GitBranchIcon,
   PencilSimpleIcon,
+  RobotIcon,
   SelectionAllIcon,
+  SmileyIcon,
+  TerminalWindowIcon,
   TrashIcon,
+  XIcon,
   type Icon,
 } from "@phosphor-icons/react";
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
 import { createPortal } from "react-dom";
 import { isDeleteChord } from "../lib/hotkey";
-import type { MenuAction, MenuIcon, MenuPoint } from "../lib/menu";
+import { SEPARATOR, type MenuAction, type MenuEntry, type MenuIcon, type MenuPoint } from "../lib/menu";
 
 const ICONS: Record<MenuIcon, Icon> = {
   edit: PencilSimpleIcon,
@@ -19,13 +30,25 @@ const ICONS: Record<MenuIcon, Icon> = {
   paste: ClipboardIcon,
   clear: BroomIcon,
   "select-all": SelectionAllIcon,
+  close: XIcon,
+  open: ArrowSquareOutIcon,
+  face: SmileyIcon,
+  bell: BellIcon,
+  read: ChecksIcon,
+  agent: RobotIcon,
+  terminal: TerminalWindowIcon,
+  branch: GitBranchIcon,
+  reopen: ArrowCounterClockwiseIcon,
+  settings: GearIcon,
 };
 
 type Props = {
   point: MenuPoint;
-  actions: MenuAction[];
+  actions: MenuEntry[];
   onPick: (id: string) => void;
   onClose: () => void;
+  /** Said above the actions: whose menu this is, when a right-click leaves any doubt. */
+  title?: string;
   /** When set, the name field sits at the top of the popover and focuses on open. */
   rename?: { initial: string; onCommit: (name: string) => void };
 };
@@ -35,14 +58,17 @@ function keyOf(action: MenuAction): string {
 }
 
 /**
- * Right-click popover at the cursor.
+ * Right-click popover at the cursor, in the same frame as every other menu.
+ * ↑↓ walk the actions, ↵ runs one, and each action's letter runs it directly.
  * Optional `rename` is an autofocused field in the popover, not a row replacement.
  */
-export function ActionMenu({ point, actions, onPick, onClose, rename }: Props) {
+export function ActionMenu({ point, actions, onPick, onClose, title, rename }: Props) {
   const surface = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLInputElement>(null);
   const skipCommit = useRef(false);
   const [name, setName] = useState(rename?.initial ?? "");
+  const runnable = actions.filter((entry): entry is MenuAction => entry !== SEPARATOR && !entry.disabled);
+  const [cursor, setCursor] = useState(-1);
 
   useLayoutEffect(() => {
     const el = surface.current;
@@ -97,12 +123,30 @@ export function ActionMenu({ point, actions, onPick, onClose, rename }: Props) {
         commitRename();
         onClose();
       }
+      if (event.key === "ArrowDown") {
+        event.preventDefault();
+        setCursor(0);
+        surface.current?.focus();
+      }
+      return;
+    }
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      const step = event.key === "ArrowDown" ? 1 : -1;
+      setCursor((c) => (c + step + runnable.length) % runnable.length);
+      return;
+    }
+    if (event.key === "Enter") {
+      const hit = runnable[cursor];
+      if (!hit) return;
+      event.preventDefault();
+      onPick(hit.id);
       return;
     }
     const hit = isDeleteChord(event)
-      ? actions.find((action) => action.id === "delete")
-      : actions.find((action) => keyOf(action) === event.key.toLowerCase());
-    if (!hit || hit.disabled) return;
+      ? runnable.find((action) => action.id.includes("delete") || action.id.includes("remove"))
+      : runnable.find((action) => keyOf(action) === event.key.toLowerCase());
+    if (!hit) return;
     event.preventDefault();
     onPick(hit.id);
   }
@@ -112,47 +156,57 @@ export function ActionMenu({ point, actions, onPick, onClose, rename }: Props) {
       ref={surface}
       role="menu"
       tabIndex={-1}
-      aria-label="Actions"
+      aria-label={title ?? "Actions"}
       onKeyDown={onMenuKey}
       onContextMenu={(event) => event.preventDefault()}
-      className={`fixed z-50 rounded-lg bg-kumo-control p-1.5 text-kumo-default shadow-lg ring ring-kumo-line outline-none ${
-        rename ? "w-56" : "w-max"
+      className={`fixed z-50 min-w-52 rounded-xl bg-kumo-control p-1 text-kumo-default shadow-lg ring ring-kumo-line outline-none ${
+        rename ? "w-60" : "w-max"
       }`}
       style={{ left: point.x, top: point.y }}
     >
+      {title && <div className="truncate px-2 pt-1.5 pb-1 text-[11px] text-kumo-subtle">{title}</div>}
       {rename && (
         <input
           ref={input}
           autoFocus
           value={name}
           aria-label="Rename"
+          spellCheck={false}
           onChange={(event) => setName(event.target.value)}
           onBlur={() => {
             if (!skipCommit.current) commitRename();
           }}
-          className="mb-1.5 w-full rounded-md bg-kumo-fill px-2.5 py-1.5 text-[13px] font-medium text-kumo-default caret-kumo-default outline-none ring-1 ring-kumo-interact"
+          className="mb-1 h-8 w-full rounded-md bg-kumo-base px-2.5 font-medium text-kumo-default ring ring-kumo-line outline-none focus:ring-[1.5px] focus:ring-kumo-focus/50"
         />
       )}
-      {actions.map((action) => {
-        const Icon = ICONS[action.icon];
-        const tone = action.danger
-          ? "text-kumo-danger hover:bg-kumo-danger/10"
-          : "text-kumo-default hover:bg-hover";
+      {actions.map((entry, index) => {
+        if (entry === SEPARATOR) return <div key={`separator-${index}`} role="separator" className="mx-2 my-1 h-px bg-kumo-line" />;
+        const Glyph = ICONS[entry.icon];
+        const lit = runnable[cursor]?.id === entry.id;
         return (
           <button
-            key={action.id}
+            key={entry.id}
             type="button"
-            role="menuitem"
-            disabled={action.disabled}
+            role={entry.checked === undefined ? "menuitem" : "menuitemcheckbox"}
+            aria-checked={entry.checked}
+            disabled={entry.disabled}
             onMouseDown={(event) => event.preventDefault()}
-            onClick={() => onPick(action.id)}
-            className={`flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-[13px] ${
-              action.disabled ? "text-kumo-placeholder" : tone
+            onMouseMove={() => setCursor(runnable.indexOf(entry))}
+            onClick={() => onPick(entry.id)}
+            className={`flex h-8 w-full items-center gap-2 rounded-md px-2 text-left ${
+              entry.disabled
+                ? "text-kumo-placeholder"
+                : entry.danger
+                  ? `text-kumo-danger ${lit ? "bg-kumo-danger/10" : ""}`
+                  : lit
+                    ? "bg-hover"
+                    : ""
             }`}
           >
-            <Icon className="size-4 shrink-0" />
-            <span>{action.label}</span>
-            <span className="ml-auto pl-6 text-[11px] text-kumo-subtle">{action.hotkey}</span>
+            <Glyph className={`size-4 shrink-0 ${entry.danger || entry.disabled ? "" : "text-kumo-subtle"}`} />
+            <span className="min-w-0 flex-1 truncate">{entry.label}</span>
+            {entry.checked && <CheckIcon className="size-3.5 shrink-0" />}
+            {entry.hotkey && <span className="shrink-0 pl-4 text-[11px] text-kumo-subtle">{entry.hotkey}</span>}
           </button>
         );
       })}

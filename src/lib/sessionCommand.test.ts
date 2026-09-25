@@ -11,6 +11,7 @@ const base: Session = {
   provider: "claude",
   model: "",
   providerSessionId: null,
+  worktree: null,
   description: "",
   notifications: true,
   autonomy: "ask",

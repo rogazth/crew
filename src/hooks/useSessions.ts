@@ -12,6 +12,8 @@ type CreateInput = {
   model: string;
   description: string;
   autonomy: Autonomy;
+  /** The worktree it runs in; left out, the workspace folder. */
+  worktree?: string | null;
 };
 
 type Registry = Record<string, Session[]>;
@@ -109,6 +111,22 @@ export function useSessions(workspaceId: string | null) {
     });
   }, []);
 
+  /** The daemon already deleted these, with the worktree they ran in; the list lets them go. */
+  const forget = useCallback(async (ids: string[]) => {
+    const gone = new Set(ids);
+    await Promise.all(ids.map((id) => dispose(id)));
+    setRegistry((prev) => {
+      let changed = false;
+      const next: Registry = {};
+      for (const [workspace, list] of Object.entries(prev)) {
+        const kept = list.filter((s) => !gone.has(s.id));
+        next[workspace] = kept;
+        if (kept.length !== list.length) changed = true;
+      }
+      return changed ? next : prev;
+    });
+  }, []);
+
   const rename = useCallback(
     async (id: string, name: string) => {
       await api.renameSession(id, name);
@@ -175,5 +193,5 @@ export function useSessions(workspaceId: string | null) {
   }, []);
 
   const sessions = (workspaceId ? registry[workspaceId] : undefined) ?? NONE;
-  return { sessions, all, create, update, rename, adoptName, remove, reorder, setStatus, dropWorkspace };
+  return { sessions, all, create, update, rename, adoptName, remove, forget, reorder, setStatus, dropWorkspace };
 }

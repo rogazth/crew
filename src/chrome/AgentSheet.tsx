@@ -1,13 +1,19 @@
-import { Button, Input, InputArea, Label, Switch } from "@cloudflare/kumo";
-import { PlusIcon, XIcon } from "@phosphor-icons/react";
-import { useCallback, useEffect, useRef, useState } from "react";
-import { Kbd } from "./Kbd";
+import { ArrowsClockwiseIcon, FolderIcon, GitBranchIcon, PlusIcon, ShuffleIcon } from "@phosphor-icons/react";
+import { useState, type KeyboardEvent, type ReactNode } from "react";
+import { AgentAvatar } from "./AgentAvatar";
+import { Button, Card, Field, Footer, Overlay, Select, TextArea, TextInput, Toggle, type Option } from "./kit";
 import { ModelPicker } from "./ModelPicker";
-import { ProviderIcon } from "./ProviderIcon";
 import type { useAgentSheet } from "../hooks/useAgentSheet";
+import { useAgentAvatar } from "../hooks/useAgentAvatar";
+import { useAgentFaces } from "../hooks/useAgentFaces";
 import { useDefaultAgent } from "../hooks/useDefaultAgent";
+import { AGENT_AVATARS, dealSeeds, type AgentAvatarId, type AgentFace } from "../lib/agentAvatar";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER, type ProviderId } from "../lib/providers";
-import type { Autonomy, Session } from "../lib/types";
+import type { Autonomy, Session, Worktree } from "../lib/types";
+import { branchError, worktreeLabel } from "../lib/worktrees";
+
+/** Where a new agent works: a worktree that exists (null path: the main checkout), or a branch to make one for. */
+export type Place = { kind: "worktree"; path: string | null } | { kind: "branch"; branch: string };
 
 export type AgentDraft = {
   name: string;
@@ -16,11 +22,17 @@ export type AgentDraft = {
   description: string;
   notifications: boolean;
   autonomy: Autonomy;
+  place: Place;
+  /** The face it wears: saved against the agent once it exists. */
+  face: AgentFace;
 };
 
 type Props = {
   /** null = creating. */
   session: Session | null;
+  worktrees: Worktree[];
+  /** Where a new agent starts out working; null is the main checkout. */
+  initialWorktree: string | null;
   existingNames: string[];
   /** null while creating: a routine needs an agent that already exists. */
   onNewRoutine: (() => void) | null;
@@ -28,46 +40,33 @@ type Props = {
   onClose: () => void;
 };
 
-const EMPTY: AgentDraft = {
-  name: "",
-  provider: DEFAULT_PROVIDER,
-  model: DEFAULT_MODEL,
-  description: "",
-  notifications: true,
-  autonomy: "ask",
-};
-
-/** Must match .sheet-panel-out in index.css. */
-const CLOSE_MS = 150;
-
-function draftOf(session: Session | null, fallback: Partial<AgentDraft>): AgentDraft {
-  if (!session) return { ...EMPTY, ...fallback };
-  return {
-    name: session.name,
-    provider: session.provider,
-    model: session.model || DEFAULT_MODEL,
-    description: session.description,
-    notifications: session.notifications,
-    autonomy: session.autonomy,
-  };
-}
+const VARIANTS = 7;
 
 /** The open sheet, keyed so switching between agents starts a fresh draft. */
 export function AgentSheetHost({
   sheet,
   sessions,
+  worktrees,
+  activeWorktree,
   onNewRoutine,
 }: {
   sheet: ReturnType<typeof useAgentSheet>;
   sessions: Session[];
+  worktrees: Worktree[];
+  /** The worktree on screen; null is the main checkout. */
+  activeWorktree: string | null;
   onNewRoutine: (sessionId: string) => void;
 }) {
   if (!sheet.sheet) return null;
   const editing = sheet.sheet.session;
+  const asked = sheet.sheet.worktree;
+  const main = worktrees.find((tree) => tree.main)?.path;
   return (
     <AgentSheet
       key={editing?.id ?? "new"}
       session={editing}
+      worktrees={worktrees}
+      initialWorktree={asked === undefined ? activeWorktree : asked === main ? null : asked}
       existingNames={sessions.flatMap((s) => (s.kind === "agent" ? [s.name] : []))}
       onNewRoutine={editing ? () => onNewRoutine(editing.id) : null}
       onSave={sheet.save}
@@ -77,103 +76,142 @@ export function AgentSheetHost({
 }
 
 function nameError(name: string, existingNames: string[], current: string | undefined) {
-  if (!name) return { taken: false, error: "Name is required" };
+  if (!name) return "Name is required";
   const lower = name.toLowerCase();
-  const taken = existingNames.some((n) => n.toLowerCase() === lower && n !== current);
-  return { taken, error: taken ? "An agent with this name already exists" : null };
+  return existingNames.some((n) => n.toLowerCase() === lower && n !== current)
+    ? "An agent with this name already exists"
+    : null;
 }
 
-export function AgentSheet({ session, existingNames, onNewRoutine, onSave, onClose }: Props) {
+/**
+ * Making or tuning an agent, in the palette's frame: who it is (face and name),
+ * where it works, what runs it, how it behaves. ⌘↵ saves from anywhere in it.
+ */
+export function AgentSheet({ session, worktrees, initialWorktree, existingNames, onNewRoutine, onSave, onClose }: Props) {
   // Seeded once per mount (the parent keys us by session): the CLI probe landing
   // mid-edit must not wipe what was typed.
   const { effective } = useDefaultAgent();
-  const [draft, setDraft] = useState<AgentDraft>(() => draftOf(session, effective));
+  const saved = useAgentFaces()[session?.id ?? ""];
+  const [draft, setDraft] = useState<AgentDraft>(() =>
+    session
+      ? {
+          name: session.name,
+          provider: session.provider,
+          model: session.model || DEFAULT_MODEL,
+          description: session.description,
+          notifications: session.notifications,
+          autonomy: session.autonomy,
+          place: { kind: "worktree", path: session.worktree },
+          face: saved ?? {},
+        }
+      : {
+          name: "",
+          provider: effective.provider ?? DEFAULT_PROVIDER,
+          model: effective.model ?? DEFAULT_MODEL,
+          description: "",
+          notifications: true,
+          autonomy: "ask",
+          place: { kind: "worktree", path: initialWorktree },
+          // A new agent has no id to draw from yet, so it starts on a seed of its own.
+          face: { seed: dealSeeds(1)[0]! },
+        },
+  );
   const [submitted, setSubmitted] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [closing, setClosing] = useState(false);
-  const closeTimer = useRef<number | null>(null);
-
-  // The parent unmounts us the moment onClose fires, so the exit has to play first.
-  const requestClose = useCallback(() => {
-    if (closeTimer.current !== null) return;
-    setClosing(true);
-    closeTimer.current = window.setTimeout(onClose, CLOSE_MS);
-  }, [onClose]);
-
-  useEffect(() => () => {
-    if (closeTimer.current !== null) clearTimeout(closeTimer.current);
-  }, []);
+  const update = (patch: Partial<AgentDraft>) => setDraft((prev) => ({ ...prev, ...patch }));
 
   const name = draft.name.trim();
-  const { taken, error } = nameError(name, existingNames, session?.name);
+  const named = nameError(name, existingNames, session?.name);
+  const placed = draft.place.kind === "branch" ? branchError(draft.place.branch) : null;
 
   async function submit() {
     setSubmitted(true);
-    if (error || saving || closing) return;
+    if (named || placed || saving) return;
     setSaving(true);
     try {
-      // onSave holds the spinner for MIN_SAVE_MS so its result and this exit coincide.
+      // onSave holds the spinner for MIN_SAVE_MS so the row, the tab and this close land together.
       await onSave({ ...draft, name });
-      requestClose();
+      onClose();
     } catch {
       setSaving(false);
     }
   }
 
-  // Saving adds the name to existingNames, so validation would flash "already
-  // exists" over the agent we just created while the sheet plays its exit.
-  const live = taken || submitted;
-  const showError = saving || closing || !live ? undefined : (error ?? undefined);
-
-  // Window-level so Escape works after clicking non-focusable content in the drawer.
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") requestClose();
-      if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) void submit();
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  });
+  function onKeyDown(event: KeyboardEvent) {
+    if (event.key !== "Enter" || !(event.metaKey || event.ctrlKey)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    void submit();
+  }
 
   return (
-    <div
-      role="presentation"
-      className={`fixed inset-0 z-40 flex justify-end ${closing ? "pointer-events-none" : ""}`}
-      onClick={requestClose}
-    >
-      <div
-        className={`absolute inset-0 bg-black/10 backdrop-blur-[1px] ${
-          closing ? "sheet-backdrop-out" : "sheet-backdrop"
-        }`}
-      />
-      <aside
-        onClick={(event) => event.stopPropagation()}
-        className={`relative flex h-full w-[380px] flex-col border-l border-border bg-canvas shadow-2xl ${
-          closing ? "sheet-panel-out" : "sheet-panel"
-        }`}
-      >
-        <header className="flex h-12 shrink-0 items-center justify-between border-b border-border pr-2 pl-4">
-          <span className="font-medium">{session ? "Agent settings" : "New agent"}</span>
-          <Button
-            variant="ghost"
-            shape="square"
-            size="sm"
-            icon={<XIcon className="size-4" />}
-            aria-label="Close"
-            onClick={requestClose}
-          />
-        </header>
-
+    <Overlay onClose={onClose} width="w-[480px]" label={session ? "Agent settings" : "New agent"}>
+      <div onKeyDown={onKeyDown} className="flex min-h-0 flex-1 flex-col">
         <div className="min-h-0 flex-1 space-y-5 overflow-y-auto p-4">
-          <AgentFields draft={draft} error={showError} onChange={setDraft} />
+          <FacePicker
+            id={session?.id ?? null}
+            face={draft.face}
+            title={session ? "Agent settings" : "New agent"}
+            onChange={(face) => update({ face })}
+          />
+
+          <Field label="Name" error={submitted ? named : null}>
+            <TextInput
+              autoFocus
+              value={draft.name}
+              placeholder="e.g. Research"
+              aria-invalid={submitted && named !== null}
+              onChange={(event) => update({ name: event.target.value })}
+            />
+          </Field>
+
+          {!session && (
+            <WorksIn
+              worktrees={worktrees}
+              place={draft.place}
+              error={submitted ? placed : null}
+              onChange={(place) => update({ place })}
+            />
+          )}
+
+          <Field label="Model">
+            <ModelPicker
+              provider={draft.provider}
+              model={draft.model}
+              onChange={(provider: ProviderId, model) => update({ provider, model })}
+            />
+          </Field>
+
+          <Field label="Description" hint="What it is for, and how it should work. It reads this every turn.">
+            <TextArea
+              rows={3}
+              value={draft.description}
+              placeholder="Reviews every change for correctness before it lands"
+              onChange={(event) => update({ description: event.target.value })}
+            />
+          </Field>
+
+          <Card>
+            <Toggle
+              checked={draft.autonomy === "full"}
+              onChange={(checked) => update({ autonomy: checked ? "full" : "ask" })}
+              label="Run autonomously"
+              description="Tools run without asking. Off, every edit and command waits for Allow."
+            />
+            <Toggle
+              checked={draft.notifications}
+              onChange={(checked) => update({ notifications: checked })}
+              label="Notifications"
+              description="When it finishes or needs you."
+            />
+          </Card>
 
           {onNewRoutine && (
             <Button
-              variant="secondary"
+              icon={ArrowsClockwiseIcon}
               className="w-full"
-              icon={PlusIcon}
               onClick={() => {
-                requestClose();
+                onClose();
                 onNewRoutine();
               }}
             >
@@ -182,100 +220,152 @@ export function AgentSheet({ session, existingNames, onNewRoutine, onSave, onClo
           )}
         </div>
 
-        <footer className="flex shrink-0 items-center justify-end gap-2 border-t border-border p-3">
-          <Button variant="secondary" onClick={requestClose}>
-            Cancel <Kbd keys="Esc" />
+        <Footer hints={[["⌘↵", session ? "save" : "create"], ["esc", "cancel"]]}>
+          <Button variant="ghost" onClick={onClose}>
+            Cancel
           </Button>
           <Button variant="primary" loading={saving} onClick={() => void submit()}>
-            {session ? "Save" : "Create agent"}{" "}
-            <Kbd keys="⌘⏎" className="border-white/20 bg-white/10 text-white/80" />
+            {session ? "Save" : "Create agent"}
           </Button>
-        </footer>
-      </aside>
+        </Footer>
+      </div>
+    </Overlay>
+  );
+}
+
+/**
+ * The face, big, with a hand of others in the same style to swap it for. The
+ * style is everyone's unless this agent is given its own.
+ */
+function FacePicker({
+  id,
+  face,
+  title,
+  onChange,
+}: {
+  id: string | null;
+  face: AgentFace;
+  title: string;
+  onChange: (face: AgentFace) => void;
+}) {
+  const { avatar } = useAgentAvatar();
+  const [hand, setHand] = useState(() => dealSeeds(VARIANTS));
+  const style = face.style ?? avatar;
+  // What the face is drawn from: its own seed, else the agent's id.
+  const seed = face.seed ?? id ?? "";
+  const styles: Option<"default" | AgentAvatarId>[] = [
+    { value: "default", label: `Default (${AGENT_AVATARS.find((a) => a.id === avatar)?.label ?? avatar})` },
+    ...AGENT_AVATARS.map((a) => ({ value: a.id, label: a.label })),
+  ];
+
+  return (
+    <div className="flex items-start gap-4">
+      <AgentAvatar seed={seed} style={style} bare className="size-16" />
+      <div className="flex min-w-0 flex-1 flex-col gap-2">
+        <div className="flex items-center gap-2">
+          <span className="min-w-0 flex-1 truncate text-[14px] font-semibold">{title}</span>
+          <Select
+            label="Face style"
+            className="w-40"
+            value={face.style ?? "default"}
+            options={styles}
+            onChange={(value) =>
+              onChange(value === "default" ? (face.seed ? { seed: face.seed } : {}) : { ...face, style: value })
+            }
+          />
+        </div>
+        <div role="radiogroup" aria-label="Face" className="flex items-center gap-1">
+          {hand.map((candidate) => (
+            <button
+              key={candidate}
+              type="button"
+              role="radio"
+              aria-checked={candidate === face.seed}
+              aria-label="Use this face"
+              onClick={() => onChange({ ...face, seed: candidate })}
+              className={`grid size-9 place-items-center rounded-lg outline-none transition-colors focus-visible:ring-2 focus-visible:ring-kumo-focus/50 ${
+                candidate === face.seed ? "bg-selected" : "hover:bg-hover"
+              }`}
+            >
+              <AgentAvatar seed={candidate} style={style} bare className="size-7" />
+            </button>
+          ))}
+          <button
+            type="button"
+            title="Deal new faces"
+            aria-label="Deal new faces"
+            onClick={() => setHand(dealSeeds(VARIANTS))}
+            className="grid size-9 place-items-center rounded-lg text-kumo-subtle outline-none hover:bg-hover hover:text-kumo-default focus-visible:ring-2 focus-visible:ring-kumo-focus/50"
+          >
+            <ShuffleIcon className="size-4" />
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
 
-function AgentFields({
-  draft,
+/** Where a new agent works: one of the workspace's worktrees, or a new branch that gets its own. */
+function WorksIn({
+  worktrees,
+  place,
   error,
   onChange,
 }: {
-  draft: AgentDraft;
-  error: string | undefined;
-  onChange: (draft: AgentDraft) => void;
+  worktrees: Worktree[];
+  place: Place;
+  error: string | null;
+  onChange: (place: Place) => void;
 }) {
-  const update = (patch: Partial<AgentDraft>) => onChange({ ...draft, ...patch });
+  const [branch, setBranch] = useState(place.kind === "branch" ? place.branch : "");
+  const row = (key: string, chosen: boolean, onClick: () => void, children: ReactNode) => (
+    <button
+      key={key}
+      type="button"
+      role="radio"
+      aria-checked={chosen}
+      onClick={onClick}
+      className={`flex h-8 w-full items-center gap-2 rounded-md px-2 text-left outline-none focus-visible:ring-1 focus-visible:ring-border-strong ${
+        chosen ? "bg-selected" : "hover:bg-hover"
+      }`}
+    >
+      {children}
+    </button>
+  );
   return (
-    <>
-      <div className="flex justify-center pt-2 pb-1">
-        <div className="flex size-16 items-center justify-center rounded-2xl border border-border bg-sidebar">
-          <ProviderIcon provider={draft.provider} className="size-7" />
+    <Field label="Works in" error={error}>
+      <div role="radiogroup" aria-label="Works in" className="flex flex-col gap-0.5 rounded-lg bg-card p-1">
+        {worktrees.map((tree) => {
+          const path = tree.main ? null : tree.path;
+          const Glyph = tree.branch || !tree.main ? GitBranchIcon : FolderIcon;
+          return row(tree.path, place.kind === "worktree" && place.path === path, () => onChange({ kind: "worktree", path }), (
+            <>
+              <Glyph className="size-3.5 shrink-0 text-kumo-subtle" />
+              <span className="min-w-0 flex-1 truncate">{worktreeLabel(tree)}</span>
+              {tree.main && <span className="text-[11px] text-kumo-subtle">main checkout</span>}
+            </>
+          ));
+        })}
+        <div
+          className={`flex h-8 w-full items-center gap-2 rounded-md px-2 ${place.kind === "branch" ? "bg-selected" : "hover:bg-hover"}`}
+        >
+          <PlusIcon className="size-3.5 shrink-0 text-kumo-subtle" />
+          <input
+            role="radio"
+            aria-checked={place.kind === "branch"}
+            aria-label="New branch"
+            value={branch}
+            placeholder="New branch in a new worktree…"
+            spellCheck={false}
+            onFocus={() => onChange({ kind: "branch", branch })}
+            onChange={(event) => {
+              setBranch(event.target.value);
+              onChange({ kind: "branch", branch: event.target.value });
+            }}
+            className="min-w-0 flex-1 bg-transparent outline-none placeholder:text-kumo-subtle"
+          />
         </div>
       </div>
-
-      <Input
-        autoFocus
-        label="Name"
-        className="w-full"
-        value={draft.name}
-        placeholder="e.g. research"
-        {...(error ? { error } : {})}
-        variant={error ? "error" : "default"}
-        onChange={(e) => update({ name: e.target.value })}
-      />
-
-      <div className="flex flex-col gap-1.5">
-        <Label>Model</Label>
-        <ModelPicker
-          provider={draft.provider}
-          model={draft.model}
-          onChange={(provider: ProviderId, model) => update({ provider, model })}
-        />
-      </div>
-
-      <InputArea
-        label="Description"
-        className="w-full"
-        rows={4}
-        value={draft.description}
-        placeholder="What this agent is for, and how it should work"
-        onChange={(e) => update({ description: e.target.value })}
-      />
-
-      <div className="rounded-xl border border-border bg-sidebar p-3">
-        <Switch
-          variant="neutral"
-          controlFirst={false}
-          checked={draft.autonomy === "full"}
-          onCheckedChange={(checked) => update({ autonomy: checked ? "full" : "ask" })}
-          label={
-            <span className="block">
-              <span className="block font-medium">Run autonomously</span>
-              <span className="mt-0.5 block font-normal text-kumo-subtle">
-                Tools run without asking. Off means every edit and command waits for Allow
-              </span>
-            </span>
-          }
-        />
-      </div>
-
-      <div className="rounded-xl border border-border bg-sidebar p-3">
-        <Switch
-          variant="neutral"
-          controlFirst={false}
-          checked={draft.notifications}
-          onCheckedChange={(checked) => update({ notifications: checked })}
-          label={
-            <span className="block">
-              <span className="block font-medium">Notifications</span>
-              <span className="mt-0.5 block font-normal text-kumo-subtle">
-                Get notified when this agent finishes or needs input
-              </span>
-            </span>
-          }
-        />
-      </div>
-    </>
+    </Field>
   );
 }

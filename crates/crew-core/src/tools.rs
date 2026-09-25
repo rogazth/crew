@@ -684,7 +684,9 @@ fn create_agent(
     // Inherited, never asked for. An agent that has to stop at every command
     // could otherwise build one that does not, and then send it the command.
     let autonomy = caller.autonomy.clone();
-    let session = session::create(
+    // It works on the same checkout as whoever made it, so what the two of
+    // them say about the files is about the same files.
+    let session = session::create_in_worktree(
         store,
         caller.workspace_id.clone(),
         "agent".into(),
@@ -693,6 +695,7 @@ fn create_agent(
         model.clone(),
         description,
         autonomy.clone(),
+        caller.worktree.clone(),
     )?;
     on_created(&session);
     transcripts.append_system(&session.id, &format!("Created by {}", caller.name));
@@ -1639,6 +1642,45 @@ mod tests {
         );
         let theirs = transcripts.window(&made.id, None, None).blocks;
         assert!(theirs.iter().any(|block| block.text.contains("Created by Coder")), "{theirs:?}");
+    }
+
+    /// A helper made from inside a worktree works on that checkout, not on the
+    /// main one next to it.
+    #[test]
+    fn an_agent_is_created_in_its_creators_worktree() {
+        let store = store();
+        let transcripts = TranscriptHub::new(store.clone());
+        let ws = workspace(&store);
+        let coder = session::create_in_worktree(
+            &store,
+            ws.clone(),
+            "agent".into(),
+            "Coder".into(),
+            "claude".into(),
+            "claude-opus-5".into(),
+            "".into(),
+            "ask".into(),
+            Some("/wt/feat".into()),
+        )
+        .expect("coder");
+
+        let out = call(
+            &store,
+            &transcripts,
+            &Postman::default(),
+            &coder,
+            "create_agent",
+            json!({ "name": "Helper", "description": "You help." }),
+        )
+        .expect("call");
+        assert!(!is_error(&out), "{}", body(&out));
+
+        let made = session::list(&store, ws)
+            .expect("list")
+            .into_iter()
+            .find(|row| row.name == "Helper")
+            .expect("the agent");
+        assert_eq!(made.worktree.as_deref(), Some("/wt/feat"));
     }
 
     #[test]

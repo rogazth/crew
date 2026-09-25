@@ -2,24 +2,31 @@ import type { Style, StyleDefinition } from "@dicebear/core";
 import { RobotIcon } from "@phosphor-icons/react";
 import { useEffect, useState } from "react";
 import { useAgentAvatar } from "../hooks/useAgentAvatar";
+import { useAgentFaces } from "../hooks/useAgentFaces";
 import { avatarUri, loadAvatarStyle, type AgentAvatarId } from "../lib/agentAvatar";
 
 /**
  * An agent's face, drawn from its session id so a rename keeps it. `style`
  * overrides the chosen one, for previews. Until the style's chunk lands the
- * robot glyph holds the spot.
+ * robot glyph holds the spot. `bare` drops the disc, so a face whose shape is
+ * its identity keeps its outline.
  */
 export function AgentAvatar({
   seed,
   style,
+  bare = false,
   className = "size-8",
 }: {
   seed: string;
   style?: AgentAvatarId;
+  bare?: boolean;
   className?: string;
 }) {
   const { avatar } = useAgentAvatar();
-  const id = style ?? avatar;
+  // A face picked for this agent wins over everyone's style; a preview's own `style` wins over both.
+  const picked = useAgentFaces()[seed];
+  const id = style ?? picked?.style ?? avatar;
+  const drawn = picked?.seed ?? seed;
   const [loaded, setLoaded] = useState<{ id: AgentAvatarId; style: Style<StyleDefinition> } | null>(null);
 
   useEffect(() => {
@@ -41,11 +48,11 @@ export function AgentAvatar({
   }
   return (
     <img
-      src={avatarUri(id, loaded.style, seed)}
+      src={avatarUri(id, loaded.style, drawn)}
       alt=""
       aria-hidden
       draggable={false}
-      className={`${className} shrink-0 rounded-full bg-kumo-fill`}
+      className={`${className} shrink-0 ${bare ? "" : "rounded-full bg-kumo-fill"}`}
     />
   );
 }

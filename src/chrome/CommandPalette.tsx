@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   ArrowClockwiseIcon,
   ArrowCounterClockwiseIcon,
@@ -11,40 +11,44 @@ import {
   FolderIcon,
   FolderOpenIcon,
   GearIcon,
+  GitBranchIcon,
+  KeyboardIcon,
   ListBulletsIcon,
-  MagnifyingGlassIcon,
   PlusIcon,
   RobotIcon,
   SidebarSimpleIcon,
   TerminalWindowIcon,
   type Icon,
 } from "@phosphor-icons/react";
+import { AgentAvatar } from "./AgentAvatar";
 import { FileTypeIcon } from "./FileTypeIcon";
 import { Kbd } from "./Kbd";
+import { ProviderIcon } from "./ProviderIcon";
 import { StatusDot } from "./StatusDot";
-import { listedCommands, runCommand, type CommandId } from "../lib/commands";
+import * as api from "../lib/api";
+import { commandKeys, listedCommands, runCommand, type CommandId } from "../lib/commands";
 import { fuzzyMatch } from "../lib/fuzzy";
-import type { ProjectFile, Session, Workspace } from "../lib/types";
+import type { ProjectFile, Session, Workspace, Worktree } from "../lib/types";
+import { workspaceMark } from "../lib/workspaces";
+import { worktreeLabel, worktreeOf } from "../lib/worktrees";
 
-export type PaletteMode = "all" | "agents" | "sessions" | "files" | "actions";
-
-const MODES: { id: PaletteMode; label: string }[] = [
-  { id: "all", label: "All" },
-  { id: "agents", label: "Agents" },
-  { id: "sessions", label: "Sessions" },
-  { id: "files", label: "Files" },
-  { id: "actions", label: "Actions" },
-];
+/** ⌘K agents, worktrees and commands; ⌘P files; ⇧⌘P commands; ⇧⌘O where to work: repo › worktree. */
+export type PaletteMode = "all" | "files" | "actions" | "context";
 
 const FILE_LIMIT = 50;
 
-type Item =
-  | { key: string; kind: "session"; session: Session }
-  | { key: string; kind: "file"; file: ProjectFile }
-  | { key: string; kind: "action"; id: CommandId; label: string; keys: string }
-  | { key: string; kind: "workspace"; workspace: Workspace };
-
-type Group = { label: string; items: Item[] };
+type Item = {
+  key: string;
+  group: string;
+  label: string;
+  /** Said before the label, quieter: the worktree of a session, the repo of a worktree. */
+  detail?: string | undefined;
+  icon: ReactNode;
+  trail?: ReactNode;
+  /** What the query matches against, when it is more than detail and label. */
+  search?: string | undefined;
+  run: () => void;
+};
 
 type Props = {
   mode: PaletteMode;
@@ -52,237 +56,222 @@ type Props = {
   sessions: Session[];
   workspaces: Workspace[];
   activeWorkspaceId: string;
+  worktrees: Worktree[];
+  activeWorktree: string;
   onOpenFile: (file: ProjectFile) => void;
   onOpenSession: (session: Session) => void;
   onSelectWorkspace: (id: string) => void;
+  onSelectWorktree: (workspaceId: string, path: string) => void;
   onClose: () => void;
 };
 
-/**
- * One palette, five filters. ⌘K lands on All, ⌘P on Files, ⇧⌘P on Actions;
- * ⇥ moves between them, and a leading `>` jumps straight to Actions.
- */
-export function CommandPalette({
-  mode: initialMode,
-  files,
-  sessions,
-  workspaces,
-  activeWorkspaceId,
-  onOpenFile,
-  onOpenSession,
-  onSelectWorkspace,
-  onClose,
-}: Props) {
-  const [mode, setMode] = useState<PaletteMode>(initialMode);
+const PLACEHOLDERS: Record<PaletteMode, string> = {
+  all: "Search agents, worktrees, commands…",
+  files: "Open a file…",
+  actions: "Run a command…",
+  context: "Switch to repo › worktree…",
+};
+
+/** One palette with four doors. A leading `>` turns any of them into commands. */
+export function CommandPalette(props: Props) {
+  const { mode, workspaces, activeWorkspaceId } = props;
   const [raw, setRaw] = useState("");
   const [cursor, setCursor] = useState(0);
-  const listRef = useRef<HTMLDivElement>(null);
-  const searchRef = useRef<HTMLInputElement>(null);
+  const [others, setOthers] = useState<Record<string, Worktree[]>>({});
+  const list = useRef<HTMLDivElement>(null);
+  const search = useRef<HTMLInputElement>(null);
+
+  // After commit, not at mount: a terminal that held the keyboard lets go of it by then.
+  useEffect(() => search.current?.focus(), []);
+
+  // The other workspaces' worktrees are read when the palette opens; the one on screen is already live.
+  useEffect(() => {
+    if (mode !== "all" && mode !== "context") return;
+    let cancelled = false;
+    for (const workspace of workspaces) {
+      if (workspace.id === activeWorkspaceId) continue;
+      void api
+        .listWorktrees(workspace.path)
+        .then((trees) => !cancelled && setOthers((prev) => ({ ...prev, [workspace.id]: trees })))
+        .catch(() => {});
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [activeWorkspaceId, mode, workspaces]);
 
   const forcedActions = raw.startsWith(">");
-  const query = forcedActions ? raw.slice(1) : raw;
-  const shown = forcedActions ? "actions" : mode;
+  const query = (forcedActions ? raw.slice(1) : raw).trim();
+  const shown: PaletteMode = forcedActions ? "actions" : mode;
 
-  const actions: Item[] = useMemo(() => {
-    const commands = listedCommands().map(
-      (command): Item => ({ key: `action:${command.id}`, kind: "action", ...command }),
-    );
-    const switches = workspaces.flatMap((workspace): Item[] =>
-      workspace.id === activeWorkspaceId ? [] : [{ key: `ws:${workspace.id}`, kind: "workspace", workspace }],
-    );
-    return [...commands, ...switches];
-  }, [activeWorkspaceId, workspaces]);
+  const items = useMemo(() => {
+    const close = (act: () => void) => () => {
+      props.onClose();
+      act();
+    };
+    const active = workspaces.find((w) => w.id === activeWorkspaceId);
 
-  const groups: Group[] = useMemo(() => {
-    const agents = sessions.filter((session) => session.kind === "agent");
-    const terminals = sessions.filter((session) => session.kind === "terminal");
-    const asItem = (session: Session): Item => ({
-      key: `session:${session.id}`,
-      kind: "session",
-      session,
+    const sessions: Item[] = active
+      ? props.sessions.map((session) => {
+          const tree = worktreeOf(session, active, props.worktrees);
+          return {
+            key: `session:${session.id}`,
+            group: "Agents & sessions",
+            label: session.name,
+            detail: tree ? `${worktreeLabel(tree)} ›` : undefined,
+            icon:
+              session.kind === "agent" ? (
+                <AgentAvatar seed={session.id} bare className="size-5" />
+              ) : (
+                <ProviderIcon provider={session.provider} className="size-4" />
+              ),
+            trail: <StatusDot status={session.status} />,
+            run: close(() => props.onOpenSession(session)),
+          } satisfies Item;
+        })
+      : [];
+
+    const worktrees: Item[] = workspaces.flatMap((workspace) => {
+      const trees = workspace.id === activeWorkspaceId ? props.worktrees : (others[workspace.id] ?? []);
+      return trees.map((tree, index) => {
+        const current = workspace.id === activeWorkspaceId && tree.path === props.activeWorktree;
+        const keys = workspace.id === activeWorkspaceId && index < 9 ? commandKeys(`worktree-${index + 1}` as CommandId) : "";
+        return {
+          key: `worktree:${workspace.id}:${tree.path}`,
+          group: "Worktrees",
+          label: worktreeLabel(tree),
+          detail: `${workspace.name} ›`,
+          icon: <GitBranchIcon className="size-4" />,
+          trail: <span className="text-[11px] text-kumo-subtle">{current ? "current" : keys}</span>,
+          search: `${workspace.name} ${worktreeLabel(tree)}`,
+          run: close(() => props.onSelectWorktree(workspace.id, tree.path)),
+        } satisfies Item;
+      });
     });
 
-    if (shown === "agents") return [group("Agents", rank(agents.map(asItem), query))];
-    if (shown === "sessions") return [group("Sessions", rank(terminals.map(asItem), query))];
-    if (shown === "actions") return [group("Actions", rank(actions, query))];
-    if (shown === "files") {
-      const items = files.map((file): Item => ({ key: `file:${file.path}`, kind: "file", file }));
-      return [group("Files", rank(items, query).slice(0, FILE_LIMIT))];
-    }
+    const spaces: Item[] = workspaces.map((workspace, index) => ({
+      key: `workspace:${workspace.id}`,
+      group: "Workspaces",
+      label: workspace.name,
+      icon: (
+        <span className="grid size-4 place-items-center rounded bg-kumo-brand text-[8px] font-semibold text-kumo-inverse">
+          {workspaceMark(workspace.name)}
+        </span>
+      ),
+      trail: (
+        <span className="text-[11px] text-kumo-subtle">
+          {workspace.id === activeWorkspaceId ? "current" : index < 9 ? commandKeys(`workspace-${index + 1}` as CommandId) : ""}
+        </span>
+      ),
+      run: close(() => props.onSelectWorkspace(workspace.id)),
+    }));
 
-    // An empty All is the cold-open case: offer what was touched last, not the whole workspace.
-    if (!query.trim()) {
-      const recent = [...sessions]
-        .sort((a, b) => b.updatedAt - a.updatedAt)
-        .slice(0, 5)
-        .map(asItem);
-      return [group("Recent", recent), group("Actions", actions.slice(0, 5))];
-    }
+    const commands: Item[] = listedCommands().map((command) => {
+      const Glyph = ACTION_ICONS[command.id] ?? CommandIcon;
+      return {
+        key: `command:${command.id}`,
+        group: "Commands",
+        label: command.label,
+        icon: <Glyph className="size-4" />,
+        trail: command.keys ? <span className="text-[11px] text-kumo-subtle">{command.keys}</span> : undefined,
+        // Closing first lets a command own the surface it opens — a sheet, a dialog, a picker.
+        run: close(() => runCommand(command.id)),
+      };
+    });
 
-    const fileItems = files.map((file): Item => ({ key: `file:${file.path}`, kind: "file", file }));
-    return [
-      group("Agents", rank(agents.map(asItem), query)),
-      group("Sessions", rank(terminals.map(asItem), query)),
-      group("Files", rank(fileItems, query).slice(0, 10)),
-      group("Actions", rank(actions, query)),
-    ];
-  }, [actions, files, query, sessions, shown]);
+    const files: Item[] = props.files.map((file) => ({
+      key: `file:${file.path}`,
+      group: "Files",
+      label: file.relative,
+      icon: <FileTypeIcon name={file.name} />,
+      run: close(() => props.onOpenFile(file)),
+    }));
 
-  const flat = useMemo(() => groups.flatMap((entry) => entry.items), [groups]);
+    if (shown === "files") return rank(files, query).slice(0, FILE_LIMIT);
+    if (shown === "actions") return rank(commands, query);
+    if (shown === "context") return rank([...worktrees, ...spaces], query);
+    // Files have their own door, ⌘P; here they would bury what ⌘K is for.
+    return rank([...sessions, ...worktrees, ...spaces, ...commands], query);
+  }, [activeWorkspaceId, others, props, query, shown, workspaces]);
 
-  useEffect(() => searchRef.current?.focus(), []);
   useEffect(() => {
-    listRef.current?.querySelector('[data-active="true"]')?.scrollIntoView({ block: "nearest" });
+    list.current?.querySelector(`[data-index="${cursor}"]`)?.scrollIntoView({ block: "nearest" });
   }, [cursor]);
 
-  function pick(item: Item) {
-    if (item.kind === "file") {
-      onOpenFile(item.file);
-      return onClose();
-    }
-    if (item.kind === "session") {
-      onOpenSession(item.session);
-      return onClose();
-    }
-    if (item.kind === "workspace") {
-      onSelectWorkspace(item.workspace.id);
-      return onClose();
-    }
-    // Closing first lets a command own the surface it opens — a sheet, a dialog, a picker.
-    onClose();
-    runCommand(item.id);
-  }
-
-  function switchMode(next: PaletteMode) {
-    setMode(next);
-    setCursor(0);
-  }
-
-  function step(delta: number) {
-    const at = MODES.findIndex((entry) => entry.id === mode);
-    switchMode(MODES[(at + delta + MODES.length) % MODES.length]!.id);
-    setRaw((value) => (value.startsWith(">") ? value.slice(1) : value));
-  }
-
   function onKeyDown(event: React.KeyboardEvent) {
-    if (event.key === "Escape") return onClose();
-    if (event.key === "Tab") {
+    if (event.key === "Escape") return props.onClose();
+    if (event.key === "ArrowDown" || (event.ctrlKey && event.key === "n")) {
       event.preventDefault();
-      return step(event.shiftKey ? -1 : 1);
+      return setCursor((c) => Math.min(c + 1, items.length - 1));
     }
-    if (event.key === "ArrowDown") {
-      event.preventDefault();
-      return setCursor((c) => Math.min(c + 1, flat.length - 1));
-    }
-    if (event.key === "ArrowUp") {
+    if (event.key === "ArrowUp" || (event.ctrlKey && event.key === "p")) {
       event.preventDefault();
       return setCursor((c) => Math.max(c - 1, 0));
     }
     if (event.key === "Enter") {
       event.preventDefault();
-      const item = flat[cursor];
-      if (item) pick(item);
+      items[cursor]?.run();
     }
   }
 
-  let index = -1;
+  // Group headers only while browsing; a search ranks everything as one list.
+  const headed = !query && (shown === "all" || shown === "context");
 
   return (
-    <div
-      role="presentation"
-      className="fixed inset-0 z-50 flex justify-center bg-black/20 pt-[15vh] backdrop-blur-[1px]"
-      onClick={onClose}
-    >
+    <div role="presentation" className="fixed inset-0 z-50" onMouseDown={props.onClose}>
+      <div className="absolute inset-0 bg-black/20" />
       <div
         role="dialog"
         aria-modal="true"
         aria-label="Command palette"
-        onClick={(event) => event.stopPropagation()}
+        onMouseDown={(event) => event.stopPropagation()}
         onKeyDown={onKeyDown}
-        className="flex h-fit max-h-[60vh] w-[580px] flex-col overflow-hidden rounded-2xl border border-border bg-canvas shadow-2xl"
+        className="absolute top-[14vh] left-1/2 w-[560px] max-w-[calc(100vw-32px)] -translate-x-1/2 overflow-hidden rounded-xl bg-kumo-control text-kumo-default shadow-2xl ring ring-kumo-line"
       >
-        <div className="flex shrink-0 items-center gap-2.5 border-b border-border px-4">
-          <MagnifyingGlassIcon className="size-4 shrink-0 text-text-muted" />
-          <input
-            ref={searchRef}
-            value={raw}
-            placeholder={PLACEHOLDERS[shown]}
-            aria-label="Search"
-            spellCheck={false}
-            onChange={(event) => {
-              setRaw(event.target.value);
-              setCursor(0);
-            }}
-            className="min-w-0 flex-1 bg-transparent py-3.5 outline-none"
-          />
-        </div>
-
-        <div className="flex shrink-0 items-center gap-1 border-b border-border px-2.5 py-1.5">
-          {MODES.map((entry) => (
-            <button
-              key={entry.id}
-              type="button"
-              onClick={() => switchMode(entry.id)}
-              className={`rounded-full px-2.5 py-1 transition-colors ${
-                entry.id === shown
-                  ? "bg-selected text-text"
-                  : "text-text-muted hover:bg-hover hover:text-text"
-              }`}
-            >
-              {entry.label}
-            </button>
-          ))}
-        </div>
-
-        <div ref={listRef} className="min-h-0 flex-1 overflow-y-auto p-1">
-          {flat.length === 0 && <p className="px-3 py-8 text-center text-placeholder">No matches</p>}
-          {groups.map((entry) =>
-            entry.items.length === 0 ? null : (
-              <div key={entry.label}>
-                <p className="px-2.5 pt-3 pb-1 text-[11px] font-semibold tracking-[0.06em] text-text-muted uppercase">
-                  {entry.label}
-                </p>
-                {entry.items.map((item) => {
-                  index += 1;
-                  return (
-                    <Row
-                      key={item.key}
-                      item={item}
-                      active={index === cursor}
-                      at={index}
-                      onHover={setCursor}
-                      onPick={() => pick(item)}
-                    />
-                  );
-                })}
+        <input
+          ref={search}
+          value={raw}
+          placeholder={forcedActions ? PLACEHOLDERS.actions : PLACEHOLDERS[mode]}
+          aria-label="Search"
+          spellCheck={false}
+          onChange={(event) => {
+            setRaw(event.target.value);
+            setCursor(0);
+          }}
+          className="h-12 w-full border-b border-kumo-line bg-transparent px-4 text-[14px] outline-none"
+        />
+        <div ref={list} className="max-h-[50vh] overflow-y-auto p-1.5">
+          {items.map((item, index) => {
+            const header = headed && item.group !== items[index - 1]?.group ? item.group : null;
+            return (
+              <div key={item.key}>
+                {header && <div className="px-2.5 pt-2 pb-1 text-[11px] text-kumo-subtle">{header}</div>}
+                <button
+                  type="button"
+                  data-index={index}
+                  onMouseMove={() => setCursor(index)}
+                  onClick={item.run}
+                  className={`flex h-9 w-full items-center gap-2.5 rounded-md px-2.5 text-left ${index === cursor ? "bg-hover" : ""}`}
+                >
+                  <span className="grid size-5 shrink-0 place-items-center text-kumo-subtle">{item.icon}</span>
+                  {item.detail && <span className="shrink-0 text-kumo-subtle">{item.detail}</span>}
+                  <span className="min-w-0 flex-1 truncate">{item.label}</span>
+                  {item.trail}
+                </button>
               </div>
-            ),
-          )}
+            );
+          })}
+          {items.length === 0 && <p className="px-2.5 py-6 text-center text-placeholder">No matches</p>}
         </div>
-
-        <div className="flex shrink-0 items-center gap-4 border-t border-border px-3 py-2 text-[11px] text-text-muted">
-          <Hint keys="↑↓" label="Select" />
-          <Hint keys="⏎" label="Open" />
-          <Hint keys="⇥" label="Change filter" />
+        <div className="flex h-9 items-center gap-4 border-t border-kumo-line px-3 text-[11px] text-kumo-subtle">
+          <Hint keys="↑↓" label="move" />
+          <Hint keys="↵" label="open" />
+          <Hint keys="esc" label="close" />
         </div>
       </div>
     </div>
   );
 }
-
-const PLACEHOLDERS: Record<PaletteMode, string> = {
-  all: "Search agents, sessions, files and actions…",
-  agents: "Search agents…",
-  sessions: "Search sessions…",
-  files: "Search files by name or path…",
-  actions: "Run an action…",
-};
-
-const KIND_ICONS: Record<"agents" | "sessions" | "workspace", Icon> = {
-  agents: RobotIcon,
-  sessions: TerminalWindowIcon,
-  workspace: FolderIcon,
-};
 
 const ACTION_ICONS: Partial<Record<CommandId, Icon>> = {
   "open-launcher": PlusIcon,
@@ -292,6 +281,9 @@ const ACTION_ICONS: Partial<Record<CommandId, Icon>> = {
   "toggle-sidebar": SidebarSimpleIcon,
   "new-agent": RobotIcon,
   "new-session": TerminalWindowIcon,
+  "new-worktree": GitBranchIcon,
+  "next-worktree": GitBranchIcon,
+  "prev-worktree": GitBranchIcon,
   "open-settings": GearIcon,
   "save-file": FloppyDiskIcon,
   "toggle-outline": ListBulletsIcon,
@@ -301,70 +293,8 @@ const ACTION_ICONS: Partial<Record<CommandId, Icon>> = {
   "browser-hard-reload": ArrowClockwiseIcon,
   "browser-devtools": BracketsAngleIcon,
   "open-history": ClockCounterClockwiseIcon,
+  shortcuts: KeyboardIcon,
 };
-
-function Row({
-  item,
-  active,
-  at,
-  onHover,
-  onPick,
-}: {
-  item: Item;
-  active: boolean;
-  at: number;
-  onHover: (at: number) => void;
-  onPick: () => void;
-}) {
-  const face = describe(item);
-  return (
-    <button
-      type="button"
-      data-active={active}
-      onMouseEnter={() => onHover(at)}
-      onClick={onPick}
-      className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left ${
-        active ? "bg-selected text-text" : "text-text-muted"
-      }`}
-    >
-      {face.icon}
-      <span className="shrink-0 truncate text-text">{face.label}</span>
-      {face.detail && <span className="min-w-0 truncate text-[12px] opacity-60">{face.detail}</span>}
-      <span className="flex-1" />
-      {item.kind === "session" && <StatusDot status={item.session.status} />}
-      {item.kind === "action" && item.keys && <Kbd keys={item.keys} className="shrink-0" />}
-    </button>
-  );
-}
-
-function describe(item: Item): { icon: React.ReactNode; label: string; detail?: string } {
-  if (item.kind === "file") {
-    return {
-      icon: <FileTypeIcon name={item.file.name} />,
-      label: item.file.name,
-      detail: item.file.relative,
-    };
-  }
-  if (item.kind === "session") {
-    const kind = item.session.kind === "agent" ? "agents" : "sessions";
-    const Glyph = KIND_ICONS[kind];
-    return {
-      icon: <Glyph className="size-4 shrink-0 text-text-muted" />,
-      label: item.session.name,
-      detail: item.session.provider,
-    };
-  }
-  if (item.kind === "workspace") {
-    const Glyph = KIND_ICONS.workspace;
-    return {
-      icon: <Glyph className="size-4 shrink-0 text-text-muted" />,
-      label: `Switch to ${item.workspace.name}`,
-      detail: item.workspace.path,
-    };
-  }
-  const Glyph = ACTION_ICONS[item.id] ?? CommandIcon;
-  return { icon: <Glyph className="size-4 shrink-0 text-text-muted" />, label: item.label };
-}
 
 function Hint({ keys, label }: { keys: string; label: string }) {
   return (
@@ -375,24 +305,13 @@ function Hint({ keys, label }: { keys: string; label: string }) {
   );
 }
 
-function group(label: string, items: Item[]): Group {
-  return { label, items };
-}
-
 function rank(items: Item[], query: string): Item[] {
-  if (!query.trim()) return items;
+  if (!query) return items;
   const scored: { item: Item; score: number }[] = [];
   for (const item of items) {
-    const hit = fuzzyMatch(query, searchText(item));
+    const hit = fuzzyMatch(query, item.search ?? `${item.detail ?? ""} ${item.label}`);
     if (hit) scored.push({ item, score: hit.score });
   }
   scored.sort((a, b) => b.score - a.score);
   return scored.map((entry) => entry.item);
-}
-
-function searchText(item: Item): string {
-  if (item.kind === "file") return item.file.relative;
-  if (item.kind === "session") return item.session.name;
-  if (item.kind === "workspace") return item.workspace.name;
-  return item.label;
 }

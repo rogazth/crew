@@ -1,5 +1,5 @@
 import { ClockIcon, PauseCircleIcon, WarningCircleIcon } from "@phosphor-icons/react";
-import { ProviderIcon } from "./ProviderIcon";
+import { AgentAvatar } from "./AgentAvatar";
 import type { RoutineEntry } from "../hooks/useRoutines";
 import { describeSchedule, parseSchedule, summarize } from "../lib/routines";
 
@@ -20,11 +20,9 @@ export function RoutineCard({ entry, workspace, onOpen }: Props) {
     <button
       type="button"
       onClick={onOpen}
-      className="flex w-full items-start gap-3 rounded-xl border border-border bg-sidebar p-4 text-left outline-none transition-colors hover:bg-hover focus-visible:bg-hover"
+      className="flex w-full items-start gap-3 rounded-xl bg-card p-4 text-left ring-1 ring-hairline outline-none transition-colors hover:bg-hover focus-visible:bg-hover focus-visible:ring-kumo-focus/50"
     >
-      <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-kumo-fill">
-        <ProviderIcon provider={session.provider} className="size-4" />
-      </span>
+      <AgentAvatar seed={session.id} bare className="size-8" />
       <span className="flex min-w-0 flex-1 flex-col gap-1">
         <span className="flex items-center gap-2">
           <span className="min-w-0 flex-1 truncate font-medium">{routine.name || "Untitled routine"}</span>

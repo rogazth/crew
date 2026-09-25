@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef } from "react";
 import { useHotkeys } from "@tanstack/react-hotkeys";
-import { keysFor, registerCommand, repeatable, type CommandId } from "../lib/commands";
+import { allKeysFor, registerCommand, repeatable, type CommandId } from "../lib/commands";
 
 /**
  * Binds a command's keys and publishes its handler, so the palette can run the
@@ -25,11 +25,8 @@ export function useCommands(map: { [K in CommandId]?: () => void }) {
   useHotkeys(
     useMemo(
       () =>
-        ids.flatMap((id) => {
-          const hotkey = keysFor(id);
-          if (!hotkey) return [];
-          return [
-            {
+        ids.flatMap((id) =>
+          allKeysFor(id).map((hotkey) => ({
               hotkey,
               callback: (event: KeyboardEvent) => {
                 // Auto-repeat is dropped via `event.repeat`, not requireReset: requireReset
@@ -39,9 +36,8 @@ export function useCommands(map: { [K in CommandId]?: () => void }) {
                 if (event.repeat && !repeatable(id)) return;
                 mapRef.current[id]?.();
               },
-            },
-          ];
-        }),
+            })),
+        ),
       // eslint-disable-next-line react-hooks/exhaustive-deps
       [key],
     ),

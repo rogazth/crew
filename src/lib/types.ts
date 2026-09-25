@@ -21,12 +21,26 @@ export type Session = {
   provider: string;
   model: string;
   providerSessionId: string | null;
+  /** The git worktree it runs in; null is the workspace folder itself. */
+  worktree: string | null;
   description: string;
   notifications: boolean;
   autonomy: Autonomy;
   status: SessionStatus;
   createdAt: number;
   updatedAt: number;
+};
+
+/** A git worktree of a workspace's repo. The main checkout comes first; outside git there is only it, branchless. */
+export type Worktree = {
+  path: string;
+  branch: string | null;
+  main: boolean;
+  /** Lines added and removed against where the branch left the main checkout, uncommitted work included. */
+  add: number;
+  del: number;
+  /** Entries `git status` lists. */
+  dirty: number;
 };
 
 export type ProjectFile = {

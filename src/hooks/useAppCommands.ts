@@ -15,7 +15,10 @@ type Deps = {
   sheetOpen: boolean;
   closeSheet: () => void;
   toggleSidebar: () => void;
-  togglePicker: () => void;
+  focusSidebar: (scope: "rail" | "panel") => void;
+  worktrees: { step: (delta: number) => void; selectAt: (index: number) => void };
+  newWorktree: () => void;
+  toggleShortcuts: () => void;
   newAgent: () => void;
   newSession: () => void;
   closeTab: (id: string) => void;
@@ -30,7 +33,21 @@ export function useAppCommands(deps: Deps) {
     "go-to-file": () => deps.togglePalette("files"),
     "open-actions": () => deps.togglePalette("actions"),
     "open-workspace": workspaces.create,
-    "switch-workspace": deps.togglePicker,
+    "switch-workspace": () => deps.togglePalette("context"),
+    "focus-sidebar": () => deps.focusSidebar("panel"),
+    "next-worktree": () => deps.worktrees.step(1),
+    "prev-worktree": () => deps.worktrees.step(-1),
+    "worktree-1": () => deps.worktrees.selectAt(0),
+    "worktree-2": () => deps.worktrees.selectAt(1),
+    "worktree-3": () => deps.worktrees.selectAt(2),
+    "worktree-4": () => deps.worktrees.selectAt(3),
+    "worktree-5": () => deps.worktrees.selectAt(4),
+    "worktree-6": () => deps.worktrees.selectAt(5),
+    "worktree-7": () => deps.worktrees.selectAt(6),
+    "worktree-8": () => deps.worktrees.selectAt(7),
+    "worktree-9": () => deps.worktrees.selectAt(8),
+    "new-worktree": deps.newWorktree,
+    shortcuts: deps.toggleShortcuts,
     "next-workspace": () => workspaces.step(1),
     "prev-workspace": () => workspaces.step(-1),
     "workspace-1": () => workspaces.activateAt(0),

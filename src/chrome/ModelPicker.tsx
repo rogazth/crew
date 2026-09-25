@@ -47,7 +47,7 @@ export function ModelPicker({ provider, model, trigger = "field", disabled = fal
           <CaretDownIcon className="size-3 shrink-0 text-kumo-subtle" />
         </Popover.Trigger>
       ) : (
-        <Popover.Trigger className="flex h-9 w-full items-center gap-2 rounded-lg bg-kumo-control px-2.5 text-kumo-default ring ring-kumo-line outline-none transition-[box-shadow] hover:ring-kumo-interact focus-visible:ring-[1.5px] focus-visible:ring-kumo-focus/50 data-popup-open:ring-[1.5px] data-popup-open:ring-kumo-focus/50">
+        <Popover.Trigger className="flex h-8 w-full items-center gap-2 rounded-md bg-kumo-base px-2.5 text-kumo-default ring ring-kumo-line outline-none transition-[box-shadow] hover:ring-kumo-interact focus-visible:ring-[1.5px] focus-visible:ring-kumo-focus/50 data-popup-open:ring-[1.5px] data-popup-open:ring-kumo-focus/50">
           <ProviderIcon provider={provider} className="size-4" />
           <span className="min-w-0 flex-1 truncate text-left">
             {providerOf(provider)?.label} {modelLabel(provider, model)}
@@ -59,7 +59,7 @@ export function ModelPicker({ provider, model, trigger = "field", disabled = fal
       <Popover.Portal>
         <Popover.Positioner side={chip ? "top" : "bottom"} align="start" sideOffset={4} className="z-50">
           <Popover.Popup
-            className={`${chip ? "w-[280px]" : "w-(--anchor-width)"} origin-(--transform-origin) overflow-hidden rounded-lg bg-kumo-control text-kumo-default shadow-lg ring ring-kumo-line outline-none transition-[opacity,scale] duration-100 data-starting-style:scale-95 data-starting-style:opacity-0 data-ending-style:scale-95 data-ending-style:opacity-0`}
+            className={`${chip ? "w-[280px]" : "w-(--anchor-width)"} origin-(--transform-origin) overflow-hidden rounded-xl bg-kumo-control text-kumo-default shadow-lg ring ring-kumo-line outline-none transition-[opacity,scale] duration-100 data-starting-style:scale-95 data-starting-style:opacity-0 data-ending-style:scale-95 data-ending-style:opacity-0`}
           >
             <div role="tablist" className="flex border-b border-kumo-line">
               {tabs.map((p) => (

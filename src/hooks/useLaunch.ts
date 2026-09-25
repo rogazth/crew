@@ -8,6 +8,8 @@ import type { useSessions } from "./useSessions";
 
 type Deps = {
   sessions: Session[];
+  /** Where a new session runs: the worktree on screen. */
+  worktree: string | null;
   create: ReturnType<typeof useSessions>["create"];
   openSession: (session: Session) => void;
   openStub: (stub: StubKind, title: string) => void;
@@ -16,12 +18,13 @@ type Deps = {
 };
 
 /** New sessions and the tab launcher's picks. */
-export function useLaunch({ sessions, create, openSession, openStub, openBrowser, newAgent }: Deps) {
+export function useLaunch({ sessions, worktree, create, openSession, openStub, openBrowser, newAgent }: Deps) {
   const { effective: defaultAgent } = useDefaultAgent();
 
   // Sessions open straight away; the name is derived, never prompted.
   const newSession = useCallback(
-    async (provider: ProviderId = defaultAgent.provider) => {
+    /** `place` puts it in a worktree other than the one on screen; null is the main checkout. */
+    async (provider: ProviderId = defaultAgent.provider, place: string | null = worktree) => {
       const model = provider === defaultAgent.provider ? defaultAgent.model : DEFAULT_MODEL;
       const session = await create("terminal", {
         name: nextSessionName(sessions, provider),
@@ -29,10 +32,11 @@ export function useLaunch({ sessions, create, openSession, openStub, openBrowser
         model,
         description: "",
         autonomy: "ask",
+        worktree: place,
       });
       if (session) openSession(session);
     },
-    [create, defaultAgent, openSession, sessions],
+    [create, defaultAgent, openSession, sessions, worktree],
   );
 
   const launch = useCallback(
