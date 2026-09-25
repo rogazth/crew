@@ -39,9 +39,21 @@ describe("contextId", () => {
   });
 });
 
+describe("sessionPath", () => {
+  it("is the session's worktree while git lists it, else the main checkout", () => {
+    expect(sessionPath(session(null), workspace, trees)).toBe("/repo");
+    expect(sessionPath(session("/wt/feat"), workspace, trees)).toBe("/wt/feat");
+    expect(sessionPath(session("/wt/gone"), workspace, trees)).toBe("/repo");
+  });
+
+  it("takes the session at its word until git has answered", () => {
+    expect(sessionPath(session("/wt/gone"), workspace, null)).toBe("/wt/gone");
+    expect(sessionPath(session(null), workspace, null)).toBe("/repo");
+  });
+});
+
 describe("worktreeOf", () => {
   it("finds a session's worktree, falling back to the main checkout", () => {
-    expect(sessionPath(session(null), workspace)).toBe("/repo");
     expect(worktreeOf(session("/wt/feat"), workspace, trees)?.branch).toBe("feat/avatars");
     expect(worktreeOf(session("/wt/gone"), workspace, trees)?.branch).toBe("master");
   });

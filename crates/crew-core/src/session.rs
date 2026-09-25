@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
@@ -103,14 +105,24 @@ pub fn get(store: &Store, id: String) -> Result<Option<Session>, String> {
     })
 }
 
-/// The folder a session works in: its worktree, or else its workspace's.
+/// The folder a session works in: its worktree while that folder exists, or
+/// else its workspace's. A worktree removed outside Crew keeps its path on the
+/// row: made again, it is the session's again.
 pub fn cwd(store: &Store, session: &Session) -> Result<String, String> {
-    if let Some(worktree) = &session.worktree {
-        return Ok(worktree.clone());
+    if let Some(worktree) = session.worktree.as_deref().filter(|path| Path::new(path).is_dir()) {
+        return Ok(worktree.to_string());
     }
     crate::workspace::get(store, session.workspace_id.clone())?
         .map(|workspace| workspace.path)
         .ok_or_else(|| "Workspace not found".to_string())
+}
+
+/// `cwd` for a row read along with its workspace's folder.
+pub fn folder(worktree: Option<&str>, workspace: String) -> String {
+    match worktree {
+        Some(path) if Path::new(path).is_dir() => path.to_string(),
+        _ => workspace,
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -387,11 +399,15 @@ pub fn sweep_disposable(store: &Store) -> Result<usize, String> {
     let (terminals, tabs) = store.with(|conn| {
         let terminals = conn
             .prepare(&format!(
-                "SELECT {SESSION_COLUMNS}, COALESCE(s.worktree, w.path) FROM sessions s
+                "SELECT {SESSION_COLUMNS}, w.path FROM sessions s
                  JOIN workspaces w ON w.id = s.workspace_id
                  WHERE s.kind = 'terminal'"
             ))?
-            .query_map([], |row| Ok((row_to_session(row, 0)?, row.get::<_, String>(SESSION_COLUMN_COUNT)?)))?
+            .query_map([], |row| {
+                let session = row_to_session(row, 0)?;
+                let cwd = folder(session.worktree.as_deref(), row.get(SESSION_COLUMN_COUNT)?);
+                Ok((session, cwd))
+            })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         let tabs = conn
             .prepare("SELECT value FROM app_state WHERE key LIKE 'tabs:%'")?
@@ -410,15 +426,20 @@ pub fn sweep_disposable(store: &Store) -> Result<usize, String> {
     Ok(swept)
 }
 
+/// What was said counts wherever it was kept: where the session works now, and
+/// the worktree it worked in before that folder went away.
 fn disposable(session: &Session, cwd: &str) -> bool {
+    let gone = session.worktree.as_deref().filter(|path| *path != cwd);
     session.kind == "terminal"
         && is_derived_name(&session.name, &session.provider)
-        && !provider_session::has_conversation(
-            &session.provider,
-            &session.id,
-            session.provider_session_id.as_deref(),
-            cwd,
-        )
+        && [Some(cwd), gone].into_iter().flatten().all(|folder| {
+            !provider_session::has_conversation(
+                &session.provider,
+                &session.id,
+                session.provider_session_id.as_deref(),
+                folder,
+            )
+        })
 }
 
 /// Mirrors `isDerivedSessionName` in the window: claude, claude 2, …
@@ -654,31 +675,62 @@ mod tests {
         }
     }
 
-    #[test]
-    fn a_session_works_in_its_worktree_or_else_the_workspace_folder() {
-        let (store, workspace) = world();
-        let root = crate::workspace::get(&store, workspace.clone()).unwrap().unwrap().path;
-        let main = agent(&store, &workspace, "Main", "ask").expect("agent");
-        let branched = create_in_worktree(
-            &store,
-            workspace.clone(),
+    fn branched(store: &Store, workspace: &str, tree: &str) -> Session {
+        create_in_worktree(
+            store,
+            workspace.to_string(),
             "agent".into(),
             "Branched".into(),
             "claude".into(),
             "m".into(),
             "".into(),
             "ask".into(),
-            Some("/wt/feat".into()),
+            Some(tree.into()),
         )
-        .expect("agent");
+        .expect("agent")
+    }
+
+    fn a_folder() -> String {
+        let dir = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
+        std::fs::create_dir_all(&dir).expect("dir");
+        dir.to_string_lossy().into_owned()
+    }
+
+    #[test]
+    fn a_session_works_in_its_worktree_or_else_the_workspace_folder() {
+        let (store, workspace) = world();
+        let root = crate::workspace::get(&store, workspace.clone()).unwrap().unwrap().path;
+        let main = agent(&store, &workspace, "Main", "ask").expect("agent");
+        let tree = a_folder();
+        let branched = branched(&store, &workspace, &tree);
 
         assert_eq!(main.worktree, None);
         assert_eq!(cwd(&store, &main).unwrap(), root);
         let read = get(&store, branched.id.clone()).unwrap().unwrap();
-        assert_eq!(read.worktree.as_deref(), Some("/wt/feat"), "the worktree did not survive a read");
-        assert_eq!(cwd(&store, &read).unwrap(), "/wt/feat");
+        assert_eq!(read.worktree.as_deref(), Some(tree.as_str()), "the worktree did not survive a read");
+        assert_eq!(cwd(&store, &read).unwrap(), tree);
         let listed = list(&store, workspace).unwrap();
         assert_eq!(listed.iter().filter(|s| s.worktree.is_some()).count(), 1);
+    }
+
+    /// Removed outside Crew, a worktree leaves its sessions to the workspace
+    /// folder, not to whatever folder a process would fall back to. The row
+    /// keeps the path, so the worktree made again is theirs again.
+    #[test]
+    fn a_session_whose_worktree_is_gone_works_in_the_workspace_folder() {
+        let (store, workspace) = world();
+        let root = crate::workspace::get(&store, workspace.clone()).unwrap().unwrap().path;
+        let tree = a_folder();
+        let session = branched(&store, &workspace, &tree);
+
+        std::fs::remove_dir(&tree).expect("remove");
+        let read = get(&store, session.id.clone()).unwrap().unwrap();
+        assert_eq!(cwd(&store, &read).unwrap(), root);
+        assert_eq!(folder(read.worktree.as_deref(), root.clone()), root);
+        assert_eq!(read.worktree.as_deref(), Some(tree.as_str()), "the row forgot its worktree");
+
+        std::fs::create_dir_all(&tree).expect("again");
+        assert_eq!(cwd(&store, &read).unwrap(), tree);
     }
 
     /// An empty path from the window is no path, not a folder named "".

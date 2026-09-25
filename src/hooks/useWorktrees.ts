@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import * as api from "../lib/api";
 import type { Workspace, Worktree } from "../lib/types";
+import { asListed } from "../lib/worktrees";
 
 const activeKey = (workspaceId: string) => `worktree:${workspaceId}`;
 
@@ -48,19 +49,19 @@ export function useWorktrees(workspace: Workspace | null) {
     };
   }, [workspaceId, chosen]);
 
-  // The main checkout answers to the workspace's own path: git may spell it
-  // resolved (/private/…), and sessions with no worktree run in the workspace folder.
+  const known = listed.path === path && listed.list.length > 0;
   const list = useMemo(
-    () =>
-      listed.path === path && listed.list.length > 0
-        ? listed.list.map((tree) => (tree.main ? { ...tree, path } : tree))
-        : path
-          ? [standIn(path)]
-          : [],
-    [listed, path],
+    () => (known ? asListed(listed.list, path) : path ? [standIn(path)] : []),
+    [known, listed, path],
   );
   // A remembered worktree that git no longer lists falls back to the main checkout.
   const active = list.find((tree) => tree.path === chosen[workspaceId]) ?? list.find((tree) => tree.main) ?? list[0] ?? null;
+
+  // Once git has answered, crewd forgets it too, so the next launch starts in the main checkout.
+  const stale = known && !!chosen[workspaceId] && !list.some((tree) => tree.path === chosen[workspaceId]);
+  useEffect(() => {
+    if (stale) void api.stateDelete(activeKey(workspaceId)).catch(() => {});
+  }, [stale, workspaceId]);
 
   const refresh = useCallback(() => setTick((n) => n + 1), []);
 
@@ -108,7 +109,7 @@ export function useWorktrees(workspace: Workspace | null) {
   const reread = useCallback(async () => {
     const fresh = await api.listWorktrees(path);
     setListed({ path, list: fresh });
-    return fresh.map((tree) => (tree.main ? { ...tree, path } : tree));
+    return asListed(fresh, path);
   }, [path]);
 
   const remove = useCallback(
@@ -125,7 +126,19 @@ export function useWorktrees(workspace: Workspace | null) {
     [chosen, refresh, workspaceId],
   );
 
-  return { list, active, refresh, reread, select, step, selectAt, create, remove };
+  return {
+    list,
+    /** Whether `list` is git's answer yet, or the workspace folder standing in for it. */
+    known,
+    active,
+    refresh,
+    reread,
+    select,
+    step,
+    selectAt,
+    create,
+    remove,
+  };
 }
 
 export type Worktrees = ReturnType<typeof useWorktrees>;

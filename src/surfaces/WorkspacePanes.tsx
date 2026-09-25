@@ -11,7 +11,7 @@ import type { ProjectFile, Session, SessionStatus, Tab, Workspace } from '../lib
 import { parseContext } from '../lib/worktrees';
 
 /**
- * A pane with where it runs resolved to a directory: its session's worktree,
+ * A pane with where it runs resolved to a directory: where its session runs,
  * else the worktree its strip belongs to, else the workspace folder.
  */
 export type MountedPane = Pane & { cwd: string };
@@ -21,6 +21,8 @@ type Props = {
   panes: Pane[];
   workspaces: Workspace[];
   sessions: Session[];
+  /** Where a worktree's work runs: there while git lists it, else the workspace folder. */
+  placeOf: (worktree: string | null, workspace: Workspace) => string;
   cwd: string | null;
   hasWorkspace: boolean;
   onCreateWorkspace: () => void;
@@ -39,6 +41,7 @@ export function WorkspacePanes({
   panes,
   workspaces,
   sessions,
+  placeOf,
   cwd,
   hasWorkspace,
   onCreateWorkspace,
@@ -52,7 +55,12 @@ export function WorkspacePanes({
 }: Props) {
   // Keyed on where each session runs, not on the sessions: a status change
   // must not hand every mounted pane a fresh object.
-  const placement = sessions.map((s) => `${s.id}\t${s.worktree ?? ''}`).join('\n');
+  const placement = sessions
+    .flatMap((s) => {
+      const workspace = workspaces.find((w) => w.id === s.workspaceId);
+      return workspace ? [`${s.id}\t${placeOf(s.worktree, workspace)}`] : [];
+    })
+    .join('\n');
   const mounted = useMemo(() => {
     const where = new Map(placement.split('\n').map((line) => line.split('\t') as [string, string]));
     return panes.flatMap((pane) => {
@@ -60,11 +68,13 @@ export function WorkspacePanes({
       const workspace = workspaces.find((w) => w.id === context.workspaceId);
       if (!workspace) return [];
       const tab = pane.tab;
-      const worktree = tab.kind === 'session' ? where.get(tab.sessionId) : undefined;
-      const cwd = worktree || (tab.kind === 'session' ? workspace.path : (context.worktree ?? workspace.path));
+      const cwd =
+        tab.kind === 'session'
+          ? (where.get(tab.sessionId) ?? workspace.path)
+          : placeOf(context.worktree, workspace);
       return [{ ...pane, cwd }];
     });
-  }, [panes, placement, workspaces]);
+  }, [panes, placement, placeOf, workspaces]);
 
   // Bound to the workspace on screen, which is the only one a click can come
   // from: the panes behind it are hidden, so nothing there can reach these.

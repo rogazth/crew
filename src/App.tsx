@@ -67,7 +67,7 @@ export function App() {
   } = useSessions(workspaceId);
   // Every workspace's: their terminals keep running, and renaming, out of sight.
   useSessionTitle(all, adoptName);
-  const work = useWorkContext(active, sessions);
+  const work = useWorkContext(active, sessions, { workspaces: workspaces.workspaces, sessions: all });
   const { tabs, worktrees, current } = work;
   const treePath = current?.path ?? active?.path ?? null;
   const files = useProjectFiles(treePath);
@@ -285,6 +285,7 @@ export function App() {
             panes={tabs.panes}
             workspaces={workspaces.workspaces}
             sessions={all}
+            placeOf={work.placeOf}
             cwd={treePath}
             hasWorkspace={active !== null}
             onCreateWorkspace={workspaces.create}

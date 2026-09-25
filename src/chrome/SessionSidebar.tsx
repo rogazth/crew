@@ -134,7 +134,7 @@ export function SessionSidebar(props: SessionSidebarProps) {
     const main = props.worktrees.find((tree) => tree.main)?.path ?? props.workspace.path;
     const { agents, terminals } = arrangeSessions(props.sessions, prefs, query);
     const put = (session: Session, key: keyof Arranged) => {
-      const path = sessionPath(session, props.workspace);
+      const path = sessionPath(session, props.workspace, props.worktrees);
       (out.get(path) ?? out.get(main))?.[key].push(session);
     };
     for (const session of agents) put(session, "agents");
@@ -294,7 +294,9 @@ export function SessionSidebar(props: SessionSidebarProps) {
             const isCurrent = tree.path === props.activeWorktree;
             const open = isCurrent || opened.has(tree.path) || filtering;
             const mine = placed.get(tree.path) ?? { agents: [], terminals: [] };
-            const everyone = props.sessions.filter((session) => sessionPath(session, props.workspace) === tree.path);
+            const everyone = props.sessions.filter(
+              (session) => sessionPath(session, props.workspace, props.worktrees) === tree.path,
+            );
             return (
               <div key={tree.path} className={`mt-1 rounded-xl ${isCurrent ? "bg-card ring-1 ring-hairline" : ""}`}>
                 <WorktreeHeader

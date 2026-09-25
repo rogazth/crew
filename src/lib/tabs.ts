@@ -15,7 +15,7 @@ export type TabState = { tabs: Tab[]; activeId: string | null; closed: Tab[] };
 
 export const NO_TABS: TabState = { tabs: [], activeId: null, closed: [] };
 
-const CLOSED_LIMIT = 10;
+export const CLOSED_LIMIT = 10;
 
 /**
  * Opens a tab, or focuses it if it is already open. `after` places it next to

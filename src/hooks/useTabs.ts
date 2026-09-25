@@ -149,6 +149,41 @@ export function useTabs(workspaceId: string | null) {
     });
   }, []);
 
+  /** Strips as they stand: live when this window holds them, else as crewd saved them. */
+  const live = useRef(registry);
+  useEffect(() => {
+    live.current = registry;
+  }, [registry]);
+  const strips = useCallback(async (ids: string[]) => {
+    const stored = await Promise.all(
+      ids.map((id) => api.stateGet(`tabs:${id}`).then(parseTabs).catch(() => NO_TABS)),
+    );
+    return Object.fromEntries(ids.map((id, at) => [id, live.current[id] ?? stored[at]!]));
+  }, []);
+
+  /**
+   * Strips traded for others at once, the way switching between tabs per
+   * worktree and all together does: `next` takes over, and the `gone` strips
+   * go, here and in crewd. A gone strip stays read, so the switch never brings
+   * back the copy crewd is still deleting.
+   */
+  const replace = useCallback((next: TabRegistry, gone: string[]) => {
+    for (const id of Object.keys(next)) {
+      asked.current.add(id);
+      restoredIds.current.add(id);
+    }
+    for (const id of gone) {
+      restoredIds.current.delete(id);
+      delete saved.current[id];
+      void api.stateDelete(`tabs:${id}`).catch(() => {});
+    }
+    setRegistry((prev) => {
+      const out = { ...prev, ...next };
+      for (const id of gone) delete out[id];
+      return out;
+    });
+  }, []);
+
   const panes = useMemo(() => panesOf(registry, workspaceId), [registry, workspaceId]);
   const tabs = state?.tabs ?? NO_TABS.tabs;
   const active = tabs.find((t) => t.id === state?.activeId) ?? null;
@@ -167,5 +202,7 @@ export function useTabs(workspaceId: string | null) {
     openIn,
     patchBrowser,
     dropWorkspace,
+    strips,
+    replace,
   };
 }

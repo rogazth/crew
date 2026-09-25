@@ -3,9 +3,29 @@ import type { Session, Workspace, Worktree } from "./types";
 /** Whether the tab strip follows the worktree on screen, or holds the whole workspace's tabs. */
 export type TabScope = "worktree" | "all";
 
-/** Where a session runs: its worktree, else the workspace folder. */
-export function sessionPath(session: Session, workspace: Workspace): string {
-  return session.worktree ?? workspace.path;
+/**
+ * Where a session runs: its worktree while git lists it, else the main
+ * checkout. `worktrees` is git's list, null until git answers, when the
+ * session's worktree is taken at its word. The session keeps its worktree:
+ * made again, the worktree is the session's again.
+ */
+export function sessionPath(session: Session, workspace: Workspace, worktrees: Worktree[] | null): string {
+  return placePath(session.worktree, workspace, worktrees);
+}
+
+/** The same rule for anything kept in a worktree, a tab strip too; null is the main checkout. */
+export function placePath(worktree: string | null, workspace: Workspace, worktrees: Worktree[] | null): string {
+  if (!worktree || (worktrees && !worktrees.some((entry) => entry.path === worktree))) return workspace.path;
+  return worktree;
+}
+
+/**
+ * A workspace's worktrees as git lists them, the main checkout answering to the
+ * workspace's own path: git may spell it resolved (/private/…), and sessions
+ * with no worktree run in the workspace folder.
+ */
+export function asListed(list: Worktree[], workspacePath: string): Worktree[] {
+  return list.map((tree) => (tree.main ? { ...tree, path: workspacePath } : tree));
 }
 
 /**
@@ -46,7 +66,7 @@ export function worktreeHue(index: number): number {
 
 /** The worktree a session runs in, from the list git gave; the main checkout when its own is gone. */
 export function worktreeOf(session: Session, workspace: Workspace, worktrees: Worktree[]): Worktree | undefined {
-  const path = sessionPath(session, workspace);
+  const path = sessionPath(session, workspace, worktrees);
   return worktrees.find((tree) => tree.path === path) ?? worktrees.find((tree) => tree.main);
 }
 

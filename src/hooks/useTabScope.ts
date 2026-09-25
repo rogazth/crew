@@ -20,6 +20,22 @@ function subscribe(listener: () => void) {
   };
 }
 
+/**
+ * What rearranges the tab strips for a new scope, set by the shell. It calls
+ * `commit` once they are rearranged, so the new scope never shows the old strips.
+ */
+type Regroup = (to: TabScope, commit: () => void) => Promise<void>;
+let regroup: Regroup | null = null;
+
+export function useTabRegroup(handler: Regroup) {
+  useEffect(() => {
+    regroup = handler;
+    return () => {
+      if (regroup === handler) regroup = null;
+    };
+  }, [handler]);
+}
+
 /** Tabs per worktree or all together; shared by the shell and the settings page. */
 export function useTabScope() {
   const current = useSyncExternalStore(subscribe, () => scope);
@@ -34,8 +50,17 @@ export function useTabScope() {
   }, []);
 
   const update = useCallback((next: TabScope) => {
-    publish(next);
-    void api.stateSet(KEY, next).catch(() => {});
+    const from = scope;
+    if (next === from) return;
+    const commit = () => {
+      if (scope !== from) return;
+      publish(next);
+      void api.stateSet(KEY, next).catch(() => {});
+    };
+    if (!regroup) return commit();
+    void regroup(next, commit)
+      .catch(() => {})
+      .finally(commit);
   }, []);
 
   return { scope: current, update };
