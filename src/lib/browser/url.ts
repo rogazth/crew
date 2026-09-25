@@ -56,6 +56,11 @@ function parse(url: string): URL | null {
   }
 }
 
+/** A dev server or a LAN device, typed without a scheme. */
+export function isLocalAddress(input: string): boolean {
+  return LOCAL.test(input.trim());
+}
+
 export function isWebUrl(url: string): boolean {
   const protocol = parse(url)?.protocol;
   return protocol === "http:" || protocol === "https:";

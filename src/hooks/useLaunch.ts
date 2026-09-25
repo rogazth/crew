@@ -11,7 +11,7 @@ type Deps = {
   create: ReturnType<typeof useSessions>["create"];
   openSession: (session: Session) => void;
   openStub: (stub: StubKind, title: string) => void;
-  openBrowser: () => void;
+  openBrowser: (url?: string) => void;
   newAgent: () => void;
 };
 
@@ -38,7 +38,7 @@ export function useLaunch({ sessions, create, openSession, openStub, openBrowser
   const launch = useCallback(
     (item: Launch) => {
       if (item.kind === "stub") openStub(item.stub, item.title);
-      if (item.kind === "browser") openBrowser();
+      if (item.kind === "browser") openBrowser(item.url);
       if (item.kind === "new-agent") newAgent();
       if (item.kind === "new-session") void newSession(item.provider);
       if (item.kind === "session") openSession(item.session);

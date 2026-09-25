@@ -34,7 +34,7 @@ function action(address: Address): Suggestion | null {
 
 /** What was typed (`https://EXAMPLE.com`) and what history holds
  *  (`https://example.com/`) are the same page. */
-function sameUrlKey(url: string): string {
+export function sameUrlKey(url: string): string {
   try {
     const parsed = new URL(url);
     parsed.hash = "";

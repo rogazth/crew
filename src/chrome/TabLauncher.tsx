@@ -1,16 +1,20 @@
 import { Popover } from "@base-ui/react/popover";
 import {
   ChatCircleIcon,
+  ClockCounterClockwiseIcon,
   GlobeIcon,
   MagnifyingGlassIcon,
   PlusIcon,
   RobotIcon,
   TerminalWindowIcon,
 } from "@phosphor-icons/react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { ProviderIcon } from "./ProviderIcon";
 import { StatusDot } from "./StatusDot";
 import { useDefaultAgent } from "../hooks/useDefaultAgent";
+import * as api from "../lib/api";
+import { launcherAddress, launcherPages } from "../lib/browser/launch";
+import { hostOf } from "../lib/browser/history";
 import { commandKeys } from "../lib/commands";
 import type { ProviderDef, ProviderId } from "../lib/providers";
 import { fuzzyMatch } from "../lib/fuzzy";
@@ -19,12 +23,17 @@ import { filterSessions } from "../lib/workspaces";
 
 export type Launch =
   | { kind: "stub"; stub: StubKind; title: string }
-  | { kind: "browser" }
+  | { kind: "browser"; url?: string }
   | { kind: "new-agent" }
   | { kind: "new-session"; provider?: ProviderId }
   | { kind: "session"; session: Session };
 
 type Action = { id: string; label: string; icon: React.ReactNode; launch: Launch; hint?: string };
+
+type Item = Action & { status?: SessionStatus };
+type Group = { heading?: string; items: Item[] };
+
+const PAGES = 5;
 
 const ICON = "size-4 shrink-0 text-kumo-subtle";
 
@@ -111,6 +120,9 @@ function LauncherPopup({ sessions, onPick }: { sessions: Session[]; onPick: (lau
   const list = useRef<HTMLDivElement>(null);
   const [cursor, setCursor] = useState(0);
 
+  const [history, setHistory] = useState<{ url: string; title: string }[]>([]);
+  const asked = useRef(0);
+
   const { effective, installed } = useDefaultAgent();
   const actions = useMemo(() => {
     const all = [TERMINAL, NEW_AGENT, ...sessionActions(installed, effective.provider), ...TRAILING];
@@ -126,15 +138,66 @@ function LauncherPopup({ sessions, onPick }: { sessions: Session[]; onPick: (lau
         : [...sessions].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 5),
     [query, sessions],
   );
-  const heading = query.trim() ? "Open" : "Recent";
 
-  const items: Launch[] = useMemo(
-    () => [
-      ...actions.map((action) => action.launch),
-      ...matches.map((session): Launch => ({ kind: "session", session })),
-    ],
-    [actions, matches],
-  );
+  const groups = useMemo((): Group[] => {
+    const address = launcherAddress(query, actions.length > 0 || matches.length > 0);
+    const open: Item | null = address && {
+      id: "open-url",
+      label: `Open ${address.label}`,
+      icon: <GlobeIcon className={ICON} />,
+      launch: { kind: "browser", url: address.url },
+    };
+    const pages = query.trim() ? launcherPages(address, history, PAGES) : [];
+    const visited = pages.map(
+      (page): Item => ({
+        id: `page:${page.url}`,
+        label: page.title.trim() || page.url,
+        icon: <ClockCounterClockwiseIcon className={ICON} />,
+        launch: { kind: "browser", url: page.url },
+        hint: hostOf(page.url),
+      }),
+    );
+    const found = matches.map(
+      (session): Item => ({
+        id: session.id,
+        label: session.name,
+        icon:
+          session.kind === "agent" ? (
+            <RobotIcon className={ICON} />
+          ) : (
+            <ProviderIcon provider={session.provider} className="size-4 shrink-0" />
+          ),
+        launch: { kind: "session", session },
+        status: session.status,
+        hint: session.kind === "agent" ? "Agent" : "Session",
+      }),
+    );
+    const lead = open && address?.lead ? [open] : [];
+    const trailing = open && !address?.lead ? [open] : [];
+    return [
+      { items: [...lead, ...actions] },
+      { heading: query.trim() ? "Open" : "Recent", items: found },
+      { heading: "Pages", items: [...trailing, ...visited] },
+    ];
+  }, [query, actions, matches, history]);
+
+  const items = useMemo(() => groups.flatMap((group) => group.items), [groups]);
+
+  /** History only answers a query: an empty launcher shows recent sessions, not recent pages. */
+  function suggestPages(text: string) {
+    const ask = ++asked.current;
+    if (!text.trim()) {
+      setHistory([]);
+      return;
+    }
+    void api
+      .browserHistorySuggest(text, PAGES + 1)
+      .then((entries) => {
+        // Typing outruns the daemon now and then; only the newest answer counts.
+        if (ask === asked.current) setHistory(entries.map((entry) => ({ url: entry.url, title: entry.title })));
+      })
+      .catch(() => {});
+  }
 
   useEffect(() => {
     list.current?.querySelector('[data-active="true"]')?.scrollIntoView({ block: "nearest" });
@@ -152,7 +215,7 @@ function LauncherPopup({ sessions, onPick }: { sessions: Session[]; onPick: (lau
     if (event.key === "Enter") {
       event.preventDefault();
       const item = items[cursor];
-      if (item) onPick(item);
+      if (item) onPick(item.launch);
     }
   }
 
@@ -167,53 +230,40 @@ function LauncherPopup({ sessions, onPick }: { sessions: Session[]; onPick: (lau
         <input
           ref={search}
           value={query}
-          placeholder="Open an agent, a session, …"
+          placeholder="Open an agent, a session, a URL…"
           aria-label="Open a tab"
           onChange={(event) => {
             setQuery(event.target.value);
             setCursor(0);
+            suggestPages(event.target.value);
           }}
           className="min-w-0 flex-1 bg-transparent py-3 outline-none"
         />
       </div>
 
       <div ref={list} className="max-h-80 overflow-y-auto p-1">
-        {actions.map((action, index) => (
-          <Row
-            key={action.id}
-            active={index === cursor}
-            onHover={() => setCursor(index)}
-            onPick={() => onPick(action.launch)}
-            icon={action.icon}
-            label={action.label}
-            hint={action.hint}
-          />
-        ))}
-
-        {matches.length > 0 && (
-          <p className="px-2.5 pt-3 pb-1 text-[11px] font-semibold tracking-[0.06em] text-kumo-subtle uppercase">
-            {heading}
-          </p>
-        )}
-        {matches.map((session, index) => {
-          const at = actions.length + index;
+        {groups.map((group, g) => {
+          const start = groups.slice(0, g).reduce((n, prev) => n + prev.items.length, 0);
           return (
-            <Row
-              key={session.id}
-              active={at === cursor}
-              onHover={() => setCursor(at)}
-              onPick={() => onPick({ kind: "session", session })}
-              icon={
-                session.kind === "agent" ? (
-                  <RobotIcon className="size-4 shrink-0 text-kumo-subtle" />
-                ) : (
-                  <ProviderIcon provider={session.provider} className="size-4 shrink-0" />
-                )
-              }
-              label={session.name}
-              status={session.status}
-              hint={session.kind === "agent" ? "Agent" : "Session"}
-            />
+            <Fragment key={group.heading ?? "actions"}>
+              {group.heading && group.items.length > 0 && (
+                <p className="px-2.5 pt-3 pb-1 text-[11px] font-semibold tracking-[0.06em] text-kumo-subtle uppercase">
+                  {group.heading}
+                </p>
+              )}
+              {group.items.map((item, index) => (
+                <Row
+                  key={item.id}
+                  active={start + index === cursor}
+                  onHover={() => setCursor(start + index)}
+                  onPick={() => onPick(item.launch)}
+                  icon={item.icon}
+                  label={item.label}
+                  status={item.status}
+                  hint={item.hint}
+                />
+              ))}
+            </Fragment>
           );
         })}
 

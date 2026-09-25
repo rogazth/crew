@@ -91,7 +91,7 @@ export function App() {
     create,
     openSession: nav.openSession,
     openStub: nav.openStub,
-    openBrowser: () => nav.openBrowser(),
+    openBrowser: (url) => nav.openBrowser(url),
     newAgent: sheet.newAgent,
   });
 
