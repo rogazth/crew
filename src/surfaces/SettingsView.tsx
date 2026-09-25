@@ -10,6 +10,7 @@ import { useFilePrefs } from "../hooks/useFilePrefs";
 import { AGENT_THEMES, type AgentThemeId } from "../lib/agentTheme";
 import { KEEP_CHOICES, SEARCH_ENGINES } from "../lib/browserPrefs";
 import { COMMANDS, COMMAND_IDS, commandKeys } from "../lib/commands";
+import { BROWSER_CLICK } from "../lib/external";
 import { parseFolders } from "../lib/filePrefs";
 import { PROVIDERS } from "../lib/providers";
 import { settingsSection, type SettingsSectionId } from "../lib/settings";
@@ -99,7 +100,11 @@ function Browser() {
       <SettingsSection title="Links">
         <SettingsRow
           label="Open links in Crew"
-          description="Links in agent chats and terminals open as a new page here. Off sends them to your default browser."
+          description={
+            prefs.openLinksInCrew
+              ? `Links in agent chats and terminals open as a new page here. ${BROWSER_CLICK}-click one to open it in your default browser instead.`
+              : "Links in agent chats and terminals open as a new page here. Off sends them to your default browser."
+          }
         >
           <Switch
             aria-label="Open links in Crew"

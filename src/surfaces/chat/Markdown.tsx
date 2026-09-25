@@ -12,8 +12,9 @@ import {
 import { Streamdown, type Components } from "streamdown";
 import "streamdown/styles.css";
 import { FileTypeIcon } from "../../chrome/FileTypeIcon";
+import { useBrowserPrefs } from "../../hooks/useBrowserPrefs";
 import { extensionOf } from "../../lib/attachments";
-import { openLink } from "../../lib/external";
+import { BROWSER_CLICK, openLink } from "../../lib/external";
 import { groupRuns, isHeadingOnly } from "../../lib/markdownRuns";
 import { VEIL_EMA_SEED_MS, veilDurationMs, veilEmaNext } from "../../lib/veil";
 import { CodeBlock } from "./CodeBlock";
@@ -61,15 +62,17 @@ function Link({ href, children, node: _node, ...rest }: LinkProps) {
   const anchor = href?.startsWith("#") ? href.slice(1) : undefined;
   const url = href && anchor === undefined && !href.startsWith("streamdown:") ? href : undefined;
   const web = url && /^https?:\/\//i.test(url) ? url : undefined;
+  const { prefs } = useBrowserPrefs();
+  const title = web && prefs.openLinksInCrew ? `${web}\n${BROWSER_CLICK}-click to open in your browser` : url;
   return (
     <a
       {...rest}
       href={href ?? "#"}
-      {...(url ? { title: url } : {})}
+      {...(title ? { title } : {})}
       data-streamdown="link"
       onClick={(event) => {
         event.preventDefault();
-        if (url) openLink(url);
+        if (url) openLink(url, event);
         else if (anchor) document.getElementById(anchor)?.scrollIntoView({ block: "center" });
       }}
     >
