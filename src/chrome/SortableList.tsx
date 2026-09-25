@@ -7,6 +7,12 @@ import { memo, type ComponentProps, type ReactNode } from "react";
 const SENSORS = [
   PointerSensor.configure({
     activationConstraints: [new PointerActivationConstraints.Distance({ value: 5 })],
+    // Rows are buttons, which dnd-kit refuses to drag from by default. The
+    // distance constraint already tells a click from a drag; only a field being
+    // typed in, like an inline rename, keeps the pointer for itself.
+    preventActivation: (event) =>
+      event.target instanceof Element &&
+      event.target.closest("input, textarea, [contenteditable]") !== null,
   }),
 ];
 

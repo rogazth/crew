@@ -77,6 +77,50 @@ if (shot === "routines") {
   }
   const grew = await page.locator('[data-selectable="blocks"] .crew-bubble').count();
   console.log(`earlier messages loaded: ${grew} bubbles in view, anchor held within ${Math.abs(after - before)}px`);
+} else if (shot === "workspaces") {
+  // Dragging a row in the switcher reorders it, and the order outlives the popover.
+  const names = () =>
+    page.locator('[aria-label="Workspaces"] button span.font-medium').allTextContents();
+  await page.locator('[data-sidebar="sidebar"] button').filter({ hasText: "crew" }).first().click();
+  await page.waitForTimeout(400);
+  const before = await names();
+  if (before.join() !== "crew,storefront-api,ledger,dotfiles") {
+    throw new Error(`the switcher opened with ${before.join()}`);
+  }
+  const rowOf = (name) =>
+    page.locator('[aria-label="Workspaces"] button').filter({ hasText: name }).first();
+  const from = await rowOf("crew").boundingBox();
+  const to = await rowOf("ledger").boundingBox();
+  await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
+  await page.mouse.down();
+  // Step through the gap so the sensor activates and the sortable sees every row.
+  await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2 + 10, { steps: 5 });
+  await page.mouse.move(to.x + to.width / 2, to.y + to.height - 4, { steps: 20 });
+  await page.waitForTimeout(200);
+  await page.mouse.up();
+  await page.waitForTimeout(400);
+  const after = await names();
+  if (after.join() !== "storefront-api,ledger,crew,dotfiles") {
+    throw new Error(`the drag left the switcher at ${after.join()}`);
+  }
+  // Letting go must not also pick the row under the pointer.
+  const open = await page.locator('[aria-label="Workspaces"]').count();
+  if (open === 0) throw new Error("dropping a row closed the switcher");
+  await page.keyboard.press("Escape");
+  await page.waitForTimeout(300);
+  await page.locator('[data-sidebar="sidebar"] button').filter({ hasText: "crew" }).first().click();
+  await page.waitForTimeout(400);
+  const reopened = await names();
+  if (reopened.join() !== after.join()) throw new Error(`reopening showed ${reopened.join()}`);
+  // A click that never travels is still a pick, not a drag.
+  await rowOf("ledger").click();
+  await page.waitForTimeout(400);
+  if ((await page.locator('[aria-label="Workspaces"]').count()) > 0) {
+    throw new Error("clicking a row did not pick it");
+  }
+  const trigger = page.locator('[data-sidebar="sidebar"] button').filter({ hasText: "ledger" });
+  if ((await trigger.count()) === 0) throw new Error("clicking ledger did not switch to it");
+  console.log(`dragged crew below ledger: ${after.join(", ")}; a click still picks`);
 } else if (shot === "search") {
   await page.keyboard.press("Control+Shift+F");
   await page.waitForTimeout(600);
