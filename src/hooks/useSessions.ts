@@ -156,7 +156,8 @@ export function useSessions(workspaceId: string | null) {
   /** Terminals report through here; agent sessions are written by the runtime. */
   const setStatus = useCallback(
     (id: string, status: SessionStatus) => {
-      patchSession(id, (session) => ({ ...session, status }));
+      // The daemon stamps the row as it stores the status; the list keeps pace.
+      patchSession(id, (session) => ({ ...session, status, updatedAt: Date.now() }));
       void api.setSessionStatus(id, status).catch(() => {});
     },
     [patchSession],
