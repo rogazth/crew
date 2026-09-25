@@ -59,6 +59,7 @@ node scripts/drive.mjs              # two agents and a message between them, hea
 SCENARIO=code node scripts/drive.mjs
 SCENARIO=loop node scripts/drive.mjs
 SCENARIO=routine node scripts/drive.mjs
+node scripts/sessions.mjs           # claude, opencode and cursor tabs: status and title, end to end
 node scripts/shot.mjs               # a screenshot of the chat against the mock
 ```
 
