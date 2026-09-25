@@ -1160,6 +1160,11 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
             block(move || crew_core::browser::page_delete(&store, &page_id)).await?;
             Ok(Value::Null)
         }
+        "browser_cookie_sources" => json(block(|| Ok(crew_core::cookie_import::sources())).await?),
+        "browser_cookies_read" => {
+            let proto::CookieSourceId { source_id } = parse(params)?;
+            json(block(move || crew_core::cookie_import::read(&source_id)).await?)
+        }
         _ => Err(format!("Unknown method: {method}")),
     }
 }

@@ -26,6 +26,8 @@ export const CHANNELS = {
   favicon: "browser:favicon",
   /** main → window: a page's download started or ended; its guest must not be discarded meanwhile. */
   download: "browser:download",
+  /** window → main: cookies the daemon read from another browser, to write into the pages' session. */
+  importCookies: "browser:import-cookies",
 } as const;
 
 export type DownloadActivity = { webContentsId: number; active: boolean };

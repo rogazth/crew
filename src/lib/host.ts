@@ -1,6 +1,7 @@
 import type { DownloadActivity, OpenTabRequest } from "./browser/bridge";
 import type { NavSnapshot } from "./browser/snapshot";
 import type { KeyboardLayout, LiveCommand } from "./keymap";
+import type { ImportedCookie } from "./protocol";
 import type { UpdateState } from "./update";
 
 export type OpenOptions = { multiple?: boolean; directory?: boolean };
@@ -39,6 +40,7 @@ export type BrowserHost = {
   snapshot(webContentsId: number): Promise<NavSnapshot | null>;
   prepareRestore(token: string, entriesJson: string, index: number): Promise<boolean>;
   favicon(url: string): Promise<string | null>;
+  importCookies(cookies: ImportedCookie[]): Promise<{ imported: number; failed: number }>;
 };
 
 export type HostDragDrop =

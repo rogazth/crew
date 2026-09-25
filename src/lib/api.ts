@@ -1,7 +1,7 @@
 import { client } from "./client";
 import { open } from "./host";
 import type { RoutineRow, ScheduledRoutine } from "./routines";
-import type { HistoryEntry, HistoryList, MessagePage, PageSnapshot, SearchHit, SearchQuery } from "./protocol";
+import type { CookieRead, CookieSource, HistoryEntry, HistoryList, MessagePage, PageSnapshot, SearchHit, SearchQuery } from "./protocol";
 import type { Autonomy, ProjectFile, Session, SessionKind, SessionStatus, Workspace, Worktree } from "./types";
 
 /** Native picker. No filters: any document the agent can read. */
@@ -243,6 +243,13 @@ export const browserHistoryDelete = (urlKey: string): Promise<void> =>
 /** `since` clears from that moment on; without it, everything goes. */
 export const browserHistoryClear = (since?: number): Promise<void> =>
   client.request("browser_history_clear", { since });
+
+/** Browser profiles on this Mac whose cookies can be imported. */
+export const browserCookieSources = (): Promise<CookieSource[]> => client.request("browser_cookie_sources", {});
+
+/** Decrypts one profile's cookies. macOS asks for keychain access first. */
+export const browserCookiesRead = (sourceId: string): Promise<CookieRead> =>
+  client.request("browser_cookies_read", { sourceId });
 
 export const browserPageSave = (pageId: string, entriesJson: string, activeIndex: number): Promise<void> =>
   client.request("browser_page_save", { pageId, entriesJson, activeIndex });

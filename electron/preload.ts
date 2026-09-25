@@ -35,5 +35,6 @@ contextBridge.exposeInMainWorld("crewHost", {
     prepareRestore: (token: string, entriesJson: string, index: number) =>
       ipcRenderer.invoke(CHANNELS.prepareRestore, token, entriesJson, index),
     favicon: (url: string) => ipcRenderer.invoke(CHANNELS.favicon, url),
+    importCookies: (cookies: unknown) => ipcRenderer.invoke(CHANNELS.importCookies, cookies),
   },
 });

@@ -32,6 +32,25 @@ export type BlockRole = "user" | "assistant" | "reasoning" | "tool" | "approval"
 
 export type BlockTool = { callId: string, name: string, title: string, status: ToolStatus, detail?: ToolDetail, };
 
+export type CookieRead = { cookies: Array<ImportedCookie>, 
+/**
+ * Rows left out: expired, undecryptable, partitioned, or on a domain that must not move.
+ */
+skipped: number, };
+
+export type CookieSameSite = "unspecified" | "no_restriction" | "lax" | "strict";
+
+/**
+ * A browser profile on this Mac whose cookies can be copied into Crew's pages.
+ */
+export type CookieSource = { 
+/**
+ * `<browser id>/<profile folder>`: what `browser_cookies_read` takes back.
+ */
+id: string, browser: string, profile: string, };
+
+export type CookieSourceId = { sourceId: string, };
+
 export type DaemonInfo = { url: string, token: string, };
 
 export type Event = { event: string, payload: unknown, };
@@ -83,6 +102,19 @@ export type IdProvider = { id: string, providerSessionId: string, };
 export type IdStatus = { id: string, status: string, };
 
 export type Ids = { ids: Array<string>, };
+
+/**
+ * One decrypted cookie, in the shape Electron's `cookies.set` wants it.
+ */
+export type ImportedCookie = { 
+/**
+ * As the source stored it: a leading dot means the cookie also covers subdomains.
+ */
+host: string, name: string, value: string, path: string, secure: boolean, httpOnly: boolean, sameSite: CookieSameSite, 
+/**
+ * Seconds since the Unix epoch. Absent for a cookie that ends with the browser session.
+ */
+expires?: number, };
 
 export type Key = { key: string, };
 

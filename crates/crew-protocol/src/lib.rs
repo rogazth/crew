@@ -578,3 +578,59 @@ pub struct PageSave {
 pub struct PageId {
     pub page_id: String,
 }
+
+/// A browser profile on this Mac whose cookies can be copied into Crew's pages.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
+pub struct CookieSource {
+    /// `<browser id>/<profile folder>`: what `browser_cookies_read` takes back.
+    pub id: String,
+    pub browser: String,
+    pub profile: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
+pub struct CookieSourceId {
+    pub source_id: String,
+}
+
+/// One decrypted cookie, in the shape Electron's `cookies.set` wants it.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
+pub struct ImportedCookie {
+    /// As the source stored it: a leading dot means the cookie also covers subdomains.
+    pub host: String,
+    pub name: String,
+    pub value: String,
+    pub path: String,
+    pub secure: bool,
+    pub http_only: bool,
+    pub same_site: CookieSameSite,
+    /// Seconds since the Unix epoch. Absent for a cookie that ends with the browser session.
+    #[serde(default)]
+    #[ts(optional, type = "number")]
+    pub expires: Option<i64>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "snake_case")]
+pub enum CookieSameSite {
+    Unspecified,
+    NoRestriction,
+    Lax,
+    Strict,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
+pub struct CookieRead {
+    pub cookies: Vec<ImportedCookie>,
+    /// Rows left out: expired, undecryptable, partitioned, or on a domain that must not move.
+    pub skipped: u32,
+}

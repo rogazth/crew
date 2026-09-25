@@ -2,6 +2,7 @@ import { ipcMain, session } from "electron";
 import type { KeyboardLayout, LiveCommand } from "../../src/lib/keymap";
 import { capSnapshot, parseSnapshot } from "../../src/lib/browser/snapshot";
 import { CHANNELS, PARTITION } from "../../src/lib/browser/bridge";
+import { importCookies } from "./cookies";
 import { ownedGuest, prepareRestore, setKeyboardLayout, setLiveCommands } from "./guests";
 
 const TOKEN = /^[A-Za-z0-9-]{1,64}$/;
@@ -76,6 +77,8 @@ export function registerBrowserIpc(): void {
     const history = guest.navigationHistory;
     return capSnapshot({ entries: history.getAllEntries(), index: history.getActiveIndex() });
   });
+
+  ipcMain.handle(CHANNELS.importCookies, (_event, list: unknown) => importCookies(session.fromPartition(PARTITION), list));
 
   ipcMain.handle(CHANNELS.favicon, (_event, url: unknown) => (typeof url === "string" ? favicon(url) : null));
 
