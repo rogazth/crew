@@ -26,8 +26,8 @@ import { Outline } from "./Outline";
 
 type Props = {
   path: string;
+  /** The text to start from: the disk's, or edits kept from before the tab went away. */
   loaded: string;
-  saved: string;
   onChange: (contents: string) => void;
   files: ProjectFile[];
   /** Opens a file tab for an absolute path. */
@@ -238,12 +238,12 @@ const THEME = EditorView.theme({
 /** Markdown's bracket pairs; quotes stay single, since prose is full of apostrophes. */
 const BRACKETS = EditorState.languageData.of(() => [{ closeBrackets: { brackets: ["(", "[", "{"] } }]);
 
-type Kept = { json: unknown; base: string; scroll: StateEffect<unknown> };
+type Kept = { json: unknown; doc: string; scroll: StateEffect<unknown>; top: number; head: number };
 
 /**
  * A tab switch unmounts the editor; this keeps each file's text, selection,
- * undo history and scroll for when it comes back — but only while disk still
- * holds what the kept state was based on.
+ * undo history and scroll for when it comes back — whole while it comes back to
+ * the same text, and only its place in the note once the disk replaced that.
  */
 const kept = new Map<string, Kept>();
 
@@ -260,9 +260,13 @@ function scrollToHeading(view: EditorView, heading: string, select: boolean) {
   });
 }
 
+/** The line at the top of the pane. */
+const topLine = (view: EditorView) =>
+  view.lineBlockAtHeight(view.scrollDOM.getBoundingClientRect().top - view.documentTop + 8);
+
 /** The last heading at or above the top of the pane: the section being read. */
 function activeHeading(view: EditorView, items: OutlineItem[]): number | null {
-  const top = view.lineBlockAtHeight(view.scrollDOM.getBoundingClientRect().top - view.documentTop + 8);
+  const top = topLine(view);
   let active: number | null = null;
   for (const item of items) {
     if (item.from > top.to) break;
@@ -271,12 +275,11 @@ function activeHeading(view: EditorView, items: OutlineItem[]): number | null {
   return active ?? items[0]?.from ?? null;
 }
 
-export function MarkdownEditor({ path, loaded, saved, onChange, files, onOpenPath, outline }: Props) {
+export function MarkdownEditor({ path, loaded, onChange, files, onOpenPath, outline }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const [hostCompartment] = useState(() => new Compartment());
   const onChangeRef = useRef(onChange);
-  const savedRef = useRef(saved);
   const hostValue = useRef<NoteHost>({ path, files, open: () => undefined });
   const [items, setItems] = useState<OutlineItem[]>([]);
   const itemsRef = useRef(items);
@@ -286,7 +289,6 @@ export function MarkdownEditor({ path, loaded, saved, onChange, files, onOpenPat
 
   useEffect(() => {
     onChangeRef.current = onChange;
-    savedRef.current = saved;
     itemsRef.current = items;
   });
 
@@ -349,15 +351,22 @@ export function MarkdownEditor({ path, loaded, saved, onChange, files, onOpenPat
 
     const previous = kept.get(path);
     kept.delete(path);
-    const restore = previous?.base === loaded ? previous : undefined;
+    const restore = previous?.doc === loaded ? previous : undefined;
     const state = restore
       ? EditorState.fromJSON(restore.json, { extensions }, { history: historyField })
       : EditorState.create({ doc: loaded, extensions });
     const view = new EditorView({ state, parent: host.current! });
     viewRef.current = view;
+    // Restored or not, the text is `loaded`, which the file already holds as the editor's.
     if (restore) {
       view.dispatch({ effects: restore.scroll });
-      onChangeRef.current(view.state.doc.toString());
+    } else if (previous) {
+      // The disk's text replaced the one kept: the caret and the pane stay about where they were.
+      const clamp = (at: number) => Math.min(at, view.state.doc.length);
+      view.dispatch({
+        selection: { anchor: clamp(previous.head) },
+        effects: EditorView.scrollIntoView(clamp(previous.top), { y: "start" }),
+      });
     }
     // Forgotten a frame later, not now: a remount in the same tick (StrictMode)
     // restores the scroll it had, which would bury the heading.
@@ -368,10 +377,15 @@ export function MarkdownEditor({ path, loaded, saved, onChange, files, onOpenPat
 
     const offScheme = onSchemeChange(() => view.dispatch({ effects: refreshPreview.of(null) }));
 
+    // Read while the pane is on screen: by the time it unmounts, it has no layout to ask.
+    let top = previous?.top ?? 0;
     let frame = 0;
     const onScroll = () => {
       cancelAnimationFrame(frame);
-      frame = requestAnimationFrame(() => setActive(activeHeading(view, itemsRef.current)));
+      frame = requestAnimationFrame(() => {
+        top = topLine(view).from;
+        setActive(activeHeading(view, itemsRef.current));
+      });
     };
     view.scrollDOM.addEventListener("scroll", onScroll, { passive: true });
 
@@ -383,8 +397,10 @@ export function MarkdownEditor({ path, loaded, saved, onChange, files, onOpenPat
       offScheme();
       kept.set(path, {
         json: view.state.toJSON({ history: historyField }),
-        base: savedRef.current,
+        doc: view.state.doc.toString(),
         scroll: view.scrollSnapshot(),
+        top,
+        head: view.state.selection.main.head,
       });
       viewRef.current = null;
       view.destroy();

@@ -1,5 +1,6 @@
 import { lazy, Suspense } from "react";
 import { ListBulletsIcon } from "@phosphor-icons/react";
+import { Button } from "../chrome/kit";
 import { useCommands } from "../hooks/useCommand";
 import { useOutlinePref } from "../hooks/useOutlinePref";
 import { useTextFile } from "../hooks/useTextFile";
@@ -24,11 +25,10 @@ const MarkdownEditor = lazy(() =>
 const MARKDOWN = /\.(?:md|markdown)$/i;
 
 export function FileEditor({ path, relative, files, onOpenPath }: Props) {
-  const { loaded, saved, dirty, error, setContents } = useTextFile(path);
-  const [outline, toggleOutline] = useOutlinePref();
-
   const name = relative.split("/").pop() ?? relative;
   const isMarkdown = MARKDOWN.test(name);
+  const { loaded, revision, dirty, conflict, error, setContents, reload, overwrite } = useTextFile(path, isMarkdown);
+  const [outline, toggleOutline] = useOutlinePref();
   useCommands(isMarkdown ? { "toggle-outline": toggleOutline } : {});
 
   if (error) return <p className="p-4 text-red-600">{error}</p>;
@@ -70,16 +70,31 @@ export function FileEditor({ path, relative, files, onOpenPath }: Props) {
         )}
       </div>
 
+      {/* The disk and the editor both changed: the edits stay, and nothing is
+          written until one side is chosen. */}
+      {conflict && (
+        <div role="alert" className="flex shrink-0 items-center gap-2 border-b border-border bg-sidebar px-4 py-1.5">
+          <span className="truncate">Changed on disk</span>
+          <Button className="ml-auto" onClick={reload}>
+            Reload
+          </Button>
+          <Button onClick={overwrite}>
+            Overwrite
+          </Button>
+        </div>
+      )}
+
       {/* The editors scroll their own root and need a definite box to size the
           virtual window against — `flex-1` alone leaves it at auto height, which
           kills both scrolling and the virtualiser. */}
       <div data-selectable className="min-h-0 flex-1 overflow-hidden">
         <Suspense fallback={null}>
           {isMarkdown ? (
+            // A new revision is the disk's text taken over the editor's: a fresh view.
             <MarkdownEditor
+              key={revision}
               path={path}
               loaded={loaded}
-              saved={saved}
               onChange={setContents}
               files={files}
               onOpenPath={onOpenPath}

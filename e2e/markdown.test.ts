@@ -6,7 +6,7 @@ import { existsSync } from "node:fs";
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { test } from "node:test";
-import { launchCrew, MOD, pressChord, waitFor, type Crew } from "./harness.ts";
+import { holdsFor, launchCrew, MOD, pressChord, waitFor, type Crew } from "./harness.ts";
 
 /** A 2×2 PNG, as a clipboard would hold a screenshot. */
 const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAEUlEQVR4nGP4zwAEUOL/fwYAIu0E/FEgFfUAAAAASUVORK5CYII=";
@@ -43,6 +43,20 @@ function unsaved(crew: Crew) {
   return crew.window.getByText("Unsaved", { exact: true }).filter({ visible: true });
 }
 
+/** The bar over a note whose disk and editor both changed. */
+function changedOnDisk(crew: Crew) {
+  return crew.window.getByRole("alert").filter({ hasText: "Changed on disk" }).filter({ visible: true });
+}
+
+/** Waits for the editor's text to hold `text` (or, with `present` false, to lose it). */
+async function shows(crew: Crew, text: string, message: string, present = true): Promise<void> {
+  let last = "";
+  const ok = await waitFor(async () => (last = await editor(crew).innerText()).includes(text) === present, {
+    timeout: 5000,
+  }).catch(() => false);
+  assert.ok(ok, `${message}: ${JSON.stringify(last.slice(-300))}`);
+}
+
 /** A file tab on the strip. */
 function fileTab(crew: Crew, file: string) {
   return crew.window.locator(`[data-tab-strip] [role="tab"][data-tab-id="file:${file}"]`);
@@ -63,7 +77,7 @@ async function diskReads(file: string, expected: string, message: string): Promi
   if (!same) assert.equal(last, expected, message);
 }
 
-test("M1: a note is edited, ticked, linked, pasted into and saved to disk", async (t) => {
+test("M1: a note is edited, ticked, linked, pasted into and saved to disk, and never loses a change made on disk", async (t) => {
   const crew = await launchCrew({ repos: [{ name: "app", files: { "README.md": "# app\n", "notes/plan.md": PLAN } }] });
   t.after(() => crew.close());
   const [workspace] = crew.workspaces;
@@ -139,44 +153,80 @@ test("M1: a note is edited, ticked, linked, pasted into and saved to disk", asyn
   await unsaved(crew).waitFor();
   assert.equal(await readFile(plan, "utf8"), expected, "the trip did not save the edit");
 
-  // Someone else writes the note while an edit is unsaved. Whether Crew may
-  // overwrite that change, or drop the edit, is Gabriel's call (Q3); at least
-  // neither may vanish without a word.
-  const signal = page.getByText(/changed on disk|modified outside|conflict|overwrite|reload/i).filter({ visible: true });
-  const warned = () =>
-    signal
-      .first()
-      .waitFor({ timeout: 3000 })
-      .then(() => true)
-      .catch(() => false);
+  // Someone else writes the note while an edit is unsaved (Q3). ⌘S writes
+  // nothing over it: the edit stays, and a bar asks which one wins.
+  const mine = `${expected}${pending}`;
+  let outside = `${expected}Written outside Crew ${stamp}\n`;
+  await writeFile(plan, outside);
+  await editor(crew).click();
+  await page.keyboard.press(`${MOD}+s`);
+  await changedOnDisk(crew).waitFor({ timeout: 5000 });
+  await holdsFor(1000, async () => (await readFile(plan, "utf8")) === outside, "the save wrote over the change made on disk");
+  await shows(crew, pending.trim(), "the edit stays in the editor");
+  await unsaved(crew).waitFor();
+  // A second ⌘S while it asks writes nothing either.
+  await page.keyboard.press(`${MOD}+s`);
+  await holdsFor(1000, async () => (await readFile(plan, "utf8")) === outside, "⌘S wrote while the bar was up");
+  // Overwrite: the edit wins, and is saved.
+  await changedOnDisk(crew).getByRole("button", { name: "Overwrite", exact: true }).click();
+  await diskReads(plan, mine, "Overwrite writes the edit over the change made on disk");
+  await changedOnDisk(crew).waitFor({ state: "detached" });
+  await unsaved(crew).waitFor({ state: "detached" });
+  expected = mine;
 
-  await t.test("saving over a change made on disk does not lose it silently", { todo: "Q3: useTextFile.save writes without comparing the disk to what it loaded" }, async () => {
-    await writeFile(plan, `${expected}Written outside Crew ${stamp}\n`);
-    await editor(crew).click();
-    await page.keyboard.press(`${MOD}+s`);
-    const said = await Promise.race([
-      unsaved(crew).waitFor({ state: "detached" }).then(() => false),
-      warned(),
-    ]);
-    const kept = (await readFile(plan, "utf8")).includes(`Written outside Crew ${stamp}`);
-    assert.ok(said || (await warned()) || kept, "the save replaced the outside change and said nothing");
-  });
+  // Again, and Reload: the disk wins, and nothing is left unsaved.
+  const dropped = ` dropped ${stamp}`;
+  await editor(crew).click();
+  await page.keyboard.press(`${MOD}+End`);
+  await page.keyboard.type(dropped);
+  await unsaved(crew).waitFor();
+  outside = `${expected}Reloaded from disk ${stamp}\n`;
+  await writeFile(plan, outside);
+  await page.keyboard.press(`${MOD}+s`);
+  await changedOnDisk(crew).getByRole("button", { name: "Reload", exact: true }).click();
+  await changedOnDisk(crew).waitFor({ state: "detached" });
+  await shows(crew, `Reloaded from disk ${stamp}`, "Reload shows the disk's text");
+  await shows(crew, dropped.trim(), "Reload drops the edit", false);
+  await unsaved(crew).waitFor({ state: "detached" });
+  assert.equal(await readFile(plan, "utf8"), outside, "Reload writes nothing");
+  expected = outside;
 
-  await t.test("an unsaved edit is not dropped when the disk changes while its tab is away", { todo: "Q3: MarkdownEditor restores a kept edit only while disk still reads its base" }, async () => {
-    expected = await readFile(plan, "utf8");
-    const edit = `Edited while away ${stamp}`;
-    await editor(crew).click();
-    await page.keyboard.press(`${MOD}+End`);
-    await page.keyboard.type(edit);
-    await unsaved(crew).waitFor();
-    await fileTab(crew, missing).click();
-    await page.getByText("notes/missing-note.md", { exact: true }).filter({ visible: true }).waitFor();
-    await writeFile(plan, `${expected}Written outside Crew again ${stamp}\n`);
-    await fileTab(crew, plan).click();
-    await editor(crew).filter({ hasText: `Written outside Crew again ${stamp}` }).or(editor(crew).filter({ hasText: edit })).waitFor();
-    const shown = await editor(crew).innerText();
-    assert.ok(shown.includes(edit) || (await warned()), "the unsaved edit is gone and nothing said so");
-  });
+  // An unsaved edit, and the disk changes while its tab is away: back on the
+  // tab, the edit is still there, the bar asks, and the disk is untouched.
+  const away = ` edited while away ${stamp}`;
+  await editor(crew).click();
+  await page.keyboard.press(`${MOD}+End`);
+  await page.keyboard.type(away);
+  await unsaved(crew).waitFor();
+  await fileTab(crew, missing).click();
+  await page.getByText("notes/missing-note.md", { exact: true }).filter({ visible: true }).waitFor();
+  outside = `${expected}Written outside Crew again ${stamp}\n`;
+  await writeFile(plan, outside);
+  await fileTab(crew, plan).click();
+  await editor(crew).waitFor();
+  await changedOnDisk(crew).waitFor({ timeout: 5000 });
+  await shows(crew, away.trim(), "the edit made before the tab went away is still in the editor");
+  await unsaved(crew).waitFor();
+  assert.equal(await readFile(plan, "utf8"), outside, "coming back wrote nothing");
+  await changedOnDisk(crew).getByRole("button", { name: "Reload", exact: true }).click();
+  await changedOnDisk(crew).waitFor({ state: "detached" });
+  expected = outside;
+
+  // Nothing unsaved: a change on disk shows up by itself, when the tab comes
+  // back and when the window does.
+  outside = `${expected}Taken while away ${stamp}\n`;
+  await fileTab(crew, missing).click();
+  await page.getByText("notes/missing-note.md", { exact: true }).filter({ visible: true }).waitFor();
+  await writeFile(plan, outside);
+  await fileTab(crew, plan).click();
+  await shows(crew, `Taken while away ${stamp}`, "coming back shows the disk's new text");
+  outside = `${outside}Taken on focus ${stamp}\n`;
+  await writeFile(plan, outside);
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await shows(crew, `Taken on focus ${stamp}`, "the window coming back shows the disk's new text");
+  assert.equal(await changedOnDisk(crew).count(), 0, "nothing was unsaved, so nothing asks");
+  assert.equal(await unsaved(crew).count(), 0);
+  assert.equal(await readFile(plan, "utf8"), outside);
 });
 
 /** A section: its heading, then enough short lines that it outgrows the pane. */
