@@ -275,7 +275,9 @@ app.whenReady().then(async () => {
     return;
   }
   createWindow();
-  watchForUpdates();
+  watchForUpdates(() => {
+    if (!win) createWindow();
+  });
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });

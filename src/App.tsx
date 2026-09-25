@@ -6,6 +6,7 @@ import { ConfirmDialog } from "./chrome/ConfirmDialog";
 import { LinkRouter } from "./chrome/LinkRouter";
 import { AppSidebar } from "./chrome/AppSidebar";
 import { TabBar } from "./chrome/TabBar";
+import { UpdateDialog } from "./chrome/UpdateDialog";
 import { useAgentSheet } from "./hooks/useAgentSheet";
 import { useAppCommands } from "./hooks/useAppCommands";
 import { useBrowserBridge } from "./hooks/useBrowserBridge";
@@ -243,6 +244,8 @@ export function App() {
       )}
 
       <ConfirmDialog confirm={confirms.confirm} onClose={confirms.close} />
+
+      <UpdateDialog />
 
       <AgentSheetHost sheet={sheet} sessions={sessions} onNewRoutine={openRoutines} />
     </Sidebar.Provider>

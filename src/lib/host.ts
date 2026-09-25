@@ -1,6 +1,7 @@
 import type { DownloadActivity, OpenTabRequest } from "./browser/bridge";
 import type { NavSnapshot } from "./browser/snapshot";
 import type { LiveCommand } from "./keymap";
+import type { UpdateState } from "./update";
 
 export type OpenOptions = { multiple?: boolean; directory?: boolean };
 
@@ -13,7 +14,17 @@ type CrewHost = {
   openUrl(url: string): Promise<void>;
   notify(title: string, body: string): Promise<void>;
   pathForFile(file: File): string;
+  update: UpdateHost;
   browser: BrowserHost;
+};
+
+/** The updater's main-process half. Absent outside Electron. */
+export type UpdateHost = {
+  current(): Promise<UpdateState>;
+  onState(cb: (state: UpdateState) => void): () => void;
+  install(): Promise<void>;
+  dismiss(): Promise<void>;
+  cancel(): Promise<void>;
 };
 
 /** The browser's main-process half. Absent outside Electron (the mock, the screenshot build). */
@@ -46,6 +57,10 @@ function crewHost(): CrewHost | undefined {
 
 export function browserHost(): BrowserHost | null {
   return crewHost()?.browser ?? null;
+}
+
+export function updateHost(): UpdateHost | null {
+  return crewHost()?.update ?? null;
 }
 
 export async function daemonInfo(): Promise<DaemonInfo> {

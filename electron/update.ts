@@ -1,21 +1,27 @@
 import { spawn } from "node:child_process";
 import { createHash, type Hash } from "node:crypto";
 import { createWriteStream } from "node:fs";
-import { access, mkdtemp, writeFile } from "node:fs/promises";
+import { access, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
-import { app, dialog } from "electron";
+import { app, BrowserWindow, ipcMain } from "electron";
+import { UPDATE_CHANNELS, type UpdateState } from "../src/lib/update";
 
 const RELEASES = "https://github.com/rogazth/crew/releases";
 const MANIFEST = `${RELEASES}/latest/download/latest.json`;
 const FIRST_CHECK = 15_000;
 const EVERY = 6 * 60 * 60 * 1000;
+const PROGRESS_EVERY = 100;
 
 type Manifest = { version: string; zip: string; sha256: string };
 
 let busy = false;
 let skipped: string | null = null;
+let state: UpdateState = { phase: "idle" };
+let offered: Manifest | null = null;
+let aborting: AbortController | null = null;
+let ensureWindow: (() => void) | null = null;
 
 function parseManifest(value: unknown): Manifest | null {
   if (typeof value !== "object" || value === null) return null;
@@ -51,25 +57,39 @@ function bundle(): string | null {
 }
 
 async function fetchManifest(): Promise<Manifest> {
-  const response = await fetch(MANIFEST, { headers: { "cache-control": "no-cache" } });
+  const response = await fetch(MANIFEST, {
+    headers: { "cache-control": "no-cache" },
+    signal: AbortSignal.timeout(15_000),
+  });
   if (!response.ok) throw new Error(`${MANIFEST} answered ${response.status}`);
   const parsed = parseManifest(await response.json());
   if (!parsed) throw new Error("latest.json is not a manifest Crew can use");
   return parsed;
 }
 
-async function download(url: string, dest: string, sha256: string): Promise<void> {
-  const response = await fetch(url);
+async function download(
+  url: string,
+  dest: string,
+  sha256: string,
+  signal: AbortSignal,
+  progress: (received: number, total: number | null) => void,
+): Promise<void> {
+  const response = await fetch(url, { signal });
   if (!response.ok) throw new Error(`${url} answered ${response.status}`);
   if (!response.body) throw new Error(`${url} answered without a body`);
+  const length = Number(response.headers.get("content-length"));
+  const total = Number.isFinite(length) && length > 0 ? length : null;
   const hash = createHash("sha256");
+  let received = 0;
   const hashing = async function* (chunks: AsyncIterable<Uint8Array>, into: Hash) {
     for await (const chunk of chunks) {
       into.update(chunk);
+      received += chunk.byteLength;
+      progress(received, total);
       yield chunk;
     }
   };
-  await pipeline(hashing(response.body as AsyncIterable<Uint8Array>, hash), createWriteStream(dest));
+  await pipeline(hashing(response.body as AsyncIterable<Uint8Array>, hash), createWriteStream(dest), { signal });
   const got = hash.digest("hex");
   if (got !== sha256) throw new Error(`checksum mismatch: the manifest says ${sha256}, the download is ${got}`);
 }
@@ -109,79 +129,111 @@ fi
 /bin/rm -rf "$stage"
 `;
 
+/** Sends the phase to every window; one that opens later asks for it. */
+function set(next: UpdateState): void {
+  state = next;
+  for (const window of BrowserWindow.getAllWindows()) window.webContents.send(UPDATE_CHANNELS.state, next);
+}
+
+function inFlight(): boolean {
+  return state.phase === "downloading" || state.phase === "installing" || state.phase === "restarting";
+}
+
 async function install(manifest: Manifest, target: string): Promise<void> {
+  const controller = new AbortController();
+  aborting = controller;
   const stage = await mkdtemp(path.join(tmpdir(), "crew-update-"));
-  const zip = path.join(stage, path.basename(manifest.zip));
-  await download(manifest.zip, zip, manifest.sha256);
-  const unpacked = path.join(stage, "unpacked");
-  await run("/usr/bin/ditto", ["-x", "-k", zip, unpacked]);
-  const staged = path.join(unpacked, path.basename(target));
-  await access(path.join(staged, "Contents", "Info.plist"));
-  const script = path.join(stage, "swap.sh");
-  await writeFile(script, SWAP, { mode: 0o755 });
-  const swap = spawn("/bin/sh", [script, String(process.pid), target, staged, stage], {
-    detached: true,
-    stdio: "ignore",
-  });
-  swap.unref();
-  app.quit();
+  try {
+    const zip = path.join(stage, path.basename(manifest.zip));
+    set({ phase: "downloading", version: manifest.version, received: 0, total: null });
+    let sent = 0;
+    await download(manifest.zip, zip, manifest.sha256, controller.signal, (received, total) => {
+      // A chunk lands every few kilobytes; the bar only needs a few frames a second.
+      const now = Date.now();
+      if (now - sent < PROGRESS_EVERY && received !== total) return;
+      sent = now;
+      set({ phase: "downloading", version: manifest.version, received, total });
+    });
+    aborting = null;
+    set({ phase: "installing", version: manifest.version });
+    const unpacked = path.join(stage, "unpacked");
+    await run("/usr/bin/ditto", ["-x", "-k", zip, unpacked]);
+    const staged = path.join(unpacked, path.basename(target));
+    await access(path.join(staged, "Contents", "Info.plist"));
+    const script = path.join(stage, "swap.sh");
+    await writeFile(script, SWAP, { mode: 0o755 });
+    set({ phase: "restarting", version: manifest.version });
+    const swap = spawn("/bin/sh", [script, String(process.pid), target, staged, stage], {
+      detached: true,
+      stdio: "ignore",
+    });
+    swap.unref();
+    app.quit();
+  } catch (error) {
+    await rm(stage, { recursive: true, force: true });
+    if (controller.signal.aborted) {
+      set({ phase: "idle" });
+      return;
+    }
+    set({ phase: "error", message: error instanceof Error ? error.message : String(error) });
+  } finally {
+    aborting = null;
+  }
 }
 
 export async function checkForUpdates(manual = false): Promise<void> {
+  if (manual) ensureWindow?.();
+  if (inFlight()) {
+    // The dialog may have been closed by a reload; the menu brings it back.
+    if (manual) set(state);
+    return;
+  }
   if (busy) return;
-  const target = bundle();
-  if (!app.isPackaged || !target) {
-    if (manual) {
-      await dialog.showMessageBox({
-        type: "info",
-        message: "Updates apply to the installed app",
-        detail: "This window runs from the checkout, so there is nothing to replace.",
-      });
-    }
+  if (!app.isPackaged || !bundle()) {
+    if (manual) set({ phase: "unpackaged" });
     return;
   }
   busy = true;
+  if (manual) set({ phase: "checking" });
   try {
     const manifest = await fetchManifest();
     if (!newer(manifest.version, app.getVersion())) {
-      if (manual) {
-        await dialog.showMessageBox({
-          type: "info",
-          message: `Crew ${app.getVersion()} is the latest version`,
-        });
-      }
+      if (manual) set({ phase: "latest", version: app.getVersion() });
       return;
     }
     if (!manual && skipped === manifest.version) return;
-    const { response } = await dialog.showMessageBox({
-      type: "info",
-      message: `Crew ${manifest.version} is available`,
-      detail: `You are on ${app.getVersion()}. Crew will replace itself and reopen.`,
-      buttons: ["Update and Restart", "Later"],
-      defaultId: 0,
-      cancelId: 1,
-    });
-    if (response !== 0) {
-      skipped = manifest.version;
-      return;
-    }
-    await install(manifest, target);
+    offered = manifest;
+    set({ phase: "available", version: manifest.version, current: app.getVersion() });
   } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
-    if (manual) {
-      await dialog.showMessageBox({ type: "error", message: "Could not update Crew", detail });
-    } else {
-      console.error(`update check failed: ${detail}`);
-    }
+    const message = error instanceof Error ? error.message : String(error);
+    if (manual) set({ phase: "error", message });
+    else console.error(`update check failed: ${message}`);
   } finally {
     busy = false;
   }
 }
 
-export function watchForUpdates(): void {
+function registerIpc(): void {
+  ipcMain.handle(UPDATE_CHANNELS.current, () => state);
+  ipcMain.handle(UPDATE_CHANNELS.install, () => {
+    const target = bundle();
+    if (state.phase !== "available" || !offered || !target) return;
+    void install(offered, target);
+  });
+  ipcMain.handle(UPDATE_CHANNELS.dismiss, () => {
+    if (inFlight()) return;
+    if (state.phase === "available") skipped = state.version;
+    set({ phase: "idle" });
+  });
+  ipcMain.handle(UPDATE_CHANNELS.cancel, () => aborting?.abort());
+}
+
+/** `open` brings a window back when the menu asks for a check and none is open. */
+export function watchForUpdates(open: () => void): void {
+  ensureWindow = open;
+  registerIpc();
   if (!app.isPackaged) return;
   const tick = () => void checkForUpdates();
   setTimeout(tick, FIRST_CHECK).unref();
   setInterval(tick, EVERY).unref();
 }
-
