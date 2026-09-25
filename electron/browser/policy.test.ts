@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { partitionFor } from "../../src/lib/browser/bridge";
 import {
-  PARTITION,
   RESTORE_PREFIX,
   attachDecision,
   browserUserAgent,
@@ -13,6 +13,7 @@ import {
 } from "./policy";
 
 const GUEST_PRELOAD = "/app/guest-preload.cjs";
+const PARTITION = partitionFor("0b6f3c1e-8f2a-4d1b-9c55-2f1e7a9d4c10")!;
 
 describe("hardenWebPreferences", () => {
   it("overrides whatever the webview asked for", () => {
@@ -32,7 +33,7 @@ describe("hardenWebPreferences", () => {
       // What Electron leaves after spreading webpreferences="partition=persist:evil".
       partition: "persist:evil",
     };
-    hardenWebPreferences(prefs, GUEST_PRELOAD);
+    hardenWebPreferences(prefs, GUEST_PRELOAD, PARTITION);
     expect(prefs).toEqual({
       preload: GUEST_PRELOAD,
       partition: PARTITION,
@@ -49,7 +50,7 @@ describe("hardenWebPreferences", () => {
 
   it("hardens an empty object the same way", () => {
     const prefs: Record<string, unknown> = {};
-    hardenWebPreferences(prefs, GUEST_PRELOAD);
+    hardenWebPreferences(prefs, GUEST_PRELOAD, PARTITION);
     expect(prefs).not.toHaveProperty("preloadURL");
     expect(prefs).not.toHaveProperty("enableBlinkFeatures");
     expect(prefs).toMatchObject({
@@ -65,7 +66,7 @@ describe("hardenWebPreferences", () => {
 describe("attachDecision", () => {
   const attach = (src: string | undefined, partition = PARTITION) =>
     attachDecision(src === undefined ? { partition } : { src, partition });
-  const allowed = { allow: true, restoreToken: null };
+  const allowed = { allow: true, partition: PARTITION, restoreToken: null };
   const denied = { allow: false };
 
   it.each([
@@ -106,12 +107,21 @@ describe("attachDecision", () => {
     expect(attach("https://example.com", "persist:other")).toEqual(denied);
     expect(attach("https://example.com", "crew-browser")).toEqual(denied);
     expect(attach("about:blank", "persist:crew-browser2")).toEqual(denied);
+    // The shared partition from before workspaces had their own is only ever copied from.
+    expect(attach("about:blank", "persist:crew-browser")).toEqual(denied);
+    expect(attach("about:blank", "persist:crew-browser-ws-../x")).toEqual(denied);
+    expect(attach("about:blank", "persist:crew-browser-ws-")).toEqual(denied);
+  });
+
+  it("allows each workspace's own partition and hands it back", () => {
+    const other = partitionFor("second-workspace")!;
+    expect(attach("about:blank", other)).toEqual({ allow: true, partition: other, restoreToken: null });
   });
 
   it("hands back a restore token", () => {
-    expect(attach(`${RESTORE_PREFIX}abc-123-DEF`)).toEqual({ allow: true, restoreToken: "abc-123-DEF" });
+    expect(attach(`${RESTORE_PREFIX}abc-123-DEF`)).toEqual({ allow: true, partition: PARTITION, restoreToken: "abc-123-DEF" });
     const longest = "a".repeat(64);
-    expect(attach(`${RESTORE_PREFIX}${longest}`)).toEqual({ allow: true, restoreToken: longest });
+    expect(attach(`${RESTORE_PREFIX}${longest}`)).toEqual({ allow: true, partition: PARTITION, restoreToken: longest });
   });
 
   it.each([

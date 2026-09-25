@@ -17,9 +17,9 @@ import {
 } from "electron";
 import { resolveForward, type KeyboardLayout, type LiveCommand } from "../../src/lib/keymap";
 import type { NavSnapshot } from "../../src/lib/browser/snapshot";
-import { CHANNELS, type OpenTabRequest } from "../../src/lib/browser/bridge";
+import { CHANNELS, isPagePartition, LEGACY_PARTITION, type OpenTabRequest } from "../../src/lib/browser/bridge";
+import { copyCookies } from "./cookies";
 import {
-  PARTITION,
   attachDecision,
   browserUserAgent,
   certificateBypass,
@@ -50,14 +50,37 @@ const pendingRestores = new Map<string, { snapshot: NavSnapshot; expires: number
  * webContents, and nothing carries an id from one to the other. Both fire in
  * attach order for one window, so a queue pairs them.
  */
-const attachQueues = new WeakMap<WebContents, (string | null)[]>();
+const attachQueues = new WeakMap<WebContents, Attach[]>();
+type Attach = { partition: string; token: string | null };
 
-let browserSession: Session | null = null;
+/** Each workspace's page session, set up the first time one of its pages attaches. */
+const pageSessions = new Map<string, { ses: Session; seeded: Promise<void> }>();
+const pageSessionSet = new WeakSet<Session>();
 
-/** The partition every page lives in: its own cookies, and none of the app window's CSP. */
-function configureSession(): Session {
-  if (browserSession) return browserSession;
-  const ses = session.fromPartition(PARTITION);
+/** Where Electron keeps a persistent partition on disk. */
+function partitionDir(partition: string): string {
+  return path.join(app.getPath("userData"), "Partitions", partition.replace(/^persist:/, ""));
+}
+
+/**
+ * A workspace's pages: their own cookies, and none of the app window's CSP.
+ * A partition seen for the first time starts from the shared one pages used
+ * before workspaces had their own, so an upgrade keeps its sign-ins. The copy
+ * takes milliseconds, once per workspace; a page that loads inside that window
+ * shows signed out until its next load.
+ */
+function pageSession(partition: string): { ses: Session; seeded: Promise<void> } {
+  const existing = pageSessions.get(partition);
+  if (existing) return existing;
+  const fresh =
+    isPagePartition(partition) && !existsSync(partitionDir(partition)) && existsSync(partitionDir(LEGACY_PARTITION));
+  const ses = session.fromPartition(partition);
+  const seeded = fresh
+    ? copyCookies(session.fromPartition(LEGACY_PARTITION), ses).then(
+        () => {},
+        () => {},
+      )
+    : Promise.resolve();
   ses.setUserAgent(browserUserAgent(ses.getUserAgent()));
   ses.setPermissionRequestHandler((_wc, permission, callback) => callback(permissionAllowed(permission)));
   ses.setPermissionCheckHandler((_wc, permission) => permissionAllowed(permission));
@@ -83,14 +106,30 @@ function configureSession(): Session {
       note.show();
     });
   });
-  // Only local dev servers get past a bad certificate; everything else keeps Chromium's refusal.
+  const entry = { ses, seeded };
+  pageSessions.set(partition, entry);
+  pageSessionSet.add(ses);
+  return entry;
+}
+
+/** A workspace's page session once any first-time copy has landed, so a write after it wins. */
+export async function readyPageSession(partition: string): Promise<Session> {
+  const { ses, seeded } = pageSession(partition);
+  await seeded;
+  return ses;
+}
+
+let certificatesGuarded = false;
+
+/** Only local dev servers get past a bad certificate; everything else keeps Chromium's refusal. */
+function guardCertificates(): void {
+  if (certificatesGuarded) return;
+  certificatesGuarded = true;
   app.on("certificate-error", (event, wc, url, _error, _cert, callback) => {
-    if (wc.session !== ses) return;
+    if (!pageSessionSet.has(wc.session)) return;
     event.preventDefault();
     callback(certificateBypass(url));
   });
-  browserSession = ses;
-  return ses;
 }
 
 function uniquePath(dir: string, name: string): string {
@@ -101,7 +140,7 @@ function uniquePath(dir: string, name: string): string {
   return candidate;
 }
 
-function attachQueue(host: WebContents): (string | null)[] {
+function attachQueue(host: WebContents): Attach[] {
   let queue = attachQueues.get(host);
   if (!queue) {
     queue = [];
@@ -112,7 +151,7 @@ function attachQueue(host: WebContents): (string | null)[] {
 
 /** Hooks a window so every <webview> it creates is vetted, hardened, and wired before its page runs. */
 export function installBrowser(win: BrowserWindow): void {
-  configureSession();
+  guardCertificates();
   const host = win.webContents;
   host.on("will-attach-webview", (event, prefs, params) => {
     const decision = attachDecision(params);
@@ -122,21 +161,24 @@ export function installBrowser(win: BrowserWindow): void {
     }
     // The attribute is how a preload arrives; the merged prefs are what Electron uses.
     delete params.preload;
-    hardenWebPreferences(prefs as Record<string, unknown>, GUEST_PRELOAD);
+    const { partition } = decision;
+    pageSession(partition);
+    hardenWebPreferences(prefs as Record<string, unknown>, GUEST_PRELOAD, partition);
     const token = decision.restoreToken;
     if (token && pendingRestores.has(token)) {
       // restore() only works on a webContents that has never loaded anything.
       params.src = "";
-      attachQueue(host).push(token);
+      attachQueue(host).push({ partition, token });
     } else {
       if (token) params.src = "about:blank";
-      attachQueue(host).push(null);
+      attachQueue(host).push({ partition, token: null });
     }
   });
   host.on("did-attach-webview", (_event, guest) => {
-    const token = attachQueue(host).shift() ?? null;
-    register(host, guest);
-    if (token) restore(guest, token);
+    const attach = attachQueue(host).shift();
+    if (!attach) return;
+    register(host, guest, attach.partition);
+    if (attach.token) restore(guest, attach.token);
   });
 }
 
@@ -178,15 +220,15 @@ function openTab(host: WebContents, request: OpenTabRequest): void {
   if (!host.isDestroyed()) host.send(CHANNELS.openTab, request);
 }
 
-function register(host: WebContents, guest: WebContents): void {
+function register(host: WebContents, guest: WebContents, partition: string): void {
   guests.set(guest.id, { guest, host });
   guest.once("destroyed", () => {
     if (guests.get(guest.id)?.guest === guest) guests.delete(guest.id);
   });
 
   const allowOpen = createRateLimiter(4, 2000);
-  guest.setWindowOpenHandler((details) => windowOpen(host, guest.id, details, allowOpen));
-  guest.on("did-create-window", (child) => guardPopup(host, guest.id, child.webContents, allowOpen));
+  guest.setWindowOpenHandler((details) => windowOpen(host, guest.id, partition, details, allowOpen));
+  guest.on("did-create-window", (child) => guardPopup(host, guest.id, partition, child.webContents, allowOpen));
   guardNavigation(guest);
 
   guest.on("before-input-event", (event, input) => {
@@ -221,6 +263,7 @@ function register(host: WebContents, guest: WebContents): void {
 function windowOpen(
   host: WebContents,
   openerId: number,
+  partition: string,
   details: HandlerDetails,
   allowOpen: () => boolean,
 ): WindowOpenHandlerResponse {
@@ -242,7 +285,7 @@ function windowOpen(
     overrideBrowserWindowOptions: {
       autoHideMenuBar: true,
       webPreferences: {
-        partition: PARTITION,
+        partition,
         sandbox: true,
         contextIsolation: true,
         nodeIntegration: false,
@@ -253,10 +296,16 @@ function windowOpen(
 }
 
 /** Applies to a popup's own popups too, however deep: a window with no handler would open unguarded. */
-function guardPopup(host: WebContents, openerId: number, popup: WebContents, allowOpen: () => boolean): void {
+function guardPopup(
+  host: WebContents,
+  openerId: number,
+  partition: string,
+  popup: WebContents,
+  allowOpen: () => boolean,
+): void {
   guardNavigation(popup);
-  popup.setWindowOpenHandler((details) => windowOpen(host, openerId, details, allowOpen));
-  popup.on("did-create-window", (child) => guardPopup(host, openerId, child.webContents, allowOpen));
+  popup.setWindowOpenHandler((details) => windowOpen(host, openerId, partition, details, allowOpen));
+  popup.on("did-create-window", (child) => guardPopup(host, openerId, partition, child.webContents, allowOpen));
 }
 
 function guardNavigation(contents: WebContents): void {

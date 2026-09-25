@@ -251,6 +251,8 @@ function sandboxEnv(home: string, config: string): NodeJS.ProcessEnv {
     XDG_DATA_HOME: path.join(home, ".local/share"),
     XDG_STATE_HOME: path.join(home, ".local/state"),
     XDG_CACHE_HOME: path.join(home, ".cache"),
+    // macOS resolves appData without HOME, so a dev build would land in the user's own "Crew Dev".
+    CREW_DATA_DIR: path.join(config, "Crew Dev"),
     PATH: [path.join(home, ".local/bin"), path.join(home, "bin"), ...system].join(":"),
     SHELL: "/bin/bash",
     // Only the sandbox's .gitconfig: nothing from the machine's /etc/gitconfig.

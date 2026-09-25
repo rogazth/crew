@@ -34,7 +34,8 @@ contextBridge.exposeInMainWorld("crewHost", {
     snapshot: (webContentsId: number) => ipcRenderer.invoke(CHANNELS.snapshot, webContentsId),
     prepareRestore: (token: string, entriesJson: string, index: number) =>
       ipcRenderer.invoke(CHANNELS.prepareRestore, token, entriesJson, index),
-    favicon: (url: string) => ipcRenderer.invoke(CHANNELS.favicon, url),
-    importCookies: (cookies: unknown) => ipcRenderer.invoke(CHANNELS.importCookies, cookies),
+    favicon: (url: string, workspaceId: string) => ipcRenderer.invoke(CHANNELS.favicon, url, workspaceId),
+    importCookies: (workspaceId: string, cookies: unknown) =>
+      ipcRenderer.invoke(CHANNELS.importCookies, workspaceId, cookies),
   },
 });

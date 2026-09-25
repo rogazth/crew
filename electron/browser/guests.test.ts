@@ -4,6 +4,7 @@ import type { LiveCommand } from "../../src/lib/keymap";
 
 const electron = vi.hoisted(() => ({
   sessionHandlers: new Map<string, (...args: unknown[]) => void>(),
+  partitions: [] as string[],
   templates: [] as unknown[][],
   openExternal: vi.fn(),
   writeText: vi.fn(),
@@ -54,7 +55,12 @@ vi.mock("electron", () => {
       },
     },
     Notification: { isSupported: () => false },
-    session: { fromPartition: () => ses },
+    session: {
+      fromPartition: (partition: string) => {
+        electron.partitions.push(partition);
+        return ses;
+      },
+    },
     shell: { openExternal: electron.openExternal, showItemInFolder: vi.fn() },
   };
 });
@@ -79,12 +85,13 @@ function didAttach(): FakeContents {
   return guest;
 }
 
-const PAGE = { partition: "persist:crew-browser" };
+const PAGE = { partition: "persist:crew-browser-ws-w1" };
 const SNAPSHOT = { entries: [{ url: "https://a.com/", title: "A" }, { url: "https://b.com/", title: "B" }], index: 0 };
 
 beforeEach(async () => {
   vi.resetModules();
   electron.templates.length = 0;
+  electron.partitions.length = 0;
   electron.openExternal.mockClear();
   guests = await import("./guests");
   host = new FakeContents();
@@ -98,13 +105,25 @@ describe("attaching", () => {
     expect(willAttach({ ...PAGE, src: "https://a.com" }).prevented).toBe(false);
   });
 
+  it("gives each workspace its own session, set up once", () => {
+    willAttach({ ...PAGE, src: "https://a.com" });
+    willAttach({ ...PAGE, src: "https://b.com" });
+    const other = willAttach({ partition: "persist:crew-browser-ws-w2", src: "https://a.com" });
+    expect(other.prefs.partition).toBe("persist:crew-browser-ws-w2");
+    expect(electron.partitions).toEqual(["persist:crew-browser-ws-w1", "persist:crew-browser-ws-w2"]);
+  });
+
+  it("refuses the shared partition from before workspaces had their own", () => {
+    expect(willAttach({ partition: "persist:crew-browser", src: "https://a.com" }).prevented).toBe(true);
+  });
+
   it("hardens what the element asked for", () => {
     const attached = willAttach({ ...PAGE, src: "https://a.com", preload: "/evil-attr.js" });
     expect(attached.params.preload).toBeUndefined();
     expect(attached.prefs.preload).toMatch(/guest-preload\.cjs$/);
     expect(attached.prefs.preload).not.toBe("/evil.js");
     expect(attached.prefs).toMatchObject({
-      partition: "persist:crew-browser",
+      partition: "persist:crew-browser-ws-w1",
       nodeIntegration: false,
       sandbox: true,
       contextIsolation: true,
@@ -217,11 +236,20 @@ describe("popups and navigation", () => {
     };
     expect(answer.action).toBe("allow");
     expect(answer.overrideBrowserWindowOptions.webPreferences).toMatchObject({
-      partition: "persist:crew-browser",
+      partition: "persist:crew-browser-ws-w1",
       sandbox: true,
       nodeIntegration: false,
     });
     expect(answer.overrideBrowserWindowOptions.webPreferences).not.toHaveProperty("preload");
+  });
+
+  it("keeps a login popup in its own workspace's partition", () => {
+    willAttach({ partition: "persist:crew-browser-ws-w2", src: "https://a.com" });
+    const guest = didAttach();
+    const answer = open(guest, "https://login.com/", "new-window", "width=400") as unknown as {
+      overrideBrowserWindowOptions: { webPreferences: Record<string, unknown> };
+    };
+    expect(answer.overrideBrowserWindowOptions.webPreferences.partition).toBe("persist:crew-browser-ws-w2");
   });
 
   it("stops a page that keeps opening windows", () => {

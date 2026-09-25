@@ -8,7 +8,7 @@ import type { useWorkspaces } from "./useWorkspaces";
 type Deps = {
   workspaces: ReturnType<typeof useWorkspaces>;
   tabs: ReturnType<typeof useTabs>;
-  pages: Pick<ReturnType<typeof usePages>, "isWorkspace" | "close" | "toggle">;
+  pages: Pick<ReturnType<typeof usePages>, "isWorkspace" | "close" | "toggle" | "openSettings">;
   palette: PaletteMode | null;
   togglePalette: (mode: PaletteMode) => void;
   closePalette: () => void;
@@ -66,6 +66,7 @@ export function useAppCommands(deps: Deps) {
     "open-history": () => pages.toggle({ kind: "history" }),
     "open-routines": () => pages.toggle({ kind: "routines", draft: null }),
     "open-settings": () => pages.toggle({ kind: "settings", section: SETTINGS_DEFAULT }),
+    "open-browser-settings": () => pages.openSettings("browser"),
     "reopen-tab": inTabs(tabs.reopen),
     "next-tab": inTabs(() => tabs.step(1)),
     "prev-tab": inTabs(() => tabs.step(-1)),

@@ -1,6 +1,6 @@
 import { useEffect, useRef, type RefObject } from "react";
 import * as api from "../../lib/api";
-import { RESTORE_PREFIX } from "../../lib/browser/bridge";
+import { partitionFor, RESTORE_PREFIX } from "../../lib/browser/bridge";
 import { classifyLoadFailure } from "../../lib/browser/loadError";
 import { pages } from "../../lib/browser/pageStore";
 import { isWebUrl, sameDocument } from "../../lib/browser/url";
@@ -58,7 +58,7 @@ async function source(pageId: string, url: string): Promise<string> {
  * reads is read through a ref: a navigation must never rebuild the guest.
  */
 export function useGuest(options: Options): RefObject<Guest | null> {
-  const { pageId, live, generation, container, address } = options;
+  const { pageId, workspaceId, live, generation, container, address } = options;
   const guest = useRef<Guest | null>(null);
   // Read at build time only: a navigation must never rebuild the guest.
   const latest = useRef(options);
@@ -67,7 +67,9 @@ export function useGuest(options: Options): RefObject<Guest | null> {
   });
 
   useEffect(() => {
-    if (!live) return;
+    // The workspace picks the session: its cookies are the ones the page signs in with.
+    const partition = partitionFor(workspaceId);
+    if (!live || !partition) return;
     let cancelled = false;
     let built: Guest | null = null;
     let patchTimer: ReturnType<typeof setTimeout> | undefined;
@@ -164,7 +166,7 @@ export function useGuest(options: Options): RefObject<Guest | null> {
       queued = null;
       // A restored stack re-commits its page; that is the same visit, not a new one.
       let restoring = open.restoring;
-      built = createGuest(host, open.src, {
+      built = createGuest(host, open.src, partition, {
         attach: (webContentsId) => update({ webContentsId, crashed: false }),
         start: (next) => {
           const current = pages.get(pageId);
@@ -201,7 +203,7 @@ export function useGuest(options: Options): RefObject<Guest | null> {
           const ask = ++faviconAsk;
           if (!icon) return update({ favicon: null });
           void browserHost()
-            ?.favicon(icon)
+            ?.favicon(icon, latest.current.workspaceId)
             .then((data) => {
               // A slow icon from the previous page must not land on this one, nor on a closed tab.
               if (ask === faviconAsk && !cancelled) update({ favicon: data });
@@ -269,7 +271,7 @@ export function useGuest(options: Options): RefObject<Guest | null> {
       if (devtools || playing) latest.current.onPinned(false);
       update({ webContentsId: null, loading: false, devtools: false });
     };
-  }, [live, pageId, generation, container, address]);
+  }, [live, pageId, workspaceId, generation, container, address]);
 
   return guest;
 }

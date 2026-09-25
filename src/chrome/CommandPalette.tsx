@@ -285,6 +285,7 @@ const ACTION_ICONS: Partial<Record<CommandId, Icon>> = {
   "next-worktree": GitBranchIcon,
   "prev-worktree": GitBranchIcon,
   "open-settings": GearIcon,
+  "open-browser-settings": GearIcon,
   "save-file": FloppyDiskIcon,
   "toggle-outline": ListBulletsIcon,
   "browser-back": ArrowLeftIcon,

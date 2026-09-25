@@ -1,4 +1,3 @@
-import { PARTITION } from "./bridge";
 
 /**
  * The slice of Electron's <webview> element the pane uses. The renderer build
@@ -75,9 +74,9 @@ export type Guest = {
  * history. Listeners go on before `src`, so a fast failure (a dev server that
  * is down) is not missed.
  */
-export function createGuest(container: HTMLElement, src: string, on: GuestEvents): Guest {
+export function createGuest(container: HTMLElement, src: string, partition: string, on: GuestEvents): Guest {
   const view = document.createElement("webview") as WebviewElement;
-  view.setAttribute("partition", PARTITION);
+  view.setAttribute("partition", partition);
   view.setAttribute("allowpopups", "");
   // Without an explicit flex display the guest keeps its 150px default height.
   view.style.cssText = "display:flex;position:absolute;inset:0;width:100%;height:100%;border:0";

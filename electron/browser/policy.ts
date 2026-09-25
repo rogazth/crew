@@ -3,10 +3,10 @@
  * them to Electron; everything here fails closed on anything it does not know.
  */
 
-import { PARTITION, RESTORE_PREFIX } from "../../src/lib/browser/bridge";
+import { isPagePartition, RESTORE_PREFIX } from "../../src/lib/browser/bridge";
 
 // The window builds its webviews with these; one definition keeps the two sides agreeing.
-export { PARTITION, RESTORE_PREFIX };
+export { RESTORE_PREFIX };
 
 const RESTORE_TOKEN = /^[A-Za-z0-9-]{1,64}$/;
 
@@ -34,12 +34,12 @@ function isBlank(url: URL | null): boolean {
  * on the object the guest is actually created with. The only preload is the
  * close guard: `window.close()` would otherwise destroy the tab.
  */
-export function hardenWebPreferences(prefs: Record<string, unknown>, guestPreload: string): void {
+export function hardenWebPreferences(prefs: Record<string, unknown>, guestPreload: string, partition: string): void {
   delete prefs.preloadURL;
   delete prefs.enableBlinkFeatures;
   delete prefs.additionalArguments;
   prefs.preload = guestPreload;
-  prefs.partition = PARTITION;
+  prefs.partition = partition;
   prefs.nodeIntegration = false;
   prefs.nodeIntegrationInSubFrames = false;
   prefs.contextIsolation = true;
@@ -53,21 +53,22 @@ export function hardenWebPreferences(prefs: Record<string, unknown>, guestPreloa
 }
 
 /**
- * Whether a <webview> may attach: only in the browser partition, and only
- * starting blank or at a web page. A restore src yields its token.
+ * Whether a <webview> may attach: only in a workspace's page partition, and
+ * only starting blank or at a web page. A restore src yields its token.
  */
 export function attachDecision(params: {
   src?: string;
   partition?: string;
-}): { allow: false } | { allow: true; restoreToken: string | null } {
-  if (params.partition !== PARTITION) return { allow: false };
+}): { allow: false } | { allow: true; partition: string; restoreToken: string | null } {
+  const { partition } = params;
+  if (!isPagePartition(partition)) return { allow: false };
   const src = params.src ?? "";
   if (src.startsWith(RESTORE_PREFIX)) {
     const token = src.slice(RESTORE_PREFIX.length);
-    return RESTORE_TOKEN.test(token) ? { allow: true, restoreToken: token } : { allow: false };
+    return RESTORE_TOKEN.test(token) ? { allow: true, partition, restoreToken: token } : { allow: false };
   }
   const url = parse(src);
-  if (src === "" || isBlank(url) || isWeb(url)) return { allow: true, restoreToken: null };
+  if (src === "" || isBlank(url) || isWeb(url)) return { allow: true, partition, restoreToken: null };
   return { allow: false };
 }
 

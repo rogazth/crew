@@ -19,7 +19,6 @@ import { parseFolders } from "../lib/filePrefs";
 import { PROVIDERS } from "../lib/providers";
 import { settingsSection, type SettingsSectionId } from "../lib/settings";
 import type { TabScope } from "../lib/worktrees";
-import { CookieImport } from "./CookieImport";
 import { TerminalSettings } from "./TerminalSettings";
 
 const TAB_SCOPES: Option<TabScope>[] = [
@@ -178,7 +177,6 @@ function Browser() {
           />
         </SettingsRow>
       </SettingsSection>
-      <CookieImport />
     </>
   );
 }

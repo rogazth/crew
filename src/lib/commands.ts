@@ -83,6 +83,7 @@ export const COMMANDS = {
   "open-routines": { label: "Routines" },
   "search-messages": { label: "Search Messages", keys: "Mod+Shift+F" },
   "open-settings": { label: "Settings", keys: "Mod+," },
+  "open-browser-settings": { label: "Browser Settings" },
   "save-file": { label: "Save File", keys: "Mod+S" },
   "toggle-outline": { label: "Toggle Outline" },
   shortcuts: { label: "Keyboard Shortcuts", keys: { key: "/", mod: true } },

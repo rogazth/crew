@@ -6,10 +6,13 @@ import { pages } from "../../lib/browser/pageStore";
 import { isWebUrl } from "../../lib/browser/url";
 import { preset, type Viewport } from "../../lib/browser/viewport";
 import { stepZoom } from "../../lib/browser/zoom";
+import { runCommand } from "../../lib/commands";
 import { browserHost } from "../../lib/host";
+import type { CookieSource } from "../../lib/protocol";
 import { BrowserError } from "./BrowserError";
 import { useGuest } from "./useGuest";
 import { BrowserToolbar } from "./BrowserToolbar";
+import { CookieImportDialog } from "./CookieImportDialog";
 import { ResponsiveBar } from "./ResponsiveBar";
 import type { AddressBarHandle } from "./AddressBar";
 
@@ -46,6 +49,8 @@ export function BrowserPane({
   const [found, setFound] = useState({ index: 0, count: 0 });
   // A fixed page size to check a layout at; null fills the pane.
   const [viewport, setViewport] = useState<Viewport | null>(null);
+  // The profile whose cookies the import dialog is asking about.
+  const [importing, setImporting] = useState<CookieSource | null>(null);
 
   const guest = useGuest({
     pageId,
@@ -161,7 +166,12 @@ export function BrowserPane({
         onReload={handle.reload}
         onStop={() => guest.current?.stop()}
         onDevTools={handle.toggleDevTools}
-        onZoomReset={() => handle.zoom(0)}
+        onZoom={handle.zoom}
+        onFind={handle.find}
+        onHistory={() => runCommand("open-history")}
+        onSettings={() => runCommand("open-browser-settings")}
+        onImportCookies={setImporting}
+        canImport={browserHost() !== null}
         responsive={viewport !== null}
         onResponsive={() => setViewport((current) => (current ? null : preset("phone")))}
         onNavigate={handle.navigate}
@@ -193,6 +203,18 @@ export function BrowserPane({
           page.error && <BrowserError kind="load" error={page.error} onRetry={handle.reload} />
         )}
       </div>
+      <CookieImportDialog
+        source={importing}
+        workspaceId={workspaceId}
+        onClose={() => {
+          setImporting(null);
+          guest.current?.focus();
+        }}
+        // The page on screen was loaded signed out; show it with the new cookies.
+        onImported={() => {
+          if (isWebUrl(pages.get(pageId).url)) handle.reload();
+        }}
+      />
     </div>
   );
 }

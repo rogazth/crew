@@ -1,9 +1,9 @@
-import { ipcMain, session } from "electron";
+import { ipcMain } from "electron";
 import type { KeyboardLayout, LiveCommand } from "../../src/lib/keymap";
 import { capSnapshot, parseSnapshot } from "../../src/lib/browser/snapshot";
-import { CHANNELS, PARTITION } from "../../src/lib/browser/bridge";
+import { CHANNELS, partitionFor } from "../../src/lib/browser/bridge";
 import { importCookies } from "./cookies";
-import { ownedGuest, prepareRestore, setKeyboardLayout, setLiveCommands } from "./guests";
+import { ownedGuest, prepareRestore, readyPageSession, setKeyboardLayout, setLiveCommands } from "./guests";
 
 const TOKEN = /^[A-Za-z0-9-]{1,64}$/;
 const FAVICON_BYTES = 128 * 1024;
@@ -11,11 +11,11 @@ const FAVICON_CACHE = 256;
 /** Insertion-ordered, so the oldest entry is the first key. */
 const favicons = new Map<string, Promise<string | null>>();
 
-/** Fetched through the pages' own session, so an icon behind a login comes back the same as in the page. */
-async function fetchFavicon(url: string): Promise<string | null> {
+/** Fetched through the page's own session, so an icon behind a login comes back the same as in the page. */
+async function fetchFavicon(url: string, partition: string): Promise<string | null> {
   if (url.startsWith("data:image/")) return url.length <= FAVICON_BYTES * 2 ? url : null;
   if (!/^https?:\/\//i.test(url)) return null;
-  const response = await session.fromPartition(PARTITION).fetch(url);
+  const response = await (await readyPageSession(partition)).fetch(url);
   const type = response.headers.get("content-type")?.split(";")[0]?.trim() ?? "";
   if (!response.ok || !type.startsWith("image/")) return null;
   const body = Buffer.from(await response.arrayBuffer());
@@ -23,11 +23,12 @@ async function fetchFavicon(url: string): Promise<string | null> {
   return `data:${type};base64,${body.toString("base64")}`;
 }
 
-function favicon(url: string): Promise<string | null> {
-  const cached = favicons.get(url);
+function favicon(url: string, partition: string): Promise<string | null> {
+  const key = `${partition} ${url}`;
+  const cached = favicons.get(key);
   if (cached) return cached;
-  const pending = fetchFavicon(url).catch(() => null);
-  favicons.set(url, pending);
+  const pending = fetchFavicon(url, partition).catch(() => null);
+  favicons.set(key, pending);
   if (favicons.size > FAVICON_CACHE) favicons.delete(favicons.keys().next().value as string);
   return pending;
 }
@@ -78,9 +79,17 @@ export function registerBrowserIpc(): void {
     return capSnapshot({ entries: history.getAllEntries(), index: history.getActiveIndex() });
   });
 
-  ipcMain.handle(CHANNELS.importCookies, (_event, list: unknown) => importCookies(session.fromPartition(PARTITION), list));
+  /** Into one workspace's pages only: each workspace keeps its own sign-ins. */
+  ipcMain.handle(CHANNELS.importCookies, async (_event, workspaceId: unknown, list: unknown) => {
+    const partition = typeof workspaceId === "string" ? partitionFor(workspaceId) : null;
+    if (!partition) return { imported: 0, failed: 0 };
+    return importCookies(await readyPageSession(partition), list);
+  });
 
-  ipcMain.handle(CHANNELS.favicon, (_event, url: unknown) => (typeof url === "string" ? favicon(url) : null));
+  ipcMain.handle(CHANNELS.favicon, (_event, url: unknown, workspaceId: unknown) => {
+    const partition = typeof workspaceId === "string" ? partitionFor(workspaceId) : null;
+    return typeof url === "string" && partition ? favicon(url, partition) : null;
+  });
 
   /** Takes the daemon's row as-is; parsing it here means main never trusts a renderer-built stack. */
   ipcMain.handle(CHANNELS.prepareRestore, (_event, token: unknown, entriesJson: unknown, index: unknown) => {

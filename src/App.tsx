@@ -132,7 +132,7 @@ export function App() {
   useAppCommands({
     workspaces,
     tabs,
-    pages: { isWorkspace, close: closePage, toggle: togglePage },
+    pages: { isWorkspace, close: closePage, toggle: togglePage, openSettings },
     palette,
     togglePalette: (mode: PaletteMode) => setPalette((open) => (open === mode ? null : mode)),
     closePalette: () => setPalette(null),

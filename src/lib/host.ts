@@ -39,8 +39,10 @@ export type BrowserHost = {
   toggleDevTools(webContentsId: number): Promise<boolean>;
   snapshot(webContentsId: number): Promise<NavSnapshot | null>;
   prepareRestore(token: string, entriesJson: string, index: number): Promise<boolean>;
-  favicon(url: string): Promise<string | null>;
-  importCookies(cookies: ImportedCookie[]): Promise<{ imported: number; failed: number }>;
+  /** Through the workspace's own session, so an icon behind its sign-in loads. */
+  favicon(url: string, workspaceId: string): Promise<string | null>;
+  /** Into the workspace's pages only. */
+  importCookies(workspaceId: string, cookies: ImportedCookie[]): Promise<{ imported: number; failed: number }>;
 };
 
 export type HostDragDrop =
