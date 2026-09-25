@@ -5,6 +5,8 @@ export type BrowserPrefs = {
   searchTemplate: string;
   /** Hidden pages that keep a live guest; the rest go cold until shown. */
   keep: number;
+  /** Web links in chats and terminals open as a page here instead of in the default browser. */
+  openLinksInCrew: boolean;
 };
 
 export const SEARCH_ENGINES = [
@@ -21,6 +23,7 @@ export const KEEP_CHOICES = [2, 4, 6, 10] as const;
 export const DEFAULT_BROWSER_PREFS: BrowserPrefs = {
   searchTemplate: SEARCH_ENGINES[0].template,
   keep: DEFAULT_KEEP,
+  openLinksInCrew: false,
 };
 
 /** Anything unknown falls back field by field, so a bad value never takes the browser down. */
@@ -29,7 +32,7 @@ export function parseBrowserPrefs(raw: string | null): BrowserPrefs {
   try {
     const parsed: unknown = JSON.parse(raw);
     if (typeof parsed !== "object" || parsed === null) return DEFAULT_BROWSER_PREFS;
-    const { searchTemplate, keep } = parsed as Partial<Record<keyof BrowserPrefs, unknown>>;
+    const { searchTemplate, keep, openLinksInCrew } = parsed as Partial<Record<keyof BrowserPrefs, unknown>>;
     return {
       searchTemplate: SEARCH_ENGINES.some((engine) => engine.template === searchTemplate)
         ? (searchTemplate as string)
@@ -37,6 +40,8 @@ export function parseBrowserPrefs(raw: string | null): BrowserPrefs {
       keep: KEEP_CHOICES.includes(keep as (typeof KEEP_CHOICES)[number])
         ? (keep as number)
         : DEFAULT_BROWSER_PREFS.keep,
+      openLinksInCrew:
+        typeof openLinksInCrew === "boolean" ? openLinksInCrew : DEFAULT_BROWSER_PREFS.openLinksInCrew,
     };
   } catch {
     return DEFAULT_BROWSER_PREFS;

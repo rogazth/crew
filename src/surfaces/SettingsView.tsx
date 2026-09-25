@@ -1,4 +1,4 @@
-import { Select } from "@cloudflare/kumo";
+import { Select, Switch } from "@cloudflare/kumo";
 import { ModelPicker } from "../chrome/ModelPicker";
 import { ProviderIcon } from "../chrome/ProviderIcon";
 import { SettingsRow, SettingsSection } from "../chrome/SettingsRow";
@@ -60,34 +60,49 @@ function Appearance() {
 function Browser() {
   const { prefs, update } = useBrowserPrefs();
   return (
-    <SettingsSection title="Pages">
-      <SettingsRow label="Search engine" description="Where the address bar sends anything that isn't an address.">
-        <Select
-          aria-label="Search engine"
-          size="sm"
-          className="w-40"
-          value={prefs.searchTemplate}
-          onValueChange={(value) => value && update({ ...prefs, searchTemplate: value })}
-          items={SEARCH_ENGINES.map((engine): { value: string; label: string } => ({
-            value: engine.template,
-            label: engine.label,
-          }))}
-        />
-      </SettingsRow>
-      <SettingsRow
-        label="Background pages"
-        description="Hidden tabs that stay loaded for an instant switch back. Each one is a process; the rest reload when shown."
-      >
-        <Select
-          aria-label="Background pages"
-          size="sm"
-          className="w-40"
-          value={String(prefs.keep)}
-          onValueChange={(value) => value && update({ ...prefs, keep: Number(value) })}
-          items={KEEP_CHOICES.map((keep) => ({ value: String(keep), label: String(keep) }))}
-        />
-      </SettingsRow>
-    </SettingsSection>
+    <>
+      <SettingsSection title="Links">
+        <SettingsRow
+          label="Open links in Crew"
+          description="Links in agent chats and terminals open as a new page here. Off sends them to your default browser."
+        >
+          <Switch
+            aria-label="Open links in Crew"
+            variant="neutral"
+            checked={prefs.openLinksInCrew}
+            onCheckedChange={(checked) => update({ ...prefs, openLinksInCrew: checked })}
+          />
+        </SettingsRow>
+      </SettingsSection>
+      <SettingsSection title="Pages">
+        <SettingsRow label="Search engine" description="Where the address bar sends anything that isn't an address.">
+          <Select
+            aria-label="Search engine"
+            size="sm"
+            className="w-40"
+            value={prefs.searchTemplate}
+            onValueChange={(value) => value && update({ ...prefs, searchTemplate: value })}
+            items={SEARCH_ENGINES.map((engine): { value: string; label: string } => ({
+              value: engine.template,
+              label: engine.label,
+            }))}
+          />
+        </SettingsRow>
+        <SettingsRow
+          label="Background pages"
+          description="Hidden tabs that stay loaded for an instant switch back. Each one is a process; the rest reload when shown."
+        >
+          <Select
+            aria-label="Background pages"
+            size="sm"
+            className="w-40"
+            value={String(prefs.keep)}
+            onValueChange={(value) => value && update({ ...prefs, keep: Number(value) })}
+            items={KEEP_CHOICES.map((keep) => ({ value: String(keep), label: String(keep) }))}
+          />
+        </SettingsRow>
+      </SettingsSection>
+    </>
   );
 }
 

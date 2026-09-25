@@ -13,7 +13,7 @@ import { Streamdown, type Components } from "streamdown";
 import "streamdown/styles.css";
 import { FileTypeIcon } from "../../chrome/FileTypeIcon";
 import { extensionOf } from "../../lib/attachments";
-import { openExternal } from "../../lib/external";
+import { openLink } from "../../lib/external";
 import { groupRuns, isHeadingOnly } from "../../lib/markdownRuns";
 import { VEIL_EMA_SEED_MS, veilDurationMs, veilEmaNext } from "../../lib/veil";
 import { CodeBlock } from "./CodeBlock";
@@ -55,7 +55,7 @@ function FileChip({ path }: { path: string }) {
 
 type LinkProps = ComponentProps<"a"> & { node?: unknown };
 
-/** Links leave for the default browser; the URL shows on hover instead of in a dialog. */
+/** Links open per the browser setting; the URL shows on hover instead of in a dialog. */
 function Link({ href, children, node: _node, ...rest }: LinkProps) {
   // A footnote's ref and backref are `#ids` into this same message, not the web.
   const anchor = href?.startsWith("#") ? href.slice(1) : undefined;
@@ -69,7 +69,7 @@ function Link({ href, children, node: _node, ...rest }: LinkProps) {
       data-streamdown="link"
       onClick={(event) => {
         event.preventDefault();
-        if (url) openExternal(url);
+        if (url) openLink(url);
         else if (anchor) document.getElementById(anchor)?.scrollIntoView({ block: "center" });
       }}
     >

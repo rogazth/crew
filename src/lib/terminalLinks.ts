@@ -2,7 +2,7 @@ import type { ILink, ILinkProvider, Terminal } from "@xterm/xterm";
 import * as api from "./api";
 import { findPaths, homePath, resolvePath, type PathHit } from "./terminalPaths";
 
-export { openExternal } from "./external";
+export { openLink } from "./external";
 
 const known = new Map<string, boolean>();
 

@@ -10,15 +10,15 @@ describe("parseBrowserPrefs", () => {
 
   it("keeps known values", () => {
     const template = SEARCH_ENGINES[1].template;
-    expect(parseBrowserPrefs(JSON.stringify({ searchTemplate: template, keep: 10 }))).toEqual({
-      searchTemplate: template,
-      keep: 10,
-    });
+    expect(
+      parseBrowserPrefs(JSON.stringify({ searchTemplate: template, keep: 10, openLinksInCrew: true })),
+    ).toEqual({ searchTemplate: template, keep: 10, openLinksInCrew: true });
   });
 
   it("falls back field by field, and never takes a template it does not know", () => {
     const raw = JSON.stringify({ searchTemplate: "javascript:alert(%s)", keep: 4 });
-    expect(parseBrowserPrefs(raw)).toEqual({ searchTemplate: DEFAULT_BROWSER_PREFS.searchTemplate, keep: 4 });
+    expect(parseBrowserPrefs(raw)).toEqual({ ...DEFAULT_BROWSER_PREFS, keep: 4 });
     expect(parseBrowserPrefs(JSON.stringify({ keep: 1000 })).keep).toBe(DEFAULT_BROWSER_PREFS.keep);
+    expect(parseBrowserPrefs(JSON.stringify({ openLinksInCrew: "yes" })).openLinksInCrew).toBe(false);
   });
 });

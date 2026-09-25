@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState, type CSSProperties } from "react";
 import { AgentSheetHost } from "./chrome/AgentSheet";
 import { CommandPalette, type PaletteMode } from "./chrome/CommandPalette";
 import { ConfirmDialog } from "./chrome/ConfirmDialog";
+import { LinkRouter } from "./chrome/LinkRouter";
 import { AppSidebar } from "./chrome/AppSidebar";
 import { TabBar } from "./chrome/TabBar";
 import { useAgentSheet } from "./hooks/useAgentSheet";
@@ -129,6 +130,7 @@ export function App() {
   return (
     <TerminalPrefsProvider>
     <BrowserPrefsProvider>
+    <LinkRouter open={nav.openBrowser} />
     <AgentThemeProvider>
     <Sidebar.Provider
       contained

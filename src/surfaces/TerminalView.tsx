@@ -15,7 +15,7 @@ import * as api from "../lib/api";
 import { subscribePty } from "../lib/pty";
 import { holdTerminal } from "../lib/terminalFocus";
 import { IS_MAC } from "../lib/hotkey";
-import { filePathProvider, openExternal } from "../lib/terminalLinks";
+import { filePathProvider, openLink } from "../lib/terminalLinks";
 import { resolveTerminalKey } from "../lib/terminalKeys";
 import { activateZwjUnicode } from "../lib/terminalUnicode";
 import { quotePath, quotePaths } from "../lib/terminalPaths";
@@ -132,7 +132,7 @@ export function TerminalView({
       macOptionClickForcesSelection: true,
       allowProposedApi: true,
       vtExtensions: { kittyKeyboard: true },
-      linkHandler: { activate: (_event, uri) => openExternal(uri) },
+      linkHandler: { activate: (_event, uri) => openLink(uri) },
       theme: colors,
     });
     const fit = new FitAddon();
@@ -149,7 +149,7 @@ export function TerminalView({
     }
     term.loadAddon(new Unicode11Addon());
     activateZwjUnicode(term);
-    term.loadAddon(new WebLinksAddon((_event, uri) => openExternal(uri)));
+    term.loadAddon(new WebLinksAddon((_event, uri) => openLink(uri)));
     const searchAddon = new SearchAddon();
     term.loadAddon(searchAddon);
     const detachSearch = attachSearch(searchAddon);
