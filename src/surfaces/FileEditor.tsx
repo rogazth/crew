@@ -27,7 +27,7 @@ const MARKDOWN = /\.(?:md|markdown)$/i;
 export function FileEditor({ path, relative, files, onOpenPath }: Props) {
   const name = relative.split("/").pop() ?? relative;
   const isMarkdown = MARKDOWN.test(name);
-  const { loaded, revision, dirty, conflict, error, setContents, reload, overwrite } = useTextFile(path, isMarkdown);
+  const { loaded, revision, dirty, conflict, error, setContents, reload, overwrite } = useTextFile(path);
   const [outline, toggleOutline] = useOutlinePref();
   useCommands(isMarkdown ? { "toggle-outline": toggleOutline } : {});
 
@@ -88,9 +88,9 @@ export function FileEditor({ path, relative, files, onOpenPath }: Props) {
           virtual window against — `flex-1` alone leaves it at auto height, which
           kills both scrolling and the virtualiser. */}
       <div data-selectable className="min-h-0 flex-1 overflow-hidden">
+        {/* A new revision is the disk's text taken over the editor's: a fresh view. */}
         <Suspense fallback={null}>
           {isMarkdown ? (
-            // A new revision is the disk's text taken over the editor's: a fresh view.
             <MarkdownEditor
               key={revision}
               path={path}
@@ -101,7 +101,7 @@ export function FileEditor({ path, relative, files, onOpenPath }: Props) {
               outline={outline}
             />
           ) : (
-            <CodeEditor path={path} name={name} loaded={loaded} onChange={setContents} />
+            <CodeEditor key={revision} path={path} name={name} loaded={loaded} onChange={setContents} />
           )}
         </Suspense>
       </div>

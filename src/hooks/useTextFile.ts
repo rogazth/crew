@@ -22,10 +22,10 @@ async function readDisk(path: string): Promise<Disk> {
  * A text file open for editing: what the editor starts from, what disk had when
  * it was last loaded or saved, and what the editor holds now. The disk is read
  * again on a save and whenever the window comes back (`lib/textFile` decides
- * what that finds). With `keep`, unsaved edits outlive the tab and meet the
- * disk again when it comes back. Owns `save-file` while mounted.
+ * what that finds). Unsaved edits outlive the tab and meet the disk again when
+ * it comes back. Owns `save-file` while mounted.
  */
-export function useTextFile(path: string, keep = false) {
+export function useTextFile(path: string) {
   /** The text an editor starts from; `revision` counts the times the disk replaced it. */
   const [loaded, setLoaded] = useState<{ text: string; revision: number } | null>(null);
   const [file, setFile] = useState<TextFile>({ base: null, mine: "", conflict: false });
@@ -41,7 +41,7 @@ export function useTextFile(path: string, keep = false) {
 
   useEffect(() => {
     let cancelled = false;
-    const previous = keep ? keptEdits.get(path) : undefined;
+    const previous = keptEdits.get(path);
     void (previous ? readDisk(path) : api.readTextFile(path))
       .then((disk) => {
         if (cancelled) return;
@@ -56,9 +56,9 @@ export function useTextFile(path: string, keep = false) {
       cancelled = true;
       const last = current.current;
       current.current = null;
-      if (keep && last && isDirty(last)) keptEdits.set(path, last);
+      if (last && isDirty(last)) keptEdits.set(path, last);
     };
-  }, [path, keep, commit]);
+  }, [path, commit]);
 
   /** Runs one read of the disk at a time, in order, so a save never races a check. */
   const enqueue = useCallback(
