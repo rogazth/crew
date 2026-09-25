@@ -1,8 +1,14 @@
 /**
  * Key chords without React or the DOM, so the window and the main process read
- * them the same way. The window binds through @tanstack/react-hotkeys, but a
- * focused page swallows its keys, so the main process matches them here. The
- * rules mirror tanstack's matchesKeyboardEvent; a test holds the two together.
+ * them the same way: the window matches its own keydowns here, and a focused
+ * page swallows its keys, so the main process matches those here too.
+ *
+ * The key a chord names is the key typed, not where it sits: ⌘] is whatever
+ * key types ] or }, so on a Latin American Mac it is the } key, and ⌘+ on the
+ * key a US board calls ] is not ⌘]. Braces are brackets, as ⇧ makes them on a
+ * US board. Only when the event names no key (a dead key) or ⌥ turned it into
+ * another character does the physical key decide, read through the current
+ * layout when there is one.
  */
 
 export type ChordInput = { key: string; code: string; meta: boolean; ctrl: boolean; alt: boolean; shift: boolean };
@@ -10,27 +16,20 @@ export type ChordSpec =
   | string
   | { key: string; mod?: boolean; ctrl?: boolean; shift?: boolean; alt?: boolean; meta?: boolean };
 
+/** What each physical key types unmodified on the current layout, by `KeyboardEvent.code`. */
+export type KeyboardLayout = Readonly<Record<string, string>>;
+
 type Chord = {
-  key: string;
-  /** The key upper-cased and its physical code, worked out once instead of per key pressed. */
-  upper: string;
-  code: string | undefined;
+  /** The key as a token (see `tokenOf`), worked out once instead of per key pressed. */
+  token: string | null;
   meta: boolean;
   ctrl: boolean;
   alt: boolean;
   shift: boolean;
+  /** Written Mod+Alt: off macOS that is Ctrl+Alt, which AltGr sends too. */
+  modAlt: boolean;
 };
 
-/** What a key event says about itself, read once however many chords it is checked against. */
-type Pressed = {
-  input: ChordInput;
-  key: string;
-  upper: string;
-  dead: boolean;
-  /** A one-character letter, and whether it is a plain a–z one. */
-  letter: boolean;
-  ascii: boolean;
-};
 type Modifier = "mod" | "meta" | "ctrl" | "alt" | "shift";
 
 const MODIFIERS = new Map<string, Modifier>([
@@ -46,19 +45,50 @@ const MODIFIERS = new Map<string, Modifier>([
   ["shift", "shift"],
 ]);
 
-const PUNCTUATION_CODES = new Map([
-  ["[", "BracketLeft"],
-  ["]", "BracketRight"],
-  [",", "Comma"],
-  [".", "Period"],
-  ["/", "Slash"],
-  [";", "Semicolon"],
-  ["'", "Quote"],
-  ["\\", "Backslash"],
-  ["`", "Backquote"],
-  ["-", "Minus"],
-  ["=", "Equal"],
+const PUNCTUATION = new Map([
+  ["[", "BRACKETLEFT"],
+  ["{", "BRACKETLEFT"],
+  ["]", "BRACKETRIGHT"],
+  ["}", "BRACKETRIGHT"],
+  ["-", "MINUS"],
+  ["_", "UNDERSCORE"],
+  ["=", "EQUAL"],
+  ["+", "PLUS"],
+  [",", "COMMA"],
+  [".", "PERIOD"],
+  ["/", "SLASH"],
+  ["\\", "BACKSLASH"],
+  [";", "SEMICOLON"],
+  ["'", "QUOTE"],
+  ["`", "BACKQUOTE"],
 ]);
+const PUNCTUATION_TOKENS = new Set(PUNCTUATION.values());
+
+/** ⇧ punctuation a US board types, read back as its key only while ⇧ is held. */
+const SHIFTED = new Map([
+  ["<", "COMMA"],
+  [">", "PERIOD"],
+  ["?", "SLASH"],
+  ["|", "BACKSLASH"],
+  [":", "SEMICOLON"],
+  ['"', "QUOTE"],
+  ["~", "BACKQUOTE"],
+]);
+
+/** Keys that say nothing about what was typed; only these send matching to the physical key. */
+const UNNAMED = new Set(["", "Dead", "Unidentified"]);
+const MODIFIER_KEYS = new Set(["Alt", "AltGraph", "Control", "Meta", "Shift", "OS", "Fn", "FnLock", "Hyper", "Super", "Symbol", "SymbolLock"]);
+
+/** A key as matching compares it: A–Z, 0–9, a punctuation name, or a named key upper-cased; null for any other character. */
+function tokenOf(key: string): string | null {
+  if (key === " ") return "SPACE";
+  if (key.length === 1) {
+    if (/^[A-Za-z0-9]$/.test(key)) return key.toUpperCase();
+    return PUNCTUATION.get(key) ?? null;
+  }
+  if (UNNAMED.has(key) || MODIFIER_KEYS.has(key)) return null;
+  return key.toUpperCase();
+}
 
 /**
  * The main process matches every key pressed in a page against every live
@@ -107,41 +137,85 @@ function parse(spec: ChordSpec, isMac: boolean): Chord {
     flags.shift = spec.shift ?? false;
   }
   return {
-    key,
-    upper: key.toUpperCase(),
-    code: codeOf(key.toUpperCase()),
+    token: tokenOf(key),
     meta: flags.meta || (flags.mod && isMac),
     ctrl: flags.ctrl || (flags.mod && !isMac),
     alt: flags.alt,
     shift: flags.shift,
+    modAlt: flags.mod && flags.alt,
   };
 }
 
-function codeOf(key: string): string | undefined {
-  if (/^[A-Za-z]$/.test(key)) return `Key${key.toUpperCase()}`;
-  if (/^[0-9]$/.test(key)) return `Digit${key}`;
-  return PUNCTUATION_CODES.get(key);
+/** What a key event says about itself, read once however many chords it is checked against. */
+type Pressed = {
+  input: ChordInput;
+  /** The key typed, as a token, or null when the event does not name one. */
+  logical: string | null;
+  /** The event names no key at all, so only its physical key can say which it is. */
+  unnamed: boolean;
+  /** A non-Latin character under Ctrl or ⌘ off macOS: the physical key is the only Latin reading. */
+  nonLatin: boolean;
+  isMac: boolean;
+  layout: KeyboardLayout | undefined;
+};
+
+function pressed(input: ChordInput, isMac: boolean, layout: KeyboardLayout | undefined): Pressed {
+  const key = input.key ?? "";
+  let logical = MODIFIER_KEYS.has(key) ? null : tokenOf(key);
+  if (logical === null && input.shift) logical = SHIFTED.get(key) ?? null;
+  const nonLatin =
+    !isMac &&
+    (input.ctrl || input.meta) &&
+    // AltGr arrives as Ctrl+Alt; that is text, not a chord.
+    !(input.ctrl && input.alt) &&
+    logical === null &&
+    key !== "" &&
+    !UNNAMED.has(key) &&
+    !MODIFIER_KEYS.has(key);
+  return { input, logical, unnamed: UNNAMED.has(key), nonLatin, isMac, layout };
 }
 
-function pressed(input: ChordInput): Pressed {
-  const key = input.key === " " ? "Space" : input.key;
-  const letter = key.length === 1 && /^\p{L}$/u.test(key);
-  return { input, key, upper: key.toUpperCase(), dead: key === "Dead", letter, ascii: letter && /^[A-Za-z]$/.test(key) };
+/** The physical key by the name a US board gives it: KeyA is A, BracketRight is BRACKETRIGHT. */
+function usToken(code: string): string | null {
+  if (/^Key[A-Z]$/.test(code)) return code.slice(3);
+  if (/^Digit[0-9]$/.test(code)) return code.slice(5);
+  return code ? code.toUpperCase() : null;
+}
+
+/**
+ * The physical key by what it types on the current layout, so ⌘⌥ on the key
+ * that types } is ⌘⌥], wherever the layout puts it. Without a layout, or for a
+ * key it does not list, the US name.
+ */
+function physicalToken(press: Pressed): string | null {
+  const code = press.input.code ?? "";
+  const typed = press.layout?.[code];
+  if (typed !== undefined) return tokenOf(typed);
+  return usToken(code);
 }
 
 function keyMatches(chord: Chord, press: Pressed): boolean {
-  if (!chord.key) return false;
-  const single = press.key.length === 1 && chord.key.length === 1;
-  if (single) {
-    if (press.upper === chord.upper) return true;
-    // A letter is the layout speaking: Dvorak's ⌘Y is ⌘Y wherever that key
-    // sits. Only ⌥ turns a letter into another one (ˆ, å), and then the
-    // physical key decides.
-    if (press.letter && (press.ascii || !press.input.alt)) return false;
+  const token = chord.token;
+  if (token === null) return false;
+  const { input } = press;
+  // Off macOS, AltGr is Ctrl+Alt: international text, not a Mod+Alt chord.
+  if (
+    !press.isMac &&
+    chord.modAlt &&
+    PUNCTUATION_TOKENS.has(token) &&
+    input.ctrl &&
+    input.alt &&
+    !input.meta &&
+    !PUNCTUATION_TOKENS.has(usToken(input.code ?? "") ?? "")
+  ) {
+    return false;
   }
-  // ⇧ punctuation, ⌥ characters and dead keys: fall back to the physical key.
-  if (press.input.code && (press.dead || single)) return chord.code === press.input.code;
-  return press.upper === chord.upper;
+  if (press.logical !== null) return press.logical === token;
+  // ⌥ on macOS composes another character (⌥I is ˆ), leaving no key named; a chord with ⌥ reads the key under it.
+  const option = press.isMac && chord.alt && input.alt;
+  if (press.unnamed || option) return physicalToken(press) === token;
+  if (press.nonLatin) return usToken(input.code ?? "") === token;
+  return false;
 }
 
 function matches(chord: Chord, press: Pressed): boolean {
@@ -156,8 +230,8 @@ function matches(chord: Chord, press: Pressed): boolean {
 }
 
 /** Whether a key event is this chord. `Mod` is ⌘ on macOS and Ctrl elsewhere; modifiers must match exactly. */
-export function matchChord(spec: ChordSpec, input: ChordInput, isMac: boolean): boolean {
-  return matches(chordOf(spec, isMac), pressed(input));
+export function matchChord(spec: ChordSpec, input: ChordInput, isMac: boolean, layout?: KeyboardLayout): boolean {
+  return matches(chordOf(spec, isMac), pressed(input, isMac, layout));
 }
 
 /** A command the window can run right now, as it publishes them to the main process. */
@@ -172,20 +246,21 @@ export type ForwardInput = ChordInput & { type: string; isAutoRepeat: boolean };
 const EDITING: readonly ChordSpec[] = ["Mod+C", "Mod+V", "Mod+X", "Mod+A", "Mod+Z", "Mod+Shift+Z"];
 
 /**
- * What a key pressed inside a web page means to the app: the live command it
- * belongs to, or null to let the page have it. An auto-repeat of a command that
- * does not repeat is still claimed, so the page never sees half a chord, but it
- * does not run.
+ * What a key pressed means to the app: the live command it belongs to, or null
+ * to let the page or the focused field have it. An auto-repeat of a command
+ * that does not repeat is still claimed, so the page never sees half a chord,
+ * but it does not run.
  */
 export function resolveForward(
   input: ForwardInput,
   commands: readonly LiveCommand[],
   isMac: boolean,
+  layout?: KeyboardLayout,
 ): { id: string; run: boolean } | null {
   if (input.type !== "keyDown") return null;
   // ⌥ alone composes characters and bare keys type; only ⌘ and Ctrl chords are the app's.
   if (!input.meta && !input.ctrl) return null;
-  const press = pressed(input);
+  const press = pressed(input, isMac, layout);
   if (EDITING.some((spec) => matches(chordOf(spec, isMac), press))) return null;
   const command = commands.find((c) => matches(chordOf(c.keys, isMac), press));
   if (!command) return null;

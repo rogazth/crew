@@ -15,7 +15,7 @@ import {
   type WebContents,
   type WindowOpenHandlerResponse,
 } from "electron";
-import { resolveForward, type LiveCommand } from "../../src/lib/keymap";
+import { resolveForward, type KeyboardLayout, type LiveCommand } from "../../src/lib/keymap";
 import type { NavSnapshot } from "../../src/lib/browser/snapshot";
 import { CHANNELS, type OpenTabRequest } from "../../src/lib/browser/bridge";
 import {
@@ -43,6 +43,7 @@ const RESTORE_TTL_MS = 10_000;
 const guests = new Map<number, { guest: WebContents; host: WebContents }>();
 /** What each window can run right now; a chord inside one of its pages is checked against this. */
 const liveCommands = new WeakMap<WebContents, LiveCommand[]>();
+const keyboardLayouts = new WeakMap<WebContents, KeyboardLayout>();
 const pendingRestores = new Map<string, { snapshot: NavSnapshot; expires: number }>();
 /**
  * will-attach-webview sees the webview's params, did-attach-webview sees its
@@ -161,6 +162,11 @@ export function setLiveCommands(host: WebContents, commands: LiveCommand[]): voi
   liveCommands.set(host, commands);
 }
 
+export function setKeyboardLayout(host: WebContents, layout: KeyboardLayout | undefined): void {
+  if (layout) keyboardLayouts.set(host, layout);
+  else keyboardLayouts.delete(host);
+}
+
 /** A guest the asking window actually embeds; ids from the renderer are never trusted on their own. */
 export function ownedGuest(host: WebContents, id: number): WebContents | null {
   const entry = guests.get(id);
@@ -198,6 +204,7 @@ function register(host: WebContents, guest: WebContents): void {
       },
       liveCommands.get(host) ?? [],
       IS_MAC,
+      keyboardLayouts.get(host),
     );
     if (!forward) return;
     event.preventDefault();
