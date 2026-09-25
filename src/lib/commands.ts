@@ -1,11 +1,12 @@
 import { formatForDisplay, type RegisterableHotkey } from "@tanstack/react-hotkeys";
 import type { LiveCommand } from "./keymap";
 
-type Command = { label: string; keys: RegisterableHotkey; repeat?: boolean };
+type Command = { label: string; keys?: RegisterableHotkey; repeat?: boolean };
 
 /**
  * App commands. The id is what handlers, menus, and settings share.
- * `keys` is the default binding; user overrides land here later.
+ * `keys` is the default binding; user overrides land here later. A command
+ * without one is reached only from the palette and its buttons.
  * A command only fires while something has registered a handler — that is the when.
  * `repeat` lets a held chord keep firing; everything else fires once per press.
  */
@@ -55,11 +56,13 @@ export const COMMANDS = {
   "browser-forward": { label: "Forward", keys: { key: "]", mod: true } },
   "browser-focus-address": { label: "Focus Address Bar", keys: "Mod+L" },
   "browser-reload": { label: "Reload Page", keys: "Mod+R" },
+  "browser-hard-reload": { label: "Hard Reload Page", keys: "Mod+Shift+R" },
   "browser-devtools": { label: "Toggle Developer Tools", keys: "Mod+Alt+I" },
   "open-history": { label: "History", keys: "Mod+Y" },
 
   "toggle-sidebar": { label: "Toggle Sidebar", keys: "Mod+B" },
-  "open-routines": { label: "Routines", keys: "Mod+Shift+R" },
+  // ⌘⇧R is the page's hard reload; Routines is one click away in the sidebar.
+  "open-routines": { label: "Routines" },
   "search-messages": { label: "Search Messages", keys: "Mod+Shift+F" },
   "open-settings": { label: "Settings", keys: "Mod+," },
   "save-file": { label: "Save File", keys: "Mod+S" },
@@ -78,12 +81,15 @@ export function isCommandId(id: string): id is CommandId {
   return id in COMMANDS;
 }
 
-export function keysFor(id: CommandId): RegisterableHotkey {
-  return COMMANDS[id].keys;
+export function keysFor(id: CommandId): RegisterableHotkey | undefined {
+  const command: Command = COMMANDS[id];
+  return command.keys;
 }
 
+/** The binding as the platform spells it, or "" for a command with none. */
 export function commandKeys(id: CommandId): string {
-  return formatForDisplay(keysFor(id));
+  const keys = keysFor(id);
+  return keys ? formatForDisplay(keys) : "";
 }
 
 export function repeatable(id: CommandId): boolean {
@@ -133,11 +139,12 @@ function changed(): void {
   });
 }
 
-/** Commands with a handler right now, in declaration order: what a focused page forwards. */
+/** Commands with a handler and a binding right now, in declaration order: what a focused page forwards. */
 export function liveCommands(): LiveCommand[] {
-  return COMMAND_IDS.flatMap((id) =>
-    handlers.has(id) ? [{ id, keys: keysFor(id), repeat: repeatable(id) }] : [],
-  );
+  return COMMAND_IDS.flatMap((id) => {
+    const keys = keysFor(id);
+    return handlers.has(id) && keys ? [{ id, keys, repeat: repeatable(id) }] : [];
+  });
 }
 
 /** Tab plumbing and the palette's own doors: bound, but noise in a command list. */

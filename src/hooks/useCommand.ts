@@ -25,17 +25,23 @@ export function useCommands(map: { [K in CommandId]?: () => void }) {
   useHotkeys(
     useMemo(
       () =>
-        ids.map((id) => ({
-          hotkey: keysFor(id),
-          callback: (event: KeyboardEvent) => {
-            // Auto-repeat is dropped via `event.repeat`, not requireReset: requireReset
-            // re-arms on keyup, and macOS sends no keyup for keys pressed while ⌘ is held,
-            // so ⌘1 ⌘3 ⌘1 in one hold would ignore the second ⌘1. Only commands marked
-            // `repeat` keep firing while held.
-            if (event.repeat && !repeatable(id)) return;
-            mapRef.current[id]?.();
-          },
-        })),
+        ids.flatMap((id) => {
+          const hotkey = keysFor(id);
+          if (!hotkey) return [];
+          return [
+            {
+              hotkey,
+              callback: (event: KeyboardEvent) => {
+                // Auto-repeat is dropped via `event.repeat`, not requireReset: requireReset
+                // re-arms on keyup, and macOS sends no keyup for keys pressed while ⌘ is held,
+                // so ⌘1 ⌘3 ⌘1 in one hold would ignore the second ⌘1. Only commands marked
+                // `repeat` keep firing while held.
+                if (event.repeat && !repeatable(id)) return;
+                mapRef.current[id]?.();
+              },
+            },
+          ];
+        }),
       // eslint-disable-next-line react-hooks/exhaustive-deps
       [key],
     ),

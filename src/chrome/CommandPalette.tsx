@@ -296,6 +296,7 @@ const ACTION_ICONS: Partial<Record<CommandId, Icon>> = {
   "browser-back": ArrowLeftIcon,
   "browser-forward": ArrowRightIcon,
   "browser-reload": ArrowClockwiseIcon,
+  "browser-hard-reload": ArrowClockwiseIcon,
   "browser-devtools": BracketsAngleIcon,
   "open-history": ClockCounterClockwiseIcon,
 };

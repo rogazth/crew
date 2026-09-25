@@ -137,6 +137,7 @@ export function useGuest(options: Options): RefObject<Guest | null> {
       back: () => built?.back(),
       forward: () => built?.forward(),
       reload: () => built?.reload(),
+      hardReload: () => built?.hardReload(),
       stop: () => built?.stop(),
       canGoBack: () => built?.canGoBack() ?? false,
       canGoForward: () => built?.canGoForward() ?? false,

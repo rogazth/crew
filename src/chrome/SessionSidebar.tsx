@@ -164,7 +164,6 @@ export function SessionSidebar(props: SessionSidebarProps) {
         <SidebarRow
           icon={ArrowsClockwiseIcon}
           label="Routines"
-          keys={commandKeys("open-routines")}
           active={props.routinesOpen}
           onClick={props.onOpenRoutines}
         />

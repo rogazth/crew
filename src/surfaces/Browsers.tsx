@@ -59,6 +59,7 @@ export function Browsers({ panes, onPatch, onOpenTab }: Props) {
           "browser-back": () => active()?.back(),
           "browser-forward": () => active()?.forward(),
           "browser-reload": () => active()?.reload(),
+          "browser-hard-reload": () => active()?.hardReload(),
           "browser-focus-address": () => active()?.focusAddress(),
           "browser-devtools": () => active()?.toggleDevTools(),
           find: () => active()?.find(),

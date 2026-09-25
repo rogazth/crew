@@ -11,6 +11,7 @@ type WebviewElement = HTMLElement & {
   goBack(): void;
   goForward(): void;
   reload(): void;
+  reloadIgnoringCache(): void;
   stop(): void;
   loadURL(url: string): Promise<void>;
   findInPage(text: string, options?: { forward?: boolean; findNext?: boolean }): number;
@@ -53,6 +54,7 @@ export type Guest = {
   back(): void;
   forward(): void;
   reload(): void;
+  hardReload(): void;
   stop(): void;
   canGoBack(): boolean;
   canGoForward(): boolean;
@@ -177,6 +179,7 @@ export function createGuest(container: HTMLElement, src: string, on: GuestEvents
     back: () => safely(() => view.goBack(), undefined),
     forward: () => safely(() => view.goForward(), undefined),
     reload: () => safely(() => view.reload(), undefined),
+    hardReload: () => safely(() => view.reloadIgnoringCache(), undefined),
     stop: () => safely(() => view.stop(), undefined),
     canGoBack: () => safely(() => view.canGoBack(), false),
     canGoForward: () => safely(() => view.canGoForward(), false),

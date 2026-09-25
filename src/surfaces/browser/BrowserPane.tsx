@@ -87,6 +87,11 @@ export function BrowserPane({
       if (error) guest.current?.navigate(error.url);
       else guest.current?.reload();
     },
+    hardReload: () => {
+      const error = pages.get(pageId).error;
+      if (error) guest.current?.navigate(error.url);
+      else guest.current?.hardReload();
+    },
     focusAddress,
     toggleDevTools: () => {
       const id = guest.current?.webContentsId();
@@ -130,6 +135,7 @@ export function BrowserPane({
         back: () => current.current.back(),
         forward: () => current.current.forward(),
         reload: () => current.current.reload(),
+        hardReload: () => current.current.hardReload(),
         focusAddress: () => current.current.focusAddress(),
         toggleDevTools: () => current.current.toggleDevTools(),
         navigate: (url) => current.current.navigate(url),

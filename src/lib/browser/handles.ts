@@ -3,6 +3,8 @@ export type PaneHandle = {
   back(): void;
   forward(): void;
   reload(): void;
+  /** Reloads past the cache, the way ⌘⇧R does in a browser. */
+  hardReload(): void;
   focusAddress(): void;
   toggleDevTools(): void;
   navigate(url: string): void;

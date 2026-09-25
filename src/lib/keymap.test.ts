@@ -7,8 +7,8 @@ import {
   type ParsedHotkey,
 } from "@tanstack/react-hotkeys";
 import {
-  COMMANDS,
   COMMAND_IDS,
+  keysFor,
   liveCommands,
   onCommandsChange,
   registerCommand,
@@ -125,28 +125,29 @@ const ev = (key: string, mods: Partial<ChordInput> = {}): ChordInput => ({
   ...mods,
 });
 
+/** Every command that has a binding; the rest are reached from the palette. */
+const BOUND = COMMAND_IDS.flatMap((id) => {
+  const keys = keysFor(id);
+  return keys ? [{ id, keys }] : [];
+});
+
 describe("every command's chord", () => {
   for (const [platform, isMac] of PLATFORMS) {
-    it.each(COMMAND_IDS)(`the canonical ${platform} event runs %s and nothing else`, (id) => {
-      const event = canonical(COMMANDS[id].keys, isMac);
-      expect(COMMAND_IDS.filter((other) => matchChord(COMMANDS[other].keys, event, isMac))).toEqual([id]);
+    it.each(BOUND)(`the canonical ${platform} event runs $id and nothing else`, ({ id, keys }) => {
+      const event = canonical(keys, isMac);
+      expect(BOUND.filter((other) => matchChord(other.keys, event, isMac)).map((other) => other.id)).toEqual([id]);
     });
 
     it(`tanstack runs every binding from its canonical ${platform} event`, () => {
-      const missed = COMMAND_IDS.filter(
-        (id) => !tanstackMatches(COMMANDS[id].keys, canonical(COMMANDS[id].keys, isMac), isMac),
-      );
+      const missed = BOUND.filter(({ keys }) => !tanstackMatches(keys, canonical(keys, isMac), isMac));
       expect(missed).toEqual([]);
     });
 
     it(`agrees with tanstack on ${platform} for every binding against every command's key`, () => {
-      const events = COMMAND_IDS.flatMap((id) => variants(canonical(COMMANDS[id].keys, isMac)));
-      const disagreements = COMMAND_IDS.flatMap((id) =>
+      const events = BOUND.flatMap(({ keys }) => variants(canonical(keys, isMac)));
+      const disagreements = BOUND.flatMap(({ id, keys }) =>
         events
-          .filter(
-            (event) =>
-              matchChord(COMMANDS[id].keys, event, isMac) !== tanstackMatches(COMMANDS[id].keys, event, isMac),
-          )
+          .filter((event) => matchChord(keys, event, isMac) !== tanstackMatches(keys, event, isMac))
           .map((event) => ({ id, event })),
       );
       expect(disagreements).toEqual([]);
@@ -214,7 +215,7 @@ const press = (key: string, mods: Partial<ForwardInput> = {}): ForwardInput => (
 });
 
 function live(...ids: CommandId[]): LiveCommand[] {
-  return ids.map((id) => ({ id, keys: COMMANDS[id].keys, repeat: repeatable(id) }));
+  return ids.map((id) => ({ id, keys: keysFor(id)!, repeat: repeatable(id) }));
 }
 
 describe("resolveForward", () => {
@@ -324,6 +325,17 @@ describe("live commands", () => {
       { id: "open-launcher", keys: "Mod+T", repeat: false },
       { id: "next-tab", keys: { key: "]", mod: true, shift: true }, repeat: true },
     ]);
+  });
+
+  it("leaves out a live command with no binding: a page has nothing to forward", () => {
+    bind("open-routines");
+    bind("close");
+    expect(liveCommands().map((c) => c.id)).toEqual(["close"]);
+  });
+
+  it("gives ⌘⇧R to the page's hard reload, not to Routines", () => {
+    expect(keysFor("browser-hard-reload")).toBe("Mod+Shift+R");
+    expect(keysFor("open-routines")).toBeUndefined();
   });
 
   it("drops a command once its handler unregisters", () => {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { COMMANDS, COMMAND_IDS, repeatable } from "../commands";
+import { COMMAND_IDS, keysFor, repeatable } from "../commands";
 import { resolveForward, type LiveCommand } from "../keymap";
 import { newBrowserTab, openTab, patchBrowserTab, type TabState } from "../tabs";
 import { createPageStore } from "./pageStore";
@@ -19,7 +19,10 @@ function timed(run: () => void): number {
 
 describe("stress", () => {
   it("forwards 100,000 chords against every command inside the budget", () => {
-    const live: LiveCommand[] = COMMAND_IDS.map((id) => ({ id, keys: COMMANDS[id].keys, repeat: repeatable(id) }));
+    const live: LiveCommand[] = COMMAND_IDS.flatMap((id) => {
+      const keys = keysFor(id);
+      return keys ? [{ id, keys, repeat: repeatable(id) }] : [];
+    });
     const keys = ["l", "[", "]", "w", "k", "x", "1", "=", "Enter", "a"];
     let forwarded = 0;
     const ms = timed(() => {
