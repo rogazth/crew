@@ -108,6 +108,8 @@ function Pane({ active, children }: { active: boolean; children: React.ReactNode
 const DARK_SCHEME = window.matchMedia('(prefers-color-scheme: dark)');
 /** codex and opencode write their session only once the first message is sent; Claude moves to a new one on `/clear`. */
 const DISCOVER_MS = 3000;
+/** Claude stops to ask for a permission with nothing but its screen to say so. */
+const ATTENTION_MS = 1500;
 
 async function launchCommand(session: Session, cwd: string): Promise<string[]> {
   const theme = DARK_SCHEME.matches ? 'dark' : 'light';
@@ -178,6 +180,23 @@ function SessionTerminal({ paneId, session, cwd, active, onStatus, onOpenPath }:
     }, DISCOVER_MS);
     return () => window.clearInterval(timer);
   }, [learns, binding, startedAt, session.id, cwd]);
+
+  useEffect(() => {
+    if (binding !== 'own' || !startedAt) return;
+    let busy = false;
+    const timer = window.setInterval(() => {
+      if (busy) return;
+      busy = true;
+      api
+        .claudeAttention(session.id)
+        .then((asked) => asked && onBell())
+        .catch(() => {})
+        .finally(() => {
+          busy = false;
+        });
+    }, ATTENTION_MS);
+    return () => window.clearInterval(timer);
+  }, [binding, startedAt, session.id, onBell]);
 
   if (!command) return null;
   return (

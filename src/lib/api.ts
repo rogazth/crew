@@ -167,6 +167,10 @@ export const createProviderSession = (id: string): Promise<string> =>
 export const rebindClaudeSession = (id: string): Promise<string | null> =>
   client.request("session_claude_rebind", { id });
 
+/** What Claude asked of you since the last look, when it stopped to ask. */
+export const claudeAttention = (id: string): Promise<string | null> =>
+  client.request("session_claude_attention", { id });
+
 export const discoverProviderSession = (id: string, cwd: string, since: number): Promise<string | null> =>
   client.request("session_provider_discover", { id, cwd, since });
 

@@ -876,6 +876,10 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
             let store = hosts.store.clone();
             json(block(move || rebind_claude_session(&store, id)).await?)
         }
+        "session_claude_attention" => {
+            let Id { id } = parse(params)?;
+            json(block(move || Ok(provider_session::claude_attention(&id))).await?)
+        }
         "session_sync_title" => {
             let Id { id } = parse(params)?;
             let store = hosts.store.clone();

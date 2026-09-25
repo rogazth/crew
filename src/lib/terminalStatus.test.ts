@@ -164,6 +164,16 @@ describe("TerminalActivity", () => {
     expect(reported).toEqual(["working", "done"]);
   });
 
+  it("lets Claude's title take the slot back once the question is answered", () => {
+    const { activity, reported } = track();
+    activity.title("✳ Claude Code");
+    activity.title("◐ Create a file");
+    activity.title("✳ Create a file");
+    activity.bell();
+    activity.title("◐ Create a file");
+    expect(reported).toEqual(["working", "done", "needs-input", "working"]);
+  });
+
   it("clears a stale working left from a closed window", () => {
     const { reported } = track("working");
     expect(reported).toEqual(["idle"]);

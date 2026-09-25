@@ -39,11 +39,19 @@ export function sessionCommand(session: Session, { resume, theme }: Options): st
 }
 
 /**
- * Hands the hook's stdin, which carries Claude's current session id, to the
- * daemon's bind folder. It must print nothing: SessionStart stdout is added to
- * the model's context.
+ * Hands each hook's stdin to the daemon's bind folder. SessionStart's carries
+ * Claude's current session id, and must print nothing: its stdout is added to
+ * the model's context. Notification's says Claude stopped to ask for something,
+ * which it otherwise shows only on screen: its title goes back to idle and it
+ * rings no bell. The idle reminder is left out; a finished turn is not a question.
  */
 function bindHooks(crewId: string) {
-  const command = `if [ -n "$CREW_CLAUDE_BIND_DIR" ]; then cat > "$CREW_CLAUDE_BIND_DIR/${crewId}.json"; fi`;
-  return { SessionStart: [{ hooks: [{ type: "command", command }] }] };
+  const at = (file: string) => `"$CREW_CLAUDE_BIND_DIR/${crewId}.${file}"`;
+  const bind = `if [ -n "$CREW_CLAUDE_BIND_DIR" ]; then cat > ${at("json")}; fi`;
+  // Written aside and moved in, so the daemon never reads half a record.
+  const ask = `if [ -n "$CREW_CLAUDE_BIND_DIR" ]; then cat > ${at("attention.tmp")} && mv ${at("attention.tmp")} ${at("attention")}; fi`;
+  return {
+    SessionStart: [{ hooks: [{ type: "command", command: bind }] }],
+    Notification: [{ matcher: "permission_prompt|elicitation_dialog", hooks: [{ type: "command", command: ask }] }],
+  };
 }

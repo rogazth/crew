@@ -229,6 +229,7 @@ const commands: Record<string, (args: Row) => unknown> = {
   session_provider_create: () => "mock-chat",
   session_provider_discover: () => null,
   session_claude_rebind: () => null,
+  session_claude_attention: () => null,
   session_sync_title: () => null,
   transcript_tail: ({ sessionId, limit, beforePos }) => {
     const row = thread(sessionId as string);

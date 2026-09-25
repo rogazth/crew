@@ -186,8 +186,9 @@ export class TerminalActivity {
     this.#onBusy(busy);
     if (busy === was) return;
     if (busy) {
-      // A bell already claimed the slot; the redraw that follows is not new work.
-      if (this.#status !== "needs-input") this.#push("working");
+      // A bell already claimed the slot and the redraw that follows is not new
+      // work; a title that spins again is: the question was answered.
+      if (this.#status !== "needs-input" || this.#titled) this.#push("working");
       return;
     }
     if (this.#watched) this.#push("idle");

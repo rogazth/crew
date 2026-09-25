@@ -45,6 +45,13 @@ describe("sessionCommand", () => {
     expect(hooks.SessionStart[0].matcher).toBeUndefined();
   });
 
+  it("has Claude report when it stops to ask, and only then", () => {
+    const { hooks } = settings(argv({}));
+    const [notification] = hooks.Notification;
+    expect(notification.matcher).toBe("permission_prompt|elicitation_dialog");
+    expect(notification.hooks[0].command).toContain('mv "$CREW_CLAUDE_BIND_DIR/crew-1.attention.tmp" "$CREW_CLAUDE_BIND_DIR/crew-1.attention"');
+  });
+
   it("resumes the others by the id their CLI handed out", () => {
     expect(argv({ provider: "cursor", providerSessionId: "chat", model: "auto" })).toEqual([
       "cursor-agent",

@@ -73,6 +73,27 @@ pub fn claude_bound(crew_id: &str) -> Option<String> {
     parse_claude_bind(&std::fs::read_to_string(dir.join(format!("{crew_id}.json"))).ok()?)
 }
 
+/// The prompt Claude raised for Crew session `crew_id` since the last look: a
+/// permission to grant, a form to fill. Claude says so only through its
+/// Notification hook, which drops the record here; reading it takes it.
+pub fn claude_attention(crew_id: &str) -> Option<String> {
+    if !is_chat_id(crew_id) {
+        return None;
+    }
+    let path = PathBuf::from(std::env::var_os(CLAUDE_BIND_ENV)?).join(format!("{crew_id}.attention"));
+    let record = std::fs::read_to_string(&path).ok()?;
+    let _ = std::fs::remove_file(&path);
+    Some(parse_claude_attention(&record))
+}
+
+fn parse_claude_attention(record: &str) -> String {
+    serde_json::from_str::<serde_json::Value>(record)
+        .ok()
+        .and_then(|value| value.get("message")?.as_str().map(str::to_string))
+        .filter(|message| !message.trim().is_empty())
+        .unwrap_or_else(|| "Needs your input".to_string())
+}
+
 fn parse_claude_bind(record: &str) -> Option<String> {
     let value: serde_json::Value = serde_json::from_str(record).ok()?;
     let id = value.get("session_id")?.as_str()?;
@@ -477,6 +498,14 @@ mod tests {
         assert_eq!(parse_claude_bind(payload).as_deref(), Some("60eb4dd5-1c2a"));
         assert_eq!(parse_claude_bind(r#"{"session_id":"../x"}"#), None);
         assert_eq!(parse_claude_bind(r#"{"session_id":"60eb"#), None);
+    }
+
+    #[test]
+    fn claude_attention_reads_the_hook_message() {
+        let payload = r#"{"hook_event_name":"Notification","message":"Claude needs your permission","notification_type":"permission_prompt"}"#;
+        assert_eq!(parse_claude_attention(payload), "Claude needs your permission");
+        assert_eq!(parse_claude_attention(r#"{"message":"  "}"#), "Needs your input");
+        assert_eq!(parse_claude_attention("{\"mess"), "Needs your input");
     }
 
     #[test]
