@@ -18,7 +18,7 @@ use crew_core::transcript::TranscriptEvents;
 use crew_core::turns::TurnHost;
 use crew_core::workspace;
 use crew_protocol::{
-    self as proto, Auth, Cwd, DaemonInfo, Id, IdName, IdStatus, Ids, Key, KeyValue, Name, NamePath, Names, ProviderDiscover,
+    self as proto, Auth, DaemonInfo, Id, IdName, IdStatus, Ids, Key, KeyValue, ListProjectFiles, Name, NamePath, Names, ProviderDiscover,
     OptionalId, PathArg, PathContents, PtyAck, PtyAttach, PtyAttached, PtyKill, PtyResize, PtySpawn, PtyWrite,
     Request, RoutineRunNow, RoutineUpsert, SessionCreate, SessionCreated, SessionId, SessionUpdate, TempFile,
     SearchQuery, TranscriptApply, TranscriptTail, TurnAnswer, TurnRespond,
@@ -943,8 +943,8 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
             Ok(Value::Null)
         }
         "list_project_files" => {
-            let Cwd { cwd } = parse(params)?;
-            json(block(move || files::list(&cwd)).await?)
+            let ListProjectFiles { cwd, include } = parse(params)?;
+            json(block(move || files::list(&cwd, &include)).await?)
         }
         "read_text_file" => {
             let PathArg { path } = parse(params)?;

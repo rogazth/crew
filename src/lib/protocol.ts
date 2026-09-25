@@ -32,8 +32,6 @@ export type BlockRole = "user" | "assistant" | "reasoning" | "tool" | "approval"
 
 export type BlockTool = { callId: string, name: string, title: string, status: ToolStatus, detail?: ToolDetail, };
 
-export type Cwd = { cwd: string, };
-
 export type DaemonInfo = { url: string, token: string, };
 
 export type Event = { event: string, payload: unknown, };
@@ -89,6 +87,12 @@ export type Ids = { ids: Array<string>, };
 export type Key = { key: string, };
 
 export type KeyValue = { key: string, value: string, };
+
+export type ListProjectFiles = { cwd: string, 
+/**
+ * Folders indexed even when git ignores them or their name starts with a dot.
+ */
+include: Array<string>, };
 
 /**
  * A window of a transcript. `more` says whether older blocks exist before

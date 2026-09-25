@@ -138,8 +138,8 @@ export const reorderSessions = (ids: string[]): Promise<void> =>
 export const reorderWorkspaces = (ids: string[]): Promise<void> =>
   client.request("workspace_reorder", { ids });
 
-export const listProjectFiles = (cwd: string): Promise<ProjectFile[]> =>
-  client.request("list_project_files", { cwd });
+export const listProjectFiles = (cwd: string, include: string[] = []): Promise<ProjectFile[]> =>
+  client.request("list_project_files", { cwd, include });
 
 export const readTextFile = (path: string): Promise<string> =>
   client.request("read_text_file", { path });

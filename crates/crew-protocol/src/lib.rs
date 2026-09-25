@@ -314,8 +314,11 @@ pub struct KeyValue {
 
 #[derive(Serialize, Deserialize, Clone, Debug, TS)]
 #[ts(export, export_to = "../../../src/lib/protocol.ts")]
-pub struct Cwd {
+pub struct ListProjectFiles {
     pub cwd: String,
+    /// Folders indexed even when git ignores them or their name starts with a dot.
+    #[serde(default)]
+    pub include: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, TS)]

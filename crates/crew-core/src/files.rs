@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -23,16 +24,42 @@ pub struct ProjectFile {
     pub relative: String,
 }
 
-pub fn list(cwd: &str) -> Result<Vec<ProjectFile>, String> {
+/// `include` names folders indexed even when git ignores them or their name starts with a dot.
+pub fn list(cwd: &str, include: &[String]) -> Result<Vec<ProjectFile>, String> {
     let root = PathBuf::from(cwd);
     if !root.is_dir() {
         return Err(format!("{cwd}: Not a directory"));
     }
     // git knows the ignore rules already; walking is the slow fallback.
-    if let Some(files) = git_ls_files(&root) {
-        return Ok(files);
+    let mut files = git_ls_files(&root).unwrap_or_else(|| {
+        let mut files = Vec::new();
+        walk(&root, &root, &mut files, &HashSet::new());
+        files
+    });
+    let mut seen: HashSet<String> = files.iter().map(|file| file.relative.clone()).collect();
+    for folder in include.iter().filter_map(|folder| included_folder(folder)) {
+        let start = root.join(&folder);
+        if !start.is_dir() {
+            continue;
+        }
+        let before = files.len();
+        walk(&root, &start, &mut files, &seen);
+        seen.extend(files[before..].iter().map(|file| file.relative.clone()));
     }
-    Ok(walk(&root))
+    Ok(files)
+}
+
+/// A folder relative to the workspace; anything that could escape it, or name `.git`, is dropped.
+fn included_folder(folder: &str) -> Option<String> {
+    let trimmed = folder.trim().trim_matches('/');
+    let segments: Vec<&str> = trimmed.split('/').filter(|segment| !segment.is_empty()).collect();
+    if segments.is_empty()
+        || folder.trim().starts_with('/')
+        || segments.iter().any(|segment| *segment == "." || *segment == ".." || *segment == ".git")
+    {
+        return None;
+    }
+    Some(segments.join("/"))
 }
 
 fn git_ls_files(root: &Path) -> Option<Vec<ProjectFile>> {
@@ -65,35 +92,37 @@ fn git_ls_files(root: &Path) -> Option<Vec<ProjectFile>> {
     Some(files)
 }
 
-fn walk(root: &Path) -> Vec<ProjectFile> {
-    let mut files = Vec::new();
-    let mut stack = vec![root.to_path_buf()];
+/// Dot-named entries are kept, as git would list them; only the heavy folders are skipped.
+fn walk(root: &Path, start: &Path, files: &mut Vec<ProjectFile>, seen: &HashSet<String>) {
+    let mut stack = vec![start.to_path_buf()];
     while let Some(dir) = stack.pop() {
         let Ok(entries) = std::fs::read_dir(&dir) else {
             continue;
         };
         for entry in entries.flatten() {
+            if files.len() >= MAX_PROJECT_FILES {
+                return;
+            }
             let path = entry.path();
             let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
                 continue;
             };
-            if name.starts_with('.') || SKIPPED_DIRS.contains(&name) {
+            if SKIPPED_DIRS.contains(&name) {
                 continue;
             }
             if path.is_dir() {
                 stack.push(path);
             } else if let Ok(relative) = path.strip_prefix(root) {
                 let relative = relative.to_string_lossy().replace('\\', "/");
+                if seen.contains(&relative) {
+                    continue;
+                }
                 if let Some(file) = make_file(root, relative) {
                     files.push(file);
-                }
-                if files.len() >= MAX_PROJECT_FILES {
-                    return files;
                 }
             }
         }
     }
-    files
 }
 
 fn make_file(root: &Path, relative: String) -> Option<ProjectFile> {
@@ -231,7 +260,7 @@ fn safe_extension(extension: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{image_mime, load_inline_images, safe_extension};
+    use super::{image_mime, included_folder, list, load_inline_images, safe_extension};
     use crew_protocol::{AttachedFile, AttachedFileKind};
 
     #[test]
@@ -263,5 +292,56 @@ mod tests {
         assert_eq!(images.len(), 1);
         assert_eq!(images[0].media_type, "image/png");
         assert!(!images[0].data.is_empty());
+    }
+
+    fn scratch(files: &[&str]) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("crew-list-{}", uuid::Uuid::new_v4()));
+        for file in files {
+            let path = dir.join(file);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, "").unwrap();
+        }
+        dir
+    }
+
+    fn relatives(dir: &std::path::Path, include: &[&str]) -> Vec<String> {
+        let include: Vec<String> = include.iter().map(|folder| folder.to_string()).collect();
+        let mut found: Vec<String> = list(dir.to_str().unwrap(), &include)
+            .unwrap()
+            .into_iter()
+            .map(|file| file.relative)
+            .collect();
+        found.sort();
+        found
+    }
+
+    #[test]
+    fn walk_keeps_dot_entries_but_skips_heavy_folders() {
+        let dir = scratch(&[".ai/plan.md", ".env.example", "src/main.rs", "node_modules/x/index.js", ".git/HEAD"]);
+        assert_eq!(relatives(&dir, &[]), [".ai/plan.md", ".env.example", "src/main.rs"]);
+    }
+
+    #[test]
+    fn include_brings_back_folders_git_ignores_once() {
+        let dir = scratch(&[".gitignore", ".ai/plan.md", ".ai/notes/a.md", ".ai/node_modules/x.js", "logs/run.log"]);
+        std::fs::write(dir.join(".gitignore"), ".ai/\nlogs/\n").unwrap();
+        let init = std::process::Command::new("git").arg("-C").arg(&dir).arg("init").output().unwrap();
+        assert!(init.status.success());
+        assert_eq!(relatives(&dir, &[]), [".gitignore"]);
+        assert_eq!(
+            relatives(&dir, &[".ai", "/.ai/", "missing", "../"]),
+            [".ai/notes/a.md", ".ai/plan.md", ".gitignore"]
+        );
+    }
+
+    #[test]
+    fn included_folder_stays_inside_the_workspace() {
+        assert_eq!(included_folder(" .ai/ ").as_deref(), Some(".ai"));
+        assert_eq!(included_folder("docs//private").as_deref(), Some("docs/private"));
+        assert_eq!(included_folder("/etc"), None);
+        assert_eq!(included_folder("../secrets"), None);
+        assert_eq!(included_folder("a/../../b"), None);
+        assert_eq!(included_folder(".git"), None);
+        assert_eq!(included_folder("  "), None);
     }
 }

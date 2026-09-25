@@ -1,13 +1,16 @@
-import { Select, Switch } from "@cloudflare/kumo";
+import { Input, Select, Switch } from "@cloudflare/kumo";
+import { useState } from "react";
 import { ModelPicker } from "../chrome/ModelPicker";
 import { ProviderIcon } from "../chrome/ProviderIcon";
 import { SettingsRow, SettingsSection } from "../chrome/SettingsRow";
 import { useAgentTheme } from "../hooks/useAgentTheme";
 import { useBrowserPrefs } from "../hooks/useBrowserPrefs";
 import { useDefaultAgent } from "../hooks/useDefaultAgent";
+import { useFilePrefs } from "../hooks/useFilePrefs";
 import { AGENT_THEMES, type AgentThemeId } from "../lib/agentTheme";
 import { KEEP_CHOICES, SEARCH_ENGINES } from "../lib/browserPrefs";
 import { COMMANDS, COMMAND_IDS, commandKeys } from "../lib/commands";
+import { parseFolders } from "../lib/filePrefs";
 import { PROVIDERS } from "../lib/providers";
 import { settingsSection, type SettingsSectionId } from "../lib/settings";
 import { TerminalSettings } from "./TerminalSettings";
@@ -21,12 +24,14 @@ export function SettingsView({ section }: { section: SettingsSectionId }) {
           {meta.label}
         </h1>
         <div className="flex flex-col gap-8">
+          {section === "general" && <General />}
           {section === "appearance" && <Appearance />}
           {section === "keybindings" && <Keybindings />}
           {section === "terminal" && <TerminalSettings />}
           {section === "browser" && <Browser />}
           {section === "providers" && <Providers />}
-          {section !== "appearance" &&
+          {section !== "general" &&
+            section !== "appearance" &&
             section !== "keybindings" &&
             section !== "terminal" &&
             section !== "browser" &&
@@ -36,6 +41,36 @@ export function SettingsView({ section }: { section: SettingsSectionId }) {
         </div>
       </div>
     </div>
+  );
+}
+
+function General() {
+  const { prefs, update } = useFilePrefs();
+  const saved = prefs.include.join(", ");
+  const [draft, setDraft] = useState<string | null>(null);
+  const save = () => {
+    if (draft === null) return;
+    update({ include: parseFolders(draft) });
+    setDraft(null);
+  };
+  return (
+    <SettingsSection title="Files">
+      <SettingsRow
+        label="Always include"
+        description="Folders that file search indexes even when git ignores them. Separate them with commas."
+      >
+        <Input
+          aria-label="Always include"
+          size="sm"
+          className="w-56"
+          placeholder=".ai, .claude"
+          value={draft ?? saved}
+          onChange={(event) => setDraft(event.target.value)}
+          onBlur={save}
+          onKeyDown={(event) => event.key === "Enter" && save()}
+        />
+      </SettingsRow>
+    </SettingsSection>
   );
 }
 
