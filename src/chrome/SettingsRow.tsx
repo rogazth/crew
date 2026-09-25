@@ -5,7 +5,7 @@ import { Card } from "./kit";
 export function SettingsSection({ title, children }: { title?: string; children: ReactNode }) {
   return (
     <section className="flex flex-col gap-2">
-      {title && <h2 className="px-2.5 text-[12px] font-medium text-kumo-subtle">{title}</h2>}
+      {title && <h2 className="px-2.5 text-[12px] font-medium text-text-muted">{title}</h2>}
       <Card>{children}</Card>
     </section>
   );
@@ -25,7 +25,7 @@ export function SettingsRow({
     <div className="flex min-h-10 items-center gap-6 py-2.5">
       <div className="min-w-0 flex-1">
         <p className="truncate">{label}</p>
-        {description && <p className="text-[12px] text-kumo-subtle">{description}</p>}
+        {description && <p className="text-[12px] text-text-muted">{description}</p>}
       </div>
       {children && <div className="flex shrink-0 items-center gap-2">{children}</div>}
     </div>

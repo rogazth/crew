@@ -1,11 +1,4 @@
-import {
-  ArrowClockwiseIcon,
-  ArrowLeftIcon,
-  ArrowRightIcon,
-  BracketsAngleIcon,
-  DeviceMobileIcon,
-  XIcon,
-} from "@phosphor-icons/react";
+import { ArrowLeftIcon, ArrowRightIcon, CodeXmlIcon, RotateCwIcon, SmartphoneIcon, XIcon } from "lucide-react";
 import type { ReactNode, Ref } from "react";
 import { commandKeys, type CommandId } from "../../lib/commands";
 import type { PageState } from "../../lib/browser/pageStore";
@@ -58,7 +51,7 @@ export function BrowserToolbar({
         </Tool>
       ) : (
         <Tool label="Reload" command="browser-reload" onClick={onReload}>
-          <ArrowClockwiseIcon className="size-4" />
+          <RotateCwIcon className="size-4" />
         </Tool>
       )}
       <div className="mx-1 flex min-w-0 flex-1">
@@ -76,16 +69,16 @@ export function BrowserToolbar({
           title={`Zoomed to ${zoomLabel(page.zoom)}. Reset to actual size (${commandKeys("zoom-reset")})`}
           onMouseDown={(event) => event.preventDefault()}
           onClick={onZoomReset}
-          className="h-6 shrink-0 rounded-md px-1.5 text-[11px] text-text-muted tabular-nums transition-colors hover:bg-hover hover:text-text"
+          className="h-6 shrink-0 rounded-md px-1.5 text-[11px] text-icon tabular-nums transition-colors hover:bg-hover hover:text-text"
         >
           {zoomLabel(page.zoom)}
         </button>
       )}
       <Tool label="Responsive View" active={responsive} onClick={onResponsive}>
-        <DeviceMobileIcon className="size-4" />
+        <SmartphoneIcon className="size-4" />
       </Tool>
       <Tool label="Developer Tools" command="browser-devtools" active={page.devtools} onClick={onDevTools}>
-        <BracketsAngleIcon className="size-4" />
+        <CodeXmlIcon className="size-4" />
       </Tool>
       {page.loading && <span aria-hidden className="browser-progress absolute inset-x-0 -bottom-px h-0.5" />}
     </div>
@@ -119,7 +112,7 @@ function Tool({
       onMouseDown={(event) => event.preventDefault()}
       onClick={onClick}
       className={`flex size-7 shrink-0 items-center justify-center rounded-md transition-colors disabled:pointer-events-none disabled:opacity-35 ${
-        active ? "bg-selected text-text" : "text-text-muted hover:bg-hover hover:text-text"
+        active ? "bg-selected text-text" : "text-icon hover:bg-hover hover:text-text"
       }`}
     >
       {children}

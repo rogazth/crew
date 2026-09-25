@@ -1,8 +1,8 @@
 import { Menu } from "@base-ui/react/menu";
-import { Button, Input } from "@cloudflare/kumo";
-import { ClockCounterClockwiseIcon, GlobeIcon, XIcon } from "@phosphor-icons/react";
+import { GlobeIcon, HistoryIcon, SearchIcon, XIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { Confirm } from "../chrome/ConfirmDialog";
+import { Button } from "../chrome/kit";
 import * as api from "../lib/api";
 import { CLEAR_RANGES, clearSince, groupByDay, hostOf, type ClearRange } from "../lib/browser/history";
 import type { HistoryEntry } from "../lib/protocol";
@@ -19,7 +19,7 @@ const PAGE = 200;
 const DEBOUNCE_MS = 120;
 
 const PANEL =
-  "w-44 origin-(--transform-origin) rounded-xl bg-kumo-control p-1 text-kumo-default shadow-lg ring ring-kumo-line outline-none transition-[opacity,scale] duration-100 data-starting-style:scale-95 data-starting-style:opacity-0 data-ending-style:scale-95 data-ending-style:opacity-0";
+  "w-44 origin-(--transform-origin) rounded-xl bg-surface p-1 text-text shadow-float outline-none transition-[opacity,scale] duration-100 data-starting-style:scale-95 data-starting-style:opacity-0 data-ending-style:scale-95 data-ending-style:opacity-0";
 const ITEM =
   "flex h-8 w-full cursor-default items-center rounded-md px-2 text-left outline-none select-none data-highlighted:bg-hover";
 
@@ -91,11 +91,11 @@ export function HistoryView({ onOpen, onConfirm }: Props) {
 
   return (
     <div className="h-full overflow-y-auto">
-      <div className="mx-auto flex max-w-4xl flex-col gap-6 px-10 py-12">
+      <div className="mx-auto flex max-w-3xl flex-col gap-5 px-8 pt-10 pb-16">
         <div className="flex items-center gap-3">
-          <h1 className="text-[20px] leading-tight font-semibold tracking-[-0.26px]">History</h1>
+          <h1 className="text-[22px] leading-7 font-semibold tracking-[-0.02em]">History</h1>
           <Menu.Root modal={false}>
-            <Menu.Trigger render={<Button variant="secondary" size="sm" className="ml-auto" />}>
+            <Menu.Trigger render={<Button variant="secondary" className="ml-auto h-7" />}>
               Clear…
             </Menu.Trigger>
             <Menu.Portal>
@@ -112,14 +112,18 @@ export function HistoryView({ onOpen, onConfirm }: Props) {
           </Menu.Root>
         </div>
 
-        <Input
-          autoFocus
-          aria-label="Search history"
-          className="w-full"
-          value={query}
-          placeholder="Search by title or address"
-          onChange={(event) => setQuery(event.target.value)}
-        />
+        <label className="crew-well flex h-11 items-center gap-3 px-4">
+          <SearchIcon className="size-4 shrink-0 text-icon" />
+          <input
+            autoFocus
+            aria-label="Search history"
+            spellCheck={false}
+            value={query}
+            placeholder="Search by title or address"
+            onChange={(event) => setQuery(event.target.value)}
+            className="h-full min-w-0 flex-1 bg-transparent text-[14px] outline-none placeholder:text-placeholder"
+          />
+        </label>
 
         {days === null ? null : days.length === 0 ? (
           <Blank searching={text !== ""} text={text} />
@@ -127,7 +131,7 @@ export function HistoryView({ onOpen, onConfirm }: Props) {
           <div className="flex flex-col gap-5">
             {days.map((day) => (
               <section key={day.key} className="flex flex-col">
-                <h2 className="px-3 pb-1 text-[11px] font-semibold tracking-[0.06em] text-text-muted uppercase">
+                <h2 className="px-3 pb-1 text-[12px] font-medium text-text-muted">
                   {day.label}
                 </h2>
                 {day.entries.map((entry) => (
@@ -136,7 +140,7 @@ export function HistoryView({ onOpen, onConfirm }: Props) {
               </section>
             ))}
             {more && (
-              <Button variant="secondary" size="sm" className="self-center" onClick={loadMore}>
+              <Button variant="secondary" className="h-7 self-center" onClick={loadMore}>
                 Show older
               </Button>
             )}
@@ -165,7 +169,7 @@ function Row({
         title={entry.url}
         className="flex min-w-0 flex-1 items-center gap-2.5 px-3 py-2 text-left"
       >
-        <GlobeIcon className="size-3.5 shrink-0 text-text-muted" />
+        <GlobeIcon className="size-3.5 shrink-0 text-icon" />
         <span className="min-w-0 shrink truncate text-[13px] text-text">{title}</span>
         <span className="min-w-0 shrink-[2] truncate text-[12px] text-placeholder">{hostOf(entry.url)}</span>
         <span className="ml-auto shrink-0 pl-3 text-[11px] text-placeholder tabular-nums">
@@ -191,7 +195,7 @@ function Blank({ searching, text }: { searching: boolean; text: string }) {
   }
   return (
     <div className="flex flex-col items-center gap-2 py-20 text-center">
-      <ClockCounterClockwiseIcon className="size-5 text-placeholder" />
+      <HistoryIcon className="size-5 text-placeholder" />
       <p className="text-[13px] text-text-muted">Pages you open in the browser show up here.</p>
     </div>
   );

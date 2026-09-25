@@ -26,7 +26,7 @@ export function Outline({ items, active, onSelect }: Props) {
                 onClick={() => onSelect(item)}
                 aria-current={item.from === active ? "location" : undefined}
                 style={{ paddingLeft: `${8 + (item.level - base) * 12}px` }}
-                className="w-full truncate rounded-md py-1 pr-2 text-left text-[12.5px] text-text-muted hover:bg-hover hover:text-text aria-[current=location]:text-text aria-[current=location]:font-medium"
+                className="w-full truncate rounded-md py-1 pr-2 text-left text-[12.5px] text-icon hover:bg-hover hover:text-text aria-[current=location]:text-text aria-[current=location]:font-medium"
                 title={item.text}
               >
                 {item.text}

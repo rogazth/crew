@@ -66,16 +66,16 @@ export function NewWorktreeDialog({ workspace, from, onCreate, onClose }: Props)
             event.nativeEvent.stopImmediatePropagation();
             void submit(event.metaKey || event.ctrlKey);
           }}
-          className="h-9 rounded-md bg-kumo-base px-3 ring ring-kumo-line outline-none focus:ring-kumo-focus/50"
+          className="h-9 rounded-md bg-canvas px-3 ring ring-border outline-none focus:ring-focus/50"
         />
-        <div className="flex flex-col gap-1 text-[12px] text-kumo-subtle">
+        <div className="flex flex-col gap-1 text-[12px] text-text-muted">
           <span>
-            From <span className="text-kumo-default">{from ? worktreeLabel(from) : "HEAD"}</span>
+            From <span className="text-text">{from ? worktreeLabel(from) : "HEAD"}</span>
           </span>
           <span className="truncate font-mono text-[11px]" title={workspace.path}>
             {shortenPath(preview(workspace, branch))}
           </span>
-          {failure && <span className="text-kumo-danger">{failure}</span>}
+          {failure && <span className="text-danger">{failure}</span>}
         </div>
       </div>
       <Footer

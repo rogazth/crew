@@ -2,19 +2,19 @@ import { RestrictToHorizontalAxis } from "@dnd-kit/abstract/modifiers";
 import { RestrictToElement } from "@dnd-kit/dom/modifiers";
 import { useSortable } from "@dnd-kit/react/sortable";
 import { Tabs } from "@base-ui/react/tabs";
-import { CaretLeftIcon, CaretRightIcon, CircleNotchIcon, GitBranchIcon, GlobeIcon } from "@phosphor-icons/react";
-import { memo, useEffect, useState } from "react";
+import { ChevronLeftIcon, ChevronRightIcon, GitBranchIcon, GlobeIcon, LoaderCircleIcon, XIcon } from "lucide-react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { ActionMenu } from "./ActionMenu";
 import { BranchDot } from "./BranchDot";
 import { AgentAvatar } from "./AgentAvatar";
 import { TOGGLE_RESERVE } from "../lib/chrome";
-import { X } from "./icons";
 import { FileTypeIcon } from "./FileTypeIcon";
 import { ProviderIcon } from "./ProviderIcon";
 import { SortableList } from "./SortableList";
-import { StatusDot } from "./StatusDot";
 import { StubIcon } from "./StubIcon";
 import { TabLauncher, type Launch } from "./TabLauncher";
+import { TabPeek, type PeekAnchor } from "./TabPeek";
+import { toneOf, type TabTone } from "../lib/tabStyle";
 import { useBrowserPage } from "../hooks/useBrowserPage";
 import { useCommand } from "../hooks/useCommand";
 import { useTabOverflow } from "../hooks/useTabOverflow";
@@ -103,6 +103,18 @@ export function TabBar({
 }: Props) {
   const [launcher, setLauncher] = useState(false);
   const [menu, setMenu] = useState<Menu | null>(null);
+  // A tab held still under the pointer for a beat shows what its session is doing.
+  const [peek, setPeek] = useState<{ tabId: string; anchor: PeekAnchor } | null>(null);
+  const peekTimer = useRef<number | undefined>(undefined);
+  const onPeek = useCallback((tabId: string, el: HTMLElement | null) => {
+    window.clearTimeout(peekTimer.current);
+    if (!el) return setPeek(null);
+    peekTimer.current = window.setTimeout(() => {
+      const rect = el.getBoundingClientRect();
+      setPeek({ tabId, anchor: { left: Math.min(rect.left, window.innerWidth - 312), top: rect.bottom + 6 } });
+    }, 450);
+  }, []);
+  useEffect(() => () => window.clearTimeout(peekTimer.current), []);
   const ids = tabs.map((tab) => tab.id);
   const strip = useTabOverflow(ids.join("|"));
 
@@ -130,9 +142,9 @@ export function TabBar({
             data-tauri-drag-region="false"
             title={`Switch ${commandKeys("switch-workspace")}`}
             onClick={context.onSwitch}
-            className="mx-1 flex h-7 shrink-0 items-center gap-1.5 rounded-md px-2 text-kumo-subtle outline-none transition-colors hover:bg-hover hover:text-kumo-default focus-visible:bg-hover"
+            className="mx-1 flex h-7 shrink-0 items-center gap-1.5 rounded-md px-2 text-icon outline-none transition-colors hover:bg-hover hover:text-text focus-visible:bg-hover"
           >
-            <span className="font-medium text-kumo-default">{context.workspace}</span>
+            <span className="font-medium text-text">{context.workspace}</span>
             <span>›</span>
             <GitBranchIcon className="size-3.5" />
             <span>{context.branch}</span>
@@ -164,6 +176,7 @@ export function TabBar({
                   onClose={onClose}
                   onMenu={setMenu}
                   branch={(branchOf ?? NO_BRANCH)(tab)}
+                  onPeek={onPeek}
                 />
               ))}
             </SortableList>
@@ -190,6 +203,8 @@ export function TabBar({
           onClick={() => strip.scroll("end")}
         />
       </Tabs.Root>
+
+      {peek && !menu && <PeekFor tabId={peek.tabId} anchor={peek.anchor} tabs={tabs} sessions={sessions} branchOf={branchOf} />}
 
       {menu && (
         <ActionMenu
@@ -231,6 +246,7 @@ const TabPill = memo(function TabPill({
   onClose,
   onMenu,
   branch,
+  onPeek,
 }: {
   tab: Tab;
   index: number;
@@ -239,6 +255,7 @@ const TabPill = memo(function TabPill({
   onClose: (id: string) => void;
   onMenu: (menu: Menu) => void;
   branch: { label: string; hue: number } | null;
+  onPeek: (tabId: string, el: HTMLElement | null) => void;
 }) {
   const { ref, isDragging } = useSortable({
     id: tab.id,
@@ -248,6 +265,7 @@ const TabPill = memo(function TabPill({
     accept: "tab",
   });
   const status = tabStatus(tab, sessions);
+  const tone = toneOf(status);
   return (
     <Tabs.Tab
       ref={ref}
@@ -257,23 +275,35 @@ const TabPill = memo(function TabPill({
       data-tab-id={tab.id}
       data-tauri-drag-region="false"
       onAuxClick={(event) => event.button === 1 && onClose(tab.id)}
-      onContextMenu={(event) => onMenu({ point: menuFromEvent(event), tab })}
-      title={tabTitle(tab, sessions)}
+      onContextMenu={(event) => {
+        onPeek(tab.id, null);
+        onMenu({ point: menuFromEvent(event), tab });
+      }}
+      onMouseEnter={(event) => tab.kind === "session" && onPeek(tab.id, event.currentTarget)}
+      onMouseLeave={() => onPeek(tab.id, null)}
+      onPointerDown={() => onPeek(tab.id, null)}
+      title={tab.kind === "session" ? undefined : tabTitle(tab, sessions)}
       /* The ring and the shadow are always drawn; only their colour moves,
          so the pill fades in instead of growing an edge. A held pill wears the
          active face: the inactive one is translucent and would show its neighbours. */
       className={`group relative flex h-7 touch-none w-fit ${branch ? "max-w-[240px]" : "max-w-[190px]"} min-w-[120px] shrink-0 items-center gap-1.5 rounded-chrome pr-1.5 pl-2.5 shadow-[0_1px_2px_var(--tab-shadow)] ring-1 outline-none transition-[color,background-color,box-shadow] duration-150 ${
-        active || isDragging
-          ? "bg-canvas text-text ring-hairline [--tab-shadow:var(--color-hairline)]"
-          : "bg-card text-text-muted ring-transparent hover:bg-hover [--tab-shadow:transparent]"
+        tone.tint
+          ? active || isDragging
+            ? "bg-canvas text-text ring-warning/45 [--tab-shadow:var(--color-hairline)]"
+            : "bg-warning/12 text-text ring-warning/30 hover:bg-warning/18 [--tab-shadow:transparent]"
+          : active || isDragging
+            ? "bg-canvas text-text ring-hairline [--tab-shadow:var(--color-hairline)]"
+            : "bg-card text-text-muted ring-transparent hover:bg-hover [--tab-shadow:transparent]"
       } ${isDragging ? "cursor-grabbing" : ""}`}
     >
       {tab.kind === "browser" ? (
         <BrowserTabFace tab={tab} />
       ) : (
         <>
-          <TabIcon tab={tab} sessions={sessions} />
-          <span className="min-w-0 flex-1 truncate">{tabTitle(tab, sessions)}</span>
+          <TabIcon tab={tab} sessions={sessions} tone={tone} />
+          <span className={`min-w-0 flex-1 truncate ${tone.bold ? "font-semibold text-text" : ""}`}>
+            {tabTitle(tab, sessions)}
+          </span>
         </>
       )}
       {branch && (
@@ -282,15 +312,8 @@ const TabPill = memo(function TabPill({
           <span className="truncate">{branch.label}</span>
         </span>
       )}
-      {/* One fixed slot for two things that never coexist: the status light
-          and the close button it yields to on hover. Stacked, so the swap
-          never resizes the tab. */}
+      {/* The close button's fixed slot: status lives on the face, so the slot never resizes the tab. */}
       <span className="relative flex h-5 w-6 shrink-0 items-center justify-end">
-        {status && (
-          <span className="absolute inset-0 flex items-center justify-center transition-opacity group-hover:opacity-0">
-            <StatusDot status={status} />
-          </span>
-        )}
         <button
           type="button"
           onClick={(event) => {
@@ -299,17 +322,17 @@ const TabPill = memo(function TabPill({
           }}
           aria-label="Close tab"
           className={`absolute right-0 flex size-5 items-center justify-center rounded-full text-text-muted transition-colors hover:bg-selected hover:text-text focus-visible:opacity-100 ${
-            active && !status ? "opacity-100" : "opacity-0 group-hover:opacity-100"
+            active ? "opacity-100" : "opacity-0 group-hover:opacity-100"
           }`}
         >
-          <X className="size-3" />
+          <XIcon className="size-3" />
         </button>
       </span>
     </Tabs.Tab>
   );
 });
 
-/** kumo's Tabs overflow affordance: a gradient over the strip's edge with a caret on top. */
+/** The strip's overflow affordance: a gradient over the strip's edge with a caret on top. */
 function ScrollControl({
   side,
   visible,
@@ -320,7 +343,7 @@ function ScrollControl({
   onClick: () => void;
 }) {
   const start = side === "start";
-  const Caret = start ? CaretLeftIcon : CaretRightIcon;
+  const Caret = start ? ChevronLeftIcon : ChevronRightIcon;
   return (
     <button
       type="button"
@@ -335,7 +358,7 @@ function ScrollControl({
         visible ? "pointer-events-auto opacity-100" : "pointer-events-none opacity-0"
       }`}
     >
-      <span className="flex size-6 items-center justify-center rounded-md text-text-muted transition-colors hover:bg-hover hover:text-text">
+      <span className="flex size-6 items-center justify-center rounded-md text-icon transition-colors hover:bg-hover hover:text-text">
         <Caret className="size-3.5" />
       </span>
     </button>
@@ -349,11 +372,11 @@ const tabStatus = (tab: Tab, sessions: Session[]) =>
 
 /** Identity only — the status light lives in the tab's trailing slot. Every branch
     fills the same 14px box, so a tab keeps its layout when its kind changes. */
-function TabIcon({ tab, sessions }: { tab: Tab; sessions: Session[] }) {
+function TabIcon({ tab, sessions, tone }: { tab: Tab; sessions: Session[]; tone: TabTone | null }) {
   const icon = () => {
-    if (tab.kind === "stub") return <StubIcon stub={tab.stub} className="size-3.5 text-text-muted" />;
+    if (tab.kind === "stub") return <StubIcon stub={tab.stub} className="size-3.5 text-icon" />;
     if (tab.kind === "file") return <FileTypeIcon name={tab.relative} className="size-3.5" />;
-    if (tab.kind === "browser") return <GlobeIcon className="size-3.5 text-text-muted" />;
+    if (tab.kind === "browser") return <GlobeIcon className="size-3.5 text-icon" />;
     const session = sessions.find((s) => s.id === tab.sessionId);
     if (!session) return null;
     return session.kind === "agent" ? (
@@ -362,7 +385,15 @@ function TabIcon({ tab, sessions }: { tab: Tab; sessions: Session[] }) {
       <ProviderIcon provider={session.provider} className="size-3.5" />
     );
   };
-  return <span className="flex size-3.5 shrink-0 items-center justify-center">{icon()}</span>;
+  return (
+    <span
+      className="crew-tab-face size-3.5 shrink-0"
+      data-ring={tone?.ring ?? undefined}
+      data-badge={tone?.badge ?? undefined}
+    >
+      {icon()}
+    </span>
+  );
 }
 
 /**
@@ -380,14 +411,35 @@ function BrowserTabFace({ tab }: { tab: Extract<Tab, { kind: "browser" }> }) {
     <>
       <span className="flex size-3.5 shrink-0 items-center justify-center">
         {page.loading ? (
-          <CircleNotchIcon className="size-3.5 animate-spin text-text-muted" weight="bold" />
+          <LoaderCircleIcon className="size-3.5 animate-spin text-icon" />
         ) : icon ? (
           <img src={icon} alt="" className="size-3.5" onError={() => setBroken(icon)} />
         ) : (
-          <GlobeIcon className="size-3.5 text-text-muted" />
+          <GlobeIcon className="size-3.5 text-icon" />
         )}
       </span>
       <span className="min-w-0 flex-1 truncate">{title}</span>
     </>
   );
+}
+
+/** The hover card for whichever tab asked, if it still holds a session. */
+function PeekFor({
+  tabId,
+  anchor,
+  tabs,
+  sessions,
+  branchOf,
+}: {
+  tabId: string;
+  anchor: PeekAnchor;
+  tabs: Tab[];
+  sessions: Session[];
+  branchOf: ((tab: Tab) => { label: string; hue: number } | null) | null;
+}) {
+  const tab = tabs.find((t) => t.id === tabId);
+  const session = tab?.kind === "session" ? sessions.find((s) => s.id === tab.sessionId) : undefined;
+  if (!tab || !session) return null;
+  const branch = branchOf?.(tab)?.label ?? (session.worktree ? (session.worktree.split("/").pop() ?? null) : null);
+  return <TabPeek session={session} branch={branch} anchor={anchor} />;
 }

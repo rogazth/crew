@@ -1,5 +1,7 @@
-import { Collapsible, Tooltip } from "@cloudflare/kumo";
-import { CaretRightIcon, PaperPlaneTiltIcon } from "@phosphor-icons/react";
+import { Collapsible } from "@base-ui/react/collapsible";
+import { Tooltip } from "../../chrome/kit";
+import { ChevronRightIcon, InfoIcon } from "lucide-react";
+import { AgentAvatar } from "../../chrome/AgentAvatar";
 import { lazy, memo, Suspense, useState } from "react";
 import { FileTypeIcon } from "../../chrome/FileTypeIcon";
 import type { AgentRef, Block, TurnUsage } from "../../lib/blocks";
@@ -56,23 +58,21 @@ function AgentMessage({ block, from }: { block: Block; from: AgentRef }) {
   return (
     <Collapsible.Root open={open} onOpenChange={setOpen}>
       <Collapsible.Trigger
-        className="group flex min-h-5 w-full items-center gap-2 py-0.5 text-left text-[13px] leading-[18px]"
+        className="group flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-left text-[13px] leading-[18px] ring-1 ring-hairline transition-colors hover:bg-hover"
         data-block={block.id}
       >
-        <span className="relative flex size-3.5 shrink-0 items-center justify-center text-kumo-subtle">
-          <PaperPlaneTiltIcon className="size-3.5 transition-opacity group-hover:opacity-0" />
-          <CaretRightIcon
-            weight="bold"
-            className={`absolute size-3 opacity-0 transition-[opacity,transform] duration-150 group-hover:opacity-100 ${open ? "rotate-90" : ""}`}
-          />
+        <AgentAvatar seed={from.id} bare className="size-5" />
+        <span className="shrink-0">
+          <span className="font-medium">{from.name}</span>
+          <span className="text-text-muted"> wrote to you</span>
         </span>
-        <span className="shrink-0 text-text-muted transition-colors group-hover:text-text">
-          {from.name} messaged you
-        </span>
-        {open ? null : <span className="min-w-0 truncate text-placeholder">{first}</span>}
+        {open ? <span className="flex-1" /> : <span className="min-w-0 flex-1 truncate text-text-muted">{first}</span>}
+        <ChevronRightIcon
+          className={`size-3.5 shrink-0 text-icon transition-transform duration-150 ${open ? "rotate-90" : ""}`}
+        />
       </Collapsible.Trigger>
       <Collapsible.Panel className="crew-phase-panel">
-        <div className="crew-tool-body flex flex-col items-start gap-1.5">
+        <div className="flex flex-col items-start gap-1.5 pt-2">
           {block.text ? (
             <div className="crew-md-row">
               <div className="crew-bubble is-from-agent">
@@ -137,12 +137,25 @@ export const AssistantMessage = memo(function AssistantMessage({ block }: { bloc
   );
 });
 
+/** Something the session itself said: a quiet line with a mark, not a message. */
 export const Note = memo(function Note({ block }: { block: Block }) {
-  return <p className="text-[13px] leading-[18px] text-text-muted">{block.text}</p>;
+  return (
+    <p className="flex items-start gap-2 text-[13px] leading-[19px] text-text-muted">
+      <InfoIcon className="mt-0.5 size-3.5 shrink-0 text-icon" />
+      {block.text}
+    </p>
+  );
 });
 
+/** A day turning over: a hairline with the date on it, as chat apps mark one. */
 export const DateBreak = memo(function DateBreak({ label }: { label: string }) {
-  return <p className="text-center text-[11px] leading-4 text-placeholder">{label}</p>;
+  return (
+    <p className="flex items-center gap-3 text-[11px] leading-4 font-medium text-text-muted">
+      <span className="h-px flex-1 bg-hairline" />
+      {label}
+      <span className="h-px flex-1 bg-hairline" />
+    </p>
+  );
 });
 
 /**
@@ -150,18 +163,18 @@ export const DateBreak = memo(function DateBreak({ label }: { label: string }) {
  * Memoised because every footer above the live turn would otherwise rebuild its
  * tooltip on each streamed token.
  */
-export const TurnFooter = memo(function TurnFooter({ usage, at }: { usage: TurnUsage; at?: number }) {
-  const worked = usage.durationMs !== undefined ? `Worked for ${duration(usage.durationMs)}` : null;
+export const TurnFooter = memo(function TurnFooter({ usage, at, text }: { usage: TurnUsage; at?: number; text?: string }) {
+  const worked = usage.durationMs !== undefined ? `Worked ${duration(usage.durationMs)}` : null;
   const parts = [worked, at !== undefined ? clock(at) : null].filter((p): p is string => p !== null);
-  if (parts.length === 0) return null;
+  if (parts.length === 0 && !text) return null;
   const detail = usageDetail(usage);
   const line = (
-    <span className="cursor-default text-[11px] leading-4 text-placeholder tabular-nums">
-      {parts.join(" · ")}
-    </span>
+    <span className="cursor-default text-[11.5px] leading-4 text-text-muted tabular-nums">{parts.join(" · ")}</span>
   );
+  // The reply's actions, as ChatGPT sets them under an answer: copy first, then what it cost.
   return (
-    <div className="flex">
+    <div className="-ml-1 flex items-center gap-1.5">
+      {text ? <CopyButton text={text.trim()} className="crew-copy" /> : null}
       {detail ? (
         <Tooltip content={detail} side="top" align="start" delay={300} render={<span />}>
           {line}

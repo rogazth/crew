@@ -1,5 +1,6 @@
 import { memo, useEffect, useState } from "react";
 import { highlightInline, resolveLang } from "../../lib/shiki";
+import { FileTypeIcon } from "../../chrome/FileTypeIcon";
 import { CopyButton } from "./CopyButton";
 import { DiffFence } from "./DiffView";
 
@@ -38,7 +39,10 @@ export const CodeBlock = memo(function CodeBlock({ code, lang, streaming }: Prop
   return (
     <div className="crew-code" data-lang={lang ?? ""}>
       <div className="crew-code-head">
-        <span>{lang || "text"}</span>
+        <span className="flex items-center gap-1.5">
+          <FileTypeIcon name={`code.${lang || "txt"}`} className="size-3.5" />
+          {lang || "text"}
+        </span>
         <CopyButton text={code} />
       </div>
       {diff && !streaming ? (

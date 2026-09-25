@@ -10,7 +10,6 @@ export type MenuIcon =
   | "select-all"
   | "close"
   | "open"
-  | "face"
   | "bell"
   | "read"
   | "agent"
@@ -65,7 +64,6 @@ export const CLOSE_TAB: MenuAction = { id: "close", label: "Close Tab", icon: "c
 export const CLOSE_OTHERS: MenuAction = { id: "close-others", label: "Close Other Tabs", icon: "close", hotkey: "O" };
 export const CLOSE_RIGHT: MenuAction = { id: "close-right", label: "Close Tabs to the Right", icon: "close", hotkey: "R" };
 export const REOPEN_TAB: MenuAction = { id: "reopen", label: "Reopen Closed Tab", icon: "reopen", hotkey: "T" };
-export const CHANGE_FACE: MenuAction = { id: "face", label: "Change Face…", icon: "face", hotkey: "F" };
 export const COPY_NAME: MenuAction = { id: "copy-name", label: "Copy Name", icon: "copy", hotkey: "C" };
 export const MARK_READ: MenuAction = { id: "mark-read", label: "Mark as Read", icon: "read", hotkey: "M" };
 

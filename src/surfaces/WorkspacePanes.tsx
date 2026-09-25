@@ -5,7 +5,7 @@ import { DiffsPool } from './DiffsPool';
 import { ChatContext, type ChatActions } from './chat/context';
 import { Surface } from './Surface';
 import { Terminals } from './Terminals';
-import type { ProviderId } from '../lib/providers';
+import type { Confirm } from '../chrome/ConfirmDialog';
 import type { Pane } from '../lib/tabs';
 import type { ProjectFile, Session, SessionStatus, Tab, Workspace } from '../lib/types';
 import { parseContext } from '../lib/worktrees';
@@ -27,12 +27,13 @@ type Props = {
   hasWorkspace: boolean;
   onCreateWorkspace: () => void;
   onStatus: (id: string, status: SessionStatus) => void;
-  onModel: (session: Session, provider: ProviderId, model: string) => void;
   onOpenFile: (file: ProjectFile) => void;
   onOpenSession: (sessionId: string) => void;
   onPatchBrowser: (workspaceId: string, tabId: string, patch: { url?: string; title?: string }) => void;
   onOpenBrowserTab: (workspaceId: string, tab: Tab, opts: { after: string; background: boolean }) => void;
   files: ProjectFile[];
+  onOpenHistory: (url: string) => void;
+  onConfirm: (confirm: Confirm) => void;
 };
 
 /** Active surface plus the mounted agent, terminal and page overlays, of every workspace. */
@@ -46,12 +47,13 @@ export function WorkspacePanes({
   hasWorkspace,
   onCreateWorkspace,
   onStatus,
-  onModel,
   onOpenFile,
   onOpenSession,
   onPatchBrowser,
   onOpenBrowserTab,
   files,
+  onOpenHistory,
+  onConfirm,
 }: Props) {
   // Keyed on where each session runs, not on the sessions: a status change
   // must not hand every mounted pane a fresh object.
@@ -101,6 +103,8 @@ export function WorkspacePanes({
           onCreateWorkspace={onCreateWorkspace}
           files={files}
           onOpenPath={chat.openPath}
+          onOpenHistory={onOpenHistory}
+          onConfirm={onConfirm}
         />
       </DiffsPool>
       <Terminals
@@ -111,7 +115,7 @@ export function WorkspacePanes({
       />
       <Browsers panes={mounted} onPatch={onPatchBrowser} onOpenTab={onOpenBrowserTab} />
       <ChatContext value={chat}>
-        <Agents panes={mounted} sessions={sessions} onModel={onModel} />
+        <Agents panes={mounted} sessions={sessions} />
       </ChatContext>
     </div>
   );

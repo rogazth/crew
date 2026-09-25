@@ -3,7 +3,7 @@ import { createConnection } from "node:net";
 import electron from "electron";
 import { compileElectron } from "./compile-electron.mjs";
 
-const PORT = 1420;
+const PORT = Number(process.env.CREW_PORT) || 1420;
 
 function run(command, args) {
   return new Promise((resolve, reject) => {

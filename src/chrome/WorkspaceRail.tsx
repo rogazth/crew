@@ -1,7 +1,7 @@
 import { RestrictToVerticalAxis } from "@dnd-kit/abstract/modifiers";
 import { RestrictToElement } from "@dnd-kit/dom/modifiers";
-import { ArrowsClockwiseIcon, GearIcon, PlusIcon, type Icon } from "@phosphor-icons/react";
-import { useMemo, useState, type KeyboardEvent } from "react";
+import { PlusIcon, RefreshCwIcon, SettingsIcon, type LucideIcon as Icon } from "lucide-react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { ActionMenu } from "./ActionMenu";
 import { SortableItem, SortableList } from "./SortableList";
 import { StatusDot } from "./StatusDot";
@@ -73,8 +73,10 @@ export function WorkspaceRail(props: Props) {
     <nav
       data-sidebar-rail
       aria-label="Workspaces"
-      className="flex w-[52px] shrink-0 flex-col items-center gap-2 pt-1 pb-3"
+      className="flex min-h-0 w-[52px] shrink-0 flex-col items-center gap-2 pt-1 pb-3"
     >
+      {/* The marks scroll; the + under them and the foot stay put, however many there are. */}
+      <RailScroll activeId={props.activeId}>
       <div data-rail-marks className="flex flex-col items-center gap-2">
         <SortableList ids={ids} onReorder={props.onReorder} modifiers={RAIL_MODIFIERS}>
           {props.workspaces.map((workspace, index) => (
@@ -93,6 +95,7 @@ export function WorkspaceRail(props: Props) {
           ))}
         </SortableList>
       </div>
+      </RailScroll>
 
       <RailButton
         icon={PlusIcon}
@@ -104,13 +107,13 @@ export function WorkspaceRail(props: Props) {
       <div className="flex-1" />
 
       <RailButton
-        icon={ArrowsClockwiseIcon}
+        icon={RefreshCwIcon}
         label="Routines"
         active={props.routinesOpen}
         onClick={props.onOpenRoutines}
       />
       <RailButton
-        icon={GearIcon}
+        icon={SettingsIcon}
         label={`Settings ${commandKeys("open-settings")}`}
         active={props.settingsOpen}
         onClick={props.onOpenSettings}
@@ -184,18 +187,18 @@ function Mark({
       onClick={onSelect}
       onContextMenu={(event) => onMenu(menuFromEvent(event))}
       onKeyDown={onKeyDown}
-      className="group relative grid size-9 place-items-center rounded-xl outline-none focus-visible:ring-2 focus-visible:ring-kumo-focus/50"
+      className="group relative grid size-9 place-items-center rounded-xl outline-none focus-visible:ring-2 focus-visible:ring-focus/50"
     >
       {/* The pill on the rail's edge: full for the one on screen, a hint on hover. */}
       <span
         aria-hidden
-        className={`absolute -left-2 w-[3px] rounded-r-full bg-kumo-default transition-[height] duration-150 ${
+        className={`absolute -left-2 w-[3px] rounded-r-full bg-text transition-[height] duration-150 ${
           active ? "h-6" : current ? "h-2" : "h-0 group-hover:h-3"
         }`}
       />
       <span
         aria-hidden
-        className={`grid size-9 place-items-center bg-kumo-brand text-[12px] font-semibold tracking-wide text-kumo-inverse transition-[border-radius,opacity] duration-150 ${
+        className={`grid size-9 place-items-center bg-accent text-[12px] font-semibold tracking-wide text-inverse transition-[border-radius,opacity] duration-150 ${
           current ? "rounded-xl" : "rounded-[18px] opacity-70 group-hover:rounded-xl group-hover:opacity-100"
         }`}
       >
@@ -232,13 +235,41 @@ function RailButton({
       aria-pressed={active}
       title={label}
       onClick={onClick}
-      className={`grid size-9 shrink-0 place-items-center outline-none transition-colors focus-visible:ring-2 focus-visible:ring-kumo-focus/50 ${
+      className={`grid size-9 shrink-0 place-items-center outline-none transition-colors focus-visible:ring-2 focus-visible:ring-focus/50 ${
         dashed
-          ? "rounded-[18px] border border-dashed border-border-strong text-kumo-subtle hover:text-kumo-default"
-          : `rounded-xl ${active ? "bg-selected text-kumo-default" : "text-kumo-subtle hover:bg-hover hover:text-kumo-default"}`
+          ? "rounded-[18px] border border-dashed border-border-strong text-text-muted hover:text-text"
+          : `rounded-xl ${active ? "bg-selected text-text" : "text-icon hover:bg-hover hover:text-text"}`
       }`}
     >
       <Glyph className="size-[18px]" />
     </button>
   );
 }
+
+/**
+ * The marks' own scroller: as tall as they are until the rail runs out, then
+ * it scrolls. The fade is always on both edges, over a margin of the same
+ * height, so at either end it lies over nothing and only shows once a mark
+ * slides under it. The active mark is kept in view when a shortcut picks one
+ * out of sight.
+ */
+function RailScroll({ activeId, children }: { activeId: string; children: ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    ref.current?.querySelector('[aria-current="true"]')?.scrollIntoView({ block: "nearest" });
+  }, [activeId]);
+
+  return (
+    <div
+      ref={ref}
+      style={{ maskImage: `linear-gradient(to bottom, transparent, #000 ${FADE}px, #000 calc(100% - ${FADE}px), transparent)` }}
+      className="no-scrollbar -my-2 flex min-h-0 w-full shrink flex-col items-center overflow-y-auto overscroll-contain py-3 [scroll-padding-block:12px]"
+    >
+      {children}
+    </div>
+  );
+}
+
+/** The fade's height, and the margin under it at either end of the list. */
+const FADE = 12;

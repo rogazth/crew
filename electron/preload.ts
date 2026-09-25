@@ -17,6 +17,7 @@ contextBridge.exposeInMainWorld("crewHost", {
   openUrl: (url: string) => ipcRenderer.invoke("open-url", url),
   notify: (title: string, body: string) => ipcRenderer.invoke("notify", { title, body }),
   pathForFile: (file: File) => webUtils.getPathForFile(file),
+  zoom: (delta: number) => ipcRenderer.invoke("app-zoom", delta),
   update: {
     current: () => ipcRenderer.invoke(UPDATE_CHANNELS.current),
     onState: (cb: (state: UpdateState) => void) => listen(UPDATE_CHANNELS.state, cb),

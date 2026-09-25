@@ -5,7 +5,7 @@ type Overflow = { overflowing: boolean; canScrollStart: boolean; canScrollEnd: b
 const NONE: Overflow = { overflowing: false, canScrollStart: false, canScrollEnd: false };
 
 /**
- * Horizontal overflow state for a tab strip, following kumo's Tabs "many tabs"
+ * Horizontal overflow state for a tab strip, in the manner of a browser's "many tabs"
  * behaviour (scroll affordances at both edges, one screenful per press).
  */
 export function useTabOverflow(watch: string) {

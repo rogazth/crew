@@ -99,21 +99,21 @@ describe("spacing", () => {
   it("hugs the footer to what it is about", () => {
     const reply: Row = { kind: "message", block: block("assistant", "green") };
     const footer: Row = { kind: "footer", id: "f", usage: COST };
-    expect(gapBefore(reply, footer)).toBe("mt-1.5");
+    expect(gapBefore(reply, footer)).toBe("mt-2");
   });
 
   it("opens a gap when the speaker changes and keeps it tight when it does not", () => {
     const mine: Row = { kind: "message", block: block("user", "hi") };
     const theirs: Row = { kind: "message", block: block("assistant", "hello") };
-    expect(gapBefore(mine, theirs)).toBe("mt-5");
-    expect(gapBefore(theirs, theirs)).toBe("mt-1.5");
+    expect(gapBefore(mine, theirs)).toBe("mt-7");
+    expect(gapBefore(theirs, theirs)).toBe("mt-2.5");
   });
 
   it("gives a note its own room on both sides", () => {
     const note: Row = { kind: "message", block: block("system", "Stopped") };
     const reply: Row = { kind: "message", block: block("assistant", "ok") };
-    expect(gapBefore(reply, note)).toBe("mt-3");
-    expect(gapBefore(note, reply)).toBe("mt-3");
+    expect(gapBefore(reply, note)).toBe("mt-4");
+    expect(gapBefore(note, reply)).toBe("mt-4");
   });
 
   it("does not count another agent's letter as you talking", () => {
@@ -128,5 +128,12 @@ describe("spacing", () => {
     expect(speaker({ kind: "activity", id: "a", blocks: [] })).toBe("agent");
     expect(speaker({ kind: "footer", id: "f", usage: COST })).toBe("agent");
     expect(speaker({ kind: "date", id: "d", at: 0 })).toBe("meta");
+  });
+});
+
+describe("footer", () => {
+  it("carries the reply's text onto its footer for copying", () => {
+    const rows = groupRows([block("assistant", "the answer", { usage: COST })]);
+    expect(rows[1]).toMatchObject({ kind: "footer", text: "the answer" });
   });
 });

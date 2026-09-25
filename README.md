@@ -61,7 +61,11 @@ SCENARIO=loop node scripts/drive.mjs
 SCENARIO=routine node scripts/drive.mjs
 node scripts/sessions.mjs           # claude, opencode and cursor tabs: status and title, end to end
 node scripts/shot.mjs               # a screenshot of the chat against the mock
+npm run app:design                  # the app on a seeded profile of its own (port 1421)
+npm run app:design -- --reseed      # wipe that profile and seed it again
 ```
+
+`npm run app:design` runs next to a regular `npm run app`: it keeps its data in `~/Library/Application Support/Crew Design` and seeds it on first run with five workspaces (git repos, worktrees with diffs, a non-git folder, an empty one), agents and sessions on every provider and in every status, transcripts, routines with run history and open tabs. Statuses stay as seeded (`CREW_KEEP_STATUS`), so a working or waiting agent can be looked at without a live turn.
 
 `scripts/drive.mjs` defaults to opencode's free models, which need no credentials, so it runs on a machine with nothing logged in.
 

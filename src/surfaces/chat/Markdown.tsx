@@ -1,4 +1,4 @@
-import { CheckCircleIcon, CircleIcon } from "@phosphor-icons/react";
+import { CircleCheckIcon, CircleIcon } from "lucide-react";
 import {
   cloneElement,
   isValidElement,
@@ -19,7 +19,6 @@ import { groupRuns, isHeadingOnly } from "../../lib/markdownRuns";
 import { VEIL_EMA_SEED_MS, veilDurationMs, veilEmaNext } from "../../lib/veil";
 import { CodeBlock } from "./CodeBlock";
 import { useChatActions } from "./context";
-import { CopyButton } from "./CopyButton";
 import { SiteIcon } from "./SiteIcon";
 
 type Props = { text: string; streaming?: boolean };
@@ -87,7 +86,7 @@ type InputProps = ComponentProps<"input"> & { node?: unknown };
 /** A task item's box: the native control can't take the icon shape the list wants. */
 function Input({ type, checked, node: _node, ...rest }: InputProps) {
   if (type !== "checkbox") return <input type={type} checked={checked} {...rest} />;
-  const Glyph = checked ? CheckCircleIcon : CircleIcon;
+  const Glyph = checked ? CircleCheckIcon : CircleIcon;
   return <Glyph className="crew-md-task" aria-hidden />;
 }
 
@@ -193,13 +192,6 @@ const MarkdownRun = memo(function MarkdownRun({
       </Streamdown>
     </div>
   );
-  // Only the bubble gets the aside copy; code and diffs carry their own.
-  return (
-    <div className="crew-md-row">
-      {body}
-      {className === "crew-md-prose" && (
-        <CopyButton text={text.trim()} className="crew-copy crew-copy-aside" />
-      )}
-    </div>
-  );
+  // The reply is copied whole from its footer; code and diffs carry their own.
+  return <div className="crew-md-row">{body}</div>;
 });

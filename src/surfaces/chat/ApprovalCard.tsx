@@ -1,4 +1,7 @@
 import { lazy, memo, Suspense, useEffect, useRef } from "react";
+import { ShieldCheckIcon } from "lucide-react";
+import { Button } from "../../chrome/kit";
+import { Kbd } from "../../chrome/Kbd";
 import type { ApprovalDecision, Block } from "../../lib/blocks";
 
 /** The diff renderer is ~300 kB and most turns never raise a card; it loads with the first one. */
@@ -54,21 +57,30 @@ export const ApprovalCard = memo(function ApprovalCard({ block, hot = false, onA
   if (requestId == null) return null;
 
   return (
-    <div ref={card} tabIndex={-1} className="crew-card my-1.5 outline-none">
-      <p className="text-[13px] leading-[18px] text-text-muted">{headline(name, input, block.text)}</p>
+    <div ref={card} tabIndex={-1} className="crew-card my-2 outline-none">
+      <div className="flex items-center gap-2.5">
+        <span className="grid size-7 shrink-0 place-items-center rounded-lg bg-warning/15 text-warning">
+          <ShieldCheckIcon className="size-4" />
+        </span>
+        <div className="flex min-w-0 flex-1 flex-col">
+          <span className="truncate font-semibold">{headline(name, input, block.text)}</span>
+          <span className="text-[12px] text-text-muted">Waiting for your approval</span>
+        </div>
+      </div>
       <Suspense fallback={null}>
         <ApprovalBody name={name} input={input} />
       </Suspense>
-      <div className="flex items-center justify-end gap-1.5">
-        <button type="button" onClick={() => onApprove(requestId, "deny")} className="crew-btn">
+      <div className="flex items-center gap-1.5">
+        <Button variant="ghost" className="h-7 px-2.5" onClick={() => onApprove(requestId, "always")}>
+          Always allow {name}
+        </Button>
+        <span className="flex-1" />
+        <Button className="h-7 px-2.5" {...(hot ? { keys: "esc" } : {})} onClick={() => onApprove(requestId, "deny")}>
           Deny
-        </button>
-        <button type="button" onClick={() => onApprove(requestId, "always")} className="crew-btn">
-          Always allow
-        </button>
-        <button type="button" onClick={() => onApprove(requestId, "allow")} className="crew-btn crew-btn-primary">
-          Allow
-        </button>
+        </Button>
+        <Button variant="primary" className="h-7 px-2.5" onClick={() => onApprove(requestId, "allow")}>
+          Allow {hot && <Kbd keys="↵" className="border-white/20 bg-white/10 text-current! opacity-80" />}
+        </Button>
       </div>
     </div>
   );

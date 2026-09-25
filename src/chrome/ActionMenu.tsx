@@ -1,45 +1,25 @@
-import {
-  ArrowCounterClockwiseIcon,
-  ArrowSquareOutIcon,
-  BellIcon,
-  BroomIcon,
-  CheckIcon,
-  ChecksIcon,
-  ClipboardIcon,
-  CopyIcon,
-  GearIcon,
-  GitBranchIcon,
-  PencilSimpleIcon,
-  RobotIcon,
-  SelectionAllIcon,
-  SmileyIcon,
-  TerminalWindowIcon,
-  TrashIcon,
-  XIcon,
-  type Icon,
-} from "@phosphor-icons/react";
+import { BellIcon, BotIcon, BrushCleaningIcon, CheckCheckIcon, CheckIcon, ClipboardIcon, CopyIcon, ExternalLinkIcon, GitBranchIcon, PencilIcon, RotateCcwIcon, SettingsIcon, SquareDashedMousePointerIcon, SquareTerminalIcon, Trash2Icon, XIcon, type LucideIcon as Icon } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
 import { createPortal } from "react-dom";
 import { isDeleteChord } from "../lib/hotkey";
 import { SEPARATOR, type MenuAction, type MenuEntry, type MenuIcon, type MenuPoint } from "../lib/menu";
 
 const ICONS: Record<MenuIcon, Icon> = {
-  edit: PencilSimpleIcon,
-  delete: TrashIcon,
+  edit: PencilIcon,
+  delete: Trash2Icon,
   copy: CopyIcon,
   paste: ClipboardIcon,
-  clear: BroomIcon,
-  "select-all": SelectionAllIcon,
+  clear: BrushCleaningIcon,
+  "select-all": SquareDashedMousePointerIcon,
   close: XIcon,
-  open: ArrowSquareOutIcon,
-  face: SmileyIcon,
+  open: ExternalLinkIcon,
   bell: BellIcon,
-  read: ChecksIcon,
-  agent: RobotIcon,
-  terminal: TerminalWindowIcon,
+  read: CheckCheckIcon,
+  agent: BotIcon,
+  terminal: SquareTerminalIcon,
   branch: GitBranchIcon,
-  reopen: ArrowCounterClockwiseIcon,
-  settings: GearIcon,
+  reopen: RotateCcwIcon,
+  settings: SettingsIcon,
 };
 
 type Props = {
@@ -159,12 +139,12 @@ export function ActionMenu({ point, actions, onPick, onClose, title, rename }: P
       aria-label={title ?? "Actions"}
       onKeyDown={onMenuKey}
       onContextMenu={(event) => event.preventDefault()}
-      className={`fixed z-50 min-w-52 rounded-xl bg-kumo-control p-1 text-kumo-default shadow-lg ring ring-kumo-line outline-none ${
+      className={`fixed z-50 min-w-52 rounded-xl bg-surface p-1 text-text shadow-float outline-none ${
         rename ? "w-60" : "w-max"
       }`}
       style={{ left: point.x, top: point.y }}
     >
-      {title && <div className="truncate px-2 pt-1.5 pb-1 text-[11px] text-kumo-subtle">{title}</div>}
+      {title && <div className="truncate px-2 pt-1.5 pb-1 text-[11px] text-text-muted">{title}</div>}
       {rename && (
         <input
           ref={input}
@@ -176,11 +156,11 @@ export function ActionMenu({ point, actions, onPick, onClose, title, rename }: P
           onBlur={() => {
             if (!skipCommit.current) commitRename();
           }}
-          className="mb-1 h-8 w-full rounded-md bg-kumo-base px-2.5 font-medium text-kumo-default ring ring-kumo-line outline-none focus:ring-[1.5px] focus:ring-kumo-focus/50"
+          className="mb-1 h-8 w-full rounded-md bg-canvas px-2.5 font-medium text-text ring ring-border outline-none focus:ring-[1.5px] focus:ring-focus/50"
         />
       )}
       {actions.map((entry, index) => {
-        if (entry === SEPARATOR) return <div key={`separator-${index}`} role="separator" className="mx-2 my-1 h-px bg-kumo-line" />;
+        if (entry === SEPARATOR) return <div key={`separator-${index}`} role="separator" className="mx-2 my-1 h-px bg-border" />;
         const Glyph = ICONS[entry.icon];
         const lit = runnable[cursor]?.id === entry.id;
         return (
@@ -195,18 +175,18 @@ export function ActionMenu({ point, actions, onPick, onClose, title, rename }: P
             onClick={() => onPick(entry.id)}
             className={`flex h-8 w-full items-center gap-2 rounded-md px-2 text-left ${
               entry.disabled
-                ? "text-kumo-placeholder"
+                ? "text-placeholder"
                 : entry.danger
-                  ? `text-kumo-danger ${lit ? "bg-kumo-danger/10" : ""}`
+                  ? `text-danger ${lit ? "bg-danger/10" : ""}`
                   : lit
                     ? "bg-hover"
                     : ""
             }`}
           >
-            <Glyph className={`size-4 shrink-0 ${entry.danger || entry.disabled ? "" : "text-kumo-subtle"}`} />
+            <Glyph className={`size-4 shrink-0 ${entry.danger || entry.disabled ? "" : "text-icon"}`} />
             <span className="min-w-0 flex-1 truncate">{entry.label}</span>
             {entry.checked && <CheckIcon className="size-3.5 shrink-0" />}
-            {entry.hotkey && <span className="shrink-0 pl-4 text-[11px] text-kumo-subtle">{entry.hotkey}</span>}
+            {entry.hotkey && <span className="shrink-0 pl-4 text-[11px] text-text-muted">{entry.hotkey}</span>}
           </button>
         );
       })}

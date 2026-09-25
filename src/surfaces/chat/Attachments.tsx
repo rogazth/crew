@@ -1,8 +1,7 @@
 import { Dialog } from "@base-ui/react/dialog";
-import { CaretLeftIcon, CaretRightIcon, XIcon } from "@phosphor-icons/react";
+import { ChevronLeftIcon, ChevronRightIcon, XIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 import { FileTypeIcon } from "../../chrome/FileTypeIcon";
-import { X } from "../../chrome/icons";
 import { useImageSrc } from "../../hooks/useImageSrc";
 import { formatBytes, isImage } from "../../lib/attachments";
 import type { AttachedFile } from "../../lib/blocks";
@@ -61,7 +60,7 @@ function Thumbnail({
         onClick={onOpen}
         title={file.name}
         aria-label={`Open ${file.name}`}
-        className={`overflow-hidden rounded-lg bg-card focus-visible:ring-[1.5px] focus-visible:ring-kumo-focus/50 focus-visible:outline-none ${box}`}
+        className={`overflow-hidden rounded-lg bg-card focus-visible:ring-[1.5px] focus-visible:ring-focus/50 focus-visible:outline-none ${box}`}
       >
         {src ? (
           <img src={src} alt={file.name} className={size === "chip" ? "size-full object-cover" : "block max-h-40 max-w-[240px] object-contain"} />
@@ -76,7 +75,7 @@ function Thumbnail({
           onClick={onRemove}
           className="absolute -top-1.5 -right-1.5 flex size-4 items-center justify-center rounded-full bg-text text-canvas opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
         >
-          <X className="size-2.5" />
+          <XIcon className="size-2.5" />
         </button>
       )}
     </span>
@@ -97,9 +96,9 @@ function FileChip({ file, onRemove, onInk }: { file: AttachedFile; onRemove?: ()
           type="button"
           aria-label={`Remove ${file.name}`}
           onClick={onRemove}
-          className="-mr-0.5 flex size-4 items-center justify-center rounded text-kumo-subtle transition-colors hover:text-text"
+          className="-mr-0.5 flex size-4 items-center justify-center rounded text-text-muted transition-colors hover:text-text"
         >
-          <X className="size-3" />
+          <XIcon className="size-3" />
         </button>
       )}
     </span>
@@ -151,15 +150,15 @@ function Lightbox({
           {many && (
             <>
               <button type="button" aria-label="Previous" onClick={prev} className="crew-lightbox-nav left-3">
-                <CaretLeftIcon className="size-4" weight="bold" />
+                <ChevronLeftIcon className="size-4" />
               </button>
               <button type="button" aria-label="Next" onClick={next} className="crew-lightbox-nav right-3">
-                <CaretRightIcon className="size-4" weight="bold" />
+                <ChevronRightIcon className="size-4" />
               </button>
             </>
           )}
           <Dialog.Close aria-label="Close" className="crew-lightbox-close">
-            <XIcon className="size-4" weight="bold" />
+            <XIcon className="size-4" />
           </Dialog.Close>
         </Dialog.Popup>
       </Dialog.Portal>

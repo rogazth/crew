@@ -1,6 +1,6 @@
-import { PlusIcon } from "@phosphor-icons/react";
+import { PlusIcon } from "lucide-react";
 import { useMemo, useState } from "react";
-import { Button, Segmented, type Option } from "../chrome/kit";
+import { Button, PageFrame, type Option } from "../chrome/kit";
 import { RoutineCard } from "../chrome/RoutineCard";
 import type { Confirm } from "../chrome/ConfirmDialog";
 import { useRoutines, type RoutineEntry } from "../hooks/useRoutines";
@@ -101,42 +101,65 @@ export function RoutinesView({ draft, workspaces, activeWorkspaceId, agents, onC
     );
   }
 
+  const counts = { all: entries?.length ?? 0, active: entries?.filter((e) => e.routine.enabled).length ?? 0 };
   return (
-    <div className="h-full overflow-y-auto">
-      <div className="mx-auto flex max-w-4xl flex-col gap-6 px-10 py-12">
-        <div className="flex items-center justify-between gap-4">
-          <h1 className="text-[20px] leading-tight font-semibold tracking-[-0.26px]">Routines</h1>
-          <Button variant="primary" icon={PlusIcon} disabled={agents.length === 0} onClick={startNew}>
-            New routine
-          </Button>
+    <PageFrame
+      title="Routines"
+      subtitle="Standing orders: an agent wakes on a schedule with a saved instruction."
+      actions={
+        <Button variant="primary" icon={PlusIcon} disabled={agents.length === 0} onClick={startNew}>
+          New routine
+        </Button>
+      }
+    >
+      {entries !== null && entries.length > 0 && (
+        <div className="flex items-center gap-1 border-b border-hairline pb-3">
+          {FILTERS.map((option) => {
+            const on = option.value === filter;
+            const count =
+              option.value === "all" ? counts.all : option.value === "active" ? counts.active : counts.all - counts.active;
+            return (
+              <button
+                key={option.value}
+                type="button"
+                aria-pressed={on}
+                onClick={() => setFilter(option.value)}
+                className={`flex h-7 items-center gap-1.5 rounded-full px-3 text-[12px] transition-colors ${
+                  on ? "bg-accent text-inverse" : "text-text-muted hover:bg-hover hover:text-text"
+                }`}
+              >
+                {option.label}
+                <span className="tabular-nums opacity-60">{count}</span>
+              </button>
+            );
+          })}
+          <span className="ml-auto flex items-center gap-3 text-[11px] text-text-muted">
+            <span className="w-40">Schedule</span>
+            <span className="w-16 text-right">Last runs</span>
+            <span className="w-20 text-right">Next</span>
+          </span>
         </div>
+      )}
 
-        {entries !== null && entries.length > 0 && (
-          <div className="self-start">
-            <Segmented label="Filter routines" value={filter} options={FILTERS} onChange={setFilter} />
-          </div>
-        )}
-
-        {entries !== null && shown.length === 0 ? (
-          <Empty hasAny={entries.length > 0} hasAgents={agents.length > 0} filter={filter} />
-        ) : (
-          <div className="grid gap-3 sm:grid-cols-2">
-            {shown.map((entry) => (
-              <RoutineCard
-                key={entry.routine.id}
-                entry={entry}
-                workspace={
-                  entry.session.workspaceId === activeWorkspaceId
-                    ? null
-                    : (workspaces.find((w) => w.id === entry.session.workspaceId)?.name ?? null)
-                }
-                onOpen={() => setOpen({ kind: "edit", id: entry.routine.id })}
-              />
-            ))}
-          </div>
-        )}
-      </div>
-    </div>
+      {entries !== null && shown.length === 0 ? (
+        <Empty hasAny={entries.length > 0} hasAgents={agents.length > 0} filter={filter} />
+      ) : (
+        <div className="-mx-3 flex flex-col gap-0.5">
+          {shown.map((entry) => (
+            <RoutineCard
+              key={entry.routine.id}
+              entry={entry}
+              workspace={
+                entry.session.workspaceId === activeWorkspaceId
+                  ? null
+                  : (workspaces.find((w) => w.id === entry.session.workspaceId)?.name ?? null)
+              }
+              onOpen={() => setOpen({ kind: "edit", id: entry.routine.id })}
+            />
+          ))}
+        </div>
+      )}
+    </PageFrame>
   );
 }
 
@@ -147,7 +170,7 @@ function Empty({ hasAny, hasAgents, filter }: { hasAny: boolean; hasAgents: bool
       ? "No routines yet. A routine wakes an agent on a schedule with a saved instruction."
       : "Routines run inside an agent's conversation. Create an agent first.";
   return (
-    <p className="rounded-xl border border-dashed border-border px-4 py-8 text-center text-kumo-subtle">
+    <p className="rounded-xl border border-dashed border-border px-4 py-10 text-center text-text-muted">
       {line}
     </p>
   );

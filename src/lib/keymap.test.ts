@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { PUNCTUATION_CODE_MAP, parseHotkey, rawHotkeyToParsedHotkey, type ParsedHotkey } from "@tanstack/react-hotkeys";
 import {
   COMMAND_IDS,
+  allKeysFor,
   keysFor,
   liveCommands,
   onCommandsChange,
@@ -173,6 +174,25 @@ function live(...ids: CommandId[]): LiveCommand[] {
   return ids.map((id) => ({ id, keys: keysFor(id)!, repeat: repeatable(id) }));
 }
 
+/** Every chord of each command, as the window publishes them. */
+function liveAll(...ids: CommandId[]): LiveCommand[] {
+  return ids.flatMap((id) => allKeysFor(id).map((keys) => ({ id, keys, repeat: repeatable(id) })));
+}
+
+describe("a US Mac", () => {
+  it("opens the shortcuts sheet with ⌘/ and ⌘?", () => {
+    const sheet = liveAll("shortcuts");
+    expect(resolveForward(press("/", { meta: true, code: "Slash" }), sheet, true)?.id).toBe("shortcuts");
+    expect(resolveForward(press("?", { meta: true, shift: true, code: "Slash" }), sheet, true)?.id).toBe("shortcuts");
+  });
+
+  it("zooms in with ⌘= and ⌘+", () => {
+    const zoom = liveAll("zoom-in");
+    expect(resolveForward(press("=", { meta: true, code: "Equal" }), zoom, true)?.id).toBe("zoom-in");
+    expect(resolveForward(press("+", { meta: true, shift: true, code: "Equal" }), zoom, true)?.id).toBe("zoom-in");
+  });
+});
+
 describe("resolveForward", () => {
   it("claims a chord with a live command and runs it", () => {
     const commands = live("open-launcher", "close");
@@ -318,6 +338,17 @@ describe("a Latin American Mac", () => {
   it("still reads ⌥ letters and digits by the key under them", () => {
     expect(run("ˆ", "KeyI", { meta: true, alt: true })).toBe("browser-devtools");
     expect(run("¡", "Digit1", { meta: true, alt: true })).toBe("worktree-1");
+  });
+
+  it("opens the shortcuts sheet with ⇧⌘7, where / is typed", () => {
+    const sheet = liveAll("shortcuts", "zoom-out");
+    expect(resolveForward(press("/", { meta: true, shift: true, code: "Digit7" }), sheet, true, LATAM)?.id).toBe("shortcuts");
+    // The key a US board calls / types - here: that is zoom out, not the sheet.
+    expect(resolveForward(press("-", { meta: true, code: "Slash" }), sheet, true, LATAM)?.id).toBe("zoom-out");
+  });
+
+  it("zooms in with ⌘+, the key that types +", () => {
+    expect(resolveForward(press("+", { meta: true, code: "BracketRight" }), liveAll("zoom-in"), true, LATAM)?.id).toBe("zoom-in");
   });
 
   it("falls back to the US key when no layout has been read", () => {

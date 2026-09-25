@@ -67,6 +67,27 @@ export function loadAvatarStyle(id: AgentAvatarId): Promise<Style<StyleDefinitio
   return style;
 }
 
+/**
+ * How each style sits in the chrome. Faces that are a figure on a square
+ * (voxel bots, moods) drop the square and stand on the surface; styles whose
+ * square is the face keep it, rounded like every other shape in the app.
+ */
+type Render = { backgroundColor?: string[]; borderRadius?: number };
+
+const RENDER: Record<AgentAvatarId, Render> = {
+  gaze: {},
+  "voxel-bot": { backgroundColor: ["#00000000"] },
+  moods: { backgroundColor: ["#00000000"] },
+  pixelbot: { borderRadius: 24 },
+  "bottts-neutral": { borderRadius: 24 },
+  glass: { borderRadius: 24 },
+  blobs: { borderRadius: 24 },
+};
+
+export function avatarRender(id: AgentAvatarId): Render {
+  return RENDER[id];
+}
+
 const uris = new Map<string, string>();
 
 /** The same seed always draws the same face, so a rendered one is kept. */
@@ -74,7 +95,7 @@ export function avatarUri(id: AgentAvatarId, style: Style<StyleDefinition>, seed
   const key = `${id}\n${seed}`;
   let uri = uris.get(key);
   if (!uri) {
-    uri = new Avatar(style, { seed }).toDataUri();
+    uri = new Avatar(style, { seed, ...RENDER[id] }).toDataUri();
     uris.set(key, uri);
   }
   return uri;

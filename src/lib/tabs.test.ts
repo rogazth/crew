@@ -190,6 +190,15 @@ describe("parseTabs", () => {
     expect(parseTabs(raw).tabs.map((tab) => tab.id)).toEqual(["session:a"]);
   });
 
+  it("drops a side chat saved before it was removed", () => {
+    const raw = JSON.stringify({
+      tabs: [sessionTab("a"), { id: "stub:sidechat", kind: "stub", stub: "sidechat", title: "Side Chat" }],
+      activeId: "stub:sidechat",
+    });
+    expect(parseTabs(raw).tabs.map((tab) => tab.id)).toEqual(["session:a"]);
+    expect(parseTabs(raw).activeId).toBe("session:a");
+  });
+
   it("falls back to the first tab when the active one did not survive", () => {
     const raw = JSON.stringify({ tabs: [sessionTab("a")], activeId: "session:gone" });
     expect(parseTabs(raw).activeId).toBe("session:a");

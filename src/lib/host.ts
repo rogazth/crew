@@ -14,6 +14,8 @@ type CrewHost = {
   openUrl(url: string): Promise<void>;
   notify(title: string, body: string): Promise<void>;
   pathForFile(file: File): string;
+  /** Steps the whole window's zoom; 0 puts it back to actual size. */
+  zoom(delta: number): Promise<void>;
   update: UpdateHost;
   browser: BrowserHost;
 };
@@ -74,6 +76,10 @@ export async function open(opts: OpenOptions): Promise<string | string[] | null>
   const host = crewHost();
   if (host) return host.open(opts);
   return browserOpen(opts);
+}
+
+export async function zoomApp(delta: number): Promise<void> {
+  await crewHost()?.zoom(delta);
 }
 
 export async function homeDir(): Promise<string> {

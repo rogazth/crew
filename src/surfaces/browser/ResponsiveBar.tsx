@@ -1,4 +1,4 @@
-import { DeviceMobileIcon, DeviceTabletIcon, LaptopIcon, XIcon, type Icon } from "@phosphor-icons/react";
+import { LaptopIcon, SmartphoneIcon, TabletIcon, XIcon, type LucideIcon as Icon } from "lucide-react";
 import { useRef, useState } from "react";
 import {
   VIEWPORT_PRESETS,
@@ -9,7 +9,7 @@ import {
   type Viewport,
 } from "../../lib/browser/viewport";
 
-const ICONS: Record<PresetId, Icon> = { phone: DeviceMobileIcon, tablet: DeviceTabletIcon, laptop: LaptopIcon };
+const ICONS: Record<PresetId, Icon> = { phone: SmartphoneIcon, tablet: TabletIcon, laptop: LaptopIcon };
 
 type Props = {
   viewport: Viewport;
@@ -32,7 +32,7 @@ export function ResponsiveBar({ viewport, onChange, onClose }: Props) {
             aria-pressed={on}
             onClick={() => onChange(preset(item.id))}
             className={`flex h-6 items-center gap-1.5 rounded-md px-2 transition-colors ${
-              on ? "bg-selected text-text" : "text-text-muted hover:bg-hover hover:text-text"
+              on ? "bg-selected text-text" : "text-icon hover:bg-hover hover:text-text"
             }`}
           >
             <Glyph className="size-3.5" />
@@ -50,7 +50,7 @@ export function ResponsiveBar({ viewport, onChange, onClose }: Props) {
         aria-label="Fill the pane"
         title="Fill the pane"
         onClick={onClose}
-        className="flex size-6 items-center justify-center rounded-md text-text-muted transition-colors hover:bg-hover hover:text-text"
+        className="flex size-6 items-center justify-center rounded-md text-icon transition-colors hover:bg-hover hover:text-text"
       >
         <XIcon className="size-3.5" />
       </button>

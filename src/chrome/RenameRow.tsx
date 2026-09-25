@@ -34,7 +34,7 @@ export function RenameRow({ initial, onCommit, onCancel, className = "" }: Props
         ref={ref}
         value={value}
         aria-label="Rename"
-        className="h-auto w-full min-w-0 rounded-md bg-kumo-fill px-2 py-1 text-[13px] font-semibold text-kumo-default caret-kumo-default outline-none ring-1 ring-kumo-interact"
+        className="h-auto w-full min-w-0 rounded-md bg-fill px-2 py-1 text-[13px] font-semibold text-text caret-text outline-none ring-1 ring-border-strong"
         onChange={(event) => setValue(event.target.value)}
         onBlur={() => finish(true)}
         onKeyDown={(event) => {
