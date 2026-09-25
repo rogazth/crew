@@ -41,6 +41,7 @@ export function boot(): Promise<void> {
     client.onReconnect(() => {
       for (const id of statuses.keys()) {
         void transcript.reload(id);
+        void resync(id);
       }
     });
   }
@@ -195,6 +196,17 @@ function onStatus(event: SessionStatusEvent) {
       if (name) void notify(name, status === "error" ? "Ran into an error" : lastReply(id));
     }
   }
+}
+
+/**
+ * A turn may have started or ended while the socket was down, and the event
+ * that said so went with it: without this the row spins on after the turn
+ * ended, or sits idle through one that began.
+ */
+async function resync(id: string) {
+  const row = await api.getSession(id).catch(() => null);
+  if (!row || row.kind !== "agent" || row.status === statuses.get(id)) return;
+  onStatus({ sessionId: id, status: row.status, updatedAt: row.updatedAt });
 }
 
 function markIdle(id: string) {

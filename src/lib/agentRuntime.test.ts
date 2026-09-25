@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const request = vi.fn();
 const listeners = new Map<string, (payload: unknown) => void>();
+const reconnects: Array<() => void> = [];
 
 vi.mock("./client", () => ({
   client: {
@@ -10,7 +11,10 @@ vi.mock("./client", () => ({
       listeners.set(event, listener);
       return () => listeners.delete(event);
     },
-    onReconnect: () => () => {},
+    onReconnect: (hook: () => void) => {
+      reconnects.push(hook);
+      return () => {};
+    },
     openStream: vi.fn(),
     writeStream: vi.fn(),
   },
@@ -141,6 +145,36 @@ describe("the status the sidebar sees", () => {
     runtime.setForeground(agent.id);
     off();
     expect(seen).toEqual(["idle"]);
+  });
+
+  // The turn ended while the socket was down, and its event went with it.
+  it("catches up on a turn that ended during a reconnect", async () => {
+    status("working");
+    request.mockImplementation((method: string) =>
+      Promise.resolve(
+        method === "session_get"
+          ? { ...agent, status: "done", updatedAt: 5 }
+          : { blocks: [], seq: 0, working: false, status: "done" },
+      ),
+    );
+    const seen: string[] = [];
+    const off = runtime.onSessionPatch((_id, patch) => patch.status && seen.push(patch.status));
+    for (const hook of reconnects) hook();
+    await vi.waitFor(() => expect(seen).toEqual(["done"]));
+    off();
+  });
+
+  it("leaves a terminal's status to its terminal", async () => {
+    await runtime.reconcile([{ ...agent, id: "t1", kind: "terminal" }]);
+    request.mockImplementation((method: string) =>
+      Promise.resolve(method === "session_get" ? { ...agent, id: "t1", kind: "terminal", status: "working" } : { blocks: [] }),
+    );
+    const seen: string[] = [];
+    const off = runtime.onSessionPatch((id, patch) => id === "t1" && patch.status && seen.push(patch.status));
+    for (const hook of reconnects) hook();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    off();
+    expect(seen).toEqual([]);
   });
 });
 
