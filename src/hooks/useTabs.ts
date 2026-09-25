@@ -4,6 +4,7 @@ import {
   activateTab,
   closeSessionTab,
   closeTab,
+  lastUsed,
   NO_TABS,
   openTab,
   panesOf,
@@ -15,6 +16,7 @@ import {
   stepTab,
   type TabRegistry,
   type TabState,
+  withRecent,
 } from '../lib/tabs';
 import type { Tab } from '../lib/types';
 
@@ -49,7 +51,7 @@ export function useTabs(workspaceId: string | null) {
           if (!early) return { ...prev, [id]: restored };
           const known = new Set(restored.tabs.map((tab) => tab.id));
           const tabs = [...restored.tabs, ...early.tabs.filter((tab) => !known.has(tab.id))];
-          return { ...prev, [id]: { ...restored, tabs, activeId: early.activeId ?? restored.activeId } };
+          return { ...prev, [id]: withRecent({ ...restored, tabs, activeId: early.activeId ?? restored.activeId }) };
         });
       });
   }, [workspaceId]);
@@ -63,16 +65,18 @@ export function useTabs(workspaceId: string | null) {
     for (const [id, next] of Object.entries(registry)) {
       if (saved.current[id] === next || !restoredIds.current.has(id)) continue;
       saved.current[id] = next;
-      const { tabs, activeId } = next;
-      void api.stateSet(`tabs:${id}`, JSON.stringify({ tabs, activeId })).catch(() => {});
+      const { tabs, activeId, recent } = next;
+      void api.stateSet(`tabs:${id}`, JSON.stringify({ tabs, activeId, recent })).catch(() => {});
     }
   }, [registry]);
 
+  // Every change keeps the strip's recent order, so the tab brought on screen
+  // is the newest, and a closed one leaves it.
   const mutateIn = useCallback((id: string, step: (state: TabState) => TabState) => {
     setRegistry((prev) => {
       const current = prev[id];
       if (!current) return prev;
-      const next = step(current);
+      const next = withRecent(step(current));
       return next === current ? prev : { ...prev, [id]: next };
     });
   }, []);
@@ -81,7 +85,7 @@ export function useTabs(workspaceId: string | null) {
   const seedIn = useCallback((id: string, step: (state: TabState) => TabState) => {
     setRegistry((prev) => {
       const current = prev[id] ?? NO_TABS;
-      const next = step(current);
+      const next = withRecent(step(current));
       return next === prev[id] ? prev : { ...prev, [id]: next };
     });
   }, []);
@@ -103,7 +107,7 @@ export function useTabs(workspaceId: string | null) {
         let changed = false;
         const next: TabRegistry = {};
         for (const [id, state] of Object.entries(prev)) {
-          next[id] = closeSessionTab(state, sessionId);
+          next[id] = withRecent(closeSessionTab(state, sessionId));
           if (next[id] !== state) changed = true;
         }
         return changed ? next : prev;
@@ -115,6 +119,16 @@ export function useTabs(workspaceId: string | null) {
   const activate = useCallback((index: number) => mutate((s) => activateTab(s, index)), [mutate]);
   const select = useCallback((id: string | null) => mutate((s) => selectTab(s, id)), [mutate]);
   const reorder = useCallback((ids: string[]) => mutate((s) => reorderTabs(s, ids)), [mutate]);
+  /** The tab last on screen of those `keep` takes, or none when it takes none. */
+  const selectLastUsed = useCallback(
+    (keep: (tab: Tab) => boolean) => mutate((s) => selectTab(s, lastUsed(s, keep)?.id ?? null)),
+    [mutate],
+  );
+  /**
+   * Brings `tabId` on screen in a context that may not be read yet: the tab
+   * waits as its active one and takes over once the saved tabs arrive.
+   */
+  const selectIn = useCallback((id: string, tabId: string) => seedIn(id, (s) => selectTab(s, tabId)), [seedIn]);
   /** A tab for a context other than the one on screen: a page's own, or the worktree about to show. */
   const openIn = useCallback(
     (id: string, tab: Tab, opts?: { after?: string; background?: boolean }) =>
@@ -199,6 +213,8 @@ export function useTabs(workspaceId: string | null) {
     activate,
     select,
     reorder,
+    selectLastUsed,
+    selectIn,
     openIn,
     patchBrowser,
     dropWorkspace,

@@ -1,4 +1,4 @@
-import { CLOSED_LIMIT, type TabState } from "./tabs";
+import { CLOSED_LIMIT, recentIds, withRecent, type TabState } from "./tabs";
 import type { Session, Tab, Workspace, Worktree } from "./types";
 import { sessionPath } from "./worktrees";
 
@@ -11,7 +11,8 @@ function once(tabs: Tab[]): Tab[] {
 /**
  * Per worktree to all together: the strips become one, main's first, then each
  * worktree's in the order git lists them, each keeping its own order. The tab
- * on screen stays on screen.
+ * on screen stays on screen, and the most recent: the strips' recent orders
+ * follow it one after another.
  */
 export function joinStrips(strips: TabState[], onScreen: string | null): TabState {
   const tabs = once(strips.flatMap((strip) => strip.tabs));
@@ -20,15 +21,16 @@ export function joinStrips(strips: TabState[], onScreen: string | null): TabStat
     .filter((tab) => !open.has(tab.id))
     .slice(0, CLOSED_LIMIT);
   const activeId = open.has(onScreen ?? "") ? onScreen : (strips.find((strip) => strip.activeId)?.activeId ?? null);
-  return { tabs, activeId, closed };
+  const recent = [...new Set(strips.flatMap(recentIds))];
+  return withRecent({ tabs, activeId, closed, recent });
 }
 
 /**
  * All together back to per worktree: each tab goes to the strip of the worktree
  * `placeOf` names, one that has no worktree to the one `current`. Every listed
- * worktree gets a strip, in the joined strip's order; the tab on screen stays
- * the active one of its strip, the others show their last. The reopen stack
- * stays with `current`.
+ * worktree gets a strip, in the joined strip's order, and the recent order of
+ * its own tabs; the tab on screen stays the active one of its strip, the others
+ * show the one last used, else their last. The reopen stack stays with `current`.
  */
 export function splitStrip(
   strip: TabState,
@@ -41,10 +43,13 @@ export function splitStrip(
     const place = placeOf(tab);
     (out.get(place ?? current) ?? out.get(current))?.push(tab);
   }
+  const recent = recentIds(strip);
   return new Map(
     [...out].map(([path, tabs]) => {
-      const activeId = tabs.some((tab) => tab.id === strip.activeId) ? strip.activeId : (tabs.at(-1)?.id ?? null);
-      return [path, { tabs, activeId, closed: path === current ? strip.closed : [] }];
+      const own = new Set(tabs.map((tab) => tab.id));
+      const mine = recent.filter((id) => own.has(id));
+      const activeId = mine[0] ?? tabs.at(-1)?.id ?? null;
+      return [path, { tabs, activeId, closed: path === current ? strip.closed : [], recent: mine }];
     }),
   );
 }

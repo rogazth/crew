@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import * as api from "../lib/api";
 import { joinStrips, splitStrip, tabPlace } from "../lib/strips";
-import type { TabRegistry } from "../lib/tabs";
+import { lastUsed, type TabRegistry } from "../lib/tabs";
 import type { Session, Tab, Workspace, Worktree } from "../lib/types";
 import { asListed, contextId, placePath, sessionPath, worktreeHue, type TabScope } from "../lib/worktrees";
 import { useTabRegroup, useTabScope } from "./useTabScope";
@@ -56,19 +56,42 @@ export function useWorkContext(
     [context, current?.path, pathOf, scope, workspace, worktrees],
   );
 
-  /** All together, going to a worktree brings up its latest tab, or none, so the strip agrees. */
+  /**
+   * All together, going to a worktree brings up the tab last used there, or
+   * none, so the strip agrees. Per worktree its own strip already shows it.
+   */
   const selectWorktree = useCallback(
     (path: string) => {
       worktrees.select(path);
       if (scope !== "all") return;
-      const own = [...tabs.tabs].reverse().find((tab) => {
+      tabs.selectLastUsed((tab) => {
         if (tab.kind !== "session") return false;
         const session = sessions.find((s) => s.id === tab.sessionId);
         return session !== undefined && pathOf(session) === path;
       });
-      tabs.select(own?.id ?? null);
     },
     [pathOf, scope, sessions, tabs, worktrees],
+  );
+
+  /**
+   * The same for a worktree of another workspace, before it shows. Its strip
+   * and sessions may not be in this window yet, so they are read first; a
+   * worktree with no tab there leaves the strip as it is.
+   */
+  const selectWorktreeIn = useCallback(
+    async (workspaceId: string, path: string) => {
+      worktrees.select(path, workspaceId);
+      const target = everywhere.workspaces.find((ws) => ws.id === workspaceId);
+      if (scope !== "all" || !target) return;
+      const [own, strips] = await Promise.all([api.listSessions(workspaceId), tabs.strips([workspaceId])]);
+      const tab = lastUsed(strips[workspaceId]!, (tab) => {
+        if (tab.kind !== "session") return false;
+        const session = own.find((s) => s.id === tab.sessionId);
+        return session !== undefined && placePath(session.worktree, target, null) === path;
+      });
+      if (tab) tabs.selectIn(workspaceId, tab.id);
+    },
+    [everywhere.workspaces, scope, tabs, worktrees],
   );
 
   const step = useCallback(
@@ -139,6 +162,7 @@ export function useWorkContext(
     placeIn: current && !current.main ? current.path : null,
     route,
     selectWorktree,
+    selectWorktreeIn,
     step,
     selectAt,
     hues,

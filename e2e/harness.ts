@@ -540,12 +540,15 @@ export function stripTabIds(crew: Crew): Promise<string[]> {
     .evaluateAll((tabs) => tabs.map((tab) => tab.getAttribute("data-tab-id") ?? ""));
 }
 
-/** A strip as crewd keeps it (`tabs:<context>`), or null when none was saved. */
-export async function savedStrip(crew: Crew, context: string): Promise<{ ids: string[]; activeId: string | null } | null> {
+/** A strip as crewd keeps it (`tabs:<context>`), or null when none was saved. `recent` is newest first. */
+export async function savedStrip(
+  crew: Crew,
+  context: string,
+): Promise<{ ids: string[]; activeId: string | null; recent: string[] } | null> {
   const raw = await crew.request<string | null>("state_get", { key: `tabs:${context}` });
   if (!raw) return null;
-  const parsed = JSON.parse(raw) as { tabs: { id: string }[]; activeId: string | null };
-  return { ids: parsed.tabs.map((tab) => tab.id), activeId: parsed.activeId };
+  const parsed = JSON.parse(raw) as { tabs: { id: string }[]; activeId: string | null; recent?: string[] };
+  return { ids: parsed.tabs.map((tab) => tab.id), activeId: parsed.activeId, recent: parsed.recent ?? [] };
 }
 
 /** The texts the kit paints as errors (a field's, a dialog's failure) inside `scope`. */

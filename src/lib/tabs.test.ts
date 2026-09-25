@@ -6,6 +6,7 @@ import {
   closeTab,
   isAgentTab,
   isTerminalTab,
+  lastUsed,
   openTab,
   parseTabs,
   panesOf,
@@ -17,6 +18,7 @@ import {
   stepTab,
   tabTitle,
   type TabState,
+  withRecent,
 } from "./tabs";
 import type { Session, Tab } from "./types";
 
@@ -41,6 +43,41 @@ describe("openTab", () => {
     const state = openTab(opened("a", "b"), sessionTab("a"));
     expect(state.tabs).toHaveLength(2);
     expect(state.activeId).toBe("session:a");
+  });
+});
+
+describe("the recent order", () => {
+  // Each step as useTabs takes it: the change, then the order brought up to date.
+  const visit = (state: TabState, ...ids: string[]) =>
+    ids.reduce((s, id) => withRecent(selectTab(s, sessionTabId(id))), withRecent(state));
+  const recent = (state: TabState) => state.recent?.map((id) => id.slice("session:".length));
+
+  it("puts the tab on screen first, each tab once", () => {
+    expect(recent(visit(opened("a", "b", "c"), "a", "b", "a"))).toEqual(["a", "b", "c"]);
+  });
+
+  it("forgets a tab that closes", () => {
+    const state = withRecent(closeTab(visit(opened("a", "b", "c"), "b", "a"), "session:b"));
+    expect(recent(state)).toEqual(["a", "c"]);
+    expect(recent(withRecent(closeSessionTab(state, "c")))).toEqual(["a"]);
+  });
+
+  it("gives the same state back when nothing moved", () => {
+    const state = visit(opened("a", "b"), "a");
+    expect(withRecent(state)).toBe(state);
+  });
+
+  it("brings back the tab last on screen of those asked for, not the rightmost", () => {
+    const state = visit(opened("a1", "a2", "m1"), "a1", "m1");
+    expect(lastUsed(state, (tab) => tab.id.startsWith("session:a"))?.id).toBe("session:a1");
+    expect(lastUsed(state)?.id).toBe("session:m1");
+    expect(lastUsed(state, () => false)).toBeNull();
+  });
+
+  it("without a recent order, takes the active tab, then the rightmost", () => {
+    const old: TabState = { tabs: opened("a1", "a2", "m1").tabs, activeId: "session:a1", closed: [] };
+    expect(lastUsed(old, (tab) => tab.id !== "session:m1")?.id).toBe("session:a1");
+    expect(lastUsed(old, (tab) => tab.id !== "session:a1")?.id).toBe("session:m1");
   });
 });
 
@@ -162,6 +199,20 @@ describe("parseTabs", () => {
     expect(parseTabs("not json")).toEqual(NO_TABS);
     expect(parseTabs(null)).toEqual(NO_TABS);
     expect(parseTabs("[]")).toEqual(NO_TABS);
+  });
+
+  it("restores the recent order, without tabs that did not survive", () => {
+    const raw = JSON.stringify({
+      tabs: [sessionTab("a"), sessionTab("b")],
+      activeId: "session:b",
+      recent: ["session:b", "session:gone", "session:a", 7],
+    });
+    expect(parseTabs(raw).recent).toEqual(["session:b", "session:a"]);
+  });
+
+  it("reads a strip saved before the recent order as having none", () => {
+    const raw = JSON.stringify({ tabs: [sessionTab("a")], activeId: "session:a" });
+    expect(parseTabs(raw).recent).toBeUndefined();
   });
 
   it("never restores the reopen stack", () => {

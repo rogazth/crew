@@ -45,6 +45,14 @@ describe("joinStrips", () => {
     const joined = joinStrips([strip([run("m1")], null, [page("y")]), strip([], null, [run("m1"), page("z")])], null);
     expect(ids({ ...joined, tabs: joined.closed })).toEqual(["browser:y", "browser:z"]);
   });
+
+  it("follows the tab on screen with each strip's recent order, one after another", () => {
+    const main = { ...strip([run("m1"), run("m2")], run("m2").id), recent: [run("m2").id, run("m1").id] };
+    // Saved before the recent order: its active tab stands for it.
+    const a = strip([run("a1"), run("a2")], run("a1").id);
+    const joined = joinStrips([main, a], run("a1").id);
+    expect(joined.recent).toEqual([run("a1").id, run("m2").id, run("m1").id]);
+  });
 });
 
 describe("splitStrip", () => {
@@ -76,7 +84,16 @@ describe("splitStrip", () => {
   });
 
   it("gives every worktree a strip, empty when nothing is its", () => {
-    expect(splitStrip(strip([run("m1")]), paths, "/repo", placeOf).get("/wt/b")).toEqual(strip([]));
+    expect(splitStrip(strip([run("m1")]), paths, "/repo", placeOf).get("/wt/b")).toEqual({ ...strip([]), recent: [] });
+  });
+
+  it("gives each strip the recent order of its own tabs, and shows the one last used", () => {
+    const used = { ...joined, recent: [run("a1").id, run("m1").id, "browser:x", run("gone").id] };
+    const split = splitStrip(used, paths, "/wt/a", placeOf);
+    expect(split.get("/repo")?.recent).toEqual([run("m1").id, run("gone").id]);
+    expect(split.get("/repo")?.activeId).toBe(run("m1").id);
+    expect(split.get("/wt/a")?.recent).toEqual([run("a1").id, "browser:x"]);
+    expect(split.get("/wt/b")?.recent).toEqual([run("b1").id]);
   });
 });
 

@@ -319,8 +319,8 @@ export function App() {
           onSelectWorktree={(id, path) => {
             closePage();
             if (id === active.id) return work.selectWorktree(path);
-            worktrees.select(path, id);
-            workspaces.activate(id);
+            // Its tab is picked before the workspace shows, so the strip never flashes another.
+            void work.selectWorktreeIn(id, path).catch(() => {}).finally(() => workspaces.activate(id));
           }}
           onClose={() => setPalette(null)}
         />

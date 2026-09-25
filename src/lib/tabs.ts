@@ -11,7 +11,12 @@ export function newBrowserTab(url = ""): Tab {
   return { id: browserTabId(), kind: "browser", url, title: "" };
 }
 
-export type TabState = { tabs: Tab[]; activeId: string | null; closed: Tab[] };
+/**
+ * `recent` is the order tabs were last on screen in, newest first, so a
+ * worktree can bring back the tab last used there. A strip saved before it
+ * existed has none, and reads as its active tab, then the rightmost.
+ */
+export type TabState = { tabs: Tab[]; activeId: string | null; closed: Tab[]; recent?: string[] };
 
 export const NO_TABS: TabState = { tabs: [], activeId: null, closed: [] };
 
@@ -59,6 +64,7 @@ export function patchBrowserTab(
 
 function withoutTab(state: TabState, id: string, closed: Tab[]): TabState {
   return {
+    ...state,
     tabs: state.tabs.filter((t) => t.id !== id),
     activeId: state.activeId === id ? neighbourId(state.tabs, id) : state.activeId,
     closed,
@@ -110,6 +116,31 @@ export function reorderTabs(state: TabState, ids: string[]): TabState {
   return tabs.every((tab, index) => tab === state.tabs[index]) ? state : { ...state, tabs };
 }
 
+/** The tabs in the order they were last on screen, newest first; the ones never shown are left out. */
+export function recentIds(state: TabState): string[] {
+  const open = new Set(state.tabs.map((tab) => tab.id));
+  const ids = [...(state.activeId ? [state.activeId] : []), ...(state.recent ?? [])];
+  return ids.filter((id, at) => open.has(id) && ids.indexOf(id) === at);
+}
+
+/** `recent` brought up to date: the tab on screen first, and no tab that has closed. Same state back when it already is. */
+export function withRecent(state: TabState): TabState {
+  const recent = recentIds(state);
+  const prior = state.recent ?? [];
+  const same = recent.length === prior.length && recent.every((id, at) => id === prior[at]);
+  return same ? state : { ...state, recent };
+}
+
+/** The tab last on screen of those `keep` takes, else the rightmost of them. */
+export function lastUsed(state: TabState, keep: (tab: Tab) => boolean = () => true): Tab | null {
+  const byId = new Map(state.tabs.map((tab) => [tab.id, tab]));
+  for (const id of recentIds(state)) {
+    const tab = byId.get(id);
+    if (tab && keep(tab)) return tab;
+  }
+  return [...state.tabs].reverse().find(keep) ?? null;
+}
+
 /** After closing the active tab, focus its right neighbour, else its left one. */
 function neighbourId(tabs: Tab[], closingId: string): string | null {
   const index = tabs.findIndex((t) => t.id === closingId);
@@ -123,7 +154,7 @@ export function parseTabs(raw: string | null): TabState {
   try {
     const parsed: unknown = JSON.parse(raw);
     if (typeof parsed !== "object" || parsed === null) return NO_TABS;
-    const { tabs, activeId: savedActive } = parsed as { tabs?: unknown; activeId?: unknown };
+    const { tabs, activeId: savedActive, recent } = parsed as { tabs?: unknown; activeId?: unknown; recent?: unknown };
     if (!Array.isArray(tabs)) return NO_TABS;
     let activeId = savedActive;
     const kept = tabs.flatMap((value: unknown) => {
@@ -133,10 +164,14 @@ export function parseTabs(raw: string | null): TabState {
       if (activeId === value.id) activeId = tab.id;
       return [tab];
     });
+    const open = new Set(kept.map((tab) => tab.id));
     return {
       tabs: kept,
       activeId: kept.some((tab) => tab.id === activeId) ? (activeId as string) : (kept[0]?.id ?? null),
       closed: [],
+      ...(Array.isArray(recent) && {
+        recent: recent.filter((id): id is string => typeof id === "string" && open.has(id)),
+      }),
     };
   } catch {
     return NO_TABS;
