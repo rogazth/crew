@@ -57,7 +57,8 @@ export function App() {
     setStatus,
     dropWorkspace: forgetSessions,
   } = useSessions(workspaceId);
-  useSessionTitle(sessions, adoptName);
+  // Every workspace's: their terminals keep running, and renaming, out of sight.
+  useSessionTitle(all, adoptName);
   const tabs = useTabs(workspaceId);
   const files = useProjectFiles(active?.path ?? null);
 
