@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { AgentAvatar } from "../chrome/AgentAvatar";
+import type { Confirm } from "../chrome/ConfirmDialog";
 import { Select, TextInput, Toggle, type Option } from "../chrome/kit";
 import { ModelPicker } from "../chrome/ModelPicker";
 import { ProviderIcon } from "../chrome/ProviderIcon";
@@ -19,6 +20,7 @@ import { parseFolders } from "../lib/filePrefs";
 import { PROVIDERS } from "../lib/providers";
 import { settingsSection, type SettingsSectionId } from "../lib/settings";
 import type { TabScope } from "../lib/worktrees";
+import { SessionSettings } from "./SessionSettings";
 import { TerminalSettings } from "./TerminalSettings";
 
 const TAB_SCOPES: Option<TabScope>[] = [
@@ -26,7 +28,13 @@ const TAB_SCOPES: Option<TabScope>[] = [
   { value: "all", label: "All together" },
 ];
 
-export function SettingsView({ section }: { section: SettingsSectionId }) {
+export function SettingsView({
+  section,
+  onConfirm,
+}: {
+  section: SettingsSectionId;
+  onConfirm: (confirm: Confirm) => void;
+}) {
   const meta = settingsSection(section);
   return (
     <div className="h-full overflow-y-auto">
@@ -35,7 +43,7 @@ export function SettingsView({ section }: { section: SettingsSectionId }) {
           {meta.label}
         </h1>
         <div className="flex flex-col gap-8">
-          {section === "general" && <General />}
+          {section === "general" && <General onConfirm={onConfirm} />}
           {section === "appearance" && <Appearance />}
           {section === "keybindings" && <Keybindings />}
           {section === "terminal" && <TerminalSettings />}
@@ -55,7 +63,7 @@ export function SettingsView({ section }: { section: SettingsSectionId }) {
   );
 }
 
-function General() {
+function General({ onConfirm }: { onConfirm: (confirm: Confirm) => void }) {
   const tabs = useTabScope();
   return (
     <>
@@ -67,6 +75,7 @@ function General() {
           <Select label="Tabs" className="w-40" value={tabs.scope} onChange={tabs.update} options={TAB_SCOPES} />
         </SettingsRow>
       </SettingsSection>
+      <SessionSettings onConfirm={onConfirm} />
       <FileSettings />
     </>
   );

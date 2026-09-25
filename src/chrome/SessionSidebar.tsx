@@ -23,6 +23,7 @@ import { RenameRow } from "./RenameRow";
 import { SidebarPrefsMenu } from "./SidebarPrefsMenu";
 import { SortableItem, SortableList } from "./SortableList";
 import { StatusDot } from "./StatusDot";
+import { useNow } from "../hooks/useNow";
 import { useSidebarPrefs } from "../hooks/useSidebarPrefs";
 import { commandKeys, type CommandId } from "../lib/commands";
 import { IS_MAC, isDeleteChord } from "../lib/hotkey";
@@ -34,7 +35,15 @@ import {
   type ClickModifiers,
   type Selection,
 } from "../lib/selection";
-import { arrangeSessions, canReorder, shows, type Arranged, type SidebarPrefs } from "../lib/sidebarPrefs";
+import {
+  arrangeSessions,
+  canReorder,
+  shows,
+  trimSection,
+  type Arranged,
+  type SidebarPrefs,
+  type Trimmed,
+} from "../lib/sidebarPrefs";
 import { STATUS_ORDER, statusLabel } from "../lib/status";
 import { elapsed } from "../lib/time";
 import type { Session, SessionStatus, Workspace, Worktree } from "../lib/types";
@@ -124,6 +133,8 @@ export function SessionSidebar(props: SessionSidebarProps) {
   const [renaming, setRenaming] = useState<string | null>(null);
   const [menu, setMenu] = useState<Menu | null>(null);
   const [opened, setOpened] = useState<Set<string>>(() => new Set());
+  // Sections unfolded past the limit, as `agents:<path>` or `terminals:<path>`; for this run only.
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const panel = useRef<HTMLDivElement>(null);
   const filtering = query.trim().length > 0;
 
@@ -158,13 +169,33 @@ export function SessionSidebar(props: SessionSidebarProps) {
     [filtering, placed, prefs?.scope, props.activeWorktree, props.worktrees],
   );
 
+  // A row ages out of the recency without anything else changing.
+  const now = useNow(60_000, prefs !== null && prefs.recency !== "any");
+
+  // What each section lists after the recency and the limit. A search looks past both.
+  const listed = useMemo(() => {
+    const out = new Map<string, Record<keyof Arranged, Trimmed>>();
+    for (const [path, mine] of placed) {
+      const trim = (key: keyof Arranged): Trimmed =>
+        !prefs || filtering || expanded.has(`${key}:${path}`)
+          ? { shown: mine[key], hidden: 0 }
+          : trimSection(mine[key], prefs, props.activeSessionId, now);
+      out.set(path, { agents: trim("agents"), terminals: trim("terminals") });
+    }
+    return out;
+  }, [expanded, filtering, now, placed, prefs, props.activeSessionId]);
+
+  const visible = useCallback(
+    (path: string) => {
+      const mine = listed.get(path);
+      return [...(mine?.agents.shown ?? []), ...(mine?.terminals.shown ?? [])];
+    },
+    [listed],
+  );
+
   const order = useMemo(
-    () =>
-      shown.flatMap((tree) => {
-        const mine = placed.get(tree.path);
-        return [...(mine?.agents ?? []), ...(mine?.terminals ?? [])].map((session) => session.id);
-      }),
-    [placed, shown],
+    () => shown.flatMap((tree) => visible(tree.path).map((session) => session.id)),
+    [shown, visible],
   );
 
   // The open session is the one-item selection. A multi-selection is held against
@@ -251,10 +282,15 @@ export function SessionSidebar(props: SessionSidebarProps) {
   });
 
   const draggable = prefs !== null && canReorder(prefs, filtering) && renaming === null;
-  const firstVisible = () => shown.flatMap((tree) => {
-    const mine = placed.get(tree.path);
-    return [...(mine?.agents ?? []), ...(mine?.terminals ?? [])];
-  })[0];
+  const firstVisible = () => shown.flatMap((tree) => visible(tree.path))[0];
+
+  const unfold = (key: string, open: boolean) =>
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (open) next.add(key);
+      else next.delete(key);
+      return next;
+    });
 
   return (
     <div ref={panel} data-sidebar-panel onKeyDown={onPanelKey} className="flex min-h-0 flex-1 flex-col">
@@ -294,7 +330,16 @@ export function SessionSidebar(props: SessionSidebarProps) {
             const index = props.worktrees.indexOf(tree);
             const isCurrent = tree.path === props.activeWorktree;
             const open = isCurrent || opened.has(tree.path) || filtering;
-            const mine = placed.get(tree.path) ?? { agents: [], terminals: [] };
+            const mine = listed.get(tree.path) ?? { agents: { shown: [], hidden: 0 }, terminals: { shown: [], hidden: 0 } };
+            const agents = mine.agents.shown;
+            const terminals = mine.terminals.shown;
+            const more = (key: keyof Arranged) => (
+              <MoreRow
+                hidden={mine[key].hidden}
+                open={expanded.has(`${key}:${tree.path}`)}
+                onToggle={(next) => unfold(`${key}:${tree.path}`, next)}
+              />
+            );
             const everyone = props.sessions.filter(
               (session) => sessionPath(session, props.workspace, props.worktrees) === tree.path,
             );
@@ -315,22 +360,23 @@ export function SessionSidebar(props: SessionSidebarProps) {
                 />
                 {open && (
                   <div className="px-1.5 pb-1.5">
-                    {mine.agents.length > 0 && (
+                    {agents.length > 0 && (
                       <div className="grid grid-cols-3 gap-0.5">
-                        <SortableList ids={mine.agents.map((s) => s.id)} disabled={!draggable} onReorder={props.onReorder}>
-                          {mine.agents.map((session, at) => (
-                            <SortableItem key={session.id} id={session.id} index={at} group={`agents:${tree.path}`} disabled={!draggable}>
+                        <SortableList ids={agents.map((s) => s.id)} disabled={!draggable || mine.agents.hidden > 0} onReorder={props.onReorder}>
+                          {agents.map((session, at) => (
+                            <SortableItem key={session.id} id={session.id} index={at} group={`agents:${tree.path}`} disabled={!draggable || mine.agents.hidden > 0}>
                               <Tile {...card(session)} onEdit={() => props.onEdit(session)} />
                             </SortableItem>
                           ))}
                         </SortableList>
                       </div>
                     )}
-                    {mine.terminals.length > 0 && (
+                    {more("agents")}
+                    {terminals.length > 0 && (
                       <div className="flex flex-col gap-0.5 pt-0.5">
-                        <SortableList ids={mine.terminals.map((s) => s.id)} disabled={!draggable} onReorder={props.onReorder}>
-                          {mine.terminals.map((session, at) => (
-                            <SortableItem key={session.id} id={session.id} index={at} group={`terminals:${tree.path}`} disabled={!draggable}>
+                        <SortableList ids={terminals.map((s) => s.id)} disabled={!draggable || mine.terminals.hidden > 0} onReorder={props.onReorder}>
+                          {terminals.map((session, at) => (
+                            <SortableItem key={session.id} id={session.id} index={at} group={`terminals:${tree.path}`} disabled={!draggable || mine.terminals.hidden > 0}>
                               {session.id === renaming ? (
                                 <RenameRow
                                   className="h-8 px-2"
@@ -349,7 +395,8 @@ export function SessionSidebar(props: SessionSidebarProps) {
                         </SortableList>
                       </div>
                     )}
-                    {mine.agents.length + mine.terminals.length === 0 && (
+                    {more("terminals")}
+                    {agents.length + terminals.length + mine.agents.hidden + mine.terminals.hidden === 0 && (
                       <p className="px-2 py-1.5 text-[12px] text-placeholder">
                         {filtering
                           ? "No matches"
@@ -516,6 +563,22 @@ function WorktreeHeader({
         <PlusIcon className="size-3.5" />
       </button>
     </div>
+  );
+}
+
+/** Under a section the limit or the recency cut short: how many it left out, and a way to see them. */
+function MoreRow({ hidden, open, onToggle }: { hidden: number; open: boolean; onToggle: (open: boolean) => void }) {
+  if (!open && hidden === 0) return null;
+  return (
+    <button
+      type="button"
+      data-nav
+      data-tauri-drag-region="false"
+      onClick={() => onToggle(!open)}
+      className="mt-0.5 flex h-7 w-full items-center rounded-md px-2 text-left text-[12px] text-kumo-subtle outline-none hover:bg-hover hover:text-kumo-default focus-visible:bg-hover"
+    >
+      {open ? "Show less" : `${hidden} more`}
+    </button>
   );
 }
 

@@ -99,3 +99,17 @@ pub struct SessionCreated {
 pub struct SessionUpdated {
     pub session: Session,
 }
+
+/// Sessions the daemon deleted on its own: untouched longer than Settings keeps them.
+#[derive(Serialize, Deserialize, Clone, Debug, TS)]
+#[ts(export, export_to = "../../../src/lib/protocol.ts")]
+pub struct SessionsDeleted {
+    pub ids: Vec<String>,
+}
+
+/// How many days untouched a session outlives, for `sessions_stale` and `sessions_expire`.
+#[derive(Serialize, Deserialize, Clone, Debug, TS)]
+#[ts(export, export_to = "../../../src/lib/protocol.ts")]
+pub struct SessionsRetention {
+    pub days: u32,
+}

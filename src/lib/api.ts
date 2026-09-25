@@ -75,6 +75,12 @@ export const renameSession = (id: string, name: string): Promise<void> =>
 export const deleteSession = (id: string): Promise<void> =>
   client.request("session_delete", { id });
 
+/** How many sessions a retention of `days` would delete now. */
+export const staleSessions = (days: number): Promise<number> => client.request("sessions_stale", { days });
+
+/** Deletes them; every window hears `sessions-deleted`. */
+export const expireSessions = (days: number): Promise<string[]> => client.request("sessions_expire", { days });
+
 /** An unnamed terminal nothing was said in: closing its tab can delete it. */
 export const isSessionDisposable = (id: string): Promise<boolean> =>
   client.request("session_is_disposable", { id });

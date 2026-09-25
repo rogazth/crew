@@ -21,7 +21,8 @@ use crew_core::worktree;
 use crew_protocol::{
     self as proto, Auth, DaemonInfo, Id, IdName, IdStatus, Ids, Key, KeyValue, ListProjectFiles, Name, NamePath, Names, ProviderDiscover,
     OptionalId, PathArg, PathBytes, PathContents, PtyAck, PtyAttach, PtyAttached, PtyKill, PtyResize, PtySpawn, PtyWrite,
-    Request, RoutineRunNow, RoutineUpsert, SessionCreate, SessionCreated, SessionId, SessionUpdated, SessionUpdate, TempFile,
+    Request, RoutineRunNow, RoutineUpsert, SessionCreate, SessionCreated, SessionId, SessionUpdated, SessionUpdate, SessionsDeleted,
+    SessionsRetention, TempFile,
     SearchQuery, TranscriptApply, TranscriptTail, TurnAnswer, TurnRespond,
     TurnStart, TurnStarted, WorkspaceId, WorktreeAdd, WorktreeRemove,
 };
@@ -431,6 +432,20 @@ async fn run(
     hosts.scheduler.set_runtime(tokio::runtime::Handle::current());
     let scheduler = hosts.scheduler.clone();
     tokio::task::spawn_blocking(move || scheduler.arm());
+    // The first tick is now: what aged out while the app was closed goes before anyone looks.
+    let expiring = hosts.clone();
+    tokio::spawn(async move {
+        let mut every = tokio::time::interval(EXPIRE_EVERY);
+        loop {
+            every.tick().await;
+            let store = expiring.store.clone();
+            if let Ok(Some(days)) = block(move || session::retention_days(&store)).await {
+                if let Err(error) = expire_sessions(&expiring, days).await {
+                    eprintln!("[crewd] expiring sessions: {error}");
+                }
+            }
+        }
+    });
 
     loop {
         tokio::select! {
@@ -723,6 +738,31 @@ async fn delete_session(hosts: &Hosts, id: String) -> Result<(), String> {
     block(move || session::delete(&store, id)).await
 }
 
+const DAY_MS: i64 = 24 * 60 * 60 * 1000;
+
+/// How often the daemon lets go of sessions Settings no longer keeps.
+const EXPIRE_EVERY: Duration = Duration::from_secs(60 * 60);
+
+fn stale_before(days: u32) -> i64 {
+    app_state::now_millis() - i64::from(days) * DAY_MS
+}
+
+/// Deletes the sessions untouched for `days`, spares any whose process still
+/// runs, and tells every window which went.
+async fn expire_sessions(hosts: &Hosts, days: u32) -> Result<Vec<String>, String> {
+    let store = hosts.store.clone();
+    let stale = block(move || session::stale(&store, stale_before(days))).await?;
+    let mut gone = Vec::new();
+    for id in stale.into_iter().filter(|id| !hosts.pty.is_live(id)) {
+        delete_session(hosts, id.clone()).await?;
+        gone.push(id);
+    }
+    if !gone.is_empty() {
+        hosts.hub.emit("sessions-deleted", SessionsDeleted { ids: gone.clone() });
+    }
+    Ok(gone)
+}
+
 fn json(value: impl serde::Serialize) -> Result<Value, String> {
     serde_json::to_value(value).map_err(|e| e.to_string())
 }
@@ -859,6 +899,16 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
             let Id { id } = parse(params)?;
             delete_session(hosts, id).await?;
             Ok(Value::Null)
+        }
+        "sessions_stale" => {
+            let SessionsRetention { days } = parse(params)?;
+            let store = hosts.store.clone();
+            let stale = block(move || session::stale(&store, stale_before(days))).await?;
+            json(stale.iter().filter(|id| !hosts.pty.is_live(id)).count())
+        }
+        "sessions_expire" => {
+            let SessionsRetention { days } = parse(params)?;
+            json(expire_sessions(hosts, days).await?)
         }
         "session_is_disposable" => {
             let Id { id } = parse(params)?;

@@ -263,6 +263,16 @@ export type SessionUpdate = { id: string, name: string, provider: string, model:
  */
 export type SessionUpdated = { session: Session, };
 
+/**
+ * Sessions the daemon deleted on its own: untouched longer than Settings keeps them.
+ */
+export type SessionsDeleted = { ids: Array<string>, };
+
+/**
+ * How many days untouched a session outlives, for `sessions_stale` and `sessions_expire`.
+ */
+export type SessionsRetention = { days: number, };
+
 export type TempFile = { extension: string, base64Contents: string, };
 
 export type ToolCall = { id: number, sessionId: string, method: string, params: unknown, };

@@ -39,7 +39,7 @@ export function Pages({
   onOpenUrl,
 }: Props) {
   const agents = sessions.filter((session) => session.kind === "agent");
-  if (page.kind === "settings") return <SettingsView section={page.section} />;
+  if (page.kind === "settings") return <SettingsView section={page.section} onConfirm={onConfirm} />;
   if (page.kind === "search") return <SearchView agents={agents} onOpenHit={onOpenHit} />;
   if (page.kind === "history") return <HistoryView onOpen={onOpenUrl} onConfirm={onConfirm} />;
   if (page.kind === "routines" && activeWorkspace) {

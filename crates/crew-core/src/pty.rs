@@ -330,6 +330,10 @@ impl PtyHost {
         Ok(attached)
     }
 
+    pub fn is_live(&self, id: &str) -> bool {
+        self.get(id).is_some()
+    }
+
     pub fn kill(&self, id: &str) {
         let _spawning = self.inner.spawning.lock().unwrap_or_else(|e| e.into_inner());
         match self.remove(id) {

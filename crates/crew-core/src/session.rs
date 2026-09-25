@@ -444,6 +444,39 @@ fn sweep_disposable_in(store: &Store, dirs: &ClaudeDirs) -> Result<usize, String
     Ok(swept)
 }
 
+/// Where Settings keeps how many days a session may sit untouched; absent keeps them forever.
+pub const RETENTION_KEY: &str = "sessions:retention";
+
+pub fn retention_days(store: &Store) -> Result<Option<u32>, String> {
+    let raw = crate::store::get(store, RETENTION_KEY.into())?;
+    Ok(raw.and_then(|raw| raw.trim().parse::<u32>().ok()).filter(|days| *days > 0))
+}
+
+/// The sessions last touched before `before`, less the ones deleting would
+/// cost something: a routine goes with its session, a tab would open onto
+/// nothing, and anything but idle still has a turn, a question or an unread
+/// answer in it. A process still running is the caller's to spare.
+pub fn stale(store: &Store, before: i64) -> Result<Vec<String>, String> {
+    let (ids, tabs) = store.with(|conn| {
+        let ids = conn
+            .prepare(
+                "SELECT id FROM sessions
+                 WHERE updated_at < ?1 AND status = 'idle'
+                   AND id NOT IN (SELECT session_id FROM routines)
+                 ORDER BY updated_at ASC",
+            )?
+            .query_map(params![before], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let tabs = conn
+            .prepare("SELECT value FROM app_state WHERE key LIKE 'tabs:%'")?
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok((ids, tabs))
+    })?;
+    let open: Vec<String> = tabs.iter().flat_map(|raw| tab_sessions(raw)).collect();
+    Ok(ids.into_iter().filter(|id| !open.contains(id)).collect())
+}
+
 /// What was said counts wherever it was kept: where the session works now, and
 /// the worktree it worked in before that folder went away.
 fn disposable(session: &Session, cwd: &str, claimed: &[String], home: Option<&Path>) -> bool {
@@ -854,6 +887,56 @@ mod tests {
             "ask".into(),
         )
         .expect("terminal")
+    }
+
+    fn age(store: &Store, id: &str, updated_at: i64) {
+        store
+            .with(|conn| conn.execute("UPDATE sessions SET updated_at = ?2 WHERE id = ?1", params![id, updated_at]))
+            .expect("age");
+    }
+
+    #[test]
+    fn stale_spares_the_recent_the_busy_the_open_and_the_scheduled() {
+        let (store, workspace) = world();
+        let old = terminal(&store, &workspace, "Old", "codex");
+        let recent = terminal(&store, &workspace, "Recent", "codex");
+        let busy = terminal(&store, &workspace, "Busy", "codex");
+        let unread = terminal(&store, &workspace, "Unread", "codex");
+        let open = terminal(&store, &workspace, "Open", "codex");
+        let scheduled = agent(&store, &workspace, "Nightly", "ask").expect("agent");
+        set_status(&store, busy.id.clone(), "working".into()).expect("busy");
+        set_status(&store, unread.id.clone(), "done".into()).expect("unread");
+        for id in [&old.id, &busy.id, &unread.id, &open.id, &scheduled.id] {
+            age(&store, id, 1_000);
+        }
+        age(&store, &recent.id, 5_000);
+        crate::store::set(
+            &store,
+            format!("tabs:{workspace}"),
+            format!(r#"{{"tabs":[{{"kind":"session","sessionId":"{}"}}],"activeId":null}}"#, open.id),
+        )
+        .expect("tabs");
+        store
+            .with(|conn| {
+                conn.execute(
+                    "INSERT INTO routines (id, session_id, prompt, schedule, created_at, updated_at)
+                     VALUES ('r', ?1, 'p', 's', 0, 0)",
+                    params![scheduled.id],
+                )
+            })
+            .expect("routine");
+
+        assert_eq!(stale(&store, 2_000).unwrap(), vec![old.id]);
+    }
+
+    #[test]
+    fn retention_reads_whole_days_and_nothing_else() {
+        let (store, _) = world();
+        assert_eq!(retention_days(&store).unwrap(), None);
+        for (raw, days) in [("30", Some(30)), ("0", None), ("never", None), (" 7 ", Some(7))] {
+            crate::store::set(&store, RETENTION_KEY.into(), raw.into()).expect("set");
+            assert_eq!(retention_days(&store).unwrap(), days, "{raw}");
+        }
     }
 
     #[test]

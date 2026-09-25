@@ -4,7 +4,7 @@ import { dispose, onSessionPatch, reconcile } from '../lib/agentRuntime';
 import { client } from '../lib/client';
 import * as api from '../lib/api';
 import { reloadAgentFaces } from './useAgentFaces';
-import type { SessionCreated, SessionUpdated } from '../lib/protocol';
+import type { SessionCreated, SessionsDeleted, SessionUpdated } from '../lib/protocol';
 import type { Autonomy, Session, SessionKind, SessionStatus } from '../lib/types';
 
 type CreateInput = {
@@ -74,6 +74,30 @@ export function useSessions(workspaceId: string | null) {
     [patchSession],
   );
 
+  /** The daemon already deleted these, with their worktree or for their age; the list lets them go. */
+  const forget = useCallback(async (ids: string[]) => {
+    const gone = new Set(ids);
+    await Promise.all(ids.map((id) => dispose(id)));
+    setRegistry((prev) => {
+      let changed = false;
+      const next: Registry = {};
+      for (const [workspace, list] of Object.entries(prev)) {
+        const kept = list.filter((s) => !gone.has(s.id));
+        next[workspace] = kept;
+        if (kept.length !== list.length) changed = true;
+      }
+      return changed ? next : prev;
+    });
+  }, []);
+
+  // Settings keeps sessions only so long; the daemon lets the old ones go on its own.
+  useEffect(() => {
+    const unsubscribe = client.on('sessions-deleted', (payload) => {
+      void forget((payload as SessionsDeleted).ids);
+    });
+    return () => unsubscribe();
+  }, [forget]);
+
   useEffect(() => {
     const unsubscribe = client.on('session-created', (payload) => {
       const created = payload as SessionCreated;
@@ -124,22 +148,6 @@ export function useSessions(workspaceId: string | null) {
       if (!entry) return prev;
       const [workspace, list] = entry;
       return { ...prev, [workspace]: list.filter((s) => s.id !== id) };
-    });
-  }, []);
-
-  /** The daemon already deleted these, with the worktree they ran in; the list lets them go. */
-  const forget = useCallback(async (ids: string[]) => {
-    const gone = new Set(ids);
-    await Promise.all(ids.map((id) => dispose(id)));
-    setRegistry((prev) => {
-      let changed = false;
-      const next: Registry = {};
-      for (const [workspace, list] of Object.entries(prev)) {
-        const kept = list.filter((s) => !gone.has(s.id));
-        next[workspace] = kept;
-        if (kept.length !== list.length) changed = true;
-      }
-      return changed ? next : prev;
     });
   }, []);
 

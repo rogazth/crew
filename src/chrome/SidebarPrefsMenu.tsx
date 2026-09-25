@@ -10,6 +10,7 @@ import {
   GitBranchIcon,
   GitDiffIcon,
   HandGrabbingIcon,
+  ListNumbersIcon,
   RobotIcon,
   ShapesIcon,
   StackIcon,
@@ -22,10 +23,13 @@ import { ProviderIcon } from "./ProviderIcon";
 import { PROVIDERS } from "../lib/providers";
 import {
   DEFAULT_PREFS,
+  LIMITS,
   isDefault,
   toggle,
   type Detail,
+  type Limit,
   type Ordering,
+  type Recency,
   type Scope,
   type SidebarPrefs,
 } from "../lib/sidebarPrefs";
@@ -42,6 +46,15 @@ const ORDERINGS: { id: Ordering; label: string; icon: Icon }[] = [
   { id: "updated", label: "Updated", icon: ClockIcon },
   { id: "name", label: "Name", icon: TextAaIcon },
 ];
+
+const RECENCIES: { id: Recency; label: string; short: string }[] = [
+  { id: "any", label: "Any time", short: "Any time" },
+  { id: "day", label: "Last 24 hours", short: "24h" },
+  { id: "3days", label: "Last 3 days", short: "3 days" },
+  { id: "week", label: "Last week", short: "Week" },
+];
+
+const limitLabel = (limit: Limit) => (limit === 0 ? "No limit" : String(limit));
 
 const DETAILS: { id: Detail; label: string; icon: Icon }[] = [
   { id: "names", label: "Agent names", icon: TextAaIcon },
@@ -76,6 +89,7 @@ export function SidebarPrefsMenu({ prefs, onChange }: Props) {
   const dirty = !isDefault(prefs);
   const ordering = ORDERINGS.find((item) => item.id === prefs.ordering);
   const scope = SCOPES.find((item) => item.id === prefs.scope);
+  const recency = RECENCIES.find((item) => item.id === prefs.recency);
 
   return (
     <Menu.Root modal={false}>
@@ -162,6 +176,36 @@ export function SidebarPrefsMenu({ prefs, onChange }: Props) {
               </Menu.Item>
             </div>
 
+            <Submenu
+              icon={ClockIcon}
+              label="Updated"
+              value={recency?.short}
+            >
+              <Menu.RadioGroup
+                value={prefs.recency}
+                onValueChange={(value) => onChange({ ...prefs, recency: value as Recency })}
+              >
+                {RECENCIES.map((item) => (
+                  <Radio key={item.id} value={item.id} label={item.label} />
+                ))}
+              </Menu.RadioGroup>
+            </Submenu>
+
+            <Submenu
+              icon={ListNumbersIcon}
+              label="Per worktree"
+              value={limitLabel(prefs.limit)}
+            >
+              <Menu.RadioGroup
+                value={prefs.limit}
+                onValueChange={(value) => onChange({ ...prefs, limit: value as Limit })}
+              >
+                {LIMITS.map((limit) => (
+                  <Radio key={limit} value={limit} label={limitLabel(limit)} />
+                ))}
+              </Menu.RadioGroup>
+            </Submenu>
+
             <Submenu icon={ShapesIcon} label="Kind" active={prefs.hiddenKinds.length > 0}>
               {KINDS.map((item) => (
                 <Check
@@ -235,6 +279,17 @@ function Submenu({
         </Menu.Positioner>
       </Menu.Portal>
     </Menu.SubmenuRoot>
+  );
+}
+
+function Radio({ value, label }: { value: string | number; label: string }) {
+  return (
+    <Menu.RadioItem value={value} className={ROW}>
+      <span className="min-w-0 flex-1 truncate">{label}</span>
+      <Menu.RadioItemIndicator>
+        <CheckIcon className="size-4 shrink-0" />
+      </Menu.RadioItemIndicator>
+    </Menu.RadioItem>
   );
 }
 
