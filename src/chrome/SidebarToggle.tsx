@@ -1,4 +1,4 @@
-import { SidebarSimpleIcon } from "@phosphor-icons/react";
+import { PanelLeftIcon } from "lucide-react";
 import { commandKeys } from "../lib/commands";
 import { IS_MAC } from "../lib/hotkey";
 
@@ -15,11 +15,11 @@ export function SidebarToggle({ onClick }: { onClick: () => void }) {
       aria-label="Toggle sidebar"
       title={`Toggle sidebar ${commandKeys("toggle-sidebar")}`}
       onClick={onClick}
-      className={`fixed top-[7px] z-40 grid size-7 place-items-center rounded-md text-kumo-subtle outline-none transition-colors hover:bg-hover hover:text-kumo-default focus-visible:bg-hover ${
+      className={`fixed top-[7px] z-40 grid size-7 place-items-center rounded-md text-icon outline-none transition-colors hover:bg-hover hover:text-text focus-visible:bg-hover ${
         IS_MAC ? "left-[80px]" : "left-2"
       }`}
     >
-      <SidebarSimpleIcon className="size-[18px]" weight="regular" />
+      <PanelLeftIcon className="size-[18px]" />
     </button>
   );
 }

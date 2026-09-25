@@ -7,7 +7,6 @@ import { mentionedFiles } from "../lib/mentions";
 import { useChatActions } from "./chat/context";
 import { useFileDrop } from "../hooks/useFileDrop";
 import type { Answers, ApprovalDecision, AttachedFile } from "../lib/blocks";
-import type { ProviderId } from "../lib/providers";
 import type { Session } from "../lib/types";
 import { useAgentTheme } from "../hooks/useAgentTheme";
 import { DefaultChatSurface } from "./chat/DefaultChatSurface";
@@ -24,10 +23,9 @@ type Props = {
   session: Session;
   cwd: string;
   active: boolean;
-  onModel: (session: Session, provider: ProviderId, model: string) => void;
 };
 
-export function AgentChat({ session, cwd, active, onModel }: Props) {
+export function AgentChat({ session, cwd, active }: Props) {
   const { blocks, ready, working, more, loadingEarlier, loadEarlier, focusId } = useThread(session.id);
   const [draft, setDraft] = useState("");
   const [files, setFiles] = useState<AttachedFile[]>([]);
@@ -113,7 +111,6 @@ export function AgentChat({ session, cwd, active, onModel }: Props) {
         onAttach={() => void attach()}
         onPasteFiles={pasteFiles}
         onRemoveFile={(path) => setFiles((prev) => prev.filter((file) => file.path !== path))}
-        onModel={(provider, model) => onModel(session, provider, model)}
         onApprove={approve}
         onAnswer={reply}
       />

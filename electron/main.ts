@@ -31,10 +31,13 @@ function crewdPath(): string {
 // dev server holds port 1420, and it runs under the packaged app's policy.
 const fromDist = app.isPackaged || process.env.CREW_RENDERER === "dist";
 
+// Two checkouts can run side by side: each takes its own dev port (CREW_PORT).
+const DEV_PORT = Number(process.env.CREW_PORT) || 1420;
+
 function csp(): string {
   const connect = fromDist
     ? "ws://127.0.0.1:*"
-    : "http://localhost:1420 ws://localhost:1420 ws://127.0.0.1:*";
+    : `http://localhost:${DEV_PORT} ws://localhost:${DEV_PORT} ws://127.0.0.1:*`;
   return [
     "default-src 'self'",
     fromDist ? "script-src 'self'" : "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
@@ -57,7 +60,7 @@ function allowedUrl(url: string): boolean {
   }
 }
 
-const DEV_ORIGIN = "http://127.0.0.1:1420";
+const DEV_ORIGIN = `http://127.0.0.1:${DEV_PORT}`;
 
 function allowedNavigation(url: string): boolean {
   try {
@@ -214,7 +217,7 @@ function createWindow(): void {
   if (fromDist) {
     void win.loadFile(path.join(app.getAppPath(), "dist/index.html"));
   } else {
-    void win.loadURL("http://127.0.0.1:1420");
+    void win.loadURL(DEV_ORIGIN);
   }
   win.on("closed", () => {
     win = null;
@@ -243,6 +246,12 @@ function registerIpc(): void {
     return filePaths[0] ?? null;
   });
   ipcMain.handle("home-dir", () => homedir());
+  // The window's own zoom, for the chrome and chats; terminals and pages zoom themselves.
+  ipcMain.handle("app-zoom", (event, delta: number) => {
+    const contents = event.sender;
+    const level = delta === 0 ? 0 : Math.min(3, Math.max(-3, contents.getZoomLevel() + delta * 0.5));
+    contents.setZoomLevel(level);
+  });
   ipcMain.handle("open-url", async (_event, url: string) => {
     if (!allowedUrl(url)) return;
     await shell.openExternal(url);
@@ -257,7 +266,9 @@ function registerIpc(): void {
 app.setName("Crew");
 // userData follows the name, and crewd keeps its database and socket there: a dev
 // build on the installed app's folder would drive the installed app's sessions.
-if (!app.isPackaged) app.setPath("userData", path.join(app.getPath("appData"), "Crew Dev"));
+// CREW_USER_DATA points a dev build at a data set of its own, like the seeded one.
+if (!app.isPackaged)
+  app.setPath("userData", process.env.CREW_USER_DATA || path.join(app.getPath("appData"), "Crew Dev"));
 app.setAboutPanelOptions({ applicationName: "Crew", applicationVersion: app.getVersion(), version: sha });
 
 app.whenReady().then(async () => {

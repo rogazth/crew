@@ -1,39 +1,64 @@
-@source "../node_modules/@cloudflare/kumo/dist/**/*.{js,jsx,ts,tsx}";
-@import "@cloudflare/kumo/styles";
 @import "tailwindcss";
 
-/* Local names kept for the chrome; values come from kumo so dark mode follows for free. */
-@theme {
-  --color-canvas: var(--color-kumo-base);
-  --color-sidebar: var(--color-kumo-elevated);
-  --color-rail: var(--color-kumo-recessed);
-  --color-border: var(--color-kumo-line);
-  --color-border-strong: var(--color-kumo-interact);
-  /* kumo namespaces its text colors under --text-color-*; the --color-* forms do not exist. */
-  --color-text: var(--text-color-kumo-default);
-  --color-text-muted: var(--text-color-kumo-subtle);
-  --color-placeholder: var(--text-color-kumo-placeholder);
-  /* Not kumo's tint/fill: those sit 1% apart from the sidebar in light mode and
-     resolve to the same neutral-800 in dark, so hover and active collapse. */
-  --color-hover: light-dark(oklch(94.5% 0 0), oklch(21% 0 0));
-  --color-selected: light-dark(oklch(89.8% 0 0), oklch(28.5% 0 0));
-  --color-accent: var(--color-kumo-brand);
-  --color-danger: var(--color-kumo-danger);
-  /* Ink mixed over transparent, not a fixed grey: the same card reads right on
-     any surface and flips with the theme without a second value. */
+/*
+ * Crew's own tokens. One neutral ramp, one ink, one set of signal colours; every
+ * surface, row and control reads from these, so nothing depends on a library's
+ * palette. `light-dark()` follows the OS through `color-scheme`.
+ * `static`: every token reaches :root, used by a utility or only by a plain rule.
+ */
+@theme static {
+  /* Surfaces, back to front. */
+  --color-canvas: light-dark(#ffffff, oklch(17% 0 0));
+  --color-sidebar: light-dark(oklch(98% 0 0), oklch(13% 0 0));
+  --color-rail: light-dark(oklch(96.5% 0 0), oklch(15% 0 0));
+  /* Floating things: menus, the palette, the launcher. */
+  --color-surface: light-dark(#ffffff, oklch(21% 0.004 285));
+  --color-fill: light-dark(oklch(94% 0 0), oklch(26.9% 0 0));
+
+  --color-border: light-dark(oklch(14.5% 0 0 / 0.09), oklch(100% 0 0 / 0.09));
+  --color-border-strong: light-dark(oklch(14.5% 0 0 / 0.16), oklch(100% 0 0 / 0.16));
+
+  /* Ink. Icons sit a step under text, never as light as secondary text. */
+  --color-text: light-dark(oklch(20% 0.004 285), oklch(96% 0 0));
+  --color-text-muted: light-dark(oklch(52% 0.004 285), oklch(70% 0 0));
+  --color-icon: light-dark(oklch(26% 0.004 285), oklch(86% 0 0));
+  --color-placeholder: light-dark(oklch(68% 0 0), oklch(52% 0 0));
+  --color-inverse: light-dark(oklch(98% 0 0), oklch(18% 0 0));
+
+  /* Not a fill of the sidebar: hover and active have to stay apart in both themes. */
+  --color-hover: light-dark(oklch(14.5% 0 0 / 0.045), oklch(100% 0 0 / 0.06));
+  --color-selected: light-dark(oklch(14.5% 0 0 / 0.085), oklch(100% 0 0 / 0.11));
+
+  /* The ink as an action colour: primary buttons, switches, the focus ring. */
+  --color-accent: light-dark(oklch(22% 0.005 285), oklch(94% 0 0));
+  --color-accent-hover: light-dark(oklch(30% 0.005 285), oklch(86% 0 0));
+  --color-focus: light-dark(oklch(45% 0.005 285), oklch(75% 0 0));
+
+  /* Signals. */
+  --color-danger: light-dark(oklch(57.7% 0.215 27.3), oklch(66% 0.2 24));
+  --color-warning: light-dark(oklch(70% 0.16 58), oklch(76% 0.15 62));
+  --color-success: light-dark(oklch(59.6% 0.145 163.2), oklch(76.5% 0.16 163));
+  --color-info: light-dark(oklch(60% 0.19 255), oklch(70% 0.15 252));
+
   /* The one blue in a neutral palette: a link has to read as a link. */
   --color-link: light-dark(oklch(55% 0.185 258), oklch(75% 0.13 250));
-  --color-card: color-mix(in srgb, var(--text-color-kumo-default) 6%, transparent);
-  --color-hairline: color-mix(in srgb, var(--text-color-kumo-default) 8%, transparent);
+  /* Ink mixed over transparent, not a fixed grey: the same card reads right on
+     any surface and flips with the theme without a second value. */
+  --color-card: light-dark(oklch(14.5% 0 0 / 0.04), oklch(100% 0 0 / 0.05));
+  --color-hairline: light-dark(oklch(14.5% 0 0 / 0.08), oklch(100% 0 0 / 0.08));
+
   /* Arc's generous row radius. One value for every row of chrome — sidebar
      items and tabs — so the two strips read as the same surface. */
   --radius-chrome: 0.625rem;
+  /* Floating surfaces: menus, the palette, dialogs. */
+  --radius-float: 0.875rem;
+
+  --shadow-float:
+    0 0 0 1px var(--color-hairline), 0 12px 32px -8px oklch(0% 0 0 / 0.14), 0 4px 10px -4px oklch(0% 0 0 / 0.06);
 }
 
-/* Neutral brand: primary buttons and focus rings read as dark grey, not Cloudflare blue. */
 :root {
-  --color-kumo-brand: light-dark(oklch(27% 0.005 285), oklch(92% 0 0));
-  --color-kumo-brand-hover: light-dark(oklch(22% 0.005 285), oklch(85% 0 0));
+  color-scheme: light dark;
 }
 
 html,
@@ -84,8 +109,8 @@ label[for],
   cursor: default;
 }
 
-/* The rule above is a button rule and unlayered, so it beats kumo's layered
-   cursor utility on the resize handle. :active holds the cursor through a drag
+/* The rule above is a button rule and unlayered, so the resize handle has to
+   restate its own cursor. :active holds the cursor through a drag
    that runs past the clamp and leaves the 12px target behind. */
 button[data-sidebar="resize-handle"] {
   cursor: col-resize;
@@ -95,7 +120,7 @@ body:has(button[data-sidebar="resize-handle"]:active) * {
   cursor: col-resize !important;
 }
 
-/* Rows carry their own selected/hover tone; kumo's brand ring on top reads as a
+/* Rows carry their own selected/hover tone; a focus ring on top reads as a
    stray outline. Unlayered so it beats the focus-visible utilities. */
 [data-sidebar="sidebar"] :focus-visible {
   outline: none;
@@ -173,13 +198,6 @@ body:has(button[data-sidebar="resize-handle"]:active) * {
   color: light-dark(oklch(22% 0.02 260), oklch(97% 0 0));
 }
 
-/* The user's bubble runs inverted against the canvas: one translucent blue reads
-   on both its grounds, and the text keeps the colour it already had. */
-.crew-bubble::selection,
-.crew-bubble ::selection {
-  background: color-mix(in srgb, oklch(72% 0.15 250) 55%, transparent);
-  color: var(--color-kumo-base);
-}
 
 /* Scrollbars: present but quiet, so panes do not shift when content grows. */
 * {
@@ -187,7 +205,7 @@ body:has(button[data-sidebar="resize-handle"]:active) * {
   scrollbar-color: var(--color-border-strong) transparent;
 }
 
-/* The `*` rule above is unlayered, so it outranks kumo's utility; restate it here
+/* The `*` rule above is unlayered, so it outranks a utility; restate it here
    for strips that carry their own scroll affordance (the tab bar). */
 .no-scrollbar {
   scrollbar-width: none;
@@ -198,7 +216,7 @@ body:has(button[data-sidebar="resize-handle"]:active) * {
   position: fixed;
   inset: 0;
   z-index: 60;
-  background: color-mix(in srgb, var(--text-color-kumo-default) 72%, transparent);
+  background: color-mix(in srgb, var(--color-text) 72%, transparent);
   transition: opacity 150ms ease;
 }
 .crew-lightbox-scrim[data-starting-style],
@@ -237,8 +255,8 @@ body:has(button[data-sidebar="resize-handle"]:active) * {
   max-width: 60vw;
   padding: 4px 12px;
   border-radius: 999px;
-  background: color-mix(in srgb, var(--color-kumo-base) 14%, transparent);
-  color: var(--color-kumo-base);
+  background: color-mix(in srgb, var(--color-canvas) 14%, transparent);
+  color: var(--color-canvas);
   font-size: 12px;
   line-height: 18px;
 }
@@ -251,8 +269,8 @@ body:has(button[data-sidebar="resize-handle"]:active) * {
   width: 32px;
   height: 32px;
   border-radius: 999px;
-  background: color-mix(in srgb, var(--color-kumo-base) 14%, transparent);
-  color: var(--color-kumo-base);
+  background: color-mix(in srgb, var(--color-canvas) 14%, transparent);
+  color: var(--color-canvas);
   transition: background-color 100ms ease;
 }
 .crew-lightbox-nav {
@@ -265,18 +283,19 @@ body:has(button[data-sidebar="resize-handle"]:active) * {
 }
 .crew-lightbox-nav:hover,
 .crew-lightbox-close:hover {
-  background: color-mix(in srgb, var(--color-kumo-base) 26%, transparent);
+  background: color-mix(in srgb, var(--color-canvas) 26%, transparent);
 }
 
 /* A card is the one thing in the log that waits for the user: hairline, radius 10, no fill. */
 .crew-card {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding: 12px;
-  border: 1px solid var(--color-hairline);
-  border-radius: 10px;
-  background: var(--color-kumo-base);
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid color-mix(in srgb, var(--color-warning) 40%, var(--color-border));
+  border-radius: 16px;
+  background: var(--color-canvas);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--color-warning) 10%, transparent), 0 8px 24px -14px oklch(0% 0 0 / 0.18);
   font-size: 14px;
   line-height: 20px;
   letter-spacing: -0.1px;
@@ -294,14 +313,14 @@ body:has(button[data-sidebar="resize-handle"]:active) * {
   transition: box-shadow 100ms ease;
 }
 .crew-field:focus-visible {
-  box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--color-kumo-focus) 50%, transparent);
+  box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--color-focus) 50%, transparent);
 }
 .crew-btn {
   height: 26px;
   padding: 0 10px;
   border-radius: 6px;
   background: var(--color-card);
-  color: var(--text-color-kumo-default);
+  color: var(--color-text);
   font-size: 12px;
   line-height: 16px;
   transition: background-color 100ms ease, opacity 100ms ease;
@@ -315,14 +334,14 @@ body:has(button[data-sidebar="resize-handle"]:active) * {
 }
 .crew-btn:focus-visible {
   outline: none;
-  box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--color-kumo-focus) 50%, transparent);
+  box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--color-focus) 50%, transparent);
 }
 .crew-btn-primary {
-  background: var(--text-color-kumo-default);
-  color: var(--color-kumo-base);
+  background: var(--color-text);
+  color: var(--color-canvas);
 }
 .crew-btn-primary:hover {
-  background: var(--color-kumo-brand-hover);
+  background: var(--color-accent-hover);
 }
 .crew-keycap {
   display: inline-flex;
@@ -334,16 +353,16 @@ body:has(button[data-sidebar="resize-handle"]:active) * {
   border: 1px solid var(--color-hairline);
   border-radius: 4px;
   font: 500 10px/1 ui-sans-serif, system-ui, sans-serif;
-  color: var(--text-color-kumo-subtle);
+  color: var(--color-text-muted);
 }
 /* Kumo's choice cards at chat density. */
 .crew-options {
   gap: 4px;
 }
 .crew-options label {
-  padding: 6px 8px;
-  font-size: 13px;
-  line-height: 18px;
+  padding: 9px 12px;
+  font-size: 13.5px;
+  line-height: 19px;
 }
 .crew-diff {
   border: 1px solid var(--color-hairline);
@@ -365,9 +384,9 @@ body:has(button[data-sidebar="resize-handle"]:active) * {
 }
 /* Steps hang off a hairline rail under the phase icon. */
 .crew-phase-steps {
-  margin-left: 6px;
-  padding-left: 14px;
-  border-left: 1px solid var(--color-hairline);
+  margin-left: 9px;
+  padding-left: 18px;
+  border-left: 1px solid var(--color-border);
 }
 /* Live labels move; the rest of the log holds still. */
 @keyframes crew-shimmer {
@@ -378,9 +397,9 @@ body:has(button[data-sidebar="resize-handle"]:active) * {
   color: transparent;
   background: linear-gradient(
       90deg,
-      var(--text-color-kumo-subtle) 0%,
-      var(--text-color-kumo-default) 50%,
-      var(--text-color-kumo-subtle) 100%
+      var(--color-text-muted) 0%,
+      var(--color-text) 50%,
+      var(--color-text-muted) 100%
     )
     0 0 / 200% 100%;
   -webkit-background-clip: text;
@@ -389,7 +408,7 @@ body:has(button[data-sidebar="resize-handle"]:active) * {
 }
 @media (prefers-reduced-motion: reduce) {
   .crew-phase-panel { transition: none; }
-  .crew-shimmer { animation: none; color: var(--text-color-kumo-subtle); background: none; }
+  .crew-shimmer { animation: none; color: var(--color-text-muted); background: none; }
 }
 
 /* A working session breathes; everything else in the chrome holds still. */
@@ -465,46 +484,51 @@ body:has(button[data-sidebar="resize-handle"]:active) * {
   background: transparent !important;
 }
 
-/* Plain rules reference kumo's own variables: a theme alias only reaches the
-   CSS when some utility uses it, and these rules must not depend on that. */
+/* Plain rules read the tokens directly, so they never depend on a utility using them. */
 .crew-ink {
-  background: var(--text-color-kumo-default);
-  color: var(--color-kumo-base);
+  background: var(--color-text);
+  color: var(--color-canvas);
 }
 .crew-prose {
   font-size: 14px;
   line-height: 20px;
   letter-spacing: -0.1px;
 }
-/* The user's turn: ink on the canvas, the one shape on the page that is not flush. */
+/* The user's turn: a soft grey bubble on the right, the one shape on the page
+   that is not flush. Ink is for actions; a message is not one. */
 .crew-bubble {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  max-width: 72%;
-  padding: 8px 12px;
-  border-radius: 16px 16px 4px 16px;
-  background: var(--text-color-kumo-default);
-  color: var(--color-kumo-base);
+  max-width: 78%;
+  padding: 9px 14px;
+  border-radius: 20px;
+  background: var(--color-fill);
+  color: var(--color-text);
   overflow-wrap: anywhere;
 }
 .crew-chip-on-ink {
-  background: color-mix(in srgb, var(--color-kumo-base) 18%, transparent);
+  background: color-mix(in srgb, var(--color-canvas) 70%, transparent);
 }
-/* Cursor's well: radius 16, a hairline that darkens on focus, no ring. */
+/* The composer: a raised well at the foot of the reading column, radius 20,
+   a hairline that darkens on focus, a toolbar along its bottom edge. */
 .crew-composer {
   display: flex;
   flex-direction: column;
-  min-height: 96px;
-  padding: 12px 12px 10px;
-  border: 1px solid color-mix(in srgb, var(--text-color-kumo-default) 10%, transparent);
-  border-radius: 16px;
-  background: var(--color-kumo-base);
-  box-shadow: 0 1px 2px color-mix(in srgb, var(--text-color-kumo-default) 4%, transparent);
-  transition: border-color 100ms ease;
+  padding: 14px 12px 12px 16px;
+  border-radius: 22px;
+  background: var(--color-canvas);
+  box-shadow:
+    0 0 0 1px var(--color-border),
+    0 8px 24px -12px oklch(0% 0 0 / 0.12),
+    0 2px 6px -2px oklch(0% 0 0 / 0.05);
+  transition: box-shadow 120ms ease;
 }
 .crew-composer:focus-within {
-  border-color: color-mix(in srgb, var(--text-color-kumo-default) 22%, transparent);
+  box-shadow:
+    0 0 0 1px var(--color-border-strong),
+    0 10px 28px -12px oklch(0% 0 0 / 0.16),
+    0 2px 6px -2px oklch(0% 0 0 / 0.06);
 }
 .crew-composer-plus {
   display: flex;
@@ -513,23 +537,23 @@ body:has(button[data-sidebar="resize-handle"]:active) * {
   width: 30px;
   height: 30px;
   border-radius: 999px;
-  background: var(--color-card);
-  color: var(--text-color-kumo-subtle);
+  color: var(--color-icon);
+  box-shadow: inset 0 0 0 1px var(--color-hairline);
   transition: background-color 100ms ease, color 100ms ease;
 }
 .crew-composer-plus:hover {
   background: var(--color-hover);
-  color: var(--text-color-kumo-default);
+  color: var(--color-text);
 }
 .crew-composer-plus:focus-visible {
   outline: none;
-  box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--color-kumo-focus) 50%, transparent);
+  box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--color-focus) 50%, transparent);
 }
 .crew-composer-field {
   display: block;
   width: 100%;
-  min-height: 36px;
-  max-height: 160px;
+  min-height: 24px;
+  max-height: 200px;
   padding: 0;
   border: 0;
   resize: none;
@@ -547,7 +571,7 @@ body:has(button[data-sidebar="resize-handle"]:active) * {
 .crew-composer-input {
   position: relative;
   color: transparent;
-  caret-color: var(--text-color-kumo-default);
+  caret-color: var(--color-text);
 }
 .crew-composer-input::placeholder {
   color: var(--color-placeholder);
@@ -561,13 +585,13 @@ body:has(button[data-sidebar="resize-handle"]:active) * {
   inset: 0;
   overflow: hidden;
   pointer-events: none;
-  color: var(--text-color-kumo-default);
+  color: var(--color-text);
 }
 .crew-mention-run {
   border-radius: 4px;
-  background: color-mix(in srgb, var(--color-kumo-brand) 14%, transparent);
+  background: color-mix(in srgb, var(--color-accent) 14%, transparent);
   color: inherit;
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-kumo-brand) 10%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-accent) 10%, transparent);
 }
 .crew-mention-pill {
   display: inline-flex;
@@ -577,19 +601,20 @@ body:has(button[data-sidebar="resize-handle"]:active) * {
   margin: 0 1px;
   padding: 0 6px 0 4px;
   border-radius: 999px;
-  background: color-mix(in srgb, var(--color-kumo-base) 18%, transparent);
+  background: var(--color-canvas);
+  box-shadow: 0 0 0 1px var(--color-hairline);
   font-size: 13px;
   line-height: 19px;
   transition: background-color 100ms ease;
 }
 .crew-mention-pill:hover {
-  background: color-mix(in srgb, var(--color-kumo-base) 30%, transparent);
+  background: var(--color-hover);
 }
 .crew-popover {
   overflow: hidden;
   padding: 4px 0;
   border-radius: 12px;
-  background: var(--color-kumo-elevated);
+  background: var(--color-surface);
   box-shadow:
     inset 0 0 0 1px var(--color-hairline),
     0 6px 18px rgb(0 0 0 / 0.04),
@@ -603,21 +628,20 @@ body:has(button[data-sidebar="resize-handle"]:active) * {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 6px;
-  font-size: 14px;
-  line-height: 20px;
+  gap: 10px;
+  font-size: 14.5px;
+  line-height: 23px;
   letter-spacing: -0.1px;
 }
+/* The agent's prose sits flush on the canvas, as ChatGPT and Grok set it: the
+   reading column is the container, not a bubble. */
 .crew-md-prose {
-  max-width: 72%;
-  padding: 9px 13px 10px;
-  border-radius: 16px 16px 16px 4px;
-  background: var(--color-card);
+  max-width: 100%;
+  padding: 0;
   overflow-wrap: anywhere;
 }
-/* Every shape shares the bubble's width; a table hugs its columns inside it. */
 .crew-md-wide {
-  width: 72%;
+  width: 100%;
   min-width: 0;
 }
 .crew-md-row {
@@ -640,32 +664,24 @@ body:has(button[data-sidebar="resize-handle"]:active) * {
 .crew-copy-aside[data-done] {
   opacity: 1;
 }
-/* Headings with nothing under them caption the block that follows; no bubble. */
+/* Headings with nothing under them caption the block that follows. */
 .crew-md-label {
-  max-width: 72%;
-  padding: 6px 2px 0;
+  max-width: 100%;
+  padding: 6px 0 0;
 }
 .crew-md-wide .crew-code {
   margin: 0;
-}
-/* On the grey bubble an ink tint would vanish; code lifts toward the canvas instead. */
-.crew-md-prose .crew-inline-code,
-.crew-md-prose .crew-file-chip {
-  background: color-mix(in srgb, var(--color-kumo-base) 72%, transparent);
-}
-.crew-md-prose .crew-file-chip:hover {
-  background: var(--color-kumo-base);
 }
 /* Zero-specificity reset so the rhythm rules below win on equal footing. */
 .crew-md :where(h1, h2, h3, h4, h5, h6, p, ul, ol, blockquote, table) {
   margin: 0;
 }
-/* Vertical rhythm: 8 between blocks, 18 into a heading, 6 out of one. */
+/* Vertical rhythm: 10 between blocks, 20 into a heading, 6 out of one. */
 .crew-md-flow > * + * {
-  margin-top: 8px;
+  margin-top: 10px;
 }
 .crew-md-flow > * + [data-streamdown^="heading"] {
-  margin-top: 18px;
+  margin-top: 20px;
 }
 .crew-md-flow > [data-streamdown^="heading"] + * {
   margin-top: 6px;
@@ -693,32 +709,33 @@ body:has(button[data-sidebar="resize-handle"]:active) * {
   }
 }
 .crew-md [data-streamdown^="heading"] {
-  font-size: 14px;
+  font-size: 14.5px;
   font-weight: 600;
-  line-height: 20px;
+  line-height: 22px;
   letter-spacing: -0.2px;
 }
 .crew-md [data-streamdown="heading-1"] {
-  font-size: 17px;
-  line-height: 24px;
-  letter-spacing: -0.3px;
+  font-size: 20px;
+  line-height: 28px;
+  letter-spacing: -0.4px;
 }
 .crew-md [data-streamdown="heading-2"] {
-  font-size: 15px;
-  line-height: 22px;
+  font-size: 17px;
+  line-height: 25px;
+  letter-spacing: -0.3px;
 }
 .crew-md [data-streamdown="heading-4"],
 .crew-md [data-streamdown="heading-5"],
 .crew-md [data-streamdown="heading-6"] {
   font-size: 13px;
   line-height: 18px;
-  color: var(--text-color-kumo-subtle);
+  color: var(--color-text-muted);
 }
 .crew-md [data-streamdown="strong"] {
   font-weight: 600;
 }
 .crew-md del {
-  color: var(--text-color-kumo-subtle);
+  color: var(--color-text-muted);
 }
 .crew-md [data-streamdown="unordered-list"],
 .crew-md [data-streamdown="ordered-list"] {
@@ -741,7 +758,7 @@ body:has(button[data-sidebar="resize-handle"]:active) * {
   padding: 0;
 }
 .crew-md [data-streamdown="list-item"]::marker {
-  color: var(--text-color-kumo-subtle);
+  color: var(--color-text-muted);
   font-variant-numeric: tabular-nums;
 }
 .crew-md [data-streamdown="list-item"] + [data-streamdown="list-item"],
@@ -760,13 +777,13 @@ body:has(button[data-sidebar="resize-handle"]:active) * {
   height: 15px;
   margin: 0 7px 0 -1.5em;
   vertical-align: -3px;
-  color: var(--text-color-kumo-subtle);
+  color: var(--color-text-muted);
 }
-/* Outside the bubble a quote is a hairline and a quieter voice, not italics. */
+/* A quote is a rail and a quieter voice, not italics. */
 .crew-md [data-streamdown="blockquote"] {
-  padding: 2px 0 2px 12px;
-  border-left: 2px solid color-mix(in srgb, var(--text-color-kumo-default) 20%, transparent);
-  color: var(--text-color-kumo-subtle);
+  padding: 2px 0 2px 14px;
+  border-left: 3px solid var(--color-border);
+  color: var(--color-text-muted);
   font-style: normal;
 }
 .crew-md [data-streamdown="blockquote"] > * + * {
@@ -788,8 +805,8 @@ body:has(button[data-sidebar="resize-handle"]:active) * {
   max-width: 100%;
   overflow-x: auto;
   overscroll-behavior-x: contain;
-  border: 1px solid var(--color-hairline);
-  border-radius: 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
   background: none;
 }
 .crew-md [data-streamdown="table"] {
@@ -810,8 +827,10 @@ body:has(button[data-sidebar="resize-handle"]:active) * {
   border-right: 0;
 }
 .crew-md [data-streamdown="table-header-cell"] {
-  background: none;
+  background: var(--color-card);
+  font-size: 12.5px;
   font-weight: 600;
+  color: var(--color-text-muted);
 }
 .crew-md [data-streamdown="table-body"] [data-streamdown="table-row"]:last-child [data-streamdown="table-cell"] {
   border-bottom: 0;
@@ -829,13 +848,14 @@ body:has(button[data-sidebar="resize-handle"]:active) * {
 .crew-md [data-streamdown="image"] {
   max-width: 100%;
   max-height: 360px;
-  border-radius: 8px;
+  border-radius: 12px;
 }
 .crew-inline-code {
-  padding: 1px 4px;
-  border-radius: 4px;
-  background: color-mix(in srgb, var(--text-color-kumo-default) 8%, transparent);
-  font: 13px/18px ui-monospace, SFMono-Regular, Menlo, monospace;
+  padding: 1px 5px;
+  border-radius: 6px;
+  background: var(--color-card);
+  box-shadow: inset 0 0 0 1px var(--color-hairline);
+  font: 12.5px/18px ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 /* A path in backticks is a link to the file, at the same weight as inline code. */
 .crew-file-chip {
@@ -843,37 +863,37 @@ body:has(button[data-sidebar="resize-handle"]:active) * {
   align-items: center;
   gap: 4px;
   vertical-align: baseline;
-  padding: 1px 5px 1px 4px;
-  border-radius: 4px;
-  background: color-mix(in srgb, var(--text-color-kumo-default) 8%, transparent);
-  font: 13px/18px ui-monospace, SFMono-Regular, Menlo, monospace;
-  color: var(--text-color-kumo-default);
+  padding: 1px 6px 1px 5px;
+  border-radius: 6px;
+  background: var(--color-card);
+  box-shadow: inset 0 0 0 1px var(--color-hairline);
+  font: 12.5px/18px ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--color-text);
   transition: background-color 100ms ease;
 }
 .crew-file-chip:hover {
-  background: color-mix(in srgb, var(--text-color-kumo-default) 14%, transparent);
+  background: var(--color-hover);
 }
 
 /* One box per fence. shiki writes both themes as variables; light-dark picks. */
 .crew-code {
   margin: 8px 0;
   max-width: 100%;
-  border: 1px solid color-mix(in srgb, var(--text-color-kumo-default) 8%, transparent);
-  border-radius: 8px;
-  background: var(--color-kumo-base);
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  background: var(--color-sidebar);
   font: 12.5px/19px ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 .crew-code-head {
   display: flex;
-  border-radius: 7px 7px 0 0;
-  background: color-mix(in srgb, var(--text-color-kumo-default) 3%, transparent);
+  border-radius: 11px 11px 0 0;
   align-items: center;
   justify-content: space-between;
-  height: 28px;
+  gap: 6px;
+  height: 32px;
   padding: 0 6px 0 12px;
-  border-bottom: 1px solid color-mix(in srgb, var(--text-color-kumo-default) 8%, transparent);
-  font-size: 11px;
-  color: var(--text-color-kumo-subtle);
+  font: 500 11.5px/1 ui-sans-serif, -apple-system, system-ui, sans-serif;
+  color: var(--color-text-muted);
 }
 .crew-copy,
 .crew-code-copy {
@@ -883,17 +903,17 @@ body:has(button[data-sidebar="resize-handle"]:active) * {
   width: 22px;
   height: 22px;
   border-radius: 5px;
-  color: var(--text-color-kumo-subtle);
+  color: var(--color-text-muted);
   transition: background-color 100ms ease, color 100ms ease;
 }
 .crew-copy:hover,
 .crew-code-copy:hover {
-  background: color-mix(in srgb, var(--text-color-kumo-default) 8%, transparent);
-  color: var(--text-color-kumo-default);
+  background: color-mix(in srgb, var(--color-text) 8%, transparent);
+  color: var(--color-text);
 }
 .crew-code-body {
   margin: 0;
-  padding: 10px 12px;
+  padding: 2px 14px 12px;
   overflow-x: auto;
   overscroll-behavior-x: contain;
   tab-size: 2;
@@ -908,7 +928,7 @@ body:has(button[data-sidebar="resize-handle"]:active) * {
 /* A diff fence: the diff view is the body, the box keeps its head and copy. */
 .crew-code .crew-diff {
   border: 0;
-  border-radius: 0 0 7px 7px;
+  border-radius: 0 0 11px 11px;
   font-size: 12.5px;
 }
 .crew-md [data-streamdown="link"] {
@@ -944,31 +964,33 @@ body:has(button[data-sidebar="resize-handle"]:active) * {
   margin-right: 5px;
   vertical-align: -3px;
   object-fit: contain;
-  color: var(--text-color-kumo-default);
+  color: var(--color-text);
 }
 
 /* A tool's payload hangs under its row, narrower than the prose column so the
    box reads as belonging to the line above it. */
 .crew-tool-body {
-  margin-left: 6px;
-  padding-left: 14px;
+  margin-left: 9px;
+  padding-left: 20px;
 }
 .crew-tool-body .crew-code {
   margin: 4px 0 6px;
 }
 
-/* A message from another agent: the mirror of your bubble, in card ink, so the
-   right-hand side stays the things you typed. */
+/* A message from another agent: a letter in the timeline, framed rather than
+   filled, so the right-hand side stays the things you typed. */
 .crew-bubble.is-from-agent {
-  border-radius: 16px 16px 16px 4px;
-  background: var(--color-card);
+  max-width: 100%;
+  border-radius: 14px;
+  background: var(--color-canvas);
+  box-shadow: inset 0 0 0 1px var(--color-border);
   color: var(--color-text);
 }
 
 /* The line a search hit sent you to. It fades, because the point is to find it,
    not to keep it marked. */
 @keyframes crew-found {
-  from { background: color-mix(in srgb, var(--color-kumo-brand) 18%, transparent); }
+  from { background: color-mix(in srgb, var(--color-accent) 18%, transparent); }
   to { background: transparent; }
 }
 .crew-found {
@@ -977,4 +999,94 @@ body:has(button[data-sidebar="resize-handle"]:active) * {
 }
 @media (prefers-reduced-motion: reduce) {
   .crew-found { animation: none; background: var(--color-card); }
+}
+
+/* One icon set, one weight: Lucide at 1.75 reads a touch lighter than text at 13px. */
+svg.lucide {
+  stroke-width: 1.75;
+}
+
+/* The one input a page is about: the composer's well, so search reads like asking. */
+.crew-well {
+  border-radius: 16px;
+  background: var(--color-canvas);
+  box-shadow: inset 0 0 0 1px var(--color-border), 0 1px 2px oklch(0% 0 0 / 0.03);
+  transition: box-shadow 100ms ease;
+}
+.crew-well:focus-within {
+  box-shadow: inset 0 0 0 1px var(--color-border-strong), 0 1px 2px oklch(0% 0 0 / 0.03);
+}
+
+/* Rich tabs. The ring sits outside the 14px face, so a status never moves the title. */
+.crew-tab-face {
+  position: relative;
+  display: grid;
+  place-items: center;
+}
+.crew-tab-face::before {
+  content: "";
+  position: absolute;
+  inset: -3px;
+  border-radius: 999px;
+  pointer-events: none;
+}
+.crew-tab-face[data-ring="spin"]::before {
+  background: conic-gradient(from 0deg, transparent 0 55%, var(--color-warning) 100%);
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 1.5px), #000 calc(100% - 1.25px));
+  mask: radial-gradient(farthest-side, transparent calc(100% - 1.5px), #000 calc(100% - 1.25px));
+  animation: crew-spin 0.9s linear infinite;
+}
+.crew-tab-face[data-ring="warning"]::before {
+  box-shadow: inset 0 0 0 1.5px var(--color-warning);
+  animation: status-pulse 1.6s ease-in-out infinite;
+}
+.crew-tab-face[data-badge]::after {
+  content: "";
+  position: absolute;
+  top: -2px;
+  right: -3px;
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--color-info);
+  box-shadow: 0 0 0 1.5px var(--color-sidebar);
+}
+.crew-tab-face[data-badge="danger"]::after {
+  background: var(--color-danger);
+}
+@keyframes crew-spin {
+  to { transform: rotate(360deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .crew-tab-face::before { animation: none; }
+}
+
+/* The agent's work between two messages, as a timeline: one rail down the left,
+   each step a node on it. The node's disc is the canvas, so the rail passes
+   behind the glyph instead of through it. */
+.crew-timeline {
+  position: relative;
+}
+.crew-timeline::before {
+  content: "";
+  position: absolute;
+  top: 12px;
+  bottom: 12px;
+  left: 9px;
+  width: 1.5px;
+  border-radius: 1px;
+  background: var(--color-border-strong);
+}
+.crew-timeline > * {
+  position: relative;
+}
+.crew-node {
+  display: grid;
+  place-items: center;
+  width: 19px;
+  height: 19px;
+  flex-shrink: 0;
+  border-radius: 999px;
+  background: var(--color-canvas);
+  color: var(--color-icon);
 }

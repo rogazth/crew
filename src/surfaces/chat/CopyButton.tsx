@@ -1,4 +1,4 @@
-import { CheckIcon, CopyIcon } from "@phosphor-icons/react";
+import { CheckIcon, CopyIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 
 type Props = { text: string; className?: string };
@@ -30,7 +30,7 @@ export function CopyButton({ text, className }: Props) {
       className={className ?? "crew-copy"}
       {...(done ? { "data-done": "" } : {})}
     >
-      {done ? <CheckIcon className="size-3.5" weight="bold" /> : <CopyIcon className="size-3.5" />}
+      {done ? <CheckIcon className="size-3.5" /> : <CopyIcon className="size-3.5" />}
     </button>
   );
 }

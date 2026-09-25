@@ -37,7 +37,7 @@ type Props = {
 };
 
 const MONO = "ui-monospace, SFMono-Regular, Menlo, monospace";
-const MUTED = "var(--text-color-kumo-subtle)";
+const MUTED = "var(--color-text-muted)";
 
 const HIGHLIGHT = HighlightStyle.define([
   { tag: tags.heading1, fontSize: "1.6em", fontWeight: "600", letterSpacing: "-0.02em" },
@@ -71,7 +71,7 @@ const THEME = EditorView.theme({
   },
   ".cm-md-heading": { paddingTop: "0.5em" },
   ".cm-md-quote": {
-    borderLeft: "2px solid color-mix(in srgb, var(--text-color-kumo-default) 20%, transparent)",
+    borderLeft: "2px solid color-mix(in srgb, var(--color-text) 20%, transparent)",
     paddingLeft: "12px",
   },
   ".cm-md-inline-code": { padding: "1px 4px", borderRadius: "4px", background: CARD },
@@ -221,7 +221,7 @@ const THEME = EditorView.theme({
   ".cm-tooltip.cm-tooltip-autocomplete": {
     border: "none",
     borderRadius: "8px",
-    background: "var(--color-kumo-control, var(--color-canvas))",
+    background: "var(--color-surface)",
     boxShadow: "0 8px 24px rgb(0 0 0 / 0.16), 0 0 0 1px var(--color-border)",
     overflow: "hidden",
   },

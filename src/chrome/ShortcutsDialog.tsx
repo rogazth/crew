@@ -1,4 +1,5 @@
 import { useCallback } from "react";
+import { Kbd } from "./Kbd";
 import { Overlay } from "./kit";
 import { commandKeys, type CommandId } from "../lib/commands";
 
@@ -59,6 +60,7 @@ function sections(): { group: string; rows: Row[] }[] {
         [commandKeys("open-actions"), "All actions"],
         [commandKeys("search-messages"), "Search messages"],
         [commandKeys("open-settings"), "Settings"],
+        [`${commandKeys("zoom-in")}  ${commandKeys("zoom-out")}  ${commandKeys("zoom-reset")}`, "Zoom in / out / actual size"],
         [commandKeys("shortcuts"), "This sheet"],
       ],
     },
@@ -77,11 +79,15 @@ export function ShortcutsDialog({ onClose }: { onClose: () => void }) {
       >
         {sections().map((section) => (
           <div key={section.group} className="flex flex-col gap-1">
-            <div className="pb-1 text-[11px] font-medium tracking-wide text-kumo-subtle uppercase">{section.group}</div>
+            <div className="pb-1 text-[11px] font-medium text-text-muted">{section.group}</div>
             {section.rows.map(([keys, label]) => (
-              <div key={label} className="flex items-baseline gap-3">
-                <span className="w-24 shrink-0 font-mono text-[12px]">{keys}</span>
-                <span className="text-kumo-subtle">{label}</span>
+              <div key={label} className="flex h-7 items-center gap-3">
+                <span className="min-w-0 flex-1 truncate">{label}</span>
+                <span className="flex shrink-0 gap-1">
+                  {keys.split(/\s{2,}/).map((chord) => (
+                    <Kbd key={chord} keys={chord} className="h-5 px-1.5 text-[11px]" />
+                  ))}
+                </span>
               </div>
             ))}
           </div>

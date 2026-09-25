@@ -1,6 +1,8 @@
 import { lazy, Suspense } from "react";
 import { EmptyState } from "./EmptyState";
+import { HistoryView } from "./HistoryView";
 import { StubView } from "./StubView";
+import type { Confirm } from "../chrome/ConfirmDialog";
 import { commandKeys } from "../lib/commands";
 import type { ProjectFile, Session, Tab } from "../lib/types";
 
@@ -14,10 +16,13 @@ type Props = {
   onCreateWorkspace: () => void;
   files: ProjectFile[];
   onOpenPath: (path: string) => void;
+  /** A history entry picked: the history tab becomes the page, as a browser's does. */
+  onOpenHistory: (url: string) => void;
+  onConfirm: (confirm: Confirm) => void;
 };
 
 /** Routes the active tab to whatever fills the pane. Agents and terminals stay mounted in their overlays. */
-export function Surface({ tab, sessions, hasWorkspace, onCreateWorkspace, files, onOpenPath }: Props) {
+export function Surface({ tab, sessions, hasWorkspace, onCreateWorkspace, files, onOpenPath, onOpenHistory, onConfirm }: Props) {
   if (!hasWorkspace) {
     return (
       <EmptyState
@@ -32,7 +37,9 @@ export function Surface({ tab, sessions, hasWorkspace, onCreateWorkspace, files,
     );
   }
   if (tab.kind === "stub") {
-    return tab.stub === "terminal" ? null : <StubView stub={tab.stub} title={tab.title} />;
+    if (tab.stub === "terminal") return null;
+    if (tab.stub === "history") return <HistoryView onOpen={onOpenHistory} onConfirm={onConfirm} />;
+    return <StubView stub={tab.stub} title={tab.title} />;
   }
   // Pages stay mounted in their own overlay, like terminals.
   if (tab.kind === "browser") return null;

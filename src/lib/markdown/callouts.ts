@@ -53,7 +53,7 @@ const YELLOW = "light-dark(oklch(64% 0.14 80), oklch(80% 0.13 85))";
 const ORANGE = "light-dark(oklch(62% 0.17 55), oklch(76% 0.14 60))";
 const RED = "light-dark(oklch(56% 0.2 25), oklch(70% 0.17 22))";
 const PURPLE = "light-dark(oklch(55% 0.18 300), oklch(73% 0.14 300))";
-const GRAY = "var(--text-color-kumo-subtle)";
+const GRAY = "var(--color-text-muted)";
 
 const KINDS: Record<string, Kind> = {};
 function define(names: string[], kind: Kind) {

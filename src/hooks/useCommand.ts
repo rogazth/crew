@@ -50,7 +50,7 @@ export function useCommand(id: CommandId, handler: () => void) {
 }
 
 /** Register several handlers in one place (the app chrome). */
-export function useCommands(map: { [K in CommandId]?: () => void }) {
+export function useCommands(map: { [K in CommandId]?: (() => void) | undefined }) {
   const mapRef = useRef(map);
   useEffect(() => {
     mapRef.current = map;

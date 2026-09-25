@@ -16,7 +16,8 @@ const ACTIVITY_ROLES = new Set(["tool", "approval", "question", "reasoning"]);
 export type Row =
   | { kind: "message"; block: Block }
   | { kind: "activity"; id: string; blocks: Block[] }
-  | { kind: "footer"; id: string; usage: TurnUsage; at?: number }
+  /** `text` is the reply the footer closes, for its copy button; absent under a group. */
+  | { kind: "footer"; id: string; usage: TurnUsage; at?: number; text?: string }
   | { kind: "date"; id: string; at: number };
 
 export type Speaker = "user" | "agent" | "meta";
@@ -74,16 +75,18 @@ function footerFor(block: Block, usage: TurnUsage): Row {
     id: `footer-${block.id}`,
     usage,
     ...(block.at !== undefined ? { at: block.at } : {}),
+    ...(block.role === "assistant" && block.text.trim() ? { text: block.text } : {}),
   };
 }
 
-/** Same speaker 6, a change of speaker 20, meta 12; the footer hugs its reply. */
+/** Same speaker 10, a change of speaker 28, meta 16; the footer hugs its reply. */
 export function gapBefore(prev: Row | undefined, current: Row): string {
   if (!prev) return "";
-  if (current.kind === "footer") return "mt-1.5";
+  if (current.kind === "footer") return "mt-2";
   const from = speaker(prev);
   const to = speaker(current);
-  if (from === "meta" || to === "meta") return "mt-3";
-  if (from === to) return "mt-1.5";
-  return "mt-5";
+  if (from === "meta" || to === "meta") return "mt-4";
+  if (from === to) return "mt-2.5";
+  return "mt-7";
 }
+
