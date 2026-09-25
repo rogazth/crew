@@ -1,8 +1,10 @@
 {
-  // The main process and the preload. Nothing is emitted: esbuild bundles them.
+  // The main process, the preload and the e2e harness. Nothing is emitted:
+  // esbuild bundles electron/ and Node runs e2e/ by stripping types, which is
+  // why only erasable syntax is allowed and imports spell out `.ts`.
   "compilerOptions": {
     "target": "ES2022",
-    // DOM for the preload, which hands the page `File` paths.
+    // DOM for the preload and for callbacks the e2e specs run inside the page.
     "lib": ["ES2022", "DOM", "DOM.Iterable", "DOM.AsyncIterable"],
     "types": ["node"],
     "module": "ESNext",
@@ -21,5 +23,5 @@
     "exactOptionalPropertyTypes": true,
     "noUncheckedIndexedAccess": true
   },
-  "include": ["electron/**/*.ts"]
+  "include": ["electron/**/*.ts", "e2e/**/*.ts"]
 }

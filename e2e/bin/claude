@@ -1,0 +1,382 @@
+#!/usr/bin/env node
+// A stand-in for Claude Code that the e2e sandbox puts first on the provider
+// search path ($HOME/.local/bin). It takes the argv Crew builds in
+// src/lib/sessionCommand.ts and leaves the traces Crew reads from the real one:
+//
+// - the terminal title: `✳ <name>` at rest, `◐◓◑◒ <name>` while a turn runs
+//   (src/lib/terminalStatus.ts);
+// - the transcript at ~/.claude/projects/<slug(cwd)>/<id>.jsonl, with `user`
+//   records per turn and `ai-title` records for names (crates/crew-core/src/
+//   claude_title.rs, provider_session.rs);
+// - the hooks passed in `--settings`: SessionStart on start and on /clear,
+//   Notification (permission_prompt) on `ask`, each run with `sh -c` and the
+//   hook's JSON on stdin, as Claude runs them.
+//
+// It reads the terminal raw, like a TUI. A line is submitted with Enter;
+// bracketed paste is accepted and a newline inside a paste does not submit.
+//
+//   work N        a turn that keeps printing for N seconds
+//   title <text>  names the session (ai-title record + OSC title)
+//   rename <text> names it in the transcript alone (ai-title record); the
+//                 terminal's title keeps the old name until its next repaint
+//   ask           raises a permission prompt and waits for a key
+//   url <u>       clears the screen, and 300 ms later records the link as the
+//                 answer in the transcript and prints it alone on the top
+//                 line, from the first column: a test can point at it without
+//                 knowing the cell size, once the transcript has it
+//   !<command>    bash mode: runs the command with sh in the session's cwd
+//   /clear        moves to a new session id, as Claude does
+//   after N <cmd> runs <cmd> N seconds later, as if typed then: the CLI acting
+//                 on its own while its tab is out of sight
+//   anything else a short turn of about a second
+//
+// Resumed (`--resume`), it repaints the conversation for about a second before
+// its title settles, the way Claude redraws a loaded transcript.
+//
+// Every launch appends its argv, cwd and pid as one JSON line to
+// $HOME/fake-claude.log. Ctrl+C twice or Ctrl+D on an empty line exits.
+//
+// Builtins come from process.getBuiltinModule, so the file runs the same as a
+// module (inside this package) and as a script (copied into a sandbox).
+"use strict";
+const { spawnSync } = process.getBuiltinModule("node:child_process");
+const { randomUUID } = process.getBuiltinModule("node:crypto");
+const fs = process.getBuiltinModule("node:fs");
+const os = process.getBuiltinModule("node:os");
+const path = process.getBuiltinModule("node:path");
+
+const HOME = process.env.HOME || os.homedir();
+const CWD = process.cwd();
+const IDLE = "✳";
+const SPIN = ["◐", "◓", "◑", "◒"];
+
+const argv = process.argv.slice(2);
+fs.appendFileSync(
+  path.join(HOME, "fake-claude.log"),
+  `${JSON.stringify({ argv, cwd: CWD, pid: process.pid, at: Date.now() })}\n`,
+);
+
+function flag(name) {
+  const at = argv.indexOf(name);
+  return at >= 0 && at + 1 < argv.length ? argv[at + 1] : null;
+}
+
+let settings = {};
+try {
+  settings = JSON.parse(flag("--settings") || "{}");
+} catch {
+  settings = {};
+}
+const resumeId = flag("--resume");
+const model = flag("--model");
+let sessionId = resumeId || flag("--session-id") || randomUUID();
+
+// Claude files a project's sessions under its cwd with every UTF-16 unit that
+// is not ASCII alphanumeric replaced by a dash; a JS regex works on those units.
+const projectDir = path.join(HOME, ".claude", "projects", CWD.replace(/[^a-zA-Z0-9]/g, "-"));
+const transcript = () => path.join(projectDir, `${sessionId}.jsonl`);
+
+const out = (text) => process.stdout.write(text);
+
+// The real CLI refuses these two, and Crew's launcher has to pick right.
+if (resumeId && !fs.existsSync(transcript())) {
+  out(`No conversation found with session ID: ${resumeId}\r\n`);
+  process.exit(1);
+}
+if (!resumeId && flag("--session-id") && fs.existsSync(transcript())) {
+  out(`Error: Session ID ${sessionId} is already in use.\r\n`);
+  process.exit(1);
+}
+
+function record(entry) {
+  fs.mkdirSync(projectDir, { recursive: true });
+  fs.appendFileSync(transcript(), `${JSON.stringify({ ...entry, sessionId, cwd: CWD, timestamp: new Date().toISOString() })}\n`);
+}
+
+/** The newest name in the transcript, as claude_title.rs reads it. */
+function storedName() {
+  try {
+    let name = null;
+    for (const line of fs.readFileSync(transcript(), "utf8").split("\n")) {
+      if (!line.includes("-title")) continue;
+      try {
+        const entry = JSON.parse(line);
+        if (entry.type === "ai-title" && entry.aiTitle) name = entry.aiTitle;
+      } catch {}
+    }
+    return name;
+  } catch {
+    return null;
+  }
+}
+
+function runHooks(event, payload, matchWith) {
+  const groups = (settings.hooks && settings.hooks[event]) || [];
+  for (const group of groups) {
+    if (matchWith !== undefined && group.matcher && !new RegExp(`^(?:${group.matcher})$`).test(matchWith)) continue;
+    for (const hook of group.hooks || []) {
+      if (hook.type !== "command") continue;
+      spawnSync("sh", ["-c", hook.command], {
+        input: JSON.stringify({
+          session_id: sessionId,
+          transcript_path: transcript(),
+          cwd: CWD,
+          hook_event_name: event,
+          ...payload,
+        }),
+        stdio: ["pipe", "ignore", "ignore"],
+        cwd: CWD,
+      });
+    }
+  }
+}
+
+let name = storedName() || "Claude Code";
+let busy = false;
+let spinner = null;
+let spinAt = 0;
+let pending = null; // what a key answers while `ask` waits
+
+function title(mark) {
+  out(`\x1b]0;${mark} ${name}\x07`);
+}
+
+function prompt() {
+  out("\r\n> ");
+}
+
+function startSpin() {
+  busy = true;
+  title(SPIN[spinAt++ % SPIN.length]);
+  spinner = setInterval(() => title(SPIN[spinAt++ % SPIN.length]), 120);
+}
+
+function stopSpin() {
+  if (spinner) clearInterval(spinner);
+  spinner = null;
+  busy = false;
+  title(IDLE);
+}
+
+/** A turn that prints steadily for `ms`, then settles back at the prompt. */
+function turn(ms, after) {
+  startSpin();
+  let n = 0;
+  const ticker = setInterval(() => out(`\r\n  working… ${++n}`), 150);
+  setTimeout(() => {
+    clearInterval(ticker);
+    record({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "Done." }] } });
+    out("\r\n● Done.");
+    stopSpin();
+    if (after) after();
+    prompt();
+  }, ms);
+}
+
+function submit(line) {
+  const text = line.trim();
+  if (!text) return prompt();
+  const later = /^after\s+(\d+(?:\.\d+)?)\s+(.+)$/.exec(text);
+  if (later) {
+    setTimeout(() => {
+      out(`\r\n> ${later[2]}`);
+      submit(later[2]);
+    }, Number(later[1]) * 1000);
+    return prompt();
+  }
+  if (text === "/clear") {
+    sessionId = randomUUID();
+    name = "Claude Code";
+    runHooks("SessionStart", { source: "clear" });
+    out("\r\n(no content)");
+    title(IDLE);
+    return prompt();
+  }
+  record({ type: "user", message: { role: "user", content: text } });
+  if (text.startsWith("!")) {
+    const result = spawnSync("sh", ["-c", text.slice(1)], { cwd: CWD, encoding: "utf8" });
+    out(`\r\n${`${result.stdout || ""}${result.stderr || ""}`.replace(/\n/g, "\r\n")}`);
+    return prompt();
+  }
+  const [command, ...rest] = text.split(/\s+/);
+  const arg = rest.join(" ");
+  if (command === "work") return turn(Math.max(0, Number(arg) || 1) * 1000);
+  if (command === "title" && arg) {
+    return turn(300, () => {
+      name = arg;
+      record({ type: "ai-title", aiTitle: arg });
+      title(IDLE);
+    });
+  }
+  if (command === "rename" && arg) {
+    name = arg;
+    record({ type: "ai-title", aiTitle: arg });
+    return prompt();
+  }
+  if (command === "url" && arg) {
+    // The screen clears at once, so the link printed before this one is gone
+    // well before this one lands in the transcript and on screen.
+    out("\x1b[2J\x1b[H");
+    startSpin();
+    setTimeout(() => {
+      record({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text: arg }] } });
+      out(`\x1b[2J\x1b[H${arg}`);
+      stopSpin();
+      prompt();
+    }, 300);
+    return;
+  }
+  if (command === "ask") {
+    startSpin();
+    setTimeout(() => {
+      // Claude stops the spinner while it waits; only the hook says why.
+      if (spinner) clearInterval(spinner);
+      spinner = null;
+      title(IDLE);
+      runHooks(
+        "Notification",
+        { message: "Claude needs your permission to use Bash", notification_type: "permission_prompt" },
+        "permission_prompt",
+      );
+      out("\r\n  Allow Bash? 1. Yes  2. No ");
+      pending = () => turn(1000);
+    }, 300);
+    return;
+  }
+  turn(1000);
+}
+
+// Input: raw bytes, escape sequences dropped, bracketed paste unwrapped.
+let buffer = "";
+let pasting = false;
+let interrupts = 0;
+
+function exit() {
+  out("\x1b[?2004l\x1b[?1004l\r\n");
+  process.exit(0);
+}
+
+function onKey(ch) {
+  if (pending && !pasting) {
+    const answer = pending;
+    pending = null;
+    out(ch === "\r" ? "" : ch);
+    answer();
+    return;
+  }
+  if (ch === "\x03") {
+    if (buffer) {
+      buffer = "";
+      interrupts = 0;
+      out("\r\n> ");
+      return;
+    }
+    if (++interrupts >= 2) exit();
+    out("\r\n  Press Ctrl-C again to exit");
+    prompt();
+    return;
+  }
+  interrupts = 0;
+  if (ch === "\x04") {
+    if (!buffer) exit();
+    return;
+  }
+  if (ch === "\r" || ch === "\n") {
+    if (pasting) {
+      buffer += "\n";
+      out("\r\n  ");
+      return;
+    }
+    if (busy) return; // Claude queues it; the fake keeps it simple and waits.
+    const line = buffer;
+    buffer = "";
+    submit(line);
+    return;
+  }
+  if (ch === "\x7f" || ch === "\b") {
+    if (buffer) {
+      buffer = buffer.slice(0, -1);
+      out("\b \b");
+    }
+    return;
+  }
+  if (ch < " ") return;
+  buffer += ch;
+  out(ch);
+}
+
+function feed(data) {
+  let i = 0;
+  while (i < data.length) {
+    if (data.startsWith("\x1b[200~", i)) {
+      pasting = true;
+      i += 6;
+      continue;
+    }
+    if (data.startsWith("\x1b[201~", i)) {
+      pasting = false;
+      i += 6;
+      continue;
+    }
+    if (data[i] === "\x1b") {
+      // CSI (ESC [ … final byte), SS3 (ESC O x) or a lone Alt+key: none of them type text.
+      if (data[i + 1] === "[") {
+        let j = i + 2;
+        while (j < data.length && !/[@-~]/.test(data[j])) j++;
+        i = j + 1;
+      } else {
+        i += data[i + 1] === "O" ? 3 : 2;
+      }
+      continue;
+    }
+    const code = data.codePointAt(i);
+    const ch = String.fromCodePoint(code);
+    i += ch.length;
+    onKey(ch);
+  }
+}
+
+// Raw before the SessionStart hook runs, so a test that waits for the hook's
+// record ($CREW_CLAUDE_BIND_DIR/<id>.json) knows keys typed from then on land.
+if (process.stdin.isTTY) process.stdin.setRawMode(true);
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", feed);
+process.stdin.on("end", () => process.exit(0));
+for (const signal of ["SIGHUP", "SIGTERM"]) process.on(signal, () => process.exit(0));
+
+runHooks("SessionStart", { source: resumeId ? "resume" : "startup" });
+// Bracketed paste and focus reporting on, as Claude turns them on.
+out("\x1b[?2004h\x1b[?1004h");
+out(`Fake Claude Code${model ? ` (${model})` : ""}\r\n`);
+out(`  session ${sessionId}\r\n  cwd ${CWD}\r\n`);
+if (resumeId) {
+  out("  resumed\r\n");
+  redraw(() => {
+    title(IDLE);
+    out("> ");
+  });
+} else {
+  title(IDLE);
+  out("> ");
+}
+
+/** The loaded conversation, painted frame by frame, as a resume does before it settles. */
+function redraw(done) {
+  const history = [];
+  try {
+    for (const line of fs.readFileSync(transcript(), "utf8").split("\n")) {
+      try {
+        const entry = JSON.parse(line);
+        if (entry.type === "user") history.push(`> ${entry.message.content}`);
+        if (entry.type === "assistant") history.push("● Done.");
+      } catch {}
+    }
+  } catch {}
+  let frame = 0;
+  const painter = setInterval(() => {
+    out(`\x1b[2J\x1b[H  loading conversation ${++frame}\r\n${history.join("\r\n")}\r\n`);
+    if (frame < 9) return;
+    clearInterval(painter);
+    done();
+  }, 120);
+}

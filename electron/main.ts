@@ -27,13 +27,17 @@ function crewdPath(): string {
   return path.join(app.getAppPath(), "target/debug/crewd");
 }
 
+// e2e loads the built renderer, so it never depends on (or talks to) whatever
+// dev server holds port 1420, and it runs under the packaged app's policy.
+const fromDist = app.isPackaged || process.env.CREW_RENDERER === "dist";
+
 function csp(): string {
-  const connect = app.isPackaged
+  const connect = fromDist
     ? "ws://127.0.0.1:*"
     : "http://localhost:1420 ws://localhost:1420 ws://127.0.0.1:*";
   return [
     "default-src 'self'",
-    app.isPackaged ? "script-src 'self'" : "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
+    fromDist ? "script-src 'self'" : "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
     "style-src 'self' 'unsafe-inline'",
     "img-src 'self' data: blob: https://www.google.com",
     "font-src 'self' data:",
@@ -58,7 +62,7 @@ const DEV_ORIGIN = "http://127.0.0.1:1420";
 function allowedNavigation(url: string): boolean {
   try {
     const parsed = new URL(url);
-    if (!app.isPackaged) return parsed.origin === DEV_ORIGIN;
+    if (!fromDist) return parsed.origin === DEV_ORIGIN;
     if (parsed.protocol !== "file:") return false;
     const root = pathToFileURL(path.join(app.getAppPath(), "dist")).href;
     return parsed.href === root || parsed.href.startsWith(`${root}/`);
@@ -207,7 +211,7 @@ function createWindow(): void {
   win.webContents.on("will-redirect", (event) => {
     if (!allowedNavigation(event.url)) event.preventDefault();
   });
-  if (app.isPackaged) {
+  if (fromDist) {
     void win.loadFile(path.join(app.getAppPath(), "dist/index.html"));
   } else {
     void win.loadURL("http://127.0.0.1:1420");
