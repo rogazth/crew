@@ -27,14 +27,17 @@ function crewdPath(): string {
   return path.join(app.getAppPath(), "target/debug/crewd");
 }
 
+// scripts/app.mjs moves a worktree's dev server off 1420 so checkouts run side by side.
+const DEV_PORT = Number(process.env.CREW_DEV_PORT) || 1420;
+
 // e2e loads the built renderer, so it never depends on (or talks to) whatever
-// dev server holds port 1420, and it runs under the packaged app's policy.
+// dev server holds the dev port, and it runs under the packaged app's policy.
 const fromDist = app.isPackaged || process.env.CREW_RENDERER === "dist";
 
 function csp(): string {
   const connect = fromDist
     ? "ws://127.0.0.1:*"
-    : "http://localhost:1420 ws://localhost:1420 ws://127.0.0.1:*";
+    : `http://localhost:${DEV_PORT} ws://localhost:${DEV_PORT} ws://127.0.0.1:*`;
   return [
     "default-src 'self'",
     fromDist ? "script-src 'self'" : "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
@@ -57,7 +60,7 @@ function allowedUrl(url: string): boolean {
   }
 }
 
-const DEV_ORIGIN = "http://127.0.0.1:1420";
+const DEV_ORIGIN = `http://127.0.0.1:${DEV_PORT}`;
 
 function allowedNavigation(url: string): boolean {
   try {
@@ -214,7 +217,7 @@ function createWindow(): void {
   if (fromDist) {
     void win.loadFile(path.join(app.getAppPath(), "dist/index.html"));
   } else {
-    void win.loadURL("http://127.0.0.1:1420");
+    void win.loadURL(DEV_ORIGIN);
   }
   win.on("closed", () => {
     win = null;
@@ -257,7 +260,11 @@ function registerIpc(): void {
 app.setName("Crew");
 // userData follows the name, and crewd keeps its database and socket there: a dev
 // build on the installed app's folder would drive the installed app's sessions.
-if (!app.isPackaged) app.setPath("userData", path.join(app.getPath("appData"), "Crew Dev"));
+// scripts/app.mjs points a git worktree at a folder inside it, so each checkout
+// gets its own database and removing the worktree removes it.
+if (!app.isPackaged) {
+  app.setPath("userData", process.env.CREW_DATA_DIR || path.join(app.getPath("appData"), "Crew Dev"));
+}
 app.setAboutPanelOptions({ applicationName: "Crew", applicationVersion: app.getVersion(), version: sha });
 
 app.whenReady().then(async () => {

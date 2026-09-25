@@ -13,6 +13,9 @@ reference/
 # Screenshots from scripts/shot.mjs
 out/
 
+# Per-worktree dev data (database, socket), see scripts/app.mjs
+.crew-dev/
+
 # tsc incremental cache
 *.tsbuildinfo
 .DS_Store
