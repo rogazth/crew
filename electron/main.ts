@@ -251,6 +251,9 @@ function registerIpc(): void {
 }
 
 app.setName("Crew");
+// userData follows the name, and crewd keeps its database and socket there: a dev
+// build on the installed app's folder would drive the installed app's sessions.
+if (!app.isPackaged) app.setPath("userData", path.join(app.getPath("appData"), "Crew Dev"));
 app.setAboutPanelOptions({ applicationName: "Crew", applicationVersion: app.getVersion(), version: sha });
 
 app.whenReady().then(async () => {
