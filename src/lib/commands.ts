@@ -29,9 +29,9 @@ export const COMMANDS = {
   "open-workspace": { label: "Open Workspace", keys: "Mod+O" },
   "switch-workspace": { label: "Switch Workspace or Worktree", keys: "Mod+Shift+O" },
   // The digits belong to workspaces; the tab strip keeps only the cycling pair.
-  // ⌃⌘ spelled out, not Mod+Ctrl: off macOS that collapses to Ctrl alone, which is Back and Forward.
-  "next-workspace": { label: "Next Workspace", keys: { key: "]", ctrl: true, meta: true } },
-  "prev-workspace": { label: "Previous Workspace", keys: { key: "[", ctrl: true, meta: true } },
+  // Each level up the ladder takes a harder chord: tabs ⌘⇧, worktrees ⌃⌘, workspaces ⌘⌥.
+  "next-workspace": { label: "Next Workspace", keys: { key: "]", mod: true, alt: true } },
+  "prev-workspace": { label: "Previous Workspace", keys: { key: "[", mod: true, alt: true } },
   "workspace-1": { label: "Go to Workspace 1", keys: "Mod+1" },
   "workspace-2": { label: "Go to Workspace 2", keys: "Mod+2" },
   "workspace-3": { label: "Go to Workspace 3", keys: "Mod+3" },
@@ -42,23 +42,24 @@ export const COMMANDS = {
   "workspace-8": { label: "Go to Workspace 8", keys: "Mod+8" },
   "workspace-9": { label: "Go to Workspace 9", keys: "Mod+9" },
 
-  // Worktrees of the workspace on screen: the workspace chords plus ⌥.
-  "next-worktree": { label: "Next Worktree", keys: { key: "]", mod: true, alt: true } },
-  "prev-worktree": { label: "Previous Worktree", keys: { key: "[", mod: true, alt: true } },
-  "worktree-1": { label: "Go to Worktree 1", keys: { key: "1", mod: true, alt: true } },
-  "worktree-2": { label: "Go to Worktree 2", keys: { key: "2", mod: true, alt: true } },
-  "worktree-3": { label: "Go to Worktree 3", keys: { key: "3", mod: true, alt: true } },
-  "worktree-4": { label: "Go to Worktree 4", keys: { key: "4", mod: true, alt: true } },
-  "worktree-5": { label: "Go to Worktree 5", keys: { key: "5", mod: true, alt: true } },
-  "worktree-6": { label: "Go to Worktree 6", keys: { key: "6", mod: true, alt: true } },
-  "worktree-7": { label: "Go to Worktree 7", keys: { key: "7", mod: true, alt: true } },
-  "worktree-8": { label: "Go to Worktree 8", keys: { key: "8", mod: true, alt: true } },
-  "worktree-9": { label: "Go to Worktree 9", keys: { key: "9", mod: true, alt: true } },
+  // Worktrees of the workspace on screen, cycled and picked with one chord.
+  // ⌃⌘ spelled out, not Mod+Ctrl: off macOS that collapses to Ctrl alone, which is Back and Forward.
+  "next-worktree": { label: "Next Worktree", keys: { key: "]", ctrl: true, meta: true } },
+  "prev-worktree": { label: "Previous Worktree", keys: { key: "[", ctrl: true, meta: true } },
+  "worktree-1": { label: "Go to Worktree 1", keys: { key: "1", ctrl: true, meta: true } },
+  "worktree-2": { label: "Go to Worktree 2", keys: { key: "2", ctrl: true, meta: true } },
+  "worktree-3": { label: "Go to Worktree 3", keys: { key: "3", ctrl: true, meta: true } },
+  "worktree-4": { label: "Go to Worktree 4", keys: { key: "4", ctrl: true, meta: true } },
+  "worktree-5": { label: "Go to Worktree 5", keys: { key: "5", ctrl: true, meta: true } },
+  "worktree-6": { label: "Go to Worktree 6", keys: { key: "6", ctrl: true, meta: true } },
+  "worktree-7": { label: "Go to Worktree 7", keys: { key: "7", ctrl: true, meta: true } },
+  "worktree-8": { label: "Go to Worktree 8", keys: { key: "8", ctrl: true, meta: true } },
+  "worktree-9": { label: "Go to Worktree 9", keys: { key: "9", ctrl: true, meta: true } },
 
   // Making things
   "new-agent": { label: "New Agent", keys: "Mod+Shift+N" },
   "new-session": { label: "New Session", keys: "Mod+N" },
-  "new-worktree": { label: "New Worktree", keys: { key: "N", mod: true, alt: true } },
+  "new-worktree": { label: "New Worktree", keys: { key: "N", ctrl: true, meta: true } },
 
   // Find and zoom — bound by whatever fills the active tab, a terminal or a page.
   find: { label: "Find", keys: "Mod+F" },

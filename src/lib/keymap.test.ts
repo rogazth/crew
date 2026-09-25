@@ -242,12 +242,12 @@ describe("resolveForward", () => {
     expect(resolveForward(press("k", { meta: true }), commands, true)).toEqual({ id: "first", run: true });
   });
 
-  it("keeps Back apart from the workspace pair on both platforms", () => {
-    const commands = live("prev-workspace", "browser-back");
+  it("keeps Back apart from the worktree pair on both platforms", () => {
+    const commands = live("prev-worktree", "browser-back");
     expect(resolveForward(press("[", { ctrl: true }), commands, false)).toEqual({ id: "browser-back", run: true });
     expect(resolveForward(press("[", { meta: true }), commands, true)).toEqual({ id: "browser-back", run: true });
     expect(resolveForward(press("[", { meta: true, ctrl: true }), commands, true)).toEqual({
-      id: "prev-workspace",
+      id: "prev-worktree",
       run: true,
     });
   });
@@ -297,32 +297,32 @@ describe("a Latin American Mac", () => {
     expect(run("+", "BracketRight", { meta: true })).toBeNull();
   });
 
-  it("switches worktrees with ⌘⌥ on the { and } keys, which ⌥ makes dead", () => {
-    expect(run("Dead", "Quote", { meta: true, alt: true })).toBe("prev-worktree");
-    expect(run("Dead", "Backslash", { meta: true, alt: true })).toBe("next-worktree");
-    expect(run("}", "Backslash", { meta: true, alt: true })).toBe("next-worktree");
+  it("switches workspaces with ⌘⌥ on the { and } keys, which ⌥ makes dead", () => {
+    expect(run("Dead", "Quote", { meta: true, alt: true })).toBe("prev-workspace");
+    expect(run("Dead", "Backslash", { meta: true, alt: true })).toBe("next-workspace");
+    expect(run("}", "Backslash", { meta: true, alt: true })).toBe("next-workspace");
   });
 
-  it("does not switch worktrees with ⌘⌥´ or ⌘⌥+", () => {
+  it("does not switch workspaces with ⌘⌥´ or ⌘⌥+", () => {
     expect(run("«", "BracketLeft", { meta: true, alt: true })).toBeNull();
     expect(run("Dead", "BracketRight", { meta: true, alt: true })).toBeNull();
   });
 
-  it("cycles tabs and workspaces on the same keys", () => {
+  it("cycles tabs and worktrees on the same keys", () => {
     expect(run("]", "Backslash", { meta: true, shift: true })).toBe("next-tab");
     expect(run("[", "Quote", { meta: true, shift: true })).toBe("prev-tab");
-    expect(run("}", "Backslash", { meta: true, ctrl: true })).toBe("next-workspace");
-    expect(run("{", "Quote", { meta: true, ctrl: true })).toBe("prev-workspace");
+    expect(run("}", "Backslash", { meta: true, ctrl: true })).toBe("next-worktree");
+    expect(run("{", "Quote", { meta: true, ctrl: true })).toBe("prev-worktree");
+    expect(run("1", "Digit1", { meta: true, ctrl: true })).toBe("worktree-1");
   });
 
-  it("still reads ⌥ letters and digits by the key under them", () => {
+  it("still reads ⌥ letters by the key under them", () => {
     expect(run("ˆ", "KeyI", { meta: true, alt: true })).toBe("browser-devtools");
-    expect(run("¡", "Digit1", { meta: true, alt: true })).toBe("worktree-1");
   });
 
   it("falls back to the US key when no layout has been read", () => {
     const id = resolveForward(press("Dead", { meta: true, alt: true, code: "BracketRight" }), commands, true)?.id;
-    expect(id).toBe("next-worktree");
+    expect(id).toBe("next-workspace");
   });
 });
 
