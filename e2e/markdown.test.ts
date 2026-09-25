@@ -302,7 +302,9 @@ test("M2: the outline follows the note and keeps its setting; Always include ind
     ["Guide", "Setup", "Usage", "Troubleshooting"],
   );
 
-  // The outline marks the section at the top of the pane as the note moves.
+  // The outline marks the section at the top of the pane: as soon as the note
+  // opens, then as the note moves (Q4).
+  await sectionIs(crew, "Guide", "opened, the outline marks the section at the top of the pane");
   const scroller = page.locator(".cm-scroller").filter({ visible: true });
   const heading = editor(crew).locator(".cm-line").filter({ hasText: /^Usage$/ });
   await scroller.hover();
@@ -327,14 +329,6 @@ test("M2: the outline follows the note and keeps its setting; Always include ind
   await sectionIs(crew, "Troubleshooting", "at the end of the note, the outline marks the last section");
   await page.keyboard.press(`${MOD}+Home`);
   await sectionIs(crew, "Guide", "back at the top, the outline marks the first heading");
-
-  // The caret alone, one line at a time into Usage: the pane follows it only
-  // as far as it must, so its top stays in Setup (Q4).
-  await t.test("the caret moved into Usage marks Usage", { todo: "Q4: the outline marks the section at the top of the pane, not the caret's (MarkdownEditor.tsx activeHeading)" }, async () => {
-    const usage = GUIDE.split("\n").indexOf("## Usage");
-    for (let line = 0; line < usage + 2; line++) await page.keyboard.press("ArrowDown");
-    await sectionIs(crew, "Usage", "the caret is in Usage");
-  });
 
   // Git ignores vendor-docs, so ⌘P does not find what is in it…
   assert.ok((await paletteRows(crew, "guide", "notes/guide.md")).includes("notes/guide.md"), "⌘P has indexed the workspace");

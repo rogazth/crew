@@ -388,6 +388,9 @@ export function MarkdownEditor({ path, loaded, onChange, files, onOpenPath, outl
       });
     };
     view.scrollDOM.addEventListener("scroll", onScroll, { passive: true });
+    // Opened, the section at the top is marked before any scroll; the outline
+    // is read off the text, since the one in state lands a render later.
+    frame = requestAnimationFrame(() => setActive(activeHeading(view, outlineOf(view.state))));
 
     return () => {
       clearTimeout(outlineTimer);
