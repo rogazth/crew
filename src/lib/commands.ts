@@ -66,6 +66,7 @@ export const COMMANDS = {
   "search-messages": { label: "Search Messages", keys: "Mod+Shift+F" },
   "open-settings": { label: "Settings", keys: "Mod+," },
   "save-file": { label: "Save File", keys: "Mod+S" },
+  "toggle-outline": { label: "Toggle Outline" },
 } as const satisfies Record<string, Command>;
 
 export type CommandId = keyof typeof COMMANDS;

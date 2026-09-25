@@ -19,7 +19,7 @@ use crew_core::turns::TurnHost;
 use crew_core::workspace;
 use crew_protocol::{
     self as proto, Auth, DaemonInfo, Id, IdName, IdStatus, Ids, Key, KeyValue, ListProjectFiles, Name, NamePath, Names, ProviderDiscover,
-    OptionalId, PathArg, PathContents, PtyAck, PtyAttach, PtyAttached, PtyKill, PtyResize, PtySpawn, PtyWrite,
+    OptionalId, PathArg, PathBytes, PathContents, PtyAck, PtyAttach, PtyAttached, PtyKill, PtyResize, PtySpawn, PtyWrite,
     Request, RoutineRunNow, RoutineUpsert, SessionCreate, SessionCreated, SessionId, SessionUpdate, TempFile,
     SearchQuery, TranscriptApply, TranscriptTail, TurnAnswer, TurnRespond,
     TurnStart, TurnStarted, WorkspaceId,
@@ -962,6 +962,11 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
         "read_file_base64" => {
             let PathArg { path } = parse(params)?;
             json(block(move || files::read_base64(&path)).await?)
+        }
+        "create_file_base64" => {
+            let PathBytes { path, base64_contents } = parse(params)?;
+            block(move || files::create_base64(&path, &base64_contents)).await?;
+            Ok(Value::Null)
         }
         "write_temp_file" => {
             let TempFile { extension, base64_contents } = parse(params)?;

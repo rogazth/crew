@@ -173,16 +173,25 @@ export const discoverProviderSession = (id: string, cwd: string, since: number):
 export const readFileBase64 = (path: string): Promise<{ mime: string; data: string }> =>
   client.request("read_file_base64", { path });
 
-/** Clipboard files have no path; the CLIs Crew hosts only take paths. */
-export async function writeTempFile(file: File): Promise<string> {
+async function base64Of(file: File): Promise<string> {
   const bytes = new Uint8Array(await file.arrayBuffer());
   // fromCharCode takes the array as arguments, so a whole screenshot blows the stack.
   let binary = "";
   for (let i = 0; i < bytes.length; i += 0x8000) {
     binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
   }
+  return btoa(binary);
+}
+
+/** Clipboard files have no path; the CLIs Crew hosts only take paths. */
+export async function writeTempFile(file: File): Promise<string> {
   const extension = file.type.split("/")[1] ?? file.name.split(".").pop() ?? "bin";
-  return client.request("write_temp_file", { extension, base64Contents: btoa(binary) });
+  return client.request("write_temp_file", { extension, base64Contents: await base64Of(file) });
+}
+
+/** A new file at `path`, parent folders included. Fails rather than overwrite. */
+export async function createFile(path: string, file: File): Promise<void> {
+  return client.request("create_file_base64", { path, base64Contents: await base64Of(file) });
 }
 
 /** A committed main-frame navigation. The daemon drops anything that is not http(s). */

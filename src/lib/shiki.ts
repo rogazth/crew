@@ -76,3 +76,23 @@ export async function highlightInline(code: string, lang: string): Promise<strin
     structure: "inline",
   });
 }
+
+/** A colored run of code: `offset` into the source, colors as `--shiki-*` variables. */
+export type CodeToken = { offset: number; length: number; style: string };
+
+/** Tokens for an editor to paint over its own text. `null` when the grammar is missing. */
+export async function highlightTokens(code: string, lang: string): Promise<CodeToken[] | null> {
+  const core = await get();
+  try {
+    await ensureLang(core, lang);
+  } catch {
+    return null;
+  }
+  const { tokens } = core.codeToTokens(code, { lang, themes: THEMES, defaultColor: false });
+  return tokens.flat().flatMap((token) => {
+    const style = Object.entries(token.htmlStyle ?? {})
+      .map(([key, value]) => `${key}:${value}`)
+      .join(";");
+    return style && token.content.trim() ? [{ offset: token.offset, length: token.content.length, style }] : [];
+  });
+}

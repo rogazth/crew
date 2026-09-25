@@ -200,7 +200,7 @@ const commands: Record<string, (args: Row) => unknown> = {
   state_get: ({ key }) => state.get(key as string) ?? null,
   state_set: ({ key, value }) => void state.set(key as string, value as string),
   list_project_files: () =>
-    ["src/App.tsx", "src/main.tsx", "src/lib/tabs.ts", "README.md"].map((relative) => ({
+    ["src/App.tsx", "src/main.tsx", "src/lib/tabs.ts", "README.md", "docs/mock.png"].map((relative) => ({
       name: relative.split("/").pop(),
       path: `/Users/me/Developer/experiments/crew/${relative}`,
       relative,
@@ -211,6 +211,7 @@ const commands: Record<string, (args: Row) => unknown> = {
   path_exists: () => false,
   read_file_base64: () => ({ mime: "image/png", data: MOCK_PNG }),
   write_temp_file: () => "/tmp/crew/mock.png",
+  create_file_base64: () => undefined,
   pty_spawn: ({ id }) => {
     const streamId = nextStream++;
     mockShell(id as string, streamId);
@@ -322,7 +323,15 @@ const commands: Record<string, (args: Row) => unknown> = {
 
 /** 160×100 gradient; any image the mock is asked for is this one. */
 /** Every construct the markdown editor renders, so one screenshot shows them all. */
-const MOCK_MARKDOWN = `# Crew
+const MOCK_MARKDOWN = `---
+title: Crew
+tags: [app, agents]
+aliases:
+  - multi-agent
+status: draft
+---
+
+# Crew
 
 A **multi-agent** workspace with *live* terminals, \`inline code\` and ~~old ideas~~.
 See [the docs](https://example.com/docs) or <https://example.com>.
@@ -347,9 +356,41 @@ See [the docs](https://example.com/docs) or <https://example.com>.
 export const answer = 42;
 \`\`\`
 
-| Name | Kind |
-| ---- | ---- |
-| crew | app  |
+| Name | Kind | Notes |
+| ---- | :--: | ----: |
+| crew | app  | **bold** and \`code\` |
+| [[README]] | note | ==marked== |
+
+## Links and callouts
+
+Links to [[README]], [[README#Getting started|a heading]], and a [[Missing note]].
+
+> [!note]
+> A note callout with **bold** text.
+
+> [!warning]- Folded by default
+> Hidden until opened.
+> Second line.
+
+> [!tip] Tip with a title
+> Use ==highlights== for what matters.
+
+![[mock.png]]
+
+## Diagram
+
+\`\`\`mermaid
+flowchart LR
+  A[Agent] --> B{Tool?}
+  B -- yes --> C[Run]
+  B -- no --> D[Answer]
+\`\`\`
+
+## Deep section
+
+### Third level
+
+Final paragraph.
 `;
 
 const MOCK_PNG = "iVBORw0KGgoAAAANSUhEUgAAAKAAAABkCAIAAACO1KzYAAACCUlEQVR42u3R6ZYIBAAG0HmwkIpUUlGRQiEt1iK+MfuYlUKlosUuLbRY2lAqyWP5HsOPe859gzvwUO7VgvxfC3O3FuW/ejh3anH+rUfyTz2av+ux3K4l+auW5s96PLdqWW7WE7lRT+aPeiq/1/L8Vk/n11qRX+qZXK9nc62ey9VamSu1Kj/X8/mpXsiP9WJ+qNW5XGtyqV7K97U239XL+bZeyTe1Lhdrfb6uDblQr+Z8vZZztTFna1PO1OacrtdzqrbkZL2Rr+rNfFlv5Yt6O5/X1pyobTle2/NZ7cintTOf1K4cq3fycb2bj2p3Pqw9OVrv5UjtzeHalw8qeb8Gc6j252ANZb6GM1cjma3RzNRYpms8UzWRAzWZyTqQiZrKeE1nrGYyWrMZqbkM13yG6mD216EM1oBgwYIFCxYsWLBgwYIFCxYsWLBgwYIFCxYsWLBgwYIFCxYsWLBgwYIFCxYsWLBgwYIFCxYsWLBgwYIFCxYsWLBgwYIFCxYsWLBgwYIFCxYsWLBgwYIFCxYsWLBgwYIFCxYsWLBgwYIFCxYsWLBgwYIFCxYsWLBgwYIFCxYsWLBgwYIFCxYsWLBgwYIFCxYsWLBgwYIFCxYsWLBgwYIFCxYsWLBgwYIFCxYsWLBgwYIFCxYsWLBgwYIFCxYsWLBgwYIFCxYsWLBgwYIFCxYsWPCDF3wfzuPLZcrYMV4AAAAASUVORK5CYII=";

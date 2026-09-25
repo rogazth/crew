@@ -245,6 +245,27 @@ pub fn write_temp(extension: &str, base64_contents: &str) -> Result<String, Stri
     Ok(path.to_string_lossy().into_owned())
 }
 
+/// A pasted or dropped image saved next to a note. Parent folders are created;
+/// an existing file is an error, so a name clash can never eat someone's image.
+pub fn create_base64(path: &str, base64_contents: &str) -> Result<(), String> {
+    use std::io::Write as _;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(base64_contents.as_bytes())
+        .map_err(|e| format!("File data is not valid base64: {e}"))?;
+    if bytes.len() > MAX_TEMP_FILE_BYTES {
+        return Err("File is too large".into());
+    }
+    if let Some(parent) = Path::new(path).parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .map_err(|e| e.to_string())?;
+    file.write_all(&bytes).map_err(|e| e.to_string())
+}
+
 fn safe_extension(extension: &str) -> String {
     let kept: String = extension
         .chars()

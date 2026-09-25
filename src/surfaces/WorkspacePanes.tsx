@@ -78,6 +78,8 @@ export function WorkspacePanes({
           sessions={sessions}
           hasWorkspace={hasWorkspace}
           onCreateWorkspace={onCreateWorkspace}
+          files={files}
+          onOpenPath={chat.openPath}
         />
       </DiffsPool>
       <Terminals

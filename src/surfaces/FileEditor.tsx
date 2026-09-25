@@ -1,9 +1,19 @@
 import { lazy, Suspense } from "react";
+import { ListBulletsIcon } from "@phosphor-icons/react";
+import { useCommands } from "../hooks/useCommand";
+import { useOutlinePref } from "../hooks/useOutlinePref";
 import { useTextFile } from "../hooks/useTextFile";
 import { commandKeys } from "../lib/commands";
 import { TOKENIZE_MAX_LENGTH } from "../lib/highlighting";
+import type { ProjectFile } from "../lib/types";
 
-type Props = { path: string; relative: string };
+type Props = {
+  path: string;
+  relative: string;
+  /** The workspace index, which `[[wikilinks]]` resolve against. */
+  files: ProjectFile[];
+  onOpenPath: (path: string) => void;
+};
 
 /** Each editor loads only when a file needs it: diffs and its highlighter are ~600 kB, CodeMirror ~330 kB. */
 const CodeEditor = lazy(() => import("./editor/CodeEditor").then((m) => ({ default: m.CodeEditor })));
@@ -13,11 +23,13 @@ const MarkdownEditor = lazy(() =>
 
 const MARKDOWN = /\.(?:md|markdown)$/i;
 
-export function FileEditor({ path, relative }: Props) {
+export function FileEditor({ path, relative, files, onOpenPath }: Props) {
   const { loaded, saved, dirty, error, setContents } = useTextFile(path);
+  const [outline, toggleOutline] = useOutlinePref();
 
   const name = relative.split("/").pop() ?? relative;
   const isMarkdown = MARKDOWN.test(name);
+  useCommands(isMarkdown ? { "toggle-outline": toggleOutline } : {});
 
   if (error) return <p className="p-4 text-red-600">{error}</p>;
   if (loaded === null) {
@@ -44,6 +56,18 @@ export function FileEditor({ path, relative }: Props) {
         <kbd className="ml-auto shrink-0 text-[11px] text-placeholder">
           {commandKeys("save-file")}
         </kbd>
+        {isMarkdown && (
+          <button
+            type="button"
+            aria-label="Outline"
+            title="Outline"
+            aria-pressed={outline}
+            onClick={toggleOutline}
+            className="-mr-2 flex size-7 shrink-0 items-center justify-center rounded-md text-kumo-subtle hover:bg-hover hover:text-kumo-default aria-pressed:text-kumo-default"
+          >
+            <ListBulletsIcon className="size-4" />
+          </button>
+        )}
       </div>
 
       {/* The editors scroll their own root and need a definite box to size the
@@ -52,7 +76,15 @@ export function FileEditor({ path, relative }: Props) {
       <div data-selectable className="min-h-0 flex-1 overflow-hidden">
         <Suspense fallback={null}>
           {isMarkdown ? (
-            <MarkdownEditor path={path} loaded={loaded} saved={saved} onChange={setContents} />
+            <MarkdownEditor
+              path={path}
+              loaded={loaded}
+              saved={saved}
+              onChange={setContents}
+              files={files}
+              onOpenPath={onOpenPath}
+              outline={outline}
+            />
           ) : (
             <CodeEditor path={path} name={name} loaded={loaded} onChange={setContents} />
           )}

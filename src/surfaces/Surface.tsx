@@ -2,7 +2,7 @@ import { lazy, Suspense } from "react";
 import { EmptyState } from "./EmptyState";
 import { StubView } from "./StubView";
 import { commandKeys } from "../lib/commands";
-import type { Session, Tab } from "../lib/types";
+import type { ProjectFile, Session, Tab } from "../lib/types";
 
 /** The file editors are the heaviest chunks in the app; only a file tab pays for them. */
 const FileEditor = lazy(() => import("./FileEditor").then((m) => ({ default: m.FileEditor })));
@@ -12,10 +12,12 @@ type Props = {
   sessions: Session[];
   hasWorkspace: boolean;
   onCreateWorkspace: () => void;
+  files: ProjectFile[];
+  onOpenPath: (path: string) => void;
 };
 
 /** Routes the active tab to whatever fills the pane. Agents and terminals stay mounted in their overlays. */
-export function Surface({ tab, sessions, hasWorkspace, onCreateWorkspace }: Props) {
+export function Surface({ tab, sessions, hasWorkspace, onCreateWorkspace, files, onOpenPath }: Props) {
   if (!hasWorkspace) {
     return (
       <EmptyState
@@ -39,7 +41,13 @@ export function Surface({ tab, sessions, hasWorkspace, onCreateWorkspace }: Prop
     // which rendered the old file's contents under the new tab's header.
     return (
       <Suspense fallback={null}>
-        <FileEditor key={tab.path} path={tab.path} relative={tab.relative} />
+        <FileEditor
+          key={tab.path}
+          path={tab.path}
+          relative={tab.relative}
+          files={files}
+          onOpenPath={onOpenPath}
+        />
       </Suspense>
     );
   }

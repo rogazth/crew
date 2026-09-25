@@ -131,6 +131,11 @@ entriesJson: string, activeIndex: number, updatedAt: number, };
 
 export type PathArg = { path: string, };
 
+/**
+ * Bytes for a new file at `path`; the daemon never overwrites one that exists.
+ */
+export type PathBytes = { path: string, base64Contents: string, };
+
 export type PathContents = { path: string, contents: string, };
 
 export type ProjectFile = { name: string, path: string, relative: string, };

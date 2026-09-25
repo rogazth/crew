@@ -342,6 +342,15 @@ pub struct TempFile {
     pub base64_contents: String,
 }
 
+/// Bytes for a new file at `path`; the daemon never overwrites one that exists.
+#[derive(Serialize, Deserialize, Clone, Debug, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
+pub struct PathBytes {
+    pub path: String,
+    pub base64_contents: String,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]

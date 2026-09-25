@@ -1,14 +1,15 @@
 import { describe, expect, it } from "vitest";
 import { ensureSyntaxTree, LanguageSupport } from "@codemirror/language";
-import { markdownLanguage } from "@codemirror/lang-markdown";
 import { EditorSelection, EditorState } from "@codemirror/state";
-import { previewDecorations } from "./markdownPreview";
+import { blockPreview } from "./blocks";
+import { previewDecorations } from "./preview";
+import { obsidianMarkdown } from "./syntax";
 
 function stateOf(doc: string, caret = 0) {
   const state = EditorState.create({
     doc,
     selection: EditorSelection.cursor(caret),
-    extensions: new LanguageSupport(markdownLanguage),
+    extensions: [new LanguageSupport(obsidianMarkdown), blockPreview],
   });
   ensureSyntaxTree(state, doc.length);
   return state;
@@ -53,8 +54,26 @@ describe("previewDecorations", () => {
     expect(rendered("- one\n- [x] done", null)).toBe("<widget> one\n<widget> done");
   });
 
-  it("keeps a code block's contents verbatim", () => {
+  it("keeps a code block's contents verbatim and quiets its fences", () => {
     const doc = "```ts\nconst a = `**b**`;\n```";
-    expect(rendered(doc, null)).toBe(doc);
+    expect(rendered(doc, null)).toBe("<widget>\nconst a = `**b**`;\n");
+    expect(rendered(doc, 2)).toBe(doc);
+  });
+
+  it("renders a highlight as its text", () => {
+    expect(rendered("a ==big== deal", null)).toBe("a big deal");
+  });
+
+  it("shows a wikilink's alias, or its target", () => {
+    expect(rendered("see [[Plan#Goals|the plan]]", null)).toBe("see the plan");
+    expect(rendered("see [[Plan]]", null)).toBe("see Plan");
+  });
+
+  it("swaps a callout's marker for its head", () => {
+    expect(rendered("> [!warning] Careful\n> body", null)).toBe("<widget>Careful\nbody");
+  });
+
+  it("renders an image in place of its markdown", () => {
+    expect(rendered("![alt](img.png) after", null)).toBe("<widget> after");
   });
 });
