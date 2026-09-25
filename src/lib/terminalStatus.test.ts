@@ -86,7 +86,7 @@ describe("TerminalActivity", () => {
     const { activity, reported } = track("idle", true);
     started(activity);
     spin(activity, 1000);
-    activity.watch(false);
+    activity.setWatched(false);
     spin(activity, 3000);
     expect(reported).toEqual(["working"]);
     vi.advanceTimersByTime(QUIET_AFTER);
@@ -97,7 +97,7 @@ describe("TerminalActivity", () => {
     const { activity, reported } = track();
     started(activity);
     spin(activity, 1000);
-    activity.watch(true);
+    activity.setWatched(true);
     spin(activity, 1000);
     expect(reported).toEqual(["working"]);
   });
@@ -107,7 +107,7 @@ describe("TerminalActivity", () => {
     started(activity);
     spin(activity, 1000);
     vi.advanceTimersByTime(QUIET_AFTER);
-    activity.watch(true);
+    activity.setWatched(true);
     expect(reported).toEqual(["working", "done", "idle"]);
   });
 
@@ -136,7 +136,7 @@ describe("TerminalActivity", () => {
   it("ignores the repaint after a tab switch", () => {
     const { activity, reported } = track("idle", true);
     started(activity);
-    activity.watch(false);
+    activity.setWatched(false);
     spin(activity, SETTLE_WINDOW - 200);
     vi.advanceTimersByTime(QUIET_AFTER);
     expect(reported).toEqual([]);
@@ -150,7 +150,7 @@ describe("TerminalActivity", () => {
     spin(activity, 500);
     vi.advanceTimersByTime(QUIET_AFTER);
     expect(reported).toEqual(["working", "needs-input"]);
-    activity.watch(true);
+    activity.setWatched(true);
     expect(activity.status).toBe("idle");
   });
 
@@ -162,8 +162,8 @@ describe("TerminalActivity", () => {
     // A long tool call: the title keeps spinning, nothing else moves.
     vi.advanceTimersByTime(20_000);
     expect(activity.status).toBe("working");
-    activity.watch(true);
-    activity.watch(false);
+    activity.setWatched(true);
+    activity.setWatched(false);
     activity.title("◑ Sleep command test");
     expect(reported).toEqual(["working"]);
     activity.title("✳ Sleep command test");

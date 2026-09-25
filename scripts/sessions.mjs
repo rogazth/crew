@@ -227,7 +227,7 @@ async function type(tab, text) {
 
 /** Only one tab is in front at a time; `null` puts some other page there. */
 function show(tabs, front) {
-  for (const tab of tabs) tab.activity.watch(tab === front);
+  for (const tab of tabs) tab.activity.setWatched(tab === front);
   for (const tab of tabs) tab.watched = tab === front;
 }
 

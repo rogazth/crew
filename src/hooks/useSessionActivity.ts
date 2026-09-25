@@ -38,7 +38,7 @@ export function useSessionActivity(
   }, [id]);
 
   useEffect(() => {
-    activity.current?.watch(active);
+    activity.current?.setWatched(active);
   }, [active]);
 
   return useMemo(

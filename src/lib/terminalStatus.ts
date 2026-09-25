@@ -117,7 +117,7 @@ export class TerminalActivity {
     return this.#busy;
   }
 
-  watch(watched: boolean): void {
+  setWatched(watched: boolean): void {
     if (watched === this.#watched) return;
     this.#watched = watched;
     this.settle();
