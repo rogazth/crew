@@ -205,7 +205,8 @@ const commands: Record<string, (args: Row) => unknown> = {
       path: `/Users/me/Developer/experiments/crew/${relative}`,
       relative,
     })),
-  read_text_file: () => "export const answer = 42;\n",
+  read_text_file: ({ path }) =>
+    String(path).endsWith(".md") ? MOCK_MARKDOWN : "export const answer = 42;\n",
   write_text_file: () => undefined,
   path_exists: () => false,
   read_file_base64: () => ({ mime: "image/png", data: MOCK_PNG }),
@@ -320,6 +321,37 @@ const commands: Record<string, (args: Row) => unknown> = {
 };
 
 /** 160×100 gradient; any image the mock is asked for is this one. */
+/** Every construct the markdown editor renders, so one screenshot shows them all. */
+const MOCK_MARKDOWN = `# Crew
+
+A **multi-agent** workspace with *live* terminals, \`inline code\` and ~~old ideas~~.
+See [the docs](https://example.com/docs) or <https://example.com>.
+
+## Getting started
+
+- Clone the repo
+- Run \`npm install\`
+  - nested item
+1. First
+2. Second
+
+- [x] Ship the browser
+- [ ] Markdown preview
+
+> Quotes read as a quieter voice.
+> Across more than one line.
+
+---
+
+\`\`\`ts
+export const answer = 42;
+\`\`\`
+
+| Name | Kind |
+| ---- | ---- |
+| crew | app  |
+`;
+
 const MOCK_PNG = "iVBORw0KGgoAAAANSUhEUgAAAKAAAABkCAIAAACO1KzYAAACCUlEQVR42u3R6ZYIBAAG0HmwkIpUUlGRQiEt1iK+MfuYlUKlosUuLbRY2lAqyWP5HsOPe859gzvwUO7VgvxfC3O3FuW/ejh3anH+rUfyTz2av+ux3K4l+auW5s96PLdqWW7WE7lRT+aPeiq/1/L8Vk/n11qRX+qZXK9nc62ey9VamSu1Kj/X8/mpXsiP9WJ+qNW5XGtyqV7K97U239XL+bZeyTe1Lhdrfb6uDblQr+Z8vZZztTFna1PO1OacrtdzqrbkZL2Rr+rNfFlv5Yt6O5/X1pyobTle2/NZ7cintTOf1K4cq3fycb2bj2p3Pqw9OVrv5UjtzeHalw8qeb8Gc6j252ANZb6GM1cjma3RzNRYpms8UzWRAzWZyTqQiZrKeE1nrGYyWrMZqbkM13yG6mD216EM1oBgwYIFCxYsWLBgwYIFCxYsWLBgwYIFCxYsWLBgwYIFCxYsWLBgwYIFCxYsWLBgwYIFCxYsWLBgwYIFCxYsWLBgwYIFCxYsWLBgwYIFCxYsWLBgwYIFCxYsWLBgwYIFCxYsWLBgwYIFCxYsWLBgwYIFCxYsWLBgwYIFCxYsWLBgwYIFCxYsWLBgwYIFCxYsWLBgwYIFCxYsWLBgwYIFCxYsWLBgwYIFCxYsWLBgwYIFCxYsWLBgwYIFCxYsWLBgwYIFCxYsWLBgwYIFCxYsWPCDF3wfzuPLZcrYMV4AAAAASUVORK5CYII=";
 
 const SEED_BLOCKS = [

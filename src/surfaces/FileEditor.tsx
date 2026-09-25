@@ -1,92 +1,30 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { Editor } from "@pierre/diffs/edit";
-import { CodeView, EditProvider } from "@pierre/diffs/react";
-import { useCommand } from "../hooks/useCommand";
+import { lazy, Suspense } from "react";
+import { useTextFile } from "../hooks/useTextFile";
 import { commandKeys } from "../lib/commands";
-import * as api from "../lib/api";
-import {
-  THEME,
-  TOKENIZE_MAX_LENGTH,
-  TOKENIZE_MAX_LINE_LENGTH,
-} from "../lib/highlighting";
+import { TOKENIZE_MAX_LENGTH } from "../lib/highlighting";
 
 type Props = { path: string; relative: string };
 
-const OPTIONS = {
-  theme: THEME,
-  themeType: "light" as const,
-  disableFileHeader: true,
-  overflow: "scroll" as const,
-  tokenizeMaxLength: TOKENIZE_MAX_LENGTH,
-  tokenizeMaxLineLength: TOKENIZE_MAX_LINE_LENGTH,
-};
+/** Each editor loads only when a file needs it: diffs and its highlighter are ~600 kB, CodeMirror ~330 kB. */
+const CodeEditor = lazy(() => import("./editor/CodeEditor").then((m) => ({ default: m.CodeEditor })));
+const MarkdownEditor = lazy(() =>
+  import("./editor/MarkdownEditor").then((m) => ({ default: m.MarkdownEditor })),
+);
+
+const MARKDOWN = /\.(?:md|markdown)$/i;
 
 export function FileEditor({ path, relative }: Props) {
-  const [loaded, setLoaded] = useState<string | null>(null);
-  const [saved, setSaved] = useState("");
-  const [contents, setContents] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
+  const { loaded, saved, dirty, error, setContents } = useTextFile(path);
 
   const name = relative.split("/").pop() ?? relative;
-  const dirty = loaded !== null && contents !== saved;
-
-  useEffect(() => {
-    let cancelled = false;
-    api
-      .readTextFile(path)
-      .then((text) => {
-        if (cancelled) return;
-        setLoaded(text);
-        setSaved(text);
-        setContents(text);
-      })
-      .catch((e) => !cancelled && setError(String(e)));
-    return () => {
-      cancelled = true;
-    };
-  }, [path]);
-
-  const save = useCallback(async () => {
-    if (!dirty || saving) return;
-    setSaving(true);
-    try {
-      await api.writeTextFile(path, contents);
-      setSaved(contents);
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setSaving(false);
-    }
-  }, [contents, dirty, path, saving]);
-
-  useCommand("save-file", () => void save());
-
-  // One item, so CodeView is really "a virtualized File". A stable cacheKey and
-  // id are what let the editor persist per-file state across tab switches.
-  // `contents` stays the text as read from disk: the editor owns the document from
-  // here, and feeding it a new value without bumping `version` resets the session.
-  const items = useMemo(
-    () =>
-      loaded === null
-        ? []
-        : [
-            {
-              id: path,
-              type: "file" as const,
-              file: { name, contents: loaded, cacheKey: path },
-              edit: true,
-            },
-          ],
-    [loaded, name, path],
-  );
+  const isMarkdown = MARKDOWN.test(name);
 
   if (error) return <p className="p-4 text-red-600">{error}</p>;
   if (loaded === null) {
     return <p className="p-4 text-text-muted">Loading {name}…</p>;
   }
 
-  const plain = loaded.length > TOKENIZE_MAX_LENGTH;
+  const plain = !isMarkdown && loaded.length > TOKENIZE_MAX_LENGTH;
 
   return (
     <div className="flex h-full flex-col bg-canvas">
@@ -108,20 +46,17 @@ export function FileEditor({ path, relative }: Props) {
         </kbd>
       </div>
 
-      {/* CodeView scrolls its own root and needs a definite box to size the virtual
-          window against — `flex-1` alone leaves it at auto height, which kills both
-          scrolling and the virtualiser. The `overflow-auto` is on the root itself:
-          the library listens for `scroll` there but never styles it. */}
+      {/* The editors scroll their own root and need a definite box to size the
+          virtual window against — `flex-1` alone leaves it at auto height, which
+          kills both scrolling and the virtualiser. */}
       <div data-selectable className="min-h-0 flex-1 overflow-hidden">
-        <EditProvider createEditor={(options) => new Editor(options)}>
-          <CodeView
-            items={items}
-            options={OPTIONS}
-            editorOptions={{ persistState: true }}
-            className="h-full min-h-0 overflow-auto"
-            onItemEditChange={(_item, file) => setContents(file.contents)}
-          />
-        </EditProvider>
+        <Suspense fallback={null}>
+          {isMarkdown ? (
+            <MarkdownEditor path={path} loaded={loaded} saved={saved} onChange={setContents} />
+          ) : (
+            <CodeEditor path={path} name={name} loaded={loaded} onChange={setContents} />
+          )}
+        </Suspense>
       </div>
     </div>
   );

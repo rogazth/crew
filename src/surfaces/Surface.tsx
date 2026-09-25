@@ -4,7 +4,7 @@ import { StubView } from "./StubView";
 import { commandKeys } from "../lib/commands";
 import type { Session, Tab } from "../lib/types";
 
-/** The diff editor and its highlighter are ~600 kB; only a file tab pays for them. */
+/** The file editors are the heaviest chunks in the app; only a file tab pays for them. */
 const FileEditor = lazy(() => import("./FileEditor").then((m) => ({ default: m.FileEditor })));
 
 type Props = {
