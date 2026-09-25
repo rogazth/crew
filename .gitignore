@@ -12,3 +12,7 @@ reference/
 
 # Screenshots from scripts/shot.mjs
 out/
+
+# tsc incremental cache
+*.tsbuildinfo
+.DS_Store
