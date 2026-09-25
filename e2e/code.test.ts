@@ -11,20 +11,30 @@ import { holdsFor, launchCrew, MOD, pressChord, waitFor, type Crew } from "./har
 const APP = ["export function answer(): number {", "  return 42;", "}", ""].join("\n");
 const UTIL = ["export const twice = (n: number) => n * 2;", ""].join("\n");
 
-/** ⌘P, the query, and the file's row: its tab opens and its editor paints. */
-async function openFile(crew: Crew, query: string, relative: string): Promise<void> {
+/** ⌘P, the query, and the file's row: its tab opens and its editor (a code one unless said) paints. */
+async function openFile(crew: Crew, query: string, relative: string, shown = editor(crew, path.basename(relative))): Promise<void> {
   const page = crew.window;
   await pressChord(crew, `${MOD}+p`);
   const palette = page.getByRole("dialog", { name: "Command palette" });
   await palette.getByRole("textbox", { name: "Search" }).fill(query);
   await palette.getByRole("button", { name: relative, exact: true }).click();
   await palette.waitFor({ state: "detached" });
-  await editor(crew, path.basename(relative)).waitFor();
+  await shown.waitFor();
 }
 
 /** The code editor on screen, by the file name it is labelled with. */
 function editor(crew: Crew, name: string) {
   return crew.window.getByRole("textbox", { name, exact: true }).filter({ visible: true });
+}
+
+/** The note editor on screen, for a markdown file. */
+function note(crew: Crew) {
+  return crew.window.locator(".cm-content").filter({ visible: true });
+}
+
+/** The prompt a close asks before it loses something. */
+function closePrompt(crew: Crew) {
+  return crew.window.getByRole("alertdialog");
 }
 
 /** A file tab on the strip. */
@@ -157,4 +167,95 @@ test("C1: a code file keeps its unsaved edits across a tab switch, and never los
   assert.equal(await changedOnDisk(crew).count(), 0, "nothing was unsaved, so nothing asks");
   assert.equal(await unsaved(crew).count(), 0);
   assert.equal(await readFile(app, "utf8"), taken);
+});
+
+// C2: closing a file tab with unsaved edits asks first. Cancel keeps the tab
+// and the edit; Discard closes it and drops the edit everywhere, so the file
+// opens again as the disk has it.
+test("C2: closing a file with unsaved edits asks, and Discard drops the edits", async (t) => {
+  const crew = await launchCrew({ repos: [{ name: "app", files: { "src/app.ts": APP, "src/util.ts": UTIL } }] });
+  t.after(() => crew.close());
+  const [workspace] = crew.workspaces;
+  assert.ok(workspace);
+  const app = path.join(workspace.path, "src/app.ts");
+  const typed = `// never saved ${Date.now().toString(36)}`;
+
+  await openFile(crew, "util.ts", "src/util.ts");
+  await openFile(crew, "app.ts", "src/app.ts");
+  await typeAtEnd(crew, "app.ts", typed);
+  await unsaved(crew).waitFor();
+
+  // ⌘W asks, naming the file; Cancel leaves the tab and the edit as they were.
+  await pressChord(crew, `${MOD}+w`);
+  const prompt = closePrompt(crew);
+  await prompt.getByText('Close "app.ts"?', { exact: true }).waitFor();
+  await prompt.getByText("Unsaved changes are lost.", { exact: true }).waitFor();
+  await prompt.getByRole("button", { name: "Cancel" }).click();
+  await prompt.waitFor({ state: "detached" });
+  assert.equal(await fileTab(crew, app).count(), 1, "Cancel keeps the tab");
+  await shows(crew, "app.ts", typed, "Cancel keeps the edit in the editor");
+  await unsaved(crew).waitFor();
+
+  // ⌘W again, Discard: the tab goes and nothing reached the disk.
+  await pressChord(crew, `${MOD}+w`);
+  await prompt.getByRole("button", { name: "Discard" }).click();
+  await prompt.waitFor({ state: "detached" });
+  await fileTab(crew, app).waitFor({ state: "detached" });
+  assert.equal(await readFile(app, "utf8"), APP, "Discard wrote nothing");
+
+  // Opened again, the file is the disk's, with nothing unsaved.
+  await openFile(crew, "app.ts", "src/app.ts");
+  await shows(crew, "app.ts", "return 42;", "the reopened file shows the disk");
+  assert.ok(!(await editor(crew, "app.ts").innerText()).includes(typed), "the discarded edit is gone");
+  await holdsFor(500, async () => (await unsaved(crew).count()) === 0, "the reopened file reads Unsaved");
+});
+
+// C3: "Close Other Tabs" over two files with unsaved edits, a code file and a
+// note, asks once, counting both; confirming drops both edits.
+test("C3: closing other tabs asks once for every unsaved file, and confirming drops their edits", async (t) => {
+  const NOTES = "# Notes\n\nNothing yet.\n";
+  const crew = await launchCrew({
+    repos: [{ name: "app", files: { "NOTES.md": NOTES, "src/app.ts": APP, "src/util.ts": UTIL } }],
+  });
+  t.after(() => crew.close());
+  const [workspace] = crew.workspaces;
+  assert.ok(workspace);
+  const page = crew.window;
+  const app = path.join(workspace.path, "src/app.ts");
+  const notes = path.join(workspace.path, "NOTES.md");
+  const util = path.join(workspace.path, "src/util.ts");
+  const stamp = Date.now().toString(36);
+
+  await openFile(crew, "app.ts", "src/app.ts");
+  await typeAtEnd(crew, "app.ts", `// app edit ${stamp}`);
+  await unsaved(crew).waitFor();
+  await openFile(crew, "NOTES.md", "NOTES.md", note(crew));
+  await note(crew).click();
+  await page.keyboard.press(`${MOD}+End`);
+  await page.keyboard.type(`note edit ${stamp}`);
+  await unsaved(crew).waitFor();
+  await openFile(crew, "util.ts", "src/util.ts");
+
+  await fileTab(crew, util).click({ button: "right" });
+  await page.getByRole("menu").getByRole("menuitem", { name: "Close Other Tabs" }).click();
+  const prompt = closePrompt(crew);
+  await prompt.getByText("Close 2 tabs?", { exact: true }).waitFor();
+  await prompt.getByText("2 files have unsaved changes", { exact: false }).waitFor();
+  await prompt.getByRole("button", { name: "Close" }).click();
+  await prompt.waitFor({ state: "detached" });
+  await fileTab(crew, app).waitFor({ state: "detached" });
+  await fileTab(crew, notes).waitFor({ state: "detached" });
+  assert.equal(await fileTab(crew, util).count(), 1, "the tab the menu came from stays");
+  assert.equal(await readFile(app, "utf8"), APP);
+  assert.equal(await readFile(notes, "utf8"), NOTES);
+
+  // Both open again as the disk has them.
+  await openFile(crew, "NOTES.md", "NOTES.md", note(crew));
+  await waitFor(async () => (await note(crew).innerText()).includes("Nothing yet."), { timeout: 5000 });
+  assert.ok(!(await note(crew).innerText()).includes(`note edit ${stamp}`), "the note's edit is gone");
+  await holdsFor(500, async () => (await unsaved(crew).count()) === 0, "the reopened note reads Unsaved");
+  await openFile(crew, "app.ts", "src/app.ts");
+  await shows(crew, "app.ts", "return 42;", "the reopened file shows the disk");
+  assert.ok(!(await editor(crew, "app.ts").innerText()).includes(`app edit ${stamp}`), "the code edit is gone");
+  await holdsFor(500, async () => (await unsaved(crew).count()) === 0, "the reopened file reads Unsaved");
 });

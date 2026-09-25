@@ -3,6 +3,7 @@ import * as api from "../lib/api";
 import { paneHandle } from "../lib/browser/handles";
 import { fileTabId, newBrowserTab, sessionTabId, stubTabId } from "../lib/tabs";
 import { focus as focusBlock } from "../lib/transcript";
+import { discardEdits, fileName, unsavedTabs } from "../lib/unsavedEdits";
 import type { ProjectFile, Session, StubKind } from "../lib/types";
 import type { useConfirmations } from "./useConfirmations";
 import type { useTabs } from "./useTabs";
@@ -101,8 +102,8 @@ export function useNavigation({ tabs, sessions, confirms, removeSession, closePa
 
   /**
    * A session tab that never held a turn goes with its session; any other
-   * leaves the session in the sidebar. Running terminals ask first, once for
-   * the whole batch.
+   * leaves the session in the sidebar. Running terminals and files with
+   * unsaved edits ask first, once for the whole batch; closing discards the edits.
    */
   const closeTabs = useCallback(
     (ids: string[]) => {
@@ -115,10 +116,14 @@ export function useNavigation({ tabs, sessions, confirms, removeSession, closePa
         if (session) owned.set(tab.id, session);
       }
       if (targets.length === 0) return;
+      const unsaved = unsavedTabs(targets);
       confirms.askCloseTabs(
         [...owned.values()],
+        unsaved.map(fileName),
         targets.length,
         () => {
+          // Before the tabs go: an editor on screen must not keep them as it unmounts.
+          for (const tab of unsaved) discardEdits(tab.path);
           for (const tab of targets) {
             const session = owned.get(tab.id);
             if (!session) {

@@ -22,6 +22,7 @@ import { markdownPreview } from "../../lib/markdown/preview";
 import { markTags, obsidianMarkdown } from "../../lib/markdown/syntax";
 import { makeWikiLinkCompletions, noteHost, type NoteHost } from "../../lib/markdown/wikilinks";
 import type { ProjectFile } from "../../lib/types";
+import { onDiscard } from "../../lib/unsavedEdits";
 import { Outline } from "./Outline";
 
 type Props = {
@@ -246,6 +247,8 @@ type Kept = { json: unknown; doc: string; scroll: StateEffect<unknown>; top: num
  * the same text, and only its place in the note once the disk replaced that.
  */
 const kept = new Map<string, Kept>();
+// A close that discards a note's edits takes its undo history and place with them.
+onDiscard((path) => kept.delete(path));
 
 /** A heading to scroll to once a note opens, set by a link that named one. */
 const pendingHeading = new Map<string, string>();
@@ -376,6 +379,11 @@ export function MarkdownEditor({ path, loaded, onChange, files, onOpenPath, outl
     setItems(outlineOf(view.state));
 
     const offScheme = onSchemeChange(() => view.dispatch({ effects: refreshPreview.of(null) }));
+    // Discarded as its tab closes: the unmount that follows keeps nothing.
+    let discarded = false;
+    const offDiscard = onDiscard((gone) => {
+      if (gone === path) discarded = true;
+    });
 
     // Read while the pane is on screen: by the time it unmounts, it has no layout to ask.
     let top = previous?.top ?? 0;
@@ -398,13 +406,16 @@ export function MarkdownEditor({ path, loaded, onChange, files, onOpenPath, outl
       cancelAnimationFrame(consumed);
       view.scrollDOM.removeEventListener("scroll", onScroll);
       offScheme();
-      kept.set(path, {
-        json: view.state.toJSON({ history: historyField }),
-        doc: view.state.doc.toString(),
-        scroll: view.scrollSnapshot(),
-        top,
-        head: view.state.selection.main.head,
-      });
+      offDiscard();
+      if (!discarded) {
+        kept.set(path, {
+          json: view.state.toJSON({ history: historyField }),
+          doc: view.state.doc.toString(),
+          scroll: view.scrollSnapshot(),
+          top,
+          head: view.state.selection.main.head,
+        });
+      }
       viewRef.current = null;
       view.destroy();
     };

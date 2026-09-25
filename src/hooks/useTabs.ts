@@ -19,6 +19,10 @@ import {
   withRecent,
 } from '../lib/tabs';
 import type { Tab } from '../lib/types';
+import { discardEdits, fileName, unsavedTabs } from '../lib/unsavedEdits';
+
+/** The strips dropping `id` takes: its own, and a workspace's worktrees' too. */
+const within = (id: string, key: string) => key === id || (!id.includes('@') && key.startsWith(`${id}@`));
 
 /**
  * Tabs belong to a context — a workspace, or one worktree of it when tabs are
@@ -141,15 +145,34 @@ export function useTabs(workspaceId: string | null) {
     [mutateIn],
   );
 
+  /** The strips as of the last render, for reads outside one. */
+  const live = useRef(registry);
+  useEffect(() => {
+    live.current = registry;
+  }, [registry]);
+
+  /** The files whose unsaved edits dropping `id` would lose, for the prompt that asks. */
+  const unsavedIn = useCallback(
+    (id: string) =>
+      Object.entries(live.current).flatMap(([key, strip]) =>
+        within(id, key) ? unsavedTabs(strip.tabs).map(fileName) : [],
+      ),
+    [],
+  );
+
   /**
    * The workspace, or one worktree of it, is gone: its panes unmount, which ends
    * what they were running. A workspace takes its worktrees' strips with it.
    * Its saved strip goes too, since nothing writes it again and the same
    * worktree made anew would restore it. crewd drops a removed workspace's
-   * worktree strips itself, the ones this window never read included.
+   * worktree strips itself, the ones this window never read included. The
+   * removal was confirmed, so its files' unsaved edits go as well.
    */
   const dropWorkspace = useCallback((id: string) => {
-    const gone = (key: string) => key === id || (!id.includes("@") && key.startsWith(`${id}@`));
+    const gone = (key: string) => within(id, key);
+    for (const [key, strip] of Object.entries(live.current)) {
+      if (gone(key)) for (const tab of unsavedTabs(strip.tabs)) discardEdits(tab.path);
+    }
     for (const key of asked.current) if (gone(key)) asked.current.delete(key);
     for (const key of restoredIds.current) if (gone(key)) restoredIds.current.delete(key);
     for (const key of Object.keys(saved.current)) if (gone(key)) delete saved.current[key];
@@ -164,10 +187,6 @@ export function useTabs(workspaceId: string | null) {
   }, []);
 
   /** Strips as they stand: live when this window holds them, else as crewd saved them. */
-  const live = useRef(registry);
-  useEffect(() => {
-    live.current = registry;
-  }, [registry]);
   const strips = useCallback(async (ids: string[]) => {
     const stored = await Promise.all(
       ids.map((id) => api.stateGet(`tabs:${id}`).then(parseTabs).catch(() => NO_TABS)),
@@ -218,6 +237,7 @@ export function useTabs(workspaceId: string | null) {
     openIn,
     patchBrowser,
     dropWorkspace,
+    unsavedIn,
     strips,
     replace,
   };

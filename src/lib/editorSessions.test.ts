@@ -49,4 +49,13 @@ describe("editorSessions", () => {
     expect(sessions.take("/a.ts", "a", create)).toBe(a);
     expect(sessions.take("/b.ts", "b", create)).not.toBe(b);
   });
+
+  it("forgets a dropped session, and ignores what its editor does after", () => {
+    const sessions = editorSessions<{ n: number }>(4);
+    const first = sessions.take("/a.ts", "v1", create);
+    sessions.edited("/a.ts", first, "v1 mine");
+    sessions.drop("/a.ts");
+    sessions.edited("/a.ts", first, "v1 mine");
+    expect(sessions.take("/a.ts", "v1 mine", create)).not.toBe(first);
+  });
 });

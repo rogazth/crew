@@ -2,9 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useCommand } from "./useCommand";
 import * as api from "../lib/api";
 import { isDirty, reconcile, resolve, type Disk, type Step, type TextFile } from "../lib/textFile";
-
-/** Unsaved edits of a file whose tab went away, with the base they were made on. */
-const keptEdits = new Map<string, TextFile>();
+import { holdEdits, onDiscard, unsavedEdits } from "../lib/unsavedEdits";
 
 const IDLE: Promise<void> = Promise.resolve();
 
@@ -22,8 +20,9 @@ async function readDisk(path: string): Promise<Disk> {
  * A text file open for editing: what the editor starts from, what disk had when
  * it was last loaded or saved, and what the editor holds now. The disk is read
  * again on a save and whenever the window comes back (`lib/textFile` decides
- * what that finds). Unsaved edits outlive the tab and meet the disk again when
- * it comes back. Owns `save-file` while mounted.
+ * what that finds). Unsaved edits outlive a tab switch and meet the disk again
+ * when it comes back; closing the tab asks, and discards them. Owns `save-file`
+ * while mounted.
  */
 export function useTextFile(path: string) {
   /** The text an editor starts from; `revision` counts the times the disk replaced it. */
@@ -34,29 +33,39 @@ export function useTextFile(path: string) {
   const current = useRef<TextFile | null>(null);
   const queue = useRef(IDLE);
 
-  const commit = useCallback((next: TextFile) => {
-    current.current = next;
-    setFile(next);
-  }, []);
+  // Every change reaches the shared store too, which is what a close reads.
+  const commit = useCallback(
+    (next: TextFile) => {
+      current.current = next;
+      holdEdits(path, next);
+      setFile(next);
+    },
+    [path],
+  );
 
   useEffect(() => {
     let cancelled = false;
-    const previous = keptEdits.get(path);
+    const previous = unsavedEdits(path);
+    // Discarded under the editor, as its tab closes: nothing it does after is kept.
+    const off = onDiscard((gone) => {
+      if (gone !== path) return;
+      cancelled = true;
+      current.current = null;
+    });
     void (previous ? readDisk(path) : api.readTextFile(path))
       .then((disk) => {
         if (cancelled) return;
-        keptEdits.delete(path);
         // Kept edits meet the disk as it is now; a file that is gone has nothing else to show.
         const next = previous ? reconcile(previous, disk, false).file : { base: disk, mine: disk ?? "", conflict: false };
         commit(next);
         setLoaded({ text: next.mine, revision: 0 });
       })
       .catch((e) => !cancelled && setError(String(e)));
+    // What the editor last held stays in the store: unsaved edits outlive the tab.
     return () => {
       cancelled = true;
-      const last = current.current;
+      off();
       current.current = null;
-      if (last && isDirty(last)) keptEdits.set(path, last);
     };
   }, [path, commit]);
 

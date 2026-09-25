@@ -1,5 +1,6 @@
 import { useCallback, useState } from "react";
 import type { Confirm } from "../chrome/ConfirmDialog";
+import { closePrompt, unsavedCost } from "../lib/confirm";
 import { isBusy } from "../lib/terminalBusy";
 import type { Session, SessionStatus, Workspace, Worktree } from "../lib/types";
 import { isDirtyRefusal, removalCost, worktreeLabel } from "../lib/worktrees";
@@ -58,11 +59,14 @@ export function useConfirmations({ closeTabsFor, removeSession, removeWorkspace,
     [askSession, closeTabsFor, removeSession],
   );
 
+  /** `unsaved` names the files of its tabs whose edits go with them. */
   const askWorkspace = useCallback(
-    (workspace: Workspace) =>
+    (workspace: Workspace, unsaved: string[]) =>
       setConfirm({
         title: `Remove workspace "${workspace.name}"?`,
-        description: "Agents and sessions inside it are deleted. Files on disk are untouched.",
+        description: ["Agents and sessions inside it are deleted. Files on disk are untouched.", unsavedCost(unsaved)]
+          .filter(Boolean)
+          .join(" "),
         action: "Remove",
         onConfirm: () => removeWorkspace(workspace.id),
       }),
@@ -74,12 +78,13 @@ export function useConfirmations({ closeTabsFor, removeSession, removeWorkspace,
    * and its sessions. Nothing closes until crewd has removed it. The count comes
    * from the last listing, so git may know of work the prompt did not: crewd
    * refuses, and the prompt asks again with git's count, forced this time.
+   * `unsaved` names the files of its tabs whose edits go with them.
    */
   const askWorktree = useCallback(
-    (tree: Worktree, sessions: Session[]) => {
+    (tree: Worktree, sessions: Session[], unsaved: string[]) => {
       const prompt = (listed: Worktree, force: boolean): Confirm => ({
         title: `Remove worktree "${worktreeLabel(listed)}"?`,
-        description: removalCost(listed.dirty, sessions.length),
+        description: [removalCost(listed.dirty, sessions.length), unsavedCost(unsaved)].filter(Boolean).join(" "),
         action: "Remove",
         onConfirm: async () => {
           try {
@@ -101,38 +106,25 @@ export function useConfirmations({ closeTabsFor, removeSession, removeWorkspace,
    * An agent turn belongs to the daemon, so its tab closes without a word and
    * the turn runs on. A terminal *is* its process: closing the tab ends it, and
    * the status cannot answer that — a watched tab reads idle whatever it runs —
-   * so this asks the terminal itself.
+   * so this asks the terminal itself. `unsaved` names the files whose edits
+   * the close loses; confirming is what discards them.
    */
-  const askCloseTabs = useCallback((sessions: Session[], count: number, onConfirm: () => void) => {
-    const running = sessions.flatMap((session) => {
-      if (session.kind !== "terminal") return [];
-      const label = runningLabel(session.status) ?? (isBusy(session.id) ? "is still working" : null);
-      return label ? [{ session, label }] : [];
-    });
-    const [only] = running;
-    if (!only) {
-      onConfirm();
-      return;
-    }
-    if (count === 1 && running.length === 1) {
-      setConfirm({
-        title: `Close "${only.session.name}"?`,
-        description: `It ${only.label}. Closing the tab ends the process; the session stays in the sidebar.`,
-        action: "Close",
-        onConfirm,
+  const askCloseTabs = useCallback(
+    (sessions: Session[], unsaved: string[], count: number, onConfirm: () => void) => {
+      const running = sessions.flatMap((session) => {
+        if (session.kind !== "terminal") return [];
+        const label = runningLabel(session.status) ?? (isBusy(session.id) ? "is still working" : null);
+        return label ? [{ name: session.name, label }] : [];
       });
-      return;
-    }
-    setConfirm({
-      title: `Close ${count} tabs?`,
-      description: `${running.length === 1 ? `"${only.session.name}" is` : `${running.length} sessions are`} still running. Closing ends ${running.length === 1 ? "its process" : "their processes"}; the sessions stay in the sidebar.`,
-      action: "Close",
-      onConfirm,
-    });
-  }, []);
+      const prompt = closePrompt(count, running, unsaved);
+      if (prompt) setConfirm({ ...prompt, onConfirm });
+      else onConfirm();
+    },
+    [],
+  );
 
   const askCloseTab = useCallback(
-    (session: Session, onConfirm: () => void) => askCloseTabs([session], 1, onConfirm),
+    (session: Session, onConfirm: () => void) => askCloseTabs([session], [], 1, onConfirm),
     [askCloseTabs],
   );
 

@@ -25,5 +25,9 @@ export function editorSessions<T>(limit: number) {
       const session = held.get(key);
       if (session?.editor === editor) session.text = text;
     },
+    /** The file's edits were discarded: its next mount starts a new session. */
+    drop(key: string): void {
+      held.delete(key);
+    },
   };
 }

@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { Editor } from "@pierre/diffs/edit";
 import { CodeView, EditProvider } from "@pierre/diffs/react";
 import { editorSessions } from "../../lib/editorSessions";
+import { onDiscard } from "../../lib/unsavedEdits";
 import {
   THEME,
   TOKENIZE_MAX_LENGTH,
@@ -33,6 +34,8 @@ const OPTIONS = {
  * Otherwise the library would put its cached document over `loaded`.
  */
 const sessions = editorSessions<Editor<unknown>>(20);
+// A close that discards a file's edits takes its undo history with them.
+onDiscard((path) => sessions.drop(path));
 
 export function CodeEditor({ path, name, loaded, onChange }: Props) {
   // Mounts show one file at a time (the Surface is keyed by path), so a file's

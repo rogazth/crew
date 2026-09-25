@@ -198,7 +198,7 @@ export function App() {
             },
             onCreate: workspaces.create,
             onRename: workspaces.rename,
-            onRemove: confirms.askWorkspace,
+            onRemove: (workspace) => confirms.askWorkspace(workspace, tabs.unsavedIn(workspace.id)),
             onReorder: workspaces.reorder,
             onOpenRoutines: () => togglePage({ kind: "routines", draft: null }),
             onOpenSettings: () => (settings ? closePage() : openSettings()),
@@ -225,7 +225,11 @@ export function App() {
             },
             onNewWorktree: () => setDialog("new-worktree"),
             onRemoveWorktree: (tree) =>
-              confirms.askWorktree(tree, sessions.filter((session) => work.pathOf(session) === tree.path)),
+              confirms.askWorktree(
+                tree,
+                sessions.filter((session) => work.pathOf(session) === tree.path),
+                tabs.unsavedIn(`${active.id}@${tree.path}`),
+              ),
             onEdit: sheet.editAgent,
             onRename: (session, name) => void rename(session.id, name),
             onRemove: confirms.askSession,
