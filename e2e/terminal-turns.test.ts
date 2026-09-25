@@ -49,7 +49,7 @@ async function becomes(crew: Crew, session: Session, label: string, status: Sess
   assert.ok(ok, `${session.name} should read ${label} (crewd: ${status}); ${String(last)}`);
 }
 
-test("T1: a long turn reads Working across tab switches, Unread when it ends out of sight, and read stays read", async (t) => {
+test("T1: a long turn reads Working across tab switches, Unread when it ends out of sight, its row marks it read, and read stays read", async (t) => {
   let crew = await launchCrew();
   t.after(() => crew.close());
   const [workspace] = crew.workspaces;
@@ -89,26 +89,15 @@ test("T1: a long turn reads Working across tab switches, Unread when it ends out
     "Unread only once the CLI finished the turn",
   );
 
-  // Pending design: terminal rows offer Open, Rename, Copy Name and Delete only.
-  await t.test("the row's menu marks it read", { todo: "Q1: terminal rows have no Mark as Read (SessionSidebar.tsx:80)" }, async () => {
-    const page = crew.window;
-    // force: dnd-kit marks the sortable wrapper aria-disabled while dragging is
-    // off, which Playwright takes for a disabled button; the mouse press is real.
-    await sessionRow(crew, s1.name).click({ button: "right", force: true });
-    try {
-      await page.getByRole("menu").getByRole("menuitem", { name: "Open" }).waitFor();
-      await page.getByRole("menu").getByRole("menuitem", { name: "Mark as Read" }).click({ timeout: 3000 });
-    } finally {
-      if (await page.getByRole("menu").count()) await page.keyboard.press("Escape");
-    }
-    await becomes(crew, s1, "Idle", "idle", 5000);
-  });
-  // Without that item, looking at the tab is what reads it.
-  if ((await storedStatus(crew, s1.id)) === "done") {
-    await sessionTab(crew, s1).click();
-    await becomes(crew, s1, "Idle", "idle", 5000);
-    await sessionTab(crew, s2).click();
-  }
+  // The row's menu reads it, with s2 still on screen: the tab never showed it (Q1).
+  const page = crew.window;
+  // force: dnd-kit marks the sortable wrapper aria-disabled while dragging is
+  // off, which Playwright takes for a disabled button; the mouse press is real.
+  await sessionRow(crew, s1.name).click({ button: "right", force: true });
+  await page.getByRole("menu").getByRole("menuitem", { name: "Mark as Read" }).click();
+  await page.getByRole("menu").waitFor({ state: "detached" });
+  await becomes(crew, s1, "Idle", "idle", 5000);
+  assert.equal(await sessionTab(crew, s2).getAttribute("aria-selected"), "true", "s2 stayed on screen");
 
   // Read stays read across a restart, with s1 out of sight so nothing reads it again.
   await sessionTab(crew, s2).and(crew.window.locator('[aria-selected="true"]')).waitFor();

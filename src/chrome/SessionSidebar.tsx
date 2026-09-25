@@ -74,7 +74,8 @@ const REMOVE_WORKTREE: MenuAction = { ...DELETE, id: "remove-worktree", label: "
 
 /** What a right-click on one session offers, loudest last. */
 function sessionActions(session: Session): MenuEntry[] {
-  if (session.kind === "terminal") return [OPEN, RENAME, COPY_NAME, SEPARATOR, DELETE];
+  if (session.kind === "terminal")
+    return [OPEN, RENAME, ...(session.status === "done" ? [MARK_READ] : []), COPY_NAME, SEPARATOR, DELETE];
   return tidy([
     OPEN,
     EDIT,

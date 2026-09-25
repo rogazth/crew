@@ -180,6 +180,11 @@ export class TerminalActivity {
     if (!this.#watched) this.#push("needs-input");
   }
 
+  /** Marked as read from its row: the finished turn is idle, and the next one to end unseen is unread again. */
+  read(): void {
+    if (this.#status === "done") this.#status = "idle";
+  }
+
   /** The process ended; the shell that replaces it starts over. */
   exit(code: number | null): void {
     this.#stopQuiet();

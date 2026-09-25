@@ -41,6 +41,11 @@ export function useSessionActivity(
     activity.current?.setWatched(active);
   }, [active]);
 
+  // Its row marks it read without the tab: the tracker learns it is no longer unread.
+  useEffect(() => {
+    if (session.status === "idle") activity.current?.read();
+  }, [session.status]);
+
   return useMemo(
     () => ({
       onBell: () => activity.current?.bell(),

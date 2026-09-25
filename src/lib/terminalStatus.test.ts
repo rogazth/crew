@@ -205,6 +205,13 @@ describe("TerminalActivity", () => {
     expect(track("done", true).reported).toEqual(["idle"]);
   });
 
+  it("once read from its row, is unread again when the process ends unseen", () => {
+    const { activity, reported } = track("done");
+    activity.read();
+    activity.exit(0);
+    expect(reported).toEqual(["done"]);
+  });
+
   it("reports a failed exit, and the shell after it starts over", () => {
     const { activity, reported } = track();
     started(activity);
