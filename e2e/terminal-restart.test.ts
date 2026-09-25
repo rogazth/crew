@@ -3,7 +3,8 @@
 // way, so nothing is running once the window is back: the row must not keep
 // saying Working. What was unread stays unread, names stay, and the CLI comes
 // back on the same conversation (`--resume <id>`, in the fake's own log)
-// without its redraw passing for a new turn.
+// without its redraw passing for a new turn. Only the tab on screen starts its
+// CLI with the window; the others start when they are opened.
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
@@ -139,12 +140,15 @@ test("T4: quitting mid-turn: after the relaunch nothing reads Working, Unread su
   const seen = await stale.stop();
   assert.deepEqual(seen, [], "a read Working after the relaunch");
 
-  // A terminal starts once its pane has a size, so b's CLI waits until b is
-  // looked at; the sessions drive (70e6b62) has every tab resume in the background.
-  await t.test("b's CLI resumes out of sight too", { todo: "Q2: out-of-sight tabs start their CLI only when shown (TerminalView.tsx applySize)" }, async () => {
-    const run = await relaunch(crew, b, before, 3000);
-    assert.equal(argAfter(run.argv, "--resume"), b.id);
-  });
+  // Only the tab on screen starts its CLI after a relaunch (Q2): b's waits,
+  // with no launch of its own, until b is opened, and then resumes by its id.
+  const none = async () => !(await crew.claudeLaunches()).slice(before).some((run) => run.argv.includes(b.id));
+  assert.ok(await none(), "b's CLI started out of sight");
+  await holdsFor(1500, none, "b's CLI starts while b is out of sight");
+  await sessionTab(crew, b).click();
+  const shown = await relaunch(crew, b, before);
+  assert.equal(argAfter(shown.argv, "--resume"), b.id, `b resumes its conversation once opened: ${JSON.stringify(shown.argv)}`);
+  assert.equal(argAfter(shown.argv, "--session-id"), undefined);
 });
 
 test("T6: crewd killed mid-turn: the app brings it back, the row settles to what really runs, and every session keeps its name", async (t) => {
