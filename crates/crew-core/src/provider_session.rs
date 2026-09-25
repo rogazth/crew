@@ -66,10 +66,13 @@ pub const CLAUDE_BIND_ENV: &str = "CREW_CLAUDE_BIND_DIR";
 
 /// The Claude session the hook last reported for Crew session `crew_id`.
 pub fn claude_bound(crew_id: &str) -> Option<String> {
+    claude_bound_in(Path::new(&std::env::var_os(CLAUDE_BIND_ENV)?), crew_id)
+}
+
+fn claude_bound_in(dir: &Path, crew_id: &str) -> Option<String> {
     if !is_chat_id(crew_id) {
         return None;
     }
-    let dir = PathBuf::from(std::env::var_os(CLAUDE_BIND_ENV)?);
     parse_claude_bind(&std::fs::read_to_string(dir.join(format!("{crew_id}.json"))).ok()?)
 }
 
@@ -137,12 +140,20 @@ pub fn title(provider: &str, id: &str) -> Option<String> {
 /// sessions are never taken for empty.
 pub fn has_conversation(provider: &str, crew_id: &str, bound: Option<&str>, cwd: &str) -> bool {
     let Some(home) = home() else { return true };
+    // The window hands crewd a `/clear`'s new id only every few seconds; the
+    // hook's record has it the moment Claude starts it.
+    let latest = (provider == "claude").then(|| claude_bound(crew_id)).flatten();
+    spoke(&home, provider, crew_id, [bound, latest.as_deref()], cwd)
+}
+
+fn spoke(home: &Path, provider: &str, crew_id: &str, bound: [Option<&str>; 2], cwd: &str) -> bool {
+    let [bound, latest] = bound;
     match provider {
         // Crew's id until a `/clear` moves Claude on; what was said before counts too.
-        "claude" => [Some(crew_id), bound]
+        "claude" => [Some(crew_id), bound, latest]
             .into_iter()
             .flatten()
-            .any(|id| claude_has_turn(&claude_transcript(&home, cwd, id))),
+            .any(|id| claude_has_turn(&claude_transcript(home, cwd, id))),
         "cursor" => bound.is_some_and(|id| cursor_has_conversation(&home.join(".cursor/chats"), id)),
         "codex" | "opencode" => bound.is_some(),
         _ => true,
@@ -502,6 +513,47 @@ mod tests {
         assert!(!cursor_has_conversation(&root, "opened"));
         assert!(!cursor_has_conversation(&root, "reserved"));
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_claude_conversation_after_clear_counts_before_crewd_learns_its_id() {
+        let home = temp_dir("claude-clear-home");
+        let binds = temp_dir("claude-clear-bind");
+        let cwd = "/work/app";
+        let crew_id = "crew-1";
+        let turn = "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"hi\"}}\n";
+        let write = |id: &str, text: &str| {
+            let transcript = claude_transcript(&home, cwd, id);
+            std::fs::create_dir_all(transcript.parent().unwrap()).unwrap();
+            std::fs::write(transcript, text).unwrap();
+        };
+        // The first conversation, under Crew's id and under an older rebind,
+        // never got a word; `/clear` moved Claude on and the turn landed there.
+        write(crew_id, r#"{"type":"ai-title","aiTitle":"x"}"#);
+        write("old", r#"{"type":"ai-title","aiTitle":"x"}"#);
+        write("after-clear", turn);
+        std::fs::write(
+            binds.join(format!("{crew_id}.json")),
+            r#"{"session_id":"after-clear","source":"clear"}"#,
+        )
+        .unwrap();
+        let latest = claude_bound_in(&binds, crew_id);
+        assert_eq!(latest.as_deref(), Some("after-clear"));
+
+        // What the database still says: nothing learned yet, or the old id.
+        for stored in [None, Some("old")] {
+            assert!(!spoke(&home, "claude", crew_id, [stored, None], cwd), "the old ids alone spoke");
+            assert!(
+                spoke(&home, "claude", crew_id, [stored, latest.as_deref()], cwd),
+                "the conversation the hook bound was ignored"
+            );
+        }
+        // A bind to a conversation still empty keeps nothing alive.
+        std::fs::write(binds.join("crew-2.json"), r#"{"session_id":"old"}"#).unwrap();
+        let empty = claude_bound_in(&binds, "crew-2");
+        assert!(!spoke(&home, "claude", "crew-2", [None, empty.as_deref()], cwd));
+        let _ = std::fs::remove_dir_all(&home);
+        let _ = std::fs::remove_dir_all(&binds);
     }
 
     #[test]
