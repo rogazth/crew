@@ -43,6 +43,12 @@ type Props = {
   onBell?: (() => void) | undefined;
   /** Output arrived. Throttled, so it reads as "this session is busy". */
   onActivity?: (() => void) | undefined;
+  /** The process retitled its terminal. */
+  onTitle?: ((title: string) => void) | undefined;
+  /** The user sent something: a key, a paste, a click, a focus change. */
+  onInput?: (() => void) | undefined;
+  /** The grid changed size, which makes a TUI repaint. */
+  onResize?: (() => void) | undefined;
   onOpenPath?: ((path: string) => void) | undefined;
 };
 
@@ -89,6 +95,9 @@ export function TerminalView({
   onExit,
   onBell,
   onActivity,
+  onTitle,
+  onInput,
+  onResize,
   onOpenPath,
 }: Props) {
   const paneRef = useRef<HTMLDivElement>(null);
@@ -101,10 +110,10 @@ export function TerminalView({
   const search = useTerminalSearch(termRef, isDark);
   const attachSearch = search.attach;
 
-  const latest = useRef({ onExit, onBell, onActivity, onOpenPath, command, shellOnExit });
+  const latest = useRef({ onExit, onBell, onActivity, onTitle, onInput, onResize, onOpenPath, command, shellOnExit });
   useEffect(() => {
     // Only `command` at spawn: a later argv must not respawn the running process.
-    latest.current = { onExit, onBell, onActivity, onOpenPath, command, shellOnExit };
+    latest.current = { onExit, onBell, onActivity, onTitle, onInput, onResize, onOpenPath, command, shellOnExit };
   });
 
   const dropPaths = useCallback((paths: string[]) => {
@@ -132,7 +141,7 @@ export function TerminalView({
       macOptionClickForcesSelection: true,
       allowProposedApi: true,
       vtExtensions: { kittyKeyboard: true },
-      linkHandler: { activate: (event, uri) => openLink(uri, event) },
+      linkHandler: { activate: (_event, uri) => openLink(uri) },
       theme: colors,
     });
     const fit = new FitAddon();
@@ -149,7 +158,7 @@ export function TerminalView({
     }
     term.loadAddon(new Unicode11Addon());
     activateZwjUnicode(term);
-    term.loadAddon(new WebLinksAddon((event, uri) => openLink(uri, event)));
+    term.loadAddon(new WebLinksAddon((_event, uri) => openLink(uri)));
     const searchAddon = new SearchAddon();
     term.loadAddon(searchAddon);
     const detachSearch = attachSearch(searchAddon);
@@ -189,6 +198,7 @@ export function TerminalView({
           else term.scrollToBottom();
           return false;
         case "input":
+          latest.current.onInput?.();
           if (spawned) void api.writePty(id, action.data);
           event.preventDefault();
           return false;
@@ -291,10 +301,12 @@ export function TerminalView({
       }),
     ];
     const bell = term.onBell(() => latest.current.onBell?.());
+    const title = term.onTitleChange((next) => latest.current.onTitle?.(next));
     const links = term.registerLinkProvider(
       filePathProvider(term, cwd, (path) => latest.current.onOpenPath?.(path)),
     );
     const input = term.onData((data) => {
+      latest.current.onInput?.();
       if (spawned) void api.writePty(id, data);
     });
 
@@ -323,6 +335,7 @@ export function TerminalView({
       if (cols === lastCols && rows === lastRows) return;
       lastCols = cols;
       lastRows = rows;
+      latest.current.onResize?.();
       void api.resizePty(id, cols, rows);
     };
     fitRef.current = applySize;
@@ -383,6 +396,7 @@ export function TerminalView({
       host.removeEventListener("paste", onPaste);
       input.dispose();
       bell.dispose();
+      title.dispose();
       links.dispose();
       detachSearch();
       for (const handler of osc) handler.dispose();

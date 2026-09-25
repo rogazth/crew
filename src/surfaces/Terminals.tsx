@@ -141,7 +141,7 @@ type SessionProps = {
 function SessionTerminal({ paneId, session, cwd, active, onStatus, onOpenPath }: SessionProps) {
   const [command, setCommand] = useState<string[] | null>(null);
   const [startedAt, setStartedAt] = useState(0);
-  const { onBell, onActivity, onExit } = useSessionActivity(session, active, onStatus);
+  const { onBell, onActivity, onTitle, onInput, onResize, onExit } = useSessionActivity(session, active, onStatus);
 
   useEffect(() => {
     let cancelled = false;
@@ -190,6 +190,9 @@ function SessionTerminal({ paneId, session, cwd, active, onStatus, onOpenPath }:
       onExit={onExit}
       onBell={onBell}
       onActivity={onActivity}
+      onTitle={onTitle}
+      onInput={onInput}
+      onResize={onResize}
       onOpenPath={onOpenPath}
     />
   );

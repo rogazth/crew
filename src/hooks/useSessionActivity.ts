@@ -1,16 +1,12 @@
-import { useCallback, useEffect, useRef } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { setBusy } from '../lib/terminalBusy';
+import { TerminalActivity } from '../lib/terminalStatus';
 import type { Session, SessionStatus } from '../lib/types';
 
-/** Claude's spinner repaints every ~100ms; a gap this long means the turn ended. */
-const QUIET_AFTER = 1500;
-/** Losing focus makes TUIs repaint; that burst is the switch echoing back, not work. */
-const SETTLE_AFTER_LEAVING = 1000;
-
 /**
- * The tab indicator speaks for the sessions you are not looking at: output means
- * it is still going, silence after output means it finished, a bell means it
- * wants you. Opening the tab reads it, which clears the indicator back to `idle`.
+ * The tab indicator for a terminal session, read off what its process does:
+ * working while the CLI is busy, unread once it finished out of sight, a bell
+ * when it wants you. Opening the tab reads it.
  *
  * Whether the terminal is *running* something is tracked either way, watched or
  * not: closing the tab ends the process, and that prompt cannot depend on which
@@ -21,72 +17,39 @@ export function useSessionActivity(
   active: boolean,
   onStatus: (id: string, status: SessionStatus) => void,
 ) {
-  const sent = useRef<SessionStatus>(session.status);
-  const quiet = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Read when the quiet timer fires, not when it was set: the tab may have come
-  // to the front in between, and a tab you are watching shows no indicator.
-  const watched = useRef(active);
-  const leftAt = useRef(0);
-
-  const stopWaiting = () => {
-    if (quiet.current) clearTimeout(quiet.current);
-    quiet.current = null;
-  };
-
-  const push = useCallback(
-    (next: SessionStatus) => {
-      if (sent.current === next) return;
-      sent.current = next;
-      onStatus(session.id, next);
-    },
-    [onStatus, session.id],
-  );
+  const id = session.id;
+  const activity = useRef<TerminalActivity | null>(null);
+  const latest = useRef({ onStatus, status: session.status, active });
+  useEffect(() => {
+    latest.current = { onStatus, status: session.status, active };
+  });
 
   useEffect(() => {
-    watched.current = active;
-    if (active) push('idle');
-    else leftAt.current = Date.now();
-  }, [active, push]);
+    const { status, active: watched } = latest.current;
+    const tracker = new TerminalActivity(status, watched, {
+      report: (next) => latest.current.onStatus(id, next),
+      onBusy: (busy) => setBusy(id, busy),
+    });
+    activity.current = tracker;
+    return () => {
+      tracker.dispose();
+      if (activity.current === tracker) activity.current = null;
+    };
+  }, [id]);
 
-  const id = session.id;
-  useEffect(
-    () => () => {
-      stopWaiting();
-      setBusy(id, false);
-    },
-    [id],
+  useEffect(() => {
+    activity.current?.watch(active);
+  }, [active]);
+
+  return useMemo(
+    () => ({
+      onBell: () => activity.current?.bell(),
+      onActivity: () => activity.current?.output(),
+      onTitle: (title: string) => activity.current?.title(title),
+      onInput: () => activity.current?.input(),
+      onResize: () => activity.current?.settle(),
+      onExit: (code: number | null) => activity.current?.exit(code),
+    }),
+    [],
   );
-
-  /** A bell already claimed the slot; the redraw that follows it is not new work. */
-  const claimed = () => sent.current === 'needs-input' || sent.current === 'error';
-
-  return {
-    onBell: useCallback(() => {
-      // Waiting on you is still running: the process is alive behind the prompt.
-      stopWaiting();
-      setBusy(id, true);
-      push(watched.current ? 'idle' : 'needs-input');
-    }, [id, push]),
-    onActivity: useCallback(() => {
-      setBusy(id, true);
-      const settled = Date.now() - leftAt.current > SETTLE_AFTER_LEAVING;
-      if (!watched.current && !claimed() && settled) push('working');
-      stopWaiting();
-      quiet.current = setTimeout(() => {
-        quiet.current = null;
-        setBusy(id, false);
-        // Only work seen from the background is unread; output you watched start was already read.
-        if (sent.current === 'working') push('done');
-      }, QUIET_AFTER);
-    }, [id, push]),
-    onExit: useCallback(
-      (code: number | null) => {
-        stopWaiting();
-        setBusy(id, false);
-        if (code !== 0 && code !== null) push('error');
-        else push(watched.current ? 'idle' : 'done');
-      },
-      [id, push],
-    ),
-  };
 }
