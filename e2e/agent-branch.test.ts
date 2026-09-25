@@ -59,7 +59,7 @@ async function agentOnBranch(name: string, branch: string): Promise<Locator> {
 async function create(sheet: Locator): Promise<void> {
   const button = sheet.getByRole("button", { name: "Create agent" });
   await button.click();
-  await waitFor(async () => (await sheet.count()) === 0 || (await button.isEnabled()), {
+  await waitFor(async () => (await sheet.count()) === 0 || (await button.isEnabled({ timeout: 100 }).catch(() => false)), {
     message: "the sheet settles after Create",
   });
 }

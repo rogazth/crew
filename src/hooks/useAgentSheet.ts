@@ -7,6 +7,9 @@ import type { useSessions } from "./useSessions";
 
 type Sessions = ReturnType<typeof useSessions>;
 
+/** Git would not make the branch "Works in" asked for; the sheet shows why under it. */
+export class BranchRefused extends Error {}
+
 type Deps = {
   create: Sessions["create"];
   update: Sessions["update"];
@@ -41,7 +44,11 @@ export function useAgentSheet({ create, update, openSession, createWorktree }: D
         return;
       }
       const tree =
-        place.kind === "branch" ? await createWorktree(place.branch) : null;
+        place.kind === "branch"
+          ? await createWorktree(place.branch).catch((error: unknown) => {
+              throw new BranchRefused(error instanceof Error ? error.message : String(error));
+            })
+          : null;
       const worktree = tree ? (tree.main ? null : tree.path) : place.kind === "worktree" ? place.path : null;
       const session = await create("agent", { ...fields, worktree }, settle);
       if (!session) return;

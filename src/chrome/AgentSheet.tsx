@@ -3,7 +3,7 @@ import { useState, type KeyboardEvent, type ReactNode } from "react";
 import { AgentAvatar } from "./AgentAvatar";
 import { Button, Card, Field, Footer, Overlay, Select, TextArea, TextInput, Toggle, type Option } from "./kit";
 import { ModelPicker } from "./ModelPicker";
-import type { useAgentSheet } from "../hooks/useAgentSheet";
+import { BranchRefused, type useAgentSheet } from "../hooks/useAgentSheet";
 import { useAgentAvatar } from "../hooks/useAgentAvatar";
 import { useAgentFaces } from "../hooks/useAgentFaces";
 import { useDefaultAgent } from "../hooks/useDefaultAgent";
@@ -118,6 +118,8 @@ export function AgentSheet({ session, worktrees, initialWorktree, existingNames,
   );
   const [submitted, setSubmitted] = useState(false);
   const [saving, setSaving] = useState(false);
+  // What git said of the new branch; it stands until "Works in" is touched again.
+  const [refused, setRefused] = useState<string | null>(null);
   const update = (patch: Partial<AgentDraft>) => setDraft((prev) => ({ ...prev, ...patch }));
 
   const name = draft.name.trim();
@@ -132,7 +134,8 @@ export function AgentSheet({ session, worktrees, initialWorktree, existingNames,
       // onSave holds the spinner for MIN_SAVE_MS so the row, the tab and this close land together.
       await onSave({ ...draft, name });
       onClose();
-    } catch {
+    } catch (error) {
+      if (error instanceof BranchRefused) setRefused(error.message);
       setSaving(false);
     }
   }
@@ -169,8 +172,11 @@ export function AgentSheet({ session, worktrees, initialWorktree, existingNames,
             <WorksIn
               worktrees={worktrees}
               place={draft.place}
-              error={submitted ? placed : null}
-              onChange={(place) => update({ place })}
+              error={submitted ? (placed ?? refused) : null}
+              onChange={(place) => {
+                update({ place });
+                setRefused(null);
+              }}
             />
           )}
 
