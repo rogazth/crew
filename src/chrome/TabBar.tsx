@@ -2,8 +2,9 @@ import { RestrictToHorizontalAxis } from "@dnd-kit/abstract/modifiers";
 import { RestrictToElement } from "@dnd-kit/dom/modifiers";
 import { useSortable } from "@dnd-kit/react/sortable";
 import { Tabs } from "@base-ui/react/tabs";
-import { CaretLeftIcon, CaretRightIcon, CircleNotchIcon, GlobeIcon, RobotIcon } from "@phosphor-icons/react";
+import { CaretLeftIcon, CaretRightIcon, CircleNotchIcon, GlobeIcon } from "@phosphor-icons/react";
 import { memo, useEffect, useState } from "react";
+import { AgentAvatar } from "./AgentAvatar";
 import { X } from "./icons";
 import { FileTypeIcon } from "./FileTypeIcon";
 import { ProviderIcon } from "./ProviderIcon";
@@ -249,7 +250,7 @@ function TabIcon({ tab, sessions }: { tab: Tab; sessions: Session[] }) {
     const session = sessions.find((s) => s.id === tab.sessionId);
     if (!session) return null;
     return session.kind === "agent" ? (
-      <RobotIcon className="size-3.5 text-text-muted" />
+      <AgentAvatar seed={session.id} className="size-3.5" />
     ) : (
       <ProviderIcon provider={session.provider} className="size-3.5" />
     );

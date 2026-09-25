@@ -19,6 +19,7 @@ import { useSelectAllScope } from "./hooks/useSelectAllScope";
 import { useSessions } from "./hooks/useSessions";
 import { useSidebarWidth } from "./hooks/useSidebarWidth";
 import { useTabs } from "./hooks/useTabs";
+import { AgentAvatarProvider } from "./hooks/useAgentAvatar";
 import { AgentThemeProvider } from "./hooks/useAgentTheme";
 import { BrowserPrefsProvider } from "./hooks/useBrowserPrefs";
 import { TerminalPrefsProvider } from "./hooks/useTerminalPrefs";
@@ -134,6 +135,7 @@ export function App() {
     <BrowserPrefsProvider>
     <LinkRouter open={nav.openBrowser} />
     <AgentThemeProvider>
+    <AgentAvatarProvider>
     <Sidebar.Provider
       contained
       collapsible="offcanvas"
@@ -250,6 +252,7 @@ export function App() {
 
       <AgentSheetHost sheet={sheet} sessions={sessions} onNewRoutine={openRoutines} />
     </Sidebar.Provider>
+    </AgentAvatarProvider>
     </AgentThemeProvider>
     </BrowserPrefsProvider>
     </TerminalPrefsProvider>

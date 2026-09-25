@@ -8,6 +8,7 @@ import {
 } from "@phosphor-icons/react";
 import { useMemo, useState, type KeyboardEvent, type MouseEvent } from "react";
 import { ActionMenu } from "./ActionMenu";
+import { AgentAvatar } from "./AgentAvatar";
 import { DELETE, EDIT, RENAME, menuFromEvent, type MenuPoint } from "../lib/menu";
 import { ProviderIcon } from "./ProviderIcon";
 import { RenameRow } from "./RenameRow";
@@ -413,9 +414,7 @@ function Card({
       }`}
     >
       {avatar && (
-        <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-kumo-fill text-kumo-subtle">
-          <RobotIcon className="size-4" />
-        </span>
+        <AgentAvatar seed={session.id} />
       )}
       <span className="flex min-w-0 flex-1 flex-col">
         <span className="flex items-baseline gap-2">
