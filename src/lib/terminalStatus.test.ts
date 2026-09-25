@@ -133,6 +133,18 @@ describe("TerminalActivity", () => {
     expect(reported).toEqual([]);
   });
 
+  it("notices a turn that starts while the user flips between tabs", () => {
+    const { activity, reported } = track();
+    started(activity);
+    // Every 1.2s: each switch's settle leaves only a short stretch between.
+    for (let t = 0; t < 4800; t += 100) {
+      if (t % 1200 === 0) activity.setWatched(t % 2400 === 0);
+      activity.output();
+      vi.advanceTimersByTime(100);
+    }
+    expect(reported[0]).toBe("working");
+  });
+
   it("ignores the repaint after a tab switch", () => {
     const { activity, reported } = track("idle", true);
     started(activity);

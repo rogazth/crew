@@ -147,11 +147,18 @@ export class TerminalActivity {
     const gap = now - this.#lastOutput;
     this.#lastOutput = now;
     if (!this.#busy) {
-      if (now - this.#lastInput < ECHO_WINDOW || now < this.#settleUntil) {
+      if (now - this.#lastInput < ECHO_WINDOW) {
         this.#burstStart = Number.NEGATIVE_INFINITY;
         return;
       }
-      if (gap > BURST_GAP || this.#burstStart === Number.NEGATIVE_INFINITY) this.#burstStart = now;
+      // A switch's repaint starts nothing, but a spinner that was already
+      // turning keeps its count through it.
+      const fresh = gap > BURST_GAP || this.#burstStart === Number.NEGATIVE_INFINITY;
+      if (fresh && now < this.#settleUntil) {
+        this.#burstStart = Number.NEGATIVE_INFINITY;
+        return;
+      }
+      if (fresh) this.#burstStart = now;
       if (now - this.#burstStart < SUSTAIN) return;
       this.#setBusy(true);
     }
