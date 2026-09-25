@@ -217,14 +217,23 @@ fn tool_detail(
 ) -> Option<ToolDetail> {
     let success = result.and_then(|row| row.get("success")).and_then(as_record);
     match name.to_ascii_lowercase().as_str() {
-        "shell" | "bash" => Some(ToolDetail::Command {
-            command: string_field(Some(args), "command")?,
-            exit_code: success
+        "shell" | "bash" => {
+            let command = string_field(Some(args), "command")?;
+            let exit_code = success
                 .and_then(|row| row.get("exitCode"))
                 .and_then(Value::as_i64)
-                .map(|code| code as i32),
-            output: text_field(success, "interleavedOutput").or_else(|| text_field(success, "stdout")),
-        }),
+                .map(|code| code as i32);
+            if exit_code.is_none_or(|code| code == 0) {
+                if let Some(message) = bridge_message(&command) {
+                    return Some(message);
+                }
+            }
+            Some(ToolDetail::Command {
+                command,
+                exit_code,
+                output: text_field(success, "interleavedOutput").or_else(|| text_field(success, "stdout")),
+            })
+        }
         "read" => {
             let range = success.and_then(|row| row.get("readRange")).and_then(as_record);
             Some(ToolDetail::File {
@@ -248,6 +257,36 @@ fn tool_detail(
             matches: None,
         }),
         _ => None,
+    }
+}
+
+/// Cursor reaches Crew's tools through the shell (`crew call message_agent
+/// '<json>'`), so a message to another agent arrives as a command. Read back as
+/// the message it is, it shows who it went to and what it said, as it does for
+/// the providers that call the tool by name.
+fn bridge_message(command: &str) -> Option<ToolDetail> {
+    const CALL: &str = " call message_agent '";
+    let start = command.find(CALL)? + CALL.len();
+    let args = single_quoted(&command[start..])?;
+    super::crew_tool_detail("crew.message_agent", &try_parse_json_record(&args)?)
+}
+
+/// The body of a shell single-quoted word, up to its closing quote. A quote
+/// inside is written `'\''`: close, escaped quote, reopen.
+fn single_quoted(rest: &str) -> Option<String> {
+    let mut out = String::new();
+    let mut tail = rest;
+    loop {
+        let end = tail.find('\'')?;
+        out.push_str(&tail[..end]);
+        tail = &tail[end + 1..];
+        match tail.strip_prefix("\\''") {
+            Some(reopened) => {
+                out.push('\'');
+                tail = reopened;
+            }
+            None => return Some(out),
+        }
     }
 }
 
@@ -551,6 +590,32 @@ mod tests {
 
     /// The failed read of `crates/crew-core/tests/fixtures/protocols/cursor.jsonl`: an error result repeats
     /// no arguments, so the row keeps the detail it already had.
+    #[test]
+    fn a_bridge_call_to_message_an_agent_reads_as_the_message() {
+        let args = |command: &str| {
+            let mut map = Map::new();
+            map.insert("command".into(), Value::String(command.into()));
+            map
+        };
+        let ok = serde_json::json!({ "success": { "exitCode": 0 } });
+        let ok = ok.as_object();
+        let sent = r#"/bin/crewd call message_agent '{"to":"abc","text":"it'\''s green"}' 2>/dev/null || true"#;
+        match tool_detail("shell", &args(sent), ok) {
+            Some(ToolDetail::Message { to, text }) => {
+                assert_eq!(to, "abc");
+                assert_eq!(text, "it's green");
+            }
+            other => panic!("expected a message, got {other:?}"),
+        }
+        // Wrong arguments, a failed call, or another tool stay the command they were.
+        let wrong = r#"crewd call message_agent '{"id":"abc","message":"hi"}'"#;
+        assert!(matches!(tool_detail("shell", &args(wrong), ok), Some(ToolDetail::Command { .. })));
+        let failed = serde_json::json!({ "success": { "exitCode": 1 } });
+        assert!(matches!(tool_detail("shell", &args(sent), failed.as_object()), Some(ToolDetail::Command { .. })));
+        let listed = "crewd call list_agents '{}'";
+        assert!(matches!(tool_detail("shell", &args(listed), ok), Some(ToolDetail::Command { .. })));
+    }
+
     #[test]
     fn a_failed_call_adds_no_detail() {
         assert_eq!(
