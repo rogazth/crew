@@ -17,12 +17,10 @@ export const COMMANDS = {
   close: { label: "Close Tab", keys: "Mod+W" },
   "reopen-tab": { label: "Reopen Closed Tab", keys: "Mod+Shift+T" },
   // TanStack's `Hotkey` string type excludes Shift+punctuation, so these two take the
-  // object form. Matching still falls back to event.code, which is what puts tab
-  // cycling on the same physical keys the browser uses on every layout.
-  // ⌘} and ⌘{ by the character typed, as Orca and Terminal read them: on a
-  // Latin American layout those are their own keys, with no ⇧ and nowhere near [ ].
-  "next-tab": { label: "Next Tab", keys: { key: "]", mod: true, shift: true }, also: [{ key: "}", mod: true }], repeat: true },
-  "prev-tab": { label: "Previous Tab", keys: { key: "[", mod: true, shift: true }, also: [{ key: "{", mod: true }], repeat: true },
+  // object form. A brace is its bracket (see keymap), so ⇧⌘} is the same chord on a
+  // US board, where } is ⇧], and a Latin American one, where ] is ⇧}.
+  "next-tab": { label: "Next Tab", keys: { key: "]", mod: true, shift: true }, repeat: true },
+  "prev-tab": { label: "Previous Tab", keys: { key: "[", mod: true, shift: true }, repeat: true },
 
   // Finding things — three doors into one palette, each opening a different filter.
   "open-palette": { label: "Command Palette", keys: "Mod+K" },

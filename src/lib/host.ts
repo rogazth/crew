@@ -1,6 +1,6 @@
 import type { DownloadActivity, OpenTabRequest } from "./browser/bridge";
 import type { NavSnapshot } from "./browser/snapshot";
-import type { LiveCommand } from "./keymap";
+import type { KeyboardLayout, LiveCommand } from "./keymap";
 import type { UpdateState } from "./update";
 
 export type OpenOptions = { multiple?: boolean; directory?: boolean };
@@ -30,6 +30,7 @@ export type UpdateHost = {
 /** The browser's main-process half. Absent outside Electron (the mock, the screenshot build). */
 export type BrowserHost = {
   setCommands(list: LiveCommand[]): void;
+  setKeyboardLayout(layout: KeyboardLayout): void;
   onCommand(cb: (id: string) => void): () => void;
   onOpenTab(cb: (request: OpenTabRequest) => void): () => void;
   onDownload(cb: (activity: DownloadActivity) => void): () => void;

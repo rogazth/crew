@@ -1,8 +1,8 @@
 import { ipcMain, session } from "electron";
-import type { LiveCommand } from "../../src/lib/keymap";
+import type { KeyboardLayout, LiveCommand } from "../../src/lib/keymap";
 import { capSnapshot, parseSnapshot } from "../../src/lib/browser/snapshot";
 import { CHANNELS, PARTITION } from "../../src/lib/browser/bridge";
-import { ownedGuest, prepareRestore, setLiveCommands } from "./guests";
+import { ownedGuest, prepareRestore, setKeyboardLayout, setLiveCommands } from "./guests";
 
 const TOKEN = /^[A-Za-z0-9-]{1,64}$/;
 const FAVICON_BYTES = 128 * 1024;
@@ -44,8 +44,19 @@ function commandList(value: unknown): LiveCommand[] {
   });
 }
 
+/** Keeps only short string entries: this map arrives from the renderer. */
+function keyboardLayout(value: unknown): KeyboardLayout | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+  const layout: Record<string, string> = {};
+  for (const [code, typed] of Object.entries(value).slice(0, 256)) {
+    if (code.length <= 32 && typeof typed === "string" && typed.length <= 4) layout[code] = typed;
+  }
+  return layout;
+}
+
 export function registerBrowserIpc(): void {
   ipcMain.on(CHANNELS.commands, (event, list: unknown) => setLiveCommands(event.sender, commandList(list)));
+  ipcMain.on(CHANNELS.keyboardLayout, (event, layout: unknown) => setKeyboardLayout(event.sender, keyboardLayout(layout)));
 
   /** Toggles, and answers whether DevTools are open afterwards. */
   ipcMain.handle(CHANNELS.devtools, (event, id: unknown) => {

@@ -26,6 +26,7 @@ contextBridge.exposeInMainWorld("crewHost", {
   },
   browser: {
     setCommands: (list: unknown) => ipcRenderer.send(CHANNELS.commands, list),
+    setKeyboardLayout: (layout: unknown) => ipcRenderer.send(CHANNELS.keyboardLayout, layout),
     onCommand: (cb: (id: string) => void) => listen(CHANNELS.command, cb),
     onOpenTab: (cb: (request: OpenTabRequest) => void) => listen(CHANNELS.openTab, cb),
     onDownload: (cb: (activity: DownloadActivity) => void) => listen(CHANNELS.download, cb),

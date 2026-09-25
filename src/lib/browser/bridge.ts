@@ -13,6 +13,8 @@ export const RESTORE_PREFIX = "about:blank#crew-restore=";
 export const CHANNELS = {
   /** window → main: the commands the window can run right now, so a focused page can forward them. */
   commands: "browser:commands",
+  /** window → main: what each physical key types on the layout in use, for chords ⌥ or a dead key leave unnamed. */
+  keyboardLayout: "browser:keyboard-layout",
   /** main → window: a chord pressed inside a page belongs to this command. */
   command: "browser:command",
   /** main → window: a page asked for a new tab (target=_blank, window.open, the context menu). */

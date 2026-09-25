@@ -1,11 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  PUNCTUATION_CODE_MAP,
-  matchesKeyboardEvent,
-  parseHotkey,
-  rawHotkeyToParsedHotkey,
-  type ParsedHotkey,
-} from "@tanstack/react-hotkeys";
+import { PUNCTUATION_CODE_MAP, parseHotkey, rawHotkeyToParsedHotkey, type ParsedHotkey } from "@tanstack/react-hotkeys";
 import {
   COMMAND_IDS,
   keysFor,
@@ -22,6 +16,7 @@ import {
   type ChordInput,
   type ChordSpec,
   type ForwardInput,
+  type KeyboardLayout,
   type LiveCommand,
 } from "./keymap";
 
@@ -34,18 +29,6 @@ const PLATFORMS = [
 function tanstackParse(spec: ChordSpec, isMac: boolean): ParsedHotkey {
   const platform = isMac ? "mac" : "linux";
   return typeof spec === "string" ? parseHotkey(spec, platform) : rawHotkeyToParsedHotkey(spec, platform);
-}
-
-function tanstackMatches(spec: ChordSpec, input: ChordInput, isMac: boolean): boolean {
-  const event = {
-    key: input.key,
-    code: input.code,
-    metaKey: input.meta,
-    ctrlKey: input.ctrl,
-    altKey: input.alt,
-    shiftKey: input.shift,
-  } as KeyboardEvent;
-  return matchesKeyboardEvent(event, tanstackParse(spec, isMac), isMac ? "mac" : "linux");
 }
 
 const PUNCTUATION_KEY_CODES = Object.fromEntries(
@@ -95,26 +78,6 @@ function canonical(spec: ChordSpec, isMac: boolean): ChordInput {
   return { key, code: codeFor(plain), meta: parsed.meta, ctrl: parsed.ctrl, alt: parsed.alt, shift: parsed.shift };
 }
 
-/** The same key with every way a real keyboard could differ. */
-function variants(event: ChordInput): ChordInput[] {
-  const out: ChordInput[] = [
-    event,
-    { ...event, key: event.key.toUpperCase() },
-    { ...event, key: "Dead" },
-    { ...event, code: "" },
-    { ...event, code: "KeyQ" },
-    { ...event, key: "x" },
-    { ...event, key: "§" },
-    { ...event, key: "ж" },
-    { ...event, key: "å", alt: true },
-    { ...event, key: "Enter" },
-  ];
-  for (const flag of ["meta", "ctrl", "alt", "shift"] as const) {
-    out.push({ ...event, [flag]: !event[flag] });
-  }
-  return out;
-}
-
 const ev = (key: string, mods: Partial<ChordInput> = {}): ChordInput => ({
   key,
   code: codeFor(key),
@@ -138,20 +101,6 @@ describe("every command's chord", () => {
       expect(BOUND.filter((other) => matchChord(other.keys, event, isMac)).map((other) => other.id)).toEqual([id]);
     });
 
-    it(`tanstack runs every binding from its canonical ${platform} event`, () => {
-      const missed = BOUND.filter(({ keys }) => !tanstackMatches(keys, canonical(keys, isMac), isMac));
-      expect(missed).toEqual([]);
-    });
-
-    it(`agrees with tanstack on ${platform} for every binding against every command's key`, () => {
-      const events = BOUND.flatMap(({ keys }) => variants(canonical(keys, isMac)));
-      const disagreements = BOUND.flatMap(({ id, keys }) =>
-        events
-          .filter((event) => matchChord(keys, event, isMac) !== tanstackMatches(keys, event, isMac))
-          .map((event) => ({ id, event })),
-      );
-      expect(disagreements).toEqual([]);
-    });
   }
 });
 
@@ -179,11 +128,17 @@ describe("matchChord", () => {
     expect(matchChord("Mod+,", ev(",", { meta: true }), true)).toBe(true);
   });
 
-  it("finds ⇧ punctuation by its physical key", () => {
-    // ⌘⇧] types "}"; the code is what says it is the ] key.
+  it("reads a brace as its bracket, wherever the key sits", () => {
+    // ⌘⇧] types "}" on a US board.
     const spec = { key: "]", mod: true, shift: true };
     expect(matchChord(spec, { ...ev("}", { meta: true, shift: true }), code: "BracketRight" }, true)).toBe(true);
-    expect(matchChord(spec, { ...ev("}", { meta: true, shift: true }), code: "BracketLeft" }, true)).toBe(false);
+    expect(matchChord(spec, { ...ev("{", { meta: true, shift: true }), code: "BracketLeft" }, true)).toBe(false);
+  });
+
+  it("goes by the key typed, not the physical key, when the event names one", () => {
+    // A key that types + where a US board has ] is not ⌘].
+    expect(matchChord({ key: "]", mod: true }, { ...ev("+", { meta: true }), code: "BracketRight" }, true)).toBe(false);
+    expect(matchChord({ key: "]", mod: true }, { ...ev("]", { meta: true }), code: "Backslash" }, true)).toBe(true);
   });
 
   it("finds a ⌥ dead character by its physical key", () => {
@@ -298,6 +253,79 @@ describe("resolveForward", () => {
   });
 });
 
+/**
+ * macOS's Latin American layout, as UCKeyTranslate reads it: { [ and } ] sit
+ * where a US board has ' and \, and the keys a US board calls [ and ] type a
+ * dead ´ and +. ⌥ on the brace keys is a dead key.
+ */
+const LATAM: KeyboardLayout = {
+  BracketLeft: "´",
+  BracketRight: "+",
+  Quote: "{",
+  Backslash: "}",
+  Semicolon: "ñ",
+  Minus: "'",
+  Equal: "¿",
+  KeyI: "i",
+  Digit1: "1",
+};
+
+describe("a Latin American Mac", () => {
+  const commands = live(
+    "next-tab",
+    "prev-tab",
+    "next-workspace",
+    "prev-workspace",
+    "next-worktree",
+    "prev-worktree",
+    "worktree-1",
+    "browser-back",
+    "browser-forward",
+    "browser-devtools",
+  );
+  const run = (key: string, code: string, mods: Partial<ForwardInput>) =>
+    resolveForward(press(key, { ...mods, code }), commands, true, LATAM)?.id ?? null;
+
+  it("goes back and forward with ⌘ on the { and } keys", () => {
+    expect(run("{", "Quote", { meta: true })).toBe("browser-back");
+    expect(run("}", "Backslash", { meta: true })).toBe("browser-forward");
+  });
+
+  it("leaves ⌘´ and ⌘+ alone, though they sit where a US board has [ and ]", () => {
+    expect(run("Dead", "BracketLeft", { meta: true })).toBeNull();
+    expect(run("´", "BracketLeft", { meta: true })).toBeNull();
+    expect(run("+", "BracketRight", { meta: true })).toBeNull();
+  });
+
+  it("switches worktrees with ⌘⌥ on the { and } keys, which ⌥ makes dead", () => {
+    expect(run("Dead", "Quote", { meta: true, alt: true })).toBe("prev-worktree");
+    expect(run("Dead", "Backslash", { meta: true, alt: true })).toBe("next-worktree");
+    expect(run("}", "Backslash", { meta: true, alt: true })).toBe("next-worktree");
+  });
+
+  it("does not switch worktrees with ⌘⌥´ or ⌘⌥+", () => {
+    expect(run("«", "BracketLeft", { meta: true, alt: true })).toBeNull();
+    expect(run("Dead", "BracketRight", { meta: true, alt: true })).toBeNull();
+  });
+
+  it("cycles tabs and workspaces on the same keys", () => {
+    expect(run("]", "Backslash", { meta: true, shift: true })).toBe("next-tab");
+    expect(run("[", "Quote", { meta: true, shift: true })).toBe("prev-tab");
+    expect(run("}", "Backslash", { meta: true, ctrl: true })).toBe("next-workspace");
+    expect(run("{", "Quote", { meta: true, ctrl: true })).toBe("prev-workspace");
+  });
+
+  it("still reads ⌥ letters and digits by the key under them", () => {
+    expect(run("ˆ", "KeyI", { meta: true, alt: true })).toBe("browser-devtools");
+    expect(run("¡", "Digit1", { meta: true, alt: true })).toBe("worktree-1");
+  });
+
+  it("falls back to the US key when no layout has been read", () => {
+    const id = resolveForward(press("Dead", { meta: true, alt: true, code: "BracketRight" }), commands, true)?.id;
+    expect(id).toBe("next-worktree");
+  });
+});
+
 describe("live commands", () => {
   let unbinds: (() => void)[] = [];
   const bind = (id: CommandId, handler: () => void = () => {}) => {
@@ -324,18 +352,17 @@ describe("live commands", () => {
     expect(liveCommands()).toEqual([
       { id: "open-launcher", keys: "Mod+T", repeat: false },
       { id: "next-tab", keys: { key: "]", mod: true, shift: true }, repeat: true },
-      { id: "next-tab", keys: { key: "}", mod: true }, repeat: true },
     ]);
   });
 
-  it("cycles tabs by the brace typed, wherever the layout puts it", () => {
+  it("cycles tabs with ⇧ on the bracket keys, wherever the layout puts them", () => {
     bind("next-tab");
     bind("prev-tab");
     const commands = liveCommands();
-    // US: ⇧⌘] types }. Latin American: } is its own key, pressed with ⌘ alone.
+    // US: ⇧⌘] types }. Latin American: ⇧ on the } key types ].
     expect(resolveForward(press("}", { meta: true, shift: true, code: "BracketRight" }), commands, true)?.id).toBe("next-tab");
-    expect(resolveForward(press("}", { meta: true, code: "Backslash" }), commands, true)?.id).toBe("next-tab");
-    expect(resolveForward(press("{", { meta: true, code: "Quote" }), commands, true)?.id).toBe("prev-tab");
+    expect(resolveForward(press("]", { meta: true, shift: true, code: "Backslash" }), commands, true)?.id).toBe("next-tab");
+    expect(resolveForward(press("[", { meta: true, shift: true, code: "Quote" }), commands, true)?.id).toBe("prev-tab");
   });
 
   it("leaves out a live command with no binding: a page has nothing to forward", () => {
