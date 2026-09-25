@@ -1,3 +1,7 @@
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { PROVIDERS, parseAgentChoice, pickProvider } from "./providers";
 import { sessionCommand } from "./sessionCommand";
@@ -37,13 +41,31 @@ describe("sessionCommand", () => {
     expect(argv({ providerSessionId: "cleared" }).slice(3)).toEqual(["--session-id", "cleared"]);
   });
 
-  it("has Claude report every session it moves to, silently", () => {
+  it("has Claude report every session it moves to, silently, one record each", () => {
     const { theme, hooks } = settings(argv({}));
     expect(theme).toBe("dark");
     const [command] = hooks.SessionStart[0].hooks;
     expect(command.type).toBe("command");
-    expect(command.command).toContain('cat > "$CREW_CLAUDE_BIND_DIR/crew-1.json"');
     expect(hooks.SessionStart[0].matcher).toBeUndefined();
+
+    // Run as Claude runs it: sh, the payload on stdin. Two starts in the same
+    // second (a quick /clear) both stay; a payload over several lines is kept whole.
+    const dir = mkdtempSync(path.join(tmpdir(), "crew-bind-"));
+    try {
+      const payloads = ['{"session_id":"a","source":"startup"}', '{\n  "session_id": "b",\n  "source": "clear"\n}'];
+      for (const input of payloads) {
+        const run = spawnSync("sh", ["-c", command.command], { input, env: { ...process.env, CREW_CLAUDE_BIND_DIR: dir } });
+        expect(run.status).toBe(0);
+        expect(run.stdout.length).toBe(0);
+      }
+      const files = readdirSync(dir);
+      expect(files).toHaveLength(2);
+      for (const file of files) expect(file).toMatch(/^crew-1\.[0-9]+-[0-9]+\.start$/);
+      const written = files.map((file) => readFileSync(path.join(dir, file), "utf8")).sort();
+      expect(written).toEqual([...payloads].sort());
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("has Claude report when it stops to ask, and only then", () => {

@@ -31,7 +31,7 @@ const ACTIVITY_INTERVAL = 400;
 /** The hooks src/lib/sessionCommand.ts hands Claude. */
 function claudeHooks(crewId) {
   const at = (file) => `"$CREW_CLAUDE_BIND_DIR/${crewId}.${file}"`;
-  const bind = `if [ -n "$CREW_CLAUDE_BIND_DIR" ]; then cat > ${at("json")}; fi`;
+  const bind = `if [ -n "$CREW_CLAUDE_BIND_DIR" ]; then f="$CREW_CLAUDE_BIND_DIR/${crewId}.$(date +%s)-$$"; cat > "$f.tmp" && mv "$f.tmp" "$f.start"; fi`;
   const ask = `if [ -n "$CREW_CLAUDE_BIND_DIR" ]; then cat > ${at("attention.tmp")} && mv ${at("attention.tmp")} ${at("attention")}; fi`;
   return {
     SessionStart: [{ hooks: [{ type: "command", command: bind }] }],

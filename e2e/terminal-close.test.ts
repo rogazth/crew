@@ -1,8 +1,9 @@
 // T5: closing a claude terminal's tab. One nothing was said in, under the name
 // Crew made up, goes with its tab; one the user named, or one that holds a
-// conversation, stays in the sidebar, wherever the conversation sits: before a
-// /clear, or only after one (e0d2017). crewd's rows are the witness, the transcripts the fake wrote the
-// reason.
+// conversation, stays in the sidebar. A conversation left by /clear is a
+// session of its own (terminal-clear.test.ts), so a terminal whose turns all
+// came before its /clear goes, and that session stays. crewd's rows are the
+// witness, the transcripts the fake wrote the reason.
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { Session } from "../src/lib/types.ts";
@@ -13,6 +14,7 @@ import {
   newTerminal,
   pressChord,
   sessionRow,
+  sessions,
   sessionTab,
   storedStatus,
   typeInTerminal,
@@ -95,12 +97,18 @@ test("T5: closing a tab deletes a terminal nothing was said in, and keeps one wi
   await closeTab(crew, spoken, "chord");
   await kept(crew, spoken, "that held a turn");
 
-  // The turn came before a /clear: Claude's new session is empty, the old one is not.
+  // The turn came before a /clear: that conversation is a session of its own
+  // now, and the terminal, in Claude's new and empty one, goes with its tab.
   const before = await newTerminal(crew, workspace.id);
   await turn(crew, before, "hello");
   await clear(crew, before);
+  const left = await waitFor(
+    async () => (await sessions(crew, workspace.id)).find((row) => row.providerSessionId === before.id),
+    { message: "the conversation before /clear becomes a session" },
+  );
   await closeTab(crew, before, "chord");
-  await kept(crew, before, "whose turn came before /clear");
+  await waitFor(async () => (await get(crew, before.id)) === null, { timeout: 5000, message: "crewd deletes the emptied terminal" });
+  await kept(crew, left, "that holds the conversation from before /clear");
 
   // The only turn came after a /clear: it lives in the transcript of Claude's new id.
   const after = await newTerminal(crew, workspace.id);
@@ -111,14 +119,15 @@ test("T5: closing a tab deletes a terminal nothing was said in, and keeps one wi
 
   // crewd's startup sweep of tab-less disposable terminals agrees.
   crew = await crew.restart();
-  for (const session of [named, spoken, before, after]) assert.ok(await get(crew, session.id), `${session.name} survives the restart`);
-  assert.equal(await get(crew, blank.id), null);
+  for (const session of [named, spoken, left, after]) assert.ok(await get(crew, session.id), `${session.name} survives the restart`);
+  for (const session of [blank, before]) assert.equal(await get(crew, session.id), null, `${session.name} came back`);
 });
 
-// A /clear moves Claude to a new id, which crewd learns by polling the bind
-// record every 3s. A tab closed inside that window is judged on the old id's
-// transcript alone. Closing is attempted right after a post-clear turn until
-// one close lands before crewd has learned the new id.
+// A /clear moves Claude to a new id, which the window has crewd look for every
+// 3s. A tab closed inside that window must be judged on the new id's
+// transcript, so closing follows the hook's records first. Closing is
+// attempted right after a post-clear turn until one close lands before crewd
+// has learned the new id.
 test("T5b: a tab closed right after a post-/clear turn keeps its session", async (t) => {
   const crew = await launchCrew();
   t.after(() => crew.close());

@@ -61,19 +61,95 @@ fn is_chat_id(id: &str) -> bool {
 
 /// Claude starts a new session on `/clear` without a word to its terminal. The
 /// SessionStart hook Crew passes it drops the hook's stdin in this folder, one
-/// file per Crew session, and that record is the only place the new id shows.
+/// file per start, and those records are the only place the new ids show.
 pub const CLAUDE_BIND_ENV: &str = "CREW_CLAUDE_BIND_DIR";
 
-/// The Claude session the hook last reported for Crew session `crew_id`.
-pub fn claude_bound(crew_id: &str) -> Option<String> {
-    claude_bound_in(Path::new(&std::env::var_os(CLAUDE_BIND_ENV)?), crew_id)
+/// Where each start's record lands, left as `<crew id>.json` once read; a CLI
+/// launched before Crew wrote one file per start overwrites that one instead.
+const CLAUDE_BIND_EXT: &str = "start";
+
+/// Where Claude's side is read from: transcripts under `home`, the hook's
+/// records in `binds`. Tests hand in their own folders.
+#[derive(Clone, Debug, Default)]
+pub struct ClaudeDirs {
+    pub home: Option<PathBuf>,
+    pub binds: Option<PathBuf>,
 }
 
-fn claude_bound_in(dir: &Path, crew_id: &str) -> Option<String> {
-    if !is_chat_id(crew_id) {
-        return None;
+impl ClaudeDirs {
+    pub fn from_env() -> Self {
+        Self {
+            home: home(),
+            binds: std::env::var_os(CLAUDE_BIND_ENV).map(PathBuf::from),
+        }
     }
-    parse_claude_bind(&std::fs::read_to_string(dir.join(format!("{crew_id}.json"))).ok()?)
+}
+
+/// The conversations the hook reported for Crew session `crew_id` since the
+/// last look, oldest first. The last one is where the CLI is now.
+pub struct ClaudeBinds {
+    dir: PathBuf,
+    crew_id: String,
+    /// Oldest first; `None` where the record could not be read.
+    records: Vec<(PathBuf, Option<String>)>,
+}
+
+impl ClaudeBinds {
+    pub fn read(dir: &Path, crew_id: &str) -> Self {
+        let mut binds = Self { dir: dir.to_path_buf(), crew_id: crew_id.to_string(), records: Vec::new() };
+        if !is_chat_id(crew_id) {
+            return binds;
+        }
+        let latest = format!("{crew_id}.json");
+        let prefix = format!("{crew_id}.");
+        let suffix = format!(".{CLAUDE_BIND_EXT}");
+        let mut found: Vec<(std::time::SystemTime, String, PathBuf)> = std::fs::read_dir(dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter_map(|entry| {
+                let name = entry.file_name().into_string().ok()?;
+                let event = name.strip_prefix(&prefix).and_then(|rest| rest.strip_suffix(&suffix)).is_some();
+                if name != latest && !event {
+                    return None;
+                }
+                let at = entry.metadata().ok()?.modified().ok()?;
+                Some((at, name, entry.path()))
+            })
+            .collect();
+        // A start's record is in place before the CLI goes on to the next one:
+        // the clock orders them, the name breaks a tie.
+        found.sort();
+        binds.records = found
+            .into_iter()
+            .map(|(_, _, path)| {
+                let id = std::fs::read_to_string(&path).ok().and_then(|record| parse_claude_bind(&record));
+                (path, id)
+            })
+            .collect();
+        binds
+    }
+
+    /// Each conversation the CLI moved through, in order.
+    pub fn ids(&self) -> Vec<String> {
+        self.records.iter().filter_map(|(_, id)| id.clone()).collect()
+    }
+
+    /// Clears what was read, keeping the newest record as `<crew id>.json`:
+    /// read again, it names where the session already is.
+    pub fn consume(self) {
+        let latest = self.dir.join(format!("{}.json", self.crew_id));
+        let keep = self.records.iter().rposition(|(_, id)| id.is_some());
+        for (at, (path, _)) in self.records.iter().enumerate() {
+            if Some(at) == keep {
+                if *path != latest {
+                    let _ = std::fs::rename(path, &latest);
+                }
+            } else if *path != latest {
+                let _ = std::fs::remove_file(path);
+            }
+        }
+    }
 }
 
 /// The prompt Claude raised for Crew session `crew_id` since the last look: a
@@ -136,21 +212,21 @@ pub fn title(provider: &str, id: &str) -> Option<String> {
 }
 
 /// Whether anything was said in the terminal session `crew_id` of `provider`,
-/// run in `cwd`. A provider Crew cannot read counts as having spoken, so its
-/// sessions are never taken for empty.
-pub fn has_conversation(provider: &str, crew_id: &str, bound: Option<&str>, cwd: &str) -> bool {
-    let Some(home) = home() else { return true };
-    // The window hands crewd a `/clear`'s new id only every few seconds; the
-    // hook's record has it the moment Claude starts it.
-    let latest = (provider == "claude").then(|| claude_bound(crew_id)).flatten();
-    spoke(&home, provider, crew_id, [bound, latest.as_deref()], cwd)
-}
-
-fn spoke(home: &Path, provider: &str, crew_id: &str, bound: [Option<&str>; 2], cwd: &str) -> bool {
-    let [bound, latest] = bound;
+/// run in `cwd`. `earlier` is a Claude conversation it moved on from that no
+/// other session holds. A provider Crew cannot read counts as having spoken, so
+/// its sessions are never taken for empty.
+pub fn has_conversation(
+    home: Option<&Path>,
+    provider: &str,
+    crew_id: &str,
+    bound: Option<&str>,
+    earlier: Option<&str>,
+    cwd: &str,
+) -> bool {
+    let Some(home) = home else { return true };
     match provider {
-        // Crew's id until a `/clear` moves Claude on; what was said before counts too.
-        "claude" => [Some(crew_id), bound, latest]
+        // Crew's id until a `/clear` moves Claude on.
+        "claude" => [bound.or(Some(crew_id)), earlier]
             .into_iter()
             .flatten()
             .any(|id| claude_has_turn(&claude_transcript(home, cwd, id))),
@@ -158,6 +234,16 @@ fn spoke(home: &Path, provider: &str, crew_id: &str, bound: [Option<&str>; 2], c
         "codex" | "opencode" => bound.is_some(),
         _ => true,
     }
+}
+
+/// When conversation `id` in `cwd` last had anything said in it, if it ever did.
+pub fn claude_spoke_at(home: &Path, cwd: &str, id: &str) -> Option<i64> {
+    let transcript = claude_transcript(home, cwd, id);
+    if !claude_has_turn(&transcript) {
+        return None;
+    }
+    let at = std::fs::metadata(&transcript).ok()?.modified().ok()?;
+    Some(at.duration_since(UNIX_EPOCH).ok()?.as_millis() as i64)
 }
 
 fn claude_transcript(home: &Path, cwd: &str, id: &str) -> PathBuf {
@@ -515,45 +601,60 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    fn record(dir: &Path, file: &str, text: &str, at_secs: u64) {
+        let path = dir.join(file);
+        std::fs::write(&path, text).unwrap();
+        let at = UNIX_EPOCH + Duration::from_secs(at_secs);
+        std::fs::File::options().write(true).open(&path).unwrap().set_modified(at).unwrap();
+    }
+
     #[test]
-    fn a_claude_conversation_after_clear_counts_before_crewd_learns_its_id() {
-        let home = temp_dir("claude-clear-home");
-        let binds = temp_dir("claude-clear-bind");
+    fn claude_binds_come_oldest_first_and_leave_the_newest_behind() {
+        let dir = temp_dir("claude-binds");
+        // A CLI from before one record per start, then two quick /clears (the
+        // same second: the clock orders them, not the name), a record that is
+        // not one, and a start still being written.
+        record(&dir, "crew-1.json", r#"{"session_id":"legacy","source":"startup"}"#, 1_000);
+        record(&dir, "crew-1.1001-9.start", "{\n  \"session_id\": \"b\",\n  \"source\": \"clear\"\n}", 1_002);
+        record(&dir, "crew-1.1001-7.start", r#"{"session_id":"a","source":"clear"}"#, 1_001);
+        record(&dir, "crew-1.1001-8.start", "{\"sess", 1_001);
+        record(&dir, "crew-1.1003-1.tmp", r#"{"session_id":"c"}"#, 1_003);
+        record(&dir, "crew-2.1001-1.start", r#"{"session_id":"other"}"#, 1_001);
+
+        let binds = ClaudeBinds::read(&dir, "crew-1");
+        assert_eq!(binds.ids(), ["legacy", "a", "b"]);
+        binds.consume();
+        let mut left: Vec<String> =
+            std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name().into_string().unwrap()).collect();
+        left.sort();
+        assert_eq!(left, ["crew-1.1003-1.tmp", "crew-1.json", "crew-2.1001-1.start"]);
+        // Read again, the newest start alone: where the CLI already is.
+        assert_eq!(ClaudeBinds::read(&dir, "crew-1").ids(), ["b"]);
+        assert!(ClaudeBinds::read(&dir, "../crew-1").ids().is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_claude_terminal_spoke_in_the_conversation_it_is_in_or_one_nobody_took() {
+        let home = temp_dir("claude-spoke-home");
         let cwd = "/work/app";
-        let crew_id = "crew-1";
-        let turn = "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"hi\"}}\n";
         let write = |id: &str, text: &str| {
             let transcript = claude_transcript(&home, cwd, id);
             std::fs::create_dir_all(transcript.parent().unwrap()).unwrap();
             std::fs::write(transcript, text).unwrap();
         };
-        // The first conversation, under Crew's id and under an older rebind,
-        // never got a word; `/clear` moved Claude on and the turn landed there.
-        write(crew_id, r#"{"type":"ai-title","aiTitle":"x"}"#);
-        write("old", r#"{"type":"ai-title","aiTitle":"x"}"#);
-        write("after-clear", turn);
-        std::fs::write(
-            binds.join(format!("{crew_id}.json")),
-            r#"{"session_id":"after-clear","source":"clear"}"#,
-        )
-        .unwrap();
-        let latest = claude_bound_in(&binds, crew_id);
-        assert_eq!(latest.as_deref(), Some("after-clear"));
-
-        // What the database still says: nothing learned yet, or the old id.
-        for stored in [None, Some("old")] {
-            assert!(!spoke(&home, "claude", crew_id, [stored, None], cwd), "the old ids alone spoke");
-            assert!(
-                spoke(&home, "claude", crew_id, [stored, latest.as_deref()], cwd),
-                "the conversation the hook bound was ignored"
-            );
-        }
-        // A bind to a conversation still empty keeps nothing alive.
-        std::fs::write(binds.join("crew-2.json"), r#"{"session_id":"old"}"#).unwrap();
-        let empty = claude_bound_in(&binds, "crew-2");
-        assert!(!spoke(&home, "claude", "crew-2", [None, empty.as_deref()], cwd));
+        write("crew-1", "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"hi\"}}\n");
+        write("cleared", r#"{"type":"ai-title","aiTitle":"x"}"#);
+        let spoke = |bound: Option<&str>, earlier: Option<&str>| {
+            has_conversation(Some(&home), "claude", "crew-1", bound, earlier, cwd)
+        };
+        assert!(spoke(None, None), "Crew's own id is the conversation until a /clear");
+        assert!(!spoke(Some("cleared"), None), "the conversation it left counted");
+        assert!(spoke(Some("cleared"), Some("crew-1")));
+        assert!(claude_spoke_at(&home, cwd, "crew-1").is_some());
+        assert_eq!(claude_spoke_at(&home, cwd, "cleared"), None);
+        assert!(has_conversation(None, "claude", "crew-1", Some("cleared"), None, cwd), "unreadable is spoken");
         let _ = std::fs::remove_dir_all(&home);
-        let _ = std::fs::remove_dir_all(&binds);
     }
 
     #[test]

@@ -337,7 +337,8 @@ function feed(data) {
 }
 
 // Raw before the SessionStart hook runs, so a test that waits for the hook's
-// record ($CREW_CLAUDE_BIND_DIR/<id>.json) knows keys typed from then on land.
+// record (in $CREW_CLAUDE_BIND_DIR, `claudeStarts` in the harness) knows keys
+// typed from then on land.
 if (process.stdin.isTTY) process.stdin.setRawMode(true);
 process.stdin.setEncoding("utf8");
 process.stdin.on("data", feed);

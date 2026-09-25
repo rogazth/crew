@@ -117,10 +117,14 @@ async function launchCommand(session: Session, cwd: string): Promise<string[]> {
   const theme = DARK_SCHEME.matches ? 'dark' : 'light';
   const binding = providerOf(session.provider)?.binding;
   if (binding === 'own') {
+    // A `/clear` from its last run the daemon never read: resume where the CLI went.
+    const moved = await api.rebindClaudeSession(session.id).catch(() => null);
+    if (moved) bindProviderSession(session.id, moved);
+    const current = moved ? { ...session, providerSessionId: moved } : session;
     const resume = await homeDir()
-      .then((home) => api.pathExists(transcriptPath(home, cwd, claudeSessionId(session))))
+      .then((home) => api.pathExists(transcriptPath(home, cwd, claudeSessionId(current))))
       .catch(() => false);
-    return sessionCommand(session, { resume, theme });
+    return sessionCommand(current, { resume, theme });
   }
   if (binding === 'before' && !session.providerSessionId) {
     const created = await api.createProviderSession(session.id).catch(() => null);

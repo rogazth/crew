@@ -225,6 +225,12 @@ export type SessionStatusEvent = { sessionId: string, status: string, providerSe
 
 export type SessionUpdate = { id: string, name: string, provider: string, model: string, description: string, notifications: boolean, autonomy: string, };
 
+/**
+ * A session's row changed outside the window's hands: a terminal Claude
+ * moved to another conversation, renamed for it.
+ */
+export type SessionUpdated = { session: Session, };
+
 export type TempFile = { extension: string, base64Contents: string, };
 
 export type ToolCall = { id: number, sessionId: string, method: string, params: unknown, };

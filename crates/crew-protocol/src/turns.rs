@@ -91,3 +91,11 @@ pub struct SessionStatusEvent {
 pub struct SessionCreated {
     pub session: Session,
 }
+
+/// A session's row changed outside the window's hands: a terminal Claude
+/// moved to another conversation, renamed for it.
+#[derive(Serialize, Deserialize, Clone, Debug, TS)]
+#[ts(export, export_to = "../../../src/lib/protocol.ts")]
+pub struct SessionUpdated {
+    pub session: Session,
+}

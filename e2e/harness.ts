@@ -5,7 +5,7 @@
 // path fails with "path must be shorter than SUN_LEN". A fake `claude` in
 // $HOME/.local/bin, where crewd looks first, plays the provider CLI.
 import { execFile } from "node:child_process";
-import { chmod, mkdir, symlink, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, symlink, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -592,10 +592,29 @@ export async function newTerminal(crew: Crew, workspaceId: string): Promise<Sess
     async () => (await sessions(crew, workspaceId)).find((row) => row.kind === "terminal" && !known.has(row.id)),
     { message: "the new session reaches crewd" },
   );
-  await waitFor(() => existsSync(path.join(crew.userData, "claude-bind", `${session.id}.json`)), {
+  await waitFor(async () => (await claudeStarts(crew, session.id)).length > 0, {
     message: "the session's CLI starts",
   });
   return session;
+}
+
+export type ClaudeStart = { session_id: string; source?: string };
+
+/**
+ * What a session's CLI told its SessionStart hook: the records crewd has not
+ * read yet (`<id>.<n>.start`) and the newest one it has (kept as `<id>.json`).
+ * The fake claude writes it once it reads keys.
+ */
+export async function claudeStarts(crew: Crew, sessionId: string): Promise<ClaudeStart[]> {
+  const dir = path.join(crew.userData, "claude-bind");
+  const names = (await readdir(dir).catch(() => [] as string[])).filter(
+    (name) => name === `${sessionId}.json` || (name.startsWith(`${sessionId}.`) && name.endsWith(".start")),
+  );
+  const records = await Promise.all(
+    // crewd moves a record it read over `<id>.json`: gone between the listing and the read, it is there.
+    names.map((name) => readFile(path.join(dir, name), "utf8").then((text) => JSON.parse(text) as ClaudeStart, () => null)),
+  );
+  return records.filter((record) => record !== null);
 }
 
 /** A session's row in the sidebar panel, by the name it shows. */

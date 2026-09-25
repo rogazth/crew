@@ -7,6 +7,7 @@ import path from "node:path";
 import { after, before, test } from "node:test";
 import type { Session } from "../src/lib/types.ts";
 import {
+  claudeStarts,
   gitWorktrees as listWorktrees,
   launchCrew,
   MOD,
@@ -62,7 +63,7 @@ test("W1: a worktree is made, worked in, dirtied and removed", async () => {
   );
   assert.equal(session.worktree, tree);
   // The fake claude drops the SessionStart record once it reads keys.
-  await waitFor(() => existsSync(path.join(crew.userData, "claude-bind", `${session.id}.json`)), {
+  await waitFor(async () => (await claudeStarts(crew, session.id)).length > 0, {
     message: "the terminal's CLI starts",
   });
   await page.locator(".xterm-helper-textarea:focus").waitFor({ state: "attached" });

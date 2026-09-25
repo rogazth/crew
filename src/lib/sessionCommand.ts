@@ -47,7 +47,9 @@ export function sessionCommand(session: Session, { resume, theme }: Options): st
  */
 function bindHooks(crewId: string) {
   const at = (file: string) => `"$CREW_CLAUDE_BIND_DIR/${crewId}.${file}"`;
-  const bind = `if [ -n "$CREW_CLAUDE_BIND_DIR" ]; then cat > ${at("json")}; fi`;
+  // One record per start, so a `/clear` the daemon has not read yet is not
+  // written over by the next one: seconds and the hook's pid name it.
+  const bind = `if [ -n "$CREW_CLAUDE_BIND_DIR" ]; then f="$CREW_CLAUDE_BIND_DIR/${crewId}.$(date +%s)-$$"; cat > "$f.tmp" && mv "$f.tmp" "$f.start"; fi`;
   // Written aside and moved in, so the daemon never reads half a record.
   const ask = `if [ -n "$CREW_CLAUDE_BIND_DIR" ]; then cat > ${at("attention.tmp")} && mv ${at("attention.tmp")} ${at("attention")}; fi`;
   return {

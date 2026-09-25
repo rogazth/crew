@@ -183,7 +183,10 @@ export const createProviderSession = (id: string): Promise<string> =>
   client.request("session_provider_create", { id });
 
 /** codex, opencode: the session they started in `cwd` since `since`, bound once found. */
-/** Claude's new session id when `/clear` moved it since the last look. */
+/**
+ * Claude's new session id when `/clear` moved it since the last look. The
+ * conversations it left with turns in them arrive as new sessions.
+ */
 export const rebindClaudeSession = (id: string): Promise<string | null> =>
   client.request("session_claude_rebind", { id });
 

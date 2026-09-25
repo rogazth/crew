@@ -3,7 +3,8 @@ import { rememberAgents } from '../lib/agentNames';
 import { dispose, onSessionPatch, reconcile } from '../lib/agentRuntime';
 import { client } from '../lib/client';
 import * as api from '../lib/api';
-import type { SessionCreated } from '../lib/protocol';
+import { reloadAgentFaces } from './useAgentFaces';
+import type { SessionCreated, SessionUpdated } from '../lib/protocol';
 import type { Autonomy, Session, SessionKind, SessionStatus } from '../lib/types';
 
 type CreateInput = {
@@ -77,16 +78,31 @@ export function useSessions(workspaceId: string | null) {
     const unsubscribe = client.on('session-created', (payload) => {
       const created = payload as SessionCreated;
       const session = created.session as unknown as Session;
+      // One split off a terminal comes with the face the terminal showed.
+      reloadAgentFaces();
       setRegistry((prev) => {
         const list = prev[session.workspaceId];
         if (!list || list.some((s) => s.id === session.id)) return prev;
         return { ...prev, [session.workspaceId]: [...list, session] };
       });
     });
+    // A Claude terminal that moved to a new conversation comes back renamed and
+    // rebound. Its status stays the window's to report, but for the unread the
+    // daemon handed to the conversation it left.
+    const unsubscribeUpdated = client.on('session-updated', (payload) => {
+      const row = (payload as SessionUpdated).session as unknown as Session;
+      patchSession(row.id, (session) => ({
+        ...session,
+        name: row.name,
+        providerSessionId: row.providerSessionId,
+        status: session.status === 'done' ? row.status : session.status,
+      }));
+    });
     return () => {
       unsubscribe();
+      unsubscribeUpdated();
     };
-  }, []);
+  }, [patchSession]);
 
   // `settle` lets a caller hold the list back so the row and its sheet land together.
   const create = useCallback(

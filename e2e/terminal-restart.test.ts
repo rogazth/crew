@@ -6,12 +6,12 @@
 // without its redraw passing for a new turn. Only the tab on screen starts its
 // CLI with the window; the others start when they are opened.
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { test } from "node:test";
 import { DatabaseSync } from "node:sqlite";
 import type { Session } from "../src/lib/types.ts";
 import {
+  claudeStarts,
   crewdPid,
   holdsFor,
   launchCrew,
@@ -55,9 +55,8 @@ async function relaunch(crew: Crew, session: Session, skip: number, timeout = 15
 
 /** The CLI has resumed and reads keys: its SessionStart hook reported a resume. */
 async function resumed(crew: Crew, session: Session): Promise<void> {
-  const record = path.join(crew.userData, "claude-bind", `${session.id}.json`);
   await waitFor(
-    async () => (JSON.parse(await readFile(record, "utf8")) as { source?: string }).source === "resume",
+    async () => (await claudeStarts(crew, session.id)).some((start) => start.source === "resume"),
     { timeout: 15_000, message: `${session.name}'s CLI reports a resume` },
   );
 }

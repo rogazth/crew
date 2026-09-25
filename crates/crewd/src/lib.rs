@@ -21,7 +21,7 @@ use crew_core::worktree;
 use crew_protocol::{
     self as proto, Auth, DaemonInfo, Id, IdName, IdStatus, Ids, Key, KeyValue, ListProjectFiles, Name, NamePath, Names, ProviderDiscover,
     OptionalId, PathArg, PathBytes, PathContents, PtyAck, PtyAttach, PtyAttached, PtyKill, PtyResize, PtySpawn, PtyWrite,
-    Request, RoutineRunNow, RoutineUpsert, SessionCreate, SessionCreated, SessionId, SessionUpdate, TempFile,
+    Request, RoutineRunNow, RoutineUpsert, SessionCreate, SessionCreated, SessionId, SessionUpdated, SessionUpdate, TempFile,
     SearchQuery, TranscriptApply, TranscriptTail, TurnAnswer, TurnRespond,
     TurnStart, TurnStarted, WorkspaceId, WorktreeAdd, WorktreeRemove,
 };
@@ -41,6 +41,7 @@ pub struct Config {
 
 #[derive(Clone)]
 struct Hosts {
+    hub: Arc<Hub>,
     pty: PtyHost,
     store: Store,
     bridge: Bridge,
@@ -369,6 +370,7 @@ pub fn serve(config: Config) -> Result<Handle, String> {
     let (ready_tx, ready_rx) = std_mpsc::channel();
     let (stop_tx, stop_rx) = tokio::sync::oneshot::channel();
     let hosts = Hosts {
+        hub: hub.clone(),
         pty: config.pty,
         store: config.store,
         bridge: config.bridge,
@@ -685,17 +687,24 @@ fn discover_provider_session(
     Ok(Some(found))
 }
 
-/// The new id when Claude moved to another session since the last look.
-fn rebind_claude_session(store: &Store, id: String) -> Result<Option<String>, String> {
-    let Some(found) = provider_session::claude_bound(&id) else {
+/// The new id when Claude moved to another session since the last look. The
+/// conversations it left with turns in them are sessions now; every window
+/// hears of them, and of the renamed terminal.
+fn rebind_claude_session(store: &Store, hub: &Hub, id: String) -> Result<Option<String>, String> {
+    let before = session::get(store, id.clone())?.and_then(|row| row.provider_session_id);
+    let Some(followed) = session::follow_claude(store, id)? else {
         return Ok(None);
     };
-    let row = session::get(store, id.clone())?.ok_or("Session not found")?;
-    if found == row.provider_session_id.unwrap_or_else(|| id.clone()) {
-        return Ok(None);
+    announce(hub, &followed);
+    let now = followed.session.provider_session_id;
+    Ok(now.filter(|now| before.as_ref() != Some(now)))
+}
+
+fn announce(hub: &Hub, followed: &session::Followed) {
+    for split in &followed.split {
+        hub.emit("session-created", SessionCreated { session: proto_session(split) });
     }
-    session::set_provider_session(store, id, found.clone())?;
-    Ok(Some(found))
+    hub.emit("session-updated", SessionUpdated { session: proto_session(&followed.session) });
 }
 
 async fn block<T: Send + 'static>(
@@ -854,7 +863,15 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
         "session_is_disposable" => {
             let Id { id } = parse(params)?;
             let store = hosts.store.clone();
-            json(block(move || session::is_disposable(&store, id)).await?)
+            let hub = hosts.hub.clone();
+            json(block(move || {
+                // Judged on the conversation the CLI is in now, the ones it left split off first.
+                if let Some(followed) = session::follow_claude(&store, id.clone())? {
+                    announce(&hub, &followed);
+                }
+                session::is_disposable(&store, id)
+            })
+            .await?)
         }
         "session_reorder" => {
             let Ids { ids } = parse(params)?;
@@ -881,7 +898,8 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
         "session_claude_rebind" => {
             let Id { id } = parse(params)?;
             let store = hosts.store.clone();
-            json(block(move || rebind_claude_session(&store, id)).await?)
+            let hub = hosts.hub.clone();
+            json(block(move || rebind_claude_session(&store, &hub, id)).await?)
         }
         "session_claude_attention" => {
             let Id { id } = parse(params)?;

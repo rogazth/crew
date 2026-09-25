@@ -8,6 +8,17 @@ let faces: AgentFaces = {};
 let requested = false;
 const listeners = new Set<() => void>();
 
+/**
+ * What is stored, under the faces picked here since: those are on their way to
+ * the store. crewd also writes one, for a conversation split off a terminal.
+ */
+export function reloadAgentFaces() {
+  api
+    .stateGet(KEY)
+    .then((raw) => publish({ ...parseFaces(raw), ...faces }))
+    .catch(() => {});
+}
+
 function publish(next: AgentFaces) {
   faces = next;
   for (const listener of listeners) listener();
@@ -27,10 +38,7 @@ export function useAgentFaces() {
   useEffect(() => {
     if (requested) return;
     requested = true;
-    api
-      .stateGet(KEY)
-      .then((raw) => publish({ ...parseFaces(raw), ...faces }))
-      .catch(() => {});
+    reloadAgentFaces();
   }, []);
 
   return current;
