@@ -2,7 +2,7 @@ import { useCallback, useState } from "react";
 import type { Confirm } from "../chrome/ConfirmDialog";
 import { isBusy } from "../lib/terminalBusy";
 import type { Session, SessionStatus, Workspace, Worktree } from "../lib/types";
-import { worktreeLabel } from "../lib/worktrees";
+import { isDirtyRefusal, removalCost, worktreeLabel } from "../lib/worktrees";
 
 const RUNNING: Record<string, string> = {
   working: "is still working",
@@ -18,11 +18,13 @@ type Deps = {
   closeTabsFor: (sessionId: string) => void;
   removeSession: (id: string) => Promise<void>;
   removeWorkspace: (id: string) => void | Promise<void>;
-  removeWorktree: (tree: Worktree, force: boolean) => void | Promise<void>;
+  removeWorktree: (tree: Worktree, force: boolean) => Promise<void>;
+  /** Git's list now, when a removal meets work the last listing did not count. */
+  rereadWorktrees: () => Promise<Worktree[]>;
 };
 
 /** Every destructive prompt of the shell, behind one dialog. */
-export function useConfirmations({ closeTabsFor, removeSession, removeWorkspace, removeWorktree }: Deps) {
+export function useConfirmations({ closeTabsFor, removeSession, removeWorkspace, removeWorktree, rereadWorktrees }: Deps) {
   const [confirm, setConfirm] = useState<Confirm | null>(null);
 
   const askSession = useCallback(
@@ -67,28 +69,32 @@ export function useConfirmations({ closeTabsFor, removeSession, removeWorkspace,
     [removeWorkspace],
   );
 
-  /** Git keeps the branch; what goes is the folder, what nobody committed in it, and its sessions. */
+  /**
+   * Git keeps the branch; what goes is the folder, what nobody committed in it,
+   * and its sessions. Nothing closes until crewd has removed it. The count comes
+   * from the last listing, so git may know of work the prompt did not: crewd
+   * refuses, and the prompt asks again with git's count, forced this time.
+   */
   const askWorktree = useCallback(
-    (tree: Worktree, sessions: Session[]) =>
-      setConfirm({
-        title: `Remove worktree "${worktreeLabel(tree)}"?`,
-        description: [
-          tree.dirty > 0
-            ? `${tree.dirty} uncommitted ${tree.dirty === 1 ? "change is" : "changes are"} lost with the folder.`
-            : "The folder is deleted; the branch stays.",
-          sessions.length > 0
-            ? `${sessions.length} ${sessions.length === 1 ? "session ends" : "sessions end"} with it.`
-            : "",
-        ]
-          .filter(Boolean)
-          .join(" "),
+    (tree: Worktree, sessions: Session[]) => {
+      const prompt = (listed: Worktree, force: boolean): Confirm => ({
+        title: `Remove worktree "${worktreeLabel(listed)}"?`,
+        description: removalCost(listed.dirty, sessions.length),
         action: "Remove",
         onConfirm: async () => {
+          try {
+            await removeWorktree(listed, force);
+          } catch (error) {
+            if (force || !isDirtyRefusal(error)) throw error;
+            const fresh = (await rereadWorktrees()).find((entry) => entry.path === listed.path) ?? listed;
+            return prompt(fresh, true);
+          }
           for (const session of sessions) closeTabsFor(session.id);
-          await removeWorktree(tree, tree.dirty > 0);
         },
-      }),
-    [closeTabsFor, removeWorktree],
+      });
+      setConfirm(prompt(tree, tree.dirty > 0));
+    },
+    [closeTabsFor, removeWorktree, rereadWorktrees],
   );
 
   /**

@@ -260,6 +260,7 @@ const commands: Record<string, (args: Row) => unknown> = {
     void sessions.filter((s) => s.id === id && s.status === "done").forEach((s) => (s.status = "idle")),
   state_get: ({ key }) => state.get(key as string) ?? null,
   state_set: ({ key, value }) => void state.set(key as string, value as string),
+  state_delete: ({ key }) => void state.delete(key as string),
   worktree_list: ({ path }) => worktreeList(path as string),
   worktree_add: ({ path, branch }) => worktreeAdd(path as string, branch as string),
   worktree_remove: ({ path, force }) => worktreeRemove(path as string, Boolean(force)),

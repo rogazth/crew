@@ -300,13 +300,14 @@ export function IconButton({
 /**
  * A question the app waits on, centred in the palette's frame. Focus stays in it
  * and goes back where it was after; Escape calls `onDismiss`, a press outside does nothing.
- * `children` is its Footer.
+ * `error` is what went wrong answering it, under the description. `children` is its Footer.
  */
 export function Alert({
   open,
   onDismiss,
   title,
   description,
+  error,
   initialFocus,
   onKeyDown,
   children,
@@ -315,6 +316,7 @@ export function Alert({
   onDismiss: () => void;
   title: string;
   description?: ReactNode;
+  error?: string | null | undefined;
   /** Defaults to the first button, which is usually the safe answer. */
   initialFocus?: RefObject<HTMLElement | null> | undefined;
   onKeyDown?: ((event: KeyboardEvent<HTMLDivElement>) => void) | undefined;
@@ -336,6 +338,7 @@ export function Alert({
                 {description}
               </AlertDialog.Description>
             )}
+            {error && <div className="text-[12px] break-words text-kumo-danger">{error}</div>}
           </div>
           {children}
         </AlertDialog.Popup>

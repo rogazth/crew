@@ -106,8 +106,15 @@ pub fn rename(store: &Store, id: String, name: String) -> Result<(), String> {
     Ok(())
 }
 
+/// The chrome it kept goes with it: its tab strip, one per worktree, and the worktree it had on screen.
 pub fn delete(store: &Store, id: String) -> Result<(), String> {
-    store.with(|conn| conn.execute("DELETE FROM workspaces WHERE id = ?1", params![id]))?;
+    store.with(|conn| {
+        conn.execute("DELETE FROM workspaces WHERE id = ?1", params![id])?;
+        conn.execute(
+            "DELETE FROM app_state WHERE key IN (?1, ?2) OR substr(key, 1, length(?3)) = ?3",
+            params![format!("tabs:{id}"), format!("worktree:{id}"), format!("tabs:{id}@")],
+        )
+    })?;
     Ok(())
 }
 
@@ -171,5 +178,26 @@ mod tests {
         let again = create(&store, "crew again".into(), path);
 
         assert!(again.is_err_and(|e| e.contains("Already open as \"crew\"")), "the folder opened twice");
+    }
+
+    /// A strip left behind would come back as ghost tabs if a workspace ever got the same id.
+    #[test]
+    fn a_removed_workspace_takes_its_saved_chrome() {
+        let store = store();
+        let gone = create(&store, "gone".into(), a_folder()).expect("gone");
+        let kept = create(&store, "kept".into(), a_folder()).expect("kept");
+        let keys = |id: &str| [format!("tabs:{id}"), format!("tabs:{id}@/tmp/feat"), format!("worktree:{id}")];
+        for key in keys(&gone.id).into_iter().chain(keys(&kept.id)).chain(["tabs:scope".to_string()]) {
+            crate::store::set(&store, key, "x".into()).expect("set");
+        }
+
+        delete(&store, gone.id.clone()).expect("delete");
+
+        for key in keys(&gone.id) {
+            assert_eq!(crate::store::get(&store, key.clone()).expect("get"), None, "{key} outlived its workspace");
+        }
+        for key in keys(&kept.id).into_iter().chain(["tabs:scope".to_string()]) {
+            assert!(crate::store::get(&store, key.clone()).expect("get").is_some(), "{key} went with another workspace");
+        }
     }
 }

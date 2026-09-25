@@ -130,12 +130,16 @@ export function useTabs(workspaceId: string | null) {
   /**
    * The workspace, or one worktree of it, is gone: its panes unmount, which ends
    * what they were running. A workspace takes its worktrees' strips with it.
+   * Its saved strip goes too, since nothing writes it again and the same
+   * worktree made anew would restore it. crewd drops a removed workspace's
+   * worktree strips itself, the ones this window never read included.
    */
   const dropWorkspace = useCallback((id: string) => {
     const gone = (key: string) => key === id || (!id.includes("@") && key.startsWith(`${id}@`));
     for (const key of asked.current) if (gone(key)) asked.current.delete(key);
     for (const key of restoredIds.current) if (gone(key)) restoredIds.current.delete(key);
     for (const key of Object.keys(saved.current)) if (gone(key)) delete saved.current[key];
+    void api.stateDelete(`tabs:${id}`).catch(() => {});
     setRegistry((prev) => {
       const keys = Object.keys(prev).filter(gone);
       if (keys.length === 0) return prev;

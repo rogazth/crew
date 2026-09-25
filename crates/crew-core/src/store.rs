@@ -307,6 +307,10 @@ pub fn set(store: &Store, key: String, value: String) -> Result<(), String> {
     store.with(|conn| write_state(conn, &key, Some(&value)))
 }
 
+pub fn delete(store: &Store, key: String) -> Result<(), String> {
+    store.with(|conn| write_state(conn, &key, None))
+}
+
 pub fn read_state(conn: &Connection, key: &str) -> rusqlite::Result<Option<String>> {
     conn.prepare_cached("SELECT value FROM app_state WHERE key = ?1")?
         .query_row(params![key], |row| row.get::<_, String>(0))

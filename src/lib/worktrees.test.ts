@@ -1,6 +1,15 @@
 import { describe, expect, it } from "vitest";
 import type { Session, Workspace, Worktree } from "./types";
-import { branchError, contextId, parseContext, sessionPath, shortBranch, worktreeOf } from "./worktrees";
+import {
+  branchError,
+  contextId,
+  isDirtyRefusal,
+  parseContext,
+  removalCost,
+  sessionPath,
+  shortBranch,
+  worktreeOf,
+} from "./worktrees";
 
 const workspace: Workspace = { id: "ws", name: "crew", path: "/repo", createdAt: 0 };
 const tree = (path: string, branch: string | null, main = false): Worktree => ({
@@ -50,5 +59,19 @@ describe("branch names", () => {
     expect(branchError("has space")).not.toBeNull();
     expect(branchError("a..b")).not.toBeNull();
     expect(branchError("feat/")).not.toBeNull();
+  });
+});
+
+describe("removing a worktree", () => {
+  it("counts what goes with the folder", () => {
+    expect(removalCost(0, 0)).toBe("The folder is deleted; the branch stays.");
+    expect(removalCost(1, 1)).toBe("1 uncommitted change is lost with the folder. 1 session ends with it.");
+    expect(removalCost(3, 2)).toBe("3 uncommitted changes are lost with the folder. 2 sessions end with it.");
+  });
+
+  it("tells crewd's refusal over uncommitted work from any other failure", () => {
+    expect(isDirtyRefusal(new Error("/wt/feat has uncommitted changes"))).toBe(true);
+    expect(isDirtyRefusal(new Error("The main checkout cannot be removed"))).toBe(false);
+    expect(isDirtyRefusal("/wt/feat has uncommitted changes")).toBe(false);
   });
 });

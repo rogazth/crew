@@ -57,3 +57,20 @@ export function branchError(branch: string): string | null {
   if (/[\s~^:?*[\\]|\.\.|@\{|\/$|^\/|\.lock$/.test(name)) return "Not a valid branch name";
   return null;
 }
+
+/** What removing a worktree takes with it, for the prompt that asks. Git keeps the branch. */
+export function removalCost(dirty: number, sessions: number): string {
+  return [
+    dirty > 0
+      ? `${dirty} uncommitted ${dirty === 1 ? "change is" : "changes are"} lost with the folder.`
+      : "The folder is deleted; the branch stays.",
+    sessions > 0 ? `${sessions} ${sessions === 1 ? "session ends" : "sessions end"} with it.` : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
+/** crewd refusing an unforced removal over work git sees and the listing did not. */
+export function isDirtyRefusal(error: unknown): boolean {
+  return error instanceof Error && error.message.endsWith(" has uncommitted changes");
+}

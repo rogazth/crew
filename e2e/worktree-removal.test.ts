@@ -57,31 +57,25 @@ test("W2: removing a worktree dirtied after the last listing loses nothing in si
   // the premise, not the bug: git is the one who knows.
   assert.doesNotMatch(await alert.innerText(), /uncommitted/);
   await alert.getByRole("button", { name: "Remove" }).click();
-  await alert.waitFor({ state: "detached" });
 
-  // Removal without force meets a dirty worktree, and crewd refuses it. The user
-  // must see that, or keep the session's tab: a closed tab with the session
-  // and folder left behind is a removal that silently did half its job.
-  const told = page.getByText(/uncommitted change/i);
+  // crewd refuses the removal without force. The same prompt says so with git's
+  // own count, and nothing was closed or dropped while it asks again.
+  const dirty = (await crew.git(tree, "status", "--porcelain")).split("\n").filter(Boolean).length;
+  await alert.getByText(new RegExp(`\\b${dirty} uncommitted changes? (is|are) lost`)).waitFor();
   const tab = page.locator(`[data-tab-strip] [data-tab-id="${tabId}"]`);
-  const kept = async () =>
-    (await crew.request<Session | null>("session_get", { id: session.id })) !== null && (await tab.count()) === 1;
-  const answered = await waitFor(async () => (await told.count()) > 0 || (await kept()), { timeout: 5000 }).catch(
-    () => false,
-  );
-  const folder = existsSync(tree);
-  const row = await crew.request<Session | null>("session_get", { id: session.id });
-  assert.ok(
-    answered,
-    `no error shows and the tab is ${(await tab.count()) === 0 ? "closed" : "open"}, ` +
-      `while the folder ${folder ? "stays" : "is gone"} and crewd ${row ? "keeps" : "dropped"} the session`,
-  );
-
-  // What happened, on the record: crewd kept everything.
-  assert.ok(folder, "the dirty worktree's folder stays");
+  assert.equal(await tab.count(), 1, "the session's tab stays open while the prompt asks again");
+  assert.ok(await crew.request<Session | null>("session_get", { id: session.id }), "crewd keeps the session");
   assert.ok(existsSync(path.join(tree, "late.txt")), "the late change stays");
   assert.ok((await gitWorktrees(crew, workspace.path)).some((entry) => entry.path === tree));
-  assert.ok(row, "crewd keeps the session");
+
+  // Confirmed with the real count, it goes: folder, session and tab.
+  await alert.getByRole("button", { name: "Remove" }).click();
+  await alert.waitFor({ state: "detached" });
+  await waitFor(() => !existsSync(tree), { message: "the worktree's folder is deleted once confirmed" });
+  assert.equal((await gitWorktrees(crew, workspace.path)).some((entry) => entry.path === tree), false);
+  await waitFor(async () => (await crew.request<Session | null>("session_get", { id: session.id })) === null, {
+    message: "crewd deletes the worktree's session",
+  });
 });
 
 /**

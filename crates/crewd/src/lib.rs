@@ -953,6 +953,12 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
             block(move || app_state::set(&store, key, value)).await?;
             Ok(Value::Null)
         }
+        "state_delete" => {
+            let Key { key } = parse(params)?;
+            let store = hosts.store.clone();
+            block(move || app_state::delete(&store, key)).await?;
+            Ok(Value::Null)
+        }
         "list_project_files" => {
             let ListProjectFiles { cwd, include } = parse(params)?;
             json(block(move || files::list(&cwd, &include)).await?)
@@ -2405,6 +2411,28 @@ print(json.dumps({"type":"turn.failed","error":{"message":"Codex exploded"}}), f
         assert!(main.result.is_some_and(|row| !row.is_null()), "the main checkout's session went too");
         let main_removal = rpc(&mut ws, 10, "worktree_remove", serde_json::json!({ "path": repo, "force": true })).await;
         assert!(main_removal.error.unwrap_or_default().contains("main checkout"));
+        handle.shutdown();
+    }
+
+    /// A worktree's strip is deleted with it, not saved empty: the same path may come back.
+    #[tokio::test]
+    async fn a_deleted_state_key_reads_as_never_set() {
+        let dir = test_dir("state-delete");
+        let handle = test_serve(&dir);
+        let mut ws = connect_authed(&handle).await;
+        for (n, key) in [(1, "tabs:w@/tmp/feat"), (2, "tabs:w")] {
+            let set = rpc(&mut ws, n, "state_set", serde_json::json!({ "key": key, "value": "{}" })).await;
+            assert!(set.ok, "{}", set.error.unwrap_or_default());
+        }
+
+        let deleted = rpc(&mut ws, 3, "state_delete", serde_json::json!({ "key": "tabs:w@/tmp/feat" })).await;
+        assert!(deleted.ok, "{}", deleted.error.unwrap_or_default());
+        let gone = rpc(&mut ws, 4, "state_get", serde_json::json!({ "key": "tabs:w@/tmp/feat" })).await;
+        assert!(gone.ok && gone.result.is_none_or(|value| value.is_null()), "the deleted key still reads");
+        let kept = rpc(&mut ws, 5, "state_get", serde_json::json!({ "key": "tabs:w" })).await;
+        assert_eq!(kept.result, Some(serde_json::json!("{}")), "a neighbouring key went too");
+        let again = rpc(&mut ws, 6, "state_delete", serde_json::json!({ "key": "tabs:w@/tmp/feat" })).await;
+        assert!(again.ok, "deleting a missing key is not an error");
         handle.shutdown();
     }
 }

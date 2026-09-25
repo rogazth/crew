@@ -104,16 +104,28 @@ export function useWorktrees(workspace: Workspace | null) {
     [path, refresh, select],
   );
 
+  /** Git's answer now, for a caller that cannot wait for the next focus. */
+  const reread = useCallback(async () => {
+    const fresh = await api.listWorktrees(path);
+    setListed({ path, list: fresh });
+    return fresh.map((tree) => (tree.main ? { ...tree, path } : tree));
+  }, [path]);
+
   const remove = useCallback(
     async (tree: Worktree, force: boolean) => {
       await api.removeWorktree(tree.path, force);
       setListed((prev) => ({ ...prev, list: prev.list.filter((entry) => entry.path !== tree.path) }));
+      // Remembered on screen, it would be picked again if the same path came back.
+      if (chosen[workspaceId] === tree.path) {
+        setChosen((prev) => ({ ...prev, [workspaceId]: "" }));
+        void api.stateDelete(activeKey(workspaceId)).catch(() => {});
+      }
       refresh();
     },
-    [refresh],
+    [chosen, refresh, workspaceId],
   );
 
-  return { list, active, refresh, select, step, selectAt, create, remove };
+  return { list, active, refresh, reread, select, step, selectAt, create, remove };
 }
 
 export type Worktrees = ReturnType<typeof useWorktrees>;

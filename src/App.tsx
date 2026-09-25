@@ -84,12 +84,13 @@ export function App() {
     [deleteWorkspace, forgetSessions, forgetTabs],
   );
 
-  // The daemon deletes its sessions with it; the strip it had goes the way a workspace's does.
+  // The daemon deletes its sessions with it; the strip it had goes the way a
+  // workspace's does, once the daemon has said yes: a refusal keeps both.
   const removeWorktree = useCallback(
     async (tree: NonNullable<typeof current>, force: boolean) => {
       const gone = sessions.filter((session) => work.pathOf(session) === tree.path).map((session) => session.id);
-      if (active) forgetTabs(`${active.id}@${tree.path}`);
       await worktrees.remove(tree, force);
+      if (active) forgetTabs(`${active.id}@${tree.path}`);
       await forget(gone);
     },
     [active, forget, forgetTabs, sessions, work, worktrees],
@@ -100,6 +101,7 @@ export function App() {
     removeSession: remove,
     removeWorkspace,
     removeWorktree,
+    rereadWorktrees: worktrees.reread,
   });
 
   const [palette, setPalette] = useState<PaletteMode | null>(null);
@@ -340,7 +342,7 @@ export function App() {
 
       <SidebarToggle onClick={() => setSidebarOpen((open) => !open)} />
 
-      <ConfirmDialog confirm={confirms.confirm} onClose={confirms.close} />
+      <ConfirmDialog confirm={confirms.confirm} onAsk={confirms.ask} onClose={confirms.close} />
 
       <UpdateDialog />
 
