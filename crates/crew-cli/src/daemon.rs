@@ -3,8 +3,8 @@
 //! Two things can keep crewd alive, and stopping it means something different
 //! under each. The dev app runs it as its child and starts it again when it
 //! dies. The packaged app installs a LaunchAgent (`launch_agent.rs`) and
-//! connects to it, so crewd runs from login and past quitting Crew; launchd
-//! brings it back after a crash and leaves it down after a clean stop.
+//! connects to it, so crewd runs past quitting Crew; launchd brings it back
+//! after a crash and leaves it down after a clean stop.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -49,11 +49,11 @@ impl Supervisor {
         }
     }
 
-    fn current(ctx: &Ctx, data_dir: &Path) -> Self {
+    fn current(data_dir: &Path) -> Self {
         if !cfg!(target_os = "macos") {
             return Supervisor::App;
         }
-        Self::choose(ctx.env.home.as_deref().and_then(|home| launch_agent::installed(Path::new(home))), data_dir)
+        Self::choose(launch_agent::installed(data_dir), data_dir)
     }
 
     fn name(&self) -> &'static str {
@@ -80,7 +80,7 @@ impl Supervisor {
 pub fn run(ctx: &Ctx, command: DaemonCommand) -> Result<ExitCode, CliError> {
     let supervised = |ctx: &Ctx| -> Result<(PathBuf, Supervisor), CliError> {
         let dir = data_dir(ctx)?;
-        let supervisor = Supervisor::current(ctx, &dir);
+        let supervisor = Supervisor::current(&dir);
         Ok((dir, supervisor))
     };
     match command {
@@ -88,7 +88,7 @@ pub fn run(ctx: &Ctx, command: DaemonCommand) -> Result<ExitCode, CliError> {
         DaemonCommand::Uninstall => uninstall(ctx),
         DaemonCommand::Status => supervised(ctx).and_then(|(_, supervisor)| status(ctx, &supervisor)),
         DaemonCommand::Stop => supervised(ctx).and_then(|(dir, supervisor)| stop(&dir, &supervisor)),
-        DaemonCommand::Restart => supervised(ctx).and_then(|(dir, supervisor)| restart(ctx, &dir, &supervisor)),
+        DaemonCommand::Restart => supervised(ctx).and_then(|(dir, supervisor)| restart(&dir, &supervisor)),
     }
 }
 
@@ -124,14 +124,6 @@ fn status(ctx: &Ctx, supervisor: &Supervisor) -> Result<ExitCode, CliError> {
     Ok(if status.running { ExitCode::SUCCESS } else { ExitCode::from(3) })
 }
 
-fn home(ctx: &Ctx) -> Result<PathBuf, CliError> {
-    ctx.env
-        .home
-        .as_deref()
-        .map(PathBuf::from)
-        .ok_or_else(|| CliError::Failed("HOME is not set, so there is no ~/Library/LaunchAgents to use.".into()))
-}
-
 fn macos_only(verb: &str) -> Result<(), CliError> {
     if cfg!(target_os = "macos") {
         Ok(())
@@ -164,7 +156,7 @@ fn install(ctx: &Ctx, crewd: Option<&Path>) -> Result<ExitCode, CliError> {
     // Not the session's: installing is for a data dir, not for whoever asks.
     let dir = identity::data_dir(ctx.global.data_dir.as_deref(), &ctx.env)?;
     let agent = Agent { program: crewd_path(crewd)?, data_dir: dir.clone() };
-    let plist = launch_agent::plist_path(&home(ctx)?);
+    let plist = launch_agent::plist_path(&dir);
     if launch_agent::loaded().is_some() {
         // The one it replaces stops first, as gracefully as any other stop:
         // two crewds on one data dir would fight over its database.
@@ -179,7 +171,7 @@ fn install(ctx: &Ctx, crewd: Option<&Path>) -> Result<ExitCode, CliError> {
     std::fs::create_dir_all(&dir).map_err(|e| CliError::Failed(format!("{}: {e}", dir.display())))?;
     create_private(&agent.log())?;
     write_plist(&plist, &agent.plist())?;
-    launch_agent::bootstrap(&plist).map_err(CliError::Failed)?;
+    launch_agent::start(&plist, false).map_err(CliError::Failed)?;
     if ctx.global.json {
         output::say_json(&json!({
             "installed": true,
@@ -191,7 +183,7 @@ fn install(ctx: &Ctx, crewd: Option<&Path>) -> Result<ExitCode, CliError> {
         }));
     } else {
         output::say(&format!(
-            "Installed {LABEL}. crewd ({}) now runs for {} from login, and keeps running when Crew quits.\nLog: {}",
+            "Installed {LABEL}. crewd ({}) now runs for {} and keeps running when Crew quits, until you log out.\nLog: {}",
             agent.program.display(),
             dir.display(),
             agent.log().display()
@@ -202,7 +194,7 @@ fn install(ctx: &Ctx, crewd: Option<&Path>) -> Result<ExitCode, CliError> {
 
 fn uninstall(ctx: &Ctx) -> Result<ExitCode, CliError> {
     macos_only("uninstall")?;
-    let plist = launch_agent::plist_path(&home(ctx)?);
+    let plist = launch_agent::plist_path(&identity::data_dir(ctx.global.data_dir.as_deref(), &ctx.env)?);
     let was_loaded = launch_agent::loaded().is_some();
     if was_loaded {
         launch_agent::bootout().map_err(CliError::Failed)?;
@@ -291,17 +283,13 @@ fn stop(dir: &Path, supervisor: &Supervisor) -> Result<ExitCode, CliError> {
     Ok(ExitCode::SUCCESS)
 }
 
-fn restart(ctx: &Ctx, dir: &Path, supervisor: &Supervisor) -> Result<ExitCode, CliError> {
+fn restart(dir: &Path, supervisor: &Supervisor) -> Result<ExitCode, CliError> {
     let old = match supervisor {
         Supervisor::App => Some(stop_daemon(dir)?),
         Supervisor::LaunchAgent(_) => {
-            // Down or not: launchd starts it either way.
+            // Down, or not even loaded since a reboot: started either way.
             let old = identity::read_daemon_file(dir).ok();
-            match launch_agent::loaded() {
-                Some(_) => launch_agent::kickstart(true),
-                None => launch_agent::bootstrap(&launch_agent::plist_path(&home(ctx)?)),
-            }
-            .map_err(CliError::Failed)?;
+            launch_agent::start(&launch_agent::plist_path(dir), true).map_err(CliError::Failed)?;
             old
         }
     };

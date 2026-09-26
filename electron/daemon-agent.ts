@@ -29,7 +29,6 @@ type Options = {
   crew: string;
   dataDir: string;
   version: string;
-  home: string;
   uid: number;
   // A daemon other than the one the app connected to took over.
   onNewDaemon: () => void;
@@ -108,9 +107,9 @@ function alive(pid: number | undefined): boolean | null {
 }
 
 export async function connectAgent(options: Options): Promise<AgentLink> {
-  const { crewd, crew, dataDir, version, home, uid, onNewDaemon } = options;
+  const { crewd, crew, dataDir, version, uid, onNewDaemon } = options;
   const target = launchctlTarget(uid);
-  const plist = plistPath(home);
+  const plist = plistPath(dataDir);
   const daemonJson = path.join(dataDir, "daemon.json");
   const log = path.join(dataDir, "crewd.log");
   let current: DaemonFile | null = null;
@@ -136,19 +135,17 @@ export async function connectAgent(options: Options): Promise<AgentLink> {
     await run(crew, ["daemon", "install", "--crewd", crewd, "--data-dir", dataDir, "--json"], 60_000);
   };
 
-  // With RunAtLoad, loading it starts it; a loaded one is kickstarted, and
-  // `kill` stops the one running first.
+  // Loaded if it is not (it never is after a reboot), then kickstarted:
+  // nothing counts on RunAtLoad. `kill` stops a running one first; one that
+  // was only just loaded is left alone.
   const start = async (kill: boolean) => {
     lastStart = Date.now();
     const loaded = await run("/bin/launchctl", ["print", target.service]).then(
       () => true,
       () => false,
     );
-    if (!loaded) {
-      await run("/bin/launchctl", ["bootstrap", target.domain, plist]);
-      return;
-    }
-    await run("/bin/launchctl", kill ? ["kickstart", "-k", target.service] : ["kickstart", target.service]);
+    if (!loaded) await run("/bin/launchctl", ["bootstrap", target.domain, plist]);
+    await run("/bin/launchctl", kill && loaded ? ["kickstart", "-k", target.service] : ["kickstart", target.service]);
   };
 
   const removeStale = async (stale: DaemonFile | null) => {
@@ -260,4 +257,11 @@ export async function connectAgent(options: Options): Promise<AgentLink> {
       await run("/bin/launchctl", ["bootout", target.service]).catch((error: unknown) => console.error(error));
     },
   };
+}
+
+// Before this run falls back to crewd as its child: a LaunchAgent that came
+// up late, or half way, would be a second daemon on the same database. Booted
+// out, it is also not restarted by KeepAlive; the next launch loads it again.
+export async function unloadAgent(uid: number): Promise<void> {
+  await run("/bin/launchctl", ["bootout", launchctlTarget(uid).service], 20_000).catch(() => {});
 }

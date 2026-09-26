@@ -1,7 +1,12 @@
-//! The LaunchAgent that runs crewd on its own, from login to logout, so the
-//! processes and agents it holds outlive the window. The packaged app
-//! installs it by running `crew daemon install` from its bundle, which makes
-//! this the one place the plist is written and read back.
+//! The LaunchAgent that runs crewd on its own, so the processes and agents it
+//! holds outlive the window. The packaged app installs it by running `crew
+//! daemon install` from its bundle, which makes this the one place the plist
+//! is written and read back.
+//!
+//! The plist lives in the data dir, not in `~/Library/LaunchAgents`, so
+//! launchd never loads it at login: crewd runs only once Crew (or `crew
+//! daemon install|restart`) bootstraps and kickstarts it, and nothing brings
+//! it back after a logout or a reboot until Crew opens again.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -13,6 +18,8 @@ use std::time::{Duration, Instant};
 pub const LABEL: &str = "rogazth.crew.crewd";
 /// In the data dir, beside daemon.json. crewd empties it when it grows too big.
 pub const LOG: &str = "crewd.log";
+/// The plist, beside the log.
+pub const PLIST: &str = "rogazth.crew.crewd.plist";
 
 const LAUNCHCTL: &str = "/bin/launchctl";
 /// crewd gives its processes one 5 s stop grace and its PTYs one more second
@@ -45,8 +52,12 @@ impl Agent {
     /// `KeepAlive { SuccessfulExit: false }` is the whole stop story: a crash
     /// or a kill is not a successful exit, so launchd starts crewd again; a
     /// clean stop (a signal, `daemon_shutdown`, "Quit Crew and Stop
-    /// Everything") exits 0 and stays down until Crew opens or the user logs
-    /// in again. `RunAtLoad` is the login part.
+    /// Everything") exits 0 and stays down until Crew starts it.
+    ///
+    /// No `RunAtLoad`. launchd.plist(5) says `SuccessfulExit` implies it
+    /// anyway, which is why the plist is kept out of `~/Library/LaunchAgents`
+    /// (see the module docs); every start still kickstarts after bootstrap
+    /// rather than count on it.
     ///
     /// `ProcessType Interactive`: left unset, launchd throttles an agent's CPU
     /// and I/O, and this one runs the user's dev servers and builds.
@@ -67,8 +78,6 @@ impl Agent {
 	<key>ProgramArguments</key>
 	<array>
 {arguments}	</array>
-	<key>RunAtLoad</key>
-	<true/>
 	<key>KeepAlive</key>
 	<dict>
 		<key>SuccessfulExit</key>
@@ -131,13 +140,13 @@ fn unescape(text: &str) -> String {
         .replace("&amp;", "&")
 }
 
-pub fn plist_path(home: &Path) -> PathBuf {
-    home.join("Library/LaunchAgents").join(format!("{LABEL}.plist"))
+pub fn plist_path(data_dir: &Path) -> PathBuf {
+    data_dir.join(PLIST)
 }
 
-/// The agent the plist on disk describes, if there is one and it reads.
-pub fn installed(home: &Path) -> Option<Agent> {
-    std::fs::read_to_string(plist_path(home)).ok().and_then(|xml| Agent::from_plist(&xml))
+/// The agent the plist in `data_dir` describes, if there is one and it reads.
+pub fn installed(data_dir: &Path) -> Option<Agent> {
+    std::fs::read_to_string(plist_path(data_dir)).ok().and_then(|xml| Agent::from_plist(&xml))
 }
 
 /// What `launchctl print` says about a loaded service.
@@ -184,9 +193,8 @@ pub fn loaded() -> Option<Loaded> {
     launchctl(&["print", &service()]).ok().map(|out| parse_print(&out))
 }
 
-/// Load the plist; with `RunAtLoad` that starts crewd. A bootout that just
-/// returned may still be letting go of the label, so a refusal is retried
-/// for a few seconds.
+/// Load the plist. A bootout that just returned may still be letting go of
+/// the label, so a refusal is retried for a few seconds.
 pub fn bootstrap(plist: &Path) -> Result<(), String> {
     let plist = plist.to_string_lossy();
     let deadline = Instant::now() + GONE_WAIT;
@@ -225,6 +233,17 @@ pub fn kickstart(kill: bool) -> Result<(), String> {
     launchctl(&args).map(|_| ())
 }
 
+/// Running, whatever the state: loaded first if it is not, then kickstarted.
+/// With `kill`, a running one is stopped and started again; one that was
+/// just loaded is left alone.
+pub fn start(plist: &Path, kill: bool) -> Result<(), String> {
+    if loaded().is_none() {
+        bootstrap(plist)?;
+        return kickstart(false);
+    }
+    kickstart(kill)
+}
+
 /// SIGTERM through launchd: a clean exit, so it stays down.
 pub fn terminate() -> Result<(), String> {
     launchctl(&["kill", "SIGTERM", &service()]).map(|_| ())
@@ -247,7 +266,7 @@ mod tests {
         assert!(xml.contains(&format!("<string>{LABEL}</string>")), "{xml}");
         assert!(xml.contains("<string>/Applications/Crew &amp; Co.app/Contents/Resources/crewd</string>"), "{xml}");
         assert!(xml.contains("<string>--supervised-by</string>\n\t\t<string>launchd</string>"), "{xml}");
-        assert!(xml.contains("<key>RunAtLoad</key>\n\t<true/>"), "{xml}");
+        assert!(!xml.contains("RunAtLoad"), "crewd starts when Crew starts it, not at load: {xml}");
         assert!(
             xml.contains("<key>KeepAlive</key>\n\t<dict>\n\t\t<key>SuccessfulExit</key>\n\t\t<false/>"),
             "a clean stop must stay down and a crash come back: {xml}"
@@ -277,6 +296,13 @@ mod tests {
         );
         assert_eq!(Agent::from_plist("<plist><dict></dict></plist>"), None);
         assert_eq!(Agent::from_plist(r"<key>ProgramArguments</key><array><string>/opt/crewd</string></array>"), None, "no data dir");
+    }
+
+    /// Out of ~/Library/LaunchAgents, so login never loads it.
+    #[test]
+    fn the_plist_lives_in_the_data_dir() {
+        let dir = Path::new("/Users/me/Library/Application Support/Crew");
+        assert_eq!(plist_path(dir), dir.join(format!("{LABEL}.plist")));
     }
 
     #[test]

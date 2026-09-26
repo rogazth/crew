@@ -7,7 +7,8 @@ import { pathToFileURL } from "node:url";
 import { app, BrowserWindow, dialog, ipcMain, Menu, Notification, session, shell, type OpenDialogOptions } from "electron";
 import { installBrowser, registerBrowserIpc, startBrowserHost } from "./browser";
 import { sha } from "./build-info";
-import { connectAgent, type AgentLink } from "./daemon-agent";
+import { connectAgent, unloadAgent, type AgentLink } from "./daemon-agent";
+import { decideLaunch, type Outcome } from "./daemon-agent-plan";
 import { buildMenu } from "./menu";
 import { watchForUpdates } from "./update";
 
@@ -41,19 +42,54 @@ function daemonInfo(): DaemonInfo | null {
   return agent ? agent.info() : info;
 }
 
-async function connectDaemon(): Promise<void> {
-  if (!app.isPackaged) return startDaemon();
-  agent = await connectAgent({
-    crewd: crewdPath(),
-    crew: path.join(process.resourcesPath, "crew"),
-    dataDir: app.getPath("userData"),
-    version: app.getVersion(),
-    home: homedir(),
-    uid: process.getuid?.() ?? 0,
-    // A crash launchd recovered from, or `crew daemon restart`: its PTYs are
-    // gone, so the window starts over, as it does when dev restarts its child.
-    onNewDaemon: () => win?.reload(),
+function reason(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+async function attempt(run: () => Promise<void>): Promise<Outcome> {
+  try {
+    await run();
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error: reason(error) };
+  }
+}
+
+// Resolves to a notice for the user when this run could not use the
+// LaunchAgent; throws only when there is no daemon at all.
+async function connectDaemon(): Promise<string | null> {
+  if (!app.isPackaged) {
+    await startDaemon().catch((error: unknown) => Promise.reject(new Error(`Could not start crewd: ${reason(error)}`)));
+    return null;
+  }
+  const uid = process.getuid?.() ?? 0;
+  const viaAgent = await attempt(async () => {
+    agent = await connectAgent({
+      crewd: crewdPath(),
+      crew: path.join(process.resourcesPath, "crew"),
+      dataDir: app.getPath("userData"),
+      version: app.getVersion(),
+      uid,
+      // A crash launchd recovered from, or `crew daemon restart`: its PTYs are
+      // gone, so the window starts over, as it does when dev restarts its child.
+      onNewDaemon: () => win?.reload(),
+    });
   });
+  let launch = decideLaunch(viaAgent);
+  if (launch.run === "try-child") {
+    if (!viaAgent.ok) console.error(`crewd LaunchAgent unavailable; running crewd as Crew's child: ${viaAgent.error}`);
+    await unloadAgent(uid);
+    launch = decideLaunch(viaAgent, await attempt(startDaemon));
+  }
+  switch (launch.run) {
+    case "agent":
+    case "try-child":
+      return null;
+    case "child":
+      return launch.notice;
+    case "none":
+      throw new Error(launch.dialog);
+  }
 }
 
 // "Quit Crew and Stop Everything". In dev a plain quit already does this.
@@ -319,14 +355,17 @@ app.whenReady().then(async () => {
   });
   Menu.setApplicationMenu(buildMenu({ quitAndStopEverything: () => void quitAndStopEverything() }));
   registerIpc();
+  let notice: string | null;
   try {
-    await connectDaemon();
+    notice = await connectDaemon();
   } catch (error) {
-    dialog.showErrorBox("Crew", `Could not start crewd: ${error instanceof Error ? error.message : String(error)}`);
+    dialog.showErrorBox("Crew", reason(error));
     app.quit();
     return;
   }
   createWindow();
+  // Crew works as before; the user only needs to know quitting stops things.
+  if (notice && Notification.isSupported()) new Notification({ title: "Crew", body: notice }).show();
   // Agents drive pages through main, over its own connection; it follows crewd across restarts.
   const browserHost = startBrowserHost(daemonInfo);
   app.once("will-quit", () => browserHost.stop());

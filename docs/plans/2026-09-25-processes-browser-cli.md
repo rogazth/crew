@@ -55,8 +55,9 @@ Verificado en el código el 2026-09-25.
 
 ### 0. `crewd` vive fuera de la ventana
 
-Pasa a ser un **LaunchAgent** (`~/Library/LaunchAgents/…crewd.plist`) que
-apunta al binario dentro del bundle. La app lo instala en el primer arranque y
+Pasa a ser un **LaunchAgent** (el plist quedó en el data dir, no en
+`~/Library/LaunchAgents`: ver "Fase 5: lo que entró") que apunta al binario
+dentro del bundle. La app lo instala en el primer arranque y
 **se conecta** a él en vez de lanzarlo. Si no responde, lo levanta con
 `launchctl kickstart`.
 
@@ -450,11 +451,17 @@ Puertos y, si hacen falta, traces de performance sobre el canal del navegador.
 - **plist** (`crates/crew-cli/src/launch_agent.rs`, el único lugar que lo
   escribe): label `rogazth.crew.crewd` (el `appId` más `.crewd`; un test en
   Rust y otro en vitest lo atan a `package.json`), `crewd --data-dir <userData>
-  --supervised-by launchd`, `RunAtLoad`, `KeepAlive { SuccessfulExit: false }`
-  (un crash vuelve, una parada limpia sale 0 y queda abajo hasta abrir Crew o
-  el próximo login), `ProcessType Interactive` (sin eso launchd frena CPU e
-  I/O, y ahí corren los dev servers) y stdout/stderr a `<data-dir>/crewd.log`,
-  creado 0600.
+  --supervised-by launchd`, `KeepAlive { SuccessfulExit: false }` (un crash
+  vuelve, una parada limpia sale 0 y queda abajo), `ProcessType Interactive`
+  (sin eso launchd frena CPU e I/O, y ahí corren los dev servers) y
+  stdout/stderr a `<data-dir>/crewd.log`, creado 0600.
+- **Sin arranque en el login**, a diferencia de la decisión 0: sin `RunAtLoad`
+  y el plist en `<data-dir>/rogazth.crew.crewd.plist`, no en
+  `~/Library/LaunchAgents`. launchd.plist(5) dice que `SuccessfulExit` implica
+  `RunAtLoad`, así que en `LaunchAgents` el login lo cargaría y lo arrancaría
+  con sus procesos `auto_start` aunque el usuario no abra Crew. Así `crewd`
+  corre solo cuando Crew (o `crew daemon install|restart`) hace `bootstrap` y
+  `kickstart`, y "Quit Crew and Stop Everything" sigue parado tras reiniciar.
 - **crewd** con `--supervised-by launchd` no imprime el handshake (iría al log
   con el token), no mira stdin, deja el log en 0600 y lo vacía pasados 10 MB.
   `daemon_shutdown` (WebSocket) y `daemon/shutdown` (bridge, solo
@@ -463,10 +470,14 @@ Puertos y, si hacen falta, traces de performance sobre el canal del navegador.
   `daemon-agent-plan.ts`): lee el plist con `plutil`; si falta o nombra otro
   `crewd` u otro data dir corre `crew daemon install` del bundle (que hace
   bootout del viejo). Después `daemon.json` + `whoami` por el bridge: listo,
-  faltante o con pid muerto (`kickstart`, con `bootstrap` si no está cargado),
-  vivo pero mudo (`kickstart -k`), otra versión (`daemon/shutdown` y
-  `kickstart`). Espera 20 s un daemon nuevo; si no, diálogo con la ruta del
-  log. Con la ventana abierta revisa cada 2 s: se cambia a un daemon nuevo y
+  faltante o con pid muerto (`bootstrap` si no está cargado y siempre
+  `kickstart`), vivo pero mudo (`kickstart -k`), otra versión
+  (`daemon/shutdown` y `kickstart`). Espera 20 s un daemon nuevo.
+- **Plan B:** si el LaunchAgent no se instala, launchctl falla o no aparece
+  nada en esos 20 s, la app hace bootout del agente (para no tener dos daemons
+  en el mismo data dir) y en esa corrida lanza `crewd` como hijo, igual que en
+  dev, con una notificación: los procesos paran al salir. El diálogo de error
+  queda para cuando el hijo también falla (`decideLaunch` en el plan puro). Con la ventana abierta revisa cada 2 s: se cambia a un daemon nuevo y
   recarga la ventana, y levanta uno que falte (como mucho uno cada 10 s, para
   no pisar el throttle de launchd). Salir solo suelta. En dev nada cambia.
 - **Menú:** "Quit Crew and Stop Everything" (`daemon/shutdown`, espera la
@@ -475,10 +486,12 @@ Puertos y, si hacen falta, traces de performance sobre el canal del navegador.
   al `crew` resuelto) y `uninstall`. `Supervisor::LaunchAgent` cuando el plist
   sirve ese data dir: `stop` pide `daemon/shutdown` (o `launchctl kill
   SIGTERM`), `restart` hace `kickstart -k`, `status` muestra estado y pid de
-  `launchctl print`. `install` se niega si hay un `crewd` hijo de la app
+  `launchctl print`. `install` y `restart` cargan si hace falta y siempre
+  hacen `kickstart`. `install` se niega si hay un `crewd` hijo de la app
   corriendo en ese data dir.
 - **Tests:** Rust del plist, su lectura, el label, `launchctl print` y la
   elección de supervisor; `crewd` bajo launchd (sobrevive a stdin, no imprime el
   token, sale 0 con `daemon/shutdown`) y quién puede pedir la salida. vitest de
-  instalar o no, archivo viejo, versión distinta y los pasos del watchdog. No se
+  instalar o no, archivo viejo, versión distinta, los pasos del watchdog y el
+  plan B. No se
   instaló un LaunchAgent real ni se corrió launchctl en los tests.

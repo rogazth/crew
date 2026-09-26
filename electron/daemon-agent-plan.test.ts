@@ -3,7 +3,9 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   AGENT_LABEL,
+  CHILD_NOTICE,
   classify,
+  decideLaunch,
   HUNG_STRIKES,
   installNeeded,
   launchctlTarget,
@@ -32,7 +34,10 @@ describe("the label", () => {
   it("is the app's bundle id, like the plist the CLI writes", () => {
     const pkg = JSON.parse(readFileSync(path.join(__dirname, "../package.json"), "utf8")) as { build: { appId: string } };
     expect(AGENT_LABEL).toBe(`${pkg.build.appId}.crewd`);
-    expect(plistPath("/Users/me")).toBe(`/Users/me/Library/LaunchAgents/${AGENT_LABEL}.plist`);
+    // Out of ~/Library/LaunchAgents, so login never loads it.
+    expect(plistPath("/Users/me/Library/Application Support/Crew")).toBe(
+      `/Users/me/Library/Application Support/Crew/${AGENT_LABEL}.plist`,
+    );
     expect(launchctlTarget(501)).toEqual({ domain: "gui/501", service: `gui/501/${AGENT_LABEL}` });
   });
 });
@@ -131,5 +136,24 @@ describe("watchStep", () => {
   it("starts one when the daemon stopped (`crew daemon stop`) or crashed", () => {
     expect(watchStep({ kind: "missing" }, current, 0)).toEqual({ do: "start", stale: null });
     expect(watchStep({ kind: "stale", file: current }, current, 0)).toEqual({ do: "start", stale: current });
+  });
+});
+
+describe("decideLaunch", () => {
+  it("uses the LaunchAgent when it came up", () => {
+    expect(decideLaunch({ ok: true })).toEqual({ run: "agent" });
+  });
+
+  it("falls back to a child when the agent could not be installed or reached", () => {
+    const agent = { ok: false, error: "launchctl bootstrap: 5: Input/output error" } as const;
+    expect(decideLaunch(agent)).toEqual({ run: "try-child" });
+    expect(decideLaunch(agent, { ok: true })).toEqual({ run: "child", notice: CHILD_NOTICE, why: agent.error });
+    expect(CHILD_NOTICE).toContain("stop when Crew quits");
+  });
+
+  it("gives up with both reasons only when the child fails too", () => {
+    const launch = decideLaunch({ ok: false, error: "no agent" }, { ok: false, error: "crewd exited 1" });
+    expect(launch.run).toBe("none");
+    if (launch.run === "none") expect(launch.dialog).toMatch(/no agent[\s\S]*crewd exited 1/);
   });
 });

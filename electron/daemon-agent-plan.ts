@@ -9,8 +9,11 @@ import path from "node:path";
 // package.json.
 export const AGENT_LABEL = "rogazth.crew.crewd";
 
-export function plistPath(home: string): string {
-  return path.join(home, "Library/LaunchAgents", `${AGENT_LABEL}.plist`);
+// In the data dir, not ~/Library/LaunchAgents: launchd would load it at every
+// login, and KeepAlive { SuccessfulExit } starts a job as soon as it is loaded
+// (launchd.plist(5)). Here crewd runs only once Crew starts it.
+export function plistPath(dataDir: string): string {
+  return path.join(dataDir, `${AGENT_LABEL}.plist`);
 }
 
 export function launchctlTarget(uid: number): { domain: string; service: string } {
@@ -87,7 +90,8 @@ export function classify(file: DaemonFile | null, probe: Probe, appVersion: stri
 
 export type Step =
   | { do: "connect"; file: DaemonFile }
-  // launchd starts it; a stale file goes first so nothing reads a dead address.
+  // Loaded if it is not (after a reboot it never is), then kickstarted; a
+  // stale file goes first so nothing reads a dead address.
   | { do: "start"; stale: DaemonFile | null }
   // `kickstart -k`: SIGTERM to the one that does not answer, then a new one.
   | { do: "restart" }
@@ -133,4 +137,25 @@ export function watchStep(found: Found, current: DaemonFile | null, strikes: num
     default:
       return nextStep(found);
   }
+}
+
+// How a packaged launch ends. The LaunchAgent is tried first; if it cannot be
+// installed, loaded or reached, this run falls back to the dev way, crewd as
+// the app's child, so Crew still opens, and only its processes stop with it.
+export type Outcome = { ok: true } | { ok: false; error: string };
+
+export type Launch =
+  | { run: "agent" }
+  | { run: "try-child" }
+  | { run: "child"; notice: string; why: string }
+  | { run: "none"; dialog: string };
+
+export const CHILD_NOTICE =
+  "Crew couldn't start its background service, so this time processes and agents stop when Crew quits.";
+
+export function decideLaunch(agent: Outcome, child?: Outcome): Launch {
+  if (agent.ok) return { run: "agent" };
+  if (!child) return { run: "try-child" };
+  if (child.ok) return { run: "child", notice: CHILD_NOTICE, why: agent.error };
+  return { run: "none", dialog: `Could not start crewd.\n\nAs a LaunchAgent: ${agent.error}\n\nAs Crew's child: ${child.error}` };
 }
