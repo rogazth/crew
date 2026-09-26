@@ -77,7 +77,8 @@ fn run(args: &[String]) -> Result<(), String> {
     wait_for_exit();
 
     remove_daemon_file(&dir, &info.url);
-    // First, so a process killed below is not restarted on its way out.
+    // First, so a process killed below is not restarted on its way out, and
+    // so supervised ones get their stop grace before the PTY host's one second.
     processes.shutdown();
     pty.kill_all();
     agents.kill_all();

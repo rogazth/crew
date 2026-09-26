@@ -185,6 +185,38 @@ fn stop_escalates_to_sigkill_when_the_group_ignores_sigterm() {
     assert_eq!(marker_count(&sleeper), 0);
 }
 
+#[test]
+fn shutdown_gives_every_process_one_shared_grace_to_exit() {
+    let f = fixture("shutdown", fast());
+    let polite = f.add("polite", "trap 'sleep 0.1; echo flushed; exit 0' TERM; while true; do sleep 0.05; done");
+    let stubborn = unique_sleep();
+    for name in ["stubborn-a", "stubborn-b"] {
+        f.add(name, &format!("trap '' TERM; {stubborn} & wait; {stubborn}"));
+    }
+    for name in ["polite", "stubborn-a", "stubborn-b"] {
+        f.host.start(&f.workspace, name).unwrap();
+    }
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while marker_count(&stubborn) < 2 && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(20));
+    }
+
+    let asked = Instant::now();
+    f.host.shutdown();
+    let took = asked.elapsed();
+
+    // Two that ignore SIGTERM still cost one grace, not two.
+    assert!(took >= fast().stop_grace, "returned before the grace: {took:?}");
+    assert!(took < fast().stop_grace * 2, "the graces added up: {took:?}");
+    let logs = f.host.read_logs(&f.workspace, &polite.id, None, Some(0), None).unwrap();
+    assert!(logs.text.contains("flushed"), "{:?}", logs.text);
+    assert_eq!(f.host.get(&f.workspace, "polite").unwrap().state, ProcessState::Stopped);
+    // What is left is the PTY host's to kill.
+    f.host.inner.pty.kill_all();
+    thread::sleep(Duration::from_millis(100));
+    assert_eq!(marker_count(&stubborn), 0);
+}
+
 fn stat_of(pid: u32) -> String {
     let out = std::process::Command::new("ps")
         .args(["-o", "stat=", "-p", &pid.to_string()])

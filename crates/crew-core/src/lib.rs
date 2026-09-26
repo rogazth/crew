@@ -13,6 +13,7 @@ pub mod mailbox;
 pub mod mcp;
 pub mod messages;
 pub mod process;
+pub mod process_tools;
 pub mod pty;
 pub mod routine;
 pub mod schedule;

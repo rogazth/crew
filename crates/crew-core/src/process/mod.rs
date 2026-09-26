@@ -815,18 +815,27 @@ impl ProcessHost {
     }
 
     /// The daemon is exiting: nothing restarts, and every group gets its
-    /// SIGTERM now. The PTY host kills what is left.
+    /// SIGTERM now. All of them share one stop grace to exit, so a server
+    /// flushing a database gets its five seconds and ten servers do not take
+    /// fifty. The PTY host kills what is left after that.
     pub fn shutdown(&self) {
         self.inner.closing.store(true, Ordering::Release);
-        let ids: Vec<String> = self
+        let running: Vec<(String, u64)> = self
             .runs()
-            .iter()
+            .iter_mut()
             .filter(|(_, run)| live(run.state))
-            .map(|(id, _)| id.clone())
+            .map(|(id, run)| {
+                run.stopping = true;
+                (id.clone(), run.generation)
+            })
             .collect();
-        for id in ids {
-            let _ = self.inner.pty.signal_group(&pty_id(&id), libc::SIGTERM);
-            let _ = self.inner.pty.signal_group(&pty_id(&id), libc::SIGCONT);
+        for (id, _) in &running {
+            let _ = self.inner.pty.signal_group(&pty_id(id), libc::SIGTERM);
+            let _ = self.inner.pty.signal_group(&pty_id(id), libc::SIGCONT);
+        }
+        let deadline = Instant::now() + self.inner.config.stop_grace;
+        for (id, generation) in &running {
+            self.wait_ended(id, *generation, deadline.saturating_duration_since(Instant::now()));
         }
     }
 

@@ -11,6 +11,7 @@ use crew_core::files;
 use crew_core::messages;
 use crew_core::provider_session;
 use crew_core::process::{ProcessEvents, ProcessHost, ProcessPatch};
+use crew_core::process_tools::ProcessTools;
 use crew_core::pty::{PtyEvents, PtyHost, SpawnOptions};
 use crew_core::routine;
 use crew_core::scheduler::Scheduler;
@@ -429,9 +430,9 @@ pub fn serve(config: Config) -> Result<Handle, String> {
     }));
     let scheduler = Scheduler::new(config.store.clone(), turns.clone());
     scheduler.set_events(hub.clone());
-    // Tool families register here, with the host handles they need:
-    // `toolbox.register(Arc::new(SomeTools { host: some_host.clone() }))`.
+    // Tool families register here, with the host handles they need.
     let toolbox = turns.toolbox();
+    toolbox.register(Arc::new(ProcessTools::new(config.processes.clone(), config.store.clone())));
     config.bridge.set_handler(Arc::new(ToolDispatch {
         store: config.store.clone(),
         transcripts,
@@ -1910,6 +1911,58 @@ mod tests {
         let reply = list_agents_as(&socket, &bridge.user_token());
         let text = reply["result"]["content"][0]["text"].as_str().unwrap_or("");
         assert!(text.contains("--workspace"), "{reply}");
+        handle.shutdown();
+    }
+
+    /// The process tools are registered: listed to an agent, and answering
+    /// with the process the window made, in the caller's workspace.
+    #[tokio::test]
+    async fn list_processes_answers_over_the_bridge() {
+        let dir = test_dir("process-tools");
+        let (handle, bridge) = test_serve_bridged(&dir);
+        let mut ws = connect_authed(&handle).await;
+        let cwd = dir.to_string_lossy().into_owned();
+        let (workspace, agent, _) = seed_terminal(&mut ws, &cwd).await;
+        let created = rpc(
+            &mut ws,
+            4,
+            "process_create",
+            serde_json::json!({ "workspaceId": workspace, "name": "web", "command": "sleep 30" }),
+        )
+        .await;
+        assert!(created.ok, "{:?}", created.error);
+        let socket = bridge.info().expect("info").socket_path;
+        let token = bridge.mint(&agent);
+
+        let listed = unix_call(&socket, &serde_json::json!({ "token": token, "method": "tools/list" }));
+        assert!(listed["result"]["tools"].to_string().contains("list_processes"), "{listed}");
+        for (token, workspace) in [(token.clone(), None), (bridge.user_token(), Some(workspace.clone()))] {
+            let reply = unix_call(
+                &socket,
+                &serde_json::json!({
+                    "token": token,
+                    "workspace": workspace,
+                    "method": "tools/call",
+                    "params": { "name": "list_processes", "arguments": {} }
+                }),
+            );
+            let text = reply["result"]["content"][0]["text"].as_str().unwrap_or("");
+            let rows: serde_json::Value = serde_json::from_str(text).unwrap_or_default();
+            assert_eq!(rows[0]["name"], "web", "{reply}");
+            assert_eq!(rows[0]["created_by"], "the user", "{reply}");
+        }
+
+        // The agent's autonomy is ask: what it writes waits for the user.
+        let reply = unix_call(
+            &socket,
+            &serde_json::json!({
+                "token": token,
+                "method": "tools/call",
+                "params": { "name": "call_tool", "arguments": { "name": "create_process", "arguments": { "name": "api", "command": "sleep 30" } } }
+            }),
+        );
+        let text = reply["result"]["content"][0]["text"].as_str().unwrap_or("");
+        assert!(text.contains("pending-approval"), "{reply}");
         handle.shutdown();
     }
 
