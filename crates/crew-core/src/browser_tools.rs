@@ -1,6 +1,7 @@
-//! The browser tools, one function each, as the gateway calls them: who is
-//! calling (their workspace and a [`Holder`]) and the tool's arguments in, an
-//! array of MCP content blocks out.
+//! The browser tools, one function each: who is calling (their workspace and
+//! a [`Holder`]) and the tool's arguments in, an array of MCP content blocks
+//! out. As a [`ToolFamily`] they sit behind `find_tool`/`call_tool` for every
+//! kind of caller.
 //!
 //! What is decided here: which tab a call is about, whether the caller may
 //! touch it (its own workspace only), and the lease. What a tool does to the
@@ -16,7 +17,9 @@ use serde_json::{json, Value};
 use crate::browser::{self, OpenPage};
 use crate::browser_leases::{Holder, Leases};
 use crate::browser_relay::BrowserRelay;
+use crate::caller::Caller;
 use crate::store::{now_millis, Store};
+use crate::tools::{Audience, Tool, ToolFamily, ToolOutput};
 
 /// Mounting a cold tab can take 15 s before the tool even starts.
 const CALL_TIMEOUT: Duration = Duration::from_secs(35);
@@ -27,15 +30,6 @@ const WAIT_MAX_S: u64 = 50;
 /// A tab `open_tab` made is known before the window has saved its strip.
 const OPENED_GRACE_MS: i64 = 30_000;
 
-/// A tool as `find_tool` shows it.
-pub struct BrowserToolSpec {
-    pub name: &'static str,
-    pub description: &'static str,
-    pub schema: Value,
-    /// Words someone would search for that the name and description miss.
-    pub keywords: &'static [&'static str],
-}
-
 fn tab_prop() -> Value {
     json!({ "type": "string", "description": "A tab id from list_tabs. Defaults to the last tab you used." })
 }
@@ -45,16 +39,19 @@ fn with_tab(mut properties: Value, required: &[&str]) -> Value {
     json!({ "type": "object", "properties": properties, "required": required })
 }
 
-/// Every browser tool. None is core: they are found with `find_tool`.
-pub fn catalog() -> Vec<BrowserToolSpec> {
-    vec![
-        BrowserToolSpec {
+/// Every browser tool, for agents, terminals and the user alike. None is
+/// core: a turn that never opens a page should not pay for sixteen schemas.
+pub fn catalog() -> Vec<Tool> {
+    [
+        Tool {
             name: "list_tabs",
             description: "List the browser tabs in this workspace: id, title, URL, and who is using each one.",
             schema: json!({ "type": "object", "properties": {} }),
             keywords: &["browser", "tabs", "pages", "web"],
+            core: false,
+            audience: Audience::EVERYONE,
         },
-        BrowserToolSpec {
+        Tool {
             name: "open_tab",
             description: "Open a new browser tab in Crew at a URL. It shows in the user's tab strip and is yours to drive.",
             schema: json!({
@@ -63,20 +60,26 @@ pub fn catalog() -> Vec<BrowserToolSpec> {
                 "required": ["url"]
             }),
             keywords: &["browser", "open", "new", "page", "web", "url", "visit"],
+            core: false,
+            audience: Audience::EVERYONE,
         },
-        BrowserToolSpec {
+        Tool {
             name: "claim_tab",
             description: "Take a browser tab so nobody else drives it while you do. Any browser tool takes it too; this is for holding it ahead of time.",
             schema: with_tab(json!({}), &["tab"]),
             keywords: &["browser", "lease", "lock", "take"],
+            core: false,
+            audience: Audience::EVERYONE,
         },
-        BrowserToolSpec {
+        Tool {
             name: "release_tab",
             description: "Let go of a browser tab you hold, so another agent can use it. Tabs you stop using free themselves after two minutes.",
             schema: with_tab(json!({}), &[]),
             keywords: &["browser", "lease", "free", "unlock"],
+            core: false,
+            audience: Audience::EVERYONE,
         },
-        BrowserToolSpec {
+        Tool {
             name: "browser_navigate",
             description: "Load a URL in the tab, or go back, forward, or reload.",
             schema: with_tab(
@@ -87,26 +90,34 @@ pub fn catalog() -> Vec<BrowserToolSpec> {
                 &[],
             ),
             keywords: &["browser", "go", "url", "load", "back", "forward", "reload", "visit"],
+            core: false,
+            audience: Audience::EVERYONE,
         },
-        BrowserToolSpec {
+        Tool {
             name: "browser_snapshot",
             description: "Read the page as an accessibility tree: roles, names and values, with a uid on each element you can act on. Take one before clicking or filling; uids last until the next snapshot of the tab.",
             schema: with_tab(json!({}), &[]),
             keywords: &["browser", "page", "read", "dom", "elements", "accessibility", "see"],
+            core: false,
+            audience: Audience::EVERYONE,
         },
-        BrowserToolSpec {
+        Tool {
             name: "browser_click",
             description: "Click an element from the last snapshot.",
             schema: with_tab(json!({ "uid": { "type": "string" } }), &["uid"]),
             keywords: &["browser", "press", "button", "link", "tap"],
+            core: false,
+            audience: Audience::EVERYONE,
         },
-        BrowserToolSpec {
+        Tool {
             name: "browser_hover",
             description: "Move the mouse over an element from the last snapshot.",
             schema: with_tab(json!({ "uid": { "type": "string" } }), &["uid"]),
             keywords: &["browser", "mouse", "tooltip", "menu"],
+            core: false,
+            audience: Audience::EVERYONE,
         },
-        BrowserToolSpec {
+        Tool {
             name: "browser_fill",
             description: "Replace the value of a text field, text area or select from the last snapshot.",
             schema: with_tab(
@@ -114,26 +125,34 @@ pub fn catalog() -> Vec<BrowserToolSpec> {
                 &["uid", "value"],
             ),
             keywords: &["browser", "input", "form", "field", "enter", "select", "write"],
+            core: false,
+            audience: Audience::EVERYONE,
         },
-        BrowserToolSpec {
+        Tool {
             name: "browser_type",
             description: "Type text into whatever has focus in the page, key by key.",
             schema: with_tab(json!({ "text": { "type": "string" } }), &["text"]),
             keywords: &["browser", "keyboard", "input", "write"],
+            core: false,
+            audience: Audience::EVERYONE,
         },
-        BrowserToolSpec {
+        Tool {
             name: "browser_press",
             description: "Press a key or a chord: Enter, Tab, Escape, ArrowDown, Backspace, Meta+A, Control+Shift+K.",
             schema: with_tab(json!({ "key": { "type": "string" } }), &["key"]),
             keywords: &["browser", "keyboard", "key", "shortcut", "enter", "escape"],
+            core: false,
+            audience: Audience::EVERYONE,
         },
-        BrowserToolSpec {
+        Tool {
             name: "browser_screenshot",
             description: "A PNG of the tab: what is in view, or the whole page.",
             schema: with_tab(json!({ "full_page": { "type": "boolean" } }), &[]),
             keywords: &["browser", "image", "picture", "capture", "see", "look"],
+            core: false,
+            audience: Audience::EVERYONE,
         },
-        BrowserToolSpec {
+        Tool {
             name: "browser_wait_for",
             description: "Wait until some text shows up in the page.",
             schema: with_tab(
@@ -144,26 +163,35 @@ pub fn catalog() -> Vec<BrowserToolSpec> {
                 &["text"],
             ),
             keywords: &["browser", "wait", "until", "appear", "load"],
+            core: false,
+            audience: Audience::EVERYONE,
         },
-        BrowserToolSpec {
+        Tool {
             name: "browser_console",
             description: "The tab's console messages and uncaught errors since you started driving it.",
             schema: with_tab(json!({}), &[]),
             keywords: &["browser", "log", "errors", "console", "debug"],
+            core: false,
+            audience: Audience::EVERYONE,
         },
-        BrowserToolSpec {
+        Tool {
             name: "browser_network",
             description: "The tab's network requests since you started driving it: method, status and URL.",
             schema: with_tab(json!({}), &[]),
             keywords: &["browser", "requests", "http", "fetch", "xhr", "api", "debug"],
+            core: false,
+            audience: Audience::EVERYONE,
         },
-        BrowserToolSpec {
+        Tool {
             name: "browser_evaluate",
             description: "Run a JavaScript expression in the page and get its value back as JSON. Promises are awaited.",
             schema: with_tab(json!({ "expression": { "type": "string" } }), &["expression"]),
             keywords: &["browser", "javascript", "js", "script", "run", "eval"],
+            core: false,
+            audience: Audience::EVERYONE,
         },
     ]
+    .into()
 }
 
 pub fn is_browser_tool(name: &str) -> bool {
@@ -208,6 +236,14 @@ impl BrowserTools {
 
     pub fn leases(&self) -> &Leases {
         &self.leases
+    }
+
+    /// Who a caller is to a tab's lease: a session by its id and name, or the user.
+    pub fn holder(caller: &Caller) -> Holder {
+        match caller.session() {
+            Some(session) => Holder::session(&session.id, &session.name),
+            None => Holder::user(),
+        }
     }
 
     /// Any browser tool by name, for a gateway that dispatches on it.
@@ -424,6 +460,23 @@ impl BrowserTools {
     }
 }
 
+impl ToolFamily for BrowserTools {
+    fn catalog(&self) -> Vec<Tool> {
+        catalog()
+    }
+
+    /// Scoped to the caller's workspace; the answer goes out as the blocks
+    /// the page gave, so a screenshot reaches the model as an image.
+    fn run(&self, caller: &Caller, name: &str, args: &Value) -> Result<ToolOutput, String> {
+        let workspace_id = caller.workspace_id()?;
+        let out = self.call(workspace_id, &Self::holder(caller), name, args)?;
+        Ok(ToolOutput::Content(match out {
+            Value::Array(blocks) => blocks,
+            other => vec![json!({ "type": "text", "text": other.to_string() })],
+        }))
+    }
+}
+
 fn page_ref(page: &OpenPage) -> BrowserPageRef {
     BrowserPageRef {
         context: page.context.clone(),
@@ -586,5 +639,65 @@ mod tests {
             assert!(out.is_ok(), "{}: {out:?}", spec.name);
         }
         assert!(tools.call("w1", &me, "browser_teleport", &json!({})).is_err());
+    }
+
+    #[test]
+    fn the_family_lists_every_browser_tool_for_everyone_and_none_as_core() {
+        let (tools, _) = tools(store());
+        let names: Vec<&str> = ToolFamily::catalog(&tools).iter().map(|tool| tool.name).collect();
+        assert_eq!(
+            names,
+            [
+                "list_tabs", "open_tab", "claim_tab", "release_tab", "browser_navigate", "browser_snapshot",
+                "browser_click", "browser_hover", "browser_fill", "browser_type", "browser_press",
+                "browser_screenshot", "browser_wait_for", "browser_console", "browser_network", "browser_evaluate",
+            ]
+        );
+        assert!(catalog().iter().all(|tool| !tool.core && tool.audience == Audience::EVERYONE));
+    }
+
+    #[test]
+    fn the_user_without_a_workspace_is_told_to_name_one() {
+        let (tools, _) = tools(store());
+        let error = ToolFamily::run(&tools, &Caller::User { workspace_id: None }, "list_tabs", &json!({}))
+            .err()
+            .expect("no workspace");
+        assert!(error.starts_with("No workspace"), "{error}");
+    }
+
+    #[test]
+    fn a_screenshot_goes_out_as_an_image_block_not_as_text() {
+        let store = store();
+        strip(&store, "w1", &["browser:a"]);
+        let relay = BrowserRelay::new();
+        let answer = relay.clone();
+        relay.set_sender(Arc::new(move |client, _event, payload| {
+            let answer = answer.clone();
+            thread::spawn(move || {
+                let id = payload["callId"].as_u64().unwrap();
+                let image = json!([{ "type": "image", "data": "iVBORw0KGgo=", "mimeType": "image/png" }]);
+                answer.resolve(client, id, Ok(image)).unwrap();
+            });
+            true
+        }));
+        relay.register_host(1);
+        let family = BrowserTools::new(store.clone(), relay, Leases::new());
+        let toolbox = crate::tools::Toolbox::default();
+        toolbox.register(Arc::new(family));
+        let transcripts = crate::transcript::TranscriptHub::new(store.clone());
+        let deliver = |_: &crate::session::Session| false;
+        let host = crate::tools::Host {
+            store: &store,
+            transcripts: &transcripts,
+            on_created: &|_| {},
+            on_routines: &|| {},
+            deliver: &deliver,
+            toolbox: &toolbox,
+        };
+        let me = Caller::User { workspace_id: Some("w1".into()) };
+        let call = json!({ "name": "call_tool", "arguments": { "name": "browser_screenshot", "arguments": { "tab": "browser:a" } } });
+        let out = crate::tools::handle(&host, &me, "tools/call", call).expect("call");
+        assert_eq!(out["content"], json!([{ "type": "image", "data": "iVBORw0KGgo=", "mimeType": "image/png" }]));
+        assert!(out.get("isError").is_none());
     }
 }

@@ -474,6 +474,7 @@ pub fn serve(config: Config) -> Result<Handle, String> {
     // Tool families register here, with the host handles they need.
     let toolbox = turns.toolbox();
     toolbox.register(Arc::new(ProcessTools::new(config.processes.clone(), config.store.clone())));
+    toolbox.register(Arc::new(browser.clone()));
     config.bridge.set_handler(Arc::new(ToolDispatch {
         store: config.store.clone(),
         transcripts,
