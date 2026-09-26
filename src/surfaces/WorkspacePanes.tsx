@@ -32,6 +32,8 @@ type Props = {
   onOpenSession: (sessionId: string) => void;
   onPatchBrowser: (workspaceId: string, tabId: string, patch: { url?: string; title?: string }) => void;
   onOpenBrowserTab: (workspaceId: string, tab: Tab, opts: { after: string; background: boolean }) => void;
+  /** An agent needs this tab in that strip: add it behind the one on screen. */
+  onAdoptBrowserTab: (context: string, tab: Tab) => void;
   files: ProjectFile[];
 };
 
@@ -51,6 +53,7 @@ export function WorkspacePanes({
   onOpenSession,
   onPatchBrowser,
   onOpenBrowserTab,
+  onAdoptBrowserTab,
   files,
 }: Props) {
   // Keyed on where each session runs, not on the sessions: a status change
@@ -92,7 +95,8 @@ export function WorkspacePanes({
     [cwd, onOpenFile, onOpenSession, files],
   );
   return (
-    <div className="relative min-h-0 flex-1">
+    // Its own stacking context: a page an agent drives out of sight sits beneath every pane here, and nothing else.
+    <div className="relative isolate min-h-0 flex-1">
       <DiffsPool>
         <Surface
           tab={tab}
@@ -109,7 +113,7 @@ export function WorkspacePanes({
         onStatus={onStatus}
         onOpenFile={onOpenFile}
       />
-      <Browsers panes={mounted} onPatch={onPatchBrowser} onOpenTab={onOpenBrowserTab} />
+      <Browsers panes={mounted} onPatch={onPatchBrowser} onOpenTab={onOpenBrowserTab} onAdopt={onAdoptBrowserTab} />
       <ChatContext value={chat}>
         <Agents panes={mounted} sessions={sessions} onModel={onModel} />
       </ChatContext>

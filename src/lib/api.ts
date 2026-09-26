@@ -2,6 +2,7 @@ import { client } from "./client";
 import { open } from "./host";
 import type { RoutineRow, ScheduledRoutine } from "./routines";
 import type {
+  BrowserLeases,
   CookieRead,
   CookieSource,
   HistoryEntry,
@@ -308,3 +309,10 @@ export const importSoloYml = (workspaceId: string): Promise<SoloImported> =>
   client.request("process_import_solo", { workspaceId });
 
 export { ackPty, attachPty, killPty, reattachPty, resizePty, spawnPty, writePty } from "./pty";
+
+/** Who drives which browser tab right now. */
+export const browserLeasesList = (): Promise<BrowserLeases> => client.request("browser_leases_list", {});
+
+/** Takes a tab back from the agent driving it. */
+export const browserLeaseRelease = (tab: string): Promise<void> =>
+  client.request("browser_lease_release", { tab });

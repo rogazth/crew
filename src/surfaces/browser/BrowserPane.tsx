@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { FindBar } from "../../chrome/FindBar";
+import { useLease } from "../../hooks/useBrowserLeases";
 import { useBrowserPage } from "../../hooks/useBrowserPage";
+import * as api from "../../lib/api";
 import { holdPane, type PaneHandle } from "../../lib/browser/handles";
 import { pages } from "../../lib/browser/pageStore";
 import { isWebUrl } from "../../lib/browser/url";
@@ -10,6 +12,7 @@ import { browserHost } from "../../lib/host";
 import { BrowserError } from "./BrowserError";
 import { useGuest } from "./useGuest";
 import { BrowserToolbar } from "./BrowserToolbar";
+import { DrivenBar } from "./DrivenBar";
 import { ResponsiveBar } from "./ResponsiveBar";
 import type { AddressBarHandle } from "./AddressBar";
 
@@ -37,6 +40,7 @@ export function BrowserPane({
   onPinned,
 }: Props) {
   const page = useBrowserPage(pageId);
+  const lease = useLease(pageId);
   const container = useRef<HTMLDivElement>(null);
   const address = useRef<AddressBarHandle>(null);
   // Bumped to throw a dead guest away and build a new one.
@@ -167,6 +171,9 @@ export function BrowserPane({
         onNavigate={handle.navigate}
         onLeaveAddress={() => guest.current?.focus()}
       />
+      {lease && lease.sessionId && (
+        <DrivenBar lease={lease} onTakeBack={() => void api.browserLeaseRelease(pageId).catch(() => {})} />
+      )}
       {viewport && <ResponsiveBar viewport={viewport} onChange={setViewport} onClose={() => setViewport(null)} />}
       <div className={`relative min-h-0 flex-1 ${viewport ? "overflow-auto bg-sidebar" : ""}`}>
         {/* React never renders into this one: the guest is appended by hand and must never move.

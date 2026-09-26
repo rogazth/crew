@@ -1,7 +1,10 @@
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { useHeldTabs } from "../hooks/useBrowserLeases";
 import { useBrowserPrefs } from "../hooks/useBrowserPrefs";
 import { useCommands } from "../hooks/useCommand";
+import * as api from "../lib/api";
 import { paneHandle } from "../lib/browser/handles";
+import { leases } from "../lib/browser/leases";
 import { pages } from "../lib/browser/pageStore";
 import { liveGuests, touch } from "../lib/browser/retention";
 import { browserHost } from "../lib/host";
@@ -19,6 +22,7 @@ type Props = {
   panes: MountedPane[];
   onPatch: (workspaceId: string, tabId: string, patch: { url?: string; title?: string }) => void;
   onOpenTab: (workspaceId: string, tab: Tab, opts: { after: string; background: boolean }) => void;
+  onAdopt: (context: string, tab: Tab) => void;
 };
 
 const isBrowser = (pane: MountedPane): pane is BrowserMount => pane.tab.kind === "browser";
@@ -28,7 +32,7 @@ const isBrowser = (pane: MountedPane): pane is BrowserMount => pane.tab.kind ===
  * that leaves the DOM loses its page. Only the most recently shown ones keep
  * a live guest; the rest go cold until they are looked at again.
  */
-export function Browsers({ panes, onPatch, onOpenTab }: Props) {
+export function Browsers({ panes, onPatch, onOpenTab, onAdopt }: Props) {
   const { prefs } = useBrowserPrefs();
   const browsers = panes.filter(isBrowser);
   const visible = browsers.find((pane) => pane.visible) ?? null;
@@ -43,12 +47,15 @@ export function Browsers({ panes, onPatch, onOpenTab }: Props) {
   const [pinned, setPinned] = useState<ReadonlySet<string>>(() => new Set());
   // Downloads in flight per page, by its pane: counted, since one page can run several.
   const [downloads, setDownloads] = useState<ReadonlyMap<string, number>>(() => new Map());
+  // A tab an agent drives stays live wherever it is, like one with DevTools open.
+  const held = useHeldTabs();
   const ids = new Set(browsers.map((pane) => pane.id));
+  const driven = browsers.flatMap((pane) => (held.has(pane.tab.id) ? [pane.id] : []));
   const live = liveGuests({
     order: order.filter((id) => ids.has(id)),
     visible: visibleId,
     keep: prefs.keep,
-    pinned: new Set([...pinned, ...downloads.keys()].filter((id) => ids.has(id))),
+    pinned: new Set([...pinned, ...downloads.keys(), ...driven].filter((id) => ids.has(id))),
   });
 
   const active = () => (visible ? paneHandle(visible.tab.id) : undefined);
@@ -98,14 +105,43 @@ export function Browsers({ panes, onPatch, onOpenTab }: Props) {
   const known = useRef(new Set<string>());
   useEffect(() => {
     const now = new Set(browsers.map((pane) => pane.tab.id));
-    for (const id of known.current) if (!now.has(id)) pages.drop(id);
+    for (const id of known.current) {
+      if (now.has(id)) continue;
+      pages.drop(id);
+      // Closing a tab an agent drives takes it back; its next call finds no tab.
+      if (leases.get(id)) void api.browserLeaseRelease(id).catch(() => {});
+    }
     known.current = now;
   });
 
-  const latest = useRef({ browsers, visible, onOpenTab });
+  const latest = useRef({ browsers, visible, onOpenTab, onAdopt });
   useEffect(() => {
-    latest.current = { browsers, visible, onOpenTab };
+    latest.current = { browsers, visible, onOpenTab, onAdopt };
   });
+
+  // An agent needs a tab live: pinning it builds its guest, which reports
+  // itself to main on attach. A tab the window does not hold yet (made by
+  // open_tab, or in a workspace not shown since launch) joins its strip first.
+  useEffect(
+    () =>
+      browserHost()?.onMount((request) => {
+        leases.summon(request.tab);
+        const pane = latest.current.browsers.find((p) => p.tab.id === request.tab);
+        if (!pane) {
+          latest.current.onAdopt(request.context, {
+            id: request.tab,
+            kind: "browser",
+            url: request.url,
+            title: request.title,
+          });
+          return;
+        }
+        // Main lost track of a guest that is still up (a window reload); tell it again.
+        const id = pages.get(request.tab).webContentsId;
+        if (id !== null) browserHost()?.reportGuest(request.tab, id);
+      }),
+    [],
+  );
   useEffect(
     () =>
       browserHost()?.onOpenTab((request) => {
@@ -136,28 +172,41 @@ export function Browsers({ panes, onPatch, onOpenTab }: Props) {
     [],
   );
 
-  return browsers.map((pane) => (
-    <div key={pane.id} hidden={!pane.visible} className="absolute inset-0">
-      <Suspense fallback={null}>
-        <BrowserPane
-          pageId={pane.tab.id}
-          workspaceId={pane.workspaceId}
-          url={pane.tab.url}
-          live={live.has(pane.id)}
-          visible={pane.visible}
-          searchTemplate={prefs.searchTemplate}
-          onPatch={(patch) => onPatch(pane.workspaceId, pane.tab.id, patch)}
-          onPinned={(on) =>
-            setPinned((current) => {
-              if (current.has(pane.id) === on) return current;
-              const next = new Set(current);
-              if (on) next.add(pane.id);
-              else next.delete(pane.id);
-              return next;
-            })
-          }
-        />
-      </Suspense>
-    </div>
-  ));
+  return browsers.map((pane) => {
+    // A page an agent drives while you look elsewhere stays laid out, under
+    // the pane on screen and behind a cover. A hidden guest draws nothing:
+    // its screenshots never come, and clicks land on a page of no size.
+    const staged = !pane.visible && held.has(pane.tab.id);
+    return (
+      <div
+        key={pane.id}
+        hidden={!pane.visible && !staged}
+        inert={staged}
+        aria-hidden={staged || undefined}
+        className={staged ? "pointer-events-none absolute inset-0 -z-10" : "absolute inset-0"}
+      >
+        <Suspense fallback={null}>
+          <BrowserPane
+            pageId={pane.tab.id}
+            workspaceId={pane.workspaceId}
+            url={pane.tab.url}
+            live={live.has(pane.id)}
+            visible={pane.visible}
+            searchTemplate={prefs.searchTemplate}
+            onPatch={(patch) => onPatch(pane.workspaceId, pane.tab.id, patch)}
+            onPinned={(on) =>
+              setPinned((current) => {
+                if (current.has(pane.id) === on) return current;
+                const next = new Set(current);
+                if (on) next.add(pane.id);
+                else next.delete(pane.id);
+                return next;
+              })
+            }
+          />
+        </Suspense>
+        {staged && <div className="absolute inset-0 bg-canvas" />}
+      </div>
+    );
+  });
 }

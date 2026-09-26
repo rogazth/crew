@@ -39,9 +39,9 @@ export function useTabs(workspaceId: string | null) {
   // seeded early would otherwise overwrite them before they are read.
   const restoredIds = useRef(new Set<string>());
 
-  useEffect(() => {
-    const id = workspaceId;
-    if (!id || asked.current.has(id)) return;
+  /** Reads a context's saved strip, once, and merges in whatever was opened there before it arrived. */
+  const restore = useCallback((id: string) => {
+    if (asked.current.has(id)) return;
     asked.current.add(id);
     void api
       .stateGet(`tabs:${id}`)
@@ -58,7 +58,11 @@ export function useTabs(workspaceId: string | null) {
           return { ...prev, [id]: withRecent({ ...restored, tabs, activeId: early.activeId ?? restored.activeId }) };
         });
       });
-  }, [workspaceId]);
+  }, []);
+
+  useEffect(() => {
+    if (workspaceId) restore(workspaceId);
+  }, [workspaceId, restore]);
 
   const state = workspaceId ? registry[workspaceId] : undefined;
 
@@ -138,6 +142,18 @@ export function useTabs(workspaceId: string | null) {
     (id: string, tab: Tab, opts?: { after?: string; background?: boolean }) =>
       seedIn(id, (s) => openTab(s, tab, opts)),
     [seedIn],
+  );
+  /**
+   * A tab an agent needs in a context: it joins the strip behind whatever is
+   * on screen, and the context's saved strip is read, so the tab is saved
+   * with the rest instead of living only in this window.
+   */
+  const adopt = useCallback(
+    (id: string, tab: Tab) => {
+      seedIn(id, (s) => (s.tabs.some((t) => t.id === tab.id) ? s : openTab(s, tab, { background: true })));
+      restore(id);
+    },
+    [seedIn, restore],
   );
   const patchBrowser = useCallback(
     (id: string, tabId: string, patch: { url?: string; title?: string }) =>
@@ -235,6 +251,7 @@ export function useTabs(workspaceId: string | null) {
     selectLastUsed,
     selectIn,
     openIn,
+    adopt,
     patchBrowser,
     dropWorkspace,
     unsavedIn,

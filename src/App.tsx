@@ -324,6 +324,7 @@ export function App() {
             onOpenSession={nav.openSessionById}
             onPatchBrowser={tabs.patchBrowser}
             onOpenBrowserTab={tabs.openIn}
+            onAdoptBrowserTab={tabs.adopt}
             files={files}
           />
         </div>
