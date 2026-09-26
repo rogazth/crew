@@ -38,6 +38,57 @@ export type BlockRole = "user" | "assistant" | "reasoning" | "tool" | "approval"
 
 export type BlockTool = { callId: string, name: string, title: string, status: ToolStatus, detail?: ToolDetail, };
 
+/**
+ * crewd → the browser host (Electron main), as the `browser-call` event: run
+ * one tool on one tab and answer with `browser_result`.
+ */
+export type BrowserCall = { callId: number, tab: string, tool: string, args: unknown, page?: BrowserPageRef, };
+
+/**
+ * Who is driving a tab, and until when unless they call again.
+ */
+export type BrowserLease = { tab: string, workspaceId: string, 
+/**
+ * What the holder is called: an agent's or a terminal's name, or "you".
+ */
+holder: string, 
+/**
+ * The session behind it, for its face; none when it is the user.
+ */
+sessionId?: string, 
+/**
+ * Milliseconds since the epoch.
+ */
+until: number, };
+
+/**
+ * Every lease there is, as the `browser-leases` event and `browser_leases_list`.
+ */
+export type BrowserLeases = { leases: Array<BrowserLease>, };
+
+/**
+ * Where a tab an agent drives sits, so the window can mount it when it is
+ * cold or its workspace was never opened.
+ */
+export type BrowserPageRef = { 
+/**
+ * The tab strip: the workspace id, or `<workspace>@<worktree path>`.
+ */
+context: string, url: string, title: string, };
+
+/**
+ * The host's answer to one `browser-call`. `result` is an array of MCP
+ * content blocks (text or image).
+ */
+export type BrowserResult = { callId: number, ok: boolean, result?: unknown, error?: string, };
+
+export type BrowserTabArg = { tab: string, };
+
+/**
+ * A browser tool run as the user, from the window or `crew`.
+ */
+export type BrowserToolRun = { workspaceId: string, tool: string, args: unknown, };
+
 export type CookieRead = { cookies: Array<ImportedCookie>, 
 /**
  * Rows left out: expired, undecryptable, partitioned, or on a domain that must not move.

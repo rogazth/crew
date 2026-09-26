@@ -6,6 +6,9 @@ use std::time::Duration;
 
 use crew_core::agent::{AgentEvents, AgentHost};
 use crew_core::bridge::{Bearer, Bridge, ToolHost};
+use crew_core::browser_leases::{Holder, Leases};
+use crew_core::browser_relay::BrowserRelay;
+use crew_core::browser_tools::BrowserTools;
 use crew_core::caller::Caller;
 use crew_core::files;
 use crew_core::messages;
@@ -54,6 +57,8 @@ struct Hosts {
     bridge: Bridge,
     turns: TurnHost,
     scheduler: Scheduler,
+    /// Browser tabs agents drive: the leases, and the relay to Electron main.
+    browser: BrowserTools,
 }
 
 pub struct Handle {
@@ -140,6 +145,9 @@ enum Outgoing {
 struct Hub {
     clients: Mutex<HashMap<u64, mpsc::Sender<Outgoing>>>,
     pty_attached: Mutex<HashSet<u64>>,
+    /// Clients that only hear `browser-*` events: Electron main's browser
+    /// host has no use for transcripts and statuses, and would pay for them.
+    quiet: Mutex<HashSet<u64>>,
     next: AtomicU64,
     runtime: Mutex<Option<tokio::runtime::Handle>>,
 }
@@ -149,6 +157,7 @@ impl Hub {
         Self {
             clients: Mutex::new(HashMap::new()),
             pty_attached: Mutex::new(HashSet::new()),
+            quiet: Mutex::new(HashSet::new()),
             next: AtomicU64::new(1),
             runtime: Mutex::new(None),
         }
@@ -184,6 +193,27 @@ impl Hub {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .remove(&id);
+        self.quiet.lock().unwrap_or_else(|e| e.into_inner()).remove(&id);
+    }
+
+    fn hush(&self, id: u64) {
+        self.quiet.lock().unwrap_or_else(|e| e.into_inner()).insert(id);
+    }
+
+    /// One event to one client. False when that client is gone.
+    fn send_event(&self, id: u64, event: &str, payload: Value) -> bool {
+        let connected = self.clients.lock().unwrap_or_else(|e| e.into_inner()).contains_key(&id);
+        if !connected {
+            return false;
+        }
+        let Ok(event) = proto::event(event, payload) else {
+            return false;
+        };
+        let Ok(text) = serde_json::to_string(&event) else {
+            return false;
+        };
+        self.send(id, Outgoing::Text(text));
+        true
     }
 
     fn send(&self, id: u64, msg: Outgoing) {
@@ -222,13 +252,15 @@ impl Hub {
         matches!(result, Ok(Ok(())))
     }
 
-    fn broadcast(&self, msg: Outgoing) {
+    fn broadcast(&self, msg: Outgoing, to_quiet: bool) {
+        let quiet = self.quiet.lock().unwrap_or_else(|e| e.into_inner()).clone();
         let ids: Vec<u64> = self
             .clients
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .keys()
             .copied()
+            .filter(|id| to_quiet || !quiet.contains(id))
             .collect();
         for id in ids {
             self.send(
@@ -243,13 +275,14 @@ impl Hub {
     }
 
     fn emit(&self, event: &str, payload: impl serde::Serialize) {
+        let to_quiet = event.starts_with("browser-");
         let Ok(event) = proto::event(event, payload) else {
             return;
         };
         let Ok(text) = serde_json::to_string(&event) else {
             return;
         };
-        self.broadcast(Outgoing::Text(text));
+        self.broadcast(Outgoing::Text(text), to_quiet);
     }
 }
 
@@ -424,6 +457,14 @@ pub fn serve(config: Config) -> Result<Handle, String> {
         transcripts.clone(),
         config.bridge.clone(),
     );
+    let leases = Leases::new();
+    let browser = BrowserTools::new(config.store.clone(), BrowserRelay::new(), leases.clone());
+    let to_client = hub.clone();
+    browser
+        .relay()
+        .set_sender(Arc::new(move |client, event, payload| to_client.send_event(client, event, payload)));
+    let to_all = hub.clone();
+    leases.set_on_change(move |all| to_all.emit("browser-leases", all));
     config.pty.set_events(hub.clone());
     config.agents.set_events(Arc::new(AgentFanout {
         turns: turns.clone(),
@@ -460,6 +501,7 @@ pub fn serve(config: Config) -> Result<Handle, String> {
         bridge: config.bridge,
         turns: turns.clone(),
         scheduler: scheduler.clone(),
+        browser,
     };
     let serve_token = token.clone();
 
@@ -519,6 +561,16 @@ async fn run(
     // whether or not the window opens its workspace.
     let processes = hosts.processes.clone();
     tokio::task::spawn_blocking(move || processes.start_auto());
+    // A lease nobody renews runs out on its own; this is how the window hears
+    // it did, and unpins the tab.
+    let leases = hosts.browser.leases().clone();
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(Duration::from_secs(5));
+        loop {
+            tick.tick().await;
+            leases.sweep(app_state::now_millis());
+        }
+    });
 
     loop {
         tokio::select! {
@@ -603,6 +655,7 @@ async fn handle_socket(stream: TcpStream, hosts: Hosts, hub: Arc<Hub>, token: St
     }
 
     hub.unsubscribe(client_id);
+    hosts.browser.relay().client_gone(client_id);
     writer.abort();
 }
 
@@ -697,6 +750,30 @@ async fn handle_text(hosts: &Hosts, hub: &Arc<Hub>, client_id: u64, text: &str) 
     if request.method == "pty_attach" {
         attach_pty(hosts, hub, client_id, request.id, request.params).await;
         return None;
+    }
+    // These two speak for the connection itself, so they need to know which one it is.
+    if request.method == "browser_host_register" {
+        hub.hush(client_id);
+        hosts.browser.relay().register_host(client_id);
+        let leases = hosts.browser.leases().list(app_state::now_millis());
+        return Some(encode(&match json(leases) {
+            Ok(value) => proto::ok(request.id, value),
+            Err(error) => proto::err(request.id, error),
+        }));
+    }
+    if request.method == "browser_result" {
+        let result = parse::<proto::BrowserResult>(request.params).and_then(|answer| {
+            let outcome = if answer.ok {
+                Ok(answer.result.unwrap_or(Value::Null))
+            } else {
+                Err(answer.error.unwrap_or_else(|| "The browser tool failed".into()))
+            };
+            hosts.browser.relay().resolve(client_id, answer.call_id, outcome)
+        });
+        return Some(encode(&match result {
+            Ok(()) => proto::ok(request.id, Value::Null),
+            Err(error) => proto::err(request.id, error),
+        }));
     }
     let result = dispatch(hosts, &request.method, request.params).await;
     Some(encode(&match result {
@@ -812,6 +889,7 @@ async fn block<T: Send + 'static>(
 fn terminal_launch(
     store: &Store,
     bridge: &Bridge,
+    leases: &Leases,
     session_id: &str,
     command: Vec<String>,
 ) -> Result<(Vec<String>, SpawnOptions), String> {
@@ -828,11 +906,17 @@ fn terminal_launch(
         &crew_core::terminal::BridgeLink { exe: &info.exe, socket: &info.socket_path, token: &token },
     );
     let bridge = bridge.clone();
+    let leases = leases.clone();
+    let session = session_id.to_string();
     Ok((
         launch.argv,
         SpawnOptions {
             env: launch.env,
-            on_exit: Some(Box::new(move || bridge.revoke_token(&token))),
+            // The browser tabs it was driving go free with it, rather than at their TTL.
+            on_exit: Some(Box::new(move || {
+                bridge.revoke_token(&token);
+                leases.release_all(&session, app_state::now_millis());
+            })),
             ..SpawnOptions::default()
         },
     ))
@@ -843,6 +927,7 @@ async fn delete_session(hosts: &Hosts, id: String) -> Result<(), String> {
     // Its process may still be running with a token in its environment;
     // a session that no longer exists should not still be able to call.
     hosts.bridge.revoke(&id);
+    hosts.browser.leases().release_all(&id, app_state::now_millis());
     block(move || session::delete(&store, id)).await
 }
 
@@ -857,10 +942,11 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
             let host = hosts.pty.clone();
             let store = hosts.store.clone();
             let bridge = hosts.bridge.clone();
+            let leases = hosts.browser.leases().clone();
             json(
                 block(move || {
                     let (command, options) = match session {
-                        Some(session) => terminal_launch(&store, &bridge, &session, command)?,
+                        Some(session) => terminal_launch(&store, &bridge, &leases, &session, command)?,
                         None => (command, SpawnOptions::default()),
                     };
                     host.spawn_with(id, cwd, command, cols, rows, options)
@@ -1299,6 +1385,18 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
             let store = hosts.store.clone();
             block(move || crew_core::browser::page_delete(&store, &page_id)).await?;
             Ok(Value::Null)
+        }
+        "browser_leases_list" => json(hosts.browser.leases().list(app_state::now_millis())),
+        // The user takes a tab back from the agent driving it.
+        "browser_lease_release" => {
+            let proto::BrowserTabArg { tab } = parse(params)?;
+            hosts.browser.leases().force_release(&tab, app_state::now_millis());
+            Ok(Value::Null)
+        }
+        "browser_tool" => {
+            let proto::BrowserToolRun { workspace_id, tool, args } = parse(params)?;
+            let browser = hosts.browser.clone();
+            block(move || browser.call(&workspace_id, &Holder::user(), &tool, &args)).await
         }
         "browser_cookie_sources" => json(block(|| Ok(crew_core::cookie_import::sources())).await?),
         "browser_cookies_read" => {

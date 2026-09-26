@@ -661,3 +661,94 @@ pub struct CookieRead {
     /// Rows left out: expired, undecryptable, partitioned, or on a domain that must not move.
     pub skipped: u32,
 }
+
+/// Where a tab an agent drives sits, so the window can mount it when it is
+/// cold or its workspace was never opened.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
+pub struct BrowserPageRef {
+    /// The tab strip: the workspace id, or `<workspace>@<worktree path>`.
+    pub context: String,
+    pub url: String,
+    pub title: String,
+}
+
+/// crewd → the browser host (Electron main), as the `browser-call` event: run
+/// one tool on one tab and answer with `browser_result`.
+#[derive(Serialize, Deserialize, Clone, Debug, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
+pub struct BrowserCall {
+    #[ts(type = "number")]
+    pub call_id: u64,
+    pub tab: String,
+    pub tool: String,
+    #[ts(type = "unknown")]
+    pub args: Value,
+    #[serde(default)]
+    #[ts(optional)]
+    pub page: Option<BrowserPageRef>,
+}
+
+/// The host's answer to one `browser-call`. `result` is an array of MCP
+/// content blocks (text or image).
+#[derive(Serialize, Deserialize, Clone, Debug, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
+pub struct BrowserResult {
+    #[ts(type = "number")]
+    pub call_id: u64,
+    pub ok: bool,
+    #[serde(default)]
+    #[ts(optional, type = "unknown")]
+    pub result: Option<Value>,
+    #[serde(default)]
+    #[ts(optional)]
+    pub error: Option<String>,
+}
+
+/// Who is driving a tab, and until when unless they call again.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
+pub struct BrowserLease {
+    pub tab: String,
+    pub workspace_id: String,
+    /// What the holder is called: an agent's or a terminal's name, or "you".
+    pub holder: String,
+    /// The session behind it, for its face; none when it is the user.
+    #[serde(default)]
+    #[ts(optional)]
+    pub session_id: Option<String>,
+    /// Milliseconds since the epoch.
+    #[ts(type = "number")]
+    pub until: i64,
+}
+
+/// Every lease there is, as the `browser-leases` event and `browser_leases_list`.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
+pub struct BrowserLeases {
+    pub leases: Vec<BrowserLease>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
+pub struct BrowserTabArg {
+    pub tab: String,
+}
+
+/// A browser tool run as the user, from the window or `crew`.
+#[derive(Serialize, Deserialize, Clone, Debug, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
+pub struct BrowserToolRun {
+    pub workspace_id: String,
+    pub tool: String,
+    #[serde(default)]
+    #[ts(type = "unknown")]
+    pub args: Value,
+}
