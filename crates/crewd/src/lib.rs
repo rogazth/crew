@@ -10,6 +10,7 @@ use crew_core::caller::Caller;
 use crew_core::files;
 use crew_core::messages;
 use crew_core::provider_session;
+use crew_core::process::{ProcessEvents, ProcessHost, ProcessPatch};
 use crew_core::pty::{PtyEvents, PtyHost, SpawnOptions};
 use crew_core::routine;
 use crew_core::scheduler::Scheduler;
@@ -39,12 +40,15 @@ pub struct Config {
     pub store: Store,
     pub agents: AgentHost,
     pub bridge: Bridge,
+    /// Built on the same store and PTY host; the daemon starts the ones marked auto-start.
+    pub processes: ProcessHost,
 }
 
 #[derive(Clone)]
 struct Hosts {
     hub: Arc<Hub>,
     pty: PtyHost,
+    processes: ProcessHost,
     store: Store,
     bridge: Bridge,
     turns: TurnHost,
@@ -268,6 +272,23 @@ impl PtyEvents for Hub {
     fn exit(&self, id: &str, code: Option<i32>) {
         self.emit("pty-exit", proto::PtyExit { id: id.to_string(), code });
     }
+
+    fn resync(&self, id: &str) {
+        self.emit("pty-resync", proto::PtyResync { id: id.to_string() });
+    }
+}
+
+impl ProcessEvents for Hub {
+    fn changed(&self, process: &proto::Process) {
+        self.emit("process-changed", process);
+    }
+
+    fn removed(&self, workspace_id: &str, id: &str) {
+        self.emit(
+            "process-removed",
+            proto::ProcessRemoved { workspace_id: workspace_id.to_string(), id: id.to_string() },
+        );
+    }
 }
 
 impl TranscriptEvents for Hub {
@@ -429,9 +450,11 @@ pub fn serve(config: Config) -> Result<Handle, String> {
 
     let (ready_tx, ready_rx) = std_mpsc::channel();
     let (stop_tx, stop_rx) = tokio::sync::oneshot::channel();
+    config.processes.set_events(hub.clone());
     let hosts = Hosts {
         hub: hub.clone(),
         pty: config.pty,
+        processes: config.processes,
         store: config.store,
         bridge: config.bridge,
         turns: turns.clone(),
@@ -491,6 +514,10 @@ async fn run(
     hosts.scheduler.set_runtime(tokio::runtime::Handle::current());
     let scheduler = hosts.scheduler.clone();
     tokio::task::spawn_blocking(move || scheduler.arm());
+    // Like routines, the daemon's to start: a dev server comes up with Crew,
+    // whether or not the window opens its workspace.
+    let processes = hosts.processes.clone();
+    tokio::task::spawn_blocking(move || processes.start_auto());
 
     loop {
         tokio::select! {
@@ -890,7 +917,13 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
         "workspace_delete" => {
             let Id { id } = parse(params)?;
             let store = hosts.store.clone();
-            block(move || workspace::delete(&store, id)).await?;
+            let processes = hosts.processes.clone();
+            block(move || {
+                // Its rows would go with the workspace, but not its processes.
+                processes.forget_workspace(&id);
+                workspace::delete(&store, id)
+            })
+            .await?;
             Ok(Value::Null)
         }
         "workspace_reorder" => {
@@ -1271,7 +1304,67 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
             let proto::CookieSourceId { source_id } = parse(params)?;
             json(block(move || crew_core::cookie_import::read(&source_id)).await?)
         }
+        method if method.starts_with("process_") => process_rpc(hosts, method, params).await,
         _ => Err(format!("Unknown method: {method}")),
+    }
+}
+
+/// The window's side of the process manager. It is the user at the keyboard:
+/// nothing it writes waits for approval, and `created_by` stays empty.
+async fn process_rpc(hosts: &Hosts, method: &str, params: Value) -> Result<Value, String> {
+    let host = hosts.processes.clone();
+    match method {
+        "process_list" => {
+            let WorkspaceId { workspace_id } = parse(params)?;
+            json(block(move || host.list(&workspace_id)).await?)
+        }
+        "process_create" => {
+            let proto::ProcessCreate { workspace_id, name, command, cwd, env, auto_start, auto_restart } = parse(params)?;
+            let spec = proto::ProcessSpec {
+                name,
+                command,
+                cwd: cwd.unwrap_or_default(),
+                env: env.unwrap_or_default(),
+                auto_start,
+                auto_restart,
+            };
+            json(block(move || host.create(&workspace_id, spec, None, false)).await?)
+        }
+        "process_update" => {
+            let proto::ProcessUpdate { workspace_id, id, name, command, cwd, env, auto_start, auto_restart } =
+                parse(params)?;
+            let patch = ProcessPatch { name, command, cwd, env, auto_start, auto_restart };
+            json(block(move || host.update(&workspace_id, &id, patch, None, false)).await?)
+        }
+        "process_reorder" => {
+            let proto::ProcessReorder { workspace_id, ids } = parse(params)?;
+            block(move || host.reorder(&workspace_id, &ids)).await?;
+            Ok(Value::Null)
+        }
+        "process_log_tail" => {
+            let proto::ProcessLogTail { workspace_id, id, max_bytes } = parse(params)?;
+            json(block(move || host.log_tail_raw(&workspace_id, &id, max_bytes)).await?)
+        }
+        "process_import_solo" => {
+            let WorkspaceId { workspace_id } = parse(params)?;
+            json(block(move || host.import_solo_yml(&workspace_id, None, false)).await?)
+        }
+        _ => {
+            let proto::ProcessRef { workspace_id, id } = parse(params)?;
+            let method = method.to_string();
+            block(move || match method.as_str() {
+                "process_delete" => host.delete(&workspace_id, &id).map(|()| Value::Null),
+                "process_start" => json(host.start(&workspace_id, &id)?),
+                "process_stop" => json(host.stop(&workspace_id, &id)?),
+                "process_restart" => json(host.restart(&workspace_id, &id)?),
+                "process_pause" => json(host.pause(&workspace_id, &id)?),
+                "process_resume" => json(host.resume(&workspace_id, &id)?),
+                "process_approve" => json(host.approve(&workspace_id, &id)?),
+                "process_reject" => json(host.reject(&workspace_id, &id)?),
+                other => Err(format!("Unknown method: {other}")),
+            })
+            .await
+        }
     }
 }
 
@@ -1314,9 +1407,12 @@ mod tests {
     /// that never runs a turn has to ask the bridge itself.
     fn test_serve_bridged(dir: &std::path::Path) -> (Handle, Bridge) {
         let bridge = Bridge::start(dir.to_path_buf()).expect("bridge");
+        let pty = PtyHost::new();
+        let store = Store::open(dir.join("crew.sqlite3")).expect("store");
         let handle = serve(Config {
-            pty: PtyHost::new(),
-            store: Store::open(dir.join("crew.sqlite3")).expect("store"),
+            processes: ProcessHost::new(store.clone(), pty.clone(), dir),
+            pty,
+            store,
             agents: AgentHost::new(),
             bridge: bridge.clone(),
         })

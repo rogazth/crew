@@ -133,6 +133,41 @@ export type ListProjectFiles = { cwd: string,
 include: Array<string>, };
 
 /**
+ * A stretch of log. `text` is ANSI-free for agents, raw for a terminal.
+ */
+export type LogChunk = { text: string, 
+/**
+ * Where `text` starts in the log.
+ */
+start: number, 
+/**
+ * Where it ends: pass it back as `since` to read on.
+ */
+cursor: number, 
+/**
+ * Bytes asked for that rotation had already dropped.
+ */
+skipped: number, };
+
+export type LogGrep = { 
+/**
+ * The latest matches, oldest first.
+ */
+matches: Array<LogMatch>, 
+/**
+ * Every match in what is still on disk, shown or not.
+ */
+total: number, cursor: number, };
+
+export type LogMatch = { 
+/**
+ * Where the matching line starts in the log.
+ */
+offset: number, line: string, before: Array<string>, after: Array<string>, };
+
+export type LogWait = { "result": "matched", offset: number, line: string, cursor: number, } | { "result": "ended", state: ProcessState, exitCode: number | null, cursor: number, } | { "result": "timed-out", cursor: number, };
+
+/**
  * A window of a transcript. `more` says whether older blocks exist before
  * `fromPos`, so the UI knows whether to keep a "load earlier" affordance.
  * `working`, `status` and `seq` are the live state of the session, so one
@@ -176,6 +211,92 @@ export type PathBytes = { path: string, base64Contents: string, };
 
 export type PathContents = { path: string, contents: string, };
 
+/**
+ * A process definition with its runtime next to it.
+ */
+export type Process = { id: string, workspaceId: string, 
+/**
+ * The session that wrote it; `None` is the user.
+ */
+createdBy: string | null, 
+/**
+ * False until the user accepts what an agent created. It cannot start before.
+ */
+approved: boolean, 
+/**
+ * A change an agent asked for, waiting on the user. What runs meanwhile
+ * is `spec`, the definition already accepted.
+ */
+proposed: ProcessSpec | null, 
+/**
+ * Who is asking: the creator of an unapproved process, or the proposer.
+ */
+requestedBy: string | null, state: ProcessState, pid: number | null, 
+/**
+ * The PTY stream a viewer reads while it runs.
+ */
+streamId: number | null, startedAt: number | null, 
+/**
+ * The last run's; `None` while running, or after a signal.
+ */
+exitCode: number | null, 
+/**
+ * Automatic restarts since the user last started it.
+ */
+restarts: number, 
+/**
+ * The PTY a viewer attaches to while it runs.
+ */
+ptyId: string, 
+/**
+ * Bytes ever logged: `read_logs { since }` continues from here.
+ */
+logCursor: number, 
+/**
+ * Where the current (or last) run's output starts in the log.
+ */
+runCursor: number, name: string, command: string, 
+/**
+ * Relative to the workspace folder, or absolute; empty is the folder itself.
+ */
+cwd: string, env: { [key in string]: string }, autoStart: boolean, autoRestart: boolean, };
+
+export type ProcessCreate = { workspaceId: string, name: string, command: string, cwd?: string, env?: { [key in string]: string }, autoStart: boolean, autoRestart: boolean, };
+
+/**
+ * The raw tail of a process's log, escapes and all, for a terminal to paint.
+ */
+export type ProcessLogTail = { workspaceId: string, id: string, maxBytes?: number, };
+
+/**
+ * One process of a workspace, by id or by name.
+ */
+export type ProcessRef = { workspaceId: string, id: string, };
+
+export type ProcessRemoved = { workspaceId: string, id: string, };
+
+export type ProcessReorder = { workspaceId: string, ids: Array<string>, };
+
+/**
+ * What a process runs: the part an agent may only propose.
+ */
+export type ProcessSpec = { name: string, command: string, 
+/**
+ * Relative to the workspace folder, or absolute; empty is the folder itself.
+ */
+cwd: string, env: { [key in string]: string }, autoStart: boolean, autoRestart: boolean, };
+
+/**
+ * Where a supervised process stands. `PendingApproval` is a definition an
+ * agent wrote or changed that the user has not accepted yet: it cannot start.
+ */
+export type ProcessState = "stopped" | "starting" | "running" | "paused" | "exited" | "crashed" | "pending-approval";
+
+/**
+ * Only the fields present change.
+ */
+export type ProcessUpdate = { workspaceId: string, id: string, name?: string, command?: string, cwd?: string, env?: { [key in string]: string }, autoStart?: boolean, autoRestart?: boolean, };
+
 export type ProjectFile = { name: string, path: string, relative: string, };
 
 /**
@@ -196,6 +317,8 @@ export type PtyExit = { id: string, code: number | null, };
 export type PtyKill = { id: string, };
 
 export type PtyResize = { id: string, cols: number, rows: number, };
+
+export type PtyResync = { id: string, };
 
 export type PtySpawn = { id: string, cwd: string, command: Array<string>, cols: number, rows: number, 
 /**
@@ -274,6 +397,8 @@ export type SessionUpdate = { id: string, name: string, provider: string, model:
  * moved to another conversation, renamed for it.
  */
 export type SessionUpdated = { session: Session, };
+
+export type SoloImported = { created: Array<string>, updated: Array<string>, };
 
 export type TempFile = { extension: string, base64Contents: string, };
 

@@ -6,6 +6,7 @@ use std::thread;
 
 use crew_core::agent::AgentHost;
 use crew_core::bridge::Bridge;
+use crew_core::process::ProcessHost;
 use crew_core::pty::PtyHost;
 use crew_core::store::Store;
 use crew_protocol::{DaemonFile, DaemonInfo};
@@ -36,9 +37,12 @@ fn run(args: &[String]) -> Result<(), String> {
     let pty = PtyHost::new();
     let agents = AgentHost::new();
     let bridge = Bridge::start(dir.clone())?;
+    let store = Store::open(dir.join("crew.sqlite3"))?;
+    let processes = ProcessHost::new(store.clone(), pty.clone(), &dir);
     let handle = serve(Config {
         pty: pty.clone(),
-        store: Store::open(dir.join("crew.sqlite3"))?,
+        store,
+        processes: processes.clone(),
         agents: agents.clone(),
         bridge: bridge.clone(),
     })?;
@@ -73,6 +77,8 @@ fn run(args: &[String]) -> Result<(), String> {
     wait_for_exit();
 
     remove_daemon_file(&dir, &info.url);
+    // First, so a process killed below is not restarted on its way out.
+    processes.shutdown();
     pty.kill_all();
     agents.kill_all();
     bridge.shutdown();

@@ -204,6 +204,8 @@ pub enum LogWait {
     /// The process stopped or ended before the pattern showed up.
     Ended {
         state: ProcessState,
+        #[serde(rename = "exitCode")]
+        #[ts(rename = "exitCode")]
         exit_code: Option<i32>,
         #[ts(type = "number")]
         cursor: u64,
