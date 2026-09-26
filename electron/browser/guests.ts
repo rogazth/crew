@@ -20,6 +20,7 @@ import type { NavSnapshot } from "../../src/lib/browser/snapshot";
 import { CHANNELS, isPagePartition, LEGACY_PARTITION, type OpenTabRequest } from "../../src/lib/browser/bridge";
 import { FILES_PARTITION } from "../../src/lib/browser/files";
 import { copyCookies } from "./cookies";
+import { openExternal } from "../external";
 import { followFile, serveFiles } from "./files";
 import {
   attachDecision,
@@ -280,7 +281,7 @@ function windowOpen(
   // The mail app counts against the same budget, or a page could spam it.
   if (verdict.action === "deny" || !allowOpen()) return { action: "deny" };
   if (verdict.action === "external") {
-    void shell.openExternal(verdict.url);
+    void openExternal(verdict.url);
     return { action: "deny" };
   }
   if (verdict.action === "tab") {
@@ -324,7 +325,7 @@ function guardNavigation(contents: WebContents): void {
     const verdict = navigationVerdict(event.url);
     if (verdict === "allow") return;
     event.preventDefault();
-    if (verdict === "external") void shell.openExternal(event.url);
+    if (verdict === "external") void openExternal(event.url);
   };
   contents.on("will-navigate", guard);
   contents.on("will-redirect", guard);
@@ -337,7 +338,7 @@ function guardPreview(host: WebContents, guest: WebContents): void {
     if (verdict === "allow") return;
     event.preventDefault();
     if (verdict === "tab") openTab(host, { url: event.url, background: false, openerId: guest.id });
-    if (verdict === "external") void shell.openExternal(event.url);
+    if (verdict === "external") void openExternal(event.url);
   };
   guest.on("will-navigate", guard);
   guest.on("will-redirect", guard);

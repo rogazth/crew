@@ -139,11 +139,12 @@ async function launch(opts: LaunchOptions, owns: boolean): Promise<Crew> {
   try {
     // executablePath keeps Playwright's loader out, and with it the Chromium
     // switches it appends (no background throttling among them): the app runs
-    // as it ships. Linux has no usable sandbox under Xvfb.
+    // as it ships. Linux has no usable sandbox under Xvfb. CREW_E2E hides the
+    // window; a restart comes back through this same launch.
     app = await _electron.launch({
       executablePath: ELECTRON,
       args: [ROOT, ...(process.platform === "linux" ? ["--no-sandbox"] : [])],
-      env: { ...env, CREW_RENDERER: "dist" },
+      env: { ...env, CREW_RENDERER: "dist", CREW_E2E: "1" },
     });
   } catch (error) {
     await cleanup();
@@ -171,6 +172,13 @@ async function launch(opts: LaunchOptions, owns: boolean): Promise<Crew> {
 
   try {
     const page = await app.firstWindow();
+    const windowHandle = await app.browserWindow(page);
+    try {
+      const hidden = await windowHandle.evaluate((win) => win.isVisible() === false);
+      if (!hidden) throw new Error("the e2e window is visible");
+    } finally {
+      await windowHandle.dispose();
+    }
     // The first window can still be on about:blank, before the preload runs.
     await page.waitForFunction(() => Boolean(window.crewHost));
     const info = await page.evaluate(() => {
@@ -281,8 +289,8 @@ async function prepareSandbox(home: string, config: string, repos: string): Prom
   // leaves out wherever the machine keeps its own.
   const node = path.join(home, "bin/node");
   if (!existsSync(node)) await symlink(process.execPath, node);
-  // The default browser: Electron's shell.openExternal runs `xdg-open <url>`
-  // off PATH on Linux. The fake keeps each call's argument, one per line.
+  // The default browser. On Linux Electron runs `xdg-open` from PATH; on macOS
+  // it would open the user's browser, so e2e writes this log itself. One URL a line.
   const opener = path.join(home, "bin/xdg-open");
   if (!existsSync(opener)) {
     await writeFile(opener, `#!/bin/sh\nprintf '%s\\n' "$1" >> "${path.join(home, "xdg-open.log")}"\n`);

@@ -4,8 +4,9 @@ import { homedir } from "node:os";
 import path from "node:path";
 import type { Readable, Writable } from "node:stream";
 import { pathToFileURL } from "node:url";
-import { app, BrowserWindow, dialog, ipcMain, Menu, Notification, session, shell, type OpenDialogOptions } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, Notification, session, type OpenDialogOptions } from "electron";
 import { installBrowser, registerBrowserIpc, registerFileIpc, registerFileScheme, serveFiles } from "./browser";
+import { openExternal } from "./external";
 import { sha } from "./build-info";
 import { buildMenu } from "./menu";
 import { watchForUpdates } from "./update";
@@ -30,6 +31,10 @@ function crewdPath(): string {
 // e2e loads the built renderer, so it never depends on (or talks to) whatever
 // dev server holds the dev port, and it runs under the packaged app's policy.
 const fromDist = app.isPackaged || process.env.CREW_RENDERER === "dist";
+// CREW_E2E hides the window. On macOS the app is an accessory: it stays out of
+// the Dock and does not activate when the window is created. `prohibited`
+// cannot create windows. Without the variable the dev app shows as usual.
+const e2e = process.env.CREW_E2E === "1";
 
 // Two checkouts can run side by side: each takes its own dev port (CREW_PORT);
 // scripts/app.mjs picks a free one for a git worktree.
@@ -195,6 +200,11 @@ function createWindow(): void {
     height: 800,
     minWidth: 800,
     minHeight: 520,
+    // A 0×0 window, or one moved off screen, changes layout or still activates
+    // the app. Hidden keeps 1280×800. A native open dialog has nothing to
+    // attach to while this stays hidden: dialog-open shows the window for
+    // that call. The dialog is not stubbed.
+    show: !e2e,
     titleBarStyle: "hiddenInset",
     trafficLightPosition: { x: 16, y: 12 },
     backgroundColor: "#ffffff",
@@ -233,6 +243,8 @@ function registerIpc(): void {
   });
   ipcMain.handle("dialog-open", async (event, opts: OpenOptions = {}) => {
     const target = BrowserWindow.fromWebContents(event.sender) ?? win ?? undefined;
+    // The real dialog. A hidden window cannot parent it, so that run shows.
+    if (target && !target.isVisible()) target.show();
     const options: OpenDialogOptions = {
       properties: opts.directory
         ? ["openDirectory"]
@@ -256,7 +268,7 @@ function registerIpc(): void {
   });
   ipcMain.handle("open-url", async (_event, url: string) => {
     if (!allowedUrl(url)) return;
-    await shell.openExternal(url);
+    await openExternal(url);
   });
   ipcMain.handle("notify", (_event, payload: { title: string; body: string }) => {
     if (!Notification.isSupported()) return;
@@ -276,6 +288,7 @@ app.setName("Crew");
 if (!app.isPackaged)
   app.setPath("userData", process.env.CREW_USER_DATA || path.join(app.getPath("appData"), "Crew Dev"));
 app.setAboutPanelOptions({ applicationName: "Crew", applicationVersion: app.getVersion(), version: sha });
+if (e2e && process.platform === "darwin") app.setActivationPolicy("accessory");
 
 app.whenReady().then(async () => {
   session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
