@@ -84,14 +84,48 @@ pub struct Bridge {
     shared: Arc<Shared>,
 }
 
+/// Why a bridge did not start.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StartError {
+    /// A daemon already answers on this data dir's socket. Taking the socket
+    /// over would cut every session and CLI off from it while it goes on
+    /// running, so the newcomer stops instead.
+    Taken(PathBuf),
+    Failed(String),
+}
+
+impl std::fmt::Display for StartError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            StartError::Taken(socket) => write!(
+                f,
+                "another crewd is already running for this data dir: it answers on {}. Leaving it be.",
+                socket.display()
+            ),
+            StartError::Failed(message) => f.write_str(message),
+        }
+    }
+}
+
+impl From<StartError> for String {
+    fn from(error: StartError) -> Self {
+        error.to_string()
+    }
+}
+
 impl Bridge {
-    pub fn start(dir: PathBuf) -> Result<Self, String> {
-        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    pub fn start(dir: PathBuf) -> Result<Self, StartError> {
+        let failed = |e: std::io::Error| StartError::Failed(e.to_string());
+        std::fs::create_dir_all(&dir).map_err(failed)?;
         let socket_path = dir.join("crew.sock");
+        // Only a socket nobody answers on is left over from a daemon that
+        // died, and only that one is ours to replace.
+        if UnixStream::connect(&socket_path).is_ok() {
+            return Err(StartError::Taken(socket_path));
+        }
         let _ = std::fs::remove_file(&socket_path);
-        let listener = UnixListener::bind(&socket_path).map_err(|e| e.to_string())?;
-        std::fs::set_permissions(&socket_path, std::fs::Permissions::from_mode(0o600))
-            .map_err(|e| e.to_string())?;
+        let listener = UnixListener::bind(&socket_path).map_err(failed)?;
+        std::fs::set_permissions(&socket_path, std::fs::Permissions::from_mode(0o600)).map_err(failed)?;
 
         let user_token = uuid::Uuid::new_v4().to_string();
         let tokens = HashMap::from([(user_token.clone(), Grant { bearer: Bearer::User, lease: Lease::User })]);
@@ -166,9 +200,13 @@ impl Bridge {
         self.tokens().retain(|_, grant| grant.bearer != bearer);
     }
 
-    /// The token that speaks as the user. It goes into `daemon.json`, which
-    /// only the user can read, and nowhere else: no process Crew starts is
-    /// handed it.
+    /// The token that speaks as the user. It goes into `daemon.json` (0600)
+    /// and nowhere else: no process Crew starts is handed it. That keeps it
+    /// from other users, not from sessions. Every process Crew starts runs as
+    /// the same UID and can read the file, and with it this token and the
+    /// WebSocket token, which is the window's. That a session speaks as
+    /// itself is the policy of the tools it is given (`crew` refuses to read
+    /// the file for one), not something this token enforces.
     pub fn user_token(&self) -> String {
         self.shared.user_token.clone()
     }
@@ -244,10 +282,38 @@ fn reply(mut stream: UnixStream, body: Value) {
 mod tests {
     use super::*;
 
-    fn bridge() -> Bridge {
+    fn short_dir() -> PathBuf {
         // Short: the socket path has to fit in SUN_LEN.
-        let dir = std::env::temp_dir().join(format!("cb-{}", &uuid::Uuid::new_v4().to_string()[..8]));
-        Bridge::start(dir).expect("bridge")
+        std::env::temp_dir().join(format!("cb-{}", &uuid::Uuid::new_v4().to_string()[..8]))
+    }
+
+    fn bridge() -> Bridge {
+        Bridge::start(short_dir()).expect("bridge")
+    }
+
+    /// It used to unlink the socket and bind its own, leaving the live
+    /// daemon running where nobody could reach it.
+    #[test]
+    fn a_second_bridge_leaves_a_live_ones_socket_alone() {
+        let dir = short_dir();
+        let first = Bridge::start(dir.clone()).expect("first");
+        let socket = dir.join("crew.sock");
+        assert_eq!(Bridge::start(dir.clone()).err(), Some(StartError::Taken(socket.clone())));
+        assert!(UnixStream::connect(&socket).is_ok(), "the first bridge lost its socket");
+        drop(first);
+    }
+
+    #[test]
+    fn a_socket_nobody_answers_on_is_replaced() {
+        let dir = short_dir();
+        std::fs::create_dir_all(&dir).expect("dir");
+        let socket = dir.join("crew.sock");
+        // What a daemon that died leaves behind: the file, and no listener.
+        drop(UnixListener::bind(&socket).expect("bind"));
+        assert!(socket.exists());
+        let bridge = Bridge::start(dir).expect("replaced");
+        assert!(UnixStream::connect(&socket).is_ok());
+        bridge.shutdown();
     }
 
     fn session(id: &str) -> Option<Bearer> {
