@@ -1,4 +1,4 @@
-import type { DownloadActivity, OpenTabRequest } from "./browser/bridge";
+import type { DownloadActivity, MountRequest, OpenTabRequest } from "./browser/bridge";
 import type { NavSnapshot } from "./browser/snapshot";
 import type { KeyboardLayout, LiveCommand } from "./keymap";
 import type { ImportedCookie } from "./protocol";
@@ -41,6 +41,10 @@ export type BrowserHost = {
   prepareRestore(token: string, entriesJson: string, index: number): Promise<boolean>;
   favicon(url: string): Promise<string | null>;
   importCookies(cookies: ImportedCookie[]): Promise<{ imported: number; failed: number }>;
+  /** Tells main which tab a guest shows, so an agent's call on the tab reaches it. */
+  reportGuest(tab: string, webContentsId: number): void;
+  /** An agent needs a tab live that is cold, or not in this window yet. */
+  onMount(cb: (request: MountRequest) => void): () => void;
 };
 
 export type HostDragDrop =

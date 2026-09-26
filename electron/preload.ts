@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from "electron";
-import { CHANNELS, type DownloadActivity, type OpenTabRequest } from "../src/lib/browser/bridge";
+import { CHANNELS, type DownloadActivity, type MountRequest, type OpenTabRequest } from "../src/lib/browser/bridge";
 import { UPDATE_CHANNELS, type UpdateState } from "../src/lib/update";
 
 function listen<T>(channel: string, cb: (value: T) => void): () => void {
@@ -36,5 +36,7 @@ contextBridge.exposeInMainWorld("crewHost", {
       ipcRenderer.invoke(CHANNELS.prepareRestore, token, entriesJson, index),
     favicon: (url: string) => ipcRenderer.invoke(CHANNELS.favicon, url),
     importCookies: (cookies: unknown) => ipcRenderer.invoke(CHANNELS.importCookies, cookies),
+    reportGuest: (tab: string, webContentsId: number) => ipcRenderer.send(CHANNELS.pageGuest, tab, webContentsId),
+    onMount: (cb: (request: MountRequest) => void) => listen(CHANNELS.mount, cb),
   },
 });

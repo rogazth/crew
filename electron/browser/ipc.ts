@@ -4,8 +4,10 @@ import { capSnapshot, parseSnapshot } from "../../src/lib/browser/snapshot";
 import { CHANNELS, PARTITION } from "../../src/lib/browser/bridge";
 import { importCookies } from "./cookies";
 import { ownedGuest, prepareRestore, setKeyboardLayout, setLiveCommands } from "./guests";
+import { bindTab } from "./tab-guests";
 
 const TOKEN = /^[A-Za-z0-9-]{1,64}$/;
+const TAB_ID = /^browser:[A-Za-z0-9-]{1,64}$/;
 const FAVICON_BYTES = 128 * 1024;
 const FAVICON_CACHE = 256;
 /** Insertion-ordered, so the oldest entry is the first key. */
@@ -76,6 +78,13 @@ export function registerBrowserIpc(): void {
     if (!guest) return null;
     const history = guest.navigationHistory;
     return capSnapshot({ entries: history.getAllEntries(), index: history.getActiveIndex() });
+  });
+
+  // Only a guest this window embeds can be named as a tab's page: an agent's call must never reach the window itself.
+  ipcMain.on(CHANNELS.pageGuest, (event, tab: unknown, id: unknown) => {
+    if (typeof tab !== "string" || !TAB_ID.test(tab) || typeof id !== "number") return;
+    const guest = ownedGuest(event.sender, id);
+    if (guest) bindTab(tab, guest);
   });
 
   ipcMain.handle(CHANNELS.importCookies, (_event, list: unknown) => importCookies(session.fromPartition(PARTITION), list));

@@ -29,6 +29,8 @@ import {
   permissionAllowed,
   popupVerdict,
 } from "./policy";
+import { noteGuestInput } from "./agent-host";
+import { setTabWindow } from "./tab-guests";
 
 const IS_MAC = process.platform === "darwin";
 /**
@@ -114,6 +116,7 @@ function attachQueue(host: WebContents): (string | null)[] {
 export function installBrowser(win: BrowserWindow): void {
   configureSession();
   const host = win.webContents;
+  setTabWindow(host);
   host.on("will-attach-webview", (event, prefs, params) => {
     const decision = attachDecision(params);
     if (!decision.allow) {
@@ -188,6 +191,9 @@ function register(host: WebContents, guest: WebContents): void {
   guest.setWindowOpenHandler((details) => windowOpen(host, guest.id, details, allowOpen));
   guest.on("did-create-window", (child) => guardPopup(host, guest.id, child.webContents, allowOpen));
   guardNavigation(guest);
+
+  // A person clicking or typing in a page an agent drives wins it for a moment.
+  guest.on("input-event", (_event, input) => noteGuestInput(guest.id, input.type));
 
   guest.on("before-input-event", (event, input) => {
     if (input.isComposing) return;

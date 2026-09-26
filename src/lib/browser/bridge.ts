@@ -28,7 +28,18 @@ export const CHANNELS = {
   download: "browser:download",
   /** window → main: cookies the daemon read from another browser, to write into the pages' session. */
   importCookies: "browser:import-cookies",
+  /** window → main: this guest is that tab's page, so an agent's call on the tab finds it. */
+  pageGuest: "browser:page-guest",
+  /** main → window: an agent needs this tab live; mount it (hidden) and pin it, or add it first. */
+  mount: "browser:mount",
 } as const;
+
+/**
+ * `open`: a tab an agent just made, to add to its strip in the background.
+ * Otherwise the tab is already in `context`'s strip, perhaps cold, perhaps in
+ * a workspace this window has not shown yet.
+ */
+export type MountRequest = { tab: string; context: string; url: string; title: string; open: boolean };
 
 export type DownloadActivity = { webContentsId: number; active: boolean };
 

@@ -5,7 +5,7 @@ import path from "node:path";
 import type { Readable, Writable } from "node:stream";
 import { pathToFileURL } from "node:url";
 import { app, BrowserWindow, dialog, ipcMain, Menu, Notification, session, shell, type OpenDialogOptions } from "electron";
-import { installBrowser, registerBrowserIpc } from "./browser";
+import { installBrowser, registerBrowserIpc, startBrowserHost } from "./browser";
 import { sha } from "./build-info";
 import { buildMenu } from "./menu";
 import { watchForUpdates } from "./update";
@@ -295,6 +295,9 @@ app.whenReady().then(async () => {
     return;
   }
   createWindow();
+  // Agents drive pages through main, over its own connection; it follows crewd across restarts.
+  const browserHost = startBrowserHost(() => info);
+  app.once("will-quit", () => browserHost.stop());
   watchForUpdates(() => {
     if (!win) createWindow();
   });
