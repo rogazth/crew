@@ -175,10 +175,12 @@ async function stopDaemon(): Promise<void> {
   const proc = child;
   if (!proc) return;
   return new Promise((resolve) => {
+    // crewd gives supervised processes one stop grace (5 s) and the PTY host
+    // one more second before it exits.
     const timer = setTimeout(() => {
       console.error("crewd still running after SIGTERM; continuing quit");
       resolve();
-    }, 5000);
+    }, 8000);
     proc.once("exit", () => {
       clearTimeout(timer);
       resolve();

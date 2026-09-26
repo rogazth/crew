@@ -113,7 +113,7 @@ impl ToolFamily for ProcessTools {
             },
             one(
                 "delete_process",
-                "Delete a process: stop it if it runs, and remove its definition and its logs.",
+                "Delete a process: stop it if it runs, and remove its definition and its logs. With autonomy ask you can only delete the processes you created.",
                 &["remove", "forget", "drop"],
             ),
             Tool {
@@ -221,6 +221,16 @@ impl ToolFamily for ProcessTools {
             }
             "delete_process" => {
                 let target = process(args)?;
+                // Deleting throws away a definition and its logs with no
+                // proposal to review, so an ask caller only gets to undo its own.
+                if !caller.full_autonomy() {
+                    let row = host.get(workspace, &target)?;
+                    if row.created_by.as_deref() != caller.session_id() {
+                        return Err(format!(
+                            "\"{target}\" was not created by you; with autonomy ask you can only delete your own processes. Ask the user to delete it."
+                        ));
+                    }
+                }
                 host.delete(workspace, &target)?;
                 json!(format!("Deleted \"{target}\"."))
             }
@@ -585,6 +595,12 @@ mod tests {
         let by_user = f.call(&f.user(), "create_process", json!({ "name": "worker", "command": "sleep 30" })).unwrap();
         assert_eq!(by_user["created_by"], "the user");
         assert_eq!(by_user["state"], "stopped");
+
+        // An ask agent can undo what it made, and nothing else.
+        let refused = f.call(&careful, "delete_process", json!({ "process": "worker" })).unwrap_err();
+        assert!(refused.contains("not created by you"), "{refused}");
+        f.call(&careful, "delete_process", json!({ "process": "dev" })).unwrap();
+        f.call(&trusted, "delete_process", json!({ "process": "worker" })).unwrap();
     }
 
     #[test]
