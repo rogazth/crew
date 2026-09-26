@@ -18,7 +18,9 @@ import {
 import { resolveForward, type KeyboardLayout, type LiveCommand } from "../../src/lib/keymap";
 import type { NavSnapshot } from "../../src/lib/browser/snapshot";
 import { CHANNELS, isPagePartition, LEGACY_PARTITION, type OpenTabRequest } from "../../src/lib/browser/bridge";
+import { FILES_PARTITION } from "../../src/lib/browser/files";
 import { copyCookies } from "./cookies";
+import { followFile, serveFiles } from "./files";
 import {
   attachDecision,
   browserUserAgent,
@@ -28,6 +30,7 @@ import {
   navigationVerdict,
   permissionAllowed,
   popupVerdict,
+  previewNavigationVerdict,
 } from "./policy";
 
 const IS_MAC = process.platform === "darwin";
@@ -75,6 +78,7 @@ function pageSession(partition: string): { ses: Session; seeded: Promise<void> }
   const fresh =
     isPagePartition(partition) && !existsSync(partitionDir(partition)) && existsSync(partitionDir(LEGACY_PARTITION));
   const ses = session.fromPartition(partition);
+  if (partition === FILES_PARTITION) serveFiles(ses);
   const seeded = fresh
     ? copyCookies(session.fromPartition(LEGACY_PARTITION), ses).then(
         () => {},
@@ -229,7 +233,12 @@ function register(host: WebContents, guest: WebContents, partition: string): voi
   const allowOpen = createRateLimiter(4, 2000);
   guest.setWindowOpenHandler((details) => windowOpen(host, guest.id, partition, details, allowOpen));
   guest.on("did-create-window", (child) => guardPopup(host, guest.id, partition, child.webContents, allowOpen));
-  guardNavigation(guest);
+  if (partition === FILES_PARTITION) {
+    guardPreview(host, guest);
+    followFile(guest);
+  } else {
+    guardNavigation(guest);
+  }
 
   guest.on("before-input-event", (event, input) => {
     if (input.isComposing) return;
@@ -278,6 +287,8 @@ function windowOpen(
     openTab(host, { url: verdict.url, background: verdict.background, openerId });
     return { action: "deny" };
   }
+  // A preview has no sign-in for a popup to finish.
+  if (partition === FILES_PARTITION) return { action: "deny" };
   // A login popup keeps window.opener, so it gets a real window in the same partition.
   // No close-guard preload: this window is supposed to be able to close itself.
   return {
@@ -317,6 +328,19 @@ function guardNavigation(contents: WebContents): void {
   };
   contents.on("will-navigate", guard);
   contents.on("will-redirect", guard);
+}
+
+/** A preview stays on files; a link to the web opens a browser tab beside it. */
+function guardPreview(host: WebContents, guest: WebContents): void {
+  const guard = (event: { url: string; preventDefault: () => void }) => {
+    const verdict = previewNavigationVerdict(event.url);
+    if (verdict === "allow") return;
+    event.preventDefault();
+    if (verdict === "tab") openTab(host, { url: event.url, background: false, openerId: guest.id });
+    if (verdict === "external") void shell.openExternal(event.url);
+  };
+  guest.on("will-navigate", guard);
+  guest.on("will-redirect", guard);
 }
 
 function contextMenu(host: WebContents, guest: WebContents, params: ContextMenuParams): MenuItemConstructorOptions[] {

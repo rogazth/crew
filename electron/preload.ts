@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from "electron";
 import { CHANNELS, type DownloadActivity, type OpenTabRequest } from "../src/lib/browser/bridge";
+import { FILE_CHANNELS } from "../src/lib/browser/files";
 import { UPDATE_CHANNELS, type UpdateState } from "../src/lib/update";
 
 function listen<T>(channel: string, cb: (value: T) => void): () => void {
@@ -17,6 +18,11 @@ contextBridge.exposeInMainWorld("crewHost", {
   openUrl: (url: string) => ipcRenderer.invoke("open-url", url),
   notify: (title: string, body: string) => ipcRenderer.invoke("notify", { title, body }),
   pathForFile: (file: File) => webUtils.getPathForFile(file),
+  files: {
+    url: (root: string, path: string) => ipcRenderer.invoke(FILE_CHANNELS.url, root, path),
+    reveal: (path: string) => ipcRenderer.invoke(FILE_CHANNELS.reveal, path),
+    openExternal: (path: string) => ipcRenderer.invoke(FILE_CHANNELS.openExternal, path),
+  },
   update: {
     current: () => ipcRenderer.invoke(UPDATE_CHANNELS.current),
     onState: (cb: (state: UpdateState) => void) => listen(UPDATE_CHANNELS.state, cb),

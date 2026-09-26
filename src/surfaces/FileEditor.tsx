@@ -1,4 +1,4 @@
-import { lazy, Suspense } from "react";
+import { lazy, Suspense, type ReactNode } from "react";
 import { ListBulletsIcon } from "@phosphor-icons/react";
 import { Button } from "../chrome/kit";
 import { useCommands } from "../hooks/useCommand";
@@ -7,6 +7,7 @@ import { useTextFile } from "../hooks/useTextFile";
 import { commandKeys } from "../lib/commands";
 import { TOKENIZE_MAX_LENGTH } from "../lib/highlighting";
 import type { ProjectFile } from "../lib/types";
+import { NoPreview } from "./NoPreview";
 
 type Props = {
   path: string;
@@ -14,6 +15,8 @@ type Props = {
   /** The workspace index, which `[[wikilinks]]` resolve against. */
   files: ProjectFile[];
   onOpenPath: (path: string) => void;
+  /** Sits at the header's right end: a page file's Preview/Source switch. */
+  actions?: ReactNode;
 };
 
 /** Each editor loads only when a file needs it: diffs and its highlighter are ~600 kB, CodeMirror ~330 kB. */
@@ -24,13 +27,15 @@ const MarkdownEditor = lazy(() =>
 
 const MARKDOWN = /\.(?:md|markdown)$/i;
 
-export function FileEditor({ path, relative, files, onOpenPath }: Props) {
+export function FileEditor({ path, relative, files, onOpenPath, actions }: Props) {
   const name = relative.split("/").pop() ?? relative;
   const isMarkdown = MARKDOWN.test(name);
   const { loaded, revision, dirty, conflict, error, setContents, reload, overwrite } = useTextFile(path);
   const [outline, toggleOutline] = useOutlinePref();
   useCommands(isMarkdown ? { "toggle-outline": toggleOutline } : {});
 
+  // The daemon reads text only; anything else says so in Rust's words.
+  if (error?.includes("valid UTF-8")) return <NoPreview path={path} relative={relative} />;
   if (error) return <p className="p-4 text-red-600">{error}</p>;
   if (loaded === null) {
     return <p className="p-4 text-text-muted">Loading {name}…</p>;
@@ -68,6 +73,7 @@ export function FileEditor({ path, relative, files, onOpenPath }: Props) {
             <ListBulletsIcon className="size-4" />
           </button>
         )}
+        {actions}
       </div>
 
       {/* The disk and the editor both changed: the edits stay, and nothing is

@@ -5,7 +5,7 @@ import { commandKeys } from "../lib/commands";
 import type { ProjectFile, Session, Tab } from "../lib/types";
 
 /** The file editors are the heaviest chunks in the app; only a file tab pays for them. */
-const FileEditor = lazy(() => import("./FileEditor").then((m) => ({ default: m.FileEditor })));
+const FileView = lazy(() => import("./FileView").then((m) => ({ default: m.FileView })));
 
 type Props = {
   tab: Tab | null;
@@ -41,7 +41,7 @@ export function Surface({ tab, sessions, hasWorkspace, onCreateWorkspace, files,
     // which rendered the old file's contents under the new tab's header.
     return (
       <Suspense fallback={null}>
-        <FileEditor
+        <FileView
           key={tab.path}
           path={tab.path}
           relative={tab.relative}

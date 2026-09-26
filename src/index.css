@@ -837,6 +837,13 @@ body:has(button[data-sidebar="resize-handle"]:active) * {
   background: color-mix(in srgb, var(--text-color-kumo-default) 8%, transparent);
   font: 13px/18px ui-monospace, SFMono-Regular, Menlo, monospace;
 }
+/* Under an image file: its transparent pixels read as a checkerboard, not as the pane. */
+.crew-checkerboard {
+  --check: light-dark(oklch(92% 0 0), oklch(30% 0 0));
+  background-color: light-dark(oklch(100% 0 0), oklch(24% 0 0));
+  background-image: conic-gradient(var(--check) 25%, transparent 0 50%, var(--check) 0 75%, transparent 0);
+  background-size: 16px 16px;
+}
 /* A path in backticks is a link to the file, at the same weight as inline code. */
 .crew-file-chip {
   display: inline-flex;

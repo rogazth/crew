@@ -102,15 +102,19 @@ export function Browsers({ panes, onPatch, onOpenTab }: Props) {
     known.current = now;
   });
 
-  const latest = useRef({ browsers, visible, onOpenTab });
+  const latest = useRef({ panes, browsers, visible, onOpenTab });
   useEffect(() => {
-    latest.current = { browsers, visible, onOpenTab };
+    latest.current = { panes, browsers, visible, onOpenTab };
   });
   useEffect(
     () =>
       browserHost()?.onOpenTab((request) => {
-        const { browsers: open, visible: front, onOpenTab: openTab } = latest.current;
-        const opener = open.find((pane) => pages.get(pane.tab.id).webContentsId === request.openerId) ?? front;
+        const { panes: all, browsers: open, visible: front, onOpenTab: openTab } = latest.current;
+        // A file's preview is no page of its own: its links open beside the tab on screen.
+        const opener =
+          open.find((pane) => pages.get(pane.tab.id).webContentsId === request.openerId) ??
+          front ??
+          all.find((pane) => pane.visible);
         if (!opener) return;
         const tab = newBrowserTab(request.url);
         openTab(opener.workspaceId, tab, { after: opener.tab.id, background: request.background });

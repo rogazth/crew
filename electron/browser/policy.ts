@@ -4,6 +4,7 @@
  */
 
 import { isPagePartition, RESTORE_PREFIX } from "../../src/lib/browser/bridge";
+import { FILES_PARTITION, isFileUrl } from "../../src/lib/browser/files";
 
 // The window builds its webviews with these; one definition keeps the two sides agreeing.
 export { RESTORE_PREFIX };
@@ -53,14 +54,18 @@ export function hardenWebPreferences(prefs: Record<string, unknown>, guestPreloa
 }
 
 /**
- * Whether a <webview> may attach: only in a workspace's page partition, and
- * only starting blank or at a web page. A restore src yields its token.
+ * Whether a <webview> may attach: in a workspace's page partition, starting
+ * blank or at a web page, or in the previews' partition at a file. A restore
+ * src yields its token.
  */
 export function attachDecision(params: {
   src?: string;
   partition?: string;
 }): { allow: false } | { allow: true; partition: string; restoreToken: string | null } {
   const { partition } = params;
+  if (partition === FILES_PARTITION) {
+    return isFileUrl(params.src ?? "") ? { allow: true, partition, restoreToken: null } : { allow: false };
+  }
   if (!isPagePartition(partition)) return { allow: false };
   const src = params.src ?? "";
   if (src.startsWith(RESTORE_PREFIX)) {
@@ -78,6 +83,19 @@ export type NavigationVerdict = "allow" | "external" | "block";
 export function navigationVerdict(url: string): NavigationVerdict {
   const parsed = parse(url);
   if (isWeb(parsed) || isBlank(parsed)) return "allow";
+  if (parsed?.protocol === "mailto:") return "external";
+  return "block";
+}
+
+/**
+ * Where a file preview may take itself: other files, in place; a web link
+ * becomes a browser tab, so the web never loads in the previews' session.
+ */
+export function previewNavigationVerdict(url: string): NavigationVerdict | "tab" {
+  const parsed = parse(url);
+  if (parsed && isFileUrl(url)) return "allow";
+  if (isBlank(parsed)) return "allow";
+  if (isWeb(parsed)) return "tab";
   if (parsed?.protocol === "mailto:") return "external";
   return "block";
 }

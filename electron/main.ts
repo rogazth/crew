@@ -5,7 +5,7 @@ import path from "node:path";
 import type { Readable, Writable } from "node:stream";
 import { pathToFileURL } from "node:url";
 import { app, BrowserWindow, dialog, ipcMain, Menu, Notification, session, shell, type OpenDialogOptions } from "electron";
-import { installBrowser, registerBrowserIpc } from "./browser";
+import { installBrowser, registerBrowserIpc, registerFileIpc, registerFileScheme, serveFiles } from "./browser";
 import { sha } from "./build-info";
 import { buildMenu } from "./menu";
 import { watchForUpdates } from "./update";
@@ -42,7 +42,8 @@ function csp(): string {
     "default-src 'self'",
     fromDist ? "script-src 'self'" : "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
     "style-src 'self' 'unsafe-inline'",
-    "img-src 'self' data: blob: https://www.google.com",
+    // crew-file: is an image file tab's picture, served from the worktree it was opened from.
+    "img-src 'self' data: blob: crew-file: https://www.google.com",
     "font-src 'self' data:",
     `connect-src ${connect}`,
     "object-src 'none'",
@@ -255,8 +256,10 @@ function registerIpc(): void {
     new Notification({ title: payload.title, body: payload.body }).show();
   });
   registerBrowserIpc();
+  registerFileIpc();
 }
 
+registerFileScheme();
 app.setName("Crew");
 // userData follows the name, and crewd keeps its database and socket there: a dev
 // build on the installed app's folder would drive the installed app's sessions.
@@ -276,6 +279,7 @@ app.whenReady().then(async () => {
       },
     });
   });
+  serveFiles(session.defaultSession);
   Menu.setApplicationMenu(buildMenu());
   registerIpc();
   try {

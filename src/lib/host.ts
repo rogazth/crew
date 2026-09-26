@@ -17,6 +17,16 @@ type CrewHost = {
   pathForFile(file: File): string;
   update: UpdateHost;
   browser: BrowserHost;
+  files: FilesHost;
+};
+
+/** Files shown as pages, and handed to Finder. Absent outside Electron. */
+export type FilesHost = {
+  /** Null for a path main will not serve. */
+  url(root: string, path: string): Promise<string | null>;
+  reveal(path: string): Promise<void>;
+  /** Resolves to why it could not open, or "" once it did. */
+  openExternal(path: string): Promise<string>;
 };
 
 /** The updater's main-process half. Absent outside Electron. */
@@ -62,6 +72,10 @@ function crewHost(): CrewHost | undefined {
 
 export function browserHost(): BrowserHost | null {
   return crewHost()?.browser ?? null;
+}
+
+export function filesHost(): FilesHost | null {
+  return crewHost()?.files ?? null;
 }
 
 export function updateHost(): UpdateHost | null {

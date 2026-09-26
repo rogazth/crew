@@ -10,7 +10,9 @@ import {
   navigationVerdict,
   permissionAllowed,
   popupVerdict,
+  previewNavigationVerdict,
 } from "./policy";
+import { FILES_PARTITION } from "../../src/lib/browser/files";
 
 const GUEST_PRELOAD = "/app/guest-preload.cjs";
 const PARTITION = partitionFor("0b6f3c1e-8f2a-4d1b-9c55-2f1e7a9d4c10")!;
@@ -142,7 +144,46 @@ describe("attachDecision", () => {
   });
 });
 
+describe("attachDecision for previews", () => {
+  it("allows a file in the previews' partition", () => {
+    expect(attachDecision({ src: "crew-file://a1b2/report.html", partition: FILES_PARTITION })).toEqual({
+      allow: true,
+      partition: FILES_PARTITION,
+      restoreToken: null,
+    });
+  });
+
+  it.each(["", "about:blank", "https://example.com", "file:///etc/passwd", `${RESTORE_PREFIX}abc`])(
+    "refuses %s in the previews' partition",
+    (src) => {
+      expect(attachDecision({ src, partition: FILES_PARTITION })).toEqual({ allow: false });
+    },
+  );
+
+  it("refuses a file in a page partition", () => {
+    expect(attachDecision({ src: "crew-file://a1b2/report.html", partition: PARTITION })).toEqual({ allow: false });
+  });
+});
+
+describe("previewNavigationVerdict", () => {
+  it.each([
+    ["another file", "crew-file://a1b2/other.html", "allow"],
+    ["about:blank", "about:blank", "allow"],
+    ["a web page", "https://example.com/", "tab"],
+    ["mail", "mailto:someone@example.com", "external"],
+    ["file:", "file:///etc/passwd", "block"],
+    ["javascript:", "javascript:alert(1)", "block"],
+    ["garbage", "not a url", "block"],
+  ])("%s → %s", (_name, url, verdict) => {
+    expect(previewNavigationVerdict(url)).toBe(verdict);
+  });
+});
+
 describe("navigationVerdict", () => {
+  it("blocks a preview's file from a web page", () => {
+    expect(navigationVerdict("crew-file://a1b2/report.html")).toBe("block");
+  });
+
   it.each([
     "http://example.com",
     "https://example.com/path?q#frag",
