@@ -154,7 +154,11 @@ enum Outgoing {
 
 struct Hub {
     clients: Mutex<HashMap<u64, mpsc::Sender<Outgoing>>>,
-    pty_attached: Mutex<HashSet<u64>>,
+    /// The streams each client attached, and so gets the frames of. Only
+    /// those: a window watching one terminal has no use for another's bytes,
+    /// and ones it never asked for would be painted as if they were the start
+    /// of the stream it attaches next.
+    pty_attached: Mutex<HashMap<u64, HashSet<u32>>>,
     /// Clients that only hear `browser-*` events: Electron main's browser
     /// host has no use for transcripts and statuses, and would pay for them.
     quiet: Mutex<HashSet<u64>>,
@@ -166,7 +170,7 @@ impl Hub {
     fn new() -> Self {
         Self {
             clients: Mutex::new(HashMap::new()),
-            pty_attached: Mutex::new(HashSet::new()),
+            pty_attached: Mutex::new(HashMap::new()),
             quiet: Mutex::new(HashSet::new()),
             next: AtomicU64::new(1),
             runtime: Mutex::new(None),
@@ -187,11 +191,13 @@ impl Hub {
         (id, rx)
     }
 
-    fn watch_pty(&self, id: u64) {
+    fn watch_pty(&self, id: u64, stream_id: u32) {
         self.pty_attached
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .insert(id);
+            .entry(id)
+            .or_default()
+            .insert(stream_id);
     }
 
     fn unsubscribe(&self, id: u64) {
@@ -306,7 +312,8 @@ impl PtyEvents for Hub {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .iter()
-            .copied()
+            .filter(|(_, streams)| streams.contains(&stream_id))
+            .map(|(id, _)| *id)
             .collect();
         for id in ids {
             self.send(id, Outgoing::Binary(frame.clone()));
@@ -819,7 +826,7 @@ async fn attach_pty(hosts: &Hosts, hub: &Arc<Hub>, client_id: u64, req_id: u32, 
     let hub_c = hub.clone();
     let result = block(move || {
         host.attach(&id, from, |attached, stream_id, tail| {
-            hub_c.watch_pty(client_id);
+            hub_c.watch_pty(client_id, stream_id);
             let value = match serde_json::to_value(PtyAttached {
                 start: attached.start,
                 emitted: attached.emitted,
@@ -1610,6 +1617,37 @@ mod tests {
 
         let output = wait_bytes(&mut ws, b"hi").await;
         assert!(output.windows(2).any(|w| w == b"hi"), "output: {output:?}");
+        handle.shutdown();
+    }
+
+    /// A window watching one terminal gets that terminal's frames and no
+    /// other's: bytes from a stream it has not attached would be painted as
+    /// the start of that stream once it did.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn pty_frames_go_only_to_clients_attached_to_that_stream() {
+        let dir = test_dir("pty-route");
+        let handle = test_serve(&dir);
+        let mut quiet = connect_authed(&handle).await;
+        send_json(&mut quiet, &spawn_req(1, "mine")).await;
+        let mine = wait_response(&mut quiet, 1).await.result.and_then(|v| v.as_u64()).expect("stream") as u32;
+        attach_pty(&mut quiet, 2, "mine", 0).await;
+
+        let mut busy = connect_authed(&handle).await;
+        send_json(&mut busy, &spawn_req(1, "theirs")).await;
+        let theirs = wait_response(&mut busy, 1).await.result.and_then(|v| v.as_u64()).expect("stream") as u32;
+        attach_pty(&mut busy, 2, "theirs", 0).await;
+        let mut frame = Vec::from(theirs.to_le_bytes());
+        frame.extend_from_slice(b"echo from-theirs\n");
+        busy.send(Message::Binary(frame.into())).await.expect("write");
+        wait_bytes(&mut busy, b"from-theirs").await;
+
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(500);
+        while let Ok(Some(Ok(msg))) = tokio::time::timeout_at(deadline, quiet.next()).await {
+            if let Message::Binary(bytes) = msg {
+                let stream = u32::from_le_bytes(bytes[..4].try_into().unwrap());
+                assert_eq!(stream, mine, "a frame of a stream this client never attached");
+            }
+        }
         handle.shutdown();
     }
 

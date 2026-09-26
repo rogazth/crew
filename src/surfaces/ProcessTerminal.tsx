@@ -9,7 +9,7 @@ import * as api from "../lib/api";
 import { client } from "../lib/client";
 import type { Process } from "../lib/processes";
 import type { PtyResync } from "../lib/protocol";
-import { subscribePty } from "../lib/pty";
+import { parsedCount, subscribePty } from "../lib/pty";
 import { openLink } from "../lib/terminalLinks";
 import { fontStack } from "../lib/terminalPrefs";
 import { DARK_SCHEME, palette } from "../lib/terminalTheme";
@@ -86,7 +86,8 @@ export function ProcessTerminal({ process }: { process: Process }) {
     const fit = fitRef.current;
     const host = hostRef.current;
     if (!term || !fit || !host) return;
-    term.reset();
+    // After whatever the last run still had queued, so none of it lands on this one.
+    term.write("", () => term.reset());
     let closed = false;
 
     if (streamId === null) {
@@ -102,30 +103,39 @@ export function ProcessTerminal({ process }: { process: Process }) {
       };
     }
 
-    let processed = 0;
+    const parsed = parsedCount();
     let ackTimer = 0;
     const flushAck = () => {
       ackTimer = 0;
-      void api.ackPty(ptyId, processed).catch(() => {});
+      void api.ackPty(ptyId, parsed.processed).catch(() => {});
     };
     const unsubscribe = subscribePty(
       ptyId,
-      (bytes) =>
+      (bytes) => {
+        const counted = parsed.write(bytes.length);
         term.write(bytes, () => {
-          processed += bytes.length;
+          if (closed || !counted()) return;
           if (!ackTimer) ackTimer = window.setTimeout(flushAck, ACK_FLUSH_MS);
-        }),
+        });
+      },
       // The run's end shows in the log tail painted next, with how it ended.
       () => {},
-      (start) => {
-        processed = start;
-      },
+      (start) => parsed.attached(start),
     );
     // The daemon dropped frames this view had no room for; the ring has them.
+    // The reset waits for what xterm has queued, or those bytes would paint
+    // over the replay; the replay waits for the reset. A second resync before
+    // then makes the first one's moot.
+    let resyncs = 0;
     const offResync = client.on("pty-resync", (payload) => {
       if ((payload as PtyResync).id !== ptyId || closed) return;
-      term.reset();
-      void api.reattachPty(ptyId).catch(() => {});
+      parsed.resync();
+      const mine = ++resyncs;
+      term.write("", () => {
+        if (closed || mine !== resyncs) return;
+        term.reset();
+        void api.reattachPty(ptyId).catch(() => {});
+      });
     });
     const input = term.onData((data) => void api.writePty(ptyId, data).catch(() => {}));
     let cols = 0;

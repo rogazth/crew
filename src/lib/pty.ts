@@ -23,19 +23,19 @@ async function applyAttach(id: string, from: number): Promise<void> {
   attachHandlers.get(id)?.(attached.start);
 }
 
-function attach(sessionId: string, streamId: number, onData: (bytes: Uint8Array) => void) {
+function attach(sessionId: string, streamId: number, onData: (bytes: Uint8Array) => void, replay = true) {
   streams.get(sessionId)?.stop();
   const wrapped = (bytes: Uint8Array) => {
     delivered.set(sessionId, (delivered.get(sessionId) ?? 0) + bytes.byteLength);
     onData(bytes);
   };
-  streams.set(sessionId, { id: streamId, stop: client.openStream(streamId, wrapped) });
+  streams.set(sessionId, { id: streamId, stop: client.openStream(streamId, wrapped, replay) });
 }
 
 /**
- * Every PTY shares one event bus, so each terminal filters by id. Stream bytes
- * that arrive before `openStream` are buffered by the client. Spawn after
- * subscribing so the exit listener is already attached.
+ * Every PTY shares one event bus, so each terminal filters by id. The daemon
+ * sends a stream's bytes only once it is attached, from the offset asked for.
+ * Spawn after subscribing so the exit listener is already attached.
  */
 export function subscribePty(
   id: string,
@@ -91,10 +91,15 @@ export async function spawnPty(
  * watches its own: subscribe first, then this.
  */
 export async function attachPty(id: string, streamId: number): Promise<void> {
+  // A new stream (a respawn, a restarted process) counts from its own first
+  // byte; only the same stream goes on from what this view already has.
+  if (streams.get(id)?.id !== streamId) delivered.set(id, 0);
   // Wire the stream before the replay: the process is already running, so a
-  // rejection here would strand it with no way to reach it again.
+  // rejection here would strand it with no way to reach it again. Anything
+  // buffered for it is dropped: it starts wherever the frames did, not at
+  // `from`, and the ring's replay has those bytes in their place.
   const onData = dataHandlers.get(id);
-  if (onData) attach(id, streamId, onData);
+  if (onData) attach(id, streamId, onData, false);
   else streams.set(id, { id: streamId, stop: () => {} });
   await applyAttach(id, delivered.get(id) ?? 0).catch(() => {});
 }
@@ -103,6 +108,41 @@ export async function attachPty(id: string, streamId: number): Promise<void> {
 export function reattachPty(id: string): Promise<void> {
   delivered.set(id, 0);
   return applyAttach(id, 0);
+}
+
+/**
+ * The bytes a viewer's xterm has parsed, for `pty_ack`, across resyncs. A
+ * resync resets the count to where the replay starts, but xterm still holds
+ * writes queued before it, and their callbacks come after: counted, they would
+ * ack past what the view has and let the daemon send more than it can take.
+ * Each write is stamped with the generation it belongs to; a resync starts a
+ * new one.
+ */
+export function parsedCount() {
+  let processed = 0;
+  let generation = 0;
+  return {
+    get processed() {
+      return processed;
+    },
+    /** Call before `term.write`; the callback it returns goes to xterm. True if it counted. */
+    write(bytes: number): () => boolean {
+      const mine = generation;
+      return () => {
+        if (mine !== generation) return false;
+        processed += bytes;
+        return true;
+      };
+    },
+    /** What was queued before this no longer counts. */
+    resync(): void {
+      generation += 1;
+    },
+    /** The attach answered: the replay starts here. */
+    attached(start: number): void {
+      processed = start;
+    },
+  };
 }
 
 export function writePty(id: string, data: string): Promise<void> {
