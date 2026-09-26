@@ -169,7 +169,7 @@ impl ToolFamily for ProcessTools {
             },
             Tool {
                 name: "send_input",
-                description: "Type into a running process's terminal, as if at its keyboard: an interactive key (vite's r to restart, q to quit) or an answer to a prompt. Sent exactly as given, so add \\r to press Enter.",
+                description: "Type into a running process's terminal, as if at its keyboard: an interactive key (vite's r to restart, q to quit) or an answer to a prompt. Sent exactly as given, so add \\r to press Enter. Needs full autonomy: with autonomy ask it is refused, since whatever the process reads it may run.",
                 schema: json!({
                     "type": "object",
                     "properties": {
@@ -272,6 +272,14 @@ impl ToolFamily for ProcessTools {
             }
             "send_input" => {
                 let target = process(args)?;
+                // Keys typed into a process run with its powers: a REPL or a
+                // shell takes `os.system(...)` as readily as `r`. That is
+                // running a command no one reviewed, which ask does not allow.
+                if !caller.full_autonomy() {
+                    return Err(format!(
+                        "With autonomy ask you cannot type into \"{target}\": what it reads, it runs. Ask the user to type it in Crew, or to give you full autonomy."
+                    ));
+                }
                 let text = string(args, "text")?.filter(|text| !text.is_empty()).ok_or("text is required")?;
                 host.send_input(workspace, &target, &text)?;
                 json!(format!("Sent {} bytes to \"{target}\".", text.len()))
@@ -607,6 +615,8 @@ mod tests {
     fn read_logs_hands_back_a_cursor_that_reads_only_what_is_new() {
         let f = fixture("cursor");
         let user = f.user();
+        let careful = f.session(&f.workspace, "agent", "Careful", "ask");
+        let trusted = f.session(&f.workspace, "terminal", "Trusted", "full");
         f.call(&user, "create_process", json!({ "name": "repl", "command": "echo one; read x; echo two-$x; sleep 30" }))
             .unwrap();
         f.call(&user, "start_process", json!({ "process": "repl" })).unwrap();
@@ -617,7 +627,12 @@ mod tests {
         assert!(read["text"].as_str().unwrap().contains("one"), "{read}");
         let cursor = read["cursor"].as_u64().unwrap();
 
-        f.call(&user, "send_input", json!({ "process": "repl", "text": "go\r" })).unwrap();
+        // An ask agent may read a running REPL but not type into it: what it
+        // reads, it runs.
+        let refused = f.call(&careful, "send_input", json!({ "process": "repl", "text": "evil\r" })).unwrap_err();
+        assert!(refused.contains("autonomy ask"), "{refused}");
+        f.call(&trusted, "send_input", json!({ "process": "repl", "text": "go" })).unwrap();
+        f.call(&user, "send_input", json!({ "process": "repl", "text": "\r" })).unwrap();
         let second = f
             .call(&user, "wait_for_log", json!({ "process": "repl", "pattern": "^two-go$", "since": cursor, "timeout_s": 5 }))
             .unwrap();
