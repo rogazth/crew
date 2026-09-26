@@ -35,20 +35,20 @@ const PAGES = 5;
 const ICON = "size-4 shrink-0 text-icon";
 const TILE_ICON = "size-5 shrink-0 text-icon";
 
-/** The three things a tab can be made from nothing: the grid at the top. */
+/** The three things a tab can be made from nothing: the grid at the top, Terminal first so ⌘T ↵ opens one. */
 const CREATE: Action[] = [
+  {
+    id: "terminal",
+    label: "Terminal",
+    icon: <SquareTerminalIcon className={TILE_ICON} />,
+    launch: { kind: "stub", stub: "terminal", title: "Terminal" },
+  },
   {
     id: "new-agent",
     label: "Agent",
     icon: <BotIcon className={TILE_ICON} />,
     launch: { kind: "new-agent" },
     hint: commandKeys("new-agent"),
-  },
-  {
-    id: "terminal",
-    label: "Terminal",
-    icon: <SquareTerminalIcon className={TILE_ICON} />,
-    launch: { kind: "stub", stub: "terminal", title: "Terminal" },
   },
   {
     id: "browser",
