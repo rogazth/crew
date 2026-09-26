@@ -16,7 +16,8 @@ Examples:
   crew call --help                every tool you can call
 
 Outside a Crew session the CLI speaks as you, in the workspace that holds the
-current directory (or --workspace). Inside one it speaks as that session.
+current directory (or --workspace). Inside one it speaks as that session, and
+only --as-user, meant for a human typing at a Crew terminal, makes it you.
 
 Exit status: 0 done, 1 the tool or command failed, 2 bad usage, 3 Crew isn't running.";
 
@@ -46,10 +47,14 @@ pub struct Global {
     #[arg(long, short = 'w', global = true, value_name = "ID|PATH")]
     pub workspace: Option<String>,
     /// Crew's data directory, where daemon.json lives. Defaults to
-    /// $CREW_DATA_DIR, else the installed app's. Naming one speaks as you even
-    /// inside a session.
+    /// $CREW_DATA_DIR, else the installed app's. Inside a Crew session it is
+    /// ignored unless --as-user is given too.
     #[arg(long, global = true, value_name = "DIR")]
     pub data_dir: Option<PathBuf>,
+    /// For a human at a Crew terminal: speak as you, through daemon.json,
+    /// instead of as the session. Not for agents: Crew takes it at its word.
+    #[arg(long, global = true)]
+    pub as_user: bool,
 }
 
 #[derive(Subcommand, Debug)]
@@ -148,6 +153,7 @@ Examples:
     },
 
     /// The daemon behind the app: status, stop, restart, and running it on its own.
+    /// Refused inside a Crew session, unless --as-user.
     Daemon {
         #[command(subcommand)]
         command: DaemonCommand,
@@ -307,8 +313,9 @@ mod tests {
         assert_eq!(cli.global.workspace.as_deref(), Some("/tmp/x"));
         assert_eq!(cli.global.data_dir, Some(PathBuf::from("/d")));
         assert!(matches!(cli.command, Command::Agents));
-        let cli = parse(&["--json", "ps"]);
-        assert!(cli.global.json && matches!(cli.command, Command::Ps));
+        assert!(!cli.global.as_user);
+        let cli = parse(&["--json", "ps", "--as-user"]);
+        assert!(cli.global.json && cli.global.as_user && matches!(cli.command, Command::Ps));
     }
 
     #[test]

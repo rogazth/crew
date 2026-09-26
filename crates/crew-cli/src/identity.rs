@@ -3,7 +3,11 @@
 //! Inside an agent or a terminal session Crew put `CREW_SOCKET` and
 //! `CREW_TOKEN` in the environment, and those are the session: the CLI acts as
 //! it, in its workspace. Anywhere else it is the user, and the way in is
-//! `<data-dir>/daemon.json`, which only the user can read.
+//! `<data-dir>/daemon.json`.
+//!
+//! That is policy, not a wall. Everything Crew starts runs as the user's UID
+//! and could read daemon.json itself; what the CLI promises is that it never
+//! does so on a session's behalf unless a human says `--as-user`.
 
 use std::path::{Path, PathBuf};
 
@@ -44,18 +48,32 @@ pub enum Source {
     User { data_dir: PathBuf },
 }
 
+/// Whether this runs inside a Crew session. Either variable is enough: a
+/// session that lost the other one is still a session, and must not end up
+/// speaking as the user because of it.
+pub fn in_session(env: &Env) -> bool {
+    env.socket.is_some() || env.token.is_some()
+}
+
 /// A session's own environment wins, because a shell inside a session that
-/// acted as the user would reach past what the session was allowed. Naming a
-/// data dir is the one way out: it points at a daemon, and possibly another
-/// one than the session's. `CREW_DATA_DIR` is not that: the dev app exports it
-/// and its sessions inherit it.
+/// acted as the user would reach past what the session was allowed: the user
+/// skips process approval and can stop the daemon under every other session.
+/// Only `--as-user` gets out, and it says what it does. Naming a data dir does
+/// not: an agent reaches for `--data-dir` to find its daemon, not to become
+/// someone else. `CREW_DATA_DIR` is not a way out either; the dev app exports
+/// it and its sessions inherit it.
 pub fn choose(global: &Global, env: &Env) -> Result<Source, CliError> {
-    if global.data_dir.is_none() {
-        if let (Some(socket), Some(token)) = (&env.socket, &env.token) {
-            return Ok(Source::Session { socket: socket.clone(), token: token.clone() });
-        }
+    if global.as_user || !in_session(env) {
+        return Ok(Source::User { data_dir: data_dir(global.data_dir.as_deref(), env)? });
     }
-    Ok(Source::User { data_dir: data_dir(global.data_dir.as_deref(), env)? })
+    match (&env.socket, &env.token) {
+        (Some(socket), Some(token)) => Ok(Source::Session { socket: socket.clone(), token: token.clone() }),
+        _ => Err(CliError::Failed(
+            "Only one of CREW_SOCKET and CREW_TOKEN is set, so this Crew session can't reach Crew, and it never \
+             speaks as you instead. A human at this terminal can pass --as-user."
+                .into(),
+        )),
+    }
 }
 
 /// `--data-dir`, else `$CREW_DATA_DIR`, else the installed app's. A dev build
@@ -137,6 +155,9 @@ impl Identity {
                 if global.workspace.is_some() {
                     eprintln!("crew: --workspace is ignored inside a Crew session, which acts in its own workspace");
                 }
+                if global.data_dir.is_some() {
+                    eprintln!("crew: --data-dir is ignored inside a Crew session, which speaks to its own daemon; a human can add --as-user");
+                }
                 Ok(Identity::Session { link: Link::new(socket, token, None) })
             }
             Source::User { data_dir } => {
@@ -189,15 +210,42 @@ mod tests {
         assert!(matches!(choose(&Global::default(), &env).expect("choose"), Source::Session { .. }));
     }
 
+    /// It used to: `crew --data-dir <the app's> …` made an agent the user,
+    /// which skips process approval.
     #[test]
-    fn naming_a_data_dir_speaks_as_the_user_even_in_a_session() {
+    fn naming_a_data_dir_does_not_make_a_session_the_user() {
         let global = Global { data_dir: Some("/other".into()), ..Global::default() };
+        assert_eq!(
+            choose(&global, &session_env()).expect("choose"),
+            Source::Session { socket: "/data/crew.sock".into(), token: "t".into() }
+        );
+    }
+
+    #[test]
+    fn as_user_is_the_one_way_out_of_a_session() {
+        let global = Global { as_user: true, ..Global::default() };
+        assert_eq!(choose(&global, &session_env()).expect("choose"), Source::User { data_dir: "/dev-data".into() });
+        let global = Global { as_user: true, data_dir: Some("/other".into()), ..Global::default() };
         assert_eq!(choose(&global, &session_env()).expect("choose"), Source::User { data_dir: "/other".into() });
     }
 
     #[test]
-    fn half_a_session_is_no_session() {
-        let env = Env { token: Some("t".into()), home: Some("/Users/me".into()), ..Env::default() };
+    fn half_a_session_is_refused_not_taken_for_the_user() {
+        for env in [
+            Env { token: Some("t".into()), home: Some("/Users/me".into()), ..Env::default() },
+            Env { socket: Some("/s".into()), home: Some("/Users/me".into()), ..Env::default() },
+        ] {
+            let Err(CliError::Failed(message)) = choose(&Global::default(), &env) else { panic!("chose an identity") };
+            assert!(message.contains("--as-user"), "{message}");
+            let global = Global { as_user: true, ..Global::default() };
+            assert!(matches!(choose(&global, &env).expect("choose"), Source::User { .. }));
+        }
+    }
+
+    #[test]
+    fn outside_a_session_the_cli_is_the_user() {
+        let env = Env { home: Some("/Users/me".into()), ..Env::default() };
+        assert!(!in_session(&env));
         assert!(matches!(choose(&Global::default(), &env).expect("choose"), Source::User { .. }));
     }
 
@@ -258,12 +306,15 @@ mod tests {
             r#"{"url":"ws://127.0.0.1:1","token":"w","socket":"/d/crew.sock","userToken":"u","version":"0","pid":9}"#,
         )
         .expect("write");
-        let global = Global { data_dir: Some(dir.clone()), workspace: Some("ws-id".into()), json: false };
+        let global = Global { data_dir: Some(dir.clone()), workspace: Some("ws-id".into()), json: false, as_user: true };
         let Identity::User { link } = Identity::resolve(&global, &session_env()).expect("resolve") else {
             panic!("not the user");
         };
         assert_eq!(link, Link::new("/d/crew.sock", "u", Some("ws-id".into())));
-        let Identity::Session { link } = Identity::resolve(&Global::default(), &session_env()).expect("resolve") else {
+        // The same data dir without --as-user: daemon.json is right there, and
+        // still not read.
+        let global = Global { as_user: false, ..global };
+        let Identity::Session { link } = Identity::resolve(&global, &session_env()).expect("resolve") else {
             panic!("not the session");
         };
         assert_eq!(link, Link::new("/data/crew.sock", "t", None));

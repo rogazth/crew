@@ -16,7 +16,7 @@ use serde_json::{json, Value};
 
 use crate::app::Status;
 use crate::args::DaemonCommand;
-use crate::identity::{self, Source};
+use crate::identity;
 use crate::launch_agent::{self, Agent, LABEL};
 use crate::output;
 use crate::{CliError, Ctx};
@@ -77,7 +77,23 @@ impl Supervisor {
     }
 }
 
+/// Every one of these acts on the daemon, not on a session: stopping it stops
+/// every other session's processes too, and reaching it at all takes the
+/// user's token or a signal, which is daemon.json's to give. So a session is
+/// refused rather than quietly made the user.
+fn refuse_in_session(ctx: &Ctx) -> Result<(), CliError> {
+    if identity::in_session(&ctx.env) && !ctx.global.as_user {
+        return Err(CliError::Failed(
+            "`crew daemon` isn't available inside a Crew session: the daemon runs every session, not just this one. \
+             Run it from your own terminal, or add --as-user if you are a human at this one."
+                .into(),
+        ));
+    }
+    Ok(())
+}
+
 pub fn run(ctx: &Ctx, command: DaemonCommand) -> Result<ExitCode, CliError> {
+    refuse_in_session(ctx)?;
     let supervised = |ctx: &Ctx| -> Result<(PathBuf, Supervisor), CliError> {
         let dir = data_dir(ctx)?;
         let supervisor = Supervisor::current(&dir);
@@ -153,8 +169,7 @@ fn crewd_path(flag: Option<&Path>) -> Result<PathBuf, CliError> {
 
 fn install(ctx: &Ctx, crewd: Option<&Path>) -> Result<ExitCode, CliError> {
     macos_only("install")?;
-    // Not the session's: installing is for a data dir, not for whoever asks.
-    let dir = identity::data_dir(ctx.global.data_dir.as_deref(), &ctx.env)?;
+    let dir = data_dir(ctx)?;
     let agent = Agent { program: crewd_path(crewd)?, data_dir: dir.clone() };
     let plist = launch_agent::plist_path(&dir);
     if launch_agent::loaded().is_some() {
@@ -194,7 +209,7 @@ fn install(ctx: &Ctx, crewd: Option<&Path>) -> Result<ExitCode, CliError> {
 
 fn uninstall(ctx: &Ctx) -> Result<ExitCode, CliError> {
     macos_only("uninstall")?;
-    let plist = launch_agent::plist_path(&identity::data_dir(ctx.global.data_dir.as_deref(), &ctx.env)?);
+    let plist = launch_agent::plist_path(&data_dir(ctx)?);
     let was_loaded = launch_agent::loaded().is_some();
     if was_loaded {
         launch_agent::bootout().map_err(CliError::Failed)?;
@@ -241,15 +256,11 @@ fn write_plist(path: &Path, body: &str) -> Result<(), CliError> {
     })
 }
 
-/// The data dir whichever identity this run has reaches.
+/// The user's data dir: past [`refuse_in_session`], this run is the user. It
+/// is never worked out from a session's socket, whose daemon.json is exactly
+/// what a session must not help itself to.
 fn data_dir(ctx: &Ctx) -> Result<PathBuf, CliError> {
-    match identity::choose(&ctx.global, &ctx.env)? {
-        Source::User { data_dir } => Ok(data_dir),
-        Source::Session { socket, .. } => Path::new(&socket)
-            .parent()
-            .map(Path::to_path_buf)
-            .ok_or_else(|| CliError::Failed(format!("No data dir beside {socket}"))),
-    }
+    identity::data_dir(ctx.global.data_dir.as_deref(), &ctx.env)
 }
 
 /// The daemon daemon.json names, if it answers on its socket. A file whose
@@ -436,6 +447,38 @@ mod tests {
         let me = std::process::id();
         assert!(alive(me));
         assert!(!is_crewd(me));
+    }
+
+    /// It used to read daemon.json beside the session's socket and stop the
+    /// daemon with the user's token, or SIGTERM, from inside any session.
+    #[test]
+    fn a_session_cannot_drive_the_daemon() {
+        use crate::args::Global;
+        use crate::identity::Env;
+        let dir = std::env::temp_dir().join(format!("crew-cli-daemon-session-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let sessions = [
+            Env { socket: Some(dir.join("crew.sock").to_string_lossy().into_owned()), token: Some("t".into()), ..Env::default() },
+            Env { token: Some("t".into()), ..Env::default() },
+        ];
+        for env in sessions {
+            for global in [Global::default(), Global { data_dir: Some(dir.clone()), ..Global::default() }] {
+                let ctx = Ctx { global, env: env.clone() };
+                // Not install and uninstall: were the refusal to break, they
+                // would reach launchctl, and tests never do.
+                for command in [DaemonCommand::Stop, DaemonCommand::Restart, DaemonCommand::Status] {
+                    let Err(CliError::Failed(message)) = run(&ctx, command) else { panic!("a session drove the daemon") };
+                    assert!(message.contains("inside a Crew session") && message.contains("--as-user"), "{message}");
+                }
+            }
+        }
+        // A human who says so gets past the refusal (to "not running" here).
+        let ctx = Ctx {
+            global: Global { data_dir: Some(dir.clone()), as_user: true, ..Global::default() },
+            env: Env { token: Some("t".into()), ..Env::default() },
+        };
+        assert!(refuse_in_session(&ctx).is_ok());
+        assert!(matches!(stop_daemon(&data_dir(&ctx).expect("dir")), Err(CliError::NotRunning(_))));
     }
 
     #[test]
