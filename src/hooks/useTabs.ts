@@ -10,16 +10,21 @@ import {
   panesOf,
   patchBrowserTab,
   parseTabs,
+  pinTab,
   reopenTab,
   reorderTabs,
   selectTab,
   stepTab,
   type TabRegistry,
   type TabState,
+  unpinTab,
   withRecent,
 } from '../lib/tabs';
+import { collapseGroup, collapseOthers, expandGroup, revealActive, visibleIn, type PlaceOf } from '../lib/tabGroups';
 import type { Tab } from '../lib/types';
 import { discardEdits, fileName, unsavedTabs } from '../lib/unsavedEdits';
+
+const NO_COLLAPSED: string[] = [];
 
 /** The strips dropping `id` takes: its own, and a workspace's worktrees' too. */
 const within = (id: string, key: string) => key === id || (!id.includes('@') && key.startsWith(`${id}@`));
@@ -29,8 +34,10 @@ const within = (id: string, key: string) => key === id || (!id.includes('@') && 
  * kept per worktree — and survive a restart. A context this window has shown
  * keeps its entry for the rest of the run: its panes stay mounted behind the one
  * on screen, which is what keeps their processes alive across a switch.
+ * `placeOf` names each tab's worktree while tabs are kept together and a
+ * worktree's can fold into a chip; null otherwise.
  */
-export function useTabs(workspaceId: string | null) {
+export function useTabs(workspaceId: string | null, placeOf: PlaceOf | null = null) {
   const [registry, setRegistry] = useState<TabRegistry>({});
   // A workspace is read once. Re-reading on every switch would hand back the
   // saved tabs while the live ones are still on screen.
@@ -69,8 +76,8 @@ export function useTabs(workspaceId: string | null) {
     for (const [id, next] of Object.entries(registry)) {
       if (saved.current[id] === next || !restoredIds.current.has(id)) continue;
       saved.current[id] = next;
-      const { tabs, activeId, recent } = next;
-      void api.stateSet(`tabs:${id}`, JSON.stringify({ tabs, activeId, recent })).catch(() => {});
+      const { tabs, activeId, recent, collapsed } = next;
+      void api.stateSet(`tabs:${id}`, JSON.stringify({ tabs, activeId, recent, collapsed })).catch(() => {});
     }
   }, [registry]);
 
@@ -94,16 +101,24 @@ export function useTabs(workspaceId: string | null) {
     });
   }, []);
 
-  /** Tab actions from the keyboard and the strip aim at the workspace on screen. */
+  /**
+   * Tab actions from the keyboard and the strip aim at the workspace on screen.
+   * Whatever brings a folded tab on screen — the sidebar, a reopen — unfolds its worktree.
+   */
   const mutate = useCallback(
     (step: (state: TabState) => TabState) => {
-      if (workspaceId) mutateIn(workspaceId, step);
+      if (!workspaceId) return;
+      const reveal = (s: TabState) => (placeOf ? revealActive(s, placeOf) : s);
+      mutateIn(workspaceId, (s) => reveal(step(reveal(s))));
     },
-    [workspaceId, mutateIn],
+    [workspaceId, mutateIn, placeOf],
   );
 
   const open = useCallback((tab: Tab) => mutate((s) => openTab(s, tab)), [mutate]);
-  const close = useCallback((id: string) => mutate((s) => closeTab(s, id)), [mutate]);
+  const close = useCallback(
+    (id: string) => mutate((s) => closeTab(s, id, visibleIn(s, placeOf))),
+    [mutate, placeOf],
+  );
   /** A session's tab can live in any context, so every one of them lets it go. */
   const closeForSession = useCallback(
     (sessionId: string) =>
@@ -119,10 +134,29 @@ export function useTabs(workspaceId: string | null) {
     [],
   );
   const reopen = useCallback(() => mutate(reopenTab), [mutate]);
-  const step = useCallback((delta: number) => mutate((s) => stepTab(s, delta)), [mutate]);
+  const step = useCallback(
+    (delta: number) => mutate((s) => stepTab(s, delta, visibleIn(s, placeOf))),
+    [mutate, placeOf],
+  );
   const activate = useCallback((index: number) => mutate((s) => activateTab(s, index)), [mutate]);
   const select = useCallback((id: string | null) => mutate((s) => selectTab(s, id)), [mutate]);
   const reorder = useCallback((ids: string[]) => mutate((s) => reorderTabs(s, ids)), [mutate]);
+  const pin = useCallback((id: string) => mutate((s) => pinTab(s, id)), [mutate]);
+  const unpin = useCallback((id: string) => mutate((s) => unpinTab(s, id)), [mutate]);
+  /** Folds `place`'s tabs into a chip where `at` stands. */
+  const collapse = useCallback(
+    (place: string, at: string) => placeOf && mutate((s) => collapseGroup(s, place, at, placeOf)),
+    [mutate, placeOf],
+  );
+  const collapseOther = useCallback(
+    (place: string) => placeOf && mutate((s) => collapseOthers(s, place, placeOf)),
+    [mutate, placeOf],
+  );
+  const expand = useCallback(
+    (place: string) => placeOf && mutate((s) => expandGroup(s, place, placeOf)),
+    [mutate, placeOf],
+  );
+
   /** The tab last on screen of those `keep` takes, or none when it takes none. */
   const selectLastUsed = useCallback(
     (keep: (tab: Tab) => boolean) => mutate((s) => selectTab(s, lastUsed(s, keep)?.id ?? null)),
@@ -218,11 +252,14 @@ export function useTabs(workspaceId: string | null) {
   }, []);
 
   const panes = useMemo(() => panesOf(registry, workspaceId), [registry, workspaceId]);
-  const tabs = state?.tabs ?? NO_TABS.tabs;
-  const active = tabs.find((t) => t.id === state?.activeId) ?? null;
+  // A tab brought on screen from another workspace, before this one showed, unfolds too.
+  const shown = useMemo(() => (state && placeOf ? revealActive(state, placeOf) : state), [state, placeOf]);
+  const tabs = shown?.tabs ?? NO_TABS.tabs;
+  const active = tabs.find((t) => t.id === shown?.activeId) ?? null;
   return {
     tabs,
     active,
+    collapsed: shown?.collapsed ?? NO_COLLAPSED,
     panes,
     open,
     close,
@@ -232,6 +269,11 @@ export function useTabs(workspaceId: string | null) {
     activate,
     select,
     reorder,
+    pin,
+    unpin,
+    collapse,
+    collapseOther,
+    expand,
     selectLastUsed,
     selectIn,
     openIn,

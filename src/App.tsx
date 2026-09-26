@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { AgentSheetHost } from "./chrome/AgentSheet";
 import { CommandPalette, type PaletteMode } from "./chrome/CommandPalette";
 import { ConfirmDialog } from "./chrome/ConfirmDialog";
@@ -7,7 +7,7 @@ import { ShortcutsDialog } from "./chrome/ShortcutsDialog";
 import { SidebarToggle } from "./chrome/SidebarToggle";
 import { LinkRouter } from "./chrome/LinkRouter";
 import { AppSidebar } from "./chrome/AppSidebar";
-import { TabBar } from "./chrome/TabBar";
+import { TabBar, type TabGroups } from "./chrome/TabBar";
 import { UpdateDialog } from "./chrome/UpdateDialog";
 import { useAgentSheet } from "./hooks/useAgentSheet";
 import { useAppCommands } from "./hooks/useAppCommands";
@@ -110,6 +110,26 @@ export function App() {
   // Destructured: the hook returns a fresh object each render, and these
   // callbacks are dependencies of half the shell.
   const { page, settings, isWorkspace, isRoutines, close: closePage, toggle: togglePage, openSettings, openRoutines } = usePages();
+
+  // With only the main checkout there is no other worktree to tell apart.
+  const { tabPlaceOf, hues } = work;
+  const branches = useMemo(
+    () => new Map(worktrees.list.map((tree) => [tree.path, { label: shortBranch(tree), hue: hues.get(tree.path) ?? 0 }])),
+    [hues, worktrees.list],
+  );
+  const { collapsed, collapse, collapseOther, expand } = tabs;
+  const groups = useMemo<TabGroups | null>(
+    () =>
+      tabPlaceOf && {
+        placeOf: tabPlaceOf,
+        labelOf: (place) => branches.get(place) ?? null,
+        collapsed,
+        onCollapse: collapse,
+        onCollapseOthers: collapseOther,
+        onExpand: expand,
+      },
+    [branches, collapse, collapseOther, collapsed, expand, tabPlaceOf],
+  );
 
   const nav = useNavigation({ tabs, sessions, confirms, removeSession: remove, closePage, route: work.route });
   const sheet = useAgentSheet({ create, update, openSession: nav.openSession, createWorktree: worktrees.create });
@@ -245,22 +265,15 @@ export function App() {
             onReopen={tabs.reopen}
             onEditSession={sheet.editAgent}
             onReorder={tabs.reorder}
+            onPin={tabs.pin}
+            onUnpin={tabs.unpin}
             onLaunch={launch}
             context={{
               workspace: active?.name ?? "",
               branch: current ? worktreeLabel(current) : "",
               onSwitch: () => openPalette("context"),
             }}
-            // With only the main checkout there is no other worktree to tell apart.
-            branchOf={
-              work.scope === "all" && active && worktrees.list.length > 1
-                ? (tab) => {
-                    const session = tab.kind === "session" ? sessions.find((s) => s.id === tab.sessionId) : undefined;
-                    const tree = session && worktrees.list.find((t) => t.path === work.pathOf(session));
-                    return tree ? { label: shortBranch(tree), hue: work.hues.get(tree.path) ?? 0 } : null;
-                  }
-                : null
-            }
+            groups={groups}
           />
 
 
