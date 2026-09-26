@@ -22,9 +22,9 @@ function freePort() {
 // A linked worktree keeps its data inside itself and takes a free port, so it runs
 // beside the main checkout and `git worktree remove` takes its database with it.
 const linked = git("--git-dir") !== git("--git-common-dir");
-const PORT = linked ? await freePort() : 1420;
-const env = { ...process.env, CREW_DEV_PORT: String(PORT) };
-if (linked) env.CREW_DATA_DIR = path.join(git("--show-toplevel"), ".crew-dev");
+const PORT = Number(process.env.CREW_PORT) || (linked ? await freePort() : 1420);
+const env = { ...process.env, CREW_PORT: String(PORT) };
+if (linked && !env.CREW_USER_DATA) env.CREW_USER_DATA = path.join(git("--show-toplevel"), ".crew-dev");
 
 function run(command, args) {
   return new Promise((resolve, reject) => {
@@ -83,7 +83,7 @@ try {
   shutdown(1);
 }
 
-if (env.CREW_DATA_DIR) console.log(`crew: data in ${env.CREW_DATA_DIR}, dev server on ${PORT}`);
+if (env.CREW_USER_DATA) console.log(`crew: data in ${env.CREW_USER_DATA}, dev server on ${PORT}`);
 const app = spawn(electron, ["."], { stdio: "inherit", env });
 app.on("exit", (code) => shutdown(code ?? 0));
 app.on("error", (error) => {

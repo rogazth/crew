@@ -1,4 +1,4 @@
-import { Button } from "@cloudflare/kumo";
+import { Button } from "../chrome/kit";
 
 type Props = {
   title: string;

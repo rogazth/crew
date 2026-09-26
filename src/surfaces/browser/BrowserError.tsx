@@ -1,4 +1,4 @@
-import { Button } from "@cloudflare/kumo";
+import { Button } from "../../chrome/kit";
 import { describeLoadError, type LoadError } from "../../lib/browser/loadError";
 
 type Props =

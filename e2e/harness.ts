@@ -252,7 +252,7 @@ function sandboxEnv(home: string, config: string): NodeJS.ProcessEnv {
     XDG_STATE_HOME: path.join(home, ".local/state"),
     XDG_CACHE_HOME: path.join(home, ".cache"),
     // macOS resolves appData without HOME, so a dev build would land in the user's own "Crew Dev".
-    CREW_DATA_DIR: path.join(config, "Crew Dev"),
+    CREW_USER_DATA: path.join(config, "Crew Dev"),
     PATH: [path.join(home, ".local/bin"), path.join(home, "bin"), ...system].join(":"),
     SHELL: "/bin/bash",
     // Only the sandbox's .gitconfig: nothing from the machine's /etc/gitconfig.
@@ -555,7 +555,7 @@ export async function savedStrip(
 
 /** The texts the kit paints as errors (a field's, a dialog's failure) inside `scope`. */
 export async function errorsIn(scope: Locator): Promise<string[]> {
-  const texts = await scope.locator(".text-kumo-danger").allInnerTexts();
+  const texts = await scope.locator(".text-danger").allInnerTexts();
   return texts.map((text) => text.trim()).filter(Boolean);
 }
 

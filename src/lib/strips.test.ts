@@ -106,7 +106,7 @@ describe("tabPlace", () => {
 
   it("gives pages, stubs and sessions it cannot find no worktree", () => {
     expect(tabPlace(page("x"), workspace, trees, sessions)).toBeNull();
-    const stub: Tab = { id: stubTabId("sidechat"), kind: "stub", stub: "sidechat", title: "" };
+    const stub: Tab = { id: stubTabId("terminal"), kind: "stub", stub: "terminal", title: "" };
     expect(tabPlace(stub, workspace, trees, sessions)).toBeNull();
     expect(tabPlace(run("nobody"), workspace, trees, sessions)).toBeNull();
   });

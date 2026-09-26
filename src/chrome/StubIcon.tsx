@@ -1,9 +1,9 @@
-import { ChatCircleIcon, TerminalWindowIcon, type Icon } from "@phosphor-icons/react";
+import { HistoryIcon, SquareTerminalIcon, type LucideIcon as Icon } from "lucide-react";
 import type { StubKind } from "../lib/types";
 
 const ICONS: Record<StubKind, Icon> = {
-  terminal: TerminalWindowIcon,
-  sidechat: ChatCircleIcon,
+  terminal: SquareTerminalIcon,
+  history: HistoryIcon,
 };
 
 export function StubIcon({ stub, className }: { stub: StubKind; className?: string }) {

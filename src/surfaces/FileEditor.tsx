@@ -1,5 +1,5 @@
 import { lazy, Suspense, type ReactNode } from "react";
-import { ListBulletsIcon } from "@phosphor-icons/react";
+import { ListIcon } from "lucide-react";
 import { Button } from "../chrome/kit";
 import { useCommands } from "../hooks/useCommand";
 import { useOutlinePref } from "../hooks/useOutlinePref";
@@ -68,9 +68,9 @@ export function FileEditor({ path, relative, files, onOpenPath, actions }: Props
             title="Outline"
             aria-pressed={outline}
             onClick={toggleOutline}
-            className="-mr-2 flex size-7 shrink-0 items-center justify-center rounded-md text-kumo-subtle hover:bg-hover hover:text-kumo-default aria-pressed:text-kumo-default"
+            className="-mr-2 flex size-7 shrink-0 items-center justify-center rounded-md text-icon hover:bg-hover hover:text-text aria-pressed:text-text"
           >
-            <ListBulletsIcon className="size-4" />
+            <ListIcon className="size-4" />
           </button>
         )}
         {actions}

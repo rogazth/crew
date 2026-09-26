@@ -1,4 +1,4 @@
-import { CaretDownIcon, CaretUpIcon, XIcon } from "@phosphor-icons/react";
+import { ChevronDownIcon, ChevronUpIcon, XIcon } from "lucide-react";
 import { useEffect, useRef, type KeyboardEvent } from "react";
 
 type Props = {
@@ -36,7 +36,7 @@ export function FindBar({ label, query, results, focusToken, onQuery, onStep, on
   const count = results.count > 0 ? `${results.index + 1} of ${results.count}` : "";
 
   return (
-    <div className="absolute top-2 right-4 z-10 flex items-center gap-1 rounded-lg bg-kumo-control p-1 shadow-lg ring ring-kumo-line">
+    <div className="absolute top-2 right-4 z-10 flex items-center gap-1 rounded-lg bg-surface p-1 shadow-float">
       <input
         ref={input}
         value={query}
@@ -45,16 +45,16 @@ export function FindBar({ label, query, results, focusToken, onQuery, onStep, on
         spellCheck={false}
         onChange={(event) => onQuery(event.target.value)}
         onKeyDown={onKeyDown}
-        className="h-7 w-48 bg-transparent px-2 text-[13px] text-kumo-default caret-kumo-default outline-none"
+        className="h-7 w-48 bg-transparent px-2 text-[13px] text-text caret-text outline-none"
       />
-      <span className="min-w-12 px-1 text-right text-[11px] tabular-nums text-kumo-subtle">
+      <span className="min-w-12 px-1 text-right text-[11px] tabular-nums text-text-muted">
         {count}
       </span>
       <Step label="Previous match" onClick={() => onStep(-1)}>
-        <CaretUpIcon className="size-4" />
+        <ChevronUpIcon className="size-4" />
       </Step>
       <Step label="Next match" onClick={() => onStep(1)}>
-        <CaretDownIcon className="size-4" />
+        <ChevronDownIcon className="size-4" />
       </Step>
       <Step label="Close find" onClick={onClose}>
         <XIcon className="size-4" />
@@ -73,7 +73,7 @@ function Step({ label, onClick, children }: StepProps) {
       title={label}
       onMouseDown={(event) => event.preventDefault()}
       onClick={onClick}
-      className="flex size-7 items-center justify-center rounded-md text-kumo-subtle hover:bg-hover hover:text-kumo-default"
+      className="flex size-7 items-center justify-center rounded-md text-icon hover:bg-hover hover:text-text"
     >
       {children}
     </button>

@@ -58,7 +58,11 @@ impl Store {
         conn.pragma_update(None, "cache_size", -8192)
             .map_err(|e| e.to_string())?;
         migrate(&conn).map_err(|e| e.to_string())?;
-        settle_open_turns(&conn).map_err(|e| e.to_string())?;
+        // The seeded design profile keeps its working and waiting rows as seeded,
+        // so every status can be looked at without a live turn behind it.
+        if std::env::var_os("CREW_KEEP_STATUS").is_none() {
+            settle_open_turns(&conn).map_err(|e| e.to_string())?;
+        }
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
         })

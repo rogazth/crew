@@ -1,23 +1,5 @@
 import { Menu } from "@base-ui/react/menu";
-import {
-  ArrowsDownUpIcon,
-  CaretRightIcon,
-  CheckIcon,
-  CircleDashedIcon,
-  ClockIcon,
-  EyeIcon,
-  FunnelSimpleIcon,
-  GitBranchIcon,
-  GitDiffIcon,
-  HandGrabbingIcon,
-  ListNumbersIcon,
-  RobotIcon,
-  ShapesIcon,
-  StackIcon,
-  TerminalWindowIcon,
-  TextAaIcon,
-  type Icon,
-} from "@phosphor-icons/react";
+import { ALargeSmallIcon, ArrowUpDownIcon, BotIcon, CheckIcon, ChevronRightIcon, CircleDashedIcon, ClockIcon, EyeIcon, GitBranchIcon, GitCompareArrowsIcon, HandGrabIcon, LayersIcon, ListFilterIcon, ListOrderedIcon, ShapesIcon, SquareTerminalIcon, type LucideIcon as Icon } from "lucide-react";
 import type { ReactNode } from "react";
 import { ProviderIcon } from "./ProviderIcon";
 import { PROVIDERS } from "../lib/providers";
@@ -36,15 +18,15 @@ import {
 import type { SessionKind } from "../lib/types";
 
 const SCOPES: { id: Scope; label: string; icon: Icon }[] = [
-  { id: "all", label: "All worktrees", icon: StackIcon },
+  { id: "all", label: "All worktrees", icon: LayersIcon },
   { id: "current", label: "Current only", icon: GitBranchIcon },
   { id: "busy", label: "With activity", icon: CircleDashedIcon },
 ];
 
 const ORDERINGS: { id: Ordering; label: string; icon: Icon }[] = [
-  { id: "manual", label: "Manual", icon: HandGrabbingIcon },
+  { id: "manual", label: "Manual", icon: HandGrabIcon },
   { id: "updated", label: "Updated", icon: ClockIcon },
-  { id: "name", label: "Name", icon: TextAaIcon },
+  { id: "name", label: "Name", icon: ALargeSmallIcon },
 ];
 
 const RECENCIES: { id: Recency; label: string; short: string }[] = [
@@ -57,19 +39,19 @@ const RECENCIES: { id: Recency; label: string; short: string }[] = [
 const limitLabel = (limit: Limit) => (limit === 0 ? "No limit" : String(limit));
 
 const DETAILS: { id: Detail; label: string; icon: Icon }[] = [
-  { id: "names", label: "Agent names", icon: TextAaIcon },
-  { id: "diff", label: "Diff stats", icon: GitDiffIcon },
+  { id: "names", label: "Agent names", icon: ALargeSmallIcon },
+  { id: "diff", label: "Diff stats", icon: GitCompareArrowsIcon },
   { id: "status", label: "Status", icon: CircleDashedIcon },
   { id: "updated", label: "Updated", icon: ClockIcon },
 ];
 
 const KINDS: { id: SessionKind; label: string; icon: Icon }[] = [
-  { id: "agent", label: "Agents", icon: RobotIcon },
-  { id: "terminal", label: "Sessions", icon: TerminalWindowIcon },
+  { id: "agent", label: "Agents", icon: BotIcon },
+  { id: "terminal", label: "Sessions", icon: SquareTerminalIcon },
 ];
 
 const PANEL =
-  "max-h-[70vh] w-56 origin-(--transform-origin) overflow-y-auto overscroll-none rounded-xl bg-kumo-control p-1 text-kumo-default shadow-lg ring ring-kumo-line outline-none transition-[opacity,scale] duration-100 data-starting-style:scale-95 data-starting-style:opacity-0 data-ending-style:scale-95 data-ending-style:opacity-0";
+  "max-h-[70vh] w-56 origin-(--transform-origin) overflow-y-auto overscroll-none rounded-xl bg-surface p-1 text-text shadow-float outline-none transition-[opacity,scale] duration-100 data-starting-style:scale-95 data-starting-style:opacity-0 data-ending-style:scale-95 data-ending-style:opacity-0";
 
 const ROW =
   "flex h-8 w-full cursor-default items-center gap-2 whitespace-nowrap rounded-md px-2 text-left outline-none select-none data-highlighted:bg-hover data-popup-open:bg-hover";
@@ -97,13 +79,13 @@ export function SidebarPrefsMenu({ prefs, onChange }: Props) {
         aria-label="Customize sidebar"
         title="Customize sidebar"
         data-tauri-drag-region="false"
-        className={`relative grid size-6 shrink-0 place-items-center rounded-md outline-none transition-colors hover:bg-hover hover:text-kumo-default data-popup-open:bg-hover data-popup-open:text-kumo-default ${
-          dirty ? "text-kumo-default" : "text-kumo-subtle"
+        className={`relative grid size-6 shrink-0 place-items-center rounded-md outline-none transition-colors hover:bg-hover hover:text-text data-popup-open:bg-hover data-popup-open:text-text ${
+          dirty ? "text-text" : "text-text-muted"
         }`}
       >
-        <FunnelSimpleIcon className="size-4" />
+        <ListFilterIcon className="size-4" />
         {dirty && (
-          <span className="absolute -top-0.5 -right-0.5 size-1.5 rounded-full bg-kumo-default ring-2 ring-kumo-control" />
+          <span className="absolute -top-0.5 -right-0.5 size-1.5 rounded-full bg-text ring-2 ring-surface" />
         )}
       </Menu.Trigger>
 
@@ -116,14 +98,14 @@ export function SidebarPrefsMenu({ prefs, onChange }: Props) {
           className="z-50"
         >
           <Menu.Popup className={PANEL}>
-            <Submenu icon={StackIcon} label="Worktrees" value={scope?.label}>
+            <Submenu icon={LayersIcon} label="Worktrees" value={scope?.label}>
               <Menu.RadioGroup
                 value={prefs.scope}
                 onValueChange={(value) => onChange({ ...prefs, scope: value as Scope })}
               >
                 {SCOPES.map((item) => (
                   <Menu.RadioItem key={item.id} value={item.id} className={ROW}>
-                    <item.icon className="size-4 shrink-0 text-kumo-subtle" />
+                    <item.icon className="size-4 shrink-0 text-icon" />
                     <span className="min-w-0 flex-1 truncate">{item.label}</span>
                     <Menu.RadioItemIndicator>
                       <CheckIcon className="size-4 shrink-0" />
@@ -133,14 +115,14 @@ export function SidebarPrefsMenu({ prefs, onChange }: Props) {
               </Menu.RadioGroup>
             </Submenu>
 
-            <Submenu icon={ArrowsDownUpIcon} label="Ordering" value={ordering?.label}>
+            <Submenu icon={ArrowUpDownIcon} label="Ordering" value={ordering?.label}>
               <Menu.RadioGroup
                 value={prefs.ordering}
                 onValueChange={(value) => onChange({ ...prefs, ordering: value as Ordering })}
               >
                 {ORDERINGS.map((item) => (
                   <Menu.RadioItem key={item.id} value={item.id} className={ROW}>
-                    <item.icon className="size-4 shrink-0 text-kumo-subtle" />
+                    <item.icon className="size-4 shrink-0 text-icon" />
                     <span className="min-w-0 flex-1 truncate">{item.label}</span>
                     <Menu.RadioItemIndicator>
                       <CheckIcon className="size-4 shrink-0" />
@@ -155,7 +137,7 @@ export function SidebarPrefsMenu({ prefs, onChange }: Props) {
                 <Check
                   key={item.id}
                   label={item.label}
-                  icon={<item.icon className="size-4 shrink-0 text-kumo-subtle" />}
+                  icon={<item.icon className="size-4 shrink-0 text-icon" />}
                   checked={prefs.show.includes(item.id)}
                   onChange={() => onChange({ ...prefs, show: toggle(prefs.show, item.id) })}
                 />
@@ -164,13 +146,13 @@ export function SidebarPrefsMenu({ prefs, onChange }: Props) {
 
             <Separator />
 
-            <div className="flex h-8 items-center justify-between pr-1 pl-2 text-kumo-subtle">
+            <div className="flex h-8 items-center justify-between pr-1 pl-2 text-text-muted">
               <span>Filters</span>
               <Menu.Item
                 closeOnClick={false}
                 disabled={!dirty}
                 onClick={() => onChange(DEFAULT_PREFS)}
-                className="cursor-default rounded-md px-1.5 py-0.5 outline-none select-none data-disabled:opacity-40 data-highlighted:bg-hover data-highlighted:text-kumo-default"
+                className="cursor-default rounded-md px-1.5 py-0.5 outline-none select-none data-disabled:opacity-40 data-highlighted:bg-hover data-highlighted:text-text"
               >
                 Reset
               </Menu.Item>
@@ -192,7 +174,7 @@ export function SidebarPrefsMenu({ prefs, onChange }: Props) {
             </Submenu>
 
             <Submenu
-              icon={ListNumbersIcon}
+              icon={ListOrderedIcon}
               label="Per worktree"
               value={limitLabel(prefs.limit)}
             >
@@ -211,7 +193,7 @@ export function SidebarPrefsMenu({ prefs, onChange }: Props) {
                 <Check
                   key={item.id}
                   label={item.label}
-                  icon={<item.icon className="size-4 shrink-0 text-kumo-subtle" />}
+                  icon={<item.icon className="size-4 shrink-0 text-icon" />}
                   checked={!prefs.hiddenKinds.includes(item.id)}
                   onChange={() =>
                     onChange({ ...prefs, hiddenKinds: toggle(prefs.hiddenKinds, item.id) })
@@ -220,7 +202,7 @@ export function SidebarPrefsMenu({ prefs, onChange }: Props) {
               ))}
             </Submenu>
 
-            <Submenu icon={RobotIcon} label="Provider" active={prefs.hiddenProviders.length > 0}>
+            <Submenu icon={BotIcon} label="Provider" active={prefs.hiddenProviders.length > 0}>
               {PROVIDERS.map((provider) => (
                 <Check
                   key={provider.id}
@@ -244,7 +226,7 @@ export function SidebarPrefsMenu({ prefs, onChange }: Props) {
 }
 
 function Separator() {
-  return <Menu.Separator className="mx-2 my-1 h-px bg-kumo-line" />;
+  return <Menu.Separator className="mx-2 my-1 h-px bg-border" />;
 }
 
 function Submenu({
@@ -263,11 +245,11 @@ function Submenu({
   return (
     <Menu.SubmenuRoot>
       <Menu.SubmenuTrigger className={ROW}>
-        <Glyph className="size-4 shrink-0 text-kumo-subtle" />
+        <Glyph className="size-4 shrink-0 text-icon" />
         <span className="min-w-0 flex-1 truncate">{label}</span>
-        {value && <span className="shrink-0 text-kumo-subtle">{value}</span>}
-        {active && <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-current text-kumo-subtle" />}
-        <CaretRightIcon className="size-3.5 shrink-0 text-kumo-subtle" />
+        {value && <span className="shrink-0 text-text-muted">{value}</span>}
+        {active && <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-current text-text-muted" />}
+        <ChevronRightIcon className="size-3.5 shrink-0 text-icon" />
       </Menu.SubmenuTrigger>
       <Menu.Portal>
         <Menu.Positioner

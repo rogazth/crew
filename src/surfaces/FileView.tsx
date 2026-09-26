@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { ArrowClockwiseIcon, FolderOpenIcon } from "@phosphor-icons/react";
+import { RotateCwIcon, FolderOpenIcon } from "lucide-react";
 import { Button } from "../chrome/kit";
 import { useCommands } from "../hooks/useCommand";
 import { FILES_PARTITION, fileView, previewRoot } from "../lib/browser/files";
@@ -52,7 +52,7 @@ function ModeToggle({ mode, onChange }: { mode: Mode; onChange: (mode: Mode) => 
           role="radio"
           aria-checked={mode === value}
           onClick={() => onChange(value)}
-          className="flex h-6 items-center rounded-[5px] px-2 text-[12px] text-kumo-subtle outline-none transition-colors hover:text-kumo-default focus-visible:ring-2 focus-visible:ring-kumo-focus/50 aria-checked:bg-kumo-base aria-checked:text-kumo-default aria-checked:shadow-sm"
+          className="flex h-6 items-center rounded-[5px] px-2 text-[12px] text-text-muted outline-none transition-colors hover:text-text focus-visible:ring-2 focus-visible:ring-focus/50 aria-checked:bg-canvas aria-checked:text-text aria-checked:shadow-sm"
         >
           {label}
         </button>
@@ -62,7 +62,7 @@ function ModeToggle({ mode, onChange }: { mode: Mode; onChange: (mode: Mode) => 
 }
 
 const HEADER_BUTTON =
-  "flex size-7 shrink-0 items-center justify-center rounded-md text-kumo-subtle hover:bg-hover hover:text-kumo-default";
+  "flex size-7 shrink-0 items-center justify-center rounded-md text-icon hover:bg-hover hover:text-text";
 
 /** Reveals the file in Finder. */
 function RevealButton({ path }: { path: string }) {
@@ -159,7 +159,7 @@ function FilePreview({ path, relative, actions }: { path: string; relative: stri
             onClick={reload}
             className={HEADER_BUTTON}
           >
-            <ArrowClockwiseIcon className="size-4" />
+            <RotateCwIcon className="size-4" />
           </button>
           <RevealButton path={path} />
           {actions}

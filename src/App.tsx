@@ -1,5 +1,4 @@
-import { Sidebar } from "@cloudflare/kumo";
-import { useCallback, useEffect, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { AgentSheetHost } from "./chrome/AgentSheet";
 import { CommandPalette, type PaletteMode } from "./chrome/CommandPalette";
 import { ConfirmDialog } from "./chrome/ConfirmDialog";
@@ -29,7 +28,8 @@ import { useWorkspaces } from "./hooks/useWorkspaces";
 import { useWorkContext } from "./hooks/useWorkContext";
 import { focusSidebar } from "./hooks/useSpatialKeys";
 import * as api from "./lib/api";
-import type { Session } from "./lib/types";
+import { zoomApp } from "./lib/host";
+import { isTerminalTab } from "./lib/tabs";
 import { shortBranch, worktreeLabel } from "./lib/worktrees";
 import { Pages } from "./surfaces/Pages";
 import { usePages } from "./hooks/usePages";
@@ -123,12 +123,6 @@ export function App() {
     newAgent: sheet.newAgent,
   });
 
-  const changeModel = useCallback(
-    (session: Session, provider: string, model: string) =>
-      void update(session.id, { ...session, provider, model }),
-    [update],
-  );
-
   useAppCommands({
     workspaces,
     tabs,
@@ -151,6 +145,8 @@ export function App() {
     worktrees: work,
     newWorktree: () => setDialog("new-worktree"),
     toggleShortcuts: () => setDialog((open) => (open === "shortcuts" ? null : "shortcuts")),
+    openHistory: () => nav.openStub("history", "History"),
+    zoom: tabs.active?.kind === "browser" || isTerminalTab(tabs.active, sessions) ? null : (delta) => void zoomApp(delta),
   });
 
   if (workspaces.loading || sidebar.width === null) return <div className="h-full" />;
@@ -164,24 +160,12 @@ export function App() {
     <LinkRouter open={nav.openBrowser} />
     <AgentThemeProvider>
     <AgentAvatarProvider>
-    <Sidebar.Provider
-      contained
-      collapsible="offcanvas"
-      animationDuration={0}
-      resizable
-      open={sidebarOpen}
-      onOpenChange={setSidebarOpen}
-      defaultWidth={sidebar.width}
-      minWidth={200}
-      maxWidth={560}
-      onWidthChange={sidebar.commit}
-      // kumo sets --sidebar-bg to the canvas colour with a class of equal weight,
-      // so the sidebar tone has to arrive inline to beat it.
-      style={{ "--sidebar-bg": "var(--color-kumo-elevated)" } as CSSProperties}
-      className="h-full"
-    >
+    <div className="flex h-full">
       {active && (
         <AppSidebar
+          open={sidebarOpen}
+          width={sidebar.width}
+          onResize={sidebar.resize}
           settings={settings}
           onSelectSettings={openSettings}
           onCloseSettings={closePage}
@@ -247,7 +231,6 @@ export function App() {
           sessions={sessions}
           onConfirm={confirms.ask}
           onOpenHit={nav.openHit}
-          onOpenUrl={nav.openUrl}
         />
         {/* Hidden, not unmounted: agent and terminal processes stay alive. */}
         <div hidden={!isWorkspace} className="flex min-h-0 flex-1 flex-col">
@@ -294,12 +277,18 @@ export function App() {
             hasWorkspace={active !== null}
             onCreateWorkspace={workspaces.create}
             onStatus={setStatus}
-            onModel={changeModel}
             onOpenFile={nav.openFile}
             onOpenSession={nav.openSessionById}
             onPatchBrowser={tabs.patchBrowser}
             onOpenBrowserTab={tabs.openIn}
             files={files}
+            onConfirm={confirms.ask}
+            // Chrome's way: the entry loads where History was, so the tab turns into the page.
+            onOpenHistory={(url) => {
+              const history = tabs.active;
+              nav.openBrowser(url);
+              if (history?.kind === "stub" && history.stub === "history") tabs.close(history.id);
+            }}
           />
         </div>
       </main>
@@ -358,7 +347,7 @@ export function App() {
         activeWorktree={work.placeIn}
         onNewRoutine={openRoutines}
       />
-    </Sidebar.Provider>
+    </div>
     </AgentAvatarProvider>
     </AgentThemeProvider>
     </BrowserPrefsProvider>

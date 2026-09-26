@@ -1,17 +1,5 @@
 import { Menu } from "@base-ui/react/menu";
-import {
-  BracketsAngleIcon,
-  CaretRightIcon,
-  ClockCounterClockwiseIcon,
-  CookieIcon,
-  DotsThreeIcon,
-  GearIcon,
-  MagnifyingGlassIcon,
-  MagnifyingGlassPlusIcon,
-  MinusIcon,
-  PlusIcon,
-  type Icon,
-} from "@phosphor-icons/react";
+import { CodeXmlIcon, ChevronRightIcon, HistoryIcon, CookieIcon, EllipsisIcon, SettingsIcon, SearchIcon, ZoomInIcon, MinusIcon, PlusIcon, type LucideIcon as Icon } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { browserCookieSources } from "../../lib/api";
 import { cookieSourceLabel } from "../../lib/browser/cookies";
@@ -20,7 +8,7 @@ import { commandKeys, type CommandId } from "../../lib/commands";
 import type { CookieSource } from "../../lib/protocol";
 
 const PANEL =
-  "max-h-[70vh] w-60 origin-(--transform-origin) overflow-y-auto overscroll-none rounded-xl bg-kumo-control p-1 text-kumo-default shadow-lg ring ring-kumo-line outline-none transition-[opacity,scale] duration-100 data-starting-style:scale-95 data-starting-style:opacity-0 data-ending-style:scale-95 data-ending-style:opacity-0";
+  "max-h-[70vh] w-60 origin-(--transform-origin) overflow-y-auto overscroll-none rounded-xl bg-surface p-1 text-text shadow-float outline-none transition-[opacity,scale] duration-100 data-starting-style:scale-95 data-starting-style:opacity-0 data-ending-style:scale-95 data-ending-style:opacity-0";
 
 const ROW =
   "flex h-8 w-full cursor-default items-center gap-2 whitespace-nowrap rounded-md px-2 text-left outline-none select-none data-disabled:opacity-40 data-highlighted:bg-hover data-popup-open:bg-hover";
@@ -69,13 +57,13 @@ export function BrowserMenu({ zoom, onZoom, onFind, onDevTools, onHistory, onSet
         onMouseDown={(event) => event.preventDefault()}
         className="flex size-7 shrink-0 items-center justify-center rounded-md text-text-muted outline-none transition-colors hover:bg-hover hover:text-text data-popup-open:bg-selected data-popup-open:text-text"
       >
-        <DotsThreeIcon weight="bold" className="size-4" />
+        <EllipsisIcon className="size-4" />
       </Menu.Trigger>
       <Menu.Portal>
         <Menu.Positioner side="bottom" align="end" sideOffset={4} className="z-50">
           <Menu.Popup className={PANEL}>
             <div className="flex h-8 items-center gap-2 pr-1 pl-2">
-              <MagnifyingGlassPlusIcon className="size-4 shrink-0 text-kumo-subtle" />
+              <ZoomInIcon className="size-4 shrink-0 text-icon" />
               <span className="flex-1">Zoom</span>
               <Menu.Item
                 aria-label="Zoom out"
@@ -104,11 +92,11 @@ export function BrowserMenu({ zoom, onZoom, onFind, onDevTools, onHistory, onSet
                 <PlusIcon className="size-3.5" />
               </Menu.Item>
             </div>
-            <Item icon={MagnifyingGlassIcon} label="Find…" command="find" onClick={onFind} />
+            <Item icon={SearchIcon} label="Find…" command="find" onClick={onFind} />
 
             <Separator />
 
-            <Item icon={ClockCounterClockwiseIcon} label="History" command="open-history" onClick={onHistory} />
+            <Item icon={HistoryIcon} label="History" command="open-history" onClick={onHistory} />
             {canImport && (
               <Submenu icon={CookieIcon} label="Import Cookies">
                 {sources === null ? (
@@ -128,11 +116,11 @@ export function BrowserMenu({ zoom, onZoom, onFind, onDevTools, onHistory, onSet
                 )}
               </Submenu>
             )}
-            <Item icon={BracketsAngleIcon} label="Developer Tools" command="browser-devtools" onClick={onDevTools} />
+            <Item icon={CodeXmlIcon} label="Developer Tools" command="browser-devtools" onClick={onDevTools} />
 
             <Separator />
 
-            <Item icon={GearIcon} label="Settings" onClick={onSettings} />
+            <Item icon={SettingsIcon} label="Settings" onClick={onSettings} />
           </Menu.Popup>
         </Menu.Positioner>
       </Menu.Portal>
@@ -143,24 +131,24 @@ export function BrowserMenu({ zoom, onZoom, onFind, onDevTools, onHistory, onSet
 function Item({ icon: Glyph, label, command, onClick }: { icon: Icon; label: string; command?: CommandId; onClick: () => void }) {
   return (
     <Menu.Item className={ROW} onClick={onClick}>
-      <Glyph className="size-4 shrink-0 text-kumo-subtle" />
+      <Glyph className="size-4 shrink-0 text-icon" />
       <span className="min-w-0 flex-1 truncate">{label}</span>
-      {command && <span className="shrink-0 text-[12px] text-kumo-subtle tabular-nums">{commandKeys(command)}</span>}
+      {command && <span className="shrink-0 text-[12px] text-text-muted tabular-nums">{commandKeys(command)}</span>}
     </Menu.Item>
   );
 }
 
 function Separator() {
-  return <Menu.Separator className="mx-2 my-1 h-px bg-kumo-line" />;
+  return <Menu.Separator className="mx-2 my-1 h-px bg-border" />;
 }
 
 function Submenu({ icon: Glyph, label, children }: { icon: Icon; label: string; children: ReactNode }) {
   return (
     <Menu.SubmenuRoot>
       <Menu.SubmenuTrigger className={ROW}>
-        <Glyph className="size-4 shrink-0 text-kumo-subtle" />
+        <Glyph className="size-4 shrink-0 text-icon" />
         <span className="min-w-0 flex-1 truncate">{label}</span>
-        <CaretRightIcon className="size-3.5 shrink-0 text-kumo-subtle" />
+        <ChevronRightIcon className="size-3.5 shrink-0 text-icon" />
       </Menu.SubmenuTrigger>
       <Menu.Portal>
         <Menu.Positioner className="z-50" sideOffset={submenuOffset} alignOffset={submenuOffset}>

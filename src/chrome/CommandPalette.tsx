@@ -1,27 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import {
-  ArrowClockwiseIcon,
-  ArrowCounterClockwiseIcon,
-  ArrowLeftIcon,
-  ArrowRightIcon,
-  BracketsAngleIcon,
-  ClockCounterClockwiseIcon,
-  CommandIcon,
-  FloppyDiskIcon,
-  FolderIcon,
-  FolderOpenIcon,
-  GearIcon,
-  GitBranchIcon,
-  KeyboardIcon,
-  ListBulletsIcon,
-  PlusIcon,
-  RobotIcon,
-  SidebarSimpleIcon,
-  TerminalWindowIcon,
-  type Icon,
-} from "@phosphor-icons/react";
+import { ArrowLeftIcon, ArrowRightIcon, BotIcon, CodeXmlIcon, CommandIcon, FolderIcon, FolderOpenIcon, GitBranchIcon, HistoryIcon, KeyboardIcon, ListIcon, PanelLeftIcon, PlusIcon, RotateCcwIcon, RotateCwIcon, SaveIcon, SearchIcon, SettingsIcon, SquareTerminalIcon, type LucideIcon as Icon } from "lucide-react";
 import { AgentAvatar } from "./AgentAvatar";
 import { FileTypeIcon } from "./FileTypeIcon";
+import { Footer, GroupHeader } from "./kit";
 import { Kbd } from "./Kbd";
 import { ProviderIcon } from "./ProviderIcon";
 import { StatusDot } from "./StatusDot";
@@ -74,7 +55,9 @@ const PLACEHOLDERS: Record<PaletteMode, string> = {
 
 /** One palette with four doors. A leading `>` turns any of them into commands. */
 export function CommandPalette(props: Props) {
-  const { mode, workspaces, activeWorkspaceId } = props;
+  const { workspaces, activeWorkspaceId } = props;
+  // Opened through one door, the others stay a click (or ⇥) away.
+  const [mode, setMode] = useState<PaletteMode>(props.mode);
   const [raw, setRaw] = useState("");
   const [cursor, setCursor] = useState(0);
   const [others, setOthers] = useState<Record<string, Worktree[]>>({});
@@ -118,7 +101,7 @@ export function CommandPalette(props: Props) {
             key: `session:${session.id}`,
             group: "Agents & sessions",
             label: session.name,
-            detail: tree ? `${worktreeLabel(tree)} ›` : undefined,
+            detail: tree ? worktreeLabel(tree) : undefined,
             icon:
               session.kind === "agent" ? (
                 <AgentAvatar seed={session.id} bare className="size-5" />
@@ -140,9 +123,9 @@ export function CommandPalette(props: Props) {
           key: `worktree:${workspace.id}:${tree.path}`,
           group: "Worktrees",
           label: worktreeLabel(tree),
-          detail: `${workspace.name} ›`,
+          detail: workspace.name,
           icon: <GitBranchIcon className="size-4" />,
-          trail: <span className="text-[11px] text-kumo-subtle">{current ? "current" : keys}</span>,
+          trail: current ? <Current /> : keys ? <Kbd keys={keys} /> : undefined,
           search: `${workspace.name} ${worktreeLabel(tree)}`,
           run: close(() => props.onSelectWorktree(workspace.id, tree.path)),
         } satisfies Item;
@@ -154,15 +137,16 @@ export function CommandPalette(props: Props) {
       group: "Workspaces",
       label: workspace.name,
       icon: (
-        <span className="grid size-4 place-items-center rounded bg-kumo-brand text-[8px] font-semibold text-kumo-inverse">
+        <span className="grid size-4 place-items-center rounded bg-accent text-[8px] font-semibold text-inverse">
           {workspaceMark(workspace.name)}
         </span>
       ),
-      trail: (
-        <span className="text-[11px] text-kumo-subtle">
-          {workspace.id === activeWorkspaceId ? "current" : index < 9 ? commandKeys(`workspace-${index + 1}` as CommandId) : ""}
-        </span>
-      ),
+      trail:
+        workspace.id === activeWorkspaceId ? (
+          <Current />
+        ) : index < 9 ? (
+          <Kbd keys={commandKeys(`workspace-${index + 1}` as CommandId)} />
+        ) : undefined,
       run: close(() => props.onSelectWorkspace(workspace.id)),
     }));
 
@@ -173,7 +157,7 @@ export function CommandPalette(props: Props) {
         group: "Commands",
         label: command.label,
         icon: <Glyph className="size-4" />,
-        trail: command.keys ? <span className="text-[11px] text-kumo-subtle">{command.keys}</span> : undefined,
+        trail: command.keys ? <Kbd keys={command.keys} /> : undefined,
         // Closing first lets a command own the surface it opens — a sheet, a dialog, a picker.
         run: close(() => runCommand(command.id)),
       };
@@ -200,6 +184,14 @@ export function CommandPalette(props: Props) {
 
   function onKeyDown(event: React.KeyboardEvent) {
     if (event.key === "Escape") return props.onClose();
+    if (event.key === "Tab") {
+      event.preventDefault();
+      const at = DOORS.findIndex((door) => door.mode === mode);
+      const next = DOORS[(at + (event.shiftKey ? DOORS.length - 1 : 1)) % DOORS.length]!;
+      setMode(next.mode);
+      setRaw("");
+      return setCursor(0);
+    }
     if (event.key === "ArrowDown" || (event.ctrlKey && event.key === "n")) {
       event.preventDefault();
       return setCursor((c) => Math.min(c + 1, items.length - 1));
@@ -219,92 +211,127 @@ export function CommandPalette(props: Props) {
 
   return (
     <div role="presentation" className="fixed inset-0 z-50" onMouseDown={props.onClose}>
-      <div className="absolute inset-0 bg-black/20" />
+      <div className="absolute inset-0 bg-black/15" />
       <div
         role="dialog"
         aria-modal="true"
         aria-label="Command palette"
         onMouseDown={(event) => event.stopPropagation()}
         onKeyDown={onKeyDown}
-        className="absolute top-[14vh] left-1/2 w-[560px] max-w-[calc(100vw-32px)] -translate-x-1/2 overflow-hidden rounded-xl bg-kumo-control text-kumo-default shadow-2xl ring ring-kumo-line"
+        className="absolute top-[12vh] left-1/2 flex w-[600px] max-w-[calc(100vw-32px)] -translate-x-1/2 flex-col overflow-hidden rounded-float bg-surface text-text shadow-float"
       >
-        <input
-          ref={search}
-          value={raw}
-          placeholder={forcedActions ? PLACEHOLDERS.actions : PLACEHOLDERS[mode]}
-          aria-label="Search"
-          spellCheck={false}
-          onChange={(event) => {
-            setRaw(event.target.value);
-            setCursor(0);
-          }}
-          className="h-12 w-full border-b border-kumo-line bg-transparent px-4 text-[14px] outline-none"
-        />
-        <div ref={list} className="max-h-[50vh] overflow-y-auto p-1.5">
+        <div className="flex h-13 shrink-0 items-center gap-3 px-4">
+          <SearchIcon className="size-4.5 shrink-0 text-icon" />
+          <input
+            ref={search}
+            value={raw}
+            placeholder={forcedActions ? PLACEHOLDERS.actions : PLACEHOLDERS[mode]}
+            aria-label="Search"
+            spellCheck={false}
+            onChange={(event) => {
+              setRaw(event.target.value);
+              setCursor(0);
+            }}
+            className="h-full min-w-0 flex-1 bg-transparent text-[15px] outline-none placeholder:text-placeholder"
+          />
+          <Kbd keys="esc" />
+        </div>
+        {/* The four doors, so the one you came through is not the only one. */}
+        <div role="tablist" className="flex shrink-0 items-center gap-1 border-b border-hairline px-3 pb-2.5">
+          {DOORS.map((door) => {
+            const on = door.mode === shown;
+            return (
+              <button
+                key={door.mode}
+                type="button"
+                role="tab"
+                aria-selected={on}
+                onClick={() => {
+                  setMode(door.mode);
+                  setRaw("");
+                  setCursor(0);
+                  search.current?.focus();
+                }}
+                className={`flex h-6 items-center gap-1.5 rounded-full px-2.5 text-[12px] transition-colors ${
+                  on ? "bg-accent text-inverse" : "text-text-muted hover:bg-hover hover:text-text"
+                }`}
+              >
+                {door.label}
+                <span className={`text-[10px] ${on ? "opacity-70" : "opacity-60"}`}>{commandKeys(door.command)}</span>
+              </button>
+            );
+          })}
+        </div>
+        <div ref={list} className="max-h-[52vh] overflow-y-auto p-1.5">
           {items.map((item, index) => {
             const header = headed && item.group !== items[index - 1]?.group ? item.group : null;
             return (
               <div key={item.key}>
-                {header && <div className="px-2.5 pt-2 pb-1 text-[11px] text-kumo-subtle">{header}</div>}
+                {header && <GroupHeader>{header}</GroupHeader>}
                 <button
                   type="button"
                   data-index={index}
                   onMouseMove={() => setCursor(index)}
                   onClick={item.run}
-                  className={`flex h-9 w-full items-center gap-2.5 rounded-md px-2.5 text-left ${index === cursor ? "bg-hover" : ""}`}
+                  className={`flex h-10 w-full items-center gap-3 rounded-lg px-2.5 text-left ${index === cursor ? "bg-hover" : ""}`}
                 >
-                  <span className="grid size-5 shrink-0 place-items-center text-kumo-subtle">{item.icon}</span>
-                  {item.detail && <span className="shrink-0 text-kumo-subtle">{item.detail}</span>}
-                  <span className="min-w-0 flex-1 truncate">{item.label}</span>
+                  <span className="grid size-5 shrink-0 place-items-center text-icon">{item.icon}</span>
+                  <span className="min-w-0 truncate">{item.label}</span>
+                  {item.detail && (
+                    <span className="flex min-w-0 shrink items-center gap-1 text-[12px] text-text-muted">
+                      <span className="text-placeholder">in</span>
+                      <span className="truncate">{item.detail}</span>
+                    </span>
+                  )}
+                  <span className="flex-1" />
                   {item.trail}
                 </button>
               </div>
             );
           })}
-          {items.length === 0 && <p className="px-2.5 py-6 text-center text-placeholder">No matches</p>}
+          {items.length === 0 && <p className="px-2.5 py-8 text-center text-placeholder">No matches</p>}
         </div>
-        <div className="flex h-9 items-center gap-4 border-t border-kumo-line px-3 text-[11px] text-kumo-subtle">
-          <Hint keys="↑↓" label="move" />
-          <Hint keys="↵" label="open" />
-          <Hint keys="esc" label="close" />
-        </div>
+        <Footer hints={[["↑↓", "move"], ["↵", "open"], ["⇥", "switch"], [">", "commands"]]} />
       </div>
     </div>
   );
 }
 
+const DOORS: { mode: PaletteMode; label: string; command: CommandId }[] = [
+  { mode: "all", label: "Everything", command: "open-palette" },
+  { mode: "context", label: "Worktrees", command: "switch-workspace" },
+  { mode: "files", label: "Files", command: "go-to-file" },
+  { mode: "actions", label: "Commands", command: "open-actions" },
+];
+
+/** The one on screen says so instead of offering its own key. */
+function Current() {
+  return <span className="rounded-full bg-card px-2 py-0.5 text-[11px] text-text-muted ring-1 ring-hairline">Current</span>;
+}
+
 const ACTION_ICONS: Partial<Record<CommandId, Icon>> = {
   "open-launcher": PlusIcon,
-  "reopen-tab": ArrowCounterClockwiseIcon,
+  "reopen-tab": RotateCcwIcon,
   "open-workspace": FolderOpenIcon,
   "switch-workspace": FolderIcon,
-  "toggle-sidebar": SidebarSimpleIcon,
-  "new-agent": RobotIcon,
-  "new-session": TerminalWindowIcon,
+  "toggle-sidebar": PanelLeftIcon,
+  "new-agent": BotIcon,
+  "new-session": SquareTerminalIcon,
   "new-worktree": GitBranchIcon,
   "next-worktree": GitBranchIcon,
   "prev-worktree": GitBranchIcon,
-  "open-settings": GearIcon,
-  "open-browser-settings": GearIcon,
-  "save-file": FloppyDiskIcon,
-  "toggle-outline": ListBulletsIcon,
+  "open-settings": SettingsIcon,
+  "open-browser-settings": SettingsIcon,
+  "save-file": SaveIcon,
+  "toggle-outline": ListIcon,
   "browser-back": ArrowLeftIcon,
   "browser-forward": ArrowRightIcon,
-  "browser-reload": ArrowClockwiseIcon,
-  "browser-hard-reload": ArrowClockwiseIcon,
-  "browser-devtools": BracketsAngleIcon,
-  "open-history": ClockCounterClockwiseIcon,
+  "browser-reload": RotateCwIcon,
+  "browser-hard-reload": RotateCwIcon,
+  "browser-devtools": CodeXmlIcon,
+  "open-history": HistoryIcon,
   shortcuts: KeyboardIcon,
 };
-
-function Hint({ keys, label }: { keys: string; label: string }) {
-  return (
-    <span className="flex items-center gap-1.5">
-      <Kbd keys={keys} />
-      {label}
-    </span>
-  );
-}
 
 function rank(items: Item[], query: string): Item[] {
   if (!query) return items;

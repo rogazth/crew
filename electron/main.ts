@@ -27,12 +27,13 @@ function crewdPath(): string {
   return path.join(app.getAppPath(), "target/debug/crewd");
 }
 
-// scripts/app.mjs moves a worktree's dev server off 1420 so checkouts run side by side.
-const DEV_PORT = Number(process.env.CREW_DEV_PORT) || 1420;
-
 // e2e loads the built renderer, so it never depends on (or talks to) whatever
 // dev server holds the dev port, and it runs under the packaged app's policy.
 const fromDist = app.isPackaged || process.env.CREW_RENDERER === "dist";
+
+// Two checkouts can run side by side: each takes its own dev port (CREW_PORT);
+// scripts/app.mjs picks a free one for a git worktree.
+const DEV_PORT = Number(process.env.CREW_PORT) || 1420;
 
 function csp(): string {
   const connect = fromDist
@@ -247,6 +248,12 @@ function registerIpc(): void {
     return filePaths[0] ?? null;
   });
   ipcMain.handle("home-dir", () => homedir());
+  // The window's own zoom, for the chrome and chats; terminals and pages zoom themselves.
+  ipcMain.handle("app-zoom", (event, delta: number) => {
+    const contents = event.sender;
+    const level = delta === 0 ? 0 : Math.min(3, Math.max(-3, contents.getZoomLevel() + delta * 0.5));
+    contents.setZoomLevel(level);
+  });
   ipcMain.handle("open-url", async (_event, url: string) => {
     if (!allowedUrl(url)) return;
     await shell.openExternal(url);
@@ -263,11 +270,11 @@ registerFileScheme();
 app.setName("Crew");
 // userData follows the name, and crewd keeps its database and socket there: a dev
 // build on the installed app's folder would drive the installed app's sessions.
-// scripts/app.mjs points a git worktree at a folder inside it, so each checkout
-// gets its own database and removing the worktree removes it.
-if (!app.isPackaged) {
-  app.setPath("userData", process.env.CREW_DATA_DIR || path.join(app.getPath("appData"), "Crew Dev"));
-}
+// CREW_USER_DATA points a dev build at a data set of its own, like the seeded one;
+// scripts/app.mjs points a git worktree at a folder inside it, so removing the
+// worktree removes its database.
+if (!app.isPackaged)
+  app.setPath("userData", process.env.CREW_USER_DATA || path.join(app.getPath("appData"), "Crew Dev"));
 app.setAboutPanelOptions({ applicationName: "Crew", applicationVersion: app.getVersion(), version: sha });
 
 app.whenReady().then(async () => {

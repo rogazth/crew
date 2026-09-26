@@ -1,4 +1,4 @@
-import type { Icon } from "@phosphor-icons/react";
+import { type LucideIcon as Icon } from "lucide-react";
 import type { ButtonHTMLAttributes, Ref } from "react";
 
 type Props = ButtonHTMLAttributes<HTMLButtonElement> & {
@@ -28,9 +28,9 @@ export function SidebarRow({
         active ? "bg-card" : "hover:bg-hover focus-visible:bg-hover data-popup-open:bg-hover"
       } ${className}`}
     >
-      <Glyph className={`size-4 shrink-0 ${active ? "" : "text-kumo-subtle"}`} />
+      <Glyph className={`size-4 shrink-0 ${active ? "" : "text-icon"}`} />
       <span className="min-w-0 flex-1 truncate">{label}</span>
-      {keys && <span className="shrink-0 text-[11px] text-kumo-subtle">{keys}</span>}
+      {keys && <span className="shrink-0 text-[11px] text-text-muted">{keys}</span>}
     </button>
   );
 }

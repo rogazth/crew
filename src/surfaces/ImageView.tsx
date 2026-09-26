@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
-import { ArrowClockwiseIcon, MagnifyingGlassMinusIcon, MagnifyingGlassPlusIcon } from "@phosphor-icons/react";
+import { RotateCwIcon, ZoomOutIcon, ZoomInIcon } from "lucide-react";
 import { useCommands } from "../hooks/useCommand";
 import { previewRoot } from "../lib/browser/files";
 import { commandKeys } from "../lib/commands";
@@ -7,7 +7,7 @@ import { fitScale, GUTTER, MAX_SCALE, MIN_SCALE, stepScale, type Size } from "..
 import { filesHost } from "../lib/host";
 
 const HEADER_BUTTON =
-  "flex size-7 shrink-0 items-center justify-center rounded-md text-kumo-subtle hover:bg-hover hover:text-kumo-default disabled:opacity-40";
+  "flex size-7 shrink-0 items-center justify-center rounded-md text-icon hover:bg-hover hover:text-text disabled:opacity-40";
 
 /**
  * An image file on a checkerboard, fitted to the pane until zoomed. A click
@@ -107,7 +107,7 @@ export function ImageView({ path, relative, actions }: { path: string; relative:
             onClick={() => step(-1)}
             className={HEADER_BUTTON}
           >
-            <MagnifyingGlassMinusIcon className="size-4" />
+            <ZoomOutIcon className="size-4" />
           </button>
           <button
             type="button"
@@ -115,7 +115,7 @@ export function ImageView({ path, relative, actions }: { path: string; relative:
             title={zoom === null ? `Actual Size (${commandKeys("zoom-reset")})` : "Fit to Window"}
             disabled={!natural}
             onClick={() => setZoom(zoom === null ? 1 : null)}
-            className="h-7 min-w-12 shrink-0 rounded-md px-1.5 text-[12px] text-kumo-subtle tabular-nums hover:bg-hover hover:text-kumo-default"
+            className="h-7 min-w-12 shrink-0 rounded-md px-1.5 text-[12px] text-icon tabular-nums hover:bg-hover hover:text-text"
           >
             {zoom === null ? `Fit · ${percent}` : percent}
           </button>
@@ -127,7 +127,7 @@ export function ImageView({ path, relative, actions }: { path: string; relative:
             onClick={() => step(1)}
             className={HEADER_BUTTON}
           >
-            <MagnifyingGlassPlusIcon className="size-4" />
+            <ZoomInIcon className="size-4" />
           </button>
           <button
             type="button"
@@ -136,7 +136,7 @@ export function ImageView({ path, relative, actions }: { path: string; relative:
             onClick={reload}
             className={HEADER_BUTTON}
           >
-            <ArrowClockwiseIcon className="size-4" />
+            <RotateCwIcon className="size-4" />
           </button>
           {actions}
         </span>
