@@ -443,4 +443,4 @@ Puertos y, si hacen falta, traces de performance sobre el canal del navegador.
   WebSocket, que es lo que usa `e2e/browser-agent.test.ts`; la CLI va por el
   bridge con el token del usuario.
 
-**Pendiente:** `crew tabs` en la CLI (fase 3).
+**Gateway:** `BrowserTools` implementa `ToolFamily` y se registra en `crewd::serve` junto a las tools de procesos; `crew tabs` llama a `list_tabs`.
