@@ -323,6 +323,11 @@ describe("a Latin American Mac", () => {
     expect(run("}", "Backslash", { meta: true, alt: true })).toBe("next-workspace");
   });
 
+  it("switches workspaces again while the dead key left a field composing", () => {
+    expect(run("Process", "Quote", { meta: true, alt: true })).toBe("prev-workspace");
+    expect(run("Process", "Backslash", { meta: true, alt: true })).toBe("next-workspace");
+  });
+
   it("does not switch workspaces with ⌘⌥´ or ⌘⌥+", () => {
     expect(run("«", "BracketLeft", { meta: true, alt: true })).toBeNull();
     expect(run("Dead", "BracketRight", { meta: true, alt: true })).toBeNull();

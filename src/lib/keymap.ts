@@ -75,8 +75,8 @@ const SHIFTED = new Map([
   ["~", "BACKQUOTE"],
 ]);
 
-/** Keys that say nothing about what was typed; only these send matching to the physical key. */
-const UNNAMED = new Set(["", "Dead", "Unidentified"]);
+/** Keys that say nothing about what was typed; only these send matching to the physical key. Process is a key the input method took. */
+const UNNAMED = new Set(["", "Dead", "Unidentified", "Process"]);
 const MODIFIER_KEYS = new Set(["Alt", "AltGraph", "Control", "Meta", "Shift", "OS", "Fn", "FnLock", "Hyper", "Super", "Symbol", "SymbolLock"]);
 
 /** A key as matching compares it: A–Z, 0–9, a punctuation name, or a named key upper-cased; null for any other character. */
