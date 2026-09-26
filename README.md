@@ -24,7 +24,7 @@ npm install
 npm run app
 ```
 
-`npm run app` builds `crewd`, starts Vite and opens the window. The daemon is spawned by the app and its data lives in the Electron user-data directory; closing the app stops it and kills every child process it started.
+`npm run app` builds `crewd` and `crew`, starts Vite and opens the window. The daemon is spawned by the app and its data lives in the Electron user-data directory; closing the app stops it and kills every child process it started.
 
 Use `npm run app` while developing. `open -a Crew` and Spotlight go through LaunchServices, which may open a stale `release/` build or an old Tauri bundle instead of this checkout.
 
@@ -48,6 +48,23 @@ From there Crew updates itself. It reads `latest.json` from the newest release f
 Releasing needs `gh` logged in, a clean working tree, and the same version in `package.json` and `Cargo.toml` — the script refuses otherwise.
 
 The bundle is ad-hoc signed (`identity: "-"`): that is what arm64 needs to launch at all, and it keeps the updater free of Apple's signing requirements. It is not notarized, so anyone who downloads the zip in a browser has to clear Gatekeeper by hand.
+
+## The `crew` command
+
+The app ships a CLI. **Crew › Install `crew` Command…** links it into `~/.local/bin` when your shell looks there, or into `/usr/local/bin` with your password.
+
+```bash
+crew status                        # is Crew running, and who does it take you for
+crew agents                        # the agents of the workspace you are in
+crew send Reviewer "look at the diff on main"
+crew ps                            # processes: start, stop, restart, logs -f, proc add…
+crew call --help                   # every tool an agent has, callable by name
+crew completions zsh > ~/.zfunc/_crew
+```
+
+From your own shell it speaks as you, in the workspace that holds the current directory (`--workspace` names another). Inside a Crew session it speaks as that session. `--json` prints what the tool answered with. `crew mcp` serves the same tools to an MCP client.
+
+For a checkout, `scripts/crew-dev dev` runs the app from source, `scripts/crew-dev build` builds the bundle, and `scripts/crew-dev cli …` runs the checkout's `crew` against the dev app.
 
 ## Development
 

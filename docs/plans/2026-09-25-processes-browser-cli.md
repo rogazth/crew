@@ -1,6 +1,6 @@
 # Procesos, navegador para agentes y CLI
 
-**Propuesto el 2026-09-25. Fases 1 y 2 hechas el mismo día.** Cuatro piezas que comparten
+**Propuesto el 2026-09-25. Fases 1, 2 y 3 hechas el mismo día.** Cuatro piezas que comparten
 cimientos: el bridge MCP, `crewd` como dueño de los procesos y una identidad por
 quien llama. Se escriben juntas porque cada una asume decisiones de las otras.
 
@@ -326,6 +326,17 @@ proceso que escupe 50 MB sin nadie mirando.
 Binario `crew`, `daemon.json`, identidad de usuario, comandos, completions,
 menú de instalación y `scripts/crew-dev`.
 
+Hecha así: crate `crates/crew-cli` (lib + binario `crew`); `crewd call` llama
+al mismo código y `crewd --mcp` sigue sirviendo solo desde el env de una
+sesión. El bridge suma `tools/catalog` (todas las tools de quien llama, para
+`crew call --help`) y `whoami` (para `crew status`); `daemon.json` suma `pid`.
+Los comandos de procesos y `crew tabs` se escribieron contra los nombres y
+argumentos de las fases 2 y 4 (`process`, `tail`, `since`, `pattern`,
+`timeout_s`) y fallan con el error del daemon hasta que esas tools existan.
+`logs -f` lee con el cursor y espera con `wait_for_log` (patrón vacío) en vez
+de sondear. La app vuelve a levantar un daemon que llevaba más de 60 s arriba,
+para que `crew daemon restart` no la cierre la segunda vez.
+
 ### Fase 4: navegador para agentes
 
 Canal crewd → main, tools nativas, snapshot con uids, leases, fijar y revivir
@@ -371,7 +382,7 @@ Puertos y, si hacen falta, traces de performance sobre el canal del navegador.
 | 0 | descartada |
 | 1 | hecha |
 | 2 | hecha |
-| 3 | pendiente |
+| 3 | hecha. `crew daemon install/uninstall` responden "todavía no" y `stop`/`restart` son best-effort (SIGTERM al pid de `daemon.json`; la app relanza su daemon): la fase 5 suma un `Supervisor` LaunchAgent en `crates/crew-cli/src/daemon.rs` |
 | 4 | pendiente |
 | 5 | pendiente |
 | 6 | pendiente |

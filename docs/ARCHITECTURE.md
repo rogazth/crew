@@ -24,6 +24,7 @@ flowchart TB
 electron/          the window; spawns crewd
 src/               the React client
 crates/crewd/      the daemon process
+crates/crew-cli/   the `crew` command line
 crates/crew-core/  turns, store, providers, tools
 crates/crew-protocol/  the messages, defined once
 ```
@@ -87,3 +88,7 @@ The bridge is a UNIX socket in the data dir. Every request carries a token, and 
 - **The user.** `<data-dir>/daemon.json` (0600) holds the WebSocket `url` and `token`, the bridge `socket`, a `userToken` and the `version`. It is written when the daemon starts and removed when it stops cleanly. A call with the user token names its workspace with `workspace`, an id or a path inside it. This is what the `crew` CLI reads.
 
 `tools/list`, `find_tool` and every tool answer according to the caller. The `initialize` of `crewd --mcp` carries `instructions` naming the caller's tools, so a terminal session learns them without Crew touching its prompt. A family of tools that lives in its own module implements `ToolFamily` and is registered on the `Toolbox` in `crewd::serve`.
+
+## The `crew` command
+
+`crew` (`crates/crew-cli`) is a client of the same bridge. Inside a session it takes `CREW_SOCKET`/`CREW_TOKEN` and is that session; anywhere else it reads `daemon.json` from `--data-dir`, `$CREW_DATA_DIR` or the installed app's folder, and speaks as the user in the workspace holding the current directory. Its commands are thin wrappers over tools (`crew ps` is `list_processes`, `crew agents` is `list_agents`), and `crew call` reaches any tool by name, so the CLI and MCP cannot drift apart. The bridge answers two methods for it beside `tools/*`: `tools/catalog`, every tool the caller may run, listed or not, for `crew call --help`; and `whoami`, for `crew status`. `crew mcp` is the stdio server; `crewd --mcp` and `crewd call` stay one version as aliases. The app bundles `crew` next to `crewd`, and **Crew › Install `crew` Command…** links it onto the user's PATH.
