@@ -5,7 +5,7 @@
 // path fails with "path must be shorter than SUN_LEN". A fake `claude` in
 // $HOME/.local/bin, where crewd looks first, plays the provider CLI.
 import { execFile } from "node:child_process";
-import { chmod, mkdir, symlink, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, symlink, mkdtemp, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -27,6 +27,9 @@ export type Modifier = "Shift" | "Control" | "Alt" | "Meta";
 
 /** The app's command modifier, as Playwright spells it: ⌘ on macOS, Ctrl elsewhere. */
 export const MOD: Modifier = process.platform === "darwin" ? "Meta" : "Control";
+
+/** Worktree chords (⌃⌘N, ⌃⌘1…9, ⌃⌘[ and ]) hold both keys on every platform. */
+export const WORKTREE_MOD = "Control+Meta";
 
 export type Repo = { name: string; files?: Record<string, string> };
 
@@ -86,7 +89,8 @@ export async function launchCrew(opts: LaunchOptions = {}): Promise<Crew> {
 
 /** `owns`: the sandbox is deleted on close, unless a restart handed it on. */
 async function launch(opts: LaunchOptions, owns: boolean): Promise<Crew> {
-  const root = opts.dir ?? (await mkdtemp("/tmp/ce-"));
+  // Resolved, as crewd and git spell it: /tmp is /private/tmp on macOS.
+  const root = opts.dir ?? (await realpath(await mkdtemp("/tmp/ce-")));
   const home = path.join(root, "home");
   const config = path.join(root, "config");
   const repos = path.join(root, "repos");
@@ -511,6 +515,19 @@ export function worktreeHeader(crew: Crew, label: string): Locator {
     .filter({ has: crew.window.getByText(label, { exact: true }) });
 }
 
+/**
+ * Goes to a worktree by the chord its sidebar line names (⌃⌘1…9): a click on
+ * the line only folds it. Resolves once the window is on it.
+ */
+export async function goToWorktree(crew: Crew, label: string): Promise<void> {
+  const header = worktreeHeader(crew, label);
+  const title = (await header.getAttribute("title")) ?? "";
+  const digit = /(\d)\s+to switch$/.exec(title)?.[1];
+  if (!digit) throw new Error(`${label}'s line names no chord to switch: ${JSON.stringify(title)}`);
+  await pressChord(crew, `${WORKTREE_MOD}+${digit}`);
+  await header.and(currentWorktree(crew)).waitFor();
+}
+
 /** The worktree line the window is on. */
 export function currentWorktree(crew: Crew): Locator {
   return crew.window.locator('[data-sidebar-panel] button[data-nav][aria-expanded][aria-current="true"]');
@@ -575,10 +592,10 @@ export async function pressChord(crew: Crew, chord: string): Promise<void> {
   await crew.window.keyboard.press(chord);
 }
 
-/** ⌥⌘N, the branch typed over the dialog's "feat/", ↵: the dialog closes once the worktree exists. */
+/** ⌃⌘N, the branch typed over the dialog's "feat/", ↵: the dialog closes once the worktree exists. */
 export async function newWorktree(crew: Crew, branch: string): Promise<void> {
   const page = crew.window;
-  await pressChord(crew, `${MOD}+Alt+n`);
+  await pressChord(crew, `${WORKTREE_MOD}+n`);
   const input = page.getByRole("textbox", { name: "Branch" });
   await input.waitFor();
   await input.fill(branch);

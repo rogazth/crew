@@ -9,8 +9,10 @@ import type { Session, Workspace } from "../src/lib/types.ts";
 import {
   currentWorktree,
   gitWorktrees,
+  goToWorktree,
   launchCrew,
   MOD,
+  WORKTREE_MOD,
   newTerminal,
   newWorktree,
   pressChord,
@@ -65,7 +67,7 @@ async function switchTo(crew: Crew, label: string, repo?: string): Promise<void>
   await pressChord(crew, `${MOD}+Shift+o`);
   const palette = page.getByRole("dialog", { name: "Command palette" });
   let row = palette.locator("button[data-index]").filter({ has: page.getByText(label, { exact: true }) });
-  if (repo) row = row.filter({ has: page.getByText(`${repo} ›`, { exact: true }) });
+  if (repo) row = row.filter({ has: page.getByText(repo, { exact: true }) });
   await row.click();
   await palette.waitFor({ state: "detached" });
 }
@@ -90,9 +92,14 @@ async function setTabScope(crew: Crew, label: string, value: string): Promise<vo
 /** A session tab's branch chip reads the branch git has checked out where the session runs. */
 async function assertChip(crew: Crew, workspace: Workspace, session: Session): Promise<void> {
   const branch = await crew.git(session.worktree ?? workspace.path, "rev-parse", "--abbrev-ref", "HEAD");
-  // The pill's title, then the chip; the chip is short, so it carries the last segment.
-  const texts = (await tabOf(crew, session).locator(".truncate").allInnerTexts()).map((text) => text.trim());
-  assert.equal(texts.length, 2, `${session.name}'s tab has a chip: ${JSON.stringify(texts)}`);
+  // The pill's title, then the chip; the chip is short, so it carries the last
+  // segment. It waits for git's listing, which a relaunch reads anew.
+  let texts: string[] = [];
+  const chipped = await waitFor(
+    async () => (texts = (await tabOf(crew, session).locator(".truncate").allInnerTexts()).map((text) => text.trim())).length === 2,
+    { timeout: 5000 },
+  ).catch(() => false);
+  assert.ok(chipped, `${session.name}'s tab has a chip: ${JSON.stringify(texts)}`);
   assert.equal(texts[1], branch.split("/").pop(), `${session.name} runs on ${branch}`);
 }
 
@@ -152,8 +159,7 @@ test("W4: per worktree, each strip and the worktree on screen come back after a 
   // fresh --session-id on an id that has a transcript is refused.
   assert.equal(resumed.argv[resumed.argv.indexOf("--resume") + 1], a1.id, `a1 resumes: ${JSON.stringify(resumed.argv)}`);
 
-  await worktreeHeader(crew, "main").click();
-  await worktreeHeader(crew, "main").and(currentWorktree(crew)).waitFor();
+  await goToWorktree(crew, "main");
   await stripIs(crew, mainStrip.ids, "main keeps its strip");
 });
 
@@ -194,8 +200,7 @@ test("W5b: all together, tabs carry their branch, survive a restart, and a workt
   await worktreeHeader(crew, "feat/alpha").and(currentWorktree(crew)).waitFor();
   const a1 = await newTerminal(crew, workspace.id);
   const a2 = await newTerminal(crew, workspace.id);
-  await worktreeHeader(crew, "main").click();
-  await worktreeHeader(crew, "main").and(currentWorktree(crew)).waitFor();
+  await goToWorktree(crew, "main");
   const m1 = await newTerminal(crew, workspace.id);
   assert.ok(a1.worktree && a1.worktree === a2.worktree, "a1 and a2 run in feat/alpha");
   assert.equal(m1.worktree, null, "m1 runs in the main checkout");
@@ -223,16 +228,16 @@ test("W5b: all together, tabs carry their branch, survive a restart, and a workt
   await tabOf(crew, a1).click();
   await worktreeHeader(crew, "feat/alpha").and(currentWorktree(crew)).waitFor();
   // Going to main brings up main's tab; coming back, feat/alpha's last used, by every door.
-  await worktreeHeader(crew, "main").click();
+  await goToWorktree(crew, "main");
   await showing(crew, m1, "main brings up m1");
-  await worktreeHeader(crew, "feat/alpha").click();
-  await showing(crew, a1, "clicked back to feat/alpha");
-  await pressChord(crew, `${MOD}+Alt+1`);
-  await showing(crew, m1, "⌘⌥1 goes to main");
-  await pressChord(crew, `${MOD}+Alt+]`);
-  await showing(crew, a1, "⌘⌥] steps back to feat/alpha");
-  await pressChord(crew, `${MOD}+Alt+[`);
-  await showing(crew, m1, "⌘⌥[ steps to main");
+  await goToWorktree(crew, "feat/alpha");
+  await showing(crew, a1, "back to feat/alpha");
+  await pressChord(crew, `${WORKTREE_MOD}+1`);
+  await showing(crew, m1, "⌃⌘1 goes to main");
+  await pressChord(crew, `${WORKTREE_MOD}+]`);
+  await showing(crew, a1, "⌃⌘] steps back to feat/alpha");
+  await pressChord(crew, `${WORKTREE_MOD}+[`);
+  await showing(crew, m1, "⌃⌘[ steps to main");
   await switchTo(crew, "feat/alpha", "app");
   await showing(crew, a1, "⇧⌘O picks feat/alpha");
   await worktreeHeader(crew, "feat/alpha").and(currentWorktree(crew)).waitFor();
@@ -246,8 +251,7 @@ test("W5b: all together, tabs carry their branch, survive a restart, and a workt
   const b1 = await newTerminal(crew, lib.id);
   const b2 = await newTerminal(crew, lib.id);
   await tabOf(crew, b1).click();
-  await worktreeHeader(crew, "main").click();
-  await worktreeHeader(crew, "main").and(currentWorktree(crew)).waitFor();
+  await goToWorktree(crew, "main");
   const l1 = await newTerminal(crew, lib.id);
   await showing(crew, l1, "lib's main shows l1");
   const libStrip = await stripTabIds(crew);
@@ -261,7 +265,7 @@ test("W5b: all together, tabs carry their branch, survive a restart, and a workt
   await railMark(crew, "lib").and(crew.window.locator('[aria-current="true"]')).waitFor();
   await showing(crew, b1, "⇧⌘O to lib's feat/beta brings back b1");
   await worktreeHeader(crew, "feat/beta").and(currentWorktree(crew)).waitFor();
-  await worktreeHeader(crew, "main").click();
+  await goToWorktree(crew, "main");
   await showing(crew, l1, "lib's main brings up l1");
   await waitFor(
     async () => {
@@ -274,7 +278,7 @@ test("W5b: all together, tabs carry their branch, survive a restart, and a workt
   await showing(crew, a1, "back in app again");
 
   // Quit from main: crewd keeps the order, and the relaunch goes by it.
-  await worktreeHeader(crew, "main").click();
+  await goToWorktree(crew, "main");
   await showing(crew, m1, "main brings up m1 again");
   await waitFor(
     async () => {
@@ -285,7 +289,9 @@ test("W5b: all together, tabs carry their branch, survive a restart, and a workt
   );
   crew = await crew.restart();
   await showing(crew, m1, "the relaunch shows m1");
-  await pressChord(crew, `${MOD}+Alt+2`);
+  // ⌃⌘2 names feat/alpha once git has listed it again.
+  await worktreeHeader(crew, "feat/alpha").waitFor();
+  await pressChord(crew, `${WORKTREE_MOD}+2`);
   await showing(crew, a1, "after a restart, feat/alpha brings back a1");
   // lib's strip is not read yet in this run: the pick waits for it.
   await switchTo(crew, "feat/beta", "lib");
@@ -309,19 +315,19 @@ test("W5c: per worktree and from workspace to workspace, the tab last used there
   const a1 = await newTerminal(crew, app.id);
   const a2 = await newTerminal(crew, app.id);
   await tabOf(crew, a1).click();
-  await worktreeHeader(crew, "main").click();
+  await goToWorktree(crew, "main");
   await showing(crew, m2, "main shows the tab it had");
   await tabOf(crew, m1).click();
   await showing(crew, m1, "m1 is used in main");
   assert.ok((await stripTabIds(crew)).at(-1)?.includes(m2.id), "m2 is main's rightmost");
 
-  await pressChord(crew, `${MOD}+Alt+2`);
-  await showing(crew, a1, "⌘⌥2 brings back a1, not feat/alpha's rightmost a2");
+  await pressChord(crew, `${WORKTREE_MOD}+2`);
+  await showing(crew, a1, "⌃⌘2 brings back a1, not feat/alpha's rightmost a2");
   assert.ok((await stripTabIds(crew)).at(-1)?.includes(a2.id), "a2 is feat/alpha's rightmost");
-  await pressChord(crew, `${MOD}+Alt+[`);
-  await showing(crew, m1, "⌘⌥[ brings back m1, not main's rightmost m2");
-  await worktreeHeader(crew, "feat/alpha").click();
-  await showing(crew, a1, "clicking feat/alpha brings back a1");
+  await pressChord(crew, `${WORKTREE_MOD}+[`);
+  await showing(crew, m1, "⌃⌘[ brings back m1, not main's rightmost m2");
+  await goToWorktree(crew, "feat/alpha");
+  await showing(crew, a1, "going to feat/alpha brings back a1");
   await switchTo(crew, "main", "app");
   await showing(crew, m1, "⇧⌘O to main brings back m1");
 
