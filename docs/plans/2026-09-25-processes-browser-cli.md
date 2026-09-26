@@ -1,6 +1,6 @@
 # Procesos, navegador para agentes y CLI
 
-**Propuesto el 2026-09-25. Fases 1 a 4 hechas el mismo día.** Cuatro piezas que comparten
+**Propuesto el 2026-09-25. Fases 1 a 5 hechas el mismo día.** Cuatro piezas que comparten
 cimientos: el bridge MCP, `crewd` como dueño de los procesos y una identidad por
 quien llama. Se escriben juntas porque cada una asume decisiones de las otras.
 
@@ -382,9 +382,9 @@ Puertos y, si hacen falta, traces de performance sobre el canal del navegador.
 | 0 | descartada |
 | 1 | hecha |
 | 2 | hecha |
-| 3 | hecha. `crew daemon install/uninstall` responden "todavía no" y `stop`/`restart` son best-effort (SIGTERM al pid de `daemon.json`; la app relanza su daemon): la fase 5 suma un `Supervisor` LaunchAgent en `crates/crew-cli/src/daemon.rs` |
+| 3 | hecha. En dev `crew daemon stop`/`restart` siguen siendo best-effort (SIGTERM al pid de `daemon.json`; la app relanza su daemon); con el LaunchAgent van por launchctl (fase 5) |
 | 4 | hecha (ver abajo) |
-| 5 | pendiente |
+| 5 | hecha (ver abajo) |
 | 6 | pendiente |
 
 ### Fase 4: lo que entró
@@ -444,3 +444,41 @@ Puertos y, si hacen falta, traces de performance sobre el canal del navegador.
   bridge con el token del usuario.
 
 **Gateway:** `BrowserTools` implementa `ToolFamily` y se registra en `crewd::serve` junto a las tools de procesos; `crew tabs` llama a `list_tabs`.
+
+### Fase 5: lo que entró
+
+- **plist** (`crates/crew-cli/src/launch_agent.rs`, el único lugar que lo
+  escribe): label `rogazth.crew.crewd` (el `appId` más `.crewd`; un test en
+  Rust y otro en vitest lo atan a `package.json`), `crewd --data-dir <userData>
+  --supervised-by launchd`, `RunAtLoad`, `KeepAlive { SuccessfulExit: false }`
+  (un crash vuelve, una parada limpia sale 0 y queda abajo hasta abrir Crew o
+  el próximo login), `ProcessType Interactive` (sin eso launchd frena CPU e
+  I/O, y ahí corren los dev servers) y stdout/stderr a `<data-dir>/crewd.log`,
+  creado 0600.
+- **crewd** con `--supervised-by launchd` no imprime el handshake (iría al log
+  con el token), no mira stdin, deja el log en 0600 y lo vacía pasados 10 MB.
+  `daemon_shutdown` (WebSocket) y `daemon/shutdown` (bridge, solo
+  `Caller::User`) piden salir igual que una señal.
+- **App empaquetada** (`electron/daemon-agent.ts`, decisiones puras en
+  `daemon-agent-plan.ts`): lee el plist con `plutil`; si falta o nombra otro
+  `crewd` u otro data dir corre `crew daemon install` del bundle (que hace
+  bootout del viejo). Después `daemon.json` + `whoami` por el bridge: listo,
+  faltante o con pid muerto (`kickstart`, con `bootstrap` si no está cargado),
+  vivo pero mudo (`kickstart -k`), otra versión (`daemon/shutdown` y
+  `kickstart`). Espera 20 s un daemon nuevo; si no, diálogo con la ruta del
+  log. Con la ventana abierta revisa cada 2 s: se cambia a un daemon nuevo y
+  recarga la ventana, y levanta uno que falte (como mucho uno cada 10 s, para
+  no pisar el throttle de launchd). Salir solo suelta. En dev nada cambia.
+- **Menú:** "Quit Crew and Stop Everything" (`daemon/shutdown`, espera la
+  salida; si no contesta, `launchctl bootout`). En dev es un quit normal.
+- **CLI:** `crew daemon install [--crewd <path>]` (por defecto el `crewd` junto
+  al `crew` resuelto) y `uninstall`. `Supervisor::LaunchAgent` cuando el plist
+  sirve ese data dir: `stop` pide `daemon/shutdown` (o `launchctl kill
+  SIGTERM`), `restart` hace `kickstart -k`, `status` muestra estado y pid de
+  `launchctl print`. `install` se niega si hay un `crewd` hijo de la app
+  corriendo en ese data dir.
+- **Tests:** Rust del plist, su lectura, el label, `launchctl print` y la
+  elección de supervisor; `crewd` bajo launchd (sobrevive a stdin, no imprime el
+  token, sale 0 con `daemon/shutdown`) y quién puede pedir la salida. vitest de
+  instalar o no, archivo viejo, versión distinta y los pasos del watchdog. No se
+  instaló un LaunchAgent real ni se corrió launchctl en los tests.

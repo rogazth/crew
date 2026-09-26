@@ -14,6 +14,8 @@ use crewd::{remove_daemon_file, serve, write_daemon_file, Config};
 
 const USAGE: &str = "\
 usage: crewd --data-dir <dir>   run the daemon (the Crew app does this)
+       crewd --data-dir <dir> --supervised-by launchd
+                                run it as the LaunchAgent `crew daemon install` writes
 
 Kept for one version, for agents and configs that still name them:
   crewd --mcp                   now `crew mcp`
@@ -42,8 +44,41 @@ fn main() -> ExitCode {
     }
 }
 
+/// Who started this daemon, which decides how it hears it should stop.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Supervisor {
+    /// The dev app's child: it reads the handshake line, and the end of stdin
+    /// is the app going away, even when the app was killed and sent nothing.
+    Parent,
+    /// launchd, as the LaunchAgent: stdin is /dev/null and stdout a log file,
+    /// so there is no handshake to print (the log would hold the token) and
+    /// no EOF to wait for. A signal or `daemon_shutdown` stops it.
+    Launchd,
+}
+
+fn supervisor(args: &[String]) -> Result<Supervisor, String> {
+    let mut args = args.iter();
+    while let Some(arg) = args.next() {
+        let named = match arg.strip_prefix("--supervised-by=") {
+            Some(name) => Some(name),
+            None if arg == "--supervised-by" => args.next().map(String::as_str),
+            None => continue,
+        };
+        return match named {
+            Some("launchd") => Ok(Supervisor::Launchd),
+            other => Err(format!("--supervised-by takes `launchd`, not {:?}", other.unwrap_or(""))),
+        };
+    }
+    Ok(Supervisor::Parent)
+}
+
 fn run(args: &[String]) -> Result<(), String> {
     let dir = data_dir(args);
+    let supervisor = supervisor(args)?;
+    if supervisor == Supervisor::Launchd {
+        tidy_log(&dir);
+        eprintln!("[crewd] {} starting, pid {}", env!("CARGO_PKG_VERSION"), std::process::id());
+    }
     // Set before any thread starts; every terminal inherits it.
     let bind = dir.join("claude-bind");
     std::fs::create_dir_all(&bind).map_err(|e| format!("{}: {e}", bind.display()))?;
@@ -81,16 +116,21 @@ fn run(args: &[String]) -> Result<(), String> {
     ) {
         eprintln!("[crewd] daemon.json: {error}");
     }
-    let mut stdout = io::stdout();
-    writeln!(
-        stdout,
-        "{}",
-        serde_json::to_string(&info).map_err(|e| e.to_string())?
-    )
-    .map_err(|e| e.to_string())?;
-    stdout.flush().map_err(|e| e.to_string())?;
+    if supervisor == Supervisor::Parent {
+        let mut stdout = io::stdout();
+        writeln!(
+            stdout,
+            "{}",
+            serde_json::to_string(&info).map_err(|e| e.to_string())?
+        )
+        .map_err(|e| e.to_string())?;
+        stdout.flush().map_err(|e| e.to_string())?;
+    }
 
-    wait_for_exit();
+    wait_for_exit(supervisor == Supervisor::Parent, handle.exit_requests());
+    if supervisor == Supervisor::Launchd {
+        eprintln!("[crewd] stopping");
+    }
 
     remove_daemon_file(&dir, &info.url);
     // First, so a process killed below is not restarted on its way out, and
@@ -119,28 +159,66 @@ fn data_dir(args: &[String]) -> PathBuf {
     std::env::temp_dir().join(format!("crewd-{}", std::process::id()))
 }
 
-fn wait_for_exit() {
+/// launchd never rotates what it appends to, and a daemon that runs from login
+/// to logout for months would grow it without end.
+const LOG_CAP: u64 = 10 * 1024 * 1024;
+
+/// launchd opened the log before crewd ran, with the umask's mode, and the log
+/// can hold what a turn printed; so it is made private, and emptied when it is
+/// past the cap (launchd appends, so the next line lands at the start).
+fn tidy_log(dir: &std::path::Path) {
+    use std::os::unix::fs::PermissionsExt;
+    // The file the plist sends stdout and stderr to.
+    let path = dir.join(crew_cli::launch_agent::LOG);
+    let Ok(meta) = std::fs::metadata(&path) else { return };
+    let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+    if meta.len() > LOG_CAP {
+        if let Ok(file) = std::fs::OpenOptions::new().write(true).open(&path) {
+            let _ = file.set_len(0);
+        }
+    }
+}
+
+/// Blocks until something says stop: a signal, `daemon_shutdown`, or, for the
+/// app's child, the end of stdin.
+fn wait_for_exit(watch_stdin: bool, requests: Option<mpsc::Receiver<()>>) {
     let (tx, rx) = mpsc::channel();
 
-    thread::Builder::new()
-        .name("crewd-stdin".into())
-        .spawn({
-            let tx = tx.clone();
-            move || {
-                let mut stdin = io::stdin();
-                let mut buf = [0u8; 64];
-                loop {
-                    match stdin.read(&mut buf) {
-                        Ok(0) | Err(_) => {
-                            let _ = tx.send(());
-                            return;
+    if watch_stdin {
+        thread::Builder::new()
+            .name("crewd-stdin".into())
+            .spawn({
+                let tx = tx.clone();
+                move || {
+                    let mut stdin = io::stdin();
+                    let mut buf = [0u8; 64];
+                    loop {
+                        match stdin.read(&mut buf) {
+                            Ok(0) | Err(_) => {
+                                let _ = tx.send(());
+                                return;
+                            }
+                            Ok(_) => {}
                         }
-                        Ok(_) => {}
                     }
                 }
-            }
-        })
-        .expect("stdin watcher");
+            })
+            .expect("stdin watcher");
+    }
+
+    if let Some(requests) = requests {
+        thread::Builder::new()
+            .name("crewd-exit".into())
+            .spawn({
+                let tx = tx.clone();
+                move || {
+                    if requests.recv().is_ok() {
+                        let _ = tx.send(());
+                    }
+                }
+            })
+            .expect("exit watcher");
+    }
 
     thread::Builder::new()
         .name("crewd-signal".into())

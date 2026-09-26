@@ -7,6 +7,7 @@ import { pathToFileURL } from "node:url";
 import { app, BrowserWindow, dialog, ipcMain, Menu, Notification, session, shell, type OpenDialogOptions } from "electron";
 import { installBrowser, registerBrowserIpc, startBrowserHost } from "./browser";
 import { sha } from "./build-info";
+import { connectAgent, type AgentLink } from "./daemon-agent";
 import { buildMenu } from "./menu";
 import { watchForUpdates } from "./update";
 
@@ -16,6 +17,10 @@ type OpenOptions = { multiple?: boolean; directory?: boolean };
 type Daemon = ChildProcessByStdio<Writable, Readable, null>;
 
 let win: BrowserWindow | null = null;
+// Dev (worktrees included) runs crewd as this process's child, on its own
+// data dir, and stops it on quit. The packaged app connects to the
+// LaunchAgent instead, and quitting leaves it running.
+let agent: AgentLink | null = null;
 let child: Daemon | null = null;
 let info: DaemonInfo | null = null;
 let stopping = false;
@@ -30,6 +35,32 @@ let upSince = 0;
 function crewdPath(): string {
   if (app.isPackaged) return path.join(process.resourcesPath, "crewd");
   return path.join(app.getAppPath(), "target/debug/crewd");
+}
+
+function daemonInfo(): DaemonInfo | null {
+  return agent ? agent.info() : info;
+}
+
+async function connectDaemon(): Promise<void> {
+  if (!app.isPackaged) return startDaemon();
+  agent = await connectAgent({
+    crewd: crewdPath(),
+    crew: path.join(process.resourcesPath, "crew"),
+    dataDir: app.getPath("userData"),
+    version: app.getVersion(),
+    home: homedir(),
+    uid: process.getuid?.() ?? 0,
+    // A crash launchd recovered from, or `crew daemon restart`: its PTYs are
+    // gone, so the window starts over, as it does when dev restarts its child.
+    onNewDaemon: () => win?.reload(),
+  });
+}
+
+// "Quit Crew and Stop Everything". In dev a plain quit already does this.
+async function quitAndStopEverything(): Promise<void> {
+  for (const window of BrowserWindow.getAllWindows()) window.hide();
+  await agent?.shutdown();
+  app.quit();
 }
 
 // scripts/app.mjs moves a worktree's dev server off 1420 so checkouts run side by side.
@@ -235,8 +266,9 @@ function createWindow(): void {
 
 function registerIpc(): void {
   ipcMain.handle("daemon-info", () => {
-    if (!info) throw new Error("Crew daemon is not running");
-    return info;
+    const current = daemonInfo();
+    if (!current) throw new Error("Crew daemon is not running");
+    return current;
   });
   ipcMain.handle("dialog-open", async (event, opts: OpenOptions = {}) => {
     const target = BrowserWindow.fromWebContents(event.sender) ?? win ?? undefined;
@@ -285,18 +317,18 @@ app.whenReady().then(async () => {
       },
     });
   });
-  Menu.setApplicationMenu(buildMenu());
+  Menu.setApplicationMenu(buildMenu({ quitAndStopEverything: () => void quitAndStopEverything() }));
   registerIpc();
   try {
-    await startDaemon();
+    await connectDaemon();
   } catch (error) {
-    dialog.showErrorBox("Crew", `Could not start crewd: ${error}`);
+    dialog.showErrorBox("Crew", `Could not start crewd: ${error instanceof Error ? error.message : String(error)}`);
     app.quit();
     return;
   }
   createWindow();
   // Agents drive pages through main, over its own connection; it follows crewd across restarts.
-  const browserHost = startBrowserHost(() => info);
+  const browserHost = startBrowserHost(daemonInfo);
   app.once("will-quit", () => browserHost.stop());
   watchForUpdates(() => {
     if (!win) createWindow();
@@ -311,6 +343,11 @@ app.on("window-all-closed", () => {
 });
 
 app.on("before-quit", (event) => {
+  // Packaged: crewd and everything it runs stay up; the app only lets go.
+  if (agent) {
+    agent.release();
+    return;
+  }
   if (stopping || (!child && !starting)) return;
   event.preventDefault();
   void stopDaemon().then(() => app.quit());

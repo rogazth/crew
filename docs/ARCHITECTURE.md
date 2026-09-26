@@ -1,6 +1,6 @@
 # Architecture
 
-Crew is two processes. Electron is the window. `crewd` is the daemon: it holds the agents, the transcripts, and a SQLite file. The window is a client of the daemon. Closing it stops the daemon and the child processes the daemon started.
+Crew is two processes. Electron is the window. `crewd` is the daemon: it holds the agents, the terminals, the processes, the transcripts, and a SQLite file. The window is a client of the daemon. In the packaged app `crewd` is a LaunchAgent: closing the window leaves it running, with everything it started, and **Crew › Quit Crew and Stop Everything** stops it. In dev it is the window's child and stops with it.
 
 ```mermaid
 flowchart TB
@@ -12,7 +12,7 @@ flowchart TB
   Bridge["UNIX socket"]
 
   UI --> Host
-  Host -->|"spawns, reads the handshake"| Daemon
+  Host -->|"connects via daemon.json (packaged) · spawns (dev)"| Daemon
   UI -->|"WebSocket"| Daemon
   Daemon --> Store
   Daemon -->|"one process per turn"| CLI
@@ -21,7 +21,7 @@ flowchart TB
 ```
 
 ```
-electron/          the window; spawns crewd
+electron/          the window; connects to crewd, or spawns it in dev
 src/               the React client
 crates/crewd/      the daemon process
 crates/crew-cli/   the `crew` command line
@@ -30,6 +30,16 @@ crates/crew-protocol/  the messages, defined once
 ```
 
 `crew-protocol` generates `src/lib/protocol.ts`. A message is defined once.
+
+## Where `crewd` runs
+
+**Packaged.** `crewd` runs as the LaunchAgent `rogazth.crew.crewd` (`~/Library/LaunchAgents/rogazth.crew.crewd.plist`), which points at the `crewd` inside the bundle with `--data-dir <userData> --supervised-by launchd` and logs to `<data-dir>/crewd.log`. `crew daemon install` writes the plist (`crates/crew-cli/src/launch_agent.rs`); the app runs that command from its bundle whenever the plist is missing or names another `crewd` or data dir, which is how a moved or replaced app takes over. `KeepAlive { SuccessfulExit: false }`: a crash brings `crewd` back, a clean stop (SIGTERM, `daemon_shutdown`) exits 0 and leaves it down until the app opens or the user logs in (`RunAtLoad`). Under launchd, `crewd` prints no handshake and does not watch stdin.
+
+On launch the app reads `daemon.json` and asks the bridge `whoami` with the user token (`electron/daemon-agent.ts`, decisions in `daemon-agent-plan.ts`). A daemon that answers with the app's version is used. No file, or one whose pid is dead, gets `launchctl kickstart` (`bootstrap` first if the agent is not loaded); one that is alive but silent gets `kickstart -k`; one of another version, after an update, is asked to exit (`daemon/shutdown`, so auto-start processes come back) and started again. While the window is open it checks every two seconds: a new daemon (launchd's restart, `crew daemon restart`) is switched to and the window reloads; a missing one is started again. The window and the browser host read the address on every reconnect, so a new port and token reach both. Quitting only lets go.
+
+**Dev** (`npm run app`, worktrees with their own `CREW_DATA_DIR`). Electron spawns `crewd --data-dir <userData>`, reads the handshake line on stdout, and `crewd` exits when its stdin closes or on a signal. A daemon that dies is started once more, or again if it had been up over a minute.
+
+`daemon_shutdown` over the WebSocket, and `daemon/shutdown` on the bridge for the user's token only, ask `crewd` to stop exactly as a signal would: it removes `daemon.json`, gives supervised processes one stop grace and exits 0.
 
 ## A turn
 
@@ -91,4 +101,4 @@ The bridge is a UNIX socket in the data dir. Every request carries a token, and 
 
 ## The `crew` command
 
-`crew` (`crates/crew-cli`) is a client of the same bridge. Inside a session it takes `CREW_SOCKET`/`CREW_TOKEN` and is that session; anywhere else it reads `daemon.json` from `--data-dir`, `$CREW_DATA_DIR` or the installed app's folder, and speaks as the user in the workspace holding the current directory. Its commands are thin wrappers over tools (`crew ps` is `list_processes`, `crew agents` is `list_agents`), and `crew call` reaches any tool by name, so the CLI and MCP cannot drift apart. The bridge answers two methods for it beside `tools/*`: `tools/catalog`, every tool the caller may run, listed or not, for `crew call --help`; and `whoami`, for `crew status`. `crew mcp` is the stdio server; `crewd --mcp` and `crewd call` stay one version as aliases. The app bundles `crew` next to `crewd`, and **Crew › Install `crew` Command…** links it onto the user's PATH.
+`crew` (`crates/crew-cli`) is a client of the same bridge. Inside a session it takes `CREW_SOCKET`/`CREW_TOKEN` and is that session; anywhere else it reads `daemon.json` from `--data-dir`, `$CREW_DATA_DIR` or the installed app's folder, and speaks as the user in the workspace holding the current directory. Its commands are thin wrappers over tools (`crew ps` is `list_processes`, `crew agents` is `list_agents`), and `crew call` reaches any tool by name, so the CLI and MCP cannot drift apart. The bridge answers two methods for it beside `tools/*`: `tools/catalog`, every tool the caller may run, listed or not, for `crew call --help`; and `whoami`, for `crew status`. `crew mcp` is the stdio server; `crewd --mcp` and `crewd call` stay one version as aliases. The app bundles `crew` next to `crewd`, and **Crew › Install `crew` Command…** links it onto the user's PATH. When the LaunchAgent serves the data dir, `crew daemon stop` asks for `daemon/shutdown`, `restart` is `launchctl kickstart -k` and `status` adds what `launchctl print` says; otherwise they go through the pid in `daemon.json`. `crew daemon install|uninstall` write or remove the plist and bootstrap or boot it out.

@@ -272,3 +272,56 @@ setInterval(() => {}, 1 << 30);
         "crewd {crewd_pid} or sleep {sleep_pids:?} still alive after parent SIGKILL"
     );
 }
+
+/// The LaunchAgent's crewd: stdin is /dev/null, so its end is no reason to
+/// stop, and stdout is a log file, so the handshake (which holds the token)
+/// is never printed. `daemon_shutdown` from the user stops it cleanly, and a
+/// clean stop exits 0, which is what keeps launchd from starting it again.
+#[test]
+fn under_launchd_it_outlives_stdin_prints_no_token_and_stops_when_asked() {
+    use std::io::{Read, Write};
+    let dir = std::env::temp_dir().join(format!("cla-{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    let path = dir.join("daemon.json");
+    let _ = std::fs::remove_file(&path);
+    let mut child = crewd()
+        .arg("--data-dir")
+        .arg(&dir)
+        .args(["--supervised-by", "launchd"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn");
+    assert!(wait_until(Duration::from_secs(10), || path.exists()), "no daemon.json");
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(child.try_wait().expect("wait").is_none(), "stopped on the end of stdin");
+
+    let file: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).expect("read")).expect("json");
+    let mut stream = std::os::unix::net::UnixStream::connect(file["socket"].as_str().expect("socket")).expect("unix");
+    writeln!(stream, r#"{{"token":"{}","method":"daemon/shutdown"}}"#, file["userToken"].as_str().expect("token"))
+        .expect("write");
+    let mut reply = String::new();
+    BufReader::new(stream).read_line(&mut reply).expect("reply");
+    assert!(reply.contains("result"), "{reply}");
+    wait_exit(&mut child, Duration::from_secs(10));
+    assert!(!path.exists(), "daemon.json outlived its daemon");
+
+    let mut out = String::new();
+    child.stdout.take().expect("stdout").read_to_string(&mut out).expect("stdout");
+    let token = file["token"].as_str().expect("token");
+    assert!(!out.contains(token), "the handshake went to the log: {out}");
+}
+
+#[test]
+fn an_unknown_supervisor_is_refused() {
+    let output = crewd()
+        .arg("--data-dir")
+        .arg(data_dir("bad-supervisor"))
+        .args(["--supervised-by", "systemd"])
+        .stdin(Stdio::null())
+        .output()
+        .expect("run");
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("--supervised-by"));
+}

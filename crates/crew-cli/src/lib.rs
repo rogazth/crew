@@ -14,6 +14,7 @@ mod call;
 mod client;
 mod daemon;
 mod identity;
+pub mod launch_agent;
 mod output;
 mod processes;
 

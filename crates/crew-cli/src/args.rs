@@ -251,13 +251,21 @@ pub struct CallArgs {
 pub enum DaemonCommand {
     /// Whether crewd is running, its pid and version, and what keeps it alive.
     Status,
-    /// Stop crewd. While the app runs it as its child, the app may start it again.
+    /// Stop crewd. While the app is open, it starts it again.
     Stop,
     /// Stop crewd and wait for a new one to come up.
     Restart,
-    /// Run crewd on its own, outliving the window. Not available yet.
-    Install,
-    /// Undo `crew daemon install`. Not available yet.
+    /// Run crewd as a LaunchAgent: from login, and past quitting Crew. The app does this itself.
+    #[command(after_help = "\
+Examples:
+  crew daemon install
+  crew daemon install --crewd /Applications/Crew.app/Contents/Resources/crewd")]
+    Install {
+        /// The crewd to run. Defaults to the one beside this `crew`, as in the app's bundle.
+        #[arg(long, value_name = "PATH")]
+        crewd: Option<PathBuf>,
+    },
+    /// Stop crewd and remove its LaunchAgent. The packaged app puts it back when it opens.
     Uninstall,
 }
 
@@ -351,6 +359,17 @@ mod tests {
         assert_eq!(command, ["cargo", "run", "--release"]);
         assert_eq!(env, ["PORT=4000"]);
         assert!(auto_start);
+    }
+
+    #[test]
+    fn daemon_install_takes_the_crewd_to_run() {
+        let Command::Daemon { command: DaemonCommand::Install { crewd } } =
+            parse(&["daemon", "install", "--crewd", "/b/crewd", "--data-dir", "/d"]).command
+        else {
+            panic!("not daemon install");
+        };
+        assert_eq!(crewd, Some(PathBuf::from("/b/crewd")));
+        assert!(matches!(parse(&["daemon", "install"]).command, Command::Daemon { command: DaemonCommand::Install { crewd: None } }));
     }
 
     #[test]

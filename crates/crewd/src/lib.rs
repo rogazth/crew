@@ -59,11 +59,14 @@ struct Hosts {
     scheduler: Scheduler,
     /// Browser tabs agents drive: the leases, and the relay to Electron main.
     browser: BrowserTools,
+    /// `daemon_shutdown`: the main thread stops the daemon as it would on a signal.
+    exit: std_mpsc::Sender<()>,
 }
 
 pub struct Handle {
     pub info: DaemonInfo,
     shutdown: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+    exit_requests: Mutex<Option<std_mpsc::Receiver<()>>>,
     turns: TurnHost,
     scheduler: Scheduler,
 }
@@ -83,6 +86,13 @@ impl Handle {
         if let Some(tx) = self.shutdown.lock().unwrap_or_else(|e| e.into_inner()).take() {
             let _ = tx.send(());
         }
+    }
+
+    /// Where `daemon_shutdown` lands, from the window or from the user's
+    /// `crew`. It only asks: whoever runs the daemon stops it, in the same
+    /// order as for a signal. Taken once.
+    pub fn exit_requests(&self) -> Option<std_mpsc::Receiver<()>> {
+        self.exit_requests.lock().unwrap_or_else(|e| e.into_inner()).take()
     }
 
     pub fn override_agent_binary(&self, name: &str, path: impl Into<String>) {
@@ -380,6 +390,7 @@ struct ToolDispatch {
     /// Shared with `turns`, so what is registered here is also named on the
     /// tool sheet in an agent's prompt.
     toolbox: Toolbox,
+    exit: std_mpsc::Sender<()>,
 }
 
 impl ToolDispatch {
@@ -396,6 +407,15 @@ impl ToolHost for ToolDispatch {
     }
 
     fn handle(&self, caller: &Caller, method: &str, params: Value) -> Result<Value, String> {
+        // `crew daemon stop`. Only the user's token: a session that could stop
+        // the daemon could stop every other session with it.
+        if method == "daemon/shutdown" {
+            if caller.kind() != crew_core::caller::CallerKind::User {
+                return Err("Only the user can stop Crew's daemon.".into());
+            }
+            let _ = self.exit.send(());
+            return Ok(Value::Null);
+        }
         let on_created = |created: &crew_core::session::Session| {
             self.hub.emit(
                 "session-created",
@@ -473,6 +493,7 @@ pub fn serve(config: Config) -> Result<Handle, String> {
     scheduler.set_events(hub.clone());
     // Tool families register here, with the host handles they need.
     let toolbox = turns.toolbox();
+    let (exit_tx, exit_rx) = std_mpsc::channel();
     toolbox.register(Arc::new(ProcessTools::new(config.processes.clone(), config.store.clone())));
     toolbox.register(Arc::new(browser.clone()));
     config.bridge.set_handler(Arc::new(ToolDispatch {
@@ -482,6 +503,7 @@ pub fn serve(config: Config) -> Result<Handle, String> {
         scheduler: scheduler.clone(),
         hub: hub.clone(),
         toolbox,
+        exit: exit_tx.clone(),
     }));
 
     // A letter left waiting for an idle agent is invisible until someone
@@ -503,6 +525,7 @@ pub fn serve(config: Config) -> Result<Handle, String> {
         turns: turns.clone(),
         scheduler: scheduler.clone(),
         browser,
+        exit: exit_tx,
     };
     let serve_token = token.clone();
 
@@ -524,6 +547,7 @@ pub fn serve(config: Config) -> Result<Handle, String> {
     Ok(Handle {
         info: DaemonInfo { url, token },
         shutdown: Mutex::new(Some(stop_tx)),
+        exit_requests: Mutex::new(Some(exit_rx)),
         turns,
         scheduler,
     })
@@ -1387,6 +1411,12 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
             block(move || crew_core::browser::page_delete(&store, &page_id)).await?;
             Ok(Value::Null)
         }
+        // "Quit Crew and Stop Everything". Answered before the daemon goes, so
+        // the window hears it was heard.
+        "daemon_shutdown" => {
+            let _ = hosts.exit.send(());
+            Ok(Value::Null)
+        }
         "browser_leases_list" => json(hosts.browser.leases().list(app_state::now_millis())),
         // The user takes a tab back from the agent driving it.
         "browser_lease_release" => {
@@ -1788,6 +1818,33 @@ mod tests {
         let reply = unix_call(&info.socket_path, &payload);
         let text = reply["result"]["content"][0]["text"].as_str().unwrap_or("");
         assert!(text.contains(&session_id), "reply: {reply}");
+        handle.shutdown();
+    }
+
+    /// `crew daemon stop` speaks as the user; an agent that could stop the
+    /// daemon would stop every other session with it. The window asks over
+    /// its own socket. Either only asks: the request lands where `main` waits.
+    #[tokio::test]
+    async fn only_the_user_and_the_window_can_ask_the_daemon_to_stop() {
+        let dir = test_dir("shutdown");
+        let (handle, bridge) = test_serve_bridged(&dir);
+        let requests = handle.exit_requests().expect("requests");
+        assert!(handle.exit_requests().is_none(), "taken once");
+        let mut ws = connect_authed(&handle).await;
+        let agent = seed_agent(&mut ws, dir.to_str().unwrap()).await;
+        let socket = bridge.info().expect("info").socket_path;
+
+        let refused = unix_call(&socket, &serde_json::json!({ "token": bridge.mint(&agent), "method": "daemon/shutdown" }));
+        assert!(refused["error"].as_str().is_some_and(|e| e.contains("Only the user")), "{refused}");
+        assert!(requests.try_recv().is_err(), "an agent asked and was heard");
+
+        let asked = unix_call(&socket, &serde_json::json!({ "token": bridge.user_token(), "method": "daemon/shutdown" }));
+        assert!(asked.get("error").is_none(), "{asked}");
+        requests.recv_timeout(Duration::from_secs(2)).expect("the user's request");
+
+        let reply = rpc(&mut ws, 900, "daemon_shutdown", serde_json::json!({})).await;
+        assert!(reply.ok, "{:?}", reply.error);
+        requests.recv_timeout(Duration::from_secs(2)).expect("the window's request");
         handle.shutdown();
     }
 
