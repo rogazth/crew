@@ -6,6 +6,7 @@ import {
   parseEnv,
   processActions,
   removeProcess,
+  replayEvents,
   specChanges,
   specOf,
   stateLabel,
@@ -37,6 +38,7 @@ function process(patch: Partial<Process> = {}): Process {
     ptyId: "process:p1",
     logCursor: 0,
     runCursor: 0,
+    revision: 0,
     ...patch,
   };
 }
@@ -56,6 +58,21 @@ describe("processes", () => {
     ]);
     expect(removeProcess(moved, "a").map((p) => p.id)).toEqual(["b"]);
     expect(removeProcess(moved, "zzz")).toBe(moved);
+  });
+
+  it("lays the events heard during a load over its answer", () => {
+    // The list was read before "a" started and "b" was deleted.
+    const answer = [process({ id: "a" }), process({ id: "b" })];
+    const heard = [
+      { kind: "changed" as const, process: process({ id: "a", state: "running" }) },
+      { kind: "removed" as const, id: "b" },
+      { kind: "changed" as const, process: process({ id: "c" }) },
+    ];
+    expect(replayEvents(answer, heard).map((p) => [p.id, p.state])).toEqual([
+      ["a", "running"],
+      ["c", "stopped"],
+    ]);
+    expect(replayEvents(answer, [])).toBe(answer);
   });
 
   it("says why it is down, and tells a restart from a first start", () => {

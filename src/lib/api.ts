@@ -14,6 +14,7 @@ import type {
   ProcessSpec,
   SearchHit,
   SearchQuery,
+  SoloEntry,
   SoloImported,
 } from "./protocol";
 import type { Autonomy, ProjectFile, Session, SessionKind, SessionStatus, Workspace, Worktree } from "./types";
@@ -284,19 +285,18 @@ export const createProcess = (workspaceId: string, spec: ProcessSpec): Promise<P
 export const updateProcess = (workspaceId: string, id: string, patch: Partial<ProcessSpec>): Promise<Process> =>
   client.request("process_update", { workspaceId, id, ...patch });
 
-export type ProcessCommand =
-  | "start"
-  | "stop"
-  | "restart"
-  | "pause"
-  | "resume"
-  | "approve"
-  | "reject"
-  | "delete";
+export type ProcessCommand = "start" | "stop" | "restart" | "pause" | "resume" | "reject" | "delete";
 
 /** Stop waits for the exit, which can take the whole grace period. */
 export const processCommand = (command: ProcessCommand, workspaceId: string, id: string): Promise<Process | null> =>
   client.request(`process_${command}`, { workspaceId, id });
+
+/**
+ * Accepts what an agent wrote, as it stood at `revision`: the one the user
+ * read. The daemon refuses it if anything changed since.
+ */
+export const approveProcess = (workspaceId: string, id: string, revision: number): Promise<Process> =>
+  client.request("process_approve", { workspaceId, id, revision });
 
 export const reorderProcesses = (workspaceId: string, ids: string[]): Promise<void> =>
   client.request("process_reorder", { workspaceId, ids });
@@ -305,8 +305,13 @@ export const reorderProcesses = (workspaceId: string, ids: string[]): Promise<vo
 export const processLogTail = (workspaceId: string, id: string): Promise<LogChunk> =>
   client.request("process_log_tail", { workspaceId, id });
 
-export const importSoloYml = (workspaceId: string): Promise<SoloImported> =>
-  client.request("process_import_solo", { workspaceId });
+/** What `solo.yml` would add, for the user to read before importing. */
+export const soloPreview = (workspaceId: string): Promise<SoloEntry[]> =>
+  client.request("process_solo_preview", { workspaceId });
+
+/** Creates the entries the user confirmed; a name already taken is skipped. */
+export const importSoloYml = (workspaceId: string, processes: ProcessSpec[]): Promise<SoloImported> =>
+  client.request("process_import_solo", { workspaceId, processes });
 
 export { ackPty, attachPty, killPty, reattachPty, resizePty, spawnPty, writePty } from "./pty";
 

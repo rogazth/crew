@@ -23,6 +23,20 @@ export function removeProcess(list: Process[], id: string): Process[] {
   return list.some((process) => process.id === id) ? list.filter((process) => process.id !== id) : list;
 }
 
+export type ProcessEvent = { kind: "changed"; process: Process } | { kind: "removed"; id: string };
+
+/**
+ * A list the daemon answered, with the events heard while it was on its way
+ * laid over it in order: the answer was read before some of them happened,
+ * and must not wind a row back to before them.
+ */
+export function replayEvents(list: Process[], events: ProcessEvent[]): Process[] {
+  return events.reduce(
+    (rows, event) => (event.kind === "changed" ? upsertProcess(rows, event.process) : removeProcess(rows, event.id)),
+    list,
+  );
+}
+
 export function stateLabel(process: Process): string {
   switch (process.state) {
     case "running":

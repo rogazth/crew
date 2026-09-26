@@ -4,12 +4,14 @@ import { ActionMenu } from "./ActionMenu";
 import type { Confirm } from "./ConfirmDialog";
 import { ProcessDialog } from "./ProcessDialog";
 import { ProcessDot } from "./ProcessDot";
+import { SoloImportDialog } from "./SoloImportDialog";
 import { SortableItem, SortableList } from "./SortableList";
 import { deleteConfirm, type Processes } from "../hooks/useProcesses";
 import * as api from "../lib/api";
 import { isDeleteChord } from "../lib/hotkey";
 import { menuFromEvent, type MenuPoint } from "../lib/menu";
 import { awaitsUser, isLive, processActions, type Process } from "../lib/processes";
+import type { SoloImported } from "../lib/protocol";
 import type { Workspace } from "../lib/types";
 
 type Props = {
@@ -45,19 +47,21 @@ export function CommandsSection({ workspace, processes, activeId, onOpen, onConf
   const [menu, setMenu] = useState<{ point: MenuPoint; process: Process } | null>(null);
   const [editing, setEditing] = useState<{ process?: Process } | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [importing, setImporting] = useState(false);
   const hasSolo = useSoloFile(workspace.path);
   const list = processes.processes ?? [];
   const { run } = processes;
 
   const importSolo = () => {
     setNotice(null);
-    api
-      .importSoloYml(workspace.id)
-      .then(({ created, updated }) => {
-        const total = created.length + updated.length;
-        setNotice(total === 0 ? "solo.yml lists no commands." : null);
-      })
-      .catch((error: unknown) => setNotice(String(error).replace(/^Error:\s*/, "")));
+    setImporting(true);
+  };
+
+  // A command by a name already here is left as it is, and said so.
+  const imported = ({ skipped }: SoloImported) => {
+    if (skipped.length === 0) return;
+    const names = skipped.map((name) => `"${name}"`).join(", ");
+    setNotice(`Skipped ${names}: a command by that name already exists.`);
   };
 
   const pick = (id: string, process: Process) => {
@@ -65,7 +69,7 @@ export function CommandsSection({ workspace, processes, activeId, onOpen, onConf
     else if (id === "delete") onConfirm(deleteConfirm(process));
     else if (id === "copy-command") void navigator.clipboard.writeText(process.command);
     else if (id === "open") onOpen(process);
-    else void run(id as api.ProcessCommand, process);
+    else void run(id as api.ProcessCommand | "approve", process);
   };
 
   return (
@@ -122,6 +126,9 @@ export function CommandsSection({ workspace, processes, activeId, onOpen, onConf
       )}
       {editing && (
         <ProcessDialog workspaceId={workspace.id} process={editing.process} onClose={() => setEditing(null)} />
+      )}
+      {importing && (
+        <SoloImportDialog workspaceId={workspace.id} onClose={() => setImporting(false)} onImported={imported} />
       )}
     </div>
   );

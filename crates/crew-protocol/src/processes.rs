@@ -72,6 +72,11 @@ pub struct Process {
     /// Where the current (or last) run's output starts in the log.
     #[ts(type = "number")]
     pub run_cursor: u64,
+    /// Bumped by every change to the definition or to what waits on the
+    /// user. An approval names the one the user read, so a change that
+    /// lands while they read it is not what they approve.
+    #[ts(type = "number")]
+    pub revision: u64,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, TS)]
@@ -127,6 +132,17 @@ pub struct ProcessUpdate {
 pub struct ProcessRef {
     pub workspace_id: String,
     pub id: String,
+}
+
+/// The user accepts a process, or a change to it, as it stood at `revision`.
+#[derive(Serialize, Deserialize, Clone, Debug, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
+pub struct ProcessApprove {
+    pub workspace_id: String,
+    pub id: String,
+    #[ts(type = "number")]
+    pub revision: u64,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, TS)]
@@ -221,7 +237,30 @@ pub enum LogWait {
 #[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
 pub struct SoloImported {
     pub created: Vec<String>,
-    pub updated: Vec<String>,
+    /// Names the workspace already has: an import never overwrites a process.
+    pub skipped: Vec<String>,
+}
+
+/// A process `solo.yml` lists, as it would be created.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
+pub struct SoloEntry {
+    #[serde(flatten)]
+    #[ts(flatten)]
+    pub spec: ProcessSpec,
+    /// The workspace has a process by this name already, so it is skipped.
+    pub exists: bool,
+}
+
+/// What the user read in the preview and confirmed, sent back as it was
+/// shown: `solo.yml` may have changed since, and it is not what they read.
+#[derive(Serialize, Deserialize, Clone, Debug, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
+pub struct SoloImport {
+    pub workspace_id: String,
+    pub processes: Vec<ProcessSpec>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, TS)]

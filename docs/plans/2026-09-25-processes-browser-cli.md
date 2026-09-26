@@ -307,15 +307,30 @@ proceso que escupe 50 MB sin nadie mirando.
 **Construido**, con estas decisiones de más:
 - Un cambio que pide aprobación queda como `proposed` junto a la definición
   aceptada, que sigue corriendo; aprobar lo aplica, rechazar lo descarta. Un
-  proceso nuevo rechazado se borra.
-- `wait_for_log` sin `since` empieza donde empezó la corrida actual, así que
-  arrancar y esperar ve todo el boot. Termina con `ended` si el proceso para.
+  proceso nuevo rechazado se borra. La propuesta se guarda como parche (solo
+  los campos que cambia) y al aprobar se aplica sobre la definición de ese
+  momento; si el usuario edita a mano un campo propuesto, ese campo sale de la
+  propuesta.
+- Cada cambio a la definición o a la propuesta sube `revision`. Aprobar lleva
+  la que el usuario leyó y se rechaza ("review it again") si cambió: un agente
+  no puede cambiar el comando mientras el usuario lee la tarjeta.
+- `wait_for_log` sin `since` empieza donde empezó la corrida viva, así que
+  arrancar y esperar ve todo el boot; durante un backoff espera la corrida
+  siguiente. Si el proceso no está arriba contesta `ended` sin buscar, y todo
+  cambio de estado despierta a quien espera.
+- `send_input` pide autonomía `full`: lo que el proceso lee lo puede ejecutar.
+- El import de `solo.yml` muestra una vista previa (comandos y flags) y crea lo
+  que el usuario confirmó, no el archivo tal como esté después. Un nombre que
+  ya existe se salta y se informa; nunca se sobrescribe.
+- Los frames de un PTY van solo a los clientes que hicieron `pty_attach` de ese
+  stream.
 - El log lleva líneas `[crew] …` entre corridas (comando, salida, reintento);
   `grep_logs` y `wait_for_log` no las cuentan.
 - La vista es una página sobre el workspace, no un tab: se abre desde la
   sección "Commands" y cerrarla no toca el proceso.
 - Un proceso se nombra por id o por nombre, y los nombres son únicos por
-  workspace.
+  workspace, con un índice único (migración 20, que antes renombra los
+  duplicados a `web (2)`).
 - Las tools viven en `crates/crew-core/src/process_tools.rs` y se registran en
   `crewd::serve`. `timeout_s` es obligatorio en `wait_for_log` y se ajusta a
   1–60 s. `created_by` sale como "Nombre (agent id)" o "the user".

@@ -18,12 +18,13 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crew_protocol::{
-    LogChunk, LogGrep, LogMatch, LogWait, Process, ProcessSpec, ProcessState, SoloImported,
+    LogChunk, LogGrep, LogMatch, LogWait, Process, ProcessSpec, ProcessState, SoloEntry, SoloImported,
 };
-use rusqlite::{params, OptionalExtension};
+use rusqlite::{params, Connection, OptionalExtension};
+use serde::{Deserialize, Serialize};
 
 use crate::pty::{PtyHost, PtySink, SpawnOptions};
-use crate::store::{now_millis, set_order, Store};
+use crate::store::{has_column, now_millis, set_order, Store};
 
 pub use log::LogStore;
 
@@ -47,6 +48,41 @@ CREATE TABLE IF NOT EXISTS processes (
 );
 CREATE INDEX IF NOT EXISTS processes_workspace_idx ON processes (workspace_id, sort_order);
 "#;
+
+/// A name is how agents and the CLI reach a process, so two by one name in a
+/// workspace would leave one unreachable. Rows from before the index are
+/// renamed first, the oldest keeping its name: `web`, `web (2)`. `revision`
+/// counts changes, for an approval to name the one the user read.
+pub fn migrate_v20(conn: &Connection) -> rusqlite::Result<()> {
+    if !has_column(conn, "processes", "revision")? {
+        conn.execute_batch("ALTER TABLE processes ADD COLUMN revision INTEGER NOT NULL DEFAULT 0;")?;
+    }
+    let rows: Vec<(String, String, String)> = conn
+        .prepare("SELECT id, workspace_id, name FROM processes ORDER BY created_at ASC, sort_order ASC, id ASC")?
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+        .collect::<rusqlite::Result<_>>()?;
+    let mut taken: HashMap<&str, std::collections::HashSet<String>> = HashMap::new();
+    for (_, workspace, name) in &rows {
+        taken.entry(workspace.as_str()).or_default().insert(name.clone());
+    }
+    let mut kept: std::collections::HashSet<(&str, &str)> = std::collections::HashSet::new();
+    for (id, workspace, name) in &rows {
+        if kept.insert((workspace.as_str(), name.as_str())) {
+            continue;
+        }
+        let names = taken.entry(workspace.as_str()).or_default();
+        let fresh = (2..)
+            .map(|n| format!("{name} ({n})"))
+            .find(|candidate| !names.contains(candidate))
+            .expect("some number is free");
+        names.insert(fresh.clone());
+        conn.execute(
+            "UPDATE processes SET name = ?2, revision = revision + 1 WHERE id = ?1",
+            params![id, fresh],
+        )?;
+    }
+    conn.execute_batch("CREATE UNIQUE INDEX IF NOT EXISTS processes_name_idx ON processes (workspace_id, name);")
+}
 
 /// A server's first paint is a screen or two; a whole log would bury a model.
 const READ_DEFAULT: u32 = 16 * 1024;
@@ -94,14 +130,26 @@ impl Default for ProcessConfig {
     }
 }
 
-/// Fields to change on `update`; the ones left `None` stay.
-#[derive(Default, Clone, Debug)]
+/// Fields to change on `update`; the ones left `None` stay. A proposal is
+/// stored as one too, so approving it lays only what the agent asked for over
+/// the definition as it is by then, and an edit made meanwhile stays.
+///
+/// Stored the way a `ProcessSpec` serializes, so a proposal written as a
+/// whole spec before reads back as a patch of every field.
+#[derive(Default, Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ProcessPatch {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub command: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cwd: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub env: Option<BTreeMap<String, String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_start: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_restart: Option<bool>,
 }
 
@@ -115,6 +163,56 @@ impl ProcessPatch {
             auto_start: self.auto_start.unwrap_or(spec.auto_start),
             auto_restart: self.auto_restart.unwrap_or(spec.auto_restart),
         }
+    }
+
+    /// The fields where `to` differs from `from`.
+    fn diff(from: &ProcessSpec, to: &ProcessSpec) -> Self {
+        fn changed<T: PartialEq + Clone>(a: &T, b: &T) -> Option<T> {
+            (a != b).then(|| b.clone())
+        }
+        Self {
+            name: changed(&from.name, &to.name),
+            command: changed(&from.command, &to.command),
+            cwd: changed(&from.cwd, &to.cwd),
+            env: changed(&from.env, &to.env),
+            auto_start: changed(&from.auto_start, &to.auto_start),
+            auto_restart: changed(&from.auto_restart, &to.auto_restart),
+        }
+    }
+
+    /// `later` on top of this: where both set a field, `later` wins.
+    fn then(&self, later: &Self) -> Self {
+        Self {
+            name: later.name.clone().or_else(|| self.name.clone()),
+            command: later.command.clone().or_else(|| self.command.clone()),
+            cwd: later.cwd.clone().or_else(|| self.cwd.clone()),
+            env: later.env.clone().or_else(|| self.env.clone()),
+            auto_start: later.auto_start.or(self.auto_start),
+            auto_restart: later.auto_restart.or(self.auto_restart),
+        }
+    }
+
+    /// This without the fields `other` sets.
+    fn without(&self, other: &Self) -> Self {
+        fn keep<T: Clone>(mine: &Option<T>, theirs: &Option<T>) -> Option<T> {
+            if theirs.is_some() {
+                None
+            } else {
+                mine.clone()
+            }
+        }
+        Self {
+            name: keep(&self.name, &other.name),
+            command: keep(&self.command, &other.command),
+            cwd: keep(&self.cwd, &other.cwd),
+            env: keep(&self.env, &other.env),
+            auto_start: keep(&self.auto_start, &other.auto_start),
+            auto_restart: keep(&self.auto_restart, &other.auto_restart),
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        *self == Self::default()
     }
 }
 
@@ -135,8 +233,19 @@ struct Def {
     spec: ProcessSpec,
     created_by: Option<String>,
     approved: bool,
-    proposed: Option<ProcessSpec>,
+    proposed: Option<ProcessPatch>,
     requested_by: Option<String>,
+    revision: u64,
+}
+
+impl Def {
+    /// What approving would change, measured against the definition as it is
+    /// now: a field the agent asked for that already holds that value is no
+    /// change, and a proposal of nothing but those is none.
+    fn pending(&self) -> Option<ProcessPatch> {
+        let proposed = self.proposed.as_ref()?;
+        Some(ProcessPatch::diff(&self.spec, &proposed.apply(&self.spec))).filter(|patch| !patch.is_empty())
+    }
 }
 
 /// What the daemon knows of a process beyond its row. Gone with the daemon:
@@ -188,6 +297,10 @@ struct Inner {
     logs_dir: PathBuf,
     config: ProcessConfig,
     runs: Mutex<HashMap<String, Run>>,
+    /// Held across a definition's read and its write, so a change that lands
+    /// in between (an agent's proposal while the user approves) is not lost
+    /// or approved unseen.
+    edits: Mutex<()>,
     /// Signalled whenever a run's state moves, for `stop` to wait on.
     moved: Condvar,
     logs: Mutex<HashMap<String, Arc<LogStore>>>,
@@ -233,6 +346,7 @@ impl ProcessHost {
                 logs_dir: data_dir.join("logs"),
                 config,
                 runs: Mutex::new(HashMap::new()),
+                edits: Mutex::new(()),
                 moved: Condvar::new(),
                 logs: Mutex::new(HashMap::new()),
                 events: Mutex::new(None),
@@ -253,12 +367,29 @@ impl ProcessHost {
         self.inner.events.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
+    fn edits(&self) -> MutexGuard<'_, ()> {
+        self.inner.edits.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Every change of state comes through here. It wakes whoever waits on
+    /// the log too: a halt from `Starting` or a restart that fails writes
+    /// nothing, and a `wait_for_log` must hear it ended rather than sleep out
+    /// its timeout.
     fn emit(&self, id: &str) {
+        self.wake_waiters(id);
         let Some(events) = self.events() else {
             return;
         };
         if let Ok(Some(def)) = self.def_by_id(id) {
             events.changed(&self.snapshot(def));
+        }
+    }
+
+    /// Without opening the log: nobody waits on one that is not open.
+    fn wake_waiters(&self, id: &str) {
+        let log = self.inner.logs.lock().unwrap_or_else(|e| e.into_inner()).get(id).cloned();
+        if let Some(log) = log {
+            log.notify();
         }
     }
 
@@ -291,6 +422,7 @@ impl ProcessHost {
         crate::workspace::get(&self.inner.store, workspace_id.to_string())?
             .ok_or("Workspace not found")?;
         let spec = tidy(spec)?;
+        let edits = self.edits();
         self.ensure_free_name(workspace_id, &spec.name, None)?;
         let id = uuid::Uuid::new_v4().to_string();
         let now = now_millis();
@@ -322,7 +454,9 @@ impl ProcessHost {
                     now
                 ],
             )
-        })?;
+        })
+        .map_err(|error| name_taken(error, &spec.name))?;
+        drop(edits);
         self.emit(&id);
         self.get(workspace_id, &id)
     }
@@ -337,50 +471,89 @@ impl ProcessHost {
         updated_by: Option<String>,
         ask_approval: bool,
     ) -> Result<Process, String> {
+        let edits = self.edits();
         let def = self.resolve(workspace_id, process)?;
         if ask_approval && def.approved {
-            // On top of what is already proposed: two asks in a row are one change.
-            let next = tidy(patch.apply(def.proposed.as_ref().unwrap_or(&def.spec)))?;
+            // On top of what is already proposed: two asks in a row are one
+            // change. Only what differs from the definition is kept, so a
+            // field the agent left alone never overwrites it on approval.
+            let asked = def.proposed.clone().unwrap_or_default().then(&patch);
+            let next = tidy(asked.apply(&def.spec))?;
             self.ensure_free_name(workspace_id, &next.name, Some(&def.id))?;
-            let proposed = serde_json::to_string(&next).map_err(|e| e.to_string())?;
-            self.inner.store.with(|conn| {
-                conn.execute(
-                    "UPDATE processes SET proposed_json = ?2, requested_by = ?3, updated_at = ?4 WHERE id = ?1",
-                    params![def.id, proposed, updated_by, now_millis()],
-                )
-            })?;
+            let proposal = ProcessPatch::diff(&def.spec, &next);
+            if proposal.is_empty() {
+                self.clear_proposal(&def.id)?;
+            } else {
+                let proposed = serde_json::to_string(&proposal).map_err(|e| e.to_string())?;
+                self.inner.store.with(|conn| {
+                    conn.execute(
+                        "UPDATE processes SET proposed_json = ?2, requested_by = ?3, updated_at = ?4,
+                           revision = revision + 1 WHERE id = ?1",
+                        params![def.id, proposed, updated_by, now_millis()],
+                    )
+                })?;
+            }
         } else {
             let next = tidy(patch.apply(&def.spec))?;
             self.ensure_free_name(workspace_id, &next.name, Some(&def.id))?;
+            // A field set here outranks what an agent proposed for it before:
+            // approving that proposal later must not undo this edit. The rest
+            // of the proposal still waits.
+            let proposal = def
+                .proposed
+                .as_ref()
+                .map(|proposed| proposed.without(&ProcessPatch::diff(&def.spec, &next)))
+                .filter(|proposal| !proposal.is_empty());
             // An unapproved process stays a request, now from whoever changed
-            // it last. An approved one keeps any proposal still waiting.
-            let requested_by = if def.approved { def.requested_by } else { updated_by.or(def.requested_by) };
-            self.write_spec(&def.id, &next, def.approved, requested_by)?;
+            // it last. An approved one is asked for by the proposer, if any.
+            let requested_by = match (def.approved, &proposal) {
+                (false, _) => updated_by.or(def.requested_by),
+                (true, Some(_)) => def.requested_by,
+                (true, None) => None,
+            };
+            self.write_spec(&def.id, &next, def.approved, proposal.as_ref(), requested_by)?;
         }
+        drop(edits);
         self.emit(&def.id);
         self.get(workspace_id, &def.id)
     }
 
-    fn write_spec(&self, id: &str, spec: &ProcessSpec, approved: bool, requested_by: Option<String>) -> Result<(), String> {
+    /// The whole row but its runtime, and a new revision.
+    fn write_spec(
+        &self,
+        id: &str,
+        spec: &ProcessSpec,
+        approved: bool,
+        proposal: Option<&ProcessPatch>,
+        requested_by: Option<String>,
+    ) -> Result<(), String> {
         let env = serde_json::to_string(&spec.env).map_err(|e| e.to_string())?;
-        self.inner.store.with(|conn| {
-            conn.execute(
-                "UPDATE processes SET name = ?2, command = ?3, cwd = ?4, env_json = ?5, auto_start = ?6,
-                   auto_restart = ?7, approved = ?8, requested_by = ?9, updated_at = ?10 WHERE id = ?1",
-                params![
-                    id,
-                    spec.name,
-                    spec.command,
-                    spec.cwd,
-                    env,
-                    spec.auto_start,
-                    spec.auto_restart,
-                    approved,
-                    requested_by,
-                    now_millis()
-                ],
-            )
-        })?;
+        let proposal = proposal
+            .map(|proposal| serde_json::to_string(proposal).map_err(|e| e.to_string()))
+            .transpose()?;
+        self.inner
+            .store
+            .with(|conn| {
+                conn.execute(
+                    "UPDATE processes SET name = ?2, command = ?3, cwd = ?4, env_json = ?5, auto_start = ?6,
+                       auto_restart = ?7, approved = ?8, proposed_json = ?9, requested_by = ?10, updated_at = ?11,
+                       revision = revision + 1 WHERE id = ?1",
+                    params![
+                        id,
+                        spec.name,
+                        spec.command,
+                        spec.cwd,
+                        env,
+                        spec.auto_start,
+                        spec.auto_restart,
+                        approved,
+                        proposal,
+                        requested_by,
+                        now_millis()
+                    ],
+                )
+            })
+            .map_err(|error| name_taken(error, &spec.name))?;
         Ok(())
     }
 
@@ -389,6 +562,7 @@ impl ProcessHost {
         let def = self.resolve(workspace_id, process)?;
         self.halt(&def.id);
         self.runs().remove(&def.id);
+        self.wake_waiters(&def.id);
         self.inner
             .store
             .with(|conn| conn.execute("DELETE FROM processes WHERE id = ?1", params![def.id]))?;
@@ -405,21 +579,37 @@ impl ProcessHost {
         Ok(())
     }
 
-    /// The user accepts what an agent wrote. A new process that asks to
-    /// start on its own starts now: that is what its author was waiting for.
-    pub fn approve(&self, workspace_id: &str, process: &str) -> Result<Process, String> {
+    /// The user accepts what an agent wrote, as it stood at `revision`: the
+    /// one they read. Anything since (an agent swapping the command while
+    /// the card was open) is refused, for them to read again. A proposal is
+    /// laid over the definition as it is now, so an edit made meanwhile
+    /// stays. A new process that asks to start on its own starts now: that
+    /// is what its author was waiting for.
+    pub fn approve(&self, workspace_id: &str, process: &str, revision: u64) -> Result<Process, String> {
+        let edits = self.edits();
         let def = self.resolve(workspace_id, process)?;
-        if let Some(proposed) = &def.proposed {
-            self.write_spec(&def.id, proposed, true, None)?;
-            self.clear_proposal(&def.id)?;
-        } else if !def.approved {
-            self.write_spec(&def.id, &def.spec, true, None)?;
-        } else {
-            return self.get(workspace_id, &def.id);
+        if def.revision != revision {
+            return Err(format!("\"{}\" changed while you were reading it; review it again", def.spec.name));
         }
+        let first = !def.approved;
+        let next = match def.pending() {
+            Some(patch) => tidy(patch.apply(&def.spec))?,
+            None if first => def.spec.clone(),
+            None if def.proposed.is_some() => {
+                // Nothing left to change: the definition already says it.
+                self.clear_proposal(&def.id)?;
+                drop(edits);
+                self.emit(&def.id);
+                return self.get(workspace_id, &def.id);
+            }
+            None => return self.get(workspace_id, &def.id),
+        };
+        // A rename proposed a while ago may have been taken since.
+        self.ensure_free_name(workspace_id, &next.name, Some(&def.id))?;
+        self.write_spec(&def.id, &next, true, None, None)?;
+        drop(edits);
         self.emit(&def.id);
-        let now = self.resolve(workspace_id, &def.id)?;
-        if !def.approved && now.spec.auto_start {
+        if first && next.auto_start {
             return self.start(workspace_id, &def.id);
         }
         self.get(workspace_id, &def.id)
@@ -427,12 +617,15 @@ impl ProcessHost {
 
     /// A process nobody accepted is deleted; a proposed change is dropped.
     pub fn reject(&self, workspace_id: &str, process: &str) -> Result<Option<Process>, String> {
+        let edits = self.edits();
         let def = self.resolve(workspace_id, process)?;
         if !def.approved {
+            drop(edits);
             self.delete(workspace_id, &def.id)?;
             return Ok(None);
         }
         self.clear_proposal(&def.id)?;
+        drop(edits);
         self.emit(&def.id);
         self.get(workspace_id, &def.id).map(Some)
     }
@@ -440,7 +633,7 @@ impl ProcessHost {
     fn clear_proposal(&self, id: &str) -> Result<(), String> {
         self.inner.store.with(|conn| {
             conn.execute(
-                "UPDATE processes SET proposed_json = NULL, requested_by = NULL WHERE id = ?1",
+                "UPDATE processes SET proposed_json = NULL, requested_by = NULL, revision = revision + 1 WHERE id = ?1",
                 params![id],
             )
         })?;
@@ -458,13 +651,10 @@ impl ProcessHost {
         self.inner.store.with(|conn| set_order(conn, "processes", &ordered))
     }
 
-    /// Creates or updates, by name, what `<workspace>/solo.yml` lists.
-    pub fn import_solo_yml(
-        &self,
-        workspace_id: &str,
-        created_by: Option<String>,
-        ask_approval: bool,
-    ) -> Result<SoloImported, String> {
+    /// What `<workspace>/solo.yml` lists, as it would be imported, for the
+    /// user to read first. Solo starts a process with the app unless told
+    /// otherwise, and a preview is where that shows.
+    pub fn solo_preview(&self, workspace_id: &str) -> Result<Vec<SoloEntry>, String> {
         let workspace = crate::workspace::get(&self.inner.store, workspace_id.to_string())?
             .ok_or("Workspace not found")?;
         let root = Path::new(&workspace.path);
@@ -474,36 +664,44 @@ impl ProcessHost {
             .find(|path| path.is_file())
             .ok_or("This workspace has no solo.yml")?;
         let source = std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-        let mut imported = SoloImported { created: Vec::new(), updated: Vec::new() };
-        for entry in solo::parse(&source)? {
-            let cwd = entry.working_dir.trim_start_matches("./").trim_end_matches('/').to_string();
-            let cwd = if cwd == "." { String::new() } else { cwd };
-            match self.resolve(workspace_id, &entry.name) {
-                Ok(existing) => {
-                    let patch = ProcessPatch {
-                        name: None,
-                        command: Some(entry.command),
-                        cwd: Some(cwd),
-                        env: Some(entry.env),
-                        auto_start: Some(entry.auto_start),
-                        auto_restart: Some(entry.auto_restart),
-                    };
-                    self.update(workspace_id, &existing.id, patch, created_by.clone(), ask_approval)?;
-                    imported.updated.push(entry.name);
-                }
-                Err(_) => {
-                    let spec = ProcessSpec {
-                        name: entry.name.clone(),
-                        command: entry.command,
-                        cwd,
-                        env: entry.env,
-                        auto_start: entry.auto_start,
-                        auto_restart: entry.auto_restart,
-                    };
-                    self.create(workspace_id, spec, created_by.clone(), ask_approval)?;
-                    imported.created.push(entry.name);
-                }
+        solo::parse(&source)?
+            .into_iter()
+            .map(|entry| {
+                let cwd = entry.working_dir.trim_start_matches("./").trim_end_matches('/').to_string();
+                let spec = tidy(ProcessSpec {
+                    name: entry.name,
+                    command: entry.command,
+                    cwd: if cwd == "." { String::new() } else { cwd },
+                    env: entry.env,
+                    auto_start: entry.auto_start,
+                    auto_restart: entry.auto_restart,
+                })?;
+                let exists = self.resolve(workspace_id, &spec.name).is_ok();
+                Ok(SoloEntry { spec, exists })
+            })
+            .collect()
+    }
+
+    /// Creates what the user confirmed from a preview. A name the workspace
+    /// already has is skipped, never overwritten: a file is no way to change
+    /// a definition someone approved. `ask_approval` is for an import nobody
+    /// looked at, which lands pending like anything else an agent writes.
+    pub fn import_solo(
+        &self,
+        workspace_id: &str,
+        specs: Vec<ProcessSpec>,
+        created_by: Option<String>,
+        ask_approval: bool,
+    ) -> Result<SoloImported, String> {
+        let mut imported = SoloImported { created: Vec::new(), skipped: Vec::new() };
+        for spec in specs {
+            let name = spec.name.trim().to_string();
+            if self.resolve(workspace_id, &name).is_ok() {
+                imported.skipped.push(name);
+                continue;
             }
+            self.create(workspace_id, spec, created_by.clone(), ask_approval)?;
+            imported.created.push(name);
         }
         Ok(imported)
     }
@@ -637,9 +835,6 @@ impl ProcessHost {
         }
         drop(runs);
         self.inner.moved.notify_all();
-        if let Some(log) = log {
-            log.notify();
-        }
         self.emit(id);
     }
 
@@ -967,7 +1162,12 @@ impl ProcessHost {
 
     /// Blocks until a line from `since` on matches, the process ends, or
     /// `timeout_s` (at most a minute) passes. `since` defaults to where the
-    /// current run began, so a start followed by a wait sees the whole boot.
+    /// live run began, so a start followed by a wait sees the whole boot.
+    ///
+    /// A process that is not up answers `Ended` before anything is matched:
+    /// what its log holds is an old run's, and a ready line from before a
+    /// crash says nothing about now. One waiting out a restart's backoff is
+    /// waited for, and read from where its next run starts.
     pub fn wait_for_log(
         &self,
         workspace_id: &str,
@@ -980,7 +1180,28 @@ impl ProcessHost {
         let regex = compile(pattern)?;
         let log = self.log(&def.id)?;
         let deadline = Instant::now() + Duration::from_secs(u64::from(timeout_s.clamp(1, WAIT_MAX_S)));
-        let mut pos = since.unwrap_or_else(|| self.runs().get(&def.id).map_or(0, |run| run.run_cursor));
+        let mut pos = loop {
+            let seen = log.seq();
+            let (state, exit_code, run_cursor) = self
+                .runs()
+                .get(&def.id)
+                .map_or((ProcessState::Stopped, None, 0), |run| (run.state, run.exit_code, run.run_cursor));
+            if live(state) {
+                break since.unwrap_or(run_cursor);
+            }
+            if state != ProcessState::Starting {
+                return Ok(LogWait::Ended { state, exit_code, cursor: log.total() });
+            }
+            // Between runs a cursor the caller holds still reads on; without
+            // one there is no run to read yet.
+            if let Some(since) = since {
+                break since;
+            }
+            if Instant::now() >= deadline {
+                return Ok(LogWait::TimedOut { cursor: log.total() });
+            }
+            log.wait_change(seen, deadline);
+        };
         loop {
             let seen = log.seq();
             let total = log.total();
@@ -1040,6 +1261,7 @@ impl ProcessHost {
     }
 
     fn snapshot(&self, def: Def) -> Process {
+        let proposed = def.pending().map(|patch| patch.apply(&def.spec));
         let log_cursor = self.log_total(&def.id);
         let runs = self.runs();
         let run = runs.get(&def.id);
@@ -1056,7 +1278,7 @@ impl ProcessHost {
             spec: def.spec,
             created_by: def.created_by,
             approved: def.approved,
-            proposed: def.proposed,
+            proposed,
             requested_by: def.requested_by,
             state,
             pid: run.and_then(|run| run.pid),
@@ -1066,6 +1288,7 @@ impl ProcessHost {
             restarts: run.map_or(0, |run| run.restarts),
             log_cursor,
             run_cursor: run.map_or(0, |run| run.run_cursor),
+            revision: def.revision,
         }
     }
 
@@ -1124,7 +1347,7 @@ impl ProcessHost {
 }
 
 const SELECT: &str = "SELECT id, workspace_id, name, command, cwd, env_json, auto_start, auto_restart,
-  created_by, approved, proposed_json, requested_by FROM processes";
+  created_by, approved, proposed_json, requested_by, revision FROM processes";
 
 fn row_to_def(row: &rusqlite::Row) -> rusqlite::Result<Def> {
     let env: String = row.get(5)?;
@@ -1144,7 +1367,17 @@ fn row_to_def(row: &rusqlite::Row) -> rusqlite::Result<Def> {
         approved: row.get(9)?,
         proposed: proposed.and_then(|json| serde_json::from_str(&json).ok()),
         requested_by: row.get(11)?,
+        revision: row.get::<_, i64>(12)?.max(0) as u64,
     })
+}
+
+/// The unique index speaks SQL; whoever named the process reads this.
+fn name_taken(error: String, name: &str) -> String {
+    if error.contains("UNIQUE constraint failed") {
+        format!("A process named \"{name}\" already exists")
+    } else {
+        error
+    }
 }
 
 fn tidy(mut spec: ProcessSpec) -> Result<ProcessSpec, String> {

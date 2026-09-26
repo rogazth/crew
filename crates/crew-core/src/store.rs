@@ -70,7 +70,7 @@ impl Store {
     }
 }
 
-fn has_column(conn: &Connection, table: &str, column: &str) -> rusqlite::Result<bool> {
+pub(crate) fn has_column(conn: &Connection, table: &str, column: &str) -> rusqlite::Result<bool> {
     conn.prepare("SELECT 1 FROM pragma_table_info(?1) WHERE name = ?2")?
         .exists(params![table, column])
 }
@@ -310,6 +310,15 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         tx.execute_batch(crate::process::MIGRATION_V19)?;
         tx.execute(
             "INSERT INTO schema_migrations (version, applied_at) VALUES (19, ?1)",
+            params![now_millis()],
+        )?;
+        tx.commit()?;
+    }
+    if current < 20 {
+        let tx = conn.unchecked_transaction()?;
+        crate::process::migrate_v20(&tx)?;
+        tx.execute(
+            "INSERT INTO schema_migrations (version, applied_at) VALUES (20, ?1)",
             params![now_millis()],
         )?;
         tx.commit()?;

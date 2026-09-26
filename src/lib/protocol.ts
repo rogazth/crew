@@ -320,11 +320,22 @@ logCursor: number,
 /**
  * Where the current (or last) run's output starts in the log.
  */
-runCursor: number, name: string, command: string, 
+runCursor: number, 
+/**
+ * Bumped by every change to the definition or to what waits on the
+ * user. An approval names the one the user read, so a change that
+ * lands while they read it is not what they approve.
+ */
+revision: number, name: string, command: string, 
 /**
  * Relative to the workspace folder, or absolute; empty is the folder itself.
  */
 cwd: string, env: { [key in string]: string }, autoStart: boolean, autoRestart: boolean, };
+
+/**
+ * The user accepts a process, or a change to it, as it stood at `revision`.
+ */
+export type ProcessApprove = { workspaceId: string, id: string, revision: number, };
 
 export type ProcessCreate = { workspaceId: string, name: string, command: string, cwd?: string, env?: { [key in string]: string }, autoStart: boolean, autoRestart: boolean, };
 
@@ -463,7 +474,30 @@ export type SessionUpdate = { id: string, name: string, provider: string, model:
  */
 export type SessionUpdated = { session: Session, };
 
-export type SoloImported = { created: Array<string>, updated: Array<string>, };
+/**
+ * A process `solo.yml` lists, as it would be created.
+ */
+export type SoloEntry = { 
+/**
+ * The workspace has a process by this name already, so it is skipped.
+ */
+exists: boolean, name: string, command: string, 
+/**
+ * Relative to the workspace folder, or absolute; empty is the folder itself.
+ */
+cwd: string, env: { [key in string]: string }, autoStart: boolean, autoRestart: boolean, };
+
+/**
+ * What the user read in the preview and confirmed, sent back as it was
+ * shown: `solo.yml` may have changed since, and it is not what they read.
+ */
+export type SoloImport = { workspaceId: string, processes: Array<ProcessSpec>, };
+
+export type SoloImported = { created: Array<string>, 
+/**
+ * Names the workspace already has: an import never overwrites a process.
+ */
+skipped: Array<string>, };
 
 export type TempFile = { extension: string, base64Contents: string, };
 

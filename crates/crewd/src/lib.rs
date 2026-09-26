@@ -1490,9 +1490,18 @@ async fn process_rpc(hosts: &Hosts, method: &str, params: Value) -> Result<Value
             let proto::ProcessLogTail { workspace_id, id, max_bytes } = parse(params)?;
             json(block(move || host.log_tail_raw(&workspace_id, &id, max_bytes)).await?)
         }
-        "process_import_solo" => {
+        "process_solo_preview" => {
             let WorkspaceId { workspace_id } = parse(params)?;
-            json(block(move || host.import_solo_yml(&workspace_id, None, false)).await?)
+            json(block(move || host.solo_preview(&workspace_id)).await?)
+        }
+        // What the user confirmed from the preview, not the file as it is now.
+        "process_import_solo" => {
+            let proto::SoloImport { workspace_id, processes } = parse(params)?;
+            json(block(move || host.import_solo(&workspace_id, processes, None, false)).await?)
+        }
+        "process_approve" => {
+            let proto::ProcessApprove { workspace_id, id, revision } = parse(params)?;
+            json(block(move || host.approve(&workspace_id, &id, revision)).await?)
         }
         _ => {
             let proto::ProcessRef { workspace_id, id } = parse(params)?;
@@ -1504,7 +1513,6 @@ async fn process_rpc(hosts: &Hosts, method: &str, params: Value) -> Result<Value
                 "process_restart" => json(host.restart(&workspace_id, &id)?),
                 "process_pause" => json(host.pause(&workspace_id, &id)?),
                 "process_resume" => json(host.resume(&workspace_id, &id)?),
-                "process_approve" => json(host.approve(&workspace_id, &id)?),
                 "process_reject" => json(host.reject(&workspace_id, &id)?),
                 other => Err(format!("Unknown method: {other}")),
             })
