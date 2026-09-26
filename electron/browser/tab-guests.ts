@@ -15,6 +15,8 @@ export const MOUNT_TIMEOUT_MS = 15_000;
 
 const tabGuests = new Map<string, WebContents>();
 const waiters = new Map<string, Set<(guest: WebContents) => void>>();
+/** Guests already watched for going away. The window reports a guest on every attach, and one listener covers them all. */
+const watched = new WeakSet<WebContents>();
 /** The window that shows the tabs; a mount request goes to it. */
 let window: WebContents | null = null;
 
@@ -25,9 +27,12 @@ export function setTabWindow(host: WebContents): void {
 /** The window says `guest` is `tab`'s page. The caller has checked the window owns it. */
 export function bindTab(tab: string, guest: WebContents): void {
   tabGuests.set(tab, guest);
-  guest.once("destroyed", () => {
-    if (tabGuests.get(tab) === guest) tabGuests.delete(tab);
-  });
+  if (!watched.has(guest)) {
+    watched.add(guest);
+    guest.once("destroyed", () => {
+      for (const [bound, page] of tabGuests) if (page === guest) tabGuests.delete(bound);
+    });
+  }
   const waiting = waiters.get(tab);
   waiters.delete(tab);
   for (const resolve of waiting ?? []) resolve(guest);
