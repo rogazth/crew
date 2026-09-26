@@ -1,6 +1,6 @@
 # Procesos, navegador para agentes y CLI
 
-**Propuesto el 2026-09-25. Fases 1, 2 y 3 hechas el mismo día.** Cuatro piezas que comparten
+**Propuesto el 2026-09-25. Fases 1 a 4 hechas el mismo día.** Cuatro piezas que comparten
 cimientos: el bridge MCP, `crewd` como dueño de los procesos y una identidad por
 quien llama. Se escriben juntas porque cada una asume decisiones de las otras.
 
@@ -383,7 +383,7 @@ Puertos y, si hacen falta, traces de performance sobre el canal del navegador.
 | 1 | hecha |
 | 2 | hecha |
 | 3 | hecha. `crew daemon install/uninstall` responden "todavía no" y `stop`/`restart` son best-effort (SIGTERM al pid de `daemon.json`; la app relanza su daemon): la fase 5 suma un `Supervisor` LaunchAgent en `crates/crew-cli/src/daemon.rs` |
-| 4 | hecha salvo el registro en el gateway (ver abajo) |
+| 4 | hecha (ver abajo) |
 | 5 | pendiente |
 | 6 | pendiente |
 
@@ -433,6 +433,14 @@ Puertos y, si hacen falta, traces de performance sobre el canal del navegador.
   del bloqueo por input del usuario. `e2e/browser-agent.test.ts` está escrito
   pero no se corrió (el harness usa la base de datos real en macOS).
 
-**Pendiente:** registrar `BrowserTools` en el gateway (`find_tool`/`call_tool`):
-un brazo por tool que arme el `Holder` desde el `Caller` y devuelva el arreglo
-de bloques como `content` (imágenes incluidas). Y `crew tabs` en la CLI.
+- **Gateway.** `BrowserTools` es un `ToolFamily` registrado en `crewd::serve`
+  con la misma instancia que usa el canal: las 16 tools, ninguna core, para
+  agentes, terminales y el usuario. El `Holder` sale del `Caller`, el alcance
+  de `Caller::workspace_id()`, y la respuesta va como `ToolOutput::Content`,
+  así que un screenshot llega como bloque `image`. La salida del proceso de
+  una terminal suelta sus leases junto con su token (`SpawnOptions::on_exit`).
+- `browser_tool` (RPC) se queda: corre una tool como el usuario por el
+  WebSocket, que es lo que usa `e2e/browser-agent.test.ts`; la CLI va por el
+  bridge con el token del usuario.
+
+**Pendiente:** `crew tabs` en la CLI (fase 3).
