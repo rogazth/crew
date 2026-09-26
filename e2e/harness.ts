@@ -244,8 +244,10 @@ async function ready(page: Page): Promise<void> {
  */
 function sandboxEnv(home: string, config: string): NodeJS.ProcessEnv {
   const system = ["/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin", "/sbin", "/bin"];
+  // A run from inside a Crew session must not reach that session's daemon.
+  const { CREW_SOCKET: _socket, CREW_TOKEN: _token, ...machine } = process.env;
   return {
-    ...process.env,
+    ...machine,
     HOME: home,
     XDG_CONFIG_HOME: config,
     XDG_DATA_HOME: path.join(home, ".local/share"),
@@ -255,6 +257,9 @@ function sandboxEnv(home: string, config: string): NodeJS.ProcessEnv {
     SHELL: "/bin/bash",
     // Only the sandbox's .gitconfig: nothing from the machine's /etc/gitconfig.
     GIT_CONFIG_NOSYSTEM: "1",
+    // macOS resolves appData from the account, not $HOME, so without this the
+    // app would open the user's real `Crew Dev` database.
+    CREW_DATA_DIR: path.join(config, "Crew Dev"),
   };
 }
 
