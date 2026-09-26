@@ -20,13 +20,8 @@ import { resolveTerminalKey } from "../lib/terminalKeys";
 import { activateZwjUnicode } from "../lib/terminalUnicode";
 import { quotePath, quotePaths } from "../lib/terminalPaths";
 import { fontStack, ligaturesEnabled } from "../lib/terminalPrefs";
-import {
-  ANSI_DARK,
-  ANSI_LIGHT,
-  isOscColorQuery,
-  oscColorReply,
-  rgbToHex,
-} from "../lib/terminalColors";
+import { isOscColorQuery, oscColorReply } from "../lib/terminalColors";
+import { DARK_SCHEME, palette } from "../lib/terminalTheme";
 import { FindBar } from "../chrome/FindBar";
 import "@xterm/xterm/css/xterm.css";
 
@@ -58,33 +53,6 @@ const ACTIVITY_INTERVAL = 400;
 const ACK_FLUSH_MS = 4;
 /** Frames the proposed grid may keep changing before it is applied anyway. */
 const MAX_STABILITY_FRAMES = 8;
-
-const DARK_SCHEME = window.matchMedia("(prefers-color-scheme: dark)");
-
-function cssColor(expr: string, fallback: string): string {
-  const probe = document.createElement("span");
-  probe.style.color = expr;
-  document.body.appendChild(probe);
-  const color = getComputedStyle(probe).color;
-  probe.remove();
-  return rgbToHex(color || fallback);
-}
-
-/** The terminal is the canvas: same background, same text colour, ANSI tuned to it. */
-function palette() {
-  const dark = DARK_SCHEME.matches;
-  const background = cssColor("var(--color-canvas)", dark ? "#1a1a1a" : "#ffffff");
-  const foreground = cssColor("var(--color-text)", dark ? "#e8eef2" : "#2e2e2e");
-  return {
-    background,
-    foreground,
-    cursor: cssColor("var(--color-accent)", foreground),
-    cursorAccent: background,
-    selectionBackground: dark ? "rgba(255,255,255,0.22)" : "rgba(0,0,0,0.16)",
-    selectionInactiveBackground: dark ? "rgba(255,255,255,0.1)" : "rgba(0,0,0,0.07)",
-    ...(dark ? ANSI_DARK : ANSI_LIGHT),
-  };
-}
 
 const isDark = () => DARK_SCHEME.matches;
 

@@ -1,6 +1,6 @@
 # Procesos, navegador para agentes y CLI
 
-**Propuesto el 2026-09-25. Fase 1 hecha el mismo día.** Cuatro piezas que comparten
+**Propuesto el 2026-09-25. Fase 1 hecha el mismo día; la 2, menos sus tools MCP, también.** Cuatro piezas que comparten
 cimientos: el bridge MCP, `crewd` como dueño de los procesos y una identidad por
 quien llama. Se escriben juntas porque cada una asume decisiones de las otras.
 
@@ -303,6 +303,19 @@ de `create_process` e importador de `solo.yml`. Tests: Rust para drenar sin
 viewer, rotación, cursor, backoff y señales al grupo. Un test de estrés con un
 proceso que escupe 50 MB sin nadie mirando.
 
+**Construido** (todo menos las tools MCP), con estas decisiones de más:
+- Un cambio que pide aprobación queda como `proposed` junto a la definición
+  aceptada, que sigue corriendo; aprobar lo aplica, rechazar lo descarta. Un
+  proceso nuevo rechazado se borra.
+- `wait_for_log` sin `since` empieza donde empezó la corrida actual, así que
+  arrancar y esperar ve todo el boot. Termina con `ended` si el proceso para.
+- El log lleva líneas `[crew] …` entre corridas (comando, salida, reintento);
+  `grep_logs` y `wait_for_log` no las cuentan.
+- La vista es una página sobre el workspace, no un tab: se abre desde la
+  sección "Commands" y cerrarla no toca el proceso.
+- Un proceso se nombra por id o por nombre, y los nombres son únicos por
+  workspace.
+
 ### Fase 3: CLI
 
 Binario `crew`, `daemon.json`, identidad de usuario, comandos, completions,
@@ -352,7 +365,7 @@ Puertos y, si hacen falta, traces de performance sobre el canal del navegador.
 | --- | --- |
 | 0 | descartada |
 | 1 | hecha |
-| 2 | pendiente |
+| 2 | hecha salvo las tools MCP: `ProcessHost` (`crates/crew-core/src/process/`) tiene la API que las tools envuelven, falta registrarlas en `tools.rs` |
 | 3 | pendiente |
 | 4 | pendiente |
 | 5 | pendiente |

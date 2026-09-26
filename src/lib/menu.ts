@@ -17,7 +17,10 @@ export type MenuIcon =
   | "terminal"
   | "branch"
   | "reopen"
-  | "settings";
+  | "settings"
+  | "play"
+  | "stop"
+  | "pause";
 
 export type MenuAction = {
   id: string;

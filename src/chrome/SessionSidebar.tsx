@@ -1,5 +1,5 @@
 import { FolderIcon, GitBranchIcon, MagnifyingGlassIcon, PlusIcon, XIcon, type Icon } from "@phosphor-icons/react";
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
 import { ActionMenu } from "./ActionMenu";
 import { AgentAvatar } from "./AgentAvatar";
 import {
@@ -61,6 +61,8 @@ export type SessionSidebarProps = {
   onRemove: (session: Session) => void;
   onRemoveMany: (sessions: Session[]) => void;
   onReorder: (ids: string[]) => void;
+  /** The workspace's long-running commands, under its worktrees. Hidden while searching sessions. */
+  commands?: ReactNode;
 };
 
 type Menu =
@@ -361,6 +363,7 @@ export function SessionSidebar(props: SessionSidebarProps) {
               </div>
             );
           })}
+        {!filtering && props.commands}
       </div>
 
       {menu?.kind === "session" && (

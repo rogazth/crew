@@ -2,7 +2,9 @@ import type { Confirm } from "../chrome/ConfirmDialog";
 import type { RoutineDraft } from "../lib/routines";
 import type { SettingsSectionId } from "../lib/settings";
 import type { Session, Workspace } from "../lib/types";
+import type { Processes } from "../hooks/useProcesses";
 import { HistoryView } from "./HistoryView";
+import { ProcessView } from "./ProcessView";
 import { RoutinesView } from "./RoutinesView";
 import { SearchView } from "./SearchView";
 import { SettingsView } from "./SettingsView";
@@ -13,7 +15,9 @@ export type Page =
   | { kind: "settings"; section: SettingsSectionId }
   | { kind: "routines"; draft: RoutineDraft | null }
   | { kind: "search" }
-  | { kind: "history" };
+  | { kind: "history" }
+  /** One of the active workspace's commands and its output. */
+  | { kind: "process"; processId: string };
 
 type Props = {
   page: Page;
@@ -23,6 +27,9 @@ type Props = {
   onConfirm: (confirm: Confirm) => void;
   onOpenHit: (sessionId: string, pos: number) => void;
   onOpenUrl: (url: string) => void;
+  processes: Processes;
+  /** Every workspace's, to name who wrote a command. */
+  allSessions: Session[];
 };
 
 /**
@@ -37,11 +44,24 @@ export function Pages({
   onConfirm,
   onOpenHit,
   onOpenUrl,
+  processes,
+  allSessions,
 }: Props) {
   const agents = sessions.filter((session) => session.kind === "agent");
   if (page.kind === "settings") return <SettingsView section={page.section} />;
   if (page.kind === "search") return <SearchView agents={agents} onOpenHit={onOpenHit} />;
   if (page.kind === "history") return <HistoryView onOpen={onOpenUrl} onConfirm={onConfirm} />;
+  if (page.kind === "process") {
+    return (
+      <ProcessView
+        key={page.processId}
+        processId={page.processId}
+        processes={processes}
+        sessions={allSessions}
+        onConfirm={onConfirm}
+      />
+    );
+  }
   if (page.kind === "routines" && activeWorkspace) {
     return (
       <RoutinesView

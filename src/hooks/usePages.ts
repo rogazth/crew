@@ -30,8 +30,12 @@ export function usePages() {
     [],
   );
 
+  const openProcess = useCallback((processId: string) => setPage({ kind: "process", processId }), []);
+
   return {
     page,
+    processId: page.kind === "process" ? page.processId : null,
+    openProcess,
     settings: page.kind === "settings" ? page.section : null,
     isWorkspace: page.kind === "workspace",
     isRoutines: page.kind === "routines",

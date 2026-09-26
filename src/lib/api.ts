@@ -1,7 +1,20 @@
 import { client } from "./client";
 import { open } from "./host";
 import type { RoutineRow, ScheduledRoutine } from "./routines";
-import type { CookieRead, CookieSource, HistoryEntry, HistoryList, MessagePage, PageSnapshot, SearchHit, SearchQuery } from "./protocol";
+import type {
+  CookieRead,
+  CookieSource,
+  HistoryEntry,
+  HistoryList,
+  LogChunk,
+  MessagePage,
+  PageSnapshot,
+  Process,
+  ProcessSpec,
+  SearchHit,
+  SearchQuery,
+  SoloImported,
+} from "./protocol";
 import type { Autonomy, ProjectFile, Session, SessionKind, SessionStatus, Workspace, Worktree } from "./types";
 
 /** Native picker. No filters: any document the agent can read. */
@@ -260,4 +273,38 @@ export const browserPageGet = (pageId: string): Promise<PageSnapshot | null> =>
 export const browserPageDelete = (pageId: string): Promise<void> =>
   client.request("browser_page_delete", { pageId });
 
-export { ackPty, killPty, resizePty, spawnPty, writePty } from "./pty";
+export const listProcesses = (workspaceId: string): Promise<Process[]> =>
+  client.request("process_list", { workspaceId });
+
+/** From the window, so it is the user's: it never waits for approval. */
+export const createProcess = (workspaceId: string, spec: ProcessSpec): Promise<Process> =>
+  client.request("process_create", { workspaceId, ...spec });
+
+export const updateProcess = (workspaceId: string, id: string, patch: Partial<ProcessSpec>): Promise<Process> =>
+  client.request("process_update", { workspaceId, id, ...patch });
+
+export type ProcessCommand =
+  | "start"
+  | "stop"
+  | "restart"
+  | "pause"
+  | "resume"
+  | "approve"
+  | "reject"
+  | "delete";
+
+/** Stop waits for the exit, which can take the whole grace period. */
+export const processCommand = (command: ProcessCommand, workspaceId: string, id: string): Promise<Process | null> =>
+  client.request(`process_${command}`, { workspaceId, id });
+
+export const reorderProcesses = (workspaceId: string, ids: string[]): Promise<void> =>
+  client.request("process_reorder", { workspaceId, ids });
+
+/** The end of the log as written, escapes and all, for a terminal to repaint. */
+export const processLogTail = (workspaceId: string, id: string): Promise<LogChunk> =>
+  client.request("process_log_tail", { workspaceId, id });
+
+export const importSoloYml = (workspaceId: string): Promise<SoloImported> =>
+  client.request("process_import_solo", { workspaceId });
+
+export { ackPty, attachPty, killPty, reattachPty, resizePty, spawnPty, writePty } from "./pty";

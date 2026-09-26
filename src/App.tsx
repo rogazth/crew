@@ -33,6 +33,8 @@ import type { Session } from "./lib/types";
 import { shortBranch, worktreeLabel } from "./lib/worktrees";
 import { Pages } from "./surfaces/Pages";
 import { usePages } from "./hooks/usePages";
+import { useProcesses } from "./hooks/useProcesses";
+import { CommandsSection } from "./chrome/CommandsSection";
 import { boot } from "./lib/agentRuntime";
 import { WorkspacePanes } from "./surfaces/WorkspacePanes";
 
@@ -109,7 +111,19 @@ export function App() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   // Destructured: the hook returns a fresh object each render, and these
   // callbacks are dependencies of half the shell.
-  const { page, settings, isWorkspace, isRoutines, close: closePage, toggle: togglePage, openSettings, openRoutines } = usePages();
+  const {
+    page,
+    settings,
+    isWorkspace,
+    isRoutines,
+    processId,
+    close: closePage,
+    toggle: togglePage,
+    openSettings,
+    openRoutines,
+    openProcess,
+  } = usePages();
+  const processes = useProcesses(workspaceId);
 
   const nav = useNavigation({ tabs, sessions, confirms, removeSession: remove, closePage, route: work.route });
   const sheet = useAgentSheet({ create, update, openSession: nav.openSession, createWorktree: worktrees.create });
@@ -235,6 +249,15 @@ export function App() {
             onRemove: confirms.askSession,
             onRemoveMany: confirms.askSessions,
             onReorder: reorder,
+            commands: (
+              <CommandsSection
+                workspace={active}
+                processes={processes}
+                activeId={processId}
+                onOpen={(process) => openProcess(process.id)}
+                onConfirm={confirms.ask}
+              />
+            ),
           }}
         />
       )}
@@ -248,6 +271,8 @@ export function App() {
           onConfirm={confirms.ask}
           onOpenHit={nav.openHit}
           onOpenUrl={nav.openUrl}
+          processes={processes}
+          allSessions={all}
         />
         {/* Hidden, not unmounted: agent and terminal processes stay alive. */}
         <div hidden={!isWorkspace} className="flex min-h-0 flex-1 flex-col">

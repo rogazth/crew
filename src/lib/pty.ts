@@ -82,13 +82,27 @@ export async function spawnPty(
 ): Promise<number> {
   const params: PtySpawn = { id, cwd, command, cols, rows, ...(session ? { session } : {}) };
   const streamId = await client.request<number>("pty_spawn", params);
+  await attachPty(id, streamId);
+  return streamId;
+}
+
+/**
+ * Watch a PTY someone else started, a supervised process's, as `spawnPty`
+ * watches its own: subscribe first, then this.
+ */
+export async function attachPty(id: string, streamId: number): Promise<void> {
   // Wire the stream before the replay: the process is already running, so a
   // rejection here would strand it with no way to reach it again.
   const onData = dataHandlers.get(id);
   if (onData) attach(id, streamId, onData);
   else streams.set(id, { id: streamId, stop: () => {} });
   await applyAttach(id, delivered.get(id) ?? 0).catch(() => {});
-  return streamId;
+}
+
+/** After a `pty-resync`: this viewer's frames were dropped, so it repaints from the ring. */
+export function reattachPty(id: string): Promise<void> {
+  delivered.set(id, 0);
+  return applyAttach(id, 0);
 }
 
 export function writePty(id: string, data: string): Promise<void> {

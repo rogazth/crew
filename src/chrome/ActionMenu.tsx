@@ -9,10 +9,13 @@ import {
   CopyIcon,
   GearIcon,
   GitBranchIcon,
+  PauseIcon,
   PencilSimpleIcon,
+  PlayIcon,
   RobotIcon,
   SelectionAllIcon,
   SmileyIcon,
+  StopIcon,
   TerminalWindowIcon,
   TrashIcon,
   XIcon,
@@ -40,6 +43,9 @@ const ICONS: Record<MenuIcon, Icon> = {
   branch: GitBranchIcon,
   reopen: ArrowCounterClockwiseIcon,
   settings: GearIcon,
+  play: PlayIcon,
+  stop: StopIcon,
+  pause: PauseIcon,
 };
 
 type Props = {
