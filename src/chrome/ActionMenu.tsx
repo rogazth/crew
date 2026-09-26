@@ -1,4 +1,4 @@
-import { BellIcon, BotIcon, BrushCleaningIcon, CheckCheckIcon, CheckIcon, ClipboardIcon, CopyIcon, ExternalLinkIcon, GitBranchIcon, PencilIcon, RotateCcwIcon, SettingsIcon, SquareDashedMousePointerIcon, SquareTerminalIcon, Trash2Icon, XIcon, type LucideIcon as Icon } from "lucide-react";
+import { BellIcon, BotIcon, BrushCleaningIcon, CheckCheckIcon, CheckIcon, ClipboardIcon, CopyIcon, ExternalLinkIcon, FoldHorizontalIcon, GitBranchIcon, PencilIcon, PinIcon, PinOffIcon, RotateCcwIcon, UnfoldHorizontalIcon, SettingsIcon, SquareDashedMousePointerIcon, SquareTerminalIcon, Trash2Icon, XIcon, type LucideIcon as Icon } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
 import { createPortal } from "react-dom";
 import { isDeleteChord } from "../lib/hotkey";
@@ -20,6 +20,10 @@ const ICONS: Record<MenuIcon, Icon> = {
   branch: GitBranchIcon,
   reopen: RotateCcwIcon,
   settings: SettingsIcon,
+  pin: PinIcon,
+  unpin: PinOffIcon,
+  collapse: FoldHorizontalIcon,
+  expand: UnfoldHorizontalIcon,
 };
 
 type Props = {

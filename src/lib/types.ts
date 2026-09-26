@@ -54,9 +54,11 @@ export const STUB_KINDS = ["terminal", "history"] as const;
 
 export type StubKind = (typeof STUB_KINDS)[number];
 
-export type Tab =
+/** A pinned tab keeps to the strip's left end, its face alone. */
+export type Tab = (
   | { id: string; kind: "session"; sessionId: string }
   | { id: string; kind: "file"; path: string; relative: string }
   /** `url` and `title` are what a cold tab restores and labels itself with; the live page lives in `pages`. */
   | { id: string; kind: "browser"; url: string; title: string }
-  | { id: string; kind: "stub"; stub: StubKind; title: string };
+  | { id: string; kind: "stub"; stub: StubKind; title: string }
+) & { pinned?: true };

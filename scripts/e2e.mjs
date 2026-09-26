@@ -1,10 +1,12 @@
 // Runs the Electron e2e specs against the built renderer and the debug crewd.
+// On macOS the window is not shown. Up to 3 spec files run at once.
 //
 //   npm run e2e                        → e2e/*.test.ts
 //   npm run e2e -- smoke               → specs whose file name contains "smoke"
 //   npm run e2e -- --stress            → e2e/stress/*.test.ts
 //   E2E_SKIP_BUILD=1 npm run e2e       → reuse dist/ as it is
 //   E2E_KEEP=1 npm run e2e             → leave each run's data directory behind
+//   npm run e2e -- --test-concurrency=1  → one spec file at a time
 //
 // Other --flags go to `node --test` (e.g. --test-name-pattern=...).
 import { spawn } from "node:child_process";
@@ -56,7 +58,12 @@ if (process.env.E2E_SKIP_BUILD !== "1") {
   if (code !== 0) process.exit(code);
 }
 
-const test = ["--test", "--test-concurrency=1", ...flags, ...files];
+// One flag: a --test-concurrency already passed wins. Otherwise three files
+// at once. Tests inside a file stay serial.
+const passedConcurrency = flags.some(
+  (arg) => arg === "--test-concurrency" || arg.startsWith("--test-concurrency="),
+);
+const test = ["--test", ...(passedConcurrency ? [] : ["--test-concurrency=3"]), ...flags, ...files];
 // Electron needs a display. xvfb-run's default screen is 640x480 at 8 bits,
 // smaller than the window's minimum size.
 const headless = process.platform === "linux" && !process.env.DISPLAY;

@@ -11,6 +11,7 @@ import {
   gitWorktrees as listWorktrees,
   launchCrew,
   MOD,
+  WORKTREE_MOD,
   returnToWindow,
   sessions,
   waitFor,
@@ -38,8 +39,8 @@ test("W1: a worktree is made, worked in, dirtied and removed", async () => {
   const repo = workspace.path;
   const tree = path.join(crew.home, ".crew/worktrees/app/feat-login");
 
-  // ⌥⌘N: the branch typed over whatever the dialog offers, ↵ makes it.
-  await page.keyboard.press(`${MOD}+Alt+n`);
+  // ⌃⌘N: the branch typed over whatever the dialog offers, ↵ makes it.
+  await page.keyboard.press(`${WORKTREE_MOD}+n`);
   const branch = page.getByRole("textbox", { name: "Branch" });
   await branch.waitFor();
   await branch.fill("feat/login");

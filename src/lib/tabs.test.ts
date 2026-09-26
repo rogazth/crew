@@ -10,6 +10,7 @@ import {
   openTab,
   parseTabs,
   panesOf,
+  pinTab,
   relativeTo,
   reopenTab,
   reorderTabs,
@@ -18,6 +19,7 @@ import {
   stepTab,
   tabTitle,
   type TabState,
+  unpinTab,
   withRecent,
 } from "./tabs";
 import type { Session, Tab } from "./types";
@@ -290,5 +292,48 @@ describe("panesOf", () => {
 
   it("shows nothing while no workspace is active", () => {
     expect(panesOf(registry, null).some((pane) => pane.visible)).toBe(false);
+  });
+});
+
+describe("pinned tabs", () => {
+  const ids = (state: TabState) => state.tabs.map((tab) => tab.id);
+
+  it("pin after the pinned ones, and unpin to the head of the rest", () => {
+    let state = opened("a", "b", "c");
+    state = pinTab(state, "session:c");
+    state = pinTab(state, "session:b");
+    expect(ids(state)).toEqual(["session:c", "session:b", "session:a"]);
+    state = unpinTab(state, "session:c");
+    expect(ids(state)).toEqual(["session:b", "session:c", "session:a"]);
+    expect(state.tabs[1]).not.toHaveProperty("pinned");
+  });
+
+  it("a tab opened beside a pinned one lands past them all", () => {
+    let state = pinTab(pinTab(opened("a", "b", "c"), "session:a"), "session:b");
+    state = openTab(state, sessionTab("d"), { after: "session:a" });
+    expect(ids(state)).toEqual(["session:a", "session:b", "session:d", "session:c"]);
+  });
+
+  it("a pinned tab reopens pinned, among the pinned", () => {
+    let state = pinTab(opened("a", "b"), "session:b");
+    state = reopenTab(closeTab(state, "session:b"));
+    expect(ids(state)).toEqual(["session:b", "session:a"]);
+    expect(state.tabs[0]?.pinned).toBe(true);
+  });
+
+  it("a drag never mixes pinned and unpinned", () => {
+    const state = pinTab(opened("a", "b"), "session:a");
+    expect(reorderTabs(state, ["session:b", "session:a"])).toBe(state);
+  });
+
+  it("restores pinned ones first", () => {
+    const raw = JSON.stringify({
+      tabs: [sessionTab("a"), { ...sessionTab("b"), pinned: true }],
+      activeId: "session:a",
+      collapsed: ["/wt"],
+    });
+    const state = parseTabs(raw);
+    expect(ids(state)).toEqual(["session:b", "session:a"]);
+    expect(state.collapsed).toEqual(["/wt"]);
   });
 });

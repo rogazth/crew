@@ -5,7 +5,7 @@
 // path fails with "path must be shorter than SUN_LEN". A fake `claude` in
 // $HOME/.local/bin, where crewd looks first, plays the provider CLI.
 import { execFile } from "node:child_process";
-import { chmod, mkdir, symlink, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, symlink, mkdtemp, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -27,6 +27,9 @@ export type Modifier = "Shift" | "Control" | "Alt" | "Meta";
 
 /** The app's command modifier, as Playwright spells it: ⌘ on macOS, Ctrl elsewhere. */
 export const MOD: Modifier = process.platform === "darwin" ? "Meta" : "Control";
+
+/** Worktree chords (⌃⌘N, ⌃⌘1…9, ⌃⌘[ and ]) hold both keys on every platform. */
+export const WORKTREE_MOD = "Control+Meta";
 
 export type Repo = { name: string; files?: Record<string, string> };
 
@@ -86,7 +89,8 @@ export async function launchCrew(opts: LaunchOptions = {}): Promise<Crew> {
 
 /** `owns`: the sandbox is deleted on close, unless a restart handed it on. */
 async function launch(opts: LaunchOptions, owns: boolean): Promise<Crew> {
-  const root = opts.dir ?? (await mkdtemp("/tmp/ce-"));
+  // Resolved, as crewd and git spell it: /tmp is /private/tmp on macOS.
+  const root = opts.dir ?? (await realpath(await mkdtemp("/tmp/ce-")));
   const home = path.join(root, "home");
   const config = path.join(root, "config");
   const repos = path.join(root, "repos");
@@ -135,11 +139,12 @@ async function launch(opts: LaunchOptions, owns: boolean): Promise<Crew> {
   try {
     // executablePath keeps Playwright's loader out, and with it the Chromium
     // switches it appends (no background throttling among them): the app runs
-    // as it ships. Linux has no usable sandbox under Xvfb.
+    // as it ships. Linux has no usable sandbox under Xvfb. CREW_E2E hides the
+    // window; a restart comes back through this same launch.
     app = await _electron.launch({
       executablePath: ELECTRON,
       args: [ROOT, ...(process.platform === "linux" ? ["--no-sandbox"] : [])],
-      env: { ...env, CREW_RENDERER: "dist" },
+      env: { ...env, CREW_RENDERER: "dist", CREW_E2E: "1" },
     });
   } catch (error) {
     await cleanup();
@@ -167,6 +172,13 @@ async function launch(opts: LaunchOptions, owns: boolean): Promise<Crew> {
 
   try {
     const page = await app.firstWindow();
+    const windowHandle = await app.browserWindow(page);
+    try {
+      const hidden = await windowHandle.evaluate((win) => win.isVisible() === false);
+      if (!hidden) throw new Error("the e2e window is visible");
+    } finally {
+      await windowHandle.dispose();
+    }
     // The first window can still be on about:blank, before the preload runs.
     await page.waitForFunction(() => Boolean(window.crewHost));
     const info = await page.evaluate(() => {
@@ -277,8 +289,8 @@ async function prepareSandbox(home: string, config: string, repos: string): Prom
   // leaves out wherever the machine keeps its own.
   const node = path.join(home, "bin/node");
   if (!existsSync(node)) await symlink(process.execPath, node);
-  // The default browser: Electron's shell.openExternal runs `xdg-open <url>`
-  // off PATH on Linux. The fake keeps each call's argument, one per line.
+  // The default browser. On Linux Electron runs `xdg-open` from PATH; on macOS
+  // it would open the user's browser, so e2e writes this log itself. One URL a line.
   const opener = path.join(home, "bin/xdg-open");
   if (!existsSync(opener)) {
     await writeFile(opener, `#!/bin/sh\nprintf '%s\\n' "$1" >> "${path.join(home, "xdg-open.log")}"\n`);
@@ -511,6 +523,19 @@ export function worktreeHeader(crew: Crew, label: string): Locator {
     .filter({ has: crew.window.getByText(label, { exact: true }) });
 }
 
+/**
+ * Goes to a worktree by the chord its sidebar line names (⌃⌘1…9): a click on
+ * the line only folds it. Resolves once the window is on it.
+ */
+export async function goToWorktree(crew: Crew, label: string): Promise<void> {
+  const header = worktreeHeader(crew, label);
+  const title = (await header.getAttribute("title")) ?? "";
+  const digit = /(\d)\s+to switch$/.exec(title)?.[1];
+  if (!digit) throw new Error(`${label}'s line names no chord to switch: ${JSON.stringify(title)}`);
+  await pressChord(crew, `${WORKTREE_MOD}+${digit}`);
+  await header.and(currentWorktree(crew)).waitFor();
+}
+
 /** The worktree line the window is on. */
 export function currentWorktree(crew: Crew): Locator {
   return crew.window.locator('[data-sidebar-panel] button[data-nav][aria-expanded][aria-current="true"]');
@@ -575,10 +600,10 @@ export async function pressChord(crew: Crew, chord: string): Promise<void> {
   await crew.window.keyboard.press(chord);
 }
 
-/** ⌥⌘N, the branch typed over the dialog's "feat/", ↵: the dialog closes once the worktree exists. */
+/** ⌃⌘N, the branch typed over the dialog's "feat/", ↵: the dialog closes once the worktree exists. */
 export async function newWorktree(crew: Crew, branch: string): Promise<void> {
   const page = crew.window;
-  await pressChord(crew, `${MOD}+Alt+n`);
+  await pressChord(crew, `${WORKTREE_MOD}+n`);
   const input = page.getByRole("textbox", { name: "Branch" });
   await input.waitFor();
   await input.fill(branch);
