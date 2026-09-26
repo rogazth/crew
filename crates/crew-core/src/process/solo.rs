@@ -109,17 +109,59 @@ fn key_of(text: &str) -> (&str, &str) {
 
 fn scalar(value: &str) -> String {
     let value = value.trim();
-    for quote in ['"', '\''] {
-        if let Some(inner) = value.strip_prefix(quote).and_then(|rest| rest.rsplit_once(quote)) {
-            return inner.0.to_string();
-        }
+    if let Some(quoted) = quoted(value) {
+        return quoted;
     }
-    // An unquoted value ends where a comment starts.
-    let value = value.split(" #").next().unwrap_or(value).trim();
+    let value = strip_comment(value).trim_end();
     if value == "~" || value == "null" {
         return String::new();
     }
     value.to_string()
+}
+
+/// A value that is one quoted string, up to its closing quote: YAML's
+/// escapes in double quotes, `''` for a quote in single ones. What follows
+/// the closing quote is a comment at most. `None` when it is not quoted, or
+/// the quote never closes.
+fn quoted(value: &str) -> Option<String> {
+    let mut chars = value.chars();
+    let quote = chars.next().filter(|c| *c == '"' || *c == '\'')?;
+    let mut out = String::new();
+    while let Some(c) = chars.next() {
+        match (quote, c) {
+            ('\'', '\'') if chars.clone().next() == Some('\'') => {
+                chars.next();
+                out.push('\'');
+            }
+            ('"', '\\') => match chars.next()? {
+                'n' => out.push('\n'),
+                't' => out.push('\t'),
+                other => out.push(other),
+            },
+            _ if c == quote => return Some(out),
+            _ => out.push(c),
+        }
+    }
+    None
+}
+
+/// An unquoted value up to its comment. As in YAML, only a `#` after a
+/// space starts one, so a URL's `#fragment` stays; and a shell command's
+/// own quotes are respected, so `echo "a # b"` stays whole.
+fn strip_comment(value: &str) -> &str {
+    let mut quote: Option<char> = None;
+    let mut after_space = true;
+    for (at, c) in value.char_indices() {
+        match quote {
+            Some(open) if c == open => quote = None,
+            Some(_) => {}
+            None if c == '"' || c == '\'' => quote = Some(c),
+            None if c == '#' && after_space => return &value[..at],
+            None => {}
+        }
+        after_space = c.is_whitespace();
+    }
+    value
 }
 
 fn block_or_scalar(value: &str, nested: &[&Line]) -> String {
@@ -186,5 +228,40 @@ processes:
         assert!(parse("name: x\n").unwrap().is_empty());
         assert!(parse("processes:\n").unwrap().is_empty());
         assert!(parse("processes:\n  broken:\n    auto_start: true\n").is_err());
+    }
+
+    #[test]
+    fn a_hash_starts_a_comment_only_after_a_space_and_outside_quotes() {
+        let source = r#"
+processes:
+  quoted-in-command:
+    command: echo "a # b" # says a # b
+  single:
+    command: echo 'x #y' && echo done
+  url:
+    command: open http://localhost:5173/#/settings
+  comment:
+    command: npm start # the server
+  quoted:
+    command: "it's \"fine\" # really" # not this
+  bare:
+    command: make # comment
+    working_dir: # nothing
+"#;
+        let parsed = parse(source).unwrap();
+        let commands: Vec<&str> = parsed.iter().map(|p| p.command.as_str()).collect();
+        assert_eq!(
+            commands,
+            vec![
+                r#"echo "a # b""#,
+                "echo 'x #y' && echo done",
+                "open http://localhost:5173/#/settings",
+                "npm start",
+                r#"it's "fine" # really"#,
+                "make",
+            ]
+        );
+        assert_eq!(parsed[5].working_dir, "");
+        assert_eq!(scalar("'it''s'"), "it's");
     }
 }
