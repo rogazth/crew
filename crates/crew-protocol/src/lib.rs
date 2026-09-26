@@ -52,6 +52,74 @@ pub struct DaemonInfo {
     pub token: String,
 }
 
+/// Bumped when a client and a daemon from different builds can no longer
+/// understand each other. A client compares a remote's against its own daemon's.
+pub const PROTOCOL: u32 = 1;
+
+/// The daemon's first message after a good `auth`, sent as the `hello` event.
+#[derive(Serialize, Deserialize, Clone, Debug, TS)]
+#[ts(export, export_to = "../../../src/lib/protocol.ts")]
+pub struct Hello {
+    pub protocol: u32,
+    pub version: String,
+}
+
+/// The machine a daemon runs on, for Settings' health line.
+#[derive(Serialize, Deserialize, Clone, Debug, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
+pub struct MachineInfo {
+    pub version: String,
+    pub protocol: u32,
+    /// `Ubuntu 24.04.1 LTS`, `macOS 14.6`.
+    pub os: String,
+    pub arch: String,
+    pub hostname: String,
+    pub home: String,
+    pub cpus: u32,
+    /// The one-minute load average: over `cpus`, the machine is saturated.
+    pub load: f64,
+    #[ts(type = "number")]
+    pub memory_total: u64,
+    /// Absent where the OS does not say cheaply (macOS).
+    #[serde(default)]
+    #[ts(optional, type = "number")]
+    pub memory_available: Option<u64>,
+    /// Sessions mid-turn or waiting on an answer.
+    pub agents_running: u32,
+    /// The agent CLIs found on the daemon's PATH.
+    pub installed: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
+pub struct DirList {
+    /// Absolute, or starting with `~`.
+    pub path: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
+pub struct DirEntry {
+    pub name: String,
+    pub path: String,
+    /// It holds a `.git`: opening it makes a workspace rather than entering it.
+    pub repo: bool,
+}
+
+/// The folders in a folder, for picking a workspace on a machine with no Finder.
+#[derive(Serialize, Deserialize, Clone, Debug, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
+pub struct DirListing {
+    /// The folder listed, with `~` expanded.
+    pub path: String,
+    pub repo: bool,
+    pub entries: Vec<DirEntry>,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]

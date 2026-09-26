@@ -53,11 +53,37 @@ export type CookieSourceId = { sourceId: string, };
 
 export type DaemonInfo = { url: string, token: string, };
 
+export type DirEntry = { name: string, path: string, 
+/**
+ * It holds a `.git`: opening it makes a workspace rather than entering it.
+ */
+repo: boolean, };
+
+export type DirList = { 
+/**
+ * Absolute, or starting with `~`.
+ */
+path: string, };
+
+/**
+ * The folders in a folder, for picking a workspace on a machine with no Finder.
+ */
+export type DirListing = { 
+/**
+ * The folder listed, with `~` expanded.
+ */
+path: string, repo: boolean, entries: Array<DirEntry>, };
+
 export type Event = { event: string, payload: unknown, };
 
 export type FileBytes = { mime: string, data: string, };
 
 export type HarnessEvent = { "type": "session.started", } | { "type": "session.ended", code?: number | null, } | { "type": "session.error", message: string, } | { "type": "session.note", message: string, } | { "type": "user.message", text: string, hidden?: boolean, files?: Array<AttachedFile>, fromAgent?: AgentRef, } | { "type": "system.message", text: string, } | { "type": "session.providerBound", providerSessionId: string, } | { "type": "message.delta", text: string, } | { "type": "message.completed", } | { "type": "reasoning.delta", text: string, } | { "type": "turn.completed", usage?: TurnUsage, } | { "type": "tool.started", callId: string, name: string, title: string, detail?: ToolDetail, } | { "type": "tool.updated", callId: string, title?: string, status?: ToolStatus, detail?: ToolDetail, } | { "type": "approval.requested", requestId: number, name: string, title: string, input?: Record<string, unknown>, } | { "type": "approval.resolved", requestId: number, decision: ApprovalResolution, } | { "type": "question.requested", requestId: number, questions: Array<Question>, } | { "type": "question.resolved", requestId: number, answers: { [key in string]: string } | null, };
+
+/**
+ * The daemon's first message after a good `auth`, sent as the `hello` event.
+ */
+export type Hello = { protocol: number, version: string, };
 
 export type HistoryClear = { 
 /**
@@ -125,6 +151,31 @@ export type ListProjectFiles = { cwd: string,
  * Folders indexed even when git ignores them or their name starts with a dot.
  */
 include: Array<string>, };
+
+/**
+ * The machine a daemon runs on, for Settings' health line.
+ */
+export type MachineInfo = { version: string, protocol: number, 
+/**
+ * `Ubuntu 24.04.1 LTS`, `macOS 14.6`.
+ */
+os: string, arch: string, hostname: string, home: string, cpus: number, 
+/**
+ * The one-minute load average: over `cpus`, the machine is saturated.
+ */
+load: number, memoryTotal: number, 
+/**
+ * Absent where the OS does not say cheaply (macOS).
+ */
+memoryAvailable?: number, 
+/**
+ * Sessions mid-turn or waiting on an answer.
+ */
+agentsRunning: number, 
+/**
+ * The agent CLIs found on the daemon's PATH.
+ */
+installed: Array<string>, };
 
 /**
  * A window of a transcript. `more` says whether older blocks exist before

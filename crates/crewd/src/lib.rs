@@ -33,6 +33,9 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::Message;
 
+mod http;
+pub mod machine;
+
 pub struct Config {
     pub pty: PtyHost,
     pub store: Store,
@@ -48,6 +51,26 @@ struct Hosts {
     bridge: Bridge,
     turns: TurnHost,
     scheduler: Scheduler,
+}
+
+/// Where the daemon listens and the token a client has to bring.
+pub struct Listen {
+    pub addr: String,
+    pub token: String,
+    /// Keep trying an address that is not up yet: a tailnet IP appears some
+    /// time after boot, and a service should wait for it rather than die.
+    pub wait_for_addr: bool,
+}
+
+impl Listen {
+    /// The window's own daemon: loopback, any port, a token for this run.
+    pub fn local() -> Self {
+        Self {
+            addr: "127.0.0.1:0".into(),
+            token: random_token(),
+            wait_for_addr: false,
+        }
+    }
 }
 
 pub struct Handle {
@@ -337,7 +360,11 @@ impl AgentEvents for AgentFanout {
 }
 
 pub fn serve(config: Config) -> Result<Handle, String> {
-    let token = random_token();
+    serve_on(config, Listen::local())
+}
+
+pub fn serve_on(config: Config, listen: Listen) -> Result<Handle, String> {
+    let token = listen.token.clone();
     let hub = Arc::new(Hub::new());
     let transcripts = crew_core::transcript::TranscriptHub::new(config.store.clone());
     transcripts.set_events(hub.clone());
@@ -378,7 +405,6 @@ pub fn serve(config: Config) -> Result<Handle, String> {
         turns: turns.clone(),
         scheduler: scheduler.clone(),
     };
-    let serve_token = token.clone();
 
     thread::Builder::new()
         .name("crewd".into())
@@ -390,7 +416,7 @@ pub fn serve(config: Config) -> Result<Handle, String> {
                     return;
                 }
             };
-            runtime.block_on(run(hosts, hub, serve_token, ready_tx, stop_rx));
+            runtime.block_on(run(hosts, hub, listen, ready_tx, stop_rx));
         })
         .map_err(|e| e.to_string())?;
 
@@ -403,14 +429,35 @@ pub fn serve(config: Config) -> Result<Handle, String> {
     })
 }
 
+async fn bind(listen: &Listen) -> std::io::Result<TcpListener> {
+    let mut wait = Duration::from_millis(500);
+    loop {
+        match TcpListener::bind(&listen.addr).await {
+            Err(error)
+                if listen.wait_for_addr
+                    && matches!(
+                        error.kind(),
+                        std::io::ErrorKind::AddrNotAvailable | std::io::ErrorKind::AddrInUse
+                    ) =>
+            {
+                eprintln!("[crewd] {}: {error}; trying again in {wait:?}", listen.addr);
+                tokio::time::sleep(wait).await;
+                wait = (wait * 2).min(Duration::from_secs(10));
+            }
+            bound => return bound,
+        }
+    }
+}
+
 async fn run(
     hosts: Hosts,
     hub: Arc<Hub>,
-    token: String,
+    listen: Listen,
     ready_tx: std_mpsc::Sender<Result<String, String>>,
     mut stop_rx: tokio::sync::oneshot::Receiver<()>,
 ) {
-    let listener = match TcpListener::bind("127.0.0.1:0").await {
+    let token = listen.token.clone();
+    let listener = match bind(&listen).await {
         Ok(listener) => listener,
         Err(error) => {
             let _ = ready_tx.send(Err(error.to_string()));
@@ -466,7 +513,7 @@ async fn run(
 }
 
 async fn handle_socket(stream: TcpStream, hosts: Hosts, hub: Arc<Hub>, token: String) {
-    let Ok(ws) = tokio_tungstenite::accept_async(stream).await else {
+    let Some(ws) = http::accept(stream, &token).await else {
         return;
     };
     let (mut sink, mut source) = ws.split();
@@ -481,6 +528,19 @@ async fn handle_socket(stream: TcpStream, hosts: Hosts, hub: Arc<Hub>, token: St
     };
     if auth != token {
         let _ = sink.close().await;
+        return;
+    }
+    let hello = proto::event(
+        "hello",
+        proto::Hello {
+            protocol: proto::PROTOCOL,
+            version: env!("CARGO_PKG_VERSION").to_string(),
+        },
+    );
+    let Ok(hello) = hello.and_then(|event| serde_json::to_string(&event)) else {
+        return;
+    };
+    if sink.send(Message::Text(hello.into())).await.is_err() {
         return;
     }
 
@@ -1084,6 +1144,14 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
             let TempFile { extension, base64_contents } = parse(params)?;
             json(block(move || files::write_temp(&extension, &base64_contents)).await?)
         }
+        "daemon_info" => {
+            let store = hosts.store.clone();
+            json(block(move || Ok(machine::info(session::list_busy(&store)?.len() as u32))).await?)
+        }
+        "dir_list" => {
+            let proto::DirList { path } = parse(params)?;
+            json(block(move || machine::dir_list(&path)).await?)
+        }
         "agent_resolve_claude" => json(block(AgentHost::resolve_claude).await?),
         "agent_resolve" => {
             let Name { name } = parse(params)?;
@@ -1227,7 +1295,7 @@ fn encode(value: &impl serde::Serialize) -> String {
     serde_json::to_string(value).unwrap_or_else(|_| r#"{"id":0,"ok":false,"error":"encode"}"#.into())
 }
 
-fn random_token() -> String {
+pub fn random_token() -> String {
     let mut bytes = [0u8; 16];
     rand::fill(&mut bytes);
     bytes.iter().map(|b| format!("{b:02x}")).collect()
