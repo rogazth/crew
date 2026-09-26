@@ -251,8 +251,9 @@ export function App() {
               branch: current ? worktreeLabel(current) : "",
               onSwitch: () => openPalette("context"),
             }}
+            // With only the main checkout there is no other worktree to tell apart.
             branchOf={
-              work.scope === "all" && active
+              work.scope === "all" && active && worktrees.list.length > 1
                 ? (tab) => {
                     const session = tab.kind === "session" ? sessions.find((s) => s.id === tab.sessionId) : undefined;
                     const tree = session && worktrees.list.find((t) => t.path === work.pathOf(session));
