@@ -108,8 +108,9 @@ export function Browsers({ panes, onPatch, onOpenTab, onAdopt }: Props) {
     for (const id of known.current) {
       if (now.has(id)) continue;
       pages.drop(id);
-      // Closing a tab an agent drives takes it back; its next call finds no tab.
-      if (leases.get(id)) void api.browserLeaseRelease(id).catch(() => {});
+      // Closing a tab takes it back from whoever drives it, and it stops being
+      // anyone's default: an agent's next call finds no tab rather than reopening it.
+      void api.browserTabClosed(id).catch(() => {});
     }
     known.current = now;
   });

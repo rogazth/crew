@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createAgentTools, USER_LOCK_MS, type BrowserCall, type Driver, type Page } from "./agent-tools";
 
 type Sent = { method: string; params?: Record<string, unknown> };
@@ -55,7 +55,7 @@ function setup(pages: Record<string, Page>) {
   let callId = 0;
   const call = (tab: string, tool: string, args: Record<string, unknown> = {}) =>
     tools.run({ callId: ++callId, tab, tool, args } satisfies BrowserCall);
-  return { tools, call, advance: (ms: number) => (now += ms) };
+  return { tools, call, advance: (ms: number) => (now += ms), now: () => now };
 }
 
 const textOf = (content: { type: string; text?: string }[]) => content.map((block) => block.text ?? "").join("\n");
@@ -247,5 +247,51 @@ describe("agent tools", () => {
     const { call } = setup({ a: drawn, b: blank });
     expect(await call("a", "browser_screenshot")).toEqual([{ type: "image", data: "LAST", mimeType: "image/png" }]);
     await expect(call("b", "browser_screenshot")).rejects.toThrow(/not being drawn right now/);
+  });
+
+  it("a load that never finishes answers at the load wait, and the tab's next call runs", async () => {
+    vi.useFakeTimers();
+    try {
+      const evaluates = { "Runtime.evaluate": () => ({ result: { type: "number", value: 1 } }) };
+      const hung = { ...fakePage(1, evaluates), loadURL: () => new Promise<void>(() => {}) };
+      const broken = { ...fakePage(2), loadURL: async () => Promise.reject(new Error("ERR_NAME_NOT_RESOLVED")) };
+      const { call } = setup({ a: hung, b: broken });
+      const load = call("a", "browser_navigate", { url: "https://slow.example/" });
+      const next = call("a", "browser_evaluate", { expression: "1" });
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(textOf(await load)).toMatch(/^https:\/\/slow\.example\/ is still loading after 30 s/);
+      await expect(next).resolves.toEqual([{ type: "text", text: "1" }]);
+      // A load that fails still says so.
+      await expect(call("b", "browser_navigate", { url: "https://nope.invalid/" })).rejects.toThrow(
+        "Could not load https://nope.invalid/: ERR_NAME_NOT_RESOLVED",
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a call still queued when crewd gave up on it is skipped, not run late", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const page = fakePage(1, {
+      "Accessibility.getFullAXTree": async () => {
+        await gate;
+        return TREE;
+      },
+      "Runtime.evaluate": () => ({ result: { value: "" } }),
+    });
+    const { tools, call, advance, now } = setup({ a: page });
+    const first = call("a", "browser_snapshot");
+    const late = tools.run({ callId: 90, tab: "a", tool: "browser_type", args: { text: "hi" }, deadline: now() + 35_000 });
+    const timely = tools.run({ callId: 91, tab: "a", tool: "browser_type", args: { text: "ok" }, deadline: now() + 90_000 });
+    advance(36_000);
+    release();
+    await first;
+    await expect(late).rejects.toThrow("browser_type was not run");
+    await expect(timely).resolves.toBeDefined();
+    const typed = page.sent.filter((s) => s.method === "Runtime.evaluate").map((s) => String(s.params?.expression));
+    expect(typed).toHaveLength(1);
+    expect(typed[0]).toContain('"o"');
+    expect(typed[0]).not.toContain('"h"');
   });
 });

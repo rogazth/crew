@@ -10,7 +10,7 @@ import type { AgentTools, BrowserCall, Content } from "./agent-tools";
 
 type DaemonInfo = { url: string; token: string };
 
-type Leases = { leases: { tab: string }[] };
+type Leases = { seq?: number; leases: { tab: string }[] };
 
 type Options = {
   /** Read on every connect: a restarted daemon has a new port and token. */
@@ -21,16 +21,31 @@ type Options = {
 
 const RETRY_MS = 1000;
 
+/**
+ * Hands on the leased tabs of each list crewd sends, skipping any older than
+ * one already handed on: the register reply and the events race each other,
+ * and a stale list would detach the debugger from a tab an agent now drives.
+ */
+export function leaseFeed(onLeases: (tabs: ReadonlySet<string>) => void): (value: unknown) => void {
+  let newest = Number.NEGATIVE_INFINITY;
+  return (value) => {
+    const all = value as Leases | null;
+    if (!Array.isArray(all?.leases)) return;
+    if (typeof all.seq === "number") {
+      if (all.seq < newest) return;
+      newest = all.seq;
+    }
+    onLeases(new Set(all.leases.map((lease) => lease.tab)));
+  };
+}
+
 export function linkBrowserHost({ info, tools, onLeases }: Options): { stop(): void } {
   let socket: WebSocket | null = null;
   let stopped = false;
   let retry: ReturnType<typeof setTimeout> | undefined;
   let nextId = 1;
-
-  const leased = (value: unknown) => {
-    const list = (value as Leases | null)?.leases;
-    if (Array.isArray(list)) onLeases(new Set(list.map((lease) => lease.tab)));
-  };
+  // Fresh for each connection: order only matters within one daemon's lists.
+  let leased = leaseFeed(onLeases);
 
   const answer = (ws: WebSocket, callId: number, outcome: { ok: true; result: Content[] } | { ok: false; error: string }) => {
     if (ws.readyState !== WebSocket.OPEN) return;
@@ -47,6 +62,7 @@ export function linkBrowserHost({ info, tools, onLeases }: Options): { stop(): v
     }
     const ws = new WebSocket(current.url);
     socket = ws;
+    leased = leaseFeed(onLeases);
     let registerId = 0;
     ws.onopen = () => {
       ws.send(JSON.stringify({ auth: current.token }));

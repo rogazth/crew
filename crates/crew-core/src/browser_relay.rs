@@ -104,6 +104,7 @@ impl BrowserRelay {
             tool: tool.to_string(),
             args,
             page,
+            deadline: crate::store::now_millis() + timeout.as_millis() as i64,
         })
         .map_err(|e| e.to_string())?;
         if !send(host, "browser-call", payload) {
@@ -187,6 +188,9 @@ mod tests {
             let (client, event, payload) = events.recv().unwrap();
             assert_eq!((client, event.as_str()), (7, "browser-call"));
             assert_eq!(payload["tab"], "browser:1");
+            // When the caller stops waiting, so the host can skip it rather than run it late.
+            let left = payload["deadline"].as_i64().unwrap() - crate::store::now_millis();
+            assert!((4_000..=5_000).contains(&left), "{left}");
             let call_id = payload["callId"].as_u64().unwrap();
             // Another client cannot answer for the host.
             assert!(host.resolve(3, call_id, Ok(json!("forged"))).is_err());

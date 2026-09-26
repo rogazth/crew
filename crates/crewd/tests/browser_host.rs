@@ -146,3 +146,30 @@ async fn a_failed_tool_and_a_departed_host_both_answer_the_caller() {
     let gone = response(&mut window, 3).await;
     assert!(gone["error"].as_str().unwrap_or_default().contains("went away"), "{gone}");
 }
+
+#[tokio::test]
+async fn a_tab_the_window_closed_is_nobodys_default_any_more() {
+    let handle = daemon("closed");
+    let mut window = connect(&handle).await;
+    send(&mut window, 1, "state_set", strip("browser:c")).await;
+    response(&mut window, 1).await;
+    let mut host = connect(&handle).await;
+    send(&mut host, 1, "browser_host_register", json!({})).await;
+    response(&mut host, 1).await;
+
+    send(&mut window, 2, "browser_tool", json!({ "workspaceId": "w1", "tool": "browser_snapshot", "args": { "tab": "browser:c" } })).await;
+    let call = event(&mut host, "browser-call").await;
+    // It says when crewd stops waiting, so a call still queued by then is skipped.
+    assert!(call["deadline"].as_i64().unwrap_or_default() > 0, "{call}");
+    send(&mut host, 2, "browser_result", json!({ "callId": call["callId"], "ok": true, "result": [] })).await;
+    response(&mut window, 2).await;
+
+    send(&mut window, 3, "browser_tab_closed", json!({ "tab": "browser:c" })).await;
+    assert_eq!(response(&mut window, 3).await["ok"], true);
+    let freed = |v: &Value| v["event"] == "browser-leases" && v["payload"]["leases"] == json!([]);
+    next_where(&mut host, freed).await;
+    // The next call without a tab no longer means that one.
+    send(&mut window, 4, "browser_tool", json!({ "workspaceId": "w1", "tool": "browser_snapshot", "args": {} })).await;
+    let refused = response(&mut window, 4).await;
+    assert!(refused["error"].as_str().unwrap_or_default().starts_with("Name a tab"), "{refused}");
+}

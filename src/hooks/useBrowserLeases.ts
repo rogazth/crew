@@ -13,9 +13,12 @@ function watch() {
   const load = () =>
     void api
       .browserLeasesList()
-      .then((all) => leases.set(all.leases))
+      .then((all) => leases.set(all.leases, all.seq))
       .catch(() => {});
-  client.on("browser-leases", (payload) => leases.set((payload as BrowserLeases).leases));
+  client.on("browser-leases", (payload) => {
+    const all = payload as BrowserLeases;
+    leases.set(all.leases, all.seq);
+  });
   // A daemon that restarted holds no leases; the list says so.
   client.onReconnect(load);
   load();

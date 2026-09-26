@@ -316,3 +316,6 @@ export const browserLeasesList = (): Promise<BrowserLeases> => client.request("b
 /** Takes a tab back from the agent driving it. */
 export const browserLeaseRelease = (tab: string): Promise<void> =>
   client.request("browser_lease_release", { tab });
+
+/** The user closed a tab: its lease goes, and no agent's next call brings it back. */
+export const browserTabClosed = (tab: string): Promise<void> => client.request("browser_tab_closed", { tab });

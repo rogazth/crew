@@ -209,7 +209,7 @@ el navegador".
 | `browser_screenshot { full_page? }` | `Page.captureScreenshot`, bloque `image` |
 | `browser_wait_for { text, timeout_s }` | sondeo del texto de la página |
 | `browser_console`, `browser_network` | buffer por tab desde que se engancha el debugger |
-| `browser_evaluate { expression }` | `Runtime.evaluate` con `awaitPromise` |
+| `browser_evaluate { expression }` | `Runtime.evaluate` con `awaitPromise`; solo con autonomía `full` |
 
 Los uids de un snapshot solo valen hasta el siguiente snapshot del mismo tab;
 uno viejo falla con "vuelve a tomar el snapshot".
@@ -362,6 +362,7 @@ Puertos y, si hacen falta, traces de performance sobre el canal del navegador.
 | El mutex de tabs no alcanza con muchos agentes | Cada tab tiene su debugger; las llamadas solo se serializan por tab |
 | El modo supervisado rompe el backpressure de las terminales | Es un flag de spawn; las terminales conservan `wait_for_credit`, con un test que lo cubra |
 | Un agente crea un proceso dañino | `pending-approval` con autonomía `ask`; `created_by` visible en la UI |
+| Un agente corre JS en una página con las cookies del usuario | `browser_evaluate` solo con autonomía `full`; navegar y abrir tabs siguen abiertos |
 | El debugger choca con DevTools | Mensaje claro y el lease sigue |
 | El LaunchAgent apunta a un bundle viejo | Comparar ruta en cada arranque y reinstalar |
 
@@ -445,6 +446,40 @@ Puertos y, si hacen falta, traces de performance sobre el canal del navegador.
   bridge con el token del usuario.
 
 **Gateway:** `BrowserTools` implementa `ToolFamily` y se registra en `crewd::serve` junto a las tools de procesos; `crew tabs` llama a `list_tabs`.
+
+**Correcciones tras la revisión:**
+
+- **`browser_evaluate` pide autonomía `full`.** Corre cualquier script con
+  `userGesture` en una partición que puede tener las cookies importadas del
+  navegador del usuario, así que a quien tiene `ask` se le rechaza con un
+  mensaje que dice que el usuario le suba la autonomía. Decisión: `navigate` y
+  `open_tab` siguen abiertos para todos, porque van adonde una persona podría
+  hacer click; el resto de las tools solo hace lo que haría una persona.
+- **Timeouts por tool.** Una tabla en `browser_tools::budget` dice cuánto
+  espera `crewd` a la ventana por cada tool: 35 s, 55 s para `open_tab` y
+  `browser_navigate` (montar 15 s más cargar 30 s) y 35 s más la espera en
+  `browser_wait_for`. `mcp::call_timeout` (el shim y `crew call`, directo o por
+  `call_tool`) espera eso más 10 s, así la respuesta de `crewd`, aunque sea su
+  timeout, llega antes. `wait_for_log` sigue con `timeout_s`. Si `open_tab`
+  falla o vence después de llegar a la ventana, el error nombra el tab y el
+  lease queda de quien llamó; solo sin host se olvida.
+- **Nada corre tarde.** `BrowserCall` lleva `deadline` (epoch ms): main salta
+  la llamada que ya venció al llegarle su turno en el tab o al terminar de
+  montarlo. `loadURL` compite con `LOAD_WAIT_MS`; una página que nunca termina
+  de cargar contesta "still loading" y no traba el tab.
+- **Leases en orden.** Cada lista lleva `seq`, numerada bajo el mismo lock que
+  el cambio y arrancando en el reloj (µs) para que un `crewd` reiniciado siga
+  por encima. Main (`leaseFeed`) y el store del renderer descartan una lista
+  más vieja que la última. Las renovaciones no se anuncian: `until` es un
+  piso, y el lease termina cuando una lista nueva lo deja fuera.
+- **Respawn de una terminal.** Los leases llevan el número del proceso que los
+  tomó o renovó (`Leases::begin_process`); la salida del proceso viejo suelta
+  solo los suyos (`end_process`), no los que el nuevo ya tomó.
+- **Un tab cerrado no vuelve.** El renderer avisa con `browser_tab_closed` al
+  cerrar cualquier tab: se va el lease, el tab deja de ser el default de
+  todos y sale de la gracia de `open_tab`. Además, en cuanto el strip guardado
+  tiene el tab, manda el strip y la gracia no aplica.
+- `bindTab` registra un solo `destroyed` por `webContents`.
 
 ### Fase 5: lo que entró
 

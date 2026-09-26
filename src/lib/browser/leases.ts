@@ -12,7 +12,12 @@ export type LeaseStore = {
   get(tab: string): BrowserLease | null;
   /** Leased or summoned. The same set back until one of them changes. */
   held(): ReadonlySet<string>;
-  set(leases: readonly BrowserLease[]): void;
+  /**
+   * Takes crewd's list, unless one numbered higher came first: an event can
+   * overtake the reply to a list request, and the older of the two would
+   * unpin a tab an agent has just taken. Unnumbered lists always apply.
+   */
+  set(leases: readonly BrowserLease[], seq?: number): void;
   summon(tab: string): void;
   subscribe(cb: () => void): () => void;
 };
@@ -25,6 +30,8 @@ export function createLeaseStore(
   later: (fn: () => void, ms: number) => void = (fn, ms) => void setTimeout(fn, ms),
 ): LeaseStore {
   let leases = new Map<string, BrowserLease>();
+  // crewd numbers from its clock, so a restarted daemon's lists still count as newer.
+  let newest = Number.NEGATIVE_INFINITY;
   const summoned = new Map<string, number>();
   let held: ReadonlySet<string> = new Set();
   const listeners = new Set<() => void>();
@@ -44,7 +51,11 @@ export function createLeaseStore(
   return {
     get: (tab) => leases.get(tab) ?? null,
     held: () => held,
-    set: (list) => {
+    set: (list, seq) => {
+      if (seq !== undefined) {
+        if (seq < newest) return;
+        newest = seq;
+      }
       const before = leases;
       leases = new Map(list.map((lease) => [lease.tab, lease]));
       const moved =

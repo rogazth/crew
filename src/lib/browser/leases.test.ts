@@ -63,4 +63,15 @@ describe("lease store", () => {
     expect([...leases.held()]).toEqual(["browser:b"]);
     expect(leases.get("browser:a")).toBeNull();
   });
+
+  it("a list older than one already taken is dropped", () => {
+    const { leases, heard } = store();
+    // The event for Ada taking b arrives before the reply to a list asked for earlier.
+    leases.set([lease("browser:a"), lease("browser:b")], 8);
+    leases.set([lease("browser:a")], 7);
+    expect([...leases.held()]).toEqual(["browser:a", "browser:b"]);
+    expect(heard()).toBe(1);
+    leases.set([], 9);
+    expect([...leases.held()]).toEqual([]);
+  });
 });

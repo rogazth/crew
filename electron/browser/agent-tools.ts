@@ -24,6 +24,8 @@ export type BrowserCall = {
   tool: string;
   args: Record<string, unknown>;
   page?: PageRef;
+  /** Epoch ms past which crewd has told the caller the call failed. */
+  deadline?: number;
 };
 
 /** One live guest, as the tools need it. */
@@ -79,6 +81,21 @@ const text = (body: string): Content[] => [{ type: "text", text: body }];
 function str(args: Record<string, unknown>, name: string): string {
   const value = args[name];
   return typeof value === "string" ? value : "";
+}
+
+/**
+ * Whether `work` settles within `ms`; a rejection before then still throws.
+ * Past it the work carries on unwatched, so the tab's next call does not
+ * wait behind something that may never finish.
+ */
+async function within(work: Promise<unknown>, ms: number): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<false>((resolve) => (timer = setTimeout(() => resolve(false), ms)));
+  try {
+    return await Promise.race([work.then(() => true), late]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /** CDP's own words for a node that went away, turned into what to do about it. */
@@ -359,9 +376,13 @@ export function createAgentTools(driver: Driver) {
     const action = str(args, "action");
     if (url) {
       // A failure arrives as the rejection; its message is Chromium's error name.
-      await page.loadURL(url).catch((error: unknown) => {
+      const loading = page.loadURL(url).catch((error: unknown) => {
         throw new Error(`Could not load ${url}: ${error instanceof Error ? error.message : String(error)}`);
       });
+      // loadURL settles when the page finishes, which some never do.
+      if (!(await within(loading, LOAD_WAIT_MS))) {
+        return text(`${url} is still loading after ${LOAD_WAIT_MS / 1000} s. Now at ${page.url()} — "${page.title()}"`);
+      }
     } else if (action === "back" || action === "forward") {
       const moved = action === "back" ? page.back() : page.forward();
       if (!moved) return text(`There is no page to go ${action} to. Still at ${page.url()}`);
@@ -376,8 +397,20 @@ export function createAgentTools(driver: Driver) {
     return text(`Now at ${page.url()} — "${page.title()}"`);
   }
 
+  /**
+   * crewd has stopped waiting and told the caller the call failed, so doing
+   * it now would click or type after the agent moved on. Checked when the
+   * call's turn on the tab comes, and again once a cold tab has mounted.
+   */
+  function checkDeadline(call: BrowserCall): void {
+    if (call.deadline !== undefined && driver.now() >= call.deadline) {
+      throw new Error(`${call.tool} was not run: it waited past its time behind the tab's earlier calls.`);
+    }
+  }
+
   async function perform(call: BrowserCall): Promise<Content[]> {
     const { tab, tool, args } = call;
+    checkDeadline(call);
     if (tool === "open_tab") {
       const url = str(args, "url");
       const page = await driver.open(tab, call.page ?? { context: "", url, title: "" });
@@ -385,6 +418,7 @@ export function createAgentTools(driver: Driver) {
       return text(`Opened ${tab} at ${page.url()} — "${page.title()}". It is yours; browser_snapshot reads it.`);
     }
     const page = await driver.page(tab, call.page);
+    checkDeadline(call);
     if (INPUT_TOOLS.has(tool)) checkLock(page);
     switch (tool) {
       case "claim_tab":

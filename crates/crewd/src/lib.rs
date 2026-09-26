@@ -933,6 +933,8 @@ fn terminal_launch(
     let bridge = bridge.clone();
     let leases = leases.clone();
     let session = session_id.to_string();
+    // Its browser tabs are numbered for this process like its token, for the same reason.
+    let process = leases.begin_process(session_id);
     Ok((
         launch.argv,
         SpawnOptions {
@@ -940,7 +942,7 @@ fn terminal_launch(
             // The browser tabs it was driving go free with it, rather than at their TTL.
             on_exit: Some(Box::new(move || {
                 bridge.revoke_token(&token);
-                leases.release_all(&session, app_state::now_millis());
+                leases.end_process(&session, process, app_state::now_millis());
             })),
             ..SpawnOptions::default()
         },
@@ -1422,6 +1424,12 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
         "browser_lease_release" => {
             let proto::BrowserTabArg { tab } = parse(params)?;
             hosts.browser.leases().force_release(&tab, app_state::now_millis());
+            Ok(Value::Null)
+        }
+        // The user closed a tab: no agent's next call may bring it back.
+        "browser_tab_closed" => {
+            let proto::BrowserTabArg { tab } = parse(params)?;
+            hosts.browser.tab_closed(&tab);
             Ok(Value::Null)
         }
         "browser_tool" => {

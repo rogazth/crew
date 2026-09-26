@@ -90,19 +90,33 @@ fn unreachable_error(error: &std::io::Error) -> String {
     format!("{NOT_RUNNING} ({error}) — open it or run `crew open`")
 }
 
-/// How long one call may take. A tool call whose arguments carry `timeout_s`
-/// — directly, or through `call_tool`'s `arguments` — is one that waits that
-/// long on purpose, so the read waits `min(timeout_s, 60) + 10` seconds; never
-/// less than the default. The convention is the whole mechanism: a tool that
-/// blocks names its wait `timeout_s` and caps it at 60 itself.
+/// How long one call may take. The tool is the one named, or the one
+/// `call_tool` names in its `arguments`, which is how a hidden tool is called.
+///
+/// A tool with a budget of its own (the browser's: crewd waits on Crew's
+/// window for it, mounting and loading pages) gets that budget plus the
+/// slack, so crewd's answer, even its timeout, arrives before this gives up.
+/// Any other tool whose arguments carry `timeout_s` is one that waits that
+/// long on purpose, so the read waits `min(timeout_s, 60) + 10` seconds. The
+/// convention is the whole mechanism there: a tool that blocks names its
+/// wait `timeout_s` and caps it at 60 itself. Never less than the default.
 fn call_timeout(method: &str, params: &Value) -> Duration {
     if method != "tools/call" {
         return CALL_TIMEOUT;
     }
-    let arguments = params.get("arguments");
+    let (name, arguments) = match params.get("name").and_then(Value::as_str) {
+        Some("call_tool") => {
+            let inner = params.get("arguments");
+            (inner.and_then(|args| args.get("name")).and_then(Value::as_str), inner.and_then(|args| args.get("arguments")))
+        }
+        name => (name, params.get("arguments")),
+    };
+    let no_args = Value::Null;
+    if let Some(budget) = name.and_then(|name| crate::browser_tools::budget(name, arguments.unwrap_or(&no_args))) {
+        return (budget + Duration::from_secs(WAIT_SLACK_S)).max(CALL_TIMEOUT);
+    }
     let asked = arguments
         .and_then(|args| args.get("timeout_s"))
-        .or_else(|| arguments.and_then(|args| args.get("arguments")).and_then(|args| args.get("timeout_s")))
         .and_then(|value| value.as_f64().filter(|secs| secs.is_finite() && *secs > 0.0));
     match asked {
         Some(secs) => {
@@ -238,6 +252,29 @@ mod tests {
         // Through the gateway, which is how a hidden tool is called.
         let gateway = json!({ "name": "call_tool", "arguments": { "name": "wait_for_log", "arguments": { "timeout_s": 30 } } });
         assert_eq!(call_timeout("tools/call", &gateway), Duration::from_secs(40));
+    }
+
+    /// crewd waits on the window for up to a mount and a page load; the
+    /// client must outlast it, or the model reads "Crew did not answer" while
+    /// the call is still going and runs it again.
+    #[test]
+    fn a_browser_tool_is_given_crewds_budget_and_ten_seconds_more() {
+        let budget = |tool: &str, args: Value| crate::browser_tools::budget(tool, &args).unwrap();
+        let slack = Duration::from_secs(WAIT_SLACK_S);
+        for (tool, args) in [
+            ("open_tab", json!({ "url": "https://example.com" })),
+            ("browser_navigate", json!({ "url": "https://example.com" })),
+            ("browser_click", json!({ "uid": "1_1" })),
+            ("browser_wait_for", json!({ "text": "Ready", "timeout_s": 50 })),
+        ] {
+            let direct = json!({ "name": tool, "arguments": args });
+            assert_eq!(call_timeout("tools/call", &direct), budget(tool, args.clone()) + slack, "{tool}");
+            let gateway = json!({ "name": "call_tool", "arguments": { "name": tool, "arguments": args } });
+            assert_eq!(call_timeout("tools/call", &gateway), budget(tool, args.clone()) + slack, "{tool} via call_tool");
+        }
+        // More than the 60 s cap a process wait gets: crewd's budget is what counts.
+        let long = json!({ "name": "call_tool", "arguments": { "name": "browser_wait_for", "arguments": { "text": "x", "timeout_s": 50 } } });
+        assert_eq!(call_timeout("tools/call", &long), Duration::from_secs(95));
     }
 
     #[test]

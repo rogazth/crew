@@ -689,6 +689,11 @@ pub struct BrowserCall {
     #[serde(default)]
     #[ts(optional)]
     pub page: Option<BrowserPageRef>,
+    /// Milliseconds since the epoch past which crewd has stopped waiting and
+    /// told the caller the call failed. A call still queued behind the tab's
+    /// earlier ones by then is skipped, not run late.
+    #[ts(type = "number")]
+    pub deadline: i64,
 }
 
 /// The host's answer to one `browser-call`. `result` is an array of MCP
@@ -721,7 +726,9 @@ pub struct BrowserLease {
     #[serde(default)]
     #[ts(optional)]
     pub session_id: Option<String>,
-    /// Milliseconds since the epoch.
+    /// Milliseconds since the epoch, as of the list it came in. Renewals are
+    /// not announced, so this only says the lease lasts at least that long:
+    /// a lease is over when a newer list leaves it out, not at `until`.
     #[ts(type = "number")]
     pub until: i64,
 }
@@ -731,6 +738,11 @@ pub struct BrowserLease {
 #[serde(rename_all = "camelCase")]
 #[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
 pub struct BrowserLeases {
+    /// Higher is newer, across daemon restarts too. Lists can arrive out of
+    /// order (an event overtaking a reply, two changes racing to the hub), so
+    /// a client drops any list numbered below the newest it has kept.
+    #[ts(type = "number")]
+    pub seq: u64,
     pub leases: Vec<BrowserLease>,
 }
 

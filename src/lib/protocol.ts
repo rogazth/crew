@@ -42,7 +42,13 @@ export type BlockTool = { callId: string, name: string, title: string, status: T
  * crewd → the browser host (Electron main), as the `browser-call` event: run
  * one tool on one tab and answer with `browser_result`.
  */
-export type BrowserCall = { callId: number, tab: string, tool: string, args: unknown, page?: BrowserPageRef, };
+export type BrowserCall = { callId: number, tab: string, tool: string, args: unknown, page?: BrowserPageRef, 
+/**
+ * Milliseconds since the epoch past which crewd has stopped waiting and
+ * told the caller the call failed. A call still queued behind the tab's
+ * earlier ones by then is skipped, not run late.
+ */
+deadline: number, };
 
 /**
  * Who is driving a tab, and until when unless they call again.
@@ -57,14 +63,22 @@ holder: string,
  */
 sessionId?: string, 
 /**
- * Milliseconds since the epoch.
+ * Milliseconds since the epoch, as of the list it came in. Renewals are
+ * not announced, so this only says the lease lasts at least that long:
+ * a lease is over when a newer list leaves it out, not at `until`.
  */
 until: number, };
 
 /**
  * Every lease there is, as the `browser-leases` event and `browser_leases_list`.
  */
-export type BrowserLeases = { leases: Array<BrowserLease>, };
+export type BrowserLeases = { 
+/**
+ * Higher is newer, across daemon restarts too. Lists can arrive out of
+ * order (an event overtaking a reply, two changes racing to the hub), so
+ * a client drops any list numbered below the newest it has kept.
+ */
+seq: number, leases: Array<BrowserLease>, };
 
 /**
  * Where a tab an agent drives sits, so the window can mount it when it is
