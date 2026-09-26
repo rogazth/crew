@@ -595,6 +595,25 @@ pub fn handle(host: &Host<'_>, caller: &Caller, method: &str, params: Value) -> 
             }))
         }
         "instructions" => Ok(json!({ "instructions": instructions(host.toolbox, caller) })),
+        // Everything this caller may run, listed or not, for a person reading
+        // `crew call --help`: the prompt budget the gateway saves is a model's,
+        // and a person at a shell has none to spend.
+        "tools/catalog" => {
+            let kind = caller.kind();
+            Ok(json!({
+                "tools": host
+                    .toolbox
+                    .visible(kind)
+                    .iter()
+                    .map(|entry| {
+                        let mut tool = describe(&entry.tool, kind);
+                        tool["core"] = json!(entry.tool.core);
+                        tool
+                    })
+                    .collect::<Vec<_>>()
+            }))
+        }
+        "whoami" => whoami(host.store, caller),
         "tools/call" => {
             let name = params.get("name").and_then(Value::as_str).unwrap_or("");
             let args = params.get("arguments").cloned().unwrap_or(json!({}));
@@ -619,6 +638,28 @@ pub fn handle(host: &Host<'_>, caller: &Caller, method: &str, params: Value) -> 
         }
         _ => Err(format!("Unknown method {method}")),
     }
+}
+
+/// Who the bridge took this caller for and which workspace that put it in,
+/// for `crew status`: a CLI that guessed the wrong identity or folder should
+/// be able to see so before it acts.
+fn whoami(store: &Store, caller: &Caller) -> Result<Value, String> {
+    let kind = match caller.kind() {
+        CallerKind::Agent => "agent",
+        CallerKind::Terminal => "terminal",
+        CallerKind::User => "user",
+    };
+    let workspace = match caller.workspace_id() {
+        Ok(id) => crate::workspace::get(store, id.to_string())?
+            .map(|found| json!({ "id": found.id, "name": found.name, "path": found.path })),
+        Err(_) => None,
+    };
+    Ok(json!({
+        "kind": kind,
+        "label": caller.label(),
+        "sessionId": caller.session_id(),
+        "workspace": workspace,
+    }))
 }
 
 /// The tool's arguments, appended to whatever it said when it refused.
@@ -2331,6 +2372,48 @@ mod tests {
         let out = handle(&host, &user(Some(&ws)), "tools/call", json!({ "name": "boil_kettle", "arguments": { "kettle": "blue" } }))
             .expect("call");
         assert!(is_error(&out), "{}", body(&out));
+    }
+
+    /// `crew call --help` lists what the gateway hides, and only what this
+    /// caller may run.
+    #[test]
+    fn the_catalog_is_every_tool_the_caller_may_run() {
+        let store = store();
+        let transcripts = TranscriptHub::new(store.clone());
+        let ws = workspace(&store);
+        let toolbox = Toolbox::default();
+        toolbox.register(Arc::new(Kettle));
+        let postman = Postman::default();
+        let deliver = |target: &Session| postman.deliver(&store, target);
+        let host = Host { store: &store, transcripts: &transcripts, on_created: &|_| {}, on_routines: &|| {}, deliver: &deliver, toolbox: &toolbox };
+        let out = handle(&host, &user(Some(&ws)), "tools/catalog", json!({})).expect("catalog");
+        let tools = out["tools"].as_array().expect("tools");
+        let named = |name: &str| tools.iter().find(|tool| tool["name"] == name);
+        assert_eq!(named("list_agents").expect("core")["core"], true);
+        assert_eq!(named("list_routines").expect("hidden")["core"], false);
+        assert!(named("list_kettles").is_some());
+        assert!(named("boil_kettle").is_none(), "not the user's");
+        assert!(named("create_agent").is_none(), "not the user's");
+        assert!(named("find_tool").is_none(), "a person needs no gateway");
+    }
+
+    #[test]
+    fn whoami_says_who_the_bridge_took_the_caller_for() {
+        let store = store();
+        let transcripts = TranscriptHub::new(store.clone());
+        let ws = workspace(&store);
+        let coder = agent(&store, &ws, "Coder");
+        let toolbox = Toolbox::default();
+        let postman = Postman::default();
+        let deliver = |target: &Session| postman.deliver(&store, target);
+        let host = Host { store: &store, transcripts: &transcripts, on_created: &|_| {}, on_routines: &|| {}, deliver: &deliver, toolbox: &toolbox };
+        let me = handle(&host, &Caller::from_session(coder.clone()), "whoami", json!({})).expect("whoami");
+        assert_eq!(me["kind"], "agent");
+        assert_eq!(me["sessionId"], coder.id);
+        assert_eq!(me["workspace"]["id"], ws);
+        let nobody = handle(&host, &user(None), "whoami", json!({})).expect("whoami");
+        assert_eq!(nobody["kind"], "user");
+        assert!(nobody["workspace"].is_null() && nobody["sessionId"].is_null(), "{nobody}");
     }
 
     #[test]

@@ -1,0 +1,26 @@
+[package]
+name = "crew-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[lib]
+name = "crew_cli"
+
+[[bin]]
+name = "crew"
+path = "src/main.rs"
+
+[dependencies]
+base64 = "0.23.1"
+clap = { version = "4.6.7", features = ["derive", "wrap_help"] }
+clap_complete = "4.6.11"
+crew-core = { path = "../crew-core" }
+crew-protocol = { path = "../crew-protocol" }
+libc = "0.2"
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tokio-tungstenite = "0.30"

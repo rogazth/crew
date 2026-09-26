@@ -12,11 +12,26 @@ use crew_core::store::Store;
 use crew_protocol::{DaemonFile, DaemonInfo};
 use crewd::{remove_daemon_file, serve, write_daemon_file, Config};
 
+const USAGE: &str = "\
+usage: crewd --data-dir <dir>   run the daemon (the Crew app does this)
+
+Kept for one version, for agents and configs that still name them:
+  crewd --mcp                   now `crew mcp`
+  crewd call <tool> [json]      now `crew call`";
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
+        // Only ever from a session's environment, as before: `crew mcp` also
+        // falls back to daemon.json, which an old config naming crewd never
+        // asked for.
         Some("--mcp") => crew_core::mcp::serve_stdio(),
-        Some("call") => crew_core::mcp::call(&args[1..]),
+        // The very command `crew call` is, so the alias cannot drift from it.
+        Some("call") => crew_cli::run_from(std::iter::once("crew".to_string()).chain(args)),
+        Some("-h" | "--help" | "help") => {
+            println!("{USAGE}");
+            ExitCode::SUCCESS
+        }
         _ => match run(&args) {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => {
@@ -61,6 +76,7 @@ fn run(args: &[String]) -> Result<(), String> {
             socket: bridge.socket_path(),
             user_token: bridge.user_token(),
             version: env!("CARGO_PKG_VERSION").to_string(),
+            pid: Some(std::process::id()),
         },
     ) {
         eprintln!("[crewd] daemon.json: {error}");

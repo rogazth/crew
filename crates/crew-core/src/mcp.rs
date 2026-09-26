@@ -1,6 +1,7 @@
-//! `crew --mcp` and `crew call`: the agent-side ends of the bridge. Both run
-//! inside the agent's process tree, not the app, so they only see the
-//! environment Crew handed the agent at spawn.
+//! `crew mcp` and the bridge client under every `crew` command. Inside an
+//! agent or a terminal session they only see the environment Crew handed the
+//! process at spawn; from the user's own shell the `crew` CLI builds the link
+//! out of `daemon.json` instead.
 
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
@@ -19,36 +20,53 @@ const WAIT_SLACK_S: u64 = 10;
 /// The newest revision this shim knows; a client that asks for an older one gets its own back.
 const PROTOCOL_VERSION: &str = "2025-06-18";
 
-struct Link {
+/// One way into the bridge: where it is and who is knocking.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Link {
     socket: String,
     /// Who this process is, as far as the daemon is concerned. Crew minted it
     /// for this session when the turn started; the session id is not sent and
     /// would not be believed.
     token: String,
+    /// The workspace a user's call acts in, an id or a path inside one. The
+    /// daemon ignores it for a session's token, whose workspace is its own.
+    workspace: Option<String>,
 }
 
 impl Link {
-    fn from_env() -> Result<Self, String> {
+    pub fn new(socket: impl Into<String>, token: impl Into<String>, workspace: Option<String>) -> Self {
+        Self { socket: socket.into(), token: token.into(), workspace }
+    }
+
+    pub fn socket(&self) -> &str {
+        &self.socket
+    }
+
+    /// The link Crew handed this process, if it handed it one.
+    pub fn from_env() -> Result<Self, String> {
         let var = |key: &str| {
             std::env::var(key).map_err(|_| format!("{key} is not set; run this from an agent or a terminal session Crew started"))
         };
         Ok(Self {
             socket: var("CREW_SOCKET")?,
             token: var("CREW_TOKEN")?,
+            workspace: None,
         })
     }
 
     /// One connection per call: a line out, a line back.
-    fn call(&self, method: &str, params: Value) -> Result<Value, String> {
-        let mut stream = UnixStream::connect(&self.socket)
-            .map_err(|e| format!("Crew is not running ({e})"))?;
+    pub fn call(&self, method: &str, params: Value) -> Result<Value, String> {
+        let mut stream = UnixStream::connect(&self.socket).map_err(|e| unreachable_error(&e))?;
         let _ = stream.set_read_timeout(Some(call_timeout(method, &params)));
-        let mut line = json!({
+        let mut request = json!({
             "token": self.token,
             "method": method,
             "params": params,
-        })
-        .to_string();
+        });
+        if let Some(workspace) = &self.workspace {
+            request["workspace"] = json!(workspace);
+        }
+        let mut line = request.to_string();
         line.push('\n');
         stream.write_all(line.as_bytes()).map_err(|e| e.to_string())?;
 
@@ -62,6 +80,14 @@ impl Link {
         }
         Ok(body.get("result").cloned().unwrap_or(Value::Null))
     }
+}
+
+/// Said when nothing answers on the socket, so a caller can tell "Crew is not
+/// there" from "Crew said no" by the prefix alone.
+pub const NOT_RUNNING: &str = "Crew isn't running";
+
+fn unreachable_error(error: &std::io::Error) -> String {
+    format!("{NOT_RUNNING} ({error}) — open it or run `crew open`")
 }
 
 /// How long one call may take. A tool call whose arguments carry `timeout_s`
@@ -90,13 +116,18 @@ fn call_timeout(method: &str, params: &Value) -> Duration {
 /// Model Context Protocol over stdio. Only `tools/*` is forwarded; the rest is
 /// the handshake every client sends first.
 pub fn serve_stdio() -> ExitCode {
-    let link = match Link::from_env() {
-        Ok(link) => link,
+    match Link::from_env() {
+        Ok(link) => serve_stdio_with(&link),
         Err(e) => {
             eprintln!("{e}");
-            return ExitCode::FAILURE;
+            ExitCode::FAILURE
         }
-    };
+    }
+}
+
+/// The same server over a link the caller built: the `crew` CLI outside a
+/// session speaks as the user, from `daemon.json`.
+pub fn serve_stdio_with(link: &Link) -> ExitCode {
     let stdin = std::io::stdin();
     let mut stdout = std::io::stdout();
     for line in stdin.lock().lines() {
@@ -113,7 +144,7 @@ pub fn serve_stdio() -> ExitCode {
         };
         let method = message.get("method").and_then(Value::as_str).unwrap_or("");
         let params = message.get("params").cloned().unwrap_or(Value::Null);
-        let body = match handle(&link, method, params) {
+        let body = match handle(link, method, params) {
             Ok(result) => json!({ "jsonrpc": "2.0", "id": id, "result": result }),
             Err((code, text)) => {
                 json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": text } })
@@ -159,67 +190,40 @@ fn handle(link: &Link, method: &str, params: Value) -> Result<Value, (i64, Strin
     }
 }
 
-/// `crew call <tool> [json-arguments]` for CLIs without a per-run MCP flag.
-pub fn call(args: &[String]) -> ExitCode {
-    let link = match Link::from_env() {
-        Ok(link) => link,
-        Err(e) => {
-            eprintln!("{e}");
-            return ExitCode::FAILURE;
-        }
-    };
-    let Some(name) = args.first().filter(|name| !name.starts_with('-')) else {
-        return match link.call("tools/list", Value::Null) {
-            Ok(result) => {
-                println!("usage: crew call <tool> ['{{\"json\": \"arguments\"}}']\n");
-                for tool in result.get("tools").and_then(Value::as_array).into_iter().flatten() {
-                    let name = tool.get("name").and_then(Value::as_str).unwrap_or("?");
-                    let about = tool.get("description").and_then(Value::as_str).unwrap_or("");
-                    let schema = tool.get("inputSchema").cloned().unwrap_or(Value::Null);
-                    println!("{name}\n  {about}\n  arguments: {schema}\n");
-                }
-                ExitCode::SUCCESS
-            }
-            Err(e) => {
-                eprintln!("{e}");
-                ExitCode::FAILURE
-            }
-        };
-    };
-    let arguments: Value = match args.get(1) {
-        Some(raw) => match serde_json::from_str(raw) {
-            Ok(value) => value,
-            Err(e) => {
-                eprintln!("Arguments must be a JSON object: {e}");
-                return ExitCode::FAILURE;
-            }
-        },
-        None => json!({}),
-    };
-    match link.call("tools/call", json!({ "name": name, "arguments": arguments })) {
-        Ok(result) => {
-            let failed = result.get("isError").and_then(Value::as_bool).unwrap_or(false);
-            for part in result.get("content").and_then(Value::as_array).into_iter().flatten() {
-                if let Some(text) = part.get("text").and_then(Value::as_str) {
-                    println!("{text}");
-                }
-            }
-            if failed {
-                ExitCode::FAILURE
-            } else {
-                ExitCode::SUCCESS
-            }
-        }
-        Err(e) => {
-            eprintln!("{e}");
-            ExitCode::FAILURE
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// What one call puts on the wire, as a bridge that answers once sees it.
+    fn sent(link_for: impl FnOnce(String) -> Link) -> Value {
+        let path = std::env::temp_dir().join(format!("cm-{}.sock", &uuid::Uuid::new_v4().to_string()[..8]));
+        let listener = std::os::unix::net::UnixListener::bind(&path).expect("bind");
+        let link = link_for(path.to_string_lossy().into_owned());
+        let seen = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().expect("accept");
+            let mut line = String::new();
+            BufReader::new(stream.try_clone().expect("clone")).read_line(&mut line).expect("read");
+            (&stream).write_all(b"{\"result\":{}}\n").expect("reply");
+            line
+        });
+        link.call("tools/list", Value::Null).expect("call");
+        let _ = std::fs::remove_file(&path);
+        serde_json::from_str(&seen.join().expect("join")).expect("json")
+    }
+
+    #[test]
+    fn a_users_call_names_its_workspace_and_a_sessions_does_not() {
+        let user = sent(|socket| Link::new(socket, "u", Some("/code/crew".into())));
+        assert_eq!((user["token"].as_str(), user["workspace"].as_str()), (Some("u"), Some("/code/crew")));
+        let session = sent(|socket| Link::new(socket, "s", None));
+        assert!(session.get("workspace").is_none(), "{session}");
+    }
+
+    #[test]
+    fn nobody_on_the_socket_reads_as_not_running() {
+        let error = Link::new("/nonexistent/crew.sock", "t", None).call("tools/list", Value::Null).unwrap_err();
+        assert!(error.starts_with(NOT_RUNNING), "{error}");
+    }
 
     #[test]
     fn a_call_waits_twenty_seconds_by_default() {

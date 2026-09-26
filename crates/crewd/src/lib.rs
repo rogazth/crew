@@ -1976,6 +1976,7 @@ mod tests {
             socket: "/s".into(),
             user_token: "u".into(),
             version: "0".into(),
+            pid: Some(7),
         };
         let path = write_daemon_file(&dir, &file).expect("write");
         let mode = std::fs::metadata(&path).expect("meta").permissions().mode() & 0o777;

@@ -67,6 +67,10 @@ pub struct DaemonFile {
     pub socket: String,
     pub user_token: String,
     pub version: String,
+    /// The daemon's own process, for `crew daemon stop`. Optional so a file a
+    /// daemon without it wrote still reads.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pid: Option<u32>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, TS)]
