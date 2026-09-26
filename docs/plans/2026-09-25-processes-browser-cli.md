@@ -383,6 +383,56 @@ Puertos y, si hacen falta, traces de performance sobre el canal del navegador.
 | 1 | hecha |
 | 2 | hecha |
 | 3 | hecha. `crew daemon install/uninstall` responden "todavía no" y `stop`/`restart` son best-effort (SIGTERM al pid de `daemon.json`; la app relanza su daemon): la fase 5 suma un `Supervisor` LaunchAgent en `crates/crew-cli/src/daemon.rs` |
-| 4 | pendiente |
+| 4 | hecha salvo el registro en el gateway (ver abajo) |
 | 5 | pendiente |
 | 6 | pendiente |
+
+### Fase 4: lo que entró
+
+- **Canal.** Electron main abre su propia conexión (`electron/browser/host-link.ts`),
+  se registra con `browser_host_register` y se reconecta sola si `crewd`
+  reinicia. `crewd` le manda `browser-call { callId, tab, tool, args, page }`
+  solo a ese cliente y espera `browser_result { callId, ok, result | error }`;
+  solo el cliente al que fue la llamada puede contestarla. El host es un
+  cliente "callado": de los eventos solo oye `browser-*`.
+- **Rust** (`crew-core`): `browser_relay.rs` (`BrowserRelay::call`, bloqueante,
+  "Open Crew to use the browser." sin host), `browser_leases.rs` (TTL 120 s,
+  renovación, conflicto, soltar todo lo de una sesión, último tab por quien
+  llama, evento `browser-leases`) y `browser_tools.rs` (`BrowserTools`: una
+  función por tool, catálogo con schemas, alcance por workspace leyendo los
+  strips guardados con `browser::open_pages`). RPCs nuevos:
+  `browser_leases_list`, `browser_lease_release` y `browser_tool` (corre una
+  tool como el usuario). Borrar la sesión y la salida del pty de una terminal
+  sueltan sus leases.
+- **Tools en main** (`agent-tools.ts`, `ax-snapshot.ts`, `press.ts`,
+  `cdp-page.ts`, `tab-guests.ts`): todas las de la tabla, serializadas por
+  tab, con timeout por comando CDP para que uno colgado no trabe el tab.
+- **Teclado dentro de la página.** Probado en Electron 44: `Input.dispatchKeyEvent`
+  e `Input.insertText` no llegan a un guest cuyo `<webview>` no tiene el foco
+  de la ventana, y darle el foco le quitaría el teclado al usuario. `type` y
+  `press` reproducen las teclas en la página (eventos de teclado más su efecto
+  por defecto: comandos de edición, enviar el form, mover el foco, scroll);
+  `fill` escribe con `execCommand("insertText")` y, si el campo no lo acepta,
+  usa el setter nativo de `value`. Los clicks sí van por `Input.dispatchMouseEvent`.
+- **Tabs ocultos.** Un guest con `display:none` no dibuja: el screenshot nunca
+  llega y los clicks caen en una página sin tamaño. Un tab con lease que no está
+  a la vista queda montado debajo del pane visible y tapado
+  (`Browsers.tsx`, "staged"). Si la ventana está minimizada o una página como
+  Settings tapa los tabs, el screenshot cae al último frame
+  (`capturePage`) o responde por qué no hay.
+- **Tabs fríos.** Un tab con lease se fija en `retention.ts`. Si el tab está frío,
+  o su workspace no está montado, main le pide al renderer montarlo
+  (`browser:mount`) y espera 15 s a que el guest se reporte
+  (`browser:page-guest`). `open_tab` agrega el tab al strip en segundo plano y
+  hace leer el strip guardado de ese contexto, así queda persistido.
+- **UI:** la pastilla del tab muestra la cara del agente; el pane, una barra con
+  "Take back".
+- **Tests:** Rust de leases, relay, tools y el ida y vuelta por WebSocket
+  (`crewd/tests/browser_host.rs`); vitest del snapshot contra un árbol AX
+  grabado en Electron 44, del parseo de teclas, de la serialización por tab y
+  del bloqueo por input del usuario. `e2e/browser-agent.test.ts` está escrito
+  pero no se corrió (el harness usa la base de datos real en macOS).
+
+**Pendiente:** registrar `BrowserTools` en el gateway (`find_tool`/`call_tool`):
+un brazo por tool que arme el `Holder` desde el `Caller` y devuelva el arreglo
+de bloques como `content` (imágenes incluidas). Y `crew tabs` en la CLI.
