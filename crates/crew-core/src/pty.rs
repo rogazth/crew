@@ -19,6 +19,13 @@ const FLOW_HIGH: u64 = 256 * 1024;
 const FLOW_LOW: u64 = 32 * 1024;
 const FLOW_POLL: Duration = Duration::from_millis(250);
 const RING_CAP: usize = FLOW_HIGH as usize;
+/// A supervised PTY's viewer may fall this far behind before its live frames
+/// are dropped. Room for a full ring replay plus a window of live output, or
+/// the replay that answers a resync would itself trip the next one.
+const VIEWER_HIGH: u64 = RING_CAP as u64 + FLOW_HIGH;
+/// How long a supervised exit waits for the reader to drain what the child
+/// wrote last. A grandchild still holding the terminal can keep it open forever.
+const DRAIN_ON_EXIT: Duration = Duration::from_secs(1);
 
 /// What a spawn can carry beyond the argv. Grows by a field, so a new option
 /// does not change every caller of `spawn`.
@@ -31,11 +38,26 @@ pub struct SpawnOptions {
     /// and the old process's exit is not announced. Also runs, at once, when
     /// the spawn fails, so what it releases is never left held.
     pub on_exit: Option<Box<dyn FnOnce() + Send>>,
+    /// Supervised: the reader never waits for credit. Every byte reaches the
+    /// sink and the ring, and a viewer that falls behind is sent a resync
+    /// instead of holding the child back. A server nobody is looking at must
+    /// not block on write.
+    pub supervised: Option<Arc<dyn PtySink>>,
 }
 
 pub trait PtyEvents: Send + Sync {
     fn data(&self, stream_id: u32, bytes: &[u8]);
     fn exit(&self, id: &str, code: Option<i32>);
+    /// A supervised PTY dropped frames its viewer had no credit for; the
+    /// viewer has to repaint from the ring with a fresh attach.
+    fn resync(&self, _id: &str) {}
+}
+
+/// Where a supervised PTY's output goes whether or not anyone is watching.
+pub trait PtySink: Send + Sync {
+    fn output(&self, bytes: &[u8]);
+    /// After the last output. `None` is a child ended by a signal.
+    fn exit(&self, code: Option<i32>);
 }
 
 struct LivePty {
@@ -47,12 +69,15 @@ struct LivePty {
     exited: AtomicBool,
     state: Mutex<PtyState>,
     credit: Condvar,
+    supervised: Option<Arc<dyn PtySink>>,
 }
 
 struct PtyState {
     ring: Ring,
     emitted: u64,
     acked: u64,
+    /// Supervised only: frames are dropped until the viewer attaches again.
+    behind: bool,
 }
 
 pub struct PtyAttached {
@@ -92,9 +117,16 @@ impl LivePty {
                 ring: Ring::default(),
                 emitted: 0,
                 acked: 0,
+                behind: false,
             }),
             credit: Condvar::new(),
+            supervised: None,
         }
+    }
+
+    fn with_sink(mut self, sink: Option<Arc<dyn PtySink>>) -> Self {
+        self.supervised = sink;
+        self
     }
 
     #[cfg(test)]
@@ -130,6 +162,28 @@ impl LivePty {
 
 fn in_flight(state: &PtyState) -> u64 {
     state.emitted.saturating_sub(state.acked)
+}
+
+#[derive(Debug, PartialEq)]
+enum Forward {
+    Send,
+    /// Already behind; the resync that says so went out with the first drop.
+    Drop,
+    Resync,
+}
+
+/// What a supervised PTY does with a frame already in its ring, `emitted`
+/// counting it. With nobody watching the first frame past the window trips
+/// a resync nobody hears, and the rest drop until someone attaches.
+fn forward(state: &mut PtyState) -> Forward {
+    if state.behind {
+        return Forward::Drop;
+    }
+    if in_flight(state) <= VIEWER_HIGH {
+        return Forward::Send;
+    }
+    state.behind = true;
+    Forward::Resync
 }
 
 struct Inner {
@@ -294,7 +348,18 @@ impl PtyHost {
             close_fd(prev.master_fd);
         }
         let on_exit = options.on_exit.take();
-        match spawn_unix(self, id, cwd, command, cols.max(2), rows.max(2), options.env, on_exit) {
+        let spawned = spawn_unix(
+            self,
+            id,
+            cwd,
+            command,
+            cols.max(2),
+            rows.max(2),
+            options.env,
+            on_exit,
+            options.supervised,
+        );
+        match spawned {
             Ok(stream) => Ok(stream),
             Err((error, on_exit)) => {
                 if let Some(on_exit) = on_exit {
@@ -303,6 +368,28 @@ impl PtyHost {
                 Err(error)
             }
         }
+    }
+
+    /// Sends `signal` to the child's whole process group, so a server's
+    /// workers stop and pause along with it.
+    pub fn signal_group(&self, id: &str, signal: i32) -> Result<(), String> {
+        let live = self
+            .get(id)
+            .ok_or_else(|| "Process is not running".to_string())?;
+        // Once reaped the kernel may hand this pid to another process.
+        if live.pid <= 1 || live.exited.load(Ordering::Acquire) {
+            return Err("Process is not running".into());
+        }
+        if unsafe { libc::kill(-(live.pid as i32), signal) } != 0 {
+            return Err(os_err("Failed to signal the process"));
+        }
+        Ok(())
+    }
+
+    pub fn pid(&self, id: &str) -> Option<u32> {
+        self.get(id)
+            .filter(|live| !live.exited.load(Ordering::Acquire))
+            .map(|live| live.pid)
     }
 
     pub fn write(&self, id: &str, data: &[u8]) -> Result<(), String> {
@@ -350,11 +437,16 @@ impl PtyHost {
             .get(id)
             .ok_or_else(|| "Terminal is not running".to_string())?;
         let mut state = live.state.lock().unwrap_or_else(|e| e.into_inner());
-        if from < state.ring.start {
+        let start = from.max(state.ring.start);
+        if live.supervised.is_some() {
+            // The replay is all this viewer has in flight: its credit starts
+            // over from there, and live frames flow to it again.
+            state.acked = start;
+            state.behind = false;
+        } else if from < state.ring.start {
             state.acked = state.acked.max(state.ring.start);
             live.credit.notify_all();
         }
-        let start = from.max(state.ring.start);
         let skip = start.saturating_sub(state.ring.start).min(state.ring.buf.len() as u64) as usize;
         let attached = PtyAttached {
             start,
@@ -406,6 +498,7 @@ fn spawn_unix(
     rows: u16,
     env: Vec<(String, String)>,
     on_exit: OnExit,
+    sink: Option<Arc<dyn PtySink>>,
 ) -> Result<u32, (String, OnExit)> {
     use std::fs::File;
     use std::os::unix::io::FromRawFd;
@@ -469,12 +562,16 @@ fn spawn_unix(
     let writer = unsafe { File::from_raw_fd(writer) };
 
     let stream_id = host.inner.next_stream.fetch_add(1, Ordering::Relaxed);
-    let live = Arc::new(LivePty::new(Box::new(writer), master, pid, stream_id));
+    let live = Arc::new(LivePty::new(Box::new(writer), master, pid, stream_id).with_sink(sink.clone()));
     host.insert(id.clone(), live.clone());
 
     let data_host = host.clone();
     let data_live = live.clone();
+    let (drained_tx, drained_rx) = std::sync::mpsc::channel::<()>();
     thread::spawn(move || {
+        // Dropped on every way out of the loop, which is what an exit waits on.
+        let _drained = drained_tx;
+        let supervised = data_live.supervised.is_some();
         let mut file = reader;
         let fd = file.as_raw_fd();
         let mut buf = vec![0_u8; READ_CHUNK];
@@ -482,7 +579,7 @@ fn spawn_unix(
         let mut last_emit = Instant::now();
         loop {
             if acc.is_empty() {
-                if !data_live.wait_for_credit() {
+                if !supervised && !data_live.wait_for_credit() {
                     break;
                 }
                 match file.read(&mut buf) {
@@ -495,7 +592,7 @@ fn spawn_unix(
             } else if should_flush(acc.len(), last_emit.elapsed())
                 || !wait_readable(fd, PTY_COALESCE.saturating_sub(last_emit.elapsed()))
             {
-                emit_data(&data_host, stream_id, &acc);
+                flush(&data_host, &data_live, stream_id, &acc);
                 acc.clear();
                 last_emit = Instant::now();
             } else {
@@ -505,12 +602,17 @@ fn spawn_unix(
                 }
             }
         }
-        emit_data(&data_host, stream_id, &acc);
+        flush(&data_host, &data_live, stream_id, &acc);
     });
 
     let wait_host = host.clone();
     thread::spawn(move || {
         let code = child.wait().ok().and_then(|status| status.code());
+        if sink.is_some() {
+            // The child's last words are still in the master: the exit must
+            // not reach the log, or a viewer, ahead of them.
+            let _ = drained_rx.recv_timeout(DRAIN_ON_EXIT);
+        }
         live.exited.store(true, Ordering::Release);
         live.credit.notify_all();
         if let Some(on_exit) = on_exit {
@@ -523,6 +625,10 @@ fn spawn_unix(
             if let Some(events) = wait_host.events() {
                 events.exit(&id, code);
             }
+        }
+        // A replaced child reports too: the supervisor tells its runs apart.
+        if let Some(sink) = sink {
+            sink.exit(code);
         }
     });
 
@@ -782,6 +888,17 @@ fn os_err(ctx: &str) -> String {
     format!("{ctx}: {}", std::io::Error::last_os_error())
 }
 
+/// The sink goes first: it is the record, and must not wait on any viewer.
+fn flush(host: &PtyHost, live: &LivePty, stream_id: u32, bytes: &[u8]) {
+    if bytes.is_empty() {
+        return;
+    }
+    if let Some(sink) = &live.supervised {
+        sink.output(bytes);
+    }
+    emit_data(host, stream_id, bytes);
+}
+
 fn emit_data(host: &PtyHost, stream_id: u32, bytes: &[u8]) {
     if bytes.is_empty() {
         return;
@@ -790,6 +907,21 @@ fn emit_data(host: &PtyHost, stream_id: u32, bytes: &[u8]) {
         let mut state = live.state.lock().unwrap_or_else(|e| e.into_inner());
         state.ring.push(bytes);
         state.emitted += bytes.len() as u64;
+        if live.supervised.is_some() {
+            match forward(&mut state) {
+                Forward::Send => {}
+                Forward::Drop => return,
+                Forward::Resync => {
+                    // Under the state lock, like the frames: a viewer sees
+                    // the resync after the last frame it was sent, never before.
+                    let id = host.session_of_stream(stream_id);
+                    if let (Some(events), Some(id)) = (host.events(), id) {
+                        events.resync(&id);
+                    }
+                    return;
+                }
+            }
+        }
         if let Some(events) = host.events() {
             events.data(stream_id, bytes);
         }
@@ -1016,6 +1148,124 @@ mod tests {
         assert_eq!(attached.emitted, 164);
         assert_eq!(replay.len(), 64);
         assert_eq!(live.state.lock().unwrap_or_else(|e| e.into_inner()).acked, 100);
+    }
+
+    /// What the hub would have sent: frames per stream and resyncs per id.
+    #[derive(Default)]
+    struct Recorder {
+        forwarded: std::sync::atomic::AtomicU64,
+        resyncs: std::sync::atomic::AtomicU32,
+    }
+
+    impl PtyEvents for Recorder {
+        fn data(&self, _stream_id: u32, bytes: &[u8]) {
+            self.forwarded.fetch_add(bytes.len() as u64, Ordering::Relaxed);
+        }
+        fn exit(&self, _id: &str, _code: Option<i32>) {}
+        fn resync(&self, _id: &str) {
+            self.resyncs.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    #[derive(Default)]
+    struct Collect {
+        bytes: std::sync::atomic::AtomicU64,
+        exit: Mutex<Option<Option<i32>>>,
+    }
+
+    impl PtySink for Collect {
+        fn output(&self, bytes: &[u8]) {
+            self.bytes.fetch_add(bytes.len() as u64, Ordering::Relaxed);
+        }
+        fn exit(&self, code: Option<i32>) {
+            *self.exit.lock().unwrap() = Some(code);
+        }
+    }
+
+    fn emitted(host: &PtyHost, id: &str) -> u64 {
+        host.get(id)
+            .map(|live| live.state.lock().unwrap_or_else(|e| e.into_inner()).emitted)
+            .unwrap_or(0)
+    }
+
+    fn flood(bytes: u64) -> Vec<String> {
+        // `yes` never ends on its own; head closes the pipe once it has enough.
+        vec!["/bin/sh".into(), "-c".into(), format!("yes 0123456789abcdef | head -c {bytes}")]
+    }
+
+    #[test]
+    fn a_terminal_nobody_acks_stops_draining_at_the_high_water_mark() {
+        let host = PtyHost::new();
+        let recorder = Arc::new(Recorder::default());
+        host.set_events(recorder.clone());
+        host.spawn("t".into(), "/".into(), flood(20_000_000), 80, 24).expect("spawn");
+        thread::sleep(Duration::from_millis(1500));
+        let reached = emitted(&host, "t");
+        host.kill("t");
+
+        // One chunk may land past the check, and one more is being coalesced.
+        assert!(reached >= FLOW_HIGH, "drained only {reached}");
+        assert!(reached <= FLOW_HIGH + 2 * READ_CHUNK as u64, "drained {reached} with no credit");
+        assert_eq!(recorder.resyncs.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn a_supervised_pty_drains_everything_with_nobody_watching() {
+        let host = PtyHost::new();
+        let recorder = Arc::new(Recorder::default());
+        host.set_events(recorder.clone());
+        let sink = Arc::new(Collect::default());
+        let options = SpawnOptions {
+            supervised: Some(sink.clone()),
+            ..SpawnOptions::default()
+        };
+        host.spawn_with("p".into(), "/".into(), flood(4_000_000), 80, 24, options)
+            .expect("spawn");
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while sink.exit.lock().unwrap().is_none() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(20));
+        }
+
+        assert_eq!(*sink.exit.lock().unwrap(), Some(Some(0)), "the flood never finished");
+        // The terminal turns each \n into \r\n, so there is more than was written.
+        assert!(sink.bytes.load(Ordering::Relaxed) >= 4_000_000);
+        let forwarded = recorder.forwarded.load(Ordering::Relaxed);
+        assert!(forwarded <= VIEWER_HIGH + READ_CHUNK as u64, "forwarded {forwarded} with no credit");
+        assert_eq!(recorder.resyncs.load(Ordering::Relaxed), 1, "one resync per fall behind");
+    }
+
+    #[test]
+    fn a_supervised_viewer_that_falls_behind_resyncs_once_and_attach_resumes_it() {
+        let mut state = PtyState {
+            ring: Ring::default(),
+            emitted: VIEWER_HIGH,
+            acked: 0,
+            behind: false,
+        };
+        assert_eq!(forward(&mut state), Forward::Send);
+        state.emitted += 1;
+        assert_eq!(forward(&mut state), Forward::Resync);
+        state.acked = state.emitted;
+        assert_eq!(forward(&mut state), Forward::Drop, "only an attach clears it");
+
+        let host = PtyHost::new();
+        let live = Arc::new(
+            LivePty::new(Box::new(std::io::sink()), -1, 1, 9)
+                .with_sink(Some(Arc::new(Collect::default()))),
+        );
+        {
+            let mut state = live.state.lock().unwrap_or_else(|e| e.into_inner());
+            state.ring.push(&[1; 64]);
+            state.ring.start = 5_000_000;
+            state.emitted = 5_000_064;
+            state.behind = true;
+        }
+        host.insert("p".into(), live.clone());
+        let attached = host.attach("p", 0, |_, _, _| {}).unwrap();
+        let mut state = live.state.lock().unwrap_or_else(|e| e.into_inner());
+        assert_eq!(attached.start, 5_000_000);
+        assert_eq!(state.acked, 5_000_000, "credit restarts at the replay");
+        assert_eq!(forward(&mut state), Forward::Send);
     }
 
     #[test]

@@ -805,6 +805,7 @@ fn terminal_launch(
         SpawnOptions {
             env: launch.env,
             on_exit: Some(Box::new(move || bridge.revoke_token(&token))),
+            ..SpawnOptions::default()
         },
     ))
 }
