@@ -8,8 +8,8 @@ use crew_core::agent::AgentHost;
 use crew_core::bridge::Bridge;
 use crew_core::pty::PtyHost;
 use crew_core::store::Store;
-use crew_protocol::DaemonInfo;
-use crewd::{serve, Config};
+use crew_protocol::{DaemonFile, DaemonInfo};
+use crewd::{remove_daemon_file, serve, write_daemon_file, Config};
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -47,6 +47,20 @@ fn run(args: &[String]) -> Result<(), String> {
         url: handle.url().to_string(),
         token: handle.token().to_string(),
     };
+    // Before the handshake line, so whoever waits on that line can rely on the
+    // file. A daemon that cannot write it still serves the window.
+    if let Err(error) = write_daemon_file(
+        &dir,
+        &DaemonFile {
+            url: info.url.clone(),
+            token: info.token.clone(),
+            socket: bridge.socket_path(),
+            user_token: bridge.user_token(),
+            version: env!("CARGO_PKG_VERSION").to_string(),
+        },
+    ) {
+        eprintln!("[crewd] daemon.json: {error}");
+    }
     let mut stdout = io::stdout();
     writeln!(
         stdout,
@@ -58,6 +72,7 @@ fn run(args: &[String]) -> Result<(), String> {
 
     wait_for_exit();
 
+    remove_daemon_file(&dir, &info.url);
     pty.kill_all();
     agents.kill_all();
     bridge.shutdown();

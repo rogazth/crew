@@ -65,7 +65,7 @@ const STDERR_TAIL: usize = 12;
 /// of that shape — with Claude Code that is its own cross-session SendMessage,
 /// which writes to another machine entirely. Measured, not guessed: it happened
 /// in `scripts/drive.mjs` and the letter left the building.
-fn tools_hint(lead: &str, spell: &dyn Fn(&str) -> String) -> String {
+fn tools_hint(lead: &str, spell: &dyn Fn(&str) -> String, hidden: &[&str]) -> String {
     format!(
         "{lead}\n\
          - {} — the other agents here, each with the id it is addressed by.\n\
@@ -89,31 +89,36 @@ fn tools_hint(lead: &str, spell: &dyn Fn(&str) -> String) -> String {
         spell("search_messages"),
         spell("find_tool"),
         spell("call_tool"),
-        crate::tools::hidden_names().join(", "),
+        hidden.join(", "),
         spell("message_agent"),
     )
 }
 
 /// Claude and Codex namespace an MCP server's tools under its name.
-fn mcp_tools_hint() -> String {
-    tools_hint("Crew gives you tools through its crew MCP server, under these names.", &|tool| {
-        format!("`mcp__crew__{tool}`")
-    })
+fn mcp_tools_hint(hidden: &[&str]) -> String {
+    tools_hint(
+        "Crew gives you tools through its crew MCP server, under these names.",
+        &|tool| format!("`mcp__crew__{tool}`"),
+        hidden,
+    )
 }
 
 /// opencode flattens them onto the server name instead.
-fn opencode_tools_hint() -> String {
-    tools_hint("Crew gives you tools through its crew MCP server, under these names.", &|tool| {
-        format!("`crew_{tool}`")
-    })
+fn opencode_tools_hint(hidden: &[&str]) -> String {
+    tools_hint(
+        "Crew gives you tools through its crew MCP server, under these names.",
+        &|tool| format!("`crew_{tool}`"),
+        hidden,
+    )
 }
 
 /// Cursor has no MCP, so it reaches the same bridge through the shell.
-fn shell_tools_hint(exe: &str) -> String {
+fn shell_tools_hint(exe: &str, hidden: &[&str]) -> String {
     tools_hint(
         "Crew's tools are not in your tool list; you reach them by running them in the shell, \
          and `<json>` is the arguments object.",
         &|tool| format!("`{exe} call {tool} '<json>'`"),
+        hidden,
     )
 }
 
@@ -205,6 +210,9 @@ pub struct TurnHost {
     cancelled: Arc<Mutex<HashSet<String>>>,
     /// Consecutive turns an agent has started by writing to itself.
     loops: Arc<Mutex<HashMap<String, u32>>>,
+    /// The tool families beside Crew's own, so the sheet in an agent's prompt
+    /// names theirs too.
+    toolbox: crate::tools::Toolbox,
 }
 
 impl TurnHost {
@@ -219,11 +227,22 @@ impl TurnHost {
             runtime: Arc::new(Mutex::new(None)),
             cancelled: Arc::new(Mutex::new(HashSet::new())),
             loops: Arc::new(Mutex::new(HashMap::new())),
+            toolbox: crate::tools::Toolbox::default(),
         }
     }
 
     pub fn transcripts(&self) -> &TranscriptHub {
         &self.transcripts
+    }
+
+    /// The toolbox this host names tools from. Register a family here and the
+    /// dispatcher that shares it runs it.
+    pub fn toolbox(&self) -> crate::tools::Toolbox {
+        self.toolbox.clone()
+    }
+
+    fn hidden_tools(&self) -> Vec<&'static str> {
+        self.toolbox.hidden_names(crate::caller::CallerKind::Agent)
     }
 
     pub fn set_runtime(&self, handle: tokio::runtime::Handle) {
@@ -793,16 +812,14 @@ impl TurnHost {
 
         let path = self.resolve_bin("claude").or_else(|_| self.resolve_bin("claude"))?;
         let mcp = self.mcp();
-        let hint = mcp.as_ref().map(|_| mcp_tools_hint());
+        let hint = mcp.as_ref().map(|_| mcp_tools_hint(&self.hidden_tools()));
         let persona = claude_persona(&session.name, &session.description, hint.as_deref());
         let spawn = ClaudeSpawn {
             model: Some(session.model.clone()).filter(|m| !m.is_empty()),
             session_id: Some(claude_session_id.clone()),
             system_prompt: Some(persona),
             autonomy,
-            mcp_config: mcp.map(|(command, args)| {
-                json!({ "mcpServers": { "crew": { "command": command, "args": args } } }).to_string()
-            }),
+            mcp_config: mcp.map(|(command, args)| crate::providers::claude::claude_mcp_config(&command, &args)),
         };
         if self.stop_requested(&session_id) {
             self.agents.kill(&session_id);
@@ -890,7 +907,7 @@ impl TurnHost {
             Err(error) => return TurnOutcome::Failed(error),
         };
         let mcp = self.mcp();
-        let hint = mcp.as_ref().map(|_| mcp_tools_hint());
+        let hint = mcp.as_ref().map(|_| mcp_tools_hint(&self.hidden_tools()));
         // Minted once and used twice: the agent's own shell gets it, and so
         // does the MCP server codex starts for it. A second mint would retire
         // the first.
@@ -951,7 +968,7 @@ impl TurnHost {
         };
         let mcp = self.mcp();
         // Cursor takes no MCP config, so the bridge is a command it runs.
-        let hint = mcp.as_ref().map(|(exe, _)| shell_tools_hint(exe));
+        let hint = mcp.as_ref().map(|(exe, _)| shell_tools_hint(exe, &self.hidden_tools()));
         let prompt = build_cursor_prompt(
             &session.name,
             &session.description,
@@ -1003,7 +1020,7 @@ impl TurnHost {
             Ok(path) => path,
             Err(error) => return TurnOutcome::Failed(error),
         };
-        let hint = mcp.as_ref().map(|_| opencode_tools_hint());
+        let hint = mcp.as_ref().map(|_| opencode_tools_hint(&self.hidden_tools()));
         let prompt = build_opencode_prompt(
             &session.name,
             &session.description,
@@ -2272,7 +2289,7 @@ print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type
         mailbox::enqueue(
             world.host.test_store(),
             &cuddles.id,
-            &AgentRef { id: coder.id.clone(), name: "Coder".into() },
+            &AgentRef::agent(coder.id.clone(), "Coder"),
             "the branch is green",
         )
         .expect("enqueue");
@@ -2335,7 +2352,7 @@ print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type
         mailbox::enqueue(
             world.host.test_store(),
             &cuddles.id,
-            &AgentRef { id: coder.id.clone(), name: "Coder".into() },
+            &AgentRef::agent(coder.id.clone(), "Coder"),
             "the branch is green",
         )
         .expect("enqueue");
@@ -2376,7 +2393,7 @@ print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type
         mailbox::enqueue(
             world.host.test_store(),
             &coder.id,
-            &AgentRef { id: coder.id.clone(), name: "Coder".into() },
+            &AgentRef::agent(coder.id.clone(), "Coder"),
             "next: run the tests",
         )
         .expect("enqueue");
@@ -2397,7 +2414,7 @@ print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type
         mailbox::enqueue(
             world.host.test_store(),
             &coder.id,
-            &AgentRef { id: coder.id.clone(), name: "Coder".into() },
+            &AgentRef::agent(coder.id.clone(), "Coder"),
             "next: run the tests",
         )
         .expect("enqueue");
@@ -2417,7 +2434,7 @@ print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type
         let world = world();
         let ws = workspace(&world);
         let coder = agent(&world, &ws, "Coder");
-        let me = AgentRef { id: coder.id.clone(), name: "Coder".into() };
+        let me = AgentRef::agent(coder.id.clone(), "Coder");
         for _ in 0..(MAX_SELF_TURNS + 2) {
             mailbox::enqueue(world.host.test_store(), &coder.id, &me, "again").expect("enqueue");
         }
@@ -2444,7 +2461,7 @@ print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type
         mailbox::enqueue(
             world.host.test_store(),
             &cuddles.id,
-            &AgentRef { id: coder.id.clone(), name: "Coder".into() },
+            &AgentRef::agent(coder.id.clone(), "Coder"),
             "later",
         )
         .expect("enqueue");
@@ -2485,7 +2502,7 @@ print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type
         let world = world();
         let ws = workspace(&world);
         let coder = agent(&world, &ws, "Coder");
-        let me = AgentRef { id: coder.id.clone(), name: "Coder".into() };
+        let me = AgentRef::agent(coder.id.clone(), "Coder");
         for _ in 0..(MAX_SELF_TURNS + 1) {
             mailbox::enqueue(world.host.test_store(), &coder.id, &me, "again").expect("enqueue");
         }
@@ -2508,7 +2525,7 @@ print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type
         let world = world();
         let ws = workspace(&world);
         let coder = agent(&world, &ws, "Coder");
-        let me = AgentRef { id: coder.id.clone(), name: "Coder".into() };
+        let me = AgentRef::agent(coder.id.clone(), "Coder");
         for _ in 0..MAX_SELF_TURNS {
             mailbox::enqueue(world.host.test_store(), &coder.id, &me, "again").expect("enqueue");
         }
@@ -2537,11 +2554,11 @@ print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type
     /// told about "message_agent" found that one and wrote to another machine.
     #[test]
     fn a_tool_sheet_names_the_tools_the_way_the_provider_takes_them() {
-        let mcp = mcp_tools_hint();
+        let mcp = mcp_tools_hint(&crate::tools::hidden_names());
         assert!(mcp.contains("`mcp__crew__message_agent`"), "{mcp}");
-        let opencode = opencode_tools_hint();
+        let opencode = opencode_tools_hint(&crate::tools::hidden_names());
         assert!(opencode.contains("`crew_message_agent`"), "{opencode}");
-        let shell = shell_tools_hint("/usr/local/bin/crew");
+        let shell = shell_tools_hint("/usr/local/bin/crew", &crate::tools::hidden_names());
         assert!(shell.contains("`/usr/local/bin/crew call message_agent '<json>'`"), "{shell}");
 
         // The bare name never appears on its own: that is the one an agent
@@ -2566,8 +2583,8 @@ print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type
     /// Whatever the spelling, every tool `tools/list` answers with is on it.
     #[test]
     fn a_tool_sheet_covers_the_whole_standing_set() {
-        for sheet in [mcp_tools_hint(), opencode_tools_hint(), shell_tools_hint("crew")] {
-            for tool in crate::tools::standing() {
+        for sheet in [mcp_tools_hint(&crate::tools::hidden_names()), opencode_tools_hint(&crate::tools::hidden_names()), shell_tools_hint("crew", &crate::tools::hidden_names())] {
+            for tool in crate::tools::standing(crate::caller::CallerKind::Agent) {
                 assert!(sheet.contains(tool.name), "{} is not on the sheet: {sheet}", tool.name);
             }
         }
@@ -2582,7 +2599,7 @@ print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type
     /// reason to look.
     #[test]
     fn a_tool_sheet_names_what_is_behind_the_gateway() {
-        for sheet in [mcp_tools_hint(), opencode_tools_hint(), shell_tools_hint("crew")] {
+        for sheet in [mcp_tools_hint(&crate::tools::hidden_names()), opencode_tools_hint(&crate::tools::hidden_names()), shell_tools_hint("crew", &crate::tools::hidden_names())] {
             for name in crate::tools::hidden_names() {
                 assert!(sheet.contains(name), "{name} is not on the sheet: {sheet}");
             }

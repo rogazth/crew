@@ -170,7 +170,7 @@ pub fn remove(path: &str, force: bool) -> Result<String, String> {
 }
 
 /// The main checkout of the repo `path` is in, whichever worktree `path` is.
-fn main_checkout(path: &str) -> Result<String, String> {
+pub fn main_checkout(path: &str) -> Result<String, String> {
     let out = run(path, &["worktree", "list", "--porcelain"])
         .map_err(|_| format!("{path} is not a git repository"))?;
     parse(&out)

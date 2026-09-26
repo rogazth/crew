@@ -294,6 +294,17 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         )?;
         tx.commit()?;
     }
+    if current < 18 {
+        let tx = conn.unchecked_transaction()?;
+        if !has_column(&tx, "mailbox", "from_kind")? {
+            tx.execute_batch(crate::mailbox::MIGRATION_V18)?;
+        }
+        tx.execute(
+            "INSERT INTO schema_migrations (version, applied_at) VALUES (18, ?1)",
+            params![now_millis()],
+        )?;
+        tx.commit()?;
+    }
     Ok(())
 }
 
@@ -432,7 +443,7 @@ mod migration_tests {
                 .with(|conn| {
                     conn.execute_batch(
                         "ALTER TABLE sessions DROP COLUMN worktree;
-                         DELETE FROM schema_migrations WHERE version = 17;",
+                         DELETE FROM schema_migrations WHERE version >= 17;",
                     )
                 })
                 .expect("downgrade");

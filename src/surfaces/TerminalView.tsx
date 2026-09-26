@@ -35,6 +35,8 @@ type Props = {
   cwd: string;
   /** Empty spawns the login shell. */
   command: string[];
+  /** The terminal session `command` runs, so the daemon can hand it Crew's tools. Not the shell it falls back to. */
+  session?: string | undefined;
   active: boolean;
   onExit?: ((code: number | null) => void) | undefined;
   /** Once the process exits, fall back to the login shell instead of a dead pane. */
@@ -90,6 +92,7 @@ export function TerminalView({
   id,
   cwd,
   command,
+  session,
   active,
   shellOnExit,
   onExit,
@@ -110,10 +113,10 @@ export function TerminalView({
   const search = useTerminalSearch(termRef, isDark);
   const attachSearch = search.attach;
 
-  const latest = useRef({ onExit, onBell, onActivity, onTitle, onInput, onResize, onOpenPath, command, shellOnExit });
+  const latest = useRef({ onExit, onBell, onActivity, onTitle, onInput, onResize, onOpenPath, command, session, shellOnExit });
   useEffect(() => {
     // Only `command` at spawn: a later argv must not respawn the running process.
-    latest.current = { onExit, onBell, onActivity, onTitle, onInput, onResize, onOpenPath, command, shellOnExit };
+    latest.current = { onExit, onBell, onActivity, onTitle, onInput, onResize, onOpenPath, command, session, shellOnExit };
   });
 
   const dropPaths = useCallback((paths: string[]) => {
@@ -310,9 +313,9 @@ export function TerminalView({
       if (spawned) void api.writePty(id, data);
     });
 
-    const spawn = (command: string[]) => {
+    const spawn = (command: string[], session?: string) => {
       spawned = true;
-      void api.spawnPty(id, cwd, command, term.cols, term.rows).catch((error: unknown) => {
+      void api.spawnPty(id, cwd, command, term.cols, term.rows, session).catch((error: unknown) => {
         spawned = false;
         term.writeln(`\x1b[31m${error instanceof Error ? error.message : String(error)}\x1b[0m`);
       });
@@ -329,7 +332,7 @@ export function TerminalView({
         started = true;
         lastCols = cols;
         lastRows = rows;
-        spawn(latest.current.command);
+        spawn(latest.current.command, latest.current.session);
         return;
       }
       if (cols === lastCols && rows === lastRows) return;

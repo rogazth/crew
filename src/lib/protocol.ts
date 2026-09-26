@@ -6,7 +6,13 @@ export type AgentBinary = { path: string, };
  * Who wrote a message, when it was not the user. Agents address each other by
  * name; the id is what the UI opens when you click it.
  */
-export type AgentRef = { id: string, name: string, };
+export type AgentRef = { id: string, name: string, 
+/**
+ * Absent for an agent. `terminal` is a terminal session, which has no
+ * turns and so reads no reply; `user` is the person, from the `crew` CLI,
+ * who reads the reply in this chat.
+ */
+kind?: string, };
 
 export type ApprovalDecision = "allow" | "always" | "deny";
 
@@ -191,7 +197,13 @@ export type PtyKill = { id: string, };
 
 export type PtyResize = { id: string, cols: number, rows: number, };
 
-export type PtySpawn = { id: string, cwd: string, command: Array<string>, cols: number, rows: number, };
+export type PtySpawn = { id: string, cwd: string, command: Array<string>, cols: number, rows: number, 
+/**
+ * The terminal session this process runs. The daemon completes the argv
+ * and the environment so the CLI reaches Crew's tools: the client cannot,
+ * because in remote mode the bridge's socket and binary are not its own.
+ */
+session?: string, };
 
 export type PtyWrite = { id: string, data: string, };
 

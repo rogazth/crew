@@ -5,15 +5,17 @@ use std::thread;
 use std::time::Duration;
 
 use crew_core::agent::{AgentEvents, AgentHost};
-use crew_core::bridge::{Bridge, ToolHost};
+use crew_core::bridge::{Bearer, Bridge, ToolHost};
+use crew_core::caller::Caller;
 use crew_core::files;
 use crew_core::messages;
 use crew_core::provider_session;
-use crew_core::pty::{PtyEvents, PtyHost};
+use crew_core::pty::{PtyEvents, PtyHost, SpawnOptions};
 use crew_core::routine;
 use crew_core::scheduler::Scheduler;
 use crew_core::session;
 use crew_core::store::{self as app_state, Store};
+use crew_core::tools::{self, Toolbox};
 use crew_core::transcript::TranscriptEvents;
 use crew_core::turns::TurnHost;
 use crew_core::workspace;
@@ -75,6 +77,49 @@ impl Handle {
 
     pub fn override_agent_binary(&self, name: &str, path: impl Into<String>) {
         self.turns.override_binary(name, path);
+    }
+}
+
+/// `<data-dir>/daemon.json`: how the `crew` CLI, or anything else that did
+/// not launch this daemon, finds it and speaks to it as the user.
+pub fn daemon_file_path(dir: &std::path::Path) -> std::path::PathBuf {
+    dir.join("daemon.json")
+}
+
+/// Written to a temporary file created 0600 and renamed over, so a reader never
+/// sees half of it and the tokens are never readable by anyone else, not even
+/// for the moment between a create and a chmod.
+pub fn write_daemon_file(dir: &std::path::Path, file: &proto::DaemonFile) -> Result<std::path::PathBuf, String> {
+    use std::io::Write as _;
+    use std::os::unix::fs::OpenOptionsExt;
+    let path = daemon_file_path(dir);
+    let temp = dir.join(format!("daemon.json.{}", std::process::id()));
+    let body = serde_json::to_vec_pretty(file).map_err(|e| e.to_string())?;
+    let written = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(&temp)
+        .and_then(|mut out| out.write_all(&body))
+        .and_then(|_| std::fs::rename(&temp, &path));
+    if let Err(error) = written {
+        let _ = std::fs::remove_file(&temp);
+        return Err(format!("{}: {error}", path.display()));
+    }
+    Ok(path)
+}
+
+/// Only if it is still ours: a second daemon on the same data dir may have
+/// written its own since, and removing that would strand its CLI.
+pub fn remove_daemon_file(dir: &std::path::Path, url: &str) {
+    let path = daemon_file_path(dir);
+    let ours = std::fs::read(&path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<proto::DaemonFile>(&bytes).ok())
+        .is_some_and(|file| file.url == url);
+    if ours {
+        let _ = std::fs::remove_file(path);
     }
 }
 
@@ -268,12 +313,18 @@ struct AgentFanout {
     turns: TurnHost,
 }
 
+/// The daemon side of the tool bridge. Host handles live here: a family of
+/// tools that needs one (the process host, the browser channel) gets a clone
+/// when it is built in `serve` and registered on `toolbox`.
 struct ToolDispatch {
     store: crew_core::store::Store,
     transcripts: crew_core::transcript::TranscriptHub,
     turns: TurnHost,
     scheduler: Scheduler,
     hub: Arc<Hub>,
+    /// Shared with `turns`, so what is registered here is also named on the
+    /// tool sheet in an agent's prompt.
+    toolbox: Toolbox,
 }
 
 impl ToolDispatch {
@@ -285,24 +336,29 @@ impl ToolDispatch {
 }
 
 impl ToolHost for ToolDispatch {
-    fn handle(&self, session_id: &str, method: &str, params: Value) -> Result<Value, String> {
-        crew_core::tools::handle(
-            &self.store,
-            &self.transcripts,
-            &|created| {
-                self.hub.emit(
-                    "session-created",
-                    SessionCreated {
-                        session: proto_session(created),
-                    },
-                );
-            },
-            &|| self.scheduler.arm(),
-            &|target| self.deliver(target),
-            session_id,
-            method,
-            params,
-        )
+    fn resolve(&self, bearer: &Bearer, workspace: Option<&str>) -> Result<Caller, String> {
+        Caller::resolve(&self.store, bearer, workspace)
+    }
+
+    fn handle(&self, caller: &Caller, method: &str, params: Value) -> Result<Value, String> {
+        let on_created = |created: &crew_core::session::Session| {
+            self.hub.emit(
+                "session-created",
+                SessionCreated {
+                    session: proto_session(created),
+                },
+            );
+        };
+        let deliver = |target: &crew_core::session::Session| self.deliver(target);
+        let host = tools::Host {
+            store: &self.store,
+            transcripts: &self.transcripts,
+            on_created: &on_created,
+            on_routines: &|| self.scheduler.arm(),
+            deliver: &deliver,
+            toolbox: &self.toolbox,
+        };
+        tools::handle(&host, caller, method, params)
     }
 }
 
@@ -352,12 +408,16 @@ pub fn serve(config: Config) -> Result<Handle, String> {
     }));
     let scheduler = Scheduler::new(config.store.clone(), turns.clone());
     scheduler.set_events(hub.clone());
+    // Tool families register here, with the host handles they need:
+    // `toolbox.register(Arc::new(SomeTools { host: some_host.clone() }))`.
+    let toolbox = turns.toolbox();
     config.bridge.set_handler(Arc::new(ToolDispatch {
         store: config.store.clone(),
         transcripts,
         turns: turns.clone(),
         scheduler: scheduler.clone(),
         hub: hub.clone(),
+        toolbox,
     }));
 
     // A letter left waiting for an idle agent is invisible until someone
@@ -715,6 +775,40 @@ async fn block<T: Send + 'static>(
         .map_err(|e| e.to_string())?
 }
 
+/// A terminal session's process, completed so its CLI reaches Crew's tools:
+/// a token of its own in the environment, and the provider's MCP flag.
+///
+/// The token lives as long as the process and is handed back by token when it
+/// is reaped, not by session: a respawn starts the new process before the old
+/// one's exit is seen, and that exit must not take the new token with it.
+fn terminal_launch(
+    store: &Store,
+    bridge: &Bridge,
+    session_id: &str,
+    command: Vec<String>,
+) -> Result<(Vec<String>, SpawnOptions), String> {
+    let row = session::get(store, session_id.to_string())?
+        .ok_or_else(|| format!("No session {session_id}"))?;
+    if row.kind != "terminal" {
+        return Err(format!("{} is not a terminal session", row.name));
+    }
+    let info = bridge.info()?;
+    let token = bridge.mint_process(session_id);
+    let launch = crew_core::terminal::launch(
+        &row.provider,
+        command,
+        &crew_core::terminal::BridgeLink { exe: &info.exe, socket: &info.socket_path, token: &token },
+    );
+    let bridge = bridge.clone();
+    Ok((
+        launch.argv,
+        SpawnOptions {
+            env: launch.env,
+            on_exit: Some(Box::new(move || bridge.revoke_token(&token))),
+        },
+    ))
+}
+
 async fn delete_session(hosts: &Hosts, id: String) -> Result<(), String> {
     let store = hosts.store.clone();
     // Its process may still be running with a token in its environment;
@@ -730,9 +824,20 @@ fn json(value: impl serde::Serialize) -> Result<Value, String> {
 async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, String> {
     match method {
         "pty_spawn" => {
-            let PtySpawn { id, cwd, command, cols, rows } = parse(params)?;
+            let PtySpawn { id, cwd, command, cols, rows, session } = parse(params)?;
             let host = hosts.pty.clone();
-            json(block(move || host.spawn(id, cwd, command, cols, rows)).await?)
+            let store = hosts.store.clone();
+            let bridge = hosts.bridge.clone();
+            json(
+                block(move || {
+                    let (command, options) = match session {
+                        Some(session) => terminal_launch(&store, &bridge, &session, command)?,
+                        None => (command, SpawnOptions::default()),
+                    };
+                    host.spawn_with(id, cwd, command, cols, rows, options)
+                })
+                .await?,
+            )
         }
         "pty_write" => {
             let PtyWrite { id, data } = parse(params)?;
@@ -1242,6 +1347,7 @@ mod tests {
                 command: vec!["/bin/sh".into()],
                 cols: 80,
                 rows: 24,
+                session: None,
             })
             .unwrap(),
         }
@@ -1358,6 +1464,7 @@ mod tests {
                     command: vec!["/usr/bin/yes".into()],
                     cols: 80,
                     rows: 24,
+                    session: None,
                 })
                 .unwrap(),
             },
@@ -1419,6 +1526,7 @@ mod tests {
                     ],
                     cols: 80,
                     rows: 24,
+                    session: None,
                 })
                 .unwrap(),
             },
@@ -1540,6 +1648,196 @@ mod tests {
         let created: proto::SessionCreated = serde_json::from_value(event.payload).expect("created");
         assert_eq!(created.session.name, "B");
         handle.shutdown();
+    }
+
+    /// A workspace with one agent and one terminal session in it.
+    async fn seed_terminal(ws: &mut Ws, cwd: &str) -> (String, String, String) {
+        let workspace: proto::Workspace = serde_json::from_value(
+            rpc(ws, 1, "workspace_create", serde_json::json!({ "name": "w", "path": cwd })).await.result.expect("ws"),
+        )
+        .expect("workspace");
+        let mut ids = Vec::new();
+        for (id, kind) in [(2, "agent"), (3, "terminal")] {
+            let session: proto::Session = serde_json::from_value(
+                rpc(
+                    ws,
+                    id,
+                    "session_create",
+                    serde_json::json!({
+                        "workspaceId": workspace.id,
+                        "kind": kind,
+                        "name": kind,
+                        "provider": "claude",
+                        "model": "",
+                        "description": "",
+                        "autonomy": "ask"
+                    }),
+                )
+                .await
+                .result
+                .expect("session"),
+            )
+            .expect("session");
+            ids.push(session.id);
+        }
+        (workspace.id, ids.remove(0), ids.remove(0))
+    }
+
+    fn list_agents_as(socket: &str, token: &str) -> serde_json::Value {
+        unix_call(
+            socket,
+            &serde_json::json!({
+                "token": token,
+                "method": "tools/call",
+                "params": { "name": "list_agents", "arguments": {} }
+            }),
+        )
+    }
+
+    /// The whole of decision 1: a terminal session's process is handed a token
+    /// of its own, calls with it as that session, and the token goes when the
+    /// process does.
+    #[tokio::test]
+    async fn a_terminal_session_reaches_the_tools_until_its_process_exits() {
+        let dir = test_dir("terminal-bridge");
+        let (handle, bridge) = test_serve_bridged(&dir);
+        let mut ws = connect_authed(&handle).await;
+        let cwd = dir.to_string_lossy().into_owned();
+        let (_, agent, terminal) = seed_terminal(&mut ws, &cwd).await;
+        let token_file = dir.join(format!("token-{}", random_token()));
+        let done = dir.join(format!("done-{}", random_token()));
+        let script = format!(
+            "printf %s \"$CREW_TOKEN\" > '{0}.tmp' && mv '{0}.tmp' '{0}'; while [ ! -e '{1}' ]; do sleep 0.05; done",
+            token_file.display(),
+            done.display()
+        );
+        let spawned = rpc(
+            &mut ws,
+            4,
+            "pty_spawn",
+            serde_json::to_value(PtySpawn {
+                id: format!("pane-{}", random_token()),
+                cwd: cwd.clone(),
+                command: vec!["/bin/sh".into(), "-c".into(), script],
+                cols: 80,
+                rows: 24,
+                session: Some(terminal.clone()),
+            })
+            .unwrap(),
+        )
+        .await;
+        assert!(spawned.ok, "{:?}", spawned.error);
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        let token = loop {
+            if let Ok(token) = std::fs::read_to_string(&token_file) {
+                break token;
+            }
+            assert!(std::time::Instant::now() < deadline, "the process never saw a token");
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        };
+        assert!(!token.is_empty(), "CREW_TOKEN was empty");
+
+        let socket = bridge.info().expect("info").socket_path;
+        let reply = list_agents_as(&socket, &token);
+        let text = reply["result"]["content"][0]["text"].as_str().unwrap_or("");
+        assert!(text.contains(&agent), "reply: {reply}");
+        // Listed as a terminal: no turns to continue.
+        let listed = unix_call(&socket, &serde_json::json!({ "token": token, "method": "tools/list" }));
+        let names = listed["result"]["tools"].to_string();
+        assert!(names.contains("message_agent") && !names.contains("continue_after_turn"), "{names}");
+
+        std::fs::write(&done, "").expect("done");
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            if list_agents_as(&socket, &token)["error"].as_str() == Some("Bad token") {
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline, "the token outlived its process");
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        handle.shutdown();
+    }
+
+    #[tokio::test]
+    async fn only_a_terminal_session_is_launched_with_a_token() {
+        let dir = test_dir("terminal-kind");
+        let (handle, _bridge) = test_serve_bridged(&dir);
+        let mut ws = connect_authed(&handle).await;
+        let cwd = dir.to_string_lossy().into_owned();
+        let (_, agent, _) = seed_terminal(&mut ws, &cwd).await;
+        for (id, session) in [(4, agent.as_str()), (5, "no-such-session")] {
+            let spawned = rpc(
+                &mut ws,
+                id,
+                "pty_spawn",
+                serde_json::to_value(PtySpawn {
+                    id: format!("pane-{}", random_token()),
+                    cwd: cwd.clone(),
+                    command: vec!["/bin/sh".into()],
+                    cols: 80,
+                    rows: 24,
+                    session: Some(session.to_string()),
+                })
+                .unwrap(),
+            )
+            .await;
+            assert!(!spawned.ok, "{session} was launched as a terminal");
+        }
+        handle.shutdown();
+    }
+
+    /// The token in daemon.json speaks as the user, in the workspace the call
+    /// names by a path inside it.
+    #[tokio::test]
+    async fn the_user_token_calls_in_the_workspace_it_names() {
+        let dir = test_dir("user-token");
+        let (handle, bridge) = test_serve_bridged(&dir);
+        let mut ws = connect_authed(&handle).await;
+        let cwd = dir.to_string_lossy().into_owned();
+        let (workspace, agent, _) = seed_terminal(&mut ws, &cwd).await;
+        let socket = bridge.info().expect("info").socket_path;
+        for named in [cwd.clone(), workspace.clone()] {
+            let reply = unix_call(
+                &socket,
+                &serde_json::json!({
+                    "token": bridge.user_token(),
+                    "workspace": named,
+                    "method": "tools/call",
+                    "params": { "name": "list_agents", "arguments": {} }
+                }),
+            );
+            let text = reply["result"]["content"][0]["text"].as_str().unwrap_or("");
+            assert!(text.contains(&agent), "{named}: {reply}");
+        }
+        let reply = list_agents_as(&socket, &bridge.user_token());
+        let text = reply["result"]["content"][0]["text"].as_str().unwrap_or("");
+        assert!(text.contains("--workspace"), "{reply}");
+        handle.shutdown();
+    }
+
+    #[test]
+    fn daemon_json_is_private_and_goes_with_its_daemon() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = test_dir(&format!("daemon-file-{}", random_token()));
+        let file = proto::DaemonFile {
+            url: "ws://127.0.0.1:1".into(),
+            token: "t".into(),
+            socket: "/s".into(),
+            user_token: "u".into(),
+            version: "0".into(),
+        };
+        let path = write_daemon_file(&dir, &file).expect("write");
+        let mode = std::fs::metadata(&path).expect("meta").permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+        let read: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).expect("read")).expect("json");
+        assert_eq!(read["userToken"], "u");
+        assert_eq!(read["socket"], "/s");
+        // Somebody else's file stays.
+        remove_daemon_file(&dir, "ws://127.0.0.1:2");
+        assert!(path.exists());
+        remove_daemon_file(&dir, &file.url);
+        assert!(!path.exists());
     }
 
     fn unix_call(path: &str, payload: &serde_json::Value) -> serde_json::Value {
@@ -2358,6 +2656,7 @@ print(json.dumps({"type":"turn.failed","error":{"message":"Codex exploded"}}), f
                         command: vec!["/usr/bin/python3".into(), "-c".into(), script(mark)],
                         cols: 80,
                         rows: 24,
+                        session: None,
                     })
                     .unwrap(),
                 },

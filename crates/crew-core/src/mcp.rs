@@ -9,7 +9,13 @@ use std::time::Duration;
 
 use serde_json::{json, Value};
 
+/// How long a call waits for the daemon before giving up on it.
 const CALL_TIMEOUT: Duration = Duration::from_secs(20);
+/// A tool that waits on purpose (`wait_for_log`) takes `timeout_s` and says
+/// how long; the call then waits that long plus this much for the answer to
+/// travel back. The wait is capped, so a model cannot hang its own turn.
+const WAIT_CAP_S: u64 = 60;
+const WAIT_SLACK_S: u64 = 10;
 /// The newest revision this shim knows; a client that asks for an older one gets its own back.
 const PROTOCOL_VERSION: &str = "2025-06-18";
 
@@ -24,7 +30,7 @@ struct Link {
 impl Link {
     fn from_env() -> Result<Self, String> {
         let var = |key: &str| {
-            std::env::var(key).map_err(|_| format!("{key} is not set; run this from an agent Crew started"))
+            std::env::var(key).map_err(|_| format!("{key} is not set; run this from an agent or a terminal session Crew started"))
         };
         Ok(Self {
             socket: var("CREW_SOCKET")?,
@@ -36,7 +42,7 @@ impl Link {
     fn call(&self, method: &str, params: Value) -> Result<Value, String> {
         let mut stream = UnixStream::connect(&self.socket)
             .map_err(|e| format!("Crew is not running ({e})"))?;
-        let _ = stream.set_read_timeout(Some(CALL_TIMEOUT));
+        let _ = stream.set_read_timeout(Some(call_timeout(method, &params)));
         let mut line = json!({
             "token": self.token,
             "method": method,
@@ -55,6 +61,29 @@ impl Link {
             return Err(error.to_string());
         }
         Ok(body.get("result").cloned().unwrap_or(Value::Null))
+    }
+}
+
+/// How long one call may take. A tool call whose arguments carry `timeout_s`
+/// — directly, or through `call_tool`'s `arguments` — is one that waits that
+/// long on purpose, so the read waits `min(timeout_s, 60) + 10` seconds; never
+/// less than the default. The convention is the whole mechanism: a tool that
+/// blocks names its wait `timeout_s` and caps it at 60 itself.
+fn call_timeout(method: &str, params: &Value) -> Duration {
+    if method != "tools/call" {
+        return CALL_TIMEOUT;
+    }
+    let arguments = params.get("arguments");
+    let asked = arguments
+        .and_then(|args| args.get("timeout_s"))
+        .or_else(|| arguments.and_then(|args| args.get("arguments")).and_then(|args| args.get("timeout_s")))
+        .and_then(|value| value.as_f64().filter(|secs| secs.is_finite() && *secs > 0.0));
+    match asked {
+        Some(secs) => {
+            let waited = Duration::from_secs((secs.ceil() as u64).min(WAIT_CAP_S) + WAIT_SLACK_S);
+            waited.max(CALL_TIMEOUT)
+        }
+        None => CALL_TIMEOUT,
     }
 }
 
@@ -103,11 +132,22 @@ fn handle(link: &Link, method: &str, params: Value) -> Result<Value, (i64, Strin
     match method {
         "initialize" => {
             let requested = params.get("protocolVersion").and_then(Value::as_str);
-            Ok(json!({
+            let mut result = json!({
                 "protocolVersion": requested.unwrap_or(PROTOCOL_VERSION),
                 "capabilities": { "tools": {} },
                 "serverInfo": { "name": "crew", "version": env!("CARGO_PKG_VERSION") },
-            }))
+            });
+            // Asked of the daemon, because what is listed depends on who is
+            // calling. The handshake does not fail without it: a daemon that
+            // is slow to answer still leaves the tools usable.
+            if let Some(text) = link
+                .call("instructions", Value::Null)
+                .ok()
+                .and_then(|reply| reply.get("instructions").and_then(Value::as_str).map(str::to_string))
+            {
+                result["instructions"] = json!(text);
+            }
+            Ok(result)
         }
         "ping" => Ok(json!({})),
         "tools/list" => link.call(method, params).map_err(|e| (-32603, e)),
@@ -174,5 +214,35 @@ pub fn call(args: &[String]) -> ExitCode {
             eprintln!("{e}");
             ExitCode::FAILURE
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_call_waits_twenty_seconds_by_default() {
+        assert_eq!(call_timeout("tools/call", &json!({ "name": "list_agents", "arguments": {} })), CALL_TIMEOUT);
+        assert_eq!(call_timeout("tools/list", &Value::Null), CALL_TIMEOUT);
+    }
+
+    #[test]
+    fn a_tool_that_waits_is_given_its_wait_and_ten_seconds_more() {
+        let direct = json!({ "name": "wait_for_log", "arguments": { "timeout_s": 45 } });
+        assert_eq!(call_timeout("tools/call", &direct), Duration::from_secs(55));
+        // Through the gateway, which is how a hidden tool is called.
+        let gateway = json!({ "name": "call_tool", "arguments": { "name": "wait_for_log", "arguments": { "timeout_s": 30 } } });
+        assert_eq!(call_timeout("tools/call", &gateway), Duration::from_secs(40));
+    }
+
+    #[test]
+    fn the_wait_is_capped_and_never_shorter_than_the_default() {
+        let long = json!({ "name": "wait_for_log", "arguments": { "timeout_s": 3600 } });
+        assert_eq!(call_timeout("tools/call", &long), Duration::from_secs(70));
+        let short = json!({ "name": "wait_for_log", "arguments": { "timeout_s": 1 } });
+        assert_eq!(call_timeout("tools/call", &short), CALL_TIMEOUT);
+        let junk = json!({ "name": "wait_for_log", "arguments": { "timeout_s": "soon" } });
+        assert_eq!(call_timeout("tools/call", &junk), CALL_TIMEOUT);
     }
 }

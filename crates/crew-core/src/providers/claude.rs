@@ -17,6 +17,12 @@ pub struct ClaudeSpawn {
     pub mcp_config: Option<String>,
 }
 
+/// The `--mcp-config` value that starts Crew's MCP server. Claude merges it
+/// with the user's own servers unless `--strict-mcp-config` is also passed.
+pub fn claude_mcp_config(command: &str, args: &[String]) -> String {
+    json!({ "mcpServers": { "crew": { "command": command, "args": args } } }).to_string()
+}
+
 pub fn build_claude_spawn_args(input: &ClaudeSpawn) -> Vec<String> {
     let mut args = vec![
         "--output-format".into(),

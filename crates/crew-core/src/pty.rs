@@ -20,6 +20,19 @@ const FLOW_LOW: u64 = 32 * 1024;
 const FLOW_POLL: Duration = Duration::from_millis(250);
 const RING_CAP: usize = FLOW_HIGH as usize;
 
+/// What a spawn can carry beyond the argv. Grows by a field, so a new option
+/// does not change every caller of `spawn`.
+#[derive(Default)]
+pub struct SpawnOptions {
+    /// Set on the child after Crew's own terminal environment, so it wins.
+    pub env: Vec<(String, String)>,
+    /// Runs once this process is reaped, whatever replaced it since. The
+    /// `exit` event is not that: a respawn on the same id takes the id over,
+    /// and the old process's exit is not announced. Also runs, at once, when
+    /// the spawn fails, so what it releases is never left held.
+    pub on_exit: Option<Box<dyn FnOnce() + Send>>,
+}
+
 pub trait PtyEvents: Send + Sync {
     fn data(&self, stream_id: u32, bytes: &[u8]);
     fn exit(&self, id: &str, code: Option<i32>);
@@ -262,13 +275,34 @@ impl PtyHost {
         cols: u16,
         rows: u16,
     ) -> Result<u32, String> {
+        self.spawn_with(id, cwd, command, cols, rows, SpawnOptions::default())
+    }
+
+    pub fn spawn_with(
+        &self,
+        id: String,
+        cwd: String,
+        command: Vec<String>,
+        cols: u16,
+        rows: u16,
+        mut options: SpawnOptions,
+    ) -> Result<u32, String> {
         let _spawning = self.inner.spawning.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(prev) = self.remove(&id) {
             eprintln!("[pty] {id}: respawn terminates pid {}", prev.pid);
             let _ = terminate(&prev);
             close_fd(prev.master_fd);
         }
-        spawn_unix(self, id, cwd, command, cols.max(2), rows.max(2))
+        let on_exit = options.on_exit.take();
+        match spawn_unix(self, id, cwd, command, cols.max(2), rows.max(2), options.env, on_exit) {
+            Ok(stream) => Ok(stream),
+            Err((error, on_exit)) => {
+                if let Some(on_exit) = on_exit {
+                    on_exit();
+                }
+                Err(error)
+            }
+        }
     }
 
     pub fn write(&self, id: &str, data: &[u8]) -> Result<(), String> {
@@ -358,6 +392,11 @@ fn write_live(live: &LivePty, data: &[u8]) -> Result<(), String> {
         .map_err(|e| format!("Failed to write to terminal: {e}"))
 }
 
+type OnExit = Option<Box<dyn FnOnce() + Send>>;
+
+/// On failure the `on_exit` comes back unrun, for the caller to run: there is
+/// no process to wait for.
+#[allow(clippy::too_many_arguments)]
 fn spawn_unix(
     host: &PtyHost,
     id: String,
@@ -365,7 +404,9 @@ fn spawn_unix(
     command: Vec<String>,
     cols: u16,
     rows: u16,
-) -> Result<u32, String> {
+    env: Vec<(String, String)>,
+    on_exit: OnExit,
+) -> Result<u32, (String, OnExit)> {
     use std::fs::File;
     use std::os::unix::io::FromRawFd;
 
@@ -374,26 +415,58 @@ fn spawn_unix(
         Some((program, args)) => (program.clone(), args.to_vec()),
         None => default_shell(),
     };
-    let (master, slave) = open_pty(cols, rows)?;
+    let (master, slave) = match open_pty(cols, rows) {
+        Ok(pair) => pair,
+        Err(err) => return Err((err, on_exit)),
+    };
     let mut cmd = match pty_command(&program, &args, &workdir, slave) {
         Ok(cmd) => cmd,
         Err(err) => {
             close_fd(master);
             close_fd(slave);
-            return Err(err);
+            return Err((err, on_exit));
         }
     };
+    cmd.envs(env);
 
-    let mut child = cmd.spawn().map_err(|e| {
-        close_fd(master);
-        close_fd(slave);
-        format!("Failed to start {program}: {e}")
-    })?;
+    let mut child = match cmd.spawn() {
+        Ok(child) => child,
+        Err(e) => {
+            close_fd(master);
+            close_fd(slave);
+            return Err((format!("Failed to start {program}: {e}"), on_exit));
+        }
+    };
     close_fd(slave);
     let pid = child.id();
 
-    let reader = unsafe { File::from_raw_fd(dup_fd(master)?) };
-    let writer = unsafe { File::from_raw_fd(dup_fd(master)?) };
+    // The child is running from here on, so what `on_exit` releases is the
+    // wait thread's to release; a failure below leaves it to that thread.
+    let dups = dup_fd(master).and_then(|reader| match dup_fd(master) {
+        Ok(writer) => Ok((reader, writer)),
+        Err(err) => {
+            close_fd(reader);
+            Err(err)
+        }
+    });
+    let (reader, writer) = match dups {
+        Ok(pair) => pair,
+        Err(err) => {
+            unsafe {
+                libc::kill(-(pid as i32), libc::SIGKILL);
+            }
+            close_fd(master);
+            thread::spawn(move || {
+                let _ = child.wait();
+                if let Some(on_exit) = on_exit {
+                    on_exit();
+                }
+            });
+            return Err((err, None));
+        }
+    };
+    let reader = unsafe { File::from_raw_fd(reader) };
+    let writer = unsafe { File::from_raw_fd(writer) };
 
     let stream_id = host.inner.next_stream.fetch_add(1, Ordering::Relaxed);
     let live = Arc::new(LivePty::new(Box::new(writer), master, pid, stream_id));
@@ -440,6 +513,9 @@ fn spawn_unix(
         let code = child.wait().ok().and_then(|status| status.code());
         live.exited.store(true, Ordering::Release);
         live.credit.notify_all();
+        if let Some(on_exit) = on_exit {
+            on_exit();
+        }
         // A respawn reuses the id; a stale wait thread must not evict the new
         // PTY from the host or paint its exit onto it.
         if wait_host.remove_if_pid(&id, pid).is_some() {

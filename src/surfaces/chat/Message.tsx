@@ -67,7 +67,7 @@ function AgentMessage({ block, from }: { block: Block; from: AgentRef }) {
           />
         </span>
         <span className="shrink-0 text-text-muted transition-colors group-hover:text-text">
-          {from.name} messaged you
+          {from.kind === "user" ? "You sent this from the command line" : `${from.name} messaged you`}
         </span>
         {open ? null : <span className="min-w-0 truncate text-placeholder">{first}</span>}
       </Collapsible.Trigger>
@@ -82,14 +82,17 @@ function AgentMessage({ block, from }: { block: Block; from: AgentRef }) {
             </div>
           ) : null}
           {block.files && block.files.length > 0 ? <AttachmentStrip files={block.files} /> : null}
-          <button
-            type="button"
-            onClick={() => openSession(from.id)}
-            className="text-[11px] leading-4 text-placeholder transition-colors hover:text-text"
-            title={`Open ${from.name}`}
-          >
-            Open {from.name}
-          </button>
+          {/* The user, and a sender deleted since, have no session to open. */}
+          {from.id ? (
+            <button
+              type="button"
+              onClick={() => openSession(from.id)}
+              className="text-[11px] leading-4 text-placeholder transition-colors hover:text-text"
+              title={`Open ${from.name}`}
+            >
+              Open {from.name}
+            </button>
+          ) : null}
         </div>
       </Collapsible.Panel>
     </Collapsible.Root>

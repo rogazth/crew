@@ -221,6 +221,7 @@ function SessionTerminal({ paneId, session, cwd, active, onStatus, onOpenPath }:
       id={paneId}
       cwd={cwd}
       command={command}
+      session={session.id}
       active={active}
       shellOnExit
       onExit={onExit}

@@ -99,6 +99,61 @@ fn mcp_flag_does_not_print_daemon_info() {
     assert!(!stdout.contains("ws://"), "{stdout}");
 }
 
+/// daemon.json is how the `crew` CLI finds a daemon it did not start: there
+/// while the daemon runs, private, and gone once it stops cleanly. Its user
+/// token is good for the MCP shim, whose handshake says which tools there are.
+#[test]
+fn daemon_json_lives_as_long_as_the_daemon_and_speaks_as_the_user() {
+    use std::io::Write;
+    use std::os::unix::fs::PermissionsExt;
+    // Short: the bridge socket lives here and must fit in SUN_LEN.
+    let dir = std::env::temp_dir().join(format!("cdj-{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    let mut child = crewd()
+        .arg("--data-dir")
+        .arg(&dir)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn");
+    let stdout = child.stdout.take().expect("stdout");
+    let mut line = String::new();
+    BufReader::new(stdout).read_line(&mut line).expect("json line");
+    let info: serde_json::Value = serde_json::from_str(line.trim()).expect("json");
+
+    let path = dir.join("daemon.json");
+    let file: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).expect("daemon.json")).expect("json");
+    assert_eq!(file["url"], info["url"]);
+    assert_eq!(file["token"], info["token"]);
+    assert_eq!(file["version"], env!("CARGO_PKG_VERSION"));
+    assert_eq!(std::fs::metadata(&path).expect("meta").permissions().mode() & 0o777, 0o600);
+
+    let mut mcp = crewd()
+        .arg("--mcp")
+        .env("CREW_SOCKET", file["socket"].as_str().expect("socket"))
+        .env("CREW_TOKEN", file["userToken"].as_str().expect("userToken"))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("mcp");
+    let mut stdin = mcp.stdin.take().expect("stdin");
+    writeln!(stdin, r#"{{"jsonrpc":"2.0","id":1,"method":"initialize","params":{{"protocolVersion":"2025-06-18"}}}}"#)
+        .expect("write");
+    let mut reply = String::new();
+    BufReader::new(mcp.stdout.take().expect("stdout")).read_line(&mut reply).expect("reply");
+    drop(stdin);
+    let _ = mcp.wait();
+    let reply: serde_json::Value = serde_json::from_str(&reply).expect("json");
+    let instructions = reply["result"]["instructions"].as_str().unwrap_or_default();
+    assert!(instructions.contains("find_tool") && instructions.contains("list_agents"), "{reply}");
+    assert!(!instructions.contains("continue_after_turn"), "the user has no turns: {instructions}");
+
+    drop(child.stdin.take());
+    wait_exit(&mut child, Duration::from_secs(5));
+    assert!(!path.exists(), "daemon.json outlived its daemon");
+}
+
 fn alive(pid: u32) -> bool {
     Command::new("kill")
         .args(["-0", &pid.to_string()])

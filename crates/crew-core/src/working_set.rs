@@ -289,7 +289,7 @@ mod tests {
     #[test]
     fn a_letter_from_another_agent_keeps_the_name_on_it() {
         let mut block = new_block(BlockRole::User, "revisa el PR");
-        block.from_agent = Some(AgentRef { id: "a1".into(), name: "Cuddles".into() });
+        block.from_agent = Some(AgentRef::agent("a1", "Cuddles"));
         let out = render(&[block], TAIL_BUDGET).expect("history");
         // The id as well as the name: a line an agent may answer to is an
         // address, and a name stops being one the moment it is changed.

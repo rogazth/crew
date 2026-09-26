@@ -52,6 +52,21 @@ pub struct DaemonInfo {
     pub token: String,
 }
 
+/// `<data-dir>/daemon.json`, mode 0600: how something that did not launch the
+/// daemon finds it. `url` and `token` are the window's WebSocket, `socket` is
+/// the tool bridge, and `userToken` speaks on that bridge as the user rather
+/// than as a session. Written once the daemon is up, removed when it stops
+/// cleanly, so a file left behind means one that died.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct DaemonFile {
+    pub url: String,
+    pub token: String,
+    pub socket: String,
+    pub user_token: String,
+    pub version: String,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
@@ -61,6 +76,12 @@ pub struct PtySpawn {
     pub command: Vec<String>,
     pub cols: u16,
     pub rows: u16,
+    /// The terminal session this process runs. The daemon completes the argv
+    /// and the environment so the CLI reaches Crew's tools: the client cannot,
+    /// because in remote mode the bridge's socket and binary are not its own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub session: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, TS)]

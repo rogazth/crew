@@ -40,6 +40,11 @@ CREATE INDEX IF NOT EXISTS mailbox_waiting_idx
   ON mailbox (to_session, at) WHERE delivered_at IS NULL;
 "#;
 
+/// Who wrote it, when that was not an agent: `terminal` or `user`. A terminal
+/// session has no turns to hand a reply to, and the user reads the reply in the
+/// chat, so both change what the envelope tells the agent about answering.
+pub const MIGRATION_V18: &str = "ALTER TABLE mailbox ADD COLUMN from_kind TEXT;";
+
 /// The header a letter is handed over under.
 ///
 /// A letter arrives as a user turn — the same shape as something the person
@@ -52,9 +57,21 @@ CREATE INDEX IF NOT EXISTS mailbox_waiting_idx
 /// agent and a reply addressed to the old one reaches nobody. A sender that
 /// has been deleted since has no id left (`ON DELETE SET NULL`), and saying so
 /// is better than offering an address that is not one.
+///
+/// The two senders that are not agents are said so, with what that means for
+/// a reply: the envelope is the only place the agent learns it, and an agent
+/// that answers a terminal with `message_agent` is told "no agent" and guesses.
 pub fn envelope(from: &AgentRef, body: &str, at: i64, to_self: bool) -> String {
     let who = if to_self {
         "yourself, to continue".to_string()
+    } else if from.kind.as_deref() == Some("user") {
+        "the user, from the crew command line. They read your reply here, in this chat.".to_string()
+    } else if from.kind.as_deref() == Some("terminal") {
+        format!(
+            "{} (terminal session {}). It cannot receive a reply: message_agent does not reach it, \
+             and what you write here is read by the user, not by it.",
+            from.name, from.id
+        )
     } else if from.id.is_empty() {
         format!("{} (agent, no longer in this workspace)", from.name)
     } else {
@@ -73,22 +90,24 @@ pub fn enqueue(store: &Store, to_session: &str, from: &AgentRef, text: &str) -> 
     };
     store.with(|conn| {
         conn.prepare_cached(
-            "INSERT INTO mailbox (id, to_session, from_session, from_name, text, at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            "INSERT INTO mailbox (id, to_session, from_session, from_name, text, at, from_kind)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
         )?
         .execute(params![
             letter.id,
             letter.to_session,
-            letter.from.id,
+            // The user is no session; an empty id would fail the foreign key.
+            Some(letter.from.id.as_str()).filter(|id| !id.is_empty()),
             letter.from.name,
             letter.text,
-            letter.at
+            letter.at,
+            letter.from.kind
         ])
     })?;
     Ok(letter)
 }
 
-const SELECT: &str = "SELECT id, to_session, from_session, from_name, text, at FROM mailbox";
+const SELECT: &str = "SELECT id, to_session, from_session, from_name, text, at, from_kind FROM mailbox";
 
 fn row_to_letter(row: &rusqlite::Row) -> rusqlite::Result<Letter> {
     Ok(Letter {
@@ -99,6 +118,7 @@ fn row_to_letter(row: &rusqlite::Row) -> rusqlite::Result<Letter> {
             // transcript needs, and that was copied in at send time.
             id: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
             name: row.get(3)?,
+            kind: row.get(6)?,
         },
         text: row.get(4)?,
         at: row.get(5)?,
@@ -129,7 +149,7 @@ pub fn claim(store: &Store, to_session: &str) -> Result<Option<Letter>, String> 
                -- so the order out is the order in.
                ORDER BY at ASC, rowid ASC LIMIT 1
              )
-             RETURNING id, to_session, from_session, from_name, text, at",
+             RETURNING id, to_session, from_session, from_name, text, at, from_kind",
         )?
         .query_row(params![to_session, now_millis()], row_to_letter)
         .optional()
@@ -188,7 +208,7 @@ mod tests {
     }
 
     fn sender(id: &str) -> AgentRef {
-        AgentRef { id: id.to_string(), name: "Coder".into() }
+        AgentRef::agent(id, "Coder")
     }
 
     #[test]
@@ -211,7 +231,7 @@ mod tests {
     /// empty id would be offering a reply that goes nowhere.
     #[test]
     fn a_deleted_sender_is_named_without_an_address() {
-        let letter = envelope(&AgentRef { id: String::new(), name: "Coder".into() }, "hi", 0, false);
+        let letter = envelope(&AgentRef::agent("", "Coder"), "hi", 0, false);
         assert!(letter.contains("Coder (agent, no longer in this workspace)"), "{letter}");
     }
 

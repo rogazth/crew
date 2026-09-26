@@ -1,5 +1,5 @@
 import { client } from "./client";
-import type { PtyAttached, PtyError, PtyExit } from "./protocol";
+import type { PtyAttached, PtyError, PtyExit, PtySpawn } from "./protocol";
 
 const encoder = new TextEncoder();
 const dataHandlers = new Map<string, (bytes: Uint8Array) => void>();
@@ -67,14 +67,21 @@ export function subscribePty(
   };
 }
 
+/**
+ * `session` is the terminal session the process runs, if any: the daemon then
+ * hands it a token and the provider's MCP flag, so the CLI reaches Crew's
+ * tools. Left out for a plain shell.
+ */
 export async function spawnPty(
   id: string,
   cwd: string,
   command: string[],
   cols: number,
   rows: number,
+  session?: string,
 ): Promise<number> {
-  const streamId = await client.request<number>("pty_spawn", { id, cwd, command, cols, rows });
+  const params: PtySpawn = { id, cwd, command, cols, rows, ...(session ? { session } : {}) };
+  const streamId = await client.request<number>("pty_spawn", params);
   // Wire the stream before the replay: the process is already running, so a
   // rejection here would strand it with no way to reach it again.
   const onData = dataHandlers.get(id);

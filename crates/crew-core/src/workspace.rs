@@ -118,6 +118,56 @@ pub fn delete(store: &Store, id: String) -> Result<(), String> {
     Ok(())
 }
 
+/// The workspace a caller outside Crew means: an id as it is, or a path
+/// inside a workspace's folder or inside one of its sessions' worktrees. The
+/// deepest folder wins, so a worktree kept inside the repo is its own answer
+/// and not the repo's.
+///
+/// A worktree no session runs in is still the workspace's: git knows which
+/// checkout it belongs to, and that checkout is a workspace folder.
+pub fn resolve(store: &Store, id_or_path: &str) -> Result<Option<String>, String> {
+    let needle = id_or_path.trim();
+    if needle.is_empty() {
+        return Ok(None);
+    }
+    if let Some(found) = get(store, needle.to_string())? {
+        return Ok(Some(found.id));
+    }
+    let path = std::path::Path::new(needle);
+    if !path.is_absolute() {
+        return Ok(None);
+    }
+    let path = canonical(path);
+    let mut roots: Vec<(std::path::PathBuf, String)> = list(store)?
+        .into_iter()
+        .map(|workspace| (canonical(std::path::Path::new(&workspace.path)), workspace.id))
+        .collect();
+    for session in crate::session::list_all(store)? {
+        if let Some(worktree) = session.worktree {
+            roots.push((canonical(std::path::Path::new(&worktree)), session.workspace_id));
+        }
+    }
+    let deepest = |target: &std::path::Path| {
+        roots
+            .iter()
+            .filter(|(root, _)| target.starts_with(root))
+            .max_by_key(|(root, _)| root.components().count())
+            .map(|(_, id)| id.clone())
+    };
+    if let Some(id) = deepest(&path) {
+        return Ok(Some(id));
+    }
+    Ok(crate::worktree::main_checkout(&path.to_string_lossy())
+        .ok()
+        .and_then(|main| deepest(&canonical(std::path::Path::new(&main)))))
+}
+
+/// Symlinks resolved, so `/tmp` and `/private/tmp` are one folder. A path that
+/// is gone is compared as it was written.
+fn canonical(path: &std::path::Path) -> std::path::PathBuf {
+    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+}
+
 pub fn reorder(store: &Store, ids: Vec<String>) -> Result<(), String> {
     store.with(|conn| set_order(conn, "workspaces", &ids))
 }

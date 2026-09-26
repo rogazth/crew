@@ -9,10 +9,16 @@ use std::thread;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
+use crate::caller::Caller;
+
 /// There is no `session_id` here on purpose. It used to arrive on the wire and
 /// be believed, which made the caller whoever the caller said it was: an
 /// agent's own shell inherits the socket and could name anybody. The token is
-/// the identity now — it says which session is calling, and nothing else does.
+/// the identity now — it says who is calling, and nothing else does.
+///
+/// `workspace` is read for the user's token alone, which belongs to no
+/// workspace: an id, or a path inside one. A session's workspace is its own
+/// and one named on the wire is ignored, like the session id was.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Request {
@@ -20,6 +26,8 @@ struct Request {
     method: String,
     #[serde(default)]
     params: Value,
+    #[serde(default)]
+    workspace: Option<String>,
 }
 
 #[derive(serde::Serialize, Clone)]
@@ -29,17 +37,45 @@ pub struct BridgeInfo {
     pub exe: String,
 }
 
+/// Who a token speaks for, before the store says what that is now: a session
+/// is re-read on every call, so a rename or a new autonomy applies at once.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Bearer {
+    Session(String),
+    User,
+}
+
 pub trait ToolHost: Send + Sync {
-    fn handle(&self, session_id: &str, method: &str, params: Value) -> Result<Value, String>;
+    /// The caller behind a bearer, with the workspace a user's call named.
+    fn resolve(&self, bearer: &Bearer, workspace: Option<&str>) -> Result<Caller, String>;
+    fn handle(&self, caller: &Caller, method: &str, params: Value) -> Result<Value, String>;
+}
+
+/// A token's lifetime is its process's, and the two kinds of process end
+/// differently: an agent's turn is replaced by the next turn, a terminal's
+/// process by nothing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Lease {
+    /// One per session, replaced when the next turn starts.
+    Turn,
+    /// One per process, handed back when that process exits. A session can
+    /// have more than one: a respawn starts the new process before the old
+    /// one's exit is reaped.
+    Process,
+    /// The user's, for as long as the daemon runs.
+    User,
+}
+
+struct Grant {
+    bearer: Bearer,
+    lease: Lease,
 }
 
 struct Shared {
     handler: Mutex<Option<Arc<dyn ToolHost>>>,
     socket_path: PathBuf,
-    /// token → the session that holds it. One per session, replaced whenever
-    /// that session starts a turn, so a token that leaked out of a process
-    /// stops working the next time its owner runs.
-    tokens: Mutex<HashMap<String, String>>,
+    tokens: Mutex<HashMap<String, Grant>>,
+    user_token: String,
 }
 
 /// Relays `crew --mcp` / `crew call` into the daemon tool host.
@@ -57,11 +93,14 @@ impl Bridge {
         std::fs::set_permissions(&socket_path, std::fs::Permissions::from_mode(0o600))
             .map_err(|e| e.to_string())?;
 
+        let user_token = uuid::Uuid::new_v4().to_string();
+        let tokens = HashMap::from([(user_token.clone(), Grant { bearer: Bearer::User, lease: Lease::User })]);
         let bridge = Self {
             shared: Arc::new(Shared {
                 handler: Mutex::new(None),
                 socket_path,
-                tokens: Mutex::new(HashMap::new()),
+                tokens: Mutex::new(tokens),
+                user_token,
             }),
         };
         let serve_bridge = bridge.clone();
@@ -78,7 +117,12 @@ impl Bridge {
         *self.shared.handler.lock().unwrap_or_else(|e| e.into_inner()) = Some(handler);
     }
 
-    /// A fresh token for one session, and the end of whatever it held before.
+    fn tokens(&self) -> std::sync::MutexGuard<'_, HashMap<String, Grant>> {
+        self.shared.tokens.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// A fresh token for one session's turn, and the end of the turn token it
+    /// held before.
     ///
     /// Minted per turn, because a turn is one process: when that process dies
     /// its token is worth having only until the next one starts. Cursor has no
@@ -86,28 +130,55 @@ impl Bridge {
     /// token is what stops that shell from speaking as anybody else.
     pub fn mint(&self, session_id: &str) -> String {
         let token = uuid::Uuid::new_v4().to_string();
-        let mut tokens = self.shared.tokens.lock().unwrap_or_else(|e| e.into_inner());
-        tokens.retain(|_, held| held != session_id);
-        tokens.insert(token.clone(), session_id.to_string());
+        let mut tokens = self.tokens();
+        tokens.retain(|_, grant| {
+            !(grant.lease == Lease::Turn && grant.bearer == Bearer::Session(session_id.to_string()))
+        });
+        tokens.insert(token.clone(), Grant { bearer: Bearer::Session(session_id.to_string()), lease: Lease::Turn });
         token
     }
 
-    /// Hand a session's token back, for a session that is gone.
-    pub fn revoke(&self, session_id: &str) {
-        self.shared
-            .tokens
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .retain(|_, held| held != session_id);
+    /// A token for one process of a terminal session, that lives until
+    /// [`Bridge::revoke_token`] hands it back. It replaces nothing: the process
+    /// a respawn replaces may still be exiting, and its exit must take only
+    /// its own token with it.
+    pub fn mint_process(&self, session_id: &str) -> String {
+        let token = uuid::Uuid::new_v4().to_string();
+        self.tokens().insert(
+            token.clone(),
+            Grant { bearer: Bearer::Session(session_id.to_string()), lease: Lease::Process },
+        );
+        token
     }
 
-    fn whose(&self, token: &str) -> Option<String> {
-        self.shared
-            .tokens
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .get(token)
-            .cloned()
+    /// Hand one token back, for a process that has exited. The user's token
+    /// is not handed back this way; it goes with the daemon.
+    pub fn revoke_token(&self, token: &str) {
+        let mut tokens = self.tokens();
+        if tokens.get(token).is_some_and(|grant| grant.lease != Lease::User) {
+            tokens.remove(token);
+        }
+    }
+
+    /// Hand back every token a session holds, for a session that is gone.
+    pub fn revoke(&self, session_id: &str) {
+        let bearer = Bearer::Session(session_id.to_string());
+        self.tokens().retain(|_, grant| grant.bearer != bearer);
+    }
+
+    /// The token that speaks as the user. It goes into `daemon.json`, which
+    /// only the user can read, and nowhere else: no process Crew starts is
+    /// handed it.
+    pub fn user_token(&self) -> String {
+        self.shared.user_token.clone()
+    }
+
+    pub fn socket_path(&self) -> String {
+        self.shared.socket_path.to_string_lossy().into_owned()
+    }
+
+    fn whose(&self, token: &str) -> Option<Bearer> {
+        self.tokens().get(token).map(|grant| grant.bearer.clone())
     }
 
     pub fn shutdown(&self) {
@@ -136,7 +207,7 @@ fn serve(bridge: Bridge, stream: UnixStream) {
         Ok(request) => request,
         Err(e) => return reply(stream, json!({ "error": format!("Bad request: {e}") })),
     };
-    let Some(session_id) = bridge.whose(&request.token) else {
+    let Some(bearer) = bridge.whose(&request.token) else {
         return reply(stream, json!({ "error": "Bad token" }));
     };
     let handler = bridge
@@ -148,7 +219,14 @@ fn serve(bridge: Bridge, stream: UnixStream) {
     let Some(handler) = handler else {
         return reply(stream, json!({ "error": "Tool handler is not set" }));
     };
-    let body = match handler.handle(&session_id, &request.method, request.params) {
+    let workspace = match bearer {
+        Bearer::User => request.workspace.as_deref(),
+        Bearer::Session(_) => None,
+    };
+    let body = match handler
+        .resolve(&bearer, workspace)
+        .and_then(|caller| handler.handle(&caller, &request.method, request.params))
+    {
         Ok(result) => json!({ "result": result }),
         Err(error) => json!({ "error": error }),
     };
@@ -160,4 +238,72 @@ fn reply(mut stream: UnixStream, body: Value) {
     text.push('\n');
     let _ = stream.write_all(text.as_bytes());
     let _ = stream.shutdown(std::net::Shutdown::Both);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bridge() -> Bridge {
+        // Short: the socket path has to fit in SUN_LEN.
+        let dir = std::env::temp_dir().join(format!("cb-{}", &uuid::Uuid::new_v4().to_string()[..8]));
+        Bridge::start(dir).expect("bridge")
+    }
+
+    fn session(id: &str) -> Option<Bearer> {
+        Some(Bearer::Session(id.to_string()))
+    }
+
+    #[test]
+    fn a_new_turn_retires_the_last_turns_token() {
+        let bridge = bridge();
+        let first = bridge.mint("a");
+        let second = bridge.mint("a");
+        assert_eq!(bridge.whose(&first), None);
+        assert_eq!(bridge.whose(&second), session("a"));
+    }
+
+    /// The respawn case: the new process is running before the old one's
+    /// exit is reaped, and that late exit must take only its own token.
+    #[test]
+    fn a_late_exit_hands_back_its_own_token_and_no_other() {
+        let bridge = bridge();
+        let old = bridge.mint_process("t");
+        let new = bridge.mint_process("t");
+        bridge.revoke_token(&old);
+        assert_eq!(bridge.whose(&old), None);
+        assert_eq!(bridge.whose(&new), session("t"));
+    }
+
+    #[test]
+    fn a_turn_does_not_retire_a_process_token() {
+        let bridge = bridge();
+        let process = bridge.mint_process("s");
+        bridge.mint("s");
+        assert_eq!(bridge.whose(&process), session("s"));
+    }
+
+    #[test]
+    fn a_deleted_session_loses_every_token_it_held() {
+        let bridge = bridge();
+        let turn = bridge.mint("s");
+        let one = bridge.mint_process("s");
+        let two = bridge.mint_process("s");
+        let other = bridge.mint_process("x");
+        bridge.revoke("s");
+        for token in [&turn, &one, &two] {
+            assert_eq!(bridge.whose(token), None);
+        }
+        assert_eq!(bridge.whose(&other), session("x"));
+    }
+
+    #[test]
+    fn the_user_token_speaks_as_the_user_and_is_not_handed_back() {
+        let bridge = bridge();
+        let user = bridge.user_token();
+        assert_eq!(bridge.whose(&user), Some(Bearer::User));
+        bridge.revoke_token(&user);
+        bridge.revoke("anyone");
+        assert_eq!(bridge.whose(&user), Some(Bearer::User));
+    }
 }

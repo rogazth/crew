@@ -1,6 +1,7 @@
 pub mod agent;
 pub mod blocks;
 pub mod bridge;
+pub mod caller;
 pub mod cookie_import;
 pub mod browser;
 pub mod claude_title;
@@ -18,6 +19,7 @@ pub mod scheduler;
 pub mod session;
 pub mod shell_path;
 pub mod store;
+pub mod terminal;
 pub mod tools;
 pub mod transcript;
 pub mod turns;
