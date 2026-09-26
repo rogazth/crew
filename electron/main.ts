@@ -8,7 +8,7 @@ import { app, BrowserWindow, dialog, ipcMain, Menu, Notification, session, shell
 import { installBrowser, registerBrowserIpc, startBrowserHost } from "./browser";
 import { sha } from "./build-info";
 import { connectAgent, unloadAgent, type AgentLink } from "./daemon-agent";
-import { decideLaunch, type Outcome } from "./daemon-agent-plan";
+import { decideLaunch, translocated, TRANSLOCATED_NOTICE, type Outcome } from "./daemon-agent-plan";
 import { buildMenu } from "./menu";
 import { watchForUpdates } from "./update";
 
@@ -63,18 +63,23 @@ async function connectDaemon(): Promise<string | null> {
     return null;
   }
   const uid = process.getuid?.() ?? 0;
-  const viaAgent = await attempt(async () => {
-    agent = await connectAgent({
-      crewd: crewdPath(),
-      crew: path.join(process.resourcesPath, "crew"),
-      dataDir: app.getPath("userData"),
-      version: app.getVersion(),
-      uid,
-      // A crash launchd recovered from, or `crew daemon restart`: its PTYs are
-      // gone, so the window starts over, as it does when dev restarts its child.
-      onNewDaemon: () => win?.reload(),
-    });
-  });
+  const viaAgent: Outcome = translocated(process.resourcesPath)
+    ? { ok: false, error: `Crew runs from App Translocation (${process.resourcesPath})`, notice: TRANSLOCATED_NOTICE }
+    : await attempt(async () => {
+        agent = await connectAgent({
+          crewd: crewdPath(),
+          crew: path.join(process.resourcesPath, "crew"),
+          dataDir: app.getPath("userData"),
+          version: app.getVersion(),
+          uid,
+          // A crash launchd recovered from, or `crew daemon restart`: its PTYs are
+          // gone, so the window starts over, as it does when dev restarts its child.
+          onNewDaemon: () => win?.reload(),
+          onMismatch: (message) => {
+            if (Notification.isSupported()) new Notification({ title: "Crew", body: message }).show();
+          },
+        });
+      });
   let launch = decideLaunch(viaAgent);
   if (launch.run === "try-child") {
     if (!viaAgent.ok) console.error(`crewd LaunchAgent unavailable; running crewd as Crew's child: ${viaAgent.error}`);
@@ -344,7 +349,24 @@ if (!app.isPackaged) {
 }
 app.setAboutPanelOptions({ applicationName: "Crew", applicationVersion: app.getVersion(), version: sha });
 
+// One Crew per data dir (the lock lives in userData, so worktrees each get
+// their own). A second one would run a second watchdog over the same crewd,
+// or a second child daemon on the same database; it hands over to the first.
+const primary = app.requestSingleInstanceLock();
+if (!primary) app.quit();
+
+app.on("second-instance", () => {
+  if (win) {
+    if (win.isMinimized()) win.restore();
+    win.show();
+    win.focus();
+  } else if (daemonInfo()) {
+    createWindow();
+  }
+});
+
 app.whenReady().then(async () => {
+  if (!primary) return;
   session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
     callback({
       responseHeaders: {

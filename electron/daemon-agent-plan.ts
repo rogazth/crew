@@ -62,11 +62,29 @@ export function parsePlistJson(text: string): Installed | null {
 
 // No plist, or one for another crewd (the app was moved, or a copy elsewhere
 // installed its own) or another data dir: `crew daemon install` writes ours,
-// which also stops whatever the old one ran.
-export function installNeeded(installed: Installed | null, want: { program: string; dataDir: string }): boolean {
+// which also stops whatever the old one ran. Both sides go through `real`
+// (realpath on disk): `crew daemon install` writes the crewd it resolved, so
+// a bundle reached through a symlink would otherwise never match its own
+// plist and be reinstalled, its processes stopped, on every launch.
+export function installNeeded(
+  installed: Installed | null,
+  want: { program: string; dataDir: string },
+  real: (p: string) => string = path.resolve,
+): boolean {
   if (!installed || installed.dataDir === null) return true;
-  return path.resolve(installed.program) !== path.resolve(want.program) || path.resolve(installed.dataDir) !== path.resolve(want.dataDir);
+  return real(installed.program) !== real(want.program) || real(installed.dataDir) !== real(want.dataDir);
 }
+
+// Gatekeeper runs a quarantined app opened where it was downloaded from a
+// random read-only path (App Translocation), a new one each launch. A
+// LaunchAgent pointing in there would run a crewd that is gone by the next
+// launch, so none is installed.
+export function translocated(bundlePath: string): boolean {
+  return /^(\/private)?\/var\/folders\/.+\/AppTranslocation\//.test(bundlePath);
+}
+
+export const TRANSLOCATED_NOTICE =
+  "Crew is running from a temporary copy macOS made of it, so this time processes and agents stop when Crew quits. Move Crew to Applications and open it again.";
 
 // What is behind daemon.json right now.
 export type Found =
@@ -90,24 +108,26 @@ export function classify(file: DaemonFile | null, probe: Probe, appVersion: stri
 
 export type Step =
   | { do: "connect"; file: DaemonFile }
-  // Loaded if it is not (after a reboot it never is), then kickstarted; a
-  // stale file goes first so nothing reads a dead address.
-  | { do: "start"; stale: DaemonFile | null }
+  // Loaded if it is not (after a reboot it never is), then kickstarted. A
+  // stale daemon.json is left for crewd, which renames its own over it: the
+  // app removing it could only ever race a crewd that just wrote a fresh one.
+  | { do: "start" }
   // `kickstart -k`: SIGTERM to the one that does not answer, then a new one.
   | { do: "restart" }
   // Asked to exit (`daemon/shutdown`, so it stops its processes the usual
   // way and the auto-start ones come back), then started.
   | { do: "replace"; file: DaemonFile };
 
-// On launch.
+// On launch. The one place a daemon of another version is replaced: the plist
+// has just been made to run this bundle's crewd, so what launchd starts in its
+// place is this version.
 export function nextStep(found: Found): Step {
   switch (found.kind) {
     case "ready":
       return { do: "connect", file: found.file };
     case "missing":
-      return { do: "start", stale: null };
     case "stale":
-      return { do: "start", stale: found.file };
+      return { do: "start" };
     case "unreachable":
       return { do: "restart" };
     case "mismatch":
@@ -124,25 +144,47 @@ export function sameDaemon(a: DaemonFile, b: DaemonFile | null): boolean {
 // one on its way out reads as missing, not as this.
 export const HUNG_STRIKES = 3;
 
-export type WatchStep = Step | { do: "keep" } | { do: "switch"; file: DaemonFile } | { do: "wait" };
+export type WatchStep =
+  | { do: "start" }
+  | { do: "restart" }
+  | { do: "keep" }
+  | { do: "switch"; file: DaemonFile }
+  | { do: "wait" }
+  // Another version is serving: said once, then left alone.
+  | { do: "warn"; file: DaemonFile }
+  | { do: "leave" };
 
 // While the app runs: `current` is the daemon it is connected to, `strikes`
-// how many checks in a row found it not answering.
-export function watchStep(found: Found, current: DaemonFile | null, strikes: number): WatchStep {
+// how many checks in a row found it not answering, `warned` the version it
+// last said was running instead of its own.
+//
+// Another version is never replaced from here. Whatever started it (the app
+// updated under a window still open, another copy's plist) starts it again:
+// replacing it meant stopping every process only for launchd to run that
+// same crewd, every ten seconds, for as long as the window stayed open.
+export function watchStep(found: Found, current: DaemonFile | null, strikes: number, warned: string | null = null): WatchStep {
   switch (found.kind) {
     case "ready":
       return sameDaemon(found.file, current) ? { do: "keep" } : { do: "switch", file: found.file };
     case "unreachable":
       return strikes + 1 >= HUNG_STRIKES ? { do: "restart" } : { do: "wait" };
-    default:
-      return nextStep(found);
+    case "mismatch":
+      return found.file.version === warned ? { do: "leave" } : { do: "warn", file: found.file };
+    case "missing":
+    case "stale":
+      return { do: "start" };
   }
+}
+
+export function mismatchNotice(running: string, app: string): string {
+  return `Crew's background service is now version ${running} and this window is ${app}. Quit Crew and open it again to bring them together.`;
 }
 
 // How a packaged launch ends. The LaunchAgent is tried first; if it cannot be
 // installed, loaded or reached, this run falls back to the dev way, crewd as
 // the app's child, so Crew still opens, and only its processes stop with it.
-export type Outcome = { ok: true } | { ok: false; error: string };
+// `notice`, for an agent that was never tried, says why in place of the usual.
+export type Outcome = { ok: true } | { ok: false; error: string; notice?: string };
 
 export type Launch =
   | { run: "agent" }
@@ -156,6 +198,6 @@ export const CHILD_NOTICE =
 export function decideLaunch(agent: Outcome, child?: Outcome): Launch {
   if (agent.ok) return { run: "agent" };
   if (!child) return { run: "try-child" };
-  if (child.ok) return { run: "child", notice: CHILD_NOTICE, why: agent.error };
+  if (child.ok) return { run: "child", notice: agent.notice ?? CHILD_NOTICE, why: agent.error };
   return { run: "none", dialog: `Could not start crewd.\n\nAs a LaunchAgent: ${agent.error}\n\nAs Crew's child: ${child.error}` };
 }

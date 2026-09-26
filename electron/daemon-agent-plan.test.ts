@@ -1,4 +1,5 @@
-import { readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
@@ -9,11 +10,14 @@ import {
   HUNG_STRIKES,
   installNeeded,
   launchctlTarget,
+  mismatchNotice,
   nextStep,
   parseDaemonFile,
   parsePlistJson,
   plistPath,
   sameDaemon,
+  translocated,
+  TRANSLOCATED_NOTICE,
   watchStep,
   type DaemonFile,
 } from "./daemon-agent-plan";
@@ -72,6 +76,24 @@ describe("installNeeded", () => {
     expect(installNeeded({ program: want.program, dataDir: `${want.dataDir}/` }, want)).toBe(false);
   });
 
+  // The plist holds the crewd `crew daemon install` resolved; the app used to
+  // compare its own spelling and reinstall on every launch.
+  it("compares both sides as they resolve on disk", () => {
+    const real = (p: string) => p.replace("/Applications/Crew.app", "/Volumes/Apps/Crew.app");
+    const resolved = { program: real(want.program), dataDir: want.dataDir };
+    expect(installNeeded(resolved, want)).toBe(true);
+    expect(installNeeded(resolved, want, real)).toBe(false);
+  });
+
+  it("sees through a real symlink with realpath", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "crew-plan-"));
+    mkdirSync(path.join(dir, "real"));
+    writeFileSync(path.join(dir, "real/crewd"), "");
+    symlinkSync(path.join(dir, "real"), path.join(dir, "link"));
+    const installed = { program: realpathSync(path.join(dir, "real/crewd")), dataDir: dir };
+    expect(installNeeded(installed, { program: path.join(dir, "link/crewd"), dataDir: dir }, realpathSync)).toBe(false);
+  });
+
   it("reads the plist through plutil's JSON", () => {
     const json = JSON.stringify({
       Label: AGENT_LABEL,
@@ -85,6 +107,21 @@ describe("installNeeded", () => {
   });
 });
 
+describe("translocated", () => {
+  it("tells a bundle Gatekeeper moved from one the user put somewhere", () => {
+    expect(translocated("/private/var/folders/xy/abc123/T/AppTranslocation/0F1E-22/d/Crew.app/Contents/Resources")).toBe(true);
+    expect(translocated("/var/folders/xy/abc123/T/AppTranslocation/0F1E-22/d/Crew.app/Contents/Resources")).toBe(true);
+    expect(translocated("/Applications/Crew.app/Contents/Resources")).toBe(false);
+    expect(translocated("/Users/me/Downloads/AppTranslocation/Crew.app/Contents/Resources")).toBe(false);
+  });
+
+  it("runs crewd as the child, with a notice to move Crew", () => {
+    const launch = decideLaunch({ ok: false, error: "translocated", notice: TRANSLOCATED_NOTICE }, { ok: true });
+    expect(launch).toEqual({ run: "child", notice: TRANSLOCATED_NOTICE, why: "translocated" });
+    expect(TRANSLOCATED_NOTICE).toContain("Move Crew to Applications");
+  });
+});
+
 describe("classify and nextStep", () => {
   it("connects to a daemon of this version that answers", () => {
     const found = classify(file(), { alive: true, answers: true }, "0.1.7");
@@ -93,13 +130,15 @@ describe("classify and nextStep", () => {
   });
 
   it("starts one when there is no file", () => {
-    expect(nextStep(classify(null, { alive: null, answers: false }, "0.1.7"))).toEqual({ do: "start", stale: null });
+    expect(nextStep(classify(null, { alive: null, answers: false }, "0.1.7"))).toEqual({ do: "start" });
   });
 
-  it("clears a file whose daemon died, then starts one", () => {
+  // The file is crewd's to replace: removing it raced a crewd that had just
+  // written a fresh one.
+  it("starts one over a file whose daemon died, and leaves the file be", () => {
     const found = classify(file(), { alive: false, answers: false }, "0.1.7");
     expect(found.kind).toBe("stale");
-    expect(nextStep(found)).toEqual({ do: "start", stale: file() });
+    expect(nextStep(found)).toEqual({ do: "start" });
   });
 
   it("restarts one that is alive but does not answer", () => {
@@ -134,8 +173,19 @@ describe("watchStep", () => {
   });
 
   it("starts one when the daemon stopped (`crew daemon stop`) or crashed", () => {
-    expect(watchStep({ kind: "missing" }, current, 0)).toEqual({ do: "start", stale: null });
-    expect(watchStep({ kind: "stale", file: current }, current, 0)).toEqual({ do: "start", stale: current });
+    expect(watchStep({ kind: "missing" }, current, 0)).toEqual({ do: "start" });
+    expect(watchStep({ kind: "stale", file: current }, current, 0)).toEqual({ do: "start" });
+  });
+
+  // It used to fall through to replace: every process stopped, then launchd
+  // ran the plist's crewd, that same other version, every ten seconds.
+  it("never replaces another version: it says so once, then leaves it", () => {
+    const other = file({ version: "0.1.8", url: "ws://127.0.0.1:7000", pid: 44 });
+    const found = { kind: "mismatch", file: other } as const;
+    expect(watchStep(found, current, 0)).toEqual({ do: "warn", file: other });
+    expect(watchStep(found, current, 0, "0.1.8")).toEqual({ do: "leave" });
+    expect(watchStep({ kind: "mismatch", file: file({ version: "0.1.9" }) }, current, 0, "0.1.8").do).toBe("warn");
+    expect(mismatchNotice("0.1.8", "0.1.7")).toMatch(/0\.1\.8[\s\S]*0\.1\.7[\s\S]*open it again/);
   });
 });
 
