@@ -1,6 +1,6 @@
 # Procesos, navegador para agentes y CLI
 
-**Propuesto el 2026-09-25. Nada construido.** Cuatro piezas que comparten
+**Propuesto el 2026-09-25. Fase 1 hecha el mismo día.** Cuatro piezas que comparten
 cimientos: el bridge MCP, `crewd` como dueño de los procesos y una identidad por
 quien llama. Se escriben juntas porque cada una asume decisiones de las otras.
 
@@ -351,7 +351,7 @@ Puertos y, si hacen falta, traces de performance sobre el canal del navegador.
 | Fase | Estado |
 | --- | --- |
 | 0 | descartada |
-| 1 | pendiente |
+| 1 | hecha |
 | 2 | pendiente |
 | 3 | pendiente |
 | 4 | pendiente |
