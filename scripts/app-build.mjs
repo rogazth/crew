@@ -15,7 +15,8 @@ function run(command, args) {
   });
 }
 
-await run("cargo", ["build", "--release", "-p", "crewd"]);
+// crew rides in the bundle beside crewd; "Install `crew` Command…" links to it.
+await run("cargo", ["build", "--release", "-p", "crewd", "-p", "crew-cli"]);
 await run("npm", ["run", "build"]);
 await compileElectron();
 await run("npx", ["electron-builder", "--mac", "--arm64", "--dir"]);

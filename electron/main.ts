@@ -21,6 +21,11 @@ let info: DaemonInfo | null = null;
 let stopping = false;
 let restarts = 0;
 let starting: Promise<void> | null = null;
+// A daemon that ran this long before it died was stopped (`crew daemon
+// restart`, a kill), not crash-looping, so it is started again even after
+// the one restart a crash gets.
+const STEADY_MS = 60_000;
+let upSince = 0;
 
 function crewdPath(): string {
   if (app.isPackaged) return path.join(process.resourcesPath, "crewd");
@@ -113,8 +118,8 @@ function readInfo(proc: Daemon): Promise<DaemonInfo> {
 
 function recover(error: unknown): Promise<void> {
   if (stopping) return Promise.resolve();
-  if (restarts === 0) {
-    restarts += 1;
+  if (restarts === 0 || (upSince > 0 && Date.now() - upSince > STEADY_MS)) {
+    restarts = 1;
     return startDaemon().then(() => {
       win?.reload();
     });
@@ -125,6 +130,7 @@ function recover(error: unknown): Promise<void> {
 async function startDaemon(): Promise<void> {
   const run = (async () => {
     const dir = app.getPath("userData");
+    upSince = 0;
     const proc = spawn(crewdPath(), ["--data-dir", dir], {
       stdio: ["pipe", "pipe", "inherit"],
       detached: true,
@@ -146,6 +152,7 @@ async function startDaemon(): Promise<void> {
     void failed.catch(() => {});
     try {
       info = await Promise.race([readInfo(proc), failed]);
+      upSince = Date.now();
     } catch (error) {
       if (proc.exitCode === null && proc.signalCode === null) proc.kill("SIGTERM");
       await recover(error);

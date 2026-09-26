@@ -103,6 +103,10 @@
       {
         "from": "target/release/crewd",
         "to": "crewd"
+      },
+      {
+        "from": "target/release/crew",
+        "to": "crew"
       }
     ],
     "mac": {

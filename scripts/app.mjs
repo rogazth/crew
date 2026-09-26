@@ -77,7 +77,7 @@ process.on("SIGTERM", () => shutdown(0));
 
 try {
   await waitForPort(PORT);
-  await run("cargo", ["build", "-p", "crewd"]);
+  await run("cargo", ["build", "-p", "crewd", "-p", "crew-cli"]);
 } catch (error) {
   console.error(error);
   shutdown(1);

@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+# Crew from this checkout. The name `crew` belongs to the CLI the app ships, so
+# the one on your PATH is the one people get; this is its dev counterpart.
+# Link it wherever you like (ln -s "$PWD/scripts/crew-dev" ~/.local/bin/crew-dev):
+# it finds the checkout from its own location, links followed.
+set -euo pipefail
+
+src="${BASH_SOURCE[0]}"
+while [ -L "$src" ]; do
+  dir="$(cd -P "$(dirname "$src")" && pwd)"
+  src="$(readlink "$src")"
+  [[ $src != /* ]] && src="$dir/$src"
+done
+ROOT="$(cd -P "$(dirname "$src")/.." && pwd)"
+
+# Where `npm run app` keeps this checkout's data: a linked worktree inside
+# itself (scripts/app.mjs), the main checkout in Electron's "Crew Dev".
+dev_data_dir() {
+  local git_dir common_dir
+  git_dir="$(cd "$ROOT" && cd "$(git rev-parse --git-dir)" && pwd -P)"
+  common_dir="$(cd "$ROOT" && cd "$(git rev-parse --git-common-dir)" && pwd -P)"
+  if [ "$git_dir" != "$common_dir" ]; then
+    echo "$ROOT/.crew-dev"
+  else
+    echo "$HOME/Library/Application Support/Crew Dev"
+  fi
+}
+
+case "${1:-}" in
+  dev)
+    # beforeDevCommand runs `npm run dev`, so it needs the repo as cwd.
+    cd "$ROOT" && exec npm run app
+    ;;
+  build)
+    cd "$ROOT" && exec npm run app:build
+    ;;
+  cli)
+    # This checkout's `crew`, pointed at the dev app's daemon.
+    shift
+    (cd "$ROOT" && cargo build -q -p crew-cli)
+    CREW_DATA_DIR="${CREW_DATA_DIR:-$(dev_data_dir)}" exec "$ROOT/target/debug/crew" "$@"
+    ;;
+  "" | -h | --help)
+    echo "crew-dev dev          run from source with hot reload"
+    echo "crew-dev build        build the app bundle into release/"
+    echo "crew-dev cli [args]   this checkout's crew CLI, against the dev app"
+    echo
+    echo "checkout: $ROOT"
+    exit 0
+    ;;
+  *)
+    echo "crew-dev: unknown command $1 (try crew-dev --help)" >&2
+    exit 2
+    ;;
+esac

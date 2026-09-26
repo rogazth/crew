@@ -54,7 +54,8 @@ if (crateVersion !== version) {
 const tags = await run("git", ["tag", "--list", tag], { capture: true });
 if (tags) fail(`${tag} already exists. Bump the version in package.json and Cargo.toml.`);
 
-await run("cargo", ["build", "--release", "-p", "crewd"]);
+// crew rides in the bundle beside crewd; "Install `crew` Command…" links to it.
+await run("cargo", ["build", "--release", "-p", "crewd", "-p", "crew-cli"]);
 await run("npm", ["run", "build"]);
 await compileElectron();
 await run("npx", ["electron-builder", "--mac", "--arm64"]);
