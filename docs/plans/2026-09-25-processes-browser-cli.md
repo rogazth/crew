@@ -530,3 +530,18 @@ Puertos y, si hacen falta, traces de performance sobre el canal del navegador.
   instalar o no, archivo viejo, versión distinta, los pasos del watchdog y el
   plan B. No se
   instaló un LaunchAgent real ni se corrió launchctl en los tests.
+- **Tras la revisión:** dentro de una sesión `crew` nunca cae a
+  `daemon.json`: `--data-dir` ya no cambia de identidad, media sesión se
+  rechaza, `crew daemon` se rechaza y solo `--as-user` (para humanos) hace de
+  usuario. Es política, no aislamiento: todo corre con el mismo UID y puede
+  leer `daemon.json` (ver ARCHITECTURE.md). Un segundo `crewd` no borra el
+  socket de uno vivo: sale 0 bajo launchd y 1 como hijo. Bajo launchd un
+  arranque que falla por algo permanente (data dir, base, otro daemon) sale 0
+  tras loguearlo; uno transitorio sale 1 hasta cinco veces seguidas
+  (`crewd.failed-starts`). Las señales se escuchan antes de arrancar. El log se
+  revisa cada 5 min (cola en `crewd.log.1`, se vacía en su lugar, 0600). La
+  app: otra versión solo se reemplaza al abrir; con la ventana abierta se
+  avisa una vez y se deja. El watchdog no toca launchctl una vez empezado un
+  quit. El plist se compara con `realpath`; bajo App Translocation no se
+  instala el agente y corre el hijo con aviso. `daemon.json` viejo lo pisa
+  `crewd`, la app ya no lo borra. Una sola instancia de Crew por data dir.
