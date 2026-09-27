@@ -21,7 +21,6 @@ import { useSelectAllScope } from "./hooks/useSelectAllScope";
 import { useSessions } from "./hooks/useSessions";
 import { useSidebarWidth } from "./hooks/useSidebarWidth";
 import { AgentAvatarProvider } from "./hooks/useAgentAvatar";
-import { AgentThemeProvider } from "./hooks/useAgentTheme";
 import { BrowserPrefsProvider } from "./hooks/useBrowserPrefs";
 import { TerminalPrefsProvider } from "./hooks/useTerminalPrefs";
 import { useWorkspaces } from "./hooks/useWorkspaces";
@@ -179,7 +178,6 @@ export function App() {
     <TerminalPrefsProvider>
     <BrowserPrefsProvider>
     <LinkRouter open={nav.openBrowser} />
-    <AgentThemeProvider>
     <AgentAvatarProvider>
     <div className="flex h-full">
       {active && (
@@ -364,7 +362,6 @@ export function App() {
       />
     </div>
     </AgentAvatarProvider>
-    </AgentThemeProvider>
     </BrowserPrefsProvider>
     </TerminalPrefsProvider>
   );

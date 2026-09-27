@@ -8,13 +8,11 @@ import { ModelPicker } from "../chrome/ModelPicker";
 import { ProviderIcon } from "../chrome/ProviderIcon";
 import { SettingsRow, SettingsSection } from "../chrome/SettingsRow";
 import { useAgentAvatar } from "../hooks/useAgentAvatar";
-import { useAgentTheme } from "../hooks/useAgentTheme";
 import { useBrowserPrefs } from "../hooks/useBrowserPrefs";
 import { useDefaultAgent } from "../hooks/useDefaultAgent";
 import { useFilePrefs } from "../hooks/useFilePrefs";
 import { useTabScope } from "../hooks/useTabScope";
 import { AGENT_AVATARS } from "../lib/agentAvatar";
-import { AGENT_THEMES } from "../lib/agentTheme";
 import { KEEP_CHOICES, SEARCH_ENGINES } from "../lib/browserPrefs";
 import { bindingGroups } from "../lib/commandGroups";
 import { commandKeys } from "../lib/commands";
@@ -117,19 +115,9 @@ function FileSettings() {
 const PREVIEW_SEEDS = ["crew", "scout", "atlas", "pilot"];
 
 function Appearance() {
-  const { theme, update } = useAgentTheme();
   const avatar = useAgentAvatar();
   return (
     <SettingsSection title="Agents">
-      <SettingsRow label="Agent theme" description="Layout and chrome for every agent chat.">
-        <Select
-          label="Agent theme"
-          className="w-40"
-          value={theme}
-          onChange={update}
-          options={AGENT_THEMES.map((item) => ({ value: item.id, label: item.label }))}
-        />
-      </SettingsRow>
       <SettingsRow label="Avatar style" description="Every agent gets its own face in this style, drawn from its id.">
         <div className="flex items-center gap-3">
           <div className="flex gap-1" aria-hidden>
