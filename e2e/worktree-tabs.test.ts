@@ -92,15 +92,15 @@ async function setTabScope(crew: Crew, label: string, value: string): Promise<vo
 /** A session tab's branch chip reads the branch git has checked out where the session runs. */
 async function assertChip(crew: Crew, workspace: Workspace, session: Session): Promise<void> {
   const branch = await crew.git(session.worktree ?? workspace.path, "rev-parse", "--abbrev-ref", "HEAD");
-  // The pill's title, then the chip; the chip is short, so it carries the last
-  // segment. It waits for git's listing, which a relaunch reads anew.
+  // The pill's title, then the chip, which carries the whole branch. It waits
+  // for git's listing, which a relaunch reads anew.
   let texts: string[] = [];
   const chipped = await waitFor(
     async () => (texts = (await tabOf(crew, session).locator(".truncate").allInnerTexts()).map((text) => text.trim())).length === 2,
     { timeout: 5000 },
   ).catch(() => false);
   assert.ok(chipped, `${session.name}'s tab has a chip: ${JSON.stringify(texts)}`);
-  assert.equal(texts[1], branch.split("/").pop(), `${session.name} runs on ${branch}`);
+  assert.equal(texts[1], branch, `${session.name} runs on ${branch}`);
 }
 
 test("W4: per worktree, each strip and the worktree on screen come back after a restart", async (t) => {

@@ -85,7 +85,7 @@ test("P1: a pinned tab keeps to the left, and a worktree's tabs fold into a chip
   // Folding feat/alpha from one of its tabs: one chip, its tabs gone from the strip.
   await anyTab(crew, m1).click();
   await pick(crew, anyTab(crew, a2), "Collapse Worktree Tabs");
-  const chip = crew.window.getByRole("button", { name: /^alpha, 2 tabs, collapsed$/ });
+  const chip = crew.window.getByRole("button", { name: /^feat\/alpha, 2 tabs, collapsed$/ });
   await chip.waitFor();
   const strip = await stripTabIds(crew);
   assert.ok(!has(strip, a1) && !has(strip, a2), `feat/alpha's tabs fold away: ${JSON.stringify(strip)}`);
@@ -96,11 +96,11 @@ test("P1: a pinned tab keeps to the left, and a worktree's tabs fold into a chip
 
   // It survives a restart.
   crew = await crew.restart();
-  await crew.window.getByRole("button", { name: /^alpha, 2 tabs, collapsed$/ }).waitFor();
+  await crew.window.getByRole("button", { name: /^feat\/alpha, 2 tabs, collapsed$/ }).waitFor();
   await crew.window.locator(`[data-tab-pins] [role="tab"][data-tab-id*="${m2.id}"]`).waitFor();
 
   // The chip unfolds them, side by side.
-  await crew.window.getByRole("button", { name: /^alpha, 2 tabs, collapsed$/ }).click();
+  await crew.window.getByRole("button", { name: /^feat\/alpha, 2 tabs, collapsed$/ }).click();
   await waitFor(async () => {
     const ids = await stripTabIds(crew);
     return has(ids, a1) && has(ids, a2);
@@ -116,7 +116,7 @@ test("P1: a pinned tab keeps to the left, and a worktree's tabs fold into a chip
   // Folded again, going to its worktree brings its last used tab on screen, unfolded.
   await anyTab(crew, m1).click();
   await pick(crew, anyTab(crew, a1), "Collapse Worktree Tabs");
-  await crew.window.getByRole("button", { name: /^alpha, 2 tabs, collapsed$/ }).waitFor();
+  await crew.window.getByRole("button", { name: /^feat\/alpha, 2 tabs, collapsed$/ }).waitFor();
   await pressChord(crew, `${WORKTREE_MOD}+2`);
   await crew.window.locator('[role="tab"][aria-selected="true"]').and(
     crew.window.locator(`[data-tab-id*="${a1.id}"], [data-tab-id*="${a2.id}"]`),
