@@ -55,6 +55,8 @@ const tags = await run("git", ["tag", "--list", tag], { capture: true });
 if (tags) fail(`${tag} already exists. Bump the version in package.json and Cargo.toml.`);
 
 await run("cargo", ["build", "--release", "-p", "crewd"]);
+// The Linux daemons Crew installs on other machines ship inside the app.
+await run("node", ["scripts/crewd-linux.mjs"]);
 await run("npm", ["run", "build"]);
 await compileElectron();
 await run("npx", ["electron-builder", "--mac", "--arm64"]);
