@@ -6,6 +6,8 @@ const dataHandlers = new Map<string, (bytes: Uint8Array) => void>();
 const attachHandlers = new Map<string, (start: number) => void>();
 const streams = new Map<string, { id: number; stop: () => void }>();
 const delivered = new Map<string, number>();
+/** Bumped by every spawn and kill: a spawn that answers after a newer one, or after its kill, is stale. */
+const generations = new Map<string, number>();
 let reconnectHook: (() => void) | null = null;
 
 function ensureReconnect() {
@@ -74,7 +76,16 @@ export async function spawnPty(
   cols: number,
   rows: number,
 ): Promise<number> {
+  const generation = (generations.get(id) ?? 0) + 1;
+  generations.set(id, generation);
   const streamId = await client.request<number>("pty_spawn", { id, cwd, command, cols, rows });
+  if (generations.get(id) !== generation) {
+    // The pane was torn down (or respawned) while this spawn was in flight, as
+    // StrictMode does to every new terminal. Its process is killed or replaced
+    // already; wiring it would write its output into the pane that replaced it.
+    client.openStream(streamId, () => {}, id)();
+    return streamId;
+  }
   // Wire the stream before the replay: the process is already running, so a
   // rejection here would strand it with no way to reach it again.
   const onData = dataHandlers.get(id);
@@ -97,6 +108,7 @@ export const ackPty = (id: string, processed: number): Promise<void> =>
   client.request("pty_ack", { id, processed });
 
 export const killPty = (id: string): Promise<void> => {
+  generations.set(id, (generations.get(id) ?? 0) + 1);
   streams.get(id)?.stop();
   streams.delete(id);
   dataHandlers.delete(id);

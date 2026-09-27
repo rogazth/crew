@@ -31,7 +31,7 @@ use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
 use serde_json::Value;
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use tokio_tungstenite::tungstenite::Message;
 
 mod http;
@@ -521,6 +521,10 @@ async fn run(
             _ = &mut stop_rx => break,
             accepted = listener.accept() => {
                 let Ok((stream, _)) = accepted else { break };
+                // Nagle holds each small write (a keystroke's echo, a reply
+                // behind another) until the last one is acked: one extra round
+                // trip per burst to a remote window.
+                let _ = stream.set_nodelay(true);
                 let hosts = hosts.clone();
                 let hub = hub.clone();
                 let token = token.clone();
@@ -583,6 +587,8 @@ async fn handle_socket(stream: TcpStream, hosts: Hosts, hub: Arc<Hub>, token: St
     });
 
     let pty_in: Arc<Mutex<HashMap<u32, mpsc::Sender<Vec<u8>>>>> = Arc::new(Mutex::new(HashMap::new()));
+    // The last call on each terminal: the next one on it waits for it to finish.
+    let mut pty_last: HashMap<String, oneshot::Receiver<()>> = HashMap::new();
 
     while let Some(msg) = source.next().await {
         let Ok(msg) = msg else { break };
@@ -590,7 +596,26 @@ async fn handle_socket(stream: TcpStream, hosts: Hosts, hub: Arc<Hub>, token: St
             Message::Text(text) => {
                 let hosts = hosts.clone();
                 let hub = hub.clone();
+                // Calls run concurrently, except those on one terminal, which run
+                // in the order sent: a respawn is a kill then a spawn, and a kill
+                // that ran second would take the new process with it.
+                let turn = pty_target(text.as_ref()).map(|id| {
+                    if pty_last.len() > 64 {
+                        pty_last.retain(|_, rx| matches!(rx.try_recv(), Err(oneshot::error::TryRecvError::Empty)));
+                    }
+                    let (done, rx) = oneshot::channel::<()>();
+                    (pty_last.insert(id, rx), done)
+                });
                 tokio::spawn(async move {
+                    let _done = match turn {
+                        Some((before, done)) => {
+                            if let Some(before) = before {
+                                let _ = before.await;
+                            }
+                            Some(done)
+                        }
+                        None => None,
+                    };
                     if let Some(reply) = handle_text(&hosts, &hub, client_id, text.as_ref()).await {
                         hub.send(client_id, Outgoing::Text(reply));
                     }
@@ -696,6 +721,24 @@ fn emit_pty_error(hub: &Hub, host: &PtyHost, stream_id: u32, error: impl Into<St
         .session_of_stream(stream_id)
         .unwrap_or_else(|| stream_id.to_string());
     hub.emit("pty-error", proto::PtyError { id, error: error.into() });
+}
+
+/// The terminal a `pty_*` call is about.
+fn pty_target(text: &str) -> Option<String> {
+    #[derive(Deserialize)]
+    struct Target {
+        method: String,
+        params: TargetId,
+    }
+    #[derive(Deserialize)]
+    struct TargetId {
+        id: String,
+    }
+    if !text.contains("\"pty_") {
+        return None;
+    }
+    let target = serde_json::from_str::<Target>(text).ok()?;
+    target.method.starts_with("pty_").then_some(target.params.id)
 }
 
 async fn handle_text(hosts: &Hosts, hub: &Arc<Hub>, client_id: u64, text: &str) -> Option<String> {
@@ -1430,6 +1473,41 @@ mod tests {
 
         let output = wait_bytes(&mut ws, b"hi").await;
         assert!(output.windows(2).any(|w| w == b"hi"), "output: {output:?}");
+        handle.shutdown();
+    }
+
+    /// A window that remounts a terminal sends kill and spawn back to back
+    /// without waiting; the new process has to survive the kill sent before it.
+    #[tokio::test]
+    async fn a_respawn_sent_right_after_a_kill_survives_it() {
+        let dir = test_dir("respawn-order");
+        let handle = test_serve(&dir);
+        let mut ws = connect_authed(&handle).await;
+        for round in 0..20u32 {
+            let pty = format!("t{round}");
+            let req = round * 10;
+            send_json(&mut ws, &spawn_req(req + 1, &pty)).await;
+            send_json(
+                &mut ws,
+                &Request {
+                    id: req + 2,
+                    method: "pty_kill".into(),
+                    params: serde_json::json!({ "id": pty }),
+                },
+            )
+            .await;
+            send_json(&mut ws, &spawn_req(req + 3, &pty)).await;
+            let respawn = wait_response(&mut ws, req + 3).await;
+            assert!(respawn.ok, "{}", respawn.error.unwrap_or_default());
+            let attach = Request {
+                id: req + 4,
+                method: "pty_attach".into(),
+                params: serde_json::json!({ "id": pty, "from": 0 }),
+            };
+            send_json(&mut ws, &attach).await;
+            let attached = wait_response(&mut ws, req + 4).await;
+            assert!(attached.ok, "round {round}: the respawned terminal is gone: {}", attached.error.unwrap_or_default());
+        }
         handle.shutdown();
     }
 

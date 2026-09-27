@@ -5,7 +5,7 @@ import { useSessionActivity } from '../hooks/useSessionActivity';
 import { nudgeTitle } from '../hooks/useSessionTitle';
 import { useTerminalPrefs } from '../hooks/useTerminalPrefs';
 import * as api from '../lib/api';
-import { sessionCwd } from '../lib/client/registry';
+import { homeFor, sessionCwd } from '../lib/client/registry';
 import { claudeSessionId, transcriptPath } from '../lib/claudeStorage';
 import { bindProviderSession } from '../lib/agentRuntime';
 import { providerOf } from '../lib/providers';
@@ -123,7 +123,8 @@ async function launchCommand(session: Session, cwd: string): Promise<string[]> {
     const moved = await api.rebindClaudeSession(session.id).catch(() => null);
     if (moved) bindProviderSession(session.id, moved);
     const current = moved ? { ...session, providerSessionId: moved } : session;
-    const resume = await homeDir()
+    // Claude keeps its transcripts in the home of the machine it runs on.
+    const resume = await Promise.resolve(homeFor(cwd) ?? homeDir())
       .then((home) => api.pathExists(transcriptPath(home, cwd, claudeSessionId(current))))
       .catch(() => false);
     return sessionCommand(current, { resume, theme });

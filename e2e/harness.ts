@@ -8,7 +8,7 @@ import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { chmod, mkdir, symlink, mkdtemp, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { createServer } from "node:http";
-import type { AddressInfo } from "node:net";
+import { connect as tcpConnect, createServer as createTcpServer, type AddressInfo, type Server, type Socket } from "node:net";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -144,7 +144,12 @@ async function launch(opts: LaunchOptions, owns: boolean): Promise<Crew> {
     app = await _electron.launch({
       executablePath: ELECTRON,
       args: [ROOT, ...(process.platform === "linux" ? ["--no-sandbox"] : [])],
-      env: { ...env, CREW_RENDERER: "dist", CREW_E2E: "1" },
+      // E2E_DEV_PORT: the renderer from a running Vite dev server, as `npm run app` loads it.
+      env: {
+        ...env,
+        ...(process.env.E2E_DEV_PORT ? { CREW_PORT: process.env.E2E_DEV_PORT, CREW_RENDERER: "" } : { CREW_RENDERER: "dist" }),
+        CREW_E2E: "1",
+      },
     });
   } catch (error) {
     await cleanup();
@@ -761,6 +766,8 @@ export type RemoteDaemon = {
   id: string;
   name: string;
   port: number;
+  /** The port Crew dials: the daemon's, or the delaying proxy's in front of it. */
+  dialPort: number;
   token: string;
   dataDir: string;
   /** Stops the daemon, as a machine going away does. */
@@ -775,7 +782,7 @@ export type RemoteDaemon = {
  * is the one it runs), and the token it writes under its data directory. It is
  * added to Crew's address book the way Settings would, and the window reloads.
  */
-export async function addRemote(crew: Crew, name = "devbox"): Promise<RemoteDaemon> {
+export async function addRemote(crew: Crew, name = "devbox", opts: { latencyMs?: number } = {}): Promise<RemoteDaemon> {
   const dataDir = path.join(crew.root, `remote-${name}`);
   await mkdir(dataDir, { recursive: true });
   const port = await freePort();
@@ -805,12 +812,58 @@ export async function addRemote(crew: Crew, name = "devbox"): Promise<RemoteDaem
   };
   await start();
   const token = (await readFile(path.join(dataDir, "token"), "utf8")).trim();
+  // Crew dials the delaying proxy when there is one; the harness's own RPCs go straight.
+  const proxy = opts.latencyMs ? await delayProxy(port, opts.latencyMs) : null;
   const row = await crew.window.evaluate(
     (input) => window.crewHost!.remotes!.add(input),
-    { id: "", name, host: "127.0.0.1", port, user: "agent", token },
+    { id: "", name, host: "127.0.0.1", port: proxy?.port ?? port, user: "agent", token },
   );
   await crew.reload();
-  return { id: row.id, name, port, token, dataDir, stop, start };
+  const stopAll = async () => {
+    await stop();
+    proxy?.drop();
+  };
+  return { id: row.id, name, port, dialPort: proxy?.port ?? port, token, dataDir, stop: stopAll, start };
+}
+
+/**
+ * A TCP proxy to `target` that holds every chunk `ms` in each direction, in
+ * order: a tailnet peer's round trip on loopback. `drop` cuts the open
+ * sockets, as the daemon going away does.
+ */
+async function delayProxy(target: number, ms: number): Promise<{ port: number; drop(): void; server: Server }> {
+  const open = new Set<Socket>();
+  const pipe = (from: Socket, to: Socket) => {
+    let last = 0;
+    from.on("data", (chunk) => {
+      // Never earlier than the chunk before it, so bytes keep their order.
+      const due = Math.max(Date.now() + ms, last);
+      last = due;
+      setTimeout(() => {
+        if (!to.destroyed) to.write(chunk);
+      }, due - Date.now());
+    });
+    from.on("close", () => setTimeout(() => to.destroy(), ms));
+    from.on("error", () => to.destroy());
+  };
+  const server = createTcpServer((client) => {
+    const upstream = tcpConnect(target, "127.0.0.1");
+    open.add(client);
+    open.add(upstream);
+    client.on("close", () => open.delete(client));
+    upstream.on("close", () => open.delete(upstream));
+    pipe(client, upstream);
+    pipe(upstream, client);
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  server.unref();
+  return {
+    port: (server.address() as AddressInfo).port,
+    server,
+    drop: () => {
+      for (const socket of open) socket.destroy();
+    },
+  };
 }
 
 /** A port nothing listens on now, and the one after it (crewd serve's SOCKS proxy) free too, most likely. */
