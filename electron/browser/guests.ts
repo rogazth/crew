@@ -17,7 +17,7 @@ import {
 } from "electron";
 import { resolveForward, type KeyboardLayout, type LiveCommand } from "../../src/lib/keymap";
 import type { NavSnapshot } from "../../src/lib/browser/snapshot";
-import { CHANNELS, isPagePartition, LEGACY_PARTITION, type OpenTabRequest } from "../../src/lib/browser/bridge";
+import { CHANNELS, isPagePartition, LEGACY_PARTITION, partitionFor, type OpenTabRequest } from "../../src/lib/browser/bridge";
 import { FILES_PARTITION } from "../../src/lib/browser/files";
 import { copyCookies } from "./cookies";
 import { openExternal } from "../external";
@@ -73,6 +73,47 @@ function partitionDir(partition: string): string {
  * takes milliseconds, once per workspace; a page that loads inside that window
  * shows signed out until its next load.
  */
+const proxyAuth = new WeakMap<Session, { token: string }>();
+let proxyLoginHooked = false;
+
+/** Electron 44 delivers proxy auth on `app`, scoped here to sessions we armed. */
+function hookProxyLogin(): void {
+  if (proxyLoginHooked) return;
+  proxyLoginHooked = true;
+  app.on("login", (event, webContents, _details, authInfo, callback) => {
+    if (!authInfo.isProxy || !webContents) return;
+    const current = proxyAuth.get(webContents.session);
+    if (!current) return;
+    event.preventDefault();
+    callback(current.token, current.token);
+  });
+}
+
+/**
+ * A remote workspace's pages reach that machine's loopback through its SOCKS
+ * proxy. Everything else stays direct, so the browser does not egress from the VPS.
+ */
+export async function setWorkspaceProxy(
+  workspaceId: string,
+  proxy: { host: string; port: number; token: string } | null,
+): Promise<void> {
+  const partition = partitionFor(workspaceId);
+  if (!partition) return;
+  const { ses } = pageSession(partition);
+  hookProxyLogin();
+  if (!proxy) {
+    proxyAuth.delete(ses);
+    await ses.setProxy({ mode: "direct" });
+    return;
+  }
+  proxyAuth.set(ses, { token: proxy.token });
+  const pac = `function FindProxyForURL(url, host) {
+    if (host === "localhost" || host === "127.0.0.1" || host === "::1" || host === "[::1]") return "SOCKS5 ${proxy.host}:${proxy.port}";
+    return "DIRECT";
+  }`;
+  await ses.setProxy({ mode: "pac_script", pacScript: pac, proxyBypassRules: "<-loopback>" });
+}
+
 function pageSession(partition: string): { ses: Session; seeded: Promise<void> } {
   const existing = pageSessions.get(partition);
   if (existing) return existing;

@@ -1,4 +1,4 @@
-import { ArrowLeftIcon, BotIcon, GlobeIcon, InfoIcon, KeyboardIcon, PaletteIcon, SlidersHorizontalIcon, SquareTerminalIcon, type LucideIcon as Icon } from "lucide-react";
+import { ArrowLeftIcon, BotIcon, GlobeIcon, InfoIcon, KeyboardIcon, PaletteIcon, ServerIcon, SlidersHorizontalIcon, SquareTerminalIcon, type LucideIcon as Icon } from "lucide-react";
 import { SidebarRow } from "./SidebarRow";
 import { SETTINGS_SECTIONS, type SettingsSectionId } from "../lib/settings";
 
@@ -7,6 +7,7 @@ const ICONS: Record<SettingsSectionId, Icon> = {
   appearance: PaletteIcon,
   terminal: SquareTerminalIcon,
   browser: GlobeIcon,
+  environments: ServerIcon,
   providers: BotIcon,
   keybindings: KeyboardIcon,
   about: InfoIcon,

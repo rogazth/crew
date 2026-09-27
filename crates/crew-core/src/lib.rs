@@ -12,6 +12,7 @@ pub mod mailbox;
 pub mod mcp;
 pub mod messages;
 pub mod pty;
+pub mod remote;
 pub mod routine;
 pub mod schedule;
 pub mod scheduler;

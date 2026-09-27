@@ -10,6 +10,7 @@ use crew_core::files;
 use crew_core::messages;
 use crew_core::provider_session;
 use crew_core::pty::{PtyEvents, PtyHost};
+use crew_core::remote;
 use crew_core::routine;
 use crew_core::scheduler::Scheduler;
 use crew_core::session;
@@ -21,7 +22,7 @@ use crew_core::worktree;
 use crew_protocol::{
     self as proto, Auth, DaemonInfo, Id, IdName, IdStatus, Ids, Key, KeyValue, ListProjectFiles, Name, NamePath, Names, ProviderDiscover,
     OptionalId, PathArg, PathBytes, PathContents, PtyAck, PtyAttach, PtyAttached, PtyKill, PtyResize, PtySpawn, PtyWrite,
-    Request, RoutineRunNow, RoutineUpsert, SessionCreate, SessionCreated, SessionId, SessionUpdated, SessionUpdate, SessionsDeleted,
+    RemoteEnv, Request, RoutineRunNow, RoutineUpsert, SessionCreate, SessionCreated, SessionId, SessionUpdated, SessionUpdate, SessionsDeleted,
     SessionsRetention, TempFile,
     SearchQuery, TranscriptApply, TranscriptTail, TurnAnswer, TurnRespond,
     TurnStart, TurnStarted, WorkspaceId, WorktreeAdd, WorktreeRemove,
@@ -35,6 +36,7 @@ use tokio_tungstenite::tungstenite::Message;
 
 mod http;
 pub mod machine;
+mod socks;
 
 pub struct Config {
     pub pty: PtyHost,
@@ -51,6 +53,8 @@ struct Hosts {
     bridge: Bridge,
     turns: TurnHost,
     scheduler: Scheduler,
+    /// `crewd serve` only. Zero on the window's daemon.
+    socks_port: u16,
 }
 
 /// Where the daemon listens and the token a client has to bring.
@@ -404,6 +408,7 @@ pub fn serve_on(config: Config, listen: Listen) -> Result<Handle, String> {
         bridge: config.bridge,
         turns: turns.clone(),
         scheduler: scheduler.clone(),
+        socks_port: 0,
     };
 
     thread::Builder::new()
@@ -449,8 +454,13 @@ async fn bind(listen: &Listen) -> std::io::Result<TcpListener> {
     }
 }
 
+fn socks_addr(ws: std::net::SocketAddr) -> Option<std::net::SocketAddr> {
+    let port = ws.port().checked_add(1)?;
+    Some(std::net::SocketAddr::new(ws.ip(), port))
+}
+
 async fn run(
-    hosts: Hosts,
+    mut hosts: Hosts,
     hub: Arc<Hub>,
     listen: Listen,
     ready_tx: std_mpsc::Sender<Result<String, String>>,
@@ -472,6 +482,18 @@ async fn run(
         }
     };
     let _ = ready_tx.send(Ok(format!("ws://{addr}")));
+    if listen.wait_for_addr {
+        if let Some(socks_at) = socks_addr(addr) {
+            match TcpListener::bind(socks_at).await {
+                Ok(listener) => {
+                    hosts.socks_port = socks_at.port();
+                    let token = token.clone();
+                    tokio::spawn(socks::run(listener, token));
+                }
+                Err(error) => eprintln!("[crewd] socks {socks_at}: {error}"),
+            }
+        }
+    }
     hub.set_runtime(tokio::runtime::Handle::current());
     hosts.turns.set_runtime(tokio::runtime::Handle::current());
     hosts.turns.transcripts().set_runtime(tokio::runtime::Handle::current());
@@ -1144,9 +1166,30 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
             let TempFile { extension, base64_contents } = parse(params)?;
             json(block(move || files::write_temp(&extension, &base64_contents)).await?)
         }
+        "ping" => Ok(Value::Null),
+        "remote_list" => {
+            let store = hosts.store.clone();
+            json(block(move || remote::list(&store)).await?)
+        }
+        "remote_upsert" => {
+            let env: RemoteEnv = parse(params)?;
+            let store = hosts.store.clone();
+            json(block(move || remote::upsert(&store, env)).await?)
+        }
+        "remote_delete" => {
+            let Id { id } = parse(params)?;
+            let store = hosts.store.clone();
+            block(move || remote::delete(&store, &id)).await?;
+            Ok(Value::Null)
+        }
         "daemon_info" => {
             let store = hosts.store.clone();
-            json(block(move || Ok(machine::info(session::list_busy(&store)?.len() as u32))).await?)
+            let socks_port = hosts.socks_port;
+            let mut info = block(move || Ok(machine::info(session::list_busy(&store)?.len() as u32))).await?;
+            if socks_port != 0 {
+                info.socks_port = Some(socks_port);
+            }
+            json(info)
         }
         "dir_list" => {
             let proto::DirList { path } = parse(params)?;

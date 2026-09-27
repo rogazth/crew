@@ -10,9 +10,9 @@ let reconnectHook: (() => void) | null = null;
 
 function ensureReconnect() {
   if (reconnectHook) return;
-  reconnectHook = client.onReconnect(() => {
+  reconnectHook = client.onReconnect((here = () => true) => {
     for (const [id] of streams) {
-      void applyAttach(id, delivered.get(id) ?? 0).catch(() => {});
+      if (here(id)) void applyAttach(id, delivered.get(id) ?? 0).catch(() => {});
     }
   });
 }
@@ -29,7 +29,7 @@ function attach(sessionId: string, streamId: number, onData: (bytes: Uint8Array)
     delivered.set(sessionId, (delivered.get(sessionId) ?? 0) + bytes.byteLength);
     onData(bytes);
   };
-  streams.set(sessionId, { id: streamId, stop: client.openStream(streamId, wrapped) });
+  streams.set(sessionId, { id: streamId, stop: client.openStream(streamId, wrapped, sessionId) });
 }
 
 /**
@@ -86,7 +86,7 @@ export async function spawnPty(
 
 export function writePty(id: string, data: string): Promise<void> {
   const stream = streams.get(id);
-  if (stream) return client.writeStream(stream.id, encoder.encode(data));
+  if (stream) return client.writeStream(stream.id, encoder.encode(data), id);
   return client.request("pty_write", { id, data });
 }
 

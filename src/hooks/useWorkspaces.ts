@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import * as api from "../lib/api";
+import { onWorkspacesChanged } from "../lib/client/registry";
 import { open } from "../lib/host";
 import type { Workspace } from "../lib/types";
 import { nameFromPath, resolveActive } from "../lib/workspaces";
@@ -25,6 +26,15 @@ export function useWorkspaces() {
     };
   }, []);
 
+  // A machine that was offline or slow at launch answers later; its workspaces join the rail then.
+  useEffect(
+    () =>
+      onWorkspacesChanged(() => {
+        void api.listWorkspaces().then(setWorkspaces, () => {});
+      }),
+    [],
+  );
+
   const activate = useCallback((id: string | null) => {
     setActiveId(id);
     void api.setActiveWorkspace(id);
@@ -42,6 +52,14 @@ export function useWorkspaces() {
       setError(String(e));
     }
   }, [activate]);
+
+  const adopt = useCallback(
+    (workspace: Workspace) => {
+      setWorkspaces((prev) => (prev.some((item) => item.id === workspace.id) ? prev : [...prev, workspace]));
+      activate(workspace.id);
+    },
+    [activate],
+  );
 
   const rename = useCallback(async (id: string, name: string) => {
     setWorkspaces((prev) =>
@@ -101,6 +119,7 @@ export function useWorkspaces() {
     activateAt,
     step,
     create,
+    adopt,
     rename,
     remove,
     reorder,

@@ -14,6 +14,34 @@ import { servedPath, urlFor, within } from "./serve";
 const roots = new Map<string, string>();
 const hosts = new Map<string, string>();
 
+/** A workspace root whose files live on another machine's `GET /fs`. */
+type RemoteRoot = { origin: string; token: string };
+const remoteRoots = new Map<string, RemoteRoot>();
+
+export function bindRemoteRoot(root: string, remote: RemoteRoot): void {
+  remoteRoots.set(root, remote);
+  hostOf(root);
+}
+
+export function unbindRemoteRoot(root: string): void {
+  remoteRoots.delete(root);
+}
+
+function remoteFor(root: string): RemoteRoot | undefined {
+  const direct = remoteRoots.get(root);
+  if (direct) return direct;
+  let best: RemoteRoot | undefined;
+  let length = -1;
+  for (const [bound, remote] of remoteRoots) {
+    const prefix = bound.endsWith("/") ? bound : `${bound}/`;
+    if ((root === bound || root.startsWith(prefix)) && bound.length > length) {
+      best = remote;
+      length = bound.length;
+    }
+  }
+  return best;
+}
+
 /** Before the app is ready: a standard, secure scheme gets relative URLs, fetch and storage like https. */
 export function registerFileScheme(): void {
   protocol.registerSchemesAsPrivileged([
@@ -64,6 +92,8 @@ async function serve(request: Request): Promise<Response> {
   const root = roots.get(url.host);
   const lexical = root ? servedPath(root, url.pathname) : null;
   if (!root || !lexical) return notFound();
+  const remote = remoteFor(root);
+  if (remote) return proxyRemote(remote, root, url.pathname, request);
   try {
     let target = lexical;
     if ((await stat(target)).isDirectory()) target = path.join(target, "index.html");
@@ -72,6 +102,21 @@ async function serve(request: Request): Promise<Response> {
     if (!within(realRoot, real) || !(await stat(real)).isFile()) return notFound();
     const range = request.headers.get("range");
     return await net.fetch(pathToFileURL(real).href, range ? { headers: { range } } : {});
+  } catch {
+    return notFound();
+  }
+}
+
+async function proxyRemote(remote: RemoteRoot, root: string, pathname: string, request: Request): Promise<Response> {
+  const target = new URL("/fs", remote.origin);
+  target.searchParams.set("root", root);
+  target.searchParams.set("path", pathname);
+  const headers = new Headers({ authorization: `Bearer ${remote.token}` });
+  const range = request.headers.get("range");
+  if (range) headers.set("range", range);
+  const method = request.method === "HEAD" ? "HEAD" : "GET";
+  try {
+    return await net.fetch(target.href, { method, headers });
   } catch {
     return notFound();
   }
@@ -95,16 +140,56 @@ export function serveFiles(ses: Session): void {
  * editor or a script that saves by renaming a new file over it leaves a
  * watch on the old one blind.
  */
+function remoteFile(url: string): { remote: RemoteRoot; root: string; pathname: string } | null {
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== `${FILE_SCHEME}:`) return null;
+    const root = roots.get(parsed.host);
+    if (!root) return null;
+    const remote = remoteFor(root);
+    if (!remote || !servedPath(root, parsed.pathname)) return null;
+    return { remote, root, pathname: parsed.pathname };
+  } catch {
+    return null;
+  }
+}
+
+/** The remote file has no local watch. A changed length is a new save. */
+function pollRemote(guest: WebContents, file: { remote: RemoteRoot; root: string; pathname: string }): ReturnType<typeof setInterval> {
+  const target = new URL("/fs", file.remote.origin);
+  target.searchParams.set("root", file.root);
+  target.searchParams.set("path", file.pathname);
+  let last = "";
+  return setInterval(() => {
+    void net
+      .fetch(target.href, { method: "HEAD", headers: { authorization: `Bearer ${file.remote.token}` } })
+      .then((response) => {
+        const length = response.headers.get("content-length") ?? "";
+        if (last && length && length !== last && !guest.isDestroyed()) guest.reload();
+        if (length) last = length;
+      })
+      .catch(() => {});
+  }, 1000);
+}
+
 export function followFile(guest: WebContents): void {
   let watcher: FSWatcher | null = null;
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let poll: ReturnType<typeof setInterval> | undefined;
   const stop = () => {
     clearTimeout(timer);
+    if (poll) clearInterval(poll);
+    poll = undefined;
     watcher?.close();
     watcher = null;
   };
   guest.on("did-navigate", (_event, url) => {
     stop();
+    const remote = remoteFile(url);
+    if (remote) {
+      poll = pollRemote(guest, remote);
+      return;
+    }
     const file = fileOf(url);
     if (!file) return;
     try {

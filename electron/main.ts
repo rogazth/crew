@@ -9,6 +9,7 @@ import { installBrowser, registerBrowserIpc, registerFileIpc, registerFileScheme
 import { openExternal } from "./external";
 import { sha } from "./build-info";
 import { buildMenu } from "./menu";
+import { registerRemoteIpc } from "./remotes";
 import { watchForUpdates } from "./update";
 
 type DaemonInfo = { url: string; token: string };
@@ -41,9 +42,9 @@ const e2e = process.env.CREW_E2E === "1";
 const DEV_PORT = Number(process.env.CREW_PORT) || 1420;
 
 function csp(): string {
-  const connect = fromDist
-    ? "ws://127.0.0.1:*"
-    : `http://localhost:${DEV_PORT} ws://localhost:${DEV_PORT} ws://127.0.0.1:*`;
+  // `ws:` and not a host list: a remote crewd is any tailnet address, added
+  // while the window is open, and a document's policy is fixed when it loads.
+  const connect = fromDist ? "ws:" : `http://localhost:${DEV_PORT} ws:`;
   return [
     "default-src 'self'",
     fromDist ? "script-src 'self'" : "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
@@ -276,6 +277,7 @@ function registerIpc(): void {
   });
   registerBrowserIpc();
   registerFileIpc();
+  registerRemoteIpc(() => info);
 }
 
 registerFileScheme();
@@ -289,6 +291,8 @@ if (!app.isPackaged)
   app.setPath("userData", process.env.CREW_USER_DATA || path.join(app.getPath("appData"), "Crew Dev"));
 app.setAboutPanelOptions({ applicationName: "Crew", applicationVersion: app.getVersion(), version: sha });
 if (e2e && process.platform === "darwin") app.setActivationPolicy("accessory");
+// The sandboxed HOME has no login keychain; remote tokens go through a mock one.
+if (e2e) app.commandLine.appendSwitch("use-mock-keychain");
 
 app.whenReady().then(async () => {
   session.defaultSession.webRequest.onHeadersReceived((details, callback) => {

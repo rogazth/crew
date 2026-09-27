@@ -13,7 +13,6 @@ import {
   gitBranches,
   gitWorktrees,
   launchCrew,
-  MOD,
   WORKTREE_MOD,
   pressChord,
   returnToWindow,

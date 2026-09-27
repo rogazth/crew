@@ -38,8 +38,9 @@ export function boot(): Promise<void> {
     client.on("session-status", (payload) => {
       onStatus(payload as SessionStatusEvent);
     });
-    client.onReconnect(() => {
+    client.onReconnect((here = () => true) => {
       for (const id of statuses.keys()) {
+        if (!here(id)) continue;
         void transcript.reload(id);
         void resync(id);
       }

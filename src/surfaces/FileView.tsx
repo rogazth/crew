@@ -5,6 +5,7 @@ import { useCommands } from "../hooks/useCommand";
 import { FILES_PARTITION, fileView, previewRoot } from "../lib/browser/files";
 import { createGuest, type Guest, type GuestEvents } from "../lib/browser/webview";
 import { commandKeys } from "../lib/commands";
+import { isLocalPath } from "../lib/client/registry";
 import { browserHost, filesHost } from "../lib/host";
 import { FileEditor } from "./FileEditor";
 import { ImageView } from "./ImageView";
@@ -67,7 +68,7 @@ const HEADER_BUTTON =
 /** Reveals the file in Finder. */
 function RevealButton({ path }: { path: string }) {
   const host = filesHost();
-  if (!host) return null;
+  if (!host || !isLocalPath(path)) return null;
   return (
     <button type="button" aria-label="Show in Finder" title="Show in Finder" onClick={() => void host.reveal(path)} className={HEADER_BUTTON}>
       <FolderOpenIcon className="size-4" />

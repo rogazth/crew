@@ -6,6 +6,8 @@ You run a roster of agents, each with its own chat. They can message each other 
 
 Everything runs on your machine. A Rust daemon holds the agents, the transcripts, and a SQLite store; the Electron app is a client over it. No account, no sync, no keys of ours. You bring the CLIs; they stay logged in the way you already use them.
 
+A workspace can also live on another Linux machine on your Tailscale network. Settings › Environments installs `crewd` there over SSH, and ⌘O opens a folder on it. The window stays on this Mac and talks to that daemon directly. Agent CLIs have to be logged in on the machine that runs them. Ubuntu, with Tailscale, is the supported remote. Windows is not.
+
 ## Install and run
 
 You need [Node](https://nodejs.org) 20+, [Rust](https://rustup.rs), and at least one provider CLI on your `PATH`:

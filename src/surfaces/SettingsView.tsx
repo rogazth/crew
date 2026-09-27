@@ -22,7 +22,9 @@ import { BROWSER_CLICK } from "../lib/external";
 import { parseFolders } from "../lib/filePrefs";
 import { PROVIDERS } from "../lib/providers";
 import { settingsSection, type SettingsSectionId } from "../lib/settings";
+import type { Workspace } from "../lib/types";
 import type { TabScope } from "../lib/worktrees";
+import { EnvironmentSettings } from "./EnvironmentSettings";
 import { SessionSettings } from "./SessionSettings";
 import { TerminalSettings } from "./TerminalSettings";
 
@@ -33,10 +35,14 @@ const TAB_SCOPES: Option<TabScope>[] = [
 
 export function SettingsView({
   section,
+  workspaces,
   onConfirm,
+  onOpenTerminal,
 }: {
   section: SettingsSectionId;
+  workspaces: Workspace[];
   onConfirm: (confirm: Confirm) => void;
+  onOpenTerminal: (envId: string) => Promise<void>;
 }) {
   const meta = settingsSection(section);
   return (
@@ -51,12 +57,14 @@ export function SettingsView({
           {section === "keybindings" && <Keybindings />}
           {section === "terminal" && <TerminalSettings />}
           {section === "browser" && <Browser />}
+          {section === "environments" && <EnvironmentSettings workspaces={workspaces} onOpenTerminal={onOpenTerminal} />}
           {section === "providers" && <Providers />}
           {section !== "general" &&
             section !== "appearance" &&
             section !== "keybindings" &&
             section !== "terminal" &&
             section !== "browser" &&
+            section !== "environments" &&
             section !== "providers" && (
             <Pending label={meta.label} />
           )}

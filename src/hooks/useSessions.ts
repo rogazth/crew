@@ -4,6 +4,7 @@ import { dispose, onSessionPatch, reconcile } from '../lib/agentRuntime';
 import { client } from '../lib/client';
 import * as api from '../lib/api';
 import { reloadAgentFaces } from './useAgentFaces';
+import { useWorkspaceLink } from './useEnvLinks';
 import type { SessionCreated, SessionsDeleted, SessionUpdated } from '../lib/protocol';
 import type { Autonomy, Session, SessionKind, SessionStatus } from '../lib/types';
 
@@ -29,9 +30,12 @@ export function useSessions(workspaceId: string | null) {
   const [registry, setRegistry] = useState<Registry>({});
   const asked = useRef(new Set<string>());
 
+  // A workspace on a machine that was down loads once the machine answers.
+  const link = useWorkspaceLink(workspaceId);
+  const reachable = link === null || (link.status === "online" && !link.mismatch);
   useEffect(() => {
     const id = workspaceId;
-    if (!id || asked.current.has(id)) return;
+    if (!id || !reachable || asked.current.has(id)) return;
     asked.current.add(id);
     void api
       .listSessions(id)
@@ -49,7 +53,7 @@ export function useSessions(workspaceId: string | null) {
         });
       })
       .catch(() => asked.current.delete(id));
-  }, [workspaceId]);
+  }, [reachable, workspaceId]);
 
   const all = useMemo(() => Object.values(registry).flat(), [registry]);
 

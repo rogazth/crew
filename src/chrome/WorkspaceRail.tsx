@@ -1,6 +1,6 @@
 import { RestrictToVerticalAxis } from "@dnd-kit/abstract/modifiers";
 import { RestrictToElement } from "@dnd-kit/dom/modifiers";
-import { PlusIcon, RefreshCwIcon, SettingsIcon, type LucideIcon as Icon } from "lucide-react";
+import { PlusIcon, RefreshCwIcon, ServerIcon, SettingsIcon, type LucideIcon as Icon } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { ActionMenu } from "./ActionMenu";
 import { SortableItem, SortableList } from "./SortableList";
@@ -10,6 +10,8 @@ import { isDeleteChord } from "../lib/hotkey";
 import { COPY_PATH, DELETE, SEPARATOR, menuFromEvent, type MenuPoint } from "../lib/menu";
 import { STATUS_ORDER } from "../lib/status";
 import type { Session, SessionStatus, Workspace } from "../lib/types";
+import type { EnvLink } from "../lib/client/registry";
+import { whereOf } from "../lib/envText";
 import { workspaceMark } from "../lib/workspaces";
 
 type Props = {
@@ -26,6 +28,8 @@ type Props = {
   onReorder: (ids: string[]) => void;
   onOpenRoutines: () => void;
   onOpenSettings: () => void;
+  /** The machine a workspace lives on, for the corner badge. Null on this Mac. */
+  remoteOf?: (workspace: Workspace) => EnvLink | null;
 };
 
 type Menu = { point: MenuPoint; workspace: Workspace };
@@ -90,6 +94,7 @@ export function WorkspaceRail(props: Props) {
                 onSelect={() => props.onSelect(workspace.id)}
                 onMenu={(point) => setMenu({ point, workspace })}
                 onRemove={() => props.onRemove(workspace)}
+                remote={props.remoteOf?.(workspace) ?? null}
               />
             </SortableItem>
           ))}
@@ -151,6 +156,7 @@ function Mark({
   onSelect,
   onMenu,
   onRemove,
+  remote,
 }: {
   workspace: Workspace;
   /** On screen: the current workspace with no page over it. */
@@ -162,6 +168,7 @@ function Mark({
   onSelect: () => void;
   onMenu: (point: MenuPoint) => void;
   onRemove: () => void;
+  remote: EnvLink | null;
 }) {
   function onKeyDown(event: KeyboardEvent<HTMLButtonElement>) {
     if (event.key === "F2" || event.key === "ContextMenu") {
@@ -183,7 +190,7 @@ function Mark({
       data-tauri-drag-region="false"
       aria-current={current ? "true" : undefined}
       aria-label={workspace.name}
-      title={`${workspace.name}${keys ? `  ${keys}` : ""}\n${workspace.path}`}
+      title={`${workspace.name}${keys ? `  ${keys}` : ""}${remote ? `\n${machineLine(remote)}` : ""}\n${workspace.path}`}
       onClick={onSelect}
       onContextMenu={(event) => onMenu(menuFromEvent(event))}
       onKeyDown={onKeyDown}
@@ -200,10 +207,25 @@ function Mark({
         aria-hidden
         className={`grid size-9 place-items-center bg-accent text-[12px] font-semibold tracking-wide text-inverse transition-[border-radius,opacity] duration-150 ${
           current ? "rounded-xl" : "rounded-[18px] opacity-70 group-hover:rounded-xl group-hover:opacity-100"
-        }`}
+        } ${remote && (remote.status === "offline" || remote.mismatch) ? "opacity-35! grayscale" : ""}`}
       >
         {workspaceMark(workspace.name)}
       </span>
+      {remote && (
+        <span
+          aria-hidden
+          data-remote-badge={remote.mismatch ? "offline" : remote.status}
+          className={`absolute -top-1 -right-1 grid size-4 place-items-center rounded-full text-inverse ring-2 ring-sidebar ${
+            remote.mismatch || remote.status === "offline"
+              ? "bg-danger"
+              : remote.status === "connecting"
+                ? "animate-pulse bg-warning"
+                : "bg-text"
+          }`}
+        >
+          <ServerIcon className="size-2.5" strokeWidth={2.5} />
+        </span>
+      )}
       {status && (
         <span className="absolute -right-1 -bottom-1 grid place-items-center rounded-full bg-sidebar p-0.5">
           <StatusDot status={status} className="size-3" />
@@ -273,3 +295,10 @@ function RailScroll({ activeId, children }: { activeId: string; children: ReactN
 
 /** The fade's height, and the margin under it at either end of the list. */
 const FADE = 12;
+
+/** The machine line of a mark's tooltip: where it is, and whether it answers. */
+function machineLine(link: EnvLink): string {
+  const where = whereOf(link);
+  const state = link.mismatch ? "needs an update" : link.status === "online" ? "online" : link.status === "connecting" ? "connecting…" : "offline";
+  return [link.name, where, state].filter(Boolean).join(" · ");
+}

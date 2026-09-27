@@ -9,7 +9,7 @@ Este documento es autosuficiente: una sesión nueva lo puede ejecutar sin el hil
 Controlar desde la app del Mac todo lo que hoy hace Crew, pero con los agentes, terminales y repos corriendo en otras máquinas: un VPS y un PC de casa, **ambos Ubuntu**. Lo local sigue igual.
 
 - Cada máquina remota corre su propio `crewd`. Crew lo instala desde la app.
-- **Settings › Remote environments** da de alta, actualiza y quita máquinas.
+- **Settings › Environments** da de alta, actualiza y quita máquinas.
 - El rail de workspaces sigue siendo uno solo y mezcla workspaces locales y remotos. Un workspace remoto lleva un badge de servidor.
 - **⌘O** abre un selector de máquina cuando hay al menos un remoto. Si no hay ninguno, sigue abriendo el diálogo nativo como hoy.
 - La red es **Tailscale**, sin servidor intermedio de Crew. El código no depende de Tailscale: un remoto es `host:puerto + token`. Tailscale aparece en la UX (lista de dispositivos, estado directo/relay) y en el instalador (Tailscale SSH).
@@ -77,7 +77,7 @@ registry     = workspaceId → envId, sessionId → envId, streamId → Connecti
 Modo nuevo, además del actual (hijo de Electron con handshake por stdout):
 
 ```
-crewd serve --listen 100.x.y.z:7777 --data-dir ~/.crew/data
+crewd serve --listen 100.x.y.z:17877 --data-dir ~/.crew/data
 ```
 
 - **No muere** por EOF en stdin ni cuando se desconecta un cliente. Solo se detiene con SIGTERM.
@@ -213,7 +213,7 @@ Y a mano contra el VPS real al cerrar las fases 2, 3 y 5.
 ## 8. Preguntas abiertas
 
 1. ¿Remove borra `~/.crew` en el remoto o lo deja? Propuesta: preguntar en el confirm, con "dejar" por defecto.
-2. ¿Puerto fijo (7777) o elegido en la instalación? Propuesta: fijo y configurable a mano.
+2. ¿Puerto fijo (7777) o elegido en la instalación? Propuesta: fijo y configurable a mano. El fijo pasó a 17877 para no chocar con Orca, que usa el 7777.
 3. ¿Las routines de un workspace remoto corren en el remoto aunque el Mac esté apagado? Debería ser sí, porque el scheduler ya vive en el daemon; confirmarlo en la fase 2.
 
 ## 9. Estado
@@ -221,15 +221,19 @@ Y a mano contra el VPS real al cerrar las fases 2, 3 y 5.
 | Fase | Estado |
 | --- | --- |
 | Prototipo | Hecho, variante A elegida. Rama `prototype/remote-env` |
-| 1 | Hecho salvo la verificación manual en el VPS. Ver notas abajo |
-| 2 | — |
-| 3 | — |
-| 4 | — |
-| 5 | — |
-| 6 | — |
-| 7 | — |
+| 1 | Hecho. Verificado en falcon-heavy al cerrar el alta (el daemon se desinstala para dejar el alta de primera vez) |
+| 2 | Hecho. Una `Connection` por daemon, rail, tokens en el keychain, fan-out de workspaces y routines |
+| 3 | Hecho. Settings › Remote y el instalador SSH. Los binarios Linux van en `extraResources` |
+| 4 | Hecho. ⌘O abre la paleta de máquinas y el `FolderBrowser` cuando hay un remoto |
+| 5 | Hecho. Previews por `GET /fs`, drops al daemon enfocado, Finder oculto en rutas remotas |
+| 6 | Hecho el proxy. SOCKS5 en el puerto siguiente, solo loopback, y `setProxy` con PAC. Que un agente posea el navegador del Mac espera a `feat/browser-mcp` |
+| 7 | Hecho. Wake, toasts, README y ARCHITECTURE |
 
-**Siguiente:** la verificación manual de la fase 1 en el VPS (abajo) y después la fase 2. La fase 2 puede arrancar sin esperar al VPS: su remoto de desarrollo es un `crewd serve` local.
+| Auditoría | Hecha el 2026-09-26. Ver "Notas de la auditoría" |
+
+**Siguiente:** probarlo a mano en la app contra falcon-heavy (ya tiene `crewd` 0.1.10 instalado y corriendo) y el alta de primera vez en una máquina sin `crewd`.
+
+Las tres preguntas abiertas quedaron así: Remove deja `~/.crew` salvo que el confirm pida borrarlo, el puerto por defecto es 17877 (el 7777 lo usa Orca) y se puede cambiar en la instalación, y las routines de un workspace remoto corren en ese daemon con el Mac apagado.
 
 ### Notas de la fase 1
 
@@ -240,6 +244,24 @@ Y a mano contra el VPS real al cerrar las fases 2, 3 y 5.
 - **`dir_list { path }`** acepta `~` y `~/…` y devuelve `{ path, repo, entries: [{ name, path, repo }] }`: solo carpetas (siguiendo symlinks), ordenadas sin distinguir mayúsculas, con las ocultas incluidas (el `FolderBrowser` decide si mostrarlas). `repo` = tiene `.git`, archivo o carpeta.
 - **`GET|HEAD /fs?root=<abs>&path=<relativa>`** con `Authorization: Bearer <token>`, en el mismo puerto (`crates/crewd/src/http.rs` hace a mano el upgrade a WebSocket). Mismas reglas que `electron/browser/serve.ts`: segmentos ocultos rechazados, carpeta → `index.html`, `realpath` dentro de `realpath(root)`. Un rango `bytes=` por request (206/416), `Cache-Control: no-store`, `Connection: close`. 401 sin token, 404 para todo lo demás.
 - **Build:** `node scripts/crewd-linux.mjs [x64] [arm64]` (requiere `brew install zig cargo-zigbuild`) deja `target/linux/crewd-linux-{x64,arm64}`. Compila sin cambios en las dependencias; los binarios piden glibc ≥ 2.29 (Ubuntu 20.04 o más nuevo). **Todavía no se empaquetan** en `extraResources`: se hace en la fase 3, que es la primera que los usa, para no exigir zig en cada `app:build`.
-- **Pendiente, a mano:** subir `crewd-linux-x64` al VPS, `crewd serve --listen <ip-tailnet>:7777`, y con `websocat` mandar `{"auth":"<token>"}` y `{"id":1,"method":"daemon_info","params":{}}`. No hay Docker en el Mac, así que las ramas de Linux de `machine.rs` (`/etc/os-release`, `/proc/meminfo`) compilan pero no se ejecutaron.
+- **Verificado a mano** en falcon-heavy con `crewd serve --listen <ip-tailnet>:17877`. No hay Docker en el Mac, así que las ramas de Linux de `machine.rs` (`/etc/os-release`, `/proc/meminfo`) se vieron ahí, no en un contenedor.
 - `cargo test --workspace`: `crew-core::pty::tests::a_pty_child_inherits_nothing_but_its_terminal` falla en esta máquina también sobre el commit base `6b603cd` (un fd heredado del entorno); no tiene que ver con esta fase.
 - `npm run e2e` en esta máquina: 25 specs pasan y el resto falla por el entorno (rutas `/tmp` frente a `/private/tmp`, timeouts de 30 s en la UI). `smoke` y `worktrees` fallan igual sobre `6b603cd`, así que no vienen de esta fase; los de archivos (`/fs` de Electron), rail y cookies pasan.
+
+### Notas de la auditoría
+
+Lo que no funcionaba y cómo quedó:
+
+- **Ningún remoto conectaba.** La CSP del renderer solo dejaba `ws://127.0.0.1:*`; el WebSocket a una IP del tailnet se bloqueaba. Ahora `connect-src` permite `ws:` (un remoto es cualquier dirección y la política de un documento se fija al cargar).
+- **Las terminales remotas no mostraban nada ni recibían teclas.** El id de un PTY es el del panel (`<workspace>[@<worktree>]/session:<sesión>`), no el de la sesión, así que `pty_attach`, los frames y las escrituras iban al daemon local. `envForPane` en `route.ts` resuelve ese id.
+- **`Connection`:** está online recién con el `hello` (un token malo ya no queda en bucle como "reconectando"), tiene timeout de apertura de 8 s, reintenta con backoff también el primer intento fallido, guarda el motivo (`error`) y, en un remoto caído, las requests fallan al instante con `EnvDown`. Estados: `connecting | online | offline`.
+- **Rail:** cada remoto guarda en el `state` local la última lista de workspaces (`env:workspaces:<id>`). Un remoto apagado al abrir sigue en el rail, offline; cuando responde, `onWorkspacesChanged` refresca el rail sin recargar. La app ya no espera a los remotos para pintar.
+- **Sesiones de un workspace remoto** se cargan cuando su máquina vuelve (antes quedaban vacías hasta cambiar de workspace), y un aviso sobre el workspace dice que la máquina está offline o conectando.
+- **Reconexión:** los hooks de `onReconnect` reciben qué sesiones viven en la máquina que volvió; un remoto que se reconecta ya no re-adjunta los PTY locales.
+- **Rendimiento:** la latencia se publica cada 5 s; `useEnvStates` y `useWorkspaceLink` evitan re-renderizar la App en cada tick, y el bind de `/fs` y del proxy SOCKS solo se manda por IPC cuando cambia.
+- **UI:** la sección es **Settings › Environments** (variante A del prototipo): tarjetas por máquina con estado, detalle de salud desplegable, menú de base-ui (cierra con click afuera y teclado), diálogos de logs, renombrar y quitar, alta con dispositivos del tailnet o una dirección a mano, pasos con progreso y reintento, y el estado de Tailscale. ⌘O y el `FolderBrowser` siguen la variante A (flechas, ⇥, ⌫, ⌘↵, recientes, "Open" en un repo).
+- La lógica remota de `App.tsx` pasó a `useEnvironments`.
+- `remove` ya no falla a medias: si SSH no llega, la máquina se quita igual y se avisa.
+- `scripts/remote-smoke.ts` recibe `user@host` en vez de tenerlo fijo. Ojo: al final borra `~/.crew` en la máquina.
+- Tests: `connection.test.ts`, `remotePath.test.ts`, rutas de PTY en `route.test.ts`, `tailnetFrom`, y `e2e/remote.test.ts` con un segundo `crewd serve` (abrir por ⌘O, terminal remota, caída y vuelta, remoto apagado al abrir, menú de Settings). El e2e usa `--use-mock-keychain` para los tokens.
+- **`~/.ssh/config`:** el instalador ya no usa `nc` (no lee la config, así que un alias como `falcon-heavy-public` no resolvía). Resuelve el destino con `ssh -G`, prueba el puerto que dice la config (o lo deja a ssh si hay ProxyJump/ProxyCommand), y todo pasa por `ssh [-l user] -- <destino>`. El alta lista los `Host` de la config (con `Include`) y usa el alias de un dispositivo del tailnet cuando alguno apunta a él. El usuario SSH es opcional. La tabla `remotes` guarda el destino en `ssh` (migración 19) y lo usan update, restart, logs y remove. "Edit…" cambia nombre, host y usuario SSH. crewd sigue escuchando solo en la IP del tailnet: sin Tailscale en la máquina el alta se detiene, y la misma máquina bajo otro alias se rechaza antes de escribir nada.

@@ -200,6 +200,22 @@ async fn daemon_info_and_dir_list() {
     let home = call(&mut ws, 4, "dir_list", json!({ "path": "~" })).await.expect("home");
     assert_eq!(home["path"], info["home"]);
     assert!(call(&mut ws, 5, "dir_list", json!({ "path": tree.join("missing") })).await.is_err());
+
+    assert_eq!(call(&mut ws, 6, "ping", json!({})).await.expect("ping"), Value::Null);
+    let saved = call(
+        &mut ws,
+        7,
+        "remote_upsert",
+        json!({ "id": "", "name": "VPS", "host": "100.1.1.1", "port": 7777, "user": "agent" }),
+    )
+    .await
+    .expect("upsert");
+    assert!(!saved["id"].as_str().unwrap_or("").is_empty());
+    let listed = call(&mut ws, 8, "remote_list", json!({})).await.expect("list");
+    assert_eq!(listed.as_array().map(Vec::len), Some(1));
+    call(&mut ws, 9, "remote_delete", json!({ "id": saved["id"] })).await.expect("delete");
+    let empty = call(&mut ws, 10, "remote_list", json!({})).await.expect("list again");
+    assert_eq!(empty.as_array().map(Vec::len), Some(0));
 }
 
 struct Reply {

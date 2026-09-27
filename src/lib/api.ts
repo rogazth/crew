@@ -1,7 +1,8 @@
 import { client } from "./client";
+import { focusEnv, envOf, RAIL_ORDER } from "./client/registry";
 import { open } from "./host";
 import type { RoutineRow, ScheduledRoutine } from "./routines";
-import type { CookieRead, CookieSource, HistoryEntry, HistoryList, MessagePage, PageSnapshot, SearchHit, SearchQuery } from "./protocol";
+import type { CookieRead, CookieSource, DirListing, HistoryEntry, HistoryList, MachineInfo, MessagePage, PageSnapshot, RemoteEnv, SearchHit, SearchQuery } from "./protocol";
 import type { Autonomy, ProjectFile, Session, SessionKind, SessionStatus, Workspace, Worktree } from "./types";
 
 /** Native picker. No filters: any document the agent can read. */
@@ -13,8 +14,9 @@ export async function pickFiles(): Promise<string[]> {
 
 export const listWorkspaces = (): Promise<Workspace[]> => client.request("workspace_list");
 
-export const createWorkspace = (name: string, path: string): Promise<Workspace> =>
-  client.request("workspace_create", { name, path });
+/** `envId` is the machine the folder is on. Omitted, the folder is on this Mac. */
+export const createWorkspace = (name: string, path: string, envId = "local"): Promise<Workspace> =>
+  client.request("workspace_create", { name, path }, envId);
 
 export const listWorktrees = (path: string): Promise<Worktree[]> =>
   client.request("worktree_list", { path });
@@ -161,8 +163,11 @@ export const stateDelete = (key: string): Promise<void> => client.request("state
 export const reorderSessions = (ids: string[]): Promise<void> =>
   client.request("session_reorder", { ids });
 
-export const reorderWorkspaces = (ids: string[]): Promise<void> =>
-  client.request("workspace_reorder", { ids });
+export async function reorderWorkspaces(ids: string[]): Promise<void> {
+  await stateSet(RAIL_ORDER, JSON.stringify(ids));
+  const localIds = ids.filter((id) => envOf(id) === "local");
+  if (localIds.length > 0) await client.request("workspace_reorder", { ids: localIds });
+}
 
 export const listProjectFiles = (cwd: string, include: string[] = []): Promise<ProjectFile[]> =>
   client.request("list_project_files", { cwd, include });
@@ -217,9 +222,10 @@ async function base64Of(file: File): Promise<string> {
 }
 
 /** Clipboard files have no path; the CLIs Crew hosts only take paths. */
-export async function writeTempFile(file: File): Promise<string> {
+/** Clipboard and drops have no path yet. On a remote workspace the bytes land on that machine. */
+export async function writeTempFile(file: File, envId = focusEnv()): Promise<string> {
   const extension = file.type.split("/")[1] ?? file.name.split(".").pop() ?? "bin";
-  return client.request("write_temp_file", { extension, base64Contents: await base64Of(file) });
+  return client.request("write_temp_file", { extension, base64Contents: await base64Of(file) }, envId);
 }
 
 /** A new file at `path`, parent folders included. Fails rather than overwrite. */
@@ -265,5 +271,16 @@ export const browserPageGet = (pageId: string): Promise<PageSnapshot | null> =>
 
 export const browserPageDelete = (pageId: string): Promise<void> =>
   client.request("browser_page_delete", { pageId });
+
+export const listRemotes = (): Promise<RemoteEnv[]> => client.request("remote_list");
+
+export const upsertRemote = (env: RemoteEnv): Promise<RemoteEnv> => client.request("remote_upsert", env);
+
+export const deleteRemoteRecord = (id: string): Promise<void> => client.request("remote_delete", { id });
+
+export const listDir = (envId: string, path: string): Promise<DirListing> =>
+  client.request("dir_list", { path }, envId);
+
+export const machineInfo = (envId: string): Promise<MachineInfo> => client.request("daemon_info", {}, envId);
 
 export { ackPty, killPty, resizePty, spawnPty, writePty } from "./pty";

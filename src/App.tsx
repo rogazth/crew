@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AgentSheetHost } from "./chrome/AgentSheet";
 import { CommandPalette, type PaletteMode } from "./chrome/CommandPalette";
+import { MachineBanner } from "./chrome/MachineBanner";
+import { MachinePalette } from "./chrome/MachinePalette";
 import { ConfirmDialog } from "./chrome/ConfirmDialog";
 import { NewWorktreeDialog } from "./chrome/NewWorktreeDialog";
 import { ShortcutsDialog } from "./chrome/ShortcutsDialog";
@@ -14,6 +16,7 @@ import { useAppCommands } from "./hooks/useAppCommands";
 import { useBrowserBridge } from "./hooks/useBrowserBridge";
 import { useSessionTitle } from "./hooks/useSessionTitle";
 import { useConfirmations } from "./hooks/useConfirmations";
+import { useEnvironments } from "./hooks/useEnvironments";
 import { useLaunch } from "./hooks/useLaunch";
 import { useNavigation } from "./hooks/useNavigation";
 import { useProjectFiles } from "./hooks/useProjectFiles";
@@ -133,6 +136,8 @@ export function App() {
 
   const nav = useNavigation({ tabs, sessions, confirms, removeSession: remove, closePage, route: work.route });
   const sheet = useAgentSheet({ create, update, openSession: nav.openSession, createWorktree: worktrees.create });
+  const envs = useEnvironments({ workspaces, active, closePage, openSettings, create, openSession: nav.openSession });
+
   const { newSession, launch } = useLaunch({
     sessions,
     worktree: work.placeIn,
@@ -165,6 +170,7 @@ export function App() {
     worktrees: work,
     newWorktree: () => setDialog("new-worktree"),
     toggleShortcuts: () => setDialog((open) => (open === "shortcuts" ? null : "shortcuts")),
+    openWorkspace: envs.openWorkspace,
     openHistory: () => nav.openStub("history", "History"),
     zoom: tabs.active?.kind === "browser" || isTerminalTab(tabs.active, sessions) ? null : (delta) => void zoomApp(delta),
   });
@@ -200,7 +206,8 @@ export function App() {
               closePage();
               workspaces.activate(id);
             },
-            onCreate: workspaces.create,
+            onCreate: envs.openWorkspace,
+            remoteOf: envs.remoteOf,
             onRename: workspaces.rename,
             onRemove: (workspace) => confirms.askWorkspace(workspace, tabs.unsavedIn(workspace.id)),
             onReorder: workspaces.reorder,
@@ -251,6 +258,7 @@ export function App() {
           sessions={sessions}
           onConfirm={confirms.ask}
           onOpenHit={nav.openHit}
+          onOpenTerminal={envs.openTerminalOn}
         />
         {/* Hidden, not unmounted: agent and terminal processes stay alive. */}
         <div hidden={!isWorkspace} className="flex min-h-0 flex-1 flex-col">
@@ -277,6 +285,8 @@ export function App() {
           />
 
 
+          <MachineBanner workspaceId={workspaceId} />
+
           {workspaces.error && (
             <div className="border-b border-border px-3 py-2 text-danger">{workspaces.error}</div>
           )}
@@ -289,7 +299,7 @@ export function App() {
             placeOf={work.placeOf}
             cwd={treePath}
             hasWorkspace={active !== null}
-            onCreateWorkspace={workspaces.create}
+            onCreateWorkspace={envs.openWorkspace}
             onStatus={setStatus}
             onOpenFile={nav.openFile}
             onOpenSession={nav.openSessionById}
@@ -306,6 +316,16 @@ export function App() {
           />
         </div>
       </main>
+
+      {envs.picker && (
+        <MachinePalette
+          start={envs.picker.start}
+          onClose={envs.closePicker}
+          onThisMac={envs.openLocal}
+          onAdd={envs.addMachine}
+          onOpen={envs.openOn}
+        />
+      )}
 
       {palette && active && (
         <CommandPalette

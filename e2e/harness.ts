@@ -4,7 +4,7 @@
 // short temporary directory: crewd's Unix socket sits in userData, and a long
 // path fails with "path must be shorter than SUN_LEN". A fake `claude` in
 // $HOME/.local/bin, where crewd looks first, plays the provider CLI.
-import { execFile } from "node:child_process";
+import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { chmod, mkdir, symlink, mkdtemp, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { createServer } from "node:http";
@@ -754,4 +754,70 @@ export async function servePages(titles: Record<string, string> = {}): Promise<P
         server.close(() => resolve());
       }),
   };
+}
+
+export type RemoteDaemon = {
+  /** The machine's id in Crew, once `addTo` paired it. */
+  id: string;
+  name: string;
+  port: number;
+  token: string;
+  dataDir: string;
+  /** Stops the daemon, as a machine going away does. */
+  stop(): Promise<void>;
+  /** Starts it again on the same port and data. */
+  start(): Promise<void>;
+};
+
+/**
+ * A second crewd, `crewd serve` on loopback, standing in for a machine on the
+ * tailnet: its own database, the sandbox's HOME and PATH (so the fake claude
+ * is the one it runs), and the token it writes under its data directory. It is
+ * added to Crew's address book the way Settings would, and the window reloads.
+ */
+export async function addRemote(crew: Crew, name = "devbox"): Promise<RemoteDaemon> {
+  const dataDir = path.join(crew.root, `remote-${name}`);
+  await mkdir(dataDir, { recursive: true });
+  const port = await freePort();
+  const env = sandboxEnv(crew.home, path.join(crew.root, "config"));
+  let child: ChildProcess | null = null;
+  const start = async () => {
+    const proc = spawn(path.join(ROOT, "target/debug/crewd"), ["serve", "--listen", `127.0.0.1:${port}`, "--data-dir", dataDir], {
+      env,
+      stdio: ["ignore", "pipe", "inherit"],
+    });
+    child = proc;
+    await new Promise<void>((resolve, reject) => {
+      proc.once("error", reject);
+      proc.once("exit", (code) => reject(new Error(`crewd serve exited ${code}`)));
+      proc.stdout?.once("data", () => resolve());
+    });
+    proc.removeAllListeners("exit");
+    proc.stdout?.resume();
+  };
+  const stop = async () => {
+    const proc = child;
+    child = null;
+    if (!proc || proc.exitCode !== null) return;
+    const exited = new Promise((resolve) => proc.once("exit", resolve));
+    proc.kill("SIGTERM");
+    await exited;
+  };
+  await start();
+  const token = (await readFile(path.join(dataDir, "token"), "utf8")).trim();
+  const row = await crew.window.evaluate(
+    (input) => window.crewHost!.remotes!.add(input),
+    { id: "", name, host: "127.0.0.1", port, user: "agent", token },
+  );
+  await crew.reload();
+  return { id: row.id, name, port, token, dataDir, stop, start };
+}
+
+/** A port nothing listens on now, and the one after it (crewd serve's SOCKS proxy) free too, most likely. */
+async function freePort(): Promise<number> {
+  const server = createServer();
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const { port } = server.address() as AddressInfo;
+  await new Promise<void>((resolve) => server.close(() => resolve()));
+  return port;
 }

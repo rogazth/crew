@@ -82,13 +82,37 @@ pub struct MachineInfo {
     #[ts(type = "number")]
     pub memory_total: u64,
     /// Absent where the OS does not say cheaply (macOS).
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional, type = "number")]
     pub memory_available: Option<u64>,
     /// Sessions mid-turn or waiting on an answer.
     pub agents_running: u32,
     /// The agent CLIs found on the daemon's PATH.
     pub installed: Vec<String>,
+    /// The SOCKS port beside `crewd serve`, for a remote workspace's browser.
+    /// Absent on the window's own daemon.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "number")]
+    pub socks_port: Option<u16>,
+}
+
+/// A machine the window reaches. The token that opens it is not here: the
+/// window keeps that in the keychain.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
+pub struct RemoteEnv {
+    pub id: String,
+    pub name: String,
+    /// The address crewd listens on: the machine's tailnet IP.
+    pub host: String,
+    pub port: u16,
+    /// Empty when `ssh` names the user, in ~/.ssh/config.
+    pub user: String,
+    /// What `ssh` is given to reach the machine: a Host from ~/.ssh/config, or
+    /// an address. Empty means `host`.
+    #[serde(default)]
+    pub ssh: String,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, TS)]

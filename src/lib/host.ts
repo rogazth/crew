@@ -1,7 +1,8 @@
 import type { DownloadActivity, OpenTabRequest } from "./browser/bridge";
 import type { NavSnapshot } from "./browser/snapshot";
 import type { KeyboardLayout, LiveCommand } from "./keymap";
-import type { ImportedCookie } from "./protocol";
+import type { ImportedCookie, RemoteEnv } from "./protocol";
+import type { InstallInput, InstallStep, ManualRemote, SshHost, Tailnet } from "./remotes";
 import type { UpdateState } from "./update";
 
 export type OpenOptions = { multiple?: boolean; directory?: boolean };
@@ -20,6 +21,7 @@ type CrewHost = {
   update: UpdateHost;
   browser: BrowserHost;
   files: FilesHost;
+  remotes?: RemotesHost;
 };
 
 /** Files shown as pages, and handed to Finder. Absent outside Electron. */
@@ -29,6 +31,30 @@ export type FilesHost = {
   reveal(path: string): Promise<void>;
   /** Resolves to why it could not open, or "" once it did. */
   openExternal(path: string): Promise<string>;
+  /** A workspace root whose files are served by that machine's daemon, not this disk. */
+  bindRemote?(root: string, envId: string): Promise<void>;
+  unbindRemote?(root: string): Promise<void>;
+};
+
+/** Machines other than this Mac. Absent outside Electron. */
+export type RemotesHost = {
+  tailnet(): Promise<Tailnet>;
+  /** The Hosts in ~/.ssh/config. */
+  sshHosts(): Promise<SshHost[]>;
+  install(input: InstallInput): Promise<RemoteEnv>;
+  onProgress(cb: (step: InstallStep) => void): () => void;
+  update(id: string): Promise<void>;
+  restart(id: string): Promise<void>;
+  /**
+   * `wipe` deletes `~/.crew` on the machine. Leaving it is the ordinary answer.
+   * The machine leaves Crew even when SSH fails; `warning` says what was left running.
+   */
+  remove(id: string, wipe: boolean): Promise<{ warning: string | null }>;
+  logs(id: string): Promise<string>;
+  token(id: string): Promise<string | null>;
+  /** A daemon that is already running, for tests and a second local `crewd serve`. */
+  add(input: ManualRemote): Promise<RemoteEnv>;
+  onWake(cb: () => void): () => void;
 };
 
 /** The updater's main-process half. Absent outside Electron. */
@@ -55,11 +81,13 @@ export type BrowserHost = {
   favicon(url: string, workspaceId: string): Promise<string | null>;
   /** Into the workspace's pages only. */
   importCookies(workspaceId: string, cookies: ImportedCookie[]): Promise<{ imported: number; failed: number }>;
+  /** Point a workspace's pages at that machine's loopback, or clear the proxy. */
+  setProxy?(workspaceId: string, envId: string | null, socksPort: number | null): Promise<void>;
 };
 
 export type HostDragDrop =
   | { type: "enter" | "over"; position: { x: number; y: number } }
-  | { type: "drop"; position: { x: number; y: number }; paths: string[] }
+  | { type: "drop"; position: { x: number; y: number }; paths: string[]; files: File[] }
   | { type: "leave" };
 
 declare global {
@@ -78,6 +106,10 @@ export function browserHost(): BrowserHost | null {
 
 export function filesHost(): FilesHost | null {
   return crewHost()?.files ?? null;
+}
+
+export function remotesHost(): RemotesHost | null {
+  return crewHost()?.remotes ?? null;
 }
 
 export function updateHost(): UpdateHost | null {
@@ -187,6 +219,7 @@ function listenDomDrops(handler: (event: HostDragDrop) => void): void {
       type: "drop",
       position: position(event),
       paths,
+      files,
     });
   };
   window.addEventListener("dragover", onDragOver);

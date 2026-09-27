@@ -16,6 +16,7 @@ function run(command, args) {
 }
 
 await run("cargo", ["build", "--release", "-p", "crewd"]);
+await run("node", ["scripts/crewd-linux.mjs"]);
 await run("npm", ["run", "build"]);
 await compileElectron();
 await run("npx", ["electron-builder", "--mac", "--arm64", "--dir"]);

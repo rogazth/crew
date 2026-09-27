@@ -57,9 +57,9 @@ function ensureBridge() {
     const apply = payload as TranscriptApply;
     applyRemote(apply.sessionId, apply.seq, apply.event);
   });
-  client.onReconnect(() => {
+  client.onReconnect((here = () => true) => {
     for (const [id, row] of threads) {
-      if (row.ready) void reload(id);
+      if (row.ready && here(id)) void reload(id);
     }
   });
 }

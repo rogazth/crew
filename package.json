@@ -104,6 +104,14 @@
       {
         "from": "target/release/crewd",
         "to": "crewd"
+      },
+      {
+        "from": "target/linux/crewd-linux-x64",
+        "to": "crewd-linux-x64"
+      },
+      {
+        "from": "target/linux/crewd-linux-arm64",
+        "to": "crewd-linux-arm64"
       }
     ],
     "mac": {

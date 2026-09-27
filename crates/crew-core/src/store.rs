@@ -298,6 +298,39 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         )?;
         tx.commit()?;
     }
+    if current < 18 {
+        // Machines the window connects to. Tokens stay in the keychain, not here.
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch(
+            "CREATE TABLE IF NOT EXISTS remotes (
+               id         TEXT PRIMARY KEY,
+               name       TEXT NOT NULL,
+               host       TEXT NOT NULL,
+               port       INTEGER NOT NULL,
+               user       TEXT NOT NULL,
+               created_at INTEGER NOT NULL
+             );
+             CREATE UNIQUE INDEX IF NOT EXISTS remotes_endpoint ON remotes (host, port);",
+        )?;
+        tx.execute(
+            "INSERT INTO schema_migrations (version, applied_at) VALUES (18, ?1)",
+            params![now_millis()],
+        )?;
+        tx.commit()?;
+    }
+    if current < 19 {
+        // How `ssh` reaches a machine: a Host from ~/.ssh/config, or an address.
+        // Empty for a machine added before, which is reached at `host`.
+        let tx = conn.unchecked_transaction()?;
+        if !has_column(&tx, "remotes", "ssh")? {
+            tx.execute_batch("ALTER TABLE remotes ADD COLUMN ssh TEXT NOT NULL DEFAULT '';")?;
+        }
+        tx.execute(
+            "INSERT INTO schema_migrations (version, applied_at) VALUES (19, ?1)",
+            params![now_millis()],
+        )?;
+        tx.commit()?;
+    }
     Ok(())
 }
 
@@ -431,12 +464,12 @@ mod migration_tests {
                 "ask".into(),
             )
             .expect("session");
-            // Back to a v16 database: no column, no version row.
+            // Back to a v16 database: no column, no version row for it or anything after.
             store
                 .with(|conn| {
                     conn.execute_batch(
                         "ALTER TABLE sessions DROP COLUMN worktree;
-                         DELETE FROM schema_migrations WHERE version = 17;",
+                         DELETE FROM schema_migrations WHERE version >= 17;",
                     )
                 })
                 .expect("downgrade");

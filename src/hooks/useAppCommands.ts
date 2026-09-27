@@ -21,6 +21,7 @@ type Deps = {
   toggleShortcuts: () => void;
   /** History is a tab, beside the pages it lists. */
   openHistory: () => void;
+  openWorkspace: () => void;
   newAgent: () => void;
   newSession: () => void;
   closeTab: (id: string) => void;
@@ -41,7 +42,7 @@ export function useAppCommands(deps: Deps) {
     "open-palette": () => deps.togglePalette("all"),
     "go-to-file": () => deps.togglePalette("files"),
     "open-actions": () => deps.togglePalette("actions"),
-    "open-workspace": workspaces.create,
+    "open-workspace": deps.openWorkspace,
     "switch-workspace": () => deps.togglePalette("context"),
     "focus-sidebar": () => deps.focusSidebar("panel"),
     "next-worktree": away(() => deps.worktrees.step(1)),

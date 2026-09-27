@@ -5,6 +5,7 @@ import { useSessionActivity } from '../hooks/useSessionActivity';
 import { nudgeTitle } from '../hooks/useSessionTitle';
 import { useTerminalPrefs } from '../hooks/useTerminalPrefs';
 import * as api from '../lib/api';
+import { sessionCwd } from '../lib/client/registry';
 import { claudeSessionId, transcriptPath } from '../lib/claudeStorage';
 import { bindProviderSession } from '../lib/agentRuntime';
 import { providerOf } from '../lib/providers';
@@ -83,15 +84,16 @@ export function Terminals({ panes, sessions, onStatus, onOpenFile }: Props) {
     if (tab.kind !== 'session') return null;
     const session = sessions.find((s) => s.id === tab.sessionId);
     if (!session || session.kind !== 'terminal') return null;
+    const here = sessionCwd(session.id) ?? cwd;
     return (
       <Pane key={pane.id} active={visible}>
         <SessionTerminal
           paneId={pane.id}
           session={session}
-          cwd={cwd}
+          cwd={here}
           active={visible}
           onStatus={onStatus}
-          onOpenPath={(path) => openPath(cwd, path)}
+          onOpenPath={(path) => openPath(here, path)}
         />
       </Pane>
     );

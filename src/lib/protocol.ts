@@ -175,7 +175,12 @@ agentsRunning: number,
 /**
  * The agent CLIs found on the daemon's PATH.
  */
-installed: Array<string>, };
+installed: Array<string>, 
+/**
+ * The SOCKS port beside `crewd serve`, for a remote workspace's browser.
+ * Absent on the window's own daemon.
+ */
+socksPort?: number, };
 
 /**
  * A window of a transcript. `more` says whether older blocks exist before
@@ -249,6 +254,25 @@ export type PtyWrite = { id: string, data: string, };
 export type Question = { question: string, header: string, multiSelect: boolean, options: Array<QuestionOption>, };
 
 export type QuestionOption = { label: string, description?: string, };
+
+/**
+ * A machine the window reaches. The token that opens it is not here: the
+ * window keeps that in the keychain.
+ */
+export type RemoteEnv = { id: string, name: string, 
+/**
+ * The address crewd listens on: the machine's tailnet IP.
+ */
+host: string, port: number, 
+/**
+ * Empty when `ssh` names the user, in ~/.ssh/config.
+ */
+user: string, 
+/**
+ * What `ssh` is given to reach the machine: a Host from ~/.ssh/config, or
+ * an address. Empty means `host`.
+ */
+ssh: string, };
 
 export type Request = { id: number, method: string, params: unknown, };
 

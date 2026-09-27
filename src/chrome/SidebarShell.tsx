@@ -75,7 +75,8 @@ export function SlidingViews({
 }) {
   const index = Math.max(0, views.findIndex((view) => view.key === active));
   return (
-    <div className={`relative min-h-0 flex-1 overflow-hidden ${className}`}>
+    // Clip, not hidden: a hidden overflow still scrolls when focus lands in a view mid-slide, and stays off by that much.
+    <div className={`relative min-h-0 flex-1 overflow-clip ${className}`}>
       {views.map((view, at) => (
         <div
           key={view.key}

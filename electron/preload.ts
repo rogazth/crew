@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from "electron";
 import { CHANNELS, type DownloadActivity, type OpenTabRequest } from "../src/lib/browser/bridge";
 import { FILE_CHANNELS } from "../src/lib/browser/files";
+import type { InstallInput, InstallStep, ManualRemote } from "../src/lib/remotes";
 import { UPDATE_CHANNELS, type UpdateState } from "../src/lib/update";
 
 function listen<T>(channel: string, cb: (value: T) => void): () => void {
@@ -22,6 +23,21 @@ contextBridge.exposeInMainWorld("crewHost", {
     url: (root: string, path: string) => ipcRenderer.invoke(FILE_CHANNELS.url, root, path),
     reveal: (path: string) => ipcRenderer.invoke(FILE_CHANNELS.reveal, path),
     openExternal: (path: string) => ipcRenderer.invoke(FILE_CHANNELS.openExternal, path),
+    bindRemote: (root: string, envId: string) => ipcRenderer.invoke("files:bind-remote", root, envId),
+    unbindRemote: (root: string) => ipcRenderer.invoke("files:unbind-remote", root),
+  },
+  remotes: {
+    tailnet: () => ipcRenderer.invoke("remotes:tailnet"),
+    sshHosts: () => ipcRenderer.invoke("remotes:ssh-hosts"),
+    install: (input: InstallInput) => ipcRenderer.invoke("remotes:install", input),
+    onProgress: (cb: (step: InstallStep) => void) => listen("remotes:progress", cb),
+    update: (id: string) => ipcRenderer.invoke("remotes:update", id),
+    restart: (id: string) => ipcRenderer.invoke("remotes:restart", id),
+    remove: (id: string, wipe: boolean) => ipcRenderer.invoke("remotes:remove", id, wipe),
+    logs: (id: string) => ipcRenderer.invoke("remotes:logs", id),
+    token: (id: string) => ipcRenderer.invoke("remotes:token", id),
+    add: (input: ManualRemote) => ipcRenderer.invoke("remotes:add", input),
+    onWake: (cb: () => void) => listen("remotes:wake", cb),
   },
   zoom: (delta: number) => ipcRenderer.invoke("app-zoom", delta),
   update: {
@@ -44,5 +60,7 @@ contextBridge.exposeInMainWorld("crewHost", {
     favicon: (url: string, workspaceId: string) => ipcRenderer.invoke(CHANNELS.favicon, url, workspaceId),
     importCookies: (workspaceId: string, cookies: unknown) =>
       ipcRenderer.invoke(CHANNELS.importCookies, workspaceId, cookies),
+    setProxy: (workspaceId: string, envId: string | null, socksPort: number | null) =>
+      ipcRenderer.invoke("browser:set-proxy", workspaceId, envId, socksPort),
   },
 });
