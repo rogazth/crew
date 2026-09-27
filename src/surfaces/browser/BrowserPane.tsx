@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { FindBar } from "../../chrome/FindBar";
 import { useBrowserPage } from "../../hooks/useBrowserPage";
 import { holdPane, type PaneHandle } from "../../lib/browser/handles";
-import { pages } from "../../lib/browser/pageStore";
+import { BLANK_PAGE, pages } from "../../lib/browser/pageStore";
 import { isWebUrl } from "../../lib/browser/url";
 import { preset, type Viewport } from "../../lib/browser/viewport";
 import { stepZoom } from "../../lib/browser/zoom";
@@ -71,6 +71,8 @@ export function BrowserPane({
     onFound: setFound,
   });
 
+  // What the tab opened with, read until the guest reports its own URL.
+  const initialUrl = useRef(url);
   // Hiding a guest that holds focus makes macOS hand the keyboard to another app.
   // Showing one puts the keyboard where it's useful: the bar on a blank tab, else the page.
   useEffect(() => {
@@ -78,7 +80,10 @@ export function BrowserPane({
       guest.current?.release();
       return;
     }
-    if (isWebUrl(pages.get(pageId).url)) guest.current?.focus();
+    // A tab opened with a URL shows before its guest reports one; the store still says blank.
+    const current = pages.get(pageId);
+    const shown = current === BLANK_PAGE ? initialUrl.current : current.url;
+    if (isWebUrl(shown)) guest.current?.focus();
     else address.current?.focus();
   }, [visible, pageId, guest]);
 
