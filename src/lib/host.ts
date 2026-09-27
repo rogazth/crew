@@ -17,6 +17,7 @@ type CrewHost = {
   pathForFile(file: File): string;
   /** Steps the whole window's zoom; 0 puts it back to actual size. */
   zoom(delta: number): Promise<void>;
+  colorMode: ColorModeHost;
   update: UpdateHost;
   browser: BrowserHost;
   files: FilesHost;
@@ -29,6 +30,12 @@ export type FilesHost = {
   reveal(path: string): Promise<void>;
   /** Resolves to why it could not open, or "" once it did. */
   openExternal(path: string): Promise<string>;
+};
+
+/** Light, dark or system, applied by main to the window and every page. Absent outside Electron. */
+export type ColorModeHost = {
+  get(): Promise<string>;
+  set(mode: string): Promise<void>;
 };
 
 /** The updater's main-process half. Absent outside Electron. */
@@ -78,6 +85,10 @@ export function browserHost(): BrowserHost | null {
 
 export function filesHost(): FilesHost | null {
   return crewHost()?.files ?? null;
+}
+
+export function colorModeHost(): ColorModeHost | null {
+  return crewHost()?.colorMode ?? null;
 }
 
 export function updateHost(): UpdateHost | null {

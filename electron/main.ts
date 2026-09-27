@@ -1,14 +1,26 @@
 import { spawn, type ChildProcessByStdio } from "node:child_process";
 import { createInterface } from "node:readline";
+import { readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import type { Readable, Writable } from "node:stream";
 import { pathToFileURL } from "node:url";
-import { app, BrowserWindow, dialog, ipcMain, Menu, Notification, session, type OpenDialogOptions } from "electron";
+import {
+  app,
+  BrowserWindow,
+  dialog,
+  ipcMain,
+  Menu,
+  nativeTheme,
+  Notification,
+  session,
+  type OpenDialogOptions,
+} from "electron";
 import { installBrowser, registerBrowserIpc, registerFileIpc, registerFileScheme, serveFiles } from "./browser";
 import { openExternal } from "./external";
 import { sha } from "./build-info";
 import { buildMenu } from "./menu";
+import { parseColorMode, type ColorMode } from "../src/lib/colorMode";
 import { watchForUpdates } from "./update";
 
 type DaemonInfo = { url: string; token: string };
@@ -194,6 +206,20 @@ async function stopDaemon(): Promise<void> {
   });
 }
 
+// Kept by main, not crewd, so the window opens in the mode before the renderer loads.
+const colorModeFile = () => path.join(app.getPath("userData"), "color-mode");
+
+function readColorMode(): ColorMode {
+  try {
+    return parseColorMode(readFileSync(colorModeFile(), "utf8").trim());
+  } catch {
+    return parseColorMode(null);
+  }
+}
+
+/** The canvas colour in each mode, so the window never flashes the other one. */
+const windowBackground = () => (nativeTheme.shouldUseDarkColors ? "#0f0f0f" : "#ffffff");
+
 function createWindow(): void {
   win = new BrowserWindow({
     width: 1280,
@@ -207,7 +233,7 @@ function createWindow(): void {
     show: !e2e,
     titleBarStyle: "hiddenInset",
     trafficLightPosition: { x: 16, y: 12 },
-    backgroundColor: "#ffffff",
+    backgroundColor: windowBackground(),
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
       contextIsolation: true,
@@ -266,6 +292,12 @@ function registerIpc(): void {
     const level = delta === 0 ? 0 : Math.min(3, Math.max(-3, contents.getZoomLevel() + delta * 0.5));
     contents.setZoomLevel(level);
   });
+  ipcMain.handle("color-mode-get", () => nativeTheme.themeSource);
+  ipcMain.handle("color-mode-set", (_event, raw: string) => {
+    const mode = parseColorMode(raw);
+    nativeTheme.themeSource = mode;
+    writeFileSync(colorModeFile(), mode);
+  });
   ipcMain.handle("open-url", async (_event, url: string) => {
     if (!allowedUrl(url)) return;
     await openExternal(url);
@@ -300,6 +332,8 @@ app.whenReady().then(async () => {
     });
   });
   serveFiles(session.defaultSession);
+  nativeTheme.themeSource = readColorMode();
+  nativeTheme.on("updated", () => win?.setBackgroundColor(windowBackground()));
   Menu.setApplicationMenu(buildMenu());
   registerIpc();
   try {

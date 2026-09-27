@@ -24,6 +24,10 @@ contextBridge.exposeInMainWorld("crewHost", {
     openExternal: (path: string) => ipcRenderer.invoke(FILE_CHANNELS.openExternal, path),
   },
   zoom: (delta: number) => ipcRenderer.invoke("app-zoom", delta),
+  colorMode: {
+    get: () => ipcRenderer.invoke("color-mode-get"),
+    set: (mode: string) => ipcRenderer.invoke("color-mode-set", mode),
+  },
   update: {
     current: () => ipcRenderer.invoke(UPDATE_CHANNELS.current),
     onState: (cb: (state: UpdateState) => void) => listen(UPDATE_CHANNELS.state, cb),

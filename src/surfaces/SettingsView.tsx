@@ -9,11 +9,13 @@ import { ProviderIcon } from "../chrome/ProviderIcon";
 import { SettingsRow, SettingsSection } from "../chrome/SettingsRow";
 import { useAgentAvatar } from "../hooks/useAgentAvatar";
 import { useBrowserPrefs } from "../hooks/useBrowserPrefs";
+import { useColorMode } from "../hooks/useColorMode";
 import { useDefaultAgent } from "../hooks/useDefaultAgent";
 import { useFilePrefs } from "../hooks/useFilePrefs";
 import { useTabScope } from "../hooks/useTabScope";
 import { AGENT_AVATARS } from "../lib/agentAvatar";
 import { KEEP_CHOICES, SEARCH_ENGINES } from "../lib/browserPrefs";
+import { COLOR_MODES } from "../lib/colorMode";
 import { bindingGroups } from "../lib/commandGroups";
 import { commandKeys } from "../lib/commands";
 import { BROWSER_CLICK } from "../lib/external";
@@ -116,25 +118,41 @@ const PREVIEW_SEEDS = ["crew", "scout", "atlas", "pilot"];
 
 function Appearance() {
   const avatar = useAgentAvatar();
+  const color = useColorMode();
   return (
-    <SettingsSection title="Agents">
-      <SettingsRow label="Avatar style" description="Every agent gets its own face in this style, drawn from its id.">
-        <div className="flex items-center gap-3">
-          <div className="flex gap-1" aria-hidden>
-            {PREVIEW_SEEDS.map((seed) => (
-              <AgentAvatar key={seed} seed={seed} bare className="size-6" />
-            ))}
+    <>
+      {color.available && (
+        <SettingsSection title="Theme">
+          <SettingsRow label="Mode" description="Light or dark for the app and its pages. System follows macOS.">
+            <Select
+              label="Mode"
+              className="w-40"
+              value={color.mode}
+              onChange={color.update}
+              options={COLOR_MODES.map((item) => ({ value: item.id, label: item.label }))}
+            />
+          </SettingsRow>
+        </SettingsSection>
+      )}
+      <SettingsSection title="Agents">
+        <SettingsRow label="Avatar style" description="Every agent gets its own face in this style, drawn from its id.">
+          <div className="flex items-center gap-3">
+            <div className="flex gap-1" aria-hidden>
+              {PREVIEW_SEEDS.map((seed) => (
+                <AgentAvatar key={seed} seed={seed} bare className="size-6" />
+              ))}
+            </div>
+            <Select
+              label="Avatar style"
+              className="w-40"
+              value={avatar.avatar}
+              onChange={avatar.update}
+              options={AGENT_AVATARS.map((item) => ({ value: item.id, label: item.label }))}
+            />
           </div>
-          <Select
-            label="Avatar style"
-            className="w-40"
-            value={avatar.avatar}
-            onChange={avatar.update}
-            options={AGENT_AVATARS.map((item) => ({ value: item.id, label: item.label }))}
-          />
-        </div>
-      </SettingsRow>
-    </SettingsSection>
+        </SettingsRow>
+      </SettingsSection>
+    </>
   );
 }
 
