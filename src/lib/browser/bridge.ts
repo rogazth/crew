@@ -43,7 +43,13 @@ export const CHANNELS = {
   command: "browser:command",
   /** main → window: a page asked for a new tab (target=_blank, window.open, the context menu). */
   openTab: "browser:open-tab",
+  /** Toggles a page's DevTools in a window of their own. */
   devtools: "browser:devtools",
+  /** Opens a page's DevTools in a view of the window, over the pane's panel. */
+  dockDevtools: "browser:dock-devtools",
+  /** Moves docked DevTools with their panel, or hides them while something covers it. */
+  placeDevtools: "browser:place-devtools",
+  closeDevtools: "browser:close-devtools",
   snapshot: "browser:snapshot",
   prepareRestore: "browser:prepare-restore",
   /** The window's CSP keeps remote images out, so main fetches a page's icon and hands back a data: URL. */
@@ -53,6 +59,12 @@ export const CHANNELS = {
   /** window → main: cookies the daemon read from another browser, to write into one workspace's session. */
   importCookies: "browser:import-cookies",
 } as const;
+
+/** Where the panel is in the window, in CSS pixels: main scales it by the window's zoom. */
+export type DockBounds = { x: number; y: number; width: number; height: number };
+
+/** What docked DevTools looked like as they were hidden, shown in their place meanwhile. */
+export type DockSnapshot = { url: string; width: number; height: number };
 
 export type DownloadActivity = { webContentsId: number; active: boolean };
 

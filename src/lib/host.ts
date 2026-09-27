@@ -1,4 +1,4 @@
-import type { DownloadActivity, OpenTabRequest } from "./browser/bridge";
+import type { DockBounds, DockSnapshot, DownloadActivity, OpenTabRequest } from "./browser/bridge";
 import type { NavSnapshot } from "./browser/snapshot";
 import type { KeyboardLayout, LiveCommand } from "./keymap";
 import type { ImportedCookie } from "./protocol";
@@ -56,6 +56,12 @@ export type BrowserHost = {
   onDownload(cb: (activity: DownloadActivity) => void): () => void;
   /** Resolves whether DevTools are open afterwards. */
   toggleDevTools(webContentsId: number): Promise<boolean>;
+  /** Beside the page, over the panel at `bounds`; false when the page isn't this window's. */
+  dockDevTools(webContentsId: number, bounds: DockBounds): Promise<boolean>;
+  /** Null hides docked DevTools while something covers their panel, and resolves to how they looked. */
+  placeDevTools(webContentsId: number, bounds: DockBounds | null): Promise<DockSnapshot | null>;
+  /** Docked ones only. */
+  closeDevTools(webContentsId: number): Promise<void>;
   snapshot(webContentsId: number): Promise<NavSnapshot | null>;
   prepareRestore(token: string, entriesJson: string, index: number): Promise<boolean>;
   /** Through the workspace's own session, so an icon behind its sign-in loads. */

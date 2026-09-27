@@ -1,7 +1,25 @@
 import { Menu } from "@base-ui/react/menu";
-import { CodeXmlIcon, ChevronRightIcon, HistoryIcon, CookieIcon, EllipsisIcon, SettingsIcon, SearchIcon, ZoomInIcon, MinusIcon, PlusIcon, type LucideIcon as Icon } from "lucide-react";
+import {
+  AppWindowIcon,
+  CheckIcon,
+  CodeXmlIcon,
+  ChevronRightIcon,
+  HistoryIcon,
+  CookieIcon,
+  EllipsisIcon,
+  PanelBottomIcon,
+  PanelLeftIcon,
+  PanelRightIcon,
+  SettingsIcon,
+  SearchIcon,
+  ZoomInIcon,
+  MinusIcon,
+  PlusIcon,
+  type LucideIcon as Icon,
+} from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { browserCookieSources } from "../../lib/api";
+import { DEVTOOLS_DOCKS, type DevToolsDock } from "../../lib/browserPrefs";
 import { cookieSourceLabel } from "../../lib/browser/cookies";
 import { zoomLabel, ZOOM_STEPS } from "../../lib/browser/zoom";
 import { commandKeys, type CommandId } from "../../lib/commands";
@@ -16,6 +34,13 @@ const ROW =
 const STEP =
   "grid size-6 cursor-default place-items-center rounded-md outline-none select-none data-disabled:opacity-40 data-highlighted:bg-hover";
 
+const DOCKS: Record<DevToolsDock, { label: string; icon: Icon }> = {
+  right: { label: "Dock to Right", icon: PanelRightIcon },
+  bottom: { label: "Dock to Bottom", icon: PanelBottomIcon },
+  left: { label: "Dock to Left", icon: PanelLeftIcon },
+  window: { label: "Separate Window", icon: AppWindowIcon },
+};
+
 const ZOOM_MIN = ZOOM_STEPS[0];
 const ZOOM_MAX = ZOOM_STEPS[ZOOM_STEPS.length - 1] ?? ZOOM_MIN;
 
@@ -29,6 +54,8 @@ type Props = {
   onZoom: (direction: -1 | 0 | 1) => void;
   onFind: () => void;
   onDevTools: () => void;
+  devtoolsDock: DevToolsDock;
+  onDevToolsDock: (dock: DevToolsDock) => void;
   onHistory: () => void;
   onSettings: () => void;
   onImportCookies: (source: CookieSource) => void;
@@ -37,7 +64,18 @@ type Props = {
 };
 
 /** The page's ⋯ menu, like a browser's: zoom, find, and what doesn't earn a toolbar button. */
-export function BrowserMenu({ zoom, onZoom, onFind, onDevTools, onHistory, onSettings, onImportCookies, canImport }: Props) {
+export function BrowserMenu({
+  zoom,
+  onZoom,
+  onFind,
+  onDevTools,
+  devtoolsDock,
+  onDevToolsDock,
+  onHistory,
+  onSettings,
+  onImportCookies,
+  canImport,
+}: Props) {
   // Read each time the menu opens: a browser installed meanwhile shows up without a restart.
   const [sources, setSources] = useState<CookieSource[] | null>(null);
 
@@ -117,6 +155,22 @@ export function BrowserMenu({ zoom, onZoom, onFind, onDevTools, onHistory, onSet
               </Submenu>
             )}
             <Item icon={CodeXmlIcon} label="Developer Tools" command="browser-devtools" onClick={onDevTools} />
+            <Submenu icon={DOCKS[devtoolsDock].icon} label="Developer Tools Position">
+              <Menu.RadioGroup value={devtoolsDock} onValueChange={(value) => onDevToolsDock(value as DevToolsDock)}>
+                {DEVTOOLS_DOCKS.map((id) => {
+                  const { icon: Glyph, label } = DOCKS[id];
+                  return (
+                    <Menu.RadioItem key={id} value={id} closeOnClick className={ROW}>
+                      <Glyph className="size-4 shrink-0 text-icon" />
+                      <span className="min-w-0 flex-1 truncate">{label}</span>
+                      <Menu.RadioItemIndicator>
+                        <CheckIcon className="size-4 shrink-0" />
+                      </Menu.RadioItemIndicator>
+                    </Menu.RadioItem>
+                  );
+                })}
+              </Menu.RadioGroup>
+            </Submenu>
 
             <Separator />
 

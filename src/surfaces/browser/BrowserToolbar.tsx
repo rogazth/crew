@@ -1,5 +1,6 @@
 import { ArrowLeftIcon, ArrowRightIcon, CodeXmlIcon, RotateCwIcon, SmartphoneIcon, XIcon } from "lucide-react";
 import type { ReactNode, Ref } from "react";
+import type { DevToolsDock } from "../../lib/browserPrefs";
 import type { CookieSource } from "../../lib/protocol";
 import { commandKeys, type CommandId } from "../../lib/commands";
 import type { PageState } from "../../lib/browser/pageStore";
@@ -16,6 +17,10 @@ type Props = {
   onReload: () => void;
   onStop: () => void;
   onDevTools: () => void;
+  /** Docked DevTools count as open before the page reports them. */
+  devtools: boolean;
+  devtoolsDock: DevToolsDock;
+  onDevToolsDock: (dock: DevToolsDock) => void;
   onZoom: (direction: -1 | 0 | 1) => void;
   onFind: () => void;
   onHistory: () => void;
@@ -38,6 +43,9 @@ export function BrowserToolbar({
   onReload,
   onStop,
   onDevTools,
+  devtools,
+  devtoolsDock,
+  onDevToolsDock,
   onZoom,
   onFind,
   onHistory,
@@ -89,7 +97,7 @@ export function BrowserToolbar({
       <Tool label="Responsive View" active={responsive} onClick={onResponsive}>
         <SmartphoneIcon className="size-4" />
       </Tool>
-      <Tool label="Developer Tools" command="browser-devtools" active={page.devtools} onClick={onDevTools}>
+      <Tool label="Developer Tools" command="browser-devtools" active={devtools} onClick={onDevTools}>
         <CodeXmlIcon className="size-4" />
       </Tool>
       <BrowserMenu
@@ -97,6 +105,8 @@ export function BrowserToolbar({
         onZoom={onZoom}
         onFind={onFind}
         onDevTools={onDevTools}
+        devtoolsDock={devtoolsDock}
+        onDevToolsDock={onDevToolsDock}
         onHistory={onHistory}
         onSettings={onSettings}
         onImportCookies={onImportCookies}

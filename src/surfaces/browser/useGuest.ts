@@ -26,6 +26,12 @@ type Options = {
   onFound: (found: { index: number; count: number }) => void;
 };
 
+/** The page's guest, plus what only the pane knows about it. */
+export type PageGuest = Guest & {
+  /** DevTools docked in the pane report nothing through the guest, so the pane says so. */
+  dockDevTools(docked: boolean): void;
+};
+
 /** A tab's title and URL are written this long after the page settles; a redirect chain is one write. */
 const PATCH_MS = 500;
 /** The back/forward stack is saved this long after the last navigation. */
@@ -57,9 +63,9 @@ async function source(pageId: string, url: string): Promise<string> {
  * state, tab snapshots, history visits and saved stacks. Everything the build
  * reads is read through a ref: a navigation must never rebuild the guest.
  */
-export function useGuest(options: Options): RefObject<Guest | null> {
+export function useGuest(options: Options): RefObject<PageGuest | null> {
   const { pageId, workspaceId, live, generation, container, address } = options;
-  const guest = useRef<Guest | null>(null);
+  const guest = useRef<PageGuest | null>(null);
   // Read at build time only: a navigation must never rebuild the guest.
   const latest = useRef(options);
   useEffect(() => {
@@ -79,6 +85,7 @@ export function useGuest(options: Options): RefObject<Guest | null> {
     let retried = false;
     let faviconAsk = 0;
     let devtools = false;
+    let docked = false;
     let playing = false;
 
     const update = (patch: Parameters<typeof pages.update>[1]) => pages.update(pageId, patch);
@@ -111,7 +118,7 @@ export function useGuest(options: Options): RefObject<Guest | null> {
       canGoBack: built?.canGoBack() ?? false,
       canGoForward: built?.canGoForward() ?? false,
     });
-    const pin = () => latest.current.onPinned(devtools || playing);
+    const pin = () => latest.current.onPinned(devtools || docked || playing);
 
     // The bar is usable while source() waits on the daemon. A URL typed then is
     // kept here, and the guest is built as soon as one arrives instead of after
@@ -122,7 +129,7 @@ export function useGuest(options: Options): RefObject<Guest | null> {
     const typed = new Promise<void>((resolve) => {
       notifyTyped = resolve;
     });
-    const facade: Guest = {
+    const facade: PageGuest = {
       get element() {
         if (!built) throw new Error("The page is not attached yet.");
         return built.element;
@@ -153,6 +160,10 @@ export function useGuest(options: Options): RefObject<Guest | null> {
       },
       release: () => built?.release(),
       destroy: () => built?.destroy(),
+      dockDevTools: (on) => {
+        docked = on;
+        pin();
+      },
     };
     guest.current = facade;
 
@@ -268,7 +279,7 @@ export function useGuest(options: Options): RefObject<Guest | null> {
       if (pending.url !== undefined || pending.title !== undefined) latest.current.onPatch(pending);
       built?.destroy();
       if (guest.current === facade) guest.current = null;
-      if (devtools || playing) latest.current.onPinned(false);
+      if (devtools || docked || playing) latest.current.onPinned(false);
       update({ webContentsId: null, loading: false, devtools: false });
     };
   }, [live, pageId, workspaceId, generation, container, address]);
