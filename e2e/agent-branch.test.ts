@@ -44,10 +44,10 @@ async function snapshot() {
   };
 }
 
-/** ⇧⌘N, a name, and a new branch in "Works in"; the sheet is returned still open. */
+/** ⇧⌘A, a name, and a new branch in "Works in"; the sheet is returned still open. */
 async function agentOnBranch(name: string, branch: string): Promise<Locator> {
   const page = crew.window;
-  await pressChord(crew, `${MOD}+Shift+n`);
+  await pressChord(crew, `${MOD}+Shift+a`);
   const sheet = page.getByRole("dialog", { name: "New agent" });
   await sheet.waitFor();
   await sheet.getByPlaceholder("e.g. Research").fill(name);

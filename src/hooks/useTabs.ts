@@ -10,6 +10,7 @@ import {
   panesOf,
   patchBrowserTab,
   parseTabs,
+  persistedTabs,
   pinTab,
   reopenTab,
   reorderTabs,
@@ -76,8 +77,7 @@ export function useTabs(workspaceId: string | null, placeOf: PlaceOf | null = nu
     for (const [id, next] of Object.entries(registry)) {
       if (saved.current[id] === next || !restoredIds.current.has(id)) continue;
       saved.current[id] = next;
-      const { tabs, activeId, recent, collapsed } = next;
-      void api.stateSet(`tabs:${id}`, JSON.stringify({ tabs, activeId, recent, collapsed })).catch(() => {});
+      void api.stateSet(`tabs:${id}`, JSON.stringify(persistedTabs(next))).catch(() => {});
     }
   }, [registry]);
 

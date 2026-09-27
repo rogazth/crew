@@ -17,7 +17,8 @@ export function useSelectAllScope() {
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
       if (event.key !== "a" && event.key !== "A") return;
-      if (!(event.metaKey || event.ctrlKey) || event.altKey) return;
+      // ⇧⌘A is New Agent, not a selection.
+      if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey) return;
       if (event.target instanceof Element && event.target.closest(EDITABLE)) return;
 
       event.preventDefault();

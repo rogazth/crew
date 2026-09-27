@@ -32,6 +32,7 @@ type Props = {
   workspaceId: string;
   /** What the tab restores to when the page has no saved stack. */
   url: string;
+  incognito: boolean;
   live: boolean;
   visible: boolean;
   searchTemplate: string;
@@ -44,6 +45,7 @@ export function BrowserPane({
   pageId,
   workspaceId,
   url,
+  incognito,
   live,
   visible,
   searchTemplate,
@@ -73,6 +75,7 @@ export function BrowserPane({
     pageId,
     url,
     workspaceId,
+    incognito,
     live,
     generation,
     container,
@@ -226,7 +229,9 @@ export function BrowserPane({
         onHistory={() => runCommand("open-history")}
         onSettings={() => runCommand("open-browser-settings")}
         onImportCookies={setImporting}
-        canImport={browserHost() !== null}
+        // Imported cookies go to the workspace's saved session, which an incognito page never sees.
+        canImport={browserHost() !== null && !incognito}
+        incognito={incognito}
         responsive={viewport !== null}
         onResponsive={() => setViewport((current) => (current ? null : preset("phone")))}
         onNavigate={handle.navigate}

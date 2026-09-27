@@ -14,7 +14,7 @@ type Deps = {
   openSession: (session: Session) => void;
   openStub: (stub: StubKind, title: string) => void;
   openTerminal: (worktree: string | null) => void;
-  openBrowser: (url?: string) => void;
+  openBrowser: (url?: string, incognito?: boolean) => void;
   newAgent: () => void;
 };
 
@@ -46,7 +46,7 @@ export function useLaunch({ sessions, worktree, create, openSession, openStub, o
         if (item.stub === "terminal") openTerminal(worktree);
         else openStub(item.stub, item.title);
       }
-      if (item.kind === "browser") openBrowser(item.url);
+      if (item.kind === "browser") openBrowser(item.url, item.incognito);
       if (item.kind === "new-agent") newAgent();
       if (item.kind === "new-session") void newSession(item.provider);
       if (item.kind === "session") openSession(item.session);

@@ -44,11 +44,13 @@ export function Browsers({ panes, onPatch, onOpenTab }: Props) {
   // Downloads in flight per page, by its pane: counted, since one page can run several.
   const [downloads, setDownloads] = useState<ReadonlyMap<string, number>>(() => new Map());
   const ids = new Set(browsers.map((pane) => pane.id));
+  // An incognito page saved no stack to come back from, so going cold would lose it.
+  const incognito = browsers.flatMap((pane) => (pane.tab.incognito ? [pane.id] : []));
   const live = liveGuests({
     order: order.filter((id) => ids.has(id)),
     visible: visibleId,
     keep: prefs.keep,
-    pinned: new Set([...pinned, ...downloads.keys()].filter((id) => ids.has(id))),
+    pinned: new Set([...pinned, ...downloads.keys(), ...incognito].filter((id) => ids.has(id))),
   });
 
   const active = () => (visible ? paneHandle(visible.tab.id) : undefined);
@@ -116,7 +118,7 @@ export function Browsers({ panes, onPatch, onOpenTab }: Props) {
           front ??
           all.find((pane) => pane.visible);
         if (!opener) return;
-        const tab = newBrowserTab(request.url);
+        const tab = newBrowserTab(request.url, request.incognito);
         openTab(opener.workspaceId, tab, { after: opener.tab.id, background: request.background });
         // A tab opened behind the current one still loads, the way a middle-click does.
         setOrder((current) => touch(current, paneId(opener.workspaceId, tab.id)));
@@ -147,6 +149,7 @@ export function Browsers({ panes, onPatch, onOpenTab }: Props) {
           pageId={pane.tab.id}
           workspaceId={pane.workspaceId}
           url={pane.tab.url}
+          incognito={pane.tab.incognito === true}
           live={live.has(pane.id)}
           visible={pane.visible}
           searchTemplate={prefs.searchTemplate}

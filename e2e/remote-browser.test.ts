@@ -69,11 +69,11 @@ function mark(crew: Crew, name: string) {
   return crew.window.locator(`nav[aria-label="Workspaces"][data-sidebar-rail] button[data-nav][aria-label="${name}"]`);
 }
 
-/** How a workspace's pages would reach `url`, as its session's proxy settles it. */
-function route(crew: Crew, workspaceId: string, url: string): Promise<string> {
+/** How a workspace's pages would reach `url`, as its session's proxy settles it; `incognito` asks its in-memory one. */
+function route(crew: Crew, workspaceId: string, url: string, incognito = false): Promise<string> {
   return crew.app.evaluate(
     ({ session }, [partition, target]) => session.fromPartition(partition!).resolveProxy(target!),
-    [partitionFor(workspaceId), url],
+    [partitionFor(workspaceId, incognito), url],
   );
 }
 
@@ -126,6 +126,10 @@ test("a remote workspace's pages open the machine's localhost, websockets too, a
     assert.equal(await route(crew, workspace.id, "https://github.io/"), "DIRECT");
     assert.equal(await route(crew, workspace.id, "http://10.0.0.1/"), "DIRECT");
     assert.equal(await route(crew, local.id, "http://localhost:3000/"), "DIRECT");
+    // Its incognito pages reach the machine the same way.
+    assert.equal(await route(crew, workspace.id, "http://localhost:3000/", true), relay);
+    assert.equal(await route(crew, workspace.id, "https://example.com/", true), "DIRECT");
+    assert.equal(await route(crew, local.id, "http://localhost:3000/", true), "DIRECT");
 
     // A dev server page and its HMR socket, through the machine.
     await mark(crew, "web").click();

@@ -57,9 +57,12 @@ export const COMMANDS = {
   "worktree-9": { label: "Go to Worktree 9", keys: { key: "9", ctrl: true, meta: true } },
 
   // Making things
-  "new-agent": { label: "New Agent", keys: "Mod+Shift+N" },
+  "new-agent": { label: "New Agent", keys: "Mod+Shift+A" },
   "new-session": { label: "New Session", keys: "Mod+N" },
   "new-worktree": { label: "New Worktree", keys: { key: "N", ctrl: true, meta: true } },
+  // ⇧⌘N is Chrome's incognito window, so the muscle memory transfers; B is for browser.
+  "new-browser-tab": { label: "New Browser Tab", keys: "Mod+Shift+B" },
+  "new-incognito-tab": { label: "New Incognito Tab", keys: "Mod+Shift+N" },
 
   // Find and zoom — bound by whatever fills the active tab: a terminal or a page zooms
   // itself, anything else zooms the window.
