@@ -10,7 +10,7 @@ import path from "node:path";
 import { test } from "node:test";
 import type { Locator } from "playwright-core";
 import type { Session, Workspace } from "../src/lib/types.ts";
-import { addRemote, launchCrew, MOD, pressChord, typeInTerminal, waitFor, type Crew, type RemoteDaemon } from "./harness.ts";
+import { addRemote, launchCrew, MOD, pressChord, remoteRequest, typeInTerminal, waitFor, type Crew, type RemoteDaemon } from "./harness.ts";
 
 function mark(crew: Crew, name: string): Locator {
   return crew.window.locator(`nav[aria-label="Workspaces"][data-sidebar-rail] button[data-nav][aria-label="${name}"]`);
@@ -21,28 +21,6 @@ function badge(crew: Crew, name: string): Promise<string | null> {
     .locator("[data-remote-badge]")
     .getAttribute("data-remote-badge", { timeout: 1_000 })
     .catch(() => null);
-}
-
-/** One RPC straight to the remote daemon, the way a second window would. */
-function remoteRequest<T>(remote: RemoteDaemon, method: string, params: object = {}): Promise<T> {
-  return new Promise((resolve, reject) => {
-    const ws = new WebSocket(`ws://127.0.0.1:${remote.port}`);
-    const timer = setTimeout(() => {
-      ws.close();
-      reject(new Error(`${method}: no answer`));
-    }, 5_000);
-    ws.onopen = () => ws.send(JSON.stringify({ auth: remote.token }));
-    ws.onerror = () => reject(new Error(`${method}: could not connect`));
-    ws.onmessage = (event) => {
-      const message = JSON.parse(String(event.data)) as { event?: string; id?: number; ok?: boolean; result?: T; error?: string };
-      if (message.event === "hello") ws.send(JSON.stringify({ id: 1, method, params }));
-      if (message.id !== 1) return;
-      clearTimeout(timer);
-      ws.close();
-      if (message.ok) resolve(message.result as T);
-      else reject(new Error(message.error ?? method));
-    };
-  });
 }
 
 test("a workspace on another machine opens from ⌘O, runs a terminal there, and rides out the machine going away", async () => {

@@ -826,6 +826,28 @@ export async function addRemote(crew: Crew, name = "devbox", opts: { latencyMs?:
   return { id: row.id, name, port, dialPort: proxy?.port ?? port, token, dataDir, stop: stopAll, start };
 }
 
+/** One RPC straight to the remote daemon, the way a second window would. */
+export function remoteRequest<T>(remote: RemoteDaemon, method: string, params: object = {}): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const ws = new WebSocket(`ws://127.0.0.1:${remote.port}`);
+    const timer = setTimeout(() => {
+      ws.close();
+      reject(new Error(`${method}: no answer`));
+    }, 5_000);
+    ws.onopen = () => ws.send(JSON.stringify({ auth: remote.token }));
+    ws.onerror = () => reject(new Error(`${method}: could not connect`));
+    ws.onmessage = (event) => {
+      const message = JSON.parse(String(event.data)) as { event?: string; id?: number; ok?: boolean; result?: T; error?: string };
+      if (message.event === "hello") ws.send(JSON.stringify({ id: 1, method, params }));
+      if (message.id !== 1) return;
+      clearTimeout(timer);
+      ws.close();
+      if (message.ok) resolve(message.result as T);
+      else reject(new Error(message.error ?? method));
+    };
+  });
+}
+
 /**
  * A TCP proxy to `target` that holds every chunk `ms` in each direction, in
  * order: a tailnet peer's round trip on loopback. `drop` cuts the open

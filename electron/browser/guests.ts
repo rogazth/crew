@@ -22,6 +22,7 @@ import { FILES_PARTITION } from "../../src/lib/browser/files";
 import { copyCookies } from "./cookies";
 import { openExternal } from "../external";
 import { followFile, serveFiles } from "./files";
+import { startRelay, type RemoteRelay } from "./remote-proxy";
 import {
   attachDecision,
   browserUserAgent,
@@ -89,9 +90,26 @@ function hookProxyLogin(): void {
   });
 }
 
+/** One relay per machine, shared by its workspaces' sessions. */
+const relays = new Map<string, { relay: Promise<RemoteRelay>; users: Set<Session> }>();
+const relayOf = new WeakMap<Session, string>();
+
+async function releaseRelay(ses: Session): Promise<void> {
+  const key = relayOf.get(ses);
+  if (!key) return;
+  relayOf.delete(ses);
+  const entry = relays.get(key);
+  if (!entry) return;
+  entry.users.delete(ses);
+  if (entry.users.size > 0) return;
+  relays.delete(key);
+  await (await entry.relay.catch(() => null))?.close();
+}
+
 /**
  * A remote workspace's pages reach that machine's loopback through its SOCKS
- * proxy. Everything else stays direct, so the browser does not egress from the VPS.
+ * proxy, by way of a relay on this Mac (see remote-proxy.ts). Everything else
+ * the relay dials from here, so the browser does not egress from the VPS.
  */
 export async function setWorkspaceProxy(
   workspaceId: string,
@@ -101,17 +119,27 @@ export async function setWorkspaceProxy(
   if (!partition) return;
   const { ses } = pageSession(partition);
   hookProxyLogin();
-  if (!proxy) {
+  const key = proxy ? `${proxy.host}:${proxy.port}` : null;
+  if (relayOf.get(ses) !== key) await releaseRelay(ses);
+  if (!proxy || !key) {
     proxyAuth.delete(ses);
     await ses.setProxy({ mode: "direct" });
     return;
   }
+  let entry = relays.get(key);
+  if (!entry) {
+    entry = { relay: startRelay(proxy), users: new Set() };
+    relays.set(key, entry);
+  }
+  entry.users.add(ses);
+  relayOf.set(ses, key);
+  const relay = await entry.relay;
+  relay.setToken(proxy.token);
   proxyAuth.set(ses, { token: proxy.token });
-  const pac = `function FindProxyForURL(url, host) {
-    if (host === "localhost" || host === "127.0.0.1" || host === "::1" || host === "[::1]") return "SOCKS5 ${proxy.host}:${proxy.port}";
-    return "DIRECT";
-  }`;
-  await ses.setProxy({ mode: "pac_script", pacScript: pac, proxyBypassRules: "<-loopback>" });
+  // `<-loopback>` drops Chromium's implicit bypass, so `localhost` reaches the relay too.
+  await ses.setProxy({ mode: "fixed_servers", proxyRules: `127.0.0.1:${relay.port}`, proxyBypassRules: "<-loopback>" });
+  // Pages already open kept their direct connections; new ones go through the relay.
+  await ses.closeAllConnections();
 }
 
 function pageSession(partition: string): { ses: Session; seeded: Promise<void> } {
