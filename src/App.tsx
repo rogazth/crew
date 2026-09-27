@@ -30,7 +30,7 @@ import { focusSidebar } from "./hooks/useSpatialKeys";
 import * as api from "./lib/api";
 import { zoomApp } from "./lib/host";
 import { isTerminalTab } from "./lib/tabs";
-import { shortBranch, worktreeLabel } from "./lib/worktrees";
+import { worktreeLabel } from "./lib/worktrees";
 import { Pages } from "./surfaces/Pages";
 import { usePages } from "./hooks/usePages";
 import { boot } from "./lib/agentRuntime";
@@ -114,7 +114,7 @@ export function App() {
   // With only the main checkout there is no other worktree to tell apart.
   const { tabPlaceOf, hues } = work;
   const branches = useMemo(
-    () => new Map(worktrees.list.map((tree) => [tree.path, { label: shortBranch(tree), hue: hues.get(tree.path) ?? 0 }])),
+    () => new Map(worktrees.list.map((tree) => [tree.path, { label: worktreeLabel(tree), hue: hues.get(tree.path) ?? 0 }])),
     [hues, worktrees.list],
   );
   const { collapsed, collapse, collapseOther, expand } = tabs;

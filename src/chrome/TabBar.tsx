@@ -429,7 +429,7 @@ const TabPill = memo(function TabPill({
       /* The ring and the shadow are always drawn; only their colour moves,
          so the pill fades in instead of growing an edge. A held pill wears the
          active face: the inactive one is translucent and would show its neighbours. */
-      className={`group relative flex h-7 touch-none w-fit ${branch ? "max-w-[240px]" : "max-w-[190px]"} min-w-[120px] shrink-0 items-center gap-1.5 rounded-chrome pr-1.5 pl-2.5 shadow-[0_1px_2px_var(--tab-shadow)] ring-1 outline-none transition-[color,background-color,box-shadow] duration-150 ${
+      className={`group relative flex h-7 touch-none w-fit ${branch ? "max-w-[240px]" : "max-w-[190px]"} min-w-[120px] shrink-0 items-center gap-1 rounded-chrome pr-1 pl-2.5 shadow-[0_1px_2px_var(--tab-shadow)] ring-1 outline-none transition-[color,background-color,box-shadow] duration-150 ${
         tone.tint
           ? active || isDragging
             ? "bg-canvas text-text ring-warning/45 [--tab-shadow:var(--color-hairline)]"
@@ -449,9 +449,9 @@ const TabPill = memo(function TabPill({
           </span>
         </>
       )}
-      {branch && <BranchTag hue={branch.hue} label={branch.label} className="max-w-[80px]" />}
+      {branch && <BranchTag hue={branch.hue} label={branch.label} className="max-w-[110px]" />}
       {/* The close button's fixed slot: status lives on the face, so the slot never resizes the tab. */}
-      <span className="relative flex h-5 w-6 shrink-0 items-center justify-end">
+      <span className="relative flex size-5 shrink-0 items-center justify-center">
         <button
           type="button"
           onClick={(event) => {

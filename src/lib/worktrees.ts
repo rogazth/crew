@@ -51,11 +51,6 @@ export function worktreeLabel(tree: Worktree): string {
   return tree.branch ?? (tree.main ? "No branch" : "Detached");
 }
 
-/** The last segment of a branch, for chips too small for the whole name. */
-export function shortBranch(tree: Worktree): string {
-  const label = worktreeLabel(tree);
-  return label.split("/").pop() ?? label;
-}
 
 const HUES = [250, 150, 25, 300, 80, 190];
 
