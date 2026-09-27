@@ -8,6 +8,8 @@ type Options = {
   /** Claude already has a transcript for its current session. Other providers resume by `providerSessionId`. */
   resume: boolean;
   theme: ClaudeTheme;
+  /** Settings bypasses permissions: the CLI runs without asking. */
+  bypass?: boolean;
 };
 
 /**
@@ -19,23 +21,25 @@ type Options = {
  * Claude paints from its own configured theme and never asks the terminal, so
  * the theme is forced to match the app.
  */
-export function sessionCommand(session: Session, { resume, theme }: Options): string[] {
+export function sessionCommand(session: Session, { resume, theme, bypass = false }: Options): string[] {
   const provider = providerOf(session.provider);
   if (!provider) return [session.provider];
+  const bypassing = bypass ? [provider.bypassFlag] : [];
   if (provider.binding !== "own") {
     const bound = session.providerSessionId;
     return [
       provider.binary,
       ...(bound ? provider.resumeArgs(bound) : []),
       ...(session.model ? [provider.modelFlag, session.model] : []),
+      ...bypassing,
     ];
   }
   const argv = [provider.binary, "--settings", JSON.stringify({ theme, hooks: bindHooks(session.id) })];
   const id = claudeSessionId(session);
-  if (resume) return [...argv, "--resume", id];
+  if (resume) return [...argv, "--resume", id, ...bypassing];
   argv.push("--session-id", id);
   if (session.model) argv.push("--model", session.model);
-  return argv;
+  return [...argv, ...bypassing];
 }
 
 /**
