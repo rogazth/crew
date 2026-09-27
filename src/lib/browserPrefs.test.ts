@@ -16,7 +16,7 @@ describe("parseBrowserPrefs", () => {
           searchTemplate: template,
           keep: 10,
           openLinksInCrew: true,
-          devtoolsDock: "bottom",
+          devtoolsDock: "left",
           devtoolsWidth: 600,
           devtoolsHeight: 250,
         }),
@@ -25,7 +25,7 @@ describe("parseBrowserPrefs", () => {
       searchTemplate: template,
       keep: 10,
       openLinksInCrew: true,
-      devtoolsDock: "bottom",
+      devtoolsDock: "left",
       devtoolsWidth: 600,
       devtoolsHeight: 250,
     });
@@ -36,7 +36,7 @@ describe("parseBrowserPrefs", () => {
     expect(parseBrowserPrefs(raw)).toEqual({ ...DEFAULT_BROWSER_PREFS, keep: 4 });
     expect(parseBrowserPrefs(JSON.stringify({ keep: 1000 })).keep).toBe(DEFAULT_BROWSER_PREFS.keep);
     expect(parseBrowserPrefs(JSON.stringify({ openLinksInCrew: "yes" })).openLinksInCrew).toBe(false);
-    expect(parseBrowserPrefs(JSON.stringify({ devtoolsDock: "top" })).devtoolsDock).toBe("right");
+    expect(parseBrowserPrefs(JSON.stringify({ devtoolsDock: "top" })).devtoolsDock).toBe("bottom");
   });
 
   it("keeps DevTools no smaller than their minimum", () => {

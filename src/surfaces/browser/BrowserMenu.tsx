@@ -35,8 +35,8 @@ const STEP =
   "grid size-6 cursor-default place-items-center rounded-md outline-none select-none data-disabled:opacity-40 data-highlighted:bg-hover";
 
 const DOCKS: Record<DevToolsDock, { label: string; icon: Icon }> = {
-  right: { label: "Dock to Right", icon: PanelRightIcon },
   bottom: { label: "Dock to Bottom", icon: PanelBottomIcon },
+  right: { label: "Dock to Right", icon: PanelRightIcon },
   left: { label: "Dock to Left", icon: PanelLeftIcon },
   window: { label: "Separate Window", icon: AppWindowIcon },
 };

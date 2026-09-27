@@ -67,7 +67,7 @@ export function BrowserPane({
   const [dockedFor, setDockedFor] = useState<number | null>(null);
   const docked = dockedFor !== null && dockedFor === page.webContentsId;
   // A move to a window is under way while the panel is still up; it keeps its side meanwhile.
-  const side = prefs.devtoolsDock === "window" ? "right" : prefs.devtoolsDock;
+  const side = prefs.devtoolsDock === "window" ? "bottom" : prefs.devtoolsDock;
 
   const guest = useGuest({
     pageId,
@@ -276,6 +276,7 @@ export function BrowserPane({
               updatePrefs(side === "bottom" ? { ...prefs, devtoolsHeight: size } : { ...prefs, devtoolsWidth: size })
             }
             onFailed={() => setDocked(null)}
+            onClose={handle.toggleDevTools}
           />
         )}
       </div>

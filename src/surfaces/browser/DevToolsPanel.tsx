@@ -1,6 +1,8 @@
+import { XIcon } from "lucide-react";
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import type { DockBounds, DockSnapshot } from "../../lib/browser/bridge";
 import { DEVTOOLS_MIN, type DevToolsDock } from "../../lib/browserPrefs";
+import { commandKeys } from "../../lib/commands";
 import { browserHost } from "../../lib/host";
 
 type Side = Exclude<DevToolsDock, "window">;
@@ -15,6 +17,7 @@ type Props = {
   onResize: (size: number) => void;
   /** Main refused to dock them; the pane goes back to no DevTools. */
   onFailed: () => void;
+  onClose: () => void;
 };
 
 /** The line between page and panel, on the panel's inner side. */
@@ -25,9 +28,9 @@ const BORDER: Record<Side, string> = { right: "border-l", left: "border-r", bott
  * The view covers the panel itself, so the strip can't reach into it.
  */
 const EDGE: Record<Side, string> = {
-  right: "right-full inset-y-0 w-2 justify-end cursor-ew-resize",
-  left: "left-full inset-y-0 w-2 justify-start cursor-ew-resize",
-  bottom: "bottom-full inset-x-0 h-2 flex-col justify-end cursor-ns-resize",
+  right: "right-full inset-y-0 w-2 justify-end",
+  left: "left-full inset-y-0 w-2 justify-start",
+  bottom: "bottom-full inset-x-0 h-2 flex-col justify-end",
 };
 
 /** What floats over the window's layout: menus, popovers, dialogs, tooltips, and whatever is portaled out of the root. */
@@ -59,7 +62,7 @@ function covered(area: DockBounds, panel: HTMLElement): boolean {
  * dragged, the view is hidden and a still of it shows here instead. The pane
  * moves the panel to another side with CSS alone, which keeps the frontend.
  */
-export function DevToolsPanel({ guestId, dock, size, visible, onResize, onFailed }: Props) {
+export function DevToolsPanel({ guestId, dock, size, visible, onResize, onFailed, onClose }: Props) {
   const outer = useRef<HTMLDivElement>(null);
   const panel = useRef<HTMLDivElement>(null);
   const start = useRef<{ at: number; size: number; max: number } | null>(null);
@@ -71,6 +74,7 @@ export function DevToolsPanel({ guestId, dock, size, visible, onResize, onFailed
   useEffect(() => {
     latest.current = { visible, dragging, onFailed };
   });
+  const cursor = dock === "bottom" ? "cursor-ns-resize" : "cursor-ew-resize";
   // Asks for the view to be placed again on the next frame.
   const sync = useRef(() => {});
 
@@ -166,8 +170,8 @@ export function DevToolsPanel({ guestId, dock, size, visible, onResize, onFailed
     const row = box.parentElement;
     const room = horizontal ? row.clientWidth : row.clientHeight;
     const current = horizontal ? box.offsetWidth : box.offsetHeight;
+    // The drag starts with the first move, so a plain click on the header hides nothing.
     start.current = { at: along(event), size: current, max: Math.max(DEVTOOLS_MIN, room - DEVTOOLS_MIN) };
-    setDragged(current);
   };
 
   const move = (event: ReactPointerEvent<HTMLDivElement>) => {
@@ -192,8 +196,35 @@ export function DevToolsPanel({ guestId, dock, size, visible, onResize, onFailed
     : { height: shown, maxHeight: `calc(100% - ${DEVTOOLS_MIN}px)`, minHeight: `min(${DEVTOOLS_MIN}px, 50%)` };
 
   return (
-    <div ref={outer} data-devtools={dock} className={`relative shrink-0 border-border bg-canvas ${BORDER[dock]}`} style={style}>
-      <div ref={panel} className="absolute inset-0 overflow-hidden">
+    <div
+      ref={outer}
+      data-devtools={dock}
+      className={`relative flex shrink-0 flex-col border-border bg-canvas ${BORDER[dock]}`}
+      style={style}
+    >
+      {/* Electron opens a webview's DevTools as if in a window of their own, so their frontend draws no
+          close button. The header holds one, and resizes the panel when dragged, like its edge. */}
+      <div
+        data-devtools-header
+        onPointerDown={down}
+        onPointerMove={move}
+        onPointerUp={up}
+        onPointerCancel={up}
+        className={`flex h-7 shrink-0 items-center justify-end border-b border-border px-1 ${cursor}`}
+      >
+        <button
+          type="button"
+          aria-label="Close Developer Tools"
+          title={`Close Developer Tools (${commandKeys("browser-devtools")})`}
+          // Not a drag: a header holding the pointer would take the click.
+          onPointerDown={(event) => event.stopPropagation()}
+          onClick={onClose}
+          className="flex size-5 cursor-default items-center justify-center rounded-md text-icon transition-colors hover:bg-hover hover:text-text"
+        >
+          <XIcon className="size-3.5" />
+        </button>
+      </div>
+      <div ref={panel} data-devtools-view className="relative min-h-0 flex-1 overflow-hidden">
         {still && (
           <img
             src={still.url}
@@ -212,7 +243,7 @@ export function DevToolsPanel({ guestId, dock, size, visible, onResize, onFailed
         onPointerMove={move}
         onPointerUp={up}
         onPointerCancel={up}
-        className={`group absolute z-10 flex ${EDGE[dock]}`}
+        className={`group absolute z-10 flex ${EDGE[dock]} ${cursor}`}
       >
         <span
           className={`bg-border-strong opacity-0 transition-opacity group-hover:opacity-100 ${
@@ -221,7 +252,7 @@ export function DevToolsPanel({ guestId, dock, size, visible, onResize, onFailed
         />
       </div>
       {/* The page under the pointer would swallow the drag; this keeps it with the edge. */}
-      {dragging && <div className={`fixed inset-0 z-50 ${horizontal ? "cursor-ew-resize" : "cursor-ns-resize"}`} />}
+      {dragging && <div className={`fixed inset-0 z-50 ${cursor}`} />}
     </div>
   );
 }

@@ -24,7 +24,7 @@ export const SEARCH_ENGINES = [
   { id: "kagi", label: "Kagi", template: "https://kagi.com/search?q=%s" },
 ] as const;
 
-export const DEVTOOLS_DOCKS: readonly DevToolsDock[] = ["right", "bottom", "left", "window"];
+export const DEVTOOLS_DOCKS: readonly DevToolsDock[] = ["bottom", "right", "left", "window"];
 
 /** The least docked DevTools shrink to, and the least of the page they leave. */
 export const DEVTOOLS_MIN = 200;
@@ -36,7 +36,7 @@ export const DEFAULT_BROWSER_PREFS: BrowserPrefs = {
   searchTemplate: SEARCH_ENGINES[0].template,
   keep: DEFAULT_KEEP,
   openLinksInCrew: false,
-  devtoolsDock: "right",
+  devtoolsDock: "bottom",
   devtoolsWidth: 480,
   devtoolsHeight: 320,
 };
