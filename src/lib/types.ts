@@ -60,5 +60,6 @@ export type Tab = (
   | { id: string; kind: "file"; path: string; relative: string }
   /** `url` and `title` are what a cold tab restores and labels itself with; the live page lives in `pages`. */
   | { id: string; kind: "browser"; url: string; title: string }
-  | { id: string; kind: "stub"; stub: StubKind; title: string }
+  /** A terminal keeps the worktree it was opened in; null or absent is the main checkout. */
+  | { id: string; kind: "stub"; stub: StubKind; title: string; worktree?: string | null }
 ) & { pinned?: true };

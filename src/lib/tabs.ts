@@ -11,6 +11,11 @@ export function newBrowserTab(url = ""): Tab {
   return { id: browserTabId(), kind: "browser", url, title: "" };
 }
 
+/** Each call a new shell, in the worktree it was asked from. */
+export function newTerminalTab(worktree: string | null): Tab {
+  return { id: `stub:terminal:${crypto.randomUUID()}`, kind: "stub", stub: "terminal", title: "Terminal", worktree };
+}
+
 /**
  * `recent` is the order tabs were last on screen in, newest first, so a
  * worktree can bring back the tab last used there. A strip saved before it
@@ -263,7 +268,9 @@ function isTab(value: unknown): value is Tab {
     return tab.id.startsWith("browser:") && typeof tab.url === "string" && typeof tab.title === "string";
   if (tab.kind === "stub")
     return (
-      typeof tab.title === "string" && STUB_KINDS.includes(tab.stub as StubKind)
+      typeof tab.title === "string" &&
+      STUB_KINDS.includes(tab.stub as StubKind) &&
+      (tab.worktree === undefined || tab.worktree === null || typeof tab.worktree === "string")
     );
   return false;
 }

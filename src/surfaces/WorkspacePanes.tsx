@@ -73,7 +73,9 @@ export function WorkspacePanes({
       const cwd =
         tab.kind === 'session'
           ? (where.get(tab.sessionId) ?? workspace.path)
-          : placeOf(context.worktree, workspace);
+          : tab.kind === 'stub' && tab.worktree !== undefined
+            ? placeOf(tab.worktree, workspace)
+            : placeOf(context.worktree, workspace);
       return [{ ...pane, cwd }];
     });
   }, [panes, placement, placeOf, workspaces]);

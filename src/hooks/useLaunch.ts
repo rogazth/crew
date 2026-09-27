@@ -13,12 +13,13 @@ type Deps = {
   create: ReturnType<typeof useSessions>["create"];
   openSession: (session: Session) => void;
   openStub: (stub: StubKind, title: string) => void;
+  openTerminal: (worktree: string | null) => void;
   openBrowser: (url?: string) => void;
   newAgent: () => void;
 };
 
 /** New sessions and the tab launcher's picks. */
-export function useLaunch({ sessions, worktree, create, openSession, openStub, openBrowser, newAgent }: Deps) {
+export function useLaunch({ sessions, worktree, create, openSession, openStub, openTerminal, openBrowser, newAgent }: Deps) {
   const { effective: defaultAgent } = useDefaultAgent();
 
   // Sessions open straight away; the name is derived, never prompted.
@@ -41,13 +42,16 @@ export function useLaunch({ sessions, worktree, create, openSession, openStub, o
 
   const launch = useCallback(
     (item: Launch) => {
-      if (item.kind === "stub") openStub(item.stub, item.title);
+      if (item.kind === "stub") {
+        if (item.stub === "terminal") openTerminal(worktree);
+        else openStub(item.stub, item.title);
+      }
       if (item.kind === "browser") openBrowser(item.url);
       if (item.kind === "new-agent") newAgent();
       if (item.kind === "new-session") void newSession(item.provider);
       if (item.kind === "session") openSession(item.session);
     },
-    [newAgent, newSession, openSession, openStub, openBrowser],
+    [newAgent, newSession, openSession, openStub, openTerminal, openBrowser, worktree],
   );
 
   return { newSession, launch };
