@@ -16,7 +16,8 @@ import { addRemote, launchCrew, remoteRequest, stripTabIds, waitFor, type Crew, 
 
 /**
  * A dev server: `/page` opens a websocket back to itself and titles itself
- * with what comes down it; every other path is a page titled by its path.
+ * with what comes down it; `/sw-page` installs `/sw.js`, which fetches
+ * `/from-sw` on its own; every other path is a page titled by its path.
  */
 async function devServer(): Promise<{ port: number; requests: string[]; server: Server }> {
   const requests: string[] = [];
@@ -24,7 +25,22 @@ async function devServer(): Promise<{ port: number; requests: string[]; server: 
     const at = new URL(request.url ?? "/", "http://localhost").pathname;
     if (at === "/favicon.ico") return void response.writeHead(404).end();
     requests.push(at);
+    if (at === "/sw.js") {
+      response.writeHead(200, { "content-type": "text/javascript" });
+      response.end(`self.addEventListener("install", (event) => event.waitUntil(fetch("/from-sw")));`);
+      return;
+    }
     response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+    if (at === "/sw-page") {
+      response.end(`<!doctype html><title>registering</title><script>
+        navigator.serviceWorker.register("/sw.js").then(
+          (reg) => { const sw = reg.installing ?? reg.waiting ?? reg.active; const done = () => { document.title = "sw " + sw.state; };
+            sw.state === "installing" ? sw.addEventListener("statechange", done) : done(); },
+          (error) => { document.title = "sw failed " + error; },
+        );
+      </script>`);
+      return;
+    }
     if (at === "/page") {
       response.end(`<!doctype html><title>waiting</title><script>
         const ws = new WebSocket("ws://" + location.host + "/hmr");
@@ -96,7 +112,7 @@ test("a remote workspace's pages open the machine's localhost, websockets too, a
     await crew.reload();
     await mark(crew, "web").waitFor({ timeout: 15_000 });
 
-    // Every host in the remote workspace goes to the relay (which dials the rest from here); this Mac's workspace goes direct.
+    // Loopback names go to the relay; names that cannot be loopback skip it; this Mac's workspace goes direct.
     await waitFor(async () => (await route(crew, workspace.id, "http://localhost:3000/")).startsWith("PROXY 127.0.0.1:"), {
       message: "the remote workspace's session routes localhost through the relay",
       timeout: 15_000,
@@ -104,7 +120,11 @@ test("a remote workspace's pages open the machine's localhost, websockets too, a
     const relay = await route(crew, workspace.id, "http://localhost:3000/");
     assert.equal(await route(crew, workspace.id, "http://127.0.0.1:3000/"), relay);
     assert.equal(await route(crew, workspace.id, "http://[::1]:3000/"), relay);
-    assert.equal(await route(crew, workspace.id, "https://example.com/"), relay);
+    assert.equal(await route(crew, workspace.id, "http://app.localhost:3000/"), relay);
+    assert.equal(await route(crew, workspace.id, "http://devbox:3000/"), relay, "a single-label name may be loopback: the relay decides");
+    assert.equal(await route(crew, workspace.id, "https://example.com/"), "DIRECT");
+    assert.equal(await route(crew, workspace.id, "https://github.io/"), "DIRECT");
+    assert.equal(await route(crew, workspace.id, "http://10.0.0.1/"), "DIRECT");
     assert.equal(await route(crew, local.id, "http://localhost:3000/"), "DIRECT");
 
     // A dev server page and its HMR socket, through the machine.
@@ -121,6 +141,14 @@ test("a remote workspace's pages open the machine's localhost, websockets too, a
     const byIp = `http://127.0.0.1:${dev.port}/by-ip`;
     await openPage(crew, byIp);
     await waitFor(async () => (await pageTitle(crew, workspace.id, byIp)) === "/by-ip", { message: "127.0.0.1 loads too" });
+
+    // A service worker's own fetches ride the relay too.
+    const swPage = `http://localhost:${dev.port}/sw-page`;
+    await openPage(crew, swPage);
+    await waitFor(async () => /^sw (installed|activating|activated)$/.test((await pageTitle(crew, workspace.id, swPage)) ?? ""), {
+      message: "the service worker installs",
+    });
+    assert.ok(dev.requests.includes("/from-sw"), "the worker's fetch reached the dev server");
 
     // The machine goes away: its pages cannot reach the dev server, this Mac's still can.
     await remote.stop();

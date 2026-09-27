@@ -22,7 +22,7 @@ import { FILES_PARTITION } from "../../src/lib/browser/files";
 import { copyCookies } from "./cookies";
 import { openExternal } from "../external";
 import { followFile, serveFiles } from "./files";
-import { startRelay, type RemoteRelay } from "./remote-proxy";
+import { relayBypassRules, startRelay, type RemoteRelay } from "./remote-proxy";
 import {
   attachDecision,
   browserUserAgent,
@@ -67,26 +67,20 @@ function partitionDir(partition: string): string {
   return path.join(app.getPath("userData"), "Partitions", partition.replace(/^persist:/, ""));
 }
 
-/**
- * A workspace's pages: their own cookies, and none of the app window's CSP.
- * A partition seen for the first time starts from the shared one pages used
- * before workspaces had their own, so an upgrade keeps its sign-ins. The copy
- * takes milliseconds, once per workspace; a page that loads inside that window
- * shows signed out until its next load.
- */
-const proxyAuth = new WeakMap<Session, { token: string }>();
+/** Each relay's token, by its port: proxy auth can come without a page (a service worker's fetch). */
+const relayTokens = new Map<number, string>();
 let proxyLoginHooked = false;
 
-/** Electron 44 delivers proxy auth on `app`, scoped here to sessions we armed. */
+/** Electron 44 delivers proxy auth on `app`; only a relay's challenge is answered. */
 function hookProxyLogin(): void {
   if (proxyLoginHooked) return;
   proxyLoginHooked = true;
-  app.on("login", (event, webContents, _details, authInfo, callback) => {
-    if (!authInfo.isProxy || !webContents) return;
-    const current = proxyAuth.get(webContents.session);
-    if (!current) return;
+  app.on("login", (event, _webContents, _details, authInfo, callback) => {
+    if (!authInfo.isProxy || authInfo.host !== "127.0.0.1") return;
+    const token = relayTokens.get(authInfo.port);
+    if (!token) return;
     event.preventDefault();
-    callback(current.token, current.token);
+    callback(token, token);
   });
 }
 
@@ -103,13 +97,17 @@ async function releaseRelay(ses: Session): Promise<void> {
   entry.users.delete(ses);
   if (entry.users.size > 0) return;
   relays.delete(key);
-  await (await entry.relay.catch(() => null))?.close();
+  const relay = await entry.relay.catch(() => null);
+  if (!relay) return;
+  relayTokens.delete(relay.port);
+  await relay.close();
 }
 
 /**
  * A remote workspace's pages reach that machine's loopback through its SOCKS
- * proxy, by way of a relay on this Mac (see remote-proxy.ts). Everything else
- * the relay dials from here, so the browser does not egress from the VPS.
+ * proxy, by way of a relay on this Mac (see remote-proxy.ts). Names that
+ * cannot be loopback skip the relay; what it does get that is not loopback it
+ * dials from here. Either way the browser does not egress from the VPS.
  */
 export async function setWorkspaceProxy(
   workspaceId: string,
@@ -122,26 +120,44 @@ export async function setWorkspaceProxy(
   const key = proxy ? `${proxy.host}:${proxy.port}` : null;
   if (relayOf.get(ses) !== key) await releaseRelay(ses);
   if (!proxy || !key) {
-    proxyAuth.delete(ses);
     await ses.setProxy({ mode: "direct" });
     return;
   }
   let entry = relays.get(key);
   if (!entry) {
-    entry = { relay: startRelay(proxy), users: new Set() };
+    const started = startRelay(proxy);
+    entry = { relay: started, users: new Set() };
     relays.set(key, entry);
+    // A relay that could not listen is not kept: the next call starts another.
+    started.catch(() => {
+      if (relays.get(key)?.relay === started) relays.delete(key);
+    });
   }
   entry.users.add(ses);
   relayOf.set(ses, key);
-  const relay = await entry.relay;
+  let relay: RemoteRelay;
+  try {
+    relay = await entry.relay;
+  } catch (error) {
+    relayOf.delete(ses);
+    await ses.setProxy({ mode: "direct" });
+    throw error;
+  }
   relay.setToken(proxy.token);
-  proxyAuth.set(ses, { token: proxy.token });
+  relayTokens.set(relay.port, proxy.token);
   // `<-loopback>` drops Chromium's implicit bypass, so `localhost` reaches the relay too.
-  await ses.setProxy({ mode: "fixed_servers", proxyRules: `127.0.0.1:${relay.port}`, proxyBypassRules: "<-loopback>" });
+  await ses.setProxy({ mode: "fixed_servers", proxyRules: `127.0.0.1:${relay.port}`, proxyBypassRules: relayBypassRules() });
   // Pages already open kept their direct connections; new ones go through the relay.
   await ses.closeAllConnections();
 }
 
+/**
+ * A workspace's pages: their own cookies, and none of the app window's CSP.
+ * A partition seen for the first time starts from the shared one pages used
+ * before workspaces had their own, so an upgrade keeps its sign-ins. The copy
+ * takes milliseconds, once per workspace; a page that loads inside that window
+ * shows signed out until its next load.
+ */
 function pageSession(partition: string): { ses: Session; seeded: Promise<void> } {
   const existing = pageSessions.get(partition);
   if (existing) return existing;

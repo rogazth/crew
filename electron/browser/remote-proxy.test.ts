@@ -1,7 +1,7 @@
 import { createServer as createHttpServer, request, type Server as HttpServer } from "node:http";
 import { connect, createServer, type AddressInfo, type Server, type Socket } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
-import { authorized, destination, startRelay, type Destination, type RemoteRelay } from "./remote-proxy";
+import { authorized, destination, relayBypassRules, startRelay, type Destination, type RemoteRelay } from "./remote-proxy";
 
 const TOKEN = "secret-token";
 const basic = (user: string, pass: string) => `Basic ${Buffer.from(`${user}:${pass}`).toString("base64")}`;
@@ -31,6 +31,43 @@ describe("destination", () => {
     ["", 80, null],
   ])("%s:%s", (host, port, expected) => {
     expect(destination(host, port)).toEqual(expected);
+  });
+});
+
+describe("relayBypassRules", () => {
+  const rules = relayBypassRules().split(",");
+  /** Chromium's hostname rules: `*` and `?` wildcards over the whole host. */
+  const bypassed = (host: string) =>
+    rules
+      .filter((rule) => !rule.startsWith("<") && !rule.includes("/"))
+      .some((rule) => new RegExp(`^${rule.replace(/[.+^${}()|[\]\\-]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".")}$`).test(host));
+
+  it("keeps Chromium's implicit loopback bypass off", () => {
+    expect(rules[0]).toBe("<-loopback>");
+  });
+
+  it.each(["example.com", "github.io", "x.net", "docs.rs", "example.st", "foo.host", "a.b.c.dev", "mylocalhost.com", "x.notlocalhost"])(
+    "%s skips the relay",
+    (host) => {
+      expect(bypassed(host)).toBe(true);
+    },
+  );
+
+  it.each(["localhost", "app.localhost", "a.b.localhost", "127.0.0.1", "devbox", "10.0.0.1"])("%s goes to the relay by name", (host) => {
+    expect(bypassed(host)).toBe(false);
+  });
+
+  it("sends IPv4 off 127/8 around the relay by range", () => {
+    const ranges = rules.filter((rule) => /^\d+\.\d+\.\d+\.\d+\/\d+$/.test(rule));
+    const inRange = (ip: string) =>
+      ranges.some((range) => {
+        const [base, bits] = range.split("/");
+        const n = (a: string) => a.split(".").reduce((acc, part) => acc * 256 + Number(part), 0);
+        const mask = 2 ** 32 - 2 ** (32 - Number(bits));
+        return (n(ip) & mask) >>> 0 === (n(base!) & mask) >>> 0;
+      });
+    expect(["10.0.0.1", "1.1.1.1", "126.255.255.255", "128.0.0.1", "192.168.1.1", "255.255.255.255", "0.0.0.0"].every(inRange)).toBe(true);
+    expect(["127.0.0.1", "127.255.0.1"].some(inRange)).toBe(false);
   });
 });
 

@@ -12,7 +12,7 @@ import type { Duplex } from "node:stream";
  * and it never hands loopback to a PAC script, so a session can only send its
  * `localhost` somewhere through fixed proxy rules, and those take every host.
  * Pages talk HTTP proxy to the relay; a 407 asks them for the token, which the
- * session's `login` handler answers, so nothing else on this Mac can use it.
+ * app's `login` handler answers, so nothing else on this Mac can use it.
  */
 export type RemoteRelay = {
   /** The port on 127.0.0.1 pages are pointed at. */
@@ -21,6 +21,33 @@ export type RemoteRelay = {
   setToken(token: string): void;
   close(): Promise<void>;
 };
+
+/**
+ * Chromium's bypass list for a relayed session: every host that cannot be
+ * loopback, so only `localhost`, `*.localhost`, `127.x`, `::1` and the odd
+ * single-label or IPv6 name reach the relay. The list has no negation, so the
+ * names are spelled out: dotted names ending in a letter (every public TLD),
+ * except those ending in `.localhost`; and IPv4 outside 127/8.
+ */
+export function relayBypassRules(): string {
+  const chars = "abcdefghijklmnopqrstuvwxyz0123456789-";
+  const letters = chars.slice(0, 26);
+  const suffix = "localhost";
+  const rules = ["<-loopback>"];
+  // Ending in a letter other than localhost's last.
+  for (const c of letters) if (c !== suffix.at(-1)) rules.push(`*.*${c}`);
+  // Ending in the last k letters of `localhost`, the one before them differing from localhost's.
+  for (let k = 1; k < suffix.length; k++) {
+    const tail = suffix.slice(-k);
+    const before = suffix.at(-k - 1);
+    for (const c of chars) if (c !== before) rules.push(`*.*${c}${tail}`);
+    rules.push(`*.${tail}`);
+  }
+  // `…xlocalhost`: a name that only ends like it, not a subdomain of it.
+  for (const c of chars) rules.push(`*.*${c}${suffix}`);
+  rules.push("0.0.0.0/2", "64.0.0.0/3", "96.0.0.0/4", "112.0.0.0/5", "120.0.0.0/6", "124.0.0.0/7", "126.0.0.0/8", "128.0.0.0/1");
+  return rules.join(",");
+}
 
 export type Upstream = { host: string; port: number; token: string };
 
