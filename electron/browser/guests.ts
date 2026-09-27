@@ -326,7 +326,18 @@ function register(host: WebContents, guest: WebContents, partition: string): voi
     guardNavigation(guest);
   }
 
-  guest.on("before-input-event", (event, input) => {
+  forwardCommands(host, guest);
+
+  guest.on("context-menu", (_event, params) => {
+    const win = BrowserWindow.fromWebContents(host);
+    if (!win) return;
+    Menu.buildFromTemplate(contextMenu(host, guest, params)).popup({ window: win });
+  });
+}
+
+/** A chord the window runs is sent to it instead of reaching the page. */
+export function forwardCommands(host: WebContents, contents: WebContents): void {
+  contents.on("before-input-event", (event, input) => {
     if (input.isComposing) return;
     const forward = resolveForward(
       {
@@ -346,12 +357,6 @@ function register(host: WebContents, guest: WebContents, partition: string): voi
     if (!forward) return;
     event.preventDefault();
     if (forward.run && !host.isDestroyed()) host.send(CHANNELS.command, forward.id);
-  });
-
-  guest.on("context-menu", (_event, params) => {
-    const win = BrowserWindow.fromWebContents(host);
-    if (!win) return;
-    Menu.buildFromTemplate(contextMenu(host, guest, params)).popup({ window: win });
   });
 }
 

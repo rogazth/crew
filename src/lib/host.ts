@@ -1,4 +1,4 @@
-import type { DownloadActivity, OpenTabRequest } from "./browser/bridge";
+import type { DockBounds, DockSnapshot, DownloadActivity, OpenTabRequest } from "./browser/bridge";
 import type { NavSnapshot } from "./browser/snapshot";
 import type { KeyboardLayout, LiveCommand } from "./keymap";
 import type { ImportedCookie, RemoteEnv } from "./protocol";
@@ -18,6 +18,7 @@ type CrewHost = {
   pathForFile(file: File): string;
   /** Steps the whole window's zoom; 0 puts it back to actual size. */
   zoom(delta: number): Promise<void>;
+  colorMode: ColorModeHost;
   update: UpdateHost;
   browser: BrowserHost;
   files: FilesHost;
@@ -57,6 +58,12 @@ export type RemotesHost = {
   onWake(cb: () => void): () => void;
 };
 
+/** Light, dark or system, applied by main to the window and every page. Absent outside Electron. */
+export type ColorModeHost = {
+  get(): Promise<string>;
+  set(mode: string): Promise<void>;
+};
+
 /** The updater's main-process half. Absent outside Electron. */
 export type UpdateHost = {
   current(): Promise<UpdateState>;
@@ -75,6 +82,12 @@ export type BrowserHost = {
   onDownload(cb: (activity: DownloadActivity) => void): () => void;
   /** Resolves whether DevTools are open afterwards. */
   toggleDevTools(webContentsId: number): Promise<boolean>;
+  /** Beside the page, over the panel at `bounds`; false when the page isn't this window's. */
+  dockDevTools(webContentsId: number, bounds: DockBounds): Promise<boolean>;
+  /** Null hides docked DevTools while something covers their panel, and resolves to how they looked. */
+  placeDevTools(webContentsId: number, bounds: DockBounds | null): Promise<DockSnapshot | null>;
+  /** Docked ones only. */
+  closeDevTools(webContentsId: number): Promise<void>;
   snapshot(webContentsId: number): Promise<NavSnapshot | null>;
   prepareRestore(token: string, entriesJson: string, index: number): Promise<boolean>;
   /** Through the workspace's own session, so an icon behind its sign-in loads. */
@@ -110,6 +123,10 @@ export function filesHost(): FilesHost | null {
 
 export function remotesHost(): RemotesHost | null {
   return crewHost()?.remotes ?? null;
+}
+
+export function colorModeHost(): ColorModeHost | null {
+  return crewHost()?.colorMode ?? null;
 }
 
 export function updateHost(): UpdateHost | null {

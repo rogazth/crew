@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { joinStrips, splitStrip, tabPlace } from "./strips";
-import { fileTabId, sessionTabId, stubTabId, type TabState } from "./tabs";
+import { fileTabId, newTerminalTab, sessionTabId, stubTabId, type TabState } from "./tabs";
 import type { Session, Tab, Workspace, Worktree } from "./types";
 
 const workspace: Workspace = { id: "ws", name: "crew", path: "/repo", createdAt: 0 };
@@ -109,6 +109,12 @@ describe("tabPlace", () => {
     const stub: Tab = { id: stubTabId("terminal"), kind: "stub", stub: "terminal", title: "" };
     expect(tabPlace(stub, workspace, trees, sessions)).toBeNull();
     expect(tabPlace(run("nobody"), workspace, trees, sessions)).toBeNull();
+  });
+
+  it("keeps a terminal in the worktree it was opened in", () => {
+    expect(tabPlace(newTerminalTab("/wt/a"), workspace, trees, sessions)).toBe("/wt/a");
+    expect(tabPlace(newTerminalTab(null), workspace, trees, sessions)).toBe("/repo");
+    expect(newTerminalTab(null).id).not.toBe(newTerminalTab(null).id);
   });
 });
 

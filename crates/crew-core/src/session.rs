@@ -452,6 +452,17 @@ pub fn retention_days(store: &Store) -> Result<Option<u32>, String> {
     Ok(raw.and_then(|raw| raw.trim().parse::<u32>().ok()).filter(|days| *days > 0))
 }
 
+/// Where Settings keeps whether every session runs without asking, whatever
+/// its own autonomy says. Only "on" turns it on.
+pub const BYPASS_KEY: &str = "sessions:bypass-permissions";
+
+pub fn bypass_permissions(store: &Store) -> bool {
+    crate::store::get(store, BYPASS_KEY.into())
+        .ok()
+        .flatten()
+        .is_some_and(|raw| raw.trim() == "on")
+}
+
 /// The sessions last touched before `before`, less the ones deleting would
 /// cost something: a routine goes with its session, a tab would open onto
 /// nothing, and anything but idle still has a turn, a question or an unread
@@ -936,6 +947,16 @@ mod tests {
         for (raw, days) in [("30", Some(30)), ("0", None), ("never", None), (" 7 ", Some(7))] {
             crate::store::set(&store, RETENTION_KEY.into(), raw.into()).expect("set");
             assert_eq!(retention_days(&store).unwrap(), days, "{raw}");
+        }
+    }
+
+    #[test]
+    fn bypass_is_on_only_when_it_says_on() {
+        let (store, _) = world();
+        assert!(!bypass_permissions(&store));
+        for (raw, on) in [("on", true), (" on ", true), ("off", false), ("true", false), ("", false)] {
+            crate::store::set(&store, BYPASS_KEY.into(), raw.into()).expect("set");
+            assert_eq!(bypass_permissions(&store), on, "{raw}");
         }
     }
 

@@ -8,6 +8,7 @@ import * as api from '../lib/api';
 import { homeFor, sessionCwd } from '../lib/client/registry';
 import { claudeSessionId, transcriptPath } from '../lib/claudeStorage';
 import { bindProviderSession } from '../lib/agentRuntime';
+import { BYPASS_KEY } from '../lib/permissions';
 import { providerOf } from '../lib/providers';
 import { sessionCommand } from '../lib/sessionCommand';
 import { titleName } from '../lib/terminalStatus';
@@ -117,6 +118,11 @@ const ATTENTION_MS = 1500;
 
 async function launchCommand(session: Session, cwd: string): Promise<string[]> {
   const theme = DARK_SCHEME.matches ? 'dark' : 'light';
+  // Read at every launch, so a change in Settings reaches the next session started.
+  const bypass = await api
+    .stateGet(BYPASS_KEY)
+    .then((raw) => raw?.trim() === 'on')
+    .catch(() => false);
   const binding = providerOf(session.provider)?.binding;
   if (binding === 'own') {
     // A `/clear` from its last run the daemon never read: resume where the CLI went.
@@ -127,16 +133,16 @@ async function launchCommand(session: Session, cwd: string): Promise<string[]> {
     const resume = await Promise.resolve(homeFor(cwd) ?? homeDir())
       .then((home) => api.pathExists(transcriptPath(home, cwd, claudeSessionId(current))))
       .catch(() => false);
-    return sessionCommand(current, { resume, theme });
+    return sessionCommand(current, { resume, theme, bypass });
   }
   if (binding === 'before' && !session.providerSessionId) {
     const created = await api.createProviderSession(session.id).catch(() => null);
     if (created) {
       bindProviderSession(session.id, created);
-      return sessionCommand({ ...session, providerSessionId: created }, { resume: true, theme });
+      return sessionCommand({ ...session, providerSessionId: created }, { resume: true, theme, bypass });
     }
   }
-  return sessionCommand(session, { resume: false, theme });
+  return sessionCommand(session, { resume: false, theme, bypass });
 }
 
 type SessionProps = {

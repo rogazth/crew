@@ -3,6 +3,7 @@ import type { KeyboardLayout, LiveCommand } from "../../src/lib/keymap";
 import { capSnapshot, parseSnapshot } from "../../src/lib/browser/snapshot";
 import { CHANNELS, partitionFor } from "../../src/lib/browser/bridge";
 import { importCookies } from "./cookies";
+import { dockBounds, dockDevTools, placeDevTools, undockDevTools } from "./devtools";
 import { ownedGuest, prepareRestore, readyPageSession, setKeyboardLayout, setLiveCommands } from "./guests";
 
 const TOKEN = /^[A-Za-z0-9-]{1,64}$/;
@@ -70,6 +71,23 @@ export function registerBrowserIpc(): void {
     }
     guest.openDevTools({ mode: "detach" });
     return true;
+  });
+
+  /** Beside the page, over the panel at `bounds`; ones already open in a window of their own move there. */
+  ipcMain.handle(CHANNELS.dockDevtools, (event, id: unknown, bounds: unknown) => {
+    const guest = typeof id === "number" ? ownedGuest(event.sender, id) : null;
+    const place = dockBounds(bounds);
+    return guest && place ? dockDevTools(event.sender, guest, place) : false;
+  });
+
+  /** Null bounds hide them and answer with how they looked. */
+  ipcMain.handle(CHANNELS.placeDevtools, (event, id: unknown, bounds: unknown) => {
+    if (typeof id !== "number") return null;
+    return placeDevTools(event.sender, id, bounds === null ? null : dockBounds(bounds));
+  });
+
+  ipcMain.handle(CHANNELS.closeDevtools, (event, id: unknown) => {
+    if (typeof id === "number") undockDevTools(event.sender, id);
   });
 
   ipcMain.handle(CHANNELS.snapshot, (event, id: unknown) => {

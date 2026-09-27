@@ -2,7 +2,7 @@ import type { RefObject } from "react";
 import type { Answers, ApprovalDecision, AttachedFile, Block } from "../../lib/blocks";
 import type { Session } from "../../lib/types";
 
-/** The contract every agent theme renders; AgentChat owns the state behind it. */
+/** The contract the chat surface renders; AgentChat owns the state behind it. */
 export type ChatSurfaceProps = {
   session: Session;
   blocks: Block[];

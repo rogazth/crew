@@ -93,6 +93,24 @@ describe("sessionCommand", () => {
     ]);
   });
 
+  it("runs every provider without asking only when Settings bypasses permissions", () => {
+    const bypassed = (patch: Partial<Session>, resume = false) =>
+      sessionCommand({ ...base, ...patch }, { resume, theme: "dark", bypass: true });
+    for (const provider of PROVIDERS) {
+      expect(argv({ provider: provider.id })).not.toContain(provider.bypassFlag);
+      expect(bypassed({ provider: provider.id })).toContain(provider.bypassFlag);
+      expect(bypassed({ provider: provider.id, providerSessionId: "id" }, true)).toContain(provider.bypassFlag);
+    }
+    expect(bypassed({}, true).slice(3)).toEqual(["--resume", "crew-1", "--dangerously-skip-permissions"]);
+    expect(bypassed({ provider: "codex", providerSessionId: "t1" })).toEqual([
+      "codex",
+      "resume",
+      "t1",
+      "--dangerously-bypass-approvals-and-sandbox",
+    ]);
+    expect(bypassed({ provider: "cursor", providerSessionId: "chat" })).toEqual(["cursor-agent", "--resume", "chat", "--force"]);
+  });
+
   it("starts fresh until an id is known", () => {
     expect(argv({ provider: "codex", model: "gpt-6-astra" })).toEqual(["codex", "-m", "gpt-6-astra"]);
     expect(argv({ provider: "opencode" })).toEqual(["opencode"]);

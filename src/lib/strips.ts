@@ -1,6 +1,6 @@
 import { CLOSED_LIMIT, pinnedFirst, recentIds, withRecent, type TabState } from "./tabs";
 import type { Session, Tab, Workspace, Worktree } from "./types";
-import { sessionPath } from "./worktrees";
+import { placePath, sessionPath } from "./worktrees";
 
 /** Each tab once, at its first place. */
 function once(tabs: Tab[]): Tab[] {
@@ -65,6 +65,7 @@ export function tabPlace(tab: Tab, workspace: Workspace, worktrees: Worktree[], 
     const session = sessions.find((s) => s.id === tab.sessionId);
     return session ? sessionPath(session, workspace, worktrees) : null;
   }
+  if (tab.kind === "stub") return tab.worktree !== undefined ? placePath(tab.worktree, workspace, worktrees) : null;
   if (tab.kind !== "file") return null;
   // The deepest folder wins: a worktree can sit inside the main checkout.
   const holders = worktrees.filter((tree) => tab.path.startsWith(`${tree.path}/`));

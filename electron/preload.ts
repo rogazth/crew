@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from "electron";
-import { CHANNELS, type DownloadActivity, type OpenTabRequest } from "../src/lib/browser/bridge";
+import { CHANNELS, type DockBounds, type DownloadActivity, type OpenTabRequest } from "../src/lib/browser/bridge";
 import { FILE_CHANNELS } from "../src/lib/browser/files";
 import type { InstallInput, InstallStep, ManualRemote } from "../src/lib/remotes";
 import { UPDATE_CHANNELS, type UpdateState } from "../src/lib/update";
@@ -40,6 +40,10 @@ contextBridge.exposeInMainWorld("crewHost", {
     onWake: (cb: () => void) => listen("remotes:wake", cb),
   },
   zoom: (delta: number) => ipcRenderer.invoke("app-zoom", delta),
+  colorMode: {
+    get: () => ipcRenderer.invoke("color-mode-get"),
+    set: (mode: string) => ipcRenderer.invoke("color-mode-set", mode),
+  },
   update: {
     current: () => ipcRenderer.invoke(UPDATE_CHANNELS.current),
     onState: (cb: (state: UpdateState) => void) => listen(UPDATE_CHANNELS.state, cb),
@@ -54,6 +58,11 @@ contextBridge.exposeInMainWorld("crewHost", {
     onOpenTab: (cb: (request: OpenTabRequest) => void) => listen(CHANNELS.openTab, cb),
     onDownload: (cb: (activity: DownloadActivity) => void) => listen(CHANNELS.download, cb),
     toggleDevTools: (webContentsId: number) => ipcRenderer.invoke(CHANNELS.devtools, webContentsId),
+    dockDevTools: (webContentsId: number, bounds: DockBounds) =>
+      ipcRenderer.invoke(CHANNELS.dockDevtools, webContentsId, bounds),
+    placeDevTools: (webContentsId: number, bounds: DockBounds | null) =>
+      ipcRenderer.invoke(CHANNELS.placeDevtools, webContentsId, bounds),
+    closeDevTools: (webContentsId: number) => ipcRenderer.invoke(CHANNELS.closeDevtools, webContentsId),
     snapshot: (webContentsId: number) => ipcRenderer.invoke(CHANNELS.snapshot, webContentsId),
     prepareRestore: (token: string, entriesJson: string, index: number) =>
       ipcRenderer.invoke(CHANNELS.prepareRestore, token, entriesJson, index),
