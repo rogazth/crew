@@ -14,6 +14,7 @@ import { useGuest } from "./useGuest";
 import { BrowserToolbar } from "./BrowserToolbar";
 import { CookieImportDialog } from "./CookieImportDialog";
 import { ResponsiveBar } from "./ResponsiveBar";
+import { ViewportHandles } from "./ViewportHandles";
 import type { AddressBarHandle } from "./AddressBar";
 
 type Props = {
@@ -183,14 +184,19 @@ export function BrowserPane({
         onLeaveAddress={() => guest.current?.focus()}
       />
       {viewport && <ResponsiveBar viewport={viewport} onChange={setViewport} onClose={() => setViewport(null)} />}
-      <div className={`relative min-h-0 flex-1 ${viewport ? "overflow-auto bg-sidebar" : ""}`}>
+      <div className={`relative min-h-0 flex-1 ${viewport ? "grid overflow-auto bg-sidebar px-6 pt-4 pb-6" : ""}`}>
         {/* React never renders into this one: the guest is appended by hand and must never move.
             A fixed size restyles it in place; moving it into a frame would destroy the page. */}
         <div
           ref={container}
-          className={viewport ? "relative mx-auto my-4 shrink-0 bg-canvas shadow-sm ring-1 ring-hairline" : "absolute inset-0"}
+          className={
+            viewport
+              ? "relative self-start justify-self-center bg-canvas shadow-sm ring-1 ring-hairline [grid-area:1/1]"
+              : "absolute inset-0"
+          }
           style={viewport ? { width: viewport.width, height: viewport.height } : undefined}
         />
+        {viewport && <ViewportHandles viewport={viewport} onChange={setViewport} />}
         {finding && (
           <FindBar
             label="Find in page"
