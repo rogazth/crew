@@ -448,8 +448,9 @@ hook and `session_claude_attention` are gone.
 **e2e.** `e2e/session-chat.test.ts` drives the fake claude, which now writes
 Claude-shaped records (tool_use, tool_result, `turn_duration`, the interrupt
 marker) and runs the hooks above. Four specs fail the same way on the commit
-before this work (A1, K1, M2, cookies), and T1 fails there too when run alone
-(its clicks outlast the 8 s turn). The `remote-*` specs cannot run on this
+before this work (A1, K1, M2, cookies), and T1 and T4 fail there too, now and
+then (their clicks, 2–3 s each with the window hidden, outlast the turns they
+time). The `remote-*` specs cannot run on this
 machine: pairing a machine needs the keychain, and its Xvfb session has none.
 
 **Codex in the chat.** The rollout is decoded the way Codex itself replays it
