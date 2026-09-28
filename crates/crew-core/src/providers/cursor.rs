@@ -307,9 +307,12 @@ fn tool_detail(
             title: None,
             output: text_field(success, "markdown"),
         }),
+        // With `merge` the call names only what changed; the result holds the
+        // whole list once it has merged them.
         "updatetodos" => Some(ToolDetail::Todo {
-            items: args
-                .get("todos")
+            items: success
+                .and_then(|row| row.get("todos"))
+                .or_else(|| args.get("todos"))
                 .and_then(Value::as_array)?
                 .iter()
                 .filter_map(|row| {
@@ -611,6 +614,11 @@ mod tests {
         assert_eq!(items[0].status, TodoStatus::Completed);
         assert_eq!(items[4].status, TodoStatus::InProgress);
         assert_eq!(items[9].status, TodoStatus::Pending);
+        // A merge names six items; the row shows all ten, as merged.
+        let merged = r#"{"type":"tool_call","subtype":"completed","call_id":"t2","tool_call":{"updateTodosToolCall":{"args":{"merge":true,"todos":[{"id":"5","content":"Run npm test","status":"TODO_STATUS_COMPLETED"}]},"result":{"success":{"todos":[{"id":"1","content":"Make a list","status":"TODO_STATUS_COMPLETED"},{"id":"5","content":"Run npm test","status":"TODO_STATUS_COMPLETED"},{"id":"6","content":"Fix it","status":"TODO_STATUS_PENDING"}]}}}}}"#;
+        let merged: Value = serde_json::from_str(merged).unwrap();
+        let Some(ToolDetail::Todo { items }) = parse_tool_call(merged.as_object().unwrap()).unwrap().detail else { panic!("merge") };
+        assert_eq!(items.len(), 3);
 
         // A shell that exited non-zero answers with `failure`, not `success`.
         let (_, shell, failed) = by("Shell");
