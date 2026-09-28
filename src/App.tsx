@@ -66,6 +66,7 @@ export function App() {
     reorder,
     setStatus,
     dropWorkspace: forgetSessions,
+    reload: reloadSessions,
   } = useSessions(workspaceId);
   // Every workspace's: their terminals keep running, and renaming, out of sight.
   useSessionTitle(all, adoptName);
@@ -246,6 +247,8 @@ export function App() {
             onRemove: confirms.askSession,
             onRemoveMany: confirms.askSessions,
             onReorder: reorder,
+            // A refusal from either still lets the other land; the button stops spinning either way.
+            onRefresh: () => Promise.allSettled([worktrees.reread(), reloadSessions()]).then(() => {}),
           }}
         />
       )}

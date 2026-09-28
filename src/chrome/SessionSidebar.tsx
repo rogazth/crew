@@ -1,4 +1,4 @@
-import { ChevronRightIcon, FolderIcon, GitBranchIcon, PlusIcon, SearchIcon, XIcon, type LucideIcon as Icon } from "lucide-react";
+import { ChevronRightIcon, FolderIcon, GitBranchIcon, PlusIcon, RotateCwIcon, SearchIcon, XIcon, type LucideIcon as Icon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent } from "react";
 import { ActionMenu } from "./ActionMenu";
 import { AgentAvatar } from "./AgentAvatar";
@@ -69,6 +69,8 @@ export type SessionSidebarProps = {
   onRemove: (session: Session) => void;
   onRemoveMany: (sessions: Session[]) => void;
   onReorder: (ids: string[]) => void;
+  /** Reads the worktrees and sessions again, for changes made outside this window. */
+  onRefresh: () => Promise<void>;
 };
 
 type Menu =
@@ -132,6 +134,7 @@ export function SessionSidebar(props: SessionSidebarProps) {
   const [prefs, setPrefs] = useSidebarPrefs();
   const [renaming, setRenaming] = useState<string | null>(null);
   const [menu, setMenu] = useState<Menu | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
   // A worktree folded or unfolded by hand; the rest follow the default: open while on screen.
   const [folds, setFolds] = useState<Map<string, boolean>>(() => new Map());
   // Sections unfolded past the limit, as `agents:<path>` or `terminals:<path>`; for this run only.
@@ -239,6 +242,12 @@ export function SessionSidebar(props: SessionSidebarProps) {
     setMenu({ kind: "session", point, session });
   };
 
+  const refresh = () => {
+    if (refreshing) return;
+    setRefreshing(true);
+    void props.onRefresh().finally(() => setRefreshing(false));
+  };
+
   const closeSearch = () => {
     setQuery("");
     setSearching(false);
@@ -313,6 +322,7 @@ export function SessionSidebar(props: SessionSidebarProps) {
           <div className="flex h-8 items-center gap-0.5 pl-2">
             <span className="min-w-0 flex-1 truncate text-text-muted">Worktrees</span>
             <HeaderButton icon={PlusIcon} label={`New worktree ${commandKeys("new-worktree")}`} onClick={props.onNewWorktree} />
+            <HeaderButton icon={RotateCwIcon} label="Refresh" spinning={refreshing} onClick={refresh} />
             <HeaderButton icon={SearchIcon} label="Find  /" onClick={() => setSearching(true)} />
             {prefs && <SidebarPrefsMenu prefs={prefs} onChange={setPrefs} />}
           </div>
@@ -454,7 +464,17 @@ export function SessionSidebar(props: SessionSidebarProps) {
   );
 }
 
-function HeaderButton({ icon: Glyph, label, onClick }: { icon: Icon; label: string; onClick: () => void }) {
+function HeaderButton({
+  icon: Glyph,
+  label,
+  spinning = false,
+  onClick,
+}: {
+  icon: Icon;
+  label: string;
+  spinning?: boolean;
+  onClick: () => void;
+}) {
   return (
     <button
       type="button"
@@ -464,7 +484,7 @@ function HeaderButton({ icon: Glyph, label, onClick }: { icon: Icon; label: stri
       onClick={onClick}
       className="grid size-6 shrink-0 place-items-center rounded-md text-icon outline-none transition-colors hover:bg-hover hover:text-text focus-visible:bg-hover"
     >
-      <Glyph className="size-4" />
+      <Glyph className={`size-4 ${spinning ? "animate-spin" : ""}`} />
     </button>
   );
 }
