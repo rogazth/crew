@@ -34,20 +34,29 @@ To build the app itself (macOS arm64):
 
 ```bash
 npm run app:build        # → release/, unpacked and fast
-npm run release          # → tags, builds the zip, publishes the GitHub release
 ```
+
+## Releasing
+
+Releases are built by GitHub Actions on a macOS runner, so any machine with node, git and push access can cut one:
+
+```bash
+npm run release -- patch    # or minor, major, or an exact version like 0.2.0
+```
+
+That bumps the version in `package.json`, `package-lock.json`, `Cargo.toml` and `Cargo.lock`, commits `chore: bump the version to X`, tags `vX` and pushes master and the tag together. It refuses on a dirty tree, off master, or behind origin.
+
+The tag starts [`.github/workflows/release.yml`](.github/workflows/release.yml), which runs `scripts/release-publish.mjs`: it builds `Crew-<version>-arm64.zip` and a `latest.json` next to it (version, download url, sha256) and publishes both to the GitHub release. Pushes to master never run it. To retry a tag whose publish failed, run the workflow by hand: `gh workflow run release.yml -f tag=vX`; it replaces the release's files.
 
 ## Install and update
 
-`npm run release` builds `Crew-<version>-arm64.zip` and a `latest.json` next to it — version, download url, sha256 — and publishes both to a GitHub release. Install by unzipping into `/Applications`:
+Install by unzipping the release zip into `/Applications`:
 
 ```bash
-ditto -x -k release/Crew-0.1.0-arm64.zip /Applications
+ditto -x -k Crew-0.1.0-arm64.zip /Applications
 ```
 
 From there Crew updates itself. It reads `latest.json` from the newest release fifteen seconds after launch and every six hours, and asks in a dialog; `Crew › Check for Updates…` asks on demand. The zip is checked against the manifest's sha256 before anything touches the disk, the bundle is swapped by a detached shell once the app has exited, and the app reopens. A checkout build never updates itself.
-
-Releasing needs `gh` logged in, a clean working tree, and the same version in `package.json` and `Cargo.toml` — the script refuses otherwise.
 
 The bundle is ad-hoc signed (`identity: "-"`): that is what arm64 needs to launch at all, and it keeps the updater free of Apple's signing requirements. It is not notarized, so anyone who downloads the zip in a browser has to clear Gatekeeper by hand.
 

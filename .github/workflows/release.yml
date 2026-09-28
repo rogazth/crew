@@ -1,0 +1,49 @@
+# Builds Crew on a macOS arm64 runner and publishes the GitHub release.
+# Started by the tag `npm run release` pushes; commits to master never run it.
+# Run it by hand (Actions › Release › Run workflow, or
+# `gh workflow run release.yml -f tag=v0.1.18`) to retry a tag whose publish failed.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to build and publish, e.g. v0.1.18
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          fetch-tags: true
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+
+      # rust-toolchain.toml picks the toolchain; the cache keeps target/ between releases.
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install zig and cargo-zigbuild
+        run: brew install zig cargo-zigbuild
+
+      - run: npm ci
+
+      - name: Build and publish
+        run: node scripts/release-publish.mjs
+        env:
+          GH_TOKEN: ${{ github.token }}
