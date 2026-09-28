@@ -163,8 +163,19 @@ export const DateBreak = memo(function DateBreak({ label }: { label: string }) {
  * Memoised because every footer above the live turn would otherwise rebuild its
  * tooltip on each streamed token.
  */
-export const TurnFooter = memo(function TurnFooter({ usage, at, text }: { usage: TurnUsage; at?: number; text?: string }) {
-  const worked = usage.durationMs !== undefined ? `Worked ${duration(usage.durationMs)}` : null;
+export const TurnFooter = memo(function TurnFooter({
+  usage,
+  at,
+  text,
+  folded,
+}: {
+  usage: TurnUsage;
+  at?: number;
+  text?: string;
+  /** The fold above already says how long the turn took. */
+  folded?: boolean;
+}) {
+  const worked = usage.durationMs !== undefined && !folded ? `Worked ${duration(usage.durationMs)}` : null;
   const parts = [worked, at !== undefined ? clock(at) : null].filter((p): p is string => p !== null);
   if (parts.length === 0 && !text) return null;
   const detail = usageDetail(usage);

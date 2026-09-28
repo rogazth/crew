@@ -16,14 +16,17 @@ const ACTIVITY_ROLES = new Set(["tool", "approval", "question", "reasoning"]);
 export type Row =
   | { kind: "message"; block: Block }
   | { kind: "activity"; id: string; blocks: Block[] }
-  /** `text` is the reply the footer closes, for its copy button; absent under a group. */
-  | { kind: "footer"; id: string; usage: TurnUsage; at?: number; text?: string }
-  | { kind: "date"; id: string; at: number };
+  /** `text` is the reply the footer closes, for its copy button; absent under a group.
+   *  `folded`: the turn's work sits behind a fold that already says how long it took. */
+  | { kind: "footer"; id: string; usage: TurnUsage; at?: number; text?: string; folded?: boolean }
+  | { kind: "date"; id: string; at: number }
+  /** A settled turn's work before its answer, behind one line. */
+  | { kind: "fold"; id: string; rows: Row[]; durationMs?: number; failed: boolean };
 
 export type Speaker = "user" | "agent" | "meta";
 
 export function speaker(row: Row): Speaker {
-  if (row.kind === "activity" || row.kind === "footer") return "agent";
+  if (row.kind === "activity" || row.kind === "footer" || row.kind === "fold") return "agent";
   if (row.kind === "date") return "meta";
   // A letter from another agent is a row in the run, not a side of the
   // conversation: it gets a note's room, not a change of speaker's.
@@ -90,3 +93,79 @@ export function gapBefore(prev: Row | undefined, current: Row): string {
   return "mt-7";
 }
 
+
+function isUser(row: Row): boolean {
+  return row.kind === "message" && row.block.role === "user";
+}
+
+function isReply(row: Row): boolean {
+  return row.kind === "message" && row.block.role === "assistant";
+}
+
+/** Every block a row holds, a fold's included: what a search hit is looked for in. */
+export function rowBlocks(row: Row): Block[] {
+  if (row.kind === "message") return [row.block];
+  if (row.kind === "activity") return row.blocks;
+  if (row.kind === "fold") return row.rows.flatMap(rowBlocks);
+  return [];
+}
+
+/**
+ * Once a turn is over, what the agent did on the way to its answer is history:
+ * the calls, the notes it wrote to itself between them, the thinking. They
+ * fold behind one line, "Worked for 4m 12s", and the answer stands alone
+ * under the question. A turn still running folds nothing — that is the work
+ * the reader is watching — and neither does a turn with no answer, or one
+ * whose work is already a single line.
+ */
+export function foldTurns(rows: Row[], working: boolean): Row[] {
+  const out: Row[] = [];
+  let at = 0;
+  while (at < rows.length) {
+    if (!isUser(rows[at]!)) {
+      out.push(rows[at]!);
+      at += 1;
+      continue;
+    }
+    let end = at + 1;
+    while (end < rows.length && !isUser(rows[end]!) && rows[end]!.kind !== "date") end += 1;
+    const turn = rows.slice(at, end);
+    const live = working && end === rows.length;
+    out.push(...(live ? turn : foldTurn(turn)));
+    at = end;
+  }
+  return out;
+}
+
+function foldTurn(turn: Row[]): Row[] {
+  let answer = -1;
+  for (let index = turn.length - 1; index > 0; index -= 1) {
+    if (isReply(turn[index]!)) {
+      answer = index;
+      break;
+    }
+  }
+  const work = answer > 0 ? turn.slice(1, answer) : [];
+  if (work.length < 2 || !work.some((row) => row.kind === "activity")) return turn;
+  const question = turn[0]!;
+  const reply = turn[answer]!;
+  const blocks = work.flatMap(rowBlocks);
+  const footer = turn.find((row): row is Extract<Row, { kind: "footer" }> => row.kind === "footer");
+  const started = question.kind === "message" ? question.block.at : undefined;
+  const ended = reply.kind === "message" ? reply.block.at : undefined;
+  const durationMs =
+    footer?.usage.durationMs ?? (started !== undefined && ended !== undefined ? ended - started : undefined);
+  const fold: Row = {
+    kind: "fold",
+    id: `fold-${rowId(work[0]!)}`,
+    rows: work,
+    ...(durationMs !== undefined && durationMs > 0 ? { durationMs } : {}),
+    failed: blocks.some((block) => block.tool?.status === "failed"),
+  };
+  const rest = turn.slice(answer).map((row) => (row.kind === "footer" ? { ...row, folded: true } : row));
+  return [question, fold, ...rest];
+}
+
+function rowId(row: Row): string {
+  return row.kind === "message" ? row.block.id : row.id;
+}

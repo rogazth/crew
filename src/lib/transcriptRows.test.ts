@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Block, TurnUsage } from "./blocks";
-import { gapBefore, groupRows, speaker, type Row } from "./transcriptRows";
+import { foldTurns, gapBefore, groupRows, speaker, type Row } from "./transcriptRows";
 
 const COST: TurnUsage = { costUsd: 0.02 };
 
@@ -135,5 +135,58 @@ describe("footer", () => {
   it("carries the reply's text onto its footer for copying", () => {
     const rows = groupRows([block("assistant", "the answer", { usage: COST })]);
     expect(rows[1]).toMatchObject({ kind: "footer", text: "the answer" });
+  });
+});
+
+describe("foldTurns", () => {
+  const turn = () => [
+    block("user", "fix it", { at: 1_000 }),
+    block("tool", "npm test", { tool: { callId: "c1", name: "Bash", title: "npm test", status: "completed" } }),
+    block("assistant", "one failed, fixing", { at: 2_000 }),
+    block("tool", "edit", { tool: { callId: "c2", name: "Edit", title: "edit", status: "failed" } }),
+    block("assistant", "green", { at: 61_000, usage: { durationMs: 60_000 } }),
+  ];
+
+  it("folds a settled turn's work behind one line and leaves the answer under the question", () => {
+    const rows = foldTurns(groupRows(turn()), false);
+    expect(kinds(rows)).toEqual(["date", "message", "fold", "message", "footer"]);
+    const fold = rows[2] as Extract<Row, { kind: "fold" }>;
+    expect(kinds(fold.rows)).toEqual(["activity", "message", "activity"]);
+    expect(fold.durationMs).toBe(60_000);
+    expect(fold.failed).toBe(true);
+    expect((rows[4] as Extract<Row, { kind: "footer" }>).folded).toBe(true);
+  });
+
+  it("leaves the turn the agent is still working on alone", () => {
+    const rows = foldTurns(groupRows(turn()), true);
+    expect(rows.some((row) => row.kind === "fold")).toBe(false);
+  });
+
+  it("does not fold work that is already one line", () => {
+    const rows = foldTurns(
+      groupRows([block("user", "run it"), block("tool", "npm test"), block("assistant", "green")]),
+      false,
+    );
+    expect(kinds(rows)).toEqual(["message", "activity", "message"]);
+  });
+
+  it("does not fold a turn that never answered", () => {
+    const rows = foldTurns(
+      groupRows([block("user", "run it"), block("tool", "a"), block("assistant", "hm"), block("tool", "b")]),
+      false,
+    );
+    expect(rows.some((row) => row.kind === "fold")).toBe(false);
+  });
+
+  it("times a turn from its question to its answer when the provider did not", () => {
+    const blocks = turn();
+    blocks[4] = block("assistant", "green", { at: 31_000 });
+    const fold = foldTurns(groupRows(blocks), false).find((row) => row.kind === "fold") as Extract<Row, { kind: "fold" }>;
+    expect(fold.durationMs).toBe(30_000);
+  });
+
+  it("folds every finished turn but the live one", () => {
+    const rows = foldTurns(groupRows([...turn(), ...turn()]), true);
+    expect(rows.filter((row) => row.kind === "fold")).toHaveLength(1);
   });
 });

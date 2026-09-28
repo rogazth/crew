@@ -13,6 +13,8 @@ import {
   type Phase,
   type PhaseKind,
 } from "../../lib/activity";
+import { useNow } from "../../hooks/useNow";
+import { duration } from "../../lib/time";
 import { answerSummary, isOpen, type Answers, type ApprovalDecision, type Block } from "../../lib/blocks";
 import { glyphKind, hasBody, toolLine, type ToolGlyphKind } from "../../lib/toolDetail";
 import { ApprovalCard } from "./ApprovalCard";
@@ -447,14 +449,24 @@ function AnsweredRow({ block }: { block: Block }) {
   );
 }
 
-/** One activity-weight line for the gap between sending and the first token. */
-export function ThinkingLine() {
+/**
+ * The turn in progress, at the foot of the chat: how long the agent has been
+ * at it, ticking. While a card waits on the reader the time is theirs, so the
+ * line says so instead of counting.
+ */
+export function WorkingLine({ since, waiting }: { since: number | undefined; waiting: boolean }) {
+  const now = useNow(1000, !waiting);
+  const label = waiting ? "Waiting for you" : since !== undefined ? `Working for ${duration(Math.max(0, now - since))}` : "Working";
   return (
     <div className="flex min-h-[26px] items-center gap-2 py-0.5 text-[13px] leading-[18px]">
       <span className="crew-node">
-        <LoaderCircleIcon className="size-3.5 animate-spin text-warning" />
+        {waiting ? (
+          <MessageCircleMoreIcon className="size-3.5 text-warning" />
+        ) : (
+          <LoaderCircleIcon className="size-3.5 animate-spin text-warning" />
+        )}
       </span>
-      <span className="crew-shimmer">Thinking</span>
+      <span className={`tabular-nums ${waiting ? "text-text-muted" : "crew-shimmer"}`}>{label}</span>
     </div>
   );
 }

@@ -5,16 +5,9 @@ import {
   type ApprovalDecision,
   type Block,
 } from "../../lib/blocks";
-import { gapBefore, groupRows, speaker } from "../../lib/transcriptRows";
-import { dayLabel } from "../../lib/time";
-import { ActivityGroup, ThinkingLine } from "./Activity";
-import {
-  AssistantMessage,
-  DateBreak,
-  Note,
-  TurnFooter,
-  UserMessage,
-} from "./Message";
+import { foldTurns, groupRows, speaker } from "../../lib/transcriptRows";
+import { WorkingLine } from "./Activity";
+import { Rows } from "./Rows";
 
 const NEAR_BOTTOM_PX = 16;
 /** How long a clicked row holds its place: the panel's 200ms, and room for what renders late in it. */
@@ -39,19 +32,17 @@ type Props = {
   onAnswer: (requestId: number, answers: Answers | null) => void;
 };
 
-/** The pending tool row already is the live state; Thinking only fills a true gap. */
-function showThinking(blocks: Block[], working: boolean): boolean {
-  if (!working) return false;
-  const last = blocks.at(-1);
-  if (!last) return true;
-  if (
-    (last.role === "assistant" || last.role === "reasoning") &&
-    last.streaming &&
-    last.text
-  )
-    return false;
-  if (isOpen(last)) return false;
-  return true;
+/** When the turn began: the message that started it, whoever sent it. */
+function turnStart(blocks: Block[]): number | undefined {
+  for (let index = blocks.length - 1; index >= 0; index -= 1) {
+    if (blocks[index]!.role === "user") return blocks[index]!.at;
+  }
+  return undefined;
+}
+
+/** A card the agent is stopped on: the time is the reader's, not the agent's. */
+function waiting(blocks: Block[]): boolean {
+  return blocks.some((block) => (block.role === "approval" || block.role === "question") && isOpen(block));
 }
 
 /** Stick-to-bottom scroller, with a 16px threshold. */
@@ -75,8 +66,7 @@ export function Transcript({
   const fromBottom = useRef(0);
   /** A row the reader just opened or closed: it stays where it was on screen while the panel moves. */
   const anchor = useRef<{ el: Element; top: number; until: number } | null>(null);
-  const rows = useMemo(() => groupRows(blocks), [blocks]);
-  const thinking = showThinking(blocks, working);
+  const rows = useMemo(() => foldTurns(groupRows(blocks), working), [blocks, working]);
 
   const onScroll = () => {
     const el = scroller.current;
@@ -130,7 +120,7 @@ export function Transcript({
     requestAnimationFrame(follow);
   };
 
-  useLayoutEffect(place, [place, blocks, thinking, active]);
+  useLayoutEffect(place, [place, blocks, working, active]);
 
   // Shiki answering, an image resolving, a webfont landing: each one grows the
   // transcript after the paint that placed the reader. The observer runs
@@ -215,60 +205,10 @@ export function Transcript({
             </button>
           </div>
         )}
-        {rows.map((row, index) => {
-          const className = gapBefore(rows[index - 1], row);
-          if (row.kind === "activity") {
-            return (
-              <div key={row.id} className={className}>
-                <ActivityGroup
-                  blocks={row.blocks}
-                  live={working && index === rows.length - 1}
-                  focusId={focusId}
-                  marked={focusId}
-                  onApprove={onApprove}
-                  onAnswer={onAnswer}
-                />
-              </div>
-            );
-          }
-          if (row.kind === "footer") {
-            return (
-              <div key={row.id} className={className}>
-                <TurnFooter
-                  usage={row.usage}
-                  {...(row.at !== undefined ? { at: row.at } : {})}
-                  {...(row.text !== undefined ? { text: row.text } : {})}
-                />
-              </div>
-            );
-          }
-          if (row.kind === "date") {
-            return (
-              <div key={row.id} className={className}>
-                <DateBreak label={dayLabel(row.at)} />
-              </div>
-            );
-          }
-          const { block } = row;
-          return (
-            <div
-              key={block.id}
-              data-block={block.id}
-              className={`${className}${block.id === focusId ? " crew-found" : ""}`}
-            >
-              {block.role === "user" ? (
-                <UserMessage block={block} />
-              ) : block.role === "system" ? (
-                <Note block={block} />
-              ) : (
-                <AssistantMessage block={block} />
-              )}
-            </div>
-          );
-        })}
-        {thinking && (
+        <Rows rows={rows} working={working} focusId={focusId} onApprove={onApprove} onAnswer={onAnswer} />
+        {working && (
           <div className={rows.length > 0 ? (speaker(rows.at(-1)!) === "agent" ? "mt-2.5" : "mt-7") : ""}>
-            <ThinkingLine />
+            <WorkingLine since={turnStart(blocks)} waiting={waiting(blocks)} />
           </div>
         )}
       </div>
