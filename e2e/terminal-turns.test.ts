@@ -3,7 +3,7 @@
 // records it left). The fake claude spins its title while a turn runs, as the
 // real one does; the window only sees the terminal.
 import assert from "node:assert/strict";
-import { existsSync } from "node:fs";
+import { readdirSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { test } from "node:test";
@@ -120,9 +120,11 @@ test("T3: a permission prompt out of sight reads Needs input; answering it works
   await sessionTab(crew, s2).click();
 
   await becomes(crew, s1, "Needs input", "needs-input");
-  // The question went through Claude's Notification hook, and crewd took the record.
-  const attention = path.join(crew.userData, "claude-bind", `${s1.id}.attention`);
-  assert.ok(!existsSync(attention), "crewd consumed the hook's attention record");
+  // The question went through Claude's PermissionRequest hook, and crewd took the record.
+  const binds = path.join(crew.userData, "claude-bind");
+  await waitFor(async () => readdirSync(binds).every((name) => !name.startsWith(s1.id) || !name.endsWith(".hook")), {
+    message: "crewd consumed the hooks' records",
+  });
   await holdsFor(2000, () => reads(crew, s1, "Needs input", "needs-input"), `${s1.name} stops waiting on its own`);
 
   // Back to it and answer: the CLI runs the tool, then rests.

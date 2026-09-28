@@ -116,6 +116,11 @@ export type HistoryList = { text?: string,
  */
 before?: number, limit: number, };
 
+/**
+ * How far crewd got reading a session's history.
+ */
+export type HistoryState = "pending" | "ready" | "error";
+
 export type HistorySuggest = { text: string, limit: number, };
 
 export type HistoryTitle = { url: string, title: string, };
@@ -321,6 +326,23 @@ export type Session = { id: string, workspaceId: string, kind: string, name: str
  */
 worktree: string | null, createdAt: number, updatedAt: number, };
 
+/**
+ * A permission prompt or a question form on the CLI's screen.
+ */
+export type SessionAsk = { 
+/**
+ * New for every ask, so an answer is never taken for the next one's.
+ */
+id: number, tool: string, input: Record<string, unknown>, 
+/**
+ * The form's questions; empty for a permission.
+ */
+questions: Array<Question>, 
+/**
+ * The prompt offers "don't ask again" as its second option.
+ */
+always: boolean, };
+
 export type SessionCreate = { workspaceId: string, kind: string, name: string, provider: string, model: string, description: string, autonomy: string, 
 /**
  * The git worktree the session runs in; absent means the workspace folder.
@@ -329,9 +351,69 @@ worktree?: string | null, };
 
 export type SessionCreated = { session: Session, };
 
+/**
+ * New or changed blocks at the end of a session's history, while a chat reads it.
+ */
+export type SessionHistoryAppended = { sessionId: string, 
+/**
+ * Every block from this index on is replaced by `blocks`.
+ */
+from: number, blocks: Array<Block>, 
+/**
+ * The history was read again from scratch (another file, or it shrank): reload the window.
+ */
+reset: boolean, state: HistoryState, };
+
+export type SessionHistoryRequest = { id: string, 
+/**
+ * Where the session runs; the CLI files its history under it.
+ */
+cwd: string, 
+/**
+ * A page of the blocks before this index; the newest page when absent.
+ */
+before?: number, };
+
+export type SessionHistoryWindow = { blocks: Array<Block>, 
+/**
+ * The index of `blocks[0]`; indices go below zero as earlier pages load.
+ */
+start: number, 
+/**
+ * Older blocks exist before `start`.
+ */
+more: boolean, state: HistoryState, error?: string, };
+
 export type SessionId = { sessionId: string, };
 
 export type SessionLine = { sessionId: string, line: string, };
+
+/**
+ * What a session's CLI is doing, as its hooks told crewd. Pushed as
+ * `session-live` whenever it changes.
+ */
+export type SessionLive = { sessionId: string, 
+/**
+ * The CLI's SessionStart hook ran: it is up and reads keys.
+ */
+started: boolean, 
+/**
+ * A turn is running: from the prompt being submitted until it stops.
+ */
+working: boolean, 
+/**
+ * Something the CLI stopped to ask; answered by keys in its terminal.
+ */
+ask?: SessionAsk, 
+/**
+ * The conversation the CLI is in now, and the file it writes it to.
+ */
+providerSessionId?: string, updatedAt: number, };
+
+/**
+ * The chat answered ask `ask_id` with keys.
+ */
+export type SessionLiveAnswered = { id: string, askId: number, };
 
 export type SessionStatusEvent = { sessionId: string, status: string, providerSessionId?: string, updatedAt: number, };
 

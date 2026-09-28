@@ -109,12 +109,15 @@ export function WorkspacePanes({
           onConfirm={onConfirm}
         />
       </DiffsPool>
-      <Terminals
-        panes={mounted}
-        sessions={sessions}
-        onStatus={onStatus}
-        onOpenFile={onOpenFile}
-      />
+      <ChatContext value={chat}>
+        {/* A session's chat is drawn inside its terminal's pane. */}
+        <Terminals
+          panes={mounted}
+          sessions={sessions}
+          onStatus={onStatus}
+          onOpenFile={onOpenFile}
+        />
+      </ChatContext>
       <Browsers panes={mounted} onPatch={onPatchBrowser} onOpenTab={onOpenBrowserTab} />
       <ChatContext value={chat}>
         <Agents panes={mounted} sessions={sessions} />

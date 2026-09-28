@@ -1,4 +1,5 @@
 import { STUB_KINDS } from "./types";
+import type { SessionSurface } from "./sessionView";
 import type { Session, StubKind, Tab } from "./types";
 
 export const sessionTabId = (sessionId: string) => `session:${sessionId}`;
@@ -303,12 +304,20 @@ export function isAgentTab(tab: Tab | null, sessions: Session[]): boolean {
   return sessions.find((session) => session.id === tab.sessionId)?.kind === "agent";
 }
 
-/** Which tab the terminal commands aim at. */
-export function isTerminalTab(tab: Tab | null, sessions: Session[]): boolean {
+/**
+ * Which tab the terminal commands aim at: one whose terminal is on screen. A
+ * session drawn as Crew's chat is not, though its CLI runs underneath.
+ */
+export function isTerminalTab(
+  tab: Tab | null,
+  sessions: Session[],
+  surfaceOf: (session: Session) => SessionSurface,
+): boolean {
   if (!tab) return false;
   if (tab.kind === "stub") return tab.stub === "terminal";
   if (tab.kind !== "session") return false;
-  return sessions.find((session) => session.id === tab.sessionId)?.kind === "terminal";
+  const session = sessions.find((row) => row.id === tab.sessionId);
+  return session !== undefined && surfaceOf(session) === "terminal";
 }
 
 /** A path the terminal linked is absolute; a file tab labels itself with the short form. */

@@ -20,6 +20,11 @@ export type ProviderDef = {
   resumeArgs: (id: string) => string[];
   /** Runs the interactive CLI without asking before it edits or runs anything. */
   bypassFlag: string;
+  /**
+   * Crew reads the CLI's own history, so its sessions can open in the chat.
+   * cursor-agent keeps its CLI chats where nothing else can load them.
+   */
+  chat: boolean;
   models: Model[];
 };
 
@@ -32,6 +37,7 @@ export const PROVIDERS: ProviderDef[] = [
     binding: "own",
     resumeArgs: (id) => ["--resume", id],
     bypassFlag: "--dangerously-skip-permissions",
+    chat: true,
     models: [
       { id: "claude-fable-5-1", label: "Fable 5.1", note: "Toughest" },
       { id: "claude-opus-5-5", label: "Opus 5.5", note: "Most capable" },
@@ -54,6 +60,7 @@ export const PROVIDERS: ProviderDef[] = [
     binding: "before",
     resumeArgs: (id) => ["--resume", id],
     bypassFlag: "--force",
+    chat: false,
     models: [
       { id: "auto", label: "Auto", note: "Default" },
       { id: "composer-2.5", label: "Composer 2.5" },
@@ -82,6 +89,7 @@ export const PROVIDERS: ProviderDef[] = [
     binding: "after",
     resumeArgs: (id) => ["resume", id],
     bypassFlag: "--dangerously-bypass-approvals-and-sandbox",
+    chat: true,
     models: [
       { id: "gpt-6-astra", label: "GPT-6 Astra", note: "Most capable" },
       { id: "gpt-6-luna", label: "GPT-6 Luna" },
@@ -100,6 +108,7 @@ export const PROVIDERS: ProviderDef[] = [
     binding: "after",
     resumeArgs: (id) => ["--session", id],
     bypassFlag: "--auto",
+    chat: true,
     models: [
       { id: "opencode/ling-3.0-flash-fin-free", label: "Ling 3.0 Flash", note: "Free" },
       { id: "opencode/nemotron-3.5-lightning-free", label: "Nemotron 3.5 Lightning", note: "Free" },

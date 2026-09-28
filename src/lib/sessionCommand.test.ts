@@ -68,11 +68,27 @@ describe("sessionCommand", () => {
     }
   });
 
-  it("has Claude report when it stops to ask, and only then", () => {
+  it("has Claude report what it does through every hook, silently, in the bind folder", () => {
     const { hooks } = settings(argv({}));
-    const [notification] = hooks.Notification;
-    expect(notification.matcher).toBe("permission_prompt|elicitation_dialog");
-    expect(notification.hooks[0].command).toContain('mv "$CREW_CLAUDE_BIND_DIR/crew-1.attention.tmp" "$CREW_CLAUDE_BIND_DIR/crew-1.attention"');
+    const events = ["SessionStart", "UserPromptSubmit", "PermissionRequest", "PostToolUse", "Stop", "SessionEnd"];
+    for (const event of events) expect(hooks[event], event).toBeDefined();
+    expect(hooks.Notification).toBeUndefined();
+    const live = hooks.PermissionRequest[0].hooks[0].command;
+    expect(hooks.SessionStart[1].hooks[0].command).toBe(live);
+
+    const dir = mkdtempSync(path.join(tmpdir(), "crew-bind-"));
+    try {
+      const input = '{"hook_event_name":"PermissionRequest","tool_name":"Bash"}';
+      const run = spawnSync("sh", ["-c", live], { input, env: { ...process.env, CREW_CLAUDE_BIND_DIR: dir } });
+      expect(run.status).toBe(0);
+      expect(run.stdout.length).toBe(0);
+      const [file, ...rest] = readdirSync(dir);
+      expect(rest).toEqual([]);
+      expect(file).toMatch(/^crew-1\.[0-9]+-[0-9]+\.hook$/);
+      expect(readFileSync(path.join(dir, file!), "utf8")).toBe(input);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("resumes the others by the id their CLI handed out", () => {

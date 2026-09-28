@@ -36,6 +36,7 @@ use tokio_tungstenite::tungstenite::Message;
 
 mod http;
 pub mod machine;
+mod sessions;
 mod socks;
 
 pub struct Config {
@@ -53,6 +54,8 @@ struct Hosts {
     bridge: Bridge,
     turns: TurnHost,
     scheduler: Scheduler,
+    /// Sessions' CLIs: what their hooks say, and their histories while a chat reads them.
+    sessions: sessions::SessionWatch,
     /// `crewd serve` only. Zero on the window's daemon.
     socks_port: u16,
 }
@@ -120,6 +123,8 @@ struct Hub {
     pty_attached: Mutex<HashSet<u64>>,
     next: AtomicU64,
     runtime: Mutex<Option<tokio::runtime::Handle>>,
+    /// Told when a session's terminal ends: its CLI is not there to type into any more.
+    sessions: std::sync::OnceLock<sessions::SessionWatch>,
 }
 
 impl Hub {
@@ -129,6 +134,7 @@ impl Hub {
             pty_attached: Mutex::new(HashSet::new()),
             next: AtomicU64::new(1),
             runtime: Mutex::new(None),
+            sessions: std::sync::OnceLock::new(),
         }
     }
 
@@ -250,6 +256,10 @@ impl PtyEvents for Hub {
 
     fn exit(&self, id: &str, code: Option<i32>) {
         self.emit("pty-exit", proto::PtyExit { id: id.to_string(), code });
+        // A session's pane is `<workspace>/session:<id>`; a CLI that crashed ran no SessionEnd hook.
+        if let (Some(sessions), Some((_, session))) = (self.sessions.get(), id.rsplit_once("/session:")) {
+            sessions.exited(self, session);
+        }
     }
 }
 
@@ -401,6 +411,8 @@ pub fn serve_on(config: Config, listen: Listen) -> Result<Handle, String> {
 
     let (ready_tx, ready_rx) = std_mpsc::channel();
     let (stop_tx, stop_rx) = tokio::sync::oneshot::channel();
+    let sessions = sessions::SessionWatch::start(config.store.clone(), hub.clone());
+    let _ = hub.sessions.set(sessions.clone());
     let hosts = Hosts {
         hub: hub.clone(),
         pty: config.pty,
@@ -408,6 +420,7 @@ pub fn serve_on(config: Config, listen: Listen) -> Result<Handle, String> {
         bridge: config.bridge,
         turns: turns.clone(),
         scheduler: scheduler.clone(),
+        sessions,
         socks_port: 0,
     };
 
@@ -637,6 +650,7 @@ async fn handle_socket(stream: TcpStream, hosts: Hosts, hub: Arc<Hub>, token: St
     }
 
     hub.unsubscribe(client_id);
+    hosts.sessions.drop_client(client_id);
     writer.abort();
 }
 
@@ -750,7 +764,15 @@ async fn handle_text(hosts: &Hosts, hub: &Arc<Hub>, client_id: u64, text: &str) 
         attach_pty(hosts, hub, client_id, request.id, request.params).await;
         return None;
     }
-    let result = dispatch(hosts, &request.method, request.params).await;
+    // A history is read for the windows that hold it open, so these know who asks.
+    let result = match request.method.as_str() {
+        "session_history_window" => history_window(hosts, client_id, request.params).await,
+        "session_history_close" => parse::<Id>(request.params).map(|Id { id }| {
+            hosts.sessions.close(client_id, &id);
+            Value::Null
+        }),
+        method => dispatch(hosts, method, request.params).await,
+    };
     Some(encode(&match result {
         Ok(value) => proto::ok(request.id, value),
         Err(error) => proto::err(request.id, error),
@@ -795,6 +817,13 @@ async fn attach_pty(hosts: &Hosts, hub: &Arc<Hub>, client_id: u64, req_id: u32, 
     }
 }
 
+async fn history_window(hosts: &Hosts, client_id: u64, params: Value) -> Result<Value, String> {
+    let proto::SessionHistoryRequest { id, cwd, before } = parse(params)?;
+    let sessions = hosts.sessions.clone();
+    let store = hosts.store.clone();
+    json(block(move || sessions.window(&store, client_id, &id, &cwd, before)).await?)
+}
+
 /// Providers that can hand out an id before the terminal starts get one now.
 fn bind_new_provider_session(store: &Store, id: String) -> Result<String, String> {
     let row = session::get(store, id.clone())?.ok_or("Session not found")?;
@@ -831,6 +860,10 @@ fn discover_provider_session(
 /// conversations it left with turns in them are sessions now; every window
 /// hears of them, and of the renamed terminal.
 fn rebind_claude_session(store: &Store, hub: &Hub, id: String) -> Result<Option<String>, String> {
+    // The window asks, and the hook watcher follows every start: one at a time,
+    // or both would split the same conversation off.
+    static FOLLOWING: Mutex<()> = Mutex::new(());
+    let _one = FOLLOWING.lock().unwrap_or_else(|e| e.into_inner());
     let before = session::get(store, id.clone())?.and_then(|row| row.provider_session_id);
     let Some(followed) = session::follow_claude(store, id)? else {
         return Ok(None);
@@ -1076,9 +1109,19 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
             let hub = hosts.hub.clone();
             json(block(move || rebind_claude_session(&store, &hub, id)).await?)
         }
-        "session_claude_attention" => {
+        "session_live_get" => {
             let Id { id } = parse(params)?;
-            json(block(move || Ok(provider_session::claude_attention(&id))).await?)
+            json(hosts.sessions.live(&id))
+        }
+        "session_live_stopped" => {
+            let Id { id } = parse(params)?;
+            hosts.sessions.stopped(&hosts.hub, &id);
+            Ok(Value::Null)
+        }
+        "session_live_answered" => {
+            let proto::SessionLiveAnswered { id, ask_id } = parse(params)?;
+            hosts.sessions.answered(&hosts.hub, &id, ask_id);
+            Ok(Value::Null)
         }
         "session_sync_title" => {
             let Id { id } = parse(params)?;

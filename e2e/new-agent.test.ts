@@ -1,6 +1,7 @@
 // New Agent makes an agent. v0.1.16 read a saved `agents:mode` and, when it
 // said "terminal", made a terminal session out of the sheet instead. The value
 // may still be saved on machines that ran that version: it must be ignored.
+// "Sessions open in" is about sessions only: agents are made agents under it.
 import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
 import { launchCrew, MOD, pressChord, sessions, waitFor, type Crew } from "./harness.ts";
@@ -34,5 +35,12 @@ test("New Agent makes an agent even with v0.1.16's terminal mode saved", async (
   await crew.request("state_set", { key: "agents:mode", value: "terminal" });
   await crew.reload();
   const made = await newAgent("Scout");
+  assert.equal(made.kind, "agent");
+});
+
+test("New Agent makes an agent with sessions opening in the chat", async () => {
+  await crew.request("state_set", { key: "sessions:view", value: "chat" });
+  await crew.reload();
+  const made = await newAgent("Ranger");
   assert.equal(made.kind, "agent");
 });

@@ -42,22 +42,33 @@ export function sessionCommand(session: Session, { resume, theme, bypass = false
   return [...argv, ...bypassing];
 }
 
+/** What the chat follows a session's CLI by: its turns, and what it stops to ask. */
+const LIVE_HOOKS = [
+  "UserPromptSubmit",
+  "PermissionRequest",
+  "PostToolUse",
+  "PostToolUseFailure",
+  "PermissionDenied",
+  "Stop",
+  "StopFailure",
+  "SessionEnd",
+] as const;
+
 /**
- * Hands each hook's stdin to the daemon's bind folder. SessionStart's carries
- * Claude's current session id, and must print nothing: its stdout is added to
- * the model's context. Notification's says Claude stopped to ask for something,
- * which it otherwise shows only on screen: its title goes back to idle and it
- * rings no bell. The idle reminder is left out; a finished turn is not a question.
+ * Hands each hook's stdin to the daemon's bind folder, one record per run,
+ * written aside and moved in so the daemon never reads half of one; the
+ * seconds and the hook's pid name it. SessionStart's `.start` carries Claude's
+ * current session id, which a `/clear` changes; every hook's `.hook` (that one
+ * included) tells the daemon what the CLI is doing. They print nothing:
+ * SessionStart's stdout is added to the model's context, and a permission
+ * hook that answers would take the decision from the user.
  */
 function bindHooks(crewId: string) {
-  const at = (file: string) => `"$CREW_CLAUDE_BIND_DIR/${crewId}.${file}"`;
-  // One record per start, so a `/clear` the daemon has not read yet is not
-  // written over by the next one: seconds and the hook's pid name it.
-  const bind = `if [ -n "$CREW_CLAUDE_BIND_DIR" ]; then f="$CREW_CLAUDE_BIND_DIR/${crewId}.$(date +%s)-$$"; cat > "$f.tmp" && mv "$f.tmp" "$f.start"; fi`;
-  // Written aside and moved in, so the daemon never reads half a record.
-  const ask = `if [ -n "$CREW_CLAUDE_BIND_DIR" ]; then cat > ${at("attention.tmp")} && mv ${at("attention.tmp")} ${at("attention")}; fi`;
+  const record = (ext: string) =>
+    `if [ -n "$CREW_CLAUDE_BIND_DIR" ]; then f="$CREW_CLAUDE_BIND_DIR/${crewId}.$(date +%s)-$$"; cat > "$f.tmp" && mv "$f.tmp" "$f.${ext}"; fi`;
+  const live = { hooks: [{ type: "command", command: record("hook") }] };
   return {
-    SessionStart: [{ hooks: [{ type: "command", command: bind }] }],
-    Notification: [{ matcher: "permission_prompt|elicitation_dialog", hooks: [{ type: "command", command: ask }] }],
+    SessionStart: [{ hooks: [{ type: "command", command: record("start") }] }, live],
+    ...Object.fromEntries(LIVE_HOOKS.map((event) => [event, [live]])),
   };
 }

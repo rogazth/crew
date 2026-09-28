@@ -1,7 +1,7 @@
 import { AgentAvatar } from "../../chrome/AgentAvatar";
 import { ProviderIcon } from "../../chrome/ProviderIcon";
 import { awaitsUser } from "../../lib/blocks";
-import { modelLabel, providerOf } from "../../lib/providers";
+import { modelLabel, providerLine, providerOf } from "../../lib/providers";
 import { Composer } from "./Composer";
 import { Transcript } from "./Transcript";
 import type { ChatSurfaceProps } from "./surface";
@@ -28,6 +28,7 @@ export function DefaultChatSurface({
   onRemoveFile,
   onApprove,
   onAnswer,
+  loading = false,
 }: ChatSurfaceProps) {
   return (
     <>
@@ -40,13 +41,15 @@ export function DefaultChatSurface({
       )}
       {blocks.length === 0 ? (
         <div className="flex min-h-0 flex-[5] flex-col items-center justify-end">
-          <Intro
-            session={session}
-            onPick={(text) => {
-              onDraft(text);
-              field.current?.focus();
-            }}
-          />
+          {!loading && (
+            <Intro
+              session={session}
+              onPick={(text) => {
+                onDraft(text);
+                field.current?.focus();
+              }}
+            />
+          )}
         </div>
       ) : (
         <Transcript
@@ -96,12 +99,21 @@ const STARTERS = [
 function Intro({ session, onPick }: { session: ChatSurfaceProps["session"]; onPick: (text: string) => void }) {
   return (
     <div className="mx-auto flex w-full max-w-[760px] flex-col items-center gap-4 px-6 pb-6 text-center">
-      <AgentAvatar seed={session.id} bare className="size-16" />
+      {/* A session is its CLI, with no face of its own: the CLI's mark stands in. */}
+      {session.kind === "agent" ? (
+        <AgentAvatar seed={session.id} bare className="size-16" />
+      ) : (
+        <span className="grid size-16 place-items-center rounded-2xl bg-card ring-1 ring-border">
+          <ProviderIcon provider={session.provider} className="size-8" />
+        </span>
+      )}
       <div className="flex flex-col items-center gap-1">
         <h2 className="text-[22px] leading-7 font-semibold tracking-[-0.02em]">{session.name}</h2>
         <p className="flex items-center gap-1.5 text-[13px] text-text-muted">
           <ProviderIcon provider={session.provider} className="size-3.5" />
-          {providerOf(session.provider)?.label} {modelLabel(session.provider, session.model)}
+          {session.kind === "agent"
+            ? `${providerOf(session.provider)?.label} ${modelLabel(session.provider, session.model)}`
+            : providerLine(session.provider, session.model)}
         </p>
         {session.description && <p className="max-w-md text-[13.5px] text-text-muted">{session.description}</p>}
       </div>

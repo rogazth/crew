@@ -12,10 +12,12 @@ import { useBrowserPrefs } from "../hooks/useBrowserPrefs";
 import { useColorMode } from "../hooks/useColorMode";
 import { useDefaultAgent } from "../hooks/useDefaultAgent";
 import { useFilePrefs } from "../hooks/useFilePrefs";
+import { useSessionView } from "../hooks/useSessionView";
 import { useTabScope } from "../hooks/useTabScope";
 import { AGENT_AVATARS } from "../lib/agentAvatar";
 import { KEEP_CHOICES, SEARCH_ENGINES } from "../lib/browserPrefs";
 import { COLOR_MODES } from "../lib/colorMode";
+import { SESSION_VIEWS } from "../lib/sessionView";
 import { bindingGroups } from "../lib/commandGroups";
 import { commandKeys } from "../lib/commands";
 import { BROWSER_CLICK } from "../lib/external";
@@ -127,6 +129,7 @@ const PREVIEW_SEEDS = ["crew", "scout", "atlas", "pilot"];
 function Appearance() {
   const avatar = useAgentAvatar();
   const color = useColorMode();
+  const sessions = useSessionView();
   return (
     <>
       {color.available && (
@@ -142,6 +145,20 @@ function Appearance() {
           </SettingsRow>
         </SettingsSection>
       )}
+      <SettingsSection title="Sessions">
+        <SettingsRow
+          label="Sessions open in"
+          description="Chat shows a session's conversation in Crew's chat while its CLI keeps running underneath. Cursor sessions always open in the terminal."
+        >
+          <Select
+            label="Sessions open in"
+            className="w-40"
+            value={sessions.view}
+            onChange={sessions.update}
+            options={SESSION_VIEWS.map((item) => ({ value: item.id, label: item.label }))}
+          />
+        </SettingsRow>
+      </SettingsSection>
       <SettingsSection title="Agents">
         <SettingsRow label="Avatar style" description="Every agent gets its own face in this style, drawn from its id.">
           <div className="flex items-center gap-3">

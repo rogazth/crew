@@ -23,6 +23,7 @@ import {
   withRecent,
 } from "./tabs";
 import type { Session, Tab } from "./types";
+import { sessionSurface } from "./sessionView";
 
 const sessionTab = (id: string): Tab => ({ id: sessionTabId(id), kind: "session", sessionId: id });
 
@@ -32,7 +33,7 @@ function opened(...ids: string[]): TabState {
 
 const agent = (id: string, name = id): Session =>
   ({ id, kind: "agent", name }) as Session;
-const terminal = (id: string): Session => ({ id, kind: "terminal", name: id }) as Session;
+const terminal = (id: string): Session => ({ id, kind: "terminal", name: id, provider: "claude" }) as Session;
 
 describe("openTab", () => {
   it("adds a tab and focuses it", () => {
@@ -234,16 +235,23 @@ describe("parseTabs", () => {
 
 describe("what a tab is", () => {
   const sessions = [agent("a", "Planner"), terminal("t")];
+  const terminals = (session: Session) => sessionSurface(session, "terminal");
 
   it("knows an agent tab from a terminal one", () => {
     expect(isAgentTab(sessionTab("a"), sessions)).toBe(true);
     expect(isAgentTab(sessionTab("t"), sessions)).toBe(false);
-    expect(isTerminalTab(sessionTab("t"), sessions)).toBe(true);
+    expect(isTerminalTab(sessionTab("t"), sessions, terminals)).toBe(true);
+  });
+
+  it("does not count a session drawn as the chat as a terminal", () => {
+    const chats = (session: Session) => sessionSurface(session, "chat");
+    expect(isTerminalTab(sessionTab("t"), sessions, chats)).toBe(false);
+    expect(isTerminalTab(sessionTab("a"), sessions, terminals)).toBe(false);
   });
 
   it("counts the terminal stub as a terminal", () => {
     const stub: Tab = { id: "stub:terminal", kind: "stub", stub: "terminal", title: "Terminal" };
-    expect(isTerminalTab(stub, sessions)).toBe(true);
+    expect(isTerminalTab(stub, sessions, terminals)).toBe(true);
     expect(isAgentTab(stub, sessions)).toBe(false);
   });
 

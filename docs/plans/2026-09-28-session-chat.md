@@ -361,7 +361,66 @@ This can ship on its own.
 | --- | --- |
 | Design | Done 2026-09-28 |
 | 1 · Revert `f984ec8` | Done 2026-09-28: reverted; `e2e/new-agent.test.ts` makes an agent with `agents:mode=terminal` saved |
-| 2 · Setting and overlay | Pending |
-| 3 · Claude | Pending |
+| 2 · Setting and overlay | Done 2026-09-28 (one commit with phase 3) |
+| 3 · Claude | Done 2026-09-28: run by hand against Claude Code 2.1.284, both renderers; see §10 |
 | 4 · Codex | Pending |
 | 5 · opencode | Pending |
+
+## 10. What building it settled
+
+Measured against the installed CLIs while building phases 2 and 3.
+
+**Claude Code 2.1.283 → 2.1.284** (it updated itself mid-way; both were run):
+
+- The permission hook is `PermissionRequest`, with `tool_name`, `tool_input`
+  and `permission_suggestions`. Questions arrive through it too, as
+  `tool_name: "AskUserQuestion"`, bypass mode or not. PreToolUse is not needed.
+- Approval keys: `1` Yes, `2` "Yes, and don't ask again" (offered when the
+  payload has suggestions), Esc No. Esc runs no Stop hook and no PostToolUse:
+  the turn ends in the history (`[Request interrupted by user for tool use]`
+  and a `turn_duration` record), which crewd reads as the end of the turn.
+- Esc before the model answered ends the turn with no hook and nothing in the
+  history, and Claude puts the message back on its input line. The chat's Stop
+  therefore ends the turn in crewd itself (`session_live_stopped`), drops the
+  queued bubbles, and the chat only shows a turn running while Claude's title
+  spins too, which covers Esc typed in the terminal.
+- Question keys: a digit picks and moves on (and submits a lone single-select
+  question); a multi-select toggles digits and `→` moves on; "Type something"
+  is the row after the options, then the text and Enter; several questions or
+  any multi-select end on a review screen answered with `1`.
+- Trust prompt: "No, exit" is preselected and digits do nothing; Trust is `↓`
+  then Enter, Exit is Esc. SessionStart runs before the prompt, so the composer
+  also waits for no blocking screen.
+- 2.1.284 shows "Try the new fullscreen renderer?" right after the trust
+  prompt. It is recognised by its text, and any other modal prompt of Claude's
+  by "Enter to confirm · Esc to cancel". The chat works under both renderers.
+- **Deviation from §2:** the text is always sent as a bracketed paste, not only
+  when it has several lines. Typed that fast, a file name in it (`hello.txt`)
+  was taken for one to complete and the Enter picked the completion: every
+  other such message was lost. Pasted, 6 of 6 arrived. A pasted `/clear` still
+  runs.
+- An image path pasted before the text becomes `[Image #1]`.
+- `/compact` keeps the session id (SessionStart `source: "compact"`); `/clear`
+  runs SessionEnd then SessionStart `source: "clear"` with the new id and
+  transcript path. Subagents write to a folder of their own, never to the
+  main file.
+
+**Codex 0.154.0:** `-c 'projects."<path>".trust_level="trusted"'` skips the
+trust prompt without touching `config.toml`. Its update offer ("Update
+available! … Update now … Skip") is a blocking screen. Hooks: to settle in
+phase 4.
+
+**opencode 1.18.31** shows no trust or first-run screen in a new folder.
+
+**Status and hooks in the app.** Hooks reach the window as `session-live`
+events: crewd watches the bind folder (`notify`, 40 ms quiet / 250 ms ceiling,
+1 s backstop) instead of the window polling it, follows a `/clear` itself, and
+marks a session's CLI gone when its terminal's process exits. The Notification
+hook and `session_claude_attention` are gone.
+
+**e2e.** `e2e/session-chat.test.ts` drives the fake claude, which now writes
+Claude-shaped records (tool_use, tool_result, `turn_duration`, the interrupt
+marker) and runs the hooks above. Four specs fail the same way on the commit
+before this work (A1, K1, M2, cookies), and T1 fails there too when run alone
+(its clicks outlast the 8 s turn). The `remote-*` specs cannot run on this
+machine: pairing a machine needs the keychain, and its Xvfb session has none.

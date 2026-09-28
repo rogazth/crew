@@ -174,6 +174,23 @@ export class TerminalActivity {
     this.#setBusy(busy);
   }
 
+  /**
+   * The CLI's hooks said whether a turn runs, and whether it stopped to ask.
+   * They are the word on it: output and title only fill in where no hook runs.
+   */
+  hooked(working: boolean, asking: boolean): void {
+    this.#titled = true;
+    this.#starting = false;
+    this.#stopQuiet();
+    if (asking) {
+      this.#busy = true;
+      this.#onBusy(true);
+      this.#push(this.#watched ? "working" : "needs-input");
+      return;
+    }
+    this.#setBusy(working);
+  }
+
   bell(): void {
     // Waiting on you is still running: the process is alive behind the prompt.
     this.#onBusy(true);

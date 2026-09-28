@@ -8,9 +8,16 @@
 // - the transcript at ~/.claude/projects/<slug(cwd)>/<id>.jsonl, with `user`
 //   records per turn and `ai-title` records for names (crates/crew-core/src/
 //   claude_title.rs, provider_session.rs);
-// - the hooks passed in `--settings`: SessionStart on start and on /clear,
-//   Notification (permission_prompt) on `ask`, each run with `sh -c` and the
-//   hook's JSON on stdin, as Claude runs them.
+// - the hooks passed in `--settings`, each run with `sh -c` and the hook's
+//   JSON on stdin, as Claude runs them: SessionStart on start and on /clear
+//   (after SessionEnd), UserPromptSubmit and Stop around a turn,
+//   PermissionRequest when it asks, PostToolUse once the tool ran. Esc stops a
+//   turn, or denies what it asked, without a Stop hook, as Claude does.
+//
+// Its transcript has the shape of Claude Code 2.1.283's: a `user` record per
+// prompt, `assistant` records with text and tool_use parts, `user` records
+// with the tool_result, `[Request interrupted by user]` after an Esc, and a
+// `system` `turn_duration` record closing each turn.
 //
 // It reads the terminal raw, like a TUI. A line is submitted with Enter;
 // bracketed paste is accepted and a newline inside a paste does not submit.
@@ -19,7 +26,9 @@
 //   title <text>  names the session (ai-title record + OSC title)
 //   rename <text> names it in the transcript alone (ai-title record); the
 //                 terminal's title keeps the old name until its next repaint
-//   ask           raises a permission prompt and waits for a key
+//   ask           asks to run a Bash command: 1 or 2 allows it, 3 or Esc denies it
+//   question      asks "Tea or coffee?" as an AskUserQuestion form: a digit
+//                 picks, 3 then text and Enter answers in its own words
 //   url <u>       clears the screen, and 300 ms later records the link as the
 //                 answer in the transcript and prints it alone on the top
 //                 line, from the first column: a test can point at it without
@@ -29,6 +38,11 @@
 //   after N <cmd> runs <cmd> N seconds later, as if typed then: the CLI acting
 //                 on its own while its tab is out of sight
 //   anything else a short turn of about a second
+//
+// A folder with a `.untrusted` file in it opens on Claude's trust prompt, in
+// its words: "No, exit" is picked, ↓ moves to "Yes, I trust this folder", and
+// Enter answers (trusting removes the file). Esc exits. SessionStart runs
+// once it is trusted, as the real one's does.
 //
 // Resumed (`--resume`), it repaints the conversation for about a second before
 // its title settles, the way Claude redraws a loaded transcript.
@@ -90,8 +104,29 @@ if (!resumeId && flag("--session-id") && fs.existsSync(transcript())) {
 
 function record(entry) {
   fs.mkdirSync(projectDir, { recursive: true });
-  fs.appendFileSync(transcript(), `${JSON.stringify({ ...entry, sessionId, cwd: CWD, timestamp: new Date().toISOString() })}\n`);
+  fs.appendFileSync(
+    transcript(),
+    `${JSON.stringify({ ...entry, uuid: randomUUID(), sessionId, cwd: CWD, timestamp: new Date().toISOString() })}\n`,
+  );
 }
+
+const say = (text) =>
+  record({ type: "assistant", message: { id: randomUUID(), role: "assistant", content: [{ type: "text", text }] } });
+const toolUse = (id, name, input) =>
+  record({ type: "assistant", message: { id: randomUUID(), role: "assistant", content: [{ type: "tool_use", id, name, input }] } });
+const toolResult = (id, content, isError, extra = {}) =>
+  record({
+    type: "user",
+    message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content, is_error: isError }] },
+    ...extra,
+  });
+let turnStarted = 0;
+const turnEnd = () => record({ type: "system", subtype: "turn_duration", durationMs: Date.now() - turnStarted });
+const interrupted = (forTool) =>
+  record({
+    type: "user",
+    message: { role: "user", content: [{ type: "text", text: `[Request interrupted by user${forTool ? " for tool use" : ""}]` }] },
+  });
 
 /** The newest name in the transcript, as claude_title.rs reads it. */
 function storedName() {
@@ -158,19 +193,40 @@ function stopSpin() {
   title(IDLE);
 }
 
+/** Timers of the turn running now, so Esc can stop it. */
+let running = [];
+
 /** A turn that prints steadily for `ms`, then settles back at the prompt. */
-function turn(ms, after) {
+function turn(ms, after, reply = "Done.") {
   startSpin();
   let n = 0;
   const ticker = setInterval(() => out(`\r\n  working… ${++n}`), 150);
-  setTimeout(() => {
+  const end = setTimeout(() => {
     clearInterval(ticker);
-    record({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "Done." }] } });
-    out("\r\n● Done.");
+    running = [];
+    say(reply);
+    turnEnd();
+    out(`\r\n● ${reply}`);
     stopSpin();
     if (after) after();
+    runHooks("Stop", { stop_hook_active: false });
     prompt();
   }, ms);
+  running = [ticker, end];
+}
+
+/** Esc while a turn runs: it stops where it is, and no Stop hook says so. */
+function interrupt() {
+  for (const timer of running) {
+    clearInterval(timer);
+    clearTimeout(timer);
+  }
+  running = [];
+  interrupted(false);
+  turnEnd();
+  out("\r\n  ⎿  Interrupted · What should Claude do instead?");
+  stopSpin();
+  prompt();
 }
 
 function submit(line) {
@@ -185,6 +241,7 @@ function submit(line) {
     return prompt();
   }
   if (text === "/clear") {
+    runHooks("SessionEnd", { reason: "clear" });
     sessionId = randomUUID();
     name = "Claude Code";
     runHooks("SessionStart", { source: "clear" });
@@ -193,6 +250,7 @@ function submit(line) {
     return prompt();
   }
   record({ type: "user", message: { role: "user", content: text } });
+  turnStarted = Date.now();
   if (text.startsWith("!")) {
     const result = spawnSync("sh", ["-c", text.slice(1)], { cwd: CWD, encoding: "utf8" });
     out(`\r\n${`${result.stdout || ""}${result.stderr || ""}`.replace(/\n/g, "\r\n")}`);
@@ -200,6 +258,8 @@ function submit(line) {
   }
   const [command, ...rest] = text.split(/\s+/);
   const arg = rest.join(" ");
+  // Every command from here on is a turn of the model's.
+  if (command !== "rename") runHooks("UserPromptSubmit", { prompt: text });
   if (command === "work") return turn(Math.max(0, Number(arg) || 1) * 1000);
   if (command === "title" && arg) {
     return turn(300, () => {
@@ -219,27 +279,101 @@ function submit(line) {
     out("\x1b[2J\x1b[H");
     startSpin();
     setTimeout(() => {
-      record({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text: arg }] } });
+      say(arg);
+      turnEnd();
       out(`\x1b[2J\x1b[H${arg}`);
       stopSpin();
+      runHooks("Stop", { stop_hook_active: false });
       prompt();
     }, 300);
     return;
   }
   if (command === "ask") {
     startSpin();
+    const id = `toolu_${randomUUID().slice(0, 8)}`;
+    const input = { command: "touch asked.txt", description: "Create asked.txt" };
     setTimeout(() => {
-      // Claude stops the spinner while it waits; only the hook says why.
+      toolUse(id, "Bash", input);
+      runHooks("PreToolUse", { tool_name: "Bash", tool_input: input, tool_use_id: id });
+      // Claude stops the spinner while it waits; only the hooks say why.
       if (spinner) clearInterval(spinner);
       spinner = null;
       title(IDLE);
+      runHooks("PermissionRequest", {
+        tool_name: "Bash",
+        tool_input: input,
+        permission_suggestions: [{ type: "addDirectories", directories: [CWD], destination: "session" }],
+      });
       runHooks(
         "Notification",
         { message: "Claude needs your permission to use Bash", notification_type: "permission_prompt" },
         "permission_prompt",
       );
-      out("\r\n  Allow Bash? 1. Yes  2. No ");
-      pending = () => turn(1000);
+      out("\r\n Bash command\r\n   touch asked.txt\r\n Do you want to proceed?\r\n ❯ 1. Yes\r\n   2. Yes, and don't ask again\r\n   3. No");
+      pending = (key) => {
+        if (key === "1" || key === "2" || key === "\r") {
+          toolResult(id, "", false);
+          runHooks("PostToolUse", { tool_name: "Bash", tool_input: input, tool_use_id: id });
+          turn(1000);
+          return true;
+        }
+        if (key === "3" || key === "\x1b") {
+          toolResult(id, "The user doesn't want to proceed with this tool use.", true, { toolUseResult: "User rejected tool use" });
+          interrupt();
+          return true;
+        }
+        return false;
+      };
+    }, 300);
+    return;
+  }
+  if (command === "question") {
+    startSpin();
+    const id = `toolu_${randomUUID().slice(0, 8)}`;
+    const question = { question: "Tea or coffee?", header: "Drink", multiSelect: false, options: [{ label: "Tea" }, { label: "Coffee" }] };
+    setTimeout(() => {
+      toolUse(id, "AskUserQuestion", { questions: [question] });
+      if (spinner) clearInterval(spinner);
+      spinner = null;
+      title(IDLE);
+      runHooks("PermissionRequest", { tool_name: "AskUserQuestion", tool_input: { questions: [question] } });
+      out("\r\n Tea or coffee?\r\n ❯ 1. Tea\r\n   2. Coffee\r\n   3. Type something.");
+      let typing = null;
+      const answer = (label) => {
+        toolResult(id, `User has answered your questions: "Tea or coffee?"="${label}".`, false, {
+          toolUseResult: { questions: [question], answers: { [question.question]: label } },
+        });
+        runHooks("PostToolUse", { tool_name: "AskUserQuestion", tool_use_id: id });
+        turn(500, undefined, `You picked ${label}.`);
+      };
+      pending = (key) => {
+        if (typing !== null) {
+          if (key === "\r") {
+            answer(typing);
+            return true;
+          }
+          if (key >= " ") {
+            typing += key;
+            out(key);
+          }
+          return false;
+        }
+        if (key === "1" || key === "2") {
+          answer(question.options[Number(key) - 1].label);
+          return true;
+        }
+        if (key === "3") {
+          typing = "";
+          out("\r\n > ");
+          return false;
+        }
+        if (key === "\x1b") {
+          toolResult(id, "The user dismissed the question.", true);
+          interrupt();
+          return true;
+        }
+        return false;
+      };
     }, 300);
     return;
   }
@@ -252,16 +386,24 @@ let pasting = false;
 let interrupts = 0;
 
 function exit() {
+  runHooks("SessionEnd", { reason: "prompt_input_exit" });
   out("\x1b[?2004l\x1b[?1004l\r\n");
   process.exit(0);
 }
 
 function onKey(ch) {
   if (pending && !pasting) {
-    const answer = pending;
-    pending = null;
-    out(ch === "\r" ? "" : ch);
-    answer();
+    if (pending(ch)) pending = null;
+    return;
+  }
+  if (ch === "\x1b") {
+    if (busy) interrupt();
+    return;
+  }
+  if (ch === "\x15") {
+    // Ctrl+U: the line is cleared, as Claude's prompt does.
+    buffer = "";
+    out("\r\x1b[2K> ");
     return;
   }
   if (ch === "\x03") {
@@ -318,6 +460,12 @@ function feed(data) {
       i += 6;
       continue;
     }
+    if (data[i] === "\x1b" && i === data.length - 1) {
+      // Esc on its own: stop, or no.
+      onKey("\x1b");
+      i += 1;
+      continue;
+    }
     if (data[i] === "\x1b") {
       // CSI (ESC [ … final byte), SS3 (ESC O x) or a lone Alt+key: none of them type text.
       if (data[i + 1] === "[") {
@@ -345,20 +493,57 @@ process.stdin.on("data", feed);
 process.stdin.on("end", () => process.exit(0));
 for (const signal of ["SIGHUP", "SIGTERM"]) process.on(signal, () => process.exit(0));
 
-runHooks("SessionStart", { source: resumeId ? "resume" : "startup" });
-// Bracketed paste and focus reporting on, as Claude turns them on.
-out("\x1b[?2004h\x1b[?1004h");
-out(`Fake Claude Code${model ? ` (${model})` : ""}\r\n`);
-out(`  session ${sessionId}\r\n  cwd ${CWD}\r\n`);
-if (resumeId) {
-  out("  resumed\r\n");
-  redraw(() => {
+const untrusted = path.join(CWD, ".untrusted");
+if (fs.existsSync(untrusted)) askTrust();
+else start();
+
+function start() {
+  runHooks("SessionStart", { source: resumeId ? "resume" : "startup" });
+  // Bracketed paste and focus reporting on, as Claude turns them on.
+  out("\x1b[?2004h\x1b[?1004h");
+  out(`Fake Claude Code${model ? ` (${model})` : ""}\r\n`);
+  out(`  session ${sessionId}\r\n  cwd ${CWD}\r\n`);
+  if (resumeId) {
+    out("  resumed\r\n");
+    redraw(() => {
+      title(IDLE);
+      out("> ");
+    });
+  } else {
     title(IDLE);
     out("> ");
-  });
-} else {
-  title(IDLE);
-  out("> ");
+  }
+}
+
+/** Claude 2.1.283's folder trust prompt: keys answer it, not typed text. */
+function askTrust() {
+  let yes = false;
+  const draw = () =>
+    out(
+      "\x1b[2J\x1b[H Accessing workspace:\r\n " +
+        CWD +
+        "\r\n Quick safety check: Is this a project you created or one you trust?\r\n" +
+        ` ${yes ? " " : "❯"} No, exit\r\n ${yes ? "❯" : " "} Yes, I trust this folder\r\n` +
+        " Enter to confirm · Esc to cancel",
+    );
+  draw();
+  process.stdin.removeListener("data", feed);
+  const answer = (data) => {
+    if (data === "\x1b[B" || data === "\x1b[A") {
+      yes = data === "\x1b[B";
+      draw();
+      return;
+    }
+    if (data === "\x1b") exit();
+    if (data !== "\r") return;
+    if (!yes) exit();
+    process.stdin.removeListener("data", answer);
+    process.stdin.on("data", feed);
+    fs.rmSync(untrusted, { force: true });
+    out("\x1b[2J\x1b[H");
+    start();
+  };
+  process.stdin.on("data", answer);
 }
 
 /** The loaded conversation, painted frame by frame, as a resume does before it settles. */

@@ -1,0 +1,306 @@
+// Sessions in Crew's chat. Settings › Appearance › "Sessions open in" draws a
+// session's conversation as the chat over its terminal, whose CLI keeps
+// running underneath: flipping the setting, or "Show terminal" on one tab,
+// never restarts it. The chat reads the CLI's own history (the fake claude
+// writes Claude's), types what is sent into the terminal, and answers what
+// the CLI asks with the keys it expects, as its hooks report it.
+import assert from "node:assert/strict";
+import { readFile, writeFile } from "node:fs/promises";
+import path from "node:path";
+import { after, before, test } from "node:test";
+import type { Session } from "../src/lib/types.ts";
+import { launchCrew, MOD, newTerminal, pressChord, typeInTerminal, waitFor, type Crew } from "./harness.ts";
+
+let crew: Crew;
+
+before(async () => {
+  crew = await launchCrew();
+});
+
+after(async () => {
+  await crew?.close();
+});
+
+/** Settings › Appearance › Sessions open in, and back out of Settings. */
+async function openSessionsIn(view: "Terminal" | "Chat"): Promise<void> {
+  const page = crew.window;
+  await pressChord(crew, `${MOD}+,`);
+  await page.getByRole("button", { name: "Appearance", exact: true }).click();
+  await page.getByRole("combobox", { name: "Sessions open in" }).click();
+  await page.getByRole("option", { name: view, exact: true }).click();
+  await waitFor(async () => (await crew.request<string | null>("state_get", { key: "sessions:view" })) === view.toLowerCase(), {
+    message: `crewd keeps "${view}"`,
+  });
+  await pressChord(crew, `${MOD}+,`);
+}
+
+function chatOf(session: Session) {
+  return crew.window.locator(`[data-session-chat="${session.id}"]`);
+}
+
+/** Where the keys go: "composer" (the chat's), "terminal" (an xterm's), or what else has focus. */
+function focusedIn(session: Session): Promise<string> {
+  return crew.window.evaluate((id) => {
+    const focused = document.activeElement;
+    if (!(focused instanceof HTMLElement)) return "nothing";
+    if (focused.closest(`[data-session-chat="${id}"]`) && focused.tagName === "TEXTAREA") return "composer";
+    if (focused.closest(".xterm")) return "terminal";
+    const label = focused.getAttribute("aria-label") ?? focused.textContent?.trim().slice(0, 40) ?? "";
+    return `${focused.tagName.toLowerCase()} "${label}"`;
+  }, session.id);
+}
+
+/** Waits for the keys to go to `where`; on a timeout, says where they went instead. */
+async function keysGoTo(session: Session, where: "composer" | "terminal"): Promise<void> {
+  await waitFor(
+    async () => {
+      const now = await focusedIn(session);
+      if (now !== where) throw new Error(`the keys go to ${now}`);
+      return true;
+    },
+    { message: `the ${where} takes the keys` },
+  );
+}
+
+/** The records the fake claude wrote for its conversation `id`, run from `cwd`. */
+async function records(cwd: string, id: string): Promise<Record<string, unknown>[]> {
+  const file = path.join(crew.home, ".claude/projects", cwd.replace(/[^a-zA-Z0-9]/g, "-"), `${id}.jsonl`);
+  const text = await readFile(file, "utf8").catch(() => "");
+  return text
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as Record<string, unknown>);
+}
+
+/** What the user typed, as the CLI recorded it. */
+async function prompts(cwd: string, id: string): Promise<string[]> {
+  return (await records(cwd, id)).flatMap((record) => {
+    const message = record.message as { content?: unknown } | undefined;
+    return record.type === "user" && typeof message?.content === "string" ? [message.content] : [];
+  });
+}
+
+/** Types `text` in the chat's composer and sends it, once the CLI reads keys. */
+async function sendFromChat(session: Session, text: string): Promise<void> {
+  const chat = chatOf(session);
+  const send = chat.getByRole("button", { name: "Send" });
+  await chat.getByRole("textbox").fill(text);
+  await waitFor(() => send.isEnabled(), { message: "the composer can send" });
+  await chat.getByRole("textbox").press("Enter");
+}
+
+function alive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+test("the chat is drawn over the running CLI, and flipping views never restarts it", async () => {
+  const [workspace] = crew.workspaces;
+  assert.ok(workspace);
+  const session = await newTerminal(crew, workspace.id);
+  await typeInTerminal(crew, "hello there");
+  const launches = await crew.claudeLaunches();
+  const cli = launches.at(-1);
+  assert.ok(cli);
+
+  await openSessionsIn("Chat");
+  await chatOf(session).waitFor();
+  await keysGoTo(session, "composer");
+  // The conversation had in the terminal is the chat's.
+  await chatOf(session).getByText("hello there").waitFor();
+  await chatOf(session).getByText("Done.").waitFor();
+  // Typed in the chat, kept in the chat: nothing reaches the CLI's own line.
+  await crew.window.keyboard.type("a draft");
+
+  // "Show terminal" turns this tab only; the setting stays.
+  await chatOf(session).getByRole("button", { name: "Show terminal" }).click();
+  await chatOf(session).waitFor({ state: "detached" });
+  await keysGoTo(session, "terminal");
+  assert.equal(await crew.request("state_get", { key: "sessions:view" }), "chat");
+  await crew.window.getByRole("button", { name: "Back to chat" }).click();
+  await chatOf(session).waitFor();
+  assert.equal(await chatOf(session).getByRole("textbox").inputValue(), "a draft", "the draft waited in the chat");
+
+  await openSessionsIn("Terminal");
+  await chatOf(session).waitFor({ state: "detached" });
+  await keysGoTo(session, "terminal");
+
+  await openSessionsIn("Chat");
+  await chatOf(session).waitFor();
+  assert.equal((await crew.claudeLaunches()).length, launches.length, "no view change launched the CLI again");
+  assert.ok(alive(cli.pid), "the CLI that started first is still the one running");
+});
+
+test("a CLI stopped on its trust prompt is named in the chat and answered in the terminal", async () => {
+  const [workspace] = crew.workspaces;
+  assert.ok(workspace);
+  // The fake Claude opens on its trust prompt in a folder marked untrusted.
+  await writeFile(path.join(workspace.path, ".untrusted"), "");
+  const known = new Set((await crew.request<Session[]>("session_list", { workspaceId: workspace.id })).map((s) => s.id));
+  await pressChord(crew, `${MOD}+n`);
+  const session = await waitFor(
+    async () =>
+      (await crew.request<Session[]>("session_list", { workspaceId: workspace.id })).find(
+        (row) => row.kind === "terminal" && !known.has(row.id),
+      ),
+    { message: "the new session reaches crewd" },
+  );
+  const chat = chatOf(session);
+  await chat.getByText("Claude asks whether you trust this folder").waitFor();
+
+  await chat.getByRole("button", { name: "Show terminal" }).click();
+  await keysGoTo(session, "terminal");
+  await crew.window.keyboard.press("ArrowDown");
+  await crew.window.keyboard.press("Enter");
+  await crew.window.getByRole("button", { name: "Back to chat" }).click();
+  await chat.waitFor();
+  await waitFor(async () => (await chat.getByText("Claude asks whether you trust this folder").count()) === 0, {
+    message: "the notice goes once the CLI is past its prompt",
+  });
+});
+
+test("a message sent from the chat lands in the CLI, and its reply comes back", async () => {
+  const [workspace] = crew.workspaces;
+  assert.ok(workspace);
+  await crew.request("state_set", { key: "sessions:view", value: "chat" });
+  await crew.reload();
+  const session = await newTerminal(crew, workspace.id);
+  const chat = chatOf(session);
+  await chat.waitFor();
+
+  await sendFromChat(session, "draft a plan");
+  await chat.getByText("Queued").waitFor();
+  await chat.getByText("Done.").waitFor();
+  await waitFor(async () => (await chat.getByText("Queued").count()) === 0, { message: "the bubble is the CLI's turn now" });
+  assert.deepEqual(await prompts(workspace.path, session.id), ["draft a plan"]);
+
+  // Several lines go in as one message, not one per line.
+  await sendFromChat(session, "first line\nsecond line");
+  await waitFor(async () => (await prompts(workspace.path, session.id)).length === 2, { message: "the second message lands" });
+  assert.equal((await prompts(workspace.path, session.id))[1], "first line\nsecond line");
+
+  // Whatever was left typed on the CLI's own line does not go with it.
+  await chat.getByRole("button", { name: "Show terminal" }).click();
+  await typeInTerminalLine("stray words");
+  await crew.window.getByRole("button", { name: "Back to chat" }).click();
+  await sendFromChat(session, "clean line");
+  await waitFor(async () => (await prompts(workspace.path, session.id)).at(-1) === "clean line", {
+    message: "the CLI's line was cleared before the message",
+  });
+});
+
+test("the CLI's permission prompt is answered from its card: Allow runs it, Deny stops the turn", async () => {
+  const [workspace] = crew.workspaces;
+  assert.ok(workspace);
+  const session = await newTerminal(crew, workspace.id);
+  const chat = chatOf(session);
+  await chat.waitFor();
+
+  await sendFromChat(session, "ask");
+  const card = chat.getByText("Wants to run a command");
+  await card.waitFor();
+  await chat.getByRole("button", { name: /^Allow/ }).click();
+  await card.waitFor({ state: "detached" });
+  await waitFor(
+    async () => (await records(workspace.path, session.id)).some((record) => JSON.stringify(record).includes('"is_error":false')),
+    { message: "the CLI ran the tool" },
+  );
+  await chat.getByText("Done.").waitFor();
+
+  await sendFromChat(session, "ask");
+  await card.waitFor();
+  await chat.getByRole("button", { name: /^Deny/ }).click();
+  await chat.getByText("Interrupted").waitFor();
+  await waitFor(async () => (await chat.getByRole("button", { name: "Send" }).count()) === 1, {
+    message: "the turn is over: the composer sends again instead of stopping",
+  });
+});
+
+test("a question from the CLI is answered from its card, in the CLI's own form", async () => {
+  const [workspace] = crew.workspaces;
+  assert.ok(workspace);
+  const session = await newTerminal(crew, workspace.id);
+  const chat = chatOf(session);
+  await chat.waitFor();
+
+  await sendFromChat(session, "question");
+  await chat.getByText("Tea or coffee?").first().waitFor();
+  await chat.getByRole("radio", { name: /Coffee/ }).or(chat.getByText("Coffee", { exact: true })).first().click();
+  await chat.getByRole("button", { name: "Send answer" }).click();
+  await chat.getByText("You picked Coffee.").waitFor();
+  const answered = (await records(workspace.path, session.id)).find((record) => record.toolUseResult !== undefined);
+  assert.deepEqual((answered?.toolUseResult as { answers?: unknown } | undefined)?.answers, { "Tea or coffee?": "Coffee" });
+});
+
+test("Stop from the chat stops the CLI's turn", async () => {
+  const [workspace] = crew.workspaces;
+  assert.ok(workspace);
+  const session = await newTerminal(crew, workspace.id);
+  const chat = chatOf(session);
+  await chat.waitFor();
+
+  await sendFromChat(session, "work 20");
+  const stop = chat.getByRole("button", { name: "Stop" });
+  await stop.waitFor();
+  await stop.click();
+  await chat.getByText("Interrupted").waitFor();
+  await chat.getByRole("button", { name: "Send" }).waitFor();
+});
+
+test("a /clear sent from the chat moves the chat to the CLI's new conversation", async () => {
+  const [workspace] = crew.workspaces;
+  assert.ok(workspace);
+  const session = await newTerminal(crew, workspace.id);
+  const chat = chatOf(session);
+  await chat.waitFor();
+
+  await sendFromChat(session, "before the clear");
+  await chat.getByText("Done.").waitFor();
+  await sendFromChat(session, "/clear");
+  await waitFor(async () => (await chat.getByText("before the clear").count()) === 0, {
+    message: "the chat leaves the conversation the CLI left",
+  });
+  await sendFromChat(session, "after the clear");
+  await chat.getByText("Done.").waitFor();
+  assert.equal(await chat.getByText("before the clear").count(), 0);
+});
+
+test("Claude's trust prompt is answered from the chat's card", async () => {
+  const [workspace] = crew.workspaces;
+  assert.ok(workspace);
+  await writeFile(path.join(workspace.path, ".untrusted"), "");
+  const known = new Set((await crew.request<Session[]>("session_list", { workspaceId: workspace.id })).map((s) => s.id));
+  await pressChord(crew, `${MOD}+n`);
+  const session = await waitFor(
+    async () =>
+      (await crew.request<Session[]>("session_list", { workspaceId: workspace.id })).find(
+        (row) => row.kind === "terminal" && !known.has(row.id),
+      ),
+    { message: "the new session reaches crewd" },
+  );
+  const chat = chatOf(session);
+  await chat.getByRole("button", { name: "Trust" }).click();
+  await chat.getByRole("button", { name: "Trust" }).waitFor({ state: "detached" });
+  await sendFromChat(session, "trusted now");
+  await chat.getByText("Done.").waitFor();
+});
+
+/** Types a line into the terminal on screen without submitting it. */
+async function typeInTerminalLine(text: string): Promise<void> {
+  await waitFor(
+    () =>
+      crew.window.evaluate(() => {
+        const shown = [...document.querySelectorAll<HTMLTextAreaElement>(".xterm-helper-textarea")].find(
+          (area) => area.closest("[hidden]") === null && area.getClientRects().length > 0,
+        );
+        shown?.focus();
+        return shown !== undefined && document.activeElement === shown;
+      }),
+    { message: "a terminal on screen takes the keys" },
+  );
+  await crew.window.keyboard.type(text);
+}
