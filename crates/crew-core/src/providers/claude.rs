@@ -5,7 +5,8 @@ use serde_json::{json, Map, Value};
 
 use super::runtime::{Autonomy, InlineImage};
 use super::{
-    as_record, as_record_owned, clip, finite_number, leaf, mcp_label, mcp_name, pretty_input, string_field, todo_items,
+    as_record, as_record_owned, clip, finite_number, leaf, mcp_label, mcp_name, pretty_input, string_field,
+    subagent_report, todo_items,
 };
 
 pub use super::{parse_json_line, try_parse_json_record};
@@ -555,9 +556,13 @@ pub fn tool_label(name: &str, input: &Map<String, Value>) -> String {
                 None => "Skill".into(),
             };
         }
+        // `select:A,B` loads tools it already knows by name; anything else searches.
         "toolsearch" => {
             return match string_field(Some(input), "query") {
-                Some(query) => format!("Find tools {}", clip(&query, 40)),
+                Some(query) => match query.strip_prefix("select:") {
+                    Some(names) => format!("Load {}", clip(&names.replace(',', ", "), 60)),
+                    None => format!("Find tools for \u{201c}{}\u{201d}", clip(&query, 40)),
+                },
                 None => "Find tools".into(),
             };
         }
@@ -672,7 +677,7 @@ pub fn tool_detail(name: &str, input: &Map<String, Value>) -> Option<ToolDetail>
             title: None,
             output: None,
         }),
-        "websearch" | "toolsearch" => Some(ToolDetail::Search {
+        "websearch" => Some(ToolDetail::Search {
             query: string_field(Some(input), "query")?,
             matches: None,
             output: None,
@@ -713,7 +718,7 @@ pub fn tool_result_detail(name: &str, input: &Map<String, Value>, content: &str)
             path,
             line_start,
             line_end,
-            preview: text(),
+            preview: text().map(|body| without_line_numbers(&body)),
         }),
         Some(ToolDetail::Search { query, matches, .. }) => Some(ToolDetail::Search {
             query,
@@ -725,7 +730,7 @@ pub fn tool_result_detail(name: &str, input: &Map<String, Value>, content: &str)
             description,
             agent_type,
             prompt,
-            output: text(),
+            output: text().map(|report| subagent_report(&report)),
         }),
         Some(ToolDetail::Mcp { server, tool, input, .. }) => Some(ToolDetail::Mcp {
             server,
@@ -738,6 +743,30 @@ pub fn tool_result_detail(name: &str, input: &Map<String, Value>, content: &str)
         Some(_) => None,
         None => text().map(|text| ToolDetail::Output { text }),
     }
+}
+
+/// Read answers `cat -n` style, `     1\t# title`, and the row already says
+/// which lines it read. The numbers go when every line carries one; a file
+/// that happens to start a line with digits and a tab is left as it is.
+fn without_line_numbers(body: &str) -> String {
+    let numbered = |line: &str| {
+        let digits = line.trim_start();
+        let tab = digits.find(['\t', '→']);
+        tab.is_some_and(|at| at > 0 && digits[..at].chars().all(|c| c.is_ascii_digit()))
+    };
+    let lines: Vec<&str> = body.lines().collect();
+    if lines.is_empty() || !lines.iter().all(|line| numbered(line)) {
+        return body.to_string();
+    }
+    lines
+        .iter()
+        .map(|line| {
+            let digits = line.trim_start();
+            let at = digits.find(['\t', '→']).unwrap_or(0);
+            &digits[at + digits[at..].chars().next().map_or(0, char::len_utf8)..]
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// A string argument exactly as sent: `string_field` trims, and a diff of
@@ -891,7 +920,7 @@ mod tests {
                     path: "/w/src/lib.rs".into(),
                     line_start: Some(40),
                     line_end: Some(51),
-                    preview: Some("    40→use std::fmt;".into()),
+                    preview: Some("use std::fmt;".into()),
                 }),
             ]
         );
@@ -1021,6 +1050,15 @@ mod tests {
                 }]),
             })
         );
+    }
+
+    #[test]
+    fn a_read_shows_the_file_without_the_line_numbers_it_came_with() {
+        assert_eq!(without_line_numbers("1\t# ask\n2\t"), "# ask\n");
+        assert_eq!(without_line_numbers("   9\tfn a() {}\n  10\t}"), "fn a() {}\n}");
+        assert_eq!(without_line_numbers("12→const a = 1;"), "const a = 1;");
+        // Not every line numbered: the file's own text.
+        assert_eq!(without_line_numbers("1\tone\nplain"), "1\tone\nplain");
     }
 
     #[test]

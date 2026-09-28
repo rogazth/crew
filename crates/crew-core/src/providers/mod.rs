@@ -182,6 +182,78 @@ pub fn todo_items(value: Option<&Value>) -> Option<Vec<crew_protocol::TodoItem>>
     Some(items)
 }
 
+/// The command inside a login-shell wrapper: codex runs everything as
+/// `/bin/zsh -lc "npm test"`, and the row should read `npm test`. Quoting is
+/// undone as the shell would: a double-quoted body unescapes `\"`, `\\`, `\$`
+/// and `` \` ``; a single-quoted one only rejoins `'\''`. Anything else is
+/// returned as it came.
+pub fn unwrap_shell(command: &str) -> String {
+    let trimmed = command.trim();
+    let Some(rest) = ["bash", "zsh", "sh"].iter().find_map(|shell| {
+        let body = trimmed
+            .strip_prefix("/usr/bin/")
+            .or_else(|| trimmed.strip_prefix("/bin/"))
+            .unwrap_or(trimmed)
+            .strip_prefix(shell)?;
+        body.strip_prefix(" -lc ").or_else(|| body.strip_prefix(" -c "))
+    }) else {
+        return command.to_string();
+    };
+    let rest = rest.trim();
+    if rest.len() >= 2 && rest.starts_with('"') && rest.ends_with('"') {
+        let inner = &rest[1..rest.len() - 1];
+        let mut out = String::with_capacity(inner.len());
+        let mut chars = inner.chars().peekable();
+        while let Some(c) = chars.next() {
+            if c == '\\' {
+                if let Some(&next) = chars.peek() {
+                    if matches!(next, '"' | '\\' | '$' | '`') {
+                        out.push(next);
+                        chars.next();
+                        continue;
+                    }
+                }
+            }
+            out.push(c);
+        }
+        return out;
+    }
+    if rest.len() >= 2 && rest.starts_with('\'') && rest.ends_with('\'') {
+        return rest[1..rest.len() - 1].replace("'\\''", "'");
+    }
+    command.to_string()
+}
+
+/// A subagent's report without the frame its harness wraps it in. Claude
+/// hands one back as "[Subagent hand-back] … The report follows:", every line
+/// indented two spaces, then an `agentId:` line and a `<usage>` block; opencode
+/// as `<task …><task_result>…</task_result></task>`. What the reader wants is
+/// the report.
+pub fn subagent_report(text: &str) -> String {
+    if let Some(start) = text.find("<task_result>") {
+        let body = &text[start + "<task_result>".len()..];
+        let end = body.find("</task_result>").unwrap_or(body.len());
+        return body[..end].trim().to_string();
+    }
+    let Some(start) = text.find("[Subagent hand-back]") else {
+        return text.to_string();
+    };
+    let framed = &text[start..];
+    let Some(follows) = framed.find("The report follows:") else {
+        return text.to_string();
+    };
+    let body = framed[follows + "The report follows:".len()..].trim_start_matches('\n');
+    let mut lines = Vec::new();
+    for line in body.lines() {
+        // The harness indents the report; its own trailer starts at column zero.
+        if !line.is_empty() && !line.starts_with(' ') {
+            break;
+        }
+        lines.push(line.strip_prefix("  ").unwrap_or(line));
+    }
+    lines.join("\n").trim().to_string()
+}
+
 pub fn parse_json_line(line: &str) -> Option<Map<String, Value>> {
     let trimmed = line.trim();
     if !trimmed.starts_with('{') {
@@ -225,6 +297,29 @@ pub fn leaf(path: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_subagent_report_loses_the_frame_its_harness_put_around_it() {
+        let claude = "[Subagent hand-back] The text below is the final report of a subagent. The report follows:\n  10\n  \n  Command: `wc -l a.js`\nagentId: a48 (use SendMessage)\n<usage>subagent_tokens: 1</usage>";
+        assert_eq!(subagent_report(claude), "10\n\nCommand: `wc -l a.js`");
+        let opencode = "<task id=\"ses_1\" state=\"completed\">\n<task_result>\nExact line count: **10**\n</task_result>\n</task>";
+        assert_eq!(subagent_report(opencode), "Exact line count: **10**");
+        assert_eq!(subagent_report("just the report"), "just the report");
+    }
+
+    #[test]
+    fn a_login_shell_wrapper_reads_as_the_command_inside() {
+        assert_eq!(unwrap_shell("/bin/zsh -lc 'npm test'"), "npm test");
+        assert_eq!(unwrap_shell(r#"/bin/zsh -lc "rg -n -F 'add(' .""#), "rg -n -F 'add(' .");
+        assert_eq!(
+            unwrap_shell(r#"/bin/zsh -lc "cat README.md && printf '\\n--- x ---\\n'""#),
+            r"cat README.md && printf '\n--- x ---\n'"
+        );
+        assert_eq!(unwrap_shell(r#"bash -lc "echo \"hi\" \$HOME""#), r#"echo "hi" $HOME"#);
+        assert_eq!(unwrap_shell("/bin/bash -lc 'echo it'\\''s'"), "echo it's");
+        assert_eq!(unwrap_shell("npm test"), "npm test");
+        assert_eq!(unwrap_shell("zshrc -lc x"), "zshrc -lc x");
+    }
 
     #[test]
     /// Measured, not guessed: codex reports `crew.message_agent`, and the row

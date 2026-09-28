@@ -4,7 +4,7 @@ use serde_json::{Map, Value};
 use super::runtime::Autonomy;
 use super::{
     as_record, as_record_owned, clip, finite_number, leaf, mcp_label, pretty_input, string_field, todo_items,
-    try_parse_json_record,
+    try_parse_json_record, unwrap_shell,
 };
 
 pub use super::parse_json_line;
@@ -311,7 +311,7 @@ pub fn tool_name(item: &Map<String, Value>) -> String {
 pub fn tool_label(item: &Map<String, Value>) -> String {
     match string_field(Some(item), "type").as_deref() {
         Some("command_execution") => string_field(Some(item), "command")
-            .map(|command| clip(&command, 72))
+            .map(|command| clip(&unwrap_shell(&command), 72))
             .unwrap_or_else(|| "Command".into()),
         Some("file_change") => {
             let changes = item.get("changes").and_then(Value::as_array);
@@ -359,7 +359,7 @@ pub fn tool_label(item: &Map<String, Value>) -> String {
 pub fn tool_detail(item: &Map<String, Value>) -> Option<ToolDetail> {
     match string_field(Some(item), "type").as_deref() {
         Some("command_execution") => Some(ToolDetail::Command {
-            command: string_field(Some(item), "command")?,
+            command: unwrap_shell(&string_field(Some(item), "command")?),
             exit_code: item
                 .get("exit_code")
                 .and_then(Value::as_i64)

@@ -2,7 +2,9 @@ use crew_protocol::{EditHunk, ToolDetail, ToolStatus, TurnUsage};
 use serde_json::{Map, Value};
 
 use super::runtime::Autonomy;
-use super::{as_record, as_record_owned, clip, crew_tool_detail, finite_number, leaf, string_field, todo_items};
+use super::{
+    as_record, as_record_owned, clip, crew_tool_detail, finite_number, leaf, string_field, subagent_report, todo_items,
+};
 
 pub use super::parse_json_line;
 
@@ -222,7 +224,7 @@ fn tool_detail(
             description: string_field(Some(input), "description").unwrap_or_else(|| "Subagent".into()),
             agent_type: string_field(Some(input), "subagent_type"),
             prompt: text_field(Some(input), "prompt"),
-            output: text_field(state, "output"),
+            output: text_field(state, "output").map(|report| subagent_report(&report)),
         }),
         _ => Some(ToolDetail::Output {
             text: text_field(state, "output")?,
