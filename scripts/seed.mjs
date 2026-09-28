@@ -510,7 +510,7 @@ flowchart LR
 
 ---
 
-Inline math like $e^{i\\pi} + 1 = 0$ and a block:
+Inline math like $$e^{i\\pi} + 1 = 0$$ and a block:
 
 $$
 \\sum_{k=1}^{n} k = \\frac{n(n+1)}{2}

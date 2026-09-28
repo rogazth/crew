@@ -9,14 +9,18 @@ import {
   type ComponentProps,
   type ReactNode,
 } from "react";
-import { Streamdown, type Components } from "streamdown";
+import { createMathPlugin } from "@streamdown/math";
+import "katex/dist/katex.min.css";
+import { defaultRehypePlugins, defaultRemarkPlugins, Streamdown, useIsCodeFenceIncomplete, type Components, type ControlsConfig, type StreamdownProps } from "streamdown";
 import "streamdown/styles.css";
 import { FileTypeIcon } from "../../chrome/FileTypeIcon";
 import { useBrowserPrefs } from "../../hooks/useBrowserPrefs";
 import { extensionOf } from "../../lib/attachments";
 import { BROWSER_CLICK, openLink } from "../../lib/external";
+import { fenceTitle, remarkAlerts } from "../../lib/markdown/alerts";
 import { groupRuns, isHeadingOnly } from "../../lib/markdownRuns";
 import { VEIL_EMA_SEED_MS, veilDurationMs, veilEmaNext } from "../../lib/veil";
+import { Blockquote } from "./Alert";
 import { CodeBlock } from "./CodeBlock";
 import { useChatActions } from "./context";
 import { SiteIcon } from "./SiteIcon";
@@ -30,16 +34,32 @@ function codeText(children: ReactNode): string {
   return typeof children === "string" ? children : Array.isArray(children) ? children.join("") : String(children ?? "");
 }
 
-type CodeProps = ComponentProps<"code"> & { node?: unknown; "data-block"?: unknown };
+/** `metastring`: the fence's info string past its language, which streamdown's `codeMeta` puts on the element. */
+type CodeProps = ComponentProps<"code"> & { node?: unknown; metastring?: string; "data-block"?: unknown };
 
-function Code({ className, children, node: _node, ...rest }: CodeProps) {
+function Code({ className, children, node: _node, metastring, ...rest }: CodeProps) {
   const text = codeText(children);
-  if ("data-block" in rest) {
-    const lang = /language-([\w+-]+)/.exec(className ?? "")?.[1];
-    return <CodeBlock code={text.replace(/\n$/, "")} {...(lang ? { lang } : {})} />;
-  }
+  if ("data-block" in rest) return <Fence code={text} className={className} meta={metastring} />;
   if (PATH_LIKE.test(text) && extensionOf(text)) return <FileChip path={text} />;
   return <code className="crew-inline-code">{children}</code>;
+}
+
+/**
+ * A fenced block. Streamdown knows whether the fence is still open, which is
+ * what keeps the highlighter and the diagram renderer off a half-arrived block.
+ */
+function Fence({ code, className, meta }: { code: string; className: string | undefined; meta: string | undefined }) {
+  const incomplete = useIsCodeFenceIncomplete();
+  const lang = /language-([\w+-]+)/.exec(className ?? "")?.[1];
+  const title = fenceTitle(meta);
+  return (
+    <CodeBlock
+      code={code.replace(/\n$/, "")}
+      {...(lang ? { lang } : {})}
+      {...(title ? { title } : {})}
+      {...(incomplete ? { streaming: true } : {})}
+    />
+  );
 }
 
 function FileChip({ path }: { path: string }) {
@@ -92,11 +112,38 @@ function Input({ type, checked, node: _node, ...rest }: InputProps) {
 
 const COMPONENTS: Components = {
   a: Link,
+  blockquote: Blockquote,
   code: Code,
   input: Input,
   // The fence's <pre> only marks its child as a block; the box is CodeBlock's.
   pre: ({ children }) =>
     isValidElement(children) ? cloneElement(children, { "data-block": true } as object) : <>{children}</>,
+};
+
+/** Streamdown's own plugins, then callouts. Module-level: a new array would re-parse every run. */
+const REMARK = [...Object.values(defaultRemarkPlugins), remarkAlerts];
+/**
+ * Streamdown's sanitizer keeps a blockquote's `cite` and nothing else, which
+ * would strip the kind `remarkAlerts` put on it. Its schema, plus those two.
+ */
+type Pluggable = NonNullable<StreamdownProps["rehypePlugins"]>[number];
+const REHYPE = Object.entries(defaultRehypePlugins).map(([name, plugin]) => {
+  if (name !== "sanitize" || !Array.isArray(plugin)) return plugin;
+  const [sanitize, schema] = plugin as [unknown, { attributes?: Record<string, unknown[]> }];
+  const attributes = schema.attributes ?? {};
+  return [
+    sanitize,
+    { ...schema, attributes: { ...attributes, blockquote: [...(attributes.blockquote ?? []), "dataAlert", "dataAlertTitle"] } },
+  ] as Pluggable;
+});
+/** `$$…$$` only: a lone `$` is a price far more often than it is maths. */
+const PLUGINS = { math: createMathPlugin({ singleDollarTextMath: false }) };
+/** A table copies as Markdown or CSV; code and diagrams bring their own controls. */
+const CONTROLS: ControlsConfig = {
+  table: { copy: true, download: false, fullscreen: false },
+  code: false,
+  mermaid: false,
+  image: false,
 };
 
 function runClass(kind: "prose" | "wide", text: string): string {
@@ -183,8 +230,11 @@ const MarkdownRun = memo(function MarkdownRun({
     <div className={className}>
       <Streamdown
         className="crew-md-flow"
-        controls={false}
+        controls={CONTROLS}
         components={COMPONENTS}
+        remarkPlugins={REMARK}
+        rehypePlugins={REHYPE}
+        plugins={PLUGINS}
         isAnimating={animating}
         {...(veiled ? { animated: VEIL } : {})}
       >

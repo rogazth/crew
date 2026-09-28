@@ -103,3 +103,8 @@ export function parseCalloutHead(line: string): CalloutHead | null {
 export function defaultTitle(type: string): string {
   return type.charAt(0).toUpperCase() + type.slice(1).toLowerCase();
 }
+
+/** An icon's path data, for a renderer that draws its own `<svg>`. */
+export function iconPath(name: IconName): string {
+  return ICONS[name];
+}
