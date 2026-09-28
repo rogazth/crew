@@ -1,17 +1,17 @@
 import { RestrictToVerticalAxis } from "@dnd-kit/abstract/modifiers";
 import { RestrictToElement } from "@dnd-kit/dom/modifiers";
 import { PlusIcon, RefreshCwIcon, ServerIcon, SettingsIcon, type LucideIcon as Icon } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { ActionMenu } from "./ActionMenu";
 import { SortableItem, SortableList } from "./SortableList";
 import { StatusDot } from "./StatusDot";
+import { WorkspacePeek, type WorkspacePeekAnchor } from "./WorkspacePeek";
 import { commandKeys, type CommandId } from "../lib/commands";
 import { isDeleteChord } from "../lib/hotkey";
 import { COPY_PATH, DELETE, SEPARATOR, menuFromEvent, type MenuPoint } from "../lib/menu";
 import { STATUS_ORDER } from "../lib/status";
 import type { Session, SessionStatus, Workspace } from "../lib/types";
 import type { EnvLink } from "../lib/client/registry";
-import { whereOf } from "../lib/envText";
 import { workspaceMark } from "../lib/workspaces";
 
 type Props = {
@@ -42,7 +42,7 @@ const RAIL_MODIFIERS = [
   }),
 ];
 
-/** ⌘1‥9 jump straight to a mark; the tooltip teaches the chord. */
+/** ⌘1‥9 jump straight to a mark; the hover card teaches the chord. */
 function jumpKeys(index: number): string {
   return index < 9 ? commandKeys(`workspace-${index + 1}` as CommandId) : "";
 }
@@ -62,6 +62,19 @@ function loudest(sessions: Session[]): SessionStatus | null {
  */
 export function WorkspaceRail(props: Props) {
   const [menu, setMenu] = useState<Menu | null>(null);
+  // A mark held still under the pointer for a beat says which workspace it is and where it lives.
+  const [peek, setPeek] = useState<{ id: string; anchor: WorkspacePeekAnchor } | null>(null);
+  const peekTimer = useRef<number | undefined>(undefined);
+  const onPeek = useCallback((id: string, el: HTMLElement | null) => {
+    window.clearTimeout(peekTimer.current);
+    if (!el) return setPeek(null);
+    peekTimer.current = window.setTimeout(() => {
+      const rect = el.getBoundingClientRect();
+      setPeek({ id, anchor: { left: rect.right + 12, top: Math.max(8, Math.min(rect.top - 4, window.innerHeight - 200)) } });
+    }, 450);
+  }, []);
+  useEffect(() => () => window.clearTimeout(peekTimer.current), []);
+  const peeked = peek ? props.workspaces.find((workspace) => workspace.id === peek.id) : undefined;
   const ids = useMemo(() => props.workspaces.map((workspace) => workspace.id), [props.workspaces]);
   const byWorkspace = useMemo(() => {
     const map = new Map<string, Session[]>();
@@ -90,9 +103,12 @@ export function WorkspaceRail(props: Props) {
                 active={workspace.id === props.activeId && !props.settingsOpen}
                 current={workspace.id === props.activeId}
                 status={workspace.id === props.activeId ? null : loudest(byWorkspace.get(workspace.id) ?? [])}
-                keys={jumpKeys(index)}
                 onSelect={() => props.onSelect(workspace.id)}
-                onMenu={(point) => setMenu({ point, workspace })}
+                onMenu={(point) => {
+                  onPeek(workspace.id, null);
+                  setMenu({ point, workspace });
+                }}
+                onPeek={(el) => onPeek(workspace.id, el)}
                 onRemove={() => props.onRemove(workspace)}
                 remote={props.remoteOf?.(workspace) ?? null}
               />
@@ -124,6 +140,15 @@ export function WorkspaceRail(props: Props) {
         onClick={props.onOpenSettings}
       />
 
+      {peek && peeked && !menu && (
+        <WorkspacePeek
+          workspace={peeked}
+          sessions={byWorkspace.get(peeked.id) ?? []}
+          keys={jumpKeys(props.workspaces.indexOf(peeked))}
+          anchor={peek.anchor}
+        />
+      )}
+
       {menu && (
         <ActionMenu
           key={menu.workspace.id}
@@ -152,10 +177,10 @@ function Mark({
   active,
   current,
   status,
-  keys,
   onSelect,
   onMenu,
   onRemove,
+  onPeek,
   remote,
 }: {
   workspace: Workspace;
@@ -164,10 +189,11 @@ function Mark({
   /** The workspace the tabs belong to, even while settings cover them. */
   current: boolean;
   status: SessionStatus | null;
-  keys: string;
   onSelect: () => void;
   onMenu: (point: MenuPoint) => void;
   onRemove: () => void;
+  /** The mark under the pointer, or null once it leaves or is pressed. */
+  onPeek: (el: HTMLElement | null) => void;
   remote: EnvLink | null;
 }) {
   function onKeyDown(event: KeyboardEvent<HTMLButtonElement>) {
@@ -190,8 +216,10 @@ function Mark({
       data-tauri-drag-region="false"
       aria-current={current ? "true" : undefined}
       aria-label={workspace.name}
-      title={`${workspace.name}${keys ? `  ${keys}` : ""}${remote ? `\n${machineLine(remote)}` : ""}\n${workspace.path}`}
       onClick={onSelect}
+      onMouseEnter={(event) => onPeek(event.currentTarget)}
+      onMouseLeave={() => onPeek(null)}
+      onPointerDown={() => onPeek(null)}
       onContextMenu={(event) => onMenu(menuFromEvent(event))}
       onKeyDown={onKeyDown}
       className="group relative grid size-9 place-items-center rounded-xl outline-none focus-visible:ring-2 focus-visible:ring-focus/50"
@@ -295,10 +323,3 @@ function RailScroll({ activeId, children }: { activeId: string; children: ReactN
 
 /** The fade's height, and the margin under it at either end of the list. */
 const FADE = 12;
-
-/** The machine line of a mark's tooltip: where it is, and whether it answers. */
-function machineLine(link: EnvLink): string {
-  const where = whereOf(link);
-  const state = link.mismatch ? "needs an update" : link.status === "online" ? "online" : link.status === "connecting" ? "connecting…" : "offline";
-  return [link.name, where, state].filter(Boolean).join(" · ");
-}

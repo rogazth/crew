@@ -3,7 +3,8 @@
 // the rail badges the workspace, a terminal runs there, and the machine going
 // away and coming back is told on the rail without touching this Mac's
 // workspace. Settings › Environments lists it, and its menu closes on a click
-// outside.
+// outside. Hovering a mark says which machine the workspace is on and whether it
+// answers.
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import path from "node:path";
@@ -21,6 +22,20 @@ function badge(crew: Crew, name: string): Promise<string | null> {
     .locator("[data-remote-badge]")
     .getAttribute("data-remote-badge", { timeout: 1_000 })
     .catch(() => null);
+}
+
+/** Rests the pointer on a mark until its hover card shows, and reads it; then moves off it. */
+async function peekOf(crew: Crew, name: string): Promise<{ machine: string; text: string }> {
+  await crew.window.mouse.move(600, 400);
+  await crew.window.locator("[data-workspace-peek]").waitFor({ state: "detached" });
+  await mark(crew, name).hover();
+  const card = crew.window.locator("[data-workspace-peek]");
+  await card.waitFor();
+  const machine = (await card.locator("[data-peek-machine]").getAttribute("data-peek-machine")) ?? "";
+  const text = (await card.textContent()) ?? "";
+  await crew.window.mouse.move(600, 400);
+  await card.waitFor({ state: "detached" });
+  return { machine, text };
 }
 
 test("a workspace on another machine opens from ⌘O, runs a terminal there, and rides out the machine going away", async () => {
@@ -117,9 +132,22 @@ test("a machine that is off when Crew opens keeps its workspaces on the rail, an
     await crew.reload();
     await mark(crew, "web").waitFor();
     await waitFor(async () => (await badge(crew, "web")) === "offline", { message: "offline from the cache", timeout: 20_000 });
+    assert.match((await peekOf(crew, "web")).text, /homepc[\s\S]*Offline/, "the card tells the machine is down");
 
     await remote.start();
     await waitFor(async () => (await badge(crew, "web")) === "online", { message: "online once it answers", timeout: 20_000 });
+
+    // Hovering the mark tells which machine it lives on and how that is reached; this Mac's says so too.
+    const remoteCard = await peekOf(crew, "web");
+    assert.equal(remoteCard.machine, "remote");
+    assert.match(remoteCard.text, /homepc/);
+    assert.match(remoteCard.text, /agent@127\.0\.0\.1/, "the card shows how the machine is reached");
+    assert.match(remoteCard.text, /\d+ ms/, "the card shows the machine answering");
+    assert.ok(remoteCard.text.includes(web), "the card shows the folder on the machine");
+    const localCard = await peekOf(crew, "app");
+    assert.equal(localCard.machine, "local");
+    assert.match(localCard.text, /This Mac/);
+    assert.doesNotMatch(localCard.text, /homepc/);
   } finally {
     await remote?.stop();
     await crew.close();
