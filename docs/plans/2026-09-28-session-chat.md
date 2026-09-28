@@ -363,7 +363,7 @@ This can ship on its own.
 | 1 · Revert `f984ec8` | Done 2026-09-28: reverted; `e2e/new-agent.test.ts` makes an agent with `agents:mode=terminal` saved |
 | 2 · Setting and overlay | Done 2026-09-28 (one commit with phase 3) |
 | 3 · Claude | Done 2026-09-28: run by hand against Claude Code 2.1.284, both renderers; see §10 |
-| 4 · Codex | Done 2026-09-28, by the fake codex and Codex's own source; the real CLI ran up to the model, its login here being revoked (see §10) |
+| 4 · Codex | Done 2026-09-28; run by hand against Codex 0.158.0 once its login was back (see §10) |
 | 5 · opencode | Done 2026-09-28, run by hand against opencode 1.18.33 on a free model (see §10) |
 
 ## 10. What building it settled
@@ -478,3 +478,23 @@ one. Later, a resting title still ends a turn Esc stopped in the terminal.
 **crewd and SIGTERM.** crewd announced itself before its signal handlers were
 in place, so a SIGTERM sent the moment the line was read could kill it
 (`exits_on_sigterm` failed under load). They are armed first now.
+
+**Codex 0.158.0, run for real.** It updated itself before its login came back,
+and the whole flow was run against it in the app (reply, approval, denial,
+Stop), on the user's own `~/.codex`, which Crew left byte for byte as it was:
+
+- The hooks and their trust hashes computed for 0.154 still hold: no review
+  screen, and every hook reaches crewd.
+- A shell command in the workspace first fails in Codex's sandbox and is
+  retried with a request for elevated permission, so `PostToolUse` of the
+  failed try arrives before the `PermissionRequest`. Its prompt offers `y`,
+  `p` (don't ask again for this prefix) and Esc; `a` is not offered, and the
+  chat shows no "Always allow" for Codex.
+- **Code mode.** 0.158 runs tools from a script: a `custom_tool_call` named
+  `exec` whose input is JavaScript calling `tools.exec_command(...)`. Codex's
+  own history (`thread_history_projection.rs`) ignores every `response_item`
+  in a paginated file and draws from `item_completed` alone; the decoder now
+  does the same for these calls, so the row is the command Codex showed
+  (`touch made-by-codex.txt`), and the sandboxed try that failed, which has no
+  item, does not show. `tests/fixtures/codex/codex-0158-approval.jsonl` is
+  that real session.

@@ -28,6 +28,9 @@ use super::{Decoded, Decoder};
 use crate::providers::codex::{tool_detail, tool_label, tool_name};
 use crate::providers::{as_record, leaf, string_field};
 
+/// The tool 0.158's code mode runs scripts with.
+const CODE_MODE_TOOL: &str = "exec";
+
 /// How many day folders `rollout_path` looks through before giving up.
 const MAX_DAYS: usize = 400;
 /// Recent days are looked at before the day an id was made: a reverted
@@ -216,6 +219,12 @@ impl CodexDecoder {
                     return;
                 };
                 let input = payload.get("input").and_then(Value::as_str).unwrap_or_default();
+                // 0.158's code mode: a script that calls the tools. The calls it
+                // made are reported as items of their own, which Codex shows,
+                // and one it had retried outside the sandbox is not.
+                if name == CODE_MODE_TOOL {
+                    return;
+                }
                 if name == "apply_patch" {
                     self.start(call_id, Kind::Patch, patch_item(input), patch_detail(input), out);
                 } else {
@@ -305,6 +314,38 @@ impl CodexDecoder {
         let item = json!({ "type": "command_execution", "id": call_id, "command": command.unwrap_or_default() });
         let detail = item.as_object().and_then(tool_detail);
         self.start(call_id, Kind::Command, item, detail, out);
+    }
+
+    /// A `FileChange` item: `changes` maps each path to `{type, unified_diff}`.
+    fn start_file_change(&mut self, call_id: String, item: &Map<String, Value>, out: &mut Out) {
+        let files: Vec<(String, String, String)> = item
+            .get("changes")
+            .and_then(as_record)
+            .map(|changes| {
+                changes
+                    .iter()
+                    .map(|(path, change)| {
+                        let change = as_record(change);
+                        let kind = string_field(change, "type").unwrap_or_else(|| "update".into());
+                        let diff = string_field(change, "unified_diff").unwrap_or_default();
+                        (path.clone(), kind, diff)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let changes: Vec<Value> = files.iter().map(|(path, kind, _)| json!({ "path": path, "kind": kind })).collect();
+        let detail = match files.as_slice() {
+            [(path, _, diff)] => {
+                let count = |mark: char| {
+                    diff.lines()
+                        .filter(|line| line.starts_with(mark) && !line.starts_with("+++") && !line.starts_with("---"))
+                        .count() as u32
+                };
+                Some(ToolDetail::Edit { path: path.clone(), added: Some(count('+')), removed: Some(count('-')), hunks: None })
+            }
+            _ => None,
+        };
+        self.start(call_id, Kind::Patch, json!({ "type": "file_change", "changes": changes }), detail, out);
     }
 
     fn start_mcp(&mut self, call_id: String, server: &str, tool: &str, args: &Map<String, Value>, out: &mut Out) {
@@ -589,6 +630,17 @@ impl CodexDecoder {
             Some("CommandExecution") => self.command_completed(item, out),
             Some(kind @ ("FileChange" | "McpToolCall")) => {
                 let Some(id) = string_field(Some(item), "id") else { return };
+                if !self.tools.contains_key(&id) {
+                    // Made from a code-mode script: this item is its only record.
+                    if kind == "FileChange" {
+                        self.start_file_change(id.clone(), item, out);
+                    } else {
+                        let server = string_field(Some(item), "server").unwrap_or_default();
+                        let tool = string_field(Some(item), "tool").unwrap_or_default();
+                        let args = item.get("arguments").and_then(as_record).cloned().unwrap_or_default();
+                        self.start_mcp(id.clone(), &server, &tool, &args, out);
+                    }
+                }
                 let Some(call) = self.tools.get_mut(&id) else { return };
                 let status = match string_field(Some(item), "status").as_deref() {
                     Some("completed") => ToolStatus::Completed,
@@ -626,10 +678,9 @@ impl CodexDecoder {
     /// made, or the only record of one the user ran with `!`.
     fn command_completed(&mut self, item: &Map<String, Value>, out: &mut Out) {
         let Some(id) = string_field(Some(item), "id") else { return };
+        // A command the user ran with `!`, or one a code-mode script ran: this
+        // item is the only record of it.
         if !self.tools.contains_key(&id) {
-            if string_field(Some(item), "source").as_deref() != Some("user_shell") {
-                return;
-            }
             self.start_command(id.clone(), argv_line(item.get("command")), out);
         }
         let Some(call) = self.tools.get_mut(&id) else { return };
@@ -1060,6 +1111,23 @@ mod tests {
     const TOOLS: &str = include_str!("../../tests/fixtures/codex/codex-tools.jsonl");
     const INTERRUPT: &str = include_str!("../../tests/fixtures/codex/codex-interrupt-compact.jsonl");
     const LEGACY: &str = include_str!("../../tests/fixtures/codex/codex-legacy.jsonl");
+    const APPROVAL_0158: &str = include_str!("../../tests/fixtures/codex/codex-0158-approval.jsonl");
+
+    /// Codex 0.158, recorded here: a code-mode script tries the command in
+    /// the sandbox, fails, and runs it again once the user allowed it.
+    #[test]
+    fn code_mode_shows_the_command_codex_showed() {
+        use BlockRole::*;
+        let blocks = open(APPROVAL_0158, 300);
+        assert_eq!(roles(&blocks), [User, Assistant, Tool, Assistant]);
+        assert_eq!(blocks[0].text, "Run the shell command: touch made-by-codex.txt");
+        let (name, status, _) = tool(&blocks[2]);
+        assert_eq!(name, "bash");
+        assert_eq!(*status, ToolStatus::Completed);
+        assert_eq!(blocks[2].text, "touch made-by-codex.txt");
+        assert_eq!(blocks[3].text, "Created `made-by-codex.txt`.");
+        clean(&blocks);
+    }
 
     fn roles(blocks: &[Block]) -> Vec<BlockRole> {
         blocks.iter().map(|block| block.role.clone()).collect()
