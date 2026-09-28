@@ -2,6 +2,7 @@ import { useMemo } from 'react';
 import { Agents } from './Agents';
 import { Browsers } from './Browsers';
 import { DiffsPool } from './DiffsPool';
+import { Previews } from './Previews';
 import { ChatContext, type ChatActions } from './chat/context';
 import { Surface } from './Surface';
 import { Terminals } from './Terminals';
@@ -36,7 +37,7 @@ type Props = {
   onConfirm: (confirm: Confirm) => void;
 };
 
-/** Active surface plus the mounted agent, terminal and page overlays, of every workspace. */
+/** Active surface plus the mounted agent, terminal, page and media overlays, of every workspace. */
 export function WorkspacePanes({
   tab,
   panes,
@@ -116,6 +117,7 @@ export function WorkspacePanes({
         onOpenFile={onOpenFile}
       />
       <Browsers panes={mounted} onPatch={onPatchBrowser} onOpenTab={onOpenBrowserTab} />
+      <Previews panes={mounted} />
       <ChatContext value={chat}>
         <Agents panes={mounted} sessions={sessions} />
       </ChatContext>
