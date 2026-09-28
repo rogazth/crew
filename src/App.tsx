@@ -1,20 +1,22 @@
-import { Sidebar } from "@cloudflare/kumo";
-import { useCallback, useEffect, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { AgentSheetHost } from "./chrome/AgentSheet";
 import { CommandPalette, type PaletteMode } from "./chrome/CommandPalette";
+import { MachineBanner } from "./chrome/MachineBanner";
+import { MachinePalette } from "./chrome/MachinePalette";
 import { ConfirmDialog } from "./chrome/ConfirmDialog";
 import { NewWorktreeDialog } from "./chrome/NewWorktreeDialog";
 import { ShortcutsDialog } from "./chrome/ShortcutsDialog";
 import { SidebarToggle } from "./chrome/SidebarToggle";
 import { LinkRouter } from "./chrome/LinkRouter";
 import { AppSidebar } from "./chrome/AppSidebar";
-import { TabBar } from "./chrome/TabBar";
+import { TabBar, type TabGroups } from "./chrome/TabBar";
 import { UpdateDialog } from "./chrome/UpdateDialog";
 import { useAgentSheet } from "./hooks/useAgentSheet";
 import { useAppCommands } from "./hooks/useAppCommands";
 import { useBrowserBridge } from "./hooks/useBrowserBridge";
 import { useSessionTitle } from "./hooks/useSessionTitle";
 import { useConfirmations } from "./hooks/useConfirmations";
+import { useEnvironments } from "./hooks/useEnvironments";
 import { useLaunch } from "./hooks/useLaunch";
 import { useNavigation } from "./hooks/useNavigation";
 import { useProjectFiles } from "./hooks/useProjectFiles";
@@ -22,15 +24,15 @@ import { useSelectAllScope } from "./hooks/useSelectAllScope";
 import { useSessions } from "./hooks/useSessions";
 import { useSidebarWidth } from "./hooks/useSidebarWidth";
 import { AgentAvatarProvider } from "./hooks/useAgentAvatar";
-import { AgentThemeProvider } from "./hooks/useAgentTheme";
 import { BrowserPrefsProvider } from "./hooks/useBrowserPrefs";
 import { TerminalPrefsProvider } from "./hooks/useTerminalPrefs";
 import { useWorkspaces } from "./hooks/useWorkspaces";
 import { useWorkContext } from "./hooks/useWorkContext";
 import { focusSidebar } from "./hooks/useSpatialKeys";
 import * as api from "./lib/api";
-import type { Session } from "./lib/types";
-import { shortBranch, worktreeLabel } from "./lib/worktrees";
+import { zoomApp } from "./lib/host";
+import { isTerminalTab } from "./lib/tabs";
+import { worktreeLabel } from "./lib/worktrees";
 import { Pages } from "./surfaces/Pages";
 import { usePages } from "./hooks/usePages";
 import { useProcesses } from "./hooks/useProcesses";
@@ -66,6 +68,7 @@ export function App() {
     reorder,
     setStatus,
     dropWorkspace: forgetSessions,
+    reload: reloadSessions,
   } = useSessions(workspaceId);
   // Every workspace's: their terminals keep running, and renaming, out of sight.
   useSessionTitle(all, adoptName);
@@ -125,28 +128,45 @@ export function App() {
   } = usePages();
   const processes = useProcesses(workspaceId);
 
+  // With only the main checkout there is no other worktree to tell apart.
+  const { tabPlaceOf, hues } = work;
+  const branches = useMemo(
+    () => new Map(worktrees.list.map((tree) => [tree.path, { label: worktreeLabel(tree), hue: hues.get(tree.path) ?? 0 }])),
+    [hues, worktrees.list],
+  );
+  const { collapsed, collapse, collapseOther, expand } = tabs;
+  const groups = useMemo<TabGroups | null>(
+    () =>
+      tabPlaceOf && {
+        placeOf: tabPlaceOf,
+        labelOf: (place) => branches.get(place) ?? null,
+        collapsed,
+        onCollapse: collapse,
+        onCollapseOthers: collapseOther,
+        onExpand: expand,
+      },
+    [branches, collapse, collapseOther, collapsed, expand, tabPlaceOf],
+  );
+
   const nav = useNavigation({ tabs, sessions, confirms, removeSession: remove, closePage, route: work.route });
   const sheet = useAgentSheet({ create, update, openSession: nav.openSession, createWorktree: worktrees.create });
+  const envs = useEnvironments({ workspaces, active, closePage, openSettings, create, openSession: nav.openSession });
+
   const { newSession, launch } = useLaunch({
     sessions,
     worktree: work.placeIn,
     create,
     openSession: nav.openSession,
     openStub: nav.openStub,
-    openBrowser: (url) => nav.openBrowser(url),
+    openTerminal: nav.openTerminal,
+    openBrowser: (url, incognito) => nav.openBrowser(url, incognito),
     newAgent: sheet.newAgent,
   });
-
-  const changeModel = useCallback(
-    (session: Session, provider: string, model: string) =>
-      void update(session.id, { ...session, provider, model }),
-    [update],
-  );
 
   useAppCommands({
     workspaces,
     tabs,
-    pages: { isWorkspace, close: closePage, toggle: togglePage },
+    pages: { isWorkspace, close: closePage, toggle: togglePage, openSettings },
     palette,
     togglePalette: (mode: PaletteMode) => setPalette((open) => (open === mode ? null : mode)),
     closePalette: () => setPalette(null),
@@ -160,11 +180,15 @@ export function App() {
     },
     newAgent: () => sheet.newAgent(),
     newSession: () => void newSession(),
+    newBrowser: (incognito) => nav.openBrowser("", incognito),
     closeTab: nav.closeTab,
     inTabs: nav.inTabs,
     worktrees: work,
     newWorktree: () => setDialog("new-worktree"),
     toggleShortcuts: () => setDialog((open) => (open === "shortcuts" ? null : "shortcuts")),
+    openWorkspace: envs.openWorkspace,
+    openHistory: () => nav.openStub("history", "History"),
+    zoom: tabs.active?.kind === "browser" || isTerminalTab(tabs.active, sessions) ? null : (delta) => void zoomApp(delta),
   });
 
   if (workspaces.loading || sidebar.width === null) return <div className="h-full" />;
@@ -176,26 +200,13 @@ export function App() {
     <TerminalPrefsProvider>
     <BrowserPrefsProvider>
     <LinkRouter open={nav.openBrowser} />
-    <AgentThemeProvider>
     <AgentAvatarProvider>
-    <Sidebar.Provider
-      contained
-      collapsible="offcanvas"
-      animationDuration={0}
-      resizable
-      open={sidebarOpen}
-      onOpenChange={setSidebarOpen}
-      defaultWidth={sidebar.width}
-      minWidth={200}
-      maxWidth={560}
-      onWidthChange={sidebar.commit}
-      // kumo sets --sidebar-bg to the canvas colour with a class of equal weight,
-      // so the sidebar tone has to arrive inline to beat it.
-      style={{ "--sidebar-bg": "var(--color-kumo-elevated)" } as CSSProperties}
-      className="h-full"
-    >
+    <div className="flex h-full">
       {active && (
         <AppSidebar
+          open={sidebarOpen}
+          width={sidebar.width}
+          onResize={sidebar.resize}
           settings={settings}
           onSelectSettings={openSettings}
           onCloseSettings={closePage}
@@ -210,7 +221,8 @@ export function App() {
               closePage();
               workspaces.activate(id);
             },
-            onCreate: workspaces.create,
+            onCreate: envs.openWorkspace,
+            remoteOf: envs.remoteOf,
             onRename: workspaces.rename,
             onRemove: (workspace) => confirms.askWorkspace(workspace, tabs.unsavedIn(workspace.id)),
             onReorder: workspaces.reorder,
@@ -258,6 +270,8 @@ export function App() {
                 onConfirm={confirms.ask}
               />
             ),
+            // A refusal from either still lets the other land; the button stops spinning either way.
+            onRefresh: () => Promise.allSettled([worktrees.reread(), reloadSessions()]).then(() => {}),
           }}
         />
       )}
@@ -270,9 +284,9 @@ export function App() {
           sessions={sessions}
           onConfirm={confirms.ask}
           onOpenHit={nav.openHit}
-          onOpenUrl={nav.openUrl}
           processes={processes}
           allSessions={all}
+          onOpenTerminal={envs.openTerminalOn}
         />
         {/* Hidden, not unmounted: agent and terminal processes stay alive. */}
         <div hidden={!isWorkspace} className="flex min-h-0 flex-1 flex-col">
@@ -287,23 +301,19 @@ export function App() {
             onReopen={tabs.reopen}
             onEditSession={sheet.editAgent}
             onReorder={tabs.reorder}
+            onPin={tabs.pin}
+            onUnpin={tabs.unpin}
             onLaunch={launch}
             context={{
               workspace: active?.name ?? "",
               branch: current ? worktreeLabel(current) : "",
               onSwitch: () => openPalette("context"),
             }}
-            branchOf={
-              work.scope === "all" && active
-                ? (tab) => {
-                    const session = tab.kind === "session" ? sessions.find((s) => s.id === tab.sessionId) : undefined;
-                    const tree = session && worktrees.list.find((t) => t.path === work.pathOf(session));
-                    return tree ? { label: shortBranch(tree), hue: work.hues.get(tree.path) ?? 0 } : null;
-                  }
-                : null
-            }
+            groups={groups}
           />
 
+
+          <MachineBanner workspaceId={workspaceId} />
 
           {workspaces.error && (
             <div className="border-b border-border px-3 py-2 text-danger">{workspaces.error}</div>
@@ -317,18 +327,34 @@ export function App() {
             placeOf={work.placeOf}
             cwd={treePath}
             hasWorkspace={active !== null}
-            onCreateWorkspace={workspaces.create}
+            onCreateWorkspace={envs.openWorkspace}
             onStatus={setStatus}
-            onModel={changeModel}
             onOpenFile={nav.openFile}
             onOpenSession={nav.openSessionById}
             onPatchBrowser={tabs.patchBrowser}
             onOpenBrowserTab={tabs.openIn}
             onAdoptBrowserTab={tabs.adopt}
             files={files}
+            onConfirm={confirms.ask}
+            // Chrome's way: the entry loads where History was, so the tab turns into the page.
+            onOpenHistory={(url) => {
+              const history = tabs.active;
+              nav.openBrowser(url);
+              if (history?.kind === "stub" && history.stub === "history") tabs.close(history.id);
+            }}
           />
         </div>
       </main>
+
+      {envs.picker && (
+        <MachinePalette
+          start={envs.picker.start}
+          onClose={envs.closePicker}
+          onThisMac={envs.openLocal}
+          onAdd={envs.addMachine}
+          onOpen={envs.openOn}
+        />
+      )}
 
       {palette && active && (
         <CommandPalette
@@ -384,9 +410,8 @@ export function App() {
         activeWorktree={work.placeIn}
         onNewRoutine={openRoutines}
       />
-    </Sidebar.Provider>
+    </div>
     </AgentAvatarProvider>
-    </AgentThemeProvider>
     </BrowserPrefsProvider>
     </TerminalPrefsProvider>
   );

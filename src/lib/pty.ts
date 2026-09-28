@@ -6,13 +6,15 @@ const dataHandlers = new Map<string, (bytes: Uint8Array) => void>();
 const attachHandlers = new Map<string, (start: number) => void>();
 const streams = new Map<string, { id: number; stop: () => void }>();
 const delivered = new Map<string, number>();
+/** Bumped by every spawn and kill: a spawn that answers after a newer one, or after its kill, is stale. */
+const generations = new Map<string, number>();
 let reconnectHook: (() => void) | null = null;
 
 function ensureReconnect() {
   if (reconnectHook) return;
-  reconnectHook = client.onReconnect(() => {
+  reconnectHook = client.onReconnect((here = () => true) => {
     for (const [id] of streams) {
-      void applyAttach(id, delivered.get(id) ?? 0).catch(() => {});
+      if (here(id)) void applyAttach(id, delivered.get(id) ?? 0).catch(() => {});
     }
   });
 }
@@ -29,7 +31,7 @@ function attach(sessionId: string, streamId: number, onData: (bytes: Uint8Array)
     delivered.set(sessionId, (delivered.get(sessionId) ?? 0) + bytes.byteLength);
     onData(bytes);
   };
-  streams.set(sessionId, { id: streamId, stop: client.openStream(streamId, wrapped, replay) });
+  streams.set(sessionId, { id: streamId, stop: client.openStream(streamId, wrapped, sessionId, replay) });
 }
 
 /**
@@ -67,21 +69,39 @@ export function subscribePty(
   };
 }
 
-/**
- * `session` is the terminal session the process runs, if any: the daemon then
- * hands it a token and the provider's MCP flag, so the CLI reaches Crew's
- * tools. Left out for a plain shell.
- */
+export type SpawnOptions = {
+  /**
+   * The terminal session the process runs, if any: the daemon then hands it a
+   * token and the provider's MCP flag, so the CLI reaches Crew's tools. Left
+   * out for a plain shell.
+   */
+  session?: string;
+  /** Keep a process still running under this id: a window opening again finds it. */
+  reuse?: boolean;
+  /** Whether the window paints the terminal dark, for COLORFGBG. */
+  dark?: boolean;
+};
+
 export async function spawnPty(
   id: string,
   cwd: string,
   command: string[],
   cols: number,
   rows: number,
-  session?: string,
+  options: SpawnOptions = {},
 ): Promise<number> {
-  const params: PtySpawn = { id, cwd, command, cols, rows, ...(session ? { session } : {}) };
+  const { session, reuse = false, dark } = options;
+  const generation = (generations.get(id) ?? 0) + 1;
+  generations.set(id, generation);
+  const params: PtySpawn = { id, cwd, command, cols, rows, reuse, ...(dark === undefined ? {} : { dark }), ...(session ? { session } : {}) };
   const streamId = await client.request<number>("pty_spawn", params);
+  if (generations.get(id) !== generation) {
+    // The pane was torn down (or respawned) while this spawn was in flight, as
+    // StrictMode does to every new terminal. Its process is killed or replaced
+    // already; wiring it would write its output into the pane that replaced it.
+    client.openStream(streamId, () => {}, id)();
+    return streamId;
+  }
   await attachPty(id, streamId);
   return streamId;
 }
@@ -147,7 +167,7 @@ export function parsedCount() {
 
 export function writePty(id: string, data: string): Promise<void> {
   const stream = streams.get(id);
-  if (stream) return client.writeStream(stream.id, encoder.encode(data));
+  if (stream) return client.writeStream(stream.id, encoder.encode(data), id);
   return client.request("pty_write", { id, data });
 }
 
@@ -158,6 +178,7 @@ export const ackPty = (id: string, processed: number): Promise<void> =>
   client.request("pty_ack", { id, processed });
 
 export const killPty = (id: string): Promise<void> => {
+  generations.set(id, (generations.get(id) ?? 0) + 1);
   streams.get(id)?.stop();
   streams.delete(id);
   dataHandlers.delete(id);

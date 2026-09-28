@@ -511,7 +511,7 @@ fn names_are_unique_and_a_stale_rename_is_refused_on_approval() {
 }
 
 #[test]
-fn migration_v20_renames_duplicate_names_before_making_them_unique() {
+fn migration_renames_duplicate_names_before_making_them_unique() {
     let f = fixture("dedupe", fast());
     let rows = f.host.inner.store.with(|conn| {
         conn.execute_batch("DROP INDEX processes_name_idx;")?;
@@ -522,7 +522,7 @@ fn migration_v20_renames_duplicate_names_before_making_them_unique() {
                 params![format!("p{i}"), f.workspace, name, i as i64],
             )?;
         }
-        migrate_v20(conn)?;
+        migrate_unique_names(conn)?;
         let mut stmt = conn.prepare("SELECT id, name FROM processes ORDER BY id")?;
         let rows = stmt.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?;
         rows.collect::<rusqlite::Result<Vec<_>>>()

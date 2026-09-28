@@ -1,4 +1,4 @@
-import type { CookiesSetDetails, Session } from "electron";
+import type { Cookie, CookiesSetDetails, Session } from "electron";
 import type { CookieSameSite, ImportedCookie } from "../../src/lib/protocol";
 
 /** Far past what one profile holds; a longer list is not from the daemon. */
@@ -40,6 +40,36 @@ export function cookieDetails(value: unknown): CookiesSetDetails | null {
     sameSite: c.sameSite,
     ...(c.expires === undefined ? {} : { expirationDate: c.expires }),
   };
+}
+
+/** A cookie one session holds, as `cookies.set` writes it into another. */
+export function copiedCookie(cookie: Cookie): CookiesSetDetails | null {
+  const host = cookie.domain?.replace(/^\./, "");
+  if (!host) return null;
+  const path = cookie.path || "/";
+  return {
+    url: `${cookie.secure ? "https" : "http"}://${host}${path}`,
+    name: cookie.name,
+    value: cookie.value,
+    ...(cookie.hostOnly ? {} : { domain: cookie.domain }),
+    path,
+    secure: cookie.secure ?? false,
+    httpOnly: cookie.httpOnly ?? false,
+    sameSite: cookie.sameSite,
+    ...(cookie.session || cookie.expirationDate === undefined ? {} : { expirationDate: cookie.expirationDate }),
+  };
+}
+
+/** Every cookie `from` holds, written into `to`. */
+export async function copyCookies(from: Session, to: Session): Promise<void> {
+  const all = await from.cookies.get({});
+  await Promise.all(
+    all.map((cookie) => {
+      const details = copiedCookie(cookie);
+      return details ? to.cookies.set(details).catch(() => {}) : undefined;
+    }),
+  );
+  await to.cookies.flushStore();
 }
 
 /** Adds to what the session already has; a cookie with the same name, domain and path is replaced. */

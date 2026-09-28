@@ -1,4 +1,4 @@
-import { ClockCounterClockwiseIcon, GlobeIcon, MagnifyingGlassIcon } from "@phosphor-icons/react";
+import { GlobeIcon, HistoryIcon, SearchIcon } from "lucide-react";
 import { useEffect, useImperativeHandle, useRef, useState, type KeyboardEvent, type Ref } from "react";
 import * as api from "../../lib/api";
 import { buildSuggestions, type Suggestion } from "../../lib/browser/suggest";
@@ -147,7 +147,7 @@ export function AddressBar({ ref, url, searchTemplate, onNavigate, onLeave }: Pr
         <div
           role="listbox"
           aria-label="Suggestions"
-          className="absolute top-full right-0 left-0 z-20 mt-1 rounded-lg bg-kumo-control p-1 shadow-lg ring ring-kumo-line"
+          className="absolute top-full right-0 left-0 z-20 mt-1 rounded-lg bg-surface p-1 shadow-float"
         >
           {rows.map((row, at) => (
             <Row
@@ -179,11 +179,11 @@ function Row({
 }) {
   const icon =
     row.kind === "search" ? (
-      <MagnifyingGlassIcon className={ICON} />
+      <SearchIcon className={ICON} />
     ) : row.kind === "go" ? (
       <GlobeIcon className={ICON} />
     ) : (
-      <ClockCounterClockwiseIcon className={ICON} />
+      <HistoryIcon className={ICON} />
     );
   const detail = row.kind === "history" && row.title.trim() ? row.url : null;
   return (

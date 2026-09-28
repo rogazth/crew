@@ -1,7 +1,6 @@
 import { useEffect } from 'react';
 import { AgentChat } from './AgentChat';
 import { setForeground } from '../lib/agentRuntime';
-import type { ProviderId } from '../lib/providers';
 import { isAgentTab } from '../lib/tabs';
 import type { MountedPane } from './WorkspacePanes';
 import type { Session } from '../lib/types';
@@ -9,7 +8,6 @@ import type { Session } from '../lib/types';
 type Props = {
   panes: MountedPane[];
   sessions: Session[];
-  onModel: (session: Session, provider: ProviderId, model: string) => void;
 };
 
 /**
@@ -17,7 +15,7 @@ type Props = {
  * draft and the scroll position. The turn itself lives in the runtime, which is
  * why closing an agent tab costs nothing.
  */
-export function Agents({ panes, sessions, onModel }: Props) {
+export function Agents({ panes, sessions }: Props) {
   const shown = panes.find((pane) => pane.visible) ?? null;
   const foreground =
     shown && isAgentTab(shown.tab, sessions) && shown.tab.kind === 'session'
@@ -36,7 +34,7 @@ export function Agents({ panes, sessions, onModel }: Props) {
     if (!session) return null;
     return (
       <div key={pane.id} hidden={!visible} className="absolute inset-0">
-        <AgentChat session={session} cwd={cwd} active={visible} onModel={onModel} />
+        <AgentChat session={session} cwd={cwd} active={visible} />
       </div>
     );
   });

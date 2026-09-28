@@ -3,10 +3,12 @@
  * them to Electron; everything here fails closed on anything it does not know.
  */
 
-import { PARTITION, RESTORE_PREFIX } from "../../src/lib/browser/bridge";
+import { isPagePartition, RESTORE_PREFIX } from "../../src/lib/browser/bridge";
+import { FILE_SCHEME, FILES_PARTITION, isFileUrl } from "../../src/lib/browser/files";
+import { externalScheme } from "../../src/lib/browser/permissions";
 
 // The window builds its webviews with these; one definition keeps the two sides agreeing.
-export { PARTITION, RESTORE_PREFIX };
+export { RESTORE_PREFIX };
 
 const RESTORE_TOKEN = /^[A-Za-z0-9-]{1,64}$/;
 
@@ -34,12 +36,12 @@ function isBlank(url: URL | null): boolean {
  * on the object the guest is actually created with. The only preload is the
  * close guard: `window.close()` would otherwise destroy the tab.
  */
-export function hardenWebPreferences(prefs: Record<string, unknown>, guestPreload: string): void {
+export function hardenWebPreferences(prefs: Record<string, unknown>, guestPreload: string, partition: string): void {
   delete prefs.preloadURL;
   delete prefs.enableBlinkFeatures;
   delete prefs.additionalArguments;
   prefs.preload = guestPreload;
-  prefs.partition = PARTITION;
+  prefs.partition = partition;
   prefs.nodeIntegration = false;
   prefs.nodeIntegrationInSubFrames = false;
   prefs.contextIsolation = true;
@@ -50,33 +52,67 @@ export function hardenWebPreferences(prefs: Record<string, unknown>, guestPreloa
   prefs.webviewTag = false;
   // Blink's defaults: the element can switch features neither on nor off.
   prefs.disableBlinkFeatures = "";
+  // A video's fullscreen fills the page's pane, not the whole window.
+  prefs.disableHtmlFullscreenWindowResize = true;
 }
 
 /**
- * Whether a <webview> may attach: only in the browser partition, and only
- * starting blank or at a web page. A restore src yields its token.
+ * Whether a <webview> may attach: in a workspace's page partition, starting
+ * blank or at a web page, or in the previews' partition at a file. A restore
+ * src yields its token.
  */
 export function attachDecision(params: {
   src?: string;
   partition?: string;
-}): { allow: false } | { allow: true; restoreToken: string | null } {
-  if (params.partition !== PARTITION) return { allow: false };
+}): { allow: false } | { allow: true; partition: string; restoreToken: string | null } {
+  const { partition } = params;
+  if (partition === FILES_PARTITION) {
+    return isFileUrl(params.src ?? "") ? { allow: true, partition, restoreToken: null } : { allow: false };
+  }
+  if (!isPagePartition(partition)) return { allow: false };
   const src = params.src ?? "";
   if (src.startsWith(RESTORE_PREFIX)) {
     const token = src.slice(RESTORE_PREFIX.length);
-    return RESTORE_TOKEN.test(token) ? { allow: true, restoreToken: token } : { allow: false };
+    return RESTORE_TOKEN.test(token) ? { allow: true, partition, restoreToken: token } : { allow: false };
   }
   const url = parse(src);
-  if (src === "" || isBlank(url) || isWeb(url)) return { allow: true, restoreToken: null };
+  if (src === "" || isBlank(url) || isWeb(url)) return { allow: true, partition, restoreToken: null };
   return { allow: false };
 }
 
-export type NavigationVerdict = "allow" | "external" | "block";
+export type NavigationVerdict = "allow" | "external" | "ask" | "download" | "block";
 
-/** Where a page may take itself: the web, or mail through the system. Never file:, javascript: or app schemes. */
+/** Crew's own schemes, which no page may hand to an app. */
+const OWN_SCHEMES = [FILE_SCHEME, "crew"];
+
+/** A link another app handles (zoommtg:, slack:), offered to it only once the person says so. */
+export function asksForApp(url: string): boolean {
+  return externalScheme(url, OWN_SCHEMES) !== null;
+}
+
+/**
+ * Where a page may take itself: the web, or mail through the system. A blob it
+ * made is saved rather than shown, and another app's link waits for a yes.
+ * Never file:, javascript: or Crew's schemes.
+ */
 export function navigationVerdict(url: string): NavigationVerdict {
   const parsed = parse(url);
   if (isWeb(parsed) || isBlank(parsed)) return "allow";
+  if (parsed?.protocol === "mailto:") return "external";
+  if (parsed?.protocol === "blob:") return "download";
+  if (asksForApp(url)) return "ask";
+  return "block";
+}
+
+/**
+ * Where a file preview may take itself: other files, in place; a web link
+ * becomes a browser tab, so the web never loads in the previews' session.
+ */
+export function previewNavigationVerdict(url: string): NavigationVerdict | "tab" {
+  const parsed = parse(url);
+  if (parsed && isFileUrl(url)) return "allow";
+  if (isBlank(parsed)) return "allow";
+  if (isWeb(parsed)) return "tab";
   if (parsed?.protocol === "mailto:") return "external";
   return "block";
 }
@@ -85,6 +121,8 @@ export type PopupVerdict =
   | { action: "tab"; url: string; background: boolean }
   | { action: "window" }
   | { action: "external"; url: string }
+  | { action: "ask"; url: string }
+  | { action: "download"; url: string }
   | { action: "deny" };
 
 // innerWidth and innerHeight are the spec's aliases for width and height.
@@ -97,14 +135,23 @@ function asksForPopup(features: string): boolean {
     .some((feature) => POPUP_FEATURES.has((feature.split("=")[0] ?? "").trim().toLowerCase()));
 }
 
-/** What window.open and target=_blank become: a Crew tab, a real child window, the mail app, or nothing. */
+/**
+ * What window.open and target=_blank become: a Crew tab, a real child window,
+ * the mail app, another app once asked, a download, or nothing.
+ */
 export function popupVerdict(details: { url: string; disposition: string; features: string }): PopupVerdict {
   const url = parse(details.url);
   // Some logins open a sized blank popup first, then navigate it or post a form into it.
   if (isBlank(url) && details.disposition === "new-window" && asksForPopup(details.features)) {
     return { action: "window" };
   }
-  if (!isWeb(url)) return url?.protocol === "mailto:" ? { action: "external", url: details.url } : { action: "deny" };
+  if (!isWeb(url)) {
+    if (url?.protocol === "mailto:") return { action: "external", url: details.url };
+    // A file the page built (an export, a generated PDF) opened in a new tab: no tab can load it, so it is saved.
+    if (url?.protocol === "blob:" || url?.protocol === "data:") return { action: "download", url: details.url };
+    if (asksForApp(details.url)) return { action: "ask", url: details.url };
+    return { action: "deny" };
+  }
   switch (details.disposition) {
     case "new-window":
       return asksForPopup(details.features)
@@ -120,13 +167,6 @@ export function popupVerdict(details: { url: string; disposition: string; featur
       // save-to-disk, and whatever Chromium adds next.
       return { action: "deny" };
   }
-}
-
-const ALLOWED_PERMISSIONS = new Set(["clipboard-sanitized-write", "fullscreen", "pointerLock"]);
-
-/** Camera, microphone, location, notifications, screen capture and the rest stay off. */
-export function permissionAllowed(permission: string): boolean {
-  return ALLOWED_PERMISSIONS.has(permission);
 }
 
 const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
@@ -153,13 +193,4 @@ export function createRateLimiter(max: number, windowMs: number, now: () => numb
     recent.push(at);
     return true;
   };
-}
-
-/** Chromium's own user agent: some sites turn away agents that name Electron or the app. */
-export function browserUserAgent(defaultUA: string): string {
-  return defaultUA
-    .replace(/\bElectron\/\S+/gi, "")
-    .replace(/\bcrew\/\S+/gi, "")
-    .replace(/ {2,}/g, " ")
-    .trim();
 }

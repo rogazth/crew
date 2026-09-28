@@ -3,6 +3,7 @@ export const SETTINGS_SECTIONS = [
   { id: "appearance", label: "Appearance" },
   { id: "terminal", label: "Terminal" },
   { id: "browser", label: "Browser" },
+  { id: "environments", label: "Environments" },
   { id: "providers", label: "Providers" },
   { id: "keybindings", label: "Keybindings" },
   { id: "about", label: "About" },

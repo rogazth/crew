@@ -10,7 +10,6 @@ export type MenuIcon =
   | "select-all"
   | "close"
   | "open"
-  | "face"
   | "bell"
   | "read"
   | "agent"
@@ -18,6 +17,10 @@ export type MenuIcon =
   | "branch"
   | "reopen"
   | "settings"
+  | "pin"
+  | "unpin"
+  | "collapse"
+  | "expand"
   | "play"
   | "stop"
   | "pause";
@@ -68,7 +71,12 @@ export const CLOSE_TAB: MenuAction = { id: "close", label: "Close Tab", icon: "c
 export const CLOSE_OTHERS: MenuAction = { id: "close-others", label: "Close Other Tabs", icon: "close", hotkey: "O" };
 export const CLOSE_RIGHT: MenuAction = { id: "close-right", label: "Close Tabs to the Right", icon: "close", hotkey: "R" };
 export const REOPEN_TAB: MenuAction = { id: "reopen", label: "Reopen Closed Tab", icon: "reopen", hotkey: "T" };
-export const CHANGE_FACE: MenuAction = { id: "face", label: "Change Face…", icon: "face", hotkey: "F" };
+export const PIN_TAB: MenuAction = { id: "pin", label: "Pin Tab", icon: "pin", hotkey: "P" };
+export const UNPIN_TAB: MenuAction = { id: "unpin", label: "Unpin Tab", icon: "unpin", hotkey: "P" };
+export const COLLAPSE_WORKTREE: MenuAction = { id: "collapse", label: "Collapse Worktree Tabs", icon: "collapse", hotkey: "G" };
+export const COLLAPSE_OTHERS: MenuAction = { id: "collapse-others", label: "Collapse Other Worktrees", icon: "collapse", hotkey: "H" };
+export const EXPAND_WORKTREE: MenuAction = { id: "expand", label: "Expand Tabs", icon: "expand", hotkey: "E" };
+export const CLOSE_WORKTREE: MenuAction = { id: "close-group", label: "Close Worktree Tabs", icon: "close", hotkey: "W" };
 export const COPY_NAME: MenuAction = { id: "copy-name", label: "Copy Name", icon: "copy", hotkey: "C" };
 export const MARK_READ: MenuAction = { id: "mark-read", label: "Mark as Read", icon: "read", hotkey: "M" };
 

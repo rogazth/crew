@@ -1,7 +1,19 @@
-import type { DownloadActivity, MountRequest, OpenTabRequest } from "./browser/bridge";
+import type {
+  DockBounds,
+  DockSnapshot,
+  DownloadAction,
+  DownloadInfo,
+  MountRequest,
+  OpenTabRequest,
+  PagePrompt,
+  PromptAnswer,
+  Responsiveness,
+  SitePermissions,
+} from "./browser/bridge";
 import type { NavSnapshot } from "./browser/snapshot";
 import type { KeyboardLayout, LiveCommand } from "./keymap";
-import type { ImportedCookie } from "./protocol";
+import type { ImportedCookie, RemoteEnv } from "./protocol";
+import type { InstallInput, InstallStep, ManualRemote, SshHost, Tailnet } from "./remotes";
 import type { UpdateState } from "./update";
 
 export type OpenOptions = { multiple?: boolean; directory?: boolean };
@@ -15,8 +27,52 @@ type CrewHost = {
   openUrl(url: string): Promise<void>;
   notify(title: string, body: string): Promise<void>;
   pathForFile(file: File): string;
+  /** Steps the whole window's zoom; 0 puts it back to actual size. */
+  zoom(delta: number): Promise<void>;
+  colorMode: ColorModeHost;
   update: UpdateHost;
   browser: BrowserHost;
+  files: FilesHost;
+  remotes?: RemotesHost;
+};
+
+/** Files shown as pages, and handed to Finder. Absent outside Electron. */
+export type FilesHost = {
+  /** Null for a path main will not serve. */
+  url(root: string, path: string): Promise<string | null>;
+  reveal(path: string): Promise<void>;
+  /** Resolves to why it could not open, or "" once it did. */
+  openExternal(path: string): Promise<string>;
+  /** A workspace root whose files are served by that machine's daemon, not this disk. */
+  bindRemote?(root: string, envId: string): Promise<void>;
+  unbindRemote?(root: string): Promise<void>;
+};
+
+/** Machines other than this Mac. Absent outside Electron. */
+export type RemotesHost = {
+  tailnet(): Promise<Tailnet>;
+  /** The Hosts in ~/.ssh/config. */
+  sshHosts(): Promise<SshHost[]>;
+  install(input: InstallInput): Promise<RemoteEnv>;
+  onProgress(cb: (step: InstallStep) => void): () => void;
+  update(id: string): Promise<void>;
+  restart(id: string): Promise<void>;
+  /**
+   * `wipe` deletes `~/.crew` on the machine. Leaving it is the ordinary answer.
+   * The machine leaves Crew even when SSH fails; `warning` says what was left running.
+   */
+  remove(id: string, wipe: boolean): Promise<{ warning: string | null }>;
+  logs(id: string): Promise<string>;
+  token(id: string): Promise<string | null>;
+  /** A daemon that is already running, for tests and a second local `crewd serve`. */
+  add(input: ManualRemote): Promise<RemoteEnv>;
+  onWake(cb: () => void): () => void;
+};
+
+/** Light, dark or system, applied by main to the window and every page. Absent outside Electron. */
+export type ColorModeHost = {
+  get(): Promise<string>;
+  set(mode: string): Promise<void>;
 };
 
 /** The updater's main-process half. Absent outside Electron. */
@@ -34,13 +90,37 @@ export type BrowserHost = {
   setKeyboardLayout(layout: KeyboardLayout): void;
   onCommand(cb: (id: string) => void): () => void;
   onOpenTab(cb: (request: OpenTabRequest) => void): () => void;
-  onDownload(cb: (activity: DownloadActivity) => void): () => void;
+  /** Every change to one of this window's downloads, whole. */
+  onDownload(cb: (download: DownloadInfo) => void): () => void;
+  /** Resolves why it could not be done ("the file is gone"), or "". */
+  downloadAction(id: string, action: DownloadAction): Promise<string>;
+  setAskWhereToSave(ask: boolean): void;
+  onPrompt(cb: (prompt: PagePrompt) => void): () => void;
+  /** A prompt main took back: its page navigated or closed. */
+  onPromptGone(cb: (id: string) => void): () => void;
+  answer(id: string, value: PromptAnswer): void;
+  /** The remembered decisions, whole, each time they change. */
+  setSitePermissions(decisions: SitePermissions): void;
+  onResponsive(cb: (state: Responsiveness) => void): () => void;
+  /** Ends a hung page's process. */
+  kill(webContentsId: number): Promise<void>;
+  print(webContentsId: number): Promise<void>;
   /** Resolves whether DevTools are open afterwards. */
   toggleDevTools(webContentsId: number): Promise<boolean>;
+  /** Beside the page, over the panel at `bounds`; false when the page isn't this window's. */
+  dockDevTools(webContentsId: number, bounds: DockBounds): Promise<boolean>;
+  /** Null hides docked DevTools while something covers their panel, and resolves to how they looked. */
+  placeDevTools(webContentsId: number, bounds: DockBounds | null): Promise<DockSnapshot | null>;
+  /** Docked ones only. */
+  closeDevTools(webContentsId: number): Promise<void>;
   snapshot(webContentsId: number): Promise<NavSnapshot | null>;
   prepareRestore(token: string, entriesJson: string, index: number): Promise<boolean>;
-  favicon(url: string): Promise<string | null>;
-  importCookies(cookies: ImportedCookie[]): Promise<{ imported: number; failed: number }>;
+  /** Through the workspace's own session, so an icon behind its sign-in loads; an incognito page's through its in-memory one. */
+  favicon(url: string, workspaceId: string, incognito?: boolean): Promise<string | null>;
+  /** Into the workspace's pages only. */
+  importCookies(workspaceId: string, cookies: ImportedCookie[]): Promise<{ imported: number; failed: number }>;
+  /** Point a workspace's pages at that machine's loopback, or clear the proxy. */
+  setProxy?(workspaceId: string, envId: string | null, socksPort: number | null): Promise<void>;
   /** Tells main which tab a guest shows, so an agent's call on the tab reaches it. */
   reportGuest(tab: string, webContentsId: number): void;
   /** An agent needs a tab live that is cold, or not in this window yet. */
@@ -49,7 +129,7 @@ export type BrowserHost = {
 
 export type HostDragDrop =
   | { type: "enter" | "over"; position: { x: number; y: number } }
-  | { type: "drop"; position: { x: number; y: number }; paths: string[] }
+  | { type: "drop"; position: { x: number; y: number }; paths: string[]; files: File[] }
   | { type: "leave" };
 
 declare global {
@@ -66,6 +146,18 @@ export function browserHost(): BrowserHost | null {
   return crewHost()?.browser ?? null;
 }
 
+export function filesHost(): FilesHost | null {
+  return crewHost()?.files ?? null;
+}
+
+export function remotesHost(): RemotesHost | null {
+  return crewHost()?.remotes ?? null;
+}
+
+export function colorModeHost(): ColorModeHost | null {
+  return crewHost()?.colorMode ?? null;
+}
+
 export function updateHost(): UpdateHost | null {
   return crewHost()?.update ?? null;
 }
@@ -80,6 +172,10 @@ export async function open(opts: OpenOptions): Promise<string | string[] | null>
   const host = crewHost();
   if (host) return host.open(opts);
   return browserOpen(opts);
+}
+
+export async function zoomApp(delta: number): Promise<void> {
+  await crewHost()?.zoom(delta);
 }
 
 export async function homeDir(): Promise<string> {
@@ -169,6 +265,7 @@ function listenDomDrops(handler: (event: HostDragDrop) => void): void {
       type: "drop",
       position: position(event),
       paths,
+      files,
     });
   };
   window.addEventListener("dragover", onDragOver);

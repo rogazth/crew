@@ -73,6 +73,98 @@ pub struct DaemonFile {
     pub pid: Option<u32>,
 }
 
+/// Bumped when a client and a daemon from different builds can no longer
+/// understand each other. A client compares a remote's against its own daemon's.
+pub const PROTOCOL: u32 = 1;
+
+/// The daemon's first message after a good `auth`, sent as the `hello` event.
+#[derive(Serialize, Deserialize, Clone, Debug, TS)]
+#[ts(export, export_to = "../../../src/lib/protocol.ts")]
+pub struct Hello {
+    pub protocol: u32,
+    pub version: String,
+}
+
+/// The machine a daemon runs on, for Settings' health line.
+#[derive(Serialize, Deserialize, Clone, Debug, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
+pub struct MachineInfo {
+    pub version: String,
+    pub protocol: u32,
+    /// `Ubuntu 24.04.1 LTS`, `macOS 14.6`.
+    pub os: String,
+    pub arch: String,
+    pub hostname: String,
+    pub home: String,
+    pub cpus: u32,
+    /// The one-minute load average: over `cpus`, the machine is saturated.
+    pub load: f64,
+    #[ts(type = "number")]
+    pub memory_total: u64,
+    /// Absent where the OS does not say cheaply (macOS).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "number")]
+    pub memory_available: Option<u64>,
+    /// Sessions mid-turn or waiting on an answer.
+    pub agents_running: u32,
+    /// The agent CLIs found on the daemon's PATH.
+    pub installed: Vec<String>,
+    /// The SOCKS port beside `crewd serve`, for a remote workspace's browser.
+    /// Absent on the window's own daemon.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "number")]
+    pub socks_port: Option<u16>,
+}
+
+/// A machine the window reaches. The token that opens it is not here: the
+/// window keeps that in the keychain.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
+pub struct RemoteEnv {
+    pub id: String,
+    pub name: String,
+    /// The address crewd listens on: the machine's tailnet IP.
+    pub host: String,
+    pub port: u16,
+    /// Empty when `ssh` names the user, in ~/.ssh/config.
+    pub user: String,
+    /// What `ssh` is given to reach the machine: a Host from ~/.ssh/config, or
+    /// an address. Empty means `host`.
+    #[serde(default)]
+    pub ssh: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
+pub struct DirList {
+    /// Absolute, or starting with `~`.
+    pub path: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
+pub struct DirEntry {
+    pub name: String,
+    pub path: String,
+    /// It holds a `.git`: opening it makes a workspace rather than entering it.
+    pub repo: bool,
+}
+
+/// The folders in a folder, for picking a workspace on a machine with no Finder.
+#[derive(Serialize, Deserialize, Clone, Debug, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
+pub struct DirListing {
+    /// The folder listed, with `~` expanded.
+    pub path: String,
+    pub repo: bool,
+    pub entries: Vec<DirEntry>,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
@@ -88,6 +180,16 @@ pub struct PtySpawn {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub session: Option<String>,
+    /// Keep a live process under this id instead of replacing it: a window
+    /// opening again finds the agent it left running.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub reuse: Option<bool>,
+    /// Whether the window paints the terminal dark. It becomes COLORFGBG, which
+    /// CLIs fall back to when their OSC 11 query outlives a remote round trip.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub dark: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, TS)]
@@ -658,8 +760,12 @@ pub enum CookieSameSite {
 #[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
 pub struct CookieRead {
     pub cookies: Vec<ImportedCookie>,
-    /// Rows left out: expired, undecryptable, partitioned, or on a domain that must not move.
+    /// Rows left out: expired, undecryptable, or partitioned.
     pub skipped: u32,
+    /// Rows on Google's and YouTube's domains, left out because Google binds them to the browser
+    /// that holds them. Only a sign-in in Crew brings those over.
+    #[serde(default)]
+    pub google: u32,
 }
 
 /// Where a tab an agent drives sits, so the window can mount it when it is

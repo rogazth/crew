@@ -1,4 +1,4 @@
-use crew_protocol::{ToolDetail, ToolStatus, TurnUsage};
+use crew_protocol::{EditHunk, TodoItem, TodoStatus, ToolDetail, ToolStatus, TurnUsage};
 use serde_json::{Map, Value};
 
 use super::runtime::Autonomy;
@@ -190,8 +190,32 @@ pub fn turn_failed(rec: &Map<String, Value>) -> Option<String> {
 
 pub fn tool_label(name: &str, input: &Map<String, Value>) -> String {
     let command = string_field(Some(input), "command").or_else(|| string_field(Some(input), "cmd"));
+    if let Some(tool) = command.as_deref().and_then(crew_call) {
+        return format!("Crew {}", tool.replace('_', " "));
+    }
+    match name.to_ascii_lowercase().as_str() {
+        "updatetodos" => return "Todos".into(),
+        "task" => {
+            return string_field(Some(input), "description")
+                .map(|description| clip(&description, 72))
+                .unwrap_or_else(|| "Subagent".into());
+        }
+        "getmcptools" => {
+            return match string_field(Some(input), "toolName") {
+                Some(tool) => format!("Look up {}", clip(&tool, 40)),
+                None => "Look up tools".into(),
+            };
+        }
+        "webfetch" => {
+            if let Some(url) = string_field(Some(input), "url") {
+                return format!("Fetch {}", clip(&url, 60));
+            }
+        }
+        _ => {}
+    }
     let path = path_argument(input);
     let query = string_field(Some(input), "pattern")
+        .or_else(|| string_field(Some(input), "globPattern"))
         .or_else(|| string_field(Some(input), "glob"))
         .or_else(|| string_field(Some(input), "query"))
         .or_else(|| string_field(Some(input), "regex"));
@@ -208,18 +232,20 @@ pub fn tool_label(name: &str, input: &Map<String, Value>) -> String {
     verb
 }
 
-/// A failed call answers with an error instead of `success` and repeats none of
-/// its arguments, so it yields `None` and the row keeps what it already showed.
+/// A call answers with `success`, or with `failure` when it ran and went wrong
+/// (a shell that exited non-zero). A call that never ran answers with neither,
+/// yields `None`, and the row keeps what it already showed.
 fn tool_detail(
     name: &str,
     args: &Map<String, Value>,
     result: Option<&Map<String, Value>>,
 ) -> Option<ToolDetail> {
     let success = result.and_then(|row| row.get("success")).and_then(as_record);
+    let outcome = success.or_else(|| result.and_then(|row| row.get("failure")).and_then(as_record));
     match name.to_ascii_lowercase().as_str() {
         "shell" | "bash" => {
             let command = string_field(Some(args), "command")?;
-            let exit_code = success
+            let exit_code = outcome
                 .and_then(|row| row.get("exitCode"))
                 .and_then(Value::as_i64)
                 .map(|code| code as i32);
@@ -227,11 +253,15 @@ fn tool_detail(
                 if let Some(message) = bridge_message(&command) {
                     return Some(message);
                 }
+                // Crew's answer is the row's body; with nothing printed the command is.
+                if let (Some(_), Some(text)) = (crew_call(&command), text_field(outcome, "stdout")) {
+                    return Some(ToolDetail::Output { text });
+                }
             }
             Some(ToolDetail::Command {
                 command,
                 exit_code,
-                output: text_field(success, "interleavedOutput").or_else(|| text_field(success, "stdout")),
+                output: shell_output(outcome),
             })
         }
         "read" => {
@@ -243,21 +273,131 @@ fn tool_detail(
                 preview: text_field(success, "content"),
             })
         }
-        // Cursor names no before/after text on a write, so the counts stay 0.
+        // The call streams only the new text; the result carries the file
+        // before and after, which is a diff once it fits.
         "write" | "edit" | "multiedit" => Some(ToolDetail::Edit {
             path: path_argument(args)?,
-            added: None,
-            removed: None,
+            added: line_number(success, "linesAdded"),
+            removed: line_number(success, "linesRemoved"),
+            hunks: text_field(success, "afterFullFileContent").map(|after| {
+                vec![EditHunk {
+                    before: text_field(success, "beforeFullFileContent").unwrap_or_default(),
+                    after,
+                }]
+            }),
         }),
-        "glob" | "grep" => Some(ToolDetail::Search {
+        "glob" => Some(ToolDetail::Search {
+            query: string_field(Some(args), "globPattern").or_else(|| string_field(Some(args), "pattern"))?,
+            matches: line_number(success, "totalFiles"),
+            output: success
+                .and_then(|row| row.get("files"))
+                .and_then(Value::as_array)
+                .map(|files| files.iter().filter_map(Value::as_str).collect::<Vec<_>>().join("\n"))
+                .filter(|text| !text.is_empty()),
+        }),
+        "grep" => Some(ToolDetail::Search {
             query: string_field(Some(args), "pattern")
-                .or_else(|| string_field(Some(args), "glob"))
                 .or_else(|| string_field(Some(args), "query"))
                 .or_else(|| string_field(Some(args), "regex"))?,
             matches: None,
+            output: grep_output(success),
         }),
+        "webfetch" => Some(ToolDetail::Fetch {
+            url: string_field(Some(args), "url")?,
+            title: None,
+            output: text_field(success, "markdown"),
+        }),
+        // With `merge` the call names only what changed; the result holds the
+        // whole list once it has merged them.
+        "updatetodos" => Some(ToolDetail::Todo {
+            items: success
+                .and_then(|row| row.get("todos"))
+                .or_else(|| args.get("todos"))
+                .and_then(Value::as_array)?
+                .iter()
+                .filter_map(|row| {
+                    let row = as_record(row)?;
+                    Some(TodoItem {
+                        text: string_field(Some(row), "content")?,
+                        status: match string_field(Some(row), "status").as_deref() {
+                            Some("TODO_STATUS_COMPLETED") => TodoStatus::Completed,
+                            Some("TODO_STATUS_IN_PROGRESS") => TodoStatus::InProgress,
+                            _ => TodoStatus::Pending,
+                        },
+                    })
+                })
+                .collect(),
+        }),
+        "task" => Some(ToolDetail::Agent {
+            description: string_field(Some(args), "description").unwrap_or_else(|| "Subagent".into()),
+            agent_type: None,
+            prompt: text_field(Some(args), "prompt"),
+            output: success
+                .and_then(|row| row.get("conversationSteps"))
+                .and_then(Value::as_array)
+                .map(|steps| {
+                    steps
+                        .iter()
+                        .filter_map(|step| {
+                            as_record(step)?.get("assistantMessage").and_then(as_record)?.get("text")?.as_str()
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n\n")
+                })
+                .filter(|text| !text.trim().is_empty()),
+        }),
+        // A tool's schema, fetched before the call: the JSON is the body.
+        "getmcptools" => text_field(success, "content").map(|text| ToolDetail::Output { text }),
         _ => None,
     }
+}
+
+/// What a shell printed, in the order it printed it when cursor kept that.
+fn shell_output(outcome: Option<&Map<String, Value>>) -> Option<String> {
+    text_field(outcome, "interleavedOutput").or_else(|| {
+        let joined = [text_field(outcome, "stdout"), text_field(outcome, "stderr")]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+            .join("\n");
+        Some(joined).filter(|text| !text.trim().is_empty())
+    })
+}
+
+/// Grep answers per workspace, per file, per line: `file:line: text`, as rg prints.
+fn grep_output(success: Option<&Map<String, Value>>) -> Option<String> {
+    let workspaces = success?.get("workspaceResults").and_then(as_record)?;
+    let mut lines = Vec::new();
+    for workspace in workspaces.values() {
+        let files = as_record(workspace)
+            .and_then(|row| row.get("content"))
+            .and_then(as_record)
+            .and_then(|row| row.get("matches"))
+            .and_then(Value::as_array);
+        for file in files.into_iter().flatten() {
+            let Some(file) = as_record(file) else { continue };
+            let name = string_field(Some(file), "file").unwrap_or_default();
+            for hit in file.get("matches").and_then(Value::as_array).into_iter().flatten() {
+                let Some(hit) = as_record(hit) else { continue };
+                let line = hit.get("lineNumber").and_then(Value::as_u64).unwrap_or(0);
+                let text = hit.get("content").and_then(Value::as_str).unwrap_or("");
+                lines.push(format!("{name}:{line}: {text}"));
+            }
+        }
+    }
+    Some(lines.join("\n")).filter(|text| !text.is_empty())
+}
+
+/// The Crew tool a shell command calls, when cursor reaches one the only way
+/// it can: `…/crewd call list_agents '{}'`.
+fn crew_call(command: &str) -> Option<&str> {
+    let at = command.find(" call ")?;
+    let binary = command[..at].rsplit('/').next()?;
+    if binary != "crewd" && binary != "crew" {
+        return None;
+    }
+    let tool = command[at + " call ".len()..].split_whitespace().next()?;
+    tool.chars().all(|c| c.is_ascii_alphanumeric() || c == '_').then_some(tool)
 }
 
 /// Cursor reaches Crew's tools through the shell (`crew call message_agent
@@ -378,6 +518,9 @@ fn tool_failed(result: Option<&Map<String, Value>>) -> bool {
     if result.get("rejected").is_some_and(|v| !v.is_null()) || result.get("denied").is_some_and(|v| !v.is_null()) {
         return true;
     }
+    if result.get("failure").is_some_and(|v| !v.is_null()) {
+        return true;
+    }
     result
         .get("success")
         .and_then(as_record)
@@ -424,7 +567,7 @@ fn pretty_tool(name: &str) -> String {
 mod tests {
     use super::*;
     use crate::turns::TurnHost;
-    use crew_protocol::{HarnessEvent, ToolDetail, ToolStatus};
+    use crew_protocol::{HarnessEvent, TodoStatus, ToolDetail, ToolStatus};
     use serde_json::json;
 
     fn events(line: &Value) -> Vec<HarnessEvent> {
@@ -440,6 +583,79 @@ mod tests {
             HarnessEvent::ToolUpdated { detail, .. } | HarnessEvent::ToolStarted { detail, .. } => detail,
             _ => None,
         })
+    }
+
+    /// Every tool cursor-agent ran in a real turn, captured in
+    /// `crates/crew-core/tests/fixtures/protocols/cursor-tools.jsonl`: each one
+    /// reads as what it did, not as a bare tool name.
+    #[test]
+    fn a_real_turns_tools_each_read_as_what_they_did() {
+        let fixture = include_str!("../../tests/fixtures/protocols/cursor-tools.jsonl");
+        let details: Vec<(String, Option<ToolDetail>, bool)> = fixture
+            .lines()
+            .map(|line| {
+                let rec: Value = serde_json::from_str(line).unwrap();
+                let call = parse_tool_call(rec.as_object().unwrap()).unwrap();
+                (call.name, call.detail, call.failed)
+            })
+            .collect();
+        let by = |name: &str| details.iter().find(|(n, ..)| n == name).cloned().unwrap();
+
+        assert!(matches!(by("GetMcpTools").1, Some(ToolDetail::Output { .. })));
+        assert!(matches!(
+            by("Glob").1,
+            Some(ToolDetail::Search { ref query, matches: Some(2), output: Some(ref out) }) if query == "*.js" && out == "src/math.js\ntest.js"
+        ));
+        let Some(ToolDetail::Search { output: Some(grep), .. }) = by("Grep").1 else { panic!("grep") };
+        assert!(grep.starts_with("./src/math.js:2: function add(a, b) {"), "{grep}");
+
+        let Some(ToolDetail::Todo { items }) = by("UpdateTodos").1 else { panic!("todos") };
+        assert_eq!(items.len(), 10);
+        assert_eq!(items[0].status, TodoStatus::Completed);
+        assert_eq!(items[4].status, TodoStatus::InProgress);
+        assert_eq!(items[9].status, TodoStatus::Pending);
+        // A merge names six items; the row shows all ten, as merged.
+        let merged = r#"{"type":"tool_call","subtype":"completed","call_id":"t2","tool_call":{"updateTodosToolCall":{"args":{"merge":true,"todos":[{"id":"5","content":"Run npm test","status":"TODO_STATUS_COMPLETED"}]},"result":{"success":{"todos":[{"id":"1","content":"Make a list","status":"TODO_STATUS_COMPLETED"},{"id":"5","content":"Run npm test","status":"TODO_STATUS_COMPLETED"},{"id":"6","content":"Fix it","status":"TODO_STATUS_PENDING"}]}}}}}"#;
+        let merged: Value = serde_json::from_str(merged).unwrap();
+        let Some(ToolDetail::Todo { items }) = parse_tool_call(merged.as_object().unwrap()).unwrap().detail else { panic!("merge") };
+        assert_eq!(items.len(), 3);
+
+        // A shell that exited non-zero answers with `failure`, not `success`.
+        let (_, shell, failed) = by("Shell");
+        assert!(failed, "a failing npm test is a failed row");
+        let Some(ToolDetail::Command { exit_code: Some(1), output: Some(output), .. }) = shell else { panic!("shell") };
+        assert!(output.contains("AssertionError"), "{output}");
+
+        assert!(matches!(by("WebFetch").1, Some(ToolDetail::Fetch { output: Some(ref md), .. }) if md.contains("Example Domain")));
+
+        let edit = |file: &str| {
+            details
+                .iter()
+                .find_map(|(_, detail, _)| match detail {
+                    Some(ToolDetail::Edit { path, .. }) if path.ends_with(file) => detail.clone(),
+                    _ => None,
+                })
+                .unwrap()
+        };
+        let ToolDetail::Edit { added: Some(1), removed: Some(1), hunks: Some(hunks), .. } = edit("src/math.js") else { panic!("edit") };
+        assert!(hunks[0].before.contains("a - b") && hunks[0].after.contains("a + b"));
+        let ToolDetail::Edit { hunks: Some(created), .. } = edit("NOTES.md") else { panic!("write") };
+        assert_eq!(created[0].before, "");
+
+        let Some(ToolDetail::Agent { description, output: Some(report), .. }) = by("Task").1 else { panic!("task") };
+        assert_eq!(description, "Count math.js lines");
+        assert!(report.ends_with("10"), "{report}");
+    }
+
+    #[test]
+    fn a_crew_tool_called_through_the_shell_is_named_as_crews() {
+        let args = json!({ "command": "/Users/me/crew/target/debug/crewd call list_agents '{}'" });
+        assert_eq!(tool_label("Shell", args.as_object().unwrap()), "Crew list agents");
+        let result = json!({ "success": { "exitCode": 0, "stdout": "[{\"name\": \"Ada\"}]" } });
+        assert_eq!(
+            tool_detail("Shell", args.as_object().unwrap(), result.as_object()),
+            Some(ToolDetail::Output { text: "[{\"name\": \"Ada\"}]".into() })
+        );
     }
 
     #[test]

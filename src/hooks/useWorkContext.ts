@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import * as api from "../lib/api";
 import { joinStrips, splitStrip, tabPlace } from "../lib/strips";
+import type { PlaceOf } from "../lib/tabGroups";
 import { lastUsed, type TabRegistry } from "../lib/tabs";
 import type { Session, Tab, Workspace, Worktree } from "../lib/types";
 import { asListed, contextId, placePath, sessionPath, worktreeHue, type TabScope } from "../lib/worktrees";
@@ -23,7 +24,17 @@ export function useWorkContext(
   const { scope } = useTabScope();
   const chosen = worktrees.active;
   const context = workspace && chosen ? contextId(workspace, chosen.path, scope) : (workspace?.id ?? null);
-  const tabs = useTabs(context);
+  // All together, with worktrees to tell apart, each tab names its own: its
+  // chip on the strip, and whose tabs fold together.
+  const { known, list } = worktrees;
+  const tabPlaceOf = useMemo<PlaceOf | null>(
+    () =>
+      scope === "all" && workspace && known && list.length > 1
+        ? (tab) => tabPlace(tab, workspace, list, sessions)
+        : null,
+    [known, list, scope, sessions, workspace],
+  );
+  const tabs = useTabs(context, tabPlaceOf);
 
   // A session whose worktree git no longer lists works in the main checkout;
   // until git answers, its worktree is taken at its word.
@@ -168,6 +179,7 @@ export function useWorkContext(
     hues,
     pathOf,
     placeOf,
+    tabPlaceOf,
   };
 }
 

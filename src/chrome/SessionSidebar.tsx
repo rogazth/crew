@@ -1,9 +1,8 @@
-import { FolderIcon, GitBranchIcon, MagnifyingGlassIcon, PlusIcon, XIcon, type Icon } from "@phosphor-icons/react";
+import { ChevronRightIcon, FolderIcon, GitBranchIcon, PlusIcon, RotateCwIcon, SearchIcon, XIcon, type LucideIcon as Icon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
 import { ActionMenu } from "./ActionMenu";
 import { AgentAvatar } from "./AgentAvatar";
 import {
-  CHANGE_FACE,
   COPY_NAME,
   COPY_PATH,
   DELETE,
@@ -23,6 +22,7 @@ import { RenameRow } from "./RenameRow";
 import { SidebarPrefsMenu } from "./SidebarPrefsMenu";
 import { SortableItem, SortableList } from "./SortableList";
 import { StatusDot } from "./StatusDot";
+import { useNow } from "../hooks/useNow";
 import { useSidebarPrefs } from "../hooks/useSidebarPrefs";
 import { commandKeys, type CommandId } from "../lib/commands";
 import { IS_MAC, isDeleteChord } from "../lib/hotkey";
@@ -34,7 +34,15 @@ import {
   type ClickModifiers,
   type Selection,
 } from "../lib/selection";
-import { arrangeSessions, canReorder, shows, type Arranged, type SidebarPrefs } from "../lib/sidebarPrefs";
+import {
+  arrangeSessions,
+  canReorder,
+  shows,
+  trimSection,
+  type Arranged,
+  type SidebarPrefs,
+  type Trimmed,
+} from "../lib/sidebarPrefs";
 import { STATUS_ORDER, statusLabel } from "../lib/status";
 import { elapsed } from "../lib/time";
 import type { Session, SessionStatus, Workspace, Worktree } from "../lib/types";
@@ -63,12 +71,15 @@ export type SessionSidebarProps = {
   onReorder: (ids: string[]) => void;
   /** The workspace's long-running commands, under its worktrees. Hidden while searching sessions. */
   commands?: ReactNode;
+  /** Reads the worktrees and sessions again, for changes made outside this window. */
+  onRefresh: () => Promise<void>;
 };
 
 type Menu =
   | { kind: "session"; point: MenuPoint; session: Session }
   | { kind: "worktree"; point: MenuPoint; tree: Worktree };
 
+const SWITCH_HERE: MenuAction = { id: "switch", label: "Switch to Worktree", icon: "open", hotkey: "O" };
 const NEW_AGENT_HERE: MenuAction = { id: "new-agent", label: "New Agent Here", icon: "agent", hotkey: "A" };
 const NEW_SESSION_HERE: MenuAction = { id: "new-session", label: "New Session Here", icon: "terminal", hotkey: "S" };
 const COPY_BRANCH: MenuAction = { id: "copy-branch", label: "Copy Branch", icon: "branch", hotkey: "B" };
@@ -81,7 +92,6 @@ function sessionActions(session: Session): MenuEntry[] {
   return tidy([
     OPEN,
     EDIT,
-    CHANGE_FACE,
     SEPARATOR,
     { id: "notifications", label: "Notifications", icon: "bell", hotkey: "N", checked: session.notifications },
     ...(session.status === "done" ? [MARK_READ] : []),
@@ -91,8 +101,9 @@ function sessionActions(session: Session): MenuEntry[] {
   ]);
 }
 
-function worktreeActions(tree: Worktree): MenuEntry[] {
+function worktreeActions(tree: Worktree, current: boolean): MenuEntry[] {
   return tidy([
+    ...(current ? [] : [SWITCH_HERE, SEPARATOR]),
     NEW_AGENT_HERE,
     NEW_SESSION_HERE,
     SEPARATOR,
@@ -125,7 +136,11 @@ export function SessionSidebar(props: SessionSidebarProps) {
   const [prefs, setPrefs] = useSidebarPrefs();
   const [renaming, setRenaming] = useState<string | null>(null);
   const [menu, setMenu] = useState<Menu | null>(null);
-  const [opened, setOpened] = useState<Set<string>>(() => new Set());
+  const [refreshing, setRefreshing] = useState(false);
+  // A worktree folded or unfolded by hand; the rest follow the default: open while on screen.
+  const [folds, setFolds] = useState<Map<string, boolean>>(() => new Map());
+  // Sections unfolded past the limit, as `agents:<path>` or `terminals:<path>`; for this run only.
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const panel = useRef<HTMLDivElement>(null);
   const filtering = query.trim().length > 0;
 
@@ -160,13 +175,33 @@ export function SessionSidebar(props: SessionSidebarProps) {
     [filtering, placed, prefs?.scope, props.activeWorktree, props.worktrees],
   );
 
+  // A row ages out of the recency without anything else changing.
+  const now = useNow(60_000, prefs !== null && prefs.recency !== "any");
+
+  // What each section lists after the recency and the limit. A search looks past both.
+  const listed = useMemo(() => {
+    const out = new Map<string, Record<keyof Arranged, Trimmed>>();
+    for (const [path, mine] of placed) {
+      const trim = (key: keyof Arranged): Trimmed =>
+        !prefs || filtering || expanded.has(`${key}:${path}`)
+          ? { shown: mine[key], hidden: 0 }
+          : trimSection(mine[key], prefs, props.activeSessionId, now);
+      out.set(path, { agents: trim("agents"), terminals: trim("terminals") });
+    }
+    return out;
+  }, [expanded, filtering, now, placed, prefs, props.activeSessionId]);
+
+  const visible = useCallback(
+    (path: string) => {
+      const mine = listed.get(path);
+      return [...(mine?.agents.shown ?? []), ...(mine?.terminals.shown ?? [])];
+    },
+    [listed],
+  );
+
   const order = useMemo(
-    () =>
-      shown.flatMap((tree) => {
-        const mine = placed.get(tree.path);
-        return [...(mine?.agents ?? []), ...(mine?.terminals ?? [])].map((session) => session.id);
-      }),
-    [placed, shown],
+    () => shown.flatMap((tree) => visible(tree.path).map((session) => session.id)),
+    [shown, visible],
   );
 
   // The open session is the one-item selection. A multi-selection is held against
@@ -209,18 +244,18 @@ export function SessionSidebar(props: SessionSidebarProps) {
     setMenu({ kind: "session", point, session });
   };
 
+  const refresh = () => {
+    if (refreshing) return;
+    setRefreshing(true);
+    void props.onRefresh().finally(() => setRefreshing(false));
+  };
+
   const closeSearch = () => {
     setQuery("");
     setSearching(false);
   };
 
-  const fold = (path: string, open: boolean) =>
-    setOpened((prev) => {
-      const next = new Set(prev);
-      if (open) next.add(path);
-      else next.delete(path);
-      return next;
-    });
+  const fold = (path: string, open: boolean) => setFolds((prev) => new Map(prev).set(path, open));
 
   // A press anywhere outside the panel puts the search away.
   useEffect(() => {
@@ -253,16 +288,21 @@ export function SessionSidebar(props: SessionSidebarProps) {
   });
 
   const draggable = prefs !== null && canReorder(prefs, filtering) && renaming === null;
-  const firstVisible = () => shown.flatMap((tree) => {
-    const mine = placed.get(tree.path);
-    return [...(mine?.agents ?? []), ...(mine?.terminals ?? [])];
-  })[0];
+  const firstVisible = () => shown.flatMap((tree) => visible(tree.path))[0];
+
+  const unfold = (key: string, open: boolean) =>
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (open) next.add(key);
+      else next.delete(key);
+      return next;
+    });
 
   return (
     <div ref={panel} data-sidebar-panel onKeyDown={onPanelKey} className="flex min-h-0 flex-1 flex-col">
       <div className="shrink-0 px-3 pt-3 pb-2" title={props.workspace.path}>
         <div className="truncate text-[15px] font-semibold tracking-[-0.01em]">{props.workspace.name}</div>
-        <div className="truncate text-[11px] text-kumo-subtle">{shortenPath(props.workspace.path)}</div>
+        <div className="truncate text-[11px] text-text-muted">{shortenPath(props.workspace.path)}</div>
       </div>
 
       <div className="shrink-0 px-2">
@@ -282,9 +322,10 @@ export function SessionSidebar(props: SessionSidebarProps) {
           />
         ) : (
           <div className="flex h-8 items-center gap-0.5 pl-2">
-            <span className="min-w-0 flex-1 truncate text-kumo-subtle">Worktrees</span>
+            <span className="min-w-0 flex-1 truncate text-text-muted">Worktrees</span>
             <HeaderButton icon={PlusIcon} label={`New worktree ${commandKeys("new-worktree")}`} onClick={props.onNewWorktree} />
-            <HeaderButton icon={MagnifyingGlassIcon} label="Find  /" onClick={() => setSearching(true)} />
+            <HeaderButton icon={RotateCwIcon} label="Refresh" spinning={refreshing} onClick={refresh} />
+            <HeaderButton icon={SearchIcon} label="Find  /" onClick={() => setSearching(true)} />
             {prefs && <SidebarPrefsMenu prefs={prefs} onChange={setPrefs} />}
           </div>
         )}
@@ -295,13 +336,22 @@ export function SessionSidebar(props: SessionSidebarProps) {
           shown.map((tree) => {
             const index = props.worktrees.indexOf(tree);
             const isCurrent = tree.path === props.activeWorktree;
-            const open = isCurrent || opened.has(tree.path) || filtering;
-            const mine = placed.get(tree.path) ?? { agents: [], terminals: [] };
+            const open = filtering || (folds.get(tree.path) ?? isCurrent);
+            const mine = listed.get(tree.path) ?? { agents: { shown: [], hidden: 0 }, terminals: { shown: [], hidden: 0 } };
+            const agents = mine.agents.shown;
+            const terminals = mine.terminals.shown;
+            const more = (key: keyof Arranged) => (
+              <MoreRow
+                hidden={mine[key].hidden}
+                open={expanded.has(`${key}:${tree.path}`)}
+                onToggle={(next) => unfold(`${key}:${tree.path}`, next)}
+              />
+            );
             const everyone = props.sessions.filter(
               (session) => sessionPath(session, props.workspace, props.worktrees) === tree.path,
             );
             return (
-              <div key={tree.path} className={`mt-1 rounded-xl ${isCurrent ? "bg-card ring-1 ring-hairline" : ""}`}>
+              <div key={tree.path} className="mt-0.5 first:mt-0">
                 <WorktreeHeader
                   tree={tree}
                   current={isCurrent}
@@ -309,30 +359,30 @@ export function SessionSidebar(props: SessionSidebarProps) {
                   sessions={everyone}
                   showDiff={shows(prefs, "diff")}
                   keys={index < 9 ? commandKeys(`worktree-${index + 1}` as CommandId) : ""}
-                  onSelect={() => props.onSelectWorktree(tree.path)}
                   onFold={(next) => fold(tree.path, next)}
                   onAdd={() => props.onNewAgent(tree.path)}
                   onMenu={(point) => setMenu({ kind: "worktree", point, tree })}
                   onRemove={() => !tree.main && props.onRemoveWorktree(tree)}
                 />
                 {open && (
-                  <div className="px-1.5 pb-1.5">
-                    {mine.agents.length > 0 && (
+                  <div className="pb-2 pl-2">
+                    {agents.length > 0 && (
                       <div className="grid grid-cols-3 gap-0.5">
-                        <SortableList ids={mine.agents.map((s) => s.id)} disabled={!draggable} onReorder={props.onReorder}>
-                          {mine.agents.map((session, at) => (
-                            <SortableItem key={session.id} id={session.id} index={at} group={`agents:${tree.path}`} disabled={!draggable}>
+                        <SortableList ids={agents.map((s) => s.id)} disabled={!draggable || mine.agents.hidden > 0} onReorder={props.onReorder}>
+                          {agents.map((session, at) => (
+                            <SortableItem key={session.id} id={session.id} index={at} group={`agents:${tree.path}`} disabled={!draggable || mine.agents.hidden > 0}>
                               <Tile {...card(session)} onEdit={() => props.onEdit(session)} />
                             </SortableItem>
                           ))}
                         </SortableList>
                       </div>
                     )}
-                    {mine.terminals.length > 0 && (
+                    {more("agents")}
+                    {terminals.length > 0 && (
                       <div className="flex flex-col gap-0.5 pt-0.5">
-                        <SortableList ids={mine.terminals.map((s) => s.id)} disabled={!draggable} onReorder={props.onReorder}>
-                          {mine.terminals.map((session, at) => (
-                            <SortableItem key={session.id} id={session.id} index={at} group={`terminals:${tree.path}`} disabled={!draggable}>
+                        <SortableList ids={terminals.map((s) => s.id)} disabled={!draggable || mine.terminals.hidden > 0} onReorder={props.onReorder}>
+                          {terminals.map((session, at) => (
+                            <SortableItem key={session.id} id={session.id} index={at} group={`terminals:${tree.path}`} disabled={!draggable || mine.terminals.hidden > 0}>
                               {session.id === renaming ? (
                                 <RenameRow
                                   className="h-8 px-2"
@@ -351,7 +401,8 @@ export function SessionSidebar(props: SessionSidebarProps) {
                         </SortableList>
                       </div>
                     )}
-                    {mine.agents.length + mine.terminals.length === 0 && (
+                    {more("terminals")}
+                    {agents.length + terminals.length + mine.agents.hidden + mine.terminals.hidden === 0 && (
                       <p className="px-2 py-1.5 text-[12px] text-placeholder">
                         {filtering
                           ? "No matches"
@@ -384,7 +435,7 @@ export function SessionSidebar(props: SessionSidebarProps) {
               return;
             }
             if (id === "open") props.onSelect(session);
-            if (id === "edit" || id === "face") props.onEdit(session);
+            if (id === "edit") props.onEdit(session);
             if (id === "notifications") props.onToggleNotifications(session);
             if (id === "mark-read") props.onMarkRead(session);
             if (id === "copy-name") void navigator.clipboard.writeText(session.name);
@@ -398,10 +449,11 @@ export function SessionSidebar(props: SessionSidebarProps) {
           key={menu.tree.path}
           point={menu.point}
           title={worktreeLabel(menu.tree)}
-          actions={worktreeActions(menu.tree)}
+          actions={worktreeActions(menu.tree, menu.tree.path === props.activeWorktree)}
           onPick={(id) => {
             const tree = menu.tree;
             setMenu(null);
+            if (id === "switch") props.onSelectWorktree(tree.path);
             if (id === "new-agent") props.onNewAgent(tree.path);
             if (id === "new-session") props.onNewSession(tree.path);
             if (id === "copy-path") void navigator.clipboard.writeText(tree.path);
@@ -415,7 +467,17 @@ export function SessionSidebar(props: SessionSidebarProps) {
   );
 }
 
-function HeaderButton({ icon: Glyph, label, onClick }: { icon: Icon; label: string; onClick: () => void }) {
+function HeaderButton({
+  icon: Glyph,
+  label,
+  spinning = false,
+  onClick,
+}: {
+  icon: Icon;
+  label: string;
+  spinning?: boolean;
+  onClick: () => void;
+}) {
   return (
     <button
       type="button"
@@ -423,16 +485,17 @@ function HeaderButton({ icon: Glyph, label, onClick }: { icon: Icon; label: stri
       title={label}
       data-tauri-drag-region="false"
       onClick={onClick}
-      className="grid size-6 shrink-0 place-items-center rounded-md text-kumo-subtle outline-none transition-colors hover:bg-hover hover:text-kumo-default focus-visible:bg-hover"
+      className="grid size-6 shrink-0 place-items-center rounded-md text-icon outline-none transition-colors hover:bg-hover hover:text-text focus-visible:bg-hover"
     >
-      <Glyph className="size-4" />
+      <Glyph className={`size-4 ${spinning ? "animate-spin" : ""}`} />
     </button>
   );
 }
 
 /**
- * A worktree's line. Clicked, it becomes the one on screen; ←/→ fold it; its
- * plus starts an agent there. Folded, it shows who works there and how loud.
+ * A worktree's line. A click or ←/→ folds it; its plus starts an agent there;
+ * opening one of its sessions, its menu or ⌥⌘1‥9 makes it the one on screen.
+ * Folded, it shows who works there and how loud.
  */
 function WorktreeHeader({
   tree,
@@ -441,7 +504,6 @@ function WorktreeHeader({
   sessions,
   showDiff,
   keys,
-  onSelect,
   onFold,
   onAdd,
   onMenu,
@@ -453,7 +515,6 @@ function WorktreeHeader({
   sessions: Session[];
   showDiff: boolean;
   keys: string;
-  onSelect: () => void;
   onFold: (open: boolean) => void;
   onAdd: () => void;
   onMenu: (point: MenuPoint) => void;
@@ -461,7 +522,7 @@ function WorktreeHeader({
 }) {
   const faces = sessions.filter((session) => session.kind === "agent").slice(0, 3);
   function onKeyDown(event: KeyboardEvent<HTMLButtonElement>) {
-    if ((event.key === "ArrowLeft" || event.key === "ArrowRight") && !current) {
+    if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
       if ((event.key === "ArrowRight") === open) return;
       event.preventDefault();
       onFold(event.key === "ArrowRight");
@@ -473,6 +534,7 @@ function WorktreeHeader({
       onRemove();
     }
   }
+  const Glyph = tree.branch || !tree.main ? GitBranchIcon : FolderIcon;
   return (
     <div className="group/tree relative">
       <button
@@ -481,44 +543,67 @@ function WorktreeHeader({
         data-tauri-drag-region="false"
         aria-current={current ? "true" : undefined}
         aria-expanded={open}
-        title={`${tree.path}${keys ? `  ${keys}` : ""}`}
-        onClick={onSelect}
+        title={`${tree.path}${keys ? `  ${keys} to switch` : ""}`}
+        onClick={() => onFold(!open)}
         onContextMenu={(event) => onMenu(menuFromEvent(event))}
         onKeyDown={onKeyDown}
-        className="flex h-9 w-full items-center gap-2 rounded-xl px-2.5 text-left outline-none hover:bg-hover focus-visible:bg-hover focus-visible:ring-1 focus-visible:ring-border-strong"
+        className="flex h-8 w-full items-center gap-2 rounded-chrome pr-2 pl-8 text-left outline-none transition-colors hover:bg-hover focus-visible:bg-hover focus-visible:ring-1 focus-visible:ring-border-strong"
       >
-        {tree.branch || !tree.main ? (
-          <GitBranchIcon className={`size-4 shrink-0 ${current ? "" : "text-kumo-subtle"}`} />
-        ) : (
-          <FolderIcon className={`size-4 shrink-0 ${current ? "" : "text-kumo-subtle"}`} />
-        )}
-        <span className={`min-w-0 flex-1 truncate ${current ? "font-semibold" : ""}`}>{worktreeLabel(tree)}</span>
+        <span className={`min-w-0 flex-1 truncate ${current ? "font-semibold text-text" : "text-text/85"}`}>
+          {worktreeLabel(tree)}
+        </span>
         {!open && faces.length > 0 && (
-          <span className="flex -space-x-1.5">
+          <span className="flex -space-x-1.5 transition-opacity group-hover/tree:opacity-0">
             {faces.map((session) => (
               <AgentAvatar key={session.id} seed={session.id} bare className="size-5" />
             ))}
           </span>
         )}
         {open && showDiff && (tree.add > 0 || tree.del > 0) && (
-          <span className="shrink-0 text-[11px] tabular-nums group-hover/tree:opacity-0">
-            <span className="text-kumo-success">+{tree.add}</span>{" "}
-            <span className="text-kumo-danger">−{tree.del}</span>
+          <span className="shrink-0 text-[11px] tabular-nums transition-opacity group-hover/tree:opacity-0">
+            <span className="text-success">+{tree.add}</span> <span className="text-danger">−{tree.del}</span>
           </span>
         )}
-        {!open && <StatusDot status={loudest(sessions)} />}
+        {!open && (
+          <span className="transition-opacity group-hover/tree:opacity-0">
+            <StatusDot status={loudest(sessions)} />
+          </span>
+        )}
       </button>
+      {/* The branch mark turns into the fold's caret under the pointer, as Linear's teams do; the row is the button. */}
+      <span aria-hidden className="pointer-events-none absolute top-1 left-1.5 grid size-6 place-items-center text-icon">
+        <Glyph className={`size-4 transition-opacity group-hover/tree:opacity-0 ${current ? "text-text" : ""}`} />
+        <ChevronRightIcon
+          className={`absolute size-3.5 opacity-0 transition-[opacity,transform] duration-150 group-hover/tree:opacity-100 ${open ? "rotate-90" : ""}`}
+        />
+      </span>
       <button
         type="button"
         tabIndex={-1}
         aria-label={`New agent in ${worktreeLabel(tree)}`}
         title={`New agent in ${worktreeLabel(tree)}`}
         onClick={onAdd}
-        className="absolute top-1.5 right-1.5 grid size-6 place-items-center rounded-md text-kumo-subtle opacity-0 transition-opacity group-hover/tree:opacity-100 hover:bg-hover hover:text-kumo-default"
+        className="absolute top-1 right-1 grid size-6 place-items-center rounded-md text-icon opacity-0 transition-opacity group-hover/tree:opacity-100 hover:bg-hover hover:text-text"
       >
         <PlusIcon className="size-3.5" />
       </button>
     </div>
+  );
+}
+
+/** Under a section the limit or the recency cut short: how many it left out, and a way to see them. */
+function MoreRow({ hidden, open, onToggle }: { hidden: number; open: boolean; onToggle: (open: boolean) => void }) {
+  if (!open && hidden === 0) return null;
+  return (
+    <button
+      type="button"
+      data-nav
+      data-tauri-drag-region="false"
+      onClick={() => onToggle(!open)}
+      className="mt-0.5 flex h-7 w-full items-center rounded-md px-2 text-left text-[12px] text-text-muted outline-none hover:bg-hover hover:text-text focus-visible:bg-hover"
+    >
+      {open ? "Show less" : `${hidden} more`}
+    </button>
   );
 }
 
@@ -544,7 +629,7 @@ function SearchField({
   const input = useCallback((node: HTMLInputElement | null) => node?.focus(), []);
   return (
     <div className="flex h-8 items-center gap-2 rounded-chrome bg-card pr-1 pl-2">
-      <MagnifyingGlassIcon className="size-3.5 shrink-0 text-kumo-subtle" />
+      <SearchIcon className="size-3.5 shrink-0 text-icon" />
       <input
         ref={input}
         value={query}
@@ -573,7 +658,7 @@ function SearchField({
         aria-label="Close search"
         onMouseDown={(event) => event.preventDefault()}
         onClick={onClose}
-        className="grid size-6 shrink-0 place-items-center rounded-md text-kumo-subtle hover:bg-hover hover:text-kumo-default"
+        className="grid size-6 shrink-0 place-items-center rounded-md text-icon hover:bg-hover hover:text-text"
       >
         <XIcon className="size-3.5" />
       </button>
@@ -644,9 +729,9 @@ function Tile({ session, prefs, active, selected, onSelect, onMenu, onClearSelec
 }
 
 const BADGE: Partial<Record<SessionStatus, string>> = {
-  "needs-input": "bg-kumo-warning",
-  done: "bg-kumo-info",
-  error: "bg-kumo-danger",
+  "needs-input": "bg-warning",
+  done: "bg-info",
+  error: "bg-danger",
 };
 
 /** Status rides the face's corner, like the unread dot on an app icon. */
@@ -696,7 +781,7 @@ function Row({
       <ProviderIcon provider={session.provider} className="size-4" />
       <span className={`min-w-0 flex-1 truncate ${active ? "font-medium" : ""}`}>{session.name}</span>
       {shows(prefs, "updated") && (
-        <span className="shrink-0 text-[12px] text-kumo-subtle tabular-nums">{elapsed(session.updatedAt)}</span>
+        <span className="shrink-0 text-[12px] text-text-muted tabular-nums">{elapsed(session.updatedAt)}</span>
       )}
       {shows(prefs, "status") && <StatusDot status={session.status} />}
     </button>

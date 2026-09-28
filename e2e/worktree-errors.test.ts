@@ -13,7 +13,7 @@ import {
   gitBranches,
   gitWorktrees,
   launchCrew,
-  MOD,
+  WORKTREE_MOD,
   pressChord,
   returnToWindow,
   waitFor,
@@ -31,10 +31,10 @@ after(async () => {
   await crew?.close();
 });
 
-/** ⌥⌘N with `branch`, ↵, and the dialog left open with whatever it says. */
+/** ⌃⌘N with `branch`, ↵, and the dialog left open with whatever it says. */
 async function tryWorktree(branch: string) {
   const page = crew.window;
-  await pressChord(crew, `${MOD}+Alt+n`);
+  await pressChord(crew, `${WORKTREE_MOD}+n`);
   const input = page.getByRole("textbox", { name: "Branch" });
   await input.waitFor();
   await input.fill(branch);

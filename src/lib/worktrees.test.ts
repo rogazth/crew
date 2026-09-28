@@ -7,7 +7,6 @@ import {
   parseContext,
   removalCost,
   sessionPath,
-  shortBranch,
   worktreeOf,
 } from "./worktrees";
 
@@ -60,11 +59,6 @@ describe("worktreeOf", () => {
 });
 
 describe("branch names", () => {
-  it("shortens to the last segment", () => {
-    expect(shortBranch(tree("/wt/feat", "feat/avatars"))).toBe("avatars");
-    expect(shortBranch(tree("/wt/x", null))).toBe("Detached");
-  });
-
   it("rejects what git would", () => {
     expect(branchError("feat/sidebar-v2")).toBeNull();
     expect(branchError("")).toBe("Branch is required");

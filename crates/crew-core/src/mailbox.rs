@@ -43,7 +43,7 @@ CREATE INDEX IF NOT EXISTS mailbox_waiting_idx
 /// Who wrote it, when that was not an agent: `terminal` or `user`. A terminal
 /// session has no turns to hand a reply to, and the user reads the reply in the
 /// chat, so both change what the envelope tells the agent about answering.
-pub const MIGRATION_V18: &str = "ALTER TABLE mailbox ADD COLUMN from_kind TEXT;";
+pub const MIGRATION_FROM_KIND: &str = "ALTER TABLE mailbox ADD COLUMN from_kind TEXT;";
 
 /// The header a letter is handed over under.
 ///

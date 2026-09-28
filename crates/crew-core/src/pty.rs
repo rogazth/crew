@@ -43,6 +43,8 @@ pub struct SpawnOptions {
     /// instead of holding the child back. A server nobody is looking at must
     /// not block on write.
     pub supervised: Option<Arc<dyn PtySink>>,
+    /// Whether the window paints the terminal dark, for COLORFGBG.
+    pub dark: Option<bool>,
 }
 
 pub trait PtyEvents: Send + Sync {
@@ -320,6 +322,35 @@ impl PtyHost {
         }
     }
 
+    /// Like `spawn`, but a process still running under `id` is kept: it gets
+    /// the new size and its stream id comes back. `prepare` runs only when a
+    /// process is started, so what it mints (a token, a lease number) is never
+    /// made for one that is kept.
+    pub fn open<F>(
+        &self,
+        id: String,
+        cwd: String,
+        command: Vec<String>,
+        cols: u16,
+        rows: u16,
+        prepare: F,
+    ) -> Result<u32, String>
+    where
+        F: FnOnce(Vec<String>) -> Result<(Vec<String>, SpawnOptions), String>,
+    {
+        let _spawning = self.inner.spawning.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(live) = self.get(&id).filter(|live| !live.exited.load(Ordering::Acquire)) {
+            let _ = resize_fd(live.master_fd, cols.max(2), rows.max(2));
+            return Ok(live.stream_id);
+        }
+        if let Some(prev) = self.remove(&id) {
+            let _ = terminate(&prev);
+            close_fd(prev.master_fd);
+        }
+        let (command, options) = prepare(command)?;
+        self.spawn_locked(id, cwd, command, cols, rows, options)
+    }
+
     /// `command` empty spawns the login shell; otherwise argv[0] is resolved on PATH.
     pub fn spawn(
         &self,
@@ -328,8 +359,9 @@ impl PtyHost {
         command: Vec<String>,
         cols: u16,
         rows: u16,
+        dark: Option<bool>,
     ) -> Result<u32, String> {
-        self.spawn_with(id, cwd, command, cols, rows, SpawnOptions::default())
+        self.spawn_with(id, cwd, command, cols, rows, SpawnOptions { dark, ..SpawnOptions::default() })
     }
 
     pub fn spawn_with(
@@ -339,7 +371,7 @@ impl PtyHost {
         command: Vec<String>,
         cols: u16,
         rows: u16,
-        mut options: SpawnOptions,
+        options: SpawnOptions,
     ) -> Result<u32, String> {
         let _spawning = self.inner.spawning.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(prev) = self.remove(&id) {
@@ -347,6 +379,19 @@ impl PtyHost {
             let _ = terminate(&prev);
             close_fd(prev.master_fd);
         }
+        self.spawn_locked(id, cwd, command, cols, rows, options)
+    }
+
+    /// `spawn_with` once the spawning lock is held and `id` is free.
+    fn spawn_locked(
+        &self,
+        id: String,
+        cwd: String,
+        command: Vec<String>,
+        cols: u16,
+        rows: u16,
+        mut options: SpawnOptions,
+    ) -> Result<u32, String> {
         let on_exit = options.on_exit.take();
         let spawned = spawn_unix(
             self,
@@ -358,6 +403,7 @@ impl PtyHost {
             options.env,
             on_exit,
             options.supervised,
+            options.dark,
         );
         match spawned {
             Ok(stream) => Ok(stream),
@@ -456,6 +502,10 @@ impl PtyHost {
         Ok(attached)
     }
 
+    pub fn is_live(&self, id: &str) -> bool {
+        self.get(id).is_some()
+    }
+
     pub fn kill(&self, id: &str) {
         let _spawning = self.inner.spawning.lock().unwrap_or_else(|e| e.into_inner());
         match self.remove(id) {
@@ -499,6 +549,7 @@ fn spawn_unix(
     env: Vec<(String, String)>,
     on_exit: OnExit,
     sink: Option<Arc<dyn PtySink>>,
+    dark: Option<bool>,
 ) -> Result<u32, (String, OnExit)> {
     use std::fs::File;
     use std::os::unix::io::FromRawFd;
@@ -512,7 +563,7 @@ fn spawn_unix(
         Ok(pair) => pair,
         Err(err) => return Err((err, on_exit)),
     };
-    let mut cmd = match pty_command(&program, &args, &workdir, slave) {
+    let mut cmd = match pty_command(&program, &args, &workdir, slave, dark) {
         Ok(cmd) => cmd,
         Err(err) => {
             close_fd(master);
@@ -644,6 +695,7 @@ fn pty_command(
     args: &[String],
     workdir: &std::path::Path,
     slave: i32,
+    dark: Option<bool>,
 ) -> Result<std::process::Command, String> {
     use std::os::unix::process::CommandExt;
     use std::process::Command;
@@ -671,13 +723,12 @@ fn pty_command(
     if let Some(home) = home_dir() {
         cmd.env("HOME", &home);
     }
-    // Launched from inside a Claude Code session, the app would pass these on
-    // and claude would treat the terminal as a child session with no transcript.
-    for (key, _) in std::env::vars_os() {
-        let key = key.to_string_lossy();
-        if key == "CLAUDECODE" || key.starts_with("CLAUDE_CODE_") {
-            cmd.env_remove(key.as_ref());
-        }
+    crate::child_env::scrub(&mut cmd);
+    // The background as rxvt spells it (white 15, black 0). An OSC 11 reply has
+    // to cross the network from the window, and CLIs that wait a few dozen ms
+    // for it (Cursor waits 60) then guess dark without this.
+    if let Some(dark) = dark {
+        cmd.env("COLORFGBG", if dark { "15;0" } else { "0;15" });
     }
     // A parent that disabled colour for its own logs must not decide for the terminal.
     cmd.env_remove("NO_COLOR");
@@ -984,7 +1035,7 @@ mod tests {
                 let gate = gate.clone();
                 thread::spawn(move || {
                     gate.wait();
-                    host.spawn(id, "/".to_string(), command, 80, 24)
+                    host.spawn(id, "/".to_string(), command, 80, 24, None)
                 })
             })
             .collect();
@@ -1004,10 +1055,39 @@ mod tests {
         assert_eq!(survivors, 0, "kill left {survivors} children running");
     }
 
+    #[test]
+    fn open_keeps_a_live_process() {
+        let host = PtyHost::new();
+        let id = "session:reuse".to_string();
+        let command = vec!["/bin/sh".to_string(), "-c".to_string(), "sleep 30".to_string()];
+        let first = host.open(id.clone(), "/".into(), command.clone(), 80, 24, |c| Ok((c, SpawnOptions::default()))).expect("first open");
+        let pid = host.get(&id).expect("live").pid;
+        let second = host.open(id.clone(), "/".into(), command, 100, 30, |c| Ok((c, SpawnOptions::default()))).expect("second open");
+        assert_eq!(first, second, "open replaced the stream");
+        assert_eq!(host.get(&id).expect("still live").pid, pid, "open replaced the process");
+        host.kill(&id);
+    }
+
+    #[test]
+    fn the_window_background_reaches_the_child_as_colorfgbg() {
+        let colorfgbg = |dark| {
+            let (master, slave) = open_pty(80, 24).expect("open pty");
+            let cmd = pty_command("/bin/sh", &[], std::path::Path::new("/"), slave, dark).expect("command");
+            close_fd(slave);
+            close_fd(master);
+            cmd.get_envs()
+                .find(|(key, _)| *key == "COLORFGBG")
+                .and_then(|(_, value)| value.map(|v| v.to_string_lossy().into_owned()))
+        };
+        assert_eq!(colorfgbg(Some(true)).as_deref(), Some("15;0"));
+        assert_eq!(colorfgbg(Some(false)).as_deref(), Some("0;15"));
+        assert_eq!(colorfgbg(None), None);
+    }
+
     fn pty_child(script: &str) -> (i32, std::process::Child) {
         let (master, slave) = open_pty(80, 24).expect("open pty");
         let args = vec!["-c".to_string(), script.to_string()];
-        let child = pty_command("/bin/sh", &args, std::path::Path::new("/"), slave)
+        let child = pty_command("/bin/sh", &args, std::path::Path::new("/"), slave, None)
             .expect("command")
             .spawn()
             .expect("spawn");
@@ -1198,7 +1278,7 @@ mod tests {
         let host = PtyHost::new();
         let recorder = Arc::new(Recorder::default());
         host.set_events(recorder.clone());
-        host.spawn("t".into(), "/".into(), flood(20_000_000), 80, 24).expect("spawn");
+        host.spawn("t".into(), "/".into(), flood(20_000_000), 80, 24, None).expect("spawn");
         thread::sleep(Duration::from_millis(1500));
         let reached = emitted(&host, "t");
         host.kill("t");

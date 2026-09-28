@@ -58,7 +58,11 @@ impl Store {
         conn.pragma_update(None, "cache_size", -8192)
             .map_err(|e| e.to_string())?;
         migrate(&conn).map_err(|e| e.to_string())?;
-        settle_open_turns(&conn).map_err(|e| e.to_string())?;
+        // The seeded design profile keeps its working and waiting rows as seeded,
+        // so every status can be looked at without a live turn behind it.
+        if std::env::var_os("CREW_KEEP_STATUS").is_none() {
+            settle_open_turns(&conn).map_err(|e| e.to_string())?;
+        }
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
         })
@@ -73,6 +77,25 @@ impl Store {
 pub(crate) fn has_column(conn: &Connection, table: &str, column: &str) -> rusqlite::Result<bool> {
     conn.prepare("SELECT 1 FROM pragma_table_info(?1) WHERE name = ?2")?
         .exists(params![table, column])
+}
+
+const MIGRATION_REMOTES: &str = "CREATE TABLE IF NOT EXISTS remotes (
+   id         TEXT PRIMARY KEY,
+   name       TEXT NOT NULL,
+   host       TEXT NOT NULL,
+   port       INTEGER NOT NULL,
+   user       TEXT NOT NULL,
+   created_at INTEGER NOT NULL
+ );
+ CREATE UNIQUE INDEX IF NOT EXISTS remotes_endpoint ON remotes (host, port);";
+
+/// How `ssh` reaches a machine: a Host from ~/.ssh/config, or an address.
+/// Empty for a machine added before, which is reached at `host`.
+fn migrate_remotes_ssh(conn: &Connection) -> rusqlite::Result<()> {
+    if !has_column(conn, "remotes", "ssh")? {
+        conn.execute_batch("ALTER TABLE remotes ADD COLUMN ssh TEXT NOT NULL DEFAULT '';")?;
+    }
+    Ok(())
 }
 
 fn migrate(conn: &Connection) -> rusqlite::Result<()> {
@@ -295,10 +318,9 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         tx.commit()?;
     }
     if current < 18 {
+        // Machines the window connects to. Tokens stay in the keychain, not here.
         let tx = conn.unchecked_transaction()?;
-        if !has_column(&tx, "mailbox", "from_kind")? {
-            tx.execute_batch(crate::mailbox::MIGRATION_V18)?;
-        }
+        tx.execute_batch(MIGRATION_REMOTES)?;
         tx.execute(
             "INSERT INTO schema_migrations (version, applied_at) VALUES (18, ?1)",
             params![now_millis()],
@@ -307,7 +329,7 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
     }
     if current < 19 {
         let tx = conn.unchecked_transaction()?;
-        tx.execute_batch(crate::process::MIGRATION_V19)?;
+        migrate_remotes_ssh(&tx)?;
         tx.execute(
             "INSERT INTO schema_migrations (version, applied_at) VALUES (19, ?1)",
             params![now_millis()],
@@ -315,10 +337,35 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         tx.commit()?;
     }
     if current < 20 {
+        // A dev database from before the processes branch met master numbered
+        // its own migrations 18 to 20 and never got `remotes`; both are
+        // idempotent, so running them again is harmless.
         let tx = conn.unchecked_transaction()?;
-        crate::process::migrate_v20(&tx)?;
+        tx.execute_batch(MIGRATION_REMOTES)?;
+        migrate_remotes_ssh(&tx)?;
+        if !has_column(&tx, "mailbox", "from_kind")? {
+            tx.execute_batch(crate::mailbox::MIGRATION_FROM_KIND)?;
+        }
         tx.execute(
             "INSERT INTO schema_migrations (version, applied_at) VALUES (20, ?1)",
+            params![now_millis()],
+        )?;
+        tx.commit()?;
+    }
+    if current < 21 {
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch(crate::process::MIGRATION_PROCESSES)?;
+        tx.execute(
+            "INSERT INTO schema_migrations (version, applied_at) VALUES (21, ?1)",
+            params![now_millis()],
+        )?;
+        tx.commit()?;
+    }
+    if current < 22 {
+        let tx = conn.unchecked_transaction()?;
+        crate::process::migrate_unique_names(&tx)?;
+        tx.execute(
+            "INSERT INTO schema_migrations (version, applied_at) VALUES (22, ?1)",
             params![now_millis()],
         )?;
         tx.commit()?;
@@ -456,7 +503,7 @@ mod migration_tests {
                 "ask".into(),
             )
             .expect("session");
-            // Back to a v16 database: no column, no version row.
+            // Back to a v16 database: no column, no version row for it or anything after.
             store
                 .with(|conn| {
                     conn.execute_batch(

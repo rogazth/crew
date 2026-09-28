@@ -1,4 +1,4 @@
-import { ClockIcon } from "@phosphor-icons/react";
+import { ClockIcon } from "lucide-react";
 import { isValidCron } from "../lib/cron";
 import {
   clockOf,
@@ -96,10 +96,10 @@ export function RoutineTrigger({ schedule, onChange }: Props) {
                 type="button"
                 aria-pressed={on}
                 onClick={() => toggleDay(day)}
-                className={`h-7 w-11 rounded-md text-[12px] outline-none transition-colors focus-visible:ring-2 focus-visible:ring-kumo-focus/50 ${
+                className={`h-7 w-11 rounded-md text-[12px] outline-none transition-colors focus-visible:ring-2 focus-visible:ring-focus/50 ${
                   on
-                    ? "bg-kumo-brand text-kumo-inverse"
-                    : "bg-kumo-base text-kumo-subtle ring ring-kumo-line hover:text-kumo-default"
+                    ? "bg-accent text-inverse"
+                    : "bg-canvas text-text-muted ring ring-border hover:text-text"
                 }`}
               >
                 {WEEKDAYS[day]}
@@ -109,7 +109,7 @@ export function RoutineTrigger({ schedule, onChange }: Props) {
         </div>
       )}
 
-      <p className="flex items-center gap-1.5 text-[12px] text-kumo-subtle">
+      <p className="flex items-center gap-1.5 text-[12px] text-text-muted">
         <ClockIcon className="size-3.5 shrink-0" />
         {!valid ? (
           <span className="text-danger">

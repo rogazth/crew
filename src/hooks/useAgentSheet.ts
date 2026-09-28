@@ -1,8 +1,10 @@
 import { useCallback, useState } from "react";
 import type { AgentDraft } from "../chrome/AgentSheet";
+import { agentKind } from "../lib/agentMode";
 import { MIN_SAVE_MS } from "../lib/timing";
 import type { Session } from "../lib/types";
 import { setAgentFace } from "./useAgentFaces";
+import { useAgentMode } from "./useAgentMode";
 import type { useSessions } from "./useSessions";
 
 type Sessions = ReturnType<typeof useSessions>;
@@ -21,6 +23,7 @@ type Deps = {
 /** One sheet serves both create and edit. The sheet closes itself so its exit can play. */
 export function useAgentSheet({ create, update, openSession, createWorktree }: Deps) {
   const [sheet, setSheet] = useState<{ session: Session | null; worktree?: string } | null>(null);
+  const { mode } = useAgentMode();
 
   /** `worktree` preselects where it works: the plus on a worktree's line passes its own. */
   const newAgent = useCallback(
@@ -50,12 +53,13 @@ export function useAgentSheet({ create, update, openSession, createWorktree }: D
             })
           : null;
       const worktree = tree ? (tree.main ? null : tree.path) : place.kind === "worktree" ? place.path : null;
-      const session = await create("agent", { ...fields, worktree }, settle);
+      // The setting picks the surface: Crew's chat, or the provider's CLI in a terminal.
+      const session = await create(agentKind(mode), { ...fields, worktree }, settle);
       if (!session) return;
       setAgentFace(session.id, face);
       openSession(session);
     },
-    [create, createWorktree, openSession, sheet, update],
+    [create, createWorktree, mode, openSession, sheet, update],
   );
 
   return { sheet, newAgent, editAgent, close, save };

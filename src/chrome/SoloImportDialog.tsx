@@ -61,19 +61,19 @@ export function SoloImportDialog({ workspaceId, onClose, onImported }: Props) {
     <Overlay onClose={onClose} width="w-[520px]" label="Import from solo.yml">
       <div className="flex min-h-0 flex-col gap-3 overflow-y-auto p-4">
         <div className="text-[14px] font-semibold">Import from solo.yml</div>
-        {entries === null && !failure && <p className="text-kumo-subtle">Reading solo.yml…</p>}
-        {entries?.length === 0 && <p className="text-kumo-subtle">solo.yml lists no commands.</p>}
+        {entries === null && !failure && <p className="text-text-muted">Reading solo.yml…</p>}
+        {entries?.length === 0 && <p className="text-text-muted">solo.yml lists no commands.</p>}
         {entries && entries.length > 0 && (
           <ul className="flex flex-col gap-2">
             {entries.map((entry) => (
               <li
                 key={entry.name}
-                className={`flex flex-col gap-1 rounded-lg p-2.5 ring-1 ring-kumo-line ${entry.exists ? "opacity-60" : ""}`}
+                className={`flex flex-col gap-1 rounded-lg p-2.5 ring-1 ring-border ${entry.exists ? "opacity-60" : ""}`}
               >
                 <div className="flex items-baseline gap-2">
                   <span className="min-w-0 flex-1 truncate font-medium">{entry.name}</span>
                   {entry.exists && (
-                    <span className="shrink-0 text-[11px] text-kumo-subtle">Already exists, skipped</span>
+                    <span className="shrink-0 text-[11px] text-text-muted">Already exists, skipped</span>
                   )}
                 </div>
                 <code className="font-mono text-[12px] break-words whitespace-pre-wrap">
@@ -81,9 +81,9 @@ export function SoloImportDialog({ workspaceId, onClose, onImported }: Props) {
                   {entry.command}
                 </code>
                 {Object.keys(entry.env).length > 0 && (
-                  <code className="font-mono text-[11px] whitespace-pre-wrap text-kumo-subtle">{formatEnv(entry.env)}</code>
+                  <code className="font-mono text-[11px] whitespace-pre-wrap text-text-muted">{formatEnv(entry.env)}</code>
                 )}
-                <span className="text-[11px] text-kumo-subtle">
+                <span className="text-[11px] text-text-muted">
                   {[entry.autoStart ? "Starts with Crew" : "Starts by hand", entry.autoRestart ? "restarts on crash" : null]
                     .filter(Boolean)
                     .join(", ")}
@@ -92,7 +92,7 @@ export function SoloImportDialog({ workspaceId, onClose, onImported }: Props) {
             ))}
           </ul>
         )}
-        {failure && <p className="text-[12px] text-kumo-danger">{failure}</p>}
+        {failure && <p className="text-[12px] text-danger">{failure}</p>}
       </div>
       <Footer hints={[["esc", "cancel"]]}>
         <Button variant="ghost" className="text-[12px]" onClick={onClose}>

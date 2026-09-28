@@ -1,5 +1,6 @@
 import type { ILink, ILinkProvider, Terminal } from "@xterm/xterm";
 import * as api from "./api";
+import { homeFor } from "./client/registry";
 import { findPaths, homePath, resolvePath, type PathHit } from "./terminalPaths";
 
 export { openLink } from "./external";
@@ -35,7 +36,7 @@ export function filePathProvider(
       }
       void Promise.all(
         hits.map(async (hit) => {
-          const path = resolvePath(hit.path, cwd, homePath());
+          const path = resolvePath(hit.path, cwd, homeFor(cwd) ?? homePath());
           return (await exists(path)) ? toLink(hit, lineNumber, () => open(path)) : null;
         }),
       ).then((links) => {

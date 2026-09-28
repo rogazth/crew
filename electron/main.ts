@@ -1,15 +1,36 @@
 import { spawn, type ChildProcessByStdio } from "node:child_process";
 import { createInterface } from "node:readline";
+import { readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import type { Readable, Writable } from "node:stream";
 import { pathToFileURL } from "node:url";
-import { app, BrowserWindow, dialog, ipcMain, Menu, Notification, session, shell, type OpenDialogOptions } from "electron";
-import { installBrowser, registerBrowserIpc, startBrowserHost } from "./browser";
-import { sha } from "./build-info";
+import {
+  app,
+  BrowserWindow,
+  dialog,
+  ipcMain,
+  Menu,
+  nativeTheme,
+  Notification,
+  session,
+  type OpenDialogOptions,
+} from "electron";
+import {
+  installBrowser,
+  registerBrowserIpc,
+  registerFileIpc,
+  registerFileScheme,
+  serveFiles,
+  startBrowserHost,
+} from "./browser";
+import { openExternal } from "./external";
+import { release, sha } from "./build-info";
 import { connectAgent, unloadAgent, type AgentLink } from "./daemon-agent";
 import { decideLaunch, translocated, TRANSLOCATED_NOTICE, type Outcome } from "./daemon-agent-plan";
 import { buildMenu } from "./menu";
+import { registerRemoteIpc } from "./remotes";
+import { parseColorMode, type ColorMode } from "../src/lib/colorMode";
 import { watchForUpdates } from "./update";
 
 type DaemonInfo = { url: string; token: string };
@@ -104,22 +125,29 @@ async function quitAndStopEverything(): Promise<void> {
   app.quit();
 }
 
-// scripts/app.mjs moves a worktree's dev server off 1420 so checkouts run side by side.
-const DEV_PORT = Number(process.env.CREW_DEV_PORT) || 1420;
-
 // e2e loads the built renderer, so it never depends on (or talks to) whatever
 // dev server holds the dev port, and it runs under the packaged app's policy.
 const fromDist = app.isPackaged || process.env.CREW_RENDERER === "dist";
+// CREW_E2E hides the window. On macOS the app is an accessory: it stays out of
+// the Dock and does not activate when the window is created. `prohibited`
+// cannot create windows. Without the variable the dev app shows as usual.
+const e2e = process.env.CREW_E2E === "1";
+
+// Two checkouts can run side by side: each takes its own dev port (CREW_PORT);
+// scripts/app.mjs picks a free one for a git worktree.
+const DEV_PORT = Number(process.env.CREW_PORT) || 1420;
 
 function csp(): string {
-  const connect = fromDist
-    ? "ws://127.0.0.1:*"
-    : `http://localhost:${DEV_PORT} ws://localhost:${DEV_PORT} ws://127.0.0.1:*`;
+  // `ws:` and not a host list: a remote crewd is any tailnet address, added
+  // while the window is open, and a document's policy is fixed when it loads.
+  const connect = fromDist ? "ws:" : `http://localhost:${DEV_PORT} ws:`;
   return [
     "default-src 'self'",
     fromDist ? "script-src 'self'" : "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
     "style-src 'self' 'unsafe-inline'",
-    "img-src 'self' data: blob: https://www.google.com",
+    // crew-file: is an image file tab's picture, served from the worktree it was opened from.
+    // Google's favicon service answers from www.google.com by redirecting to a gstatic host.
+    "img-src 'self' data: blob: crew-file: https://www.google.com https://*.gstatic.com",
     "font-src 'self' data:",
     `connect-src ${connect}`,
     "object-src 'none'",
@@ -268,15 +296,34 @@ async function stopDaemon(): Promise<void> {
   });
 }
 
+// Kept by main, not crewd, so the window opens in the mode before the renderer loads.
+const colorModeFile = () => path.join(app.getPath("userData"), "color-mode");
+
+function readColorMode(): ColorMode {
+  try {
+    return parseColorMode(readFileSync(colorModeFile(), "utf8").trim());
+  } catch {
+    return parseColorMode(null);
+  }
+}
+
+/** The canvas colour in each mode, so the window never flashes the other one. */
+const windowBackground = () => (nativeTheme.shouldUseDarkColors ? "#0f0f0f" : "#ffffff");
+
 function createWindow(): void {
   win = new BrowserWindow({
     width: 1280,
     height: 800,
     minWidth: 800,
     minHeight: 520,
+    // A 0×0 window, or one moved off screen, changes layout or still activates
+    // the app. Hidden keeps 1280×800. A native open dialog has nothing to
+    // attach to while this stays hidden: dialog-open shows the window for
+    // that call. The dialog is not stubbed.
+    show: !e2e,
     titleBarStyle: "hiddenInset",
     trafficLightPosition: { x: 16, y: 12 },
-    backgroundColor: "#ffffff",
+    backgroundColor: windowBackground(),
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
       contextIsolation: true,
@@ -313,6 +360,8 @@ function registerIpc(): void {
   });
   ipcMain.handle("dialog-open", async (event, opts: OpenOptions = {}) => {
     const target = BrowserWindow.fromWebContents(event.sender) ?? win ?? undefined;
+    // The real dialog. A hidden window cannot parent it, so that run shows.
+    if (target && !target.isVisible()) target.show();
     const options: OpenDialogOptions = {
       properties: opts.directory
         ? ["openDirectory"]
@@ -328,33 +377,60 @@ function registerIpc(): void {
     return filePaths[0] ?? null;
   });
   ipcMain.handle("home-dir", () => homedir());
+  // The window's own zoom, for the chrome and chats; terminals and pages zoom themselves.
+  ipcMain.handle("app-zoom", (event, delta: number) => {
+    const contents = event.sender;
+    const level = delta === 0 ? 0 : Math.min(3, Math.max(-3, contents.getZoomLevel() + delta * 0.5));
+    contents.setZoomLevel(level);
+  });
+  ipcMain.handle("color-mode-get", () => nativeTheme.themeSource);
+  ipcMain.handle("color-mode-set", (_event, raw: string) => {
+    const mode = parseColorMode(raw);
+    nativeTheme.themeSource = mode;
+    writeFileSync(colorModeFile(), mode);
+  });
   ipcMain.handle("open-url", async (_event, url: string) => {
     if (!allowedUrl(url)) return;
-    await shell.openExternal(url);
+    await openExternal(url);
   });
   ipcMain.handle("notify", (_event, payload: { title: string; body: string }) => {
     if (!Notification.isSupported()) return;
     new Notification({ title: payload.title, body: payload.body }).show();
   });
   registerBrowserIpc();
+  registerFileIpc();
+  registerRemoteIpc(() => info);
 }
 
-app.setName("Crew");
-// userData follows the name, and crewd keeps its database and socket there: a dev
-// build on the installed app's folder would drive the installed app's sessions.
-// scripts/app.mjs points a git worktree at a folder inside it, so each checkout
-// gets its own database and removing the worktree removes it.
-if (!app.isPackaged) {
-  app.setPath("userData", process.env.CREW_DATA_DIR || path.join(app.getPath("appData"), "Crew Dev"));
-}
-app.setAboutPanelOptions({ applicationName: "Crew", applicationVersion: app.getVersion(), version: sha });
-
-// One Crew per data dir (the lock lives in userData, so worktrees each get
-// their own). A second one would run a second watchdog over the same crewd,
-// or a second child daemon on the same database; it hands over to the first.
+registerFileScheme();
+// Only the published release runs on the installed app's userData, where crewd
+// keeps its database and socket: any other build there would drive the installed
+// app's sessions. A dev build takes "Crew Dev"; a package built here (npm run
+// app:build, a bare electron-builder) is "Crew Local", which the name also gives
+// a keychain key of its own.
+// CREW_USER_DATA points either at a data set of its own, like the seeded one;
+// scripts/app.mjs points a git worktree at a folder inside it, so removing the
+// worktree removes its database. The release ignores it: started from a dev
+// terminal, it would open that checkout's data.
+const local = app.isPackaged && !release;
+app.setName(local ? "Crew Local" : "Crew");
+if (!(app.isPackaged && release))
+  app.setPath(
+    "userData",
+    process.env.CREW_USER_DATA || path.join(app.getPath("appData"), local ? "Crew Local" : "Crew Dev"),
+  );
+// One window per userData, so dev, local and release builds each run once. A
+// second launch on the same data would start a second crewd there; it only
+// brings the first one forward. crewd refuses a folder in use as well.
 const primary = app.requestSingleInstanceLock();
-if (!primary) app.quit();
+if (!primary) app.exit(0);
+app.setAboutPanelOptions({ applicationName: app.getName(), applicationVersion: app.getVersion(), version: sha });
+if (e2e && process.platform === "darwin") app.setActivationPolicy("accessory");
+// The sandboxed HOME has no login keychain; remote tokens go through a mock one.
+if (e2e) app.commandLine.appendSwitch("use-mock-keychain");
 
+// A second Crew on this data dir hands over to the first: it would run a
+// second watchdog over the same crewd, or a second child daemon.
 app.on("second-instance", () => {
   if (win) {
     if (win.isMinimized()) win.restore();
@@ -375,6 +451,9 @@ app.whenReady().then(async () => {
       },
     });
   });
+  serveFiles(session.defaultSession);
+  nativeTheme.themeSource = readColorMode();
+  nativeTheme.on("updated", () => win?.setBackgroundColor(windowBackground()));
   Menu.setApplicationMenu(buildMenu({ quitAndStopEverything: () => void quitAndStopEverything() }));
   registerIpc();
   let notice: string | null;

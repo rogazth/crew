@@ -1,4 +1,4 @@
-import { CircleNotchIcon } from "@phosphor-icons/react";
+import { LoaderCircleIcon } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { updateHost } from "../lib/host";
 import type { UpdateState } from "../lib/update";
@@ -40,7 +40,7 @@ type View = {
 function Working({ label }: { label: string }) {
   return (
     <div className="flex items-center gap-2">
-      <CircleNotchIcon className="size-4 shrink-0 animate-spin" />
+      <LoaderCircleIcon className="size-4 shrink-0 animate-spin" />
       {label}
     </div>
   );
@@ -64,7 +64,7 @@ function Progress({ received, total }: { received: number; total: number }) {
         aria-valuetext={text}
         className="h-1.5 overflow-hidden rounded-full bg-selected"
       >
-        <div className="h-full rounded-full bg-kumo-brand transition-[width]" style={{ width: `${percent}%` }} />
+        <div className="h-full rounded-full bg-accent transition-[width]" style={{ width: `${percent}%` }} />
       </div>
     </div>
   );

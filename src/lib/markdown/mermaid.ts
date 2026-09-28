@@ -22,13 +22,13 @@ export function renderedMermaid(source: string, dark: boolean): string | undefin
 
 const scheme = () => window.matchMedia("(prefers-color-scheme: dark)");
 
-/** The scheme the page renders in, which kumo sets and `light-dark()` follows; not the OS setting. */
+/** The scheme the page renders in, which `color-scheme` sets and `light-dark()` follows; not the OS setting. */
 export function isDark(): boolean {
   if (typeof document === "undefined") return false;
   return getComputedStyle(document.documentElement).colorScheme.split(" ").includes("dark");
 }
 
-/** Fires when either the OS scheme or kumo's `data-mode` changes. */
+/** Fires when either the OS scheme or the root's `data-mode` changes. */
 export function onSchemeChange(listener: () => void): () => void {
   const query = scheme();
   query.addEventListener("change", listener);

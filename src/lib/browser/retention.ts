@@ -13,9 +13,10 @@ export function forget(order: readonly string[], id: string): readonly string[] 
 }
 
 /**
- * The visible guest, every pinned one (DevTools open, audio playing or a
- * download in flight), and the `keep` most recent of the rest. Pinned guests
- * don't use up the budget: discarding one would lose what it's doing.
+ * The visible guest, every pinned one (DevTools open, audio playing, a
+ * download in flight, an incognito page), and the `keep` most recent of the
+ * rest. Pinned guests don't use up the budget: discarding one would lose what
+ * it's doing.
  */
 export function liveGuests(input: {
   order: readonly string[];

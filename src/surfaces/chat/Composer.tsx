@@ -9,11 +9,9 @@ import {
   type KeyboardEvent,
   type Ref,
 } from "react";
-import { ModelPicker } from "../../chrome/ModelPicker";
-import { Plus, Send, Square } from "../../chrome/icons";
+import { ArrowUpIcon, PaperclipIcon, SquareIcon } from "lucide-react";
 import type { AttachedFile } from "../../lib/blocks";
 import { completeMention, mentionAt, searchFiles, splitMentions } from "../../lib/mentions";
-import type { ProviderId } from "../../lib/providers";
 import type { ProjectFile, Session } from "../../lib/types";
 import { AttachmentStrip } from "./Attachments";
 import { useChatActions } from "./context";
@@ -26,10 +24,11 @@ type Props = {
   files: AttachedFile[];
   working: boolean;
   ready: boolean;
+  /** Something above waits on the user: an approval or a question. */
+  waiting?: boolean;
   /** An empty chat: the well is the page, so it sits in the middle. */
   centered?: boolean;
   onDraft: (value: string) => void;
-  onModel: (provider: ProviderId, model: string) => void;
   onAttach: () => void;
   /** Files pasted from the clipboard (screenshots); they have no path yet. */
   onPasteFiles: (files: File[]) => void;
@@ -48,9 +47,9 @@ export function Composer({
   files,
   working,
   ready,
+  waiting = false,
   centered = false,
   onDraft,
-  onModel,
   onAttach,
   onPasteFiles,
   onRemoveFile,
@@ -140,8 +139,8 @@ export function Composer({
   };
 
   return (
-    <div className={`shrink-0 px-6 ${centered ? "py-4" : "pb-4"}`}>
-      <form onSubmit={submit} className={`crew-composer relative ${centered ? "mx-auto w-full max-w-[720px]" : ""}`}>
+    <div className={`mx-auto w-full max-w-[760px] shrink-0 px-6 ${centered ? "py-3" : "pb-3"}`}>
+      <form onSubmit={submit} className="crew-composer relative">
         {mention && (
           <MentionPicker results={results} active={Math.min(active, Math.max(0, results.length - 1))} onHover={setActive} onPick={pick} />
         )}
@@ -165,9 +164,15 @@ export function Composer({
           </div>
           <textarea
             ref={field}
-            rows={2}
+            rows={1}
             value={draft}
-            placeholder={`Message ${session.name}`}
+            placeholder={
+              waiting
+                ? `${session.name} is waiting on you — answer above`
+                : working
+                  ? `${session.name} is working — ↵ stops it`
+                  : `Ask ${session.name} anything — @ to mention a file`
+            }
             spellCheck={false}
             onChange={(event) => {
               onDraft(event.target.value);
@@ -186,7 +191,7 @@ export function Composer({
             className="crew-composer-field crew-composer-input"
           />
         </div>
-        <div className="mt-2 flex h-[30px] items-center justify-between gap-2">
+        <div className="mt-1.5 flex h-8 items-center justify-between gap-2">
           <div className="flex min-w-0 items-center gap-1.5">
             <button
               type="button"
@@ -195,30 +200,27 @@ export function Composer({
               onClick={onAttach}
               className="crew-composer-plus shrink-0"
             >
-              <Plus className="size-4" />
+              <PaperclipIcon className="size-4" />
             </button>
-            <ModelPicker
-              trigger="chip"
-              provider={session.provider}
-              model={session.model}
-              disabled={working}
-              onChange={onModel}
-            />
           </div>
           <button
             type="submit"
             disabled={!working && !canSend}
             aria-label={working ? "Stop" : "Send"}
-            className={`flex size-[30px] shrink-0 items-center justify-center rounded-full transition-colors duration-100 focus-visible:ring-[1.5px] focus-visible:ring-kumo-focus/50 focus-visible:outline-none ${
+            className={`flex size-[30px] shrink-0 items-center justify-center rounded-full transition-colors duration-100 focus-visible:ring-[1.5px] focus-visible:ring-focus/50 focus-visible:outline-none ${
               working || canSend
-                ? "crew-ink hover:bg-kumo-brand-hover"
-                : "bg-card text-kumo-subtle"
+                ? "crew-ink hover:bg-accent-hover"
+                : "bg-card text-text-muted"
             }`}
           >
-            {working ? <Square className="size-2.5" /> : <Send className="size-4" />}
+            {working ? <SquareIcon className="size-2.5 fill-current" /> : <ArrowUpIcon className="size-4" />}
           </button>
         </div>
       </form>
+      <p className="mt-2 text-center text-[11px] text-placeholder">
+        <kbd className="font-sans">↵</kbd> send · <kbd className="font-sans">⇧↵</kbd> new line · @ file · drop or paste to attach
+      </p>
     </div>
   );
 }
+

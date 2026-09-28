@@ -7,6 +7,7 @@ import path from "node:path";
 import { pipeline } from "node:stream/promises";
 import { app, BrowserWindow, ipcMain } from "electron";
 import { UPDATE_CHANNELS, type UpdateState } from "../src/lib/update";
+import { release } from "./build-info";
 
 const RELEASES = "https://github.com/rogazth/crew/releases";
 const MANIFEST = `${RELEASES}/latest/download/latest.json`;
@@ -189,7 +190,8 @@ export async function checkForUpdates(manual = false): Promise<void> {
     return;
   }
   if (busy) return;
-  if (!app.isPackaged || !bundle()) {
+  // A local build updating itself would turn into the release, on the installed app's data.
+  if (!app.isPackaged || !release || !bundle()) {
     if (manual) set({ phase: "unpackaged" });
     return;
   }
@@ -232,7 +234,7 @@ function registerIpc(): void {
 export function watchForUpdates(open: () => void): void {
   ensureWindow = open;
   registerIpc();
-  if (!app.isPackaged) return;
+  if (!app.isPackaged || !release) return;
   const tick = () => void checkForUpdates();
   setTimeout(tick, FIRST_CHECK).unref();
   setInterval(tick, EVERY).unref();

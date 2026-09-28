@@ -164,9 +164,8 @@ pub enum ToolDetail {
         #[ts(optional)]
         preview: Option<String>,
     },
-    /// A file the agent wrote. The diff itself rides on the approval block.
-    /// The counts are absent when the provider did not say — which is not the
-    /// same as a write that changed nothing.
+    /// A file the agent wrote. The counts are absent when the provider did not
+    /// say — which is not the same as a write that changed nothing.
     Edit {
         path: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -175,28 +174,106 @@ pub enum ToolDetail {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional, type = "number")]
         removed: Option<u32>,
+        /// The replacements as the call named them, when it named them and they
+        /// fit: a write is one hunk with nothing before it. Absent when too big
+        /// to keep, rather than kept in part: half a diff reads as a wrong one.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        hunks: Option<Vec<EditHunk>>,
     },
     Search {
         query: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional, type = "number")]
         matches: Option<u32>,
+        /// What came back: the files, the lines, the results.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        output: Option<String>,
     },
     Fetch {
         url: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         title: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        output: Option<String>,
     },
     /// One of Crew's own tools: a message to another agent.
     Message { to: String, text: String },
+    /// The agent's checklist, whole: every call restates all of it.
+    Todo { items: Vec<TodoItem> },
+    /// A subagent the agent handed part of the work to.
+    Agent {
+        description: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        agent_type: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        prompt: Option<String>,
+        /// What it reported back.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        output: Option<String>,
+    },
+    /// A tool from an MCP server. `input` is the arguments as JSON.
+    Mcp {
+        server: String,
+        tool: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        input: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        output: Option<String>,
+    },
+    /// A plan the agent proposed, in markdown.
+    Plan { text: String },
     /// Anything else: the result text, clipped.
     Output { text: String },
 }
 
+/// One replacement in a file: `before` became `after`.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, TS)]
+#[ts(export, export_to = "../../../src/lib/protocol.ts")]
+pub struct EditHunk {
+    pub before: String,
+    pub after: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
+pub enum TodoStatus {
+    Pending,
+    InProgress,
+    Completed,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, TS)]
+#[ts(export, export_to = "../../../src/lib/protocol.ts")]
+pub struct TodoItem {
+    pub text: String,
+    pub status: TodoStatus,
+}
+
+/// How much of a diff a tool line keeps, before and after together. A diff
+/// is kept whole or not at all.
+pub const EDIT_TEXT_LIMIT: usize = 16 * 1024;
+
+/// Hunks that fit, or none: the row still shows the path and the counts.
+pub fn edit_hunks(hunks: Vec<EditHunk>) -> Option<Vec<EditHunk>> {
+    let size: usize = hunks.iter().map(|hunk| hunk.before.len() + hunk.after.len()).sum();
+    (!hunks.is_empty() && size <= EDIT_TEXT_LIMIT).then_some(hunks)
+}
+
 /// Transcripts are persisted, indexed and shipped over the websocket on every
 /// reconnect, so a tool line keeps a readable excerpt, never the whole output.
-pub const TOOL_TEXT_LIMIT: usize = 4096;
+/// Enough for a test run's failures or a file's first few hundred lines; the
+/// row folds anything long behind a line count.
+pub const TOOL_TEXT_LIMIT: usize = 16 * 1024;
 
 /// Clip on a char boundary and say how much was dropped, so the UI never has to
 /// guess whether it is looking at everything.
@@ -228,14 +305,50 @@ impl ToolDetail {
                 line_end,
                 preview: preview.map(|text| clip(&text, TOOL_TEXT_LIMIT)),
             },
+            ToolDetail::Edit { path, added, removed, hunks } => ToolDetail::Edit {
+                path,
+                added,
+                removed,
+                hunks: hunks.and_then(edit_hunks),
+            },
+            ToolDetail::Search { query, matches, output } => ToolDetail::Search {
+                query,
+                matches,
+                output: output.map(|text| clip(&text, TOOL_TEXT_LIMIT)),
+            },
+            ToolDetail::Fetch { url, title, output } => ToolDetail::Fetch {
+                url,
+                title,
+                output: output.map(|text| clip(&text, TOOL_TEXT_LIMIT)),
+            },
             ToolDetail::Message { to, text } => ToolDetail::Message {
                 to,
+                text: clip(&text, TOOL_TEXT_LIMIT),
+            },
+            ToolDetail::Todo { items } => ToolDetail::Todo {
+                items: items
+                    .into_iter()
+                    .map(|item| TodoItem { text: clip(&item.text, 512), status: item.status })
+                    .collect(),
+            },
+            ToolDetail::Agent { description, agent_type, prompt, output } => ToolDetail::Agent {
+                description,
+                agent_type,
+                prompt: prompt.map(|text| clip(&text, TOOL_TEXT_LIMIT)),
+                output: output.map(|text| clip(&text, TOOL_TEXT_LIMIT)),
+            },
+            ToolDetail::Mcp { server, tool, input, output } => ToolDetail::Mcp {
+                server,
+                tool,
+                input: input.map(|text| clip(&text, TOOL_TEXT_LIMIT)),
+                output: output.map(|text| clip(&text, TOOL_TEXT_LIMIT)),
+            },
+            ToolDetail::Plan { text } => ToolDetail::Plan {
                 text: clip(&text, TOOL_TEXT_LIMIT),
             },
             ToolDetail::Output { text } => ToolDetail::Output {
                 text: clip(&text, TOOL_TEXT_LIMIT),
             },
-            other => other,
         }
     }
 
@@ -248,6 +361,13 @@ impl ToolDetail {
             ToolDetail::Search { query, .. } => query.clone(),
             ToolDetail::Fetch { url, .. } => url.clone(),
             ToolDetail::Message { to, .. } => to.clone(),
+            ToolDetail::Todo { items } => {
+                let done = items.iter().filter(|item| item.status == TodoStatus::Completed).count();
+                format!("{done}/{} done", items.len())
+            }
+            ToolDetail::Agent { description, .. } => description.clone(),
+            ToolDetail::Mcp { server, tool, .. } => format!("{server} · {tool}"),
+            ToolDetail::Plan { text } => text.lines().find(|line| !line.trim().is_empty()).unwrap_or("").to_string(),
             ToolDetail::Output { text } => text.lines().next().unwrap_or("").to_string(),
         }
     }

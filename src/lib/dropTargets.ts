@@ -1,3 +1,6 @@
+import { writeTempFile } from "./api";
+import { focusEnv } from "./client/registry";
+import { LOCAL } from "./client/route";
 import { onDragDrop } from "./host";
 
 type Target = {
@@ -43,11 +46,26 @@ function listen() {
     if (payload.type === "drop") {
       const target = under(payload.position);
       hover(null);
-      if (payload.paths.length > 0) target?.onDrop(payload.paths);
+      if (target) void deliver(target, payload.files, payload.paths);
       return;
     }
     hover(null);
   });
+}
+
+async function deliver(target: Target, files: File[], paths: string[]) {
+  if (focusEnv() === LOCAL) {
+    if (paths.length > 0) target.onDrop(paths);
+    return;
+  }
+  // A remote workspace cannot read this Mac's disk: the bytes go to its machine first.
+  const results = await Promise.allSettled(files.map((file) => writeTempFile(file)));
+  const uploaded: string[] = [];
+  for (const result of results) {
+    if (result.status === "fulfilled") uploaded.push(result.value);
+    else console.error("Drop rejected:", result.reason instanceof Error ? result.reason.message : result.reason);
+  }
+  if (uploaded.length > 0) target.onDrop(uploaded);
 }
 
 export function registerDropTarget(target: Target): () => void {

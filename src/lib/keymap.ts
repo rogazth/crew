@@ -3,12 +3,12 @@
  * them the same way: the window matches its own keydowns here, and a focused
  * page swallows its keys, so the main process matches those here too.
  *
- * The key a chord names is the key typed, not where it sits: ⌘] is whatever
- * key types ] or }, so on a Latin American Mac it is the } key, and ⌘+ on the
- * key a US board calls ] is not ⌘]. Braces are brackets, as ⇧ makes them on a
- * US board. Only when the event names no key (a dead key) or ⌥ turned it into
- * another character does the physical key decide, read through the current
- * layout when there is one.
+ * The rules are Orca's. The key a chord names is the key typed, not where it
+ * sits: ⌘] is whatever key types ] or }, so on a Latin American Mac it is the
+ * } key, and ⌘+ on the key a US board calls ] is not ⌘]. Braces are brackets,
+ * as ⇧ makes them on a US board. Only when the event names no key (a dead key)
+ * or ⌥ turned it into another character does the physical key decide, read
+ * through the current layout when there is one.
  */
 
 export type ChordInput = { key: string; code: string; meta: boolean; ctrl: boolean; alt: boolean; shift: boolean };
@@ -75,8 +75,8 @@ const SHIFTED = new Map([
   ["~", "BACKQUOTE"],
 ]);
 
-/** Keys that say nothing about what was typed; only these send matching to the physical key. */
-const UNNAMED = new Set(["", "Dead", "Unidentified"]);
+/** Keys that say nothing about what was typed; only these send matching to the physical key. Process is a key the input method took. */
+const UNNAMED = new Set(["", "Dead", "Unidentified", "Process"]);
 const MODIFIER_KEYS = new Set(["Alt", "AltGraph", "Control", "Meta", "Shift", "OS", "Fn", "FnLock", "Hyper", "Super", "Symbol", "SymbolLock"]);
 
 /** A key as matching compares it: A–Z, 0–9, a punctuation name, or a named key upper-cased; null for any other character. */

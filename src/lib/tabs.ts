@@ -7,8 +7,31 @@ export const stubTabId = (stub: StubKind) => `stub:${stub}`;
 /** Unlike the other kinds, a page has no natural key: two tabs can show the same URL. */
 export const browserTabId = () => `browser:${crypto.randomUUID()}`;
 
-export function newBrowserTab(url = ""): Tab {
-  return { id: browserTabId(), kind: "browser", url, title: "" };
+export function newBrowserTab(url = "", incognito = false): Tab {
+  return { id: browserTabId(), kind: "browser", url, title: "", ...(incognito && { incognito: true as const }) };
+}
+
+export const isIncognitoTab = (tab: Tab) => tab.kind === "browser" && tab.incognito === true;
+
+/**
+ * What a strip writes to disk: everything but its incognito tabs, which end
+ * with the app like a private window does.
+ */
+export function persistedTabs(state: TabState): Omit<TabState, "closed"> {
+  const { activeId, recent, collapsed } = state;
+  const tabs = state.tabs.filter((tab) => !isIncognitoTab(tab));
+  const kept = new Set(tabs.map((tab) => tab.id));
+  return {
+    tabs,
+    activeId: activeId !== null && kept.has(activeId) ? activeId : null,
+    ...(recent && { recent: recent.filter((id) => kept.has(id)) }),
+    ...(collapsed && { collapsed }),
+  };
+}
+
+/** Each call a new shell, in the worktree it was asked from. */
+export function newTerminalTab(worktree: string | null): Tab {
+  return { id: `stub:terminal:${crypto.randomUUID()}`, kind: "stub", stub: "terminal", title: "Terminal", worktree };
 }
 
 /**
@@ -16,7 +39,17 @@ export function newBrowserTab(url = ""): Tab {
  * worktree can bring back the tab last used there. A strip saved before it
  * existed has none, and reads as its active tab, then the rightmost.
  */
-export type TabState = { tabs: Tab[]; activeId: string | null; closed: Tab[]; recent?: string[] };
+export type TabState = {
+  tabs: Tab[];
+  activeId: string | null;
+  closed: Tab[];
+  recent?: string[];
+  /** Worktrees whose tabs are folded into one chip, all together only. */
+  collapsed?: string[];
+};
+
+/** Which tabs a strip shows; the ones folded into a chip are left out. */
+export type Visible = (tab: Tab) => boolean;
 
 export const NO_TABS: TabState = { tabs: [], activeId: null, closed: [] };
 
@@ -35,46 +68,56 @@ export function openTab(
   const exists = state.tabs.some((t) => t.id === tab.id);
   let tabs = state.tabs;
   if (!exists) {
+    // Pinned tabs lead the strip: a pinned one lands at their end, any other past them.
+    const pins = pinnedCount(state.tabs);
     const anchor = after === undefined ? -1 : state.tabs.findIndex((t) => t.id === after);
-    tabs =
-      anchor === -1
-        ? [...state.tabs, tab]
-        : [...state.tabs.slice(0, anchor + 1), tab, ...state.tabs.slice(anchor + 1)];
+    const at = tab.pinned
+      ? pins
+      : Math.max(pins, anchor === -1 ? state.tabs.length : anchor + 1);
+    tabs = [...state.tabs.slice(0, at), tab, ...state.tabs.slice(at)];
   }
   const activeId = background && exists === false ? state.activeId : tab.id;
   return tabs === state.tabs && activeId === state.activeId ? state : { ...state, tabs, activeId };
 }
 
-/** A page committed a navigation or changed its title. Same state back when nothing moved. */
+/** What a page writes back to its tab. */
+export type BrowserTabPatch = { url?: string; title?: string; icon?: string };
+
+/** A page committed a navigation or changed its title or favicon. Same state back when nothing moved. */
 export function patchBrowserTab(
   state: TabState,
   id: string,
-  patch: { url?: string; title?: string },
+  patch: BrowserTabPatch,
 ): TabState {
   const index = state.tabs.findIndex((tab) => tab.id === id);
   const tab = state.tabs[index];
   if (!tab || tab.kind !== "browser") return state;
   const url = patch.url ?? tab.url;
   const title = patch.title ?? tab.title;
-  if (url === tab.url && title === tab.title) return state;
+  // An empty icon is a page that has none.
+  const icon = patch.icon === undefined ? tab.icon : patch.icon || undefined;
+  if (url === tab.url && title === tab.title && icon === tab.icon) return state;
+  const next: typeof tab = { ...tab, url, title };
+  if (icon === undefined) delete next.icon;
+  else next.icon = icon;
   const tabs = state.tabs.slice();
-  tabs[index] = { ...tab, url, title };
+  tabs[index] = next;
   return { ...state, tabs };
 }
 
-function withoutTab(state: TabState, id: string, closed: Tab[]): TabState {
+function withoutTab(state: TabState, id: string, closed: Tab[], visible?: Visible): TabState {
   return {
     ...state,
     tabs: state.tabs.filter((t) => t.id !== id),
-    activeId: state.activeId === id ? neighbourId(state.tabs, id) : state.activeId,
+    activeId: state.activeId === id ? neighbourId(state.tabs, id, visible) : state.activeId,
     closed,
   };
 }
 
-export function closeTab(state: TabState, id: string): TabState {
+export function closeTab(state: TabState, id: string, visible?: Visible): TabState {
   const tab = state.tabs.find((t) => t.id === id);
   if (!tab) return state;
-  return withoutTab(state, id, [tab, ...state.closed].slice(0, CLOSED_LIMIT));
+  return withoutTab(state, id, [tab, ...state.closed].slice(0, CLOSED_LIMIT), visible);
 }
 
 /** Its session is gone, so the tab must not land in the reopen stack. */
@@ -89,9 +132,10 @@ export function reopenTab(state: TabState): TabState {
   return openTab({ ...state, closed: rest }, tab);
 }
 
-/** Chromium's Ctrl+Tab: strip order, wrapping at both ends. */
-export function stepTab(state: TabState, delta: number): TabState {
-  const { tabs, activeId } = state;
+/** Chromium's Ctrl+Tab: strip order, wrapping at both ends, past the tabs folded away. */
+export function stepTab(state: TabState, delta: number, visible: Visible = () => true): TabState {
+  const { activeId } = state;
+  const tabs = state.tabs.filter((tab) => tab.id === activeId || visible(tab));
   if (tabs.length === 0) return state;
   const index = tabs.findIndex((tab) => tab.id === activeId);
   const next = (((index === -1 ? 0 : index + delta) % tabs.length) + tabs.length) % tabs.length;
@@ -108,12 +152,49 @@ export function selectTab(state: TabState, id: string | null): TabState {
   return state.activeId === id ? state : { ...state, activeId: id };
 }
 
-/** The strip was dragged into a new order. An order that no longer names exactly the open tabs is stale and dropped. */
+/**
+ * The strip was dragged into a new order. An order that no longer names exactly
+ * the open tabs is stale and dropped, and so is one that mixes the pinned in.
+ */
 export function reorderTabs(state: TabState, ids: string[]): TabState {
   const byId = new Map(state.tabs.map((tab) => [tab.id, tab]));
   const tabs = ids.flatMap((id) => byId.get(id) ?? []);
   if (tabs.length !== state.tabs.length || new Set(ids).size !== ids.length) return state;
+  if (pinnedCount(tabs) !== pinnedCount(state.tabs) || tabs.some((tab, at) => tab.pinned && at >= pinnedCount(tabs)))
+    return state;
   return tabs.every((tab, index) => tab === state.tabs[index]) ? state : { ...state, tabs };
+}
+
+/** How many tabs lead the strip pinned. */
+function pinnedCount(tabs: Tab[]): number {
+  const at = tabs.findIndex((tab) => !tab.pinned);
+  return at === -1 ? tabs.length : at;
+}
+
+/** Pinned first, each side in the order it had. */
+export function pinnedFirst(tabs: Tab[]): Tab[] {
+  const pinned = tabs.filter((tab) => tab.pinned);
+  return pinned.length === pinnedCount(tabs) ? tabs : [...pinned, ...tabs.filter((tab) => !tab.pinned)];
+}
+
+/** Pins a tab after the ones already pinned, the way Chromium does. */
+export function pinTab(state: TabState, id: string): TabState {
+  const tab = state.tabs.find((t) => t.id === id);
+  if (!tab || tab.pinned) return state;
+  const rest = state.tabs.filter((t) => t.id !== id);
+  const at = pinnedCount(rest);
+  return { ...state, tabs: [...rest.slice(0, at), { ...tab, pinned: true }, ...rest.slice(at)] };
+}
+
+/** Unpins a tab to the head of the unpinned ones, right past the pinned. */
+export function unpinTab(state: TabState, id: string): TabState {
+  const tab = state.tabs.find((t) => t.id === id);
+  if (!tab?.pinned) return state;
+  const rest = state.tabs.filter((t) => t.id !== id);
+  const at = pinnedCount(rest);
+  const unpinned = { ...tab };
+  delete unpinned.pinned;
+  return { ...state, tabs: [...rest.slice(0, at), unpinned, ...rest.slice(at)] };
 }
 
 /** The tabs in the order they were last on screen, newest first; the ones never shown are left out. */
@@ -141,11 +222,18 @@ export function lastUsed(state: TabState, keep: (tab: Tab) => boolean = () => tr
   return [...state.tabs].reverse().find(keep) ?? null;
 }
 
-/** After closing the active tab, focus its right neighbour, else its left one. */
-function neighbourId(tabs: Tab[], closingId: string): string | null {
+/**
+ * After closing the active tab, focus its nearest shown neighbour, the right
+ * one first; with none shown, the nearest folded one.
+ */
+function neighbourId(tabs: Tab[], closingId: string, visible: Visible = () => true): string | null {
   const index = tabs.findIndex((t) => t.id === closingId);
   if (index === -1) return null;
-  return tabs[index + 1]?.id ?? tabs[index - 1]?.id ?? null;
+  const right = tabs.slice(index + 1);
+  const left = tabs.slice(0, index).reverse();
+  return (
+    right.find(visible)?.id ?? left.find(visible)?.id ?? right[0]?.id ?? left[0]?.id ?? null
+  );
 }
 
 /** Restores what `state_set` wrote. Anything that no longer parses is dropped, not thrown. */
@@ -154,16 +242,23 @@ export function parseTabs(raw: string | null): TabState {
   try {
     const parsed: unknown = JSON.parse(raw);
     if (typeof parsed !== "object" || parsed === null) return NO_TABS;
-    const { tabs, activeId: savedActive, recent } = parsed as { tabs?: unknown; activeId?: unknown; recent?: unknown };
+    const {
+      tabs,
+      activeId: savedActive,
+      recent,
+      collapsed,
+    } = parsed as { tabs?: unknown; activeId?: unknown; recent?: unknown; collapsed?: unknown };
     if (!Array.isArray(tabs)) return NO_TABS;
     let activeId = savedActive;
-    const kept = tabs.flatMap((value: unknown) => {
-      if (!isLegacyBrowserStub(value)) return isTab(value) ? [value] : [];
-      // The browser used to be a placeholder stub; it comes back as a blank page.
-      const tab = newBrowserTab();
-      if (activeId === value.id) activeId = tab.id;
-      return [tab];
-    });
+    const kept = pinnedFirst(
+      tabs.flatMap((value: unknown) => {
+        if (!isLegacyBrowserStub(value)) return isTab(value) ? [value] : [];
+        // The browser used to be a placeholder stub; it comes back as a blank page.
+        const tab = newBrowserTab();
+        if (activeId === value.id) activeId = tab.id;
+        return [tab];
+      }),
+    );
     const open = new Set(kept.map((tab) => tab.id));
     return {
       tabs: kept,
@@ -172,6 +267,10 @@ export function parseTabs(raw: string | null): TabState {
       ...(Array.isArray(recent) && {
         recent: recent.filter((id): id is string => typeof id === "string" && open.has(id)),
       }),
+      ...(Array.isArray(collapsed) &&
+        collapsed.length > 0 && {
+          collapsed: collapsed.filter((place): place is string => typeof place === "string"),
+        }),
     };
   } catch {
     return NO_TABS;
@@ -188,13 +287,22 @@ function isTab(value: unknown): value is Tab {
   if (typeof value !== "object" || value === null) return false;
   const tab = value as Partial<Tab>;
   if (typeof tab.id !== "string") return false;
+  if (tab.pinned !== undefined && tab.pinned !== true) return false;
   if (tab.kind === "session") return typeof tab.sessionId === "string";
   if (tab.kind === "file") return typeof tab.path === "string" && typeof tab.relative === "string";
   if (tab.kind === "browser")
-    return tab.id.startsWith("browser:") && typeof tab.url === "string" && typeof tab.title === "string";
+    return (
+      tab.id.startsWith("browser:") &&
+      typeof tab.url === "string" &&
+      typeof tab.title === "string" &&
+      (tab.icon === undefined || typeof tab.icon === "string") &&
+      (tab.incognito === undefined || tab.incognito === true)
+    );
   if (tab.kind === "stub")
     return (
-      typeof tab.title === "string" && STUB_KINDS.includes(tab.stub as StubKind)
+      typeof tab.title === "string" &&
+      STUB_KINDS.includes(tab.stub as StubKind) &&
+      (tab.worktree === undefined || tab.worktree === null || typeof tab.worktree === "string")
     );
   return false;
 }

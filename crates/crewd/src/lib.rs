@@ -16,6 +16,7 @@ use crew_core::provider_session;
 use crew_core::process::{ProcessEvents, ProcessHost, ProcessPatch};
 use crew_core::process_tools::ProcessTools;
 use crew_core::pty::{PtyEvents, PtyHost, SpawnOptions};
+use crew_core::remote;
 use crew_core::routine;
 use crew_core::scheduler::Scheduler;
 use crew_core::session;
@@ -28,7 +29,8 @@ use crew_core::worktree;
 use crew_protocol::{
     self as proto, Auth, DaemonInfo, Id, IdName, IdStatus, Ids, Key, KeyValue, ListProjectFiles, Name, NamePath, Names, ProviderDiscover,
     OptionalId, PathArg, PathBytes, PathContents, PtyAck, PtyAttach, PtyAttached, PtyKill, PtyResize, PtySpawn, PtyWrite,
-    Request, RoutineRunNow, RoutineUpsert, SessionCreate, SessionCreated, SessionId, SessionUpdated, SessionUpdate, TempFile,
+    RemoteEnv, Request, RoutineRunNow, RoutineUpsert, SessionCreate, SessionCreated, SessionId, SessionUpdated, SessionUpdate, SessionsDeleted,
+    SessionsRetention, TempFile,
     SearchQuery, TranscriptApply, TranscriptTail, TurnAnswer, TurnRespond,
     TurnStart, TurnStarted, WorkspaceId, WorktreeAdd, WorktreeRemove,
 };
@@ -36,8 +38,13 @@ use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
 use serde_json::Value;
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use tokio_tungstenite::tungstenite::Message;
+
+mod http;
+pub mod lock;
+pub mod machine;
+mod socks;
 
 pub struct Config {
     pub pty: PtyHost,
@@ -61,6 +68,28 @@ struct Hosts {
     browser: BrowserTools,
     /// `daemon_shutdown`: the main thread stops the daemon as it would on a signal.
     exit: std_mpsc::Sender<()>,
+    /// `crewd serve` only. Zero on the window's daemon.
+    socks_port: u16,
+}
+
+/// Where the daemon listens and the token a client has to bring.
+pub struct Listen {
+    pub addr: String,
+    pub token: String,
+    /// Keep trying an address that is not up yet: a tailnet IP appears some
+    /// time after boot, and a service should wait for it rather than die.
+    pub wait_for_addr: bool,
+}
+
+impl Listen {
+    /// The window's own daemon: loopback, any port, a token for this run.
+    pub fn local() -> Self {
+        Self {
+            addr: "127.0.0.1:0".into(),
+            token: random_token(),
+            wait_for_addr: false,
+        }
+    }
 }
 
 pub struct Handle {
@@ -474,7 +503,11 @@ impl AgentEvents for AgentFanout {
 }
 
 pub fn serve(config: Config) -> Result<Handle, String> {
-    let token = random_token();
+    serve_on(config, Listen::local())
+}
+
+pub fn serve_on(config: Config, listen: Listen) -> Result<Handle, String> {
+    let token = listen.token.clone();
     let hub = Arc::new(Hub::new());
     let transcripts = crew_core::transcript::TranscriptHub::new(config.store.clone());
     transcripts.set_events(hub.clone());
@@ -533,8 +566,8 @@ pub fn serve(config: Config) -> Result<Handle, String> {
         scheduler: scheduler.clone(),
         browser,
         exit: exit_tx,
+        socks_port: 0,
     };
-    let serve_token = token.clone();
 
     thread::Builder::new()
         .name("crewd".into())
@@ -546,7 +579,7 @@ pub fn serve(config: Config) -> Result<Handle, String> {
                     return;
                 }
             };
-            runtime.block_on(run(hosts, hub, serve_token, ready_tx, stop_rx));
+            runtime.block_on(run(hosts, hub, listen, ready_tx, stop_rx));
         })
         .map_err(|e| e.to_string())?;
 
@@ -560,14 +593,40 @@ pub fn serve(config: Config) -> Result<Handle, String> {
     })
 }
 
+async fn bind(listen: &Listen) -> std::io::Result<TcpListener> {
+    let mut wait = Duration::from_millis(500);
+    loop {
+        match TcpListener::bind(&listen.addr).await {
+            Err(error)
+                if listen.wait_for_addr
+                    && matches!(
+                        error.kind(),
+                        std::io::ErrorKind::AddrNotAvailable | std::io::ErrorKind::AddrInUse
+                    ) =>
+            {
+                eprintln!("[crewd] {}: {error}; trying again in {wait:?}", listen.addr);
+                tokio::time::sleep(wait).await;
+                wait = (wait * 2).min(Duration::from_secs(10));
+            }
+            bound => return bound,
+        }
+    }
+}
+
+fn socks_addr(ws: std::net::SocketAddr) -> Option<std::net::SocketAddr> {
+    let port = ws.port().checked_add(1)?;
+    Some(std::net::SocketAddr::new(ws.ip(), port))
+}
+
 async fn run(
-    hosts: Hosts,
+    mut hosts: Hosts,
     hub: Arc<Hub>,
-    token: String,
+    listen: Listen,
     ready_tx: std_mpsc::Sender<Result<String, String>>,
     mut stop_rx: tokio::sync::oneshot::Receiver<()>,
 ) {
-    let listener = match TcpListener::bind("127.0.0.1:0").await {
+    let token = listen.token.clone();
+    let listener = match bind(&listen).await {
         Ok(listener) => listener,
         Err(error) => {
             let _ = ready_tx.send(Err(error.to_string()));
@@ -582,6 +641,18 @@ async fn run(
         }
     };
     let _ = ready_tx.send(Ok(format!("ws://{addr}")));
+    if listen.wait_for_addr {
+        if let Some(socks_at) = socks_addr(addr) {
+            match TcpListener::bind(socks_at).await {
+                Ok(listener) => {
+                    hosts.socks_port = socks_at.port();
+                    let token = token.clone();
+                    tokio::spawn(socks::run(listener, token));
+                }
+                Err(error) => eprintln!("[crewd] socks {socks_at}: {error}"),
+            }
+        }
+    }
     hub.set_runtime(tokio::runtime::Handle::current());
     hosts.turns.set_runtime(tokio::runtime::Handle::current());
     hosts.turns.transcripts().set_runtime(tokio::runtime::Handle::current());
@@ -603,12 +674,30 @@ async fn run(
             leases.sweep(app_state::now_millis());
         }
     });
+    // The first tick is now: what aged out while the app was closed goes before anyone looks.
+    let expiring = hosts.clone();
+    tokio::spawn(async move {
+        let mut every = tokio::time::interval(EXPIRE_EVERY);
+        loop {
+            every.tick().await;
+            let store = expiring.store.clone();
+            if let Ok(Some(days)) = block(move || session::retention_days(&store)).await {
+                if let Err(error) = expire_sessions(&expiring, days).await {
+                    eprintln!("[crewd] expiring sessions: {error}");
+                }
+            }
+        }
+    });
 
     loop {
         tokio::select! {
             _ = &mut stop_rx => break,
             accepted = listener.accept() => {
                 let Ok((stream, _)) = accepted else { break };
+                // Nagle holds each small write (a keystroke's echo, a reply
+                // behind another) until the last one is acked: one extra round
+                // trip per burst to a remote window.
+                let _ = stream.set_nodelay(true);
                 let hosts = hosts.clone();
                 let hub = hub.clone();
                 let token = token.clone();
@@ -623,7 +712,7 @@ async fn run(
 }
 
 async fn handle_socket(stream: TcpStream, hosts: Hosts, hub: Arc<Hub>, token: String) {
-    let Ok(ws) = tokio_tungstenite::accept_async(stream).await else {
+    let Some(ws) = http::accept(stream, &token).await else {
         return;
     };
     let (mut sink, mut source) = ws.split();
@@ -638,6 +727,19 @@ async fn handle_socket(stream: TcpStream, hosts: Hosts, hub: Arc<Hub>, token: St
     };
     if auth != token {
         let _ = sink.close().await;
+        return;
+    }
+    let hello = proto::event(
+        "hello",
+        proto::Hello {
+            protocol: proto::PROTOCOL,
+            version: env!("CARGO_PKG_VERSION").to_string(),
+        },
+    );
+    let Ok(hello) = hello.and_then(|event| serde_json::to_string(&event)) else {
+        return;
+    };
+    if sink.send(Message::Text(hello.into())).await.is_err() {
         return;
     }
 
@@ -658,6 +760,8 @@ async fn handle_socket(stream: TcpStream, hosts: Hosts, hub: Arc<Hub>, token: St
     });
 
     let pty_in: Arc<Mutex<HashMap<u32, mpsc::Sender<Vec<u8>>>>> = Arc::new(Mutex::new(HashMap::new()));
+    // The last call on each terminal: the next one on it waits for it to finish.
+    let mut pty_last: HashMap<String, oneshot::Receiver<()>> = HashMap::new();
 
     while let Some(msg) = source.next().await {
         let Ok(msg) = msg else { break };
@@ -665,7 +769,26 @@ async fn handle_socket(stream: TcpStream, hosts: Hosts, hub: Arc<Hub>, token: St
             Message::Text(text) => {
                 let hosts = hosts.clone();
                 let hub = hub.clone();
+                // Calls run concurrently, except those on one terminal, which run
+                // in the order sent: a respawn is a kill then a spawn, and a kill
+                // that ran second would take the new process with it.
+                let turn = pty_target(text.as_ref()).map(|id| {
+                    if pty_last.len() > 64 {
+                        pty_last.retain(|_, rx| matches!(rx.try_recv(), Err(oneshot::error::TryRecvError::Empty)));
+                    }
+                    let (done, rx) = oneshot::channel::<()>();
+                    (pty_last.insert(id, rx), done)
+                });
                 tokio::spawn(async move {
+                    let _done = match turn {
+                        Some((before, done)) => {
+                            if let Some(before) = before {
+                                let _ = before.await;
+                            }
+                            Some(done)
+                        }
+                        None => None,
+                    };
                     if let Some(reply) = handle_text(&hosts, &hub, client_id, text.as_ref()).await {
                         hub.send(client_id, Outgoing::Text(reply));
                     }
@@ -772,6 +895,24 @@ fn emit_pty_error(hub: &Hub, host: &PtyHost, stream_id: u32, error: impl Into<St
         .session_of_stream(stream_id)
         .unwrap_or_else(|| stream_id.to_string());
     hub.emit("pty-error", proto::PtyError { id, error: error.into() });
+}
+
+/// The terminal a `pty_*` call is about.
+fn pty_target(text: &str) -> Option<String> {
+    #[derive(Deserialize)]
+    struct Target {
+        method: String,
+        params: TargetId,
+    }
+    #[derive(Deserialize)]
+    struct TargetId {
+        id: String,
+    }
+    if !text.contains("\"pty_") {
+        return None;
+    }
+    let target = serde_json::from_str::<Target>(text).ok()?;
+    target.method.starts_with("pty_").then_some(target.params.id)
 }
 
 async fn handle_text(hosts: &Hosts, hub: &Arc<Hub>, client_id: u64, text: &str) -> Option<String> {
@@ -965,6 +1106,31 @@ async fn delete_session(hosts: &Hosts, id: String) -> Result<(), String> {
     block(move || session::delete(&store, id)).await
 }
 
+const DAY_MS: i64 = 24 * 60 * 60 * 1000;
+
+/// How often the daemon lets go of sessions Settings no longer keeps.
+const EXPIRE_EVERY: Duration = Duration::from_secs(60 * 60);
+
+fn stale_before(days: u32) -> i64 {
+    app_state::now_millis() - i64::from(days) * DAY_MS
+}
+
+/// Deletes the sessions untouched for `days`, spares any whose process still
+/// runs, and tells every window which went.
+async fn expire_sessions(hosts: &Hosts, days: u32) -> Result<Vec<String>, String> {
+    let store = hosts.store.clone();
+    let stale = block(move || session::stale(&store, stale_before(days))).await?;
+    let mut gone = Vec::new();
+    for id in stale.into_iter().filter(|id| !hosts.pty.is_live(id)) {
+        delete_session(hosts, id.clone()).await?;
+        gone.push(id);
+    }
+    if !gone.is_empty() {
+        hosts.hub.emit("sessions-deleted", SessionsDeleted { ids: gone.clone() });
+    }
+    Ok(gone)
+}
+
 fn json(value: impl serde::Serialize) -> Result<Value, String> {
     serde_json::to_value(value).map_err(|e| e.to_string())
 }
@@ -972,18 +1138,26 @@ fn json(value: impl serde::Serialize) -> Result<Value, String> {
 async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, String> {
     match method {
         "pty_spawn" => {
-            let PtySpawn { id, cwd, command, cols, rows, session } = parse(params)?;
+            let PtySpawn { id, cwd, command, cols, rows, session, reuse, dark } = parse(params)?;
             let host = hosts.pty.clone();
             let store = hosts.store.clone();
             let bridge = hosts.bridge.clone();
             let leases = hosts.browser.leases().clone();
             json(
                 block(move || {
-                    let (command, options) = match session {
-                        Some(session) => terminal_launch(&store, &bridge, &leases, &session, command)?,
-                        None => (command, SpawnOptions::default()),
+                    let prepare = move |command: Vec<String>| {
+                        let (command, options) = match session {
+                            Some(session) => terminal_launch(&store, &bridge, &leases, &session, command)?,
+                            None => (command, SpawnOptions::default()),
+                        };
+                        Ok((command, SpawnOptions { dark, ..options }))
                     };
-                    host.spawn_with(id, cwd, command, cols, rows, options)
+                    if reuse == Some(true) {
+                        host.open(id, cwd, command, cols, rows, prepare)
+                    } else {
+                        let (command, options) = prepare(command)?;
+                        host.spawn_with(id, cwd, command, cols, rows, options)
+                    }
                 })
                 .await?,
             )
@@ -1119,6 +1293,16 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
             let Id { id } = parse(params)?;
             delete_session(hosts, id).await?;
             Ok(Value::Null)
+        }
+        "sessions_stale" => {
+            let SessionsRetention { days } = parse(params)?;
+            let store = hosts.store.clone();
+            let stale = block(move || session::stale(&store, stale_before(days))).await?;
+            json(stale.iter().filter(|id| !hosts.pty.is_live(id)).count())
+        }
+        "sessions_expire" => {
+            let SessionsRetention { days } = parse(params)?;
+            json(expire_sessions(hosts, days).await?)
         }
         "session_is_disposable" => {
             let Id { id } = parse(params)?;
@@ -1293,6 +1477,35 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
         "write_temp_file" => {
             let TempFile { extension, base64_contents } = parse(params)?;
             json(block(move || files::write_temp(&extension, &base64_contents)).await?)
+        }
+        "ping" => Ok(Value::Null),
+        "remote_list" => {
+            let store = hosts.store.clone();
+            json(block(move || remote::list(&store)).await?)
+        }
+        "remote_upsert" => {
+            let env: RemoteEnv = parse(params)?;
+            let store = hosts.store.clone();
+            json(block(move || remote::upsert(&store, env)).await?)
+        }
+        "remote_delete" => {
+            let Id { id } = parse(params)?;
+            let store = hosts.store.clone();
+            block(move || remote::delete(&store, &id)).await?;
+            Ok(Value::Null)
+        }
+        "daemon_info" => {
+            let store = hosts.store.clone();
+            let socks_port = hosts.socks_port;
+            let mut info = block(move || Ok(machine::info(session::list_busy(&store)?.len() as u32))).await?;
+            if socks_port != 0 {
+                info.socks_port = Some(socks_port);
+            }
+            json(info)
+        }
+        "dir_list" => {
+            let proto::DirList { path } = parse(params)?;
+            json(block(move || machine::dir_list(&path)).await?)
         }
         "agent_resolve_claude" => json(block(AgentHost::resolve_claude).await?),
         "agent_resolve" => {
@@ -1529,7 +1742,7 @@ fn encode(value: &impl serde::Serialize) -> String {
     serde_json::to_string(value).unwrap_or_else(|_| r#"{"id":0,"ok":false,"error":"encode"}"#.into())
 }
 
-fn random_token() -> String {
+pub fn random_token() -> String {
     let mut bytes = [0u8; 16];
     rand::fill(&mut bytes);
     bytes.iter().map(|b| format!("{b:02x}")).collect()
@@ -1598,6 +1811,8 @@ mod tests {
                 cols: 80,
                 rows: 24,
                 session: None,
+                reuse: None,
+                dark: None,
             })
             .unwrap(),
         }
@@ -1655,6 +1870,41 @@ mod tests {
                 let stream = u32::from_le_bytes(bytes[..4].try_into().unwrap());
                 assert_eq!(stream, mine, "a frame of a stream this client never attached");
             }
+        }
+        handle.shutdown();
+    }
+
+    /// A window that remounts a terminal sends kill and spawn back to back
+    /// without waiting; the new process has to survive the kill sent before it.
+    #[tokio::test]
+    async fn a_respawn_sent_right_after_a_kill_survives_it() {
+        let dir = test_dir("respawn-order");
+        let handle = test_serve(&dir);
+        let mut ws = connect_authed(&handle).await;
+        for round in 0..20u32 {
+            let pty = format!("t{round}");
+            let req = round * 10;
+            send_json(&mut ws, &spawn_req(req + 1, &pty)).await;
+            send_json(
+                &mut ws,
+                &Request {
+                    id: req + 2,
+                    method: "pty_kill".into(),
+                    params: serde_json::json!({ "id": pty }),
+                },
+            )
+            .await;
+            send_json(&mut ws, &spawn_req(req + 3, &pty)).await;
+            let respawn = wait_response(&mut ws, req + 3).await;
+            assert!(respawn.ok, "{}", respawn.error.unwrap_or_default());
+            let attach = Request {
+                id: req + 4,
+                method: "pty_attach".into(),
+                params: serde_json::json!({ "id": pty, "from": 0 }),
+            };
+            send_json(&mut ws, &attach).await;
+            let attached = wait_response(&mut ws, req + 4).await;
+            assert!(attached.ok, "round {round}: the respawned terminal is gone: {}", attached.error.unwrap_or_default());
         }
         handle.shutdown();
     }
@@ -1746,6 +1996,8 @@ mod tests {
                     cols: 80,
                     rows: 24,
                     session: None,
+                    reuse: None,
+                    dark: None,
                 })
                 .unwrap(),
             },
@@ -1808,6 +2060,8 @@ mod tests {
                     cols: 80,
                     rows: 24,
                     session: None,
+                    reuse: None,
+                    dark: None,
                 })
                 .unwrap(),
             },
@@ -2030,6 +2284,8 @@ mod tests {
                 cols: 80,
                 rows: 24,
                 session: Some(terminal.clone()),
+                reuse: None,
+                dark: None,
             })
             .unwrap(),
         )
@@ -2086,6 +2342,8 @@ mod tests {
                     cols: 80,
                     rows: 24,
                     session: Some(session.to_string()),
+                    reuse: None,
+                    dark: None,
                 })
                 .unwrap(),
             )
@@ -3018,6 +3276,8 @@ print(json.dumps({"type":"turn.failed","error":{"message":"Codex exploded"}}), f
                         cols: 80,
                         rows: 24,
                         session: None,
+                        reuse: None,
+                        dark: None,
                     })
                     .unwrap(),
                 },

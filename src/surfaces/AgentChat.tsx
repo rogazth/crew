@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type ComponentType } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useThread } from "../hooks/useThread";
 import { answer, respond, send, stop } from "../lib/agentRuntime";
 import { pickFiles, writeTempFile } from "../lib/api";
@@ -7,34 +7,22 @@ import { mentionedFiles } from "../lib/mentions";
 import { useChatActions } from "./chat/context";
 import { useFileDrop } from "../hooks/useFileDrop";
 import type { Answers, ApprovalDecision, AttachedFile } from "../lib/blocks";
-import type { ProviderId } from "../lib/providers";
 import type { Session } from "../lib/types";
-import { useAgentTheme } from "../hooks/useAgentTheme";
 import { DefaultChatSurface } from "./chat/DefaultChatSurface";
-import { TimelineChatSurface } from "./chat-timeline/TimelineChatSurface";
-import type { AgentThemeId } from "../lib/agentTheme";
-import type { ChatSurfaceProps } from "./chat/surface";
-
-const SURFACES: Record<AgentThemeId, ComponentType<ChatSurfaceProps>> = {
-  default: DefaultChatSurface,
-  timeline: TimelineChatSurface,
-};
 
 type Props = {
   session: Session;
   cwd: string;
   active: boolean;
-  onModel: (session: Session, provider: ProviderId, model: string) => void;
 };
 
-export function AgentChat({ session, cwd, active, onModel }: Props) {
+export function AgentChat({ session, cwd, active }: Props) {
   const { blocks, ready, working, more, loadingEarlier, loadEarlier, focusId } = useThread(session.id);
   const [draft, setDraft] = useState("");
   const [files, setFiles] = useState<AttachedFile[]>([]);
   const field = useRef<HTMLTextAreaElement>(null);
   const pane = useRef<HTMLDivElement>(null);
   const { files: projectFiles } = useChatActions();
-  const { theme } = useAgentTheme();
 
   // Opening the tab means "talk to this agent"; the caret should already be there.
   useEffect(() => {
@@ -89,11 +77,9 @@ export function AgentChat({ session, cwd, active, onModel }: Props) {
     [session],
   );
 
-  const Surface = SURFACES[theme];
-
   return (
     <div ref={pane} className="relative flex h-full flex-col bg-canvas">
-      <Surface
+      <DefaultChatSurface
         session={session}
         blocks={blocks}
         working={working}
@@ -113,7 +99,6 @@ export function AgentChat({ session, cwd, active, onModel }: Props) {
         onAttach={() => void attach()}
         onPasteFiles={pasteFiles}
         onRemoveFile={(path) => setFiles((prev) => prev.filter((file) => file.path !== path))}
-        onModel={(provider, model) => onModel(session, provider, model)}
         onApprove={approve}
         onAnswer={reply}
       />

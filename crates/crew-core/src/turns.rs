@@ -260,8 +260,16 @@ impl TurnHost {
         self.inner.lock().unwrap_or_else(|e| e.into_inner())
     }
 
+    /// The runtime, out of its lock. Matching on the lock's guard would keep
+    /// it held for the whole arm — for `block_on`, the whole turn — and every
+    /// other session's timers and turns would wait on it: one agent stopped on
+    /// an approval froze every other agent's finish.
+    fn handle(&self) -> Option<tokio::runtime::Handle> {
+        self.runtime.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
     fn after(&self, dur: Duration, f: impl FnOnce() + Send + 'static) {
-        if let Some(handle) = self.runtime.lock().unwrap_or_else(|e| e.into_inner()).clone() {
+        if let Some(handle) = self.handle() {
             handle.spawn(async move {
                 tokio::time::sleep(dur).await;
                 f();
@@ -275,7 +283,7 @@ impl TurnHost {
     }
 
     fn block_on<T>(&self, fut: impl Future<Output = T> + Send) -> T {
-        if let Some(handle) = self.runtime.lock().unwrap_or_else(|e| e.into_inner()).clone() {
+        if let Some(handle) = self.handle() {
             handle.block_on(fut)
         } else {
             tokio::runtime::Builder::new_current_thread()
@@ -772,15 +780,21 @@ impl TurnHost {
         outcome
     }
 
+    /// How much a turn may do alone: the session's own autonomy, unless
+    /// Settings bypasses permissions for every session.
+    fn autonomy(&self, session: &crate::session::Session) -> Autonomy {
+        if session.autonomy == "full" || crate::session::bypass_permissions(&self.store) {
+            Autonomy::Full
+        } else {
+            Autonomy::Ask
+        }
+    }
+
     /// A turn gets its own Claude session, every time. What the agent remembers
     /// is the tail Crew hands it, not whatever the CLI kept.
     fn ensure_claude(&self, session: &crate::session::Session, params: &TurnStart) -> Result<(), String> {
         let session_id = session.id.clone();
-        let autonomy = if session.autonomy == "full" {
-            Autonomy::Full
-        } else {
-            Autonomy::Ask
-        };
+        let autonomy = self.autonomy(session);
         if self.lock().contains_key(&session_id) {
             self.agents.kill(&session_id);
             self.detach(&session_id);
@@ -927,11 +941,7 @@ impl TurnHost {
                 prompt,
                 model: Some(session.model.clone()).filter(|m| !m.is_empty()),
                 cwd: Some(params.cwd.clone()),
-                autonomy: if session.autonomy == "full" {
-                    Autonomy::Full
-                } else {
-                    Autonomy::Ask
-                },
+                autonomy: self.autonomy(&session),
                 mcp,
                 mcp_env: env.clone().into_iter().collect(),
             }),
@@ -983,11 +993,7 @@ impl TurnHost {
             build_cursor_spawn_args(&CursorSpawn {
                 prompt,
                 model: Some(session.model.clone()).filter(|m| !m.is_empty()),
-                autonomy: if session.autonomy == "full" {
-                    Autonomy::Full
-                } else {
-                    Autonomy::Ask
-                },
+                autonomy: self.autonomy(&session),
             }),
             params.cwd,
             Some(self.agent_env(&session_id)),
@@ -1032,7 +1038,7 @@ impl TurnHost {
         // opencode has no approval channel: without --auto it falls back to the
         // user's own permission config, which Crew cannot answer for. Saying so
         // once beats an "ask" that silently never asks.
-        if history.is_none() && session.autonomy != "full" {
+        if history.is_none() && self.autonomy(&session) != Autonomy::Full {
             self.transcripts.append_system(
                 &session_id,
                 "opencode decides its own permissions: it has no way to ask Crew, so it runs under your opencode config.",
@@ -1047,11 +1053,7 @@ impl TurnHost {
             path,
             build_opencode_spawn_args(&OpencodeSpawn {
                 model: Some(session.model.clone()).filter(|m| !m.is_empty()),
-                autonomy: if session.autonomy == "full" {
-                    Autonomy::Full
-                } else {
-                    Autonomy::Ask
-                },
+                autonomy: self.autonomy(&session),
             }),
             params.cwd,
             Some(env),
@@ -2087,6 +2089,34 @@ impl TurnHost {
 
 #[cfg(test)]
 mod mailbox_tests {
+    /// Measured: an agent stopped on an approval held the runtime's lock for
+    /// as long as it waited, and a second agent's turn could not even arm its
+    /// silence timer, so it never finished. One session waiting must not stop
+    /// another.
+    #[test]
+    fn a_turn_waiting_forever_does_not_hold_up_another_sessions_timers() {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .unwrap();
+        let host = TurnHost::test_new();
+        host.set_runtime(runtime.handle().clone());
+        let (_hold, never) = tokio::sync::oneshot::channel::<()>();
+        let waiting = host.clone();
+        std::thread::spawn(move || {
+            let _ = waiting.block_on(never);
+        });
+        std::thread::sleep(Duration::from_millis(100));
+        let (tx, rx) = std::sync::mpsc::channel();
+        let armed = host.clone();
+        std::thread::spawn(move || armed.after(Duration::from_millis(1), move || drop(tx.send(()))));
+        assert!(
+            rx.recv_timeout(Duration::from_secs(3)).is_ok(),
+            "a timer armed while another session waits never fired"
+        );
+    }
+
     use super::*;
     use crew_protocol::{AgentRef, BlockRole};
 
@@ -2335,6 +2365,60 @@ print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type
             second.find("· user] el parser").unwrap() < second.find("## This turn").unwrap(),
             "{second}"
         );
+    }
+
+    /// The setting overrides an agent that asks: its next turn is spawned the
+    /// way a "full" one is, and turning it off gives the agent its own back.
+    #[test]
+    fn bypass_permissions_runs_an_asking_agent_without_asking() {
+        let world = world();
+        let argv = world.dir.join("argv.txt");
+        let fake = world.dir.join("fake-opencode-argv");
+        std::fs::write(
+            &fake,
+            format!(
+                r#"#!/usr/bin/env python3
+import json, sys
+open({argv:?}, "w").write(json.dumps(sys.argv[1:]))
+sys.stdin.read()
+sid = "ses_test"
+print(json.dumps({{"type":"text","sessionID":sid,"part":{{"id":"p1","type":"text","text":"ok"}}}}), flush=True)
+print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type":"step-finish","reason":"stop","tokens":{{"input":1,"output":1,"reasoning":0,"cache":{{"read":0,"write":0}}}},"cost":0}}}}), flush=True)
+"#,
+                argv = argv.to_string_lossy()
+            ),
+        )
+        .expect("write fake");
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        world.host.override_binary("opencode", fake.to_string_lossy().into_owned());
+        let ws = workspace(&world);
+        let asker = crate::session::create(
+            world.host.test_store(),
+            ws,
+            "agent".into(),
+            "Asker".into(),
+            "opencode".into(),
+            "m".into(),
+            "".into(),
+            "ask".into(),
+        )
+        .expect("agent");
+        let ran_auto = || {
+            let raw = std::fs::read_to_string(&argv).expect("the provider was never spawned");
+            serde_json::from_str::<Vec<String>>(&raw).expect("argv").iter().any(|arg| arg == "--auto")
+        };
+
+        turn(&world, &asker, "one");
+        assert!(!ran_auto(), "an asking agent asks by default");
+
+        crate::store::set(world.host.test_store(), crate::session::BYPASS_KEY.into(), "on".into()).expect("set");
+        turn(&world, &asker, "two");
+        assert!(ran_auto(), "bypass runs it without asking");
+
+        crate::store::delete(world.host.test_store(), crate::session::BYPASS_KEY.into()).expect("delete");
+        turn(&world, &asker, "three");
+        assert!(!ran_auto(), "off again, it asks again");
     }
 
     /// Without this the model gets a turn shaped exactly like something the

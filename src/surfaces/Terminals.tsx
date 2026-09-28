@@ -5,8 +5,10 @@ import { useSessionActivity } from '../hooks/useSessionActivity';
 import { nudgeTitle } from '../hooks/useSessionTitle';
 import { useTerminalPrefs } from '../hooks/useTerminalPrefs';
 import * as api from '../lib/api';
+import { homeFor, sessionCwd } from '../lib/client/registry';
 import { claudeSessionId, transcriptPath } from '../lib/claudeStorage';
 import { bindProviderSession } from '../lib/agentRuntime';
+import { BYPASS_KEY } from '../lib/permissions';
 import { providerOf } from '../lib/providers';
 import { sessionCommand } from '../lib/sessionCommand';
 import { titleName } from '../lib/terminalStatus';
@@ -83,15 +85,16 @@ export function Terminals({ panes, sessions, onStatus, onOpenFile }: Props) {
     if (tab.kind !== 'session') return null;
     const session = sessions.find((s) => s.id === tab.sessionId);
     if (!session || session.kind !== 'terminal') return null;
+    const here = sessionCwd(session.id) ?? cwd;
     return (
       <Pane key={pane.id} active={visible}>
         <SessionTerminal
           paneId={pane.id}
           session={session}
-          cwd={cwd}
+          cwd={here}
           active={visible}
           onStatus={onStatus}
-          onOpenPath={(path) => openPath(cwd, path)}
+          onOpenPath={(path) => openPath(here, path)}
         />
       </Pane>
     );
@@ -115,25 +118,34 @@ const ATTENTION_MS = 1500;
 
 async function launchCommand(session: Session, cwd: string): Promise<string[]> {
   const theme = DARK_SCHEME.matches ? 'dark' : 'light';
+  // Read at every launch, so a change in Settings reaches the next session started.
+  // An agent made to run without asking runs its CLI that way too.
+  const bypass =
+    session.autonomy === 'full' ||
+    (await api
+      .stateGet(BYPASS_KEY)
+      .then((raw) => raw?.trim() === 'on')
+      .catch(() => false));
   const binding = providerOf(session.provider)?.binding;
   if (binding === 'own') {
     // A `/clear` from its last run the daemon never read: resume where the CLI went.
     const moved = await api.rebindClaudeSession(session.id).catch(() => null);
     if (moved) bindProviderSession(session.id, moved);
     const current = moved ? { ...session, providerSessionId: moved } : session;
-    const resume = await homeDir()
+    // Claude keeps its transcripts in the home of the machine it runs on.
+    const resume = await Promise.resolve(homeFor(cwd) ?? homeDir())
       .then((home) => api.pathExists(transcriptPath(home, cwd, claudeSessionId(current))))
       .catch(() => false);
-    return sessionCommand(current, { resume, theme });
+    return sessionCommand(current, { resume, theme, bypass });
   }
   if (binding === 'before' && !session.providerSessionId) {
     const created = await api.createProviderSession(session.id).catch(() => null);
     if (created) {
       bindProviderSession(session.id, created);
-      return sessionCommand({ ...session, providerSessionId: created }, { resume: true, theme });
+      return sessionCommand({ ...session, providerSessionId: created }, { resume: true, theme, bypass });
     }
   }
-  return sessionCommand(session, { resume: false, theme });
+  return sessionCommand(session, { resume: false, theme, bypass });
 }
 
 type SessionProps = {

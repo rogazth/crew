@@ -1,4 +1,4 @@
-import { ArrowCounterClockwiseIcon, MinusIcon, PlusIcon } from "@phosphor-icons/react";
+import { MinusIcon, PlusIcon, RotateCcwIcon } from "lucide-react";
 import { useMemo, useState } from "react";
 import { IconButton, Select, type Option } from "../chrome/kit";
 import { SettingsRow, SettingsSection } from "../chrome/SettingsRow";
@@ -99,7 +99,7 @@ export function TerminalSettings() {
 function Reset({ hidden, onClick }: { hidden: boolean; onClick: () => void }) {
   return (
     <IconButton
-      icon={ArrowCounterClockwiseIcon}
+      icon={RotateCcwIcon}
       label="Reset to default"
       className={hidden ? "invisible" : ""}
       onClick={onClick}
@@ -144,7 +144,7 @@ function Stepper({
   const nudge = (direction: 1 | -1) => onCommit(snap(value + direction * step, step, limits));
 
   return (
-    <div className="flex h-8 items-center rounded-md bg-kumo-base px-0.5 ring ring-kumo-line transition-shadow has-[input:focus]:ring-[1.5px] has-[input:focus]:ring-kumo-focus/50">
+    <div className="flex h-8 items-center rounded-md bg-canvas px-0.5 ring ring-border transition-shadow has-[input:focus]:ring-[1.5px] has-[input:focus]:ring-focus/50">
       <StepButton
         icon={MinusIcon}
         label="Smaller"
@@ -193,7 +193,7 @@ function StepButton({
       aria-label={label}
       disabled={disabled}
       onClick={onClick}
-      className="flex size-7 items-center justify-center rounded-md text-kumo-subtle outline-none transition-colors hover:bg-hover hover:text-kumo-default focus-visible:ring-2 focus-visible:ring-kumo-focus/50 disabled:bg-transparent disabled:text-placeholder"
+      className="flex size-7 items-center justify-center rounded-md text-icon outline-none transition-colors hover:bg-hover hover:text-text focus-visible:ring-2 focus-visible:ring-focus/50 disabled:bg-transparent disabled:text-placeholder"
     >
       <Glyph className="size-3.5" />
     </button>

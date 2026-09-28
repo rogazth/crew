@@ -1,22 +1,17 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import {
-  isOpen,
+  awaitsUser,
   type Answers,
   type ApprovalDecision,
   type Block,
 } from "../../lib/blocks";
-import { gapBefore, groupRows, speaker } from "../../lib/transcriptRows";
-import { dayLabel } from "../../lib/time";
-import { ActivityGroup, ThinkingLine } from "./Activity";
-import {
-  AssistantMessage,
-  DateBreak,
-  Note,
-  TurnFooter,
-  UserMessage,
-} from "./Message";
+import { foldTurns, groupRows, speaker } from "../../lib/transcriptRows";
+import { WorkingLine } from "./Activity";
+import { Rows } from "./Rows";
 
 const NEAR_BOTTOM_PX = 16;
+/** How long a clicked row holds its place: the panel's 200ms, and room for what renders late in it. */
+const ANCHOR_MS = 600;
 /** How close to the top the reader gets before the page behind it is fetched. */
 const PREFETCH_PX = 600;
 /** How many frames to wait for a folded phase to mount the row it holds. */
@@ -37,19 +32,17 @@ type Props = {
   onAnswer: (requestId: number, answers: Answers | null) => void;
 };
 
-/** The pending tool row already is the live state; Thinking only fills a true gap. */
-function showThinking(blocks: Block[], working: boolean): boolean {
-  if (!working) return false;
-  const last = blocks.at(-1);
-  if (!last) return true;
-  if (
-    (last.role === "assistant" || last.role === "reasoning") &&
-    last.streaming &&
-    last.text
-  )
-    return false;
-  if (isOpen(last)) return false;
-  return true;
+/** When the turn began: the message that started it, whoever sent it. */
+function turnStart(blocks: Block[]): number | undefined {
+  for (let index = blocks.length - 1; index >= 0; index -= 1) {
+    if (blocks[index]!.role === "user") return blocks[index]!.at;
+  }
+  return undefined;
+}
+
+/** A card the agent is stopped on: the time is the reader's, not the agent's. */
+function waiting(blocks: Block[]): boolean {
+  return blocks.some(awaitsUser);
 }
 
 /** Stick-to-bottom scroller, with a 16px threshold. */
@@ -71,8 +64,9 @@ export function Transcript({
   /** Where the reader is, measured from the bottom: everything that arrives
    *  arrives above them, so this is the number that must not change. */
   const fromBottom = useRef(0);
-  const rows = useMemo(() => groupRows(blocks), [blocks]);
-  const thinking = showThinking(blocks, working);
+  /** A row the reader just opened or closed: it stays where it was on screen while the panel moves. */
+  const anchor = useRef<{ el: Element; top: number; until: number } | null>(null);
+  const rows = useMemo(() => foldTurns(groupRows(blocks), working), [blocks, working]);
 
   const onScroll = () => {
     const el = scroller.current;
@@ -88,6 +82,15 @@ export function Transcript({
     // 0; writing one there is what lands the reader at the top of a year of
     // history the moment the tab is shown.
     if (!el || el.clientHeight === 0) return;
+    const held = anchor.current;
+    if (held && performance.now() < held.until && held.el.isConnected) {
+      // What the reader clicked is the fixed point, not the bottom and not the
+      // distance to it: the panel opens (or folds) under their pointer.
+      el.scrollTop += held.el.getBoundingClientRect().top - held.top;
+      fromBottom.current = el.scrollHeight - el.scrollTop;
+      return;
+    }
+    anchor.current = null;
     if (pinned.current) {
       el.scrollTop = el.scrollHeight;
       return;
@@ -97,7 +100,27 @@ export function Transcript({
     el.scrollTop = el.scrollHeight - fromBottom.current;
   }, []);
 
-  useLayoutEffect(place, [place, blocks, thinking, active]);
+  // A click on anything that folds (a phase, a tool row, a letter) pins that
+  // row for the length of the animation. Keyboard activation clicks too.
+  const onClickCapture = (event: React.MouseEvent) => {
+    const trigger = (event.target as Element).closest("[aria-expanded]");
+    if (!trigger || !scroller.current?.contains(trigger)) return;
+    anchor.current = { el: trigger, top: trigger.getBoundingClientRect().top, until: event.timeStamp + ANCHOR_MS };
+    // Re-measured each frame of the panel's transition, which a resize observer
+    // on the content also catches; this covers the frames it does not.
+    const follow = () => {
+      if (!anchor.current) return;
+      place();
+      if (anchor.current && performance.now() < anchor.current.until) requestAnimationFrame(follow);
+      else {
+        anchor.current = null;
+        onScroll();
+      }
+    };
+    requestAnimationFrame(follow);
+  };
+
+  useLayoutEffect(place, [place, blocks, working, active]);
 
   // Shiki answering, an image resolving, a webfont landing: each one grows the
   // transcript after the paint that placed the reader. The observer runs
@@ -107,7 +130,7 @@ export function Transcript({
     const body = content.current;
     if (!el || !body) return;
     const observer = new ResizeObserver(() => {
-      if (pinned.current) place();
+      if (pinned.current || anchor.current) place();
     });
     observer.observe(body);
     observer.observe(el);
@@ -165,9 +188,10 @@ export function Transcript({
       data-selectable="blocks"
       data-focus={focusId ?? ""}
       onScroll={onScroll}
+      onClickCapture={onClickCapture}
       className="min-h-0 flex-1 overflow-y-auto"
     >
-      <div ref={content} className="crew-prose px-6 pt-5 pb-7">
+      <div ref={content} className="crew-prose mx-auto w-full max-w-[760px] px-6 pt-8 pb-10">
         <div ref={sentinel} aria-hidden className="h-px" />
         {more && (
           <div className="mb-4 flex justify-center">
@@ -175,76 +199,20 @@ export function Transcript({
               type="button"
               disabled={loadingEarlier}
               onClick={onLoadEarlier}
-              className="rounded-chrome px-2.5 py-1 text-[11px] text-text-muted transition-colors hover:bg-hover hover:text-text disabled:text-placeholder"
+              className="rounded-chrome px-2.5 py-1 text-[11px] text-icon transition-colors hover:bg-hover hover:text-text disabled:text-placeholder"
             >
               {loadingEarlier ? "Loading…" : "Earlier messages"}
             </button>
           </div>
         )}
-        {rows.map((row, index) => {
-          const className = gapBefore(rows[index - 1], row);
-          if (row.kind === "activity") {
-            return (
-              <div key={row.id} className={className}>
-                <ActivityGroup
-                  blocks={row.blocks}
-                  live={working && index === rows.length - 1}
-                  focusId={focusId}
-                  marked={focusId}
-                  onApprove={onApprove}
-                  onAnswer={onAnswer}
-                />
-              </div>
-            );
-          }
-          if (row.kind === "footer") {
-            return (
-              <div key={row.id} className={className}>
-                <TurnFooter
-                  usage={row.usage}
-                  {...(row.at !== undefined ? { at: row.at } : {})}
-                />
-              </div>
-            );
-          }
-          if (row.kind === "date") {
-            return (
-              <div key={row.id} className={className}>
-                <DateBreak label={dayLabel(row.at)} />
-              </div>
-            );
-          }
-          const { block } = row;
-          return (
-            <div
-              key={block.id}
-              data-block={block.id}
-              className={`${className}${block.id === focusId ? " crew-found" : ""}`}
-            >
-              {block.role === "user" ? (
-                <UserMessage block={block} />
-              ) : block.role === "system" ? (
-                <Note block={block} />
-              ) : (
-                <AssistantMessage block={block} />
-              )}
-            </div>
-          );
-        })}
-        {thinking && (
-          <div
-            className={
-              rows.length > 0
-                ? speaker(rows.at(-1)!) === "agent"
-                  ? "mt-1.5"
-                  : "mt-5"
-                : ""
-            }
-          >
-            <ThinkingLine />
+        <Rows rows={rows} working={working} focusId={focusId} onApprove={onApprove} onAnswer={onAnswer} />
+        {working && (
+          <div className={rows.length > 0 ? (speaker(rows.at(-1)!) === "agent" ? "mt-2.5" : "mt-7") : ""}>
+            <WorkingLine since={turnStart(blocks)} waiting={waiting(blocks)} />
           </div>
         )}
       </div>
     </div>
   );
 }
+

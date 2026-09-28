@@ -45,3 +45,13 @@ export function elapsed(since: number, now = Date.now()): string {
   if (hours < 24) return rest ? `${hours}h ${rest}m` : `${hours}h`;
   return `${Math.floor(hours / 24)}d`;
 }
+
+/** How far off a moment is, as a list column says it: "in 12m", "in 3h", "in 2d", or "due". */
+export function until(at: number, now = Date.now()): string {
+  const minutes = Math.floor((at - now) / 60_000);
+  if (minutes < 1) return "due";
+  if (minutes < 60) return `in ${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `in ${hours}h`;
+  return `in ${Math.floor(hours / 24)}d`;
+}

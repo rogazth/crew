@@ -54,6 +54,14 @@ export function isOpen(block: Block): boolean {
   return false;
 }
 
+/**
+ * A card the user has to answer. A running tool is open too, but it waits on
+ * the agent, not on them.
+ */
+export function awaitsUser(block: Block): boolean {
+  return (block.role === "approval" || block.role === "question") && isOpen(block);
+}
+
 export function settleStreaming(blocks: Block[]): Block[] {
   return blocks.map((block) => (block.streaming ? { ...block, streaming: false } : block));
 }

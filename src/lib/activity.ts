@@ -1,5 +1,5 @@
 import { isOpen, type Block } from "./blocks";
-import { detailOf } from "./toolDetail";
+import { detailOf, prettyTitle } from "./toolDetail";
 
 /** What a run of tool calls was for. Drives the phase icon and its one-line label. */
 export type PhaseKind = "edit" | "research" | "run" | "other";
@@ -40,6 +40,10 @@ export function phaseKind(block: Block): PhaseKind {
     case "fetch":
       return "research";
     case "message":
+    case "todo":
+    case "agent":
+    case "mcp":
+    case "plan":
     case "output":
       return "other";
     default:
@@ -102,8 +106,9 @@ function isSearch(block: Block): boolean {
   return /^(glob|grep|websearch|search|find)$/i.test(toolName(block));
 }
 
+/** One file by its name — the rows under the label carry the path — or a count. */
 function fileLabel(files: Set<string>): string {
-  if (files.size === 1) return [...files][0]!;
+  if (files.size === 1) return [...files][0]!.split("/").pop()!;
   return `${files.size} files`;
 }
 
@@ -132,7 +137,7 @@ export function phaseLabel(phase: Phase): string {
       if (count === 1) return live ? "Running a command" : "Ran a command";
       return `${live ? "Running" : "Ran"} ${count} commands`;
     default:
-      if (count === 1) return phase.blocks[0]!.tool?.title ?? phase.blocks[0]!.text;
+      if (count === 1) return prettyTitle(phase.blocks[0]!.tool?.title ?? phase.blocks[0]!.text);
       return `${live ? "Running" : "Ran"} ${count} tools`;
   }
 }
@@ -192,4 +197,17 @@ export function summarize(text: string, max = 96): string {
       .map((row) => row.replace(/^[#>\-*\s]+/, "").replace(/[*_`]/g, "").trim())
       .find((row) => row.length > 0) ?? "";
   return line.length > max ? `${line.slice(0, max - 1)}…` : line;
+}
+
+/**
+ * A thought without the line its folded row already shows, so opening it does
+ * not say that line twice. Nothing when the thought was only that line.
+ */
+export function afterSummary(text: string): string {
+  // A first line the row had to cut short is not said yet: keep it all.
+  if (summarize(text).endsWith("…")) return text;
+  const lines = text.split("\n");
+  const first = lines.findIndex((row) => row.trim().length > 0);
+  if (first < 0) return "";
+  return lines.slice(first + 1).join("\n").replace(/^\s*\n/, "").trimEnd();
 }

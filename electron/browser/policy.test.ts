@@ -1,18 +1,20 @@
 import { describe, expect, it } from "vitest";
+import { partitionFor } from "../../src/lib/browser/bridge";
 import {
-  PARTITION,
   RESTORE_PREFIX,
+  asksForApp,
   attachDecision,
-  browserUserAgent,
   certificateBypass,
   createRateLimiter,
   hardenWebPreferences,
   navigationVerdict,
-  permissionAllowed,
   popupVerdict,
+  previewNavigationVerdict,
 } from "./policy";
+import { FILES_PARTITION } from "../../src/lib/browser/files";
 
 const GUEST_PRELOAD = "/app/guest-preload.cjs";
+const PARTITION = partitionFor("0b6f3c1e-8f2a-4d1b-9c55-2f1e7a9d4c10")!;
 
 describe("hardenWebPreferences", () => {
   it("overrides whatever the webview asked for", () => {
@@ -32,7 +34,7 @@ describe("hardenWebPreferences", () => {
       // What Electron leaves after spreading webpreferences="partition=persist:evil".
       partition: "persist:evil",
     };
-    hardenWebPreferences(prefs, GUEST_PRELOAD);
+    hardenWebPreferences(prefs, GUEST_PRELOAD, PARTITION);
     expect(prefs).toEqual({
       preload: GUEST_PRELOAD,
       partition: PARTITION,
@@ -44,12 +46,13 @@ describe("hardenWebPreferences", () => {
       allowRunningInsecureContent: false,
       disableBlinkFeatures: "",
       webviewTag: false,
+      disableHtmlFullscreenWindowResize: true,
     });
   });
 
   it("hardens an empty object the same way", () => {
     const prefs: Record<string, unknown> = {};
-    hardenWebPreferences(prefs, GUEST_PRELOAD);
+    hardenWebPreferences(prefs, GUEST_PRELOAD, PARTITION);
     expect(prefs).not.toHaveProperty("preloadURL");
     expect(prefs).not.toHaveProperty("enableBlinkFeatures");
     expect(prefs).toMatchObject({
@@ -65,7 +68,7 @@ describe("hardenWebPreferences", () => {
 describe("attachDecision", () => {
   const attach = (src: string | undefined, partition = PARTITION) =>
     attachDecision(src === undefined ? { partition } : { src, partition });
-  const allowed = { allow: true, restoreToken: null };
+  const allowed = { allow: true, partition: PARTITION, restoreToken: null };
   const denied = { allow: false };
 
   it.each([
@@ -105,13 +108,25 @@ describe("attachDecision", () => {
     expect(attach("https://example.com", "")).toEqual(denied);
     expect(attach("https://example.com", "persist:other")).toEqual(denied);
     expect(attach("https://example.com", "crew-browser")).toEqual(denied);
+    expect(attach("https://example.com", "crew-incognito-ws-")).toEqual(denied);
+    expect(attach("https://example.com", "persist:crew-incognito-ws-w1")).toEqual(denied);
+    expect(attach("https://example.com", "crew-incognito-ws-../x")).toEqual(denied);
     expect(attach("about:blank", "persist:crew-browser2")).toEqual(denied);
+    // The shared partition from before workspaces had their own is only ever copied from.
+    expect(attach("about:blank", "persist:crew-browser")).toEqual(denied);
+    expect(attach("about:blank", "persist:crew-browser-ws-../x")).toEqual(denied);
+    expect(attach("about:blank", "persist:crew-browser-ws-")).toEqual(denied);
+  });
+
+  it("allows each workspace's own partition and hands it back", () => {
+    const other = partitionFor("second-workspace")!;
+    expect(attach("about:blank", other)).toEqual({ allow: true, partition: other, restoreToken: null });
   });
 
   it("hands back a restore token", () => {
-    expect(attach(`${RESTORE_PREFIX}abc-123-DEF`)).toEqual({ allow: true, restoreToken: "abc-123-DEF" });
+    expect(attach(`${RESTORE_PREFIX}abc-123-DEF`)).toEqual({ allow: true, partition: PARTITION, restoreToken: "abc-123-DEF" });
     const longest = "a".repeat(64);
-    expect(attach(`${RESTORE_PREFIX}${longest}`)).toEqual({ allow: true, restoreToken: longest });
+    expect(attach(`${RESTORE_PREFIX}${longest}`)).toEqual({ allow: true, partition: PARTITION, restoreToken: longest });
   });
 
   it.each([
@@ -132,7 +147,56 @@ describe("attachDecision", () => {
   });
 });
 
+describe("attachDecision for incognito pages", () => {
+  it("allows a workspace's in-memory session", () => {
+    expect(attachDecision({ src: "https://example.com", partition: "crew-incognito-ws-w1" })).toEqual({
+      allow: true,
+      partition: "crew-incognito-ws-w1",
+      restoreToken: null,
+    });
+  });
+});
+
+describe("attachDecision for previews", () => {
+  it("allows a file in the previews' partition", () => {
+    expect(attachDecision({ src: "crew-file://a1b2/report.html", partition: FILES_PARTITION })).toEqual({
+      allow: true,
+      partition: FILES_PARTITION,
+      restoreToken: null,
+    });
+  });
+
+  it.each(["", "about:blank", "https://example.com", "file:///etc/passwd", `${RESTORE_PREFIX}abc`])(
+    "refuses %s in the previews' partition",
+    (src) => {
+      expect(attachDecision({ src, partition: FILES_PARTITION })).toEqual({ allow: false });
+    },
+  );
+
+  it("refuses a file in a page partition", () => {
+    expect(attachDecision({ src: "crew-file://a1b2/report.html", partition: PARTITION })).toEqual({ allow: false });
+  });
+});
+
+describe("previewNavigationVerdict", () => {
+  it.each([
+    ["another file", "crew-file://a1b2/other.html", "allow"],
+    ["about:blank", "about:blank", "allow"],
+    ["a web page", "https://example.com/", "tab"],
+    ["mail", "mailto:someone@example.com", "external"],
+    ["file:", "file:///etc/passwd", "block"],
+    ["javascript:", "javascript:alert(1)", "block"],
+    ["garbage", "not a url", "block"],
+  ])("%s → %s", (_name, url, verdict) => {
+    expect(previewNavigationVerdict(url)).toBe(verdict);
+  });
+});
+
 describe("navigationVerdict", () => {
+  it("blocks a preview's file from a web page", () => {
+    expect(navigationVerdict("crew-file://a1b2/report.html")).toBe("block");
+  });
+
   it.each([
     "http://example.com",
     "https://example.com/path?q#frag",
@@ -151,25 +215,43 @@ describe("navigationVerdict", () => {
     },
   );
 
+  it.each(["vscode://file/x", "zoommtg://zoom.us/join?confno=1", "slack://open", "tel:+123", "ftp://example.com"])(
+    "asks before handing %s to its app",
+    (url) => {
+      expect(navigationVerdict(url)).toBe("ask");
+    },
+  );
+
+  it("saves a blob the page made instead of showing it", () => {
+    expect(navigationVerdict("blob:https://example.com/uuid")).toBe("download");
+  });
+
   it.each([
     "file:///etc/passwd",
     "FILE:///etc/passwd",
     "javascript:alert(1)",
     "JavaScript:alert(1)",
     "data:text/html,hi",
-    "blob:https://example.com/uuid",
     "crew://open",
-    "vscode://file/x",
+    "crew-file://a1b2/report.html",
     "chrome://settings",
     "about:config",
     "about:srcdoc",
-    "tel:+123",
-    "ftp://example.com",
+    "view-source:https://example.com",
     "",
     "not a url",
     "http://",
   ])("blocks %s", (url) => {
     expect(navigationVerdict(url)).toBe("block");
+  });
+});
+
+describe("asksForApp", () => {
+  it("offers an app's scheme and never Crew's own", () => {
+    expect(asksForApp("zoommtg://zoom.us/join")).toBe(true);
+    expect(asksForApp("crew-file://x/y")).toBe(false);
+    expect(asksForApp("CREW://open")).toBe(false);
+    expect(asksForApp("mailto:a@b.c")).toBe(false);
   });
 });
 
@@ -222,10 +304,24 @@ describe("popupVerdict", () => {
     expect(popup("about:blank", "foreground-tab")).toEqual({ action: "deny" });
   });
 
+  it("saves a blob or data URL opened in a new tab", () => {
+    expect(popup("blob:https://example.com/uuid", "foreground-tab")).toEqual({
+      action: "download",
+      url: "blob:https://example.com/uuid",
+    });
+    expect(popup("data:application/pdf;base64,AA==", "new-window")).toEqual({
+      action: "download",
+      url: "data:application/pdf;base64,AA==",
+    });
+  });
+
+  it("asks before opening another app's link", () => {
+    expect(popup("zoommtg://zoom.us/join", "foreground-tab")).toEqual({ action: "ask", url: "zoommtg://zoom.us/join" });
+  });
+
   it.each([
     "javascript:alert(1)",
     "file:///etc/passwd",
-    "data:text/html,hi",
     "crew://x",
     "",
     "not a url",
@@ -240,39 +336,6 @@ describe("popupVerdict", () => {
       url: "HTTPS://EXAMPLE.COM/",
       background: true,
     });
-  });
-});
-
-describe("permissionAllowed", () => {
-  it.each(["clipboard-sanitized-write", "fullscreen", "pointerLock"])("allows %s", (permission) => {
-    expect(permissionAllowed(permission)).toBe(true);
-  });
-
-  it.each([
-    "media",
-    "geolocation",
-    "notifications",
-    "display-capture",
-    "openExternal",
-    "clipboard-read",
-    "midi",
-    "midiSysex",
-    "hid",
-    "serial",
-    "usb",
-    "idle-detection",
-    "keyboardLock",
-    "window-management",
-    "storage-access",
-    "top-level-storage-access",
-    "speaker-selection",
-    "fileSystem",
-    "unknown",
-    "",
-    "Fullscreen",
-    "pointerlock",
-  ])("denies %s", (permission) => {
-    expect(permissionAllowed(permission)).toBe(false);
   });
 });
 
@@ -368,36 +431,5 @@ describe("createRateLimiter", () => {
     const allow = createRateLimiter(1, 60_000);
     expect(allow()).toBe(true);
     expect(allow()).toBe(false);
-  });
-});
-
-describe("browserUserAgent", () => {
-  // Electron 44.2's default, read from app.userAgentFallback.
-  const linux =
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Crew/0.1.4 Chrome/152.0.7977.76 Electron/44.2.0 Safari/537.36";
-  const mac =
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Crew/0.1.4 Chrome/152.0.7977.76 Electron/44.2.0 Safari/537.36";
-
-  it("leaves Chromium's own agent", () => {
-    expect(browserUserAgent(linux)).toBe(
-      "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.7977.76 Safari/537.36",
-    );
-    expect(browserUserAgent(mac)).toBe(
-      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.7977.76 Safari/537.36",
-    );
-  });
-
-  it("strips the app token in any case", () => {
-    expect(browserUserAgent(linux.replace("Crew/", "crew/"))).not.toMatch(/crew/i);
-    expect(browserUserAgent(linux.replace("Crew/0.1.4", "CREW/1.0.0-beta.2"))).not.toMatch(/crew/i);
-  });
-
-  it("keeps words that merely contain the app name", () => {
-    expect(browserUserAgent("Mozilla/5.0 Screw/1.0 Chrome/152.0.0.0")).toBe("Mozilla/5.0 Screw/1.0 Chrome/152.0.0.0");
-  });
-
-  it("leaves an agent without the tokens alone", () => {
-    const plain = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.7977.76 Safari/537.36";
-    expect(browserUserAgent(plain)).toBe(plain);
   });
 });

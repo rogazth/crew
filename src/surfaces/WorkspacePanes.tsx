@@ -2,11 +2,12 @@ import { useMemo } from 'react';
 import { Agents } from './Agents';
 import { Browsers } from './Browsers';
 import { DiffsPool } from './DiffsPool';
+import { Previews } from './Previews';
 import { ChatContext, type ChatActions } from './chat/context';
 import { Surface } from './Surface';
 import { Terminals } from './Terminals';
-import type { ProviderId } from '../lib/providers';
-import type { Pane } from '../lib/tabs';
+import type { Confirm } from '../chrome/ConfirmDialog';
+import type { BrowserTabPatch, Pane } from '../lib/tabs';
 import type { ProjectFile, Session, SessionStatus, Tab, Workspace } from '../lib/types';
 import { parseContext } from '../lib/worktrees';
 
@@ -27,17 +28,18 @@ type Props = {
   hasWorkspace: boolean;
   onCreateWorkspace: () => void;
   onStatus: (id: string, status: SessionStatus) => void;
-  onModel: (session: Session, provider: ProviderId, model: string) => void;
   onOpenFile: (file: ProjectFile) => void;
   onOpenSession: (sessionId: string) => void;
-  onPatchBrowser: (workspaceId: string, tabId: string, patch: { url?: string; title?: string }) => void;
+  onPatchBrowser: (workspaceId: string, tabId: string, patch: BrowserTabPatch) => void;
   onOpenBrowserTab: (workspaceId: string, tab: Tab, opts: { after: string; background: boolean }) => void;
   /** An agent needs this tab in that strip: add it behind the one on screen. */
   onAdoptBrowserTab: (context: string, tab: Tab) => void;
   files: ProjectFile[];
+  onOpenHistory: (url: string) => void;
+  onConfirm: (confirm: Confirm) => void;
 };
 
-/** Active surface plus the mounted agent, terminal and page overlays, of every workspace. */
+/** Active surface plus the mounted agent, terminal, page and media overlays, of every workspace. */
 export function WorkspacePanes({
   tab,
   panes,
@@ -48,13 +50,14 @@ export function WorkspacePanes({
   hasWorkspace,
   onCreateWorkspace,
   onStatus,
-  onModel,
   onOpenFile,
   onOpenSession,
   onPatchBrowser,
   onOpenBrowserTab,
   onAdoptBrowserTab,
   files,
+  onOpenHistory,
+  onConfirm,
 }: Props) {
   // Keyed on where each session runs, not on the sessions: a status change
   // must not hand every mounted pane a fresh object.
@@ -74,7 +77,9 @@ export function WorkspacePanes({
       const cwd =
         tab.kind === 'session'
           ? (where.get(tab.sessionId) ?? workspace.path)
-          : placeOf(context.worktree, workspace);
+          : tab.kind === 'stub' && tab.worktree !== undefined
+            ? placeOf(tab.worktree, workspace)
+            : placeOf(context.worktree, workspace);
       return [{ ...pane, cwd }];
     });
   }, [panes, placement, placeOf, workspaces]);
@@ -105,6 +110,8 @@ export function WorkspacePanes({
           onCreateWorkspace={onCreateWorkspace}
           files={files}
           onOpenPath={chat.openPath}
+          onOpenHistory={onOpenHistory}
+          onConfirm={onConfirm}
         />
       </DiffsPool>
       <Terminals
@@ -114,8 +121,9 @@ export function WorkspacePanes({
         onOpenFile={onOpenFile}
       />
       <Browsers panes={mounted} onPatch={onPatchBrowser} onOpenTab={onOpenBrowserTab} onAdopt={onAdoptBrowserTab} />
+      <Previews panes={mounted} />
       <ChatContext value={chat}>
-        <Agents panes={mounted} sessions={sessions} onModel={onModel} />
+        <Agents panes={mounted} sessions={sessions} />
       </ChatContext>
     </div>
   );

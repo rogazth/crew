@@ -1,19 +1,5 @@
-import { Collapsible } from "@cloudflare/kumo";
-import {
-  CaretRightIcon,
-  ChatCircleDotsIcon,
-  CircleNotchIcon,
-  FileTextIcon,
-  GlobeSimpleIcon,
-  MagnifyingGlassIcon,
-  PaperPlaneTiltIcon,
-  PencilSimpleIcon,
-  SparkleIcon,
-  TerminalIcon,
-  WrenchIcon,
-  XIcon,
-  type Icon,
-} from "@phosphor-icons/react";
+import { Collapsible } from "@base-ui/react/collapsible";
+import { BotIcon, ChevronRightIcon, FileTextIcon, GlobeIcon, ListChecksIcon, LoaderCircleIcon, MessageCircleMoreIcon, NotebookTextIcon, PencilIcon, PlugIcon, SearchIcon, SendIcon, SparkleIcon, TerminalIcon, WrenchIcon, XIcon, type LucideIcon as Icon } from "lucide-react";
 import { createElement, memo, useMemo, useState, type ReactNode } from "react";
 import {
   FOLD_AT,
@@ -22,13 +8,16 @@ import {
   phaseFailed,
   phaseLabel,
   phaseOpen,
+  afterSummary,
   summarize,
   type ActivityDigest,
   type Phase,
   type PhaseKind,
 } from "../../lib/activity";
+import { useNow } from "../../hooks/useNow";
+import { duration } from "../../lib/time";
 import { answerSummary, isOpen, type Answers, type ApprovalDecision, type Block } from "../../lib/blocks";
-import { glyphKind, hasBody, toolLine } from "../../lib/toolDetail";
+import { glyphKind, hasBody, toolLine, type ToolGlyphKind } from "../../lib/toolDetail";
 import { ApprovalCard } from "./ApprovalCard";
 import { QuestionCard } from "./QuestionCard";
 import { ToolBody } from "./ToolBody";
@@ -46,8 +35,8 @@ type Props = {
 };
 
 const KIND_ICON: Record<PhaseKind, Icon> = {
-  edit: PencilSimpleIcon,
-  research: MagnifyingGlassIcon,
+  edit: PencilIcon,
+  research: SearchIcon,
   run: TerminalIcon,
   other: WrenchIcon,
 };
@@ -55,13 +44,17 @@ const KIND_ICON: Record<PhaseKind, Icon> = {
 const DIGEST_ICON: Record<ActivityDigest["kind"], Icon> = { ...KIND_ICON, thought: SparkleIcon };
 
 /** A row wears what it did, not what its phase was called. */
-const DETAIL_ICON: Record<string, Icon> = {
+const DETAIL_ICON: Record<NonNullable<ToolGlyphKind>, Icon> = {
   command: TerminalIcon,
   file: FileTextIcon,
-  edit: PencilSimpleIcon,
-  search: MagnifyingGlassIcon,
-  fetch: GlobeSimpleIcon,
-  message: PaperPlaneTiltIcon,
+  edit: PencilIcon,
+  search: SearchIcon,
+  fetch: GlobeIcon,
+  message: SendIcon,
+  todo: ListChecksIcon,
+  agent: BotIcon,
+  mcp: PlugIcon,
+  plan: NotebookTextIcon,
 };
 
 function iconFor(block: Block, fallback: Icon | undefined): Icon | undefined {
@@ -100,8 +93,10 @@ export const ActivityGroup = memo(function ActivityGroup({
   const items = useMemo(() => buildActivity(blocks), [blocks]);
   // Keys go to one card: the newest thing waiting on the user.
   const hot = live ? blocks.filter(isOpen).at(-1)?.id : undefined;
+  // Its own rail, unless a run folds it: then the run's steps are the rail.
+  const folds = items.length >= FOLD_AT;
   const rows = (
-    <div className="flex flex-col">
+    <div className={`flex flex-col gap-1.5 ${folds ? "" : "crew-timeline"}`}>
       {items.map((item, index) => {
         if (item.kind === "question") {
           return isOpen(item.block) ? (
@@ -127,11 +122,13 @@ export const ActivityGroup = memo(function ActivityGroup({
       })}
     </div>
   );
-  if (items.length < FOLD_AT) return rows;
+  if (!folds) return rows;
   return (
+    <div className="crew-timeline">
     <RunShell blocks={blocks} items={items} live={live} focusId={focusId} marked={marked}>
       {rows}
     </RunShell>
+    </div>
   );
 }, sameBlocks);
 
@@ -183,13 +180,12 @@ function RunShell({
 
   return (
     <Collapsible.Root open={open} onOpenChange={(next) => setPinned(next)}>
-      <Collapsible.Trigger className="group flex min-h-5 w-full items-center gap-2 py-0.5 text-left text-[13px] leading-[18px]">
-        <span className="relative flex size-3.5 shrink-0 items-center justify-center text-kumo-subtle">
+      <Collapsible.Trigger className="group flex min-h-[26px] w-full items-center gap-2 py-0.5 text-left text-[13px] leading-[18px]">
+        <span className="crew-node relative">
           {createElement(DIGEST_ICON[digest.kind], {
             className: `size-3.5 transition-opacity group-hover:opacity-0${failed ? " text-danger" : ""}`,
           })}
-          <CaretRightIcon
-            weight="bold"
+          <ChevronRightIcon
             className={`absolute size-3 opacity-0 transition-[opacity,transform] duration-150 group-hover:opacity-100 ${open ? "rotate-90" : ""}`}
           />
         </span>
@@ -250,7 +246,7 @@ function PhaseRow({
 
   return (
     <Collapsible.Root open={open} onOpenChange={(next) => setPinned(next)}>
-      <Collapsible.Trigger className="group flex min-h-5 w-full items-center gap-2 py-0.5 text-left text-[13px] leading-[18px]">
+      <Collapsible.Trigger className="group flex min-h-[26px] w-full items-center gap-2 py-0.5 text-left text-[13px] leading-[18px]">
         <PhaseLine phase={phase} waiting={waiting} failed={failed} open={open} />
       </Collapsible.Trigger>
       <Collapsible.Panel className="crew-phase-panel">
@@ -278,16 +274,15 @@ function PhaseLine({
 }) {
   return (
     <>
-      <span className="relative flex size-3.5 shrink-0 items-center justify-center text-kumo-subtle">
+      <span className="crew-node relative">
         {waiting ? (
-          <CircleNotchIcon className="size-3.5 animate-spin text-kumo-warning" weight="bold" />
+          <LoaderCircleIcon className="size-3.5 animate-spin text-warning" />
         ) : (
           <>
             {createElement(failed ? XIcon : KIND_ICON[phase.kind], {
               className: `size-3.5 transition-opacity group-hover:opacity-0${failed ? " text-danger" : ""}`,
             })}
-            <CaretRightIcon
-              weight="bold"
+            <ChevronRightIcon
               className={`absolute size-3 opacity-0 transition-[opacity,transform] duration-150 group-hover:opacity-100 ${open ? "rotate-90" : ""}`}
             />
           </>
@@ -302,7 +297,7 @@ function PhaseLine({
   );
 }
 
-const ROW = "group flex min-h-5 items-center gap-2 py-0.5 text-[13px] leading-[18px]";
+const ROW = "group flex min-h-[26px] items-center gap-2 py-0.5 text-[13px] leading-[18px]";
 
 /** The row a search hit sent the reader to. */
 function lit(id: string, marked: string | null): string {
@@ -323,12 +318,11 @@ function ToolGlyph({
   openable: boolean;
   icon?: Icon | undefined;
 }) {
-  if (pending) return <CircleNotchIcon className="size-3.5 animate-spin text-kumo-warning" weight="bold" />;
-  if (failed) return <XIcon className="size-3 text-danger" weight="bold" />;
+  if (pending) return <LoaderCircleIcon className="size-3.5 animate-spin text-warning" />;
+  if (failed) return <XIcon className="size-3 text-danger" />;
   if (openable) {
     return (
-      <CaretRightIcon
-        weight="bold"
+      <ChevronRightIcon
         className={`size-3 transition-transform duration-150 ${open ? "rotate-90" : ""}`}
       />
     );
@@ -359,7 +353,7 @@ function ToolLine({
   const tone = toneOf(failed, block.approval?.decided === "deny");
   return (
     <>
-      <span className="flex size-3.5 shrink-0 items-center justify-center text-kumo-subtle">
+      <span className="crew-node">
         <ToolGlyph pending={isOpen(block)} failed={failed} open={open} openable={openable} icon={icon} />
       </span>
       <span className={`min-w-0 truncate transition-colors ${tone} ${line.mono ? "font-mono text-[12.5px]" : ""}`}>
@@ -417,25 +411,41 @@ function ReasoningRow({ block, marked }: { block: Block; marked: string | null }
   const [pinned, setPinned] = useState<boolean | null>(null);
   const open = pinned ?? streaming;
   const summary = summarize(block.text);
+  const rest = afterSummary(block.text);
+  const label = (
+    <span className={`min-w-0 truncate ${streaming ? "crew-shimmer" : "text-text-muted transition-colors group-hover:text-text"}`}>
+      {streaming ? "Thinking" : summary || "Thought"}
+    </span>
+  );
+  // A one-line thought is all in its row; there is nothing to open.
+  if (!streaming && !rest) {
+    return (
+      <div data-block={block.id} className={`${ROW}${lit(block.id, marked)}`}>
+        <span className="crew-node">
+          <SparkleIcon className="size-3.5" />
+        </span>
+        {label}
+      </div>
+    );
+  }
   return (
     <Collapsible.Root open={open} onOpenChange={(next) => setPinned(next)}>
       <Collapsible.Trigger
         data-block={block.id}
-        className={`group flex min-h-5 w-full items-center gap-2 py-0.5 text-left text-[13px] leading-[18px]${lit(block.id, marked)}`}
+        className={`group flex min-h-[26px] w-full items-center gap-2 py-0.5 text-left text-[13px] leading-[18px]${lit(block.id, marked)}`}
       >
-        <span className="relative flex size-3.5 shrink-0 items-center justify-center text-kumo-subtle">
+        <span className="crew-node relative">
           <SparkleIcon className="size-3.5 transition-opacity group-hover:opacity-0" />
-          <CaretRightIcon
-            weight="bold"
+          <ChevronRightIcon
             className={`absolute size-3 opacity-0 transition-[opacity,transform] duration-150 group-hover:opacity-100 ${open ? "rotate-90" : ""}`}
           />
         </span>
-        <span className={`min-w-0 truncate ${streaming ? "crew-shimmer" : "text-text-muted transition-colors group-hover:text-text"}`}>
-          {streaming ? "Thinking" : summary || "Thought"}
-        </span>
+        {label}
       </Collapsible.Trigger>
       <Collapsible.Panel className="crew-phase-panel">
-        <p className="crew-phase-steps whitespace-pre-wrap py-0.5 text-[13px] leading-[18px] text-text-muted">{block.text}</p>
+        <p className="crew-phase-steps whitespace-pre-wrap py-0.5 text-[13px] leading-[18px] text-text-muted">
+          {streaming ? block.text : rest}
+        </p>
       </Collapsible.Panel>
     </Collapsible.Root>
   );
@@ -445,9 +455,9 @@ function AnsweredRow({ block }: { block: Block }) {
   const summary = answerSummary(block);
   const dismissed = block.question?.dismissed === true;
   return (
-    <div className="flex min-h-5 items-center gap-2 py-0.5 text-[13px] leading-[18px]">
-      <span className="flex size-3.5 shrink-0 items-center justify-center text-kumo-subtle">
-        <ChatCircleDotsIcon className="size-3.5" />
+    <div className="flex min-h-[26px] items-center gap-2 py-0.5 text-[13px] leading-[18px]">
+      <span className="crew-node">
+        <MessageCircleMoreIcon className="size-3.5" />
       </span>
       <span className={`min-w-0 truncate ${dismissed ? "text-placeholder line-through" : "text-text-muted"}`}>
         {block.text}
@@ -457,14 +467,24 @@ function AnsweredRow({ block }: { block: Block }) {
   );
 }
 
-/** One activity-weight line for the gap between sending and the first token. */
-export function ThinkingLine() {
+/**
+ * The turn in progress, at the foot of the chat: how long the agent has been
+ * at it, ticking. While a card waits on the reader the time is theirs, so the
+ * line says so instead of counting.
+ */
+export function WorkingLine({ since, waiting }: { since: number | undefined; waiting: boolean }) {
+  const now = useNow(1000, !waiting);
+  const label = waiting ? "Waiting for you" : since !== undefined ? `Working for ${duration(Math.max(0, now - since))}` : "Working";
   return (
-    <div className="flex min-h-5 items-center gap-2 py-0.5 text-[13px] leading-[18px]">
-      <span className="flex size-3.5 shrink-0 items-center justify-center">
-        <CircleNotchIcon className="size-3.5 animate-spin text-kumo-warning" weight="bold" />
+    <div className="flex min-h-[26px] items-center gap-2 py-0.5 text-[13px] leading-[18px]">
+      <span className="crew-node">
+        {waiting ? (
+          <MessageCircleMoreIcon className="size-3.5 text-warning" />
+        ) : (
+          <LoaderCircleIcon className="size-3.5 animate-spin text-warning" />
+        )}
       </span>
-      <span className="crew-shimmer">Thinking</span>
+      <span className={`tabular-nums ${waiting ? "text-text-muted" : "crew-shimmer"}`}>{label}</span>
     </div>
   );
 }

@@ -1,4 +1,4 @@
-import { ArrowsClockwiseIcon, FileArrowDownIcon, PlayIcon, PlusIcon, StopIcon, type Icon } from "@phosphor-icons/react";
+import { FileDownIcon, PlayIcon, PlusIcon, RotateCwIcon, SquareIcon, type LucideIcon as Icon } from "lucide-react";
 import { useEffect, useState, type KeyboardEvent } from "react";
 import { ActionMenu } from "./ActionMenu";
 import type { Confirm } from "./ConfirmDialog";
@@ -75,8 +75,8 @@ export function CommandsSection({ workspace, processes, activeId, onOpen, onConf
   return (
     <div className="mt-3" data-commands>
       <div className="flex h-8 items-center gap-0.5 pl-2">
-        <span className="min-w-0 flex-1 truncate text-kumo-subtle">Commands</span>
-        {hasSolo && <HeaderButton icon={FileArrowDownIcon} label="Import from solo.yml" onClick={importSolo} />}
+        <span className="min-w-0 flex-1 truncate text-text-muted">Commands</span>
+        {hasSolo && <HeaderButton icon={FileDownIcon} label="Import from solo.yml" onClick={importSolo} />}
         <HeaderButton icon={PlusIcon} label="New command" onClick={() => setEditing({})} />
       </div>
 
@@ -105,7 +105,7 @@ export function CommandsSection({ workspace, processes, activeId, onOpen, onConf
       </div>
 
       {(notice ?? processes.error) && (
-        <p role="alert" className="px-2 py-1.5 text-[12px] text-kumo-danger">
+        <p role="alert" className="px-2 py-1.5 text-[12px] text-danger">
           {notice ?? processes.error}
         </p>
       )}
@@ -141,7 +141,7 @@ function HeaderButton({ icon: Glyph, label, onClick }: { icon: Icon; label: stri
       aria-label={label}
       title={label}
       onClick={onClick}
-      className="grid size-6 shrink-0 place-items-center rounded-md text-kumo-subtle outline-none transition-colors hover:bg-hover hover:text-kumo-default focus-visible:bg-hover"
+      className="grid size-6 shrink-0 place-items-center rounded-md text-text-muted outline-none transition-colors hover:bg-hover hover:text-text focus-visible:bg-hover"
     >
       <Glyph className="size-4" />
     </button>
@@ -195,7 +195,7 @@ function CommandRow({
         <ProcessDot process={process} />
         <span className={`min-w-0 flex-1 truncate ${active ? "font-medium" : ""}`}>{process.name}</span>
         {asking && (
-          <span className="shrink-0 rounded-full bg-kumo-warning/15 px-1.5 text-[11px] text-kumo-warning group-hover/cmd:opacity-0">
+          <span className="shrink-0 rounded-full bg-warning/15 px-1.5 text-[11px] text-warning group-hover/cmd:opacity-0">
             Review
           </span>
         )}
@@ -203,10 +203,10 @@ function CommandRow({
       {!asking && (
         <span className="absolute top-1 right-1 flex gap-0.5 opacity-0 transition-opacity group-focus-within/cmd:opacity-100 group-hover/cmd:opacity-100">
           {live && process.state !== "starting" && (
-            <RowButton icon={ArrowsClockwiseIcon} label={`Restart ${process.name}`} onClick={onRestart} />
+            <RowButton icon={RotateCwIcon} label={`Restart ${process.name}`} onClick={onRestart} />
           )}
           <RowButton
-            icon={live ? StopIcon : PlayIcon}
+            icon={live ? SquareIcon : PlayIcon}
             label={`${live ? "Stop" : "Start"} ${process.name}`}
             onClick={onToggle}
           />
@@ -224,9 +224,9 @@ function RowButton({ icon: Glyph, label, onClick }: { icon: Icon; label: string;
       aria-label={label}
       title={label}
       onClick={onClick}
-      className="grid size-6 place-items-center rounded-md text-kumo-subtle hover:bg-hover hover:text-kumo-default"
+      className="grid size-6 place-items-center rounded-md text-text-muted hover:bg-hover hover:text-text"
     >
-      <Glyph className="size-3.5" weight="fill" />
+      <Glyph className="size-3.5 fill-current" />
     </button>
   );
 }

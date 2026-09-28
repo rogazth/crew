@@ -6,6 +6,8 @@ You run a roster of agents, each with its own chat. They can message each other 
 
 Everything runs on your machine. A Rust daemon holds the agents, the transcripts, and a SQLite store; the Electron app is a client over it. No account, no sync, no keys of ours. You bring the CLIs; they stay logged in the way you already use them.
 
+A workspace can also live on another Linux machine on your Tailscale network. Settings › Environments installs `crewd` there over SSH, and ⌘O opens a folder on it. The window stays on this Mac and talks to that daemon directly. Agent CLIs have to be logged in on the machine that runs them. Ubuntu, with Tailscale, is the supported remote. Windows is not.
+
 ## Install and run
 
 You need [Node](https://nodejs.org) 20+, [Rust](https://rustup.rs), and at least one provider CLI on your `PATH`:
@@ -32,20 +34,29 @@ To build the app itself (macOS arm64):
 
 ```bash
 npm run app:build        # → release/, unpacked and fast
-npm run release          # → tags, builds the zip, publishes the GitHub release
 ```
+
+## Releasing
+
+Releases are built by GitHub Actions on a macOS runner, so any machine with node, git and push access can cut one:
+
+```bash
+npm run release -- patch    # or minor, major, or an exact version like 0.2.0
+```
+
+That bumps the version in `package.json`, `package-lock.json`, `Cargo.toml` and `Cargo.lock`, commits `chore: bump the version to X`, tags `vX` and pushes master and the tag together. It refuses on a dirty tree, off master, or behind origin.
+
+The tag starts [`.github/workflows/release.yml`](.github/workflows/release.yml), which runs `scripts/release-publish.mjs`: it builds `Crew-<version>-arm64.zip` and a `latest.json` next to it (version, download url, sha256) and publishes both to the GitHub release. Pushes to master never run it. To retry a tag whose publish failed, run the workflow by hand: `gh workflow run release.yml -f tag=vX`; it replaces the release's files.
 
 ## Install and update
 
-`npm run release` builds `Crew-<version>-arm64.zip` and a `latest.json` next to it — version, download url, sha256 — and publishes both to a GitHub release. Install by unzipping into `/Applications`:
+Install by unzipping the release zip into `/Applications`:
 
 ```bash
-ditto -x -k release/Crew-0.1.0-arm64.zip /Applications
+ditto -x -k Crew-0.1.0-arm64.zip /Applications
 ```
 
 From there Crew updates itself. It reads `latest.json` from the newest release fifteen seconds after launch and every six hours, and asks in a dialog; `Crew › Check for Updates…` asks on demand. The zip is checked against the manifest's sha256 before anything touches the disk, the bundle is swapped by a detached shell once the app has exited, and the app reopens. A checkout build never updates itself.
-
-Releasing needs `gh` logged in, a clean working tree, and the same version in `package.json` and `Cargo.toml` — the script refuses otherwise.
 
 The bundle is ad-hoc signed (`identity: "-"`): that is what arm64 needs to launch at all, and it keeps the updater free of Apple's signing requirements. It is not notarized, so anyone who downloads the zip in a browser has to clear Gatekeeper by hand.
 
@@ -78,7 +89,11 @@ SCENARIO=loop node scripts/drive.mjs
 SCENARIO=routine node scripts/drive.mjs
 node scripts/sessions.mjs           # claude, opencode and cursor tabs: status and title, end to end
 node scripts/shot.mjs               # a screenshot of the chat against the mock
+npm run app:design                  # the app on a seeded profile of its own (port 1421)
+npm run app:design -- --reseed      # wipe that profile and seed it again
 ```
+
+`npm run app:design` runs next to a regular `npm run app`: it keeps its data in `~/Library/Application Support/Crew Design` and seeds it on first run with five workspaces (git repos, worktrees with diffs, a non-git folder, an empty one), agents and sessions on every provider and in every status, transcripts, routines with run history and open tabs. Statuses stay as seeded (`CREW_KEEP_STATUS`), so a working or waiting agent can be looked at without a live turn.
 
 `scripts/drive.mjs` defaults to opencode's free models, which need no credentials, so it runs on a machine with nothing logged in.
 

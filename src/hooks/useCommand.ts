@@ -17,7 +17,9 @@ function listen() {
   listening = true;
   watchKeyboardLayout();
   document.addEventListener("keydown", (event) => {
-    if (event.isComposing) return;
+    // A dead key leaves the focused field composing, and ⌘⌥ on the brace keys is
+    // one on some layouts, so ⌘ and Ctrl chords still count mid-composition.
+    if (event.isComposing && !event.metaKey && !event.ctrlKey) return;
     const forward = resolveForward(
       {
         type: "keyDown",
@@ -50,7 +52,7 @@ export function useCommand(id: CommandId, handler: () => void) {
 }
 
 /** Register several handlers in one place (the app chrome). */
-export function useCommands(map: { [K in CommandId]?: () => void }) {
+export function useCommands(map: { [K in CommandId]?: (() => void) | undefined }) {
   const mapRef = useRef(map);
   useEffect(() => {
     mapRef.current = map;

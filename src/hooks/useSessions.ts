@@ -3,8 +3,10 @@ import { rememberAgents } from '../lib/agentNames';
 import { dispose, onSessionPatch, reconcile } from '../lib/agentRuntime';
 import { client } from '../lib/client';
 import * as api from '../lib/api';
+import { droppedOnReload, mergeReloaded } from '../lib/sessionList';
 import { reloadAgentFaces } from './useAgentFaces';
-import type { SessionCreated, SessionUpdated } from '../lib/protocol';
+import { useWorkspaceLink } from './useEnvLinks';
+import type { SessionCreated, SessionsDeleted, SessionUpdated } from '../lib/protocol';
 import type { Autonomy, Session, SessionKind, SessionStatus } from '../lib/types';
 
 type CreateInput = {
@@ -28,10 +30,15 @@ const NONE: Session[] = [];
 export function useSessions(workspaceId: string | null) {
   const [registry, setRegistry] = useState<Registry>({});
   const asked = useRef(new Set<string>());
+  // Sessions made while a reload is in flight, which its answer predates.
+  const madeSince = useRef<Set<string> | null>(null);
 
+  // A workspace on a machine that was down loads once the machine answers.
+  const link = useWorkspaceLink(workspaceId);
+  const reachable = link === null || (link.status === "online" && !link.mismatch);
   useEffect(() => {
     const id = workspaceId;
-    if (!id || asked.current.has(id)) return;
+    if (!id || !reachable || asked.current.has(id)) return;
     asked.current.add(id);
     void api
       .listSessions(id)
@@ -49,7 +56,7 @@ export function useSessions(workspaceId: string | null) {
         });
       })
       .catch(() => asked.current.delete(id));
-  }, [workspaceId]);
+  }, [reachable, workspaceId]);
 
   const all = useMemo(() => Object.values(registry).flat(), [registry]);
 
@@ -74,12 +81,37 @@ export function useSessions(workspaceId: string | null) {
     [patchSession],
   );
 
+  /** The daemon already deleted these, with their worktree or for their age; the list lets them go. */
+  const forget = useCallback(async (ids: string[]) => {
+    const gone = new Set(ids);
+    await Promise.all(ids.map((id) => dispose(id)));
+    setRegistry((prev) => {
+      let changed = false;
+      const next: Registry = {};
+      for (const [workspace, list] of Object.entries(prev)) {
+        const kept = list.filter((s) => !gone.has(s.id));
+        next[workspace] = kept;
+        if (kept.length !== list.length) changed = true;
+      }
+      return changed ? next : prev;
+    });
+  }, []);
+
+  // Settings keeps sessions only so long; the daemon lets the old ones go on its own.
+  useEffect(() => {
+    const unsubscribe = client.on('sessions-deleted', (payload) => {
+      void forget((payload as SessionsDeleted).ids);
+    });
+    return () => unsubscribe();
+  }, [forget]);
+
   useEffect(() => {
     const unsubscribe = client.on('session-created', (payload) => {
       const created = payload as SessionCreated;
       const session = created.session as unknown as Session;
       // One split off a terminal comes with the face the terminal showed.
       reloadAgentFaces();
+      madeSince.current?.add(session.id);
       setRegistry((prev) => {
         const list = prev[session.workspaceId];
         if (!list || list.some((s) => s.id === session.id)) return prev;
@@ -110,6 +142,7 @@ export function useSessions(workspaceId: string | null) {
       if (!workspaceId) return null;
       const session = await api.createSession(workspaceId, kind, input);
       await settle;
+      madeSince.current?.add(session.id);
       setRegistry((prev) => ({ ...prev, [workspaceId]: [...(prev[workspaceId] ?? []), session] }));
       return session;
     },
@@ -124,22 +157,6 @@ export function useSessions(workspaceId: string | null) {
       if (!entry) return prev;
       const [workspace, list] = entry;
       return { ...prev, [workspace]: list.filter((s) => s.id !== id) };
-    });
-  }, []);
-
-  /** The daemon already deleted these, with the worktree they ran in; the list lets them go. */
-  const forget = useCallback(async (ids: string[]) => {
-    const gone = new Set(ids);
-    await Promise.all(ids.map((id) => dispose(id)));
-    setRegistry((prev) => {
-      let changed = false;
-      const next: Registry = {};
-      for (const [workspace, list] of Object.entries(prev)) {
-        const kept = list.filter((s) => !gone.has(s.id));
-        next[workspace] = kept;
-        if (kept.length !== list.length) changed = true;
-      }
-      return changed ? next : prev;
     });
   }, []);
 
@@ -197,6 +214,27 @@ export function useSessions(workspaceId: string | null) {
     [patchSession],
   );
 
+  /** The daemon's list again, for sessions made or removed where this window did not hear of it. */
+  const reload = useCallback(async () => {
+    const id = workspaceId;
+    if (!id || !reachable) return;
+    const since = new Set<string>();
+    madeSince.current = since;
+    try {
+      const list = await api.listSessions(id);
+      const held = registry[id] ?? [];
+      const known = new Set(held.map((session) => session.id));
+      // Only the newcomers take their status from the daemon; the rest are the window's to report.
+      await reconcile(list.filter((session) => !known.has(session.id)));
+      rememberAgents(list);
+      reloadAgentFaces();
+      await forget(droppedOnReload(held, list, since));
+      setRegistry((prev) => ({ ...prev, [id]: mergeReloaded(prev[id] ?? [], list, since) }));
+    } finally {
+      if (madeSince.current === since) madeSince.current = null;
+    }
+  }, [forget, reachable, registry, workspaceId]);
+
   /** The workspace was removed; the daemon dropped its sessions with it. */
   const dropWorkspace = useCallback((id: string) => {
     asked.current.delete(id);
@@ -209,5 +247,5 @@ export function useSessions(workspaceId: string | null) {
   }, []);
 
   const sessions = (workspaceId ? registry[workspaceId] : undefined) ?? NONE;
-  return { sessions, all, create, update, rename, adoptName, remove, forget, reorder, setStatus, dropWorkspace };
+  return { sessions, all, create, update, rename, adoptName, remove, forget, reorder, setStatus, dropWorkspace, reload };
 }

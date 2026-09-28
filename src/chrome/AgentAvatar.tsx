@@ -1,5 +1,5 @@
 import type { Style, StyleDefinition } from "@dicebear/core";
-import { RobotIcon } from "@phosphor-icons/react";
+import { BotIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useAgentAvatar } from "../hooks/useAgentAvatar";
 import { useAgentFaces } from "../hooks/useAgentFaces";
@@ -41,8 +41,8 @@ export function AgentAvatar({
 
   if (loaded?.id !== id) {
     return (
-      <span className={`${className} flex shrink-0 items-center justify-center rounded-full bg-kumo-fill text-kumo-subtle`}>
-        <RobotIcon className="size-1/2" />
+      <span className={`${className} flex shrink-0 items-center justify-center rounded-full bg-fill text-text-muted`}>
+        <BotIcon className="size-1/2" />
       </span>
     );
   }
@@ -52,7 +52,7 @@ export function AgentAvatar({
       alt=""
       aria-hidden
       draggable={false}
-      className={`${className} shrink-0 ${bare ? "" : "rounded-full bg-kumo-fill"}`}
+      className={`${className} shrink-0 ${bare ? "" : "rounded-full bg-fill"}`}
     />
   );
 }

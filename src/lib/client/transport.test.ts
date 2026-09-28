@@ -43,8 +43,11 @@ describe("transport connect", () => {
     expect(ws).toBeTruthy();
     ws!.readyState = FakeSocket.OPEN;
     ws!.onopen?.();
-    await vi.waitFor(() => expect(ws!.sent.length).toBe(2));
-    const req = JSON.parse(ws!.sent[1] ?? "{}") as { id: number };
+    ws!.onmessage?.({ data: JSON.stringify({ event: "hello", payload: { protocol: 1, version: "0.1.0" } }) });
+    const sentRequest = () =>
+      ws!.sent.map((raw) => JSON.parse(raw) as { id: number; method?: string }).find((item) => item.method === "state_get");
+    await vi.waitFor(() => expect(sentRequest()).toBeTruthy());
+    const req = sentRequest()!;
     ws!.onmessage?.({ data: JSON.stringify({ id: req.id, ok: true, result: "ok" }) });
     await expect(pending).resolves.toBe("ok");
   });

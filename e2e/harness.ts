@@ -4,11 +4,11 @@
 // short temporary directory: crewd's Unix socket sits in userData, and a long
 // path fails with "path must be shorter than SUN_LEN". A fake `claude` in
 // $HOME/.local/bin, where crewd looks first, plays the provider CLI.
-import { execFile } from "node:child_process";
-import { chmod, mkdir, symlink, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { execFile, spawn, type ChildProcess } from "node:child_process";
+import { chmod, mkdir, symlink, mkdtemp, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { createServer } from "node:http";
-import type { AddressInfo } from "node:net";
+import { connect as tcpConnect, createServer as createTcpServer, type AddressInfo, type Server, type Socket } from "node:net";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -27,6 +27,9 @@ export type Modifier = "Shift" | "Control" | "Alt" | "Meta";
 
 /** The app's command modifier, as Playwright spells it: ⌘ on macOS, Ctrl elsewhere. */
 export const MOD: Modifier = process.platform === "darwin" ? "Meta" : "Control";
+
+/** Worktree chords (⌃⌘N, ⌃⌘1…9, ⌃⌘[ and ]) hold both keys on every platform. */
+export const WORKTREE_MOD = "Control+Meta";
 
 export type Repo = { name: string; files?: Record<string, string> };
 
@@ -86,7 +89,8 @@ export async function launchCrew(opts: LaunchOptions = {}): Promise<Crew> {
 
 /** `owns`: the sandbox is deleted on close, unless a restart handed it on. */
 async function launch(opts: LaunchOptions, owns: boolean): Promise<Crew> {
-  const root = opts.dir ?? (await mkdtemp("/tmp/ce-"));
+  // Resolved, as crewd and git spell it: /tmp is /private/tmp on macOS.
+  const root = opts.dir ?? (await realpath(await mkdtemp("/tmp/ce-")));
   const home = path.join(root, "home");
   const config = path.join(root, "config");
   const repos = path.join(root, "repos");
@@ -135,11 +139,17 @@ async function launch(opts: LaunchOptions, owns: boolean): Promise<Crew> {
   try {
     // executablePath keeps Playwright's loader out, and with it the Chromium
     // switches it appends (no background throttling among them): the app runs
-    // as it ships. Linux has no usable sandbox under Xvfb.
+    // as it ships. Linux has no usable sandbox under Xvfb. CREW_E2E hides the
+    // window; a restart comes back through this same launch.
     app = await _electron.launch({
       executablePath: ELECTRON,
       args: [ROOT, ...(process.platform === "linux" ? ["--no-sandbox"] : [])],
-      env: { ...env, CREW_RENDERER: "dist" },
+      // E2E_DEV_PORT: the renderer from a running Vite dev server, as `npm run app` loads it.
+      env: {
+        ...env,
+        ...(process.env.E2E_DEV_PORT ? { CREW_PORT: process.env.E2E_DEV_PORT, CREW_RENDERER: "" } : { CREW_RENDERER: "dist" }),
+        CREW_E2E: "1",
+      },
     });
   } catch (error) {
     await cleanup();
@@ -167,6 +177,13 @@ async function launch(opts: LaunchOptions, owns: boolean): Promise<Crew> {
 
   try {
     const page = await app.firstWindow();
+    const windowHandle = await app.browserWindow(page);
+    try {
+      const hidden = await windowHandle.evaluate((win) => win.isVisible() === false);
+      if (!hidden) throw new Error("the e2e window is visible");
+    } finally {
+      await windowHandle.dispose();
+    }
     // The first window can still be on about:blank, before the preload runs.
     await page.waitForFunction(() => Boolean(window.crewHost));
     const info = await page.evaluate(() => {
@@ -253,6 +270,8 @@ function sandboxEnv(home: string, config: string): NodeJS.ProcessEnv {
     XDG_DATA_HOME: path.join(home, ".local/share"),
     XDG_STATE_HOME: path.join(home, ".local/state"),
     XDG_CACHE_HOME: path.join(home, ".cache"),
+    // macOS resolves appData without HOME, so a dev build would land in the user's own "Crew Dev".
+    CREW_USER_DATA: path.join(config, "Crew Dev"),
     PATH: [path.join(home, ".local/bin"), path.join(home, "bin"), ...system].join(":"),
     SHELL: "/bin/bash",
     // Only the sandbox's .gitconfig: nothing from the machine's /etc/gitconfig.
@@ -280,8 +299,8 @@ async function prepareSandbox(home: string, config: string, repos: string): Prom
   // leaves out wherever the machine keeps its own.
   const node = path.join(home, "bin/node");
   if (!existsSync(node)) await symlink(process.execPath, node);
-  // The default browser: Electron's shell.openExternal runs `xdg-open <url>`
-  // off PATH on Linux. The fake keeps each call's argument, one per line.
+  // The default browser. On Linux Electron runs `xdg-open` from PATH; on macOS
+  // it would open the user's browser, so e2e writes this log itself. One URL a line.
   const opener = path.join(home, "bin/xdg-open");
   if (!existsSync(opener)) {
     await writeFile(opener, `#!/bin/sh\nprintf '%s\\n' "$1" >> "${path.join(home, "xdg-open.log")}"\n`);
@@ -514,6 +533,19 @@ export function worktreeHeader(crew: Crew, label: string): Locator {
     .filter({ has: crew.window.getByText(label, { exact: true }) });
 }
 
+/**
+ * Goes to a worktree by the chord its sidebar line names (⌃⌘1…9): a click on
+ * the line only folds it. Resolves once the window is on it.
+ */
+export async function goToWorktree(crew: Crew, label: string): Promise<void> {
+  const header = worktreeHeader(crew, label);
+  const title = (await header.getAttribute("title")) ?? "";
+  const digit = /(\d)\s+to switch$/.exec(title)?.[1];
+  if (!digit) throw new Error(`${label}'s line names no chord to switch: ${JSON.stringify(title)}`);
+  await pressChord(crew, `${WORKTREE_MOD}+${digit}`);
+  await header.and(currentWorktree(crew)).waitFor();
+}
+
 /** The worktree line the window is on. */
 export function currentWorktree(crew: Crew): Locator {
   return crew.window.locator('[data-sidebar-panel] button[data-nav][aria-expanded][aria-current="true"]');
@@ -558,7 +590,7 @@ export async function savedStrip(
 
 /** The texts the kit paints as errors (a field's, a dialog's failure) inside `scope`. */
 export async function errorsIn(scope: Locator): Promise<string[]> {
-  const texts = await scope.locator(".text-kumo-danger").allInnerTexts();
+  const texts = await scope.locator(".text-danger").allInnerTexts();
   return texts.map((text) => text.trim()).filter(Boolean);
 }
 
@@ -578,10 +610,10 @@ export async function pressChord(crew: Crew, chord: string): Promise<void> {
   await crew.window.keyboard.press(chord);
 }
 
-/** ⌥⌘N, the branch typed over the dialog's "feat/", ↵: the dialog closes once the worktree exists. */
+/** ⌃⌘N, the branch typed over the dialog's "feat/", ↵: the dialog closes once the worktree exists. */
 export async function newWorktree(crew: Crew, branch: string): Promise<void> {
   const page = crew.window;
-  await pressChord(crew, `${MOD}+Alt+n`);
+  await pressChord(crew, `${WORKTREE_MOD}+n`);
   const input = page.getByRole("textbox", { name: "Branch" });
   await input.waitFor();
   await input.fill(branch);
@@ -732,4 +764,140 @@ export async function servePages(titles: Record<string, string> = {}): Promise<P
         server.close(() => resolve());
       }),
   };
+}
+
+export type RemoteDaemon = {
+  /** The machine's id in Crew, once `addTo` paired it. */
+  id: string;
+  name: string;
+  port: number;
+  /** The port Crew dials: the daemon's, or the delaying proxy's in front of it. */
+  dialPort: number;
+  token: string;
+  dataDir: string;
+  /** Stops the daemon, as a machine going away does. */
+  stop(): Promise<void>;
+  /** Starts it again on the same port and data. */
+  start(): Promise<void>;
+};
+
+/**
+ * A second crewd, `crewd serve` on loopback, standing in for a machine on the
+ * tailnet: its own database, the sandbox's HOME and PATH (so the fake claude
+ * is the one it runs), and the token it writes under its data directory. It is
+ * added to Crew's address book the way Settings would, and the window reloads.
+ */
+export async function addRemote(crew: Crew, name = "devbox", opts: { latencyMs?: number } = {}): Promise<RemoteDaemon> {
+  const dataDir = path.join(crew.root, `remote-${name}`);
+  await mkdir(dataDir, { recursive: true });
+  const port = await freePort();
+  const env = sandboxEnv(crew.home, path.join(crew.root, "config"));
+  let child: ChildProcess | null = null;
+  const start = async () => {
+    const proc = spawn(path.join(ROOT, "target/debug/crewd"), ["serve", "--listen", `127.0.0.1:${port}`, "--data-dir", dataDir], {
+      env,
+      stdio: ["ignore", "pipe", "inherit"],
+    });
+    child = proc;
+    await new Promise<void>((resolve, reject) => {
+      proc.once("error", reject);
+      proc.once("exit", (code) => reject(new Error(`crewd serve exited ${code}`)));
+      proc.stdout?.once("data", () => resolve());
+    });
+    proc.removeAllListeners("exit");
+    proc.stdout?.resume();
+  };
+  const stop = async () => {
+    const proc = child;
+    child = null;
+    if (!proc || proc.exitCode !== null) return;
+    const exited = new Promise((resolve) => proc.once("exit", resolve));
+    proc.kill("SIGTERM");
+    await exited;
+  };
+  await start();
+  const token = (await readFile(path.join(dataDir, "token"), "utf8")).trim();
+  // Crew dials the delaying proxy when there is one; the harness's own RPCs go straight.
+  const proxy = opts.latencyMs ? await delayProxy(port, opts.latencyMs) : null;
+  const row = await crew.window.evaluate(
+    (input) => window.crewHost!.remotes!.add(input),
+    { id: "", name, host: "127.0.0.1", port: proxy?.port ?? port, user: "agent", token },
+  );
+  await crew.reload();
+  const stopAll = async () => {
+    await stop();
+    proxy?.drop();
+  };
+  return { id: row.id, name, port, dialPort: proxy?.port ?? port, token, dataDir, stop: stopAll, start };
+}
+
+/** One RPC straight to the remote daemon, the way a second window would. */
+export function remoteRequest<T>(remote: RemoteDaemon, method: string, params: object = {}): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const ws = new WebSocket(`ws://127.0.0.1:${remote.port}`);
+    const timer = setTimeout(() => {
+      ws.close();
+      reject(new Error(`${method}: no answer`));
+    }, 5_000);
+    ws.onopen = () => ws.send(JSON.stringify({ auth: remote.token }));
+    ws.onerror = () => reject(new Error(`${method}: could not connect`));
+    ws.onmessage = (event) => {
+      const message = JSON.parse(String(event.data)) as { event?: string; id?: number; ok?: boolean; result?: T; error?: string };
+      if (message.event === "hello") ws.send(JSON.stringify({ id: 1, method, params }));
+      if (message.id !== 1) return;
+      clearTimeout(timer);
+      ws.close();
+      if (message.ok) resolve(message.result as T);
+      else reject(new Error(message.error ?? method));
+    };
+  });
+}
+
+/**
+ * A TCP proxy to `target` that holds every chunk `ms` in each direction, in
+ * order: a tailnet peer's round trip on loopback. `drop` cuts the open
+ * sockets, as the daemon going away does.
+ */
+async function delayProxy(target: number, ms: number): Promise<{ port: number; drop(): void; server: Server }> {
+  const open = new Set<Socket>();
+  const pipe = (from: Socket, to: Socket) => {
+    let last = 0;
+    from.on("data", (chunk) => {
+      // Never earlier than the chunk before it, so bytes keep their order.
+      const due = Math.max(Date.now() + ms, last);
+      last = due;
+      setTimeout(() => {
+        if (!to.destroyed) to.write(chunk);
+      }, due - Date.now());
+    });
+    from.on("close", () => setTimeout(() => to.destroy(), ms));
+    from.on("error", () => to.destroy());
+  };
+  const server = createTcpServer((client) => {
+    const upstream = tcpConnect(target, "127.0.0.1");
+    open.add(client);
+    open.add(upstream);
+    client.on("close", () => open.delete(client));
+    upstream.on("close", () => open.delete(upstream));
+    pipe(client, upstream);
+    pipe(upstream, client);
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  server.unref();
+  return {
+    port: (server.address() as AddressInfo).port,
+    server,
+    drop: () => {
+      for (const socket of open) socket.destroy();
+    },
+  };
+}
+
+/** A port nothing listens on now, and the one after it (crewd serve's SOCKS proxy) free too, most likely. */
+async function freePort(): Promise<number> {
+  const server = createServer();
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const { port } = server.address() as AddressInfo;
+  await new Promise<void>((resolve) => server.close(() => resolve()));
+  return port;
 }

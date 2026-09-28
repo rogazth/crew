@@ -343,11 +343,11 @@ fn a_second_crewd_leaves_the_live_one_alone() {
         .expect("second under launchd");
     assert!(launchd.status.success(), "{launchd:?}");
     let said = String::from_utf8_lossy(&launchd.stderr);
-    assert!(said.contains("another crewd is already running"), "{said}");
+    assert!(said.contains("another crewd is already"), "{said}");
 
     let child = crewd().arg("--data-dir").arg(&dir).stdin(Stdio::piped()).output().expect("second as a child");
     assert!(!child.status.success(), "{child:?}");
-    assert!(String::from_utf8_lossy(&child.stderr).contains("another crewd is already running"));
+    assert!(String::from_utf8_lossy(&child.stderr).contains("another crewd is already"));
     assert!(child.stdout.is_empty(), "a refused crewd printed a handshake");
 
     assert_eq!(std::fs::read(&path).expect("daemon.json"), before, "daemon.json is still the first one's");

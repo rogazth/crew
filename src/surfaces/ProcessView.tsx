@@ -1,11 +1,4 @@
-import {
-  ArrowsClockwiseIcon,
-  PauseIcon,
-  PencilSimpleIcon,
-  PlayIcon,
-  StopIcon,
-  TrashIcon,
-} from "@phosphor-icons/react";
+import { PauseIcon, PencilIcon, PlayIcon, RotateCwIcon, SquareIcon, Trash2Icon } from "lucide-react";
 import { useState } from "react";
 import type { Confirm } from "../chrome/ConfirmDialog";
 import { Button, IconButton } from "../chrome/kit";
@@ -38,7 +31,7 @@ export function ProcessView({ processId, processes, sessions, onConfirm }: Props
   const process = processes.processes?.find((p) => p.id === processId);
   if (processes.processes === null) return null;
   if (!process) {
-    return <p className="p-10 text-center text-kumo-subtle">This command was deleted.</p>;
+    return <p className="p-10 text-center text-text-muted">This command was deleted.</p>;
   }
   const { run } = processes;
   const live = isLive(process);
@@ -51,9 +44,9 @@ export function ProcessView({ processId, processes, sessions, onConfirm }: Props
         <div className="min-w-0 flex-1">
           <div className="flex items-baseline gap-2">
             <h1 className="truncate text-[14px] font-semibold">{process.name}</h1>
-            <span className="shrink-0 text-[12px] text-kumo-subtle">{stateLabel(process)}</span>
+            <span className="shrink-0 text-[12px] text-text-muted">{stateLabel(process)}</span>
           </div>
-          <div className="truncate font-mono text-[11px] text-kumo-subtle" title={process.command}>
+          <div className="truncate font-mono text-[11px] text-text-muted" title={process.command}>
             {process.cwd ? `${process.cwd} $ ` : "$ "}
             {process.command}
           </div>
@@ -68,14 +61,14 @@ export function ProcessView({ processId, processes, sessions, onConfirm }: Props
             )}
             {(process.state === "running" || process.state === "paused") && (
               <IconButton
-                icon={ArrowsClockwiseIcon}
+                icon={RotateCwIcon}
                 label="Restart"
                 title="Restart"
                 onClick={() => void run("restart", process)}
               />
             )}
             {live ? (
-              <Button icon={StopIcon} className="text-[12px]" onClick={() => void run("stop", process)}>
+              <Button icon={SquareIcon} className="text-[12px]" onClick={() => void run("stop", process)}>
                 Stop
               </Button>
             ) : (
@@ -85,13 +78,13 @@ export function ProcessView({ processId, processes, sessions, onConfirm }: Props
             )}
           </div>
         )}
-        <IconButton icon={PencilSimpleIcon} label="Edit" title="Edit" onClick={() => setEditing(true)} />
-        <IconButton icon={TrashIcon} label="Delete" title="Delete" onClick={() => onConfirm(deleteConfirm(process))} />
+        <IconButton icon={PencilIcon} label="Edit" title="Edit" onClick={() => setEditing(true)} />
+        <IconButton icon={Trash2Icon} label="Delete" title="Delete" onClick={() => onConfirm(deleteConfirm(process))} />
       </header>
 
       {asking && <ApprovalCard process={process} sessions={sessions} processes={processes} />}
       {processes.error && (
-        <p role="alert" className="shrink-0 border-b border-hairline px-4 py-2 text-[12px] text-kumo-danger">
+        <p role="alert" className="shrink-0 border-b border-hairline px-4 py-2 text-[12px] text-danger">
           {processes.error}
         </p>
       )}
@@ -119,7 +112,7 @@ function ApprovalCard({ process, sessions, processes }: { process: Process; sess
   return (
     <section
       aria-label="Waiting for your approval"
-      className="m-3 flex shrink-0 flex-col gap-3 rounded-xl bg-card p-4 ring-1 ring-kumo-warning/40"
+      className="m-3 flex shrink-0 flex-col gap-3 rounded-xl bg-card p-4 ring-1 ring-warning/40"
     >
       <p>
         <span className="font-medium">{name}</span>{" "}
@@ -129,28 +122,28 @@ function ApprovalCard({ process, sessions, processes }: { process: Process; sess
         <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-[12px]">
           {changes.map((change) => (
             <div key={change.field} className="contents">
-              <dt className="text-kumo-subtle">{change.field}</dt>
+              <dt className="text-text-muted">{change.field}</dt>
               <dd className="min-w-0 font-mono break-words whitespace-pre-wrap">
-                <span className="text-kumo-danger line-through">{change.before || "—"}</span>
+                <span className="text-danger line-through">{change.before || "—"}</span>
                 {"\n"}
-                <span className="text-kumo-success">{change.after || "—"}</span>
+                <span className="text-success">{change.after || "—"}</span>
               </dd>
             </div>
           ))}
         </dl>
       ) : (
         <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-[12px]">
-          <dt className="text-kumo-subtle">Command</dt>
+          <dt className="text-text-muted">Command</dt>
           <dd className="min-w-0 font-mono break-words whitespace-pre-wrap">{process.command}</dd>
-          <dt className="text-kumo-subtle">Folder</dt>
+          <dt className="text-text-muted">Folder</dt>
           <dd className="font-mono">{process.cwd || "Workspace root"}</dd>
           {Object.keys(process.env).length > 0 && (
             <>
-              <dt className="text-kumo-subtle">Environment</dt>
+              <dt className="text-text-muted">Environment</dt>
               <dd className="font-mono whitespace-pre-wrap">{formatEnv(process.env)}</dd>
             </>
           )}
-          <dt className="text-kumo-subtle">Starts</dt>
+          <dt className="text-text-muted">Starts</dt>
           <dd>
             {[process.autoStart ? "with Crew" : "by hand", process.autoRestart ? "restarts on crash" : null]
               .filter(Boolean)

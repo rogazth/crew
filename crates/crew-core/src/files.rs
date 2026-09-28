@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::{Arc, Mutex};
 
 use base64::Engine as _;
 use crew_protocol::{AttachedFile, AttachedFileKind};
@@ -31,11 +32,7 @@ pub fn list(cwd: &str, include: &[String]) -> Result<Vec<ProjectFile>, String> {
         return Err(format!("{cwd}: Not a directory"));
     }
     // git knows the ignore rules already; walking is the slow fallback.
-    let mut files = git_ls_files(&root).unwrap_or_else(|| {
-        let mut files = Vec::new();
-        walk(&root, &root, &mut files, &HashSet::new());
-        files
-    });
+    let mut files = git_ls_files(&root).unwrap_or_else(|| walk_ignoring(&root));
     let mut seen: HashSet<String> = files.iter().map(|file| file.relative.clone()).collect();
     for folder in include.iter().filter_map(|folder| included_folder(folder)) {
         let start = root.join(&folder);
@@ -63,33 +60,102 @@ fn included_folder(folder: &str) -> Option<String> {
 }
 
 fn git_ls_files(root: &Path) -> Option<Vec<ProjectFile>> {
+    let mut files = Vec::new();
+    ls_repo(root, root, &mut files)?;
+    Some(files)
+}
+
+/// git lists a nested repo as a single `dir/` entry, so each one is asked for its own files.
+fn ls_repo(root: &Path, repo: &Path, files: &mut Vec<ProjectFile>) -> Option<()> {
     let output = Command::new("git")
         .arg("-C")
-        .arg(root)
+        .arg(repo)
         .args(["ls-files", "-co", "--exclude-standard", "-z"])
         .output()
         .ok()?;
     if !output.status.success() {
         return None;
     }
+    let prefix = repo
+        .strip_prefix(root)
+        .ok()?
+        .to_string_lossy()
+        .replace('\\', "/");
 
-    let mut files = Vec::new();
     for chunk in output.stdout.split(|byte| *byte == 0) {
+        if files.len() >= MAX_PROJECT_FILES {
+            break;
+        }
         if chunk.is_empty() {
             continue;
         }
-        let relative = String::from_utf8_lossy(chunk).replace('\\', "/");
-        if relative.ends_with('/') || has_skipped_dir(&relative) {
+        let entry = String::from_utf8_lossy(chunk).replace('\\', "/");
+        let relative = if prefix.is_empty() { entry } else { format!("{prefix}/{entry}") };
+        if has_skipped_dir(&relative) {
+            continue;
+        }
+        if let Some(dir) = relative.strip_suffix('/') {
+            let nested = root.join(dir);
+            if nested.join(".git").is_dir() {
+                let _ = ls_repo(root, &nested, files);
+            }
             continue;
         }
         if let Some(file) = make_file(root, relative) {
             files.push(file);
         }
+    }
+    Some(())
+}
+
+/// Outside a repo, nested repos list their own files through git, so ignored
+/// caches and logs cannot eat the cap before the real sources are reached.
+/// Worktrees and submodules (a `.git` file) are copies of other code and are skipped.
+fn walk_ignoring(root: &Path) -> Vec<ProjectFile> {
+    let repos = Arc::new(Mutex::new(Vec::new()));
+    let found = Arc::clone(&repos);
+    let walker = ignore::WalkBuilder::new(root)
+        .hidden(false)
+        .require_git(false)
+        .filter_entry(move |entry| {
+            let name = entry.file_name().to_str();
+            if name.is_some_and(|name| SKIPPED_DIRS.contains(&name)) {
+                return false;
+            }
+            let git = entry.path().join(".git");
+            if entry.depth() == 0 || !git.exists() {
+                return true;
+            }
+            if git.is_dir() {
+                found.lock().unwrap().push(entry.path().to_path_buf());
+            }
+            false
+        })
+        .build();
+    let mut files = Vec::new();
+    for entry in walker.flatten() {
         if files.len() >= MAX_PROJECT_FILES {
             break;
         }
+        if !entry.path().is_file() {
+            continue;
+        }
+        let Ok(relative) = entry.path().strip_prefix(root) else {
+            continue;
+        };
+        if let Some(file) = make_file(root, relative.to_string_lossy().replace('\\', "/")) {
+            files.push(file);
+        }
     }
-    Some(files)
+    let mut repos = std::mem::take(&mut *repos.lock().unwrap());
+    repos.sort();
+    for repo in repos {
+        if files.len() >= MAX_PROJECT_FILES {
+            break;
+        }
+        let _ = ls_repo(root, &repo, &mut files);
+    }
+    files
 }
 
 /// Dot-named entries are kept, as git would list them; only the heavy folders are skipped.
@@ -353,6 +419,43 @@ mod tests {
             relatives(&dir, &[".ai", "/.ai/", "missing", "../"]),
             [".ai/notes/a.md", ".ai/plan.md", ".gitignore"]
         );
+    }
+
+    fn git_init(dir: &std::path::Path) {
+        let init = std::process::Command::new("git").arg("-C").arg(dir).arg("init").output().unwrap();
+        assert!(init.status.success());
+    }
+
+    #[test]
+    fn walk_outside_a_repo_respects_nested_gitignores() {
+        let dir = scratch(&[
+            "api/.gitignore",
+            "api/app.php",
+            "api/storage/logs/a.log",
+            "api/wt/copy.php",
+            "web/src/index.ts",
+        ]);
+        std::fs::write(dir.join("api/.gitignore"), "storage/\n").unwrap();
+        git_init(&dir.join("api"));
+        // A worktree or submodule: `.git` is a file pointing elsewhere.
+        let separate = std::process::Command::new("git")
+            .arg("init")
+            .arg("--separate-git-dir")
+            .arg(dir.with_extension("wt-git"))
+            .arg(dir.join("api/wt"))
+            .output()
+            .unwrap();
+        assert!(separate.status.success());
+        assert_eq!(relatives(&dir, &[]), ["api/.gitignore", "api/app.php", "web/src/index.ts"]);
+    }
+
+    #[test]
+    fn nested_repos_inside_a_repo_are_listed() {
+        let dir = scratch(&["README.md", "api/.gitignore", "api/app.php", "api/storage/a.log"]);
+        std::fs::write(dir.join("api/.gitignore"), "storage/\n").unwrap();
+        git_init(&dir);
+        git_init(&dir.join("api"));
+        assert_eq!(relatives(&dir, &[]), ["README.md", "api/.gitignore", "api/app.php"]);
     }
 
     #[test]

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { cookieDetails } from "./cookies";
+import type { Cookie } from "electron";
+import { cookieDetails, copiedCookie } from "./cookies";
 
 const base = {
   host: ".github.com",
@@ -46,5 +47,45 @@ describe("cookieDetails", () => {
     expect(cookieDetails({ ...base, sameSite: "none" })).toBeNull();
     expect(cookieDetails({ ...base, secure: "yes" })).toBeNull();
     expect(cookieDetails({ ...base, expires: Number.NaN })).toBeNull();
+  });
+});
+
+describe("copiedCookie", () => {
+  const cookie: Cookie = {
+    name: "sid",
+    value: "v",
+    domain: ".github.com",
+    hostOnly: false,
+    path: "/",
+    secure: true,
+    httpOnly: true,
+    session: false,
+    expirationDate: 1_900_000_000,
+    sameSite: "lax",
+  };
+
+  it("writes a domain cookie back with its domain and expiry", () => {
+    expect(copiedCookie(cookie)).toEqual({
+      url: "https://github.com/",
+      name: "sid",
+      value: "v",
+      domain: ".github.com",
+      path: "/",
+      secure: true,
+      httpOnly: true,
+      sameSite: "lax",
+      expirationDate: 1_900_000_000,
+    });
+  });
+
+  it("keeps a host-only cookie host-only and a session cookie without an expiry", () => {
+    const copied = copiedCookie({ ...cookie, domain: "localhost", hostOnly: true, secure: false, session: true });
+    expect(copied).toMatchObject({ url: "http://localhost/" });
+    expect(copied).not.toHaveProperty("domain");
+    expect(copied).not.toHaveProperty("expirationDate");
+  });
+
+  it("skips a cookie without a domain", () => {
+    expect(copiedCookie({ ...cookie, domain: "" })).toBeNull();
   });
 });

@@ -11,8 +11,26 @@ describe("parseBrowserPrefs", () => {
   it("keeps known values", () => {
     const template = SEARCH_ENGINES[1].template;
     expect(
-      parseBrowserPrefs(JSON.stringify({ searchTemplate: template, keep: 10, openLinksInCrew: true })),
-    ).toEqual({ searchTemplate: template, keep: 10, openLinksInCrew: true });
+      parseBrowserPrefs(
+        JSON.stringify({
+          searchTemplate: template,
+          keep: 10,
+          openLinksInCrew: true,
+          devtoolsDock: "left",
+          devtoolsWidth: 600,
+          devtoolsHeight: 250,
+          askWhereToSave: true,
+        }),
+      ),
+    ).toEqual({
+      searchTemplate: template,
+      keep: 10,
+      openLinksInCrew: true,
+      devtoolsDock: "left",
+      devtoolsWidth: 600,
+      devtoolsHeight: 250,
+      askWhereToSave: true,
+    });
   });
 
   it("falls back field by field, and never takes a template it does not know", () => {
@@ -20,5 +38,16 @@ describe("parseBrowserPrefs", () => {
     expect(parseBrowserPrefs(raw)).toEqual({ ...DEFAULT_BROWSER_PREFS, keep: 4 });
     expect(parseBrowserPrefs(JSON.stringify({ keep: 1000 })).keep).toBe(DEFAULT_BROWSER_PREFS.keep);
     expect(parseBrowserPrefs(JSON.stringify({ openLinksInCrew: "yes" })).openLinksInCrew).toBe(false);
+    expect(parseBrowserPrefs(JSON.stringify({ devtoolsDock: "top" })).devtoolsDock).toBe("bottom");
+    expect(parseBrowserPrefs(JSON.stringify({ askWhereToSave: 1 })).askWhereToSave).toBe(false);
+  });
+
+  it("keeps DevTools no smaller than their minimum", () => {
+    const raw = JSON.stringify({ devtoolsWidth: 12, devtoolsHeight: -1 });
+    expect(parseBrowserPrefs(raw)).toMatchObject({
+      devtoolsWidth: DEFAULT_BROWSER_PREFS.devtoolsWidth,
+      devtoolsHeight: DEFAULT_BROWSER_PREFS.devtoolsHeight,
+    });
+    expect(parseBrowserPrefs(JSON.stringify({ devtoolsWidth: 512.6 })).devtoolsWidth).toBe(513);
   });
 });

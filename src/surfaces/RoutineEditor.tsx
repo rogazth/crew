@@ -1,12 +1,4 @@
-import {
-  CaretRightIcon,
-  CheckIcon,
-  CircleNotchIcon,
-  MinusIcon,
-  PlayIcon,
-  TrashIcon,
-  XIcon,
-} from "@phosphor-icons/react";
+import { CheckIcon, ChevronRightIcon, LoaderCircleIcon, MinusIcon, PlayIcon, Trash2Icon, XIcon } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { Button, Card, Field, IconButton, Select, TextArea, TextInput, Toggle } from "../chrome/kit";
 import { RoutineTrigger } from "../chrome/RoutineTrigger";
@@ -102,11 +94,11 @@ export function RoutineEditor({
           <button
             type="button"
             onClick={onBack}
-            className="rounded-md px-1.5 py-0.5 text-kumo-subtle transition-colors hover:bg-hover hover:text-kumo-default"
+            className="rounded-md px-1.5 py-0.5 text-icon transition-colors hover:bg-hover hover:text-text"
           >
             Routines
           </button>
-          <CaretRightIcon className="size-3 text-placeholder" />
+          <ChevronRightIcon className="size-3 text-placeholder" />
           <span className="min-w-0 truncate">{draft.name.trim() || "New routine"}</span>
           <span className="flex-1" />
           {onRunNow && (
@@ -117,7 +109,7 @@ export function RoutineEditor({
           <Button variant="primary" disabled={!valid} loading={saving} onClick={() => void save()}>
             Save
           </Button>
-          {onDelete && <IconButton icon={TrashIcon} label="Delete routine" onClick={onDelete} />}
+          {onDelete && <IconButton icon={Trash2Icon} label="Delete routine" onClick={onDelete} />}
         </div>
 
         {runError && (
@@ -197,7 +189,7 @@ export function RoutineEditor({
 function Group({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div role="group" aria-label={label} className="flex flex-col gap-1.5">
-      <span className="text-[12px] font-medium text-kumo-subtle">{label}</span>
+      <span className="text-[12px] font-medium text-text-muted">{label}</span>
       {children}
     </div>
   );
@@ -213,7 +205,7 @@ function History({ runs }: { runs: RoutineRun[] }) {
             <span className="min-w-0 flex-1 truncate">{dayLabel(run.startedAt)}</span>
             {run.trigger === "manual" && <span className="shrink-0 text-placeholder">manual</span>}
             {run.finishedAt !== null && (
-              <span className="shrink-0 text-kumo-subtle tabular-nums">
+              <span className="shrink-0 text-text-muted tabular-nums">
                 {duration(run.finishedAt - run.startedAt)}
               </span>
             )}
@@ -226,9 +218,9 @@ function History({ runs }: { runs: RoutineRun[] }) {
 
 function RunMark({ run }: { run: RoutineRun }) {
   if (run.status === "running")
-    return <CircleNotchIcon className="size-3.5 shrink-0 animate-spin text-kumo-warning" weight="bold" />;
-  if (run.status === "ok") return <CheckIcon className="size-3.5 shrink-0 text-kumo-success" weight="bold" />;
+    return <LoaderCircleIcon className="size-3.5 shrink-0 animate-spin text-warning" />;
+  if (run.status === "ok") return <CheckIcon className="size-3.5 shrink-0 text-success" />;
   // Came due while the agent was busy: nothing ran, and nothing went wrong.
-  if (run.status === "skipped") return <MinusIcon className="size-3.5 shrink-0 text-placeholder" weight="bold" />;
-  return <XIcon className="size-3.5 shrink-0 text-danger" weight="bold" />;
+  if (run.status === "skipped") return <MinusIcon className="size-3.5 shrink-0 text-placeholder" />;
+  return <XIcon className="size-3.5 shrink-0 text-danger" />;
 }

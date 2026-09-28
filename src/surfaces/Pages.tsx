@@ -3,7 +3,6 @@ import type { RoutineDraft } from "../lib/routines";
 import type { SettingsSectionId } from "../lib/settings";
 import type { Session, Workspace } from "../lib/types";
 import type { Processes } from "../hooks/useProcesses";
-import { HistoryView } from "./HistoryView";
 import { ProcessView } from "./ProcessView";
 import { RoutinesView } from "./RoutinesView";
 import { SearchView } from "./SearchView";
@@ -15,7 +14,6 @@ export type Page =
   | { kind: "settings"; section: SettingsSectionId }
   | { kind: "routines"; draft: RoutineDraft | null }
   | { kind: "search" }
-  | { kind: "history" }
   /** One of the active workspace's commands and its output. */
   | { kind: "process"; processId: string };
 
@@ -26,7 +24,7 @@ type Props = {
   sessions: Session[];
   onConfirm: (confirm: Confirm) => void;
   onOpenHit: (sessionId: string, pos: number) => void;
-  onOpenUrl: (url: string) => void;
+  onOpenTerminal: (envId: string) => Promise<void>;
   processes: Processes;
   /** Every workspace's, to name who wrote a command. */
   allSessions: Session[];
@@ -43,14 +41,22 @@ export function Pages({
   sessions,
   onConfirm,
   onOpenHit,
-  onOpenUrl,
+  onOpenTerminal,
   processes,
   allSessions,
 }: Props) {
   const agents = sessions.filter((session) => session.kind === "agent");
-  if (page.kind === "settings") return <SettingsView section={page.section} />;
+  if (page.kind === "settings") {
+    return (
+      <SettingsView
+        section={page.section}
+        workspaces={workspaces}
+        onConfirm={onConfirm}
+        onOpenTerminal={onOpenTerminal}
+      />
+    );
+  }
   if (page.kind === "search") return <SearchView agents={agents} onOpenHit={onOpenHit} />;
-  if (page.kind === "history") return <HistoryView onOpen={onOpenUrl} onConfirm={onConfirm} />;
   if (page.kind === "process") {
     return (
       <ProcessView

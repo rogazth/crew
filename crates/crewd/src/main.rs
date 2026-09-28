@@ -11,12 +11,15 @@ use crew_core::process::ProcessHost;
 use crew_core::pty::PtyHost;
 use crew_core::store::Store;
 use crew_protocol::{DaemonFile, DaemonInfo};
-use crewd::{remove_daemon_file, serve, write_daemon_file, Config};
+use crewd::lock::DataLock;
+use crewd::{machine, remove_daemon_file, serve_on, write_daemon_file, Config, Listen};
 
 const USAGE: &str = "\
 usage: crewd --data-dir <dir>   run the daemon (the Crew app does this)
        crewd --data-dir <dir> --supervised-by launchd
                                 run it as the LaunchAgent `crew daemon install` writes
+       crewd serve --listen <host:port> [--data-dir <dir>]
+                                serve another machine's window over the network
 
 Kept for one version, for agents and configs that still name them:
   crewd --mcp                   now `crew mcp`
@@ -35,7 +38,8 @@ fn main() -> ExitCode {
             println!("{USAGE}");
             ExitCode::SUCCESS
         }
-        _ => daemon(&args),
+        Some("serve") => daemon(&args[1..], Some(Supervisor::Served)),
+        _ => daemon(&args, None),
     }
 }
 
@@ -49,6 +53,10 @@ enum Supervisor {
     /// so there is no handshake to print (the log would hold the token) and
     /// no EOF to wait for. A signal or `daemon_shutdown` stops it.
     Launchd,
+    /// `crewd serve`, for a machine the window reaches over the network: it
+    /// listens where it is told, keeps its token across restarts, and ignores
+    /// SIGHUP, since the SSH session that started it may close.
+    Served,
 }
 
 fn supervisor(args: &[String]) -> Result<Supervisor, String> {
@@ -100,21 +108,51 @@ const FAILED_STARTS: &str = "crewd.failed-starts";
 /// leaves it down: the app sees no daemon come up, runs crewd as its child
 /// instead, and that child fails the same way where the app shows it. A
 /// transient one exits 1 for launchd to retry, a few times at most.
-fn daemon(args: &[String]) -> ExitCode {
-    let supervisor = match supervisor(args) {
+fn daemon(args: &[String], served: Option<Supervisor>) -> ExitCode {
+    let supervisor = match served.map(Ok).unwrap_or_else(|| supervisor(args)) {
         Ok(supervisor) => supervisor,
         Err(error) => {
             eprintln!("{error}");
             return ExitCode::FAILURE;
         }
     };
-    let dir = data_dir(args);
+    let dir = match (supervisor, flag(args, "--data-dir")) {
+        (_, Some(dir)) => PathBuf::from(dir),
+        (Supervisor::Served, None) => match std::env::var_os("HOME") {
+            Some(home) => PathBuf::from(home).join(".crew/data"),
+            None => {
+                eprintln!("crewd serve: --data-dir is required when HOME is not set");
+                return ExitCode::FAILURE;
+            }
+        },
+        _ => std::env::temp_dir().join(format!("crewd-{}", std::process::id())),
+    };
+    let listen = match supervisor {
+        Supervisor::Served => {
+            let Some(addr) = flag(args, "--listen") else {
+                eprintln!("crewd serve: --listen <host:port> is required");
+                return ExitCode::FAILURE;
+            };
+            if let Err(error) = std::fs::create_dir_all(&dir) {
+                eprintln!("{}: {error}", dir.display());
+                return ExitCode::FAILURE;
+            }
+            match machine::persistent_token(&dir, crewd::random_token) {
+                Ok(token) => Listen { addr, token, wait_for_addr: true },
+                Err(error) => {
+                    eprintln!("{error}");
+                    return ExitCode::FAILURE;
+                }
+            }
+        }
+        _ => Listen::local(),
+    };
     let failed_starts = dir.join(FAILED_STARTS);
-    let failure = match run(&dir, supervisor) {
+    let failure = match run(&dir, supervisor, listen) {
         Ok(()) => return ExitCode::SUCCESS,
         Err(failure) => failure,
     };
-    if supervisor == Supervisor::Parent {
+    if supervisor != Supervisor::Launchd {
         eprintln!("{}", failure.message());
         return ExitCode::FAILURE;
     }
@@ -136,16 +174,20 @@ fn daemon(args: &[String]) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-fn run(dir: &Path, supervisor: Supervisor) -> Result<(), Failure> {
+fn run(dir: &Path, supervisor: Supervisor, listen: Listen) -> Result<(), Failure> {
     // First, before anything there is to clean up: a SIGTERM during startup
     // (launchd's bootout, the app quitting) is heard, and ends in the same
     // cleanup as any stop, instead of killing crewd half started.
     let (stop, stopped) = mpsc::channel();
-    watch_signals(stop.clone()).map_err(Failure::Transient)?;
+    watch_signals(stop.clone(), supervisor != Supervisor::Served).map_err(Failure::Transient)?;
     if supervisor == Supervisor::Launchd {
         tidy_log_every(dir.join(crew_cli::launch_agent::LOG));
         eprintln!("[crewd] {} starting, pid {}", env!("CARGO_PKG_VERSION"), std::process::id());
     }
+    std::fs::create_dir_all(dir).map_err(|e| Failure::Permanent(format!("{}: {e}", dir.display())))?;
+    // Before the socket, the database or anything else in the folder. Held
+    // until `run` returns, after everything below has stopped.
+    let _lock = DataLock::acquire(dir).map_err(Failure::Permanent)?;
     // Set before any thread starts; every terminal inherits it.
     let bind = dir.join("claude-bind");
     std::fs::create_dir_all(&bind).map_err(|e| Failure::Permanent(format!("{}: {e}", bind.display())))?;
@@ -156,7 +198,7 @@ fn run(dir: &Path, supervisor: Supervisor) -> Result<(), Failure> {
         StartError::Taken(_) => Failure::Permanent(error.to_string()),
         StartError::Failed(message) => Failure::Transient(format!("bridge: {message}")),
     })?;
-    let started = start(dir, &bridge);
+    let started = start(dir, &bridge, listen);
     let (pty, agents, processes, handle) = match started {
         Ok(started) => started,
         Err(failure) => {
@@ -188,10 +230,21 @@ fn run(dir: &Path, supervisor: Supervisor) -> Result<(), Failure> {
         ) {
             eprintln!("[crewd] daemon.json: {error}");
         }
-        if supervisor == Supervisor::Parent {
-            let mut stdout = io::stdout();
-            let line = serde_json::to_string(&info).map_err(|e| Failure::Transient(e.to_string()))?;
-            let _ = writeln!(stdout, "{line}").and_then(|_| stdout.flush());
+        match supervisor {
+            Supervisor::Parent => {
+                let mut stdout = io::stdout();
+                let line = serde_json::to_string(&info).map_err(|e| Failure::Transient(e.to_string()))?;
+                let _ = writeln!(stdout, "{line}").and_then(|_| stdout.flush());
+            }
+            Supervisor::Served => {
+                // The port, for whoever started it on port 0. The token stays
+                // in its file. Best effort: a service whose stdout went away
+                // keeps serving.
+                let mut stdout = io::stdout();
+                let _ = writeln!(stdout, "{}", serde_json::json!({ "url": info.url })).and_then(|_| stdout.flush());
+                eprintln!("[crewd] {} serving {} from {}", env!("CARGO_PKG_VERSION"), info.url, dir.display());
+            }
+            Supervisor::Launchd => {}
         }
         wait_for_exit(stop, stopped, supervisor == Supervisor::Parent, handle.exit_requests());
     }
@@ -211,37 +264,41 @@ fn run(dir: &Path, supervisor: Supervisor) -> Result<(), Failure> {
 }
 
 /// Everything after the bridge: the hosts, the database, the WebSocket.
-fn start(dir: &Path, bridge: &Bridge) -> Result<(PtyHost, AgentHost, ProcessHost, crewd::Handle), Failure> {
+fn start(
+    dir: &Path,
+    bridge: &Bridge,
+    listen: Listen,
+) -> Result<(PtyHost, AgentHost, ProcessHost, crewd::Handle), Failure> {
     crew_core::shell_path::prewarm();
     let pty = PtyHost::new();
     let agents = AgentHost::new();
     let store = Store::open(dir.join("crew.sqlite3")).map_err(|e| Failure::Permanent(format!("database: {e}")))?;
     let processes = ProcessHost::new(store.clone(), pty.clone(), dir);
-    let handle = serve(Config {
-        pty: pty.clone(),
-        store,
-        processes: processes.clone(),
-        agents: agents.clone(),
-        bridge: bridge.clone(),
-    })
+    let handle = serve_on(
+        Config {
+            pty: pty.clone(),
+            store,
+            processes: processes.clone(),
+            agents: agents.clone(),
+            bridge: bridge.clone(),
+        },
+        listen,
+    )
     .map_err(Failure::Transient)?;
     Ok((pty, agents, processes, handle))
 }
 
-fn data_dir(args: &[String]) -> PathBuf {
+fn flag(args: &[String], name: &str) -> Option<String> {
     let mut args = args.iter();
     while let Some(arg) = args.next() {
-        if let Some(path) = arg.strip_prefix("--data-dir=") {
-            return PathBuf::from(path);
+        if let Some(value) = arg.strip_prefix(name).and_then(|rest| rest.strip_prefix('=')) {
+            return Some(value.to_string());
         }
-        if arg == "--data-dir" {
-            if let Some(path) = args.next() {
-                return PathBuf::from(path);
-            }
-            break;
+        if arg == name {
+            return args.next().cloned();
         }
     }
-    std::env::temp_dir().join(format!("crewd-{}", std::process::id()))
+    None
 }
 
 /// launchd never rotates what it appends to, and a daemon that runs from login
@@ -299,10 +356,10 @@ fn tidy_log(path: &Path, cap: u64, keep: u64) {
     }
 }
 
-/// SIGTERM, SIGINT and SIGHUP, each a request to stop. The handlers are
+/// SIGTERM, SIGINT and, when `hangup` holds, SIGHUP, each a request to stop. The handlers are
 /// registered here, on the caller's thread, so they are in place when this
 /// returns; the thread it leaves behind only waits for one to arrive.
-fn watch_signals(stop: mpsc::Sender<()>) -> Result<(), String> {
+fn watch_signals(stop: mpsc::Sender<()>, hangup: bool) -> Result<(), String> {
     use tokio::signal::unix::{signal, SignalKind};
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -317,10 +374,12 @@ fn watch_signals(stop: mpsc::Sender<()>) -> Result<(), String> {
         .name("crewd-signal".into())
         .spawn(move || {
             runtime.block_on(async {
-                tokio::select! {
-                    _ = term.recv() => {}
-                    _ = int.recv() => {}
-                    _ = hup.recv() => {}
+                loop {
+                    tokio::select! {
+                        _ = term.recv() => break,
+                        _ = int.recv() => break,
+                        _ = hup.recv() => if hangup { break },
+                    }
                 }
             });
             let _ = stop.send(());

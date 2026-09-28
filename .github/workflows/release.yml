@@ -1,0 +1,92 @@
+# Builds Crew on a macOS arm64 runner and publishes the GitHub release.
+# Started by the tag `npm run release` pushes; commits to master never run it.
+# Run it by hand (Actions › Release › Run workflow, or
+# `gh workflow run release.yml -f tag=v0.1.18`) to retry a tag whose publish failed.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to build and publish, e.g. v0.1.18
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          # Full history and branches, for the master check below.
+          fetch-depth: 0
+
+      - name: Refuse tags that are not on master
+        run: |
+          if ! git merge-base --is-ancestor HEAD origin/master; then
+            echo "::error::$(git rev-parse --short HEAD) is not on master. Cut releases from master with npm run release."
+            exit 1
+          fi
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+
+      # rust-toolchain.toml picks the toolchain; the cache keeps target/ between releases.
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install zig and cargo-zigbuild
+        run: brew install zig cargo-zigbuild
+
+      - run: npm ci
+
+      # The certificate scripts/signing-cert.mjs made, in a keychain of the run's own.
+      # scripts/sign-mac.cjs signs with it; without it the app is signed ad hoc, and
+      # macOS asks for the keychain password again after every update.
+      - name: Load the signing certificate
+        env:
+          MAC_SIGNING_P12: ${{ secrets.MAC_SIGNING_P12 }}
+          MAC_SIGNING_PASSWORD: ${{ secrets.MAC_SIGNING_PASSWORD }}
+        run: |
+          if [ -z "$MAC_SIGNING_P12" ]; then
+            echo "::warning::No MAC_SIGNING_P12 secret: this release is signed ad hoc. Run node scripts/signing-cert.mjs --github once."
+            exit 0
+          fi
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          password="$(openssl rand -base64 24)"
+          echo "$MAC_SIGNING_P12" | base64 --decode > "$RUNNER_TEMP/signing.p12"
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 3600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          security import "$RUNNER_TEMP/signing.p12" -k "$keychain" -P "$MAC_SIGNING_PASSWORD" -T /usr/bin/codesign
+          rm "$RUNNER_TEMP/signing.p12"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$password" "$keychain" > /dev/null
+          # codesign only finds an identity in a keychain on the search list.
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          identity="$(security find-identity -p codesigning "$keychain" | awk '/"Crew Code Signing"/ { print $2; exit }')"
+          if [ -z "$identity" ]; then
+            echo "::error::MAC_SIGNING_P12 holds no \"Crew Code Signing\" identity."
+            exit 1
+          fi
+          echo "CREW_SIGN_IDENTITY=$identity" >> "$GITHUB_ENV"
+          echo "CREW_SIGN_KEYCHAIN=$keychain" >> "$GITHUB_ENV"
+
+      - name: Build and publish
+        run: node scripts/release-publish.mjs
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Remove the signing keychain
+        if: always() && env.CREW_SIGN_KEYCHAIN != ''
+        run: security delete-keychain "$CREW_SIGN_KEYCHAIN"

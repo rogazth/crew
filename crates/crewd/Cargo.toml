@@ -17,10 +17,11 @@ crew-cli = { path = "../crew-cli" }
 crew-core = { path = "../crew-core" }
 crew-protocol = { path = "../crew-protocol" }
 futures-util.workspace = true
+libc = "0.2.189"
 rand.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-tokio = { workspace = true, features = ["signal"] }
+tokio = { workspace = true, features = ["signal", "fs", "io-util"] }
 tokio-tungstenite.workspace = true
 
 [dev-dependencies]

@@ -105,9 +105,14 @@ export type BrowserToolRun = { workspaceId: string, tool: string, args: unknown,
 
 export type CookieRead = { cookies: Array<ImportedCookie>, 
 /**
- * Rows left out: expired, undecryptable, partitioned, or on a domain that must not move.
+ * Rows left out: expired, undecryptable, or partitioned.
  */
-skipped: number, };
+skipped: number, 
+/**
+ * Rows on Google's and YouTube's domains, left out because Google binds them to the browser
+ * that holds them. Only a sign-in in Crew brings those over.
+ */
+google: number, };
 
 export type CookieSameSite = "unspecified" | "no_restriction" | "lax" | "strict";
 
@@ -124,11 +129,42 @@ export type CookieSourceId = { sourceId: string, };
 
 export type DaemonInfo = { url: string, token: string, };
 
+export type DirEntry = { name: string, path: string, 
+/**
+ * It holds a `.git`: opening it makes a workspace rather than entering it.
+ */
+repo: boolean, };
+
+export type DirList = { 
+/**
+ * Absolute, or starting with `~`.
+ */
+path: string, };
+
+/**
+ * The folders in a folder, for picking a workspace on a machine with no Finder.
+ */
+export type DirListing = { 
+/**
+ * The folder listed, with `~` expanded.
+ */
+path: string, repo: boolean, entries: Array<DirEntry>, };
+
+/**
+ * One replacement in a file: `before` became `after`.
+ */
+export type EditHunk = { before: string, after: string, };
+
 export type Event = { event: string, payload: unknown, };
 
 export type FileBytes = { mime: string, data: string, };
 
 export type HarnessEvent = { "type": "session.started", } | { "type": "session.ended", code?: number | null, } | { "type": "session.error", message: string, } | { "type": "session.note", message: string, } | { "type": "user.message", text: string, hidden?: boolean, files?: Array<AttachedFile>, fromAgent?: AgentRef, } | { "type": "system.message", text: string, } | { "type": "session.providerBound", providerSessionId: string, } | { "type": "message.delta", text: string, } | { "type": "message.completed", } | { "type": "reasoning.delta", text: string, } | { "type": "turn.completed", usage?: TurnUsage, } | { "type": "tool.started", callId: string, name: string, title: string, detail?: ToolDetail, } | { "type": "tool.updated", callId: string, title?: string, status?: ToolStatus, detail?: ToolDetail, } | { "type": "approval.requested", requestId: number, name: string, title: string, input?: Record<string, unknown>, } | { "type": "approval.resolved", requestId: number, decision: ApprovalResolution, } | { "type": "question.requested", requestId: number, questions: Array<Question>, } | { "type": "question.resolved", requestId: number, answers: { [key in string]: string } | null, };
+
+/**
+ * The daemon's first message after a good `auth`, sent as the `hello` event.
+ */
+export type Hello = { protocol: number, version: string, };
 
 export type HistoryClear = { 
 /**
@@ -231,6 +267,36 @@ export type LogMatch = {
 offset: number, line: string, before: Array<string>, after: Array<string>, };
 
 export type LogWait = { "result": "matched", offset: number, line: string, cursor: number, } | { "result": "ended", state: ProcessState, exitCode: number | null, cursor: number, } | { "result": "timed-out", cursor: number, };
+
+/**
+ * The machine a daemon runs on, for Settings' health line.
+ */
+export type MachineInfo = { version: string, protocol: number, 
+/**
+ * `Ubuntu 24.04.1 LTS`, `macOS 14.6`.
+ */
+os: string, arch: string, hostname: string, home: string, cpus: number, 
+/**
+ * The one-minute load average: over `cpus`, the machine is saturated.
+ */
+load: number, memoryTotal: number, 
+/**
+ * Absent where the OS does not say cheaply (macOS).
+ */
+memoryAvailable?: number, 
+/**
+ * Sessions mid-turn or waiting on an answer.
+ */
+agentsRunning: number, 
+/**
+ * The agent CLIs found on the daemon's PATH.
+ */
+installed: Array<string>, 
+/**
+ * The SOCKS port beside `crewd serve`, for a remote workspace's browser.
+ * Absent on the window's own daemon.
+ */
+socksPort?: number, };
 
 /**
  * A window of a transcript. `more` says whether older blocks exist before
@@ -402,13 +468,42 @@ export type PtySpawn = { id: string, cwd: string, command: Array<string>, cols: 
  * and the environment so the CLI reaches Crew's tools: the client cannot,
  * because in remote mode the bridge's socket and binary are not its own.
  */
-session?: string, };
+session?: string, 
+/**
+ * Keep a live process under this id instead of replacing it: a window
+ * opening again finds the agent it left running.
+ */
+reuse?: boolean, 
+/**
+ * Whether the window paints the terminal dark. It becomes COLORFGBG, which
+ * CLIs fall back to when their OSC 11 query outlives a remote round trip.
+ */
+dark?: boolean, };
 
 export type PtyWrite = { id: string, data: string, };
 
 export type Question = { question: string, header: string, multiSelect: boolean, options: Array<QuestionOption>, };
 
 export type QuestionOption = { label: string, description?: string, };
+
+/**
+ * A machine the window reaches. The token that opens it is not here: the
+ * window keeps that in the keychain.
+ */
+export type RemoteEnv = { id: string, name: string, 
+/**
+ * The address crewd listens on: the machine's tailnet IP.
+ */
+host: string, port: number, 
+/**
+ * Empty when `ssh` names the user, in ~/.ssh/config.
+ */
+user: string, 
+/**
+ * What `ssh` is given to reach the machine: a Host from ~/.ssh/config, or
+ * an address. Empty means `host`.
+ */
+ssh: string, };
 
 export type Request = { id: number, method: string, params: unknown, };
 
@@ -475,6 +570,16 @@ export type SessionUpdate = { id: string, name: string, provider: string, model:
 export type SessionUpdated = { session: Session, };
 
 /**
+ * Sessions the daemon deleted on its own: untouched longer than Settings keeps them.
+ */
+export type SessionsDeleted = { ids: Array<string>, };
+
+/**
+ * How many days untouched a session outlives, for `sessions_stale` and `sessions_expire`.
+ */
+export type SessionsRetention = { days: number, };
+
+/**
  * A process `solo.yml` lists, as it would be created.
  */
 export type SoloEntry = { 
@@ -501,6 +606,10 @@ skipped: Array<string>, };
 
 export type TempFile = { extension: string, base64Contents: string, };
 
+export type TodoItem = { text: string, status: TodoStatus, };
+
+export type TodoStatus = "pending" | "inProgress" | "completed";
+
 export type ToolCall = { id: number, sessionId: string, method: string, params: unknown, };
 
 /**
@@ -509,7 +618,21 @@ export type ToolCall = { id: number, sessionId: string, method: string, params: 
  * or opencode's `bash`: the adapters translate into this, and the UI renders
  * one shape instead of four.
  */
-export type ToolDetail = { "kind": "command", command: string, exitCode?: number, output?: string, } | { "kind": "file", path: string, lineStart?: number, lineEnd?: number, preview?: string, } | { "kind": "edit", path: string, added?: number, removed?: number, } | { "kind": "search", query: string, matches?: number, } | { "kind": "fetch", url: string, title?: string, } | { "kind": "message", to: string, text: string, } | { "kind": "output", text: string, };
+export type ToolDetail = { "kind": "command", command: string, exitCode?: number, output?: string, } | { "kind": "file", path: string, lineStart?: number, lineEnd?: number, preview?: string, } | { "kind": "edit", path: string, added?: number, removed?: number, 
+/**
+ * The replacements as the call named them, when it named them and they
+ * fit: a write is one hunk with nothing before it. Absent when too big
+ * to keep, rather than kept in part: half a diff reads as a wrong one.
+ */
+hunks?: Array<EditHunk>, } | { "kind": "search", query: string, matches?: number, 
+/**
+ * What came back: the files, the lines, the results.
+ */
+output?: string, } | { "kind": "fetch", url: string, title?: string, output?: string, } | { "kind": "message", to: string, text: string, } | { "kind": "todo", items: Array<TodoItem>, } | { "kind": "agent", description: string, agentType?: string, prompt?: string, 
+/**
+ * What it reported back.
+ */
+output?: string, } | { "kind": "mcp", server: string, tool: string, input?: string, output?: string, } | { "kind": "plan", text: string, } | { "kind": "output", text: string, };
 
 export type ToolStatus = "pending" | "completed" | "failed" | "interrupted";
 

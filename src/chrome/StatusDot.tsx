@@ -1,11 +1,11 @@
-import { CircleNotchIcon } from "@phosphor-icons/react";
+import { LoaderCircleIcon } from "lucide-react";
 import { statusLabel } from "../lib/status";
 import type { SessionStatus } from "../lib/types";
 
 const DOT: Partial<Record<SessionStatus, string>> = {
-  "needs-input": "bg-kumo-warning",
-  done: "bg-kumo-info",
-  error: "bg-kumo-danger",
+  "needs-input": "bg-warning",
+  done: "bg-info",
+  error: "bg-danger",
 };
 
 /**
@@ -28,7 +28,7 @@ export function StatusDot({ status, className = "" }: { status: SessionStatus; c
       className={`flex size-3.5 shrink-0 items-center justify-center ${className}`}
     >
       {status === "working" ? (
-        <CircleNotchIcon className="size-3.5 animate-spin text-kumo-warning" weight="bold" />
+        <LoaderCircleIcon className="size-3.5 animate-spin text-warning" />
       ) : (
         dot && <span className={`size-2 rounded-full ${dot}`} />
       )}

@@ -1,9 +1,8 @@
 import type { RefObject } from "react";
 import type { Answers, ApprovalDecision, AttachedFile, Block } from "../../lib/blocks";
-import type { ProviderId } from "../../lib/providers";
 import type { Session } from "../../lib/types";
 
-/** The contract every agent theme renders; AgentChat owns the state behind it. */
+/** The contract the chat surface renders; AgentChat owns the state behind it. */
 export type ChatSurfaceProps = {
   session: Session;
   blocks: Block[];
@@ -27,7 +26,6 @@ export type ChatSurfaceProps = {
   onAttach: () => void;
   onPasteFiles: (files: File[]) => void;
   onRemoveFile: (path: string) => void;
-  onModel: (provider: ProviderId, model: string) => void;
   onApprove: (requestId: number, decision: ApprovalDecision) => void;
   onAnswer: (requestId: number, answers: Answers | null) => void;
 };

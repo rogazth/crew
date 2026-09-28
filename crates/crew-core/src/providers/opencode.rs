@@ -1,8 +1,10 @@
-use crew_protocol::{ToolDetail, ToolStatus, TurnUsage};
+use crew_protocol::{EditHunk, ToolDetail, ToolStatus, TurnUsage};
 use serde_json::{Map, Value};
 
 use super::runtime::Autonomy;
-use super::{as_record, as_record_owned, clip, crew_tool_detail, finite_number, leaf, string_field};
+use super::{
+    as_record, as_record_owned, clip, crew_tool_detail, finite_number, leaf, string_field, subagent_report, todo_items,
+};
 
 pub use super::parse_json_line;
 
@@ -194,11 +196,13 @@ fn tool_detail(
                 preview: text_field(meta, "preview").or_else(|| text_field(display, "text")),
             })
         }
-        // opencode counts no lines on a write, so the counts stay unset.
+        // opencode counts no lines on a write, so the counts stay unset; the
+        // replacement is in the input, as it is for Claude.
         "write" | "edit" | "patch" => Some(ToolDetail::Edit {
             path: string_field(meta, "filepath").or_else(|| string_field(Some(input), "filePath"))?,
             added: None,
             removed: None,
+            hunks: edit_hunk(name, input).map(|hunk| vec![hunk]),
         }),
         "grep" | "glob" => Some(ToolDetail::Search {
             query: string_field(Some(input), "pattern")?,
@@ -206,10 +210,21 @@ fn tool_detail(
                 .and_then(|meta| meta.get("matches"))
                 .and_then(Value::as_u64)
                 .map(|count| count as u32),
+            output: text_field(state, "output"),
         }),
         "webfetch" => Some(ToolDetail::Fetch {
             url: string_field(Some(input), "url")?,
             title: None,
+            output: text_field(state, "output"),
+        }),
+        "todowrite" => Some(ToolDetail::Todo {
+            items: todo_items(input.get("todos"))?,
+        }),
+        "task" => Some(ToolDetail::Agent {
+            description: string_field(Some(input), "description").unwrap_or_else(|| "Subagent".into()),
+            agent_type: string_field(Some(input), "subagent_type"),
+            prompt: text_field(Some(input), "prompt"),
+            output: text_field(state, "output").map(|report| subagent_report(&report)),
         }),
         _ => Some(ToolDetail::Output {
             text: text_field(state, "output")?,
@@ -260,6 +275,18 @@ fn pretty_tool(name: &str) -> String {
 
 /// Output and file excerpts keep their whitespace: `string_field` trims, and a
 /// preview that starts mid-indentation would lose its shape.
+fn edit_hunk(name: &str, input: &Map<String, Value>) -> Option<EditHunk> {
+    let (before, after) = match name {
+        "edit" => (text_field(Some(input), "oldString"), text_field(Some(input), "newString")),
+        "write" => (None, text_field(Some(input), "content")),
+        _ => return None,
+    };
+    (before.is_some() || after.is_some()).then(|| EditHunk {
+        before: before.unwrap_or_default(),
+        after: after.unwrap_or_default(),
+    })
+}
+
 fn text_field(rec: Option<&Map<String, Value>>, key: &str) -> Option<String> {
     rec?.get(key)
         .and_then(Value::as_str)
@@ -512,6 +539,7 @@ mod tests {
                     path: "/w/new.txt".into(),
                     added: None,
                     removed: None,
+                    hunks: Some(vec![EditHunk { before: String::new(), after: "hello".into() }]),
                 }),
             })
         );
@@ -537,6 +565,7 @@ mod tests {
             Some(ToolDetail::Search {
                 query: "TODO".into(),
                 matches: Some(1),
+                output: Some("Found 1 matches\n/w/have.txt:\n  Line 2: TODO beta\n".into()),
             })
         );
     }

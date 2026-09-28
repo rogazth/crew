@@ -28,7 +28,7 @@ use crate::store::{has_column, now_millis, set_order, Store};
 
 pub use log::LogStore;
 
-pub const MIGRATION_V19: &str = r#"
+pub const MIGRATION_PROCESSES: &str = r#"
 CREATE TABLE IF NOT EXISTS processes (
   id            TEXT PRIMARY KEY,
   workspace_id  TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
@@ -53,7 +53,7 @@ CREATE INDEX IF NOT EXISTS processes_workspace_idx ON processes (workspace_id, s
 /// workspace would leave one unreachable. Rows from before the index are
 /// renamed first, the oldest keeping its name: `web`, `web (2)`. `revision`
 /// counts changes, for an approval to name the one the user read.
-pub fn migrate_v20(conn: &Connection) -> rusqlite::Result<()> {
+pub fn migrate_unique_names(conn: &Connection) -> rusqlite::Result<()> {
     if !has_column(conn, "processes", "revision")? {
         conn.execute_batch("ALTER TABLE processes ADD COLUMN revision INTEGER NOT NULL DEFAULT 0;")?;
     }

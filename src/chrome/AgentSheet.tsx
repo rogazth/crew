@@ -1,7 +1,7 @@
-import { ArrowsClockwiseIcon, FolderIcon, GitBranchIcon, PlusIcon, ShuffleIcon } from "@phosphor-icons/react";
+import { FolderIcon, GitBranchIcon, PlusIcon, RefreshCwIcon, ShuffleIcon } from "lucide-react";
 import { useState, type KeyboardEvent, type ReactNode } from "react";
 import { AgentAvatar } from "./AgentAvatar";
-import { Button, Card, Field, Footer, Overlay, Select, TextArea, TextInput, Toggle, type Option } from "./kit";
+import { Button, Card, Field, Footer, Overlay, Select, TextArea, Toggle, type Option } from "./kit";
 import { ModelPicker } from "./ModelPicker";
 import { BranchRefused, type useAgentSheet } from "../hooks/useAgentSheet";
 import { useAgentAvatar } from "../hooks/useAgentAvatar";
@@ -148,25 +148,31 @@ export function AgentSheet({ session, worktrees, initialWorktree, existingNames,
   }
 
   return (
-    <Overlay onClose={onClose} width="w-[480px]" label={session ? "Agent settings" : "New agent"}>
+    <Overlay onClose={onClose} width="w-[540px]" label={session ? "Agent settings" : "New agent"}>
       <div onKeyDown={onKeyDown} className="flex min-h-0 flex-1 flex-col">
         <div className="min-h-0 flex-1 space-y-5 overflow-y-auto p-4">
+          {/* The name is the sheet's title, as Linear titles a new issue: typed where it will read. */}
           <FacePicker
             id={session?.id ?? null}
             face={draft.face}
-            title={session ? "Agent settings" : "New agent"}
             onChange={(face) => update({ face })}
+            heading={
+              <div className="flex min-w-0 flex-1 flex-col">
+                <span className="text-[11.5px] text-text-muted">{session ? "Agent settings" : "New agent"}</span>
+                <input
+                  autoFocus
+                  spellCheck={false}
+                  value={draft.name}
+                  placeholder="Name it, e.g. Research"
+                  aria-label="Name"
+                  aria-invalid={submitted && named !== null}
+                  onChange={(event) => update({ name: event.target.value })}
+                  className="h-8 min-w-0 bg-transparent text-[20px] font-semibold tracking-[-0.02em] outline-none placeholder:font-normal placeholder:text-placeholder"
+                />
+                {submitted && named ? <span className="text-[12px] text-danger">{named}</span> : null}
+              </div>
+            }
           />
-
-          <Field label="Name" error={submitted ? named : null}>
-            <TextInput
-              autoFocus
-              value={draft.name}
-              placeholder="e.g. Research"
-              aria-invalid={submitted && named !== null}
-              onChange={(event) => update({ name: event.target.value })}
-            />
-          </Field>
 
           {!session && (
             <WorksIn
@@ -214,7 +220,7 @@ export function AgentSheet({ session, worktrees, initialWorktree, existingNames,
 
           {onNewRoutine && (
             <Button
-              icon={ArrowsClockwiseIcon}
+              icon={RefreshCwIcon}
               className="w-full"
               onClick={() => {
                 onClose();
@@ -246,12 +252,12 @@ export function AgentSheet({ session, worktrees, initialWorktree, existingNames,
 function FacePicker({
   id,
   face,
-  title,
+  heading,
   onChange,
 }: {
   id: string | null;
   face: AgentFace;
-  title: string;
+  heading: ReactNode;
   onChange: (face: AgentFace) => void;
 }) {
   const { avatar } = useAgentAvatar();
@@ -269,7 +275,7 @@ function FacePicker({
       <AgentAvatar seed={seed} style={style} bare className="size-16" />
       <div className="flex min-w-0 flex-1 flex-col gap-2">
         <div className="flex items-center gap-2">
-          <span className="min-w-0 flex-1 truncate text-[14px] font-semibold">{title}</span>
+          {heading}
           <Select
             label="Face style"
             className="w-40"
@@ -289,7 +295,7 @@ function FacePicker({
               aria-checked={candidate === face.seed}
               aria-label="Use this face"
               onClick={() => onChange({ ...face, seed: candidate })}
-              className={`grid size-9 place-items-center rounded-lg outline-none transition-colors focus-visible:ring-2 focus-visible:ring-kumo-focus/50 ${
+              className={`grid size-9 place-items-center rounded-lg outline-none transition-colors focus-visible:ring-2 focus-visible:ring-focus/50 ${
                 candidate === face.seed ? "bg-selected" : "hover:bg-hover"
               }`}
             >
@@ -301,7 +307,7 @@ function FacePicker({
             title="Deal new faces"
             aria-label="Deal new faces"
             onClick={() => setHand(dealSeeds(VARIANTS))}
-            className="grid size-9 place-items-center rounded-lg text-kumo-subtle outline-none hover:bg-hover hover:text-kumo-default focus-visible:ring-2 focus-visible:ring-kumo-focus/50"
+            className="grid size-9 place-items-center rounded-lg text-icon outline-none hover:bg-hover hover:text-text focus-visible:ring-2 focus-visible:ring-focus/50"
           >
             <ShuffleIcon className="size-4" />
           </button>
@@ -346,16 +352,16 @@ function WorksIn({
           const Glyph = tree.branch || !tree.main ? GitBranchIcon : FolderIcon;
           return row(tree.path, place.kind === "worktree" && place.path === path, () => onChange({ kind: "worktree", path }), (
             <>
-              <Glyph className="size-3.5 shrink-0 text-kumo-subtle" />
+              <Glyph className="size-3.5 shrink-0 text-icon" />
               <span className="min-w-0 flex-1 truncate">{worktreeLabel(tree)}</span>
-              {tree.main && <span className="text-[11px] text-kumo-subtle">main checkout</span>}
+              {tree.main && <span className="text-[11px] text-text-muted">main checkout</span>}
             </>
           ));
         })}
         <div
           className={`flex h-8 w-full items-center gap-2 rounded-md px-2 ${place.kind === "branch" ? "bg-selected" : "hover:bg-hover"}`}
         >
-          <PlusIcon className="size-3.5 shrink-0 text-kumo-subtle" />
+          <PlusIcon className="size-3.5 shrink-0 text-icon" />
           <input
             role="radio"
             aria-checked={place.kind === "branch"}
@@ -368,7 +374,7 @@ function WorksIn({
               setBranch(event.target.value);
               onChange({ kind: "branch", branch: event.target.value });
             }}
-            className="min-w-0 flex-1 bg-transparent outline-none placeholder:text-kumo-subtle"
+            className="min-w-0 flex-1 bg-transparent outline-none placeholder:text-placeholder"
           />
         </div>
       </div>

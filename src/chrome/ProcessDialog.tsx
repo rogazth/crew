@@ -99,9 +99,9 @@ export function ProcessDialog({ workspaceId, process, onClose, onSaved }: Props)
           />
         </div>
         {process && isLive(process) && (
-          <p className="text-[12px] text-kumo-subtle">It keeps running as it is until you restart it.</p>
+          <p className="text-[12px] text-text-muted">It keeps running as it is until you restart it.</p>
         )}
-        {failure && <p className="text-[12px] text-kumo-danger">{failure}</p>}
+        {failure && <p className="text-[12px] text-danger">{failure}</p>}
         <button type="submit" hidden />
       </form>
       <Footer hints={[["⌘↵", "save"], ["esc", "cancel"]]}>

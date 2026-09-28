@@ -57,13 +57,18 @@ export const COMMANDS = {
   "worktree-9": { label: "Go to Worktree 9", keys: { key: "9", ctrl: true, meta: true } },
 
   // Making things
-  "new-agent": { label: "New Agent", keys: "Mod+Shift+N" },
+  "new-agent": { label: "New Agent", keys: "Mod+Shift+A" },
   "new-session": { label: "New Session", keys: "Mod+N" },
   "new-worktree": { label: "New Worktree", keys: { key: "N", ctrl: true, meta: true } },
+  // ⇧⌘N is Chrome's incognito window, so the muscle memory transfers; B is for browser.
+  "new-browser-tab": { label: "New Browser Tab", keys: "Mod+Shift+B" },
+  "new-incognito-tab": { label: "New Incognito Tab", keys: "Mod+Shift+N" },
 
-  // Find and zoom — bound by whatever fills the active tab, a terminal or a page.
+  // Find and zoom — bound by whatever fills the active tab: a terminal or a page zooms
+  // itself, anything else zooms the window.
   find: { label: "Find", keys: "Mod+F" },
-  "zoom-in": { label: "Zoom In", keys: { key: "=", mod: true } },
+  // ⌘+ is what the key says on most layouts; ⌘= is the same key unshifted on a US one.
+  "zoom-in": { label: "Zoom In", keys: { key: "+", mod: true }, also: [{ key: "=", mod: true }, { key: "+", mod: true, shift: true }] },
   "zoom-out": { label: "Zoom Out", keys: { key: "-", mod: true } },
   "zoom-reset": { label: "Actual Size", keys: "Mod+0" },
 
@@ -83,9 +88,12 @@ export const COMMANDS = {
   "open-routines": { label: "Routines" },
   "search-messages": { label: "Search Messages", keys: "Mod+Shift+F" },
   "open-settings": { label: "Settings", keys: "Mod+," },
+  "open-browser-settings": { label: "Browser Settings" },
   "save-file": { label: "Save File", keys: "Mod+S" },
   "toggle-outline": { label: "Toggle Outline" },
-  shortcuts: { label: "Keyboard Shortcuts", keys: { key: "/", mod: true } },
+  // ⇧⌘/ too: where / is a shifted key (⇧7 on a Latin American board) ⌘/ cannot be typed,
+  // and on a US board it is ⌘?, the Help chord.
+  shortcuts: { label: "Keyboard Shortcuts", keys: { key: "/", mod: true }, also: [{ key: "/", mod: true, shift: true }] },
 } as const satisfies Record<string, Command>;
 
 export type CommandId = keyof typeof COMMANDS;
@@ -118,7 +126,15 @@ const MAC_ORDER = ["⌃", "⌥", "⇧", "⌘"];
 /** The binding as the platform spells it, or "" for a command with none. */
 export function commandKeys(id: CommandId): string {
   const keys = keysFor(id);
-  if (!keys) return "";
+  return keys ? chordLabel(keys) : "";
+}
+
+/** Every chord of the command as the platform spells it, the one shown first. */
+export function commandChords(id: CommandId): string[] {
+  return allKeysFor(id).map(chordLabel);
+}
+
+function chordLabel(keys: RegisterableHotkey): string {
   const shown = formatForDisplay(keys).replace("^", "⌃");
   if (!MAC_ORDER.some((glyph) => shown.includes(glyph))) return shown;
   const parts = shown.split(/\s+/).join("");

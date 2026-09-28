@@ -41,7 +41,7 @@ test("A1: the avatar style and a face picked for one agent survive a restart", a
   const page = crew.window;
 
   // An agent, made in the sheet.
-  await pressChord(crew, `${MOD}+Shift+n`);
+  await pressChord(crew, `${MOD}+Shift+a`);
   const sheet = page.getByRole("dialog", { name: "New agent" });
   await sheet.getByPlaceholder("e.g. Research").fill("Scout");
   await sheet.getByRole("button", { name: "Create agent" }).click();

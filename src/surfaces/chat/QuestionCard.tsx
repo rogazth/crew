@@ -1,4 +1,8 @@
-import { Checkbox, Radio } from "@cloudflare/kumo";
+import { Checkbox } from "@base-ui/react/checkbox";
+import { Radio } from "@base-ui/react/radio";
+import { RadioGroup } from "@base-ui/react/radio-group";
+import { CheckIcon, MessageCircleQuestionIcon } from "lucide-react";
+import { Button } from "../../chrome/kit";
 import { useEffect, useRef, useState } from "react";
 import type { Answers, Block, Question } from "../../lib/blocks";
 
@@ -103,7 +107,19 @@ export function QuestionCard({ block, hot = false, onAnswer }: Props) {
   if (!ask || !current) return null;
 
   return (
-    <div ref={card} tabIndex={-1} className="crew-card my-1.5 outline-none">
+    <div ref={card} tabIndex={-1} className="crew-card my-2 outline-none">
+      <div className="flex items-center gap-2.5">
+        <span className="grid size-7 shrink-0 place-items-center rounded-lg bg-warning/15 text-warning">
+          <MessageCircleQuestionIcon className="size-4" />
+        </span>
+        <div className="flex min-w-0 flex-1 flex-col">
+          <span className="font-semibold">{current.question}</span>
+          <span className="text-[12px] text-text-muted">
+            {questions.length > 1 ? `Question ${step + 1} of ${questions.length}` : "Waiting for your answer"}
+            {current.multiSelect ? " · pick any" : ""}
+          </span>
+        </div>
+      </div>
       {questions.length > 1 && (
         <div className="flex gap-1">
           {questions.map((q, index) => (
@@ -111,35 +127,38 @@ export function QuestionCard({ block, hot = false, onAnswer }: Props) {
               key={q.question}
               type="button"
               onClick={() => setStep(index)}
-              className={`h-6 rounded-md px-2 text-[12px] leading-4 transition-colors ${
-                index === step ? "bg-card text-text" : "text-text-muted hover:text-text"
-              } ${answered(picks[q.question]) && index !== step ? "line-through decoration-hairline" : ""}`}
+              className={`flex h-6 items-center gap-1 rounded-full px-2.5 text-[12px] leading-4 transition-colors ${
+                index === step ? "bg-accent text-inverse" : "text-text-muted ring-1 ring-hairline hover:text-text"
+              }`}
             >
+              {answered(picks[q.question]) && index !== step ? <CheckIcon className="size-3" /> : null}
               {q.header}
             </button>
           ))}
         </div>
       )}
-      <p className="font-medium">{current.question}</p>
       <Options key={current.question} question={current} chosen={pick.chosen} onChoose={choose} />
       <input
         value={pick.other}
         onChange={(event) => set({ ...pick, other: event.target.value })}
         placeholder={current.multiSelect ? "Anything else" : "Something else"}
-        className="crew-field"
+        className="h-9 rounded-xl bg-canvas px-3 text-[13px] ring-1 ring-border outline-none placeholder:text-placeholder focus:ring-border-strong"
       />
-      <div className="flex items-center justify-end gap-1.5">
-        <button type="button" onClick={() => onAnswer(ask.requestId, null)} className="crew-btn">
+      <div className="flex items-center gap-1.5">
+        <span className="flex-1 text-[11.5px] text-text-muted">
+          {hot ? `${LETTERS[0]}–${LETTERS[current.options.length - 1]} to pick · ↵ ${last ? "to send" : "for next"} · esc to dismiss` : ""}
+        </span>
+        <Button variant="ghost" className="h-7 px-2.5" onClick={() => onAnswer(ask.requestId, null)}>
           Dismiss
-        </button>
+        </Button>
         {last ? (
-          <button type="button" disabled={!complete} onClick={submit} className="crew-btn crew-btn-primary">
-            Submit
-          </button>
+          <Button variant="primary" className="h-7 px-2.5" disabled={!complete} onClick={submit}>
+            Send answer
+          </Button>
         ) : (
-          <button type="button" disabled={!answered(pick)} onClick={advance} className="crew-btn crew-btn-primary">
+          <Button variant="primary" className="h-7 px-2.5" disabled={!answered(pick)} onClick={advance}>
             Next
-          </button>
+          </Button>
         )}
       </div>
     </div>
@@ -160,25 +179,47 @@ function Options({
     return (
       <div role="group" aria-label={question.question} className="crew-options flex flex-col">
         {question.options.map((option, index) => (
-          <Checkbox
-            key={option.label}
-            checked={picked.has(option.label)}
-            onCheckedChange={() => onChoose(option.label)}
-            label={<OptionLabel option={option} index={index} />}
-          />
+          <label key={option.label} className={CHOICE}>
+            <Checkbox.Root
+              checked={picked.has(option.label)}
+              onCheckedChange={() => onChoose(option.label)}
+              className="mt-0.5 grid size-4 shrink-0 place-items-center rounded-[5px] ring-1 ring-border-strong outline-none focus-visible:ring-2 focus-visible:ring-focus/50 data-checked:bg-accent data-checked:ring-accent"
+            >
+              <Checkbox.Indicator>
+                <CheckIcon className="size-3 text-inverse" />
+              </Checkbox.Indicator>
+            </Checkbox.Root>
+            <OptionLabel option={option} index={index} />
+          </label>
         ))}
       </div>
     );
   }
   return (
-    <Radio.Group value={chosen[0] ?? ""} onValueChange={(next) => onChoose(String(next))} className="crew-options">
-      <Radio.Legend className="sr-only">{question.question}</Radio.Legend>
+    <RadioGroup
+      aria-label={question.question}
+      value={chosen[0] ?? ""}
+      onValueChange={(next) => onChoose(String(next))}
+      className="crew-options flex flex-col"
+    >
       {question.options.map((option, index) => (
-        <Radio.Item key={option.label} value={option.label} label={<OptionLabel option={option} index={index} />} />
+        <label key={option.label} className={CHOICE}>
+          <Radio.Root
+            value={option.label}
+            className="mt-0.5 grid size-4 shrink-0 place-items-center rounded-full ring-1 ring-border-strong outline-none focus-visible:ring-2 focus-visible:ring-focus/50 data-checked:bg-accent data-checked:ring-accent"
+          >
+            <Radio.Indicator className="size-1.5 rounded-full bg-inverse" />
+          </Radio.Root>
+          <OptionLabel option={option} index={index} />
+        </label>
       ))}
-    </Radio.Group>
+    </RadioGroup>
   );
 }
+
+/** One choice: a row that lights when hovered, the control on its left. */
+const CHOICE =
+  "flex cursor-pointer items-start gap-2.5 rounded-lg ring-1 ring-hairline transition-colors hover:bg-hover has-data-checked:bg-card has-data-checked:ring-border-strong";
 
 function OptionLabel({ option, index }: { option: Question["options"][number]; index: number }) {
   return (
