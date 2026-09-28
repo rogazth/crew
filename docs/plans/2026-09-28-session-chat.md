@@ -1,6 +1,6 @@
 # Session chat — a chat view over the live CLI
 
-**Status:** planned 2026-09-28, nothing built yet. The plan stands on its own: a
+**Status:** planned 2026-09-28, being built (see §9). The plan stands on its own: a
 fresh session can carry it out without the thread it was decided in. Each phase
 ends with the app working and tests green, and gets a line in §9.
 
@@ -360,7 +360,7 @@ This can ship on its own.
 | Phase | Status |
 | --- | --- |
 | Design | Done 2026-09-28 |
-| 1 · Revert `f984ec8` | Pending |
+| 1 · Revert `f984ec8` | Done 2026-09-28: reverted; `e2e/new-agent.test.ts` makes an agent with `agents:mode=terminal` saved |
 | 2 · Setting and overlay | Pending |
 | 3 · Claude | Pending |
 | 4 · Codex | Pending |
