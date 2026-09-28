@@ -417,7 +417,7 @@ fn strip_ansi(text: &str) -> String {
 }
 
 /// `2026-09-28T18:15:16.464Z` (or with a `+hh:mm` offset) in ms since the epoch.
-fn parse_timestamp(text: &str) -> Option<i64> {
+pub(super) fn parse_timestamp(text: &str) -> Option<i64> {
     let bytes = text.as_bytes();
     let num = |from: usize, len: usize| -> Option<i64> {
         let digits = text.get(from..from + len)?;
