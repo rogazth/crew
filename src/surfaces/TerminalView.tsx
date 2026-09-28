@@ -63,6 +63,8 @@ const ACTIVITY_INTERVAL = 400;
 const ACK_FLUSH_MS = 4;
 /** How long output must pause before the screen is read again for `onScreen`. */
 const SCREEN_SETTLE_MS = 250;
+/** A CLI that never pauses (a spinner turning) is still read this often. */
+const SCREEN_CEILING_MS = 1000;
 /** Frames the proposed grid may keep changing before it is applied anyway. */
 const MAX_STABILITY_FRAMES = 8;
 
@@ -187,9 +189,11 @@ export function TerminalView({
     let processed = 0;
     let ackTimer = 0;
     let screenTimer = 0;
+    let screenDue = 0;
     // The live screen, not where the user scrolled to: what the CLI is showing now.
     const readScreen = () => {
       screenTimer = 0;
+      screenDue = 0;
       const report = latest.current.onScreen;
       if (!report || closed) return;
       const buffer = term.buffer.active;
@@ -200,8 +204,10 @@ export function TerminalView({
       report(lines);
     };
     const settleScreen = () => {
+      const now = Date.now();
+      if (!screenDue) screenDue = now + SCREEN_CEILING_MS;
       if (screenTimer) clearTimeout(screenTimer);
-      screenTimer = window.setTimeout(readScreen, SCREEN_SETTLE_MS);
+      screenTimer = window.setTimeout(readScreen, Math.min(SCREEN_SETTLE_MS, screenDue - now));
     };
     settleScreenRef.current = settleScreen;
     // xterm keeps the kitty flags private, so they are mirrored off the output stream.

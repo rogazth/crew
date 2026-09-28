@@ -34,6 +34,10 @@ const RULES: Record<string, Rule[]> = {
     { kind: "hooks", title: "Codex wants its hooks reviewed", test: /hooks need review/ },
     { kind: "login", title: "Codex needs you to sign in", test: /Sign in with ChatGPT/ },
   ],
+  opencode: [
+    // It runs no hooks, so its permission prompt is only ever on its screen.
+    { kind: "dialog", title: "opencode asks for a permission", test: /Permission required.*Allow once.*Reject/ },
+  ],
 };
 
 /** The blocking screen `provider`'s CLI shows in `lines` (its visible rows), if any. */

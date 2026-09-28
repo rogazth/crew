@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { QUIET_AFTER, SETTLE_WINDOW, TerminalActivity, titleBusy, titleName } from "./terminalStatus";
+import { HOOK_GRACE, QUIET_AFTER, SETTLE_WINDOW, TerminalActivity, titleBusy, titleName } from "./terminalStatus";
 import type { SessionStatus } from "./types";
 
 function track(initial: SessionStatus = "idle", watched = false) {
@@ -242,6 +242,18 @@ describe("TerminalActivity with hooks", () => {
     expect(activity.status).toBe("needs-input");
     activity.hooked(true, false);
     expect(reported.at(-1)).toBe("working");
+  });
+
+  it("takes a resting title drawn before the prompt's hook for what it is", () => {
+    const { activity, reported } = track();
+    activity.hooked(true, false);
+    // The ✳ a /clear painted, landing after the next prompt's hook.
+    activity.title("✳ Claude Code");
+    expect(reported).toEqual(["working"]);
+    // Esc in the terminal, well into the turn: no hook, the title ends it.
+    vi.advanceTimersByTime(HOOK_GRACE);
+    activity.title("✳ Claude Code");
+    expect(reported).toEqual(["working", "done"]);
   });
 
   it("stops reading output as work once a hook has spoken", () => {

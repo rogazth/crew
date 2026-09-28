@@ -306,14 +306,14 @@ fn home() -> Option<PathBuf> {
     std::env::var("HOME").ok().filter(|h| !h.is_empty()).map(PathBuf::from)
 }
 
-fn codex_home() -> Option<PathBuf> {
+pub fn codex_home() -> Option<PathBuf> {
     match std::env::var("CODEX_HOME") {
         Ok(dir) if !dir.is_empty() => Some(PathBuf::from(dir)),
         _ => home().map(|h| h.join(".codex")),
     }
 }
 
-fn opencode_db() -> Option<PathBuf> {
+pub fn opencode_db() -> Option<PathBuf> {
     let data = match std::env::var("XDG_DATA_HOME") {
         Ok(dir) if !dir.is_empty() => PathBuf::from(dir),
         _ => home()?.join(".local/share"),

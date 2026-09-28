@@ -83,8 +83,21 @@ describe("blockingScreen", () => {
     expect(blockingScreen("codex", ["  3 hooks need", "review before they can run."])?.kind).toBe("hooks");
   });
 
+  it("knows opencode's permission prompt", () => {
+    // opencode 1.18.33, reading outside the project.
+    const screen = [
+      "  ┃  △ Permission required",
+      "  ┃    ← Access external directory /etc",
+      "  ┃  Patterns",
+      "  ┃  - /etc/*",
+      "  ┃   Allow once   Allow always   Reject           ctrl+f fullscreen  ⇆ select  enter confirm",
+    ];
+    expect(blockingScreen("opencode", screen)?.title).toBe("opencode asks for a permission");
+  });
+
   it("only reads the screens of the CLI it is asked about", () => {
     expect(blockingScreen("codex", CLAUDE_TRUST)).toBeNull();
     expect(blockingScreen("opencode", CODEX_TRUST)).toBeNull();
+    expect(blockingScreen("opencode", ["  ┃  Ask anything… \"Fix a TODO in the codebase\""])).toBeNull();
   });
 });

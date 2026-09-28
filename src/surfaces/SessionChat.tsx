@@ -11,7 +11,7 @@ import {
   messageKeys,
   ptyQueue,
   questionKeys,
-  STOP_KEYS,
+  stopKeys,
   trustKeys,
   type Keystroke,
 } from "../lib/ptySend";
@@ -19,7 +19,7 @@ import { delivered, openQuestion, queuedBlock, withAsk, type Queued } from "../l
 import { holdHistory, loadEarlierHistory, readHistory, subscribeHistory } from "../lib/sessionHistory";
 import { answeredAsk, liveHeard, readLive, stoppedTurn, subscribeLive } from "../lib/sessionLive";
 import { providerLine } from "../lib/providers";
-import { reportsLive } from "../lib/sessionView";
+import { reportsLive, startsAtLaunch } from "../lib/sessionView";
 import type { Session } from "../lib/types";
 import { AlwaysAllow } from "./chat/context";
 import { DefaultChatSurface } from "./chat/DefaultChatSurface";
@@ -75,7 +75,7 @@ export function SessionChat({ session, paneId, cwd, active, blocked, busy, onSho
   const working = hooked ? (live?.working ?? false) && busy : busy;
   const gone = useGone(hooked && live !== null && !live.started);
   // Keys typed before the CLI reads them are lost, or answer its trust prompt.
-  const ready = !blocked && (!hooked || live?.started === true);
+  const ready = !blocked && (!hooked || !startsAtLaunch(session.provider) || live?.started === true);
   const ask = live?.ask ?? null;
 
   const queue = useMemo(() => ptyQueue(paneId, (data) => api.writePty(paneId, data)), [paneId]);
@@ -127,15 +127,15 @@ export function SessionChat({ session, paneId, cwd, active, blocked, busy, onSho
   // own line, where the next send clears it. It is not coming.
   const stop = useCallback(() => {
     keepQueued(() => []);
-    void type(STOP_KEYS).then(() => stoppedTurn(id));
-  }, [id, keepQueued, type]);
+    void type(stopKeys(session.provider)).then(() => stoppedTurn(id));
+  }, [id, keepQueued, session.provider, type]);
 
   const approve = useCallback(
     (requestId: number, decision: ApprovalDecision) => {
-      void type(approvalKeys(decision));
+      void type(approvalKeys(session.provider, decision));
       answeredAsk(id, requestId);
     },
-    [id, type],
+    [id, session.provider, type],
   );
 
   const reply = useCallback(

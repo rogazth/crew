@@ -32,5 +32,13 @@ export function sessionSurface(session: Pick<Session, "kind" | "provider">, view
 
 /** CLIs whose hooks Crew passes on each launch, so the daemon hears what they do. */
 export function reportsLive(provider: string): boolean {
+  return provider === "claude" || provider === "codex";
+}
+
+/**
+ * Whether the CLI's SessionStart hook says it is up and reading keys. Claude
+ * runs it as it starts; Codex only once the first message is sent.
+ */
+export function startsAtLaunch(provider: string): boolean {
   return provider === "claude";
 }

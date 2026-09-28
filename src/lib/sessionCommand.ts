@@ -1,4 +1,5 @@
 import { claudeSessionId } from "./claudeStorage";
+import { codexOverrides } from "./codexHooks";
 import { providerOf } from "./providers";
 import type { Session } from "./types";
 
@@ -10,6 +11,8 @@ type Options = {
   theme: ClaudeTheme;
   /** Settings bypasses permissions: the CLI runs without asking. */
   bypass?: boolean;
+  /** Where it runs: Codex is told to trust it, rather than ask. */
+  cwd?: string;
 };
 
 /**
@@ -21,7 +24,7 @@ type Options = {
  * Claude paints from its own configured theme and never asks the terminal, so
  * the theme is forced to match the app.
  */
-export function sessionCommand(session: Session, { resume, theme, bypass = false }: Options): string[] {
+export function sessionCommand(session: Session, { resume, theme, bypass = false, cwd }: Options): string[] {
   const provider = providerOf(session.provider);
   if (!provider) return [session.provider];
   const bypassing = bypass ? [provider.bypassFlag] : [];
@@ -29,6 +32,7 @@ export function sessionCommand(session: Session, { resume, theme, bypass = false
     const bound = session.providerSessionId;
     return [
       provider.binary,
+      ...(provider.id === "codex" && cwd ? codexOverrides(cwd) : []),
       ...(bound ? provider.resumeArgs(bound) : []),
       ...(session.model ? [provider.modelFlag, session.model] : []),
       ...bypassing,

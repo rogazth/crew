@@ -13,8 +13,11 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crew_core::provider_session::CLAUDE_BIND_ENV;
+use crew_core::provider_session;
 use crew_core::session_history::claude::ClaudeDecoder;
-use crew_core::session_history::History;
+use crew_core::session_history::codex::{rollout_path, CodexDecoder};
+use crew_core::session_history::opencode::OpencodeHistory;
+use crew_core::session_history::{History, SessionHistory};
 use crew_core::session_live::{hook_owner, LiveBoard};
 use crew_core::store::{self as app_state, Store};
 use crew_core::{claude_title, session};
@@ -51,7 +54,9 @@ struct Inner {
 /// One session's history, while some chat holds it open.
 struct Reader {
     cwd: String,
-    history: History<ClaudeDecoder>,
+    /// None until the CLI's history can be found: Codex and opencode name
+    /// their session only once the first message is sent.
+    history: Option<Box<dyn SessionHistory>>,
     clients: HashSet<u64>,
 }
 
@@ -128,23 +133,28 @@ impl SessionWatch {
     ) -> Result<SessionHistoryWindow, String> {
         let mut inner = self.lock();
         if !inner.readers.contains_key(id) {
-            let path = transcript(&inner.board, store, id, cwd)?;
-            let history = History::open(&path, ClaudeDecoder::default(), OPEN_MESSAGES).map_err(|e| e.to_string())?;
-            inner.watch_folder(&path);
+            let history = open_history(&inner.board, store, id, cwd)?;
+            if let Some(history) = &history {
+                let path = history.path().to_path_buf();
+                inner.watch_folder(&path);
+            }
             inner.readers.insert(id.to_string(), Reader { cwd: cwd.to_string(), history, clients: HashSet::new() });
         }
         let reader = inner.readers.get_mut(id).ok_or("History closed")?;
         reader.clients.insert(client);
+        let Some(history) = reader.history.as_mut() else {
+            return Ok(SessionHistoryWindow { blocks: Vec::new(), start: 0, more: false, state: HistoryState::Pending, error: None });
+        };
         if let Some(before) = before {
-            // Enough of the file read back to fill the page asked for.
-            while before - reader.history.base() < WINDOW_BLOCKS as i64 && reader.history.has_earlier() {
-                if reader.history.load_earlier(OPEN_MESSAGES).map_err(|e| e.to_string())? == 0 {
+            // Enough of the history read back to fill the page asked for.
+            while before - history.base() < WINDOW_BLOCKS as i64 && history.has_earlier() {
+                if history.load_earlier(OPEN_MESSAGES).map_err(|e| e.to_string())? == 0 {
                     break;
                 }
             }
         }
-        let window = reader.history.window(before, WINDOW_BLOCKS);
-        let (state, error) = state_of(&reader.history);
+        let window = history.window(before, WINDOW_BLOCKS);
+        let (state, error) = state_of(history.as_ref());
         Ok(SessionHistoryWindow { blocks: window.blocks, start: window.start, more: window.more, state, error })
     }
 
@@ -208,7 +218,7 @@ impl SessionWatch {
                     self.read_binds(dir, &store, &hub);
                 }
             }
-            self.poll_histories(&hub, if everything { None } else { Some(&dirty) });
+            self.poll_histories(&store, &hub, if everything { None } else { Some(&dirty) });
             binds_dirty = false;
             dirty.clear();
             first_change = None;
@@ -244,30 +254,48 @@ impl SessionWatch {
         // A start may be a `/clear`: the session follows the CLI to its new
         // conversation, and a chat reading the old one moves with it.
         for id in started {
-            if let Err(error) = crate::rebind_claude_session(store, hub, id.clone()) {
+            if let Err(error) = self.follow(store, hub, &id) {
                 eprintln!("[crewd] following {id}: {error}");
             }
             self.repoint(&id, store, hub);
         }
     }
 
-    /// The chat reading `id` follows the CLI to the file it writes now.
+    /// Binds session `id` to the conversation its CLI said it started.
+    fn follow(&self, store: &Store, hub: &Hub, id: &str) -> Result<(), String> {
+        let Some(row) = session::get(store, id.to_string())? else { return Ok(()) };
+        if row.provider == "claude" {
+            return crate::rebind_claude_session(store, hub, id.to_string()).map(|_| ());
+        }
+        // Codex names its session in the hook; opencode runs none.
+        let Some(started) = self.lock().board.get(id).and_then(|live| live.provider_session_id) else { return Ok(()) };
+        if row.provider_session_id.as_deref() == Some(started.as_str()) {
+            return Ok(());
+        }
+        session::set_provider_session(store, id.to_string(), started)?;
+        if let Some(row) = session::get(store, id.to_string())? {
+            hub.emit("session-updated", crew_protocol::SessionUpdated { session: crate::proto_session(&row) });
+        }
+        Ok(())
+    }
+
+    /// The chat reading `id` follows the CLI to where it writes now, or finds
+    /// it for the first time.
     fn repoint(&self, id: &str, store: &Store, hub: &Hub) {
         let mut inner = self.lock();
         let Some(cwd) = inner.readers.get(id).map(|reader| reader.cwd.clone()) else { return };
-        let Ok(path) = transcript(&inner.board, store, id, &cwd) else { return };
-        if inner.readers.get(id).is_some_and(|reader| reader.history.path() == path) {
+        let Ok(Some(history)) = open_history(&inner.board, store, id, &cwd) else { return };
+        let old = inner.readers.get(id).and_then(|reader| reader.history.as_ref().map(|h| h.path().to_path_buf()));
+        if old.as_deref() == Some(history.path()) {
             return;
         }
-        let Ok(history) = History::open(&path, ClaudeDecoder::default(), OPEN_MESSAGES) else { return };
-        let old = inner.readers.get(id).map(|reader| reader.history.path().to_path_buf());
-        inner.watch_folder(&path);
+        inner.watch_folder(history.path());
         if let Some(old) = old {
             inner.unwatch_folder(&old);
         }
-        let (state, _) = state_of(&history);
+        let (state, _) = state_of(history.as_ref());
         if let Some(reader) = inner.readers.get_mut(id) {
-            reader.history = history;
+            reader.history = Some(history);
         }
         drop(inner);
         hub.emit(
@@ -276,21 +304,30 @@ impl SessionWatch {
         );
     }
 
-    fn poll_histories(&self, hub: &Hub, only: Option<&HashSet<PathBuf>>) {
+    fn poll_histories(&self, store: &Store, hub: &Hub, only: Option<&HashSet<PathBuf>>) {
+        // A history not found yet is looked for on every backstop.
+        if only.is_none() {
+            let waiting: Vec<String> =
+                self.lock().readers.iter().filter(|(_, reader)| reader.history.is_none()).map(|(id, _)| id.clone()).collect();
+            for id in waiting {
+                self.repoint(&id, store, hub);
+            }
+        }
         let mut inner = self.lock();
         let now = app_state::now_millis();
         let mut out = Vec::new();
         let mut ended = Vec::new();
         for (id, reader) in inner.readers.iter_mut() {
-            let folder = reader.history.path().parent().map(Path::to_path_buf);
+            let Some(history) = reader.history.as_mut() else { continue };
+            let folder = history.path().parent().map(Path::to_path_buf);
             if only.is_some_and(|dirty| !folder.as_ref().is_some_and(|folder| dirty.contains(folder))) {
                 continue;
             }
-            let Ok(Some(change)) = reader.history.poll() else { continue };
+            let Ok(Some(change)) = history.poll() else { continue };
             if change.turn_ended {
                 ended.push(id.clone());
             }
-            let (state, _) = state_of(&reader.history);
+            let (state, _) = state_of(history.as_ref());
             out.push(SessionHistoryAppended {
                 session_id: id.clone(),
                 from: change.from,
@@ -336,37 +373,56 @@ impl Inner {
     }
 
     fn drop_reader(&mut self, id: &str) {
-        if let Some(reader) = self.readers.remove(id) {
-            let path = reader.history.path().to_path_buf();
-            self.unwatch_folder(&path);
+        if let Some(Some(history)) = self.readers.remove(id).map(|reader| reader.history) {
+            self.unwatch_folder(history.path());
         }
     }
 }
 
-/// Where the CLI writes session `id`'s conversation: the path its hook
-/// reported, else where Claude files it under `cwd` by the id it runs as.
-fn transcript(board: &LiveBoard, store: &Store, id: &str, cwd: &str) -> Result<PathBuf, String> {
-    if let Some(path) = board.transcript_path(id) {
-        return Ok(PathBuf::from(path));
-    }
+/// Session `id`'s history, read the way its CLI keeps it; None while the CLI
+/// has not said where yet.
+fn open_history(board: &LiveBoard, store: &Store, id: &str, cwd: &str) -> Result<Option<Box<dyn SessionHistory>>, String> {
     let row = session::get(store, id.to_string())?.ok_or("Session not found")?;
-    if row.provider != "claude" {
-        return Err(format!("Crew can't read {}'s history yet", row.provider));
+    let io = |error: std::io::Error| error.to_string();
+    let hooked = board.transcript_path(id).map(PathBuf::from);
+    match row.provider.as_str() {
+        "claude" => {
+            // Where the hook said, else where Claude files it under `cwd` by the id it runs as.
+            let path = match hooked {
+                Some(path) => path,
+                None => {
+                    let claude_id = row.provider_session_id.unwrap_or_else(|| id.to_string());
+                    claude_title::transcript_path(cwd, &claude_id)
+                        .map(PathBuf::from)
+                        .ok_or("No home folder to find Claude's history in")?
+                }
+            };
+            Ok(Some(Box::new(History::open(path, ClaudeDecoder::default(), OPEN_MESSAGES).map_err(io)?)))
+        }
+        "codex" => {
+            let path = hooked.or_else(|| {
+                let bound = row.provider_session_id?;
+                rollout_path(&provider_session::codex_home()?, &bound)
+            });
+            let Some(path) = path else { return Ok(None) };
+            Ok(Some(Box::new(History::open(path, CodexDecoder::default(), OPEN_MESSAGES).map_err(io)?)))
+        }
+        "opencode" => {
+            let (Some(bound), Some(db)) = (row.provider_session_id, provider_session::opencode_db()) else { return Ok(None) };
+            Ok(Some(Box::new(OpencodeHistory::open(&db, &bound, OPEN_MESSAGES).map_err(io)?)))
+        }
+        other => Err(format!("Crew can't read {other}'s history")),
     }
-    let claude_id = row.provider_session_id.unwrap_or_else(|| id.to_string());
-    claude_title::transcript_path(cwd, &claude_id)
-        .map(PathBuf::from)
-        .ok_or_else(|| "No home folder to find Claude's history in".to_string())
 }
 
-fn state_of(history: &History<ClaudeDecoder>) -> (HistoryState, Option<String>) {
+fn state_of(history: &dyn SessionHistory) -> (HistoryState, Option<String>) {
     if history.is_empty_decode() {
         return (
             HistoryState::Error,
             Some(format!("{} has messages, and none of them could be read.", history.path().display())),
         );
     }
-    if history.blocks().is_empty() && !history.path().exists() {
+    if history.blocks().is_empty() && !history.exists() {
         return (HistoryState::Pending, None);
     }
     (HistoryState::Ready, None)

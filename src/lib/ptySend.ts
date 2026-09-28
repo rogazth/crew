@@ -50,12 +50,22 @@ export function messageKeys(provider: string, text: string, paths: readonly stri
   return keys;
 }
 
-/** Stop: what Esc does at the CLI's own prompt. */
-export const STOP_KEYS: Keystroke[] = [{ data: ESC, wait: 0 }];
+/** A second Esc, once the CLI has taken the first as "press again". */
+export const AGAIN_MS = 300;
 
-/** Claude's permission prompt: 1 Yes, 2 Yes and don't ask again, Esc No. */
-export function approvalKeys(decision: ApprovalDecision): Keystroke[] {
-  const data = decision === "allow" ? "1" : decision === "always" ? "2" : ESC;
+/** Stop: Esc, and a second one for opencode, which asks for it again. */
+export function stopKeys(provider: string): Keystroke[] {
+  const esc = { data: ESC, wait: 0 };
+  return provider === "opencode" ? [esc, { data: ESC, wait: AGAIN_MS }] : [esc];
+}
+
+/**
+ * A permission prompt answered. Claude: 1 Yes, 2 Yes and don't ask again, Esc
+ * No. Codex (its default keymap): y, a for the rest of the session, Esc.
+ */
+export function approvalKeys(provider: string, decision: ApprovalDecision): Keystroke[] {
+  const keys = provider === "codex" ? { allow: "y", always: "a" } : { allow: "1", always: "2" };
+  const data = decision === "deny" ? ESC : keys[decision];
   return [{ data, wait: 0 }];
 }
 

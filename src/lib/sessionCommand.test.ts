@@ -100,6 +100,15 @@ describe("sessionCommand", () => {
       "auto",
     ]);
     expect(argv({ provider: "codex", providerSessionId: "t1" })).toEqual(["codex", "resume", "t1"]);
+    // Where it runs, Codex trusts the folder and takes Crew's hooks, from the command line alone.
+    const codex = sessionCommand({ ...base, provider: "codex", providerSessionId: "t1" }, {
+      resume: false,
+      theme: "dark",
+      cwd: "/w/app",
+    });
+    expect(codex[0]).toBe("codex");
+    expect(codex.slice(1, 3)).toEqual(["-c", 'projects={"/w/app"={trust_level="trusted"}}']);
+    expect(codex.slice(-2)).toEqual(["resume", "t1"]);
     expect(argv({ provider: "opencode", providerSessionId: "ses_1", model: "opencode/x" })).toEqual([
       "opencode",
       "--session",

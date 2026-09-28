@@ -9,7 +9,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { after, before, test } from "node:test";
 import type { Session } from "../src/lib/types.ts";
-import { launchCrew, MOD, newTerminal, pressChord, typeInTerminal, waitFor, type Crew } from "./harness.ts";
+import { installFakeCodex, launchCrew, MOD, newTerminal, pressChord, typeInTerminal, waitFor, type Crew } from "./harness.ts";
 
 let crew: Crew;
 
@@ -304,3 +304,54 @@ async function typeInTerminalLine(text: string): Promise<void> {
   );
   await crew.window.keyboard.type(text);
 }
+
+/** ⌘T › "Codex session", with the fake Codex installed: the session crewd made. */
+async function newCodexSession(): Promise<Session> {
+  const [workspace] = crew.workspaces;
+  assert.ok(workspace);
+  await installFakeCodex(crew);
+  const known = new Set((await crew.request<Session[]>("session_list", { workspaceId: workspace.id })).map((s) => s.id));
+  await pressChord(crew, `${MOD}+t`);
+  await crew.window.getByRole("button", { name: /^Codex session/ }).click();
+  return waitFor(
+    async () =>
+      (await crew.request<Session[]>("session_list", { workspaceId: workspace.id })).find(
+        (row) => row.provider === "codex" && !known.has(row.id),
+      ),
+    { message: "the Codex session reaches crewd" },
+  );
+}
+
+test("a Codex session in the chat: trusted from the command line, its rollout read, its prompt answered", async () => {
+  const [workspace] = crew.workspaces;
+  assert.ok(workspace);
+  await crew.request("state_set", { key: "sessions:view", value: "chat" });
+  await crew.reload();
+  const session = await newCodexSession();
+  const chat = chatOf(session);
+  await chat.waitFor();
+
+  // No trust prompt stands in the way: the folder was trusted on the command line.
+  await sendFromChat(session, "hello codex");
+  await chat.getByText("Done.").waitFor();
+  await waitFor(async () => (await chat.getByText("Queued").count()) === 0, { message: "the bubble is Codex's turn" });
+  const launch = (await readFile(path.join(crew.home, "fake-codex.log"), "utf8")).trim().split("\n").at(-1);
+  assert.ok(launch?.includes("trust_level"), "Codex was told to trust the folder");
+  assert.ok(launch?.includes("hooks.state"), "Crew's hooks came trusted");
+
+  // The permission Codex asks for reaches the chat through its hook, and y answers it.
+  await sendFromChat(session, "ask");
+  await chat.getByText("Wants to run a command").waitFor();
+  assert.equal(await chat.getByRole("button", { name: /^Always allow/ }).count(), 0, "Codex offers no rule to keep");
+  await chat.getByRole("button", { name: /^Allow/ }).click();
+  await waitFor(async () => (await readFile(path.join(workspace.path, "asked.txt"), "utf8").then(() => true, () => false)), {
+    message: "Codex ran the command",
+  });
+  await waitFor(async () => (await chat.getByText("Done.").count()) === 2, { message: "the turn after the approval ends" });
+
+  // Esc stops a turn; the rollout's turn_aborted ends it in the chat.
+  await sendFromChat(session, "ask");
+  await chat.getByText("Wants to run a command").waitFor();
+  await chat.getByRole("button", { name: /^Deny/ }).click();
+  await chat.getByText("Interrupted").waitFor();
+});

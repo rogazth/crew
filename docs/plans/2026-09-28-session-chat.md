@@ -363,8 +363,8 @@ This can ship on its own.
 | 1 · Revert `f984ec8` | Done 2026-09-28: reverted; `e2e/new-agent.test.ts` makes an agent with `agents:mode=terminal` saved |
 | 2 · Setting and overlay | Done 2026-09-28 (one commit with phase 3) |
 | 3 · Claude | Done 2026-09-28: run by hand against Claude Code 2.1.284, both renderers; see §10 |
-| 4 · Codex | Pending |
-| 5 · opencode | Pending |
+| 4 · Codex | Done 2026-09-28, by the fake codex and Codex's own source; the real CLI ran up to the model, its login here being revoked (see §10) |
+| 5 · opencode | Done 2026-09-28, run by hand against opencode 1.18.33 on a free model (see §10) |
 
 ## 10. What building it settled
 
@@ -405,12 +405,39 @@ Measured against the installed CLIs while building phases 2 and 3.
   transcript path. Subagents write to a folder of their own, never to the
   main file.
 
-**Codex 0.154.0:** `-c 'projects."<path>".trust_level="trusted"'` skips the
-trust prompt without touching `config.toml`. Its update offer ("Update
-available! … Update now … Skip") is a blocking screen. Hooks: to settle in
-phase 4.
+**Codex 0.154.0** (read in its source, `rust-v0.154.0`, and run here up to the
+model: this machine's Codex login is revoked, so no turn gets an answer):
 
-**opencode 1.18.31** shows no trust or first-run screen in a new folder.
+- `-c` splits its key on every dot, quotes or not: `projects."<path>".…`
+  silently misses. A path goes in as an inline table,
+  `-c 'projects={"<path>"={trust_level="trusted"}}'`, which skips the trust
+  prompt and writes nothing. (An Enter pressed on the prompt writes the trust
+  into `config.toml`; Crew never presses it.)
+- Hooks are accepted through `-c` (`hooks.<Event>=[{hooks=[{type="command",
+  command=…}]}]`), with the same events as Claude plus `PermissionRequest`
+  (`tool_name` `Bash` for the shell, `tool_input`, no suggestions). Codex runs a
+  hook only once trusted, by `hooks.state."/<session-flags>/config.toml:<event>:0:0"
+  .trusted_hash`: sha256 of the canonical JSON of `{event_name, hooks: [the
+  hook, with its default timeout]}` (`hook_hash`, hooks/src/engine/discovery.rs).
+  Crew passes that state with its hooks, as one inline table, so nothing is
+  reviewed and nothing written. The hook command is the same for every
+  session (it names its session from `CREW_SESSION_ID`, which crewd sets in a
+  session's terminal), so a Codex that hashes differently asks the user once.
+- SessionStart runs with the first prompt, not at launch: the composer does
+  not wait for it.
+- Approval keys (default keymap): `y`, `a` for the session, Esc (`n`) to
+  decline and stop the turn.
+- The update offer ("Update available! … Update now … Skip") comes back on
+  every launch until updated or "Skip until next version"; it is named in the
+  chat, not suppressed (`check_for_update_on_startup` is the user's).
+- The rollout differs from the plan's picture: besides `response_item` and
+  `event_msg` it has `session_meta`, `turn_context`, `world_state`, and
+  `event_msg` `item_completed`.
+
+**opencode 1.18.31 → 1.18.33** shows no trust or first-run screen in a new
+folder, and by default runs shell commands without asking. It asks ("△
+Permission required … Allow once / Allow always / Reject") for paths outside
+the project; that screen is named in the chat, and answered in the terminal.
 
 **Status and hooks in the app.** Hooks reach the window as `session-live`
 events: crewd watches the bind folder (`notify`, 40 ms quiet / 250 ms ceiling,
@@ -424,3 +451,29 @@ marker) and runs the hooks above. Four specs fail the same way on the commit
 before this work (A1, K1, M2, cookies), and T1 fails there too when run alone
 (its clicks outlast the 8 s turn). The `remote-*` specs cannot run on this
 machine: pairing a machine needs the keychain, and its Xvfb session has none.
+
+**Codex in the chat.** The rollout is decoded the way Codex itself replays it
+(`ThreadHistoryBuilder` / `thread_history_projection.rs`): 0.154 files are
+"paginated", and the words come from `item_completed` records, so nothing
+shows twice. `request_user_input` exists only in plan mode; it shows as a
+question card. The chat finds the file by the hook's `transcript_path`, else by
+the bound id under `~/.codex/sessions`. Its question card is not answered with
+keys yet: that needs a Codex with a working login to measure.
+
+**opencode in the chat.** crewd reads `message` and `part` of `opencode.db`
+read-only, rebuilding only when the session's row count or `time_updated`
+moves; blocks take opencode's part ids, so a rebuild keeps them. opencode 1.18
+writes a text part twice (empty, then whole), so replies arrive whole, as
+Claude's do. It has no hooks: status comes from its output, and Stop is Esc
+twice ("esc again to interrupt"). The screen is read at least once a second
+even while its spinner never stops, or its permission prompt went unseen.
+
+**Titles and hooks.** Once hooks speak, a title at rest that lands within
+1.5 s of the hook that opened a turn is stale (Claude repaints ✳ on `/clear`,
+and it can arrive after the next prompt's hook): obeying it made the status
+flap, and crewd, taking the three writes concurrently, could keep the wrong
+one. Later, a resting title still ends a turn Esc stopped in the terminal.
+
+**crewd and SIGTERM.** crewd announced itself before its signal handlers were
+in place, so a SIGTERM sent the moment the line was read could kill it
+(`exits_on_sigterm` failed under load). They are armed first now.

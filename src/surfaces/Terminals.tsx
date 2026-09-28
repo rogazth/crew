@@ -148,10 +148,10 @@ async function launchCommand(session: Session, cwd: string): Promise<string[]> {
     const created = await api.createProviderSession(session.id).catch(() => null);
     if (created) {
       bindProviderSession(session.id, created);
-      return sessionCommand({ ...session, providerSessionId: created }, { resume: true, theme, bypass });
+      return sessionCommand({ ...session, providerSessionId: created }, { resume: true, theme, bypass, cwd });
     }
   }
-  return sessionCommand(session, { resume: false, theme, bypass });
+  return sessionCommand(session, { resume: false, theme, bypass, cwd });
 }
 
 type SessionProps = {

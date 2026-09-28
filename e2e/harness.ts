@@ -21,6 +21,7 @@ const ROOT = fileURLToPath(new URL("..", import.meta.url));
 // In Node the electron package exports the path to its binary.
 const ELECTRON: string = createRequire(import.meta.url)("electron");
 const FAKE_CLAUDE = path.join(ROOT, "e2e/bin/claude");
+const FAKE_CODEX = path.join(ROOT, "e2e/bin/codex");
 const run = promisify(execFile);
 
 export type Modifier = "Shift" | "Control" | "Alt" | "Meta";
@@ -306,6 +307,17 @@ async function prepareSandbox(home: string, config: string, repos: string): Prom
   const source = await readFile(FAKE_CLAUDE, "utf8");
   await writeFile(claude, source.replace(/^#!.*\n/, `#!${process.execPath}\n`));
   await chmod(claude, 0o755);
+}
+
+/**
+ * Puts the fake Codex (e2e/bin/codex) first on the sandbox's PATH. Specs that
+ * leave it out get no `codex` at all, or their own stand-in.
+ */
+export async function installFakeCodex(crew: Crew): Promise<void> {
+  const codex = path.join(crew.home, ".local/bin/codex");
+  const source = await readFile(FAKE_CODEX, "utf8");
+  await writeFile(codex, source.replace(/^#!.*\n/, `#!${process.execPath}\n`));
+  await chmod(codex, 0o755);
 }
 
 /** `afterExit` runs once the app's process is gone, before Playwright lets go of it. */

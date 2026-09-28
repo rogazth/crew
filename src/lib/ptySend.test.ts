@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  AGAIN_MS,
   ANSWER_STEP_MS,
   approvalKeys,
   ENTER_AFTER_MS,
@@ -8,6 +9,7 @@ import {
   PtyQueue,
   questionKeys,
   SLASH_KEY_MS,
+  stopKeys,
   trustKeys,
   type SendClock,
 } from "./ptySend";
@@ -189,10 +191,16 @@ const keysOf = (questions: Question[], answers: Record<string, string> | null) =
   questionKeys(questions, answers).map((key) => key.data);
 
 describe("answer keys", () => {
-  it("approves with 1, always with 2, and denies with Esc", () => {
-    expect(approvalKeys("allow")[0]?.data).toBe("1");
-    expect(approvalKeys("always")[0]?.data).toBe("2");
-    expect(approvalKeys("deny")[0]?.data).toBe("\x1b");
+  it("approves Claude with 1, always with 2, and denies with Esc", () => {
+    expect(approvalKeys("claude", "allow")[0]?.data).toBe("1");
+    expect(approvalKeys("claude", "always")[0]?.data).toBe("2");
+    expect(approvalKeys("claude", "deny")[0]?.data).toBe("\x1b");
+  });
+
+  it("approves Codex with y, for the session with a, and denies with Esc", () => {
+    expect(approvalKeys("codex", "allow")[0]?.data).toBe("y");
+    expect(approvalKeys("codex", "always")[0]?.data).toBe("a");
+    expect(approvalKeys("codex", "deny")[0]?.data).toBe("\x1b");
   });
 
   it("trusts a folder by moving off the default before Enter, and exits with Esc", () => {
@@ -219,6 +227,14 @@ describe("answer keys", () => {
     expect(
       keysOf([toppings, fruit], { [toppings.question]: "ham", [fruit.question]: "medium please" }),
     ).toEqual(["2", "\x1b[C", "3", "medium please", "\r", "1"]);
+  });
+
+  it("stops with Esc, pressed twice for opencode", () => {
+    expect(stopKeys("claude").map((key) => key.data)).toEqual(["\x1b"]);
+    expect(stopKeys("opencode")).toEqual([
+      { data: "\x1b", wait: 0 },
+      { data: "\x1b", wait: AGAIN_MS },
+    ]);
   });
 
   it("dismisses the form with Esc", () => {
