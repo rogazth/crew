@@ -3,7 +3,7 @@ import { agentLabel } from "../../lib/agentNames";
 import type { Block } from "../../lib/blocks";
 import type { ToolDetail } from "../../lib/protocol";
 import { detailOf, langProp } from "../../lib/toolDetail";
-import { CommandBody, EditBody, Pair, Pre, Prose, Result, Source, Todos } from "./ToolParts";
+import { CommandBody, EditBody, FetchBody, Pair, Pre, Prose, Result, Source, Todos } from "./ToolParts";
 
 type Kind = ToolDetail["kind"];
 type Render<K extends Kind> = (detail: Extract<ToolDetail, { kind: K }>, failed: boolean) => ReactNode;
@@ -14,7 +14,7 @@ const BODIES: { [K in Kind]: Render<K> } = {
   file: (detail) => (detail.preview?.trim() ? <Source text={detail.preview} {...langProp(detail.path)} /> : null),
   edit: (detail) => <EditBody detail={detail} />,
   search: (detail, failed) => (detail.output ? <Result head="results" text={detail.output} danger={failed} /> : null),
-  fetch: (detail, failed) => (detail.output ? <Result head="results" text={detail.output} danger={failed} /> : null),
+  fetch: (detail, failed) => (detail.output ? <FetchBody text={detail.output} failed={failed} /> : null),
   message: (detail) => <Pre head={`to ${agentLabel(detail.to)}`} text={detail.text} />,
   todo: (detail) => <Todos items={detail.items} />,
   agent: (detail) => (

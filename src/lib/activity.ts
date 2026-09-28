@@ -106,8 +106,9 @@ function isSearch(block: Block): boolean {
   return /^(glob|grep|websearch|search|find)$/i.test(toolName(block));
 }
 
+/** One file by its name — the rows under the label carry the path — or a count. */
 function fileLabel(files: Set<string>): string {
-  if (files.size === 1) return [...files][0]!;
+  if (files.size === 1) return [...files][0]!.split("/").pop()!;
   return `${files.size} files`;
 }
 
@@ -196,4 +197,17 @@ export function summarize(text: string, max = 96): string {
       .map((row) => row.replace(/^[#>\-*\s]+/, "").replace(/[*_`]/g, "").trim())
       .find((row) => row.length > 0) ?? "";
   return line.length > max ? `${line.slice(0, max - 1)}…` : line;
+}
+
+/**
+ * A thought without the line its folded row already shows, so opening it does
+ * not say that line twice. Nothing when the thought was only that line.
+ */
+export function afterSummary(text: string): string {
+  // A first line the row had to cut short is not said yet: keep it all.
+  if (summarize(text).endsWith("…")) return text;
+  const lines = text.split("\n");
+  const first = lines.findIndex((row) => row.trim().length > 0);
+  if (first < 0) return "";
+  return lines.slice(first + 1).join("\n").replace(/^\s*\n/, "").trimEnd();
 }

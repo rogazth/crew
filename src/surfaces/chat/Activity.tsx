@@ -8,6 +8,7 @@ import {
   phaseFailed,
   phaseLabel,
   phaseOpen,
+  afterSummary,
   summarize,
   type ActivityDigest,
   type Phase,
@@ -410,6 +411,23 @@ function ReasoningRow({ block, marked }: { block: Block; marked: string | null }
   const [pinned, setPinned] = useState<boolean | null>(null);
   const open = pinned ?? streaming;
   const summary = summarize(block.text);
+  const rest = afterSummary(block.text);
+  const label = (
+    <span className={`min-w-0 truncate ${streaming ? "crew-shimmer" : "text-text-muted transition-colors group-hover:text-text"}`}>
+      {streaming ? "Thinking" : summary || "Thought"}
+    </span>
+  );
+  // A one-line thought is all in its row; there is nothing to open.
+  if (!streaming && !rest) {
+    return (
+      <div data-block={block.id} className={`${ROW}${lit(block.id, marked)}`}>
+        <span className="crew-node">
+          <SparkleIcon className="size-3.5" />
+        </span>
+        {label}
+      </div>
+    );
+  }
   return (
     <Collapsible.Root open={open} onOpenChange={(next) => setPinned(next)}>
       <Collapsible.Trigger
@@ -422,12 +440,12 @@ function ReasoningRow({ block, marked }: { block: Block; marked: string | null }
             className={`absolute size-3 opacity-0 transition-[opacity,transform] duration-150 group-hover:opacity-100 ${open ? "rotate-90" : ""}`}
           />
         </span>
-        <span className={`min-w-0 truncate ${streaming ? "crew-shimmer" : "text-text-muted transition-colors group-hover:text-text"}`}>
-          {streaming ? "Thinking" : summary || "Thought"}
-        </span>
+        {label}
       </Collapsible.Trigger>
       <Collapsible.Panel className="crew-phase-panel">
-        <p className="crew-phase-steps whitespace-pre-wrap py-0.5 text-[13px] leading-[18px] text-text-muted">{block.text}</p>
+        <p className="crew-phase-steps whitespace-pre-wrap py-0.5 text-[13px] leading-[18px] text-text-muted">
+          {streaming ? block.text : rest}
+        </p>
       </Collapsible.Panel>
     </Collapsible.Root>
   );

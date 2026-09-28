@@ -1,6 +1,6 @@
 import { AgentAvatar } from "../../chrome/AgentAvatar";
 import { ProviderIcon } from "../../chrome/ProviderIcon";
-import { isOpen } from "../../lib/blocks";
+import { awaitsUser } from "../../lib/blocks";
 import { modelLabel, providerOf } from "../../lib/providers";
 import { Composer } from "./Composer";
 import { Transcript } from "./Transcript";
@@ -69,7 +69,7 @@ export function DefaultChatSurface({
         files={files}
         working={working}
         ready={ready}
-        waiting={blocks.some(isOpen)}
+        waiting={blocks.some(awaitsUser)}
         onDraft={onDraft}
         onAttach={onAttach}
         onPasteFiles={onPasteFiles}

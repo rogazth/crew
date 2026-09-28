@@ -17,6 +17,7 @@ import { FileTypeIcon } from "../../chrome/FileTypeIcon";
 import { useBrowserPrefs } from "../../hooks/useBrowserPrefs";
 import { extensionOf } from "../../lib/attachments";
 import { BROWSER_CLICK, openLink } from "../../lib/external";
+import { localPath } from "../../lib/localLink";
 import { fenceTitle, remarkAlerts } from "../../lib/markdown/alerts";
 import { groupRuns, isHeadingOnly } from "../../lib/markdownRuns";
 import { VEIL_EMA_SEED_MS, veilDurationMs, veilEmaNext } from "../../lib/veil";
@@ -77,11 +78,30 @@ type LinkProps = ComponentProps<"a"> & { node?: unknown };
 
 /** Links open per the browser setting; the URL shows on hover instead of in a dialog. */
 function Link({ href, children, node: _node, ...rest }: LinkProps) {
+  const { openPath } = useChatActions();
   // A footnote's ref and backref are `#ids` into this same message, not the web.
   const anchor = href?.startsWith("#") ? href.slice(1) : undefined;
+  const file = localPath(href);
   const url = href && anchor === undefined && !href.startsWith("streamdown:") ? href : undefined;
   const web = url && /^https?:\/\//i.test(url) ? url : undefined;
   const { prefs } = useBrowserPrefs();
+  if (file) {
+    return (
+      <a
+        {...rest}
+        href={href}
+        title={file}
+        data-streamdown="link"
+        onClick={(event) => {
+          event.preventDefault();
+          openPath(file);
+        }}
+      >
+        <FileTypeIcon name={file.split("/").pop() ?? file} className="crew-site-icon" />
+        {children}
+      </a>
+    );
+  }
   const title = web && prefs.openLinksInCrew ? `${web}\n${BROWSER_CLICK}-click to open in your browser` : url;
   return (
     <a

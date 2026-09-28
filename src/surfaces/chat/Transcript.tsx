@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import {
-  isOpen,
+  awaitsUser,
   type Answers,
   type ApprovalDecision,
   type Block,
@@ -42,7 +42,7 @@ function turnStart(blocks: Block[]): number | undefined {
 
 /** A card the agent is stopped on: the time is the reader's, not the agent's. */
 function waiting(blocks: Block[]): boolean {
-  return blocks.some((block) => (block.role === "approval" || block.role === "question") && isOpen(block));
+  return blocks.some(awaitsUser);
 }
 
 /** Stick-to-bottom scroller, with a 16px threshold. */

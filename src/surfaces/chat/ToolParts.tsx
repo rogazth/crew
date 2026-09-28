@@ -42,7 +42,7 @@ function Dropped({ bytes }: { bytes: number | null }) {
 }
 
 /** Terminal output is not source: a plain box, no grammar, no worker. */
-export function Pre({ head, text, danger }: { head: string; text: string; danger?: boolean }) {
+export function Pre({ head, text, danger, wrap }: { head: string; text: string; danger?: boolean; wrap?: boolean }) {
   const { body, dropped } = splitClip(text);
   return (
     <Folded text={body}>
@@ -52,7 +52,7 @@ export function Pre({ head, text, danger }: { head: string; text: string; danger
             <span className={danger ? "text-danger" : undefined}>{head}</span>
             <CopyButton text={body} />
           </div>
-          <pre className="crew-code-body">
+          <pre className={`crew-code-body${wrap ? " is-wrapped" : ""}`}>
             <code>{shown}</code>
           </pre>
           <Dropped bytes={dropped} />
@@ -153,4 +153,14 @@ export function Pair({ first, second }: { first: ReactNode; second: ReactNode })
       {second}
     </>
   );
+}
+
+/**
+ * A page the agent fetched. Claude and cursor hand back markdown (Claude's is
+ * its own summary of the page), opencode the raw HTML: markdown reads as
+ * prose, HTML as source that wraps instead of running off the side.
+ */
+export function FetchBody({ text, failed }: { text: string; failed: boolean }) {
+  if (/^\s*<(?:!doctype|html)\b/i.test(text)) return <Pre head="page" text={text} wrap {...(failed ? { danger: true } : {})} />;
+  return <Prose text={text} />;
 }

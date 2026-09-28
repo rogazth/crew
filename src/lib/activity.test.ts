@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { activityDigest, buildActivity, phaseFailed, phaseKind, phaseLabel, summarize, type Phase } from "./activity";
+import { activityDigest, afterSummary, buildActivity, phaseFailed, phaseKind, phaseLabel, summarize, type Phase } from "./activity";
 import type { Block, ToolStatus } from "./blocks";
 
 function tool(name: string, title: string, status: ToolStatus = "completed"): Block {
@@ -143,7 +143,7 @@ describe("phaseKind", () => {
         detail: { kind: "edit", path: "src/lib/tabs.ts", added: 2, removed: 1 },
       },
     };
-    expect(phaseLabel(phase(buildActivity([edit])))).toBe("Edited src/lib/tabs.ts");
+    expect(phaseLabel(phase(buildActivity([edit])))).toBe("Edited tabs.ts");
   });
 });
 
@@ -218,5 +218,20 @@ describe("activityDigest", () => {
   it("stays in the present while a call is still open", () => {
     const items = buildActivity([tool("Bash", "npm test"), tool("Bash", "npm lint", "pending")]);
     expect(activityDigest(items).label).toBe("Running 2 commands");
+  });
+});
+
+describe("afterSummary", () => {
+  it("leaves out the line the folded row already shows", () => {
+    expect(afterSummary("I will read the files.\n\nThen fix the bug.")).toBe("Then fix the bug.");
+  });
+
+  it("is empty for a one-line thought", () => {
+    expect(afterSummary("Just one line.")).toBe("");
+  });
+
+  it("keeps everything when the row had to cut the first line short", () => {
+    const long = `${"word ".repeat(40)}\nmore`;
+    expect(afterSummary(long)).toBe(long);
   });
 });

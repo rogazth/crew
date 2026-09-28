@@ -62,7 +62,8 @@ function csp(): string {
     fromDist ? "script-src 'self'" : "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
     "style-src 'self' 'unsafe-inline'",
     // crew-file: is an image file tab's picture, served from the worktree it was opened from.
-    "img-src 'self' data: blob: crew-file: https://www.google.com",
+    // Google's favicon service answers from www.google.com by redirecting to a gstatic host.
+    "img-src 'self' data: blob: crew-file: https://www.google.com https://*.gstatic.com",
     "font-src 'self' data:",
     `connect-src ${connect}`,
     "object-src 'none'",
