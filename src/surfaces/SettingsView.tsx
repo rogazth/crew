@@ -8,12 +8,14 @@ import { ModelPicker } from "../chrome/ModelPicker";
 import { ProviderIcon } from "../chrome/ProviderIcon";
 import { SettingsRow, SettingsSection } from "../chrome/SettingsRow";
 import { useAgentAvatar } from "../hooks/useAgentAvatar";
+import { useAgentMode } from "../hooks/useAgentMode";
 import { useBrowserPrefs } from "../hooks/useBrowserPrefs";
 import { useColorMode } from "../hooks/useColorMode";
 import { useDefaultAgent } from "../hooks/useDefaultAgent";
 import { useFilePrefs } from "../hooks/useFilePrefs";
 import { useTabScope } from "../hooks/useTabScope";
 import { AGENT_AVATARS } from "../lib/agentAvatar";
+import { AGENT_MODES } from "../lib/agentMode";
 import { KEEP_CHOICES, SEARCH_ENGINES } from "../lib/browserPrefs";
 import { COLOR_MODES } from "../lib/colorMode";
 import { bindingGroups } from "../lib/commandGroups";
@@ -76,8 +78,17 @@ export function SettingsView({
 
 function General({ onConfirm }: { onConfirm: (confirm: Confirm) => void }) {
   const tabs = useTabScope();
+  const agents = useAgentMode();
   return (
     <>
+      <SettingsSection title="Agents">
+        <SettingsRow
+          label="New agents run in"
+          description="Chat shows the agent's work in Crew's timeline, with its tools, diffs and approvals. Terminal runs the provider's own CLI in a terminal tab. Agents you already have keep the way they run."
+        >
+          <Select label="New agents run in" className="w-40" value={agents.mode} onChange={agents.update} options={AGENT_MODES} />
+        </SettingsRow>
+      </SettingsSection>
       <SettingsSection title="Worktrees">
         <SettingsRow
           label="Tabs"

@@ -119,10 +119,13 @@ const ATTENTION_MS = 1500;
 async function launchCommand(session: Session, cwd: string): Promise<string[]> {
   const theme = DARK_SCHEME.matches ? 'dark' : 'light';
   // Read at every launch, so a change in Settings reaches the next session started.
-  const bypass = await api
-    .stateGet(BYPASS_KEY)
-    .then((raw) => raw?.trim() === 'on')
-    .catch(() => false);
+  // An agent made to run without asking runs its CLI that way too.
+  const bypass =
+    session.autonomy === 'full' ||
+    (await api
+      .stateGet(BYPASS_KEY)
+      .then((raw) => raw?.trim() === 'on')
+      .catch(() => false));
   const binding = providerOf(session.provider)?.binding;
   if (binding === 'own') {
     // A `/clear` from its last run the daemon never read: resume where the CLI went.
