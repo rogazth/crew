@@ -207,3 +207,10 @@ export function asJson(text: string): string | null {
     return null;
   }
 }
+
+/** A path's extension as the highlighter's language, when it has one. */
+export function langProp(path: string): { lang?: string } {
+  const name = path.split("/").pop() ?? path;
+  const dot = name.lastIndexOf(".");
+  return dot > 0 ? { lang: name.slice(dot + 1) } : {};
+}
