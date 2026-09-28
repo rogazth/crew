@@ -314,7 +314,7 @@ export function TerminalView({
     // a window opening again (an update, a relaunch) finds the agent it left.
     const spawn = (command: string[], reuse = false) => {
       spawned = true;
-      void api.spawnPty(id, cwd, command, term.cols, term.rows, reuse).catch((error: unknown) => {
+      void api.spawnPty(id, cwd, command, term.cols, term.rows, reuse, isDark()).catch((error: unknown) => {
         spawned = false;
         term.writeln(`\x1b[31m${error instanceof Error ? error.message : String(error)}\x1b[0m`);
       });

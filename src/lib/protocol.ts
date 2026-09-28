@@ -262,7 +262,12 @@ export type PtySpawn = { id: string, cwd: string, command: Array<string>, cols: 
  * Keep a live process under this id instead of replacing it: a window
  * opening again finds the agent it left running.
  */
-reuse?: boolean, };
+reuse?: boolean, 
+/**
+ * Whether the window paints the terminal dark. It becomes COLORFGBG, which
+ * CLIs fall back to when their OSC 11 query outlives a remote round trip.
+ */
+dark?: boolean, };
 
 export type PtyWrite = { id: string, data: string, };
 

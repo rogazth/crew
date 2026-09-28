@@ -896,14 +896,14 @@ fn json(value: impl serde::Serialize) -> Result<Value, String> {
 async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, String> {
     match method {
         "pty_spawn" => {
-            let PtySpawn { id, cwd, command, cols, rows, reuse } = parse(params)?;
+            let PtySpawn { id, cwd, command, cols, rows, reuse, dark } = parse(params)?;
             let host = hosts.pty.clone();
             json(
                 block(move || {
                     if reuse == Some(true) {
-                        host.open(id, cwd, command, cols, rows)
+                        host.open(id, cwd, command, cols, rows, dark)
                     } else {
-                        host.spawn(id, cwd, command, cols, rows)
+                        host.spawn(id, cwd, command, cols, rows, dark)
                     }
                 })
                 .await?,
@@ -1457,6 +1457,7 @@ mod tests {
                 cols: 80,
                 rows: 24,
                 reuse: None,
+                dark: None,
             })
             .unwrap(),
         }
@@ -1609,6 +1610,7 @@ mod tests {
                     cols: 80,
                     rows: 24,
                     reuse: None,
+                    dark: None,
                 })
                 .unwrap(),
             },
@@ -1671,6 +1673,7 @@ mod tests {
                     cols: 80,
                     rows: 24,
                     reuse: None,
+                    dark: None,
                 })
                 .unwrap(),
             },
@@ -2611,6 +2614,7 @@ print(json.dumps({"type":"turn.failed","error":{"message":"Codex exploded"}}), f
                         cols: 80,
                         rows: 24,
                         reuse: None,
+                        dark: None,
                     })
                     .unwrap(),
                 },

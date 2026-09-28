@@ -76,10 +76,11 @@ export async function spawnPty(
   cols: number,
   rows: number,
   reuse = false,
+  dark?: boolean,
 ): Promise<number> {
   const generation = (generations.get(id) ?? 0) + 1;
   generations.set(id, generation);
-  const streamId = await client.request<number>("pty_spawn", { id, cwd, command, cols, rows, reuse });
+  const streamId = await client.request<number>("pty_spawn", { id, cwd, command, cols, rows, reuse, dark });
   if (generations.get(id) !== generation) {
     // The pane was torn down (or respawned) while this spawn was in flight, as
     // StrictMode does to every new terminal. Its process is killed or replaced

@@ -158,6 +158,11 @@ pub struct PtySpawn {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub reuse: Option<bool>,
+    /// Whether the window paints the terminal dark. It becomes COLORFGBG, which
+    /// CLIs fall back to when their OSC 11 query outlives a remote round trip.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub dark: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, TS)]
