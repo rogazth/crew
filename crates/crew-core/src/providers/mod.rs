@@ -133,6 +133,55 @@ pub fn crew_tool_detail(name: &str, input: &Map<String, Value>) -> Option<crew_p
     })
 }
 
+/// An MCP tool's server and tool, from Claude's `mcp__server__tool` name.
+/// Crew's own server is left to `crew_tool`.
+pub fn mcp_name(name: &str) -> Option<(String, String)> {
+    let rest = name.strip_prefix("mcp__")?;
+    let (server, tool) = rest.split_once("__")?;
+    if server.is_empty() || tool.is_empty() || server == "crew" {
+        return None;
+    }
+    Some((server.to_string(), tool.to_string()))
+}
+
+/// The row line for an MCP call: `chrome-devtools · take snapshot`. Servers a
+/// connector names `claude_ai_Notion` read as `Notion`.
+pub fn mcp_label(server: &str, tool: &str) -> String {
+    let server = server.strip_prefix("claude_ai_").unwrap_or(server).replace('_', " ");
+    format!("{server} · {}", tool.replace(['_', '-'], " "))
+}
+
+/// Arguments as the JSON a person reads, or nothing for a call that took none.
+pub fn pretty_input(input: &Map<String, Value>) -> Option<String> {
+    if input.is_empty() {
+        return None;
+    }
+    serde_json::to_string_pretty(input).ok()
+}
+
+/// A checklist in the `[{content|text, status}]` shape Claude and opencode
+/// both write; codex marks `completed` instead of naming a status.
+pub fn todo_items(value: Option<&Value>) -> Option<Vec<crew_protocol::TodoItem>> {
+    use crew_protocol::{TodoItem, TodoStatus};
+    let rows = value?.as_array()?;
+    let items = rows
+        .iter()
+        .filter_map(|row| {
+            let row = as_record(row)?;
+            let text = string_field(Some(row), "content").or_else(|| string_field(Some(row), "text"))?;
+            let status = match string_field(Some(row), "status").as_deref() {
+                Some("completed") => TodoStatus::Completed,
+                Some("in_progress") => TodoStatus::InProgress,
+                Some(_) => TodoStatus::Pending,
+                None if row.get("completed").and_then(Value::as_bool) == Some(true) => TodoStatus::Completed,
+                None => TodoStatus::Pending,
+            };
+            Some(TodoItem { text, status })
+        })
+        .collect::<Vec<_>>();
+    Some(items)
+}
+
 pub fn parse_json_line(line: &str) -> Option<Map<String, Value>> {
     let trimmed = line.trim();
     if !trimmed.starts_with('{') {

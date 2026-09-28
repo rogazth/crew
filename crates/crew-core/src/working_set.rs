@@ -5,7 +5,7 @@
 //! the chat renders it folded — text as text, a tool as the one line it did,
 //! never its output — and stops at a whole block when the budget runs out.
 
-use crew_protocol::{ApprovalDecision, Block, BlockRole, ToolDetail, ToolStatus};
+use crew_protocol::{ApprovalDecision, Block, BlockRole, TodoStatus, ToolDetail, ToolStatus};
 
 use crate::store::stamp;
 
@@ -143,11 +143,11 @@ fn detail_line(detail: &ToolDetail) -> String {
             (Some(start), Some(end)) => format!("read: {path}:{start}-{end}"),
             _ => format!("read: {path}"),
         },
-        ToolDetail::Edit { path, added, removed } => match (added, removed) {
+        ToolDetail::Edit { path, added, removed, .. } => match (added, removed) {
             (Some(added), Some(removed)) => format!("edited: {path} +{added} −{removed}"),
             _ => format!("edited: {path}"),
         },
-        ToolDetail::Search { query, matches } => match matches {
+        ToolDetail::Search { query, matches, .. } => match matches {
             Some(count) => format!("searched: {} → {count} match(es)", clip(query, LINE_LIMIT)),
             None => format!("searched: {}", clip(query, LINE_LIMIT)),
         },
@@ -155,6 +155,13 @@ fn detail_line(detail: &ToolDetail) -> String {
         ToolDetail::Message { to, text } => {
             format!("wrote to {to}: {}", clip(text, MESSAGE_LIMIT))
         }
+        ToolDetail::Todo { items } => {
+            let done = items.iter().filter(|item| item.status == TodoStatus::Completed).count();
+            format!("todos: {done}/{} done", items.len())
+        }
+        ToolDetail::Agent { description, .. } => format!("delegated: {}", clip(description, LINE_LIMIT)),
+        ToolDetail::Mcp { server, tool, .. } => format!("called: {server}.{tool}"),
+        ToolDetail::Plan { text } => format!("planned: {}", clip(text, LINE_LIMIT)),
         ToolDetail::Output { text } => clip(text, LINE_LIMIT),
     }
 }
@@ -243,7 +250,7 @@ mod tests {
             ),
             tool(
                 "Edit",
-                ToolDetail::Edit { path: "parser.rs".into(), added: Some(12), removed: Some(3) },
+                ToolDetail::Edit { path: "parser.rs".into(), added: Some(12), removed: Some(3), hunks: None },
                 ToolStatus::Completed,
             ),
             new_block(BlockRole::Assistant, "14 tests pasan."),

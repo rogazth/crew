@@ -1,10 +1,12 @@
 use std::collections::HashMap;
 
-use crew_protocol::{ApprovalDecision, Question, QuestionOption, ToolDetail, TurnUsage};
+use crew_protocol::{ApprovalDecision, EditHunk, Question, QuestionOption, ToolDetail, TurnUsage};
 use serde_json::{json, Map, Value};
 
 use super::runtime::{Autonomy, InlineImage};
-use super::{as_record, as_record_owned, clip, finite_number, leaf, string_field};
+use super::{
+    as_record, as_record_owned, clip, finite_number, leaf, mcp_label, mcp_name, pretty_input, string_field, todo_items,
+};
 
 pub use super::{parse_json_line, try_parse_json_record};
 
@@ -535,8 +537,35 @@ pub fn tool_label(name: &str, input: &Map<String, Value>) -> String {
             };
         }
     }
+    if let Some((server, tool)) = mcp_name(name) {
+        return mcp_label(&server, &tool);
+    }
+    match name.to_ascii_lowercase().as_str() {
+        "task" | "agent" => {
+            return match string_field(Some(input), "description") {
+                Some(description) => clip(&description, 72),
+                None => "Subagent".into(),
+            };
+        }
+        "todowrite" => return "Todos".into(),
+        "exitplanmode" => return "Plan".into(),
+        "skill" => {
+            return match string_field(Some(input), "skill") {
+                Some(skill) => format!("Skill {}", clip(&skill, 40)),
+                None => "Skill".into(),
+            };
+        }
+        "toolsearch" => {
+            return match string_field(Some(input), "query") {
+                Some(query) => format!("Find tools {}", clip(&query, 40)),
+                None => "Find tools".into(),
+            };
+        }
+        _ => {}
+    }
     let command = string_field(Some(input), "command").or_else(|| string_field(Some(input), "cmd"));
     let path = string_field(Some(input), "file_path")
+        .or_else(|| string_field(Some(input), "notebook_path"))
         .or_else(|| string_field(Some(input), "path"))
         .or_else(|| string_field(Some(input), "target_file"))
         .or_else(|| string_field(Some(input), "filePath"));
@@ -563,6 +592,14 @@ pub fn tool_detail(name: &str, input: &Map<String, Value>) -> Option<ToolDetail>
     if let Some(detail) = super::crew_tool_detail(name, input) {
         return Some(detail);
     }
+    if let Some((server, tool)) = mcp_name(name) {
+        return Some(ToolDetail::Mcp {
+            server,
+            tool,
+            input: pretty_input(input),
+            output: None,
+        });
+    }
     match name.to_ascii_lowercase().as_str() {
         "bash" => Some(ToolDetail::Command {
             command: string_field(Some(input), "command")?,
@@ -586,6 +623,7 @@ pub fn tool_detail(name: &str, input: &Map<String, Value>) -> Option<ToolDetail>
             path: string_field(Some(input), "file_path")?,
             added: Some(line_count(input, "new_string")),
             removed: Some(line_count(input, "old_string")),
+            hunks: hunk(input, "old_string", "new_string").map(|hunk| vec![hunk]),
         }),
         // A write replaces whatever was there, and the call does not say what
         // that was: counting zero removed lines would be a claim, not a fact.
@@ -593,25 +631,63 @@ pub fn tool_detail(name: &str, input: &Map<String, Value>) -> Option<ToolDetail>
             path: string_field(Some(input), "file_path")?,
             added: Some(line_count(input, "content")),
             removed: None,
+            hunks: raw(input, "content").map(|after| {
+                vec![EditHunk {
+                    before: String::new(),
+                    after: after.to_string(),
+                }]
+            }),
         }),
-        // MultiEdit keeps its edits in an array we do not walk. The path is
-        // worth showing; a tally we did not compute is not.
-        "multiedit" => Some(ToolDetail::Edit {
-            path: string_field(Some(input), "file_path")?,
-            added: None,
+        "multiedit" => {
+            let edits = input
+                .get("edits")
+                .and_then(Value::as_array)
+                .map(|rows| rows.iter().filter_map(as_record).collect::<Vec<_>>())
+                .unwrap_or_default();
+            let hunks = edits
+                .iter()
+                .filter_map(|edit| hunk(edit, "old_string", "new_string"))
+                .collect::<Vec<_>>();
+            let tally = |key: &str| edits.iter().map(|edit| line_count(edit, key)).sum::<u32>();
+            Some(ToolDetail::Edit {
+                path: string_field(Some(input), "file_path")?,
+                added: (!edits.is_empty()).then(|| tally("new_string")),
+                removed: (!edits.is_empty()).then(|| tally("old_string")),
+                hunks: (!hunks.is_empty()).then_some(hunks),
+            })
+        }
+        "notebookedit" => Some(ToolDetail::Edit {
+            path: string_field(Some(input), "notebook_path")?,
+            added: Some(line_count(input, "new_source")),
             removed: None,
+            hunks: None,
         }),
         "glob" | "grep" => Some(ToolDetail::Search {
             query: string_field(Some(input), "pattern")?,
             matches: None,
+            output: None,
         }),
         "webfetch" => Some(ToolDetail::Fetch {
             url: string_field(Some(input), "url")?,
             title: None,
+            output: None,
         }),
-        "websearch" => Some(ToolDetail::Search {
+        "websearch" | "toolsearch" => Some(ToolDetail::Search {
             query: string_field(Some(input), "query")?,
             matches: None,
+            output: None,
+        }),
+        "todowrite" => Some(ToolDetail::Todo {
+            items: todo_items(input.get("todos"))?,
+        }),
+        "task" | "agent" => Some(ToolDetail::Agent {
+            description: string_field(Some(input), "description").unwrap_or_else(|| "Subagent".into()),
+            agent_type: string_field(Some(input), "subagent_type"),
+            prompt: raw(input, "prompt").map(str::to_string),
+            output: None,
+        }),
+        "exitplanmode" => Some(ToolDetail::Plan {
+            text: raw(input, "plan")?.to_string(),
         }),
         _ => None,
     }
@@ -626,7 +702,7 @@ pub fn tool_result_detail(name: &str, input: &Map<String, Value>, content: &str)
     if super::crew_tool(name) == Some("message_agent") {
         return None;
     }
-    let text = || Some(content.to_string()).filter(|body| !body.is_empty());
+    let text = || Some(content.to_string()).filter(|body| !body.trim().is_empty());
     match tool_detail(name, input) {
         Some(ToolDetail::Command { command, .. }) => Some(ToolDetail::Command {
             command,
@@ -639,9 +715,44 @@ pub fn tool_result_detail(name: &str, input: &Map<String, Value>, content: &str)
             line_end,
             preview: text(),
         }),
+        Some(ToolDetail::Search { query, matches, .. }) => Some(ToolDetail::Search {
+            query,
+            matches,
+            output: text(),
+        }),
+        Some(ToolDetail::Fetch { url, title, .. }) => Some(ToolDetail::Fetch { url, title, output: text() }),
+        Some(ToolDetail::Agent { description, agent_type, prompt, .. }) => Some(ToolDetail::Agent {
+            description,
+            agent_type,
+            prompt,
+            output: text(),
+        }),
+        Some(ToolDetail::Mcp { server, tool, input, .. }) => Some(ToolDetail::Mcp {
+            server,
+            tool,
+            input,
+            output: text(),
+        }),
+        // An edit's result is "the file was updated"; a checklist's is "todos
+        // modified"; a plan's is the approval. The row already holds more.
         Some(_) => None,
         None => text().map(|text| ToolDetail::Output { text }),
     }
+}
+
+/// A string argument exactly as sent: `string_field` trims, and a diff of
+/// trimmed text shows changes that were never made.
+fn raw<'a>(input: &'a Map<String, Value>, key: &str) -> Option<&'a str> {
+    input.get(key).and_then(Value::as_str)
+}
+
+fn hunk(input: &Map<String, Value>, before: &str, after: &str) -> Option<EditHunk> {
+    let before = raw(input, before).unwrap_or_default();
+    let after = raw(input, after).unwrap_or_default();
+    (!before.is_empty() || !after.is_empty()).then(|| EditHunk {
+        before: before.to_string(),
+        after: after.to_string(),
+    })
 }
 
 fn line_count(input: &Map<String, Value>, key: &str) -> u32 {
@@ -682,7 +793,7 @@ fn pretty_tool(name: &str) -> String {
 mod tests {
     use super::*;
     use crate::turns::TurnHost;
-    use crew_protocol::{HarnessEvent, ToolDetail};
+    use crew_protocol::{HarnessEvent, TodoItem, TodoStatus, ToolDetail};
     use serde_json::json;
 
     /// The command Claude asked to run in capture 2 of
@@ -799,6 +910,10 @@ mod tests {
                 path: "/w/src/lib/sidebarPrefs.ts".into(),
                 added: Some(2),
                 removed: Some(1),
+                hunks: Some(vec![EditHunk {
+                    before: "  return prefs.hidden.includes(key);".into(),
+                    after: "  const set = hiddenSet(prefs);\n  return set.has(key);".into(),
+                }]),
             })]
         );
     }
@@ -900,14 +1015,96 @@ mod tests {
                 path: "/w/a.ts".into(),
                 added: Some(3),
                 removed: None,
+                hunks: Some(vec![EditHunk {
+                    before: String::new(),
+                    after: "one\ntwo\nthree".into(),
+                }]),
             })
         );
     }
 
     #[test]
+    fn a_checklist_reads_as_its_items() {
+        let input = json!({ "todos": [
+            { "content": "Ship it", "status": "pending", "activeForm": "Shipping it" },
+            { "content": "Test it", "status": "in_progress", "activeForm": "Testing it" },
+            { "content": "Write it", "status": "completed", "activeForm": "Writing it" },
+        ] });
+        assert_eq!(
+            tool_details(&[tool_use("TodoWrite", input)]),
+            vec![Some(ToolDetail::Todo {
+                items: vec![
+                    TodoItem { text: "Ship it".into(), status: TodoStatus::Pending },
+                    TodoItem { text: "Test it".into(), status: TodoStatus::InProgress },
+                    TodoItem { text: "Write it".into(), status: TodoStatus::Completed },
+                ]
+            })]
+        );
+    }
+
+    #[test]
     fn a_tool_with_nothing_to_show_stays_none() {
-        let input = json!({ "todos": [{ "content": "Ship it", "status": "pending" }] });
-        assert_eq!(tool_details(&[tool_use("TodoWrite", input)]), vec![None]);
+        assert_eq!(tool_details(&[tool_use("Skill", json!({ "skill": "simplify" }))]), vec![None]);
+    }
+
+    /// The row that read `[` because it showed the first line of a JSON result:
+    /// an MCP call names its server and tool, and keeps its answer for the body.
+    #[test]
+    fn an_mcp_call_names_its_server_and_keeps_what_it_answered() {
+        let got = tool_details(&[
+            tool_use("mcp__chrome-devtools__take_snapshot", json!({ "verbose": true })),
+            tool_result("[\n  {\"uid\": 1}\n]"),
+        ]);
+        assert_eq!(
+            got.last().cloned().flatten(),
+            Some(ToolDetail::Mcp {
+                server: "chrome-devtools".into(),
+                tool: "take_snapshot".into(),
+                input: Some("{\n  \"verbose\": true\n}".into()),
+                output: Some("[\n  {\"uid\": 1}\n]".into()),
+            })
+        );
+        assert_eq!(
+            tool_label("mcp__chrome-devtools__take_snapshot", &Map::new()),
+            "chrome-devtools · take snapshot"
+        );
+        assert_eq!(tool_label("mcp__claude_ai_Notion__notion-fetch", &Map::new()), "Notion · notion fetch");
+    }
+
+    #[test]
+    fn a_subagent_shows_what_it_was_asked_and_what_it_said() {
+        let input = json!({ "description": "Find the parser", "subagent_type": "Explore", "prompt": "Where is it?" });
+        let got = tool_details(&[tool_use("Task", input.clone()), tool_result("In src/parse.rs")]);
+        assert_eq!(
+            got.last().cloned().flatten(),
+            Some(ToolDetail::Agent {
+                description: "Find the parser".into(),
+                agent_type: Some("Explore".into()),
+                prompt: Some("Where is it?".into()),
+                output: Some("In src/parse.rs".into()),
+            })
+        );
+        assert_eq!(tool_label("Task", input.as_object().unwrap()), "Find the parser");
+    }
+
+    #[test]
+    fn a_multiedit_keeps_every_hunk_and_counts_them_all() {
+        let input = json!({ "file_path": "/w/a.ts", "edits": [
+            { "old_string": "a", "new_string": "b\nc" },
+            { "old_string": "d\ne", "new_string": "f" },
+        ] });
+        assert_eq!(
+            tool_detail("MultiEdit", input.as_object().unwrap()),
+            Some(ToolDetail::Edit {
+                path: "/w/a.ts".into(),
+                added: Some(3),
+                removed: Some(3),
+                hunks: Some(vec![
+                    EditHunk { before: "a".into(), after: "b\nc".into() },
+                    EditHunk { before: "d\ne".into(), after: "f".into() },
+                ]),
+            })
+        );
     }
 
     #[test]
@@ -927,12 +1124,12 @@ mod tests {
         let grep = json!({ "pattern": "ToolDetail", "path": "crates" });
         assert_eq!(
             tool_detail("Grep", grep.as_object().unwrap()),
-            Some(ToolDetail::Search { query: "ToolDetail".into(), matches: None })
+            Some(ToolDetail::Search { query: "ToolDetail".into(), matches: None, output: None })
         );
         let fetch = json!({ "url": "https://example.com", "prompt": "what is this" });
         assert_eq!(
             tool_detail("WebFetch", fetch.as_object().unwrap()),
-            Some(ToolDetail::Fetch { url: "https://example.com".into(), title: None })
+            Some(ToolDetail::Fetch { url: "https://example.com".into(), title: None, output: None })
         );
     }
 

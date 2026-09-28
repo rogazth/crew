@@ -114,8 +114,10 @@ describe("hasBody", () => {
     expect(hasBody(tool({ kind: "command", command: "a\nb", exitCode: 0 }))).toBe(true);
   });
 
-  it("never opens an edit: the tally is the whole story", () => {
+  it("opens an edit only when it carries the diff", () => {
     expect(hasBody(tool({ kind: "edit", path: "a.ts", added: 1, removed: 0 }))).toBe(false);
+    const hunks = [{ before: "a", after: "b" }];
+    expect(hasBody(tool({ kind: "edit", path: "a.ts", added: 1, removed: 1, hunks }))).toBe(true);
   });
 
   it("does not open a one-line message", () => {
@@ -188,10 +190,46 @@ describe("REVIEW: the live client store and ToolDetail", () => {
   });
 });
 
-describe("REVIEW: hasBody and indented single-line output", () => {
-  it("does not offer to open a one-line output that happens to be indented", () => {
-    // firstLine() returns the raw line, the comparison trims only one side, so
-    // any leading whitespace makes a one-liner look like it has a body.
-    expect(hasBody(tool({ kind: "output", text: "  Ada, Grace" }))).toBe(false);
+describe("a result with no shape of its own", () => {
+  it("is named by its tool, not by the first line of what it answered", () => {
+    const row = tool({ kind: "output", text: '[\n  {"id": "a"}\n]' }, "completed", "Crew list agents");
+    expect(toolLine(row).text).toBe("Crew list agents");
+    expect(hasBody(row)).toBe(true);
+  });
+
+  it("reads an old transcript's raw MCP name as its server and tool", () => {
+    const row = tool({ kind: "output", text: "{}" }, "completed", "mcp__chrome-devtools__take_snapshot");
+    expect(toolLine(row).text).toBe("chrome-devtools · take snapshot");
+  });
+
+  it("has nothing to open when it answered blank", () => {
+    expect(hasBody(tool({ kind: "output", text: "  " }))).toBe(false);
+  });
+});
+
+describe("the shaped tools", () => {
+  it("says what a checklist is on and how far along it is", () => {
+    const line = toolLine(
+      tool({
+        kind: "todo",
+        items: [
+          { text: "Write it", status: "completed" },
+          { text: "Test it", status: "inProgress" },
+          { text: "Ship it", status: "pending" },
+        ],
+      }),
+    );
+    expect(line).toMatchObject({ text: "Test it", suffix: "1/3 done" });
+  });
+
+  it("names a subagent by its task and its kind", () => {
+    const line = toolLine(tool({ kind: "agent", description: "Find the parser", agentType: "Explore" }));
+    expect(line).toMatchObject({ text: "Find the parser", suffix: "Explore", mono: false });
+  });
+
+  it("names an MCP call by its server and tool", () => {
+    const row = tool({ kind: "mcp", server: "claude_ai_Notion", tool: "notion-fetch", output: "{}" });
+    expect(toolLine(row).text).toBe("Notion · notion fetch");
+    expect(hasBody(row)).toBe(true);
   });
 });

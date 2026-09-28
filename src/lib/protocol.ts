@@ -74,6 +74,11 @@ export type DirListing = {
  */
 path: string, repo: boolean, entries: Array<DirEntry>, };
 
+/**
+ * One replacement in a file: `before` became `after`.
+ */
+export type EditHunk = { before: string, after: string, };
+
 export type Event = { event: string, payload: unknown, };
 
 export type FileBytes = { mime: string, data: string, };
@@ -350,6 +355,10 @@ export type SessionsRetention = { days: number, };
 
 export type TempFile = { extension: string, base64Contents: string, };
 
+export type TodoItem = { text: string, status: TodoStatus, };
+
+export type TodoStatus = "pending" | "inProgress" | "completed";
+
 export type ToolCall = { id: number, sessionId: string, method: string, params: unknown, };
 
 /**
@@ -358,7 +367,21 @@ export type ToolCall = { id: number, sessionId: string, method: string, params: 
  * or opencode's `bash`: the adapters translate into this, and the UI renders
  * one shape instead of four.
  */
-export type ToolDetail = { "kind": "command", command: string, exitCode?: number, output?: string, } | { "kind": "file", path: string, lineStart?: number, lineEnd?: number, preview?: string, } | { "kind": "edit", path: string, added?: number, removed?: number, } | { "kind": "search", query: string, matches?: number, } | { "kind": "fetch", url: string, title?: string, } | { "kind": "message", to: string, text: string, } | { "kind": "output", text: string, };
+export type ToolDetail = { "kind": "command", command: string, exitCode?: number, output?: string, } | { "kind": "file", path: string, lineStart?: number, lineEnd?: number, preview?: string, } | { "kind": "edit", path: string, added?: number, removed?: number, 
+/**
+ * The replacements as the call named them, when it named them and they
+ * fit: a write is one hunk with nothing before it. Absent when too big
+ * to keep, rather than kept in part: half a diff reads as a wrong one.
+ */
+hunks?: Array<EditHunk>, } | { "kind": "search", query: string, matches?: number, 
+/**
+ * What came back: the files, the lines, the results.
+ */
+output?: string, } | { "kind": "fetch", url: string, title?: string, output?: string, } | { "kind": "message", to: string, text: string, } | { "kind": "todo", items: Array<TodoItem>, } | { "kind": "agent", description: string, agentType?: string, prompt?: string, 
+/**
+ * What it reported back.
+ */
+output?: string, } | { "kind": "mcp", server: string, tool: string, input?: string, output?: string, } | { "kind": "plan", text: string, } | { "kind": "output", text: string, };
 
 export type ToolStatus = "pending" | "completed" | "failed" | "interrupted";
 

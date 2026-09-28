@@ -248,6 +248,7 @@ fn tool_detail(
             path: path_argument(args)?,
             added: None,
             removed: None,
+            hunks: None,
         }),
         "glob" | "grep" => Some(ToolDetail::Search {
             query: string_field(Some(args), "pattern")
@@ -255,6 +256,7 @@ fn tool_detail(
                 .or_else(|| string_field(Some(args), "query"))
                 .or_else(|| string_field(Some(args), "regex"))?,
             matches: None,
+            output: None,
         }),
         _ => None,
     }

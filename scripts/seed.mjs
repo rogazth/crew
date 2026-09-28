@@ -198,6 +198,12 @@ const lead = await session("crew", "agent", "Planner", {
   status: "working",
   ago: 0,
 });
+const showcase = await session("crew", "agent", "Showcase", {
+  model: "claude-opus-5-5",
+  description: "Every tool and every block the chat can draw, in one transcript.",
+  status: "done",
+  ago: 1 * MIN,
+});
 const reviewer = await session("crew", "agent", "Reviewer", {
   provider: "codex",
   model: "gpt-5.5-codex",
@@ -434,6 +440,168 @@ transcript(reviewer.id, [
       ],
     },
   },
+]);
+
+const TEST_LOG = [
+  "> crew@0.1.14 test",
+  "> vitest run",
+  "",
+  ...Array.from({ length: 58 }, (_, i) => ` ✓ src/lib/${["tabs", "keymap", "blocks", "activity", "toolDetail"][i % 5]}.test.ts (${12 + i} tests) ${3 + (i % 7)}ms`),
+  "",
+  " Test Files  58 passed (58)",
+  "      Tests  1038 passed (1038)",
+].join("\n");
+
+const SHOWCASE_REPLY = `## What changed
+
+The chat now draws each tool as what it did. Here is the tour, block by block.
+
+### Lists
+
+1. **Ordered** items keep their numbers
+   - and nest a bullet list
+     - two levels deep
+2. With \`inline code\` and a path like \`src/lib/toolDetail.ts\`
+
+- [x] A finished task
+- [ ] One still open
+
+### Quotes and callouts
+
+> A plain quote, for when the agent cites something.
+> It can run over two lines.
+
+> [!NOTE]
+> Callouts render with an icon and a tint.
+
+> [!WARNING]
+> This one would ship a breaking change.
+
+### Tables
+
+| Tool | Row says | Opens to |
+| --- | --- | --- |
+| Edit | \`src/App.tsx +3 −1\` | the diff |
+| MCP | \`chrome-devtools · take snapshot\` | input and result |
+| Task | the subagent's job | its report |
+
+### Code
+
+\`\`\`ts title="src/lib/toolDetail.ts"
+export function prettyTitle(title: string): string {
+  const mcp = /^mcp__(.+?)__(.+)$/.exec(title);
+  return mcp ? mcpLabel(mcp[1]!, mcp[2]!) : title;
+}
+\`\`\`
+
+\`\`\`bash
+npm run check && git push
+\`\`\`
+
+\`\`\`diff
+- const title = block.tool?.title ?? block.text;
++ const title = prettyTitle(block.tool?.title ?? block.text);
+\`\`\`
+
+\`\`\`mermaid
+flowchart LR
+  Provider --> Daemon --> Transcript --> Chat
+\`\`\`
+
+---
+
+Inline math like $e^{i\\pi} + 1 = 0$ and a block:
+
+$$
+\\sum_{k=1}^{n} k = \\frac{n(n+1)}{2}
+$$
+
+Sources: the t3code timeline[^1] and [Zeron's tool chips](https://example.com/zeron).
+
+[^1]: \`apps/web/src/components/chat/MessagesTimeline.tsx\``;
+
+transcript(showcase.id, [
+  { role: "user", text: "Show me everything the chat can draw.", ago: 9 * MIN },
+  { role: "reasoning", text: "I'll plan it first, then touch each kind of tool once so every row shows up." },
+  tool("TodoWrite", "Todos", {
+    kind: "todo",
+    items: [
+      { text: "Read the tool rows", status: "completed" },
+      { text: "Exercise every tool", status: "inProgress" },
+      { text: "Write the tour", status: "pending" },
+    ],
+  }),
+  tool("Read", "Read toolDetail.ts", {
+    kind: "file",
+    path: "src/lib/toolDetail.ts",
+    lineStart: 1,
+    lineEnd: 12,
+    preview: 'import { agentLabel } from "./agentNames";\nimport type { Block, ToolDetail } from "./protocol";\n\nexport type ToolLine = {\n  text: string;\n  mono: boolean;\n};',
+  }),
+  tool("Grep", "Grep toolLine", {
+    kind: "search",
+    query: "toolLine",
+    output: "src/lib/toolDetail.ts\nsrc/surfaces/chat/Activity.tsx\nsrc/lib/toolDetail.test.ts",
+  }),
+  tool("ToolSearch", "Find tools chrome", { kind: "search", query: "select:mcp__chrome-devtools__take_snapshot" }),
+  tool("Task", "Find where tools are titled", {
+    kind: "agent",
+    description: "Find where tools are titled",
+    agentType: "Explore",
+    prompt: "Where does the daemon decide a tool row's title? Report file:line.",
+    output: "Titles come from **`tool_label`** in `crates/crew-core/src/providers/claude.rs`.\n\n- MCP names split on `__`\n- Crew's own tools get a verb\n- Everything else falls back to the tool name",
+  }),
+  tool("mcp__chrome-devtools__take_snapshot", "chrome-devtools · take snapshot", {
+    kind: "mcp",
+    server: "chrome-devtools",
+    tool: "take_snapshot",
+    input: '{\n  "verbose": false\n}',
+    output: '[{"uid":"1_0","role":"RootWebArea","name":"Crew"},{"uid":"1_1","role":"button","name":"New agent"}]',
+  }),
+  tool("mcp__crew__list_agents", "mcp__crew__list_agents", {
+    kind: "output",
+    text: '[\n  {\n    "id": "5888c0",\n    "name": "Planner"\n  }\n]',
+  }),
+  { role: "assistant", text: "Found it. Now the edits." },
+  tool("Edit", "Edit toolDetail.ts", {
+    kind: "edit",
+    path: "src/lib/toolDetail.ts",
+    added: 2,
+    removed: 1,
+    hunks: [
+      {
+        before: "  const title = block.tool?.title ?? block.text;",
+        after: "  // The result is the body, never the line.\n  const title = prettyTitle(block.tool?.title ?? block.text);",
+      },
+    ],
+  }),
+  tool("Write", "Write notes.md", {
+    kind: "edit",
+    path: "docs/notes.md",
+    added: 3,
+    hunks: [{ before: "", after: "# Notes\n\nEvery tool gets a renderer.\n" }],
+  }),
+  tool("Bash", "npm test", { kind: "command", command: "npm test", exitCode: 0, output: TEST_LOG }),
+  tool("mcp__linear__save_issue", "linear · save issue", {
+    kind: "mcp",
+    server: "linear",
+    tool: "save_issue",
+    input: '{\n  "title": "Chat timeline"\n}',
+    output: "Unauthorized: the Linear token expired.",
+  }, "failed"),
+  tool("ExitPlanMode", "Plan", {
+    kind: "plan",
+    text: "## Plan\n\n1. Fix the `[` rows\n2. Give every tool a renderer\n3. Fold finished turns",
+  }),
+  tool("TodoWrite", "Todos", {
+    kind: "todo",
+    items: [
+      { text: "Read the tool rows", status: "completed" },
+      { text: "Exercise every tool", status: "completed" },
+      { text: "Write the tour", status: "completed" },
+    ],
+  }),
+  { role: "assistant", text: SHOWCASE_REPLY, ...usage(252, 48_200, 3_900, 0.61) },
 ]);
 
 transcript(scribe.id, [

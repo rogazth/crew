@@ -2,7 +2,10 @@ use crew_protocol::{ToolDetail, TurnUsage};
 use serde_json::{Map, Value};
 
 use super::runtime::Autonomy;
-use super::{as_record, as_record_owned, clip, finite_number, leaf, string_field, try_parse_json_record};
+use super::{
+    as_record, as_record_owned, clip, finite_number, leaf, mcp_label, pretty_input, string_field, todo_items,
+    try_parse_json_record,
+};
 
 pub use super::parse_json_line;
 
@@ -142,7 +145,15 @@ mod crew_row_tests {
             "arguments": { "code": "await cua.getState()", "title": "Inspect" },
             "result": { "content": [{ "type": "text", "text": "Window: Crew" }] }
         })));
-        assert_eq!(detail, Some(ToolDetail::Output { text: "Window: Crew".into() }));
+        assert_eq!(
+            detail,
+            Some(ToolDetail::Mcp {
+                server: "cua_repl".into(),
+                tool: "js".into(),
+                input: Some("{\n  \"code\": \"await cua.getState()\",\n  \"title\": \"Inspect\"\n}".into()),
+                output: Some("Window: Crew".into()),
+            })
+        );
     }
 }
 
@@ -276,7 +287,7 @@ pub fn turn_usage(rec: &Map<String, Value>) -> Option<TurnUsage> {
 pub fn is_tool_item(item: &Map<String, Value>) -> bool {
     matches!(
         string_field(Some(item), "type").as_deref(),
-        Some("command_execution" | "file_change" | "mcp_tool_call" | "web_search" | "collab_tool_call")
+        Some("command_execution" | "file_change" | "mcp_tool_call" | "web_search" | "collab_tool_call" | "todo_list")
     )
 }
 
@@ -291,6 +302,7 @@ pub fn tool_name(item: &Map<String, Value>) -> String {
         Some("mcp_tool_call") => string_field(Some(item), "tool").unwrap_or_else(|| "mcp".into()),
         Some("web_search") => "websearch".into(),
         Some("collab_tool_call") => string_field(Some(item), "tool").unwrap_or_else(|| "collab".into()),
+        Some("todo_list") => "todo".into(),
         Some(other) => other.into(),
         None => "tool".into(),
     }
@@ -326,7 +338,7 @@ pub fn tool_label(item: &Map<String, Value>) -> String {
             let tool = string_field(Some(item), "tool");
             let server = string_field(Some(item), "server");
             match (tool, server) {
-                (Some(tool), Some(server)) => format!("{server}.{tool}"),
+                (Some(tool), Some(server)) => mcp_label(&server, &tool),
                 (Some(tool), None) => tool,
                 (None, Some(server)) => server,
                 _ => "MCP".into(),
@@ -336,6 +348,7 @@ pub fn tool_label(item: &Map<String, Value>) -> String {
             .map(|query| format!("Search {}", clip(&query, 40)))
             .unwrap_or_else(|| "Search".into()),
         Some("collab_tool_call") => string_field(Some(item), "tool").unwrap_or_else(|| "Collab".into()),
+        Some("todo_list") => "Todos".into(),
         Some(other) => other.into(),
         None => "tool".into(),
     }
@@ -363,7 +376,8 @@ pub fn tool_detail(item: &Map<String, Value>) -> Option<ToolDetail> {
             Some(ToolDetail::Edit {
                 path: string_field(as_record(only), "path")?,
                 added: None,
-            removed: None,
+                removed: None,
+                hunks: None,
             })
         }
         Some("mcp_tool_call") => {
@@ -380,13 +394,26 @@ pub fn tool_detail(item: &Map<String, Value>) -> Option<ToolDetail> {
                     }
                 }
             }
-            Some(ToolDetail::Output {
-                text: output_text(item.get("result").and_then(as_record)?.get("content"))?,
-            })
+            let output = output_text(item.get("result").and_then(as_record).and_then(|result| result.get("content")));
+            let server = string_field(Some(item), "server");
+            let tool = string_field(Some(item), "tool");
+            match (server, tool) {
+                (Some(server), Some(tool)) if server != "crew" => Some(ToolDetail::Mcp {
+                    server,
+                    tool,
+                    input: item.get("arguments").and_then(as_record).and_then(pretty_input),
+                    output,
+                }),
+                _ => Some(ToolDetail::Output { text: output? }),
+            }
         }
         Some("web_search") => Some(ToolDetail::Search {
             query: string_field(Some(item), "query")?,
             matches: None,
+            output: None,
+        }),
+        Some("todo_list") => Some(ToolDetail::Todo {
+            items: todo_items(item.get("items"))?,
         }),
         _ => None,
     }
@@ -511,7 +538,8 @@ mod tests {
                 detail: Some(ToolDetail::Edit {
                     path: "/tmp/app/foo.ts".into(),
                     added: None,
-            removed: None,
+                    removed: None,
+                    hunks: None,
                 }),
             }]
         );
@@ -632,10 +660,10 @@ mod tests {
         );
     }
 
-    /// Both captures come from `crates/crew-core/tests/fixtures/protocols/codex.jsonl`: an MCP call says
-    /// nothing until it answers.
+    /// Both captures come from `crates/crew-core/tests/fixtures/protocols/codex.jsonl`: an MCP call
+    /// names what it called while it runs, and adds the answer once it has one.
     #[test]
-    fn an_mcp_call_says_nothing_until_it_answers() {
+    fn an_mcp_call_names_itself_before_it_answers() {
         assert_eq!(
             detail(&json!({
                 "type": "item.started",
@@ -650,12 +678,20 @@ mod tests {
                     "status": "in_progress"
                 }
             })),
-            None
+            Some(ToolDetail::Mcp {
+                server: "cua_repl".into(),
+                tool: "js".into(),
+                input: Some(
+                    "{\n  \"code\": \"await cua.getState()\",\n  \"title\": \"Inspect available terminal surfaces\"\n}"
+                        .into()
+                ),
+                output: None,
+            })
         );
     }
 
     #[test]
-    fn an_mcp_result_becomes_output() {
+    fn an_mcp_result_rides_on_the_call() {
         assert_eq!(
             detail(&json!({
                 "type": "item.completed",
@@ -670,7 +706,15 @@ mod tests {
                     "status": "failed"
                 }
             })),
-            Some(ToolDetail::Output { text: "cua.getApp is not a function".into() })
+            Some(ToolDetail::Mcp {
+                server: "cua_repl".into(),
+                tool: "js".into(),
+                input: Some(
+                    "{\n  \"code\": \"const app = await cua.getApp('Terminal')\",\n  \"title\": \"Open terminal\"\n}"
+                        .into()
+                ),
+                output: Some("cua.getApp is not a function".into()),
+            })
         );
     }
 

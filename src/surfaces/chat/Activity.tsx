@@ -1,5 +1,5 @@
 import { Collapsible } from "@base-ui/react/collapsible";
-import { ChevronRightIcon, FileTextIcon, GlobeIcon, LoaderCircleIcon, MessageCircleMoreIcon, PencilIcon, SearchIcon, SendIcon, SparkleIcon, TerminalIcon, WrenchIcon, XIcon, type LucideIcon as Icon } from "lucide-react";
+import { BotIcon, ChevronRightIcon, FileTextIcon, GlobeIcon, ListChecksIcon, LoaderCircleIcon, MessageCircleMoreIcon, NotebookTextIcon, PencilIcon, PlugIcon, SearchIcon, SendIcon, SparkleIcon, TerminalIcon, WrenchIcon, XIcon, type LucideIcon as Icon } from "lucide-react";
 import { createElement, memo, useMemo, useState, type ReactNode } from "react";
 import {
   FOLD_AT,
@@ -14,7 +14,7 @@ import {
   type PhaseKind,
 } from "../../lib/activity";
 import { answerSummary, isOpen, type Answers, type ApprovalDecision, type Block } from "../../lib/blocks";
-import { glyphKind, hasBody, toolLine } from "../../lib/toolDetail";
+import { glyphKind, hasBody, toolLine, type ToolGlyphKind } from "../../lib/toolDetail";
 import { ApprovalCard } from "./ApprovalCard";
 import { QuestionCard } from "./QuestionCard";
 import { ToolBody } from "./ToolBody";
@@ -41,13 +41,17 @@ const KIND_ICON: Record<PhaseKind, Icon> = {
 const DIGEST_ICON: Record<ActivityDigest["kind"], Icon> = { ...KIND_ICON, thought: SparkleIcon };
 
 /** A row wears what it did, not what its phase was called. */
-const DETAIL_ICON: Record<string, Icon> = {
+const DETAIL_ICON: Record<NonNullable<ToolGlyphKind>, Icon> = {
   command: TerminalIcon,
   file: FileTextIcon,
   edit: PencilIcon,
   search: SearchIcon,
   fetch: GlobeIcon,
   message: SendIcon,
+  todo: ListChecksIcon,
+  agent: BotIcon,
+  mcp: PlugIcon,
+  plan: NotebookTextIcon,
 };
 
 function iconFor(block: Block, fallback: Icon | undefined): Icon | undefined {

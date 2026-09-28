@@ -1,5 +1,5 @@
 import { isOpen, type Block } from "./blocks";
-import { detailOf } from "./toolDetail";
+import { detailOf, prettyTitle } from "./toolDetail";
 
 /** What a run of tool calls was for. Drives the phase icon and its one-line label. */
 export type PhaseKind = "edit" | "research" | "run" | "other";
@@ -40,6 +40,10 @@ export function phaseKind(block: Block): PhaseKind {
     case "fetch":
       return "research";
     case "message":
+    case "todo":
+    case "agent":
+    case "mcp":
+    case "plan":
     case "output":
       return "other";
     default:
@@ -132,7 +136,7 @@ export function phaseLabel(phase: Phase): string {
       if (count === 1) return live ? "Running a command" : "Ran a command";
       return `${live ? "Running" : "Ran"} ${count} commands`;
     default:
-      if (count === 1) return phase.blocks[0]!.tool?.title ?? phase.blocks[0]!.text;
+      if (count === 1) return prettyTitle(phase.blocks[0]!.tool?.title ?? phase.blocks[0]!.text);
       return `${live ? "Running" : "Ran"} ${count} tools`;
   }
 }
