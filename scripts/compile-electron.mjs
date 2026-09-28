@@ -9,7 +9,8 @@ function sha() {
   }
 }
 
-export async function compileElectron() {
+/** `release` marks the published build, the only one on the installed app's data. */
+export async function compileElectron({ release = false } = {}) {
   await build({
     entryPoints: [
       { in: "electron/main.ts", out: "main" },
@@ -24,7 +25,7 @@ export async function compileElectron() {
     format: "cjs",
     target: "node20",
     external: ["electron"],
-    define: { __CREW_SHA__: JSON.stringify(sha()) },
+    define: { __CREW_SHA__: JSON.stringify(sha()), __CREW_RELEASE__: JSON.stringify(release) },
     logLevel: "warning",
   });
 }

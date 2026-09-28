@@ -368,12 +368,7 @@ fn prepare_child(cmd: &mut Command) {
     if let Some(home) = home_dir() {
         cmd.env("HOME", &home);
     }
-    for (key, _) in std::env::vars_os() {
-        let key = key.to_string_lossy();
-        if key == "CLAUDECODE" || key.starts_with("CLAUDE_CODE_") {
-            cmd.env_remove(key.as_ref());
-        }
-    }
+    crate::child_env::scrub(cmd);
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;

@@ -493,14 +493,7 @@ fn pty_command(
     if let Some(home) = home_dir() {
         cmd.env("HOME", &home);
     }
-    // Launched from inside a Claude Code session, the app would pass these on
-    // and claude would treat the terminal as a child session with no transcript.
-    for (key, _) in std::env::vars_os() {
-        let key = key.to_string_lossy();
-        if key == "CLAUDECODE" || key.starts_with("CLAUDE_CODE_") {
-            cmd.env_remove(key.as_ref());
-        }
-    }
+    crate::child_env::scrub(&mut cmd);
     // A parent that disabled colour for its own logs must not decide for the terminal.
     cmd.env_remove("NO_COLOR");
     for key in ["FORCE_COLOR", "CLICOLOR"] {

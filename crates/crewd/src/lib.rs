@@ -35,6 +35,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_tungstenite::tungstenite::Message;
 
 mod http;
+pub mod lock;
 pub mod machine;
 mod socks;
 

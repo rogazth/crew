@@ -57,7 +57,7 @@ await run("cargo", ["build", "--release", "-p", "crewd"]);
 // The Linux daemons Crew installs on other machines ship inside the app.
 await run("node", ["scripts/crewd-linux.mjs"]);
 await run("npm", ["run", "build"]);
-await compileElectron();
+await compileElectron({ release: true });
 // Without --publish never, electron-builder publishes on its own when it sees CI and a tag.
 await run("npx", ["electron-builder", "--mac", "--arm64", "--publish", "never"]);
 
