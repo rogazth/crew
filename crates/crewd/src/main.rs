@@ -73,6 +73,9 @@ impl Daemon {
 fn run(args: &[String]) -> Result<(), String> {
     let dir = data_dir(args);
     let daemon = Daemon::start(&dir, Listen::local())?;
+    // Armed before the window hears of it: a SIGTERM sent the moment the
+    // line is read must stop it cleanly, not kill it.
+    let exit = exit_on_eof_or_signal();
 
     let info = DaemonInfo {
         url: daemon.handle.url().to_string(),
@@ -87,7 +90,7 @@ fn run(args: &[String]) -> Result<(), String> {
     .map_err(|e| e.to_string())?;
     stdout.flush().map_err(|e| e.to_string())?;
 
-    wait_for_exit();
+    let _ = exit.recv();
 
     daemon.stop();
     Ok(())
@@ -115,6 +118,7 @@ fn run_serve(args: &[String]) -> Result<(), String> {
         },
     )?;
 
+    let exit = exit_on_signal();
     // The port, for whoever started it on port 0. The token stays in its file.
     // Best effort: a service whose stdout went away keeps serving.
     let url = daemon.handle.url().to_string();
@@ -123,7 +127,7 @@ fn run_serve(args: &[String]) -> Result<(), String> {
     let _ = stdout.flush();
     eprintln!("[crewd] {} serving {url} from {}", env!("CARGO_PKG_VERSION"), dir.display());
 
-    wait_for_signal();
+    let _ = exit.recv();
 
     daemon.stop();
     Ok(())
@@ -148,7 +152,8 @@ fn data_dir(args: &[String]) -> PathBuf {
         .unwrap_or_else(|| std::env::temp_dir().join(format!("crewd-{}", std::process::id())))
 }
 
-fn wait_for_exit() {
+/// Receives once stdin closes or SIGTERM, SIGINT or SIGHUP arrives.
+fn exit_on_eof_or_signal() -> mpsc::Receiver<()> {
     let (tx, rx) = mpsc::channel();
     watch_signals(tx.clone(), true);
 
@@ -171,19 +176,20 @@ fn wait_for_exit() {
             }
         })
         .expect("stdin watcher");
-
-    let _ = rx.recv();
+    rx
 }
 
-fn wait_for_signal() {
+fn exit_on_signal() -> mpsc::Receiver<()> {
     let (tx, rx) = mpsc::channel();
     watch_signals(tx, false);
-    let _ = rx.recv();
+    rx
 }
 
 /// Sends once SIGTERM or SIGINT arrives, or SIGHUP when `hangup` holds. A
 /// served daemon ignores SIGHUP: the SSH session that started it may close.
+/// Returns once the handlers are in place.
 fn watch_signals(tx: mpsc::Sender<()>, hangup: bool) {
+    let (armed_tx, armed_rx) = mpsc::channel::<()>();
     thread::Builder::new()
         .name("crewd-signal".into())
         .spawn(move || {
@@ -208,6 +214,7 @@ fn watch_signals(tx: mpsc::Sender<()>, hangup: bool) {
                     else {
                         return;
                     };
+                    let _ = armed_tx.send(());
                     loop {
                         tokio::select! {
                             _ = sigterm.recv() => break,
@@ -218,10 +225,13 @@ fn watch_signals(tx: mpsc::Sender<()>, hangup: bool) {
                 }
                 #[cfg(not(unix))]
                 {
+                    let _ = armed_tx.send(());
                     let _ = tokio::signal::ctrl_c().await;
                 }
             });
             let _ = tx.send(());
         })
         .expect("signal watcher");
+    // A watcher that failed to set up drops its sender: nothing to wait for.
+    let _ = armed_rx.recv();
 }
