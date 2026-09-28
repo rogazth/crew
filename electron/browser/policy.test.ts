@@ -108,6 +108,9 @@ describe("attachDecision", () => {
     expect(attach("https://example.com", "")).toEqual(denied);
     expect(attach("https://example.com", "persist:other")).toEqual(denied);
     expect(attach("https://example.com", "crew-browser")).toEqual(denied);
+    expect(attach("https://example.com", "crew-incognito-ws-")).toEqual(denied);
+    expect(attach("https://example.com", "persist:crew-incognito-ws-w1")).toEqual(denied);
+    expect(attach("https://example.com", "crew-incognito-ws-../x")).toEqual(denied);
     expect(attach("about:blank", "persist:crew-browser2")).toEqual(denied);
     // The shared partition from before workspaces had their own is only ever copied from.
     expect(attach("about:blank", "persist:crew-browser")).toEqual(denied);
@@ -141,6 +144,16 @@ describe("attachDecision", () => {
 
   it("checks the partition before the restore token", () => {
     expect(attach(`${RESTORE_PREFIX}abc`, "persist:other")).toEqual(denied);
+  });
+});
+
+describe("attachDecision for incognito pages", () => {
+  it("allows a workspace's in-memory session", () => {
+    expect(attachDecision({ src: "https://example.com", partition: "crew-incognito-ws-w1" })).toEqual({
+      allow: true,
+      partition: "crew-incognito-ws-w1",
+      restoreToken: null,
+    });
   });
 });
 

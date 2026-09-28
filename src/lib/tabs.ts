@@ -7,8 +7,26 @@ export const stubTabId = (stub: StubKind) => `stub:${stub}`;
 /** Unlike the other kinds, a page has no natural key: two tabs can show the same URL. */
 export const browserTabId = () => `browser:${crypto.randomUUID()}`;
 
-export function newBrowserTab(url = ""): Tab {
-  return { id: browserTabId(), kind: "browser", url, title: "" };
+export function newBrowserTab(url = "", incognito = false): Tab {
+  return { id: browserTabId(), kind: "browser", url, title: "", ...(incognito && { incognito: true as const }) };
+}
+
+export const isIncognitoTab = (tab: Tab) => tab.kind === "browser" && tab.incognito === true;
+
+/**
+ * What a strip writes to disk: everything but its incognito tabs, which end
+ * with the app like a private window does.
+ */
+export function persistedTabs(state: TabState): Omit<TabState, "closed"> {
+  const { activeId, recent, collapsed } = state;
+  const tabs = state.tabs.filter((tab) => !isIncognitoTab(tab));
+  const kept = new Set(tabs.map((tab) => tab.id));
+  return {
+    tabs,
+    activeId: activeId !== null && kept.has(activeId) ? activeId : null,
+    ...(recent && { recent: recent.filter((id) => kept.has(id)) }),
+    ...(collapsed && { collapsed }),
+  };
 }
 
 /** Each call a new shell, in the worktree it was asked from. */
@@ -265,7 +283,12 @@ function isTab(value: unknown): value is Tab {
   if (tab.kind === "session") return typeof tab.sessionId === "string";
   if (tab.kind === "file") return typeof tab.path === "string" && typeof tab.relative === "string";
   if (tab.kind === "browser")
-    return tab.id.startsWith("browser:") && typeof tab.url === "string" && typeof tab.title === "string";
+    return (
+      tab.id.startsWith("browser:") &&
+      typeof tab.url === "string" &&
+      typeof tab.title === "string" &&
+      (tab.incognito === undefined || tab.incognito === true)
+    );
   if (tab.kind === "stub")
     return (
       typeof tab.title === "string" &&

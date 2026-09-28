@@ -12,7 +12,7 @@ type Entry = CommandId | { run: "workspace" | "worktree"; label: string };
 const GROUPS: { title: string; entries: Entry[] }[] = [
   {
     title: "Tabs",
-    entries: ["open-launcher", "close", "reopen-tab", "next-tab", "prev-tab"],
+    entries: ["open-launcher", "new-browser-tab", "new-incognito-tab", "close", "reopen-tab", "next-tab", "prev-tab"],
   },
   {
     title: "Workspaces and worktrees",

@@ -34,6 +34,7 @@ function sections(): { group: string; rows: Row[] }[] {
       group: "Tabs",
       rows: [
         [commandKeys("open-launcher"), "New tab"],
+        [pair("new-browser-tab", "new-incognito-tab"), "New browser / incognito tab"],
         [commandKeys("go-to-file"), "Open a file in this worktree"],
         [pair("close", "reopen-tab"), "Close / reopen tab"],
         [pair("prev-tab", "next-tab"), "Previous / next tab"],

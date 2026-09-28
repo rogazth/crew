@@ -1,5 +1,5 @@
 import { Popover } from "@base-ui/react/popover";
-import { BotIcon, GitBranchIcon, GlobeIcon, HistoryIcon, PlusIcon, SquareTerminalIcon } from "lucide-react";
+import { BotIcon, GitBranchIcon, GlobeIcon, HatGlassesIcon, HistoryIcon, PlusIcon, SquareTerminalIcon } from "lucide-react";
 import { Fragment, cloneElement, isValidElement, useEffect, useMemo, useRef, useState } from "react";
 import { AgentAvatar } from "./AgentAvatar";
 import { Footer, GroupHeader } from "./kit";
@@ -19,7 +19,7 @@ import { filterSessions } from "../lib/workspaces";
 
 export type Launch =
   | { kind: "stub"; stub: StubKind; title: string }
-  | { kind: "browser"; url?: string }
+  | { kind: "browser"; url?: string; incognito?: boolean }
   | { kind: "new-agent" }
   | { kind: "new-session"; provider?: ProviderId }
   | { kind: "session"; session: Session };
@@ -35,7 +35,7 @@ const PAGES = 5;
 const ICON = "size-4 shrink-0 text-icon";
 const TILE_ICON = "size-5 shrink-0 text-icon";
 
-/** The three things a tab can be made from nothing: the grid at the top, Terminal first so ⌘T ↵ opens one. */
+/** What a tab can be made from nothing: the grid at the top, Terminal first so ⌘T ↵ opens one. */
 const CREATE: Action[] = [
   {
     id: "terminal",
@@ -55,6 +55,14 @@ const CREATE: Action[] = [
     label: "Browser",
     icon: <GlobeIcon className={TILE_ICON} />,
     launch: { kind: "browser" },
+    hint: commandKeys("new-browser-tab"),
+  },
+  {
+    id: "incognito",
+    label: "Incognito",
+    icon: <HatGlassesIcon className={TILE_ICON} />,
+    launch: { kind: "browser", incognito: true },
+    hint: commandKeys("new-incognito-tab"),
   },
 ];
 
@@ -222,7 +230,9 @@ function LauncherPopup({ sessions, onPick }: { sessions: Session[]; onPick: (lau
     } else if (event.key === "Enter") {
       event.preventDefault();
       const item = items[cursor];
-      if (item) onPick(item.launch);
+      if (!item) return;
+      // ⌥↵ opens a page, typed or from history, in an incognito tab.
+      onPick(event.altKey && item.launch.kind === "browser" ? { ...item.launch, incognito: true } : item.launch);
     }
   }
 
@@ -256,7 +266,7 @@ function LauncherPopup({ sessions, onPick }: { sessions: Session[]; onPick: (lau
           if (group.items.length === 0) return null;
           if (group.tiles) {
             return (
-              <div key="tiles" className="grid grid-cols-3 gap-1 p-1 pb-2">
+              <div key="tiles" className="grid grid-cols-4 gap-1 p-1 pb-2">
                 {group.items.map((item, index) => (
                   <Tile
                     key={item.id}
@@ -287,7 +297,14 @@ function LauncherPopup({ sessions, onPick }: { sessions: Session[]; onPick: (lau
 
         {items.length === 0 && <p className="px-3 py-6 text-center text-placeholder">No matches</p>}
       </div>
-      <Footer hints={[["↑↓", "move"], ["↵", "open"], ["esc", "close"]]} />
+      <Footer
+        hints={[
+          ["↑↓", "move"],
+          ["↵", "open"],
+          ...(items[cursor]?.launch.kind === "browser" ? [["⌥↵", "incognito"] as [string, string]] : []),
+          ["esc", "close"],
+        ]}
+      />
     </Popover.Popup>
   );
 }

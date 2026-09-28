@@ -90,8 +90,8 @@ export type BrowserHost = {
   closeDevTools(webContentsId: number): Promise<void>;
   snapshot(webContentsId: number): Promise<NavSnapshot | null>;
   prepareRestore(token: string, entriesJson: string, index: number): Promise<boolean>;
-  /** Through the workspace's own session, so an icon behind its sign-in loads. */
-  favicon(url: string, workspaceId: string): Promise<string | null>;
+  /** Through the workspace's own session, so an icon behind its sign-in loads; an incognito page's through its in-memory one. */
+  favicon(url: string, workspaceId: string, incognito?: boolean): Promise<string | null>;
   /** Into the workspace's pages only. */
   importCookies(workspaceId: string, cookies: ImportedCookie[]): Promise<{ imported: number; failed: number }>;
   /** Point a workspace's pages at that machine's loopback, or clear the proxy. */

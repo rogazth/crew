@@ -90,9 +90,9 @@ export function useNavigation({ tabs, sessions, confirms, removeSession, closePa
 
   /** Every call is a new tab: pages have no natural key to dedupe on. */
   const openBrowser = useCallback(
-    (url = "") => {
+    (url = "", incognito = false) => {
       closePage();
-      tabs.open(newBrowserTab(url));
+      tabs.open(newBrowserTab(url, incognito));
     },
     [closePage, tabs],
   );

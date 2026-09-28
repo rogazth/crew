@@ -5,6 +5,7 @@ import {
   openTab,
   parseTabs,
   patchBrowserTab,
+  persistedTabs,
   tabTitle,
   type TabState,
 } from "./tabs";
@@ -115,6 +116,39 @@ describe("parseTabs with pages", () => {
     expect(page).toMatchObject({ kind: "browser", url: "", title: "" });
     expect(page?.id).toMatch(/^browser:/);
     expect(restored.activeId).toBe(page?.id);
+  });
+});
+
+describe("incognito tabs", () => {
+  it("are marked only when asked for", () => {
+    expect(newBrowserTab("https://a.com")).not.toHaveProperty("incognito");
+    expect(newBrowserTab("https://a.com", true)).toMatchObject({ kind: "browser", incognito: true });
+  });
+
+  it("are left out of what the strip writes to disk, with the ids that point at them", () => {
+    const page = newBrowserTab("https://a.com");
+    const secret = newBrowserTab("https://secret.test", true);
+    const saved = persistedTabs({
+      tabs: [file("a"), secret, page],
+      activeId: secret.id,
+      closed: [secret],
+      recent: [secret.id, page.id, "file:a"],
+      collapsed: ["w"],
+    });
+    expect(saved).toEqual({ tabs: [file("a"), page], activeId: null, recent: [page.id, "file:a"], collapsed: ["w"] });
+    expect(JSON.stringify(saved)).not.toContain("secret");
+    expect(parseTabs(JSON.stringify(saved)).activeId).toBe("file:a");
+  });
+
+  it("leave a strip without them as it was, minus the closed stack", () => {
+    const page = newBrowserTab("https://a.com");
+    expect(persistedTabs({ tabs: [page], activeId: page.id, closed: [page] })).toEqual({ tabs: [page], activeId: page.id });
+  });
+
+  it("parse back, and a malformed flag drops the tab", () => {
+    const secret = { id: "browser:1", kind: "browser", url: "", title: "", incognito: true };
+    const bad = { id: "browser:2", kind: "browser", url: "", title: "", incognito: "yes" };
+    expect(parseTabs(JSON.stringify({ tabs: [secret, bad] })).tabs).toEqual([secret]);
   });
 });
 

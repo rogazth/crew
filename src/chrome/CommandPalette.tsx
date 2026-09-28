@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { ArrowLeftIcon, ArrowRightIcon, BotIcon, CodeXmlIcon, CommandIcon, FolderIcon, FolderOpenIcon, GitBranchIcon, HistoryIcon, KeyboardIcon, ListIcon, PanelLeftIcon, PlusIcon, RotateCcwIcon, RotateCwIcon, SaveIcon, SearchIcon, SettingsIcon, SquareTerminalIcon, type LucideIcon as Icon } from "lucide-react";
+import { ArrowLeftIcon, ArrowRightIcon, BotIcon, CodeXmlIcon, CommandIcon, FolderIcon, FolderOpenIcon, GitBranchIcon, GlobeIcon, HatGlassesIcon, HistoryIcon, KeyboardIcon, ListIcon, PanelLeftIcon, PlusIcon, RotateCcwIcon, RotateCwIcon, SaveIcon, SearchIcon, SettingsIcon, SquareTerminalIcon, type LucideIcon as Icon } from "lucide-react";
 import { AgentAvatar } from "./AgentAvatar";
 import { FileTypeIcon } from "./FileTypeIcon";
 import { Footer, GroupHeader } from "./kit";
@@ -318,6 +318,8 @@ const ACTION_ICONS: Partial<Record<CommandId, Icon>> = {
   "new-agent": BotIcon,
   "new-session": SquareTerminalIcon,
   "new-worktree": GitBranchIcon,
+  "new-browser-tab": GlobeIcon,
+  "new-incognito-tab": HatGlassesIcon,
   "next-worktree": GitBranchIcon,
   "prev-worktree": GitBranchIcon,
   "open-settings": SettingsIcon,

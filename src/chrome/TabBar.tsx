@@ -2,7 +2,7 @@ import { RestrictToHorizontalAxis } from "@dnd-kit/abstract/modifiers";
 import { RestrictToElement } from "@dnd-kit/dom/modifiers";
 import { useSortable } from "@dnd-kit/react/sortable";
 import { Tabs } from "@base-ui/react/tabs";
-import { ChevronLeftIcon, ChevronRightIcon, GitBranchIcon, GlobeIcon, LoaderCircleIcon, XIcon } from "lucide-react";
+import { ChevronLeftIcon, ChevronRightIcon, GitBranchIcon, GlobeIcon, HatGlassesIcon, LoaderCircleIcon, XIcon } from "lucide-react";
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { ActionMenu } from "./ActionMenu";
 import { BranchDot, BranchTag } from "./BranchDot";
@@ -39,7 +39,7 @@ import {
   type MenuEntry,
   type MenuPoint,
 } from "../lib/menu";
-import { browserTitle, tabTitle } from "../lib/tabs";
+import { browserTitle, isIncognitoTab, tabTitle } from "../lib/tabs";
 import { itemOrder, stripItems, type PlaceOf, type StripItem } from "../lib/tabGroups";
 import type { Session, SessionStatus, Tab } from "../lib/types";
 
@@ -416,6 +416,7 @@ const TabPill = memo(function TabPill({
       nativeButton={false}
       render={<div />}
       data-tab-id={tab.id}
+      data-incognito={isIncognitoTab(tab) || undefined}
       data-tauri-drag-region="false"
       onAuxClick={(event) => event.button === 1 && onClose(tab.id)}
       onContextMenu={(event) => {
@@ -509,6 +510,7 @@ const PinnedPill = memo(function PinnedPill({
       nativeButton={false}
       render={<div />}
       data-tab-id={tab.id}
+      data-incognito={isIncognitoTab(tab) || undefined}
       data-tauri-drag-region="false"
       aria-label={title}
       onAuxClick={(event) => event.button === 1 && onClose(tab.id)}
@@ -659,7 +661,8 @@ function TabIcon({ tab, sessions, tone }: { tab: Tab; sessions: Session[]; tone:
   const icon = () => {
     if (tab.kind === "stub") return <StubIcon stub={tab.stub} className="size-3.5 text-icon" />;
     if (tab.kind === "file") return <FileTypeIcon name={tab.relative} className="size-3.5" />;
-    if (tab.kind === "browser") return <GlobeIcon className="size-3.5 text-icon" />;
+    if (tab.kind === "browser")
+      return tab.incognito ? <IncognitoIcon /> : <GlobeIcon className="size-3.5 text-icon" />;
     const session = sessions.find((s) => s.id === tab.sessionId);
     if (!session) return null;
     return session.kind === "agent" ? (
@@ -695,6 +698,9 @@ function BrowserTabFace({ tab, bare = false }: { tab: Extract<Tab, { kind: "brow
       <span className="flex size-3.5 shrink-0 items-center justify-center">
         {page.loading ? (
           <LoaderCircleIcon className="size-3.5 animate-spin text-icon" />
+        ) : tab.incognito ? (
+          // Pages of both kinds share the strip, so the private one wears its mark instead of the site's.
+          <IncognitoIcon />
         ) : icon ? (
           <img src={icon} alt="" className="size-3.5" onError={() => setBroken(icon)} />
         ) : (
@@ -704,6 +710,10 @@ function BrowserTabFace({ tab, bare = false }: { tab: Extract<Tab, { kind: "brow
       {!bare && <span className="min-w-0 flex-1 truncate">{title}</span>}
     </>
   );
+}
+
+function IncognitoIcon() {
+  return <HatGlassesIcon role="img" aria-label="Incognito" className="size-3.5 text-text" />;
 }
 
 /** The hover card for whichever tab asked, if it still holds a session. */

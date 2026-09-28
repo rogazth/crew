@@ -17,7 +17,14 @@ import {
 } from "electron";
 import { resolveForward, type KeyboardLayout, type LiveCommand } from "../../src/lib/keymap";
 import type { NavSnapshot } from "../../src/lib/browser/snapshot";
-import { CHANNELS, isPagePartition, LEGACY_PARTITION, partitionFor, type OpenTabRequest } from "../../src/lib/browser/bridge";
+import {
+  CHANNELS,
+  isIncognitoPartition,
+  isPagePartition,
+  LEGACY_PARTITION,
+  partitionFor,
+  type OpenTabRequest,
+} from "../../src/lib/browser/bridge";
 import { FILES_PARTITION } from "../../src/lib/browser/files";
 import { copyCookies } from "./cookies";
 import { openExternal } from "../external";
@@ -43,6 +50,12 @@ const IS_MAC = process.platform === "darwin";
 const GUEST_PRELOAD = path.join(__dirname, "guest-preload.cjs");
 /** A snapshot handed over for restore waits this long for its webview to attach. */
 const RESTORE_TTL_MS = 10_000;
+/**
+ * An incognito session is wiped this long after its last page goes, so a page
+ * rebuilt after a crash, which drops its guest and attaches a new one, keeps
+ * its sign-ins.
+ */
+const INCOGNITO_WIPE_MS = 1000;
 
 /** Every attached guest, by webContents id, with the window that embeds it. */
 const guests = new Map<number, { guest: WebContents; host: WebContents }>();
@@ -61,6 +74,9 @@ type Attach = { partition: string; token: string | null };
 /** Each workspace's page session, set up the first time one of its pages attaches. */
 const pageSessions = new Map<string, { ses: Session; seeded: Promise<void> }>();
 const pageSessionSet = new WeakSet<Session>();
+/** The guests attached in each incognito session, by webContents id. */
+const incognitoGuests = new Map<string, Set<number>>();
+const incognitoWipes = new Map<string, ReturnType<typeof setTimeout>>();
 
 /** Where Electron keeps a persistent partition on disk. */
 function partitionDir(partition: string): string {
@@ -109,13 +125,16 @@ async function releaseRelay(ses: Session): Promise<void> {
  * cannot be loopback skip the relay; what it does get that is not loopback it
  * dials from here. Either way the browser does not egress from the VPS.
  */
-export async function setWorkspaceProxy(
-  workspaceId: string,
-  proxy: { host: string; port: number; token: string } | null,
-): Promise<void> {
-  const partition = partitionFor(workspaceId);
-  if (!partition) return;
-  const { ses } = pageSession(partition);
+export async function setWorkspaceProxy(workspaceId: string, proxy: RemoteProxy | null): Promise<void> {
+  // Its incognito pages reach the machine the same way, so their session is set up now, before any attaches.
+  for (const partition of [partitionFor(workspaceId), partitionFor(workspaceId, true)]) {
+    if (partition) await proxySession(pageSession(partition).ses, proxy);
+  }
+}
+
+type RemoteProxy = { host: string; port: number; token: string };
+
+async function proxySession(ses: Session, proxy: RemoteProxy | null): Promise<void> {
   hookProxyLogin();
   const key = proxy ? `${proxy.host}:${proxy.port}` : null;
   if (relayOf.get(ses) !== key) await releaseRelay(ses);
@@ -161,8 +180,12 @@ export async function setWorkspaceProxy(
 function pageSession(partition: string): { ses: Session; seeded: Promise<void> } {
   const existing = pageSessions.get(partition);
   if (existing) return existing;
+  // An incognito session starts empty: nothing is copied in, and nothing it holds is on disk to find.
   const fresh =
-    isPagePartition(partition) && !existsSync(partitionDir(partition)) && existsSync(partitionDir(LEGACY_PARTITION));
+    isPagePartition(partition) &&
+    !isIncognitoPartition(partition) &&
+    !existsSync(partitionDir(partition)) &&
+    existsSync(partitionDir(LEGACY_PARTITION));
   const ses = session.fromPartition(partition);
   if (partition === FILES_PARTITION) serveFiles(ses);
   const seeded = fresh
@@ -310,11 +333,50 @@ function openTab(host: WebContents, request: OpenTabRequest): void {
   if (!host.isDestroyed()) host.send(CHANNELS.openTab, request);
 }
 
+/**
+ * Whatever an incognito session gathered goes once its last page does: cookies,
+ * storage, cache and HTTP auth. Electron keeps an in-memory session for the
+ * app's lifetime, so without this a new incognito tab would still be signed in.
+ */
+async function wipeIncognito(partition: string): Promise<void> {
+  const entry = pageSessions.get(partition);
+  if (!entry) return;
+  const { ses } = entry;
+  await Promise.allSettled([ses.clearStorageData(), ses.clearCache(), ses.clearAuthCache(), ses.clearHostResolverCache()]);
+  await ses.closeAllConnections().catch(() => {});
+}
+
+function trackIncognito(guest: WebContents, partition: string): void {
+  clearTimeout(incognitoWipes.get(partition));
+  incognitoWipes.delete(partition);
+  let open = incognitoGuests.get(partition);
+  if (!open) {
+    open = new Set();
+    incognitoGuests.set(partition, open);
+  }
+  open.add(guest.id);
+  const id = guest.id;
+  guest.once("destroyed", () => {
+    const left = incognitoGuests.get(partition);
+    left?.delete(id);
+    if (left && left.size > 0) return;
+    incognitoGuests.delete(partition);
+    incognitoWipes.set(
+      partition,
+      setTimeout(() => {
+        incognitoWipes.delete(partition);
+        void wipeIncognito(partition);
+      }, INCOGNITO_WIPE_MS),
+    );
+  });
+}
+
 function register(host: WebContents, guest: WebContents, partition: string): void {
   guests.set(guest.id, { guest, host });
   guest.once("destroyed", () => {
     if (guests.get(guest.id)?.guest === guest) guests.delete(guest.id);
   });
+  if (isIncognitoPartition(partition)) trackIncognito(guest, partition);
 
   const allowOpen = createRateLimiter(4, 2000);
   guest.setWindowOpenHandler((details) => windowOpen(host, guest.id, partition, details, allowOpen));
@@ -331,7 +393,7 @@ function register(host: WebContents, guest: WebContents, partition: string): voi
   guest.on("context-menu", (_event, params) => {
     const win = BrowserWindow.fromWebContents(host);
     if (!win) return;
-    Menu.buildFromTemplate(contextMenu(host, guest, params)).popup({ window: win });
+    Menu.buildFromTemplate(contextMenu(host, guest, partition, params)).popup({ window: win });
   });
 }
 
@@ -375,7 +437,7 @@ function windowOpen(
     return { action: "deny" };
   }
   if (verdict.action === "tab") {
-    openTab(host, { url: verdict.url, background: verdict.background, openerId });
+    openTab(host, { url: verdict.url, background: verdict.background, openerId, incognito: isIncognitoPartition(partition) });
     return { action: "deny" };
   }
   // A preview has no sign-in for a popup to finish.
@@ -427,14 +489,19 @@ function guardPreview(host: WebContents, guest: WebContents): void {
     const verdict = previewNavigationVerdict(event.url);
     if (verdict === "allow") return;
     event.preventDefault();
-    if (verdict === "tab") openTab(host, { url: event.url, background: false, openerId: guest.id });
+    if (verdict === "tab") openTab(host, { url: event.url, background: false, openerId: guest.id, incognito: false });
     if (verdict === "external") void openExternal(event.url);
   };
   guest.on("will-navigate", guard);
   guest.on("will-redirect", guard);
 }
 
-function contextMenu(host: WebContents, guest: WebContents, params: ContextMenuParams): MenuItemConstructorOptions[] {
+function contextMenu(
+  host: WebContents,
+  guest: WebContents,
+  partition: string,
+  params: ContextMenuParams,
+): MenuItemConstructorOptions[] {
   const items: MenuItemConstructorOptions[] = [];
   const group = (next: MenuItemConstructorOptions[]) => {
     if (next.length === 0) return;
@@ -442,13 +509,15 @@ function contextMenu(host: WebContents, guest: WebContents, params: ContextMenuP
     items.push(...next);
   };
   const link = navigationVerdict(params.linkURL) === "allow" && params.linkURL !== "about:blank";
+  // An incognito page's new tabs are incognito already.
+  const incognito = isIncognitoPartition(partition);
+  const open = (inIncognito: boolean) => () =>
+    openTab(host, { url: params.linkURL, background: true, openerId: guest.id, incognito: inIncognito });
   group(
     link
       ? [
-          {
-            label: "Open Link in New Tab",
-            click: () => openTab(host, { url: params.linkURL, background: true, openerId: guest.id }),
-          },
+          { label: "Open Link in New Tab", click: open(incognito) },
+          ...(incognito ? [] : [{ label: "Open Link in Incognito Tab", click: open(true) }]),
           { label: "Copy Link", click: () => clipboard.writeText(params.linkURL) },
         ]
       : [],

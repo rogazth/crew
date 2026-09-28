@@ -24,6 +24,8 @@ type Deps = {
   openWorkspace: () => void;
   newAgent: () => void;
   newSession: () => void;
+  /** A blank page, the address bar ready; `incognito` keeps it off the disk. */
+  newBrowser: (incognito: boolean) => void;
   closeTab: (id: string) => void;
   inTabs: (act: () => void) => () => void;
   /** Null while a terminal or a page fills the tab: those zoom themselves. */
@@ -72,6 +74,8 @@ export function useAppCommands(deps: Deps) {
     "toggle-sidebar": deps.toggleSidebar,
     "new-agent": deps.newAgent,
     "new-session": deps.newSession,
+    "new-browser-tab": () => deps.newBrowser(false),
+    "new-incognito-tab": () => deps.newBrowser(true),
     "search-messages": () => pages.toggle({ kind: "search" }),
     "open-history": deps.openHistory,
     "open-routines": () => pages.toggle({ kind: "routines", draft: null }),

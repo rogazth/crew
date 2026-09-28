@@ -144,7 +144,7 @@ export function App() {
     openSession: nav.openSession,
     openStub: nav.openStub,
     openTerminal: nav.openTerminal,
-    openBrowser: (url) => nav.openBrowser(url),
+    openBrowser: (url, incognito) => nav.openBrowser(url, incognito),
     newAgent: sheet.newAgent,
   });
 
@@ -165,6 +165,7 @@ export function App() {
     },
     newAgent: () => sheet.newAgent(),
     newSession: () => void newSession(),
+    newBrowser: (incognito) => nav.openBrowser("", incognito),
     closeTab: nav.closeTab,
     inTabs: nav.inTabs,
     worktrees: work,

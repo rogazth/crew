@@ -1,4 +1,4 @@
-import { ArrowLeftIcon, ArrowRightIcon, CodeXmlIcon, RotateCwIcon, SmartphoneIcon, XIcon } from "lucide-react";
+import { ArrowLeftIcon, ArrowRightIcon, CodeXmlIcon, HatGlassesIcon, RotateCwIcon, SmartphoneIcon, XIcon } from "lucide-react";
 import type { ReactNode, Ref } from "react";
 import type { DevToolsDock } from "../../lib/browserPrefs";
 import type { CookieSource } from "../../lib/protocol";
@@ -27,6 +27,8 @@ type Props = {
   onSettings: () => void;
   onImportCookies: (source: CookieSource) => void;
   canImport: boolean;
+  /** Says so beside the address, where every navigation starts. */
+  incognito: boolean;
   responsive: boolean;
   onResponsive: () => void;
   onNavigate: (url: string) => void;
@@ -52,6 +54,7 @@ export function BrowserToolbar({
   onSettings,
   onImportCookies,
   canImport,
+  incognito,
   responsive,
   onResponsive,
   onNavigate,
@@ -73,6 +76,15 @@ export function BrowserToolbar({
         <Tool label="Reload" command="browser-reload" onClick={onReload}>
           <RotateCwIcon className="size-4" />
         </Tool>
+      )}
+      {incognito && (
+        <span
+          title="Incognito: no history is kept, and sign-ins end when the last incognito tab closes"
+          className="ml-1 flex h-6 shrink-0 items-center gap-1 rounded-md bg-selected px-1.5 text-[11px] text-text"
+        >
+          <HatGlassesIcon aria-hidden className="size-3.5" />
+          Incognito
+        </span>
       )}
       <div className="mx-1 flex min-w-0 flex-1">
         <AddressBar

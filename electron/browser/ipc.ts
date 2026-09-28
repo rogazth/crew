@@ -1,7 +1,7 @@
 import { ipcMain } from "electron";
 import type { KeyboardLayout, LiveCommand } from "../../src/lib/keymap";
 import { capSnapshot, parseSnapshot } from "../../src/lib/browser/snapshot";
-import { CHANNELS, partitionFor } from "../../src/lib/browser/bridge";
+import { CHANNELS, isIncognitoPartition, partitionFor } from "../../src/lib/browser/bridge";
 import { importCookies } from "./cookies";
 import { dockBounds, dockDevTools, placeDevTools, undockDevTools } from "./devtools";
 import { ownedGuest, prepareRestore, readyPageSession, setKeyboardLayout, setLiveCommands } from "./guests";
@@ -25,6 +25,8 @@ async function fetchFavicon(url: string, partition: string): Promise<string | nu
 }
 
 function favicon(url: string, partition: string): Promise<string | null> {
+  // What an incognito page showed is not kept past it, even in memory.
+  if (isIncognitoPartition(partition)) return fetchFavicon(url, partition).catch(() => null);
   const key = `${partition} ${url}`;
   const cached = favicons.get(key);
   if (cached) return cached;
@@ -104,8 +106,8 @@ export function registerBrowserIpc(): void {
     return importCookies(await readyPageSession(partition), list);
   });
 
-  ipcMain.handle(CHANNELS.favicon, (_event, url: unknown, workspaceId: unknown) => {
-    const partition = typeof workspaceId === "string" ? partitionFor(workspaceId) : null;
+  ipcMain.handle(CHANNELS.favicon, (_event, url: unknown, workspaceId: unknown, incognito: unknown) => {
+    const partition = typeof workspaceId === "string" ? partitionFor(workspaceId, incognito === true) : null;
     return typeof url === "string" && partition ? favicon(url, partition) : null;
   });
 

@@ -58,8 +58,11 @@ export type StubKind = (typeof STUB_KINDS)[number];
 export type Tab = (
   | { id: string; kind: "session"; sessionId: string }
   | { id: string; kind: "file"; path: string; relative: string }
-  /** `url` and `title` are what a cold tab restores and labels itself with; the live page lives in `pages`. */
-  | { id: string; kind: "browser"; url: string; title: string }
+  /**
+   * `url` and `title` are what a cold tab restores and labels itself with; the live page lives in `pages`.
+   * An incognito page keeps nothing: no history, no saved stack, and its tab is never written to disk.
+   */
+  | { id: string; kind: "browser"; url: string; title: string; incognito?: true }
   /** A terminal keeps the worktree it was opened in; null or absent is the main checkout. */
   | { id: string; kind: "stub"; stub: StubKind; title: string; worktree?: string | null }
 ) & { pinned?: true };

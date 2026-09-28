@@ -11,23 +11,37 @@
 export const LEGACY_PARTITION = "persist:crew-browser";
 
 const PARTITION_PREFIX = "persist:crew-browser-ws-";
+/** No `persist:`: Electron keeps the session in memory, so nothing it stores reaches the disk. */
+const INCOGNITO_PREFIX = "crew-incognito-ws-";
 const WORKSPACE_ID = /^[A-Za-z0-9-]{1,64}$/;
 
 /**
  * The session a workspace's pages live in: its own cookies and storage, so two
- * workspaces can be signed in as different people. Null for an id that could
- * not have come from the daemon.
+ * workspaces can be signed in as different people. An incognito page gets the
+ * workspace's in-memory session instead, shared by its incognito tabs and
+ * wiped once the last of them closes. Null for an id that could not have come
+ * from the daemon.
  */
-export function partitionFor(workspaceId: string): string | null {
-  return WORKSPACE_ID.test(workspaceId) ? `${PARTITION_PREFIX}${workspaceId}` : null;
+export function partitionFor(workspaceId: string, incognito = false): string | null {
+  if (!WORKSPACE_ID.test(workspaceId)) return null;
+  return `${incognito ? INCOGNITO_PREFIX : PARTITION_PREFIX}${workspaceId}`;
+}
+
+export function isIncognitoPartition(partition: unknown): partition is string {
+  return (
+    typeof partition === "string" &&
+    partition.startsWith(INCOGNITO_PREFIX) &&
+    WORKSPACE_ID.test(partition.slice(INCOGNITO_PREFIX.length))
+  );
 }
 
 /** Main refuses a webview in any partition this doesn't recognize. */
 export function isPagePartition(partition: unknown): partition is string {
   return (
-    typeof partition === "string" &&
-    partition.startsWith(PARTITION_PREFIX) &&
-    WORKSPACE_ID.test(partition.slice(PARTITION_PREFIX.length))
+    isIncognitoPartition(partition) ||
+    (typeof partition === "string" &&
+      partition.startsWith(PARTITION_PREFIX) &&
+      WORKSPACE_ID.test(partition.slice(PARTITION_PREFIX.length)))
   );
 }
 
@@ -68,4 +82,5 @@ export type DockSnapshot = { url: string; width: number; height: number };
 
 export type DownloadActivity = { webContentsId: number; active: boolean };
 
-export type OpenTabRequest = { url: string; background: boolean; openerId: number };
+/** `incognito`: the tab opens in the workspace's in-memory session, as every tab an incognito page opens does. */
+export type OpenTabRequest = { url: string; background: boolean; openerId: number; incognito: boolean };

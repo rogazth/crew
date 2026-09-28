@@ -8,6 +8,7 @@ const electron = vi.hoisted(() => ({
   templates: [] as unknown[][],
   openExternal: vi.fn(),
   writeText: vi.fn(),
+  clearStorageData: vi.fn(() => Promise.resolve()),
 }));
 
 class FakeContents extends EventEmitter {
@@ -43,6 +44,11 @@ vi.mock("electron", () => {
     setPermissionRequestHandler: vi.fn(),
     setPermissionCheckHandler: vi.fn(),
     on: (name: string, handler: (...args: unknown[]) => void) => electron.sessionHandlers.set(name, handler),
+    clearStorageData: electron.clearStorageData,
+    clearCache: vi.fn(() => Promise.resolve()),
+    clearAuthCache: vi.fn(() => Promise.resolve()),
+    clearHostResolverCache: vi.fn(() => Promise.resolve()),
+    closeAllConnections: vi.fn(() => Promise.resolve()),
   };
   return {
     app: { on: vi.fn(), getPath: () => "/tmp" },
@@ -86,6 +92,7 @@ function didAttach(): FakeContents {
 }
 
 const PAGE = { partition: "persist:crew-browser-ws-w1" };
+const INCOGNITO = { partition: "crew-incognito-ws-w1" };
 const SNAPSHOT = { entries: [{ url: "https://a.com/", title: "A" }, { url: "https://b.com/", title: "B" }], index: 0 };
 
 beforeEach(async () => {
@@ -93,6 +100,7 @@ beforeEach(async () => {
   electron.templates.length = 0;
   electron.partitions.length = 0;
   electron.openExternal.mockClear();
+  electron.clearStorageData.mockClear();
   guests = await import("./guests");
   host = new FakeContents();
   guests.installBrowser({ webContents: host } as never);
@@ -224,7 +232,24 @@ describe("popups and navigation", () => {
     willAttach({ ...PAGE, src: "https://a.com" });
     const guest = didAttach();
     expect(open(guest, "https://b.com/", "background-tab").action).toBe("deny");
-    expect(host.sent).toContainEqual(["browser:open-tab", { url: "https://b.com/", background: true, openerId: guest.id }]);
+    expect(host.sent).toContainEqual([
+      "browser:open-tab",
+      { url: "https://b.com/", background: true, openerId: guest.id, incognito: false },
+    ]);
+  });
+
+  it("keeps an incognito page's new tabs and login popups incognito", () => {
+    willAttach({ ...INCOGNITO, src: "https://a.com" });
+    const guest = didAttach();
+    open(guest, "https://b.com/", "foreground-tab");
+    expect(host.sent).toContainEqual([
+      "browser:open-tab",
+      { url: "https://b.com/", background: false, openerId: guest.id, incognito: true },
+    ]);
+    const answer = open(guest, "https://login.com/", "new-window", "width=400") as unknown as {
+      overrideBrowserWindowOptions: { webPreferences: Record<string, unknown> };
+    };
+    expect(answer.overrideBrowserWindowOptions.webPreferences.partition).toBe("crew-incognito-ws-w1");
   });
 
   it("gives a login popup a window in the same partition", () => {
@@ -324,6 +349,32 @@ describe("the context menu", () => {
     expect(labels()).not.toContain("Open Link in New Tab");
   });
 
+  const click = (label: string) =>
+    (electron.templates.at(-1) as { label?: string; click?: () => void }[]).find((item) => item.label === label)?.click?.();
+
+  it("opens a link in an incognito tab from a regular page", () => {
+    willAttach({ ...PAGE, src: "https://a.com" });
+    const guest = didAttach();
+    guest.emit("context-menu", {}, { ...params, linkURL: "https://b.com/" });
+    click("Open Link in Incognito Tab");
+    expect(host.sent).toContainEqual([
+      "browser:open-tab",
+      { url: "https://b.com/", background: true, openerId: guest.id, incognito: true },
+    ]);
+  });
+
+  it("offers no second incognito item on an incognito page, whose new tabs are incognito already", () => {
+    willAttach({ ...INCOGNITO, src: "https://a.com" });
+    const guest = didAttach();
+    guest.emit("context-menu", {}, { ...params, linkURL: "https://b.com/" });
+    expect(labels()).not.toContain("Open Link in Incognito Tab");
+    click("Open Link in New Tab");
+    expect(host.sent).toContainEqual([
+      "browser:open-tab",
+      { url: "https://b.com/", background: true, openerId: guest.id, incognito: true },
+    ]);
+  });
+
   it("offers editing roles in a field, and always back, forward, reload and inspect", () => {
     willAttach({ ...PAGE, src: "https://a.com" });
     const guest = didAttach();
@@ -331,6 +382,44 @@ describe("the context menu", () => {
     expect(labels()).toEqual(
       expect.arrayContaining(["cut", "copy", "paste", "selectAll", "Back", "Forward", "Reload", "Inspect Element"]),
     );
+  });
+});
+
+describe("incognito sessions", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    return () => vi.useRealTimers();
+  });
+
+  it("wipes the session a moment after its last page goes, not before", async () => {
+    willAttach({ ...INCOGNITO, src: "https://a.com" });
+    const first = didAttach();
+    willAttach({ ...INCOGNITO, src: "https://b.com" });
+    const second = didAttach();
+    first.destroy();
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(electron.clearStorageData).not.toHaveBeenCalled();
+    second.destroy();
+    await vi.advanceTimersByTimeAsync(999);
+    expect(electron.clearStorageData).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(electron.clearStorageData).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the session when a page is rebuilt right after its guest goes", async () => {
+    willAttach({ ...INCOGNITO, src: "https://a.com" });
+    didAttach().destroy();
+    willAttach({ ...INCOGNITO, src: "https://a.com" });
+    didAttach();
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(electron.clearStorageData).not.toHaveBeenCalled();
+  });
+
+  it("never wipes a workspace's saved session", async () => {
+    willAttach({ ...PAGE, src: "https://a.com" });
+    didAttach().destroy();
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(electron.clearStorageData).not.toHaveBeenCalled();
   });
 });
 
