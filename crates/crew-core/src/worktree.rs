@@ -26,9 +26,14 @@ pub struct Worktree {
 }
 
 pub fn list(cwd: &str) -> Vec<Worktree> {
-    let mut listed = git(cwd, &["worktree", "list", "--porcelain"])
-        .map(|out| parse(&out))
-        .unwrap_or_default();
+    let mut porcelain = git(cwd, &["worktree", "list", "--porcelain"]);
+    // A worktree whose folder was deleted without git is an orphan: git forgets
+    // it here rather than the sidebar showing a line with nothing behind it.
+    // Only then does a listing write; a locked one is never prunable.
+    if porcelain.as_deref().is_some_and(has_orphans) && git(cwd, &["worktree", "prune"]).is_some() {
+        porcelain = git(cwd, &["worktree", "list", "--porcelain"]);
+    }
+    let mut listed = porcelain.map(|out| parse(&out)).unwrap_or_default();
     if listed.is_empty() {
         return vec![Worktree { path: cwd.to_string(), branch: None, main: true, add: 0, del: 0, dirty: 0 }];
     }
@@ -67,6 +72,11 @@ pub fn parse(porcelain: &str) -> Vec<Worktree> {
         }
     }
     out
+}
+
+/// Whether git marks any worktree `prunable`: its folder is gone.
+pub fn has_orphans(porcelain: &str) -> bool {
+    porcelain.lines().any(|line| line == "prunable" || line.starts_with("prunable "))
 }
 
 fn count(tree: &mut Worktree, main_head: Option<&str>) {
@@ -410,5 +420,41 @@ mod tests {
     fn removing_what_is_not_a_worktree_says_so() {
         let plain = at(&temp("crew-plain"));
         assert!(remove(&plain, false).is_err_and(|e| e.contains("not a git worktree")));
+    }
+
+    #[test]
+    fn a_worktree_whose_folder_is_gone_is_pruned_from_git_and_the_list() {
+        let repo = repo();
+        let root = temp("crew-wt-root");
+        let kept = add_under(&root, &at(&repo), "kept").expect("add").path;
+        let gone = add_under(&root, &at(&repo), "gone").expect("add").path;
+        std::fs::remove_dir_all(&gone).unwrap();
+
+        let paths: Vec<_> = list(&at(&repo)).into_iter().map(|tree| tree.path).collect();
+
+        assert_eq!(paths, vec![at(&repo), kept]);
+        let porcelain = run(&at(&repo), &["worktree", "list", "--porcelain"]).unwrap();
+        assert!(!porcelain.contains(&gone), "git still records the orphan: {porcelain}");
+        sh(&repo, &["show-ref", "--verify", "--quiet", "refs/heads/gone"]);
+    }
+
+    #[test]
+    fn a_locked_worktree_is_kept_though_its_folder_is_gone() {
+        let repo = repo();
+        let root = temp("crew-wt-root");
+        let offline = add_under(&root, &at(&repo), "offline").expect("add").path;
+        sh(&repo, &["worktree", "lock", &offline]);
+        std::fs::remove_dir_all(&offline).unwrap();
+
+        list(&at(&repo));
+
+        let porcelain = run(&at(&repo), &["worktree", "list", "--porcelain"]).unwrap();
+        assert!(porcelain.contains(&offline), "a locked worktree was pruned: {porcelain}");
+    }
+
+    #[test]
+    fn orphans_are_read_off_the_prunable_line() {
+        assert!(has_orphans("worktree /a\nHEAD 1\nbranch refs/heads/main\n\nworktree /b\nHEAD 2\nprunable gitdir file points to non-existent location\n"));
+        assert!(!has_orphans("worktree /a\nHEAD 1\nbranch refs/heads/main\n\nworktree /b\nHEAD 2\nlocked\n"));
     }
 }

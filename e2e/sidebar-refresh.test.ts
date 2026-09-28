@@ -1,11 +1,13 @@
 // W9, the sidebar's refresh: a worktree git made and sessions crewd made or
 // deleted, none of which the window heard about, reach the panel from the
-// Refresh button on its Worktrees line, without the window losing focus.
+// Refresh button on its Worktrees line, without the window losing focus. A
+// worktree whose folder was deleted without git leaves, and git forgets it.
 import assert from "node:assert/strict";
+import { rm } from "node:fs/promises";
 import path from "node:path";
 import { test } from "node:test";
 import type { Session } from "../src/lib/types.ts";
-import { launchCrew, sessionRow, worktreeHeader } from "./harness.ts";
+import { gitWorktrees, launchCrew, sessionRow, worktreeHeader } from "./harness.ts";
 
 test("W9: Refresh reads worktrees and sessions made or removed outside the window", async (t) => {
   const crew = await launchCrew();
@@ -39,4 +41,13 @@ test("W9: Refresh reads worktrees and sessions made or removed outside the windo
   await refresh.click();
   await sessionRow(crew, "made outside").waitFor({ state: "detached" });
   await worktreeHeader(crew, "feat/outside").waitFor();
+
+  // Its folder deleted by hand, not by git: an orphan, pruned on the next read.
+  const outside = path.join(crew.root, "outside");
+  await rm(outside, { recursive: true, force: true });
+  await refresh.click();
+  await worktreeHeader(crew, "feat/outside").waitFor({ state: "detached" });
+  const listed = await gitWorktrees(crew, app.path);
+  assert.equal(listed.length, 1, `git still records the orphan: ${JSON.stringify(listed)}`);
+  assert.notEqual(await crew.git(app.path, "branch", "--list", "feat/outside"), "", "its branch stays");
 });
