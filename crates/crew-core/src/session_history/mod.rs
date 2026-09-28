@@ -6,6 +6,8 @@
 //! chat renders both the same way.
 
 pub mod claude;
+pub mod codex;
+pub mod opencode;
 
 use std::fs::File;
 use std::io::{self, Read as _, Seek, SeekFrom};
@@ -529,6 +531,54 @@ fn apply_stamped(blocks: Vec<Block>, event: HarnessEvent, at_ms: Option<i64>) ->
         }
     }
     next
+}
+
+/// What crewd holds for a chat, whatever the CLI keeps its history in: a
+/// JSONL file (Claude, Codex) or a database (opencode).
+pub trait SessionHistory: Send {
+    /// What changed since the last look, if anything.
+    fn poll(&mut self) -> io::Result<Option<Change>>;
+    fn window(&self, before: Option<i64>, limit: usize) -> Window;
+    fn load_earlier(&mut self, min_messages: usize) -> io::Result<usize>;
+    fn has_earlier(&self) -> bool;
+    /// Messages are there and none of them decoded: an error, never an empty chat.
+    fn is_empty_decode(&self) -> bool;
+    fn base(&self) -> i64;
+    fn blocks(&self) -> &[Block];
+    /// The file whose folder is watched for changes.
+    fn path(&self) -> &Path;
+    /// The CLI has written anything yet.
+    fn exists(&self) -> bool;
+}
+
+impl<D: Decoder + Default + Send> SessionHistory for History<D> {
+    fn poll(&mut self) -> io::Result<Option<Change>> {
+        History::poll(self)
+    }
+    fn window(&self, before: Option<i64>, limit: usize) -> Window {
+        History::window(self, before, limit)
+    }
+    fn load_earlier(&mut self, min_messages: usize) -> io::Result<usize> {
+        History::load_earlier(self, min_messages)
+    }
+    fn has_earlier(&self) -> bool {
+        History::has_earlier(self)
+    }
+    fn is_empty_decode(&self) -> bool {
+        History::is_empty_decode(self)
+    }
+    fn base(&self) -> i64 {
+        History::base(self)
+    }
+    fn blocks(&self) -> &[Block] {
+        History::blocks(self)
+    }
+    fn path(&self) -> &Path {
+        History::path(self)
+    }
+    fn exists(&self) -> bool {
+        History::path(self).exists()
+    }
 }
 
 #[cfg(test)]
