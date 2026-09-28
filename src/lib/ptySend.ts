@@ -81,14 +81,15 @@ export function questionKeys(questions: readonly Question[], answers: Answers | 
   const keys: string[] = [];
   for (const question of questions) {
     const answer = answers[question.question] ?? "";
-    const labels = question.options.map((option) => option.label);
+    const digits = new Map(question.options.map((option, at) => [option.label, String(at + 1)]));
     const picked = question.multiSelect ? answer.split(", ").filter(Boolean) : [answer];
-    const custom = picked.filter((label) => !labels.includes(label)).join(", ");
+    const custom: string[] = [];
     for (const label of picked) {
-      const at = labels.indexOf(label);
-      if (at >= 0) keys.push(String(at + 1));
+      const digit = digits.get(label);
+      if (digit) keys.push(digit);
+      else custom.push(label);
     }
-    if (custom) keys.push(String(labels.length + 1), custom, ENTER);
+    if (custom.length > 0) keys.push(String(digits.size + 1), custom.join(", "), ENTER);
     if (question.multiSelect) keys.push(RIGHT);
   }
   if (questions.length > 1 || questions.some((question) => question.multiSelect)) keys.push("1");

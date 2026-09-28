@@ -1,10 +1,10 @@
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type RefObject } from "react";
 import { MessageSquareTextIcon, ShieldQuestionIcon, SquareTerminalIcon, TriangleAlertIcon } from "lucide-react";
 import { Button } from "../chrome/kit";
 import { useFileDrop } from "../hooks/useFileDrop";
 import * as api from "../lib/api";
 import { attachedFrom } from "../lib/attachments";
-import type { Answers, ApprovalDecision, AttachedFile } from "../lib/blocks";
+import type { Answers, ApprovalDecision, AttachedFile, Block } from "../lib/blocks";
 import type { BlockingScreen } from "../lib/blockingScreen";
 import {
   approvalKeys,
@@ -51,7 +51,6 @@ export function SessionChat({ session, paneId, cwd, active, blocked, busy, onSho
   const id = session.id;
   const [draft, setDraft] = useState(() => drafts.get(id) ?? "");
   const [files, setFiles] = useState<AttachedFile[]>([]);
-  const [queued, setQueued] = useState<Queued[]>(() => pending.get(id) ?? []);
   const field = useRef<HTMLTextAreaElement>(null);
   const root = useRef<HTMLDivElement>(null);
 
@@ -91,51 +90,20 @@ export function SessionChat({ session, paneId, cwd, active, blocked, busy, onSho
     [id],
   );
 
-  const keepQueued = useCallback(
-    (update: (prev: Queued[]) => Queued[]) =>
-      setQueued((prev) => {
-        const next = update(prev);
-        if (next.length > 0) pending.set(id, next);
-        else pending.delete(id);
-        return next;
-      }),
-    [id],
-  );
-
-  // A queued message shows until its turn is in the history.
-  const waiting = useMemo(() => {
-    const done = delivered(queued, history.blocks);
-    return queued.filter((sent) => !done.has(sent.id));
-  }, [history.blocks, queued]);
+  const { waiting, keepQueued } = useQueued(id, history.blocks);
 
   const blocks = useMemo(
     () => [...withAsk(history.blocks, ask), ...waiting.map(queuedBlock)],
     [ask, history.blocks, waiting],
   );
 
-  // The caret goes where the keys are wanted: when the tab comes up, and when a
-  // page such as Settings that hid the whole workspace goes away again.
-  useEffect(() => {
-    const el = root.current;
-    if (!active || !el) return;
-    field.current?.focus();
-    let shown = el.clientHeight > 0;
-    const observer = new ResizeObserver(() => {
-      const now = el.clientHeight > 0;
-      if (now && !shown && (document.activeElement === document.body || document.activeElement === null)) {
-        field.current?.focus();
-      }
-      shown = now;
-    });
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, [active]);
+  useFocusWhenShown(root, field, active);
 
   const addPaths = useCallback((paths: string[]) => {
     if (paths.length === 0) return;
     setFiles((prev) => {
       const seen = new Set(prev.map((file) => file.path));
-      return [...prev, ...paths.filter((path) => !seen.has(path)).map(attachedFrom)];
+      return [...prev, ...paths.flatMap((path) => (seen.has(path) ? [] : [attachedFrom(path)]))];
     });
     field.current?.focus();
   }, []);
@@ -180,6 +148,14 @@ export function SessionChat({ session, paneId, cwd, active, blocked, busy, onSho
     [ask, history.blocks, id, type],
   );
 
+  const stopped: StopReason | null = blocked
+    ? { kind: "screen", screen: blocked }
+    : gone
+      ? { kind: "gone" }
+      : history.state === "error"
+        ? { kind: "unreadable", error: history.error }
+        : null;
+
   return (
     <div ref={root} className="absolute inset-0 z-10 flex flex-col bg-canvas" data-session-chat={id}>
       <div className="flex h-10 shrink-0 items-center justify-end px-3">
@@ -190,24 +166,11 @@ export function SessionChat({ session, paneId, cwd, active, blocked, busy, onSho
           </Button>
         )}
       </div>
-      {blocked?.kind === "trust" && session.provider === "claude" ? (
-        <TrustCard onAnswer={(trust) => void type(trustKeys(trust))} onShowTerminal={onShowTerminal} />
-      ) : blocked ? (
-        <Notice
-          title={blocked.title}
-          detail="The chat picks up once it's answered in the terminal."
-          onShowTerminal={onShowTerminal}
-        />
-      ) : gone ? (
-        <Notice
-          title={`${providerLine(session.provider, "")} isn't running in this terminal`}
-          detail="It exited. Its conversation is kept; restart the terminal to pick it up again."
-          onShowTerminal={onShowTerminal}
-        />
-      ) : history.state === "error" ? (
-        <Notice
-          title="Crew couldn't read this conversation"
-          detail={history.error ?? "Its history is there, but none of it could be read."}
+      {stopped ? (
+        <Stopped
+          reason={stopped}
+          provider={session.provider}
+          onTrust={(trust) => void type(trustKeys(trust))}
           onShowTerminal={onShowTerminal}
         />
       ) : (
@@ -247,6 +210,45 @@ export function SessionChat({ session, paneId, cwd, active, blocked, busy, onSho
 }
 
 /**
+ * Messages sent and not in the CLI's history yet. They outlive the chat, which
+ * the setting and the tab mount and unmount, and show until their turn is in.
+ */
+function useQueued(id: string, blocks: Block[]) {
+  const [queued, setQueued] = useState<Queued[]>(() => pending.get(id) ?? []);
+  useEffect(() => {
+    if (queued.length > 0) pending.set(id, queued);
+    else pending.delete(id);
+  }, [id, queued]);
+  const waiting = useMemo(() => {
+    const done = delivered(queued, blocks);
+    return queued.filter((sent) => !done.has(sent.id));
+  }, [blocks, queued]);
+  return { waiting, keepQueued: setQueued };
+}
+
+/**
+ * The caret goes where the keys are wanted: when the tab comes up, and when a
+ * page such as Settings that hid the whole workspace goes away again.
+ */
+function useFocusWhenShown(root: RefObject<HTMLElement | null>, field: RefObject<HTMLTextAreaElement | null>, active: boolean) {
+  useEffect(() => {
+    const el = root.current;
+    if (!active || !el) return;
+    field.current?.focus();
+    let shown = el.clientHeight > 0;
+    const observer = new ResizeObserver(() => {
+      const now = el.clientHeight > 0;
+      if (now && !shown && (document.activeElement === document.body || document.activeElement === null)) {
+        field.current?.focus();
+      }
+      shown = now;
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [active, field, root]);
+}
+
+/**
  * The CLI ended, for longer than a `/clear` takes to end one conversation and
  * start the next.
  */
@@ -264,6 +266,54 @@ function useGone(ended: boolean): boolean {
 }
 
 const GONE_AFTER_MS = 1500;
+
+/** Why the chat cannot take a message now. */
+type StopReason =
+  | { kind: "screen"; screen: BlockingScreen }
+  | { kind: "gone" }
+  | { kind: "unreadable"; error: string | null };
+
+/** In the conversation's place: why the chat can't go on, and the way to the terminal. */
+function Stopped({
+  reason,
+  provider,
+  onTrust,
+  onShowTerminal,
+}: {
+  reason: StopReason;
+  provider: string;
+  onTrust: (trust: boolean) => void;
+  onShowTerminal: () => void;
+}) {
+  if (reason.kind === "screen" && reason.screen.kind === "trust" && provider === "claude") {
+    return <TrustCard onAnswer={onTrust} onShowTerminal={onShowTerminal} />;
+  }
+  if (reason.kind === "screen") {
+    return (
+      <Notice
+        title={reason.screen.title}
+        detail="The chat picks up once it's answered in the terminal."
+        onShowTerminal={onShowTerminal}
+      />
+    );
+  }
+  if (reason.kind === "gone") {
+    return (
+      <Notice
+        title={`${providerLine(provider, "")} isn't running in this terminal`}
+        detail="It exited. Its conversation is kept; restart the terminal to pick it up again."
+        onShowTerminal={onShowTerminal}
+      />
+    );
+  }
+  return (
+    <Notice
+      title="Crew couldn't read this conversation"
+      detail={reason.error ?? "Its history is there, but none of it could be read."}
+      onShowTerminal={onShowTerminal}
+    />
+  );
+}
 
 /** Claude's folder trust prompt, answered from the chat. */
 function TrustCard({ onAnswer, onShowTerminal }: { onAnswer: (trust: boolean) => void; onShowTerminal: () => void }) {
