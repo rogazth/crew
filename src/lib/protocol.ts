@@ -257,7 +257,12 @@ export type PtyKill = { id: string, };
 
 export type PtyResize = { id: string, cols: number, rows: number, };
 
-export type PtySpawn = { id: string, cwd: string, command: Array<string>, cols: number, rows: number, };
+export type PtySpawn = { id: string, cwd: string, command: Array<string>, cols: number, rows: number, 
+/**
+ * Keep a live process under this id instead of replacing it: a window
+ * opening again finds the agent it left running.
+ */
+reuse?: boolean, };
 
 export type PtyWrite = { id: string, data: string, };
 

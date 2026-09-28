@@ -253,6 +253,28 @@ impl PtyHost {
         }
     }
 
+    /// Like `spawn`, but a process still running under `id` is kept: it gets
+    /// the new size and its stream id comes back.
+    pub fn open(
+        &self,
+        id: String,
+        cwd: String,
+        command: Vec<String>,
+        cols: u16,
+        rows: u16,
+    ) -> Result<u32, String> {
+        let _spawning = self.inner.spawning.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(live) = self.get(&id).filter(|live| !live.exited.load(Ordering::Acquire)) {
+            let _ = resize_fd(live.master_fd, cols.max(2), rows.max(2));
+            return Ok(live.stream_id);
+        }
+        if let Some(prev) = self.remove(&id) {
+            let _ = terminate(&prev);
+            close_fd(prev.master_fd);
+        }
+        spawn_unix(self, id, cwd, command, cols.max(2), rows.max(2))
+    }
+
     /// `command` empty spawns the login shell; otherwise argv[0] is resolved on PATH.
     pub fn spawn(
         &self,
@@ -791,6 +813,19 @@ mod tests {
 
         assert_eq!(spawned, 1, "two concurrent spawns left {spawned} children");
         assert_eq!(survivors, 0, "kill left {survivors} children running");
+    }
+
+    #[test]
+    fn open_keeps_a_live_process() {
+        let host = PtyHost::new();
+        let id = "session:reuse".to_string();
+        let command = vec!["/bin/sh".to_string(), "-c".to_string(), "sleep 30".to_string()];
+        let first = host.open(id.clone(), "/".into(), command.clone(), 80, 24).expect("first open");
+        let pid = host.get(&id).expect("live").pid;
+        let second = host.open(id.clone(), "/".into(), command, 100, 30).expect("second open");
+        assert_eq!(first, second, "open replaced the stream");
+        assert_eq!(host.get(&id).expect("still live").pid, pid, "open replaced the process");
+        host.kill(&id);
     }
 
     fn pty_child(script: &str) -> (i32, std::process::Child) {

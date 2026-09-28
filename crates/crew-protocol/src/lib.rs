@@ -153,6 +153,11 @@ pub struct PtySpawn {
     pub command: Vec<String>,
     pub cols: u16,
     pub rows: u16,
+    /// Keep a live process under this id instead of replacing it: a window
+    /// opening again finds the agent it left running.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub reuse: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, TS)]
