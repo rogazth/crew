@@ -9,6 +9,7 @@ use crew_core::bridge::Bridge;
 use crew_core::pty::PtyHost;
 use crew_core::store::Store;
 use crew_protocol::DaemonInfo;
+use crewd::lock::DataLock;
 use crewd::{machine, serve_on, Config, Handle, Listen};
 
 fn main() -> ExitCode {
@@ -38,10 +39,15 @@ struct Daemon {
     agents: AgentHost,
     bridge: Bridge,
     handle: Handle,
+    // Last, so it is let go of after everything above has stopped.
+    _lock: DataLock,
 }
 
 impl Daemon {
     fn start(dir: &Path, listen: Listen) -> Result<Self, String> {
+        std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+        // Before the socket, the database or anything else in the folder.
+        let lock = DataLock::acquire(dir)?;
         // Set before any thread starts; every terminal inherits it.
         let bind = dir.join("claude-bind");
         std::fs::create_dir_all(&bind).map_err(|e| format!("{}: {e}", bind.display()))?;
@@ -59,7 +65,7 @@ impl Daemon {
             },
             listen,
         )?;
-        Ok(Self { pty, agents, bridge, handle })
+        Ok(Self { pty, agents, bridge, handle, _lock: lock })
     }
 
     fn stop(self) {

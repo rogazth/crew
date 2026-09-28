@@ -7,6 +7,10 @@ import type { PageState } from "../../lib/browser/pageStore";
 import { zoomLabel } from "../../lib/browser/zoom";
 import { AddressBar, type AddressBarHandle } from "./AddressBar";
 import { BrowserMenu } from "./BrowserMenu";
+import { DownloadsButton } from "./DownloadsButton";
+
+/** The toolbar's two floating panels; one at a time, held by the pane. */
+export type ToolbarPanel = "menu" | "downloads";
 
 type Props = {
   page: PageState;
@@ -25,8 +29,14 @@ type Props = {
   onFind: () => void;
   onHistory: () => void;
   onSettings: () => void;
+  onPrint: () => void;
   onImportCookies: (source: CookieSource) => void;
   canImport: boolean;
+  /** The origin whose permissions the menu offers, or null. */
+  site: string | null;
+  panel: ToolbarPanel | null;
+  /** One panel opening or closing; closing one never closes the other. */
+  onPanel: (panel: ToolbarPanel, open: boolean) => void;
   /** Says so beside the address, where every navigation starts. */
   incognito: boolean;
   responsive: boolean;
@@ -52,8 +62,12 @@ export function BrowserToolbar({
   onFind,
   onHistory,
   onSettings,
+  onPrint,
   onImportCookies,
   canImport,
+  site,
+  panel,
+  onPanel,
   incognito,
   responsive,
   onResponsive,
@@ -112,7 +126,13 @@ export function BrowserToolbar({
       <Tool label="Developer Tools" command="browser-devtools" active={devtools} onClick={onDevTools}>
         <CodeXmlIcon className="size-4" />
       </Tool>
+      <DownloadsButton
+        open={panel === "downloads"}
+        onOpenChange={(open) => onPanel("downloads", open)}
+      />
       <BrowserMenu
+        open={panel === "menu"}
+        onOpenChange={(open) => onPanel("menu", open)}
         zoom={page.zoom}
         onZoom={onZoom}
         onFind={onFind}
@@ -121,8 +141,10 @@ export function BrowserToolbar({
         onDevToolsDock={onDevToolsDock}
         onHistory={onHistory}
         onSettings={onSettings}
+        onPrint={onPrint}
         onImportCookies={onImportCookies}
         canImport={canImport}
+        site={site}
       />
       {page.loading && <span aria-hidden className="browser-progress absolute inset-x-0 -bottom-px h-0.5" />}
     </div>

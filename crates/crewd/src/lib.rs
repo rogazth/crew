@@ -35,6 +35,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_tungstenite::tungstenite::Message;
 
 mod http;
+pub mod lock;
 pub mod machine;
 mod sessions;
 mod socks;
@@ -928,9 +929,18 @@ fn json(value: impl serde::Serialize) -> Result<Value, String> {
 async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, String> {
     match method {
         "pty_spawn" => {
-            let PtySpawn { id, cwd, command, cols, rows } = parse(params)?;
+            let PtySpawn { id, cwd, command, cols, rows, reuse, dark } = parse(params)?;
             let host = hosts.pty.clone();
-            json(block(move || host.spawn(id, cwd, command, cols, rows)).await?)
+            json(
+                block(move || {
+                    if reuse == Some(true) {
+                        host.open(id, cwd, command, cols, rows, dark)
+                    } else {
+                        host.spawn(id, cwd, command, cols, rows, dark)
+                    }
+                })
+                .await?,
+            )
         }
         "pty_write" => {
             let PtyWrite { id, data } = parse(params)?;
@@ -1489,6 +1499,8 @@ mod tests {
                 command: vec!["/bin/sh".into()],
                 cols: 80,
                 rows: 24,
+                reuse: None,
+                dark: None,
             })
             .unwrap(),
         }
@@ -1640,6 +1652,8 @@ mod tests {
                     command: vec!["/usr/bin/yes".into()],
                     cols: 80,
                     rows: 24,
+                    reuse: None,
+                    dark: None,
                 })
                 .unwrap(),
             },
@@ -1701,6 +1715,8 @@ mod tests {
                     ],
                     cols: 80,
                     rows: 24,
+                    reuse: None,
+                    dark: None,
                 })
                 .unwrap(),
             },
@@ -2640,6 +2656,8 @@ print(json.dumps({"type":"turn.failed","error":{"message":"Codex exploded"}}), f
                         command: vec!["/usr/bin/python3".into(), "-c".into(), script(mark)],
                         cols: 80,
                         rows: 24,
+                        reuse: None,
+                        dark: None,
                     })
                     .unwrap(),
                 },

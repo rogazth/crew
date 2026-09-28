@@ -34,9 +34,14 @@ export type BlockTool = { callId: string, name: string, title: string, status: T
 
 export type CookieRead = { cookies: Array<ImportedCookie>, 
 /**
- * Rows left out: expired, undecryptable, partitioned, or on a domain that must not move.
+ * Rows left out: expired, undecryptable, or partitioned.
  */
-skipped: number, };
+skipped: number, 
+/**
+ * Rows on Google's and YouTube's domains, left out because Google binds them to the browser
+ * that holds them. Only a sign-in in Crew brings those over.
+ */
+google: number, };
 
 export type CookieSameSite = "unspecified" | "no_restriction" | "lax" | "strict";
 
@@ -257,7 +262,17 @@ export type PtyKill = { id: string, };
 
 export type PtyResize = { id: string, cols: number, rows: number, };
 
-export type PtySpawn = { id: string, cwd: string, command: Array<string>, cols: number, rows: number, };
+export type PtySpawn = { id: string, cwd: string, command: Array<string>, cols: number, rows: number, 
+/**
+ * Keep a live process under this id instead of replacing it: a window
+ * opening again finds the agent it left running.
+ */
+reuse?: boolean, 
+/**
+ * Whether the window paints the terminal dark. It becomes COLORFGBG, which
+ * CLIs fall back to when their OSC 11 query outlives a remote round trip.
+ */
+dark?: boolean, };
 
 export type PtyWrite = { id: string, data: string, };
 

@@ -347,9 +347,11 @@ export function TerminalView({
       if (spawned) void api.writePty(id, data);
     });
 
-    const spawn = (command: string[]) => {
+    // The first spawn reuses a process the daemon still runs under this id, so
+    // a window opening again (an update, a relaunch) finds the agent it left.
+    const spawn = (command: string[], reuse = false) => {
       spawned = true;
-      void api.spawnPty(id, cwd, command, term.cols, term.rows).catch((error: unknown) => {
+      void api.spawnPty(id, cwd, command, term.cols, term.rows, reuse, isDark()).catch((error: unknown) => {
         spawned = false;
         term.writeln(`\x1b[31m${error instanceof Error ? error.message : String(error)}\x1b[0m`);
       });
@@ -366,7 +368,7 @@ export function TerminalView({
         started = true;
         lastCols = cols;
         lastRows = rows;
-        spawn(latest.current.command);
+        spawn(latest.current.command, true);
         return;
       }
       if (cols === lastCols && rows === lastRows) return;

@@ -155,6 +155,16 @@ pub struct PtySpawn {
     pub command: Vec<String>,
     pub cols: u16,
     pub rows: u16,
+    /// Keep a live process under this id instead of replacing it: a window
+    /// opening again finds the agent it left running.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub reuse: Option<bool>,
+    /// Whether the window paints the terminal dark. It becomes COLORFGBG, which
+    /// CLIs fall back to when their OSC 11 query outlives a remote round trip.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub dark: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, TS)]
@@ -725,6 +735,10 @@ pub enum CookieSameSite {
 #[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
 pub struct CookieRead {
     pub cookies: Vec<ImportedCookie>,
-    /// Rows left out: expired, undecryptable, partitioned, or on a domain that must not move.
+    /// Rows left out: expired, undecryptable, or partitioned.
     pub skipped: u32,
+    /// Rows on Google's and YouTube's domains, left out because Google binds them to the browser
+    /// that holds them. Only a sign-in in Crew brings those over.
+    #[serde(default)]
+    pub google: u32,
 }

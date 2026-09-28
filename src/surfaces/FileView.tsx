@@ -96,7 +96,18 @@ const IGNORE: GuestEvents = {
  * folder it was opened from so its relative links load. Main reloads it when
  * the file changes on disk.
  */
-function FilePreview({ path, relative, actions }: { path: string; relative: string; actions: ReactNode }) {
+export function FilePreview({
+  path,
+  relative,
+  actions,
+  active = true,
+}: {
+  path: string;
+  relative: string;
+  actions: ReactNode;
+  /** False while its tab is hidden: the commands go to the tab on screen, and the keyboard with them. */
+  active?: boolean;
+}) {
   const box = useRef<HTMLDivElement>(null);
   const guest = useRef<Guest | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
@@ -135,18 +146,27 @@ function FilePreview({ path, relative, actions }: { path: string; relative: stri
     };
   }, [root, path]);
 
+  // Hiding a guest that holds focus makes macOS hand the keyboard to another app.
+  useEffect(() => {
+    if (!active) guest.current?.release();
+  }, [active]);
+
   const reload = () => {
     setProblem(null);
     guest.current?.reload();
   };
-  useCommands({
-    "browser-reload": reload,
-    "browser-hard-reload": () => guest.current?.hardReload(),
-    "browser-devtools": () => {
-      const id = guest.current?.webContentsId();
-      if (id != null) void browserHost()?.toggleDevTools(id);
-    },
-  });
+  useCommands(
+    active
+      ? {
+          "browser-reload": reload,
+          "browser-hard-reload": () => guest.current?.hardReload(),
+          "browser-devtools": () => {
+            const id = guest.current?.webContentsId();
+            if (id != null) void browserHost()?.toggleDevTools(id);
+          },
+        }
+      : {},
+  );
 
   return (
     <div className="flex h-full flex-col bg-canvas">

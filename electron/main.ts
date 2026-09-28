@@ -18,7 +18,7 @@ import {
 } from "electron";
 import { installBrowser, registerBrowserIpc, registerFileIpc, registerFileScheme, serveFiles } from "./browser";
 import { openExternal } from "./external";
-import { sha } from "./build-info";
+import { release, sha } from "./build-info";
 import { buildMenu } from "./menu";
 import { registerRemoteIpc } from "./remotes";
 import { parseColorMode, type ColorMode } from "../src/lib/colorMode";
@@ -314,20 +314,40 @@ function registerIpc(): void {
 }
 
 registerFileScheme();
-app.setName("Crew");
-// userData follows the name, and crewd keeps its database and socket there: a dev
-// build on the installed app's folder would drive the installed app's sessions.
-// CREW_USER_DATA points a dev build at a data set of its own, like the seeded one;
+// Only the published release runs on the installed app's userData, where crewd
+// keeps its database and socket: any other build there would drive the installed
+// app's sessions. A dev build takes "Crew Dev"; a package built here (npm run
+// app:build, a bare electron-builder) is "Crew Local", which the name also gives
+// a keychain key of its own.
+// CREW_USER_DATA points either at a data set of its own, like the seeded one;
 // scripts/app.mjs points a git worktree at a folder inside it, so removing the
-// worktree removes its database.
-if (!app.isPackaged)
-  app.setPath("userData", process.env.CREW_USER_DATA || path.join(app.getPath("appData"), "Crew Dev"));
-app.setAboutPanelOptions({ applicationName: "Crew", applicationVersion: app.getVersion(), version: sha });
+// worktree removes its database. The release ignores it: started from a dev
+// terminal, it would open that checkout's data.
+const local = app.isPackaged && !release;
+app.setName(local ? "Crew Local" : "Crew");
+if (!(app.isPackaged && release))
+  app.setPath(
+    "userData",
+    process.env.CREW_USER_DATA || path.join(app.getPath("appData"), local ? "Crew Local" : "Crew Dev"),
+  );
+// One window per userData, so dev, local and release builds each run once. A
+// second launch on the same data would start a second crewd there; it only
+// brings the first one forward. crewd refuses a folder in use as well.
+const primary = app.requestSingleInstanceLock();
+if (!primary) app.exit(0);
+app.on("second-instance", () => {
+  if (!win) return;
+  if (win.isMinimized()) win.restore();
+  win.show();
+  win.focus();
+});
+app.setAboutPanelOptions({ applicationName: app.getName(), applicationVersion: app.getVersion(), version: sha });
 if (e2e && process.platform === "darwin") app.setActivationPolicy("accessory");
 // The sandboxed HOME has no login keychain; remote tokens go through a mock one.
 if (e2e) app.commandLine.appendSwitch("use-mock-keychain");
 
 app.whenReady().then(async () => {
+  if (!primary) return;
   session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
     callback({
       responseHeaders: {

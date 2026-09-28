@@ -1,5 +1,15 @@
 import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from "electron";
-import { CHANNELS, type DockBounds, type DownloadActivity, type OpenTabRequest } from "../src/lib/browser/bridge";
+import {
+  CHANNELS,
+  type DockBounds,
+  type DownloadAction,
+  type DownloadInfo,
+  type OpenTabRequest,
+  type PagePrompt,
+  type PromptAnswer,
+  type Responsiveness,
+  type SitePermissions,
+} from "../src/lib/browser/bridge";
 import { FILE_CHANNELS } from "../src/lib/browser/files";
 import type { InstallInput, InstallStep, ManualRemote } from "../src/lib/remotes";
 import { UPDATE_CHANNELS, type UpdateState } from "../src/lib/update";
@@ -56,7 +66,16 @@ contextBridge.exposeInMainWorld("crewHost", {
     setKeyboardLayout: (layout: unknown) => ipcRenderer.send(CHANNELS.keyboardLayout, layout),
     onCommand: (cb: (id: string) => void) => listen(CHANNELS.command, cb),
     onOpenTab: (cb: (request: OpenTabRequest) => void) => listen(CHANNELS.openTab, cb),
-    onDownload: (cb: (activity: DownloadActivity) => void) => listen(CHANNELS.download, cb),
+    onDownload: (cb: (download: DownloadInfo) => void) => listen(CHANNELS.downloads, cb),
+    downloadAction: (id: string, action: DownloadAction) => ipcRenderer.invoke(CHANNELS.downloadAction, id, action),
+    setAskWhereToSave: (ask: boolean) => ipcRenderer.send(CHANNELS.downloadPrefs, ask),
+    onPrompt: (cb: (prompt: PagePrompt) => void) => listen(CHANNELS.prompt, cb),
+    onPromptGone: (cb: (id: string) => void) => listen(CHANNELS.promptGone, cb),
+    answer: (id: string, value: PromptAnswer) => ipcRenderer.send(CHANNELS.answer, id, value),
+    setSitePermissions: (decisions: SitePermissions) => ipcRenderer.send(CHANNELS.sitePermissions, decisions),
+    onResponsive: (cb: (state: Responsiveness) => void) => listen(CHANNELS.responsive, cb),
+    kill: (webContentsId: number) => ipcRenderer.invoke(CHANNELS.kill, webContentsId),
+    print: (webContentsId: number) => ipcRenderer.invoke(CHANNELS.print, webContentsId),
     toggleDevTools: (webContentsId: number) => ipcRenderer.invoke(CHANNELS.devtools, webContentsId),
     dockDevTools: (webContentsId: number, bounds: DockBounds) =>
       ipcRenderer.invoke(CHANNELS.dockDevtools, webContentsId, bounds),

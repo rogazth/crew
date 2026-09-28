@@ -34,8 +34,9 @@ const BROWSERS: &[Browser] = &[
 ];
 
 /// Google ties its sign-in to the browser that made it; a copied session gets
-/// the original signed out too.
-const NON_TRANSFERABLE: &[&str] = &["google.com"];
+/// the original signed out too. YouTube (YouTube Music with it) signs in with
+/// the same Google account, on cookies of its own domain.
+const NON_TRANSFERABLE: &[&str] = &["google.com", "youtube.com"];
 
 /// Seconds between 1601-01-01 (Chromium's epoch) and 1970-01-01.
 const CHROMIUM_EPOCH_OFFSET: i64 = 11_644_473_600;
@@ -215,11 +216,16 @@ pub fn read_db(path: &Path, key: &Key, now: i64) -> Result<CookieRead, String> {
     let mut rows = stmt.query([]).map_err(|e| e.to_string())?;
     let mut cookies = Vec::new();
     let mut skipped = 0u32;
+    let mut google = 0u32;
     while let Some(row) = rows.next().map_err(|e| e.to_string())? {
         let host: String = row.get(0).map_err(|e| e.to_string())?;
         let partition: String = row.get(9).unwrap_or_default();
         let expires = unix_expiry(row.get(5).unwrap_or(0));
-        let movable = partition.is_empty() && transferable(&host) && expires.is_none_or(|at| at > now);
+        if !transferable(&host) {
+            google += 1;
+            continue;
+        }
+        let movable = partition.is_empty() && expires.is_none_or(|at| at > now);
         let plain: String = row.get(2).unwrap_or_default();
         let encrypted: Vec<u8> = row.get(3).unwrap_or_default();
         let value = if !movable {
@@ -244,7 +250,7 @@ pub fn read_db(path: &Path, key: &Key, now: i64) -> Result<CookieRead, String> {
             expires,
         });
     }
-    Ok(CookieRead { cookies, skipped })
+    Ok(CookieRead { cookies, skipped, google })
 }
 
 fn has_column(conn: &Connection, table: &str, column: &str) -> Result<bool, String> {
@@ -377,6 +383,8 @@ mod tests {
             ("app.example.com", "", "sid", encrypt(&with_digest("app.example.com", "s"), &key), 0, 2),
             ("old.example.com", "", "gone", encrypt(&with_digest("old.example.com", "x"), &key), chromium_time(now - 60), 0),
             (".google.com", "", "SID", encrypt(&with_digest(".google.com", "g"), &key), 0, 0),
+            (".youtube.com", "", "SID", encrypt(&with_digest(".youtube.com", "y"), &key), 0, 0),
+            ("music.youtube.com", "", "pref", encrypt(&with_digest("music.youtube.com", "m"), &key), 0, 0),
             ("embed.example.com", "https://site.com", "p", encrypt(&with_digest("embed.example.com", "p"), &key), 0, 0),
             ("broken.example.com", "", "b", b"v10garbagegarbage".to_vec(), 0, 0),
         ];
@@ -391,7 +399,8 @@ mod tests {
 
         let read = read_db(&path, &key, now).unwrap();
         let _ = fs::remove_file(&path);
-        assert_eq!(read.skipped, 4);
+        assert_eq!(read.skipped, 3);
+        assert_eq!(read.google, 3);
         assert_eq!(
             read.cookies,
             vec![

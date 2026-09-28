@@ -1,6 +1,7 @@
 pub mod agent;
 pub mod blocks;
 pub mod bridge;
+pub mod child_env;
 pub mod cookie_import;
 pub mod browser;
 pub mod claude_title;

@@ -1,7 +1,7 @@
 {
   "name": "crew",
   "private": true,
-  "version": "0.1.16",
+  "version": "0.1.20",
   "license": "MIT",
   "type": "module",
   "main": "electron-dist/main.cjs",
@@ -131,9 +131,16 @@
         }
       ],
       "category": "public.app-category.developer-tools",
+      "extendInfo": {
+        "NSCameraUsageDescription": "Pages in Crew's browser can use the camera once you allow them.",
+        "NSMicrophoneUsageDescription": "Pages in Crew's browser can use the microphone once you allow them.",
+        "NSLocationUsageDescription": "Pages in Crew's browser can know your location once you allow them.",
+        "NSLocationWhenInUseUsageDescription": "Pages in Crew's browser can know your location once you allow them."
+      },
       "hardenedRuntime": false,
       "gatekeeperAssess": false,
       "identity": "-"
-    }
+    },
+    "afterSign": "scripts/sign-mac.cjs"
   }
 }

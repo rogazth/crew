@@ -253,6 +253,29 @@ impl PtyHost {
         }
     }
 
+    /// Like `spawn`, but a process still running under `id` is kept: it gets
+    /// the new size and its stream id comes back.
+    pub fn open(
+        &self,
+        id: String,
+        cwd: String,
+        command: Vec<String>,
+        cols: u16,
+        rows: u16,
+        dark: Option<bool>,
+    ) -> Result<u32, String> {
+        let _spawning = self.inner.spawning.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(live) = self.get(&id).filter(|live| !live.exited.load(Ordering::Acquire)) {
+            let _ = resize_fd(live.master_fd, cols.max(2), rows.max(2));
+            return Ok(live.stream_id);
+        }
+        if let Some(prev) = self.remove(&id) {
+            let _ = terminate(&prev);
+            close_fd(prev.master_fd);
+        }
+        spawn_unix(self, id, cwd, command, cols.max(2), rows.max(2), dark)
+    }
+
     /// `command` empty spawns the login shell; otherwise argv[0] is resolved on PATH.
     pub fn spawn(
         &self,
@@ -261,6 +284,7 @@ impl PtyHost {
         command: Vec<String>,
         cols: u16,
         rows: u16,
+        dark: Option<bool>,
     ) -> Result<u32, String> {
         let _spawning = self.inner.spawning.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(prev) = self.remove(&id) {
@@ -268,7 +292,7 @@ impl PtyHost {
             let _ = terminate(&prev);
             close_fd(prev.master_fd);
         }
-        spawn_unix(self, id, cwd, command, cols.max(2), rows.max(2))
+        spawn_unix(self, id, cwd, command, cols.max(2), rows.max(2), dark)
     }
 
     pub fn write(&self, id: &str, data: &[u8]) -> Result<(), String> {
@@ -372,6 +396,7 @@ fn spawn_unix(
     command: Vec<String>,
     cols: u16,
     rows: u16,
+    dark: Option<bool>,
 ) -> Result<u32, String> {
     use std::fs::File;
     use std::os::unix::io::FromRawFd;
@@ -382,7 +407,7 @@ fn spawn_unix(
         None => default_shell(),
     };
     let (master, slave) = open_pty(cols, rows)?;
-    let mut cmd = match pty_command(&program, &args, &workdir, slave) {
+    let mut cmd = match pty_command(&program, &args, &workdir, slave, dark) {
         Ok(cmd) => cmd,
         Err(err) => {
             close_fd(master);
@@ -476,6 +501,7 @@ fn pty_command(
     args: &[String],
     workdir: &std::path::Path,
     slave: i32,
+    dark: Option<bool>,
 ) -> Result<std::process::Command, String> {
     use std::os::unix::process::CommandExt;
     use std::process::Command;
@@ -503,13 +529,12 @@ fn pty_command(
     if let Some(home) = home_dir() {
         cmd.env("HOME", &home);
     }
-    // Launched from inside a Claude Code session, the app would pass these on
-    // and claude would treat the terminal as a child session with no transcript.
-    for (key, _) in std::env::vars_os() {
-        let key = key.to_string_lossy();
-        if key == "CLAUDECODE" || key.starts_with("CLAUDE_CODE_") {
-            cmd.env_remove(key.as_ref());
-        }
+    crate::child_env::scrub(&mut cmd);
+    // The background as rxvt spells it (white 15, black 0). An OSC 11 reply has
+    // to cross the network from the window, and CLIs that wait a few dozen ms
+    // for it (Cursor waits 60) then guess dark without this.
+    if let Some(dark) = dark {
+        cmd.env("COLORFGBG", if dark { "15;0" } else { "0;15" });
     }
     // A parent that disabled colour for its own logs must not decide for the terminal.
     cmd.env_remove("NO_COLOR");
@@ -790,7 +815,7 @@ mod tests {
                 let gate = gate.clone();
                 thread::spawn(move || {
                     gate.wait();
-                    host.spawn(id, "/".to_string(), command, 80, 24)
+                    host.spawn(id, "/".to_string(), command, 80, 24, None)
                 })
             })
             .collect();
@@ -810,10 +835,39 @@ mod tests {
         assert_eq!(survivors, 0, "kill left {survivors} children running");
     }
 
+    #[test]
+    fn open_keeps_a_live_process() {
+        let host = PtyHost::new();
+        let id = "session:reuse".to_string();
+        let command = vec!["/bin/sh".to_string(), "-c".to_string(), "sleep 30".to_string()];
+        let first = host.open(id.clone(), "/".into(), command.clone(), 80, 24, None).expect("first open");
+        let pid = host.get(&id).expect("live").pid;
+        let second = host.open(id.clone(), "/".into(), command, 100, 30, None).expect("second open");
+        assert_eq!(first, second, "open replaced the stream");
+        assert_eq!(host.get(&id).expect("still live").pid, pid, "open replaced the process");
+        host.kill(&id);
+    }
+
+    #[test]
+    fn the_window_background_reaches_the_child_as_colorfgbg() {
+        let colorfgbg = |dark| {
+            let (master, slave) = open_pty(80, 24).expect("open pty");
+            let cmd = pty_command("/bin/sh", &[], std::path::Path::new("/"), slave, dark).expect("command");
+            close_fd(slave);
+            close_fd(master);
+            cmd.get_envs()
+                .find(|(key, _)| *key == "COLORFGBG")
+                .and_then(|(_, value)| value.map(|v| v.to_string_lossy().into_owned()))
+        };
+        assert_eq!(colorfgbg(Some(true)).as_deref(), Some("15;0"));
+        assert_eq!(colorfgbg(Some(false)).as_deref(), Some("0;15"));
+        assert_eq!(colorfgbg(None), None);
+    }
+
     fn pty_child(script: &str) -> (i32, std::process::Child) {
         let (master, slave) = open_pty(80, 24).expect("open pty");
         let args = vec!["-c".to_string(), script.to_string()];
-        let child = pty_command("/bin/sh", &args, std::path::Path::new("/"), slave)
+        let child = pty_command("/bin/sh", &args, std::path::Path::new("/"), slave, None)
             .expect("command")
             .spawn()
             .expect("spawn");

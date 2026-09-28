@@ -3,6 +3,7 @@ import { EmptyState } from "./EmptyState";
 import { HistoryView } from "./HistoryView";
 import { StubView } from "./StubView";
 import type { Confirm } from "../chrome/ConfirmDialog";
+import { fileView } from "../lib/browser/files";
 import { commandKeys } from "../lib/commands";
 import type { ProjectFile, Session, Tab } from "../lib/types";
 
@@ -43,6 +44,8 @@ export function Surface({ tab, sessions, hasWorkspace, onCreateWorkspace, files,
   }
   // Pages stay mounted in their own overlay, like terminals.
   if (tab.kind === "browser") return null;
+  // So do PDFs and media: unmounting one loses the file, and it loads again when shown.
+  if (tab.kind === "file" && fileView(tab.relative) === "media") return null;
   if (tab.kind === "file") {
     // Keyed by path: CodeView keeps its previous item when only props change,
     // which rendered the old file's contents under the new tab's header.

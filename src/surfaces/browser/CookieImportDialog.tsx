@@ -38,7 +38,8 @@ export function CookieImportDialog({ source, workspaceId, onClose, onImported }:
     try {
       const read = await browserCookiesRead(source.id);
       const written = await host.importCookies(workspaceId, read.cookies);
-      setRun({ of: source, step: { kind: "done", summary: importSummary(written.imported, read.skipped + written.failed) } });
+      const summary = importSummary(written.imported, read.skipped + written.failed, read.google ?? 0);
+      setRun({ of: source, step: { kind: "done", summary } });
       if (written.imported > 0) onImported();
     } catch (error) {
       setRun({ of: source, step: { kind: "failed", error: error instanceof Error ? error.message : String(error) } });
@@ -48,10 +49,22 @@ export function CookieImportDialog({ source, workspaceId, onClose, onImported }:
   };
 
   const label = source ? cookieSourceLabel(source) : "";
+  const browser = source?.browser ?? "the browser";
   const description =
-    step.kind === "done"
-      ? step.summary
-      : `Pages in this workspace open signed in wherever ${label} is. Other workspaces keep their own cookies. macOS asks to let Crew read ${source?.browser ?? "the browser"}'s keychain entry.`;
+    step.kind === "done" ? (
+      step.summary
+    ) : (
+      <div className="flex flex-col gap-2">
+        <p>
+          Pages in this workspace open signed in wherever {label} is. Other workspaces keep their own cookies. macOS
+          asks to let Crew read {browser}'s keychain entry.
+        </p>
+        <p>
+          Google and YouTube accounts don't come over: sign in to Google here. Some sites end a sign-in that two browsers share, so
+          you may have to sign in to them again in {browser}.
+        </p>
+      </div>
+    );
 
   return (
     <Alert
