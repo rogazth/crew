@@ -25,6 +25,12 @@ describe("fuzzyMatch", () => {
     expect(fuzzyMatch("prefs", "sidebarPREFS.ts")).not.toBeNull();
   });
 
+  it("ignores accents on both sides", () => {
+    expect(fuzzyMatch("redmad index", "REDMAD Índex")).not.toBeNull();
+    expect(fuzzyMatch("índex", "Index")).not.toBeNull();
+    expect(fuzzyMatch("ind", "xÍndex")?.positions).toEqual([1, 2, 3]);
+  });
+
   it("answers for an empty query instead of refusing", () => {
     expect(fuzzyMatch("", "anything")).toEqual({ score: 0, positions: [] });
     expect(fuzzyMatch("   ", "anything")).toEqual({ score: 0, positions: [] });

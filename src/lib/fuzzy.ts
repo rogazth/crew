@@ -33,8 +33,8 @@ export function fuzzyMatch(query: string, text: string): FuzzyHit | null {
 function matchToken(query: string, text: string): FuzzyHit | null {
   if (!query) return { score: 0, positions: [] };
 
-  const needle = query.toLowerCase();
-  const hay = text.toLowerCase();
+  const needle = fold(query);
+  const hay = fold(text);
   const head = needle[0]!;
 
   let best: FuzzyHit | null = null;
@@ -70,6 +70,18 @@ function scoreFrom(
 
   if (qi !== needle.length) return null;
   return { score: score - (text.length - needle.length), positions };
+}
+
+/** Lowercase and strip accents one character at a time, so "Í" matches "i"
+ *  and every index still points at the same character in the original text. */
+function fold(text: string): string {
+  let out = "";
+  for (const ch of text) {
+    const bare = ch.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase();
+    const kept = bare.length === ch.length ? bare : ch.toLowerCase();
+    out += kept.length === ch.length ? kept : ch;
+  }
+  return out;
 }
 
 function isBreak(ch: string): boolean {
