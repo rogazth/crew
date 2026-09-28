@@ -20,6 +20,7 @@ import { CookieImportDialog } from "./CookieImportDialog";
 import { DevToolsPanel } from "./DevToolsPanel";
 import { ResponsiveBar } from "./ResponsiveBar";
 import { ViewportHandles } from "./ViewportHandles";
+import type { BrowserTabPatch } from "../../lib/tabs";
 import type { AddressBarHandle } from "./AddressBar";
 
 /** How the page and docked DevTools share the pane: the page always comes first in the DOM. */
@@ -34,11 +35,13 @@ type Props = {
   workspaceId: string;
   /** What the tab restores to when the page has no saved stack. */
   url: string;
+  /** The favicon the tab saved, shown while the page is cold. */
+  icon: string | null;
   incognito: boolean;
   live: boolean;
   visible: boolean;
   searchTemplate: string;
-  onPatch: (patch: { url?: string; title?: string }) => void;
+  onPatch: (patch: BrowserTabPatch) => void;
   /** DevTools open or audio playing: discarding the guest would lose what it's doing. */
   onPinned: (pinned: boolean) => void;
 };
@@ -47,6 +50,7 @@ export function BrowserPane({
   pageId,
   workspaceId,
   url,
+  icon,
   incognito,
   live,
   visible,
@@ -78,6 +82,7 @@ export function BrowserPane({
   const guest = useGuest({
     pageId,
     url,
+    icon,
     workspaceId,
     incognito,
     live,

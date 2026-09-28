@@ -22,6 +22,7 @@ import {
   withRecent,
 } from '../lib/tabs';
 import { collapseGroup, collapseOthers, expandGroup, revealActive, visibleIn, type PlaceOf } from '../lib/tabGroups';
+import type { BrowserTabPatch } from '../lib/tabs';
 import type { Tab } from '../lib/types';
 import { discardEdits, fileName, unsavedTabs } from '../lib/unsavedEdits';
 
@@ -174,7 +175,7 @@ export function useTabs(workspaceId: string | null, placeOf: PlaceOf | null = nu
     [seedIn],
   );
   const patchBrowser = useCallback(
-    (id: string, tabId: string, patch: { url?: string; title?: string }) =>
+    (id: string, tabId: string, patch: BrowserTabPatch) =>
       mutateIn(id, (s) => patchBrowserTab(s, tabId, patch)),
     [mutateIn],
   );

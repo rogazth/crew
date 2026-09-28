@@ -62,7 +62,15 @@ export type Tab = (
    * `url` and `title` are what a cold tab restores and labels itself with; the live page lives in `pages`.
    * An incognito page keeps nothing: no history, no saved stack, and its tab is never written to disk.
    */
-  | { id: string; kind: "browser"; url: string; title: string; incognito?: true }
+  | {
+      id: string;
+      kind: "browser";
+      url: string;
+      title: string;
+      /** Where the page's favicon lives, so a cold tab can show it before its page comes back. */
+      icon?: string;
+      incognito?: true;
+    }
   /** A terminal keeps the worktree it was opened in; null or absent is the main checkout. */
   | { id: string; kind: "stub"; stub: StubKind; title: string; worktree?: string | null }
 ) & { pinned?: true };

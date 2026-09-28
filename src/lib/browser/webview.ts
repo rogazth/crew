@@ -7,6 +7,8 @@ type WebviewElement = HTMLElement & {
   getWebContentsId(): number;
   canGoBack(): boolean;
   canGoForward(): boolean;
+  getTitle(): string;
+  getURL(): string;
   goBack(): void;
   goForward(): void;
   reload(): void;
@@ -84,6 +86,11 @@ export function createGuest(container: HTMLElement, src: string, partition: stri
   let id: number | null = null;
   let ready = false;
   let destroyed = false;
+  let announced = "";
+  const setTitle = (title: string) => {
+    announced = title;
+    on.title(title);
+  };
 
   /** Every call into the guest throws before dom-ready and after its process dies. */
   const safely = <T>(fn: () => T, fallback: T): T => {
@@ -124,8 +131,14 @@ export function createGuest(container: HTMLElement, src: string, partition: stri
     if (event.isMainFrame) on.navigate(String(event.url), true);
   });
   listen("did-start-loading", () => on.loading(true));
-  listen("did-stop-loading", () => on.loading(false));
-  listen("page-title-updated", (event) => on.title(String(event.title)));
+  listen("did-stop-loading", () => {
+    on.loading(false);
+    // A page restored from a saved stack comes back with its entry's title, and
+    // Chromium announces no title that doesn't change, so it is read here.
+    const title = safely(() => view.getTitle(), "");
+    if (title && title !== announced && title !== safely(() => view.getURL(), "")) setTitle(title);
+  });
+  listen("page-title-updated", (event) => setTitle(String(event.title)));
   listen("page-favicon-updated", (event) => {
     const favicons = event.favicons as unknown;
     on.favicon(Array.isArray(favicons) && typeof favicons[0] === "string" ? favicons[0] : null);

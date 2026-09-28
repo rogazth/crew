@@ -80,20 +80,28 @@ export function openTab(
   return tabs === state.tabs && activeId === state.activeId ? state : { ...state, tabs, activeId };
 }
 
-/** A page committed a navigation or changed its title. Same state back when nothing moved. */
+/** What a page writes back to its tab. */
+export type BrowserTabPatch = { url?: string; title?: string; icon?: string };
+
+/** A page committed a navigation or changed its title or favicon. Same state back when nothing moved. */
 export function patchBrowserTab(
   state: TabState,
   id: string,
-  patch: { url?: string; title?: string },
+  patch: BrowserTabPatch,
 ): TabState {
   const index = state.tabs.findIndex((tab) => tab.id === id);
   const tab = state.tabs[index];
   if (!tab || tab.kind !== "browser") return state;
   const url = patch.url ?? tab.url;
   const title = patch.title ?? tab.title;
-  if (url === tab.url && title === tab.title) return state;
+  // An empty icon is a page that has none.
+  const icon = patch.icon === undefined ? tab.icon : patch.icon || undefined;
+  if (url === tab.url && title === tab.title && icon === tab.icon) return state;
+  const next: typeof tab = { ...tab, url, title };
+  if (icon === undefined) delete next.icon;
+  else next.icon = icon;
   const tabs = state.tabs.slice();
-  tabs[index] = { ...tab, url, title };
+  tabs[index] = next;
   return { ...state, tabs };
 }
 
@@ -287,6 +295,7 @@ function isTab(value: unknown): value is Tab {
       tab.id.startsWith("browser:") &&
       typeof tab.url === "string" &&
       typeof tab.title === "string" &&
+      (tab.icon === undefined || typeof tab.icon === "string") &&
       (tab.incognito === undefined || tab.incognito === true)
     );
   if (tab.kind === "stub")

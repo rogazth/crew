@@ -9,7 +9,7 @@ import { pages } from "../lib/browser/pageStore";
 import { prompts } from "../lib/browser/prompts";
 import { liveGuests, touch } from "../lib/browser/retention";
 import { browserHost } from "../lib/host";
-import { newBrowserTab, paneId } from "../lib/tabs";
+import { newBrowserTab, paneId, type BrowserTabPatch } from "../lib/tabs";
 import type { Tab } from "../lib/types";
 import type { MountedPane } from "./WorkspacePanes";
 
@@ -21,7 +21,7 @@ type BrowserMount = MountedPane & { tab: BrowserTab };
 
 type Props = {
   panes: MountedPane[];
-  onPatch: (workspaceId: string, tabId: string, patch: { url?: string; title?: string }) => void;
+  onPatch: (workspaceId: string, tabId: string, patch: BrowserTabPatch) => void;
   onOpenTab: (workspaceId: string, tab: Tab, opts: { after: string; background: boolean }) => void;
 };
 
@@ -167,6 +167,7 @@ export function Browsers({ panes, onPatch, onOpenTab }: Props) {
           pageId={pane.tab.id}
           workspaceId={pane.workspaceId}
           url={pane.tab.url}
+          icon={pane.tab.icon ?? null}
           incognito={pane.tab.incognito === true}
           live={live.has(pane.id)}
           visible={pane.visible}

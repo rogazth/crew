@@ -7,7 +7,7 @@ import { ChatContext, type ChatActions } from './chat/context';
 import { Surface } from './Surface';
 import { Terminals } from './Terminals';
 import type { Confirm } from '../chrome/ConfirmDialog';
-import type { Pane } from '../lib/tabs';
+import type { BrowserTabPatch, Pane } from '../lib/tabs';
 import type { ProjectFile, Session, SessionStatus, Tab, Workspace } from '../lib/types';
 import { parseContext } from '../lib/worktrees';
 
@@ -30,7 +30,7 @@ type Props = {
   onStatus: (id: string, status: SessionStatus) => void;
   onOpenFile: (file: ProjectFile) => void;
   onOpenSession: (sessionId: string) => void;
-  onPatchBrowser: (workspaceId: string, tabId: string, patch: { url?: string; title?: string }) => void;
+  onPatchBrowser: (workspaceId: string, tabId: string, patch: BrowserTabPatch) => void;
   onOpenBrowserTab: (workspaceId: string, tab: Tab, opts: { after: string; background: boolean }) => void;
   files: ProjectFile[];
   onOpenHistory: (url: string) => void;
