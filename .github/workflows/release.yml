@@ -51,7 +51,42 @@ jobs:
 
       - run: npm ci
 
+      # The certificate scripts/signing-cert.mjs made, in a keychain of the run's own.
+      # scripts/sign-mac.cjs signs with it; without it the app is signed ad hoc, and
+      # macOS asks for the keychain password again after every update.
+      - name: Load the signing certificate
+        env:
+          MAC_SIGNING_P12: ${{ secrets.MAC_SIGNING_P12 }}
+          MAC_SIGNING_PASSWORD: ${{ secrets.MAC_SIGNING_PASSWORD }}
+        run: |
+          if [ -z "$MAC_SIGNING_P12" ]; then
+            echo "::warning::No MAC_SIGNING_P12 secret: this release is signed ad hoc. Run node scripts/signing-cert.mjs --github once."
+            exit 0
+          fi
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          password="$(openssl rand -base64 24)"
+          echo "$MAC_SIGNING_P12" | base64 --decode > "$RUNNER_TEMP/signing.p12"
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 3600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          security import "$RUNNER_TEMP/signing.p12" -k "$keychain" -P "$MAC_SIGNING_PASSWORD" -T /usr/bin/codesign
+          rm "$RUNNER_TEMP/signing.p12"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$password" "$keychain" > /dev/null
+          # codesign only finds an identity in a keychain on the search list.
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          identity="$(security find-identity -p codesigning "$keychain" | awk '/"Crew Code Signing"/ { print $2; exit }')"
+          if [ -z "$identity" ]; then
+            echo "::error::MAC_SIGNING_P12 holds no \"Crew Code Signing\" identity."
+            exit 1
+          fi
+          echo "CREW_SIGN_IDENTITY=$identity" >> "$GITHUB_ENV"
+          echo "CREW_SIGN_KEYCHAIN=$keychain" >> "$GITHUB_ENV"
+
       - name: Build and publish
         run: node scripts/release-publish.mjs
         env:
           GH_TOKEN: ${{ github.token }}
+
+      - name: Remove the signing keychain
+        if: always() && env.CREW_SIGN_KEYCHAIN != ''
+        run: security delete-keychain "$CREW_SIGN_KEYCHAIN"

@@ -140,6 +140,7 @@
       "hardenedRuntime": false,
       "gatekeeperAssess": false,
       "identity": "-"
-    }
+    },
+    "afterSign": "scripts/sign-mac.cjs"
   }
 }
