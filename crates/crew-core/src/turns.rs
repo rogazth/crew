@@ -241,8 +241,16 @@ impl TurnHost {
         self.inner.lock().unwrap_or_else(|e| e.into_inner())
     }
 
+    /// The runtime, out of its lock. Matching on the lock's guard would keep
+    /// it held for the whole arm — for `block_on`, the whole turn — and every
+    /// other session's timers and turns would wait on it: one agent stopped on
+    /// an approval froze every other agent's finish.
+    fn handle(&self) -> Option<tokio::runtime::Handle> {
+        self.runtime.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
     fn after(&self, dur: Duration, f: impl FnOnce() + Send + 'static) {
-        if let Some(handle) = self.runtime.lock().unwrap_or_else(|e| e.into_inner()).clone() {
+        if let Some(handle) = self.handle() {
             handle.spawn(async move {
                 tokio::time::sleep(dur).await;
                 f();
@@ -256,7 +264,7 @@ impl TurnHost {
     }
 
     fn block_on<T>(&self, fut: impl Future<Output = T> + Send) -> T {
-        if let Some(handle) = self.runtime.lock().unwrap_or_else(|e| e.into_inner()).clone() {
+        if let Some(handle) = self.handle() {
             handle.block_on(fut)
         } else {
             tokio::runtime::Builder::new_current_thread()
@@ -2064,6 +2072,34 @@ impl TurnHost {
 
 #[cfg(test)]
 mod mailbox_tests {
+    /// Measured: an agent stopped on an approval held the runtime's lock for
+    /// as long as it waited, and a second agent's turn could not even arm its
+    /// silence timer, so it never finished. One session waiting must not stop
+    /// another.
+    #[test]
+    fn a_turn_waiting_forever_does_not_hold_up_another_sessions_timers() {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .unwrap();
+        let host = TurnHost::test_new();
+        host.set_runtime(runtime.handle().clone());
+        let (_hold, never) = tokio::sync::oneshot::channel::<()>();
+        let waiting = host.clone();
+        std::thread::spawn(move || {
+            let _ = waiting.block_on(never);
+        });
+        std::thread::sleep(Duration::from_millis(100));
+        let (tx, rx) = std::sync::mpsc::channel();
+        let armed = host.clone();
+        std::thread::spawn(move || armed.after(Duration::from_millis(1), move || drop(tx.send(()))));
+        assert!(
+            rx.recv_timeout(Duration::from_secs(3)).is_ok(),
+            "a timer armed while another session waits never fired"
+        );
+    }
+
     use super::*;
     use crew_protocol::{AgentRef, BlockRole};
 
