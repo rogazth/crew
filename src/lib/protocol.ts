@@ -34,9 +34,14 @@ export type BlockTool = { callId: string, name: string, title: string, status: T
 
 export type CookieRead = { cookies: Array<ImportedCookie>, 
 /**
- * Rows left out: expired, undecryptable, partitioned, or on a domain that must not move.
+ * Rows left out: expired, undecryptable, or partitioned.
  */
-skipped: number, };
+skipped: number, 
+/**
+ * Rows on Google's and YouTube's domains, left out because Google binds them to the browser
+ * that holds them. Only a sign-in in Crew brings those over.
+ */
+google: number, };
 
 export type CookieSameSite = "unspecified" | "no_restriction" | "lax" | "strict";
 

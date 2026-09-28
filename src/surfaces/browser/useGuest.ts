@@ -26,6 +26,8 @@ type Options = {
   onPinned: (pinned: boolean) => void;
   onNavigate: (inPage: boolean) => void;
   onFound: (found: { index: number; count: number }) => void;
+  /** The page took the keyboard: whatever floats over the toolbar closes, as a click outside would. */
+  onFocus: () => void;
 };
 
 /** The page's guest, plus what only the pane knows about it. */
@@ -185,7 +187,7 @@ export function useGuest(options: Options): RefObject<PageGuest | null> {
       // A restored stack re-commits its page; that is the same visit, not a new one.
       let restoring = open.restoring;
       built = createGuest(host, open.src, partition, {
-        attach: (webContentsId) => update({ webContentsId, crashed: false }),
+        attach: (webContentsId) => update({ webContentsId, crashed: false, hung: false }),
         start: (next) => {
           const current = pages.get(pageId);
           // Chromium doesn't announce a favicon again on the same origin, so only a new origin clears it.
@@ -233,7 +235,7 @@ export function useGuest(options: Options): RefObject<PageGuest | null> {
           if (error) update({ error, loading: false });
         },
         gone: () => {
-          update({ crashed: true, loading: false });
+          update({ crashed: true, hung: false, loading: false });
           // One quiet retry: a renderer that died once usually comes back. The next commit clears the flag.
           if (retried) return;
           retried = true;
@@ -248,7 +250,10 @@ export function useGuest(options: Options): RefObject<PageGuest | null> {
           playing = on;
           pin();
         },
-        focus: () => address.current?.dismiss(),
+        focus: () => {
+          address.current?.dismiss();
+          latest.current.onFocus();
+        },
         found: ({ activeMatchOrdinal, matches }) =>
           latest.current.onFound({ index: Math.max(0, activeMatchOrdinal - 1), count: matches }),
       });
@@ -287,7 +292,7 @@ export function useGuest(options: Options): RefObject<PageGuest | null> {
       built?.destroy();
       if (guest.current === facade) guest.current = null;
       if (devtools || docked || playing) latest.current.onPinned(false);
-      update({ webContentsId: null, loading: false, devtools: false });
+      update({ webContentsId: null, loading: false, devtools: false, hung: false });
     };
   }, [live, pageId, workspaceId, incognito, generation, container, address]);
 

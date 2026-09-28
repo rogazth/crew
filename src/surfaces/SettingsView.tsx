@@ -3,7 +3,7 @@ import { SearchIcon } from "lucide-react";
 import { AgentAvatar } from "../chrome/AgentAvatar";
 import type { Confirm } from "../chrome/ConfirmDialog";
 import { Kbd } from "../chrome/Kbd";
-import { Select, TextInput, Toggle, type Option } from "../chrome/kit";
+import { Button, Select, TextInput, Toggle, type Option } from "../chrome/kit";
 import { ModelPicker } from "../chrome/ModelPicker";
 import { ProviderIcon } from "../chrome/ProviderIcon";
 import { SettingsRow, SettingsSection } from "../chrome/SettingsRow";
@@ -13,10 +13,12 @@ import { useBrowserPrefs } from "../hooks/useBrowserPrefs";
 import { useColorMode } from "../hooks/useColorMode";
 import { useDefaultAgent } from "../hooks/useDefaultAgent";
 import { useFilePrefs } from "../hooks/useFilePrefs";
+import { changeSitePermissions, useSitePermissions } from "../hooks/useSitePermissions";
 import { useTabScope } from "../hooks/useTabScope";
 import { AGENT_AVATARS } from "../lib/agentAvatar";
 import { AGENT_MODES } from "../lib/agentMode";
 import { KEEP_CHOICES, SEARCH_ENGINES } from "../lib/browserPrefs";
+import { forget, PERMISSION_LABELS, SITE_PERMISSIONS } from "../lib/browser/permissions";
 import { COLOR_MODES } from "../lib/colorMode";
 import { bindingGroups } from "../lib/commandGroups";
 import { commandKeys } from "../lib/commands";
@@ -214,7 +216,62 @@ function Browser() {
           />
         </SettingsRow>
       </SettingsSection>
+      <SettingsSection title="Downloads">
+        <Toggle
+          label="Ask where to save each file"
+          description={
+            prefs.askWhereToSave
+              ? "Every download opens a save dialog first."
+              : "Files go straight to your Downloads folder. Right-click a link or an image to choose where instead."
+          }
+          checked={prefs.askWhereToSave}
+          onChange={(checked) => update({ ...prefs, askWhereToSave: checked })}
+        />
+      </SettingsSection>
+      <SitePermissionsSettings />
     </>
+  );
+}
+
+/** Every site with a decision kept, what it may and may not use, and a way to start over. */
+function SitePermissionsSettings() {
+  const decisions = useSitePermissions();
+  const sites = Object.keys(decisions).sort((a, b) => a.localeCompare(b));
+  return (
+    <SettingsSection title="Site permissions">
+      {sites.length === 0 ? (
+        <p className="py-3 text-[12px] text-text-muted">
+          Sites ask before they use your camera, microphone, location, notifications or clipboard. What you allow or
+          block for good shows up here.
+        </p>
+      ) : (
+        sites.map((site) => {
+          const decided = decisions[site] ?? {};
+          const names = { allow: [] as string[], block: [] as string[] };
+          for (const kind of SITE_PERMISSIONS) {
+            const decision = decided[kind];
+            if (decision) names[decision].push(PERMISSION_LABELS[kind].name);
+          }
+          const allowed = names.allow.join(", ");
+          const blocked = names.block.join(", ");
+          return (
+            <SettingsRow
+              key={site}
+              label={site.replace(/^https:\/\//, "")}
+              description={[allowed && `Allowed: ${allowed}`, blocked && `Blocked: ${blocked}`].filter(Boolean).join(" · ")}
+            >
+              <Button
+                variant="ghost"
+                className="h-7 text-[12px]"
+                onClick={() => void changeSitePermissions((current) => forget(current, site))}
+              >
+                Reset
+              </Button>
+            </SettingsRow>
+          );
+        })
+      )}
+    </SettingsSection>
   );
 }
 

@@ -15,6 +15,7 @@ export async function compileElectron() {
       { in: "electron/main.ts", out: "main" },
       { in: "electron/preload.ts", out: "preload" },
       { in: "electron/browser/guest-preload.ts", out: "guest-preload" },
+      { in: "electron/browser/popup-preload.ts", out: "popup-preload" },
     ],
     outdir: "electron-dist",
     outExtension: { ".js": ".cjs" },

@@ -4,6 +4,8 @@
  * DOM and Electron.
  */
 
+import type { SitePermission, SitePermissions } from "./permissions";
+
 /**
  * Where pages kept their cookies before each workspace had its own. A new
  * workspace session starts from a copy of it, so an upgrade keeps its sign-ins.
@@ -68,8 +70,25 @@ export const CHANNELS = {
   prepareRestore: "browser:prepare-restore",
   /** The window's CSP keeps remote images out, so main fetches a page's icon and hands back a data: URL. */
   favicon: "browser:favicon",
-  /** main → window: a page's download started or ended; its guest must not be discarded meanwhile. */
-  download: "browser:download",
+  /** main → window: where a download is; a page with one in flight must not be discarded meanwhile. */
+  downloads: "browser:downloads",
+  /** window → main: cancel, open or show one of this window's downloads. */
+  downloadAction: "browser:download-action",
+  /** window → main: whether each download asks where to go. */
+  downloadPrefs: "browser:download-prefs",
+  /** main → window: a page is waiting on the person (a permission, a sign-in, another app). */
+  prompt: "browser:prompt",
+  /** main → window: a prompt nobody needs any more: its page navigated or closed. */
+  promptGone: "browser:prompt-gone",
+  /** window → main: what the person answered. */
+  answer: "browser:answer",
+  /** window → main: every remembered site permission, so main can answer Chromium without asking. */
+  sitePermissions: "browser:site-permissions",
+  /** main → window: a page stopped answering, or came back. */
+  responsive: "browser:responsive",
+  /** Ends a hung page's process so it can load again. */
+  kill: "browser:kill",
+  print: "browser:print",
   /** window → main: cookies the daemon read from another browser, to write into one workspace's session. */
   importCookies: "browser:import-cookies",
 } as const;
@@ -80,7 +99,50 @@ export type DockBounds = { x: number; y: number; width: number; height: number }
 /** What docked DevTools looked like as they were hidden, shown in their place meanwhile. */
 export type DockSnapshot = { url: string; width: number; height: number };
 
-export type DownloadActivity = { webContentsId: number; active: boolean };
+export type DownloadState = "progressing" | "paused" | "completed" | "cancelled" | "interrupted";
+
+/**
+ * One download as the window shows it. `webContentsId` is the page it belongs
+ * to (a popup's download belongs to the page that opened it), null when no
+ * page of this window started it.
+ */
+export type DownloadInfo = {
+  id: string;
+  webContentsId: number | null;
+  filename: string;
+  url: string;
+  /** Empty while a save dialog is still open. */
+  path: string;
+  received: number;
+  /** 0 when the server didn't say. */
+  total: number;
+  state: DownloadState;
+  startedAt: number;
+};
+
+export type DownloadAction = "cancel" | "open" | "reveal" | "resume";
+
+/**
+ * What a page waits on. `webContentsId` is the page it shows over. Answers:
+ * a permission is `{ allow, remember }`, a sign-in `{ username, password }`
+ * or null, another app `{ open }`, and a system block `{ settings }`.
+ */
+export type PagePrompt =
+  | { kind: "permission"; id: string; webContentsId: number; origin: string; permissions: SitePermission[] }
+  | { kind: "auth"; id: string; webContentsId: number; origin: string; realm: string; secure: boolean }
+  | { kind: "external"; id: string; webContentsId: number; origin: string; app: string; scheme: string }
+  | { kind: "system"; id: string; webContentsId: number; permissions: SitePermission[] };
+
+export type PromptAnswer =
+  | { allow: boolean; remember: boolean }
+  | { username: string; password: string }
+  | { open: boolean }
+  | { settings: boolean }
+  | null;
+
+export type Responsiveness = { webContentsId: number; hung: boolean };
+
+export type { SitePermissions };
 
 /** `incognito`: the tab opens in the workspace's in-memory session, as every tab an incognito page opens does. */
 export type OpenTabRequest = { url: string; background: boolean; openerId: number; incognito: boolean };

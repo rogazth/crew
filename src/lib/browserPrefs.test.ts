@@ -19,6 +19,7 @@ describe("parseBrowserPrefs", () => {
           devtoolsDock: "left",
           devtoolsWidth: 600,
           devtoolsHeight: 250,
+          askWhereToSave: true,
         }),
       ),
     ).toEqual({
@@ -28,6 +29,7 @@ describe("parseBrowserPrefs", () => {
       devtoolsDock: "left",
       devtoolsWidth: 600,
       devtoolsHeight: 250,
+      askWhereToSave: true,
     });
   });
 
@@ -37,6 +39,7 @@ describe("parseBrowserPrefs", () => {
     expect(parseBrowserPrefs(JSON.stringify({ keep: 1000 })).keep).toBe(DEFAULT_BROWSER_PREFS.keep);
     expect(parseBrowserPrefs(JSON.stringify({ openLinksInCrew: "yes" })).openLinksInCrew).toBe(false);
     expect(parseBrowserPrefs(JSON.stringify({ devtoolsDock: "top" })).devtoolsDock).toBe("bottom");
+    expect(parseBrowserPrefs(JSON.stringify({ askWhereToSave: 1 })).askWhereToSave).toBe(false);
   });
 
   it("keeps DevTools no smaller than their minimum", () => {

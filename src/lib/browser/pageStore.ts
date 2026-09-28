@@ -13,6 +13,8 @@ export type PageState = {
   canGoForward: boolean;
   error: LoadError | null;
   crashed: boolean;
+  /** The page's process stopped answering; it may still come back. */
+  hung: boolean;
   devtools: boolean;
   /** Chromium keeps zoom per origin, so this is read back after each navigation. */
   zoom: number;
@@ -28,6 +30,7 @@ export const BLANK_PAGE: PageState = Object.freeze({
   canGoForward: false,
   error: null,
   crashed: false,
+  hung: false,
   devtools: false,
   zoom: 1,
   webContentsId: null,

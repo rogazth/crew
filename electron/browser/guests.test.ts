@@ -4,11 +4,19 @@ import type { LiveCommand } from "../../src/lib/keymap";
 
 const electron = vi.hoisted(() => ({
   sessionHandlers: new Map<string, (...args: unknown[]) => void>(),
+  appHandlers: new Map<string, (...args: unknown[]) => void>(),
   partitions: [] as string[],
   templates: [] as unknown[][],
   openExternal: vi.fn(),
   writeText: vi.fn(),
   clearStorageData: vi.fn(() => Promise.resolve()),
+  lastSession: null as unknown,
+  permissionRequest: null as null | ((...args: unknown[]) => void),
+  permissionCheck: null as null | ((...args: unknown[]) => boolean),
+  headers: null as null | ((details: unknown, callback: (response: unknown) => void) => void),
+  appForProtocol: vi.fn((_url: string) => "zoom.us.app"),
+  mediaStatus: "granted" as string,
+  askForMediaAccess: vi.fn(() => Promise.resolve(true)),
 }));
 
 class FakeContents extends EventEmitter {
@@ -25,7 +33,13 @@ class FakeContents extends EventEmitter {
     goForward: vi.fn(),
   };
   loadURL = vi.fn(() => Promise.resolve());
-  session: unknown = null;
+  downloadURL = vi.fn();
+  print = vi.fn();
+  url = "https://a.com/";
+  getURL = () => this.url;
+  getUserAgent = () => "Chrome";
+  setUserAgent = vi.fn();
+  session: unknown = { getUserAgent: () => "Chrome" };
   isDestroyed = () => this.destroyed;
   send = (channel: string, value: unknown) => this.sent.push([channel, value]);
   setWindowOpenHandler = (handler: (details: unknown) => unknown) => {
@@ -41,8 +55,18 @@ vi.mock("electron", () => {
   const ses = {
     setUserAgent: vi.fn(),
     getUserAgent: () => "Mozilla/5.0 Chrome/140 Electron/44.2.0 crew/0.1.4",
-    setPermissionRequestHandler: vi.fn(),
-    setPermissionCheckHandler: vi.fn(),
+    setPermissionRequestHandler: (handler: (...args: unknown[]) => void) => {
+      electron.permissionRequest = handler;
+    },
+    setPermissionCheckHandler: (handler: (...args: unknown[]) => boolean) => {
+      electron.permissionCheck = handler;
+    },
+    setDisplayMediaRequestHandler: vi.fn(),
+    webRequest: {
+      onBeforeSendHeaders: (handler: (details: unknown, callback: (response: unknown) => void) => void) => {
+        electron.headers = handler;
+      },
+    },
     on: (name: string, handler: (...args: unknown[]) => void) => electron.sessionHandlers.set(name, handler),
     clearStorageData: electron.clearStorageData,
     clearCache: vi.fn(() => Promise.resolve()),
@@ -51,8 +75,12 @@ vi.mock("electron", () => {
     closeAllConnections: vi.fn(() => Promise.resolve()),
   };
   return {
-    app: { on: vi.fn(), getPath: () => "/tmp" },
-    BrowserWindow: { fromWebContents: () => ({}) },
+    app: {
+      on: (name: string, handler: (...args: unknown[]) => void) => electron.appHandlers.set(name, handler),
+      getPath: () => "/tmp",
+      getApplicationNameForProtocol: electron.appForProtocol,
+    },
+    BrowserWindow: { fromWebContents: () => ({ isFocused: () => true }) },
     clipboard: { writeText: electron.writeText },
     Menu: {
       buildFromTemplate: (template: unknown[]) => {
@@ -64,10 +92,15 @@ vi.mock("electron", () => {
     session: {
       fromPartition: (partition: string) => {
         electron.partitions.push(partition);
+        electron.lastSession = ses;
         return ses;
       },
     },
-    shell: { openExternal: electron.openExternal, showItemInFolder: vi.fn() },
+    shell: { openExternal: electron.openExternal, showItemInFolder: vi.fn(), openPath: vi.fn(() => Promise.resolve("")) },
+    systemPreferences: {
+      getMediaAccessStatus: () => electron.mediaStatus,
+      askForMediaAccess: electron.askForMediaAccess,
+    },
   };
 });
 
@@ -97,6 +130,10 @@ const SNAPSHOT = { entries: [{ url: "https://a.com/", title: "A" }, { url: "http
 
 beforeEach(async () => {
   vi.resetModules();
+  electron.appHandlers.clear();
+  electron.mediaStatus = "granted";
+  electron.appForProtocol.mockClear();
+  electron.appForProtocol.mockImplementation(() => "zoom.us.app");
   electron.templates.length = 0;
   electron.partitions.length = 0;
   electron.openExternal.mockClear();
@@ -265,7 +302,8 @@ describe("popups and navigation", () => {
       sandbox: true,
       nodeIntegration: false,
     });
-    expect(answer.overrideBrowserWindowOptions.webPreferences).not.toHaveProperty("preload");
+    // Only the sign-in disguise: the close guard would keep the popup from closing itself.
+    expect(answer.overrideBrowserWindowOptions.webPreferences.preload).toMatch(/popup-preload\.cjs$/);
   });
 
   it("keeps a login popup in its own workspace's partition", () => {
@@ -375,13 +413,44 @@ describe("the context menu", () => {
     ]);
   });
 
-  it("offers editing roles in a field, and always back, forward, reload and inspect", () => {
+  it("offers editing roles in a field, and always back, forward, reload, print and inspect", () => {
     willAttach({ ...PAGE, src: "https://a.com" });
     const guest = didAttach();
     guest.emit("context-menu", {}, { ...params, isEditable: true });
     expect(labels()).toEqual(
-      expect.arrayContaining(["cut", "copy", "paste", "selectAll", "Back", "Forward", "Reload", "Inspect Element"]),
+      expect.arrayContaining(["cut", "copy", "paste", "selectAll", "Back", "Forward", "Reload", "Print…", "Inspect Element"]),
     );
+    click("Print…");
+    expect(guest.print).toHaveBeenCalled();
+  });
+
+  it("saves a link with a dialog, and sends one to the default browser", () => {
+    willAttach({ ...PAGE, src: "https://a.com" });
+    const guest = didAttach();
+    guest.emit("context-menu", {}, { ...params, linkURL: "https://b.com/file.zip" });
+    click("Save Link As…");
+    expect(guest.downloadURL).toHaveBeenCalledWith("https://b.com/file.zip");
+    const item = downloadItem("https://b.com/file.zip");
+    electron.sessionHandlers.get("will-download")?.({}, item, guest);
+    expect(item.setSaveDialogOptions).toHaveBeenCalledWith({ defaultPath: "/tmp/evil.sh" });
+    expect(item.setSavePath).not.toHaveBeenCalled();
+    click("Open Link in Default Browser");
+    expect(electron.openExternal).toHaveBeenCalledWith("https://b.com/file.zip");
+  });
+
+  it("offers to open and save an image", () => {
+    willAttach({ ...PAGE, src: "https://a.com" });
+    const guest = didAttach();
+    guest.emit("context-menu", {}, { ...params, mediaType: "image", hasImageContents: true, srcURL: "https://a.com/i.png" });
+    expect(labels()).toEqual(expect.arrayContaining(["Open Image in New Tab", "Save Image As…", "Copy Image"]));
+    click("Open Image in New Tab");
+    expect(host.sent).toContainEqual([
+      "browser:open-tab",
+      { url: "https://a.com/i.png", background: true, openerId: guest.id, incognito: false },
+    ]);
+    guest.emit("context-menu", {}, { ...params, mediaType: "image", hasImageContents: true, srcURL: "data:image/png;base64,AA" });
+    expect(labels()).not.toContain("Open Image in New Tab");
+    expect(labels()).toContain("Save Image As…");
   });
 });
 
@@ -423,32 +492,329 @@ describe("incognito sessions", () => {
   });
 });
 
-describe("downloads", () => {
-  const fakeItem = () => {
-    const item = new EventEmitter() as EventEmitter & Record<string, unknown>;
-    Object.assign(item, { getFilename: () => "../../evil.sh", setSavePath: vi.fn(), cancel: vi.fn() });
-    return item;
-  };
+function downloadItem(url = "https://a.com/f.zip") {
+  const item = new EventEmitter() as EventEmitter & Record<string, unknown>;
+  let state = "progressing";
+  Object.assign(item, {
+    getFilename: () => "../../evil.sh",
+    getURL: () => url,
+    setSavePath: vi.fn(),
+    setSaveDialogOptions: vi.fn(),
+    getSavePath: () => "/tmp/evil.sh",
+    getReceivedBytes: () => 10,
+    getTotalBytes: () => 20,
+    getState: () => state,
+    isPaused: () => false,
+    canResume: () => false,
+    cancel: vi.fn(),
+    finish: (next: string) => {
+      state = next;
+      item.emit("done", {}, next);
+    },
+  });
+  return item as typeof item & { finish: (state: string) => void };
+}
 
-  it("tells the window a page's download started and ended, and saves under Downloads", () => {
+describe("downloads", () => {
+  const reports = () =>
+    host.sent.filter(([channel]) => channel === "browser:downloads").map(([, info]) => info as Record<string, unknown>);
+
+  it("reports a page's download to its window, saved under Downloads with a safe name", () => {
     willAttach({ ...PAGE, src: "https://a.com" });
     const guest = didAttach();
-    const item = fakeItem();
+    const item = downloadItem();
     electron.sessionHandlers.get("will-download")?.({}, item, guest);
     expect(item.setSavePath).toHaveBeenCalledWith("/tmp/evil.sh");
-    item.emit("done", {}, "completed");
-    expect(host.sent.filter(([channel]) => channel === "browser:download")).toEqual([
-      ["browser:download", { webContentsId: guest.id, active: true }],
-      ["browser:download", { webContentsId: guest.id, active: false }],
-    ]);
+    item.finish("completed");
+    const sent = reports();
+    expect(sent[0]).toMatchObject({ webContentsId: guest.id, filename: "evil.sh", state: "progressing" });
+    expect(sent.at(-1)).toMatchObject({ webContentsId: guest.id, state: "completed", received: 10, total: 20 });
+    expect(new Set(sent.map((info) => info.id)).size).toBe(1);
+  });
+
+  it("credits a login popup's download to the page that opened it", () => {
+    willAttach({ ...PAGE, src: "https://a.com" });
+    const guest = didAttach();
+    const popup = new FakeContents();
+    guest.emit("did-create-window", { webContents: popup });
+    electron.sessionHandlers.get("will-download")?.({}, downloadItem(), popup);
+    expect(reports()[0]).toMatchObject({ webContentsId: guest.id });
   });
 
   it("cancels a burst of downloads", () => {
     willAttach({ ...PAGE, src: "https://a.com" });
     const guest = didAttach();
-    const items = Array.from({ length: 15 }, fakeItem);
+    const items = Array.from({ length: 15 }, () => downloadItem());
     for (const item of items) electron.sessionHandlers.get("will-download")?.({}, item, guest);
     expect(items.filter((item) => (item.cancel as ReturnType<typeof vi.fn>).mock.calls.length > 0)).toHaveLength(5);
+  });
+
+  it("saves a blob the page opens or navigates to", () => {
+    willAttach({ ...PAGE, src: "https://a.com" });
+    const guest = didAttach();
+    const answer = guest.openHandler?.({ url: "blob:https://a.com/x", disposition: "foreground-tab", features: "" });
+    expect(answer).toEqual({ action: "deny" });
+    expect(guest.downloadURL).toHaveBeenCalledWith("blob:https://a.com/x");
+    const event = { url: "blob:https://a.com/y", prevented: false, preventDefault() { this.prevented = true; } };
+    guest.emit("will-navigate", event);
+    expect(event.prevented).toBe(true);
+    expect(guest.downloadURL).toHaveBeenCalledWith("blob:https://a.com/y");
+  });
+});
+
+/** The prompts main sent the window, oldest first. */
+const prompts = () =>
+  host.sent.filter(([channel]) => channel === "browser:prompt").map(([, prompt]) => prompt as Record<string, unknown>);
+
+async function answer(id: unknown, value: unknown) {
+  const { answer: reply } = await import("./prompts");
+  reply(host as never, id, value);
+}
+
+describe("permissions", () => {
+  const request = (guest: FakeContents, permission: string, details: Record<string, unknown> = {}) =>
+    new Promise<boolean>((resolve) =>
+      electron.permissionRequest?.(guest, permission, resolve, {
+        requestingUrl: "https://meet.example.com/room",
+        isMainFrame: true,
+        ...details,
+      }),
+    );
+
+  it("grants what reaches no further than the page without asking", async () => {
+    willAttach({ ...PAGE, src: "https://a.com" });
+    const guest = didAttach();
+    expect(await request(guest, "fullscreen")).toBe(true);
+    expect(await request(guest, "midi")).toBe(false);
+    expect(prompts()).toEqual([]);
+  });
+
+  it("asks over the page, and remembers an answer the person asked to keep", async () => {
+    willAttach({ ...PAGE, src: "https://a.com" });
+    const guest = didAttach();
+    const first = request(guest, "media", { mediaTypes: ["video", "audio"] });
+    await vi.waitFor(() => expect(prompts()).toHaveLength(1));
+    const [prompt] = prompts();
+    expect(prompt).toMatchObject({
+      kind: "permission",
+      webContentsId: guest.id,
+      origin: "https://meet.example.com",
+      permissions: ["camera", "microphone"],
+    });
+    await answer(prompt?.id, { allow: true, remember: true });
+    expect(await first).toBe(true);
+    expect(await request(guest, "media", { mediaTypes: ["audio"] })).toBe(true);
+    expect(prompts()).toHaveLength(1);
+    expect(electron.permissionCheck?.(guest, "media", "https://meet.example.com", { mediaType: "video", isMainFrame: true })).toBe(true);
+    expect(electron.permissionCheck?.(guest, "media", "https://other.com", { mediaType: "video", isMainFrame: true })).toBe(false);
+  });
+
+  it("asks again after a refusal that was not kept", async () => {
+    willAttach({ ...PAGE, src: "https://a.com" });
+    const guest = didAttach();
+    const first = request(guest, "notifications");
+    await vi.waitFor(() => expect(prompts()).toHaveLength(1));
+    await answer(prompts()[0]?.id, { allow: false, remember: false });
+    expect(await first).toBe(false);
+    void request(guest, "notifications");
+    await vi.waitFor(() => expect(prompts()).toHaveLength(2));
+  });
+
+  it("answers from what the window sent, and refuses a blocked site outright", async () => {
+    guests.setSitePermissions({ "https://meet.example.com": { geolocation: "block", notifications: "allow" } });
+    willAttach({ ...PAGE, src: "https://a.com" });
+    const guest = didAttach();
+    expect(await request(guest, "geolocation")).toBe(false);
+    expect(await request(guest, "notifications")).toBe(true);
+    expect(prompts()).toEqual([]);
+  });
+
+  it("drops a question when its page navigates away, answering no", async () => {
+    willAttach({ ...PAGE, src: "https://a.com" });
+    const guest = didAttach();
+    const pending = request(guest, "geolocation");
+    await vi.waitFor(() => expect(prompts()).toHaveLength(1));
+    guest.emit("did-start-navigation", { isMainFrame: true, isSameDocument: false, url: "https://b.com/" });
+    expect(await pending).toBe(false);
+    expect(host.sent).toContainEqual(["browser:prompt-gone", prompts()[0]?.id]);
+  });
+
+  it("ignores an answer from a window that wasn't asked", async () => {
+    willAttach({ ...PAGE, src: "https://a.com" });
+    const guest = didAttach();
+    let settled = false;
+    void request(guest, "geolocation").then(() => {
+      settled = true;
+    });
+    await vi.waitFor(() => expect(prompts()).toHaveLength(1));
+    const { answer: reply } = await import("./prompts");
+    reply(new FakeContents() as never, prompts()[0]?.id, { allow: true, remember: true });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+  });
+
+  it("keeps an incognito page's decisions out of the saved sessions", async () => {
+    willAttach({ ...INCOGNITO, src: "https://a.com" });
+    const incognito = didAttach();
+    const first = request(incognito, "notifications");
+    await vi.waitFor(() => expect(prompts()).toHaveLength(1));
+    await answer(prompts()[0]?.id, { allow: true, remember: true });
+    expect(await first).toBe(true);
+    willAttach({ ...PAGE, src: "https://a.com" });
+    const saved = didAttach();
+    void request(saved, "notifications");
+    await vi.waitFor(() => expect(prompts()).toHaveLength(2));
+  });
+
+  it("tells the person when macOS keeps the camera from Crew", async () => {
+    if (process.platform !== "darwin") return;
+    electron.mediaStatus = "denied";
+    guests.setSitePermissions({ "https://meet.example.com": { camera: "allow" } });
+    willAttach({ ...PAGE, src: "https://a.com" });
+    const guest = didAttach();
+    expect(await request(guest, "media", { mediaTypes: ["video"] })).toBe(false);
+    expect(prompts()[0]).toMatchObject({ kind: "system", permissions: ["camera"] });
+  });
+});
+
+describe("another app's links", () => {
+  const navigate = (contents: FakeContents, url: string) => {
+    const event = { url, prevented: false, preventDefault() { this.prevented = true; } };
+    contents.emit("will-navigate", event);
+    return event.prevented;
+  };
+
+  it("opens the app only after the person says yes", async () => {
+    willAttach({ ...PAGE, src: "https://a.com" });
+    const guest = didAttach();
+    expect(navigate(guest, "zoommtg://zoom.us/join?confno=1")).toBe(true);
+    await vi.waitFor(() => expect(prompts()).toHaveLength(1));
+    expect(prompts()[0]).toMatchObject({ kind: "external", app: "zoom.us", scheme: "zoommtg", origin: "https://a.com" });
+    expect(electron.openExternal).not.toHaveBeenCalled();
+    await answer(prompts()[0]?.id, { open: true });
+    await vi.waitFor(() => expect(electron.openExternal).toHaveBeenCalledWith("zoommtg://zoom.us/join?confno=1"));
+  });
+
+  it("drops a link no app handles, and never asks about Crew's own schemes", async () => {
+    electron.appForProtocol.mockImplementation(() => "");
+    willAttach({ ...PAGE, src: "https://a.com" });
+    const guest = didAttach();
+    expect(navigate(guest, "nothing://x")).toBe(true);
+    expect(navigate(guest, "crew-file://a/b")).toBe(true);
+    await Promise.resolve();
+    expect(prompts()).toEqual([]);
+  });
+
+  it("asks through the permission Chromium raises for a frame's link", async () => {
+    willAttach({ ...PAGE, src: "https://a.com" });
+    const guest = didAttach();
+    const granted = new Promise<boolean>((resolve) =>
+      electron.permissionRequest?.(guest, "openExternal", resolve, {
+        requestingUrl: "https://a.com/",
+        isMainFrame: false,
+        externalURL: "slack://open",
+      }),
+    );
+    await vi.waitFor(() => expect(prompts()).toHaveLength(1));
+    await answer(prompts()[0]?.id, { open: false });
+    expect(await granted).toBe(false);
+  });
+
+  it("limits how often one page can ask", async () => {
+    willAttach({ ...PAGE, src: "https://a.com" });
+    const guest = didAttach();
+    for (let i = 0; i < 10; i++) navigate(guest, "zoommtg://x");
+    await vi.waitFor(() => expect(prompts()).toHaveLength(3));
+  });
+});
+
+describe("site sign-in", () => {
+  const login = (contents: FakeContents | null, isProxy = false) => {
+    const callback = vi.fn();
+    const event = { prevented: false, preventDefault() { this.prevented = true; } };
+    electron.appHandlers.get("login")?.(
+      event,
+      contents,
+      { url: "http://intranet.example.com/admin" },
+      { isProxy, scheme: "basic", host: "intranet.example.com", port: 80, realm: "Admin" },
+      callback,
+    );
+    return { callback, event };
+  };
+
+  it("asks for a page's basic auth over that page and answers with what was typed", async () => {
+    willAttach({ ...PAGE, src: "https://a.com" });
+    const guest = didAttach();
+    (guest as unknown as { session: unknown }).session = sessionOf();
+    const { callback, event } = login(guest);
+    expect(event.prevented).toBe(true);
+    await vi.waitFor(() => expect(prompts()).toHaveLength(1));
+    expect(prompts()[0]).toMatchObject({ kind: "auth", origin: "http://intranet.example.com", realm: "Admin", secure: false });
+    await answer(prompts()[0]?.id, { username: "me", password: "pw" });
+    await vi.waitFor(() => expect(callback).toHaveBeenCalledWith("me", "pw"));
+  });
+
+  it("cancels the sign-in when the person does", async () => {
+    willAttach({ ...PAGE, src: "https://a.com" });
+    const guest = didAttach();
+    (guest as unknown as { session: unknown }).session = sessionOf();
+    const { callback } = login(guest);
+    await vi.waitFor(() => expect(prompts()).toHaveLength(1));
+    await answer(prompts()[0]?.id, null);
+    await vi.waitFor(() => expect(callback).toHaveBeenCalledWith());
+  });
+
+  it("leaves the app's own windows to Electron", () => {
+    const { event } = login(new FakeContents());
+    expect(event.prevented).toBe(false);
+  });
+});
+
+/** The one fake session every partition shares; the page sessions are recognized by it. */
+function sessionOf() {
+  return electron.lastSession;
+}
+
+describe("hung pages", () => {
+  it("tells the window a page stopped answering, and when it came back", () => {
+    willAttach({ ...PAGE, src: "https://a.com" });
+    const guest = didAttach();
+    guest.emit("unresponsive");
+    guest.emit("responsive");
+    expect(host.sent.filter(([channel]) => channel === "browser:responsive")).toEqual([
+      ["browser:responsive", { webContentsId: guest.id, hung: true }],
+      ["browser:responsive", { webContentsId: guest.id, hung: false }],
+    ]);
+  });
+});
+
+describe("Google sign-in", () => {
+  it("goes by Firefox's name on the sign-in page and by Chrome's elsewhere", () => {
+    willAttach({ ...PAGE, src: "https://a.com" });
+    const guest = didAttach() as FakeContents & Record<string, unknown>;
+    let agent = "Chrome";
+    Object.assign(guest, {
+      session: { getUserAgent: () => "Chrome" },
+      getUserAgent: () => agent,
+      setUserAgent: (next: string) => {
+        agent = next;
+      },
+    });
+    guest.emit("did-start-navigation", { isMainFrame: true, isSameDocument: false, url: "https://accounts.google.com/signin" });
+    expect(agent).toMatch(/Firefox/);
+    guest.emit("did-start-navigation", { isMainFrame: false, isSameDocument: false, url: "https://x.com/" });
+    expect(agent).toMatch(/Firefox/);
+    guest.emit("did-start-navigation", { isMainFrame: true, isSameDocument: false, url: "https://mail.google.com/" });
+    expect(agent).toBe("Chrome");
+  });
+
+  it("names Chrome in every page request's client hints", () => {
+    willAttach({ ...PAGE, src: "https://a.com" });
+    const callback = vi.fn();
+    electron.headers?.({ url: "https://github.com/", requestHeaders: { "sec-ch-ua": '"Chromium";v="152"' } }, callback);
+    expect(callback.mock.calls[0]?.[0]).toMatchObject({
+      requestHeaders: { "sec-ch-ua": expect.stringContaining('"Google Chrome"') },
+    });
   });
 });
 

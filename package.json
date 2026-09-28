@@ -131,6 +131,12 @@
         }
       ],
       "category": "public.app-category.developer-tools",
+      "extendInfo": {
+        "NSCameraUsageDescription": "Pages in Crew's browser can use the camera once you allow them.",
+        "NSMicrophoneUsageDescription": "Pages in Crew's browser can use the microphone once you allow them.",
+        "NSLocationUsageDescription": "Pages in Crew's browser can know your location once you allow them.",
+        "NSLocationWhenInUseUsageDescription": "Pages in Crew's browser can know your location once you allow them."
+      },
       "hardenedRuntime": false,
       "gatekeeperAssess": false,
       "identity": "-"

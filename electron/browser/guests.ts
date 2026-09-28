@@ -5,12 +5,13 @@ import {
   BrowserWindow,
   clipboard,
   Menu,
-  Notification,
   session,
   shell,
+  systemPreferences,
   type ContextMenuParams,
   type HandlerDetails,
   type MenuItemConstructorOptions,
+  type PermissionRequest,
   type Session,
   type WebContents,
   type WindowOpenHandlerResponse,
@@ -26,18 +27,31 @@ import {
   type OpenTabRequest,
 } from "../../src/lib/browser/bridge";
 import { FILES_PARTITION } from "../../src/lib/browser/files";
+import {
+  alwaysAllowed,
+  decide,
+  externalScheme,
+  originOf,
+  parseSitePermissions,
+  permissionKinds,
+  verdict,
+  type SiteDecision,
+  type SitePermission,
+  type SitePermissions,
+} from "../../src/lib/browser/permissions";
 import { copyCookies } from "./cookies";
 import { openExternal } from "../external";
+import { forgetHost, saveNextAs, trackDownload } from "./downloads";
 import { followFile, serveFiles } from "./files";
+import { chromeUserAgent, firefoxUserAgent, isGoogleSignIn, outgoingHeaders } from "./identity";
+import { ask, dropHost, dropPrompts, type PromptTarget } from "./prompts";
 import { relayBypassRules, startRelay, type RemoteRelay } from "./remote-proxy";
 import {
   attachDecision,
-  browserUserAgent,
   certificateBypass,
   createRateLimiter,
   hardenWebPreferences,
   navigationVerdict,
-  permissionAllowed,
   popupVerdict,
   previewNavigationVerdict,
 } from "./policy";
@@ -48,6 +62,8 @@ const IS_MAC = process.platform === "darwin";
  * `__dirname` there is that directory. import.meta.url is empty in the cjs bundle.
  */
 const GUEST_PRELOAD = path.join(__dirname, "guest-preload.cjs");
+/** A login popup's: the sign-in disguise without the close guard, so it can still close itself. */
+const POPUP_PRELOAD = path.join(__dirname, "popup-preload.cjs");
 /** A snapshot handed over for restore waits this long for its webview to attach. */
 const RESTORE_TTL_MS = 10_000;
 /**
@@ -59,6 +75,8 @@ const INCOGNITO_WIPE_MS = 1000;
 
 /** Every attached guest, by webContents id, with the window that embeds it. */
 const guests = new Map<number, { guest: WebContents; host: WebContents }>();
+/** Every login popup, by webContents id: the window and the page that opened it, where its questions show. */
+const popups = new Map<number, PromptTarget>();
 /** What each window can run right now; a chord inside one of its pages is checked against this. */
 const liveCommands = new WeakMap<WebContents, LiveCommand[]>();
 const keyboardLayouts = new WeakMap<WebContents, KeyboardLayout>();
@@ -85,18 +103,39 @@ function partitionDir(partition: string): string {
 
 /** Each relay's token, by its port: proxy auth can come without a page (a service worker's fetch). */
 const relayTokens = new Map<number, string>();
-let proxyLoginHooked = false;
+let loginHooked = false;
 
-/** Electron 44 delivers proxy auth on `app`; only a relay's challenge is answered. */
-function hookProxyLogin(): void {
-  if (proxyLoginHooked) return;
-  proxyLoginHooked = true;
-  app.on("login", (event, _webContents, _details, authInfo, callback) => {
-    if (!authInfo.isProxy || authInfo.host !== "127.0.0.1") return;
-    const token = relayTokens.get(authInfo.port);
-    if (!token) return;
+/**
+ * Electron 44 delivers proxy and site auth on `app`. A relay's challenge is
+ * answered with its token; a page's own sign-in (basic or digest auth) asks
+ * the person over that page. Anything else keeps Electron's default: no answer.
+ */
+function hookLogin(): void {
+  if (loginHooked) return;
+  loginHooked = true;
+  app.on("login", (event, webContents, details, authInfo, callback) => {
+    if (authInfo.isProxy) {
+      if (authInfo.host !== "127.0.0.1") return;
+      const token = relayTokens.get(authInfo.port);
+      if (!token) return;
+      event.preventDefault();
+      callback(token, token);
+      return;
+    }
+    if (!webContents || !pageSessionSet.has(webContents.session)) return;
+    const target = promptTarget(webContents);
+    const origin = originOf(details.url);
+    if (!target || !origin) return;
     event.preventDefault();
-    callback(token, token);
+    void ask(target, {
+      kind: "auth",
+      origin,
+      realm: authInfo.realm.slice(0, 200),
+      secure: origin.startsWith("https:"),
+    }).then((reply) => {
+      if (reply && "username" in reply) callback(reply.username, reply.password);
+      else callback();
+    });
   });
 }
 
@@ -135,7 +174,7 @@ export async function setWorkspaceProxy(workspaceId: string, proxy: RemoteProxy 
 type RemoteProxy = { host: string; port: number; token: string };
 
 async function proxySession(ses: Session, proxy: RemoteProxy | null): Promise<void> {
-  hookProxyLogin();
+  hookLogin();
   const key = proxy ? `${proxy.host}:${proxy.port}` : null;
   if (relayOf.get(ses) !== key) await releaseRelay(ses);
   if (!proxy || !key) {
@@ -194,9 +233,20 @@ function pageSession(partition: string): { ses: Session; seeded: Promise<void> }
         () => {},
       )
     : Promise.resolve();
-  ses.setUserAgent(browserUserAgent(ses.getUserAgent()));
-  ses.setPermissionRequestHandler((_wc, permission, callback) => callback(permissionAllowed(permission)));
-  ses.setPermissionCheckHandler((_wc, permission) => permissionAllowed(permission));
+  ses.setUserAgent(chromeUserAgent(ses.getUserAgent()));
+  const chrome = chromeVersion();
+  // The only onBeforeSendHeaders on a page session: Electron keeps one listener per event.
+  ses.webRequest.onBeforeSendHeaders((details, callback) =>
+    callback({ requestHeaders: outgoingHeaders(details.requestHeaders, details.url, chrome) }),
+  );
+  ses.setPermissionRequestHandler((contents, permission, callback, details) => {
+    void requestPermission(contents, permission, details, partition).then(callback, () => callback(false));
+  });
+  ses.setPermissionCheckHandler((_contents, permission, requestingOrigin, details) =>
+    checkPermission(permission, originOf(details.requestingUrl) ?? originOf(requestingOrigin), details.mediaType, partition),
+  );
+  // Screen sharing goes through macOS's own picker, which is the consent. Where there is none, it is refused.
+  ses.setDisplayMediaRequestHandler((_request, callback) => callback({}), { useSystemPicker: true });
   // Downloads need no gesture, so a page could fill the disk; a burst past this is cancelled.
   const allowDownload = createRateLimiter(10, 60_000);
   ses.on("will-download", (_event, item, contents) => {
@@ -204,20 +254,8 @@ function pageSession(partition: string): { ses: Session; seeded: Promise<void> }
       item.cancel();
       return;
     }
-    const owner = contents ? guests.get(contents.id)?.host : undefined;
-    const report = (active: boolean) => {
-      if (owner && !owner.isDestroyed()) owner.send(CHANNELS.download, { webContentsId: contents.id, active });
-    };
-    report(true);
-    const target = uniquePath(app.getPath("downloads"), path.basename(item.getFilename()) || "download");
-    item.setSavePath(target);
-    item.once("done", (_e, state) => {
-      report(false);
-      if (state !== "completed" || !Notification.isSupported()) return;
-      const note = new Notification({ title: "Download complete", body: path.basename(target) });
-      note.on("click", () => shell.showItemInFolder(target));
-      note.show();
-    });
+    const target = contents ? promptTarget(contents) : null;
+    trackDownload(item, target ? { host: target.host, pageId: target.pageId } : null);
   });
   const entry = { ses, seeded };
   pageSessions.set(partition, entry);
@@ -234,6 +272,146 @@ export async function readyPageSession(partition: string): Promise<Session> {
 
 let certificatesGuarded = false;
 
+/** Chromium's version as Chrome reports it: the major alone in `sec-ch-ua`, all four parts in the full list. */
+function chromeVersion(): { major: string; full: string } {
+  const full = process.versions.chrome ?? "";
+  return { major: full.split(".")[0] ?? "", full };
+}
+
+/**
+ * Site decisions the person asked to keep, as the window last sent them; the
+ * window stores them. An incognito session remembers its own, in memory, and
+ * forgets them with its sign-ins.
+ */
+let siteDecisions: SitePermissions = {};
+const incognitoDecisions = new Map<string, SitePermissions>();
+
+export function setSitePermissions(value: unknown): void {
+  siteDecisions = parseSitePermissions(value);
+}
+
+function decisionsFor(partition: string): SitePermissions {
+  return isIncognitoPartition(partition) ? (incognitoDecisions.get(partition) ?? {}) : siteDecisions;
+}
+
+function remember(partition: string, origin: string, kinds: SitePermission[], decision: SiteDecision): void {
+  if (isIncognitoPartition(partition)) {
+    incognitoDecisions.set(partition, decide(incognitoDecisions.get(partition) ?? {}, origin, kinds, decision));
+  } else {
+    siteDecisions = decide(siteDecisions, origin, kinds, decision);
+  }
+}
+
+/** Where a page's questions show: over the page itself, or over the one that opened its popup. */
+function promptTarget(contents: WebContents): PromptTarget | null {
+  const guest = guests.get(contents.id);
+  if (guest && guest.guest === contents) return { host: guest.host, pageId: contents.id };
+  return popups.get(contents.id) ?? null;
+}
+
+/** Chromium's question, answered from what the person decided, or put to them over the page. */
+async function requestPermission(
+  contents: WebContents,
+  permission: string,
+  details: PermissionRequest & { mediaTypes?: string[]; externalURL?: string },
+  partition: string,
+): Promise<boolean> {
+  if (alwaysAllowed(permission)) return true;
+  // A link to another app that no navigation guard saw: a frame's, or a redirect's.
+  if (permission === "openExternal") return details.externalURL ? askForApp(contents, details.externalURL) : false;
+  const kinds = permissionKinds(permission, details.mediaTypes);
+  const origin = originOf(details.requestingUrl) ?? originOf(contents.getURL());
+  const target = promptTarget(contents);
+  if (!kinds || !origin || !target) return false;
+  const decided = verdict(decisionsFor(partition), origin, kinds);
+  if (decided.answer === "block") return false;
+  if (decided.answer === "ask") {
+    const reply = await ask(target, { kind: "permission", origin, permissions: decided.kinds });
+    if (!reply || !("allow" in reply)) return false;
+    if (reply.remember) remember(partition, origin, decided.kinds, reply.allow ? "allow" : "block");
+    if (!reply.allow) return false;
+  }
+  return systemAllows(target, kinds);
+}
+
+/** What a page may read without asking: only what the person already allowed. */
+function checkPermission(permission: string, origin: string | null, mediaType: string | undefined, partition: string): boolean {
+  if (alwaysAllowed(permission)) return true;
+  const kinds = permissionKinds(permission, mediaType === "unknown" ? undefined : mediaType);
+  if (!kinds || !origin) return false;
+  return verdict(decisionsFor(partition), origin, kinds).answer === "allow";
+}
+
+const PRIVACY_PANES: Partial<Record<SitePermission, string>> = {
+  camera: "x-apple.systempreferences:com.apple.preference.security?Privacy_Camera",
+  microphone: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone",
+};
+
+/**
+ * macOS has its own say over the camera and microphone. The first time, it
+ * asks; once it has said no, the page is refused and the person is told where
+ * to change that.
+ */
+async function systemAllows(target: PromptTarget, kinds: SitePermission[]): Promise<boolean> {
+  if (!IS_MAC) return true;
+  const blocked: SitePermission[] = [];
+  for (const kind of kinds) {
+    if (kind !== "camera" && kind !== "microphone") continue;
+    const status = systemPreferences.getMediaAccessStatus(kind);
+    if (status === "granted") continue;
+    if (status === "not-determined" && (await systemPreferences.askForMediaAccess(kind).catch(() => false))) continue;
+    blocked.push(kind);
+  }
+  if (blocked.length === 0) return true;
+  void ask(target, { kind: "system", permissions: blocked }).then((reply) => {
+    const pane = blocked[0] && PRIVACY_PANES[blocked[0]];
+    if (reply && "settings" in reply && reply.settings && pane) void shell.openExternal(pane);
+  });
+  return false;
+}
+
+/** Per page, so one page asking to open Zoom over and over can't bury the others' questions. */
+const appLimits = new Map<number, () => boolean>();
+
+/**
+ * Another app's link (zoommtg:, slack:, vscode:) opens only after the person
+ * says yes over the page. A scheme no app on this Mac handles is dropped.
+ */
+async function askForApp(contents: WebContents, url: string): Promise<boolean> {
+  const scheme = externalScheme(url);
+  const target = promptTarget(contents);
+  if (!scheme || !target) return false;
+  const name = app.getApplicationNameForProtocol(url).replace(/\.app$/i, "");
+  if (!name) return false;
+  let allow = appLimits.get(target.pageId);
+  if (!allow) {
+    allow = createRateLimiter(3, 10_000);
+    appLimits.set(target.pageId, allow);
+  }
+  if (!allow()) return false;
+  const origin = originOf(contents.getURL()) ?? "";
+  const reply = await ask(target, { kind: "external", origin, app: name, scheme });
+  return reply !== null && "open" in reply && reply.open;
+}
+
+function openApp(contents: WebContents, url: string): void {
+  void askForApp(contents, url).then((open) => {
+    if (open) void openExternal(url);
+  });
+}
+
+/**
+ * Google's sign-in turns away embedded Chromium, so on its pages a page or a
+ * popup goes by Firefox's name, and by Chrome's again once it leaves.
+ */
+function followSignIn(contents: WebContents): void {
+  contents.on("did-start-navigation", (details) => {
+    if (!details.isMainFrame || details.isSameDocument) return;
+    const agent = isGoogleSignIn(details.url) ? firefoxUserAgent() : contents.session.getUserAgent();
+    if (contents.getUserAgent() !== agent) contents.setUserAgent(agent);
+  });
+}
+
 /** Only local dev servers get past a bad certificate; everything else keeps Chromium's refusal. */
 function guardCertificates(): void {
   if (certificatesGuarded) return;
@@ -243,14 +421,6 @@ function guardCertificates(): void {
     event.preventDefault();
     callback(certificateBypass(url));
   });
-}
-
-function uniquePath(dir: string, name: string): string {
-  const ext = path.extname(name);
-  const stem = name.slice(0, name.length - ext.length);
-  let candidate = path.join(dir, name);
-  for (let n = 1; existsSync(candidate); n++) candidate = path.join(dir, `${stem} (${n})${ext}`);
-  return candidate;
 }
 
 function attachQueue(host: WebContents): Attach[] {
@@ -265,7 +435,12 @@ function attachQueue(host: WebContents): Attach[] {
 /** Hooks a window so every <webview> it creates is vetted, hardened, and wired before its page runs. */
 export function installBrowser(win: BrowserWindow): void {
   guardCertificates();
+  hookLogin();
   const host = win.webContents;
+  host.once("destroyed", () => {
+    dropHost(host);
+    forgetHost(host);
+  });
   host.on("will-attach-webview", (event, prefs, params) => {
     const decision = attachDecision(params);
     if (!decision.allow) {
@@ -339,6 +514,7 @@ function openTab(host: WebContents, request: OpenTabRequest): void {
  * app's lifetime, so without this a new incognito tab would still be signed in.
  */
 async function wipeIncognito(partition: string): Promise<void> {
+  incognitoDecisions.delete(partition);
   const entry = pageSessions.get(partition);
   if (!entry) return;
   const { ses } = entry;
@@ -372,21 +548,34 @@ function trackIncognito(guest: WebContents, partition: string): void {
 }
 
 function register(host: WebContents, guest: WebContents, partition: string): void {
-  guests.set(guest.id, { guest, host });
+  const id = guest.id;
+  guests.set(id, { guest, host });
   guest.once("destroyed", () => {
-    if (guests.get(guest.id)?.guest === guest) guests.delete(guest.id);
+    if (guests.get(id)?.guest === guest) guests.delete(id);
+    appLimits.delete(id);
+    dropPrompts(id);
   });
   if (isIncognitoPartition(partition)) trackIncognito(guest, partition);
 
   const allowOpen = createRateLimiter(4, 2000);
-  guest.setWindowOpenHandler((details) => windowOpen(host, guest.id, partition, details, allowOpen));
-  guest.on("did-create-window", (child) => guardPopup(host, guest.id, partition, child.webContents, allowOpen));
+  guest.setWindowOpenHandler((details) => windowOpen(host, guest, id, partition, details, allowOpen));
+  guest.on("did-create-window", (child) => guardPopup(host, id, partition, child.webContents, allowOpen));
   if (partition === FILES_PARTITION) {
     guardPreview(host, guest);
     followFile(guest);
   } else {
     guardNavigation(guest);
+    followSignIn(guest);
   }
+  // A question asked by the page it left is no longer the page's to answer.
+  guest.on("did-start-navigation", (details) => {
+    if (details.isMainFrame && !details.isSameDocument) dropPrompts(id);
+  });
+  const responsive = (hung: boolean) => {
+    if (!host.isDestroyed()) host.send(CHANNELS.responsive, { webContentsId: id, hung });
+  };
+  guest.on("unresponsive", () => responsive(true));
+  guest.on("responsive", () => responsive(false));
 
   forwardCommands(host, guest);
 
@@ -424,18 +613,28 @@ export function forwardCommands(host: WebContents, contents: WebContents): void 
 
 function windowOpen(
   host: WebContents,
+  source: WebContents,
   openerId: number,
   partition: string,
   details: HandlerDetails,
   allowOpen: () => boolean,
 ): WindowOpenHandlerResponse {
-  const verdict = popupVerdict(details);
+  const decision = popupVerdict(details);
   // The mail app counts against the same budget, or a page could spam it.
-  if (verdict.action === "deny" || !allowOpen()) return { action: "deny" };
-  if (verdict.action === "external") {
-    void openExternal(verdict.url);
+  if (decision.action === "deny" || !allowOpen()) return { action: "deny" };
+  if (decision.action === "external") {
+    void openExternal(decision.url);
     return { action: "deny" };
   }
+  if (decision.action === "ask") {
+    openApp(source, decision.url);
+    return { action: "deny" };
+  }
+  if (decision.action === "download") {
+    source.downloadURL(decision.url);
+    return { action: "deny" };
+  }
+  const verdict = decision;
   if (verdict.action === "tab") {
     openTab(host, { url: verdict.url, background: verdict.background, openerId, incognito: isIncognitoPartition(partition) });
     return { action: "deny" };
@@ -449,6 +648,7 @@ function windowOpen(
     overrideBrowserWindowOptions: {
       autoHideMenuBar: true,
       webPreferences: {
+        preload: POPUP_PRELOAD,
         partition,
         sandbox: true,
         contextIsolation: true,
@@ -467,8 +667,15 @@ function guardPopup(
   popup: WebContents,
   allowOpen: () => boolean,
 ): void {
+  const id = popup.id;
+  popups.set(id, { host, pageId: openerId });
+  popup.once("destroyed", () => {
+    popups.delete(id);
+    dropPrompts(id);
+  });
   guardNavigation(popup);
-  popup.setWindowOpenHandler((details) => windowOpen(host, openerId, partition, details, allowOpen));
+  followSignIn(popup);
+  popup.setWindowOpenHandler((details) => windowOpen(host, popup, openerId, partition, details, allowOpen));
   popup.on("did-create-window", (child) => guardPopup(host, openerId, partition, child.webContents, allowOpen));
 }
 
@@ -478,6 +685,8 @@ function guardNavigation(contents: WebContents): void {
     if (verdict === "allow") return;
     event.preventDefault();
     if (verdict === "external") void openExternal(event.url);
+    else if (verdict === "ask") openApp(contents, event.url);
+    else if (verdict === "download") contents.downloadURL(event.url);
   };
   contents.on("will-navigate", guard);
   contents.on("will-redirect", guard);
@@ -513,18 +722,36 @@ function contextMenu(
   const incognito = isIncognitoPartition(partition);
   const open = (inIncognito: boolean) => () =>
     openTab(host, { url: params.linkURL, background: true, openerId: guest.id, incognito: inIncognito });
+  const saveAs = (url: string) => () => {
+    saveNextAs(url);
+    guest.downloadURL(url);
+  };
   group(
     link
       ? [
           { label: "Open Link in New Tab", click: open(incognito) },
           ...(incognito ? [] : [{ label: "Open Link in Incognito Tab", click: open(true) }]),
+          { label: "Open Link in Default Browser", click: () => void openExternal(params.linkURL) },
+          { type: "separator" },
+          { label: "Save Link As…", click: saveAs(params.linkURL) },
           { label: "Copy Link", click: () => clipboard.writeText(params.linkURL) },
         ]
       : [],
   );
+  const image = params.mediaType === "image" && params.hasImageContents;
+  const imageUrl = image && navigationVerdict(params.srcURL) === "allow" ? params.srcURL : null;
   group(
-    params.mediaType === "image" && params.hasImageContents
+    image
       ? [
+          ...(imageUrl
+            ? [
+                {
+                  label: "Open Image in New Tab",
+                  click: () => openTab(host, { url: imageUrl, background: true, openerId: guest.id, incognito }),
+                },
+              ]
+            : []),
+          { label: "Save Image As…", click: saveAs(params.srcURL) },
           { label: "Copy Image", click: () => guest.copyImageAt(params.x, params.y) },
           { label: "Copy Image Address", click: () => clipboard.writeText(params.srcURL) },
         ]
@@ -546,6 +773,7 @@ function contextMenu(
     { label: "Forward", enabled: history.canGoForward(), click: () => history.goForward() },
     { label: "Reload", click: () => guest.reload() },
   ]);
+  group([{ label: "Print…", click: () => guest.print() }]);
   group([{ label: "Inspect Element", click: () => guest.inspectElement(params.x, params.y) }]);
   return items;
 }

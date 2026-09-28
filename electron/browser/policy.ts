@@ -4,7 +4,8 @@
  */
 
 import { isPagePartition, RESTORE_PREFIX } from "../../src/lib/browser/bridge";
-import { FILES_PARTITION, isFileUrl } from "../../src/lib/browser/files";
+import { FILE_SCHEME, FILES_PARTITION, isFileUrl } from "../../src/lib/browser/files";
+import { externalScheme } from "../../src/lib/browser/permissions";
 
 // The window builds its webviews with these; one definition keeps the two sides agreeing.
 export { RESTORE_PREFIX };
@@ -51,6 +52,8 @@ export function hardenWebPreferences(prefs: Record<string, unknown>, guestPreloa
   prefs.webviewTag = false;
   // Blink's defaults: the element can switch features neither on nor off.
   prefs.disableBlinkFeatures = "";
+  // A video's fullscreen fills the page's pane, not the whole window.
+  prefs.disableHtmlFullscreenWindowResize = true;
 }
 
 /**
@@ -77,13 +80,27 @@ export function attachDecision(params: {
   return { allow: false };
 }
 
-export type NavigationVerdict = "allow" | "external" | "block";
+export type NavigationVerdict = "allow" | "external" | "ask" | "download" | "block";
 
-/** Where a page may take itself: the web, or mail through the system. Never file:, javascript: or app schemes. */
+/** Crew's own schemes, which no page may hand to an app. */
+const OWN_SCHEMES = [FILE_SCHEME, "crew"];
+
+/** A link another app handles (zoommtg:, slack:), offered to it only once the person says so. */
+export function asksForApp(url: string): boolean {
+  return externalScheme(url, OWN_SCHEMES) !== null;
+}
+
+/**
+ * Where a page may take itself: the web, or mail through the system. A blob it
+ * made is saved rather than shown, and another app's link waits for a yes.
+ * Never file:, javascript: or Crew's schemes.
+ */
 export function navigationVerdict(url: string): NavigationVerdict {
   const parsed = parse(url);
   if (isWeb(parsed) || isBlank(parsed)) return "allow";
   if (parsed?.protocol === "mailto:") return "external";
+  if (parsed?.protocol === "blob:") return "download";
+  if (asksForApp(url)) return "ask";
   return "block";
 }
 
@@ -104,6 +121,8 @@ export type PopupVerdict =
   | { action: "tab"; url: string; background: boolean }
   | { action: "window" }
   | { action: "external"; url: string }
+  | { action: "ask"; url: string }
+  | { action: "download"; url: string }
   | { action: "deny" };
 
 // innerWidth and innerHeight are the spec's aliases for width and height.
@@ -116,14 +135,23 @@ function asksForPopup(features: string): boolean {
     .some((feature) => POPUP_FEATURES.has((feature.split("=")[0] ?? "").trim().toLowerCase()));
 }
 
-/** What window.open and target=_blank become: a Crew tab, a real child window, the mail app, or nothing. */
+/**
+ * What window.open and target=_blank become: a Crew tab, a real child window,
+ * the mail app, another app once asked, a download, or nothing.
+ */
 export function popupVerdict(details: { url: string; disposition: string; features: string }): PopupVerdict {
   const url = parse(details.url);
   // Some logins open a sized blank popup first, then navigate it or post a form into it.
   if (isBlank(url) && details.disposition === "new-window" && asksForPopup(details.features)) {
     return { action: "window" };
   }
-  if (!isWeb(url)) return url?.protocol === "mailto:" ? { action: "external", url: details.url } : { action: "deny" };
+  if (!isWeb(url)) {
+    if (url?.protocol === "mailto:") return { action: "external", url: details.url };
+    // A file the page built (an export, a generated PDF) opened in a new tab: no tab can load it, so it is saved.
+    if (url?.protocol === "blob:" || url?.protocol === "data:") return { action: "download", url: details.url };
+    if (asksForApp(details.url)) return { action: "ask", url: details.url };
+    return { action: "deny" };
+  }
   switch (details.disposition) {
     case "new-window":
       return asksForPopup(details.features)
@@ -139,13 +167,6 @@ export function popupVerdict(details: { url: string; disposition: string; featur
       // save-to-disk, and whatever Chromium adds next.
       return { action: "deny" };
   }
-}
-
-const ALLOWED_PERMISSIONS = new Set(["clipboard-sanitized-write", "fullscreen", "pointerLock"]);
-
-/** Camera, microphone, location, notifications, screen capture and the rest stay off. */
-export function permissionAllowed(permission: string): boolean {
-  return ALLOWED_PERMISSIONS.has(permission);
 }
 
 const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
@@ -172,13 +193,4 @@ export function createRateLimiter(max: number, windowMs: number, now: () => numb
     recent.push(at);
     return true;
   };
-}
-
-/** Chromium's own user agent: some sites turn away agents that name Electron or the app. */
-export function browserUserAgent(defaultUA: string): string {
-  return defaultUA
-    .replace(/\bElectron\/\S+/gi, "")
-    .replace(/\bcrew\/\S+/gi, "")
-    .replace(/ {2,}/g, " ")
-    .trim();
 }

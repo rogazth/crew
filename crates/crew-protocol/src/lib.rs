@@ -723,6 +723,10 @@ pub enum CookieSameSite {
 #[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
 pub struct CookieRead {
     pub cookies: Vec<ImportedCookie>,
-    /// Rows left out: expired, undecryptable, partitioned, or on a domain that must not move.
+    /// Rows left out: expired, undecryptable, or partitioned.
     pub skipped: u32,
+    /// Rows on Google's and YouTube's domains, left out because Google binds them to the browser
+    /// that holds them. Only a sign-in in Crew brings those over.
+    #[serde(default)]
+    pub google: u32,
 }

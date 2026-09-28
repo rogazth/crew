@@ -4,7 +4,16 @@ import { capSnapshot, parseSnapshot } from "../../src/lib/browser/snapshot";
 import { CHANNELS, isIncognitoPartition, partitionFor } from "../../src/lib/browser/bridge";
 import { importCookies } from "./cookies";
 import { dockBounds, dockDevTools, placeDevTools, undockDevTools } from "./devtools";
-import { ownedGuest, prepareRestore, readyPageSession, setKeyboardLayout, setLiveCommands } from "./guests";
+import { downloadAction, setAskWhereToSave } from "./downloads";
+import {
+  ownedGuest,
+  prepareRestore,
+  readyPageSession,
+  setKeyboardLayout,
+  setLiveCommands,
+  setSitePermissions,
+} from "./guests";
+import { answer } from "./prompts";
 
 const TOKEN = /^[A-Za-z0-9-]{1,64}$/;
 const FAVICON_BYTES = 128 * 1024;
@@ -62,6 +71,23 @@ function keyboardLayout(value: unknown): KeyboardLayout | undefined {
 export function registerBrowserIpc(): void {
   ipcMain.on(CHANNELS.commands, (event, list: unknown) => setLiveCommands(event.sender, commandList(list)));
   ipcMain.on(CHANNELS.keyboardLayout, (event, layout: unknown) => setKeyboardLayout(event.sender, keyboardLayout(layout)));
+
+  ipcMain.on(CHANNELS.answer, (event, id: unknown, value: unknown) => answer(event.sender, id, value));
+  ipcMain.on(CHANNELS.sitePermissions, (_event, decisions: unknown) => setSitePermissions(decisions));
+  ipcMain.on(CHANNELS.downloadPrefs, (_event, ask: unknown) => setAskWhereToSave(ask === true));
+  /** Resolves why the file could not open, or "" once it did. */
+  ipcMain.handle(CHANNELS.downloadAction, (event, id: unknown, action: unknown) => downloadAction(event.sender, id, action));
+
+  /** A hung page's process is ended; the window then builds it again. */
+  ipcMain.handle(CHANNELS.kill, (event, id: unknown) => {
+    const guest = typeof id === "number" ? ownedGuest(event.sender, id) : null;
+    guest?.forcefullyCrashRenderer();
+  });
+
+  ipcMain.handle(CHANNELS.print, (event, id: unknown) => {
+    const guest = typeof id === "number" ? ownedGuest(event.sender, id) : null;
+    guest?.print();
+  });
 
   /** Toggles, and answers whether DevTools are open afterwards. */
   ipcMain.handle(CHANNELS.devtools, (event, id: unknown) => {

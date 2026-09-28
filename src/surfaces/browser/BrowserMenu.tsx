@@ -10,17 +10,21 @@ import {
   PanelBottomIcon,
   PanelLeftIcon,
   PanelRightIcon,
+  PrinterIcon,
   SettingsIcon,
   SearchIcon,
+  ShieldIcon,
   ZoomInIcon,
   MinusIcon,
   PlusIcon,
   type LucideIcon as Icon,
 } from "lucide-react";
 import { useState, type ReactNode } from "react";
+import { changeSitePermissions, useSitePermissions } from "../../hooks/useSitePermissions";
 import { browserCookieSources } from "../../lib/api";
 import { DEVTOOLS_DOCKS, type DevToolsDock } from "../../lib/browserPrefs";
 import { cookieSourceLabel } from "../../lib/browser/cookies";
+import { decide, forget, PERMISSION_LABELS, SITE_PERMISSIONS } from "../../lib/browser/permissions";
 import { zoomLabel, ZOOM_STEPS } from "../../lib/browser/zoom";
 import { commandKeys, type CommandId } from "../../lib/commands";
 import type { CookieSource } from "../../lib/protocol";
@@ -50,6 +54,9 @@ function submenuOffset({ side }: { side: Menu.Positioner.Props["side"] }) {
 }
 
 type Props = {
+  /** Held by the pane, which closes it when the page is hidden or takes the keyboard. */
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
   zoom: number;
   onZoom: (direction: -1 | 0 | 1) => void;
   onFind: () => void;
@@ -58,13 +65,18 @@ type Props = {
   onDevToolsDock: (dock: DevToolsDock) => void;
   onHistory: () => void;
   onSettings: () => void;
+  onPrint: () => void;
   onImportCookies: (source: CookieSource) => void;
   /** False outside Electron, where nothing can write the cookies. */
   canImport: boolean;
+  /** The page's origin while it shows a site whose permissions are kept; null on a blank or incognito page. */
+  site: string | null;
 };
 
 /** The page's ⋯ menu, like a browser's: zoom, find, and what doesn't earn a toolbar button. */
 export function BrowserMenu({
+  open,
+  onOpenChange,
   zoom,
   onZoom,
   onFind,
@@ -73,21 +85,24 @@ export function BrowserMenu({
   onDevToolsDock,
   onHistory,
   onSettings,
+  onPrint,
   onImportCookies,
   canImport,
+  site,
 }: Props) {
   // Read each time the menu opens: a browser installed meanwhile shows up without a restart.
   const [sources, setSources] = useState<CookieSource[] | null>(null);
 
-  const load = (open: boolean) => {
-    if (!open || !canImport) return;
+  const load = (next: boolean) => {
+    onOpenChange(next);
+    if (!next || !canImport) return;
     browserCookieSources()
       .then(setSources)
       .catch(() => setSources([]));
   };
 
   return (
-    <Menu.Root modal={false} onOpenChange={load}>
+    <Menu.Root open={open} modal={false} onOpenChange={load}>
       <Menu.Trigger
         aria-label="More"
         title="More"
@@ -131,6 +146,7 @@ export function BrowserMenu({
               </Menu.Item>
             </div>
             <Item icon={SearchIcon} label="Find…" command="find" onClick={onFind} />
+            <Item icon={PrinterIcon} label="Print…" onClick={onPrint} />
 
             <Separator />
 
@@ -154,6 +170,7 @@ export function BrowserMenu({
                 )}
               </Submenu>
             )}
+            {site && <SitePermissions site={site} />}
             <Item icon={CodeXmlIcon} label="Developer Tools" command="browser-devtools" onClick={onDevTools} />
             <Submenu icon={DOCKS[devtoolsDock].icon} label="Developer Tools Position">
               <Menu.RadioGroup value={devtoolsDock} onValueChange={(value) => onDevToolsDock(value as DevToolsDock)}>
@@ -189,6 +206,64 @@ function Item({ icon: Glyph, label, command, onClick }: { icon: Icon; label: str
       <span className="min-w-0 flex-1 truncate">{label}</span>
       {command && <span className="shrink-0 text-[12px] text-text-muted tabular-nums">{commandKeys(command)}</span>}
     </Menu.Item>
+  );
+}
+
+/** "meet.google.com", or the whole origin when it is not https on the default port. */
+function siteLabel(origin: string): string {
+  try {
+    const url = new URL(origin);
+    return url.protocol === "https:" ? url.host : origin;
+  } catch {
+    return origin;
+  }
+}
+
+/**
+ * What this site may use, checked when allowed. Unchecking goes back to
+ * asking; a blocked one says so and is allowed by checking it.
+ */
+function SitePermissions({ site }: { site: string }) {
+  const decided = useSitePermissions()[site] ?? {};
+  const any = Object.keys(decided).length > 0;
+  return (
+    <Submenu icon={ShieldIcon} label="Site Permissions">
+      <div className="truncate px-2 pt-1 pb-1.5 text-[11px] text-text-muted">{siteLabel(site)}</div>
+      {SITE_PERMISSIONS.map((kind) => {
+        const decision = decided[kind];
+        return (
+          <Menu.CheckboxItem
+            key={kind}
+            checked={decision === "allow"}
+            closeOnClick={false}
+            onCheckedChange={(checked) =>
+              void changeSitePermissions((current) =>
+                checked ? decide(current, site, [kind], "allow") : forget(current, site, kind),
+              )
+            }
+            className={ROW}
+          >
+            <span className="flex size-4 shrink-0 items-center justify-center">
+              <Menu.CheckboxItemIndicator>
+                <CheckIcon className="size-4" />
+              </Menu.CheckboxItemIndicator>
+            </span>
+            <span className="min-w-0 flex-1 truncate">{PERMISSION_LABELS[kind].name}</span>
+            {decision === "block" && <span className="shrink-0 text-[12px] text-text-muted">Blocked</span>}
+          </Menu.CheckboxItem>
+        );
+      })}
+      <Separator />
+      <Menu.Item
+        disabled={!any}
+        closeOnClick={false}
+        onClick={() => void changeSitePermissions((current) => forget(current, site))}
+        className={ROW}
+      >
+        <span className="size-4 shrink-0" />
+        Reset Permissions
+      </Menu.Item>
+    </Submenu>
   );
 }
 

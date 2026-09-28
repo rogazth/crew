@@ -1,4 +1,14 @@
-import type { DockBounds, DockSnapshot, DownloadActivity, OpenTabRequest } from "./browser/bridge";
+import type {
+  DockBounds,
+  DockSnapshot,
+  DownloadAction,
+  DownloadInfo,
+  OpenTabRequest,
+  PagePrompt,
+  PromptAnswer,
+  Responsiveness,
+  SitePermissions,
+} from "./browser/bridge";
 import type { NavSnapshot } from "./browser/snapshot";
 import type { KeyboardLayout, LiveCommand } from "./keymap";
 import type { ImportedCookie, RemoteEnv } from "./protocol";
@@ -79,7 +89,21 @@ export type BrowserHost = {
   setKeyboardLayout(layout: KeyboardLayout): void;
   onCommand(cb: (id: string) => void): () => void;
   onOpenTab(cb: (request: OpenTabRequest) => void): () => void;
-  onDownload(cb: (activity: DownloadActivity) => void): () => void;
+  /** Every change to one of this window's downloads, whole. */
+  onDownload(cb: (download: DownloadInfo) => void): () => void;
+  /** Resolves why it could not be done ("the file is gone"), or "". */
+  downloadAction(id: string, action: DownloadAction): Promise<string>;
+  setAskWhereToSave(ask: boolean): void;
+  onPrompt(cb: (prompt: PagePrompt) => void): () => void;
+  /** A prompt main took back: its page navigated or closed. */
+  onPromptGone(cb: (id: string) => void): () => void;
+  answer(id: string, value: PromptAnswer): void;
+  /** The remembered decisions, whole, each time they change. */
+  setSitePermissions(decisions: SitePermissions): void;
+  onResponsive(cb: (state: Responsiveness) => void): () => void;
+  /** Ends a hung page's process. */
+  kill(webContentsId: number): Promise<void>;
+  print(webContentsId: number): Promise<void>;
   /** Resolves whether DevTools are open afterwards. */
   toggleDevTools(webContentsId: number): Promise<boolean>;
   /** Beside the page, over the panel at `bounds`; false when the page isn't this window's. */
