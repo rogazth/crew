@@ -661,31 +661,6 @@ export type SessionsDeleted = { ids: Array<string>, };
  */
 export type SessionsRetention = { days: number, };
 
-/**
- * A process `solo.yml` lists, as it would be created.
- */
-export type SoloEntry = { 
-/**
- * The workspace has a process by this name already, so it is skipped.
- */
-exists: boolean, name: string, command: string, 
-/**
- * Relative to the workspace folder, or absolute; empty is the folder itself.
- */
-cwd: string, env: { [key in string]: string }, autoStart: boolean, autoRestart: boolean, };
-
-/**
- * What the user read in the preview and confirmed, sent back as it was
- * shown: `solo.yml` may have changed since, and it is not what they read.
- */
-export type SoloImport = { workspaceId: string, processes: Array<ProcessSpec>, };
-
-export type SoloImported = { created: Array<string>, 
-/**
- * Names the workspace already has: an import never overwrites a process.
- */
-skipped: Array<string>, };
-
 export type TempFile = { extension: string, base64Contents: string, };
 
 export type TodoItem = { text: string, status: TodoStatus, };

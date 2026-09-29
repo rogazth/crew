@@ -232,37 +232,6 @@ pub enum LogWait {
     },
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
-pub struct SoloImported {
-    pub created: Vec<String>,
-    /// Names the workspace already has: an import never overwrites a process.
-    pub skipped: Vec<String>,
-}
-
-/// A process `solo.yml` lists, as it would be created.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
-pub struct SoloEntry {
-    #[serde(flatten)]
-    #[ts(flatten)]
-    pub spec: ProcessSpec,
-    /// The workspace has a process by this name already, so it is skipped.
-    pub exists: bool,
-}
-
-/// What the user read in the preview and confirmed, sent back as it was
-/// shown: `solo.yml` may have changed since, and it is not what they read.
-#[derive(Serialize, Deserialize, Clone, Debug, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
-pub struct SoloImport {
-    pub workspace_id: String,
-    pub processes: Vec<ProcessSpec>,
-}
-
 #[derive(Serialize, Deserialize, Clone, Debug, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]

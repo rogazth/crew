@@ -1746,15 +1746,6 @@ async fn process_rpc(hosts: &Hosts, method: &str, params: Value) -> Result<Value
             let proto::ProcessLogTail { workspace_id, id, max_bytes } = parse(params)?;
             json(block(move || host.log_tail_raw(&workspace_id, &id, max_bytes)).await?)
         }
-        "process_solo_preview" => {
-            let WorkspaceId { workspace_id } = parse(params)?;
-            json(block(move || host.solo_preview(&workspace_id)).await?)
-        }
-        // What the user confirmed from the preview, not the file as it is now.
-        "process_import_solo" => {
-            let proto::SoloImport { workspace_id, processes } = parse(params)?;
-            json(block(move || host.import_solo(&workspace_id, processes, None, false)).await?)
-        }
         "process_approve" => {
             let proto::ProcessApprove { workspace_id, id, revision } = parse(params)?;
             json(block(move || host.approve(&workspace_id, &id, revision)).await?)

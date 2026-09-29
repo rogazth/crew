@@ -539,38 +539,6 @@ fn migration_renames_duplicate_names_before_making_them_unique() {
 }
 
 #[test]
-fn solo_yml_is_previewed_then_imported_without_touching_what_exists() {
-    let f = fixture("solo", fast());
-    let mine = f.add("app", "npm run mine");
-    std::fs::write(
-        f.dir.join("solo.yml"),
-        "name: X\nprocesses:\n  app:\n    command: npm run app\n  web:\n    command: npm run web # vite\n    auto_restart: true\n",
-    )
-    .unwrap();
-    let preview = f.host.solo_preview(&f.workspace).unwrap();
-    let shown: Vec<(&str, &str, bool, bool)> = preview
-        .iter()
-        .map(|entry| (entry.spec.name.as_str(), entry.spec.command.as_str(), entry.spec.auto_start, entry.exists))
-        .collect();
-    // Solo starts what it lists unless told otherwise; the preview says so.
-    assert_eq!(shown, vec![("app", "npm run app", true, true), ("web", "npm run web", true, false)]);
-
-    let specs = preview.into_iter().map(|entry| entry.spec).collect();
-    let imported = f.host.import_solo(&f.workspace, specs, None, false).unwrap();
-    assert_eq!((imported.created, imported.skipped), (vec!["web".to_string()], vec!["app".to_string()]));
-    let app = f.host.get(&f.workspace, "app").unwrap();
-    assert_eq!((app.id, app.spec.command.as_str()), (mine.id, "npm run mine"), "an approved process stays");
-    let web = f.host.get(&f.workspace, "web").unwrap();
-    assert!(web.approved && web.spec.auto_start && web.spec.auto_restart);
-    assert_eq!(web.state, ProcessState::Stopped, "imported, not started");
-
-    // One nobody looked at waits for the user like anything an agent writes.
-    let unseen = vec![spec("worker", "npm run worker")];
-    f.host.import_solo(&f.workspace, unseen, Some("session-1".into()), true).unwrap();
-    assert_eq!(f.host.get(&f.workspace, "worker").unwrap().state, ProcessState::PendingApproval);
-}
-
-#[test]
 fn wait_for_log_answers_ended_at_once_for_a_process_that_is_not_up() {
     let f = fixture("wait-down", fast());
     let once = f.add("once", "echo ready; exit 0");

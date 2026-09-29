@@ -18,8 +18,6 @@ import type {
   RemoteEnv,
   SearchHit,
   SearchQuery,
-  SoloEntry,
-  SoloImported,
 } from "./protocol";
 import type { Autonomy, ProjectFile, Session, SessionKind, SessionStatus, Workspace, Worktree } from "./types";
 
@@ -315,14 +313,6 @@ export const reorderProcesses = (workspaceId: string, ids: string[]): Promise<vo
 /** The end of the log as written, escapes and all, for a terminal to repaint. */
 export const processLogTail = (workspaceId: string, id: string): Promise<LogChunk> =>
   client.request("process_log_tail", { workspaceId, id });
-
-/** What `solo.yml` would add, for the user to read before importing. */
-export const soloPreview = (workspaceId: string): Promise<SoloEntry[]> =>
-  client.request("process_solo_preview", { workspaceId });
-
-/** Creates the entries the user confirmed; a name already taken is skipped. */
-export const importSoloYml = (workspaceId: string, processes: ProcessSpec[]): Promise<SoloImported> =>
-  client.request("process_import_solo", { workspaceId, processes });
 
 /** Who drives which browser tab right now. */
 export const browserLeasesList = (): Promise<BrowserLeases> => client.request("browser_leases_list", {});

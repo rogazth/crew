@@ -1,17 +1,15 @@
-import { FileDownIcon, PlayIcon, PlusIcon, RotateCwIcon, SquareIcon, type LucideIcon as Icon } from "lucide-react";
-import { useEffect, useState, type KeyboardEvent } from "react";
+import { PlayIcon, PlusIcon, RotateCwIcon, SquareIcon, type LucideIcon as Icon } from "lucide-react";
+import { useState, type KeyboardEvent } from "react";
 import { ActionMenu } from "./ActionMenu";
 import type { Confirm } from "./ConfirmDialog";
 import { ProcessDialog } from "./ProcessDialog";
 import { ProcessDot } from "./ProcessDot";
-import { SoloImportDialog } from "./SoloImportDialog";
 import { SortableItem, SortableList } from "./SortableList";
 import { deleteConfirm, type Processes } from "../hooks/useProcesses";
 import * as api from "../lib/api";
 import { isDeleteChord } from "../lib/hotkey";
 import { menuFromEvent, type MenuPoint } from "../lib/menu";
 import { awaitsUser, isLive, processActions, type Process } from "../lib/processes";
-import type { SoloImported } from "../lib/protocol";
 import type { Workspace } from "../lib/types";
 
 type Props = {
@@ -23,21 +21,6 @@ type Props = {
   onConfirm: (confirm: Confirm) => void;
 };
 
-/** Solo's file, when the workspace has one: its commands come over in one go. */
-function useSoloFile(path: string): boolean {
-  const [found, setFound] = useState<{ path: string; yes: boolean } | null>(null);
-  useEffect(() => {
-    let cancelled = false;
-    Promise.all([api.pathExists(`${path}/solo.yml`), api.pathExists(`${path}/solo.yaml`)])
-      .then(([yml, yaml]) => !cancelled && setFound({ path, yes: yml || yaml }))
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, [path]);
-  return found?.path === path && found.yes;
-}
-
 /**
  * The workspace's long-running commands, below its worktrees: dev servers,
  * watchers, workers. Each keeps running with nobody looking; a row opens its
@@ -46,23 +29,8 @@ function useSoloFile(path: string): boolean {
 export function CommandsSection({ workspace, processes, activeId, onOpen, onConfirm }: Props) {
   const [menu, setMenu] = useState<{ point: MenuPoint; process: Process } | null>(null);
   const [editing, setEditing] = useState<{ process?: Process } | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
-  const [importing, setImporting] = useState(false);
-  const hasSolo = useSoloFile(workspace.path);
   const list = processes.processes ?? [];
   const { run } = processes;
-
-  const importSolo = () => {
-    setNotice(null);
-    setImporting(true);
-  };
-
-  // A command by a name already here is left as it is, and said so.
-  const imported = ({ skipped }: SoloImported) => {
-    if (skipped.length === 0) return;
-    const names = skipped.map((name) => `"${name}"`).join(", ");
-    setNotice(`Skipped ${names}: a command by that name already exists.`);
-  };
 
   const pick = (id: string, process: Process) => {
     if (id === "edit") setEditing({ process });
@@ -76,13 +44,12 @@ export function CommandsSection({ workspace, processes, activeId, onOpen, onConf
     <div className="mt-3" data-commands>
       <div className="flex h-8 items-center gap-0.5 pl-2">
         <span className="min-w-0 flex-1 truncate text-text-muted">Commands</span>
-        {hasSolo && <HeaderButton icon={FileDownIcon} label="Import from solo.yml" onClick={importSolo} />}
         <HeaderButton icon={PlusIcon} label="New command" onClick={() => setEditing({})} />
       </div>
 
       {processes.processes !== null && list.length === 0 && (
         <p className="px-2 py-1.5 text-[12px] text-placeholder">
-          {hasSolo ? "No commands yet. Import the ones in solo.yml, or add one." : "No commands yet."}
+          No commands yet.
         </p>
       )}
 
@@ -104,9 +71,9 @@ export function CommandsSection({ workspace, processes, activeId, onOpen, onConf
         </SortableList>
       </div>
 
-      {(notice ?? processes.error) && (
+      {processes.error && (
         <p role="alert" className="px-2 py-1.5 text-[12px] text-danger">
-          {notice ?? processes.error}
+          {processes.error}
         </p>
       )}
 
@@ -126,9 +93,6 @@ export function CommandsSection({ workspace, processes, activeId, onOpen, onConf
       )}
       {editing && (
         <ProcessDialog workspaceId={workspace.id} process={editing.process} onClose={() => setEditing(null)} />
-      )}
-      {importing && (
-        <SoloImportDialog workspaceId={workspace.id} onClose={() => setImporting(false)} onImported={imported} />
       )}
     </div>
   );

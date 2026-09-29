@@ -1,4 +1,4 @@
-//! Processes a workspace keeps running, like Solo's: dev servers, watchers,
+//! Processes a workspace keeps running: dev servers, watchers,
 //! workers. Each runs in a supervised PTY, so it has colours and takes keys
 //! like a terminal, but never waits on anyone to read it: everything it prints
 //! goes to a log on disk, and a viewer that falls behind is resynced.
@@ -7,7 +7,6 @@
 //! by its name there. The MCP tools and the window's RPCs are thin wrappers.
 
 mod log;
-pub mod solo;
 pub mod text;
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
@@ -18,7 +17,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crew_protocol::{
-    LogChunk, LogGrep, LogMatch, LogWait, Process, ProcessSpec, ProcessState, SoloEntry, SoloImported,
+    LogChunk, LogGrep, LogMatch, LogWait, Process, ProcessSpec, ProcessState,
 };
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -649,61 +648,6 @@ impl ProcessHost {
             .collect();
         let ordered: Vec<String> = ids.iter().filter(|id| mine.contains(id)).cloned().collect();
         self.inner.store.with(|conn| set_order(conn, "processes", &ordered))
-    }
-
-    /// What `<workspace>/solo.yml` lists, as it would be imported, for the
-    /// user to read first. Solo starts a process with the app unless told
-    /// otherwise, and a preview is where that shows.
-    pub fn solo_preview(&self, workspace_id: &str) -> Result<Vec<SoloEntry>, String> {
-        let workspace = crate::workspace::get(&self.inner.store, workspace_id.to_string())?
-            .ok_or("Workspace not found")?;
-        let root = Path::new(&workspace.path);
-        let path = ["solo.yml", "solo.yaml"]
-            .iter()
-            .map(|name| root.join(name))
-            .find(|path| path.is_file())
-            .ok_or("This workspace has no solo.yml")?;
-        let source = std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-        solo::parse(&source)?
-            .into_iter()
-            .map(|entry| {
-                let cwd = entry.working_dir.trim_start_matches("./").trim_end_matches('/').to_string();
-                let spec = tidy(ProcessSpec {
-                    name: entry.name,
-                    command: entry.command,
-                    cwd: if cwd == "." { String::new() } else { cwd },
-                    env: entry.env,
-                    auto_start: entry.auto_start,
-                    auto_restart: entry.auto_restart,
-                })?;
-                let exists = self.resolve(workspace_id, &spec.name).is_ok();
-                Ok(SoloEntry { spec, exists })
-            })
-            .collect()
-    }
-
-    /// Creates what the user confirmed from a preview. A name the workspace
-    /// already has is skipped, never overwritten: a file is no way to change
-    /// a definition someone approved. `ask_approval` is for an import nobody
-    /// looked at, which lands pending like anything else an agent writes.
-    pub fn import_solo(
-        &self,
-        workspace_id: &str,
-        specs: Vec<ProcessSpec>,
-        created_by: Option<String>,
-        ask_approval: bool,
-    ) -> Result<SoloImported, String> {
-        let mut imported = SoloImported { created: Vec::new(), skipped: Vec::new() };
-        for spec in specs {
-            let name = spec.name.trim().to_string();
-            if self.resolve(workspace_id, &name).is_ok() {
-                imported.skipped.push(name);
-                continue;
-            }
-            self.create(workspace_id, spec, created_by.clone(), ask_approval)?;
-            imported.created.push(name);
-        }
-        Ok(imported)
     }
 
     // ---- running --------------------------------------------------------
