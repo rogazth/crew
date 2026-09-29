@@ -66,10 +66,11 @@ The app ships a CLI. **Crew › Install `crew` Command…** links it into `~/.lo
 
 ```bash
 crew status                        # is Crew running, and who does it take you for
-crew agents                        # the agents of the workspace you are in
-crew send Reviewer "look at the diff on main"
-crew ps                            # processes: start, stop, restart, logs -f, proc add…
-crew call --help                   # every tool an agent has, callable by name
+crew agents list                   # the agents of the workspace you are in
+crew agents send Reviewer "look at the diff on main"
+crew processes list                # and start, stop, restart, logs -f, add, edit…
+crew tabs snapshot                 # the browser: open, navigate, click, fill, screenshot…
+crew --help                        # every group; `crew <group> --help` for its commands
 crew completions zsh > ~/.zfunc/_crew
 ```
 

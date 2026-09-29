@@ -241,6 +241,16 @@ fn model_sheet() -> String {
         .join("\n")
 }
 
+/// Every tool Crew has, its families' included, for the CLI to build a
+/// command from each: a person at a shell has no prompt to keep them out of.
+pub fn every_tool() -> Vec<Tool> {
+    catalog()
+        .into_iter()
+        .chain(crate::process_tools::catalog())
+        .chain(crate::browser_tools::catalog())
+        .collect()
+}
+
 /// Crew's own tools.
 ///
 /// Who sees what: a terminal session has no turns, so nothing that leaves a
@@ -270,7 +280,7 @@ pub(crate) fn catalog() -> Vec<Tool> {
             description: "List the agents in this workspace, including yourself.",
             schema: json!({ "type": "object", "properties": {} }),
             keywords: &["roster", "team", "who", "agents"],
-            core: true,
+            core: false,
             audience: Audience::EVERYONE,
         },
         Tool {
@@ -310,7 +320,7 @@ pub(crate) fn catalog() -> Vec<Tool> {
                 "required": ["to", "text"]
             }),
             keywords: &["send", "tell", "ask", "dm", "reply", "message"],
-            core: true,
+            core: false,
             audience: Audience::EVERYONE,
         },
         Tool {
@@ -324,7 +334,7 @@ pub(crate) fn catalog() -> Vec<Tool> {
                 "required": ["text"]
             }),
             keywords: &["continue", "carry", "loop", "next", "self", "resume"],
-            core: true,
+            core: false,
             audience: Audience::AGENTS,
         },
         Tool {
@@ -354,7 +364,7 @@ pub(crate) fn catalog() -> Vec<Tool> {
                 "required": ["query"]
             }),
             keywords: &["find", "grep", "history", "transcript", "said"],
-            core: true,
+            core: false,
             audience: Audience::AGENTS_AND_USER,
         },
         Tool {
@@ -562,13 +572,13 @@ pub fn instructions(toolbox: &Toolbox, caller: &Caller) -> String {
         ),
         Caller::User { .. } => " You are calling as the user.".to_string(),
     };
+    let listed = if listed.is_empty() { String::new() } else { format!("Always listed: {}.\n", listed.join(", ")) };
     format!(
         "Crew is the app this runs in: it holds a workspace of agents, and these tools reach them.{who}\n\
-         Always listed: {}.\n\
-         The rest are not listed, to keep them out of the prompt: find_tool searches them by what you \
-         want to do and returns each match with its arguments, and call_tool runs one by name. \
-         What is there: {}.",
-        listed.join(", "),
+         {listed}\
+         Its tools are not listed, to keep them out of the prompt: find_tool searches them by what you \
+         want to do and returns each match with its arguments, and call_tool runs one by name with \
+         those arguments. What is there: {}.",
         if hidden.is_empty() { "nothing more".to_string() } else { hidden.join(", ") },
     )
 }
@@ -596,7 +606,7 @@ pub fn handle(host: &Host<'_>, caller: &Caller, method: &str, params: Value) -> 
         }
         "instructions" => Ok(json!({ "instructions": instructions(host.toolbox, caller) })),
         // Everything this caller may run, listed or not, for a person reading
-        // `crew call --help`: the prompt budget the gateway saves is a model's,
+        // the `crew` commands: the prompt budget the gateway saves is a model's,
         // and a person at a shell has none to spend.
         "tools/catalog" => {
             let kind = caller.kind();
@@ -1417,17 +1427,7 @@ mod tests {
 
         // An exact set: a tool that quietly becomes core would otherwise slip
         // the whole hidden catalogue back into every prompt.
-        assert_eq!(
-            names,
-            vec![
-                "list_agents".to_string(),
-                "message_agent".to_string(),
-                "continue_after_turn".to_string(),
-                "search_messages".to_string(),
-                "find_tool".to_string(),
-                "call_tool".to_string(),
-            ]
-        );
+        assert_eq!(names, vec!["find_tool".to_string(), "call_tool".to_string()]);
     }
 
     #[test]
@@ -2187,7 +2187,7 @@ mod tests {
         let shell = terminal(&store, &ws, "Shell");
         assert_eq!(
             listed(&store, &transcripts, &shell),
-            vec!["list_agents", "message_agent", "find_tool", "call_tool"]
+            vec!["find_tool", "call_tool"]
         );
     }
 
@@ -2198,7 +2198,7 @@ mod tests {
         let ws = workspace(&store);
         assert_eq!(
             listed_as(&store, &transcripts, &Toolbox::default(), &user(Some(&ws))),
-            vec!["list_agents", "message_agent", "search_messages", "find_tool", "call_tool"]
+            vec!["find_tool", "call_tool"]
         );
     }
 
@@ -2260,7 +2260,7 @@ mod tests {
         let deliver = |target: &Session| postman.deliver(&store, target);
         let toolbox = Toolbox::default();
         let host = Host { store: &store, transcripts: &transcripts, on_created: &|_| {}, on_routines: &|| {}, deliver: &deliver, toolbox: &toolbox };
-        let out = handle(&host, &someone("terminal"), "tools/list", json!({})).expect("list");
+        let out = handle(&host, &someone("terminal"), "tools/catalog", json!({})).expect("catalog");
         let message = out["tools"].as_array().expect("tools").iter().find(|t| t["name"] == "message_agent").expect("message_agent");
         assert!(message["description"].as_str().unwrap_or_default().contains("cannot receive a reply"));
     }
@@ -2374,7 +2374,7 @@ mod tests {
         assert!(is_error(&out), "{}", body(&out));
     }
 
-    /// `crew call --help` lists what the gateway hides, and only what this
+    /// The catalog lists what the gateway hides, and only what this
     /// caller may run.
     #[test]
     fn the_catalog_is_every_tool_the_caller_may_run() {
@@ -2389,7 +2389,7 @@ mod tests {
         let out = handle(&host, &user(Some(&ws)), "tools/catalog", json!({})).expect("catalog");
         let tools = out["tools"].as_array().expect("tools");
         let named = |name: &str| tools.iter().find(|tool| tool["name"] == name);
-        assert_eq!(named("list_agents").expect("core")["core"], true);
+        assert_eq!(named("list_agents").expect("hidden")["core"], false);
         assert_eq!(named("list_routines").expect("hidden")["core"], false);
         assert!(named("list_kettles").is_some());
         assert!(named("boil_kettle").is_none(), "not the user's");

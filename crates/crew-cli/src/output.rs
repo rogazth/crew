@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use base64::Engine;
 use serde_json::Value;
 
-/// One line (or several) to stdout. A reader that went away — `crew logs -f |
+/// One line (or several) to stdout. A reader that went away — `crew processes logs -f |
 /// head` — ends the run quietly instead of panicking the way `println!` does.
 pub fn say(text: &str) {
     use std::io::Write;

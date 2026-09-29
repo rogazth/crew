@@ -2349,9 +2349,12 @@ mod tests {
         let reply = list_agents_as(&socket, &token);
         let text = reply["result"]["content"][0]["text"].as_str().unwrap_or("");
         assert!(text.contains(&agent), "reply: {reply}");
-        // Listed as a terminal: no turns to continue.
+        // Seen as a terminal: no turns to continue, and nothing listed but the gateway.
         let listed = unix_call(&socket, &serde_json::json!({ "token": token, "method": "tools/list" }));
         let names = listed["result"]["tools"].to_string();
+        assert!(names.contains("find_tool") && !names.contains("message_agent"), "{names}");
+        let catalog = unix_call(&socket, &serde_json::json!({ "token": token, "method": "tools/catalog" }));
+        let names = catalog["result"]["tools"].to_string();
         assert!(names.contains("message_agent") && !names.contains("continue_after_turn"), "{names}");
 
         std::fs::write(&done, "").expect("done");
@@ -2445,7 +2448,7 @@ mod tests {
         let socket = bridge.info().expect("info").socket_path;
         let token = bridge.mint(&agent);
 
-        let listed = unix_call(&socket, &serde_json::json!({ "token": token, "method": "tools/list" }));
+        let listed = unix_call(&socket, &serde_json::json!({ "token": token, "method": "tools/catalog" }));
         assert!(listed["result"]["tools"].to_string().contains("list_processes"), "{listed}");
         for (token, workspace) in [(token.clone(), None), (bridge.user_token(), Some(workspace.clone()))] {
             let reply = unix_call(

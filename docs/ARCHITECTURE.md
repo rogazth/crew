@@ -16,7 +16,7 @@ flowchart TB
   UI -->|"WebSocket"| Daemon
   Daemon --> Store
   Daemon -->|"one process per turn"| CLI
-  CLI -->|"crew --mcp or crew call"| Bridge
+  CLI -->|"crew mcp or crew commands"| Bridge
   Bridge --> Daemon
 ```
 
@@ -89,7 +89,7 @@ sequenceDiagram
   end
 ```
 
-Claude, Codex, and opencode reach Crew through an MCP server (`crewd --mcp`). Cursor reaches the same bridge by running `crewd call` in the shell.
+Claude, Codex, and opencode reach Crew through an MCP server (`crewd --mcp`) whose `tools/list` is only `find_tool` and `call_tool`: every other tool is found and run through them, so no schema sits in a prompt that does not need it, and the chat reads a `call_tool` row as the tool it named. Cursor reaches the same bridge by running `crew` commands in the shell (`crew agents send <id> <text>`), found with `crew --help`.
 
 ## Who is calling
 
@@ -105,7 +105,7 @@ This is policy, not isolation. Every process Crew starts, agents and terminals i
 
 ## The `crew` command
 
-`crew` (`crates/crew-cli`) is a client of the same bridge. Inside a session (`CREW_SOCKET` or `CREW_TOKEN` set) it takes them and is that session: `--data-dir` does not change that, half a session is refused rather than taken for the user, and `crew daemon` is refused outright, since the daemon runs every session. Only `--as-user`, meant for a human typing at a Crew terminal, makes it the user there. Anywhere else it reads `daemon.json` from `--data-dir`, `$CREW_DATA_DIR` or the installed app's folder, and speaks as the user in the workspace holding the current directory. Its commands are thin wrappers over tools (`crew ps` is `list_processes`, `crew agents` is `list_agents`), and `crew call` reaches any tool by name, so the CLI and MCP cannot drift apart. The bridge answers two methods for it beside `tools/*`: `tools/catalog`, every tool the caller may run, listed or not, for `crew call --help`; and `whoami`, for `crew status`. `crew mcp` is the stdio server; `crewd --mcp` and `crewd call` stay one version as aliases. The app bundles `crew` next to `crewd`, and **Crew › Install `crew` Command…** links it onto the user's PATH. When the LaunchAgent serves the data dir, `crew daemon stop` asks for `daemon/shutdown`, `restart` is `launchctl kickstart -k` and `status` adds what `launchctl print` says; otherwise they go through the pid in `daemon.json`. `crew daemon install|uninstall` write or remove the plist and bootstrap or boot it out.
+`crew` (`crates/crew-cli`) is a client of the same bridge. Inside a session (`CREW_SOCKET` or `CREW_TOKEN` set) it takes them and is that session: `--data-dir` does not change that, half a session is refused rather than taken for the user, and `crew daemon` is refused outright, since the daemon runs every session. Only `--as-user`, meant for a human typing at a Crew terminal, makes it the user there. Anywhere else it reads `daemon.json` from `--data-dir`, `$CREW_DATA_DIR` or the installed app's folder, and speaks as the user in the workspace holding the current directory. Its commands are `crew <group> <verb>` (agents, messages, routines, processes, tabs), one per tool and built from the tool's schema (`crates/crew-cli/src/commands.rs`), so the CLI and MCP cannot drift apart: a test fails if a tool has no command. A few are written by hand where a shell wants more than the tool (`processes logs -f`, `agents send <name>`). The bridge answers two methods for it beside `tools/*`: `tools/catalog`, every tool the caller may run; and `whoami`, for `crew status`. `crew mcp` is the stdio server; `crewd --mcp` stays one version as an alias. The app bundles `crew` next to `crewd`, and **Crew › Install `crew` Command…** links it onto the user's PATH. When the LaunchAgent serves the data dir, `crew daemon stop` asks for `daemon/shutdown`, `restart` is `launchctl kickstart -k` and `status` adds what `launchctl print` says; otherwise they go through the pid in `daemon.json`. `crew daemon install|uninstall` write or remove the plist and bootstrap or boot it out.
 
 ## A machine that is not this Mac
 

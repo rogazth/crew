@@ -78,7 +78,7 @@ struct Shared {
     user_token: String,
 }
 
-/// Relays `crew --mcp` / `crew call` into the daemon tool host.
+/// Relays `crew mcp` and the `crew` commands into the daemon tool host.
 #[derive(Clone)]
 pub struct Bridge {
     shared: Arc<Shared>,
@@ -160,7 +160,7 @@ impl Bridge {
     ///
     /// Minted per turn, because a turn is one process: when that process dies
     /// its token is worth having only until the next one starts. Cursor has no
-    /// MCP and reaches the bridge through `crew call` in its shell, so the
+    /// MCP and reaches the bridge through `crew` in its shell, so the
     /// token is what stops that shell from speaking as anybody else.
     pub fn mint(&self, session_id: &str) -> String {
         let token = uuid::Uuid::new_v4().to_string();

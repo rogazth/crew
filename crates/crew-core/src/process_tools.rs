@@ -57,132 +57,138 @@ fn one(name: &'static str, description: &'static str, keywords: &'static [&'stat
     }
 }
 
+/// The process tools. They need no host to be described, so the CLI builds
+/// its commands from the same list the daemon runs.
+pub fn catalog() -> Vec<Tool> {
+    let mut update = spec_properties();
+    update["process"] = process_arg();
+    vec![
+        Tool {
+            name: "list_processes",
+            description: "List this workspace's processes: the dev servers, watchers and workers Crew keeps running, each in a terminal of its own with its output logged. Each comes with its state (stopped, starting, running, paused, exited, crashed, pending-approval), pid, uptime, last exit code, automatic restarts, who created it and whether it waits for the user's approval. log_cursor is where its log ends right now: pass it as since to read_logs or wait_for_log to see only what comes after.",
+            schema: json!({ "type": "object", "properties": {} }),
+            keywords: &["dev", "server", "servers", "running", "status", "commands", "processes", "services", "watchers"],
+            core: false,
+            audience: Audience::EVERYONE,
+        },
+        one(
+            "start_process",
+            "Start a process of this workspace. It returns as soon as the process is running; to know it is up, follow with wait_for_log for its ready line (without since it reads this run from its first line, so nothing printed in between is missed). Already running, it is left alone. A process an agent created that the user has not approved yet cannot start: the error says so, and only the user can approve it, in Crew.",
+            &["run", "launch", "boot", "dev", "server", "serve", "up"],
+        ),
+        one(
+            "stop_process",
+            "Stop a process: SIGTERM to its whole process group, SIGKILL if it is still up after the grace (5 s). Returns once it has exited; an automatic restart does not bring it back.",
+            &["kill", "halt", "terminate", "shutdown", "down", "server"],
+        ),
+        one(
+            "restart_process",
+            "Stop a process and start it again: after changing its definition, or when it hangs. Follow with wait_for_log without since to watch the new run boot.",
+            &["reload", "reboot", "bounce", "server", "dev"],
+        ),
+        one(
+            "pause_process",
+            "Freeze a running process (SIGSTOP to its group): it keeps its memory and its ports but runs nothing until resume_process.",
+            &["suspend", "freeze", "sigstop"],
+        ),
+        one(
+            "resume_process",
+            "Continue a paused process (SIGCONT to its group).",
+            &["continue", "unpause", "unfreeze", "sigcont"],
+        ),
+        Tool {
+            name: "create_process",
+            description: "Define a new process in this workspace: a shell command Crew keeps running in a terminal of its own, with its output logged. It is not started: call start_process. If your autonomy is ask, it is created pending-approval: the user has to accept it in Crew first, and start_process fails until then, so tell the user it is waiting for them.",
+            schema: json!({ "type": "object", "properties": spec_properties(), "required": ["name", "command"] }),
+            keywords: &["new", "add", "define", "dev", "server", "command", "watcher", "service"],
+            core: false,
+            audience: Audience::EVERYONE,
+        },
+        Tool {
+            name: "update_process",
+            description: "Change a process's definition; only the fields you pass change. If your autonomy is ask, the change waits for the user's approval as a proposal, and what runs meanwhile is the definition already accepted. A running process picks up a change on its next start: restart_process.",
+            schema: json!({ "type": "object", "properties": update, "required": ["process"] }),
+            keywords: &["edit", "change", "rename", "configure", "env", "command"],
+            core: false,
+            audience: Audience::EVERYONE,
+        },
+        one(
+            "delete_process",
+            "Delete a process: stop it if it runs, and remove its definition and its logs. With autonomy ask you can only delete the processes you created.",
+            &["remove", "forget", "drop"],
+        ),
+        Tool {
+            name: "read_logs",
+            description: "Read a process's output as plain text, colours and escapes stripped. Without since: its last tail lines (200 by default). With since: what was written from that cursor on, up to max_bytes (16 KB by default, 256 KB at most); a cursor short of log_cursor means there is more, so call again. Either way the answer's cursor is where this read ended: pass it back as since and you get only what is new. That is how you watch a process: poll read_logs with the last cursor, or block on wait_for_log. skipped above zero means log rotation dropped that many bytes after since.",
+            schema: json!({
+                "type": "object",
+                "properties": {
+                    "process": process_arg(),
+                    "tail": { "type": "integer", "minimum": 1, "maximum": 5000, "description": "Lines from the end, when since is not given." },
+                    "since": { "type": "integer", "minimum": 0, "description": "A cursor from an earlier call, or log_cursor from list_processes." },
+                    "max_bytes": { "type": "integer", "minimum": 1, "maximum": 262144 }
+                },
+                "required": ["process"]
+            }),
+            keywords: &["log", "output", "tail", "watch", "stdout", "stderr", "console", "print", "poll"],
+            core: false,
+            audience: Audience::EVERYONE,
+        },
+        Tool {
+            name: "grep_logs",
+            description: "Search a process's whole log still on disk for a regex: the latest max_matches matching lines (20 by default), oldest first, each with context lines either side (up to 10). total counts every match, shown or not. Crew's own [crew] lines are never matched.",
+            schema: json!({
+                "type": "object",
+                "properties": {
+                    "process": process_arg(),
+                    "pattern": { "type": "string", "description": "A regex, e.g. \"(?i)error|warn\"." },
+                    "context": { "type": "integer", "minimum": 0, "maximum": 10 },
+                    "max_matches": { "type": "integer", "minimum": 1, "maximum": 200 }
+                },
+                "required": ["process", "pattern"]
+            }),
+            keywords: &["log", "search", "find", "error", "errors", "grep", "regex", "stack", "trace"],
+            core: false,
+            audience: Audience::EVERYONE,
+        },
+        Tool {
+            name: "wait_for_log",
+            description: "Block until a line of a process's log matches a regex, the process stops or exits, or timeout_s passes (at most 60). Without since it searches the current run from its first line, so start_process or restart_process followed by this sees the whole boot, even a line printed before the call. With since, only what comes after that cursor. Answers with result matched (the line, and the cursor after it), ended (the state and exit code: nothing more is coming) or timed-out. To wait longer than a minute, call again with since set to the cursor it returned.",
+            schema: json!({
+                "type": "object",
+                "properties": {
+                    "process": process_arg(),
+                    "pattern": { "type": "string", "description": "A regex, e.g. \"ready|listening on\"." },
+                    "since": { "type": "integer", "minimum": 0, "description": "A cursor from an earlier call. Omit to search the current run from its start." },
+                    "timeout_s": { "type": "integer", "minimum": 1, "maximum": WAIT_MAX_S, "description": "Seconds to wait, at most 60." }
+                },
+                "required": ["process", "pattern", "timeout_s"]
+            }),
+            keywords: &["log", "watch", "ready", "listening", "until", "block", "boot", "started", "compiled"],
+            core: false,
+            audience: Audience::EVERYONE,
+        },
+        Tool {
+            name: "send_input",
+            description: "Type into a running process's terminal, as if at its keyboard: an interactive key (vite's r to restart, q to quit) or an answer to a prompt. Sent exactly as given, so add \\r to press Enter. Needs full autonomy: with autonomy ask it is refused, since whatever the process reads it may run.",
+            schema: json!({
+                "type": "object",
+                "properties": {
+                    "process": process_arg(),
+                    "text": { "type": "string" }
+                },
+                "required": ["process", "text"]
+            }),
+            keywords: &["type", "keys", "keyboard", "stdin", "input", "press", "answer", "prompt"],
+            core: false,
+            audience: Audience::EVERYONE,
+        },
+    ]
+}
+
 impl ToolFamily for ProcessTools {
     fn catalog(&self) -> Vec<Tool> {
-        let mut update = spec_properties();
-        update["process"] = process_arg();
-        vec![
-            Tool {
-                name: "list_processes",
-                description: "List this workspace's processes: the dev servers, watchers and workers Crew keeps running, each in a terminal of its own with its output logged. Each comes with its state (stopped, starting, running, paused, exited, crashed, pending-approval), pid, uptime, last exit code, automatic restarts, who created it and whether it waits for the user's approval. log_cursor is where its log ends right now: pass it as since to read_logs or wait_for_log to see only what comes after.",
-                schema: json!({ "type": "object", "properties": {} }),
-                keywords: &["dev", "server", "servers", "running", "status", "commands", "processes", "services", "watchers"],
-                core: true,
-                audience: Audience::EVERYONE,
-            },
-            one(
-                "start_process",
-                "Start a process of this workspace. It returns as soon as the process is running; to know it is up, follow with wait_for_log for its ready line (without since it reads this run from its first line, so nothing printed in between is missed). Already running, it is left alone. A process an agent created that the user has not approved yet cannot start: the error says so, and only the user can approve it, in Crew.",
-                &["run", "launch", "boot", "dev", "server", "serve", "up"],
-            ),
-            one(
-                "stop_process",
-                "Stop a process: SIGTERM to its whole process group, SIGKILL if it is still up after the grace (5 s). Returns once it has exited; an automatic restart does not bring it back.",
-                &["kill", "halt", "terminate", "shutdown", "down", "server"],
-            ),
-            one(
-                "restart_process",
-                "Stop a process and start it again: after changing its definition, or when it hangs. Follow with wait_for_log without since to watch the new run boot.",
-                &["reload", "reboot", "bounce", "server", "dev"],
-            ),
-            one(
-                "pause_process",
-                "Freeze a running process (SIGSTOP to its group): it keeps its memory and its ports but runs nothing until resume_process.",
-                &["suspend", "freeze", "sigstop"],
-            ),
-            one(
-                "resume_process",
-                "Continue a paused process (SIGCONT to its group).",
-                &["continue", "unpause", "unfreeze", "sigcont"],
-            ),
-            Tool {
-                name: "create_process",
-                description: "Define a new process in this workspace: a shell command Crew keeps running in a terminal of its own, with its output logged. It is not started: call start_process. If your autonomy is ask, it is created pending-approval: the user has to accept it in Crew first, and start_process fails until then, so tell the user it is waiting for them.",
-                schema: json!({ "type": "object", "properties": spec_properties(), "required": ["name", "command"] }),
-                keywords: &["new", "add", "define", "dev", "server", "command", "watcher", "service"],
-                core: false,
-                audience: Audience::EVERYONE,
-            },
-            Tool {
-                name: "update_process",
-                description: "Change a process's definition; only the fields you pass change. If your autonomy is ask, the change waits for the user's approval as a proposal, and what runs meanwhile is the definition already accepted. A running process picks up a change on its next start: restart_process.",
-                schema: json!({ "type": "object", "properties": update, "required": ["process"] }),
-                keywords: &["edit", "change", "rename", "configure", "env", "command"],
-                core: false,
-                audience: Audience::EVERYONE,
-            },
-            one(
-                "delete_process",
-                "Delete a process: stop it if it runs, and remove its definition and its logs. With autonomy ask you can only delete the processes you created.",
-                &["remove", "forget", "drop"],
-            ),
-            Tool {
-                name: "read_logs",
-                description: "Read a process's output as plain text, colours and escapes stripped. Without since: its last tail lines (200 by default). With since: what was written from that cursor on, up to max_bytes (16 KB by default, 256 KB at most); a cursor short of log_cursor means there is more, so call again. Either way the answer's cursor is where this read ended: pass it back as since and you get only what is new. That is how you watch a process: poll read_logs with the last cursor, or block on wait_for_log. skipped above zero means log rotation dropped that many bytes after since.",
-                schema: json!({
-                    "type": "object",
-                    "properties": {
-                        "process": process_arg(),
-                        "tail": { "type": "integer", "minimum": 1, "maximum": 5000, "description": "Lines from the end, when since is not given." },
-                        "since": { "type": "integer", "minimum": 0, "description": "A cursor from an earlier call, or log_cursor from list_processes." },
-                        "max_bytes": { "type": "integer", "minimum": 1, "maximum": 262144 }
-                    },
-                    "required": ["process"]
-                }),
-                keywords: &["log", "output", "tail", "watch", "stdout", "stderr", "console", "print", "poll"],
-                core: false,
-                audience: Audience::EVERYONE,
-            },
-            Tool {
-                name: "grep_logs",
-                description: "Search a process's whole log still on disk for a regex: the latest max_matches matching lines (20 by default), oldest first, each with context lines either side (up to 10). total counts every match, shown or not. Crew's own [crew] lines are never matched.",
-                schema: json!({
-                    "type": "object",
-                    "properties": {
-                        "process": process_arg(),
-                        "pattern": { "type": "string", "description": "A regex, e.g. \"(?i)error|warn\"." },
-                        "context": { "type": "integer", "minimum": 0, "maximum": 10 },
-                        "max_matches": { "type": "integer", "minimum": 1, "maximum": 200 }
-                    },
-                    "required": ["process", "pattern"]
-                }),
-                keywords: &["log", "search", "find", "error", "errors", "grep", "regex", "stack", "trace"],
-                core: false,
-                audience: Audience::EVERYONE,
-            },
-            Tool {
-                name: "wait_for_log",
-                description: "Block until a line of a process's log matches a regex, the process stops or exits, or timeout_s passes (at most 60). Without since it searches the current run from its first line, so start_process or restart_process followed by this sees the whole boot, even a line printed before the call. With since, only what comes after that cursor. Answers with result matched (the line, and the cursor after it), ended (the state and exit code: nothing more is coming) or timed-out. To wait longer than a minute, call again with since set to the cursor it returned.",
-                schema: json!({
-                    "type": "object",
-                    "properties": {
-                        "process": process_arg(),
-                        "pattern": { "type": "string", "description": "A regex, e.g. \"ready|listening on\"." },
-                        "since": { "type": "integer", "minimum": 0, "description": "A cursor from an earlier call. Omit to search the current run from its start." },
-                        "timeout_s": { "type": "integer", "minimum": 1, "maximum": WAIT_MAX_S, "description": "Seconds to wait, at most 60." }
-                    },
-                    "required": ["process", "pattern", "timeout_s"]
-                }),
-                keywords: &["log", "watch", "ready", "listening", "until", "block", "boot", "started", "compiled"],
-                core: false,
-                audience: Audience::EVERYONE,
-            },
-            Tool {
-                name: "send_input",
-                description: "Type into a running process's terminal, as if at its keyboard: an interactive key (vite's r to restart, q to quit) or an answer to a prompt. Sent exactly as given, so add \\r to press Enter. Needs full autonomy: with autonomy ask it is refused, since whatever the process reads it may run.",
-                schema: json!({
-                    "type": "object",
-                    "properties": {
-                        "process": process_arg(),
-                        "text": { "type": "string" }
-                    },
-                    "required": ["process", "text"]
-                }),
-                keywords: &["type", "keys", "keyboard", "stdin", "input", "press", "answer", "prompt"],
-                core: false,
-                audience: Audience::EVERYONE,
-            },
-        ]
+        catalog()
     }
 
     fn run(&self, caller: &Caller, name: &str, args: &Value) -> Result<ToolOutput, String> {
@@ -522,7 +528,7 @@ mod tests {
     }
 
     #[test]
-    fn the_catalog_is_one_listed_tool_and_the_rest_behind_the_gateway_for_everyone() {
+    fn the_catalog_is_all_behind_the_gateway_for_everyone() {
         let f = fixture("catalog");
         let tools = ProcessTools::new(f.host.clone(), f.store.clone()).catalog();
         let names: Vec<&str> = tools.iter().map(|tool| tool.name).collect();
@@ -544,8 +550,7 @@ mod tests {
                 "send_input",
             ]
         );
-        let core: Vec<&str> = tools.iter().filter(|tool| tool.core).map(|tool| tool.name).collect();
-        assert_eq!(core, vec!["list_processes"]);
+        assert!(tools.iter().all(|tool| !tool.core), "only the gateway is listed");
         assert!(tools.iter().all(|tool| tool.audience == Audience::EVERYONE));
         // The shim stretches its read by this argument's name.
         let wait = tools.iter().find(|tool| tool.name == "wait_for_log").unwrap();
@@ -553,7 +558,7 @@ mod tests {
 
         for kind in [CallerKind::Agent, CallerKind::Terminal, CallerKind::User] {
             let hidden = f.toolbox.hidden_names(kind);
-            assert!(hidden.contains(&"read_logs") && !hidden.contains(&"list_processes"), "{kind:?}: {hidden:?}");
+            assert!(hidden.contains(&"read_logs") && hidden.contains(&"list_processes"), "{kind:?}: {hidden:?}");
         }
         let agent = f.session(&f.workspace, "agent", "Coder", "ask");
         let found = f.call(&agent, "find_tool", json!({ "query": "tail the dev server logs" })).unwrap();

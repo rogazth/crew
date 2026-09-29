@@ -13,7 +13,6 @@ pub struct Client {
 /// What a tool answered: MCP content blocks, and whether it refused.
 #[derive(Clone, Debug)]
 pub struct Reply {
-    pub raw: Value,
     pub content: Vec<Value>,
     pub is_error: bool,
 }
@@ -22,7 +21,7 @@ impl Reply {
     pub fn from_raw(raw: Value) -> Self {
         let content = raw.get("content").and_then(Value::as_array).cloned().unwrap_or_default();
         let is_error = raw.get("isError").and_then(Value::as_bool).unwrap_or(false);
-        Self { raw, content, is_error }
+        Self { content, is_error }
     }
 
     /// Every text block, joined: what the tool said.

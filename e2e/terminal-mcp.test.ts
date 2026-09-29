@@ -1,7 +1,7 @@
 // Plan 2026-09-25, phase 1: a terminal session reaches Crew's tools. The daemon
 // completes the argv the window builds: Claude gets `--mcp-config` (added to
 // the user's own servers, never `--strict-mcp-config`), and the process gets a
-// token of its own in CREW_TOKEN. From the CLI's shell, `crew call list_agents`
+// token of its own in CREW_TOKEN. From the CLI's shell, `crew agents list`
 // answers with the agents of its workspace.
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
@@ -41,10 +41,11 @@ test("a terminal session lists the workspace's agents through the bridge", async
   // The fake claude's `!` runs a shell command in the session's cwd, with the
   // environment it was started with: the one the daemon handed it.
   const out = path.join(launch.cwd, `agents-${Date.now().toString(36)}.txt`);
-  await typeInTerminal(crew, `!'${crewd}' call list_agents > '${out}' 2>&1`);
+  const crewCli = path.join(path.dirname(crewd), "crew");
+  await typeInTerminal(crew, `!'${crewCli}' agents list > '${out}' 2>&1`);
   const listed = await waitFor(() => readFile(out, "utf8").catch(() => ""), {
     timeout: 15_000,
-    message: "crew call list_agents answers",
+    message: "crew agents list answers",
   });
   assert.ok(listed.includes(agent.id), `list_agents answered: ${listed}`);
   assert.ok(!listed.includes(shell.id), "a terminal session is not an agent");

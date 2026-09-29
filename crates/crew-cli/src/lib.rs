@@ -1,17 +1,17 @@
-//! `crew`, the command line. A library so `crewd call` can be the very same
-//! command for the version it is kept as an alias.
+//! `crew`, the command line. A library so its tests, and `crewd`, can build
+//! the same tree.
 
 use std::ffi::OsString;
 use std::process::ExitCode;
 
-use clap::{CommandFactory, Parser};
+use clap::FromArgMatches;
 use serde_json::Value;
 
 pub mod args;
 mod agents;
 mod app;
-mod call;
 mod client;
+mod commands;
 mod daemon;
 mod identity;
 pub mod launch_agent;
@@ -94,41 +94,49 @@ where
     I: IntoIterator<Item = T>,
     T: Into<OsString> + Clone,
 {
-    let cli = match Cli::try_parse_from(args) {
-        Ok(cli) => cli,
+    let matches = match args::command().try_get_matches_from(args) {
+        Ok(matches) => matches,
         Err(error) => {
             let _ = error.print();
             return ExitCode::from(error.exit_code() as u8);
         }
     };
-    let ctx = Ctx { global: cli.global, env: Env::from_process() };
-    match dispatch(&ctx, cli.command) {
-        Ok(code) => code,
+    let global = match Global::from_arg_matches(&matches) {
+        Ok(global) => global,
         Err(error) => {
-            if !error.message().is_empty() {
-                eprintln!("crew: {}", error.message());
-            }
-            ExitCode::from(error.code())
+            let _ = error.print();
+            return ExitCode::from(2);
+        }
+    };
+    let ctx = Ctx { global, env: Env::from_process() };
+    let result = match matches.subcommand() {
+        Some((group, sub)) if commands::GROUPS.iter().any(|candidate| candidate.name == group) => commands::run(&ctx, group, sub),
+        _ => Cli::from_arg_matches(&matches)
+            .map_err(|e| CliError::Usage(e.to_string()))
+            .and_then(|cli| dispatch(&ctx, cli.command)),
+    };
+    result.unwrap_or_else(|error| report(&ctx, error))
+}
+
+/// Why it failed, where the one who ran it reads it. A session is a model
+/// reading the command's output, and Cursor runs its commands with stderr
+/// thrown away, so there a refusal goes to stdout; a person gets stderr.
+fn report(ctx: &Ctx, error: CliError) -> ExitCode {
+    if !error.message().is_empty() {
+        let line = format!("crew: {}", error.message());
+        if identity::in_session(&ctx.env) && !ctx.global.as_user {
+            output::say(&line);
+        } else {
+            eprintln!("{line}");
         }
     }
+    ExitCode::from(error.code())
 }
 
 fn dispatch(ctx: &Ctx, command: Command) -> Result<ExitCode, CliError> {
     match command {
         Command::Open { path } => app::open(path.as_deref()),
         Command::Status => app::status(ctx),
-        Command::Ps => processes::ps(ctx),
-        Command::Start(target) => processes::act(ctx, "start_process", &target.process),
-        Command::Stop(target) => processes::act(ctx, "stop_process", &target.process),
-        Command::Restart(target) => processes::act(ctx, "restart_process", &target.process),
-        Command::Pause(target) => processes::act(ctx, "pause_process", &target.process),
-        Command::Resume(target) => processes::act(ctx, "resume_process", &target.process),
-        Command::Logs(logs) => processes::logs(ctx, &logs),
-        Command::Proc { command } => processes::define(ctx, command),
-        Command::Agents => agents::list(ctx),
-        Command::Send { agent, text } => agents::send(ctx, &agent, &text),
-        Command::Tabs => agents::tabs(ctx),
-        Command::Call(call) => call::run(ctx, &call),
         Command::Mcp => {
             let identity = Identity::resolve(&ctx.global, &ctx.env)?;
             Ok(crew_core::mcp::serve_stdio_with(identity.link()))
@@ -136,7 +144,7 @@ fn dispatch(ctx: &Ctx, command: Command) -> Result<ExitCode, CliError> {
         Command::Completions { shell } => {
             let shell: clap_complete::Shell = shell.into();
             let mut script = Vec::new();
-            clap_complete::generate(shell, &mut Cli::command(), "crew", &mut script);
+            clap_complete::generate(shell, &mut args::command(), "crew", &mut script);
             output::say(String::from_utf8_lossy(&script).trim_end());
             Ok(ExitCode::SUCCESS)
         }
@@ -171,9 +179,9 @@ mod tests {
     #[test]
     fn completions_name_the_commands() {
         let mut script = Vec::new();
-        clap_complete::generate(clap_complete::Shell::Zsh, &mut Cli::command(), "crew", &mut script);
+        clap_complete::generate(clap_complete::Shell::Zsh, &mut args::command(), "crew", &mut script);
         let script = String::from_utf8(script).expect("utf8");
-        for command in ["logs", "agents", "call", "daemon"] {
+        for command in ["logs", "agents", "processes", "tabs", "snapshot", "daemon"] {
             assert!(script.contains(command), "{command} missing");
         }
     }

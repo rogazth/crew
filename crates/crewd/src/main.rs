@@ -21,9 +21,8 @@ usage: crewd --data-dir <dir>   run the daemon (the Crew app does this)
        crewd serve --listen <host:port> [--data-dir <dir>]
                                 serve another machine's window over the network
 
-Kept for one version, for agents and configs that still name them:
-  crewd --mcp                   now `crew mcp`
-  crewd call <tool> [json]      now `crew call`";
+Kept for one version, for configs that still name it:
+  crewd --mcp                   now `crew mcp`";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -32,8 +31,6 @@ fn main() -> ExitCode {
         // falls back to daemon.json, which an old config naming crewd never
         // asked for.
         Some("--mcp") => crew_core::mcp::serve_stdio(),
-        // The very command `crew call` is, so the alias cannot drift from it.
-        Some("call") => crew_cli::run_from(std::iter::once("crew".to_string()).chain(args)),
         Some("-h" | "--help" | "help") => {
             println!("{USAGE}");
             ExitCode::SUCCESS

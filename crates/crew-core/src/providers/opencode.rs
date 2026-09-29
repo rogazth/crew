@@ -233,7 +233,7 @@ fn tool_detail(
 }
 
 fn tool_label(name: &str, input: &Map<String, Value>) -> String {
-    if let Some(verb) = super::crew_tool(name) {
+    if let Some((verb, input)) = super::crew_call(name, input) {
         let subject = string_field(Some(input), "to")
             .or_else(|| string_field(Some(input), "name"))
             .or_else(|| string_field(Some(input), "query"));

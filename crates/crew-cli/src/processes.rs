@@ -1,5 +1,5 @@
-//! `crew ps`, the lifecycle verbs, `crew logs` and `crew proc`: the process
-//! tools, one per command, with a table or a line for a person.
+//! `crew processes`: the table `list` prints, the line a lifecycle verb
+//! answers with, `logs`, and the process definitions `add` and `edit` take.
 
 use std::collections::BTreeMap;
 use std::process::ExitCode;
@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use serde_json::{json, Map, Value};
 
-use crate::args::{LogsArgs, ProcCommand};
+use crate::args::{LogsArgs, ProcAdd, ProcEdit};
 use crate::client::Client;
 use crate::output::{self, Column};
 use crate::{CliError, Ctx};
@@ -34,7 +34,7 @@ pub fn ps(ctx: &Ctx) -> Result<ExitCode, CliError> {
     ctx.show(&reply, |value| {
         let rows = output::rows(value, &["processes"])?;
         if rows.is_empty() {
-            return Some("No processes in this workspace. `crew proc add` defines one.".into());
+            return Some("No processes in this workspace. `crew processes add` defines one.".into());
         }
         let now = now_millis();
         let rows: Vec<Value> = rows.iter().map(|row| with_uptime(row, now)).collect();
@@ -70,16 +70,8 @@ fn now_millis() -> i64 {
         .unwrap_or(0)
 }
 
-/// `start`, `stop`, `restart`, `pause` and `resume`: one tool each, answered
-/// with the process as it stands after.
-pub fn act(ctx: &Ctx, tool: &str, process: &str) -> Result<ExitCode, CliError> {
-    let reply = ctx.client()?.run(tool, json!({ "process": process }))?;
-    ctx.show(&reply, |value| summary(value));
-    Ok(ExitCode::SUCCESS)
-}
-
 /// `web  running  pid 4242`, from a process row.
-fn summary(value: &Value) -> Option<String> {
+pub fn summary(value: &Value) -> Option<String> {
     let name = value.get("name")?.as_str()?;
     let state = value.get("state").or_else(|| value.get("status")).and_then(Value::as_str).unwrap_or("?");
     let mut line = format!("{name}  {state}");
@@ -261,50 +253,49 @@ fn matches_text(found: &Value, with_context: bool) -> Option<String> {
     Some(groups.join(if with_context { "\n--\n" } else { "\n" }))
 }
 
-pub fn define(ctx: &Ctx, command: ProcCommand) -> Result<ExitCode, CliError> {
-    let (tool, arguments) = match command {
-        ProcCommand::Add { name, command, cwd, env, auto_start, auto_restart } => {
-            let mut arguments = json!({
-                "name": name,
-                "command": command.join(" "),
-                "auto_start": auto_start,
-                "auto_restart": auto_restart,
-            });
-            if let Some(cwd) = cwd {
-                arguments["cwd"] = json!(cwd);
-            }
-            if !env.is_empty() {
-                arguments["env"] = json!(parse_env(&env)?);
-            }
-            ("create_process", arguments)
-        }
-        ProcCommand::Edit { process, name, command, cwd, env, auto_start, auto_restart } => {
-            let mut changes = Map::new();
-            let mut set = |key: &str, value: Option<Value>| {
-                if let Some(value) = value {
-                    changes.insert(key.to_string(), value);
-                }
-            };
-            set("name", name.map(Value::from));
-            set("command", command.map(Value::from));
-            set("cwd", cwd.map(Value::from));
-            set("env", if env.is_empty() { None } else { Some(json!(parse_env(&env)?)) });
-            set("auto_start", auto_start.map(Value::from));
-            set("auto_restart", auto_restart.map(Value::from));
-            if changes.is_empty() {
-                return Err(CliError::Usage("Nothing to change: name at least one of --name, --command, --cwd, --env, --auto-start, --auto-restart.".into()));
-            }
-            changes.insert("process".into(), json!(process));
-            ("update_process", Value::Object(changes))
-        }
-        ProcCommand::Rm { process } => ("delete_process", json!({ "process": process })),
-    };
-    let reply = ctx.client()?.run(tool, arguments)?;
-    ctx.show(&reply, |value| summary(value));
+pub fn add(ctx: &Ctx, add: ProcAdd) -> Result<ExitCode, CliError> {
+    let ProcAdd { name, command, cwd, env, auto_start, auto_restart } = add;
+    let mut arguments = json!({
+        "name": name,
+        "command": command.join(" "),
+        "auto_start": auto_start,
+        "auto_restart": auto_restart,
+    });
+    if let Some(cwd) = cwd {
+        arguments["cwd"] = json!(cwd);
+    }
+    if !env.is_empty() {
+        arguments["env"] = json!(parse_env(&env)?);
+    }
+    let reply = ctx.client()?.run("create_process", arguments)?;
+    ctx.show(&reply, summary);
     Ok(ExitCode::SUCCESS)
 }
 
-fn parse_env(pairs: &[String]) -> Result<BTreeMap<String, String>, CliError> {
+pub fn edit(ctx: &Ctx, edit: ProcEdit) -> Result<ExitCode, CliError> {
+    let ProcEdit { process, name, command, cwd, env, auto_start, auto_restart } = edit;
+    let mut changes = Map::new();
+    let mut set = |key: &str, value: Option<Value>| {
+        if let Some(value) = value {
+            changes.insert(key.to_string(), value);
+        }
+    };
+    set("name", name.map(Value::from));
+    set("command", command.map(Value::from));
+    set("cwd", cwd.map(Value::from));
+    set("env", if env.is_empty() { None } else { Some(json!(parse_env(&env)?)) });
+    set("auto_start", auto_start.map(Value::from));
+    set("auto_restart", auto_restart.map(Value::from));
+    if changes.is_empty() {
+        return Err(CliError::Usage("Nothing to change: name at least one of --name, --command, --cwd, --env, --auto-start, --auto-restart.".into()));
+    }
+    changes.insert("process".into(), json!(process));
+    let reply = ctx.client()?.run("update_process", Value::Object(changes))?;
+    ctx.show(&reply, summary);
+    Ok(ExitCode::SUCCESS)
+}
+
+pub(crate) fn parse_env(pairs: &[String]) -> Result<BTreeMap<String, String>, CliError> {
     pairs
         .iter()
         .map(|pair| match pair.split_once('=') {

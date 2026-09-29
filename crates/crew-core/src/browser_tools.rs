@@ -37,7 +37,7 @@ const OPENED_GRACE_MS: i64 = 30_000;
 pub const EVALUATE_NEEDS_FULL: &str = "browser_evaluate runs any script in the page, which may be signed in with the user's own accounts, so it is only for sessions with full autonomy. Ask the user to raise your autonomy to full if you need it; the other browser tools work as they are.";
 
 /// How long crewd waits on the window for `tool`, or `None` when it is not a
-/// browser tool. Whoever waits on crewd (the MCP shim, `crew call`) goes by
+/// browser tool. Whoever waits on crewd (the MCP shim, the `crew` commands) goes by
 /// this too, plus a margin, so crewd's own answer, a timeout included, always
 /// reaches them before they give up.
 pub fn budget(tool: &str, args: &Value) -> Option<Duration> {

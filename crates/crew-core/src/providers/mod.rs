@@ -121,10 +121,30 @@ pub fn crew_tool(name: &str) -> Option<&str> {
         .filter(|verb| !verb.is_empty())
 }
 
+/// The Crew tool a call runs, and its arguments. Only `find_tool` and
+/// `call_tool` are listed, so most calls are `call_tool` naming the tool; a
+/// row read as the gateway would show every message as "call tool" and a blob.
+pub fn crew_call<'a>(name: &'a str, input: &'a Map<String, Value>) -> Option<(&'a str, &'a Map<String, Value>)> {
+    let verb = crew_tool(name)?;
+    if verb != "call_tool" {
+        return Some((verb, input));
+    }
+    let inner = input.get("name").and_then(Value::as_str).filter(|inner| !inner.is_empty());
+    let arguments = input.get("arguments").and_then(Value::as_object);
+    match (inner, arguments) {
+        (Some(inner), Some(arguments)) => Some((inner, arguments)),
+        (Some(inner), None) => Some((inner, &EMPTY)),
+        _ => Some((verb, input)),
+    }
+}
+
+static EMPTY: std::sync::LazyLock<Map<String, Value>> = std::sync::LazyLock::new(Map::new);
+
 /// What a Crew tool did, for the one that is worth reading in a transcript: a
 /// message to another agent is half of a conversation happening in two places.
 pub fn crew_tool_detail(name: &str, input: &Map<String, Value>) -> Option<crew_protocol::ToolDetail> {
-    if crew_tool(name)? != "message_agent" {
+    let (verb, input) = crew_call(name, input)?;
+    if verb != "message_agent" {
         return None;
     }
     Some(crew_protocol::ToolDetail::Message {
@@ -333,6 +353,28 @@ mod tests {
         for other in ["message_agent", "crew", "crew_", "spawn_agent", "mcp__solo__spawn_agent"] {
             assert_eq!(crew_tool(other), None, "{other}");
         }
+    }
+
+    /// Every Crew call goes through `call_tool` now, and the row is about the
+    /// tool it named: a message still reads as who it went to and what it said.
+    #[test]
+    fn a_call_through_the_gateway_reads_as_the_tool_it_ran() {
+        let input = serde_json::json!({ "name": "message_agent", "arguments": { "to": "abc", "text": "green" } });
+        let input = input.as_object().unwrap();
+        for spelling in ["mcp__crew__call_tool", "crew_call_tool", "crew.call_tool"] {
+            let (verb, arguments) = crew_call(spelling, input).expect(spelling);
+            assert_eq!(verb, "message_agent", "{spelling}");
+            assert_eq!(arguments["to"], "abc");
+            assert!(matches!(
+                crew_tool_detail(spelling, input),
+                Some(crew_protocol::ToolDetail::Message { ref to, ref text }) if to == "abc" && text == "green"
+            ));
+        }
+        let bare = serde_json::json!({ "name": "list_agents" });
+        assert_eq!(crew_call("mcp__crew__call_tool", bare.as_object().unwrap()).map(|(verb, _)| verb), Some("list_agents"));
+        let empty = serde_json::Map::new();
+        assert_eq!(crew_call("mcp__crew__call_tool", &empty).map(|(verb, _)| verb), Some("call_tool"));
+        assert_eq!(crate::providers::claude::tool_label("mcp__crew__call_tool", input), "Crew message agent abc");
     }
 
     #[test]

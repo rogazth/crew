@@ -161,37 +161,37 @@ test("T2: the crew CLI, as the user, runs a process's whole life and lists the t
 
   // Reads a line and echoes it, so send_input has something to answer.
   const script = `echo booting; sleep 0.5; echo ready on 4000; while read line; do echo "got $line"; done`;
-  await crewCmd("proc", "add", "echoer", "--", "sh", "-c", `'${script}'`);
-  const listed = JSON.parse(await crewCmd("ps", "--json")) as unknown;
+  await crewCmd("processes", "add", "echoer", "--", "sh", "-c", `'${script}'`);
+  const listed = JSON.parse(await crewCmd("processes", "list", "--json")) as unknown;
   assert.ok(JSON.stringify(listed).includes("echoer"), JSON.stringify(listed));
 
-  await crewCmd("start", "echoer");
-  const waited = await crewCmd("call", "wait_for_log", JSON.stringify({ process: "echoer", pattern: "ready on", timeout_s: 20 }));
+  await crewCmd("processes", "start", "echoer");
+  const waited = await crewCmd("processes", "wait", "echoer", "ready on", "--timeout-s", "20");
   assert.match(waited, /matched|ready on 4000/);
 
-  await crewCmd("call", "send_input", JSON.stringify({ process: "echoer", text: "hello\r" }));
-  await waitFor(async () => (await crewCmd("logs", "echoer")).includes("got hello"), { message: "send_input reaches it" });
+  await crewCmd("processes", "input", "echoer", "hello\r");
+  await waitFor(async () => (await crewCmd("processes", "logs", "echoer")).includes("got hello"), { message: "send_input reaches it" });
 
-  const grep = await crewCmd("logs", "echoer", "--grep", "ready|got");
+  const grep = await crewCmd("processes", "logs", "echoer", "--grep", "ready|got");
   assert.match(grep, /ready on 4000/);
   assert.match(grep, /got hello/);
-  const read = JSON.parse(await crewCmd("call", "read_logs", JSON.stringify({ process: "echoer", tail: 10 }), "--json")) as unknown;
+  const read = JSON.parse(await crewCmd("processes", "logs", "echoer", "-n", "10", "--json")) as unknown;
   assert.ok(JSON.stringify(read).includes("booting"), JSON.stringify(read));
 
-  await crewCmd("pause", "echoer");
-  assert.match(await crewCmd("ps"), /paused/);
-  await crewCmd("resume", "echoer");
-  assert.match(await crewCmd("ps"), /running/);
-  await crewCmd("restart", "echoer");
-  await crewCmd("call", "wait_for_log", JSON.stringify({ process: "echoer", pattern: "ready on", timeout_s: 20 }));
-  await crewCmd("proc", "edit", "echoer", "--auto-restart", "true");
-  await crewCmd("stop", "echoer");
-  assert.match(await crewCmd("ps"), /stopped|exited/);
-  await crewCmd("proc", "rm", "echoer");
-  assert.ok(!(await crewCmd("ps")).includes("echoer"));
+  await crewCmd("processes", "pause", "echoer");
+  assert.match(await crewCmd("processes", "list"), /paused/);
+  await crewCmd("processes", "resume", "echoer");
+  assert.match(await crewCmd("processes", "list"), /running/);
+  await crewCmd("processes", "restart", "echoer");
+  await crewCmd("processes", "wait", "echoer", "ready on", "--timeout-s", "20");
+  await crewCmd("processes", "edit", "echoer", "--auto-restart", "true");
+  await crewCmd("processes", "stop", "echoer");
+  assert.match(await crewCmd("processes", "list"), /stopped|exited/);
+  await crewCmd("processes", "rm", "echoer");
+  assert.ok(!(await crewCmd("processes", "list")).includes("echoer"));
 
   // The browser from a shell: the tabs the workspace has.
-  assert.match(await crewCmd("tabs"), /./);
+  assert.match(await crewCmd("tabs", "list"), /./);
 });
 
 test("T3: a terminal session drives the browser and processes with its own token, gated by its autonomy", async (t) => {
@@ -232,16 +232,16 @@ test("T3: a terminal session drives the browser and processes with its own token
   await setAutonomy("full");
   const full = await inSession([
     `echo "== whoami"; '${CREW}' status`,
-    `echo "== open"; '${CREW}' call open_tab '${JSON.stringify({ url: `${base}/order` })}'`,
-    `echo "== tabs"; '${CREW}' tabs`,
-    `echo "== snapshot"; '${CREW}' call browser_snapshot`,
-    `echo "== evaluate"; '${CREW}' call browser_evaluate '{"expression":"1+1"}'`,
-    `echo "== proc"; '${CREW}' proc add ticker -- sh -c "'while true; do echo tick; sleep 1; done'"`,
-    `echo "== start"; '${CREW}' start ticker`,
-    `echo "== wait"; '${CREW}' call wait_for_log '{"process":"ticker","pattern":"tick","timeout_s":20}'`,
-    `echo "== input"; '${CREW}' call send_input '{"process":"ticker","text":"x\\r"}' && echo input-ok`,
-    `echo "== stop"; '${CREW}' stop ticker`,
-    `echo "== user"; '${CREW}' --data-dir /nowhere ps >/dev/null 2>&1 && echo still-the-session`,
+    `echo "== open"; '${CREW}' tabs open '${base}/order'`,
+    `echo "== tabs"; '${CREW}' tabs list`,
+    `echo "== snapshot"; '${CREW}' tabs snapshot`,
+    `echo "== evaluate"; '${CREW}' tabs eval 1+1`,
+    `echo "== proc"; '${CREW}' processes add ticker -- sh -c "'while true; do echo tick; sleep 1; done'"`,
+    `echo "== start"; '${CREW}' processes start ticker`,
+    `echo "== wait"; '${CREW}' processes wait ticker tick --timeout-s 20`,
+    `echo "== input"; '${CREW}' processes input ticker x && echo input-ok`,
+    `echo "== stop"; '${CREW}' processes stop ticker`,
+    `echo "== user"; '${CREW}' --data-dir /nowhere processes list >/dev/null 2>&1 && echo still-the-session`,
     `echo "== daemon"; '${CREW}' daemon status; echo "exit=$?"`,
   ]);
   assert.match(full, new RegExp(shell.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")), full);
@@ -267,11 +267,11 @@ test("T3: a terminal session drives the browser and processes with its own token
 
   await setAutonomy("ask");
   const ask = await inSession([
-    `echo "== evaluate"; '${CREW}' call browser_evaluate '{"expression":"1+1"}'; echo "exit=$?"`,
-    `echo "== snapshot"; '${CREW}' call browser_snapshot >/dev/null && echo snapshot-ok`,
-    `echo "== input"; '${CREW}' call send_input '{"process":"ticker","text":"x\\r"}'; echo "exit=$?"`,
-    `echo "== create"; '${CREW}' proc add proposed -- echo hi`,
-    `echo "== start"; '${CREW}' start proposed; echo "exit=$?"`,
+    `echo "== evaluate"; '${CREW}' tabs eval 1+1; echo "exit=$?"`,
+    `echo "== snapshot"; '${CREW}' tabs snapshot >/dev/null && echo snapshot-ok`,
+    `echo "== input"; '${CREW}' processes input ticker x; echo "exit=$?"`,
+    `echo "== create"; '${CREW}' processes add proposed -- echo hi`,
+    `echo "== start"; '${CREW}' processes start proposed; echo "exit=$?"`,
   ]);
   assert.match(ask, /== evaluate\n[\s\S]*autonomy[\s\S]*exit=1/, ask);
   assert.match(ask, /snapshot-ok/, ask);
@@ -287,7 +287,7 @@ test("T3: a terminal session drives the browser and processes with its own token
   });
 });
 
-test("T4: crew mcp speaks MCP on stdio and lists the browser tools", async (t) => {
+test("T4: crew mcp speaks MCP on stdio, lists only the gateway and finds the browser tools", async (t) => {
   const crew = await launchCrew();
   t.after(() => crew.close());
   const [workspace] = crew.workspaces;
@@ -297,16 +297,20 @@ test("T4: crew mcp speaks MCP on stdio and lists the browser tools", async (t) =
     { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "e2e", version: "1" } } },
     { jsonrpc: "2.0", method: "notifications/initialized" },
     { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "find_tool", arguments: { query: "browser snapshot" } } },
+    { jsonrpc: "2.0", id: 3, method: "tools/list" },
   ];
   const child = execFile(CREW, ["mcp"], { cwd: workspace.path, env: { ...env, HOME: crew.home, CREW_DATA_DIR: crew.userData } });
   let stdout = "";
   child.stdout?.on("data", (chunk: Buffer) => (stdout += chunk.toString()));
   child.stdin?.write(requests.map((request) => JSON.stringify(request)).join("\n") + "\n");
-  await waitFor(() => stdout.split("\n").filter(Boolean).length >= 2, { timeout: 15_000, message: "two answers" });
+  await waitFor(() => stdout.split("\n").filter(Boolean).length >= 3, { timeout: 15_000, message: "three answers" });
   child.stdin?.end();
-  const [init, found] = stdout.split("\n").filter(Boolean).map((line) => JSON.parse(line) as { result?: unknown });
+  const [init, found, listed] = stdout.split("\n").filter(Boolean).map((line) => JSON.parse(line) as { result?: unknown });
   assert.ok(JSON.stringify(init?.result).includes("instructions"), stdout);
   assert.ok(JSON.stringify(found?.result).includes("browser_snapshot"), stdout);
+  // Nothing else is in the prompt: the rest is behind find_tool.
+  const names = (listed?.result as { tools: { name: string }[] }).tools.map((tool) => tool.name);
+  assert.deepEqual(names, ["find_tool", "call_tool"], stdout);
 });
 
 
@@ -370,7 +374,7 @@ test("T5: Install `crew` Command… links the CLI onto the shell's PATH, and the
 
   // The installed name works from a plain shell in the workspace.
   const { CREW_SOCKET: _socket, CREW_TOKEN: _token, ...env } = process.env;
-  const { stdout } = await execFileAsync("/bin/bash", ["-lc", "crew status && crew ps"], {
+  const { stdout } = await execFileAsync("/bin/bash", ["-lc", "crew status && crew processes list"], {
     cwd: workspace.path,
     env: { ...env, HOME: crew.home, CREW_DATA_DIR: crew.userData, PATH: `${path.dirname(link)}:/usr/bin:/bin` },
   });

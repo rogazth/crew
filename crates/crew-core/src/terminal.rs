@@ -8,7 +8,7 @@
 //! Each provider takes the MCP server the way it does for an agent's turn,
 //! with one difference for Claude: no `--strict-mcp-config`, so Crew is added
 //! to the user's own servers instead of replacing them. Cursor has no MCP flag
-//! and gets the environment alone, for `crew call` from its shell.
+//! and gets the environment alone, for `crew` from its shell.
 
 use std::path::Path;
 
@@ -35,7 +35,7 @@ pub struct Launch {
 ///
 /// The flags go on only when argv[0] is the provider's own binary: an empty
 /// argv is the login shell, and a command the user changed is not one whose
-/// flags Crew knows. The environment goes on regardless, so `crew call` works
+/// flags Crew knows. The environment goes on regardless, so `crew` works
 /// from any shell the session opens.
 pub fn launch(provider: &str, mut argv: Vec<String>, link: &BridgeLink<'_>) -> Launch {
     let mut env = vec![
@@ -156,7 +156,7 @@ mod tests {
         assert!(out.env.starts_with(&crew_env()));
     }
 
-    /// Cursor has no MCP flag: it reaches the bridge with `crew call`.
+    /// Cursor has no MCP flag: it reaches the bridge with `crew`.
     #[test]
     fn cursor_gets_the_environment_alone() {
         let out = launch("cursor", argv(&["cursor-agent", "--resume", "c1", "--model", "auto"]), &LINK);
@@ -165,7 +165,7 @@ mod tests {
     }
 
     /// The login shell a session falls back to, or a command that is not the
-    /// provider's: no flags Crew cannot vouch for, but `crew call` still works.
+    /// provider's: no flags Crew cannot vouch for, but `crew` still works.
     #[test]
     fn anything_else_gets_the_environment_alone() {
         assert_eq!(launch("claude", Vec::new(), &LINK), Launch { argv: Vec::new(), env: crew_env() });

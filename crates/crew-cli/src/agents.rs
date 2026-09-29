@@ -1,10 +1,11 @@
-//! `crew agents`, `crew send` and `crew tabs`: the roster and the browser, as
-//! `list_agents`, `message_agent` and `list_tabs` answer them.
+//! `crew agents list`, `crew agents send` and `crew tabs list`: the roster
+//! and the browser, as `list_agents`, `message_agent` and `list_tabs` answer them.
 
 use std::process::ExitCode;
 
 use serde_json::{json, Value};
 
+use crate::args::SendArgs;
 use crate::output::{self, Column};
 use crate::{read_stdin, CliError, Ctx};
 
@@ -36,7 +37,8 @@ pub fn list(ctx: &Ctx) -> Result<ExitCode, CliError> {
 /// `message_agent` takes an id and only an id, because a name the user
 /// changes goes stale in an agent's memory. A person typing at a shell has no
 /// such memory, so a name is looked up here, once, and the id is what is sent.
-pub fn send(ctx: &Ctx, agent: &str, words: &[String]) -> Result<ExitCode, CliError> {
+pub fn send(ctx: &Ctx, args: &SendArgs) -> Result<ExitCode, CliError> {
+    let (agent, words) = (args.agent.as_str(), &args.text);
     let text = if words.len() == 1 && words[0] == "-" { read_stdin()? } else { words.join(" ") };
     if text.trim().is_empty() {
         return Err(CliError::Usage("Nothing to send.".into()));
@@ -61,7 +63,7 @@ fn pick_agent(rows: &[Value], who: &str) -> Result<String, CliError> {
     match named.as_slice() {
         [one] => Ok(field(one, "id")),
         [] => Err(CliError::Failed(format!(
-            "No agent {who} in this workspace. `crew agents` lists them{}",
+            "No agent {who} in this workspace. `crew agents list` lists them{}",
             if rows.is_empty() { "; there are none.".to_string() } else { ".".to_string() }
         ))),
         many => Err(CliError::Failed(format!(
@@ -112,7 +114,7 @@ mod tests {
         let CliError::Failed(twice) = pick_agent(&roster(), "Coder").unwrap_err() else { panic!() };
         assert!(twice.contains("b2") && twice.contains("c3"), "{twice}");
         let CliError::Failed(nobody) = pick_agent(&roster(), "Tester").unwrap_err() else { panic!() };
-        assert!(nobody.contains("crew agents"), "{nobody}");
+        assert!(nobody.contains("crew agents list"), "{nobody}");
     }
 
     #[test]

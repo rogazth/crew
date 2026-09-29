@@ -123,22 +123,21 @@ fn crew_speaks_as_the_user_through_daemon_json() {
     let (workspace, agent) = daemon.seed(&folder, "Reviewer");
 
     // From a folder inside the workspace, which is the default workspace.
-    let out = crew(&daemon.dir, &folder.join("src"), &["agents"]);
+    let out = crew(&daemon.dir, &folder.join("src"), &["agents", "list"]);
     assert!(out.status.success(), "{out:?}");
     let table = stdout(&out);
     assert!(table.starts_with("NAME"), "{table}");
     assert!(table.contains("Reviewer") && table.contains(&agent), "{table}");
 
-    // The raw MCP answer, under --json.
-    let out = crew(&daemon.dir, &folder, &["call", "list_agents", "--json"]);
+    // The tool's answer as data, under --json.
+    let out = crew(&daemon.dir, &folder, &["agents", "list", "--json"]);
     assert!(out.status.success(), "{out:?}");
-    let raw: Value = serde_json::from_slice(&out.stdout).expect("json");
-    let rows: Value = serde_json::from_str(raw["content"][0]["text"].as_str().expect("text")).expect("rows");
+    let rows: Value = serde_json::from_slice(&out.stdout).expect("json");
     assert_eq!(rows[0]["id"], agent.as_str(), "{rows}");
 
     // Named by id from anywhere.
     let elsewhere = std::env::temp_dir();
-    let out = crew(&daemon.dir, &elsewhere, &["agents", "--json", "--workspace", &workspace]);
+    let out = crew(&daemon.dir, &elsewhere, &["agents", "list", "--json", "--workspace", &workspace]);
     assert!(out.status.success(), "{out:?}");
     let rows: Value = serde_json::from_slice(&out.stdout).expect("json");
     assert_eq!(rows[0]["name"], "Reviewer");
@@ -152,22 +151,18 @@ fn crew_speaks_as_the_user_through_daemon_json() {
     assert_eq!(status["caller"]["workspace"]["id"], workspace.as_str());
     assert_eq!(status["version"], env!("CARGO_PKG_VERSION"));
 
-    // The catalog lists what the gateway hides, and one tool describes itself.
-    let out = crew(&daemon.dir, &folder, &["call", "--help"]);
-    let catalog = stdout(&out);
-    assert!(out.status.success() && catalog.contains("list_routines"), "{catalog}");
-    assert!(!catalog.contains("find_tool"), "{catalog}");
-    let out = crew(&daemon.dir, &folder, &["call", "message_agent", "--help"]);
-    let help = stdout(&out);
-    assert!(help.contains("Arguments:") && help.contains("to") && help.contains("required"), "{help}");
+    // A command built from a tool's schema runs it: routines has no hand-written one.
+    let out = crew(&daemon.dir, &folder, &["routines", "list", "--agent-id", &agent, "--json"]);
+    assert!(out.status.success(), "{out:?}");
+    serde_json::from_slice::<Value>(&out.stdout).expect("json");
 
-    // A refusal is an answer on stdout and a failed exit.
-    let out = crew(&daemon.dir, &folder, &["call", "no_such_tool"]);
+    // A refusal fails the command and says why.
+    let out = crew(&daemon.dir, &folder, &["routines", "rm", "no-such-routine"]);
     assert_eq!(out.status.code(), Some(1), "{out:?}");
-    assert!(stdout(&out).contains("Unknown tool"), "{out:?}");
+    assert!(String::from_utf8_lossy(&out.stderr).starts_with("crew: "), "{out:?}");
 
     // Outside any workspace, a tool that needs one says how to name one.
-    let out = crew(&daemon.dir, &elsewhere, &["agents"]);
+    let out = crew(&daemon.dir, &elsewhere, &["agents", "list"]);
     assert_eq!(out.status.code(), Some(1), "{out:?}");
     assert!(String::from_utf8_lossy(&out.stderr).contains("--workspace"), "{out:?}");
 
@@ -179,7 +174,7 @@ fn crew_says_when_crew_is_not_running() {
     let daemon = Daemon::start("gone");
     let dir = daemon.dir.clone();
     daemon.stop();
-    let out = crew(&dir, &dir, &["agents"]);
+    let out = crew(&dir, &dir, &["agents", "list"]);
     assert_eq!(out.status.code(), Some(3), "{out:?}");
     assert!(String::from_utf8_lossy(&out.stderr).contains("Crew isn't running"), "{out:?}");
     let out = crew(&dir, &dir, &["status"]);
@@ -187,22 +182,3 @@ fn crew_says_when_crew_is_not_running() {
     assert!(stdout(&out).contains("not running"), "{out:?}");
 }
 
-/// `crewd call` is kept for a version as the same command.
-#[test]
-fn crewd_call_is_crew_call() {
-    let daemon = Daemon::start("alias");
-    let folder = daemon.dir.join("repo");
-    std::fs::create_dir_all(&folder).expect("folder");
-    let (_, agent) = daemon.seed(&folder, "Coder");
-    let out = Command::new(crewd_path())
-        .args(["call", "list_agents"])
-        .current_dir(&folder)
-        .env("CREW_DATA_DIR", &daemon.dir)
-        .env_remove("CREW_TOKEN")
-        .env_remove("CREW_SOCKET")
-        .output()
-        .expect("crewd call");
-    assert!(out.status.success(), "{out:?}");
-    assert!(stdout(&out).contains(&agent), "{out:?}");
-    daemon.stop();
-}
