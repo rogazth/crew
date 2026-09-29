@@ -26,7 +26,7 @@ import {
 } from "./browser";
 import { openExternal } from "./external";
 import { release, sha } from "./build-info";
-import { connectAgent, unloadAgent, type AgentLink } from "./daemon-agent";
+import { connectAgent, launchdStandIn, unloadAgent, type AgentLink } from "./daemon-agent";
 import { decideLaunch, translocated, TRANSLOCATED_NOTICE, type Outcome } from "./daemon-agent-plan";
 import { buildMenu } from "./menu";
 import { registerRemoteIpc } from "./remotes";
@@ -79,6 +79,16 @@ async function attempt(run: () => Promise<void>): Promise<Outcome> {
 // Resolves to a notice for the user when this run could not use the
 // LaunchAgent; throws only when there is no daemon at all.
 async function connectDaemon(): Promise<string | null> {
+  // CREW_E2E_AGENT: e2e takes the packaged app's way to crewd, a LaunchAgent,
+  // with a stand-in for launchd.
+  if (e2e && process.env.CREW_E2E_AGENT === "1") {
+    const dataDir = app.getPath("userData");
+    agent = await connectAgent(
+      { crewd: crewdPath(), crew: "crew", dataDir, version: app.getVersion(), uid: 0, onNewDaemon: () => win?.reload(), onMismatch: () => {} },
+      launchdStandIn(crewdPath(), dataDir),
+    );
+    return null;
+  }
   if (!app.isPackaged) {
     await startDaemon().catch((error: unknown) => Promise.reject(new Error(`Could not start crewd: ${reason(error)}`)));
     return null;
@@ -399,7 +409,7 @@ function registerIpc(): void {
   });
   registerBrowserIpc();
   registerFileIpc();
-  registerRemoteIpc(() => info);
+  registerRemoteIpc(daemonInfo);
 }
 
 registerFileScheme();

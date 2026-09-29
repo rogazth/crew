@@ -45,6 +45,12 @@ export type LaunchOptions = {
    * active. Defaults to one repo, `app`. Ignored with `dir`.
    */
   repos?: (string | Repo)[];
+  /**
+   * How the app runs crewd: as its child, as dev does (the default), or as the
+   * packaged app does, a LaunchAgent that outlives it (launchd stood in for).
+   * The harness stops an agent's crewd on close.
+   */
+  daemon?: "child" | "agent";
 };
 
 export type Crew = {
@@ -97,6 +103,7 @@ async function launch(opts: LaunchOptions, owns: boolean): Promise<Crew> {
   const repos = path.join(root, "repos");
   const userData = path.join(config, "Crew Dev");
   const env = sandboxEnv(home, config);
+  const agent = opts.daemon === "agent";
 
   let handedOff = false;
   const cleanup = async () => {
@@ -150,6 +157,7 @@ async function launch(opts: LaunchOptions, owns: boolean): Promise<Crew> {
         ...env,
         ...(process.env.E2E_DEV_PORT ? { CREW_PORT: process.env.E2E_DEV_PORT, CREW_RENDERER: "" } : { CREW_RENDERER: "dist" }),
         CREW_E2E: "1",
+        ...(agent ? { CREW_E2E_AGENT: "1" } : {}),
       },
     });
   } catch (error) {
@@ -163,7 +171,10 @@ async function launch(opts: LaunchOptions, owns: boolean): Promise<Crew> {
     if (closed) return;
     closed = true;
     rpc?.close();
-    await quit(app, () => killStragglers(home));
+    await quit(app, async () => {
+      if (agent) await stopAgentDaemon(userData);
+      await killStragglers(home);
+    });
   };
   const close = async () => {
     await shutdown();
@@ -173,7 +184,7 @@ async function launch(opts: LaunchOptions, owns: boolean): Promise<Crew> {
     await shutdown();
     await between?.();
     handedOff = true;
-    return launch({ dir: root }, owns);
+    return launch({ dir: root, ...(opts.daemon ? { daemon: opts.daemon } : {}) }, owns);
   };
 
   try {
@@ -347,6 +358,34 @@ async function quit(app: ElectronApplication, afterExit: () => Promise<void>): P
   await exited;
   await afterExit();
   // crewd exits on its own once its stdin, the dead app's pipe, closes.
+}
+
+/** The LaunchAgent's crewd, which quitting the app leaves running, stopped as `crew daemon stop` does. */
+async function stopAgentDaemon(userData: string): Promise<void> {
+  const file = await readFile(path.join(userData, "daemon.json"), "utf8").catch(() => "");
+  const pid = file ? (JSON.parse(file) as { pid?: number }).pid : undefined;
+  if (pid === undefined) return;
+  const alive = () => {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  try {
+    process.kill(pid, "SIGTERM");
+  } catch {
+    return;
+  }
+  // crewd gives its processes a 5 s stop grace and the PTY host one more second.
+  for (let waited = 0; alive() && waited < 8000; waited += 100) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  if (alive()) {
+    console.error(`e2e: the LaunchAgent's crewd ${pid} outlived SIGTERM; killing it`);
+    process.kill(pid, "SIGKILL");
+  }
 }
 
 /**
@@ -831,15 +870,25 @@ export async function addRemote(crew: Crew, name = "devbox", opts: { latencyMs?:
   const token = (await readFile(path.join(dataDir, "token"), "utf8")).trim();
   // Crew dials the delaying proxy when there is one; the harness's own RPCs go straight.
   const proxy = opts.latencyMs ? await delayProxy(port, opts.latencyMs) : null;
-  const row = await crew.window.evaluate(
-    (input) => window.crewHost!.remotes!.add(input),
-    { id: "", name, host: "127.0.0.1", port: proxy?.port ?? port, user: "agent", token },
-  );
-  await crew.reload();
   const stopAll = async () => {
     await stop();
     proxy?.drop();
   };
+  // A daemon left serving would hold the test run open.
+  const row = await crew.window
+    .evaluate((input) => window.crewHost!.remotes!.add(input), {
+      id: "",
+      name,
+      host: "127.0.0.1",
+      port: proxy?.port ?? port,
+      user: "agent",
+      token,
+    })
+    .catch(async (error: unknown) => {
+      await stopAll();
+      throw error;
+    });
+  await crew.reload();
   return { id: row.id, name, port, dialPort: proxy?.port ?? port, token, dataDir, stop: stopAll, start };
 }
 

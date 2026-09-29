@@ -3,7 +3,7 @@
 // Quitting the app only lets go of it. The decisions are daemon-agent-plan.ts;
 // this is the disk, launchctl and the socket.
 
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { realpathSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { createConnection } from "node:net";
@@ -305,4 +305,28 @@ export async function connectAgent(options: Options, sys: System = system): Prom
 // out, it is also not restarted by KeepAlive; the next launch loads it again.
 export async function unloadAgent(uid: number, dataDir: string): Promise<void> {
   await run("/bin/launchctl", ["bootout", launchctlTarget(uid, dataDir).service], 20_000).catch(() => {});
+}
+
+// e2e's launchd, on any platform: `kickstart` starts crewd as launchd would
+// (`--supervised-by launchd`, detached, no pipes), and `bootout` stops it. The
+// rest succeeds or, for `print` and `plutil`, finds nothing installed, so
+// connectAgent takes the path a first launch of the packaged app takes.
+export function launchdStandIn(crewd: string, dataDir: string): System {
+  const stop = async () => {
+    const file = parseDaemonFile(await readFile(path.join(dataDir, "daemon.json"), "utf8").catch(() => ""));
+    if (file?.pid !== undefined && alive(file.pid)) process.kill(file.pid, "SIGTERM");
+  };
+  return {
+    ...system,
+    run: async (file, args) => {
+      const [verb] = args;
+      if (file === "/usr/bin/plutil" || verb === "print") throw new Error(`${path.basename(file)} ${args.join(" ")}: not found`);
+      if (verb === "kickstart") {
+        if (args.includes("-k")) await stop();
+        spawn(crewd, ["--supervised-by", "launchd", "--data-dir", dataDir], { detached: true, stdio: "ignore" }).unref();
+      }
+      if (verb === "bootout") await stop();
+      return "";
+    },
+  };
 }
