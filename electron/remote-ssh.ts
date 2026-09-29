@@ -35,6 +35,31 @@ export type Paired = {
 /** Same number as `DEFAULT_PORT` in src/lib/remotes.ts. Kept here so this file stays free of app imports. */
 const DEFAULT_PORT = 17877;
 
+/** Which app installs crewd: the published release, a package built here, or a dev build. */
+export type Channel = "release" | "local" | "dev";
+
+/**
+ * Where one app's crewd lives on a machine: its user unit, the folder under
+ * the home that holds its binary and data, and the port it listens on unless
+ * told another. The release's is what it always was. A dev or local build
+ * adding the same machine gets its own, so it never replaces the release's
+ * binary, restarts its daemon or reads its data.
+ */
+export type RemoteLayout = { unit: string; home: string; port: number };
+
+export function remoteLayout(channel: Channel): RemoteLayout {
+  switch (channel) {
+    case "release":
+      return { unit: "crewd", home: ".crew", port: DEFAULT_PORT };
+    case "local":
+      return { unit: "crewd-local", home: ".crew-local", port: DEFAULT_PORT + 1 };
+    case "dev":
+      return { unit: "crewd-dev", home: ".crew-dev", port: DEFAULT_PORT + 2 };
+  }
+}
+
+const RELEASE = remoteLayout("release");
+
 export function linuxArch(uname: string): "x64" | "arm64" | null {
   if (uname.trim() === "x86_64") return "x64";
   if (uname.trim() === "aarch64" || uname.trim() === "arm64") return "arm64";
@@ -42,13 +67,13 @@ export function linuxArch(uname: string): "x64" | "arm64" | null {
 }
 
 /** The user unit. `%h` is the remote home, so the same text works for any user. */
-export function serviceUnit(ip: string, port: number): string {
+export function serviceUnit(ip: string, port: number, layout: RemoteLayout = RELEASE): string {
   return `[Unit]
-Description=Crew daemon
+Description=Crew daemon${layout.unit === RELEASE.unit ? "" : ` (${layout.unit})`}
 After=tailscaled.service
 
 [Service]
-ExecStart=%h/.crew/bin/crewd serve --listen ${ip}:${port} --data-dir %h/.crew/data
+ExecStart=%h/${layout.home}/bin/crewd serve --listen ${ip}:${port} --data-dir %h/${layout.home}/data
 Restart=on-failure
 RestartSec=1
 
@@ -64,8 +89,11 @@ export async function installDaemon(opts: {
   onStep?: (step: StepUpdate) => void;
   /** Before anything is written: may refuse the machine by its tailnet address, as one already added. */
   check?: (ip: string) => Promise<void>;
+  layout?: RemoteLayout;
 }): Promise<Paired> {
-  const port = opts.port ?? DEFAULT_PORT;
+  const layout = opts.layout ?? RELEASE;
+  const port = opts.port ?? layout.port;
+  const { unit, home } = layout;
   const control = controlPath(opts.target.destination);
   const report = opts.onStep ?? (() => {});
   try {
@@ -86,10 +114,10 @@ export async function installDaemon(opts: {
     const binary = opts.binaryFor(arch);
     if (!binary) throw new Error(`Crew has no Linux build for ${arch}`);
     await step(report, "upload", async () => {
-      await ssh(opts.target, 'mkdir -p "$HOME/.crew/bin" "$HOME/.crew/data" "$HOME/.config/systemd/user"', control);
+      await ssh(opts.target, `mkdir -p "$HOME/${home}/bin" "$HOME/${home}/data" "$HOME/.config/systemd/user"`, control);
       await sshStream(
         opts.target,
-        'cat > "$HOME/.crew/bin/crewd.new" && chmod 755 "$HOME/.crew/bin/crewd.new"',
+        `cat > "$HOME/${home}/bin/crewd.new" && chmod 755 "$HOME/${home}/bin/crewd.new"`,
         control,
         binary,
       );
@@ -98,19 +126,19 @@ export async function installDaemon(opts: {
       await ssh(opts.target, 'loginctl enable-linger "$(id -un)"', control);
       await ssh(
         opts.target,
-        userctl('systemctl --user stop crewd 2>/dev/null || true; mv "$HOME/.crew/bin/crewd.new" "$HOME/.crew/bin/crewd"'),
+        userctl(`systemctl --user stop ${unit} 2>/dev/null || true; mv "$HOME/${home}/bin/crewd.new" "$HOME/${home}/bin/crewd"`),
         control,
       );
-      await sshStdin(opts.target, 'cat > "$HOME/.config/systemd/user/crewd.service"', control, serviceUnit(ip, port));
-      await ssh(opts.target, userctl("systemctl --user daemon-reload && systemctl --user enable --now crewd"), control);
+      await sshStdin(opts.target, `cat > "$HOME/.config/systemd/user/${unit}.service"`, control, serviceUnit(ip, port, layout));
+      await ssh(opts.target, userctl(`systemctl --user daemon-reload && systemctl --user enable --now ${unit}`), control);
     });
-    const token = await readToken(opts.target, control);
+    const token = await readToken(opts.target, control, layout);
     const paired = await step(report, "pair", async () => {
       try {
         return await pair(ip, port, token);
       } catch (error) {
-        const logs = await ssh(opts.target, userctl("journalctl --user -u crewd -n 40 --no-pager"), control).catch(() => "");
-        await ssh(opts.target, userctl("systemctl --user stop crewd 2>/dev/null || true"), control).catch(() => {});
+        const logs = await ssh(opts.target, userctl(`journalctl --user -u ${unit} -n 40 --no-pager`), control).catch(() => "");
+        await ssh(opts.target, userctl(`systemctl --user stop ${unit} 2>/dev/null || true`), control).catch(() => {});
         if (logs.includes("Address already in use")) {
           throw new Error(`Port ${port} is already in use on that machine`);
         }
@@ -130,35 +158,36 @@ export async function installDaemon(opts: {
   }
 }
 
-export async function restartDaemon(target: SshTarget): Promise<void> {
+export async function restartDaemon(target: SshTarget, layout: RemoteLayout = RELEASE): Promise<void> {
   const control = controlPath(target.destination);
   try {
-    await ssh(target, userctl("systemctl --user restart crewd"), control);
+    await ssh(target, userctl(`systemctl --user restart ${layout.unit}`), control);
   } finally {
     await closeControl(target, control);
   }
 }
 
-export async function removeDaemon(target: SshTarget, wipe: boolean): Promise<void> {
+export async function removeDaemon(target: SshTarget, wipe: boolean, layout: RemoteLayout = RELEASE): Promise<void> {
+  const { unit, home } = layout;
   const control = controlPath(target.destination);
   try {
     await ssh(
       target,
       userctl(
-        'systemctl --user disable --now crewd 2>/dev/null || true; rm -f "$HOME/.config/systemd/user/crewd.service"; systemctl --user daemon-reload 2>/dev/null || true',
+        `systemctl --user disable --now ${unit} 2>/dev/null || true; rm -f "$HOME/.config/systemd/user/${unit}.service"; systemctl --user daemon-reload 2>/dev/null || true`,
       ),
       control,
     );
-    if (wipe) await ssh(target, 'rm -rf "$HOME/.crew"', control);
+    if (wipe) await ssh(target, `rm -rf "$HOME/${home}"`, control);
   } finally {
     await closeControl(target, control);
   }
 }
 
-export async function daemonLogs(target: SshTarget): Promise<string> {
+export async function daemonLogs(target: SshTarget, layout: RemoteLayout = RELEASE): Promise<string> {
   const control = controlPath(target.destination);
   try {
-    return await ssh(target, userctl("journalctl --user -u crewd -n 200 --no-pager"), control);
+    return await ssh(target, userctl(`journalctl --user -u ${layout.unit} -n 200 --no-pager`), control);
   } finally {
     await closeControl(target, control);
   }
@@ -236,11 +265,11 @@ async function tailnetIp(target: SshTarget, control: string, hostname: string): 
   throw new Error("The machine is not on your tailnet. Crew reaches crewd over Tailscale: install it there and sign in");
 }
 
-async function readToken(target: SshTarget, control: string): Promise<string> {
+async function readToken(target: SshTarget, control: string, layout: RemoteLayout): Promise<string> {
   let last = "The daemon did not write its token";
   for (let attempt = 0; attempt < 20; attempt++) {
     try {
-      const token = (await ssh(target, 'cat "$HOME/.crew/data/token"', control)).trim();
+      const token = (await ssh(target, `cat "$HOME/${layout.home}/data/token"`, control)).trim();
       if (token) return token;
     } catch (error) {
       last = error instanceof Error ? error.message : String(error);

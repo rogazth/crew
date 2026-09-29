@@ -7,7 +7,8 @@ import type { RemoteEnv } from "../src/lib/protocol";
 import { DEFAULT_PORT, INSTALL_JOB, type InstallInput, type ManualRemote } from "../src/lib/remotes";
 import { bindRemoteRoot, unbindRemoteRoot } from "./browser/files";
 import { setWorkspaceProxy } from "./browser/guests";
-import { daemonLogs, installDaemon, removeDaemon, restartDaemon, rpc, type SshTarget } from "./remote-ssh";
+import { release } from "./build-info";
+import { daemonLogs, installDaemon, remoteLayout, removeDaemon, restartDaemon, rpc, type SshTarget } from "./remote-ssh";
 import { dropToken, getToken, putToken } from "./remote-tokens";
 import { sshHosts } from "./ssh-config";
 import { tailnetFrom } from "./tailscale";
@@ -27,6 +28,11 @@ export function linuxBinary(arch: "x64" | "arm64"): string | null {
   const name = `crewd-linux-${arch}`;
   const candidates = [path.join(process.resourcesPath, name), path.join(app.getAppPath(), "target", "linux", name)];
   return candidates.find((file) => existsSync(file)) ?? null;
+}
+
+/** This app's crewd on a machine: the release's, or a dev or local build's own beside it. */
+function layout() {
+  return remoteLayout(app.isPackaged ? (release ? "release" : "local") : "dev");
 }
 
 export function registerRemoteIpc(getDaemon: () => Daemon | null): void {
@@ -62,10 +68,12 @@ export function registerRemoteIpc(getDaemon: () => Daemon | null): void {
 
   ipcMain.handle("remotes:install", async (event, input: InstallInput) => {
     const target = sshOf(input);
-    const port = input.port ?? DEFAULT_PORT;
+    // The form offers the release's port; a dev or local build keeps off it, so it never meets the release's crewd.
+    const port = input.port === undefined || input.port === DEFAULT_PORT ? layout().port : input.port;
     const paired = await installDaemon({
       target,
       port,
+      layout: layout(),
       binaryFor: linuxBinary,
       // The same machine under another name (a public alias, its tailnet IP) is refused before anything changes there.
       check: async (ip) => {
@@ -98,6 +106,7 @@ export function registerRemoteIpc(getDaemon: () => Daemon | null): void {
     await installDaemon({
       target: targetOf(row),
       port: row.port,
+      layout: layout(),
       binaryFor: linuxBinary,
       onStep: (step) => {
         if (!event.sender.isDestroyed()) event.sender.send("remotes:progress", { ...step, job: row.id });
@@ -109,14 +118,14 @@ export function registerRemoteIpc(getDaemon: () => Daemon | null): void {
 
   ipcMain.handle("remotes:restart", async (_event, id: unknown) => {
     const row = await requireRow(getDaemon, id);
-    await restartDaemon(targetOf(row));
+    await restartDaemon(targetOf(row), layout());
   });
 
   ipcMain.handle("remotes:remove", async (_event, id: unknown, wipe: unknown) => {
     const row = await requireRow(getDaemon, id);
     let warning: string | null = null;
     try {
-      await removeDaemon(targetOf(row), wipe === true);
+      await removeDaemon(targetOf(row), wipe === true, layout());
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       warning = `Removed from Crew, but crewd may still run on ${row.name}: ${reason}`;
@@ -128,7 +137,7 @@ export function registerRemoteIpc(getDaemon: () => Daemon | null): void {
 
   ipcMain.handle("remotes:logs", async (_event, id: unknown) => {
     const row = await requireRow(getDaemon, id);
-    return daemonLogs(targetOf(row));
+    return daemonLogs(targetOf(row), layout());
   });
 
   ipcMain.handle("remotes:token", async (_event, id: unknown) => {

@@ -17,7 +17,7 @@ use serde_json::{json, Value};
 use crate::app::Status;
 use crate::args::DaemonCommand;
 use crate::identity;
-use crate::launch_agent::{self, Agent, LABEL};
+use crate::launch_agent::{self, Agent};
 use crate::output;
 use crate::{CliError, Ctx};
 
@@ -66,12 +66,12 @@ impl Supervisor {
     fn describe(&self, loaded: Option<&launch_agent::Loaded>) -> String {
         match self {
             Supervisor::App => "the Crew app, as its child; it stops when the app quits".into(),
-            Supervisor::LaunchAgent(_) => {
+            Supervisor::LaunchAgent(agent) => {
                 let state = match loaded {
                     None => "installed, not loaded".to_string(),
                     Some(loaded) => loaded.state.clone().unwrap_or_else(|| "loaded".into()),
                 };
-                format!("launchd, as {LABEL} ({state}); it keeps running when Crew quits")
+                format!("launchd, as {} ({state}); it keeps running when Crew quits", launch_agent::label(&agent.data_dir))
             }
         }
     }
@@ -111,7 +111,7 @@ pub fn run(ctx: &Ctx, command: DaemonCommand) -> Result<ExitCode, CliError> {
 fn status(ctx: &Ctx, supervisor: &Supervisor) -> Result<ExitCode, CliError> {
     let status = Status::gather(ctx);
     let loaded = match supervisor {
-        Supervisor::LaunchAgent(_) => launch_agent::loaded(),
+        Supervisor::LaunchAgent(agent) => launch_agent::loaded(&launch_agent::label(&agent.data_dir)),
         Supervisor::App => None,
     };
     if ctx.global.json {
@@ -119,7 +119,7 @@ fn status(ctx: &Ctx, supervisor: &Supervisor) -> Result<ExitCode, CliError> {
         report["supervisor"] = json!(supervisor.name());
         if let Supervisor::LaunchAgent(agent) = supervisor {
             report["launchAgent"] = json!({
-                "label": LABEL,
+                "label": launch_agent::label(&agent.data_dir),
                 "program": agent.program,
                 "log": agent.log(),
                 "loaded": loaded.is_some(),
@@ -172,10 +172,11 @@ fn install(ctx: &Ctx, crewd: Option<&Path>) -> Result<ExitCode, CliError> {
     let dir = data_dir(ctx)?;
     let agent = Agent { program: crewd_path(crewd)?, data_dir: dir.clone() };
     let plist = launch_agent::plist_path(&dir);
-    if launch_agent::loaded().is_some() {
+    let label = launch_agent::label(&dir);
+    if launch_agent::loaded(&label).is_some() {
         // The one it replaces stops first, as gracefully as any other stop:
         // two crewds on one data dir would fight over its database.
-        launch_agent::bootout().map_err(CliError::Failed)?;
+        launch_agent::bootout(&label).map_err(CliError::Failed)?;
     } else if let Ok(file) = live_daemon(&dir) {
         return Err(CliError::Failed(format!(
             "crewd (pid {}) is already running for {} as the Crew app's child. Quit Crew, then install.",
@@ -186,11 +187,11 @@ fn install(ctx: &Ctx, crewd: Option<&Path>) -> Result<ExitCode, CliError> {
     std::fs::create_dir_all(&dir).map_err(|e| CliError::Failed(format!("{}: {e}", dir.display())))?;
     create_private(&agent.log())?;
     write_plist(&plist, &agent.plist())?;
-    launch_agent::start(&plist, false).map_err(CliError::Failed)?;
+    launch_agent::start(&label, &plist, false).map_err(CliError::Failed)?;
     if ctx.global.json {
         output::say_json(&json!({
             "installed": true,
-            "label": LABEL,
+            "label": label,
             "plist": plist,
             "program": agent.program,
             "dataDir": agent.data_dir,
@@ -198,7 +199,7 @@ fn install(ctx: &Ctx, crewd: Option<&Path>) -> Result<ExitCode, CliError> {
         }));
     } else {
         output::say(&format!(
-            "Installed {LABEL}. crewd ({}) now runs for {} and keeps running when Crew quits, until you log out.\nLog: {}",
+            "Installed {label}. crewd ({}) now runs for {} and keeps running when Crew quits, until you log out.\nLog: {}",
             agent.program.display(),
             dir.display(),
             agent.log().display()
@@ -209,20 +210,22 @@ fn install(ctx: &Ctx, crewd: Option<&Path>) -> Result<ExitCode, CliError> {
 
 fn uninstall(ctx: &Ctx) -> Result<ExitCode, CliError> {
     macos_only("uninstall")?;
-    let plist = launch_agent::plist_path(&data_dir(ctx)?);
-    let was_loaded = launch_agent::loaded().is_some();
+    let dir = data_dir(ctx)?;
+    let plist = launch_agent::plist_path(&dir);
+    let label = launch_agent::label(&dir);
+    let was_loaded = launch_agent::loaded(&label).is_some();
     if was_loaded {
-        launch_agent::bootout().map_err(CliError::Failed)?;
+        launch_agent::bootout(&label).map_err(CliError::Failed)?;
     }
     let had_file = plist.exists();
     if had_file {
         std::fs::remove_file(&plist).map_err(|e| CliError::Failed(format!("{}: {e}", plist.display())))?;
     }
     if ctx.global.json {
-        output::say_json(&json!({ "uninstalled": was_loaded || had_file, "label": LABEL, "plist": plist }));
+        output::say_json(&json!({ "uninstalled": was_loaded || had_file, "label": label, "plist": plist }));
     } else if was_loaded || had_file {
         output::say(&format!(
-            "Removed {LABEL} and stopped crewd. The packaged Crew app installs it again the next time it opens."
+            "Removed {label} and stopped crewd. The packaged Crew app installs it again the next time it opens."
         ));
     } else {
         output::say("No LaunchAgent for crewd is installed.");
@@ -300,7 +303,7 @@ fn restart(dir: &Path, supervisor: &Supervisor) -> Result<ExitCode, CliError> {
         Supervisor::LaunchAgent(_) => {
             // Down, or not even loaded since a reboot: started either way.
             let old = identity::read_daemon_file(dir).ok();
-            launch_agent::start(&launch_agent::plist_path(dir), true).map_err(CliError::Failed)?;
+            launch_agent::start(&launch_agent::label(dir), &launch_agent::plist_path(dir), true).map_err(CliError::Failed)?;
             old
         }
     };
@@ -328,13 +331,13 @@ fn stop_agent(dir: &Path) -> Result<DaemonFile, CliError> {
     let file = live_daemon(dir)?;
     let asked = Link::new(file.socket.clone(), file.user_token.clone(), None).call("daemon/shutdown", Value::Null);
     if asked.is_err() {
-        launch_agent::terminate().map_err(CliError::Failed)?;
+        launch_agent::terminate(&launch_agent::label(dir)).map_err(CliError::Failed)?;
     }
     let deadline = Instant::now() + STOP_WAIT;
     loop {
         let gone = match file.pid {
             Some(pid) => !alive(pid),
-            None => launch_agent::loaded().is_none_or(|loaded| loaded.pid.is_none()),
+            None => launch_agent::loaded(&launch_agent::label(dir)).is_none_or(|loaded| loaded.pid.is_none()),
         };
         if gone {
             return Ok(file);
@@ -426,7 +429,7 @@ mod tests {
         let agent = Supervisor::LaunchAgent(agent_for("/d"));
         let running = launch_agent::Loaded { state: Some("running".into()), pid: Some(7) };
         let text = agent.describe(Some(&running));
-        assert!(text.contains(LABEL) && text.contains("(running)") && text.contains("keeps running when Crew quits"), "{text}");
+        assert!(text.contains(launch_agent::LABEL) && text.contains("(running)") && text.contains("keeps running when Crew quits"), "{text}");
         assert!(agent.describe(None).contains("installed, not loaded"));
     }
 

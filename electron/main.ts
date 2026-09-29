@@ -104,7 +104,7 @@ async function connectDaemon(): Promise<string | null> {
   let launch = decideLaunch(viaAgent);
   if (launch.run === "try-child") {
     if (!viaAgent.ok) console.error(`crewd LaunchAgent unavailable; running crewd as Crew's child: ${viaAgent.error}`);
-    await unloadAgent(uid);
+    await unloadAgent(uid, app.getPath("userData"));
     launch = decideLaunch(viaAgent, await attempt(startDaemon));
   }
   switch (launch.run) {

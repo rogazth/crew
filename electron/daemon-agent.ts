@@ -140,7 +140,7 @@ export const system: System = {
 export async function connectAgent(options: Options, sys: System = system): Promise<AgentLink> {
   const { crewd, crew, dataDir, version, uid, onNewDaemon, onMismatch } = options;
   const { ms } = sys;
-  const target = launchctlTarget(uid);
+  const target = launchctlTarget(uid, dataDir);
   const plist = plistPath(dataDir);
   const daemonJson = path.join(dataDir, "daemon.json");
   const log = path.join(dataDir, "crewd.log");
@@ -303,6 +303,6 @@ export async function connectAgent(options: Options, sys: System = system): Prom
 // Before this run falls back to crewd as its child: a LaunchAgent that came
 // up late, or half way, would be a second daemon on the same database. Booted
 // out, it is also not restarted by KeepAlive; the next launch loads it again.
-export async function unloadAgent(uid: number): Promise<void> {
-  await run("/bin/launchctl", ["bootout", launchctlTarget(uid).service], 20_000).catch(() => {});
+export async function unloadAgent(uid: number, dataDir: string): Promise<void> {
+  await run("/bin/launchctl", ["bootout", launchctlTarget(uid, dataDir).service], 20_000).catch(() => {});
 }

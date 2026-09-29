@@ -4,21 +4,41 @@
 
 import path from "node:path";
 
-// package.json's build.appId plus ".crewd". crates/crew-cli/src/launch_agent.rs
-// writes the plist under the same label; a test on each side holds it to
-// package.json.
+// package.json's build.appId plus ".crewd": the installed app's label.
+// crates/crew-cli/src/launch_agent.rs writes the plist under the same one; a
+// test on each side holds it to package.json.
 export const AGENT_LABEL = "rogazth.crew.crewd";
+// Where the released app keeps its data. Every other data dir is a local or dev build's.
+const RELEASE_DIR = "Library/Application Support/Crew";
+
+// One label is one launchd service, so a local build sharing the release's
+// would boot the release's crewd out, and every process it runs with it. The
+// release keeps its label; any other data dir gets its own, from its name and
+// a hash of its path. `label` in launch_agent.rs is the same function, held to
+// the same answers by a test on each side.
+export function agentLabel(dataDir: string): string {
+  if (dataDir.replace(/\/+$/, "").endsWith(RELEASE_DIR)) return AGENT_LABEL;
+  const slug = path.basename(dataDir).toLowerCase().split(/[^a-z0-9]+/).filter(Boolean).join("-");
+  return `${AGENT_LABEL}.${slug}-${fnv1a(dataDir).toString(16).padStart(8, "0")}`;
+}
+
+// 32-bit FNV-1a over the path's UTF-8 bytes, as the Rust side hashes it.
+function fnv1a(text: string): number {
+  let hash = 0x811c9dc5;
+  for (const byte of new TextEncoder().encode(text)) hash = Math.imul(hash ^ byte, 0x01000193) >>> 0;
+  return hash;
+}
 
 // In the data dir, not ~/Library/LaunchAgents: launchd would load it at every
 // login, and KeepAlive { SuccessfulExit } starts a job as soon as it is loaded
 // (launchd.plist(5)). Here crewd runs only once Crew starts it.
 export function plistPath(dataDir: string): string {
-  return path.join(dataDir, `${AGENT_LABEL}.plist`);
+  return path.join(dataDir, `${agentLabel(dataDir)}.plist`);
 }
 
-export function launchctlTarget(uid: number): { domain: string; service: string } {
+export function launchctlTarget(uid: number, dataDir: string): { domain: string; service: string } {
   const domain = `gui/${uid}`;
-  return { domain, service: `${domain}/${AGENT_LABEL}` };
+  return { domain, service: `${domain}/${agentLabel(dataDir)}` };
 }
 
 // <data-dir>/daemon.json, as crewd writes it (crew_protocol::DaemonFile).

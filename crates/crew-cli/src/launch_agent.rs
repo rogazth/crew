@@ -12,14 +12,36 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
 
-/// The app's bundle id (`build.appId` in package.json) plus `.crewd`.
-/// `electron/daemon-agent-plan.ts` names it too; a test on each side holds
-/// both to package.json.
+/// The app's bundle id (`build.appId` in package.json) plus `.crewd`: the
+/// installed app's label. `electron/daemon-agent-plan.ts` names it too; a
+/// test on each side holds both to package.json.
 pub const LABEL: &str = "rogazth.crew.crewd";
 /// In the data dir, beside daemon.json. crewd empties it when it grows too big.
 pub const LOG: &str = "crewd.log";
-/// The plist, beside the log.
-pub const PLIST: &str = "rogazth.crew.crewd.plist";
+/// Where the released app keeps its data. Every other data dir is a local or
+/// dev build's.
+const RELEASE_DIR: &str = "Library/Application Support/Crew";
+
+/// The label for the crewd of `data_dir`. One label is one launchd service, so
+/// a local build sharing the release's would boot the release's crewd out,
+/// and every process it runs with it. The release keeps the label it always
+/// had; any other data dir gets its own, from its name and a hash of its path.
+/// `agentLabel` in `electron/daemon-agent-plan.ts` is the same function; a
+/// test on each side holds them to the same answers.
+pub fn label(data_dir: &Path) -> String {
+    let path = data_dir.to_string_lossy();
+    if path.trim_end_matches('/').ends_with(RELEASE_DIR) {
+        return LABEL.to_string();
+    }
+    let name = data_dir.file_name().map(|name| name.to_string_lossy().to_lowercase()).unwrap_or_default();
+    let slug: Vec<&str> = name.split(|c: char| !c.is_ascii_alphanumeric()).filter(|part| !part.is_empty()).collect();
+    format!("{LABEL}.{}-{:08x}", slug.join("-"), fnv1a(path.as_bytes()))
+}
+
+/// 32-bit FNV-1a: short, and simple enough to write the same in TypeScript.
+fn fnv1a(bytes: &[u8]) -> u32 {
+    bytes.iter().fold(0x811c_9dc5_u32, |hash, byte| (hash ^ u32::from(*byte)).wrapping_mul(0x0100_0193))
+}
 
 const LAUNCHCTL: &str = "/bin/launchctl";
 /// crewd gives its processes one 5 s stop grace and its PTYs one more second
@@ -68,13 +90,14 @@ impl Agent {
             .map(|arg| format!("\t\t<string>{}</string>\n", escape(arg)))
             .collect();
         let log = escape(&self.log().to_string_lossy());
+        let label = label(&self.data_dir);
         format!(
             r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
 	<key>Label</key>
-	<string>{LABEL}</string>
+	<string>{label}</string>
 	<key>ProgramArguments</key>
 	<array>
 {arguments}	</array>
@@ -141,7 +164,7 @@ fn unescape(text: &str) -> String {
 }
 
 pub fn plist_path(data_dir: &Path) -> PathBuf {
-    data_dir.join(PLIST)
+    data_dir.join(format!("{}.plist", label(data_dir)))
 }
 
 /// The agent the plist in `data_dir` describes, if there is one and it reads.
@@ -173,8 +196,8 @@ fn domain() -> String {
     format!("gui/{}", unsafe { libc::getuid() })
 }
 
-fn service() -> String {
-    format!("{}/{LABEL}", domain())
+fn service(label: &str) -> String {
+    format!("{}/{label}", domain())
 }
 
 fn launchctl(args: &[&str]) -> Result<String, String> {
@@ -189,8 +212,8 @@ fn launchctl(args: &[&str]) -> Result<String, String> {
 
 /// `None` when launchd has not loaded the service (never bootstrapped, or
 /// booted out).
-pub fn loaded() -> Option<Loaded> {
-    launchctl(&["print", &service()]).ok().map(|out| parse_print(&out))
+pub fn loaded(label: &str) -> Option<Loaded> {
+    launchctl(&["print", &service(label)]).ok().map(|out| parse_print(&out))
 }
 
 /// Load the plist. A bootout that just returned may still be letting go of
@@ -209,12 +232,12 @@ pub fn bootstrap(plist: &Path) -> Result<(), String> {
 
 /// Unload the service. launchd sends crewd SIGTERM, so it stops its
 /// processes the way it always does; this waits until it is gone.
-pub fn bootout() -> Result<(), String> {
-    launchctl(&["bootout", &service()])?;
+pub fn bootout(label: &str) -> Result<(), String> {
+    launchctl(&["bootout", &service(label)])?;
     let deadline = Instant::now() + GONE_WAIT;
-    while loaded().is_some() {
+    while loaded(label).is_some() {
         if Instant::now() >= deadline {
-            return Err(format!("{LABEL} is still loaded {} s after bootout", GONE_WAIT.as_secs()));
+            return Err(format!("{label} is still loaded {} s after bootout", GONE_WAIT.as_secs()));
         }
         std::thread::sleep(POLL);
     }
@@ -223,8 +246,8 @@ pub fn bootout() -> Result<(), String> {
 
 /// Start it now; with `kill`, stop the running one first (SIGTERM, so as
 /// gracefully as any other stop).
-pub fn kickstart(kill: bool) -> Result<(), String> {
-    let service = service();
+pub fn kickstart(label: &str, kill: bool) -> Result<(), String> {
+    let service = service(label);
     let mut args = vec!["kickstart"];
     if kill {
         args.push("-k");
@@ -236,17 +259,17 @@ pub fn kickstart(kill: bool) -> Result<(), String> {
 /// Running, whatever the state: loaded first if it is not, then kickstarted.
 /// With `kill`, a running one is stopped and started again; one that was
 /// just loaded is left alone.
-pub fn start(plist: &Path, kill: bool) -> Result<(), String> {
-    if loaded().is_none() {
+pub fn start(label: &str, plist: &Path, kill: bool) -> Result<(), String> {
+    if loaded(label).is_none() {
         bootstrap(plist)?;
-        return kickstart(false);
+        return kickstart(label, false);
     }
-    kickstart(kill)
+    kickstart(label, kill)
 }
 
 /// SIGTERM through launchd: a clean exit, so it stays down.
-pub fn terminate() -> Result<(), String> {
-    launchctl(&["kill", "SIGTERM", &service()]).map(|_| ())
+pub fn terminate(label: &str) -> Result<(), String> {
+    launchctl(&["kill", "SIGTERM", &service(label)]).map(|_| ())
 }
 
 #[cfg(test)]
@@ -303,6 +326,20 @@ mod tests {
     fn the_plist_lives_in_the_data_dir() {
         let dir = Path::new("/Users/me/Library/Application Support/Crew");
         assert_eq!(plist_path(dir), dir.join(format!("{LABEL}.plist")));
+    }
+
+    /// Only the released app's data dir has the bundle id's label; a local or
+    /// dev build's is another service, so installing it never boots the
+    /// release's crewd out. The same answers are held in
+    /// electron/daemon-agent-plan.test.ts.
+    #[test]
+    fn each_data_dir_has_a_label_of_its_own() {
+        assert_eq!(label(Path::new("/Users/me/Library/Application Support/Crew")), LABEL);
+        assert_eq!(label(Path::new("/Users/me/Library/Application Support/Crew Local")), "rogazth.crew.crewd.crew-local-e1e2ad52");
+        assert_eq!(label(Path::new("/tmp/app data")), "rogazth.crew.crewd.app-data-bb444e4d");
+        let dir = Path::new("/Users/me/Library/Application Support/Crew Dev");
+        assert_eq!(plist_path(dir), dir.join(format!("{}.plist", label(dir))));
+        assert!(Agent { program: "/crewd".into(), data_dir: dir.into() }.plist().contains(&format!("<string>{}</string>", label(dir))));
     }
 
     #[test]

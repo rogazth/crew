@@ -4,6 +4,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   AGENT_LABEL,
+  agentLabel,
   CHILD_NOTICE,
   classify,
   decideLaunch,
@@ -42,7 +43,21 @@ describe("the label", () => {
     expect(plistPath("/Users/me/Library/Application Support/Crew")).toBe(
       `/Users/me/Library/Application Support/Crew/${AGENT_LABEL}.plist`,
     );
-    expect(launchctlTarget(501)).toEqual({ domain: "gui/501", service: `gui/501/${AGENT_LABEL}` });
+    expect(launchctlTarget(501, "/Users/me/Library/Application Support/Crew")).toEqual({
+      domain: "gui/501",
+      service: `gui/501/${AGENT_LABEL}`,
+    });
+  });
+
+  // The same answers as launch_agent.rs's test: a local or dev build's crewd is
+  // another launchd service, so installing it never boots the release's out.
+  it("is one of its own for every data dir but the release's", () => {
+    expect(agentLabel("/Users/me/Library/Application Support/Crew")).toBe(AGENT_LABEL);
+    expect(agentLabel("/Users/me/Library/Application Support/Crew Local")).toBe("rogazth.crew.crewd.crew-local-e1e2ad52");
+    expect(agentLabel("/tmp/app data")).toBe("rogazth.crew.crewd.app-data-bb444e4d");
+    const dev = "/Users/me/Library/Application Support/Crew Dev";
+    expect(plistPath(dev)).toBe(`${dev}/${agentLabel(dev)}.plist`);
+    expect(launchctlTarget(501, dev).service).toBe(`gui/501/${agentLabel(dev)}`);
   });
 });
 

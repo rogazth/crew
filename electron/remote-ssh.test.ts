@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isTailnetIp, linuxArch, serviceUnit } from "./remote-ssh";
+import { isTailnetIp, linuxArch, remoteLayout, serviceUnit } from "./remote-ssh";
 
 describe("linux installer", () => {
   it("maps uname to the builds Crew ships", () => {
@@ -13,6 +13,19 @@ describe("linux installer", () => {
     expect(unit).toContain("After=tailscaled.service");
     expect(unit).toContain("ExecStart=%h/.crew/bin/crewd serve --listen 100.127.204.79:17877 --data-dir %h/.crew/data");
     expect(unit).toContain("WantedBy=default.target");
+  });
+
+  // A dev or local build adding the machine the release runs on gets a crewd of its own.
+  it("keeps each app's crewd apart on the machine", () => {
+    const release = remoteLayout("release");
+    expect(release).toEqual({ unit: "crewd", home: ".crew", port: 17877 });
+    const layouts = (["release", "local", "dev"] as const).map(remoteLayout);
+    for (const key of ["unit", "home", "port"] as const) {
+      expect(new Set(layouts.map((layout) => layout[key])).size).toBe(3);
+    }
+    const dev = serviceUnit("100.127.204.79", 17879, remoteLayout("dev"));
+    expect(dev).toContain("ExecStart=%h/.crew-dev/bin/crewd serve --listen 100.127.204.79:17879 --data-dir %h/.crew-dev/data");
+    expect(dev).not.toContain("%h/.crew/");
   });
 
   it("only takes a tailnet address as the one crewd listens on", () => {
