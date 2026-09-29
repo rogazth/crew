@@ -14,6 +14,7 @@ import type {
   RefObject,
   TextareaHTMLAttributes,
 } from "react";
+import { createPortal } from "react-dom";
 import { Kbd } from "./Kbd";
 
 /**
@@ -239,7 +240,9 @@ export function Overlay({
   width?: string;
   label?: string;
 }) {
-  return (
+  // Portaled: an ancestor with a transform (the sidebar's sliding views) would
+  // otherwise become the containing block for `fixed` and clip the dialog to it.
+  return createPortal(
     <div role="presentation" className="fixed inset-0 z-50" onMouseDown={onClose}>
       <div className="absolute inset-0 bg-black/15" />
       <div
@@ -256,7 +259,8 @@ export function Overlay({
       >
         {children}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
