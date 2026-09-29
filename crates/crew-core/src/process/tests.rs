@@ -62,6 +62,31 @@ impl Fixture {
     }
 }
 
+/// The main checkout's run, or a stopped one if it never ran there: what a
+/// process's own state was before runs had a worktree.
+trait Main {
+    fn main(&self) -> ProcessRun;
+}
+
+impl Main for Process {
+    fn main(&self) -> ProcessRun {
+        self.run_in(None).cloned().unwrap_or_else(|| ProcessRun {
+            worktree: None,
+            state: ProcessState::Stopped,
+            pid: None,
+            stream_id: None,
+            started_at: None,
+            exit_code: None,
+            restarts: 0,
+            pty_id: pty_id(&self.id, None),
+            log_cursor: 0,
+            run_cursor: 0,
+            started_by: None,
+            env: BTreeMap::new(),
+        })
+    }
+}
+
 fn marker_count(pattern: &str) -> usize {
     let out = std::process::Command::new("pgrep").args(["-f", pattern]).output().unwrap();
     String::from_utf8_lossy(&out.stdout).lines().filter(|l| !l.is_empty()).count()
@@ -120,28 +145,28 @@ fn a_crashing_process_restarts_until_the_limit_and_stays_crashed() {
     let mut definition = spec("flaky", "echo boom; exit 3");
     definition.auto_restart = true;
     let process = f.host.create(&f.workspace, definition, None, false).unwrap();
-    f.host.start(&f.workspace, &process.id).unwrap();
+    f.host.start(&f.workspace, &process.id, RunRequest::default()).unwrap();
 
-    let done = f.wait(&process.id, Duration::from_secs(10), |p| p.state == ProcessState::Crashed);
+    let done = f.wait(&process.id, Duration::from_secs(10), |p| p.main().state == ProcessState::Crashed);
 
-    assert_eq!(done.state, ProcessState::Crashed);
-    assert_eq!(done.restarts, 2, "three crashes: the first run and two restarts");
-    assert_eq!(done.exit_code, Some(3));
-    let logs = f.host.read_logs(&f.workspace, "flaky", None, Some(0), None).unwrap();
+    assert_eq!(done.main().state, ProcessState::Crashed);
+    assert_eq!(done.main().restarts, 2, "three crashes: the first run and two restarts");
+    assert_eq!(done.main().exit_code, Some(3));
+    let logs = f.host.read_logs(&f.workspace, "flaky", None, None, Some(0), None).unwrap();
     assert_eq!(logs.text.lines().filter(|line| *line == "boom").count(), 3, "{:?}", logs.text);
     // A start by hand is a fresh count.
-    let again = f.host.start(&f.workspace, "flaky").unwrap();
-    assert_eq!(again.restarts, 0);
+    let again = f.host.start(&f.workspace, "flaky", RunRequest::default()).unwrap();
+    assert_eq!(again.main().restarts, 0);
 }
 
 #[test]
 fn a_process_that_ends_on_its_own_is_exited_with_its_code() {
     let f = fixture("exit", fast());
     let process = f.add("once", "exit 7");
-    f.host.start(&f.workspace, &process.id).unwrap();
-    let done = f.wait(&process.id, Duration::from_secs(5), |p| p.state == ProcessState::Exited);
-    assert_eq!((done.state, done.exit_code), (ProcessState::Exited, Some(7)));
-    assert_eq!(done.pid, None);
+    f.host.start(&f.workspace, &process.id, RunRequest::default()).unwrap();
+    let done = f.wait(&process.id, Duration::from_secs(5), |p| p.main().state == ProcessState::Exited);
+    assert_eq!((done.main().state, done.main().exit_code), (ProcessState::Exited, Some(7)));
+    assert_eq!(done.main().pid, None);
 }
 
 #[test]
@@ -149,7 +174,7 @@ fn stop_takes_the_whole_process_group_down() {
     let f = fixture("group", fast());
     let sleeper = unique_sleep();
     let process = f.add("server", &format!("{sleeper} & {sleeper} & wait"));
-    f.host.start(&f.workspace, &process.id).unwrap();
+    f.host.start(&f.workspace, &process.id, RunRequest::default()).unwrap();
     let deadline = Instant::now() + Duration::from_secs(5);
     // The shell's own command line names the sleep too.
     while marker_count(&sleeper) < 3 && Instant::now() < deadline {
@@ -157,10 +182,10 @@ fn stop_takes_the_whole_process_group_down() {
     }
     assert_eq!(marker_count(&sleeper), 3, "the workers never started");
 
-    let stopped = f.host.stop(&f.workspace, &process.id).unwrap();
+    let stopped = f.host.stop(&f.workspace, &process.id, None).unwrap();
     thread::sleep(Duration::from_millis(100));
 
-    assert_eq!(stopped.state, ProcessState::Stopped);
+    assert_eq!(stopped.main().state, ProcessState::Stopped);
     assert_eq!(marker_count(&sleeper), 0, "a worker outlived the stop");
 }
 
@@ -169,17 +194,17 @@ fn stop_escalates_to_sigkill_when_the_group_ignores_sigterm() {
     let f = fixture("kill", fast());
     let sleeper = unique_sleep();
     let process = f.add("stubborn", &format!("trap '' TERM; {sleeper} & wait; {sleeper}"));
-    f.host.start(&f.workspace, &process.id).unwrap();
+    f.host.start(&f.workspace, &process.id, RunRequest::default()).unwrap();
     let deadline = Instant::now() + Duration::from_secs(5);
     while marker_count(&sleeper) < 1 && Instant::now() < deadline {
         thread::sleep(Duration::from_millis(20));
     }
 
     let asked = Instant::now();
-    let stopped = f.host.stop(&f.workspace, &process.id).unwrap();
+    let stopped = f.host.stop(&f.workspace, &process.id, None).unwrap();
 
     assert!(asked.elapsed() >= fast().stop_grace, "stop returned before the grace ran out");
-    assert_eq!(stopped.state, ProcessState::Stopped);
+    assert_eq!(stopped.main().state, ProcessState::Stopped);
     thread::sleep(Duration::from_millis(100));
     assert_eq!(marker_count(&sleeper), 0);
 }
@@ -193,7 +218,7 @@ fn shutdown_gives_every_process_one_shared_grace_to_exit() {
         f.add(name, &format!("trap '' TERM; {stubborn} & wait; {stubborn}"));
     }
     for name in ["polite", "stubborn-a", "stubborn-b"] {
-        f.host.start(&f.workspace, name).unwrap();
+        f.host.start(&f.workspace, name, RunRequest::default()).unwrap();
     }
     let deadline = Instant::now() + Duration::from_secs(5);
     while marker_count(&stubborn) < 2 && Instant::now() < deadline {
@@ -207,9 +232,9 @@ fn shutdown_gives_every_process_one_shared_grace_to_exit() {
     // Two that ignore SIGTERM still cost one grace, not two.
     assert!(took >= fast().stop_grace, "returned before the grace: {took:?}");
     assert!(took < fast().stop_grace * 2, "the graces added up: {took:?}");
-    let logs = f.host.read_logs(&f.workspace, &polite.id, None, Some(0), None).unwrap();
+    let logs = f.host.read_logs(&f.workspace, &polite.id, None, None, Some(0), None).unwrap();
     assert!(logs.text.contains("flushed"), "{:?}", logs.text);
-    assert_eq!(f.host.get(&f.workspace, "polite").unwrap().state, ProcessState::Stopped);
+    assert_eq!(f.host.get(&f.workspace, "polite").unwrap().main().state, ProcessState::Stopped);
     // What is left is the PTY host's to kill.
     f.host.inner.pty.kill_all();
     thread::sleep(Duration::from_millis(100));
@@ -228,37 +253,37 @@ fn stat_of(pid: u32) -> String {
 fn pause_and_resume_stop_and_continue_the_group() {
     let f = fixture("pause", fast());
     let process = f.add("ticker", "while true; do sleep 0.05; done");
-    let started = f.host.start(&f.workspace, &process.id).unwrap();
-    let pid = started.pid.expect("a pid while running");
+    let started = f.host.start(&f.workspace, &process.id, RunRequest::default()).unwrap();
+    let pid = started.main().pid.expect("a pid while running");
 
-    let paused = f.host.pause(&f.workspace, &process.id).unwrap();
+    let paused = f.host.pause(&f.workspace, &process.id, None).unwrap();
     thread::sleep(Duration::from_millis(100));
     let while_paused = stat_of(pid);
-    let resumed = f.host.resume(&f.workspace, &process.id).unwrap();
+    let resumed = f.host.resume(&f.workspace, &process.id, None).unwrap();
     thread::sleep(Duration::from_millis(100));
     let after = stat_of(pid);
     // Stopping a paused process has to wake it for its SIGTERM.
-    let stopped = f.host.pause(&f.workspace, &process.id).and_then(|_| f.host.stop(&f.workspace, &process.id)).unwrap();
+    let stopped = f.host.pause(&f.workspace, &process.id, None).and_then(|_| f.host.stop(&f.workspace, &process.id, None)).unwrap();
 
-    assert_eq!(paused.state, ProcessState::Paused);
+    assert_eq!(paused.main().state, ProcessState::Paused);
     assert!(while_paused.starts_with('T'), "paused stat {while_paused}");
-    assert_eq!(resumed.state, ProcessState::Running);
+    assert_eq!(resumed.main().state, ProcessState::Running);
     assert!(!after.starts_with('T'), "resumed stat {after}");
-    assert_eq!(stopped.state, ProcessState::Stopped);
-    assert!(f.host.resume(&f.workspace, &process.id).is_err());
+    assert_eq!(stopped.main().state, ProcessState::Stopped);
+    assert!(f.host.resume(&f.workspace, &process.id, None).is_err());
 }
 
 #[test]
 fn a_process_drains_to_its_log_with_nobody_watching() {
     let f = fixture("drain", fast());
     let process = f.add("flood", "yes 0123456789abcdef | head -c 3000000; echo; echo DONE");
-    f.host.start(&f.workspace, &process.id).unwrap();
-    let done = f.wait(&process.id, Duration::from_secs(20), |p| p.state == ProcessState::Exited);
-    assert_eq!(done.state, ProcessState::Exited, "blocked with nobody reading");
-    assert!(done.log_cursor > 3_000_000);
-    let tail = f.host.read_logs(&f.workspace, &process.id, Some(3), None, None).unwrap();
+    f.host.start(&f.workspace, &process.id, RunRequest::default()).unwrap();
+    let done = f.wait(&process.id, Duration::from_secs(20), |p| p.main().state == ProcessState::Exited);
+    assert_eq!(done.main().state, ProcessState::Exited, "blocked with nobody reading");
+    assert!(done.main().log_cursor > 3_000_000);
+    let tail = f.host.read_logs(&f.workspace, &process.id, None, Some(3), None, None).unwrap();
     assert!(tail.text.contains("DONE"), "{:?}", tail.text);
-    assert_eq!(tail.cursor, done.log_cursor);
+    assert_eq!(tail.cursor, done.main().log_cursor);
 }
 
 #[test]
@@ -266,15 +291,15 @@ fn logs_rotate_and_a_cursor_reads_on_across_the_rotation() {
     let config = ProcessConfig { rotate_at: 64 * 1024, ..fast() };
     let f = fixture("rotate", config);
     let first = f.add("counter", "i=0; while [ $i -lt 2000 ]; do echo line-$i; i=$((i+1)); done");
-    f.host.start(&f.workspace, &first.id).unwrap();
-    let done = f.wait(&first.id, Duration::from_secs(20), |p| p.state == ProcessState::Exited);
+    f.host.start(&f.workspace, &first.id, RunRequest::default()).unwrap();
+    let done = f.wait(&first.id, Duration::from_secs(20), |p| p.main().state == ProcessState::Exited);
     let files = std::fs::read_dir(f.dir.join("logs").join(&first.id)).unwrap().count();
-    let from_start = f.host.read_logs(&f.workspace, &first.id, None, Some(0), Some(256 * 1024)).unwrap();
-    let cursor = done.log_cursor;
+    let from_start = f.host.read_logs(&f.workspace, &first.id, None, None, Some(0), Some(256 * 1024)).unwrap();
+    let cursor = done.main().log_cursor;
 
-    f.host.start(&f.workspace, &first.id).unwrap();
-    f.wait(&first.id, Duration::from_secs(20), |p| p.state == ProcessState::Exited && p.log_cursor > cursor);
-    let next = f.host.read_logs(&f.workspace, &first.id, None, Some(cursor), Some(64)).unwrap();
+    f.host.start(&f.workspace, &first.id, RunRequest::default()).unwrap();
+    f.wait(&first.id, Duration::from_secs(20), |p| p.main().state == ProcessState::Exited && p.main().log_cursor > cursor);
+    let next = f.host.read_logs(&f.workspace, &first.id, None, None, Some(cursor), Some(64)).unwrap();
 
     assert!(files <= 2, "{files} log files");
     assert_eq!(from_start.skipped, 0, "20 KB fit in one file");
@@ -282,7 +307,7 @@ fn logs_rotate_and_a_cursor_reads_on_across_the_rotation() {
     assert_eq!(next.start, cursor);
     assert!(next.text.starts_with("[crew] $"), "the second run starts at the old cursor: {:?}", next.text);
     // A cursor from before the oldest file is served from where the disk starts.
-    let old = f.host.read_logs(&f.workspace, &first.id, None, Some(0), Some(64)).unwrap();
+    let old = f.host.read_logs(&f.workspace, &first.id, None, None, Some(0), Some(64)).unwrap();
     assert!(old.skipped > 0 || old.start == 0);
 }
 
@@ -290,10 +315,10 @@ fn logs_rotate_and_a_cursor_reads_on_across_the_rotation() {
 fn text_for_agents_has_no_escapes_but_the_log_keeps_them() {
     let f = fixture("ansi", fast());
     let process = f.add("colour", r"printf '\033[31mred\033[0m plain\n'");
-    f.host.start(&f.workspace, &process.id).unwrap();
-    f.wait(&process.id, Duration::from_secs(5), |p| p.state == ProcessState::Exited);
-    let clean = f.host.read_logs(&f.workspace, &process.id, None, None, None).unwrap();
-    let raw = f.host.log_tail_raw(&f.workspace, &process.id, None).unwrap();
+    f.host.start(&f.workspace, &process.id, RunRequest::default()).unwrap();
+    f.wait(&process.id, Duration::from_secs(5), |p| p.main().state == ProcessState::Exited);
+    let clean = f.host.read_logs(&f.workspace, &process.id, None, None, None, None).unwrap();
+    let raw = f.host.log_tail_raw(&f.workspace, &process.id, None, None).unwrap();
     assert!(clean.text.contains("red plain"), "{:?}", clean.text);
     assert!(!clean.text.contains('\x1b'));
     assert!(raw.text.contains("\x1b[31mred"));
@@ -303,37 +328,37 @@ fn text_for_agents_has_no_escapes_but_the_log_keeps_them() {
 fn grep_finds_the_latest_matches_with_context() {
     let f = fixture("grep", fast());
     let process = f.add("noisy", "for i in 1 2 3 4 5 6; do echo before-$i; echo ERROR $i; done; echo tail");
-    f.host.start(&f.workspace, &process.id).unwrap();
-    f.wait(&process.id, Duration::from_secs(5), |p| p.state == ProcessState::Exited);
-    let grep = f.host.grep_logs(&f.workspace, &process.id, r"ERROR \d", Some(1), Some(2)).unwrap();
+    f.host.start(&f.workspace, &process.id, RunRequest::default()).unwrap();
+    f.wait(&process.id, Duration::from_secs(5), |p| p.main().state == ProcessState::Exited);
+    let grep = f.host.grep_logs(&f.workspace, &process.id, None, r"ERROR \d", Some(1), Some(2)).unwrap();
     assert_eq!(grep.total, 6);
     let lines: Vec<&str> = grep.matches.iter().map(|m| m.line.as_str()).collect();
     assert_eq!(lines, vec!["ERROR 5", "ERROR 6"]);
     assert_eq!(grep.matches[0].before, vec!["before-5"]);
     assert_eq!(grep.matches[0].after, vec!["before-6"]);
     assert_eq!(grep.matches[1].after, vec!["tail"]);
-    assert!(f.host.grep_logs(&f.workspace, &process.id, "(", None, None).is_err());
+    assert!(f.host.grep_logs(&f.workspace, &process.id, None, "(", None, None).is_err());
 }
 
 #[test]
 fn wait_for_log_matches_times_out_and_notices_the_end() {
     let f = fixture("wait", fast());
     let server = f.add("server", "sleep 0.3; echo 'ready on :5173'; sleep 30");
-    f.host.start(&f.workspace, &server.id).unwrap();
-    let matched = f.host.wait_for_log(&f.workspace, "server", r"ready on :\d+", None, 10).unwrap();
+    f.host.start(&f.workspace, &server.id, RunRequest::default()).unwrap();
+    let matched = f.host.wait_for_log(&f.workspace, "server", None, r"ready on :\d+", None, 10).unwrap();
     let LogWait::Matched { line, cursor, .. } = matched else {
         panic!("{matched:?}");
     };
     assert_eq!(line, "ready on :5173");
 
     let asked = Instant::now();
-    let timed_out = f.host.wait_for_log(&f.workspace, "server", "never", Some(cursor), 1).unwrap();
+    let timed_out = f.host.wait_for_log(&f.workspace, "server", None, "never", Some(cursor), 1).unwrap();
     assert!(matches!(timed_out, LogWait::TimedOut { .. }), "{timed_out:?}");
     assert!(asked.elapsed() >= Duration::from_secs(1));
 
     let short = f.add("short", "sleep 0.2; exit 4");
-    f.host.start(&f.workspace, &short.id).unwrap();
-    let ended = f.host.wait_for_log(&f.workspace, "short", "never", None, 10).unwrap();
+    f.host.start(&f.workspace, &short.id, RunRequest::default()).unwrap();
+    let ended = f.host.wait_for_log(&f.workspace, "short", None, "never", None, 10).unwrap();
     assert!(
         matches!(ended, LogWait::Ended { state: ProcessState::Exited, exit_code: Some(4), .. }),
         "{ended:?}"
@@ -344,12 +369,12 @@ fn wait_for_log_matches_times_out_and_notices_the_end() {
 fn send_input_types_into_the_process() {
     let f = fixture("input", fast());
     let process = f.add("repl", "read line; echo got:$line; sleep 30");
-    f.host.start(&f.workspace, &process.id).unwrap();
-    f.host.send_input(&f.workspace, &process.id, "hi\r").unwrap();
-    let got = f.host.wait_for_log(&f.workspace, &process.id, "^got:hi$", None, 5).unwrap();
+    f.host.start(&f.workspace, &process.id, RunRequest::default()).unwrap();
+    f.host.send_input(&f.workspace, &process.id, None, "hi\r").unwrap();
+    let got = f.host.wait_for_log(&f.workspace, &process.id, None, "^got:hi$", None, 5).unwrap();
     assert!(matches!(got, LogWait::Matched { .. }), "{got:?}");
-    f.host.stop(&f.workspace, &process.id).unwrap();
-    assert!(f.host.send_input(&f.workspace, &process.id, "x").is_err());
+    f.host.stop(&f.workspace, &process.id, None).unwrap();
+    assert!(f.host.send_input(&f.workspace, &process.id, None, "x").is_err());
 }
 
 #[test]
@@ -357,15 +382,15 @@ fn what_an_agent_writes_waits_for_the_user() {
     let f = fixture("approval", fast());
     let agent = Some("session-1".to_string());
     let asked = f.host.create(&f.workspace, spec("dev", "echo v1; sleep 30"), agent.clone(), true).unwrap();
-    assert_eq!(asked.state, ProcessState::PendingApproval);
+    assert!(!asked.approved && asked.runs.is_empty());
     assert_eq!(asked.created_by, agent);
     assert_eq!(asked.requested_by, agent);
-    let refused = f.host.start(&f.workspace, "dev").unwrap_err();
+    let refused = f.host.start(&f.workspace, "dev", RunRequest::default()).unwrap_err();
     assert!(refused.contains("approve"), "{refused}");
 
     let approved = f.host.approve(&f.workspace, "dev", asked.revision).unwrap();
     assert!(approved.approved);
-    assert_eq!(approved.state, ProcessState::Stopped);
+    assert_eq!(approved.main().state, ProcessState::Stopped);
 
     let patch = ProcessPatch { command: Some("echo v2".into()), ..ProcessPatch::default() };
     let proposed = f.host.update(&f.workspace, "dev", patch, agent.clone(), true).unwrap();
@@ -391,7 +416,7 @@ fn a_workspace_sees_only_its_own_processes() {
     let mine = f.add("web", "sleep 30");
     assert!(f.host.get(&other, &mine.id).is_err());
     assert!(f.host.get(&other, "web").is_err());
-    assert!(f.host.start(&other, &mine.id).is_err());
+    assert!(f.host.start(&other, &mine.id, RunRequest::default()).is_err());
     assert!(f.host.list(&other).unwrap().is_empty());
     // Names are per workspace.
     f.host.create(&other, spec("web", "sleep 30"), None, false).unwrap();
@@ -402,9 +427,9 @@ fn a_workspace_sees_only_its_own_processes() {
 fn delete_stops_it_and_removes_its_logs() {
     let f = fixture("delete", fast());
     let process = f.add("gone", "echo hi; sleep 30");
-    f.host.start(&f.workspace, &process.id).unwrap();
-    f.host.wait_for_log(&f.workspace, "gone", "hi", None, 5).unwrap();
-    let pid = f.host.get(&f.workspace, "gone").unwrap().pid.unwrap();
+    f.host.start(&f.workspace, &process.id, RunRequest::default()).unwrap();
+    f.host.wait_for_log(&f.workspace, "gone", None, "hi", None, 5).unwrap();
+    let pid = f.host.get(&f.workspace, "gone").unwrap().main().pid.unwrap();
     f.host.delete(&f.workspace, "gone").unwrap();
     thread::sleep(Duration::from_millis(100));
     assert!(stat_of(pid).is_empty() || stat_of(pid).starts_with('Z'), "still running");
@@ -427,7 +452,7 @@ fn approving_takes_what_the_user_read_and_refuses_a_swap_made_meanwhile() {
     let refused = f.host.approve(&f.workspace, "dev", shown.revision).unwrap_err();
     assert!(refused.contains("review it again"), "{refused}");
     let still = f.host.get(&f.workspace, "dev").unwrap();
-    assert_eq!(still.state, ProcessState::PendingApproval, "nothing ran");
+    assert!(still.runs.is_empty(), "nothing ran");
     assert!(!still.approved);
 
     // A proposal changed under the card is refused the same way.
@@ -539,20 +564,20 @@ fn migration_renames_duplicate_names_before_making_them_unique() {
 fn wait_for_log_answers_ended_at_once_for_a_process_that_is_not_up() {
     let f = fixture("wait-down", fast());
     let once = f.add("once", "echo ready; exit 0");
-    f.host.start(&f.workspace, &once.id).unwrap();
-    f.wait(&once.id, Duration::from_secs(5), |p| p.state == ProcessState::Exited);
+    f.host.start(&f.workspace, &once.id, RunRequest::default()).unwrap();
+    f.wait(&once.id, Duration::from_secs(5), |p| p.main().state == ProcessState::Exited);
 
     // The line is in the log, from a run that is over: it says nothing about now.
     let asked = Instant::now();
-    let waited = f.host.wait_for_log(&f.workspace, "once", "ready", None, 5).unwrap();
+    let waited = f.host.wait_for_log(&f.workspace, "once", None, "ready", None, 5).unwrap();
     assert!(matches!(waited, LogWait::Ended { state: ProcessState::Exited, .. }), "{waited:?}");
-    let waited = f.host.wait_for_log(&f.workspace, "once", "ready", Some(0), 5).unwrap();
+    let waited = f.host.wait_for_log(&f.workspace, "once", None, "ready", Some(0), 5).unwrap();
     assert!(matches!(waited, LogWait::Ended { .. }), "{waited:?}");
     assert!(asked.elapsed() < Duration::from_secs(1));
 
     // A daemon that restarted knows no run: the log is not scanned from 0.
     let again = ProcessHost::with_config(f.host.inner.store.clone(), PtyHost::new(), &f.dir, fast());
-    let waited = again.wait_for_log(&f.workspace, "once", "ready", None, 5).unwrap();
+    let waited = again.wait_for_log(&f.workspace, "once", None, "ready", None, 5).unwrap();
     assert!(matches!(waited, LogWait::Ended { state: ProcessState::Stopped, .. }), "{waited:?}");
 }
 
@@ -572,29 +597,29 @@ fn wait_for_log_in_a_backoff_waits_for_the_next_run_and_hears_a_stop() {
     let mut flaky = spec("flaky", &command);
     flaky.auto_restart = true;
     let process = f.host.create(&f.workspace, flaky, None, false).unwrap();
-    f.host.start(&f.workspace, &process.id).unwrap();
-    f.wait(&process.id, Duration::from_secs(5), |p| p.state == ProcessState::Starting);
+    f.host.start(&f.workspace, &process.id, RunRequest::default()).unwrap();
+    f.wait(&process.id, Duration::from_secs(5), |p| p.main().state == ProcessState::Starting);
 
     // Waiting out the backoff, the dead run's ready line must not count.
-    let waited = f.host.wait_for_log(&f.workspace, "flaky", "ready", None, 10).unwrap();
+    let waited = f.host.wait_for_log(&f.workspace, "flaky", None, "ready", None, 10).unwrap();
     let LogWait::Matched { line, .. } = waited else {
         panic!("{waited:?}");
     };
     assert_eq!(line, "second-ready");
-    f.host.stop(&f.workspace, "flaky").unwrap();
+    f.host.stop(&f.workspace, "flaky", None).unwrap();
 
     // A stop during the backoff writes nothing, and still wakes the waiter.
     std::fs::remove_file(&marker).unwrap();
-    f.host.start(&f.workspace, &process.id).unwrap();
-    f.wait(&process.id, Duration::from_secs(5), |p| p.state == ProcessState::Starting);
+    f.host.start(&f.workspace, &process.id, RunRequest::default()).unwrap();
+    f.wait(&process.id, Duration::from_secs(5), |p| p.main().state == ProcessState::Starting);
     let host = f.host.clone();
     let workspace = f.workspace.clone();
     let waiter = thread::spawn(move || {
         let asked = Instant::now();
-        (host.wait_for_log(&workspace, "flaky", "never", Some(u64::MAX), 30).unwrap(), asked.elapsed())
+        (host.wait_for_log(&workspace, "flaky", None, "never", Some(u64::MAX), 30).unwrap(), asked.elapsed())
     });
     thread::sleep(Duration::from_millis(100));
-    f.host.stop(&f.workspace, "flaky").unwrap();
+    f.host.stop(&f.workspace, "flaky", None).unwrap();
     let (waited, took) = waiter.join().unwrap();
     assert!(matches!(waited, LogWait::Ended { state: ProcessState::Stopped, .. }), "{waited:?}");
     assert!(took < Duration::from_secs(2), "slept out its timeout: {took:?}");
@@ -608,16 +633,40 @@ fn stress_fifty_megabytes_with_nobody_watching() {
     let f = fixture("stress", ProcessConfig::default());
     let process = f.add("firehose", "yes 0123456789abcdefghijklmnopqrstuvwxyz | head -c 52428800; echo; echo END");
     let started = Instant::now();
-    f.host.start(&f.workspace, &process.id).unwrap();
-    let done = f.wait(&process.id, Duration::from_secs(120), |p| p.state == ProcessState::Exited);
-    assert_eq!(done.state, ProcessState::Exited, "did not finish in two minutes");
-    assert!(done.log_cursor >= 52_428_800);
+    f.host.start(&f.workspace, &process.id, RunRequest::default()).unwrap();
+    let done = f.wait(&process.id, Duration::from_secs(120), |p| p.main().state == ProcessState::Exited);
+    assert_eq!(done.main().state, ProcessState::Exited, "did not finish in two minutes");
+    assert!(done.main().log_cursor >= 52_428_800);
     let on_disk: u64 = std::fs::read_dir(f.dir.join("logs").join(&process.id))
         .unwrap()
         .map(|entry| entry.unwrap().metadata().unwrap().len())
         .sum();
     assert!(on_disk <= 2 * log::ROTATE_AT, "{on_disk} bytes kept");
-    let tail = f.host.read_logs(&f.workspace, &process.id, Some(2), None, None).unwrap();
+    let tail = f.host.read_logs(&f.workspace, &process.id, None, Some(2), None, None).unwrap();
     assert!(tail.text.contains("END"));
     eprintln!("50 MB drained in {:?}", started.elapsed());
+}
+
+#[test]
+fn a_log_from_before_worktrees_is_the_main_checkouts() {
+    let f = fixture("old-log", fast());
+    let web = f.add("web", "echo hi");
+    let dir = f.dir.join("logs").join(&web.id);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join(format!("{:020}.log", 0)), "old line\n").unwrap();
+
+    let host = ProcessHost::with_config(f.host.inner.store.clone(), PtyHost::new(), &f.dir, fast());
+    assert!(dir.join("main").join(format!("{:020}.log", 0)).is_file());
+    let read = host.read_logs(&f.workspace, "web", None, None, Some(0), None).unwrap();
+    assert_eq!(read.text, "old line\n");
+}
+
+#[test]
+fn a_folder_is_relative_to_the_worktree() {
+    let f = fixture("relative", fast());
+    let absolute = ProcessSpec { cwd: "/tmp".into(), ..spec("abs", "true") };
+    assert!(f.host.create(&f.workspace, absolute, None, false).unwrap_err().contains("relative"));
+    f.add("web", "true");
+    let patch = ProcessPatch { cwd: Some("/etc".into()), ..ProcessPatch::default() };
+    assert!(f.host.update(&f.workspace, "web", patch, None, false).unwrap_err().contains("relative"));
 }

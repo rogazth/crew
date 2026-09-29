@@ -49,6 +49,14 @@ pub fn list(cwd: &str) -> Vec<Worktree> {
     listed
 }
 
+/// Where the repo's worktrees are, the main checkout first: one git call and
+/// no counting, for checking a path is one of them.
+pub fn paths(cwd: &str) -> Vec<String> {
+    git(cwd, &["worktree", "list", "--porcelain"])
+        .map(|out| parse(&out).into_iter().map(|tree| tree.path).collect())
+        .unwrap_or_default()
+}
+
 /// Porcelain output: one block per worktree, blank-line separated. A bare
 /// repository has no files to work in, so it never becomes a row.
 pub fn parse(porcelain: &str) -> Vec<Worktree> {

@@ -112,7 +112,7 @@ pub const GROUPS: &[Group] = &[
         aliases: &["process", "proc"],
         verbs: &[
             verb("list", "list_processes").alias(&["ls"]).shape(Shape::ListProcesses).eg("crew processes list\n  crew processes list --json | jq '.[].name'"),
-            verb("start", "start_process").pos(&["process"]).shape(Shape::Process).eg("crew processes start web"),
+            verb("start", "start_process").pos(&["process"]).shape(Shape::Process).eg("crew processes start web\n  crew processes start web --worktree ../app-feat --env PORT=3001"),
             verb("stop", "stop_process").pos(&["process"]).shape(Shape::Process).eg("crew processes stop web"),
             verb("restart", "restart_process").pos(&["process"]).shape(Shape::Process).eg("crew processes restart web"),
             verb("pause", "pause_process").pos(&["process"]).shape(Shape::Process).eg("crew processes pause worker"),

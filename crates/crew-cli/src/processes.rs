@@ -21,6 +21,7 @@ const FOLLOW_POLL: Duration = Duration::from_millis(750);
 
 const PROCESS_COLUMNS: &[Column] = &[
     Column::new("NAME", &["name"]),
+    Column::new("WORKTREE", &["worktree"]),
     Column::new("STATE", &["state", "status"]),
     Column::new("PID", &["pid"]),
     Column::new("UPTIME", &["uptime"]),
@@ -37,10 +38,41 @@ pub fn ps(ctx: &Ctx) -> Result<ExitCode, CliError> {
             return Some("No processes in this workspace. `crew processes add` defines one.".into());
         }
         let now = now_millis();
-        let rows: Vec<Value> = rows.iter().map(|row| with_uptime(row, now)).collect();
+        let rows: Vec<Value> = rows.iter().flat_map(by_run).map(|row| with_uptime(&row, now)).collect();
         Some(output::table(&rows, PROCESS_COLUMNS).render(output::styled()))
     });
     Ok(ExitCode::SUCCESS)
+}
+
+/// A line per run of a process, its definition's fields beside each; one
+/// that runs nowhere gets a line of its own, stopped or waiting to be approved.
+fn by_run(row: &Value) -> Vec<Value> {
+    let runs = row.get("runs").and_then(Value::as_array).cloned().unwrap_or_default();
+    let mut base = row.clone();
+    if let Some(object) = base.as_object_mut() {
+        object.remove("runs");
+    }
+    if runs.is_empty() {
+        let state = if row.get("pending_approval").is_some() { "pending-approval" } else { "stopped" };
+        if let Some(object) = base.as_object_mut() {
+            object.entry("state").or_insert(json!(state));
+        }
+        return vec![base];
+    }
+    runs.into_iter()
+        .map(|run| {
+            let mut line = base.clone();
+            if let (Some(line), Some(run)) = (line.as_object_mut(), run.as_object()) {
+                for (key, value) in run {
+                    line.insert(key.clone(), value.clone());
+                }
+                if let Some(secs) = run.get("uptime_s") {
+                    line.insert("uptime".into(), secs.clone());
+                }
+            }
+            line
+        })
+        .collect()
 }
 
 /// A row with its uptime readable. The tool may say it in seconds, or only
@@ -70,15 +102,25 @@ fn now_millis() -> i64 {
         .unwrap_or(0)
 }
 
-/// `web  running  pid 4242`, from a process row.
+/// `web  running  pid 4242`, from a process row: the run the verb acted on
+/// (the reply marks it `here`), or the definition's own line if it has none.
 pub fn summary(value: &Value) -> Option<String> {
     let name = value.get("name")?.as_str()?;
-    let state = value.get("state").or_else(|| value.get("status")).and_then(Value::as_str).unwrap_or("?");
+    let run = value
+        .get("runs")
+        .and_then(Value::as_array)
+        .and_then(|runs| runs.iter().find(|run| run.get("here").is_some()))
+        .unwrap_or(value);
+    let fallback = if value.get("pending_approval").is_some() { "pending-approval" } else { "stopped" };
+    let state = run.get("state").or_else(|| run.get("status")).and_then(Value::as_str).unwrap_or(fallback);
     let mut line = format!("{name}  {state}");
-    if let Some(pid) = value.get("pid").and_then(Value::as_u64) {
+    if let Some(tree) = run.get("worktree").and_then(Value::as_str) {
+        line.push_str(&format!("  {tree}"));
+    }
+    if let Some(pid) = run.get("pid").and_then(Value::as_u64) {
         line.push_str(&format!("  pid {pid}"));
     }
-    if let Some(code) = value.get("exitCode").and_then(Value::as_i64) {
+    if let Some(code) = run.get("exit_code").or_else(|| run.get("exitCode")).and_then(Value::as_i64) {
         line.push_str(&format!("  exit {code}"));
     }
     Some(line)
@@ -92,8 +134,26 @@ pub fn logs(ctx: &Ctx, args: &LogsArgs) -> Result<ExitCode, CliError> {
     }
 }
 
+/// The run a `logs` reads: the process, in the worktree named or the caller's.
+fn target(args: &LogsArgs) -> Value {
+    let mut target = json!({ "process": args.process });
+    if let Some(worktree) = &args.worktree {
+        target["worktree"] = json!(worktree);
+    }
+    target
+}
+
+/// `target` with more fields laid over it.
+fn with(target: &Value, more: Value) -> Value {
+    let mut out = target.clone();
+    if let (Some(out), Some(more)) = (out.as_object_mut(), more.as_object()) {
+        out.extend(more.clone());
+    }
+    out
+}
+
 fn tail(ctx: &Ctx, client: &Client, args: &LogsArgs) -> Result<ExitCode, CliError> {
-    let mut request = json!({ "process": args.process });
+    let mut request = target(args);
     if let Some(lines) = args.lines {
         request["tail"] = json!(lines);
     }
@@ -105,7 +165,7 @@ fn tail(ctx: &Ctx, client: &Client, args: &LogsArgs) -> Result<ExitCode, CliErro
         print_text(text);
     }
     if args.follow {
-        follow(ctx, client, &args.process, cursor)?;
+        follow(ctx, client, &target(args), cursor)?;
     }
     Ok(ExitCode::SUCCESS)
 }
@@ -113,10 +173,10 @@ fn tail(ctx: &Ctx, client: &Client, args: &LogsArgs) -> Result<ExitCode, CliErro
 /// `tail -f` over the bridge. Reads from the cursor until there is nothing
 /// new, then lets `wait_for_log` hold the call until a line arrives, so a
 /// quiet process costs one request every half minute rather than a poll loop.
-fn follow(ctx: &Ctx, client: &Client, process: &str, mut cursor: u64) -> Result<(), CliError> {
+fn follow(ctx: &Ctx, client: &Client, target: &Value, mut cursor: u64) -> Result<(), CliError> {
     let mut can_wait = true;
     loop {
-        let chunk = client.run("read_logs", json!({ "process": process, "since": cursor }))?.value();
+        let chunk = client.run("read_logs", with(target, json!({ "since": cursor })))?.value();
         let (text, next) = chunk_parts(&chunk)?;
         if let Some(skipped) = chunk.get("skipped").and_then(Value::as_u64).filter(|n| *n > 0) {
             eprintln!("crew: {skipped} bytes were rotated away before they could be read");
@@ -135,7 +195,7 @@ fn follow(ctx: &Ctx, client: &Client, process: &str, mut cursor: u64) -> Result<
             continue;
         }
         // An empty pattern matches the first line to arrive.
-        let wait = json!({ "process": process, "pattern": "", "since": cursor, "timeout_s": FOLLOW_WAIT_S });
+        let wait = with(target, json!({ "pattern": "", "since": cursor, "timeout_s": FOLLOW_WAIT_S }));
         let reply = client.tool("wait_for_log", wait)?;
         if reply.is_error {
             // A daemon without the tool still has read_logs; poll it.
@@ -151,7 +211,7 @@ fn follow(ctx: &Ctx, client: &Client, process: &str, mut cursor: u64) -> Result<
 }
 
 fn grep(ctx: &Ctx, client: &Client, args: &LogsArgs, pattern: &str) -> Result<ExitCode, CliError> {
-    let mut request = json!({ "process": args.process, "pattern": pattern });
+    let mut request = with(&target(args), json!({ "pattern": pattern }));
     if let Some(lines) = args.lines {
         request["max_matches"] = json!(lines);
     }
@@ -179,7 +239,7 @@ fn grep(ctx: &Ctx, client: &Client, args: &LogsArgs, pattern: &str) -> Result<Ex
     // Each wait blocks in the daemon until a matching line arrives, so only
     // matches cross the bridge.
     loop {
-        let wait = json!({ "process": args.process, "pattern": pattern, "since": cursor, "timeout_s": FOLLOW_WAIT_S });
+        let wait = with(&target(args), json!({ "pattern": pattern, "since": cursor, "timeout_s": FOLLOW_WAIT_S }));
         let result = client.run("wait_for_log", wait)?.value();
         let next = result
             .get("cursor")

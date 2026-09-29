@@ -4,7 +4,9 @@
 //! goes to a log on disk, and a viewer that falls behind is resynced.
 //!
 //! Every call is scoped to a workspace, and a process is named by its id or
-//! by its name there. The MCP tools and the window's RPCs are thin wrappers.
+//! by its name there. A process is a definition of the workspace; it runs in
+//! one of its worktrees, at most once in each. The MCP tools and the window's
+//! RPCs are thin wrappers.
 
 mod log;
 pub mod text;
@@ -16,9 +18,7 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, Weak};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crew_protocol::{
-    LogChunk, LogGrep, LogMatch, LogWait, Process, ProcessSpec, ProcessState,
-};
+use crew_protocol::{LogChunk, LogGrep, LogMatch, LogWait, Process, ProcessRun, ProcessSpec, ProcessState};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
@@ -214,9 +214,37 @@ pub trait ProcessEvents: Send + Sync {
     fn removed(&self, workspace_id: &str, id: &str);
 }
 
-/// The PTY a process runs in. A viewer attaches to it with `pty_attach`.
-pub fn pty_id(process_id: &str) -> String {
-    format!("process:{process_id}")
+/// The PTY a run lives in. A viewer attaches to it with `pty_attach`.
+pub fn pty_id(process_id: &str, worktree: Option<&str>) -> String {
+    format!("process:{process_id}:{}", run_slug(worktree))
+}
+
+/// A run's name on disk and in its PTY's id: `main` for the main checkout,
+/// a hash of the path for a worktree. FNV-1a, so it holds across builds and
+/// a log is found again after an update.
+fn run_slug(worktree: Option<&str>) -> String {
+    let Some(path) = worktree else {
+        return "main".into();
+    };
+    let hash = path.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
+        (hash ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3)
+    });
+    format!("wt-{hash:016x}")
+}
+
+/// A run: the process, and the worktree it runs in (`None`, the main checkout).
+type Key = (String, Option<String>);
+
+/// What a start asks for beyond the process itself.
+#[derive(Clone, Debug, Default)]
+pub struct RunRequest {
+    /// `None` is the main checkout.
+    pub worktree: Option<String>,
+    /// Laid over the definition's for this run. `None` on a restart keeps
+    /// the last run's; on a start it is none.
+    pub env: Option<BTreeMap<String, String>>,
+    /// The session starting it; `None` is the user.
+    pub started_by: Option<String>,
 }
 
 #[derive(Clone)]
@@ -241,8 +269,8 @@ impl Def {
     }
 }
 
-/// What the daemon knows of a process beyond its row. Gone with the daemon:
-/// after a restart every process is stopped until something starts it.
+/// What the daemon knows of a run beyond the definition. Gone with the
+/// daemon: after a restart nothing runs until something starts it.
 struct Run {
     state: ProcessState,
     /// Bumped by every spawn and every cancelled restart: an exit or a timer
@@ -259,6 +287,8 @@ struct Run {
     /// The exit that comes is one the user asked for.
     stopping: bool,
     run_cursor: u64,
+    env: BTreeMap<String, String>,
+    started_by: Option<String>,
 }
 
 impl Default for Run {
@@ -276,6 +306,8 @@ impl Default for Run {
             backoff: Duration::ZERO,
             stopping: false,
             run_cursor: 0,
+            env: BTreeMap::new(),
+            started_by: None,
         }
     }
 }
@@ -289,14 +321,14 @@ struct Inner {
     pty: PtyHost,
     logs_dir: PathBuf,
     config: ProcessConfig,
-    runs: Mutex<HashMap<String, Run>>,
+    runs: Mutex<HashMap<Key, Run>>,
     /// Held across a definition's read and its write, so a change that lands
     /// in between (an agent's proposal while the user approves) is not lost
     /// or approved unseen.
     edits: Mutex<()>,
     /// Signalled whenever a run's state moves, for `stop` to wait on.
     moved: Condvar,
-    logs: Mutex<HashMap<String, Arc<LogStore>>>,
+    logs: Mutex<HashMap<Key, Arc<LogStore>>>,
     events: Mutex<Option<Arc<dyn ProcessEvents>>>,
     /// The daemon is going down: nothing restarts.
     closing: AtomicBool,
@@ -309,7 +341,7 @@ pub struct ProcessHost {
 
 struct RunSink {
     host: Weak<Inner>,
-    id: String,
+    key: Key,
     generation: u64,
     log: Arc<LogStore>,
 }
@@ -321,7 +353,7 @@ impl PtySink for RunSink {
 
     fn exit(&self, code: Option<i32>) {
         if let Some(inner) = self.host.upgrade() {
-            ProcessHost { inner }.on_exit(&self.id, self.generation, code);
+            ProcessHost { inner }.on_exit(&self.key, self.generation, code);
         }
     }
 }
@@ -332,11 +364,13 @@ impl ProcessHost {
     }
 
     pub fn with_config(store: Store, pty: PtyHost, data_dir: &Path, config: ProcessConfig) -> Self {
+        let logs_dir = data_dir.join("logs");
+        log::move_to_main(&logs_dir);
         Self {
             inner: Arc::new(Inner {
                 store,
                 pty,
-                logs_dir: data_dir.join("logs"),
+                logs_dir,
                 config,
                 runs: Mutex::new(HashMap::new()),
                 edits: Mutex::new(()),
@@ -352,7 +386,7 @@ impl ProcessHost {
         *self.inner.events.lock().unwrap_or_else(|e| e.into_inner()) = Some(events);
     }
 
-    fn runs(&self) -> MutexGuard<'_, HashMap<String, Run>> {
+    fn runs(&self) -> MutexGuard<'_, HashMap<Key, Run>> {
         self.inner.runs.lock().unwrap_or_else(|e| e.into_inner())
     }
 
@@ -378,10 +412,18 @@ impl ProcessHost {
         }
     }
 
-    /// Without opening the log: nobody waits on one that is not open.
+    /// Every run's, without opening a log: nobody waits on one that is not open.
     fn wake_waiters(&self, id: &str) {
-        let log = self.inner.logs.lock().unwrap_or_else(|e| e.into_inner()).get(id).cloned();
-        if let Some(log) = log {
+        let logs: Vec<Arc<LogStore>> = self
+            .inner
+            .logs
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .filter(|((process, _), _)| process == id)
+            .map(|(_, log)| log.clone())
+            .collect();
+        for log in logs {
             log.notify();
         }
     }
@@ -389,14 +431,17 @@ impl ProcessHost {
     // ---- definitions ----------------------------------------------------
 
     pub fn list(&self, workspace_id: &str) -> Result<Vec<Process>, String> {
-        let defs = self.inner.store.with(|conn| {
+        Ok(self.defs(workspace_id)?.into_iter().map(|def| self.snapshot(def)).collect())
+    }
+
+    fn defs(&self, workspace_id: &str) -> Result<Vec<Def>, String> {
+        self.inner.store.with(|conn| {
             let mut stmt = conn.prepare_cached(&format!(
                 "{SELECT} WHERE workspace_id = ?1 ORDER BY sort_order ASC, created_at ASC"
             ))?;
             let rows = stmt.query_map(params![workspace_id], row_to_def)?;
             rows.collect::<rusqlite::Result<Vec<_>>>()
-        })?;
-        Ok(defs.into_iter().map(|def| self.snapshot(def)).collect())
+        })
     }
 
     pub fn get(&self, workspace_id: &str, process: &str) -> Result<Process, String> {
@@ -415,6 +460,7 @@ impl ProcessHost {
         crate::workspace::get(&self.inner.store, workspace_id.to_string())?
             .ok_or("Workspace not found")?;
         let spec = tidy(spec)?;
+        relative_cwd(&spec.cwd)?;
         let edits = self.edits();
         self.ensure_free_name(workspace_id, &spec.name, None)?;
         let id = uuid::Uuid::new_v4().to_string();
@@ -463,6 +509,9 @@ impl ProcessHost {
         updated_by: Option<String>,
         ask_approval: bool,
     ) -> Result<Process, String> {
+        if let Some(cwd) = &patch.cwd {
+            relative_cwd(cwd)?;
+        }
         let edits = self.edits();
         let def = self.resolve(workspace_id, process)?;
         if ask_approval && def.approved {
@@ -548,22 +597,24 @@ impl ProcessHost {
         Ok(())
     }
 
-    /// Stops it first; its logs go with it.
+    /// Stops every run first; the logs of all of them go with it.
     pub fn delete(&self, workspace_id: &str, process: &str) -> Result<(), String> {
         let def = self.resolve(workspace_id, process)?;
-        self.halt(&def.id);
-        self.runs().remove(&def.id);
+        let keys = self.keys_of(&def.id);
+        for key in &keys {
+            self.halt(key);
+        }
+        self.runs().retain(|(id, _), _| *id != def.id);
         self.wake_waiters(&def.id);
         self.inner
             .store
             .with(|conn| conn.execute("DELETE FROM processes WHERE id = ?1", params![def.id]))?;
-        let log = self.inner.logs.lock().unwrap_or_else(|e| e.into_inner()).remove(&def.id);
-        match log.and_then(|log| Arc::try_unwrap(log).ok()) {
-            Some(log) => log.remove(),
-            None => {
-                let _ = std::fs::remove_dir_all(self.inner.logs_dir.join(&def.id));
-            }
-        }
+        self.inner
+            .logs
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .retain(|(id, _), _| *id != def.id);
+        let _ = std::fs::remove_dir_all(self.inner.logs_dir.join(&def.id));
         if let Some(events) = self.events() {
             events.removed(workspace_id, &def.id);
         }
@@ -574,8 +625,7 @@ impl ProcessHost {
     /// one they read. Anything since (an agent swapping the command while
     /// the card was open) is refused, for them to read again. A proposal is
     /// laid over the definition as it is now, so an edit made meanwhile
-    /// stays. A new process that asks to start on its own starts now: that
-    /// is what its author was waiting for.
+    /// stays. Nothing starts: that is for whoever asked for it, or the user.
     pub fn approve(&self, workspace_id: &str, process: &str, revision: u64) -> Result<Process, String> {
         let edits = self.edits();
         let def = self.resolve(workspace_id, process)?;
@@ -641,8 +691,10 @@ impl ProcessHost {
 
     // ---- running --------------------------------------------------------
 
-    /// Starts it unless it already runs. Fails on a process still waiting for approval.
-    pub fn start(&self, workspace_id: &str, process: &str) -> Result<Process, String> {
+    /// Starts it in `request.worktree` unless it already runs there. Fails on
+    /// a process still waiting for approval, or a worktree the workspace does
+    /// not have.
+    pub fn start(&self, workspace_id: &str, process: &str, request: RunRequest) -> Result<Process, String> {
         let def = self.resolve(workspace_id, process)?;
         if !def.approved {
             return Err(format!(
@@ -650,10 +702,12 @@ impl ProcessHost {
                 def.spec.name
             ));
         }
-        let cwd = self.cwd_of(&def)?;
+        let worktree = self.place(&def, request.worktree.as_deref(), true)?;
+        let key = (def.id.clone(), worktree);
+        let cwd = self.cwd_of(&def, key.1.as_deref())?;
         {
             let mut runs = self.runs();
-            let run = runs.entry(def.id.clone()).or_default();
+            let run = runs.entry(key.clone()).or_default();
             if live(run.state) {
                 drop(runs);
                 return self.get(workspace_id, &def.id);
@@ -662,7 +716,9 @@ impl ProcessHost {
             run.restarts = 0;
             run.crashes.clear();
             run.backoff = Duration::ZERO;
-            let spawned = self.spawn_run(run, &def, cwd);
+            run.env = request.env.unwrap_or_default();
+            run.started_by = request.started_by;
+            let spawned = self.spawn_run(run, &def, &key, cwd);
             drop(runs);
             self.inner.moved.notify_all();
             self.emit(&def.id);
@@ -671,16 +727,17 @@ impl ProcessHost {
         self.get(workspace_id, &def.id)
     }
 
-    fn spawn_run(&self, run: &mut Run, def: &Def, cwd: String) -> Result<(), String> {
+    fn spawn_run(&self, run: &mut Run, def: &Def, key: &Key, cwd: String) -> Result<(), String> {
         run.generation += 1;
         run.stopping = false;
         run.exit_code = None;
-        let log = self.log(&def.id)?;
+        let log = self.log(key)?;
         run.run_cursor = log.total();
-        log.note(&format!("$ {}", def.spec.command));
+        let own: Vec<String> = run.env.iter().map(|(k, v)| format!("{k}={v}")).collect();
+        log.note(&format!("$ {}", [own.join(" "), def.spec.command.clone()].join(" ").trim_start()));
         let sink = Arc::new(RunSink {
             host: Arc::downgrade(&self.inner),
-            id: def.id.clone(),
+            key: key.clone(),
             generation: run.generation,
             log: log.clone(),
         });
@@ -688,12 +745,14 @@ impl ProcessHost {
             .ok()
             .filter(|shell| !shell.is_empty())
             .unwrap_or_else(|| "/bin/zsh".into());
+        let mut env = def.spec.env.clone();
+        env.extend(run.env.clone());
         let options = SpawnOptions {
-            env: def.spec.env.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
+            env: env.into_iter().collect(),
             supervised: Some(sink),
             ..SpawnOptions::default()
         };
-        let id = pty_id(&def.id);
+        let id = pty_id(&key.0, key.1.as_deref());
         // The user's shell reads the command, so pipes, `&&` and globs work
         // as typed; PATH is the login shell's, which the PTY sets.
         let argv = vec![shell, "-c".into(), def.spec.command.clone()];
@@ -716,10 +775,10 @@ impl ProcessHost {
         }
     }
 
-    fn on_exit(&self, id: &str, generation: u64, code: Option<i32>) {
-        let def = self.def_by_id(id).ok().flatten();
+    fn on_exit(&self, key: &Key, generation: u64, code: Option<i32>) {
+        let def = self.def_by_id(&key.0).ok().flatten();
         let mut runs = self.runs();
-        let Some(run) = runs.get_mut(id) else {
+        let Some(run) = runs.get_mut(key) else {
             return;
         };
         if run.generation != generation {
@@ -729,7 +788,7 @@ impl ProcessHost {
         run.pid = None;
         run.stream_id = None;
         run.exit_code = code;
-        let log = self.log(id).ok();
+        let log = self.log(key).ok();
         if let Some(log) = &log {
             let how = code.map_or("killed by a signal".to_string(), |code| format!("exited with code {code}"));
             log.note(&how);
@@ -750,10 +809,10 @@ impl ProcessHost {
                         log.note(&format!("restarting in {secs:.1}s"));
                     }
                     let host = self.clone();
-                    let id = id.to_string();
+                    let key = key.clone();
                     thread::spawn(move || {
                         thread::sleep(delay);
-                        host.restart_due(&id, generation);
+                        host.restart_due(&key, generation);
                     });
                 }
                 None => {
@@ -768,28 +827,28 @@ impl ProcessHost {
         }
         drop(runs);
         self.inner.moved.notify_all();
-        self.emit(id);
+        self.emit(&key.0);
     }
 
     /// A backoff ran out. Anything that happened meanwhile (a stop, a start
     /// by hand) moved the generation on, and the timer is stale.
-    fn restart_due(&self, id: &str, generation: u64) {
+    fn restart_due(&self, key: &Key, generation: u64) {
         if self.inner.closing.load(Ordering::Acquire) {
             return;
         }
-        let Ok(Some(def)) = self.def_by_id(id) else {
+        let Ok(Some(def)) = self.def_by_id(&key.0) else {
             return;
         };
-        let cwd = self.cwd_of(&def);
+        let cwd = self.cwd_of(&def, key.1.as_deref());
         let mut runs = self.runs();
-        let Some(run) = runs.get_mut(id) else {
+        let Some(run) = runs.get_mut(key) else {
             return;
         };
         if run.generation != generation || run.state != ProcessState::Starting {
             return;
         }
         let result = match cwd {
-            Ok(cwd) => self.spawn_run(run, &def, cwd),
+            Ok(cwd) => self.spawn_run(run, &def, key, cwd),
             Err(error) => {
                 run.state = ProcessState::Exited;
                 Err(error)
@@ -797,23 +856,24 @@ impl ProcessHost {
         };
         drop(runs);
         if let Err(error) = result {
-            eprintln!("[process] {id}: restart failed: {error}");
+            eprintln!("[process] {}: restart failed: {error}", key.0);
         }
         self.inner.moved.notify_all();
-        self.emit(id);
+        self.emit(&key.0);
     }
 
     /// SIGTERM to the whole group, SIGKILL once the grace runs out. Returns
-    /// once it has exited.
-    pub fn stop(&self, workspace_id: &str, process: &str) -> Result<Process, String> {
+    /// once it has exited. A worktree that is gone can still be stopped in.
+    pub fn stop(&self, workspace_id: &str, process: &str, worktree: Option<&str>) -> Result<Process, String> {
         let def = self.resolve(workspace_id, process)?;
-        self.halt(&def.id);
+        let worktree = self.place(&def, worktree, false)?;
+        self.halt(&(def.id.clone(), worktree));
         self.get(workspace_id, &def.id)
     }
 
-    fn halt(&self, id: &str) {
+    fn halt(&self, key: &Key) {
         let mut runs = self.runs();
-        let Some(run) = runs.get_mut(id) else {
+        let Some(run) = runs.get_mut(key) else {
             return;
         };
         if run.state == ProcessState::Starting {
@@ -821,7 +881,7 @@ impl ProcessHost {
             run.generation += 1;
             run.state = ProcessState::Stopped;
             drop(runs);
-            self.emit(id);
+            self.emit(&key.0);
             return;
         }
         if !live(run.state) {
@@ -832,24 +892,24 @@ impl ProcessHost {
         let generation = run.generation;
         drop(runs);
 
-        let pty = pty_id(id);
+        let pty = pty_id(&key.0, key.1.as_deref());
         let _ = self.inner.pty.signal_group(&pty, libc::SIGTERM);
         if paused {
             // A stopped group holds the TERM until it runs again.
             let _ = self.inner.pty.signal_group(&pty, libc::SIGCONT);
         }
-        if !self.wait_ended(id, generation, self.inner.config.stop_grace) {
+        if !self.wait_ended(key, generation, self.inner.config.stop_grace) {
             let _ = self.inner.pty.signal_group(&pty, libc::SIGKILL);
-            self.wait_ended(id, generation, KILL_SETTLE);
+            self.wait_ended(key, generation, KILL_SETTLE);
         }
     }
 
-    fn wait_ended(&self, id: &str, generation: u64, limit: Duration) -> bool {
+    fn wait_ended(&self, key: &Key, generation: u64, limit: Duration) -> bool {
         let deadline = Instant::now() + limit;
         let mut runs = self.runs();
         loop {
             let ended = runs
-                .get(id)
+                .get(key)
                 .is_none_or(|run| run.generation != generation || !live(run.state));
             if ended {
                 return true;
@@ -867,41 +927,50 @@ impl ProcessHost {
         }
     }
 
-    pub fn restart(&self, workspace_id: &str, process: &str) -> Result<Process, String> {
+    /// Stops the run and starts it again. Without an `env` of its own the
+    /// request keeps the one the last run had.
+    pub fn restart(&self, workspace_id: &str, process: &str, mut request: RunRequest) -> Result<Process, String> {
         let def = self.resolve(workspace_id, process)?;
-        self.halt(&def.id);
-        self.start(workspace_id, &def.id)
+        let worktree = self.place(&def, request.worktree.as_deref(), true)?;
+        let key = (def.id.clone(), worktree.clone());
+        self.halt(&key);
+        if request.env.is_none() {
+            request.env = self.runs().get(&key).map(|run| run.env.clone());
+        }
+        request.worktree = worktree;
+        self.start(workspace_id, &def.id, request)
     }
 
     /// SIGSTOP to the group: it keeps its memory and ports, and runs nothing.
-    pub fn pause(&self, workspace_id: &str, process: &str) -> Result<Process, String> {
-        self.signal_state(workspace_id, process, ProcessState::Running, libc::SIGSTOP, ProcessState::Paused)
+    pub fn pause(&self, workspace_id: &str, process: &str, worktree: Option<&str>) -> Result<Process, String> {
+        self.signal_state(workspace_id, process, worktree, ProcessState::Running, libc::SIGSTOP, ProcessState::Paused)
     }
 
-    pub fn resume(&self, workspace_id: &str, process: &str) -> Result<Process, String> {
-        self.signal_state(workspace_id, process, ProcessState::Paused, libc::SIGCONT, ProcessState::Running)
+    pub fn resume(&self, workspace_id: &str, process: &str, worktree: Option<&str>) -> Result<Process, String> {
+        self.signal_state(workspace_id, process, worktree, ProcessState::Paused, libc::SIGCONT, ProcessState::Running)
     }
 
     fn signal_state(
         &self,
         workspace_id: &str,
         process: &str,
+        worktree: Option<&str>,
         from: ProcessState,
         signal: i32,
         to: ProcessState,
     ) -> Result<Process, String> {
         let def = self.resolve(workspace_id, process)?;
+        let key = (def.id.clone(), self.place(&def, worktree, false)?);
         {
             let mut runs = self.runs();
-            let run = runs.entry(def.id.clone()).or_default();
+            let Some(run) = runs.get_mut(&key).filter(|run| run.state == from || run.state == to) else {
+                return Err(format!("\"{}\" is not {} there", def.spec.name, state_word(from)));
+            };
             if run.state == to {
                 drop(runs);
                 return self.get(workspace_id, &def.id);
             }
-            if run.state != from {
-                return Err(format!("\"{}\" is not {}", def.spec.name, state_word(from)));
-            }
-            self.inner.pty.signal_group(&pty_id(&def.id), signal)?;
+            self.inner.pty.signal_group(&pty_id(&key.0, key.1.as_deref()), signal)?;
             run.state = to;
         }
         self.inner.moved.notify_all();
@@ -909,14 +978,15 @@ impl ProcessHost {
         self.get(workspace_id, &def.id)
     }
 
-    /// Typed into the process's terminal, as if at its keyboard.
-    pub fn send_input(&self, workspace_id: &str, process: &str, text: &str) -> Result<(), String> {
+    /// Typed into the run's terminal, as if at its keyboard.
+    pub fn send_input(&self, workspace_id: &str, process: &str, worktree: Option<&str>, text: &str) -> Result<(), String> {
         let def = self.resolve(workspace_id, process)?;
-        let running = self.runs().get(&def.id).is_some_and(|run| live(run.state));
+        let key = (def.id.clone(), self.place(&def, worktree, false)?);
+        let running = self.runs().get(&key).is_some_and(|run| live(run.state));
         if !running {
-            return Err(format!("\"{}\" is not running", def.spec.name));
+            return Err(format!("\"{}\" is not running {}", def.spec.name, where_(key.1.as_deref())));
         }
-        self.inner.pty.write(&pty_id(&def.id), text.as_bytes())
+        self.inner.pty.write(&pty_id(&key.0, key.1.as_deref()), text.as_bytes())
     }
 
     /// Before the workspace's rows go: its processes must not outlive it.
@@ -926,28 +996,52 @@ impl ProcessHost {
         }
     }
 
+    /// Before a worktree goes: what runs there stops, and its runs and their
+    /// logs go. `path` is the worktree's, as git lists it. Every workspace's
+    /// processes are looked at: a path is one worktree, whoever lists it.
+    pub fn forget_worktree(&self, path: &str) {
+        let path = path.trim_end_matches('/');
+        let keys: Vec<Key> = self.runs().keys().filter(|(_, tree)| tree.as_deref() == Some(path)).cloned().collect();
+        for key in &keys {
+            self.halt(key);
+            self.runs().remove(key);
+            self.inner.logs.lock().unwrap_or_else(|e| e.into_inner()).remove(key);
+            self.wake_waiters(&key.0);
+            self.emit(&key.0);
+        }
+        // Logs outlive the daemon; runs do not. Whatever this worktree left
+        // on disk goes too, run this time or not.
+        let slug = run_slug(Some(path));
+        if let Ok(processes) = std::fs::read_dir(&self.inner.logs_dir) {
+            for process in processes.flatten() {
+                let _ = std::fs::remove_dir_all(process.path().join(&slug));
+            }
+        }
+    }
+
     /// The daemon is exiting: nothing restarts, and every group gets its
     /// SIGTERM now. All of them share one stop grace to exit, so a server
     /// flushing a database gets its five seconds and ten servers do not take
     /// fifty. The PTY host kills what is left after that.
     pub fn shutdown(&self) {
         self.inner.closing.store(true, Ordering::Release);
-        let running: Vec<(String, u64)> = self
+        let running: Vec<(Key, u64)> = self
             .runs()
             .iter_mut()
             .filter(|(_, run)| live(run.state))
-            .map(|(id, run)| {
+            .map(|(key, run)| {
                 run.stopping = true;
-                (id.clone(), run.generation)
+                (key.clone(), run.generation)
             })
             .collect();
-        for (id, _) in &running {
-            let _ = self.inner.pty.signal_group(&pty_id(id), libc::SIGTERM);
-            let _ = self.inner.pty.signal_group(&pty_id(id), libc::SIGCONT);
+        for (key, _) in &running {
+            let pty = pty_id(&key.0, key.1.as_deref());
+            let _ = self.inner.pty.signal_group(&pty, libc::SIGTERM);
+            let _ = self.inner.pty.signal_group(&pty, libc::SIGCONT);
         }
         let deadline = Instant::now() + self.inner.config.stop_grace;
-        for (id, generation) in &running {
-            self.wait_ended(id, *generation, deadline.saturating_duration_since(Instant::now()));
+        for (key, generation) in &running {
+            self.wait_ended(key, *generation, deadline.saturating_duration_since(Instant::now()));
         }
     }
 
@@ -959,12 +1053,13 @@ impl ProcessHost {
         &self,
         workspace_id: &str,
         process: &str,
+        worktree: Option<&str>,
         tail: Option<u32>,
         since: Option<u64>,
         max_bytes: Option<u32>,
     ) -> Result<LogChunk, String> {
         let def = self.resolve(workspace_id, process)?;
-        let log = self.log(&def.id)?;
+        let log = self.log(&(def.id.clone(), self.place(&def, worktree, false)?))?;
         let max = u64::from(max_bytes.unwrap_or(READ_DEFAULT).clamp(1, READ_MAX));
         let total = log.total();
         if let Some(since) = since {
@@ -1001,9 +1096,15 @@ impl ProcessHost {
 
     /// The raw end of the log, escapes kept, for a terminal to repaint a
     /// process that is not running.
-    pub fn log_tail_raw(&self, workspace_id: &str, process: &str, max_bytes: Option<u32>) -> Result<LogChunk, String> {
+    pub fn log_tail_raw(
+        &self,
+        workspace_id: &str,
+        process: &str,
+        worktree: Option<&str>,
+        max_bytes: Option<u32>,
+    ) -> Result<LogChunk, String> {
         let def = self.resolve(workspace_id, process)?;
-        let log = self.log(&def.id)?;
+        let log = self.log(&(def.id.clone(), self.place(&def, worktree, false)?))?;
         let total = log.total();
         let max = u64::from(max_bytes.unwrap_or(READ_MAX).clamp(1, READ_MAX));
         let (at, bytes) = log.read(total.saturating_sub(max), total);
@@ -1027,13 +1128,14 @@ impl ProcessHost {
         &self,
         workspace_id: &str,
         process: &str,
+        worktree: Option<&str>,
         pattern: &str,
         context: Option<u32>,
         max_matches: Option<u32>,
     ) -> Result<LogGrep, String> {
         let def = self.resolve(workspace_id, process)?;
         let regex = compile(pattern)?;
-        let log = self.log(&def.id)?;
+        let log = self.log(&(def.id.clone(), self.place(&def, worktree, false)?))?;
         let context = context.unwrap_or(0).min(CONTEXT_MAX) as usize;
         let keep = max_matches.unwrap_or(MATCHES_DEFAULT).clamp(1, MATCHES_MAX) as usize;
         let total_bytes = log.total();
@@ -1089,19 +1191,21 @@ impl ProcessHost {
         &self,
         workspace_id: &str,
         process: &str,
+        worktree: Option<&str>,
         pattern: &str,
         since: Option<u64>,
         timeout_s: u32,
     ) -> Result<LogWait, String> {
         let def = self.resolve(workspace_id, process)?;
         let regex = compile(pattern)?;
-        let log = self.log(&def.id)?;
+        let key = (def.id.clone(), self.place(&def, worktree, false)?);
+        let log = self.log(&key)?;
         let deadline = Instant::now() + Duration::from_secs(u64::from(timeout_s.clamp(1, WAIT_MAX_S)));
         let mut pos = loop {
             let seen = log.seq();
             let (state, exit_code, run_cursor) = self
                 .runs()
-                .get(&def.id)
+                .get(&key)
                 .map_or((ProcessState::Stopped, None, 0), |run| (run.state, run.exit_code, run.run_cursor));
             if live(state) {
                 break since.unwrap_or(run_cursor);
@@ -1139,7 +1243,7 @@ impl ProcessHost {
             pos = end.max(pos);
             let (state, exit_code) = self
                 .runs()
-                .get(&def.id)
+                .get(&key)
                 .map_or((ProcessState::Stopped, None), |run| (run.state, run.exit_code));
             let waiting = live(state) || state == ProcessState::Starting;
             if !waiting && log.seq() == seen {
@@ -1156,40 +1260,65 @@ impl ProcessHost {
 
     // ---- internals --------------------------------------------------------
 
-    fn log(&self, id: &str) -> Result<Arc<LogStore>, String> {
+    fn log_dir(&self, key: &Key) -> PathBuf {
+        self.inner.logs_dir.join(&key.0).join(run_slug(key.1.as_deref()))
+    }
+
+    fn log(&self, key: &Key) -> Result<Arc<LogStore>, String> {
         let mut logs = self.inner.logs.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(log) = logs.get(id) {
+        if let Some(log) = logs.get(key) {
             return Ok(log.clone());
         }
-        let log = Arc::new(LogStore::open(self.inner.logs_dir.join(id), self.inner.config.rotate_at)?);
-        logs.insert(id.to_string(), log.clone());
+        let log = Arc::new(LogStore::open(self.log_dir(key), self.inner.config.rotate_at)?);
+        logs.insert(key.clone(), log.clone());
         Ok(log)
     }
 
     /// Without creating anything: a listing must not leave empty folders behind.
-    fn log_total(&self, id: &str) -> u64 {
-        if let Some(log) = self.inner.logs.lock().unwrap_or_else(|e| e.into_inner()).get(id) {
+    fn log_total(&self, key: &Key) -> u64 {
+        if let Some(log) = self.inner.logs.lock().unwrap_or_else(|e| e.into_inner()).get(key) {
             return log.total();
         }
-        if self.inner.logs_dir.join(id).is_dir() {
-            return self.log(id).map(|log| log.total()).unwrap_or(0);
+        if self.log_dir(key).is_dir() {
+            return self.log(key).map(|log| log.total()).unwrap_or(0);
         }
         0
     }
 
+    /// The process's runs, the main checkout first and then by path.
+    fn keys_of(&self, id: &str) -> Vec<Key> {
+        let mut keys: Vec<Key> = self.runs().keys().filter(|(process, _)| process == id).cloned().collect();
+        keys.sort_by(|a, b| a.1.cmp(&b.1));
+        keys
+    }
+
     fn snapshot(&self, def: Def) -> Process {
         let proposed = def.pending().map(|patch| patch.apply(&def.spec));
-        let log_cursor = self.log_total(&def.id);
+        let keys = self.keys_of(&def.id);
+        let cursors: Vec<u64> = keys.iter().map(|key| self.log_total(key)).collect();
         let runs = self.runs();
-        let run = runs.get(&def.id);
-        let state = match run.map(|run| run.state) {
-            Some(state) if live(state) || state == ProcessState::Starting => state,
-            _ if !def.approved => ProcessState::PendingApproval,
-            Some(state) => state,
-            None => ProcessState::Stopped,
-        };
+        let runs = keys
+            .iter()
+            .zip(cursors)
+            .filter_map(|(key, log_cursor)| {
+                let run = runs.get(key)?;
+                Some(ProcessRun {
+                    worktree: key.1.clone(),
+                    state: run.state,
+                    pid: run.pid,
+                    stream_id: run.stream_id,
+                    started_at: run.started_at,
+                    exit_code: run.exit_code,
+                    restarts: run.restarts,
+                    pty_id: pty_id(&key.0, key.1.as_deref()),
+                    log_cursor,
+                    run_cursor: run.run_cursor,
+                    started_by: run.started_by.clone(),
+                    env: run.env.clone(),
+                })
+            })
+            .collect();
         Process {
-            pty_id: pty_id(&def.id),
             id: def.id,
             workspace_id: def.workspace_id,
             spec: def.spec,
@@ -1197,14 +1326,7 @@ impl ProcessHost {
             approved: def.approved,
             proposed,
             requested_by: def.requested_by,
-            state,
-            pid: run.and_then(|run| run.pid),
-            stream_id: run.and_then(|run| run.stream_id),
-            started_at: run.and_then(|run| run.started_at),
-            exit_code: run.and_then(|run| run.exit_code),
-            restarts: run.map_or(0, |run| run.restarts),
-            log_cursor,
-            run_cursor: run.map_or(0, |run| run.run_cursor),
+            runs,
             revision: def.revision,
         }
     }
@@ -1250,10 +1372,44 @@ impl ProcessHost {
         }
     }
 
-    fn cwd_of(&self, def: &Def) -> Result<String, String> {
+    /// The run's worktree as a key holds it: `None` for the main checkout,
+    /// however it was named. `check` refuses a path that is not one of the
+    /// workspace's worktrees; stopping or reading one that was removed
+    /// meanwhile does not check.
+    fn place(&self, def: &Def, worktree: Option<&str>, check: bool) -> Result<Option<String>, String> {
+        let Some(path) = worktree.map(|path| path.trim_end_matches('/')).filter(|path| !path.is_empty()) else {
+            return Ok(None);
+        };
         let workspace = crate::workspace::get(&self.inner.store, def.workspace_id.clone())?
             .ok_or("Workspace not found")?;
-        let path = resolve_cwd(&workspace.path, &def.spec.cwd);
+        if path == workspace.path.trim_end_matches('/') {
+            return Ok(None);
+        }
+        if !check {
+            return Ok(Some(path.to_string()));
+        }
+        // Kept as git lists it, which is how sessions and the window have it,
+        // whatever spelling of it was asked for.
+        let real = |path: &str| std::fs::canonicalize(path).ok();
+        crate::worktree::paths(&workspace.path)
+            .into_iter()
+            .skip(1)
+            .find(|tree| tree == path || real(tree).is_some_and(|tree| Some(tree) == real(path)))
+            .map(Some)
+            .ok_or_else(|| format!("{path} is not a worktree of this workspace"))
+    }
+
+    /// The folder a run starts in: the definition's `cwd` inside its worktree.
+    fn cwd_of(&self, def: &Def, worktree: Option<&str>) -> Result<String, String> {
+        let root = match worktree {
+            Some(path) => path.to_string(),
+            None => {
+                crate::workspace::get(&self.inner.store, def.workspace_id.clone())?
+                    .ok_or("Workspace not found")?
+                    .path
+            }
+        };
+        let path = resolve_cwd(&root, &def.spec.cwd);
         // The PTY falls back to $HOME for a missing folder, which suits a
         // shell; a server started in the wrong place is worse than an error.
         if !path.is_dir() {
@@ -1313,6 +1469,15 @@ fn tidy(mut spec: ProcessSpec) -> Result<ProcessSpec, String> {
     Ok(spec)
 }
 
+/// A new or changed `cwd` is inside the worktree: an absolute one would run
+/// in the same place from every worktree.
+fn relative_cwd(cwd: &str) -> Result<(), String> {
+    if Path::new(cwd.trim()).is_absolute() {
+        return Err("The folder has to be relative to the worktree, e.g. \"server\"; leave it empty for its root".into());
+    }
+    Ok(())
+}
+
 fn resolve_cwd(root: &str, cwd: &str) -> PathBuf {
     let cwd = cwd.trim();
     if cwd.is_empty() {
@@ -1354,6 +1519,11 @@ fn tail_start(bytes: &[u8], lines: usize) -> usize {
         }
     }
     0
+}
+
+/// "in <worktree>", or "in the main checkout", for an error to say where.
+fn where_(worktree: Option<&str>) -> String {
+    worktree.map_or("in the main checkout".to_string(), |path| format!("in {path}"))
 }
 
 fn state_word(state: ProcessState) -> &'static str {

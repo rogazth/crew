@@ -41,6 +41,33 @@ fn segment_path(dir: &Path, start: u64) -> PathBuf {
     dir.join(format!("{start:020}.log"))
 }
 
+/// Logs from before runs had a worktree lay their segments right in the
+/// process's folder; they were the main checkout's, and move under `main/`.
+pub fn move_to_main(logs_dir: &Path) {
+    let Ok(processes) = fs::read_dir(logs_dir) else {
+        return;
+    };
+    for process in processes.flatten() {
+        let dir = process.path();
+        let Ok(entries) = fs::read_dir(&dir) else {
+            continue;
+        };
+        let segments: Vec<PathBuf> = entries
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| path.is_file() && path.extension().is_some_and(|ext| ext == "log"))
+            .collect();
+        if segments.is_empty() || fs::create_dir_all(dir.join("main")).is_err() {
+            continue;
+        }
+        for segment in segments {
+            if let Some(name) = segment.file_name() {
+                let _ = fs::rename(&segment, dir.join("main").join(name));
+            }
+        }
+    }
+}
+
 impl LogStore {
     pub fn open(dir: PathBuf, rotate_at: u64) -> Result<Self, String> {
         fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;

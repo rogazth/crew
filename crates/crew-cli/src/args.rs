@@ -104,6 +104,9 @@ Examples:
 pub struct LogsArgs {
     /// The process, by name or id.
     pub process: String,
+    /// The worktree whose run to read, by path; the main checkout if not given.
+    #[arg(long, value_name = "PATH")]
+    pub worktree: Option<String>,
     /// Keep printing what it writes until interrupted.
     #[arg(short, long)]
     pub follow: bool,

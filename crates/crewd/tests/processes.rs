@@ -85,15 +85,20 @@ async fn processes_answer_the_json_the_renderer_sends() {
     .expect("create");
     assert_eq!(created["name"], "web");
     assert_eq!(created["autoRestart"], true);
-    assert_eq!(created["state"], "stopped");
+    assert_eq!(created["runs"], json!([]));
     assert_eq!(created["createdBy"], Value::Null);
     let id = created["id"].as_str().unwrap().to_string();
     let target = json!({ "workspaceId": workspace_id, "id": id });
 
-    let started = call(&mut ws, &mut seen, 3, "process_start", target.clone()).await.expect("start");
-    assert_eq!(started["state"], "running");
-    assert!(started["pid"].is_u64() && started["streamId"].is_u64(), "{started}");
-    assert_eq!(started["ptyId"], format!("process:{id}"));
+    // The window starts in the main checkout unless it names a worktree, with
+    // an env of its own for the run.
+    let start = json!({ "workspaceId": workspace_id, "id": id, "env": { "PORT": "4000" } });
+    let started = call(&mut ws, &mut seen, 3, "process_start", start).await.expect("start");
+    let run = &started["runs"][0];
+    assert_eq!((run["state"].as_str(), run["worktree"].clone()), (Some("running"), Value::Null), "{started}");
+    assert!(run["pid"].is_u64() && run["streamId"].is_u64(), "{started}");
+    assert_eq!(run["ptyId"], format!("process:{id}:main"));
+    assert_eq!((run["env"]["PORT"].as_str(), run["startedBy"].clone()), (Some("4000"), Value::Null));
 
     let updated = call(
         &mut ws,
@@ -108,7 +113,7 @@ async fn processes_answer_the_json_the_renderer_sends() {
     assert_eq!(updated["command"], "echo up; sleep 30");
 
     let stopped = call(&mut ws, &mut seen, 5, "process_stop", target.clone()).await.expect("stop");
-    assert_eq!(stopped["state"], "stopped");
+    assert_eq!(stopped["runs"][0]["state"], "stopped");
     let tail = call(&mut ws, &mut seen, 6, "process_log_tail", target.clone()).await.expect("tail");
     assert!(tail["text"].as_str().unwrap().contains("up"), "{tail}");
     assert!(tail["cursor"].as_u64().unwrap() > 0);
@@ -152,7 +157,7 @@ async fn a_viewer_that_stops_acking_is_resynced_and_the_process_runs_on() {
     .expect("create");
     let target = json!({ "workspaceId": workspace_id, "id": created["id"] });
     let started = call(&mut ws, &mut seen, 3, "process_start", target.clone()).await.expect("start");
-    let pty = started["ptyId"].as_str().unwrap().to_string();
+    let pty = started["runs"][0]["ptyId"].as_str().unwrap().to_string();
 
     call(&mut ws, &mut seen, 4, "pty_attach", json!({ "id": pty, "from": 0 })).await.expect("attach");
     // Read frames and never ack, until the daemon gives up on this viewer.
@@ -225,7 +230,7 @@ async fn approve_carries_the_revision() {
     assert!(refused.contains("review it again"), "{refused}");
     let read = json!({ "workspaceId": workspace_id, "id": asked.id, "revision": asked.revision });
     let approved = call(&mut ws, &mut seen, 4, "process_approve", read).await.expect("approve");
-    assert_eq!((approved["approved"].clone(), approved["state"].clone()), (json!(true), json!("stopped")));
+    assert_eq!((approved["approved"].clone(), approved["runs"].clone()), (json!(true), json!([])));
 
     handle.shutdown();
     let _ = std::fs::remove_dir_all(dir);

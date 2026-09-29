@@ -143,6 +143,11 @@ pub trait ToolFamily: Send + Sync {
     /// audience admits `caller`. An `Err` is read by the model, so say what to
     /// do next.
     fn run(&self, caller: &Caller, name: &str, args: &Value) -> Result<ToolOutput, String>;
+    /// A few lines for `initialize` to tell this caller, when its tools need
+    /// saying more than their names: when to reach for them, what is there.
+    fn instructions(&self, _caller: &Caller) -> Option<String> {
+        None
+    }
 }
 
 /// The tool families registered beside Crew's own. Cloned handles share one
@@ -163,6 +168,12 @@ struct Entry {
 impl Toolbox {
     pub fn register(&self, family: Arc<dyn ToolFamily>) {
         self.families.write().unwrap_or_else(|e| e.into_inner()).push(family);
+    }
+
+    /// What the families have to say to this caller, in the order they registered.
+    fn notes(&self, caller: &Caller) -> Vec<String> {
+        let families = self.families.read().unwrap_or_else(|e| e.into_inner()).clone();
+        families.iter().filter_map(|family| family.instructions(caller)).collect()
     }
 
     /// Every tool there is behind the gateway, Crew's own first.
@@ -573,12 +584,13 @@ pub fn instructions(toolbox: &Toolbox, caller: &Caller) -> String {
         Caller::User { .. } => " You are calling as the user.".to_string(),
     };
     let listed = if listed.is_empty() { String::new() } else { format!("Always listed: {}.\n", listed.join(", ")) };
+    let notes: String = toolbox.notes(caller).into_iter().map(|note| format!("\n{note}")).collect();
     format!(
         "Crew is the app this runs in: it holds a workspace of agents, and these tools reach them.{who}\n\
          {listed}\
          Its tools are not listed, to keep them out of the prompt: find_tool searches them by what you \
          want to do and returns each match with its arguments, and call_tool runs one by name with \
-         those arguments. What is there: {}.",
+         those arguments. What is there: {}.{notes}",
         if hidden.is_empty() { "nothing more".to_string() } else { hidden.join(", ") },
     )
 }

@@ -3,8 +3,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-/// Where a supervised process stands. `PendingApproval` is a definition an
-/// agent wrote or changed that the user has not accepted yet: it cannot start.
+/// Where one run of a command stands.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, TS)]
 #[serde(rename_all = "kebab-case")]
 #[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "kebab-case")]
@@ -18,7 +17,6 @@ pub enum ProcessState {
     Exited,
     /// Restarted too often in too little time and was left down.
     Crashed,
-    PendingApproval,
 }
 
 /// What a process runs: the part an agent may only propose.
@@ -28,13 +26,14 @@ pub enum ProcessState {
 pub struct ProcessSpec {
     pub name: String,
     pub command: String,
-    /// Relative to the workspace folder, or absolute; empty is the folder itself.
+    /// Relative to the worktree it runs in; empty is its root. Rows from
+    /// before worktrees may hold an absolute path, which runs there from any.
     pub cwd: String,
     pub env: BTreeMap<String, String>,
     pub auto_restart: bool,
 }
 
-/// A process definition with its runtime next to it.
+/// A command of the workspace's inventory, with the runs it has in its worktrees.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
@@ -53,6 +52,30 @@ pub struct Process {
     pub proposed: Option<ProcessSpec>,
     /// Who is asking: the creator of an unapproved process, or the proposer.
     pub requested_by: Option<String>,
+    /// One per worktree it was started in since the daemon came up, the main
+    /// checkout first. A run that ended stays, so its exit can be read.
+    pub runs: Vec<ProcessRun>,
+    /// Bumped by every change to the definition or to what waits on the
+    /// user. An approval names the one the user read, so a change that
+    /// lands while they read it is not what they approve.
+    #[ts(type = "number")]
+    pub revision: u64,
+}
+
+impl Process {
+    /// Its run in `worktree` (`None` is the main checkout), if it has one.
+    pub fn run_in(&self, worktree: Option<&str>) -> Option<&ProcessRun> {
+        self.runs.iter().find(|run| run.worktree.as_deref() == worktree)
+    }
+}
+
+/// A command running, or last run, in one worktree.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
+pub struct ProcessRun {
+    /// The worktree's path; `None` is the workspace's main checkout.
+    pub worktree: Option<String>,
     pub state: ProcessState,
     pub pid: Option<u32>,
     /// The PTY stream a viewer reads while it runs.
@@ -61,7 +84,7 @@ pub struct Process {
     pub started_at: Option<i64>,
     /// The last run's; `None` while running, or after a signal.
     pub exit_code: Option<i32>,
-    /// Automatic restarts since the user last started it.
+    /// Automatic restarts since it was last started by hand.
     pub restarts: u32,
     /// The PTY a viewer attaches to while it runs.
     pub pty_id: String,
@@ -71,11 +94,10 @@ pub struct Process {
     /// Where the current (or last) run's output starts in the log.
     #[ts(type = "number")]
     pub run_cursor: u64,
-    /// Bumped by every change to the definition or to what waits on the
-    /// user. An approval names the one the user read, so a change that
-    /// lands while they read it is not what they approve.
-    #[ts(type = "number")]
-    pub revision: u64,
+    /// The session that started it; `None` is the user.
+    pub started_by: Option<String>,
+    /// Laid over the command's own for this run, e.g. a `PORT` of its own.
+    pub env: BTreeMap<String, String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, TS)]
@@ -126,6 +148,27 @@ pub struct ProcessUpdate {
 pub struct ProcessRef {
     pub workspace_id: String,
     pub id: String,
+    /// The run's worktree; absent is the main checkout. Ignored by the
+    /// commands that act on the definition (delete, reject).
+    #[serde(default)]
+    #[ts(optional)]
+    pub worktree: Option<String>,
+}
+
+/// Starts, or restarts, a command in a worktree.
+#[derive(Serialize, Deserialize, Clone, Debug, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
+pub struct ProcessStart {
+    pub workspace_id: String,
+    pub id: String,
+    #[serde(default)]
+    #[ts(optional)]
+    pub worktree: Option<String>,
+    /// Over the command's own, for this run. Absent on a restart keeps the last run's.
+    #[serde(default)]
+    #[ts(optional)]
+    pub env: Option<BTreeMap<String, String>>,
 }
 
 /// The user accepts a process, or a change to it, as it stood at `revision`.
@@ -154,6 +197,9 @@ pub struct ProcessReorder {
 pub struct ProcessLogTail {
     pub workspace_id: String,
     pub id: String,
+    #[serde(default)]
+    #[ts(optional)]
+    pub worktree: Option<String>,
     #[serde(default)]
     #[ts(optional)]
     pub max_bytes: Option<u32>,

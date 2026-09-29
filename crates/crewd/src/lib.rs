@@ -13,7 +13,7 @@ use crew_core::caller::Caller;
 use crew_core::files;
 use crew_core::messages;
 use crew_core::provider_session;
-use crew_core::process::{ProcessEvents, ProcessHost, ProcessPatch};
+use crew_core::process::{ProcessEvents, ProcessHost, ProcessPatch, RunRequest};
 use crew_core::process_tools::ProcessTools;
 use crew_core::pty::{PtyEvents, PtyHost, SpawnOptions};
 use crew_core::remote;
@@ -1475,8 +1475,15 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
         "worktree_remove" => {
             let WorktreeRemove { path, force } = parse(params)?;
             let store = hosts.store.clone();
+            let processes = hosts.processes.clone();
             let doomed = block(move || {
+                // Before git: a dev server still writing into it could leave
+                // files behind that make the removal refuse.
+                processes.forget_worktree(&path);
                 let listed = worktree::remove(&path, force)?;
+                if listed != path {
+                    processes.forget_worktree(&listed);
+                }
                 // Stored as the window had it, which is how git lists it; the
                 // path asked for is looked up too, in case they differ.
                 let mut ids = session::in_worktree(&store, &listed)?;
@@ -1737,23 +1744,35 @@ async fn process_rpc(hosts: &Hosts, method: &str, params: Value) -> Result<Value
             Ok(Value::Null)
         }
         "process_log_tail" => {
-            let proto::ProcessLogTail { workspace_id, id, max_bytes } = parse(params)?;
-            json(block(move || host.log_tail_raw(&workspace_id, &id, max_bytes)).await?)
+            let proto::ProcessLogTail { workspace_id, id, worktree, max_bytes } = parse(params)?;
+            json(block(move || host.log_tail_raw(&workspace_id, &id, worktree.as_deref(), max_bytes)).await?)
         }
         "process_approve" => {
             let proto::ProcessApprove { workspace_id, id, revision } = parse(params)?;
             json(block(move || host.approve(&workspace_id, &id, revision)).await?)
         }
+        // The window is the user: what it starts, nobody's session started.
+        "process_start" | "process_restart" => {
+            let proto::ProcessStart { workspace_id, id, worktree, env } = parse(params)?;
+            let request = RunRequest { worktree, env, started_by: None };
+            let restart = method == "process_restart";
+            block(move || {
+                json(if restart {
+                    host.restart(&workspace_id, &id, request)?
+                } else {
+                    host.start(&workspace_id, &id, request)?
+                })
+            })
+            .await
+        }
         _ => {
-            let proto::ProcessRef { workspace_id, id } = parse(params)?;
+            let proto::ProcessRef { workspace_id, id, worktree } = parse(params)?;
             let method = method.to_string();
             block(move || match method.as_str() {
                 "process_delete" => host.delete(&workspace_id, &id).map(|()| Value::Null),
-                "process_start" => json(host.start(&workspace_id, &id)?),
-                "process_stop" => json(host.stop(&workspace_id, &id)?),
-                "process_restart" => json(host.restart(&workspace_id, &id)?),
-                "process_pause" => json(host.pause(&workspace_id, &id)?),
-                "process_resume" => json(host.resume(&workspace_id, &id)?),
+                "process_stop" => json(host.stop(&workspace_id, &id, worktree.as_deref())?),
+                "process_pause" => json(host.pause(&workspace_id, &id, worktree.as_deref())?),
+                "process_resume" => json(host.resume(&workspace_id, &id, worktree.as_deref())?),
                 "process_reject" => json(host.reject(&workspace_id, &id)?),
                 other => Err(format!("Unknown method: {other}")),
             })
