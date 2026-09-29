@@ -31,7 +31,6 @@ pub struct ProcessSpec {
     /// Relative to the workspace folder, or absolute; empty is the folder itself.
     pub cwd: String,
     pub env: BTreeMap<String, String>,
-    pub auto_start: bool,
     pub auto_restart: bool,
 }
 
@@ -93,8 +92,6 @@ pub struct ProcessCreate {
     #[ts(optional)]
     pub env: Option<BTreeMap<String, String>>,
     #[serde(default)]
-    pub auto_start: bool,
-    #[serde(default)]
     pub auto_restart: bool,
 }
 
@@ -117,9 +114,6 @@ pub struct ProcessUpdate {
     #[serde(default)]
     #[ts(optional)]
     pub env: Option<BTreeMap<String, String>>,
-    #[serde(default)]
-    #[ts(optional)]
-    pub auto_start: Option<bool>,
     #[serde(default)]
     #[ts(optional)]
     pub auto_restart: Option<bool>,

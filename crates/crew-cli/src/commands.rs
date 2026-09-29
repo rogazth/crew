@@ -123,7 +123,7 @@ pub const GROUPS: &[Group] = &[
             verb("wait", "wait_for_log").pos(&["process", "pattern"]).eg("crew processes wait web 'ready|listening' --timeout-s 30"),
             verb("input", "send_input").rest(&["process", "text"]).eg("crew processes input web r\n  printf 'y\\r' | crew processes input setup -"),
             verb("add", "create_process").shape(Shape::AddProcess).eg(
-                "crew processes add web npm run dev\n  crew processes add api --cwd server --env PORT=4000 --auto-start -- cargo run",
+                "crew processes add web npm run dev\n  crew processes add api --cwd server --env PORT=4000 --auto-restart -- cargo run",
             ),
             verb("edit", "update_process").shape(Shape::EditProcess).eg(
                 "crew processes edit web --command 'npm run dev -- --port 3001'\n  crew processes edit web --auto-restart true",

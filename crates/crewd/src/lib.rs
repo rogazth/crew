@@ -52,7 +52,7 @@ pub struct Config {
     pub store: Store,
     pub agents: AgentHost,
     pub bridge: Bridge,
-    /// Built on the same store and PTY host; the daemon starts the ones marked auto-start.
+    /// Built on the same store and PTY host. Nothing in it starts on its own.
     pub processes: ProcessHost,
 }
 
@@ -673,10 +673,6 @@ async fn run(
     hosts.scheduler.set_runtime(tokio::runtime::Handle::current());
     let scheduler = hosts.scheduler.clone();
     tokio::task::spawn_blocking(move || scheduler.arm());
-    // Like routines, the daemon's to start: a dev server comes up with Crew,
-    // whether or not the window opens its workspace.
-    let processes = hosts.processes.clone();
-    tokio::task::spawn_blocking(move || processes.start_auto());
     // A lease nobody renews runs out on its own; this is how the window hears
     // it did, and unpins the tab.
     let leases = hosts.browser.leases().clone();
@@ -1720,21 +1716,19 @@ async fn process_rpc(hosts: &Hosts, method: &str, params: Value) -> Result<Value
             json(block(move || host.list(&workspace_id)).await?)
         }
         "process_create" => {
-            let proto::ProcessCreate { workspace_id, name, command, cwd, env, auto_start, auto_restart } = parse(params)?;
+            let proto::ProcessCreate { workspace_id, name, command, cwd, env, auto_restart } = parse(params)?;
             let spec = proto::ProcessSpec {
                 name,
                 command,
                 cwd: cwd.unwrap_or_default(),
                 env: env.unwrap_or_default(),
-                auto_start,
                 auto_restart,
             };
             json(block(move || host.create(&workspace_id, spec, None, false)).await?)
         }
         "process_update" => {
-            let proto::ProcessUpdate { workspace_id, id, name, command, cwd, env, auto_start, auto_restart } =
-                parse(params)?;
-            let patch = ProcessPatch { name, command, cwd, env, auto_start, auto_restart };
+            let proto::ProcessUpdate { workspace_id, id, name, command, cwd, env, auto_restart } = parse(params)?;
+            let patch = ProcessPatch { name, command, cwd, env, auto_restart };
             json(block(move || host.update(&workspace_id, &id, patch, None, false)).await?)
         }
         "process_reorder" => {

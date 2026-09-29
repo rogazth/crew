@@ -135,7 +135,7 @@ export type Step =
   // `kickstart -k`: SIGTERM to the one that does not answer, then a new one.
   | { do: "restart" }
   // Asked to exit (`daemon/shutdown`, so it stops its processes the usual
-  // way and the auto-start ones come back), then started.
+  // way), then started.
   | { do: "replace"; file: DaemonFile };
 
 // On launch. The one place a daemon of another version is replaced: the plist

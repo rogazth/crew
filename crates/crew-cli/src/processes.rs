@@ -254,11 +254,10 @@ fn matches_text(found: &Value, with_context: bool) -> Option<String> {
 }
 
 pub fn add(ctx: &Ctx, add: ProcAdd) -> Result<ExitCode, CliError> {
-    let ProcAdd { name, command, cwd, env, auto_start, auto_restart } = add;
+    let ProcAdd { name, command, cwd, env, auto_restart } = add;
     let mut arguments = json!({
         "name": name,
         "command": command.join(" "),
-        "auto_start": auto_start,
         "auto_restart": auto_restart,
     });
     if let Some(cwd) = cwd {
@@ -273,7 +272,7 @@ pub fn add(ctx: &Ctx, add: ProcAdd) -> Result<ExitCode, CliError> {
 }
 
 pub fn edit(ctx: &Ctx, edit: ProcEdit) -> Result<ExitCode, CliError> {
-    let ProcEdit { process, name, command, cwd, env, auto_start, auto_restart } = edit;
+    let ProcEdit { process, name, command, cwd, env, auto_restart } = edit;
     let mut changes = Map::new();
     let mut set = |key: &str, value: Option<Value>| {
         if let Some(value) = value {
@@ -284,10 +283,9 @@ pub fn edit(ctx: &Ctx, edit: ProcEdit) -> Result<ExitCode, CliError> {
     set("command", command.map(Value::from));
     set("cwd", cwd.map(Value::from));
     set("env", if env.is_empty() { None } else { Some(json!(parse_env(&env)?)) });
-    set("auto_start", auto_start.map(Value::from));
     set("auto_restart", auto_restart.map(Value::from));
     if changes.is_empty() {
-        return Err(CliError::Usage("Nothing to change: name at least one of --name, --command, --cwd, --env, --auto-start, --auto-restart.".into()));
+        return Err(CliError::Usage("Nothing to change: name at least one of --name, --command, --cwd, --env, --auto-restart.".into()));
     }
     changes.insert("process".into(), json!(process));
     let reply = ctx.client()?.run("update_process", Value::Object(changes))?;

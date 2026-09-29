@@ -401,14 +401,14 @@ revision: number, name: string, command: string,
 /**
  * Relative to the workspace folder, or absolute; empty is the folder itself.
  */
-cwd: string, env: { [key in string]: string }, autoStart: boolean, autoRestart: boolean, };
+cwd: string, env: { [key in string]: string }, autoRestart: boolean, };
 
 /**
  * The user accepts a process, or a change to it, as it stood at `revision`.
  */
 export type ProcessApprove = { workspaceId: string, id: string, revision: number, };
 
-export type ProcessCreate = { workspaceId: string, name: string, command: string, cwd?: string, env?: { [key in string]: string }, autoStart: boolean, autoRestart: boolean, };
+export type ProcessCreate = { workspaceId: string, name: string, command: string, cwd?: string, env?: { [key in string]: string }, autoRestart: boolean, };
 
 /**
  * The raw tail of a process's log, escapes and all, for a terminal to paint.
@@ -431,7 +431,7 @@ export type ProcessSpec = { name: string, command: string,
 /**
  * Relative to the workspace folder, or absolute; empty is the folder itself.
  */
-cwd: string, env: { [key in string]: string }, autoStart: boolean, autoRestart: boolean, };
+cwd: string, env: { [key in string]: string }, autoRestart: boolean, };
 
 /**
  * Where a supervised process stands. `PendingApproval` is a definition an
@@ -442,7 +442,7 @@ export type ProcessState = "stopped" | "starting" | "running" | "paused" | "exit
 /**
  * Only the fields present change.
  */
-export type ProcessUpdate = { workspaceId: string, id: string, name?: string, command?: string, cwd?: string, env?: { [key in string]: string }, autoStart?: boolean, autoRestart?: boolean, };
+export type ProcessUpdate = { workspaceId: string, id: string, name?: string, command?: string, cwd?: string, env?: { [key in string]: string }, autoRestart?: boolean, };
 
 export type ProjectFile = { name: string, path: string, relative: string, };
 

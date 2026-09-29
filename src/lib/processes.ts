@@ -141,7 +141,6 @@ const FIELDS: { key: keyof ProcessSpec; label: string }[] = [
   { key: "command", label: "Command" },
   { key: "cwd", label: "Folder" },
   { key: "env", label: "Environment" },
-  { key: "autoStart", label: "Start with Crew" },
   { key: "autoRestart", label: "Restart on crash" },
 ];
 
@@ -166,7 +165,6 @@ export function specOf(process: Process): ProcessSpec {
     command: process.command,
     cwd: process.cwd,
     env: process.env,
-    autoStart: process.autoStart,
     autoRestart: process.autoRestart,
   };
 }

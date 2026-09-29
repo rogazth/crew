@@ -142,9 +142,6 @@ pub struct ProcAdd {
     /// An environment variable, KEY=VALUE. Repeat for more.
     #[arg(long = "env", value_name = "KEY=VALUE")]
     pub env: Vec<String>,
-    /// Start it whenever Crew starts.
-    #[arg(long)]
-    pub auto_start: bool,
     /// Start it again when it exits on its own.
     #[arg(long)]
     pub auto_restart: bool,
@@ -164,8 +161,6 @@ pub struct ProcEdit {
     /// Replaces its environment: KEY=VALUE, repeated.
     #[arg(long = "env", value_name = "KEY=VALUE")]
     pub env: Vec<String>,
-    #[arg(long, value_name = "true|false")]
-    pub auto_start: Option<bool>,
     #[arg(long, value_name = "true|false")]
     pub auto_restart: Option<bool>,
 }
@@ -274,11 +269,11 @@ mod tests {
 
     #[test]
     fn processes_add_keeps_the_command_whole() {
-        let add: ProcAdd = verb(&["processes", "add", "api", "--env", "PORT=4000", "--auto-start", "--", "cargo", "run", "--release"]);
+        let add: ProcAdd = verb(&["processes", "add", "api", "--env", "PORT=4000", "--auto-restart", "--", "cargo", "run", "--release"]);
         assert_eq!(add.name, "api");
         assert_eq!(add.command, ["cargo", "run", "--release"]);
         assert_eq!(add.env, ["PORT=4000"]);
-        assert!(add.auto_start);
+        assert!(add.auto_restart);
     }
 
     #[test]

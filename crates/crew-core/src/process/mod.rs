@@ -147,8 +147,6 @@ pub struct ProcessPatch {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub env: Option<BTreeMap<String, String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub auto_start: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_restart: Option<bool>,
 }
 
@@ -159,7 +157,6 @@ impl ProcessPatch {
             command: self.command.clone().unwrap_or_else(|| spec.command.clone()),
             cwd: self.cwd.clone().unwrap_or_else(|| spec.cwd.clone()),
             env: self.env.clone().unwrap_or_else(|| spec.env.clone()),
-            auto_start: self.auto_start.unwrap_or(spec.auto_start),
             auto_restart: self.auto_restart.unwrap_or(spec.auto_restart),
         }
     }
@@ -174,7 +171,6 @@ impl ProcessPatch {
             command: changed(&from.command, &to.command),
             cwd: changed(&from.cwd, &to.cwd),
             env: changed(&from.env, &to.env),
-            auto_start: changed(&from.auto_start, &to.auto_start),
             auto_restart: changed(&from.auto_restart, &to.auto_restart),
         }
     }
@@ -186,7 +182,6 @@ impl ProcessPatch {
             command: later.command.clone().or_else(|| self.command.clone()),
             cwd: later.cwd.clone().or_else(|| self.cwd.clone()),
             env: later.env.clone().or_else(|| self.env.clone()),
-            auto_start: later.auto_start.or(self.auto_start),
             auto_restart: later.auto_restart.or(self.auto_restart),
         }
     }
@@ -205,7 +200,6 @@ impl ProcessPatch {
             command: keep(&self.command, &other.command),
             cwd: keep(&self.cwd, &other.cwd),
             env: keep(&self.env, &other.env),
-            auto_start: keep(&self.auto_start, &other.auto_start),
             auto_restart: keep(&self.auto_restart, &other.auto_restart),
         }
     }
@@ -434,9 +428,9 @@ impl ProcessHost {
                 |row| row.get(0),
             )?;
             conn.execute(
-                "INSERT INTO processes (id, workspace_id, name, command, cwd, env_json, auto_start,
+                "INSERT INTO processes (id, workspace_id, name, command, cwd, env_json,
                    auto_restart, created_by, sort_order, approved, requested_by, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?13)",
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?12)",
                 params![
                     id,
                     workspace_id,
@@ -444,7 +438,6 @@ impl ProcessHost {
                     spec.command,
                     spec.cwd,
                     env,
-                    spec.auto_start,
                     spec.auto_restart,
                     created_by,
                     order,
@@ -534,8 +527,8 @@ impl ProcessHost {
             .store
             .with(|conn| {
                 conn.execute(
-                    "UPDATE processes SET name = ?2, command = ?3, cwd = ?4, env_json = ?5, auto_start = ?6,
-                       auto_restart = ?7, approved = ?8, proposed_json = ?9, requested_by = ?10, updated_at = ?11,
+                    "UPDATE processes SET name = ?2, command = ?3, cwd = ?4, env_json = ?5,
+                       auto_restart = ?6, approved = ?7, proposed_json = ?8, requested_by = ?9, updated_at = ?10,
                        revision = revision + 1 WHERE id = ?1",
                     params![
                         id,
@@ -543,7 +536,6 @@ impl ProcessHost {
                         spec.command,
                         spec.cwd,
                         env,
-                        spec.auto_start,
                         spec.auto_restart,
                         approved,
                         proposal,
@@ -608,9 +600,6 @@ impl ProcessHost {
         self.write_spec(&def.id, &next, true, None, None)?;
         drop(edits);
         self.emit(&def.id);
-        if first && next.auto_start {
-            return self.start(workspace_id, &def.id);
-        }
         self.get(workspace_id, &def.id)
     }
 
@@ -928,22 +917,6 @@ impl ProcessHost {
             return Err(format!("\"{}\" is not running", def.spec.name));
         }
         self.inner.pty.write(&pty_id(&def.id), text.as_bytes())
-    }
-
-    /// Every approved process marked `auto_start`, in every workspace.
-    pub fn start_auto(&self) {
-        let due = self.inner.store.with(|conn| {
-            let mut stmt = conn.prepare(&format!(
-                "{SELECT} WHERE auto_start = 1 AND approved = 1 ORDER BY sort_order ASC"
-            ))?;
-            let rows = stmt.query_map([], row_to_def)?;
-            rows.collect::<rusqlite::Result<Vec<_>>>()
-        });
-        for def in due.unwrap_or_default() {
-            if let Err(error) = self.start(&def.workspace_id, &def.id) {
-                eprintln!("[process] {}: auto start failed: {error}", def.spec.name);
-            }
-        }
     }
 
     /// Before the workspace's rows go: its processes must not outlive it.
@@ -1290,12 +1263,13 @@ impl ProcessHost {
     }
 }
 
-const SELECT: &str = "SELECT id, workspace_id, name, command, cwd, env_json, auto_start, auto_restart,
+/// `auto_start` stays in the table unread: nothing starts on its own anymore.
+const SELECT: &str = "SELECT id, workspace_id, name, command, cwd, env_json, auto_restart,
   created_by, approved, proposed_json, requested_by, revision FROM processes";
 
 fn row_to_def(row: &rusqlite::Row) -> rusqlite::Result<Def> {
     let env: String = row.get(5)?;
-    let proposed: Option<String> = row.get(10)?;
+    let proposed: Option<String> = row.get(9)?;
     Ok(Def {
         id: row.get(0)?,
         workspace_id: row.get(1)?,
@@ -1304,14 +1278,13 @@ fn row_to_def(row: &rusqlite::Row) -> rusqlite::Result<Def> {
             command: row.get(3)?,
             cwd: row.get(4)?,
             env: serde_json::from_str(&env).unwrap_or_default(),
-            auto_start: row.get(6)?,
-            auto_restart: row.get(7)?,
+            auto_restart: row.get(6)?,
         },
-        created_by: row.get(8)?,
-        approved: row.get(9)?,
+        created_by: row.get(7)?,
+        approved: row.get(8)?,
         proposed: proposed.and_then(|json| serde_json::from_str(&json).ok()),
-        requested_by: row.get(11)?,
-        revision: row.get::<_, i64>(12)?.max(0) as u64,
+        requested_by: row.get(10)?,
+        revision: row.get::<_, i64>(11)?.max(0) as u64,
     })
 }
 

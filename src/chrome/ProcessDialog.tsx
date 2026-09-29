@@ -12,7 +12,7 @@ type Props = {
   onSaved?: ((process: Process) => void) | undefined;
 };
 
-const EMPTY: ProcessSpec = { name: "", command: "", cwd: "", env: {}, autoStart: false, autoRestart: false };
+const EMPTY: ProcessSpec = { name: "", command: "", cwd: "", env: {}, autoRestart: false };
 
 /** A command's definition. The user writes it, so it runs without asking anyone. */
 export function ProcessDialog({ workspaceId, process, onClose, onSaved }: Props) {
@@ -21,7 +21,6 @@ export function ProcessDialog({ workspaceId, process, onClose, onSaved }: Props)
   const [command, setCommand] = useState(initial.command);
   const [cwd, setCwd] = useState(initial.cwd);
   const [envText, setEnvText] = useState(() => formatEnv(initial.env));
-  const [autoStart, setAutoStart] = useState(initial.autoStart);
   const [autoRestart, setAutoRestart] = useState(initial.autoRestart);
   const [failure, setFailure] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -32,7 +31,7 @@ export function ProcessDialog({ workspaceId, process, onClose, onSaved }: Props)
 
   async function save() {
     if (!ready || busy || env.env === null) return;
-    const spec: ProcessSpec = { name: name.trim(), command: command.trim(), cwd: cwd.trim(), env: env.env, autoStart, autoRestart };
+    const spec: ProcessSpec = { name: name.trim(), command: command.trim(), cwd: cwd.trim(), env: env.env, autoRestart };
     setBusy(true);
     setFailure(null);
     try {
@@ -90,7 +89,6 @@ export function ProcessDialog({ workspaceId, process, onClose, onSaved }: Props)
           />
         </Field>
         <div className="-my-1 flex flex-col">
-          <Toggle label="Start with Crew" description="Starts whenever Crew opens." checked={autoStart} onChange={setAutoStart} />
           <Toggle
             label="Restart on crash"
             description="Waits longer after each crash. Five in two minutes and it stays down."

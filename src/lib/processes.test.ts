@@ -23,7 +23,6 @@ function process(patch: Partial<Process> = {}): Process {
     command: "npm run dev",
     cwd: "",
     env: {},
-    autoStart: false,
     autoRestart: false,
     createdBy: null,
     approved: true,

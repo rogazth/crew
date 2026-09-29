@@ -79,7 +79,7 @@ async fn processes_answer_the_json_the_renderer_sends() {
         &mut seen,
         2,
         "process_create",
-        json!({ "workspaceId": workspace_id, "name": "web", "command": "echo up; sleep 30", "autoStart": false, "autoRestart": true }),
+        json!({ "workspaceId": workspace_id, "name": "web", "command": "echo up; sleep 30", "autoRestart": true }),
     )
     .await
     .expect("create");
@@ -213,7 +213,6 @@ async fn approve_carries_the_revision() {
         command: "echo hi".into(),
         cwd: String::new(),
         env: Default::default(),
-        auto_start: false,
         auto_restart: false,
     };
     let asked = agent.create(&workspace_id, spec, Some("session-1".into()), true).expect("create");

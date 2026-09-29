@@ -41,7 +41,6 @@ fn spec_properties() -> Value {
         "command": { "type": "string", "description": "Run by the user's shell, so pipes, && and globs work as typed, e.g. \"npm run dev\"." },
         "cwd": { "type": "string", "description": "Relative to the workspace folder, or absolute. Empty is the folder itself." },
         "env": { "type": "object", "additionalProperties": { "type": "string" }, "description": "Extra environment variables." },
-        "auto_start": { "type": "boolean", "description": "Start it whenever Crew starts." },
         "auto_restart": { "type": "boolean", "description": "Restart it when it exits on its own, backing off from 1 s to 30 s; five crashes in two minutes leave it crashed." }
     })
 }
@@ -207,7 +206,6 @@ impl ToolFamily for ProcessTools {
                     command: string(args, "command")?.ok_or("command is required")?,
                     cwd: string(args, "cwd")?.unwrap_or_default(),
                     env: env(args)?.unwrap_or_default(),
-                    auto_start: flag(args, "auto_start")?.unwrap_or(false),
                     auto_restart: flag(args, "auto_restart")?.unwrap_or(false),
                 };
                 let by = caller.session_id().map(str::to_string);
@@ -219,7 +217,6 @@ impl ToolFamily for ProcessTools {
                     command: string(args, "command")?,
                     cwd: string(args, "cwd")?,
                     env: env(args)?,
-                    auto_start: flag(args, "auto_start")?,
                     auto_restart: flag(args, "auto_restart")?,
                 };
                 let by = caller.session_id().map(str::to_string);
@@ -308,7 +305,6 @@ impl ProcessTools {
             "pid": process.pid,
             "exit_code": process.exit_code,
             "restarts": process.restarts,
-            "auto_start": process.spec.auto_start,
             "auto_restart": process.spec.auto_restart,
             "created_by": self.who(process.created_by.as_deref()),
             "log_cursor": process.log_cursor
@@ -339,7 +335,6 @@ impl ProcessTools {
                 "command": proposed.command,
                 "cwd": proposed.cwd,
                 "env": proposed.env,
-                "auto_start": proposed.auto_start,
                 "auto_restart": proposed.auto_restart
             });
         }

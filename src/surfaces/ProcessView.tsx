@@ -143,12 +143,8 @@ function ApprovalCard({ process, sessions, processes }: { process: Process; sess
               <dd className="font-mono whitespace-pre-wrap">{formatEnv(process.env)}</dd>
             </>
           )}
-          <dt className="text-text-muted">Starts</dt>
-          <dd>
-            {[process.autoStart ? "with Crew" : "by hand", process.autoRestart ? "restarts on crash" : null]
-              .filter(Boolean)
-              .join(", ")}
-          </dd>
+          <dt className="text-text-muted">On crash</dt>
+          <dd>{process.autoRestart ? "Restarts" : "Stays down"}</dd>
         </dl>
       )}
       <div className="flex gap-2">
