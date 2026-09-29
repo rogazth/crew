@@ -1,4 +1,4 @@
-import { PauseIcon, PencilIcon, PlayIcon, RotateCwIcon, SquareIcon, Trash2Icon } from "lucide-react";
+import { PencilIcon, PlayIcon, RotateCwIcon, SquareIcon, Trash2Icon } from "lucide-react";
 import { useState } from "react";
 import type { Confirm } from "../chrome/ConfirmDialog";
 import { Button, IconButton } from "../chrome/kit";
@@ -53,9 +53,6 @@ export function ProcessView({ processId, processes, sessions, onConfirm }: Props
         </div>
         {!asking && (
           <div className="flex shrink-0 items-center gap-0.5">
-            {process.state === "running" && (
-              <IconButton icon={PauseIcon} label="Pause" title="Pause" onClick={() => void run("pause", process)} />
-            )}
             {process.state === "paused" && (
               <IconButton icon={PlayIcon} label="Resume" title="Resume" onClick={() => void run("resume", process)} />
             )}

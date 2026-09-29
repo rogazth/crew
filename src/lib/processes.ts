@@ -80,7 +80,6 @@ export function stateTone(process: Process): Tone {
 const START: MenuAction = { id: "start", label: "Start", icon: "play", hotkey: "S" };
 const STOP: MenuAction = { id: "stop", label: "Stop", icon: "stop", hotkey: "S" };
 const RESTART: MenuAction = { id: "restart", label: "Restart", icon: "reopen", hotkey: "R" };
-const PAUSE: MenuAction = { id: "pause", label: "Pause", icon: "pause", hotkey: "P" };
 const RESUME: MenuAction = { id: "resume", label: "Resume", icon: "play", hotkey: "P" };
 const APPROVE: MenuAction = { id: "approve", label: "Approve", icon: "read", hotkey: "A" };
 const REJECT: MenuAction = { id: "reject", label: "Reject", icon: "close", hotkey: "X" };
@@ -96,7 +95,8 @@ export function processActions(process: Process): MenuEntry[] {
     ...(awaitsUser(process) ? [APPROVE, REJECT, SEPARATOR] : []),
     ...(live ? [STOP] : process.approved ? [START] : []),
     ...(running || paused ? [RESTART] : []),
-    ...(running ? [PAUSE] : paused ? [RESUME] : []),
+    // Pausing is left to agents; one they paused, the user can still wake.
+    ...(paused ? [RESUME] : []),
     SEPARATOR,
     EDIT_PROCESS,
     COPY_COMMAND,

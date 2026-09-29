@@ -89,7 +89,6 @@ describe("processes", () => {
     expect(ids(process({ state: "running" }))).toEqual([
       "stop",
       "restart",
-      "pause",
       "|",
       "edit",
       "copy-command",

@@ -22,8 +22,7 @@ export type MenuIcon =
   | "collapse"
   | "expand"
   | "play"
-  | "stop"
-  | "pause";
+  | "stop";
 
 export type MenuAction = {
   id: string;

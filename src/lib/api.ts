@@ -294,7 +294,7 @@ export const createProcess = (workspaceId: string, spec: ProcessSpec): Promise<P
 export const updateProcess = (workspaceId: string, id: string, patch: Partial<ProcessSpec>): Promise<Process> =>
   client.request("process_update", { workspaceId, id, ...patch });
 
-export type ProcessCommand = "start" | "stop" | "restart" | "pause" | "resume" | "reject" | "delete";
+export type ProcessCommand = "start" | "stop" | "restart" | "resume" | "reject" | "delete";
 
 /** Stop waits for the exit, which can take the whole grace period. */
 export const processCommand = (command: ProcessCommand, workspaceId: string, id: string): Promise<Process | null> =>
