@@ -53,7 +53,15 @@ mod tests {
         assert!(refused.contains("another crewd is already using"), "{refused}");
 
         drop(first);
-        assert!(DataLock::acquire(&dir).is_ok());
+        // A child another test forks meanwhile holds the descriptor until its
+        // exec closes it, and the lock with it: that takes a moment, not more.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        let mut again = DataLock::acquire(&dir);
+        while again.is_err() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            again = DataLock::acquire(&dir);
+        }
+        assert!(again.is_ok(), "{:?}", again.err());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

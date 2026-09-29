@@ -1125,16 +1125,13 @@ mod tests {
         assert!(inherited > 2);
         // A second terminal open at the same time, as another tab's would be.
         let (other_master, mut other) = pty_child("exec sleep 30");
-        let (master, mut child) = pty_child("exec ls /dev/fd");
-        let mut out = Vec::new();
-        let mut buf = [0_u8; 4096];
-        loop {
-            let n = unsafe { libc::read(master, buf.as_mut_ptr().cast(), buf.len()) };
-            if n <= 0 {
-                break;
-            }
-            out.extend_from_slice(&buf[..n as usize]);
-        }
+        // Read from outside, off a child that opens nothing itself: `ls
+        // /dev/fd` opens one or two of its own, by macOS version, and a shell
+        // under a terminal keeps one of its own too.
+        let (master, mut child) = pty_child("exec sleep 30");
+        thread::sleep(Duration::from_millis(200));
+        let fds = open_fds(child.id());
+        let _ = child.kill();
         let _ = child.wait();
         close_fd(master);
         close_fd(other_master);
@@ -1142,11 +1139,30 @@ mod tests {
         let _ = other.wait();
         close_fd(inherited);
 
-        let listing = String::from_utf8_lossy(&out).into_owned();
-        let fds: Vec<i32> = listing.split_whitespace().filter_map(|fd| fd.parse().ok()).collect();
-        assert!(fds.contains(&0) && fds.contains(&2), "no listing: {listing:?}");
-        // 3 is the directory ls itself opened to list /dev/fd.
-        assert!(fds.iter().all(|fd| *fd <= 3), "the child kept {fds:?}");
+        assert!(fds.contains(&0) && fds.contains(&2), "no listing: {fds:?}");
+        assert!(fds.iter().all(|fd| *fd <= 2), "the child kept {fds:?}");
+    }
+
+    /// The descriptors another process has open, as its kernel lists them.
+    fn open_fds(pid: u32) -> Vec<i32> {
+        #[cfg(target_os = "linux")]
+        {
+            std::fs::read_dir(format!("/proc/{pid}/fd"))
+                .expect("proc fd")
+                .filter_map(|entry| entry.ok()?.file_name().to_str()?.parse().ok())
+                .collect()
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let out = std::process::Command::new("lsof")
+                .args(["-a", "-p", &pid.to_string(), "-d", "0-65535", "-F", "f"])
+                .output()
+                .expect("lsof");
+            String::from_utf8_lossy(&out.stdout)
+                .lines()
+                .filter_map(|line| line.strip_prefix('f')?.parse().ok())
+                .collect()
+        }
     }
 
     #[test]

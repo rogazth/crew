@@ -6,8 +6,14 @@ use futures_util::{SinkExt, StreamExt};
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::Message;
 
+/// Without the session a Crew terminal hands its children: run from one, a
+/// test would otherwise speak for that session.
 fn crewd() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_crewd"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_crewd"));
+    for (key, _) in std::env::vars().filter(|(key, _)| key.starts_with("CREW_")) {
+        command.env_remove(key);
+    }
+    command
 }
 
 fn data_dir(name: &str) -> std::path::PathBuf {

@@ -368,8 +368,12 @@ test("a new terminal on another machine shows its output once", { skip: !process
     await openOnMachine(crew, "devbox", api, "api");
     const workspace = await remoteWorkspace(remote, api);
     await crew.window.evaluate(async () => {
-      const { Connection } = (await import(/* @vite-ignore */ "/src/lib/client/connection.ts")) as typeof import("../src/lib/client/connection.ts");
-      const shown = ((window as unknown as { __shown?: Record<number, number> }).__shown = {});
+      // Served by the dev server, not resolved here: typed by the one method it patches.
+      type Streams = { openStream(id: number, onBytes: (bytes: Uint8Array) => void): unknown };
+      const url = "/src/lib/client/connection.ts";
+      const { Connection } = (await import(/* @vite-ignore */ url)) as { Connection: { prototype: Streams } };
+      const shown: Record<number, number> = {};
+      (window as unknown as { __shown?: Record<number, number> }).__shown = shown;
       const open = Connection.prototype.openStream;
       Connection.prototype.openStream = function (id, onBytes) {
         return open.call(this, id, (bytes) => {

@@ -108,7 +108,7 @@ function cookiesIn(incognito: boolean): Promise<string[]> {
 }
 
 function lastVisit(path: string): Visit {
-  const visit = visits.findLast((v) => v.path === path);
+  const visit = visits.filter((v) => v.path === path).at(-1);
   assert.ok(visit, `${path} was visited`);
   return visit;
 }

@@ -2131,7 +2131,9 @@ mod mailbox_tests {
         std::thread::sleep(Duration::from_millis(100));
         let (tx, rx) = std::sync::mpsc::channel();
         let armed = host.clone();
-        std::thread::spawn(move || armed.after(Duration::from_millis(1), move || drop(tx.send(()))));
+        std::thread::spawn(move || armed.after(Duration::from_millis(1), move || {
+            let _ = tx.send(());
+        }));
         assert!(
             rx.recv_timeout(Duration::from_secs(3)).is_ok(),
             "a timer armed while another session waits never fired"

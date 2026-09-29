@@ -2480,7 +2480,7 @@ mod tests {
             }),
         );
         let text = reply["result"]["content"][0]["text"].as_str().unwrap_or("");
-        assert!(text.contains("pending-approval"), "{reply}");
+        assert!(text.contains("waiting for the user to approve it"), "{reply}");
         handle.shutdown();
     }
 

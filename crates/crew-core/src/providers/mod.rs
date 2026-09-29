@@ -341,7 +341,6 @@ mod tests {
         assert_eq!(unwrap_shell("zshrc -lc x"), "zshrc -lc x");
     }
 
-    #[test]
     /// Measured, not guessed: codex reports `crew.message_agent`, and the row
     /// it produced carried a dump of the tool's result where the chat wanted
     /// "wrote to Cuddles: the branch is green".
