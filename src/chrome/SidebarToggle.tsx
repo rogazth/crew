@@ -5,7 +5,7 @@ import { IS_MAC } from "../lib/hotkey";
 /**
  * One toggle for both states, pinned to the window rather than to the sidebar
  * or the tab strip, so collapsing never moves it. Its centre sits on the
- * traffic lights' line, a pixel under the strip's middle.
+ * traffic lights' line, on the strip's middle.
  */
 export function SidebarToggle({ onClick }: { onClick: () => void }) {
   return (
@@ -15,7 +15,7 @@ export function SidebarToggle({ onClick }: { onClick: () => void }) {
       aria-label="Toggle sidebar"
       title={`Toggle sidebar ${commandKeys("toggle-sidebar")}`}
       onClick={onClick}
-      className={`fixed top-[7px] z-40 grid size-7 place-items-center rounded-md text-icon outline-none transition-colors hover:bg-hover hover:text-text focus-visible:bg-hover ${
+      className={`fixed top-[6px] z-40 grid size-7 place-items-center rounded-md text-icon outline-none transition-colors hover:bg-hover hover:text-text focus-visible:bg-hover ${
         IS_MAC ? "left-[80px]" : "left-2"
       }`}
     >
