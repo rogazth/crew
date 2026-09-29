@@ -67,6 +67,9 @@ test("a cold tab keeps its title and favicon after the window reloads", async ()
   await waitFor(async () => (await face(first)).icon === 1, { message: "the cold tab shows its saved favicon" });
   await pill(first).click();
   await waitFor(async () => (await face(first)).text.includes("Title /one"), { message: "the title comes back" });
+  // The pill shows a spinner in the icon's place while the page loads, and the
+  // title can come back before it finishes: the icon is waited for, not sampled.
+  await waitFor(async () => (await face(first)).icon === 1, { message: "the favicon comes back" });
   const after = await face(first);
   assert.ok(after.text.includes("Title /one"), `title lost: ${JSON.stringify(after)}`);
   assert.equal(after.icon, 1, `favicon lost: ${JSON.stringify(after)}`);
