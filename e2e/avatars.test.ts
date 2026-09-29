@@ -81,9 +81,19 @@ test("A1: the avatar style and a face picked for one agent survive a restart", a
     return face !== born && face;
   }, { message: "the agent's face is drawn in the new style" });
 
-  // Change Face…: a new hand, one face from it, saved.
+  // Agent Settings…: a new hand, one face from it, saved. The sidebar slides
+  // back from Settings first, and a card mid-slide is off screen.
+  await waitFor(
+    () =>
+      card(crew, "Scout").evaluate((node) => {
+        const box = node.getBoundingClientRect();
+        return box.left >= 0 && box.right <= window.innerWidth && box.width > 0;
+      }),
+    { message: "the sidebar is back on screen" },
+  );
+  // Forced: the sortable wrapper says aria-disabled while dragging is off.
   await card(crew, "Scout").click({ button: "right", force: true });
-  await page.getByRole("menuitem", { name: "Change Face…" }).click();
+  await page.getByRole("menuitem", { name: "Agent Settings…" }).click();
   const settings = page.getByRole("dialog", { name: "Agent settings" });
   await settings.waitFor();
   const before = ((await stored(crew, "agent:faces")) ?? {}) as Faces;

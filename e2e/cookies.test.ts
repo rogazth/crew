@@ -137,7 +137,8 @@ test("imported cookies reach only the workspace they were imported into", async 
   // beta's page never sees it.
   await crew.window
     .locator('nav[aria-label="Workspaces"][data-sidebar-rail]')
-    .locator(`button[aria-label="${beta.name}"][title$="${beta.path}"]`)
+    // The mark names the workspace; its path is on the hover card now, not a title.
+    .locator(`button[data-nav][aria-label="${beta.name}"]`)
     .click();
   await openPage(`${origin}/beta`);
   const visit = await waitFor(() => visits.find((v) => v.path === "/beta"), { message: "beta's page loads" });
