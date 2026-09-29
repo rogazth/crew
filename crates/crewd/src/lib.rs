@@ -859,13 +859,24 @@ fn enqueue_pty_input(
     data: Vec<u8>,
 ) {
     let mut map = pty_in.lock().unwrap_or_else(|e| e.into_inner());
-    if let Some(tx) = map.get(&stream_id) {
-        if tx.try_send(data).is_err() {
-            drop(map);
-            emit_pty_error(hub, &hosts.pty, stream_id, "Terminal is not accepting input");
-        }
-        return;
-    }
+    let data = match map.get(&stream_id) {
+        None => data,
+        Some(tx) => match tx.try_send(data) {
+            Ok(()) => return,
+            Err(mpsc::error::TrySendError::Full(_)) => {
+                drop(map);
+                emit_pty_error(hub, &hosts.pty, stream_id, "Terminal is not accepting input");
+                return;
+            }
+            // Its drain gave up on a stream that ended. Stream ids start over
+            // with the daemon, so a new terminal can come to hold this one: it
+            // gets a queue of its own rather than the dead one's refusal.
+            Err(mpsc::error::TrySendError::Closed(data)) => {
+                map.remove(&stream_id);
+                data
+            }
+        },
+    };
     let (tx, rx) = mpsc::channel(32);
     if tx.try_send(data).is_err() {
         drop(map);
