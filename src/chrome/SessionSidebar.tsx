@@ -246,10 +246,22 @@ export function SessionSidebar(props: SessionSidebarProps) {
     setMenu({ kind: "session", point, session });
   };
 
+  // A click while one runs asks for another after it: what changed meanwhile
+  // may have been read before it happened.
+  const again = useRef(false);
   const refresh = () => {
-    if (refreshing) return;
+    if (refreshing) {
+      again.current = true;
+      return;
+    }
     setRefreshing(true);
-    void props.onRefresh().finally(() => setRefreshing(false));
+    const run = (): Promise<void> =>
+      props.onRefresh().then(() => {
+        if (!again.current) return;
+        again.current = false;
+        return run();
+      });
+    void run().finally(() => setRefreshing(false));
   };
 
   const closeSearch = () => {
