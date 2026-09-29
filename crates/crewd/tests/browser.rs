@@ -19,9 +19,12 @@ fn daemon(name: &str) -> Handle {
     let dir = std::env::temp_dir().join(format!("crewd-browser-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("dir");
+    let pty = PtyHost::new();
+    let store = Store::open(dir.join("crew.sqlite3")).expect("store");
     serve(Config {
-        pty: PtyHost::new(),
-        store: Store::open(dir.join("crew.sqlite3")).expect("store"),
+        processes: crew_core::process::ProcessHost::new(store.clone(), pty.clone(), &dir),
+        pty,
+        store,
         agents: AgentHost::new(),
         bridge: Bridge::start(dir).expect("bridge"),
     })

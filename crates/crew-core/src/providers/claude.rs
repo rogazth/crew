@@ -20,6 +20,12 @@ pub struct ClaudeSpawn {
     pub mcp_config: Option<String>,
 }
 
+/// The `--mcp-config` value that starts Crew's MCP server. Claude merges it
+/// with the user's own servers unless `--strict-mcp-config` is also passed.
+pub fn claude_mcp_config(command: &str, args: &[String]) -> String {
+    json!({ "mcpServers": { "crew": { "command": command, "args": args } } }).to_string()
+}
+
 pub fn build_claude_spawn_args(input: &ClaudeSpawn) -> Vec<String> {
     let mut args = vec![
         "--output-format".into(),
@@ -521,7 +527,7 @@ pub fn is_compact_boundary(rec: &Map<String, Value>) -> bool {
 }
 
 pub fn tool_label(name: &str, input: &Map<String, Value>) -> String {
-    if let Some(verb_raw) = name.strip_prefix("mcp__crew__") {
+    if let Some((verb_raw, input)) = name.strip_prefix("mcp__crew__").and(super::crew_call(name, input)) {
         if !verb_raw.is_empty()
             && verb_raw
                 .chars()
@@ -704,7 +710,7 @@ pub fn tool_result_detail(name: &str, input: &Map<String, Value>, content: &str)
     // The message row already shows the message. Its result is the delivery
     // receipt, and the input that would rebuild the row is no longer in hand
     // by then, so this kept replacing the message with its own receipt.
-    if super::crew_tool(name) == Some("message_agent") {
+    if super::crew_call(name, input).map(|(verb, _)| verb) == Some("message_agent") {
         return None;
     }
     let text = || Some(content.to_string()).filter(|body| !body.trim().is_empty());

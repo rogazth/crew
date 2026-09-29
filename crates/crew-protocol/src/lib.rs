@@ -4,10 +4,12 @@ use ts_rs::TS;
 
 mod blocks;
 mod messages;
+mod processes;
 mod sessions;
 mod turns;
 pub use blocks::*;
 pub use messages::*;
+pub use processes::*;
 pub use sessions::*;
 pub use turns::*;
 
@@ -52,6 +54,25 @@ pub struct Event {
 pub struct DaemonInfo {
     pub url: String,
     pub token: String,
+}
+
+/// `<data-dir>/daemon.json`, mode 0600: how something that did not launch the
+/// daemon finds it. `url` and `token` are the window's WebSocket, `socket` is
+/// the tool bridge, and `userToken` speaks on that bridge as the user rather
+/// than as a session. Written once the daemon is up, removed when it stops
+/// cleanly, so a file left behind means one that died.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct DaemonFile {
+    pub url: String,
+    pub token: String,
+    pub socket: String,
+    pub user_token: String,
+    pub version: String,
+    /// The daemon's own process, for `crew daemon stop`. Optional so a file a
+    /// daemon without it wrote still reads.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pid: Option<u32>,
 }
 
 /// Bumped when a client and a daemon from different builds can no longer
@@ -155,6 +176,12 @@ pub struct PtySpawn {
     pub command: Vec<String>,
     pub cols: u16,
     pub rows: u16,
+    /// The terminal session this process runs. The daemon completes the argv
+    /// and the environment so the CLI reaches Crew's tools: the client cannot,
+    /// because in remote mode the bridge's socket and binary are not its own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub session: Option<String>,
     /// Keep a live process under this id instead of replacing it: a window
     /// opening again finds the agent it left running.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -741,4 +768,107 @@ pub struct CookieRead {
     /// that holds them. Only a sign-in in Crew brings those over.
     #[serde(default)]
     pub google: u32,
+}
+
+/// Where a tab an agent drives sits, so the window can mount it when it is
+/// cold or its workspace was never opened.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
+pub struct BrowserPageRef {
+    /// The tab strip: the workspace id, or `<workspace>@<worktree path>`.
+    pub context: String,
+    pub url: String,
+    pub title: String,
+}
+
+/// crewd → the browser host (Electron main), as the `browser-call` event: run
+/// one tool on one tab and answer with `browser_result`.
+#[derive(Serialize, Deserialize, Clone, Debug, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
+pub struct BrowserCall {
+    #[ts(type = "number")]
+    pub call_id: u64,
+    pub tab: String,
+    pub tool: String,
+    #[ts(type = "unknown")]
+    pub args: Value,
+    #[serde(default)]
+    #[ts(optional)]
+    pub page: Option<BrowserPageRef>,
+    /// Milliseconds since the epoch past which crewd has stopped waiting and
+    /// told the caller the call failed. A call still queued behind the tab's
+    /// earlier ones by then is skipped, not run late.
+    #[ts(type = "number")]
+    pub deadline: i64,
+}
+
+/// The host's answer to one `browser-call`. `result` is an array of MCP
+/// content blocks (text or image).
+#[derive(Serialize, Deserialize, Clone, Debug, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
+pub struct BrowserResult {
+    #[ts(type = "number")]
+    pub call_id: u64,
+    pub ok: bool,
+    #[serde(default)]
+    #[ts(optional, type = "unknown")]
+    pub result: Option<Value>,
+    #[serde(default)]
+    #[ts(optional)]
+    pub error: Option<String>,
+}
+
+/// Who is driving a tab, and until when unless they call again.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
+pub struct BrowserLease {
+    pub tab: String,
+    pub workspace_id: String,
+    /// What the holder is called: an agent's or a terminal's name, or "you".
+    pub holder: String,
+    /// The session behind it, for its face; none when it is the user.
+    #[serde(default)]
+    #[ts(optional)]
+    pub session_id: Option<String>,
+    /// Milliseconds since the epoch, as of the list it came in. Renewals are
+    /// not announced, so this only says the lease lasts at least that long:
+    /// a lease is over when a newer list leaves it out, not at `until`.
+    #[ts(type = "number")]
+    pub until: i64,
+}
+
+/// Every lease there is, as the `browser-leases` event and `browser_leases_list`.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
+pub struct BrowserLeases {
+    /// Higher is newer, across daemon restarts too. Lists can arrive out of
+    /// order (an event overtaking a reply, two changes racing to the hub), so
+    /// a client drops any list numbered below the newest it has kept.
+    #[ts(type = "number")]
+    pub seq: u64,
+    pub leases: Vec<BrowserLease>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
+pub struct BrowserTabArg {
+    pub tab: String,
+}
+
+/// A browser tool run as the user, from the window or `crew`.
+#[derive(Serialize, Deserialize, Clone, Debug, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
+pub struct BrowserToolRun {
+    pub workspace_id: String,
+    pub tool: String,
+    #[serde(default)]
+    #[ts(type = "unknown")]
+    pub args: Value,
 }

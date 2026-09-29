@@ -820,14 +820,19 @@ function on(event: string, listener: Listener): () => void {
   };
 }
 
-function openStream(id: number, onBytes: (bytes: Uint8Array) => void): () => void {
+/**
+ * `replay` false drops what arrived before: a viewer about to attach gets
+ * its bytes from the daemon's ring, from a known offset, and a buffer that
+ * starts wherever the frames happened to start would paint ahead of it.
+ */
+function openStream(id: number, onBytes: (bytes: Uint8Array) => void, replay = true): () => void {
   closed.delete(id);
   streams.set(id, onBytes);
   const queue = buffered.get(id);
   if (queue) {
     buffered.delete(id);
     bufferedBytes.delete(id);
-    for (const chunk of queue) onBytes(chunk);
+    if (replay) for (const chunk of queue) onBytes(chunk);
   }
   return () => {
     if (streams.get(id) === onBytes) streams.delete(id);

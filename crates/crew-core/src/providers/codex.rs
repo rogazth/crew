@@ -25,31 +25,40 @@ pub struct CodexSpawn {
     pub mcp_env: Vec<(String, String)>,
 }
 
+/// The `-c` overrides that start Crew's MCP server under codex, with the
+/// environment it needs to reach the bridge (see [`CodexSpawn::mcp_env`]).
+/// Codex takes them on the root command as well as on `exec` and `resume`.
+pub fn codex_mcp_overrides(command: &str, mcp_args: &[String], env: &[(String, String)]) -> Vec<String> {
+    let mut args = vec![
+        "-c".to_string(),
+        format!(
+            "mcp_servers.crew.command={}",
+            serde_json::to_string(command).unwrap_or_else(|_| "\"\"".into())
+        ),
+        "-c".to_string(),
+        format!(
+            "mcp_servers.crew.args={}",
+            serde_json::to_string(mcp_args).unwrap_or_else(|_| "[]".into())
+        ),
+    ];
+    if !env.is_empty() {
+        let pairs = env
+            .iter()
+            .map(|(key, value)| {
+                format!("{key}={}", serde_json::to_string(value).unwrap_or_else(|_| "\"\"".into()))
+            })
+            .collect::<Vec<_>>()
+            .join(",");
+        args.push("-c".into());
+        args.push(format!("mcp_servers.crew.env={{{pairs}}}"));
+    }
+    args
+}
+
 pub fn build_codex_spawn_args(input: &CodexSpawn) -> Vec<String> {
     let mut args = vec!["exec".into()];
     if let Some((command, mcp_args)) = &input.mcp {
-        args.push("-c".into());
-        args.push(format!(
-            "mcp_servers.crew.command={}",
-            serde_json::to_string(command).unwrap_or_else(|_| "\"\"".into())
-        ));
-        args.push("-c".into());
-        args.push(format!(
-            "mcp_servers.crew.args={}",
-            serde_json::to_string(mcp_args).unwrap_or_else(|_| "[]".into())
-        ));
-        if !input.mcp_env.is_empty() {
-            let pairs = input
-                .mcp_env
-                .iter()
-                .map(|(key, value)| {
-                    format!("{key}={}", serde_json::to_string(value).unwrap_or_else(|_| "\"\"".into()))
-                })
-                .collect::<Vec<_>>()
-                .join(",");
-            args.push("-c".into());
-            args.push(format!("mcp_servers.crew.env={{{pairs}}}"));
-        }
+        args.extend(codex_mcp_overrides(command, mcp_args, &input.mcp_env));
     }
     args.push("--json".into());
     args.push("--skip-git-repo-check".into());
@@ -337,6 +346,20 @@ pub fn tool_label(item: &Map<String, Value>) -> String {
             }
             let tool = string_field(Some(item), "tool");
             let server = string_field(Some(item), "server");
+            if let (Some(tool), Some("crew")) = (tool.as_deref(), server.as_deref()) {
+                let named = format!("crew.{tool}");
+                let arguments = item.get("arguments").and_then(as_record).cloned().unwrap_or_default();
+                if let Some((verb, input)) = super::crew_call(&named, &arguments) {
+                    let verb = format!("Crew {}", verb.replace('_', " "));
+                    let subject = string_field(Some(input), "to")
+                        .or_else(|| string_field(Some(input), "name"))
+                        .or_else(|| string_field(Some(input), "query"));
+                    return match subject {
+                        Some(subject) => format!("{verb} {}", clip(&subject, 40)),
+                        None => verb,
+                    };
+                }
+            }
             match (tool, server) {
                 (Some(tool), Some(server)) => mcp_label(&server, &tool),
                 (Some(tool), None) => tool,

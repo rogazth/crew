@@ -1,5 +1,5 @@
 import { ChevronRightIcon, FolderIcon, GitBranchIcon, PlusIcon, RotateCwIcon, SearchIcon, XIcon, type LucideIcon as Icon } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
 import { ActionMenu } from "./ActionMenu";
 import { AgentAvatar } from "./AgentAvatar";
 import {
@@ -69,6 +69,8 @@ export type SessionSidebarProps = {
   onRemove: (session: Session) => void;
   onRemoveMany: (sessions: Session[]) => void;
   onReorder: (ids: string[]) => void;
+  /** The workspace's long-running commands, under its worktrees. Hidden while searching sessions. */
+  commands?: ReactNode;
   /** Reads the worktrees and sessions again, for changes made outside this window. */
   onRefresh: () => Promise<void>;
 };
@@ -412,6 +414,7 @@ export function SessionSidebar(props: SessionSidebarProps) {
               </div>
             );
           })}
+        {!filtering && props.commands}
       </div>
 
       {menu?.kind === "session" && (

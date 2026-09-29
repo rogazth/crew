@@ -26,7 +26,7 @@ npm install
 npm run app
 ```
 
-`npm run app` builds `crewd`, starts Vite and opens the window. The daemon is spawned by the app and its data lives in the Electron user-data directory; closing the app stops it and kills every child process it started.
+`npm run app` builds `crewd` and `crew`, starts Vite and opens the window. The daemon is spawned by the app and its data lives in the Electron user-data directory; closing the app stops it and kills every child process it started.
 
 Use `npm run app` while developing. `open -a Crew` and Spotlight go through LaunchServices, which may open a stale `release/` build or an old Tauri bundle instead of this checkout.
 
@@ -59,6 +59,24 @@ ditto -x -k Crew-0.1.0-arm64.zip /Applications
 From there Crew updates itself. It reads `latest.json` from the newest release fifteen seconds after launch and every six hours, and asks in a dialog; `Crew › Check for Updates…` asks on demand. The zip is checked against the manifest's sha256 before anything touches the disk, the bundle is swapped by a detached shell once the app has exited, and the app reopens. A checkout build never updates itself.
 
 The bundle is ad-hoc signed (`identity: "-"`): that is what arm64 needs to launch at all, and it keeps the updater free of Apple's signing requirements. It is not notarized, so anyone who downloads the zip in a browser has to clear Gatekeeper by hand.
+
+## The `crew` command
+
+The app ships a CLI. **Crew › Install `crew` Command…** links it into `~/.local/bin` when your shell looks there, or into `/usr/local/bin` with your password.
+
+```bash
+crew status                        # is Crew running, and who does it take you for
+crew agents list                   # the agents of the workspace you are in
+crew agents send Reviewer "look at the diff on main"
+crew processes list                # and start, stop, restart, logs -f, add, edit…
+crew tabs snapshot                 # the browser: open, navigate, click, fill, screenshot…
+crew --help                        # every group; `crew <group> --help` for its commands
+crew completions zsh > ~/.zfunc/_crew
+```
+
+From your own shell it speaks as you, in the workspace that holds the current directory (`--workspace` names another). Inside a Crew session it speaks as that session. `--json` prints what the tool answered with. `crew mcp` serves the same tools to an MCP client.
+
+For a checkout, `scripts/crew-dev dev` runs the app from source, `scripts/crew-dev build` builds the bundle, and `scripts/crew-dev cli …` runs the checkout's `crew` against the dev app.
 
 ## Development
 

@@ -55,6 +55,8 @@ import {
   popupVerdict,
   previewNavigationVerdict,
 } from "./policy";
+import { noteGuestInput } from "./agent-host";
+import { setTabWindow } from "./tab-guests";
 
 const IS_MAC = process.platform === "darwin";
 /**
@@ -437,6 +439,7 @@ export function installBrowser(win: BrowserWindow): void {
   guardCertificates();
   hookLogin();
   const host = win.webContents;
+  setTabWindow(host);
   host.once("destroyed", () => {
     dropHost(host);
     forgetHost(host);
@@ -576,6 +579,9 @@ function register(host: WebContents, guest: WebContents, partition: string): voi
   };
   guest.on("unresponsive", () => responsive(true));
   guest.on("responsive", () => responsive(false));
+
+  // A person clicking or typing in a page an agent drives wins it for a moment.
+  guest.on("input-event", (_event, input) => noteGuestInput(guest.id, input.type));
 
   forwardCommands(host, guest);
 

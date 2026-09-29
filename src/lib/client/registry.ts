@@ -167,8 +167,13 @@ export function onReconnect(hook: (here: Here) => void): () => void {
   return () => reconnectHooks.delete(hook);
 }
 
-export function openStream(id: number, onBytes: (bytes: Uint8Array) => void, sessionId?: string): () => void {
-  return owner(sessionId).openStream(id, onBytes);
+export function openStream(
+  id: number,
+  onBytes: (bytes: Uint8Array) => void,
+  sessionId?: string,
+  replay = true,
+): () => void {
+  return owner(sessionId).openStream(id, onBytes, replay);
 }
 
 export function writeStream(id: number, bytes: Uint8Array, sessionId?: string): Promise<void> {

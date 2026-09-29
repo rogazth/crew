@@ -401,6 +401,73 @@ pub fn page_delete(store: &Store, page_id: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// A browser tab as the window saved it in a tab strip.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpenPage {
+    pub page_id: String,
+    /// The strip it sits in: the workspace id, or `<workspace>@<worktree path>`.
+    pub context: String,
+    pub workspace_id: String,
+    pub url: String,
+    pub title: String,
+}
+
+/// The workspace a strip key belongs to. A worktree's own strip is keyed
+/// `<workspace>@<path>`, the same split the window makes.
+fn workspace_of(context: &str) -> &str {
+    context.split_once('@').map_or(context, |(workspace, _)| workspace)
+}
+
+/// Every browser tab of every saved strip. The window is the only writer of
+/// the strips (`tabs:<context>` in app state), so this is the daemon's one way
+/// to know which workspace a page belongs to; a strip that no longer parses,
+/// or a key under `tabs:` that is not a strip, is skipped.
+pub fn open_pages(store: &Store) -> Result<Vec<OpenPage>, String> {
+    let rows: Vec<(String, String)> = store.with(|conn| {
+        conn.prepare_cached("SELECT key, value FROM app_state WHERE key LIKE 'tabs:%'")?
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .collect()
+    })?;
+    let mut pages = Vec::new();
+    for (key, value) in rows {
+        let context = &key["tabs:".len()..];
+        let Ok(strip) = serde_json::from_str::<serde_json::Value>(&value) else {
+            continue;
+        };
+        let tabs = strip.get("tabs").and_then(|tabs| tabs.as_array()).cloned().unwrap_or_default();
+        for tab in tabs {
+            if tab.get("kind").and_then(|kind| kind.as_str()) != Some("browser") {
+                continue;
+            }
+            let field = |name: &str| tab.get(name).and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let page_id = field("id");
+            if page_id.is_empty() {
+                continue;
+            }
+            pages.push(OpenPage {
+                page_id,
+                context: context.to_string(),
+                workspace_id: workspace_of(context).to_string(),
+                url: field("url"),
+                title: field("title"),
+            });
+        }
+    }
+    Ok(pages)
+}
+
+pub fn find_page(store: &Store, page_id: &str) -> Result<Option<OpenPage>, String> {
+    Ok(open_pages(store)?.into_iter().find(|page| page.page_id == page_id))
+}
+
+/// A workspace's browser tabs, its worktrees' strips included.
+pub fn workspace_pages(store: &Store, workspace_id: &str) -> Result<Vec<OpenPage>, String> {
+    Ok(open_pages(store)?
+        .into_iter()
+        .filter(|page| page.workspace_id == workspace_id)
+        .collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1003,5 +1070,43 @@ mod tests {
         let p95 = times[times.len() * 95 / 100];
         println!("browser suggest over {HISTORY_MAX_ROWS} rows: p50 {p50:?}, p95 {p95:?}");
         assert!(p95 < std::time::Duration::from_millis(5), "p95 {p95:?}");
+    }
+
+    #[test]
+    fn a_page_is_found_in_whichever_strip_holds_it() {
+        let store = store();
+        let strip = |tabs: serde_json::Value| serde_json::json!({ "tabs": tabs, "activeId": null }).to_string();
+        crate::store::set(
+            &store,
+            "tabs:w1".into(),
+            strip(serde_json::json!([
+                { "id": "browser:a", "kind": "browser", "url": "http://localhost:3000/", "title": "App" },
+                { "id": "session:s", "kind": "session", "sessionId": "s" }
+            ])),
+        )
+        .expect("set");
+        crate::store::set(
+            &store,
+            "tabs:w1@/tmp/feat".into(),
+            strip(serde_json::json!([{ "id": "browser:b", "kind": "browser", "url": "", "title": "" }])),
+        )
+        .expect("set");
+        crate::store::set(
+            &store,
+            "tabs:w2".into(),
+            strip(serde_json::json!([{ "id": "browser:c", "kind": "browser", "url": "https://x.dev/", "title": "X" }])),
+        )
+        .expect("set");
+        // Not every key under tabs: is a strip.
+        crate::store::set(&store, "tabs:scope".into(), "all".into()).expect("set");
+
+        let found = find_page(&store, "browser:b").expect("find").expect("a page");
+        assert_eq!(found.workspace_id, "w1");
+        assert_eq!(found.context, "w1@/tmp/feat");
+        let mut ids: Vec<String> =
+            workspace_pages(&store, "w1").expect("pages").into_iter().map(|page| page.page_id).collect();
+        ids.sort();
+        assert_eq!(ids, ["browser:a", "browser:b"]);
+        assert!(find_page(&store, "session:s").expect("find").is_none());
     }
 }

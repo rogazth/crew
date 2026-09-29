@@ -65,10 +65,14 @@ function AgentMessage({ block, from }: { block: Block; from: AgentRef }) {
         data-block={block.id}
       >
         <AgentAvatar seed={from.id} bare className="size-5" />
-        <span className="shrink-0">
-          <span className="font-medium">{from.name}</span>
-          <span className="text-text-muted"> wrote to you</span>
-        </span>
+        {from.kind === "user" ? (
+          <span className="shrink-0 text-text-muted">You sent this from the command line</span>
+        ) : (
+          <span className="shrink-0">
+            <span className="font-medium">{from.name}</span>
+            <span className="text-text-muted"> wrote to you</span>
+          </span>
+        )}
         {open ? <span className="flex-1" /> : <span className="min-w-0 flex-1 truncate text-text-muted">{first}</span>}
         <ChevronRightIcon
           className={`size-3.5 shrink-0 text-icon transition-transform duration-150 ${open ? "rotate-90" : ""}`}
@@ -85,14 +89,17 @@ function AgentMessage({ block, from }: { block: Block; from: AgentRef }) {
             </div>
           ) : null}
           {block.files && block.files.length > 0 ? <AttachmentStrip files={block.files} /> : null}
-          <button
-            type="button"
-            onClick={() => openSession(from.id)}
-            className="text-[11px] leading-4 text-placeholder transition-colors hover:text-text"
-            title={`Open ${from.name}`}
-          >
-            Open {from.name}
-          </button>
+          {/* The user, and a sender deleted since, have no session to open. */}
+          {from.id ? (
+            <button
+              type="button"
+              onClick={() => openSession(from.id)}
+              className="text-[11px] leading-4 text-placeholder transition-colors hover:text-text"
+              title={`Open ${from.name}`}
+            >
+              Open {from.name}
+            </button>
+          ) : null}
         </div>
       </Collapsible.Panel>
     </Collapsible.Root>

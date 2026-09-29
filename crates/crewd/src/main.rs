@@ -1,142 +1,288 @@
-use std::io::{self, Read, Write};
+use std::io::{self, Read, Seek, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::mpsc;
 use std::thread;
+use std::time::Duration;
 
 use crew_core::agent::AgentHost;
-use crew_core::bridge::Bridge;
+use crew_core::bridge::{Bridge, StartError};
+use crew_core::process::ProcessHost;
 use crew_core::pty::PtyHost;
 use crew_core::store::Store;
-use crew_protocol::DaemonInfo;
+use crew_protocol::{DaemonFile, DaemonInfo};
 use crewd::lock::DataLock;
-use crewd::{machine, serve_on, Config, Handle, Listen};
+use crewd::{machine, remove_daemon_file, serve_on, write_daemon_file, Config, Listen};
+
+const USAGE: &str = "\
+usage: crewd --data-dir <dir>   run the daemon (the Crew app does this)
+       crewd --data-dir <dir> --supervised-by launchd
+                                run it as the LaunchAgent `crew daemon install` writes
+       crewd serve --listen <host:port> [--data-dir <dir>]
+                                serve another machine's window over the network
+
+Kept for one version, for configs that still name it:
+  crewd --mcp                   now `crew mcp`";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
+        // Only ever from a session's environment, as before: `crew mcp` also
+        // falls back to daemon.json, which an old config naming crewd never
+        // asked for.
         Some("--mcp") => crew_core::mcp::serve_stdio(),
-        Some("call") => crew_core::mcp::call(&args[1..]),
-        Some("serve") => match run_serve(&args[1..]) {
-            Ok(()) => ExitCode::SUCCESS,
-            Err(error) => {
-                eprintln!("{error}");
-                ExitCode::FAILURE
+        Some("-h" | "--help" | "help") => {
+            println!("{USAGE}");
+            ExitCode::SUCCESS
+        }
+        Some("serve") => daemon(&args[1..], Some(Supervisor::Served)),
+        _ => daemon(&args, None),
+    }
+}
+
+/// Who started this daemon, which decides how it hears it should stop.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Supervisor {
+    /// The dev app's child: it reads the handshake line, and the end of stdin
+    /// is the app going away, even when the app was killed and sent nothing.
+    Parent,
+    /// launchd, as the LaunchAgent: stdin is /dev/null and stdout a log file,
+    /// so there is no handshake to print (the log would hold the token) and
+    /// no EOF to wait for. A signal or `daemon_shutdown` stops it.
+    Launchd,
+    /// `crewd serve`, for a machine the window reaches over the network: it
+    /// listens where it is told, keeps its token across restarts, and ignores
+    /// SIGHUP, since the SSH session that started it may close.
+    Served,
+}
+
+fn supervisor(args: &[String]) -> Result<Supervisor, String> {
+    let mut args = args.iter();
+    while let Some(arg) = args.next() {
+        let named = match arg.strip_prefix("--supervised-by=") {
+            Some(name) => Some(name),
+            None if arg == "--supervised-by" => args.next().map(String::as_str),
+            None => continue,
+        };
+        return match named {
+            Some("launchd") => Ok(Supervisor::Launchd),
+            other => Err(format!("--supervised-by takes `launchd`, not {:?}", other.unwrap_or(""))),
+        };
+    }
+    Ok(Supervisor::Parent)
+}
+
+/// Why a start did not get as far as serving.
+#[derive(Debug)]
+enum Failure {
+    /// Fails the same way however often it is tried: a data dir it cannot
+    /// use, a database it cannot open or migrate, another daemon already
+    /// serving the data dir.
+    Permanent(String),
+    /// May pass: the WebSocket listener or the bridge not binding, a thread
+    /// that did not spawn.
+    Transient(String),
+}
+
+impl Failure {
+    fn message(&self) -> &str {
+        match self {
+            Failure::Permanent(message) | Failure::Transient(message) => message,
+        }
+    }
+}
+
+/// Transient failures in a row, under launchd, before crewd takes one for
+/// permanent after all. Counted in a file because each is a new process.
+const TRANSIENT_TRIES: u32 = 5;
+const FAILED_STARTS: &str = "crewd.failed-starts";
+
+/// How a failed start exits decides what its supervisor does next. The app
+/// reads a non-zero exit as "crewd failed" and says so. launchd reads it as a
+/// crash and, through `KeepAlive { SuccessfulExit: false }`, starts crewd
+/// again every ten seconds for as long as the user is logged in, Crew open or
+/// not. So under launchd a permanent failure is logged and exits 0, which
+/// leaves it down: the app sees no daemon come up, runs crewd as its child
+/// instead, and that child fails the same way where the app shows it. A
+/// transient one exits 1 for launchd to retry, a few times at most.
+fn daemon(args: &[String], served: Option<Supervisor>) -> ExitCode {
+    let supervisor = match served.map(Ok).unwrap_or_else(|| supervisor(args)) {
+        Ok(supervisor) => supervisor,
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let dir = match (supervisor, flag(args, "--data-dir")) {
+        (_, Some(dir)) => PathBuf::from(dir),
+        (Supervisor::Served, None) => match std::env::var_os("HOME") {
+            Some(home) => PathBuf::from(home).join(".crew/data"),
+            None => {
+                eprintln!("crewd serve: --data-dir is required when HOME is not set");
+                return ExitCode::FAILURE;
             }
         },
-        _ => match run(&args) {
-            Ok(()) => ExitCode::SUCCESS,
-            Err(error) => {
-                eprintln!("{error}");
-                ExitCode::FAILURE
+        _ => std::env::temp_dir().join(format!("crewd-{}", std::process::id())),
+    };
+    let listen = match supervisor {
+        Supervisor::Served => {
+            let Some(addr) = flag(args, "--listen") else {
+                eprintln!("crewd serve: --listen <host:port> is required");
+                return ExitCode::FAILURE;
+            };
+            if let Err(error) = std::fs::create_dir_all(&dir) {
+                eprintln!("{}: {error}", dir.display());
+                return ExitCode::FAILURE;
             }
-        },
+            match machine::persistent_token(&dir, crewd::random_token) {
+                Ok(token) => Listen { addr, token, wait_for_addr: true },
+                Err(error) => {
+                    eprintln!("{error}");
+                    return ExitCode::FAILURE;
+                }
+            }
+        }
+        _ => Listen::local(),
+    };
+    let failed_starts = dir.join(FAILED_STARTS);
+    let failure = match run(&dir, supervisor, listen) {
+        Ok(()) => return ExitCode::SUCCESS,
+        Err(failure) => failure,
+    };
+    if supervisor != Supervisor::Launchd {
+        eprintln!("{}", failure.message());
+        return ExitCode::FAILURE;
     }
+    let tries = match failure {
+        Failure::Permanent(_) => TRANSIENT_TRIES,
+        Failure::Transient(_) => {
+            let before: u32 =
+                std::fs::read_to_string(&failed_starts).ok().and_then(|text| text.trim().parse().ok()).unwrap_or(0);
+            let _ = std::fs::write(&failed_starts, (before + 1).to_string());
+            before + 1
+        }
+    };
+    if tries < TRANSIENT_TRIES {
+        eprintln!("[crewd] couldn't start ({tries} of {TRANSIENT_TRIES}), launchd will try again: {}", failure.message());
+        return ExitCode::FAILURE;
+    }
+    let _ = std::fs::remove_file(&failed_starts);
+    eprintln!("[crewd] couldn't start, and won't be restarted until Crew opens: {}", failure.message());
+    ExitCode::SUCCESS
 }
 
-struct Daemon {
-    pty: PtyHost,
-    agents: AgentHost,
-    bridge: Bridge,
-    handle: Handle,
-    // Last, so it is let go of after everything above has stopped.
-    _lock: DataLock,
-}
-
-impl Daemon {
-    fn start(dir: &Path, listen: Listen) -> Result<Self, String> {
-        std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-        // Before the socket, the database or anything else in the folder.
-        let lock = DataLock::acquire(dir)?;
-        // Set before any thread starts; every terminal inherits it.
-        let bind = dir.join("claude-bind");
-        std::fs::create_dir_all(&bind).map_err(|e| format!("{}: {e}", bind.display()))?;
-        std::env::set_var(crew_core::provider_session::CLAUDE_BIND_ENV, &bind);
-        crew_core::shell_path::prewarm();
-        let pty = PtyHost::new();
-        let agents = AgentHost::new();
-        let bridge = Bridge::start(dir.to_path_buf())?;
-        let handle = serve_on(
-            Config {
-                pty: pty.clone(),
-                store: Store::open(dir.join("crew.sqlite3"))?,
-                agents: agents.clone(),
-                bridge: bridge.clone(),
-            },
-            listen,
-        )?;
-        Ok(Self { pty, agents, bridge, handle, _lock: lock })
+fn run(dir: &Path, supervisor: Supervisor, listen: Listen) -> Result<(), Failure> {
+    // First, before anything there is to clean up: a SIGTERM during startup
+    // (launchd's bootout, the app quitting) is heard, and ends in the same
+    // cleanup as any stop, instead of killing crewd half started.
+    let (stop, stopped) = mpsc::channel();
+    watch_signals(stop.clone(), supervisor != Supervisor::Served).map_err(Failure::Transient)?;
+    if supervisor == Supervisor::Launchd {
+        tidy_log_every(dir.join(crew_cli::launch_agent::LOG));
+        eprintln!("[crewd] {} starting, pid {}", env!("CARGO_PKG_VERSION"), std::process::id());
     }
-
-    fn stop(self) {
-        self.pty.kill_all();
-        self.agents.kill_all();
-        self.bridge.shutdown();
-        self.handle.shutdown();
-    }
-}
-
-fn run(args: &[String]) -> Result<(), String> {
-    let dir = data_dir(args);
-    let daemon = Daemon::start(&dir, Listen::local())?;
-    // Armed before the window hears of it: a SIGTERM sent the moment the
-    // line is read must stop it cleanly, not kill it.
-    let exit = exit_on_eof_or_signal();
+    std::fs::create_dir_all(dir).map_err(|e| Failure::Permanent(format!("{}: {e}", dir.display())))?;
+    // Before the socket, the database or anything else in the folder. Held
+    // until `run` returns, after everything below has stopped.
+    let _lock = DataLock::acquire(dir).map_err(Failure::Permanent)?;
+    // Set before any thread starts; every terminal inherits it.
+    let bind = dir.join("claude-bind");
+    std::fs::create_dir_all(&bind).map_err(|e| Failure::Permanent(format!("{}: {e}", bind.display())))?;
+    std::env::set_var(crew_core::provider_session::CLAUDE_BIND_ENV, &bind);
+    // Before anything else is opened: a daemon already serving this data dir
+    // owns its database too.
+    let bridge = Bridge::start(dir.to_path_buf()).map_err(|error| match error {
+        StartError::Taken(_) => Failure::Permanent(error.to_string()),
+        StartError::Failed(message) => Failure::Transient(format!("bridge: {message}")),
+    })?;
+    let started = start(dir, &bridge, listen);
+    let (pty, agents, processes, handle) = match started {
+        Ok(started) => started,
+        Err(failure) => {
+            bridge.shutdown();
+            return Err(failure);
+        }
+    };
+    let _ = std::fs::remove_file(dir.join(FAILED_STARTS));
 
     let info = DaemonInfo {
-        url: daemon.handle.url().to_string(),
-        token: daemon.handle.token().to_string(),
+        url: handle.url().to_string(),
+        token: handle.token().to_string(),
     };
-    let mut stdout = io::stdout();
-    writeln!(
-        stdout,
-        "{}",
-        serde_json::to_string(&info).map_err(|e| e.to_string())?
-    )
-    .map_err(|e| e.to_string())?;
-    stdout.flush().map_err(|e| e.to_string())?;
+    // Asked to stop while it was starting: nobody is told it is up.
+    let early = stopped.try_recv().is_ok();
+    if !early {
+        // Before the handshake line, so whoever waits on that line can rely on
+        // the file. A daemon that cannot write it still serves the window.
+        if let Err(error) = write_daemon_file(
+            dir,
+            &DaemonFile {
+                url: info.url.clone(),
+                token: info.token.clone(),
+                socket: bridge.socket_path(),
+                user_token: bridge.user_token(),
+                version: env!("CARGO_PKG_VERSION").to_string(),
+                pid: Some(std::process::id()),
+            },
+        ) {
+            eprintln!("[crewd] daemon.json: {error}");
+        }
+        match supervisor {
+            Supervisor::Parent => {
+                let mut stdout = io::stdout();
+                let line = serde_json::to_string(&info).map_err(|e| Failure::Transient(e.to_string()))?;
+                let _ = writeln!(stdout, "{line}").and_then(|_| stdout.flush());
+            }
+            Supervisor::Served => {
+                // The port, for whoever started it on port 0. The token stays
+                // in its file. Best effort: a service whose stdout went away
+                // keeps serving.
+                let mut stdout = io::stdout();
+                let _ = writeln!(stdout, "{}", serde_json::json!({ "url": info.url })).and_then(|_| stdout.flush());
+                eprintln!("[crewd] {} serving {} from {}", env!("CARGO_PKG_VERSION"), info.url, dir.display());
+            }
+            Supervisor::Launchd => {}
+        }
+        wait_for_exit(stop, stopped, supervisor == Supervisor::Parent, handle.exit_requests());
+    }
+    if supervisor == Supervisor::Launchd {
+        eprintln!("[crewd] stopping");
+    }
 
-    let _ = exit.recv();
-
-    daemon.stop();
+    remove_daemon_file(dir, &info.url);
+    // First, so a process killed below is not restarted on its way out, and
+    // so supervised ones get their stop grace before the PTY host's one second.
+    processes.shutdown();
+    pty.kill_all();
+    agents.kill_all();
+    bridge.shutdown();
+    handle.shutdown();
     Ok(())
 }
 
-/// A daemon that outlives its clients, for a machine the window reaches over
-/// the network: it listens where it is told, keeps its token across restarts
-/// and stops only on SIGTERM or SIGINT.
-fn run_serve(args: &[String]) -> Result<(), String> {
-    let addr = flag(args, "--listen").ok_or("crewd serve: --listen <host:port> is required")?;
-    let dir = match flag(args, "--data-dir") {
-        Some(dir) => PathBuf::from(dir),
-        None => std::env::var_os("HOME")
-            .map(|home| PathBuf::from(home).join(".crew/data"))
-            .ok_or("crewd serve: --data-dir is required when HOME is not set")?,
-    };
-    std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-    let token = machine::persistent_token(&dir, crewd::random_token)?;
-    let daemon = Daemon::start(
-        &dir,
-        Listen {
-            addr,
-            token,
-            wait_for_addr: true,
+/// Everything after the bridge: the hosts, the database, the WebSocket.
+fn start(
+    dir: &Path,
+    bridge: &Bridge,
+    listen: Listen,
+) -> Result<(PtyHost, AgentHost, ProcessHost, crewd::Handle), Failure> {
+    crew_core::shell_path::prewarm();
+    let pty = PtyHost::new();
+    let agents = AgentHost::new();
+    let store = Store::open(dir.join("crew.sqlite3")).map_err(|e| Failure::Permanent(format!("database: {e}")))?;
+    let processes = ProcessHost::new(store.clone(), pty.clone(), dir);
+    let handle = serve_on(
+        Config {
+            pty: pty.clone(),
+            store,
+            processes: processes.clone(),
+            agents: agents.clone(),
+            bridge: bridge.clone(),
         },
-    )?;
-
-    let exit = exit_on_signal();
-    // The port, for whoever started it on port 0. The token stays in its file.
-    // Best effort: a service whose stdout went away keeps serving.
-    let url = daemon.handle.url().to_string();
-    let mut stdout = io::stdout();
-    let _ = writeln!(stdout, "{}", serde_json::json!({ "url": url }));
-    let _ = stdout.flush();
-    eprintln!("[crewd] {} serving {url} from {}", env!("CARGO_PKG_VERSION"), dir.display());
-
-    let _ = exit.recv();
-
-    daemon.stop();
-    Ok(())
+        listen,
+    )
+    .map_err(Failure::Transient)?;
+    Ok((pty, agents, processes, handle))
 }
 
 fn flag(args: &[String], name: &str) -> Option<String> {
@@ -152,92 +298,167 @@ fn flag(args: &[String], name: &str) -> Option<String> {
     None
 }
 
-fn data_dir(args: &[String]) -> PathBuf {
-    flag(args, "--data-dir")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| std::env::temp_dir().join(format!("crewd-{}", std::process::id())))
+/// launchd never rotates what it appends to, and a daemon that runs from login
+/// to logout for months would grow it without end.
+const LOG_CAP: u64 = 10 * 1024 * 1024;
+/// What is kept of a log that went past the cap, in `crewd.log.1`: the lines
+/// just before it was emptied are the ones someone may be looking for.
+const LOG_KEEP: u64 = 1024 * 1024;
+/// Often enough that even a chatty process cannot put much past the cap.
+const LOG_CHECK: Duration = Duration::from_secs(5 * 60);
+
+/// Now and then, for as long as crewd runs: a cap checked only at startup
+/// never applies to a daemon that stays up.
+fn tidy_log_every(path: PathBuf) {
+    tidy_log(&path, LOG_CAP, LOG_KEEP);
+    let _ = thread::Builder::new().name("crewd-log".into()).spawn(move || loop {
+        thread::sleep(LOG_CHECK);
+        tidy_log(&path, LOG_CAP, LOG_KEEP);
+    });
 }
 
-/// Receives once stdin closes or SIGTERM, SIGINT or SIGHUP arrives.
-fn exit_on_eof_or_signal() -> mpsc::Receiver<()> {
-    let (tx, rx) = mpsc::channel();
-    watch_signals(tx.clone(), true);
-
-    thread::Builder::new()
-        .name("crewd-stdin".into())
-        .spawn({
-            let tx = tx.clone();
-            move || {
-                let mut stdin = io::stdin();
-                let mut buf = [0u8; 64];
-                loop {
-                    match stdin.read(&mut buf) {
-                        Ok(0) | Err(_) => {
-                            let _ = tx.send(());
-                            return;
-                        }
-                        Ok(_) => {}
-                    }
-                }
-            }
-        })
-        .expect("stdin watcher");
-    rx
+/// launchd opened the log before crewd ran, with the umask's mode, and the log
+/// can hold what a turn printed; so it is made private. Past `cap` its tail is
+/// copied aside and it is emptied in place. It cannot be renamed away:
+/// launchd's descriptor (crewd's own stdout and stderr) would follow it. It is
+/// opened for appending, though, so after the truncation the next line lands
+/// at the start rather than past a hole.
+fn tidy_log(path: &Path, cap: u64, keep: u64) {
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+    let private = std::fs::Permissions::from_mode(0o600);
+    let Ok(meta) = std::fs::metadata(path) else { return };
+    let _ = std::fs::set_permissions(path, private.clone());
+    if meta.len() <= cap {
+        return;
+    }
+    let old = path.with_extension("log.1");
+    let tail = std::fs::File::open(path).and_then(|mut log| {
+        log.seek(io::SeekFrom::Start(meta.len().saturating_sub(keep)))?;
+        let mut tail = Vec::new();
+        log.take(keep).read_to_end(&mut tail)?;
+        Ok(tail)
+    });
+    if let Ok(tail) = tail {
+        let _ = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&old)
+            .and_then(|mut out| out.write_all(&tail));
+        let _ = std::fs::set_permissions(&old, private);
+    }
+    if let Ok(file) = std::fs::OpenOptions::new().write(true).open(path) {
+        let _ = file.set_len(0);
+    }
 }
 
-fn exit_on_signal() -> mpsc::Receiver<()> {
-    let (tx, rx) = mpsc::channel();
-    watch_signals(tx, false);
-    rx
-}
-
-/// Sends once SIGTERM or SIGINT arrives, or SIGHUP when `hangup` holds. A
-/// served daemon ignores SIGHUP: the SSH session that started it may close.
-/// Returns once the handlers are in place.
-fn watch_signals(tx: mpsc::Sender<()>, hangup: bool) {
-    let (armed_tx, armed_rx) = mpsc::channel::<()>();
+/// SIGTERM, SIGINT and, when `hangup` holds, SIGHUP, each a request to stop. The handlers are
+/// registered here, on the caller's thread, so they are in place when this
+/// returns; the thread it leaves behind only waits for one to arrive.
+fn watch_signals(stop: mpsc::Sender<()>, hangup: bool) -> Result<(), String> {
+    use tokio::signal::unix::{signal, SignalKind};
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| format!("signals: {e}"))?;
+    let (mut term, mut int, mut hup) = {
+        let _entered = runtime.enter();
+        let listen = |kind| signal(kind).map_err(|e| format!("signals: {e}"));
+        (listen(SignalKind::terminate())?, listen(SignalKind::interrupt())?, listen(SignalKind::hangup())?)
+    };
     thread::Builder::new()
         .name("crewd-signal".into())
         .spawn(move || {
-            let Ok(runtime) = tokio::runtime::Builder::new_current_thread().enable_all().build() else {
-                return;
-            };
             runtime.block_on(async {
-                #[cfg(unix)]
-                {
-                    let Ok(mut sigterm) =
-                        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-                    else {
-                        return;
-                    };
-                    let Ok(mut sigint) =
-                        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
-                    else {
-                        return;
-                    };
-                    let Ok(mut sighup) =
-                        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup())
-                    else {
-                        return;
-                    };
-                    let _ = armed_tx.send(());
+                loop {
+                    tokio::select! {
+                        _ = term.recv() => break,
+                        _ = int.recv() => break,
+                        _ = hup.recv() => if hangup { break },
+                    }
+                }
+            });
+            let _ = stop.send(());
+        })
+        .map(|_| ())
+        .map_err(|e| format!("signals: {e}"))
+}
+
+/// Blocks until something says stop: a signal (already watched), a
+/// `daemon_shutdown`, or, for the app's child, the end of stdin.
+fn wait_for_exit(
+    stop: mpsc::Sender<()>,
+    stopped: mpsc::Receiver<()>,
+    watch_stdin: bool,
+    requests: Option<mpsc::Receiver<()>>,
+) {
+    if watch_stdin {
+        thread::Builder::new()
+            .name("crewd-stdin".into())
+            .spawn({
+                let stop = stop.clone();
+                move || {
+                    let mut stdin = io::stdin();
+                    let mut buf = [0u8; 64];
                     loop {
-                        tokio::select! {
-                            _ = sigterm.recv() => break,
-                            _ = sigint.recv() => break,
-                            _ = sighup.recv() => if hangup { break },
+                        match stdin.read(&mut buf) {
+                            Ok(0) | Err(_) => {
+                                let _ = stop.send(());
+                                return;
+                            }
+                            Ok(_) => {}
                         }
                     }
                 }
-                #[cfg(not(unix))]
-                {
-                    let _ = armed_tx.send(());
-                    let _ = tokio::signal::ctrl_c().await;
+            })
+            .expect("stdin watcher");
+    }
+
+    if let Some(requests) = requests {
+        thread::Builder::new()
+            .name("crewd-exit".into())
+            .spawn(move || {
+                if requests.recv().is_ok() {
+                    let _ = stop.send(());
                 }
-            });
-            let _ = tx.send(());
-        })
-        .expect("signal watcher");
-    // A watcher that failed to set up drops its sender: nothing to wait for.
-    let _ = armed_rx.recv();
+            })
+            .expect("exit watcher");
+    }
+
+    let _ = stopped.recv();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+
+    /// It used to be checked only at startup. What launchd holds is an
+    /// appending descriptor, and it has to keep writing into the same, now
+    /// short, file.
+    #[test]
+    fn a_log_past_the_cap_is_emptied_in_place_and_its_tail_kept_privately() {
+        let dir = std::env::temp_dir().join(format!("crewd-log-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let path = dir.join("crewd.log");
+        let old = dir.join("crewd.log.1");
+        let _ = std::fs::remove_file(&old);
+        std::fs::write(&path, "").expect("log");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).expect("mode");
+        let mut launchd = std::fs::OpenOptions::new().append(true).mode(0o644).open(&path).expect("open");
+        launchd.write_all(&[b'a'; 100]).expect("write");
+        launchd.write_all(b"the last line\n").expect("write");
+
+        tidy_log(&path, 1000, 64);
+        assert_eq!(std::fs::read(&path).expect("read").len(), 114, "under the cap it stays");
+        assert_eq!(std::fs::metadata(&path).expect("meta").permissions().mode() & 0o777, 0o600);
+
+        tidy_log(&path, 100, 20);
+        assert_eq!(std::fs::read_to_string(&path).expect("read"), "");
+        assert_eq!(std::fs::read_to_string(&old).expect("old"), "aaaaaathe last line\n");
+        assert_eq!(std::fs::metadata(&old).expect("meta").permissions().mode() & 0o777, 0o600);
+        launchd.write_all(b"next\n").expect("write");
+        assert_eq!(std::fs::read_to_string(&path).expect("read"), "next\n", "written past a hole");
+    }
 }

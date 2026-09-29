@@ -262,6 +262,7 @@ function SessionTerminal({
             id={paneId}
             cwd={cwd}
             command={command}
+            session={session.id}
             active={active}
             covered={chat}
             shellOnExit

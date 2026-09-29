@@ -6,7 +6,13 @@ export type AgentBinary = { path: string, };
  * Who wrote a message, when it was not the user. Agents address each other by
  * name; the id is what the UI opens when you click it.
  */
-export type AgentRef = { id: string, name: string, };
+export type AgentRef = { id: string, name: string, 
+/**
+ * Absent for an agent. `terminal` is a terminal session, which has no
+ * turns and so reads no reply; `user` is the person, from the `crew` CLI,
+ * who reads the reply in this chat.
+ */
+kind?: string, };
 
 export type ApprovalDecision = "allow" | "always" | "deny";
 
@@ -31,6 +37,71 @@ export type BlockQuestion = { requestId: number, questions: Array<Question>, ans
 export type BlockRole = "user" | "assistant" | "reasoning" | "tool" | "approval" | "question" | "system";
 
 export type BlockTool = { callId: string, name: string, title: string, status: ToolStatus, detail?: ToolDetail, };
+
+/**
+ * crewd → the browser host (Electron main), as the `browser-call` event: run
+ * one tool on one tab and answer with `browser_result`.
+ */
+export type BrowserCall = { callId: number, tab: string, tool: string, args: unknown, page?: BrowserPageRef, 
+/**
+ * Milliseconds since the epoch past which crewd has stopped waiting and
+ * told the caller the call failed. A call still queued behind the tab's
+ * earlier ones by then is skipped, not run late.
+ */
+deadline: number, };
+
+/**
+ * Who is driving a tab, and until when unless they call again.
+ */
+export type BrowserLease = { tab: string, workspaceId: string, 
+/**
+ * What the holder is called: an agent's or a terminal's name, or "you".
+ */
+holder: string, 
+/**
+ * The session behind it, for its face; none when it is the user.
+ */
+sessionId?: string, 
+/**
+ * Milliseconds since the epoch, as of the list it came in. Renewals are
+ * not announced, so this only says the lease lasts at least that long:
+ * a lease is over when a newer list leaves it out, not at `until`.
+ */
+until: number, };
+
+/**
+ * Every lease there is, as the `browser-leases` event and `browser_leases_list`.
+ */
+export type BrowserLeases = { 
+/**
+ * Higher is newer, across daemon restarts too. Lists can arrive out of
+ * order (an event overtaking a reply, two changes racing to the hub), so
+ * a client drops any list numbered below the newest it has kept.
+ */
+seq: number, leases: Array<BrowserLease>, };
+
+/**
+ * Where a tab an agent drives sits, so the window can mount it when it is
+ * cold or its workspace was never opened.
+ */
+export type BrowserPageRef = { 
+/**
+ * The tab strip: the workspace id, or `<workspace>@<worktree path>`.
+ */
+context: string, url: string, title: string, };
+
+/**
+ * The host's answer to one `browser-call`. `result` is an array of MCP
+ * content blocks (text or image).
+ */
+export type BrowserResult = { callId: number, ok: boolean, result?: unknown, error?: string, };
+
+export type BrowserTabArg = { tab: string, };
+
+/**
+ * A browser tool run as the user, from the window or `crew`.
+ */
+export type BrowserToolRun = { workspaceId: string, tool: string, args: unknown, };
 
 export type CookieRead = { cookies: Array<ImportedCookie>, 
 /**
@@ -168,6 +239,41 @@ export type ListProjectFiles = { cwd: string,
 include: Array<string>, };
 
 /**
+ * A stretch of log. `text` is ANSI-free for agents, raw for a terminal.
+ */
+export type LogChunk = { text: string, 
+/**
+ * Where `text` starts in the log.
+ */
+start: number, 
+/**
+ * Where it ends: pass it back as `since` to read on.
+ */
+cursor: number, 
+/**
+ * Bytes asked for that rotation had already dropped.
+ */
+skipped: number, };
+
+export type LogGrep = { 
+/**
+ * The latest matches, oldest first.
+ */
+matches: Array<LogMatch>, 
+/**
+ * Every match in what is still on disk, shown or not.
+ */
+total: number, cursor: number, };
+
+export type LogMatch = { 
+/**
+ * Where the matching line starts in the log.
+ */
+offset: number, line: string, before: Array<string>, after: Array<string>, };
+
+export type LogWait = { "result": "matched", offset: number, line: string, cursor: number, } | { "result": "ended", state: ProcessState, exitCode: number | null, cursor: number, } | { "result": "timed-out", cursor: number, };
+
+/**
  * The machine a daemon runs on, for Settings' health line.
  */
 export type MachineInfo = { version: string, protocol: number, 
@@ -241,6 +347,103 @@ export type PathBytes = { path: string, base64Contents: string, };
 
 export type PathContents = { path: string, contents: string, };
 
+/**
+ * A process definition with its runtime next to it.
+ */
+export type Process = { id: string, workspaceId: string, 
+/**
+ * The session that wrote it; `None` is the user.
+ */
+createdBy: string | null, 
+/**
+ * False until the user accepts what an agent created. It cannot start before.
+ */
+approved: boolean, 
+/**
+ * A change an agent asked for, waiting on the user. What runs meanwhile
+ * is `spec`, the definition already accepted.
+ */
+proposed: ProcessSpec | null, 
+/**
+ * Who is asking: the creator of an unapproved process, or the proposer.
+ */
+requestedBy: string | null, state: ProcessState, pid: number | null, 
+/**
+ * The PTY stream a viewer reads while it runs.
+ */
+streamId: number | null, startedAt: number | null, 
+/**
+ * The last run's; `None` while running, or after a signal.
+ */
+exitCode: number | null, 
+/**
+ * Automatic restarts since the user last started it.
+ */
+restarts: number, 
+/**
+ * The PTY a viewer attaches to while it runs.
+ */
+ptyId: string, 
+/**
+ * Bytes ever logged: `read_logs { since }` continues from here.
+ */
+logCursor: number, 
+/**
+ * Where the current (or last) run's output starts in the log.
+ */
+runCursor: number, 
+/**
+ * Bumped by every change to the definition or to what waits on the
+ * user. An approval names the one the user read, so a change that
+ * lands while they read it is not what they approve.
+ */
+revision: number, name: string, command: string, 
+/**
+ * Relative to the workspace folder, or absolute; empty is the folder itself.
+ */
+cwd: string, env: { [key in string]: string }, autoStart: boolean, autoRestart: boolean, };
+
+/**
+ * The user accepts a process, or a change to it, as it stood at `revision`.
+ */
+export type ProcessApprove = { workspaceId: string, id: string, revision: number, };
+
+export type ProcessCreate = { workspaceId: string, name: string, command: string, cwd?: string, env?: { [key in string]: string }, autoStart: boolean, autoRestart: boolean, };
+
+/**
+ * The raw tail of a process's log, escapes and all, for a terminal to paint.
+ */
+export type ProcessLogTail = { workspaceId: string, id: string, maxBytes?: number, };
+
+/**
+ * One process of a workspace, by id or by name.
+ */
+export type ProcessRef = { workspaceId: string, id: string, };
+
+export type ProcessRemoved = { workspaceId: string, id: string, };
+
+export type ProcessReorder = { workspaceId: string, ids: Array<string>, };
+
+/**
+ * What a process runs: the part an agent may only propose.
+ */
+export type ProcessSpec = { name: string, command: string, 
+/**
+ * Relative to the workspace folder, or absolute; empty is the folder itself.
+ */
+cwd: string, env: { [key in string]: string }, autoStart: boolean, autoRestart: boolean, };
+
+/**
+ * Where a supervised process stands. `PendingApproval` is a definition an
+ * agent wrote or changed that the user has not accepted yet: it cannot start.
+ */
+export type ProcessState = "stopped" | "starting" | "running" | "paused" | "exited" | "crashed" | "pending-approval";
+
+/**
+ * Only the fields present change.
+ */
+export type ProcessUpdate = { workspaceId: string, id: string, name?: string, command?: string, cwd?: string, env?: { [key in string]: string }, autoStart?: boolean, autoRestart?: boolean, };
+
 export type ProjectFile = { name: string, path: string, relative: string, };
 
 /**
@@ -262,7 +465,15 @@ export type PtyKill = { id: string, };
 
 export type PtyResize = { id: string, cols: number, rows: number, };
 
+export type PtyResync = { id: string, };
+
 export type PtySpawn = { id: string, cwd: string, command: Array<string>, cols: number, rows: number, 
+/**
+ * The terminal session this process runs. The daemon completes the argv
+ * and the environment so the CLI reaches Crew's tools: the client cannot,
+ * because in remote mode the bridge's socket and binary are not its own.
+ */
+session?: string, 
 /**
  * Keep a live process under this id instead of replacing it: a window
  * opening again finds the agent it left running.
@@ -449,6 +660,31 @@ export type SessionsDeleted = { ids: Array<string>, };
  * How many days untouched a session outlives, for `sessions_stale` and `sessions_expire`.
  */
 export type SessionsRetention = { days: number, };
+
+/**
+ * A process `solo.yml` lists, as it would be created.
+ */
+export type SoloEntry = { 
+/**
+ * The workspace has a process by this name already, so it is skipped.
+ */
+exists: boolean, name: string, command: string, 
+/**
+ * Relative to the workspace folder, or absolute; empty is the folder itself.
+ */
+cwd: string, env: { [key in string]: string }, autoStart: boolean, autoRestart: boolean, };
+
+/**
+ * What the user read in the preview and confirmed, sent back as it was
+ * shown: `solo.yml` may have changed since, and it is not what they read.
+ */
+export type SoloImport = { workspaceId: string, processes: Array<ProcessSpec>, };
+
+export type SoloImported = { created: Array<string>, 
+/**
+ * Names the workspace already has: an import never overwrites a process.
+ */
+skipped: Array<string>, };
 
 export type TempFile = { extension: string, base64Contents: string, };
 

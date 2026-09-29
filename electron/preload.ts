@@ -4,6 +4,7 @@ import {
   type DockBounds,
   type DownloadAction,
   type DownloadInfo,
+  type MountRequest,
   type OpenTabRequest,
   type PagePrompt,
   type PromptAnswer,
@@ -91,5 +92,7 @@ contextBridge.exposeInMainWorld("crewHost", {
       ipcRenderer.invoke(CHANNELS.importCookies, workspaceId, cookies),
     setProxy: (workspaceId: string, envId: string | null, socksPort: number | null) =>
       ipcRenderer.invoke("browser:set-proxy", workspaceId, envId, socksPort),
+    reportGuest: (tab: string, webContentsId: number) => ipcRenderer.send(CHANNELS.pageGuest, tab, webContentsId),
+    onMount: (cb: (request: MountRequest) => void) => listen(CHANNELS.mount, cb),
   },
 });

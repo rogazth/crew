@@ -36,6 +36,8 @@ import { isTerminalTab } from "./lib/tabs";
 import { worktreeLabel } from "./lib/worktrees";
 import { Pages } from "./surfaces/Pages";
 import { usePages } from "./hooks/usePages";
+import { useProcesses } from "./hooks/useProcesses";
+import { CommandsSection } from "./chrome/CommandsSection";
 import { boot } from "./lib/agentRuntime";
 import { WorkspacePanes } from "./surfaces/WorkspacePanes";
 
@@ -114,7 +116,19 @@ export function App() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   // Destructured: the hook returns a fresh object each render, and these
   // callbacks are dependencies of half the shell.
-  const { page, settings, isWorkspace, isRoutines, close: closePage, toggle: togglePage, openSettings, openRoutines } = usePages();
+  const {
+    page,
+    settings,
+    isWorkspace,
+    isRoutines,
+    processId,
+    close: closePage,
+    toggle: togglePage,
+    openSettings,
+    openRoutines,
+    openProcess,
+  } = usePages();
+  const processes = useProcesses(workspaceId);
 
   // With only the main checkout there is no other worktree to tell apart.
   const { tabPlaceOf, hues } = work;
@@ -249,6 +263,15 @@ export function App() {
             onRemove: confirms.askSession,
             onRemoveMany: confirms.askSessions,
             onReorder: reorder,
+            commands: (
+              <CommandsSection
+                workspace={active}
+                processes={processes}
+                activeId={processId}
+                onOpen={(process) => openProcess(process.id)}
+                onConfirm={confirms.ask}
+              />
+            ),
             // A refusal from either still lets the other land; the button stops spinning either way.
             onRefresh: () => Promise.allSettled([worktrees.reread(), reloadSessions()]).then(() => {}),
           }}
@@ -263,6 +286,8 @@ export function App() {
           sessions={sessions}
           onConfirm={confirms.ask}
           onOpenHit={nav.openHit}
+          processes={processes}
+          allSessions={all}
           onOpenTerminal={envs.openTerminalOn}
         />
         {/* Hidden, not unmounted: agent and terminal processes stay alive. */}
@@ -310,6 +335,7 @@ export function App() {
             onOpenSession={nav.openSessionById}
             onPatchBrowser={tabs.patchBrowser}
             onOpenBrowserTab={tabs.openIn}
+            onAdoptBrowserTab={tabs.adopt}
             files={files}
             onConfirm={confirms.ask}
             // Chrome's way: the entry loads where History was, so the tab turns into the page.

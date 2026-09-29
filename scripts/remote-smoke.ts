@@ -3,7 +3,7 @@
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import { promisify } from "node:util";
-import { installDaemon, removeDaemon, rpc } from "../electron/remote-ssh.ts";
+import { installDaemon, remoteLayout, removeDaemon, rpc } from "../electron/remote-ssh.ts";
 
 const exec = promisify(execFile);
 const [destination, arch = "arm64"] = process.argv.slice(2);
@@ -14,7 +14,9 @@ if (!user || !host) {
 }
 const binary = `target/linux/crewd-linux-${arch}`;
 const target = { destination: host, user };
-const port = 17877;
+// A crewd of its own, beside any the release runs on that machine.
+const layout = remoteLayout("dev");
+const port = layout.port;
 
 if (!existsSync(binary)) {
   console.error(`Missing ${binary}`);
@@ -25,6 +27,7 @@ try {
   const paired = await installDaemon({
     target,
     port,
+    layout,
     binaryFor: (wanted) => (wanted === arch ? binary : null),
     onStep: (step) => console.log(`${step.state}\t${step.id}${step.detail ? `\t${step.detail}` : ""}`),
   });
@@ -57,7 +60,7 @@ try {
   ).catch((err: unknown) => (err instanceof Error ? err.message : String(err)));
   console.log(diag);
 } finally {
-  await removeDaemon(target, true).catch((error: unknown) => {
+  await removeDaemon(target, true, layout).catch((error: unknown) => {
     console.error(error instanceof Error ? error.message : error);
     process.exitCode = 1;
   });

@@ -20,7 +20,10 @@ export type MenuIcon =
   | "pin"
   | "unpin"
   | "collapse"
-  | "expand";
+  | "expand"
+  | "play"
+  | "stop"
+  | "pause";
 
 export type MenuAction = {
   id: string;

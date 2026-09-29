@@ -3,6 +3,7 @@ import type {
   DockSnapshot,
   DownloadAction,
   DownloadInfo,
+  MountRequest,
   OpenTabRequest,
   PagePrompt,
   PromptAnswer,
@@ -120,6 +121,10 @@ export type BrowserHost = {
   importCookies(workspaceId: string, cookies: ImportedCookie[]): Promise<{ imported: number; failed: number }>;
   /** Point a workspace's pages at that machine's loopback, or clear the proxy. */
   setProxy?(workspaceId: string, envId: string | null, socksPort: number | null): Promise<void>;
+  /** Tells main which tab a guest shows, so an agent's call on the tab reaches it. */
+  reportGuest(tab: string, webContentsId: number): void;
+  /** An agent needs a tab live that is cold, or not in this window yet. */
+  onMount(cb: (request: MountRequest) => void): () => void;
 };
 
 export type HostDragDrop =

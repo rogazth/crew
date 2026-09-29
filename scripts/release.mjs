@@ -10,7 +10,7 @@ import path from "node:path";
 const ROOT = path.resolve(import.meta.dirname, "..");
 const BRANCH = "master";
 // The workspace crates whose version Cargo.lock records.
-const CRATES = ["crew-core", "crew-protocol", "crewd"];
+const CRATES = ["crew-cli", "crew-core", "crew-protocol", "crewd"];
 
 function run(command, args, options = {}) {
   return new Promise((resolve, reject) => {

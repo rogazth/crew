@@ -1,15 +1,15 @@
 # Procesos, navegador para agentes y CLI
 
-**Propuesto el 2026-09-25. Nada construido.** Cuatro piezas que comparten
+**Propuesto el 2026-09-25. Fases 1 a 5 hechas el mismo día.** Cuatro piezas que comparten
 cimientos: el bridge MCP, `crewd` como dueño de los procesos y una identidad por
 quien llama. Se escriben juntas porque cada una asume decisiones de las otras.
 
 1. Las **sesiones de terminal** reciben el MCP de Crew igual que los agentes.
 2. Un **gestor de procesos** al estilo de Solo, dentro de `crewd`, con tools
    para que agentes y sesiones arranquen, paren y lean logs.
-3. Agentes y sesiones **conducen tabs del navegador de Crew** con las tools de
-   chrome-devtools-mcp: empaquetado, detrás del gateway, un solo proceso y un
-   lease por tab.
+3. Agentes y sesiones **conducen tabs del navegador de Crew** con tools
+   nativas sobre `webContents.debugger`, detrás del gateway y con un lease por
+   tab.
 4. Una **CLI `crew`** en condiciones.
 
 Y una decisión previa que las cruza a todas: `crewd` deja de morir con la
@@ -29,7 +29,7 @@ Verificado en el código el 2026-09-25.
 | CLI | `crewd` entiende `--mcp`, `call` y el modo daemon, con parsing a mano. `crew call` sin argumentos vuelca schemas JSON y solo imprime el `text` de la respuesta. `~/.local/bin/crew` es un script personal fuera del repo con `dev`/`build` y una ruta fija a `$HOME/Developer/...`. |
 | Navegador | v1 hecha (`docs/plans/2026-09-23-browser.md`). Dejó fuera, a propósito, que los agentes lo conduzcan. Tabs persistidos en `browser_pages`, partición propia, guests en `electron/browser/guests.ts`. |
 
-### chrome-devtools-mcp 1.10.1, leído del paquete
+### chrome-devtools-mcp 1.10.1, leído del paquete (descartado, ver decisión 3)
 
 - Apache-2.0, **sin dependencias en runtime** (build bundleado), Node `^20.19 || ^22.12 || >=23`.
 - Se conecta a un navegador existente con `--wsEndpoint` o `--browserUrl`.
@@ -55,8 +55,9 @@ Verificado en el código el 2026-09-25.
 
 ### 0. `crewd` vive fuera de la ventana
 
-Pasa a ser un **LaunchAgent** (`~/Library/LaunchAgents/…crewd.plist`) que
-apunta al binario dentro del bundle. La app lo instala en el primer arranque y
+Pasa a ser un **LaunchAgent** (el plist quedó en el data dir, no en
+`~/Library/LaunchAgents`: ver "Fase 5: lo que entró") que apunta al binario
+dentro del bundle. La app lo instala en el primer arranque y
 **se conecta** a él en vez de lanzarlo. Si no responde, lo levanta con
 `launchctl kickstart`.
 
@@ -64,6 +65,10 @@ apunta al binario dentro del bundle. La app lo instala en el primer arranque y
   `version`. Lo lee la app y lo lee la CLI.
 - **Cerrar Crew no mata los procesos.** El menú suma "Quit Crew and stop
   everything".
+- **Solo en la app empaquetada.** En dev (`crew-dev`, worktrees) el daemon
+  sigue siendo hijo de Electron, con su data-dir propio.
+- **Bundle movido:** en cada arranque la app compara la ruta del plist con la
+  del bundle y lo reinstala si no coinciden.
 - **Actualizaciones:** handshake de versión. Si el daemon no coincide con la
   app, la app le pide salir y lo relanza; los procesos con `auto_start` vuelven
   solos.
@@ -89,8 +94,14 @@ El cliente no arma esto porque en modo remoto la ruta de `crewd` y el socket
 son los de la VM.
 
 **Vida del token:** el de un agente se renueva en cada turno; el de una
-terminal dura lo que dura el proceso. Se genera en el spawn y se revoca en
-`PtyEvents::exit` y al borrar la sesión (esto último ya existe).
+terminal dura lo que dura el proceso. Se genera en el spawn y se revoca **por
+token** en `PtyEvents::exit` (así el exit tardío de un proceso viejo no revoca
+el del nuevo) y al borrar la sesión.
+
+**Quién llama.** `tools.rs` pasa de `&Session` a un
+`Caller { Agent(Session) | Terminal(Session) | User { workspace } }`. El bridge
+resuelve el token a un `Caller`; `tools/list`, `find_tool` y cada tool filtran
+según él.
 
 **Tools según quién llama.** `tools/list` y `find_tool` reciben el tipo de
 quien llama. Una terminal no tiene turnos: `continue_after_turn` no aparece.
@@ -117,6 +128,10 @@ atajos interactivos (el `r` de vite). La diferencia con una terminal es que el
 reader **nunca espera crédito**: todo va a un log en disco, y xterm se engancha
 con `attach` sobre el ring cuando alguien abre la vista. Es un flag de spawn en
 `PtyHost`; el control de flujo de las terminales normales no cambia.
+
+**Viewer lento:** el reader siempre escribe en el log y en el ring. Al viewer
+se le manda solo lo que su crédito permite; si se queda atrás, se descarta y se
+le emite `resync`, y xterm se repinta desde el ring. La memoria queda acotada.
 
 **Logs:**
 - `<data-dir>/logs/<process-id>/` con rotación a 10 MB y dos archivos.
@@ -154,86 +169,81 @@ mientras tanto. Arrancar y parar procesos que ya existen no pide permiso.
 
 **Watch:** MCP es petición/respuesta y las notificaciones push no las soportan
 bien todos los providers. Watch es `wait_for_log` más polling con `cursor`. El
-shim corta a los 20 s (`CALL_TIMEOUT` en `mcp.rs`): sube a 120 s, y
-`wait_for_log` se limita por debajo del timeout de tool más corto de los
-providers (spike, pregunta f).
+shim corta a los 20 s (`CALL_TIMEOUT` en `mcp.rs`): el timeout pasa a ser por
+llamada, 20 s por defecto y `timeout_s + 10` para `wait_for_log`, que se limita
+a 60 s.
 
-### 3. Navegador: chrome-devtools-mcp empaquetado, detrás del gateway, un proceso
+### 3. Navegador: tools nativas sobre `webContents.debugger`
+
+**Revisado el 2026-09-25:** se descarta chrome-devtools-mcp. Emular el nivel
+browser de CDP para Puppeteer, mapear `pageId` (que se reinicia al reconectar),
+el mutex global, un proceso Node empaquetado, su telemetría y un catálogo que
+cambia rápido cuestan más que escribir las tools que los agentes usan. Se
+pierden performance traces, Lighthouse y emulación; si hacen falta, se suman
+luego sobre el mismo canal.
 
 ```
-Electron      tabs persistentes, id estable de Crew
-   ▲ proxy CDP (127.0.0.1, puerto al azar, ruta con secreto)
-   │ solo guests manejables; la UI de Crew nunca aparece
-chrome-devtools-mcp   1 proceso por daemon, crewd es su único cliente
-   ▲ MCP stdio
-crewd         leases por tab, mapa tab ↔ pageId, cola de llamadas
+Electron main   dueño de los guests; ejecuta las tools con webContents.debugger
+   ▲ canal crewd → main (peticiones del daemon por el WebSocket del cliente)
+crewd           leases por tab, alcance por workspace, republica en el gateway
    ▲ find_tool / call_tool
 sesiones y agentes   van y vienen; el tab se queda
 ```
 
-**Empaquetado.** `chrome-devtools-mcp` se fija en `package.json` y `app:build`
-lo copia a `Resources/`. Lo lanza `crewd` con el binario de Electron y
-`ELECTRON_RUN_AS_NODE=1`: no hace falta Node instalado ni un MCP configurado en
-el provider. Siempre con `--no-usage-statistics`,
-`CHROME_DEVTOOLS_MCP_NO_USAGE_STATISTICS=1` y
-`CHROME_DEVTOOLS_MCP_NO_UPDATE_CHECKS=1`, con un test que lo compruebe.
+**Canal.** Hoy Electron es cliente de crewd y nada va en sentido contrario. El
+main abre su propia conexión al daemon y se registra como `browser host`;
+crewd le manda `browser_call { tab, tool, args }` y espera la respuesta. Sin
+host registrado (ventana cerrada), las tools fallan con "abre Crew para usar
+el navegador".
 
-**Un proceso, arrancado en la primera llamada.** Se mata tras 10 min sin
-llamadas y se relanza si cae. El tab no pertenece al proceso: cerrar sesiones,
-o el proceso, no cierra tabs.
+**Tools** (gateway, ninguna core, todas con `tab` opcional; por defecto el
+último tab que tomó quien llama):
 
-**El proxy CDP vive en el main de Electron,** que es dueño de los webContents.
-Emula el nivel browser que Puppeteer pide al conectar (`/json/version`,
-`Browser.getVersion`, `Target.getTargets`, `setDiscoverTargets`,
-`setAutoAttach`, `attachToTarget` con sesiones flatten) sobre
-`webContents.debugger` de cada guest. `Target.createTarget` abre un tab en Crew
-y `Target.closeTarget` lo cierra.
+| Tool | Cómo |
+| --- | --- |
+| `list_tabs`, `open_tab { url }`, `claim_tab`, `release_tab` | propias de Crew |
+| `browser_navigate { url \| back \| forward \| reload }` | `loadURL` / historial |
+| `browser_snapshot` | `Accessibility.getFullAXTree` → árbol con `uid` por nodo, mapeado a `backendDOMNodeId` y guardado por tab |
+| `browser_click`, `browser_hover { uid }` | `DOM.scrollIntoViewIfNeeded` + `DOM.getBoxModel` + `Input.dispatchMouseEvent` |
+| `browser_fill { uid, value }`, `browser_type { text }`, `browser_press { key }` | foco + `Input.insertText` / `Input.dispatchKeyEvent` |
+| `browser_screenshot { full_page? }` | `Page.captureScreenshot`, bloque `image` |
+| `browser_wait_for { text, timeout_s }` | sondeo del texto de la página |
+| `browser_console`, `browser_network` | buffer por tab desde que se engancha el debugger |
+| `browser_evaluate { expression }` | `Runtime.evaluate` con `awaitPromise`; solo con autonomía `full` |
 
-Descartado: `--remote-debugging-port`. Es menos código, pero abre todos los
-webContents, incluida la UI de Crew, a cualquier proceso local desde el
-arranque.
+Los uids de un snapshot solo valen hasta el siguiente snapshot del mismo tab;
+uno viejo falla con "vuelve a tomar el snapshot".
 
-**Superficie de tools.** Se republican detrás del gateway con prefijo
-`browser_` (`browser_click`, `browser_take_snapshot`…). Ninguna es core, así
-que el prompt no crece.
-- **Se ocultan** `new_page`, `close_page`, `select_page`, `list_pages`,
-  `get_tab_id` y las categorías que exigen pipe (`extensions`, `pwa`).
-- **`pageId` sale del schema;** crewd lo inyecta.
-- **Tools propias de Crew:** `list_tabs` (url, título, quién tiene el lease y
-  hasta cuándo), `open_tab { url }`, `claim_tab { tab }`, `release_tab { tab }`.
-- **Las tools de página aceptan un `tab` opcional.** Por defecto usan el último
-  tab que tomó quien llama.
-- **Las imágenes pasan tal cual:** `call_tool` reenvía los bloques `image` de
-  `take_screenshot`. La CLI los guarda en un archivo e imprime la ruta.
+**Tabs fríos.** El renderer solo mantiene vivos 6 guests más los fijados
+(`retention.ts`) y solo monta los workspaces visitados.
+- El lease **fija** el guest, igual que DevTools o una descarga.
+- `open_tab`/`claim_tab` o una tool sobre un tab frío, o de un workspace no
+  montado, le piden al renderer que lo monte oculto y esperan a que el guest se
+  enganche (timeout 15 s).
+- Cada llamada resuelve el guest actual del tab: si renació, cambió su
+  `webContentsId` y el debugger se vuelve a enganchar.
 
 **Leases por tab,** en memoria en crewd:
 - **Tomarlo:** con `open_tab`, `claim_tab` o la primera tool sobre el tab. Cada
   llamada lo renueva.
 - **Soltarlo:** con `release_tab`, a los 120 s sin uso, al borrar la sesión o
   al salir el proceso de una terminal. El de un agente **no** se suelta al
-  terminar el turno, para que pueda seguir en el siguiente; lo suelta el TTL.
-- **Conflicto:** otra sesión recibe "tab X en uso por Y, libre en ~N s; usa
-  otro tab o espera".
+  terminar el turno; lo suelta el TTL.
+- **Conflicto:** "tab X en uso por Y, libre en ~N s; usa otro tab o espera".
 - **El usuario manda:** si hace click o escribe en un tab con lease, durante
-  unos segundos se rechazan las tools de input del agente (click, fill, press).
-  Las de lectura siguen. El tab muestra el avatar de quien lo tiene y un botón
-  para soltarlo a la fuerza.
+  3 s se rechazan las tools de input (click, hover, fill, type, press). Las de
+  lectura siguen. El tab muestra el avatar de quien lo tiene y un botón para
+  soltarlo.
 
-**Mapa tab ↔ `pageId`.** El proxy conoce `targetId ↔ tab`. crewd tiene que
-llegar de `pageId` a `targetId` y rehacer el mapa cuando el MCP se reconecta,
-porque el contador se reinicia. Cómo obtenerlo de forma fiable es la pregunta c
-del spike.
-
-**Concurrencia.** El mutex global serializa todo: un `wait_for` o un trace de
-performance de A bloquea a B aunque estén en tabs distintos. Se empieza con un
-proceso. Si aparece contención, se pasa a un pool de 2–3 con afinidad por tab,
-sin cambiar nada hacia las sesiones.
+**DevTools abiertas:** `debugger.attach` convive con DevTools en Electron; si
+falla, la tool responde "cierra DevTools en este tab".
 
 **Qué tabs se pueden manejar:** los browser tabs del workspace de quien llama.
 
-**Modo remoto:** chrome-devtools-mcp correría en la VM y tendría que tunelear
-el WebSocket del proxy por la conexión del cliente. No entra en esta v1, pero
-el proxy queda en una frontera que se puede tunelear.
+**Imágenes:** `call_tool` reenvía los bloques `image`. La CLI los guarda en un
+archivo e imprime la ruta.
+
+**Modo remoto:** fuera de esta versión.
 
 ### 4. CLI `crew`
 
@@ -272,74 +282,104 @@ distribuida; si no, en tu máquina nunca estarías probando la real.
 
 ## Fases
 
-### Fase 0: spike (rama desechable, medio día)
+### Fase 0: spike
 
-Preguntas que tienen que salir con "sí" o con un plan B:
-
-- **a.** chrome-devtools-mcp 1.10.1 arranca con `ELECTRON_RUN_AS_NODE=1` sobre
-  el Node de Electron 44.
-- **b.** Puppeteer `connect` contra un proxy sintetizado sobre
-  `webContents.debugger`: `list_pages`, `take_snapshot`, `click` y
-  `take_screenshot` sobre un guest.
-- **c.** Una forma fiable de mapear `pageId ↔ targetId`: `structuredContent` de
-  `list_pages`, parsear su texto, u otra.
-- **d.** `debugger.attach` convive con la ventana de DevTools abierta sobre el
-  mismo tab.
-- **e.** El orden de argv funciona: codex con `-c mcp_servers…` junto a
-  `resume <id>`, y claude con `--mcp-config` junto a `--resume`.
-- **f.** El timeout de tool MCP de claude, codex y opencode, para fijar el
-  límite de `wait_for_log`.
+Descartado junto con chrome-devtools-mcp. Lo que quedaba (argv de codex con
+`resume`, claude con `--mcp-config` y `--resume`, debugger junto a DevTools) se
+comprueba con tests dentro de cada fase.
 
 ### Fase 1: MCP en terminales
 
-`pty_spawn { session }`, token por proceso, flags por provider, tools según
-quién llama y `instructions` en el `initialize`.
-Tests: Rust para el env y los flags de cada provider, y `scripts/drive.mjs` con
-una terminal que llame a `list_agents`.
+`Caller`, revocación por token, `pty_spawn { session }`, flags por provider,
+tools según quién llama, `instructions` en el `initialize` y timeout por
+llamada. Tests: Rust para el env y los flags de cada provider, y
+`scripts/drive.mjs` con una terminal que llame a `list_agents`.
 
 ### Fase 2: gestor de procesos
 
-Modo supervisado en `PtyHost`, logs con rotación y cursor, `ProcessHost` con
-estados y backoff, RPCs, eventos al cliente, sección "Commands" por workspace
-en el sidebar, vista con xterm, tools MCP y aprobación de `create_process`.
-Tests: Rust para drenar sin viewer, rotación, cursor, backoff y señales al
-grupo. Un test de estrés con un proceso que escupe 50 MB sin nadie mirando.
+Modo supervisado en `PtyHost`, `resync` del viewer, logs con rotación y cursor,
+`ProcessHost` con estados y backoff, RPCs, eventos al cliente, sección
+"Commands" por workspace en el sidebar, vista con xterm, tools MCP, aprobación
+de `create_process` e importador de `solo.yml`. Tests: Rust para drenar sin
+viewer, rotación, cursor, backoff y señales al grupo. Un test de estrés con un
+proceso que escupe 50 MB sin nadie mirando.
+
+**Construido**, con estas decisiones de más:
+- Un cambio que pide aprobación queda como `proposed` junto a la definición
+  aceptada, que sigue corriendo; aprobar lo aplica, rechazar lo descarta. Un
+  proceso nuevo rechazado se borra. La propuesta se guarda como parche (solo
+  los campos que cambia) y al aprobar se aplica sobre la definición de ese
+  momento; si el usuario edita a mano un campo propuesto, ese campo sale de la
+  propuesta.
+- Cada cambio a la definición o a la propuesta sube `revision`. Aprobar lleva
+  la que el usuario leyó y se rechaza ("review it again") si cambió: un agente
+  no puede cambiar el comando mientras el usuario lee la tarjeta.
+- `wait_for_log` sin `since` empieza donde empezó la corrida viva, así que
+  arrancar y esperar ve todo el boot; durante un backoff espera la corrida
+  siguiente. Si el proceso no está arriba contesta `ended` sin buscar, y todo
+  cambio de estado despierta a quien espera.
+- `send_input` pide autonomía `full`: lo que el proceso lee lo puede ejecutar.
+- El import de `solo.yml` muestra una vista previa (comandos y flags) y crea lo
+  que el usuario confirmó, no el archivo tal como esté después. Un nombre que
+  ya existe se salta y se informa; nunca se sobrescribe.
+- Los frames de un PTY van solo a los clientes que hicieron `pty_attach` de ese
+  stream.
+- El log lleva líneas `[crew] …` entre corridas (comando, salida, reintento);
+  `grep_logs` y `wait_for_log` no las cuentan.
+- La vista es una página sobre el workspace, no un tab: se abre desde la
+  sección "Commands" y cerrarla no toca el proceso.
+- Un proceso se nombra por id o por nombre, y los nombres son únicos por
+  workspace, con un índice único (migración 20, que antes renombra los
+  duplicados a `web (2)`).
+- Las tools viven en `crates/crew-core/src/process_tools.rs` y se registran en
+  `crewd::serve`. `timeout_s` es obligatorio en `wait_for_log` y se ajusta a
+  1–60 s. `created_by` sale como "Nombre (agent id)" o "the user".
+- Al cerrar, `crewd` manda SIGTERM a todos los procesos a la vez y espera un
+  solo `stop_grace` para todos antes de que `PtyHost::kill_all` mate el resto.
 
 ### Fase 3: CLI
 
 Binario `crew`, `daemon.json`, identidad de usuario, comandos, completions,
 menú de instalación y `scripts/crew-dev`.
 
+Hecha así: crate `crates/crew-cli` (lib + binario `crew`); `crewd call` llama
+al mismo código y `crewd --mcp` sigue sirviendo solo desde el env de una
+sesión. El bridge suma `tools/catalog` (todas las tools de quien llama, para
+`crew call --help`) y `whoami` (para `crew status`); `daemon.json` suma `pid`.
+Los comandos de procesos y `crew tabs` se escribieron contra los nombres y
+argumentos de las fases 2 y 4 (`process`, `tail`, `since`, `pattern`,
+`timeout_s`) y fallan con el error del daemon hasta que esas tools existan.
+`logs -f` lee con el cursor y espera con `wait_for_log` (patrón vacío) en vez
+de sondear. La app vuelve a levantar un daemon que llevaba más de 60 s arriba,
+para que `crew daemon restart` no la cierre la segunda vez.
+
 ### Fase 4: navegador para agentes
 
-Proxy CDP en el main, empaquetado y ciclo de vida de chrome-devtools-mcp,
-cliente MCP en crewd, republicación en el gateway, leases, bloqueo por input
-del usuario, avatar en el tab e imágenes en `call_tool`.
-Tests: snapshot del catálogo republicado, que falla si una actualización cambia
-nombres; leases en Rust; proxy con Electron simulado; y un test de que la
-telemetría va apagada.
+Canal crewd → main, tools nativas, snapshot con uids, leases, fijar y revivir
+tabs fríos, bloqueo por input del usuario, avatar en el tab e imágenes en
+`call_tool`. Tests: snapshot del catálogo, leases en Rust, tools contra un
+guest real en e2e.
 
 ### Fase 5: `crewd` como LaunchAgent
 
-plist, `kickstart`, handshake de versión, "Quit and stop everything" y
-`crew daemon install/uninstall`.
+plist (solo empaquetado), `kickstart`, handshake de versión, reinstalar si el
+bundle se movió, "Quit and stop everything" y `crew daemon install/uninstall`.
 
 ### Fase 6: extras
 
-Puertos, importador de `solo.yml`, pool de chrome-devtools-mcp si hubo
-contención, y túnel CDP para modo remoto.
+Puertos y, si hacen falta, traces de performance sobre el canal del navegador.
 
 ## Riesgos
 
 | Riesgo | Mitigación |
 | --- | --- |
-| chrome-devtools-mcp cambia nombres y semántica de tools rápido | Versión fijada, snapshot test del catálogo, actualizar a propósito |
-| Puppeteer pide al proxy algo que no emula | Spike b; los métodos desconocidos se reenvían al target adjunto o fallan con un mensaje claro |
-| El mutex global genera contención | Pool con afinidad por tab (fase 6) |
+| El snapshot nativo es peor que el de chrome-devtools-mcp | Filtrar nodos ignorados, nombres y roles como en su formato; iterar con uso real |
+| El mutex de tabs no alcanza con muchos agentes | Cada tab tiene su debugger; las llamadas solo se serializan por tab |
 | El modo supervisado rompe el backpressure de las terminales | Es un flag de spawn; las terminales conservan `wait_for_credit`, con un test que lo cubra |
 | Un agente crea un proceso dañino | `pending-approval` con autonomía `ask`; `created_by` visible en la UI |
-| El debugger choca con DevTools | Spike d; si chocan, el lease se suspende mientras DevTools esté abierta |
-| La telemetría de Google se escapa | Flag, env y un test |
+| Un agente corre JS en una página con las cookies del usuario | `browser_evaluate` solo con autonomía `full`; navegar y abrir tabs siguen abiertos |
+| El debugger choca con DevTools | Mensaje claro y el lease sigue |
+| El LaunchAgent apunta a un bundle viejo | Comparar ruta en cada arranque y reinstalar |
 
 ## Preguntas abiertas (default elegido)
 
@@ -351,16 +391,172 @@ contención, y túnel CDP para modo remoto.
 - **TTL del lease.** Default: 120 s.
 - **¿Cerrar Crew para los procesos?** Default: no, con la opción explícita en
   el menú.
-- **Tamaño del pool de chrome-devtools-mcp.** Default: 1.
 
 ## Estado
 
 | Fase | Estado |
 | --- | --- |
-| 0 | pendiente |
-| 1 | pendiente |
-| 2 | pendiente |
-| 3 | pendiente |
-| 4 | pendiente |
-| 5 | pendiente |
+| 0 | descartada |
+| 1 | hecha |
+| 2 | hecha |
+| 3 | hecha. En dev `crew daemon stop`/`restart` siguen siendo best-effort (SIGTERM al pid de `daemon.json`; la app relanza su daemon); con el LaunchAgent van por launchctl (fase 5) |
+| 4 | hecha (ver abajo) |
+| 5 | hecha (ver abajo) |
 | 6 | pendiente |
+
+### Fase 4: lo que entró
+
+- **Canal.** Electron main abre su propia conexión (`electron/browser/host-link.ts`),
+  se registra con `browser_host_register` y se reconecta sola si `crewd`
+  reinicia. `crewd` le manda `browser-call { callId, tab, tool, args, page }`
+  solo a ese cliente y espera `browser_result { callId, ok, result | error }`;
+  solo el cliente al que fue la llamada puede contestarla. El host es un
+  cliente "callado": de los eventos solo oye `browser-*`.
+- **Rust** (`crew-core`): `browser_relay.rs` (`BrowserRelay::call`, bloqueante,
+  "Open Crew to use the browser." sin host), `browser_leases.rs` (TTL 120 s,
+  renovación, conflicto, soltar todo lo de una sesión, último tab por quien
+  llama, evento `browser-leases`) y `browser_tools.rs` (`BrowserTools`: una
+  función por tool, catálogo con schemas, alcance por workspace leyendo los
+  strips guardados con `browser::open_pages`). RPCs nuevos:
+  `browser_leases_list`, `browser_lease_release` y `browser_tool` (corre una
+  tool como el usuario). Borrar la sesión y la salida del pty de una terminal
+  sueltan sus leases.
+- **Tools en main** (`agent-tools.ts`, `ax-snapshot.ts`, `press.ts`,
+  `cdp-page.ts`, `tab-guests.ts`): todas las de la tabla, serializadas por
+  tab, con timeout por comando CDP para que uno colgado no trabe el tab.
+- **Teclado dentro de la página.** Probado en Electron 44: `Input.dispatchKeyEvent`
+  e `Input.insertText` no llegan a un guest cuyo `<webview>` no tiene el foco
+  de la ventana, y darle el foco le quitaría el teclado al usuario. `type` y
+  `press` reproducen las teclas en la página (eventos de teclado más su efecto
+  por defecto: comandos de edición, enviar el form, mover el foco, scroll);
+  `fill` escribe con `execCommand("insertText")` y, si el campo no lo acepta,
+  usa el setter nativo de `value`. Los clicks sí van por `Input.dispatchMouseEvent`.
+- **Tabs ocultos.** Un guest con `display:none` no dibuja: el screenshot nunca
+  llega y los clicks caen en una página sin tamaño. Un tab con lease que no está
+  a la vista queda montado debajo del pane visible y tapado
+  (`Browsers.tsx`, "staged"). Si la ventana está minimizada o una página como
+  Settings tapa los tabs, el screenshot cae al último frame
+  (`capturePage`) o responde por qué no hay.
+- **Tabs fríos.** Un tab con lease se fija en `retention.ts`. Si el tab está frío,
+  o su workspace no está montado, main le pide al renderer montarlo
+  (`browser:mount`) y espera 15 s a que el guest se reporte
+  (`browser:page-guest`). `open_tab` agrega el tab al strip en segundo plano y
+  hace leer el strip guardado de ese contexto, así queda persistido.
+- **UI:** la pastilla del tab muestra la cara del agente; el pane, una barra con
+  "Take back".
+- **Tests:** Rust de leases, relay, tools y el ida y vuelta por WebSocket
+  (`crewd/tests/browser_host.rs`); vitest del snapshot contra un árbol AX
+  grabado en Electron 44, del parseo de teclas, de la serialización por tab y
+  del bloqueo por input del usuario. `e2e/browser-agent.test.ts` está escrito
+  pero no se corrió (el harness usa la base de datos real en macOS).
+
+- **Gateway.** `BrowserTools` es un `ToolFamily` registrado en `crewd::serve`
+  con la misma instancia que usa el canal: las 16 tools, ninguna core, para
+  agentes, terminales y el usuario. El `Holder` sale del `Caller`, el alcance
+  de `Caller::workspace_id()`, y la respuesta va como `ToolOutput::Content`,
+  así que un screenshot llega como bloque `image`. La salida del proceso de
+  una terminal suelta sus leases junto con su token (`SpawnOptions::on_exit`).
+- `browser_tool` (RPC) se queda: corre una tool como el usuario por el
+  WebSocket, que es lo que usa `e2e/browser-agent.test.ts`; la CLI va por el
+  bridge con el token del usuario.
+
+**Gateway:** `BrowserTools` implementa `ToolFamily` y se registra en `crewd::serve` junto a las tools de procesos; `crew tabs` llama a `list_tabs`.
+
+**Correcciones tras la revisión:**
+
+- **`browser_evaluate` pide autonomía `full`.** Corre cualquier script con
+  `userGesture` en una partición que puede tener las cookies importadas del
+  navegador del usuario, así que a quien tiene `ask` se le rechaza con un
+  mensaje que dice que el usuario le suba la autonomía. Decisión: `navigate` y
+  `open_tab` siguen abiertos para todos, porque van adonde una persona podría
+  hacer click; el resto de las tools solo hace lo que haría una persona.
+- **Timeouts por tool.** Una tabla en `browser_tools::budget` dice cuánto
+  espera `crewd` a la ventana por cada tool: 35 s, 55 s para `open_tab` y
+  `browser_navigate` (montar 15 s más cargar 30 s) y 35 s más la espera en
+  `browser_wait_for`. `mcp::call_timeout` (el shim y `crew call`, directo o por
+  `call_tool`) espera eso más 10 s, así la respuesta de `crewd`, aunque sea su
+  timeout, llega antes. `wait_for_log` sigue con `timeout_s`. Si `open_tab`
+  falla o vence después de llegar a la ventana, el error nombra el tab y el
+  lease queda de quien llamó; solo sin host se olvida.
+- **Nada corre tarde.** `BrowserCall` lleva `deadline` (epoch ms): main salta
+  la llamada que ya venció al llegarle su turno en el tab o al terminar de
+  montarlo. `loadURL` compite con `LOAD_WAIT_MS`; una página que nunca termina
+  de cargar contesta "still loading" y no traba el tab.
+- **Leases en orden.** Cada lista lleva `seq`, numerada bajo el mismo lock que
+  el cambio y arrancando en el reloj (µs) para que un `crewd` reiniciado siga
+  por encima. Main (`leaseFeed`) y el store del renderer descartan una lista
+  más vieja que la última. Las renovaciones no se anuncian: `until` es un
+  piso, y el lease termina cuando una lista nueva lo deja fuera.
+- **Respawn de una terminal.** Los leases llevan el número del proceso que los
+  tomó o renovó (`Leases::begin_process`); la salida del proceso viejo suelta
+  solo los suyos (`end_process`), no los que el nuevo ya tomó.
+- **Un tab cerrado no vuelve.** El renderer avisa con `browser_tab_closed` al
+  cerrar cualquier tab: se va el lease, el tab deja de ser el default de
+  todos y sale de la gracia de `open_tab`. Además, en cuanto el strip guardado
+  tiene el tab, manda el strip y la gracia no aplica.
+- `bindTab` registra un solo `destroyed` por `webContents`.
+
+### Fase 5: lo que entró
+
+- **plist** (`crates/crew-cli/src/launch_agent.rs`, el único lugar que lo
+  escribe): label `rogazth.crew.crewd` (el `appId` más `.crewd`; un test en
+  Rust y otro en vitest lo atan a `package.json`), `crewd --data-dir <userData>
+  --supervised-by launchd`, `KeepAlive { SuccessfulExit: false }` (un crash
+  vuelve, una parada limpia sale 0 y queda abajo), `ProcessType Interactive`
+  (sin eso launchd frena CPU e I/O, y ahí corren los dev servers) y
+  stdout/stderr a `<data-dir>/crewd.log`, creado 0600.
+- **Sin arranque en el login**, a diferencia de la decisión 0: sin `RunAtLoad`
+  y el plist en `<data-dir>/rogazth.crew.crewd.plist`, no en
+  `~/Library/LaunchAgents`. launchd.plist(5) dice que `SuccessfulExit` implica
+  `RunAtLoad`, así que en `LaunchAgents` el login lo cargaría y lo arrancaría
+  con sus procesos `auto_start` aunque el usuario no abra Crew. Así `crewd`
+  corre solo cuando Crew (o `crew daemon install|restart`) hace `bootstrap` y
+  `kickstart`, y "Quit Crew and Stop Everything" sigue parado tras reiniciar.
+- **crewd** con `--supervised-by launchd` no imprime el handshake (iría al log
+  con el token), no mira stdin, deja el log en 0600 y lo vacía pasados 10 MB.
+  `daemon_shutdown` (WebSocket) y `daemon/shutdown` (bridge, solo
+  `Caller::User`) piden salir igual que una señal.
+- **App empaquetada** (`electron/daemon-agent.ts`, decisiones puras en
+  `daemon-agent-plan.ts`): lee el plist con `plutil`; si falta o nombra otro
+  `crewd` u otro data dir corre `crew daemon install` del bundle (que hace
+  bootout del viejo). Después `daemon.json` + `whoami` por el bridge: listo,
+  faltante o con pid muerto (`bootstrap` si no está cargado y siempre
+  `kickstart`), vivo pero mudo (`kickstart -k`), otra versión
+  (`daemon/shutdown` y `kickstart`). Espera 20 s un daemon nuevo.
+- **Plan B:** si el LaunchAgent no se instala, launchctl falla o no aparece
+  nada en esos 20 s, la app hace bootout del agente (para no tener dos daemons
+  en el mismo data dir) y en esa corrida lanza `crewd` como hijo, igual que en
+  dev, con una notificación: los procesos paran al salir. El diálogo de error
+  queda para cuando el hijo también falla (`decideLaunch` en el plan puro). Con la ventana abierta revisa cada 2 s: se cambia a un daemon nuevo y
+  recarga la ventana, y levanta uno que falte (como mucho uno cada 10 s, para
+  no pisar el throttle de launchd). Salir solo suelta. En dev nada cambia.
+- **Menú:** "Quit Crew and Stop Everything" (`daemon/shutdown`, espera la
+  salida; si no contesta, `launchctl bootout`). En dev es un quit normal.
+- **CLI:** `crew daemon install [--crewd <path>]` (por defecto el `crewd` junto
+  al `crew` resuelto) y `uninstall`. `Supervisor::LaunchAgent` cuando el plist
+  sirve ese data dir: `stop` pide `daemon/shutdown` (o `launchctl kill
+  SIGTERM`), `restart` hace `kickstart -k`, `status` muestra estado y pid de
+  `launchctl print`. `install` y `restart` cargan si hace falta y siempre
+  hacen `kickstart`. `install` se niega si hay un `crewd` hijo de la app
+  corriendo en ese data dir.
+- **Tests:** Rust del plist, su lectura, el label, `launchctl print` y la
+  elección de supervisor; `crewd` bajo launchd (sobrevive a stdin, no imprime el
+  token, sale 0 con `daemon/shutdown`) y quién puede pedir la salida. vitest de
+  instalar o no, archivo viejo, versión distinta, los pasos del watchdog y el
+  plan B. No se
+  instaló un LaunchAgent real ni se corrió launchctl en los tests.
+- **Tras la revisión:** dentro de una sesión `crew` nunca cae a
+  `daemon.json`: `--data-dir` ya no cambia de identidad, media sesión se
+  rechaza, `crew daemon` se rechaza y solo `--as-user` (para humanos) hace de
+  usuario. Es política, no aislamiento: todo corre con el mismo UID y puede
+  leer `daemon.json` (ver ARCHITECTURE.md). Un segundo `crewd` no borra el
+  socket de uno vivo: sale 0 bajo launchd y 1 como hijo. Bajo launchd un
+  arranque que falla por algo permanente (data dir, base, otro daemon) sale 0
+  tras loguearlo; uno transitorio sale 1 hasta cinco veces seguidas
+  (`crewd.failed-starts`). Las señales se escuchan antes de arrancar. El log se
+  revisa cada 5 min (cola en `crewd.log.1`, se vacía en su lugar, 0600). La
+  app: otra versión solo se reemplaza al abrir; con la ventana abierta se
+  avisa una vez y se deja. El watchdog no toca launchctl una vez empezado un
+  quit. El plist se compara con `realpath`; bajo App Translocation no se
+  instala el agente y corre el hijo con aviso. `daemon.json` viejo lo pisa
+  `crewd`, la app ya no lo borra. Una sola instancia de Crew por data dir.

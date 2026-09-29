@@ -13,6 +13,7 @@ import { ProviderIcon } from "./ProviderIcon";
 import { SortableList } from "./SortableList";
 import { StubIcon } from "./StubIcon";
 import { TabLauncher, type Launch } from "./TabLauncher";
+import { useLease } from "../hooks/useBrowserLeases";
 import { TabPeek, type PeekAnchor } from "./TabPeek";
 import { toneOf, type TabTone } from "../lib/tabStyle";
 import { useBrowserPage } from "../hooks/useBrowserPage";
@@ -689,6 +690,7 @@ function TabIcon({ tab, sessions, tone }: { tab: Tab; sessions: Session[]; tone:
  */
 function BrowserTabFace({ tab, bare = false }: { tab: Extract<Tab, { kind: "browser" }>; bare?: boolean }) {
   const page = useBrowserPage(tab.id);
+  const lease = useLease(tab.id);
   const [broken, setBroken] = useState<string | null>(null);
   const live = page.webContentsId !== null;
   const title = live ? browserTitle(page.title, page.url) : browserTitle(tab.title, tab.url);
@@ -708,6 +710,12 @@ function BrowserTabFace({ tab, bare = false }: { tab: Extract<Tab, { kind: "brow
         )}
       </span>
       {!bare && <span className="min-w-0 flex-1 truncate">{title}</span>}
+      {/* An agent driving the page wears its face on the tab; the page's own bar has the way to take it back. */}
+      {lease?.sessionId && (
+        <span title={`${lease.holder} is using this page`} className="flex shrink-0 items-center" data-tab-driver={lease.holder}>
+          <AgentAvatar seed={lease.sessionId} className="size-3.5" />
+        </span>
+      )}
     </>
   );
 }

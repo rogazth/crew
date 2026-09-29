@@ -205,7 +205,11 @@ export function useGuest(options: Options): RefObject<PageGuest | null> {
       // A restored stack re-commits its page; that is the same visit, not a new one.
       let restoring = open.restoring;
       built = createGuest(host, open.src, partition, {
-        attach: (webContentsId) => update({ webContentsId, crashed: false, hung: false }),
+        attach: (webContentsId) => {
+          update({ webContentsId, crashed: false, hung: false });
+          // Main finds a tab's page by this when an agent drives it.
+          browserHost()?.reportGuest(pageId, webContentsId);
+        },
         start: (next) => {
           const current = pages.get(pageId);
           // Chromium doesn't announce a favicon again on the same origin, so only a new origin clears it.

@@ -190,8 +190,8 @@ pub fn turn_failed(rec: &Map<String, Value>) -> Option<String> {
 
 pub fn tool_label(name: &str, input: &Map<String, Value>) -> String {
     let command = string_field(Some(input), "command").or_else(|| string_field(Some(input), "cmd"));
-    if let Some(tool) = command.as_deref().and_then(crew_call) {
-        return format!("Crew {}", tool.replace('_', " "));
+    if let Some((path, _)) = command.as_deref().and_then(crew_command) {
+        return format!("Crew {path}");
     }
     match name.to_ascii_lowercase().as_str() {
         "updatetodos" => return "Todos".into(),
@@ -254,7 +254,7 @@ fn tool_detail(
                     return Some(message);
                 }
                 // Crew's answer is the row's body; with nothing printed the command is.
-                if let (Some(_), Some(text)) = (crew_call(&command), text_field(outcome, "stdout")) {
+                if let (Some(_), Some(text)) = (crew_command(&command), text_field(outcome, "stdout")) {
                     return Some(ToolDetail::Output { text });
                 }
             }
@@ -388,46 +388,116 @@ fn grep_output(success: Option<&Map<String, Value>>) -> Option<String> {
     Some(lines.join("\n")).filter(|text| !text.is_empty())
 }
 
-/// The Crew tool a shell command calls, when cursor reaches one the only way
-/// it can: `…/crewd call list_agents '{}'`.
-fn crew_call(command: &str) -> Option<&str> {
-    let at = command.find(" call ")?;
-    let binary = command[..at].rsplit('/').next()?;
-    if binary != "crewd" && binary != "crew" {
+/// The Crew command a shell command runs, when cursor reaches one the only
+/// way it can: `…/crew agents send <id> <text>`. The group and verb, and what
+/// follows them.
+fn crew_command(command: &str) -> Option<(String, Vec<String>)> {
+    let words = shell_words(command);
+    let (binary, rest) = words.split_first()?;
+    let binary = binary.rsplit('/').next()?;
+    if binary != "crew" && binary != "crewd" {
         return None;
     }
-    let tool = command[at + " call ".len()..].split_whitespace().next()?;
-    tool.chars().all(|c| c.is_ascii_alphanumeric() || c == '_').then_some(tool)
+    // Global flags may come first; the ones that take a value are named.
+    let mut rest = rest.iter().peekable();
+    while let Some(word) = rest.peek() {
+        if !word.starts_with('-') {
+            break;
+        }
+        let takes_value = matches!(word.as_str(), "-w" | "--workspace" | "--data-dir");
+        rest.next();
+        if takes_value {
+            rest.next();
+        }
+    }
+    let rest: Vec<String> = rest.cloned().collect();
+    let (group, verb) = (rest.first()?, rest.get(1)?);
+    let named = |word: &str| !word.is_empty() && word.chars().all(|c| c.is_ascii_alphanumeric() || c == '-');
+    if !named(group) || !named(verb) {
+        return None;
+    }
+    Some((format!("{group} {verb}"), rest[2..].to_vec()))
 }
 
-/// Cursor reaches Crew's tools through the shell (`crew call message_agent
-/// '<json>'`), so a message to another agent arrives as a command. Read back as
+/// Cursor reaches Crew's tools through the shell (`crew agents send <id>
+/// <text>`), so a message to another agent arrives as a command. Read back as
 /// the message it is, it shows who it went to and what it said, as it does for
 /// the providers that call the tool by name.
 fn bridge_message(command: &str) -> Option<ToolDetail> {
-    const CALL: &str = " call message_agent '";
-    let start = command.find(CALL)? + CALL.len();
-    let args = single_quoted(&command[start..])?;
-    super::crew_tool_detail("crew.message_agent", &try_parse_json_record(&args)?)
+    let (path, args) = crew_command(command)?;
+    if path != "agents send" {
+        return None;
+    }
+    let (to, words) = args.split_first()?;
+    // `-` reads the text from stdin, which the command line does not show.
+    if words.is_empty() || words == ["-"] || to.starts_with('-') {
+        return None;
+    }
+    let mut input = Map::new();
+    input.insert("to".into(), Value::String(to.clone()));
+    input.insert("text".into(), Value::String(words.join(" ")));
+    super::crew_tool_detail("crew.message_agent", &input)
 }
 
-/// The body of a shell single-quoted word, up to its closing quote. A quote
-/// inside is written `'\''`: close, escaped quote, reopen.
-fn single_quoted(rest: &str) -> Option<String> {
-    let mut out = String::new();
-    let mut tail = rest;
-    loop {
-        let end = tail.find('\'')?;
-        out.push_str(&tail[..end]);
-        tail = &tail[end + 1..];
-        match tail.strip_prefix("\\''") {
-            Some(reopened) => {
-                out.push('\'');
-                tail = reopened;
+/// A command line split the way a POSIX shell splits words: single quotes
+/// verbatim, double quotes with backslash escapes, and nothing past the first
+/// unquoted `|`, `;`, `&` or redirection.
+fn shell_words(command: &str) -> Vec<String> {
+    let mut words = Vec::new();
+    let mut word = String::new();
+    let mut started = false;
+    let mut chars = command.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\'' => {
+                started = true;
+                for q in chars.by_ref() {
+                    if q == '\'' {
+                        break;
+                    }
+                    word.push(q);
+                }
             }
-            None => return Some(out),
+            '"' => {
+                started = true;
+                while let Some(q) = chars.next() {
+                    match q {
+                        '"' => break,
+                        '\\' => {
+                            if let Some(escaped) = chars.next() {
+                                word.push(escaped);
+                            }
+                        }
+                        _ => word.push(q),
+                    }
+                }
+            }
+            '\\' => {
+                started = true;
+                if let Some(escaped) = chars.next() {
+                    word.push(escaped);
+                }
+            }
+            '|' | ';' | '&' | '<' | '>' => break,
+            c if c.is_whitespace() => {
+                if started {
+                    words.push(std::mem::take(&mut word));
+                    started = false;
+                }
+            }
+            c => {
+                started = true;
+                word.push(c);
+            }
         }
     }
+    if started {
+        // A trailing `2` of `2>/dev/null` is the redirection's, not a word.
+        if !(word == "2" && command.contains("2>")) {
+            words.push(word);
+        }
+    }
+    words
 }
 
 fn path_argument(args: &Map<String, Value>) -> Option<String> {
@@ -649,8 +719,8 @@ mod tests {
 
     #[test]
     fn a_crew_tool_called_through_the_shell_is_named_as_crews() {
-        let args = json!({ "command": "/Users/me/crew/target/debug/crewd call list_agents '{}'" });
-        assert_eq!(tool_label("Shell", args.as_object().unwrap()), "Crew list agents");
+        let args = json!({ "command": "/Users/me/crew/target/debug/crew agents list --json" });
+        assert_eq!(tool_label("Shell", args.as_object().unwrap()), "Crew agents list");
         let result = json!({ "success": { "exitCode": 0, "stdout": "[{\"name\": \"Ada\"}]" } });
         assert_eq!(
             tool_detail("Shell", args.as_object().unwrap(), result.as_object()),
@@ -815,20 +885,21 @@ mod tests {
         };
         let ok = serde_json::json!({ "success": { "exitCode": 0 } });
         let ok = ok.as_object();
-        let sent = r#"/bin/crewd call message_agent '{"to":"abc","text":"it'\''s green"}' 2>/dev/null || true"#;
+        let sent = r#"/bin/crew agents send abc 'it'\''s' "green, \"really\"" 2>/dev/null || true"#;
         match tool_detail("shell", &args(sent), ok) {
             Some(ToolDetail::Message { to, text }) => {
                 assert_eq!(to, "abc");
-                assert_eq!(text, "it's green");
+                assert_eq!(text, "it's green, \"really\"");
             }
             other => panic!("expected a message, got {other:?}"),
         }
-        // Wrong arguments, a failed call, or another tool stay the command they were.
-        let wrong = r#"crewd call message_agent '{"id":"abc","message":"hi"}'"#;
-        assert!(matches!(tool_detail("shell", &args(wrong), ok), Some(ToolDetail::Command { .. })));
+        // Text on stdin, a failed call, or another command stay the command they were.
+        let piped = "git diff | crew agents send abc -";
+        assert!(matches!(tool_detail("shell", &args(piped), ok), Some(ToolDetail::Command { .. })));
         let failed = serde_json::json!({ "success": { "exitCode": 1 } });
         assert!(matches!(tool_detail("shell", &args(sent), failed.as_object()), Some(ToolDetail::Command { .. })));
-        let listed = "crewd call list_agents '{}'";
+        let listed = "crew -w /tmp/x agents list";
+        assert_eq!(tool_label("shell", &args(listed)), "Crew agents list");
         assert!(matches!(tool_detail("shell", &args(listed), ok), Some(ToolDetail::Command { .. })));
     }
 

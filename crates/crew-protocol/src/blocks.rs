@@ -76,6 +76,18 @@ pub struct AttachedFile {
 pub struct AgentRef {
     pub id: String,
     pub name: String,
+    /// Absent for an agent. `terminal` is a terminal session, which has no
+    /// turns and so reads no reply; `user` is the person, from the `crew` CLI,
+    /// who reads the reply in this chat.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub kind: Option<String>,
+}
+
+impl AgentRef {
+    pub fn agent(id: impl Into<String>, name: impl Into<String>) -> Self {
+        Self { id: id.into(), name: name.into(), kind: None }
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, TS)]

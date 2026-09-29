@@ -16,9 +16,18 @@ import {
   session,
   type OpenDialogOptions,
 } from "electron";
-import { installBrowser, registerBrowserIpc, registerFileIpc, registerFileScheme, serveFiles } from "./browser";
+import {
+  installBrowser,
+  registerBrowserIpc,
+  registerFileIpc,
+  registerFileScheme,
+  serveFiles,
+  startBrowserHost,
+} from "./browser";
 import { openExternal } from "./external";
 import { release, sha } from "./build-info";
+import { connectAgent, unloadAgent, type AgentLink } from "./daemon-agent";
+import { decideLaunch, translocated, TRANSLOCATED_NOTICE, type Outcome } from "./daemon-agent-plan";
 import { buildMenu } from "./menu";
 import { registerRemoteIpc } from "./remotes";
 import { parseColorMode, type ColorMode } from "../src/lib/colorMode";
@@ -30,15 +39,90 @@ type OpenOptions = { multiple?: boolean; directory?: boolean };
 type Daemon = ChildProcessByStdio<Writable, Readable, null>;
 
 let win: BrowserWindow | null = null;
+// Dev (worktrees included) runs crewd as this process's child, on its own
+// data dir, and stops it on quit. The packaged app connects to the
+// LaunchAgent instead, and quitting leaves it running.
+let agent: AgentLink | null = null;
 let child: Daemon | null = null;
 let info: DaemonInfo | null = null;
 let stopping = false;
 let restarts = 0;
 let starting: Promise<void> | null = null;
+// A daemon that ran this long before it died was stopped (`crew daemon
+// restart`, a kill), not crash-looping, so it is started again even after
+// the one restart a crash gets.
+const STEADY_MS = 60_000;
+let upSince = 0;
 
 function crewdPath(): string {
   if (app.isPackaged) return path.join(process.resourcesPath, "crewd");
   return path.join(app.getAppPath(), "target/debug/crewd");
+}
+
+function daemonInfo(): DaemonInfo | null {
+  return agent ? agent.info() : info;
+}
+
+function reason(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+async function attempt(run: () => Promise<void>): Promise<Outcome> {
+  try {
+    await run();
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error: reason(error) };
+  }
+}
+
+// Resolves to a notice for the user when this run could not use the
+// LaunchAgent; throws only when there is no daemon at all.
+async function connectDaemon(): Promise<string | null> {
+  if (!app.isPackaged) {
+    await startDaemon().catch((error: unknown) => Promise.reject(new Error(`Could not start crewd: ${reason(error)}`)));
+    return null;
+  }
+  const uid = process.getuid?.() ?? 0;
+  const viaAgent: Outcome = translocated(process.resourcesPath)
+    ? { ok: false, error: `Crew runs from App Translocation (${process.resourcesPath})`, notice: TRANSLOCATED_NOTICE }
+    : await attempt(async () => {
+        agent = await connectAgent({
+          crewd: crewdPath(),
+          crew: path.join(process.resourcesPath, "crew"),
+          dataDir: app.getPath("userData"),
+          version: app.getVersion(),
+          uid,
+          // A crash launchd recovered from, or `crew daemon restart`: its PTYs are
+          // gone, so the window starts over, as it does when dev restarts its child.
+          onNewDaemon: () => win?.reload(),
+          onMismatch: (message) => {
+            if (Notification.isSupported()) new Notification({ title: "Crew", body: message }).show();
+          },
+        });
+      });
+  let launch = decideLaunch(viaAgent);
+  if (launch.run === "try-child") {
+    if (!viaAgent.ok) console.error(`crewd LaunchAgent unavailable; running crewd as Crew's child: ${viaAgent.error}`);
+    await unloadAgent(uid, app.getPath("userData"));
+    launch = decideLaunch(viaAgent, await attempt(startDaemon));
+  }
+  switch (launch.run) {
+    case "agent":
+    case "try-child":
+      return null;
+    case "child":
+      return launch.notice;
+    case "none":
+      throw new Error(launch.dialog);
+  }
+}
+
+// "Quit Crew and Stop Everything". In dev a plain quit already does this.
+async function quitAndStopEverything(): Promise<void> {
+  for (const window of BrowserWindow.getAllWindows()) window.hide();
+  await agent?.shutdown();
+  app.quit();
 }
 
 // e2e loads the built renderer, so it never depends on (or talks to) whatever
@@ -134,8 +218,8 @@ function readInfo(proc: Daemon): Promise<DaemonInfo> {
 
 function recover(error: unknown): Promise<void> {
   if (stopping) return Promise.resolve();
-  if (restarts === 0) {
-    restarts += 1;
+  if (restarts === 0 || (upSince > 0 && Date.now() - upSince > STEADY_MS)) {
+    restarts = 1;
     return startDaemon().then(() => {
       win?.reload();
     });
@@ -146,6 +230,7 @@ function recover(error: unknown): Promise<void> {
 async function startDaemon(): Promise<void> {
   const run = (async () => {
     const dir = app.getPath("userData");
+    upSince = 0;
     const proc = spawn(crewdPath(), ["--data-dir", dir], {
       stdio: ["pipe", "pipe", "inherit"],
       detached: true,
@@ -167,6 +252,7 @@ async function startDaemon(): Promise<void> {
     void failed.catch(() => {});
     try {
       info = await Promise.race([readInfo(proc), failed]);
+      upSince = Date.now();
     } catch (error) {
       if (proc.exitCode === null && proc.signalCode === null) proc.kill("SIGTERM");
       await recover(error);
@@ -196,10 +282,12 @@ async function stopDaemon(): Promise<void> {
   const proc = child;
   if (!proc) return;
   return new Promise((resolve) => {
+    // crewd gives supervised processes one stop grace (5 s) and the PTY host
+    // one more second before it exits.
     const timer = setTimeout(() => {
       console.error("crewd still running after SIGTERM; continuing quit");
       resolve();
-    }, 5000);
+    }, 8000);
     proc.once("exit", () => {
       clearTimeout(timer);
       resolve();
@@ -266,8 +354,9 @@ function createWindow(): void {
 
 function registerIpc(): void {
   ipcMain.handle("daemon-info", () => {
-    if (!info) throw new Error("Crew daemon is not running");
-    return info;
+    const current = daemonInfo();
+    if (!current) throw new Error("Crew daemon is not running");
+    return current;
   });
   ipcMain.handle("dialog-open", async (event, opts: OpenOptions = {}) => {
     const target = BrowserWindow.fromWebContents(event.sender) ?? win ?? undefined;
@@ -335,16 +424,22 @@ if (!(app.isPackaged && release))
 // brings the first one forward. crewd refuses a folder in use as well.
 const primary = app.requestSingleInstanceLock();
 if (!primary) app.exit(0);
-app.on("second-instance", () => {
-  if (!win) return;
-  if (win.isMinimized()) win.restore();
-  win.show();
-  win.focus();
-});
 app.setAboutPanelOptions({ applicationName: app.getName(), applicationVersion: app.getVersion(), version: sha });
 if (e2e && process.platform === "darwin") app.setActivationPolicy("accessory");
 // The sandboxed HOME has no login keychain; remote tokens go through a mock one.
 if (e2e) app.commandLine.appendSwitch("use-mock-keychain");
+
+// A second Crew on this data dir hands over to the first: it would run a
+// second watchdog over the same crewd, or a second child daemon.
+app.on("second-instance", () => {
+  if (win) {
+    if (win.isMinimized()) win.restore();
+    win.show();
+    win.focus();
+  } else if (daemonInfo()) {
+    createWindow();
+  }
+});
 
 app.whenReady().then(async () => {
   if (!primary) return;
@@ -359,16 +454,22 @@ app.whenReady().then(async () => {
   serveFiles(session.defaultSession);
   nativeTheme.themeSource = readColorMode();
   nativeTheme.on("updated", () => win?.setBackgroundColor(windowBackground()));
-  Menu.setApplicationMenu(buildMenu());
+  Menu.setApplicationMenu(buildMenu({ quitAndStopEverything: () => void quitAndStopEverything() }));
   registerIpc();
+  let notice: string | null;
   try {
-    await startDaemon();
+    notice = await connectDaemon();
   } catch (error) {
-    dialog.showErrorBox("Crew", `Could not start crewd: ${error}`);
+    dialog.showErrorBox("Crew", reason(error));
     app.quit();
     return;
   }
   createWindow();
+  // Crew works as before; the user only needs to know quitting stops things.
+  if (notice && Notification.isSupported()) new Notification({ title: "Crew", body: notice }).show();
+  // Agents drive pages through main, over its own connection; it follows crewd across restarts.
+  const browserHost = startBrowserHost(daemonInfo);
+  app.once("will-quit", () => browserHost.stop());
   watchForUpdates(() => {
     if (!win) createWindow();
   });
@@ -382,6 +483,11 @@ app.on("window-all-closed", () => {
 });
 
 app.on("before-quit", (event) => {
+  // Packaged: crewd and everything it runs stay up; the app only lets go.
+  if (agent) {
+    agent.release();
+    return;
+  }
   if (stopping || (!child && !starting)) return;
   event.preventDefault();
   void stopDaemon().then(() => app.quit());

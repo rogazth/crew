@@ -5,16 +5,23 @@ use std::thread;
 use std::time::Duration;
 
 use crew_core::agent::{AgentEvents, AgentHost};
-use crew_core::bridge::{Bridge, ToolHost};
+use crew_core::bridge::{Bearer, Bridge, ToolHost};
+use crew_core::browser_leases::{Holder, Leases};
+use crew_core::browser_relay::BrowserRelay;
+use crew_core::browser_tools::BrowserTools;
+use crew_core::caller::Caller;
 use crew_core::files;
 use crew_core::messages;
 use crew_core::provider_session;
-use crew_core::pty::{PtyEvents, PtyHost};
+use crew_core::process::{ProcessEvents, ProcessHost, ProcessPatch};
+use crew_core::process_tools::ProcessTools;
+use crew_core::pty::{PtyEvents, PtyHost, SpawnOptions};
 use crew_core::remote;
 use crew_core::routine;
 use crew_core::scheduler::Scheduler;
 use crew_core::session;
 use crew_core::store::{self as app_state, Store};
+use crew_core::tools::{self, Toolbox};
 use crew_core::transcript::TranscriptEvents;
 use crew_core::turns::TurnHost;
 use crew_core::workspace;
@@ -45,16 +52,23 @@ pub struct Config {
     pub store: Store,
     pub agents: AgentHost,
     pub bridge: Bridge,
+    /// Built on the same store and PTY host; the daemon starts the ones marked auto-start.
+    pub processes: ProcessHost,
 }
 
 #[derive(Clone)]
 struct Hosts {
     hub: Arc<Hub>,
     pty: PtyHost,
+    processes: ProcessHost,
     store: Store,
     bridge: Bridge,
     turns: TurnHost,
     scheduler: Scheduler,
+    /// Browser tabs agents drive: the leases, and the relay to Electron main.
+    browser: BrowserTools,
+    /// `daemon_shutdown`: the main thread stops the daemon as it would on a signal.
+    exit: std_mpsc::Sender<()>,
     /// Sessions' CLIs: what their hooks say, and their histories while a chat reads them.
     sessions: sessions::SessionWatch,
     /// `crewd serve` only. Zero on the window's daemon.
@@ -84,6 +98,7 @@ impl Listen {
 pub struct Handle {
     pub info: DaemonInfo,
     shutdown: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+    exit_requests: Mutex<Option<std_mpsc::Receiver<()>>>,
     turns: TurnHost,
     scheduler: Scheduler,
 }
@@ -105,8 +120,58 @@ impl Handle {
         }
     }
 
+    /// Where `daemon_shutdown` lands, from the window or from the user's
+    /// `crew`. It only asks: whoever runs the daemon stops it, in the same
+    /// order as for a signal. Taken once.
+    pub fn exit_requests(&self) -> Option<std_mpsc::Receiver<()>> {
+        self.exit_requests.lock().unwrap_or_else(|e| e.into_inner()).take()
+    }
+
     pub fn override_agent_binary(&self, name: &str, path: impl Into<String>) {
         self.turns.override_binary(name, path);
+    }
+}
+
+/// `<data-dir>/daemon.json`: how the `crew` CLI, or anything else that did
+/// not launch this daemon, finds it and speaks to it as the user.
+pub fn daemon_file_path(dir: &std::path::Path) -> std::path::PathBuf {
+    dir.join("daemon.json")
+}
+
+/// Written to a temporary file created 0600 and renamed over, so a reader never
+/// sees half of it and the tokens are never readable by anyone else, not even
+/// for the moment between a create and a chmod.
+pub fn write_daemon_file(dir: &std::path::Path, file: &proto::DaemonFile) -> Result<std::path::PathBuf, String> {
+    use std::io::Write as _;
+    use std::os::unix::fs::OpenOptionsExt;
+    let path = daemon_file_path(dir);
+    let temp = dir.join(format!("daemon.json.{}", std::process::id()));
+    let body = serde_json::to_vec_pretty(file).map_err(|e| e.to_string())?;
+    let written = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(&temp)
+        .and_then(|mut out| out.write_all(&body))
+        .and_then(|_| std::fs::rename(&temp, &path));
+    if let Err(error) = written {
+        let _ = std::fs::remove_file(&temp);
+        return Err(format!("{}: {error}", path.display()));
+    }
+    Ok(path)
+}
+
+/// Only if it is still ours: a second daemon on the same data dir may have
+/// written its own since, and removing that would strand its CLI.
+pub fn remove_daemon_file(dir: &std::path::Path, url: &str) {
+    let path = daemon_file_path(dir);
+    let ours = std::fs::read(&path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<proto::DaemonFile>(&bytes).ok())
+        .is_some_and(|file| file.url == url);
+    if ours {
+        let _ = std::fs::remove_file(path);
     }
 }
 
@@ -121,7 +186,14 @@ enum Outgoing {
 
 struct Hub {
     clients: Mutex<HashMap<u64, mpsc::Sender<Outgoing>>>,
-    pty_attached: Mutex<HashSet<u64>>,
+    /// The streams each client attached, and so gets the frames of. Only
+    /// those: a window watching one terminal has no use for another's bytes,
+    /// and ones it never asked for would be painted as if they were the start
+    /// of the stream it attaches next.
+    pty_attached: Mutex<HashMap<u64, HashSet<u32>>>,
+    /// Clients that only hear `browser-*` events: Electron main's browser
+    /// host has no use for transcripts and statuses, and would pay for them.
+    quiet: Mutex<HashSet<u64>>,
     next: AtomicU64,
     runtime: Mutex<Option<tokio::runtime::Handle>>,
     /// Told when a session's terminal ends: its CLI is not there to type into any more.
@@ -132,7 +204,8 @@ impl Hub {
     fn new() -> Self {
         Self {
             clients: Mutex::new(HashMap::new()),
-            pty_attached: Mutex::new(HashSet::new()),
+            pty_attached: Mutex::new(HashMap::new()),
+            quiet: Mutex::new(HashSet::new()),
             next: AtomicU64::new(1),
             runtime: Mutex::new(None),
             sessions: std::sync::OnceLock::new(),
@@ -153,11 +226,13 @@ impl Hub {
         (id, rx)
     }
 
-    fn watch_pty(&self, id: u64) {
+    fn watch_pty(&self, id: u64, stream_id: u32) {
         self.pty_attached
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .insert(id);
+            .entry(id)
+            .or_default()
+            .insert(stream_id);
     }
 
     fn unsubscribe(&self, id: u64) {
@@ -169,6 +244,27 @@ impl Hub {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .remove(&id);
+        self.quiet.lock().unwrap_or_else(|e| e.into_inner()).remove(&id);
+    }
+
+    fn hush(&self, id: u64) {
+        self.quiet.lock().unwrap_or_else(|e| e.into_inner()).insert(id);
+    }
+
+    /// One event to one client. False when that client is gone.
+    fn send_event(&self, id: u64, event: &str, payload: Value) -> bool {
+        let connected = self.clients.lock().unwrap_or_else(|e| e.into_inner()).contains_key(&id);
+        if !connected {
+            return false;
+        }
+        let Ok(event) = proto::event(event, payload) else {
+            return false;
+        };
+        let Ok(text) = serde_json::to_string(&event) else {
+            return false;
+        };
+        self.send(id, Outgoing::Text(text));
+        true
     }
 
     fn send(&self, id: u64, msg: Outgoing) {
@@ -207,13 +303,15 @@ impl Hub {
         matches!(result, Ok(Ok(())))
     }
 
-    fn broadcast(&self, msg: Outgoing) {
+    fn broadcast(&self, msg: Outgoing, to_quiet: bool) {
+        let quiet = self.quiet.lock().unwrap_or_else(|e| e.into_inner()).clone();
         let ids: Vec<u64> = self
             .clients
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .keys()
             .copied()
+            .filter(|id| to_quiet || !quiet.contains(id))
             .collect();
         for id in ids {
             self.send(
@@ -228,13 +326,14 @@ impl Hub {
     }
 
     fn emit(&self, event: &str, payload: impl serde::Serialize) {
+        let to_quiet = event.starts_with("browser-");
         let Ok(event) = proto::event(event, payload) else {
             return;
         };
         let Ok(text) = serde_json::to_string(&event) else {
             return;
         };
-        self.broadcast(Outgoing::Text(text));
+        self.broadcast(Outgoing::Text(text), to_quiet);
     }
 }
 
@@ -248,7 +347,8 @@ impl PtyEvents for Hub {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .iter()
-            .copied()
+            .filter(|(_, streams)| streams.contains(&stream_id))
+            .map(|(id, _)| *id)
             .collect();
         for id in ids {
             self.send(id, Outgoing::Binary(frame.clone()));
@@ -261,6 +361,23 @@ impl PtyEvents for Hub {
         if let (Some(sessions), Some((_, session))) = (self.sessions.get(), id.rsplit_once("/session:")) {
             sessions.exited(self, session);
         }
+    }
+
+    fn resync(&self, id: &str) {
+        self.emit("pty-resync", proto::PtyResync { id: id.to_string() });
+    }
+}
+
+impl ProcessEvents for Hub {
+    fn changed(&self, process: &proto::Process) {
+        self.emit("process-changed", process);
+    }
+
+    fn removed(&self, workspace_id: &str, id: &str) {
+        self.emit(
+            "process-removed",
+            proto::ProcessRemoved { workspace_id: workspace_id.to_string(), id: id.to_string() },
+        );
     }
 }
 
@@ -307,12 +424,19 @@ struct AgentFanout {
     turns: TurnHost,
 }
 
+/// The daemon side of the tool bridge. Host handles live here: a family of
+/// tools that needs one (the process host, the browser channel) gets a clone
+/// when it is built in `serve` and registered on `toolbox`.
 struct ToolDispatch {
     store: crew_core::store::Store,
     transcripts: crew_core::transcript::TranscriptHub,
     turns: TurnHost,
     scheduler: Scheduler,
     hub: Arc<Hub>,
+    /// Shared with `turns`, so what is registered here is also named on the
+    /// tool sheet in an agent's prompt.
+    toolbox: Toolbox,
+    exit: std_mpsc::Sender<()>,
 }
 
 impl ToolDispatch {
@@ -324,24 +448,38 @@ impl ToolDispatch {
 }
 
 impl ToolHost for ToolDispatch {
-    fn handle(&self, session_id: &str, method: &str, params: Value) -> Result<Value, String> {
-        crew_core::tools::handle(
-            &self.store,
-            &self.transcripts,
-            &|created| {
-                self.hub.emit(
-                    "session-created",
-                    SessionCreated {
-                        session: proto_session(created),
-                    },
-                );
-            },
-            &|| self.scheduler.arm(),
-            &|target| self.deliver(target),
-            session_id,
-            method,
-            params,
-        )
+    fn resolve(&self, bearer: &Bearer, workspace: Option<&str>) -> Result<Caller, String> {
+        Caller::resolve(&self.store, bearer, workspace)
+    }
+
+    fn handle(&self, caller: &Caller, method: &str, params: Value) -> Result<Value, String> {
+        // `crew daemon stop`. Only the user's token: a session that could stop
+        // the daemon could stop every other session with it.
+        if method == "daemon/shutdown" {
+            if caller.kind() != crew_core::caller::CallerKind::User {
+                return Err("Only the user can stop Crew's daemon.".into());
+            }
+            let _ = self.exit.send(());
+            return Ok(Value::Null);
+        }
+        let on_created = |created: &crew_core::session::Session| {
+            self.hub.emit(
+                "session-created",
+                SessionCreated {
+                    session: proto_session(created),
+                },
+            );
+        };
+        let deliver = |target: &crew_core::session::Session| self.deliver(target);
+        let host = tools::Host {
+            store: &self.store,
+            transcripts: &self.transcripts,
+            on_created: &on_created,
+            on_routines: &|| self.scheduler.arm(),
+            deliver: &deliver,
+            toolbox: &self.toolbox,
+        };
+        tools::handle(&host, caller, method, params)
     }
 }
 
@@ -389,18 +527,33 @@ pub fn serve_on(config: Config, listen: Listen) -> Result<Handle, String> {
         transcripts.clone(),
         config.bridge.clone(),
     );
+    let leases = Leases::new();
+    let browser = BrowserTools::new(config.store.clone(), BrowserRelay::new(), leases.clone());
+    let to_client = hub.clone();
+    browser
+        .relay()
+        .set_sender(Arc::new(move |client, event, payload| to_client.send_event(client, event, payload)));
+    let to_all = hub.clone();
+    leases.set_on_change(move |all| to_all.emit("browser-leases", all));
     config.pty.set_events(hub.clone());
     config.agents.set_events(Arc::new(AgentFanout {
         turns: turns.clone(),
     }));
     let scheduler = Scheduler::new(config.store.clone(), turns.clone());
     scheduler.set_events(hub.clone());
+    // Tool families register here, with the host handles they need.
+    let toolbox = turns.toolbox();
+    let (exit_tx, exit_rx) = std_mpsc::channel();
+    toolbox.register(Arc::new(ProcessTools::new(config.processes.clone(), config.store.clone())));
+    toolbox.register(Arc::new(browser.clone()));
     config.bridge.set_handler(Arc::new(ToolDispatch {
         store: config.store.clone(),
         transcripts,
         turns: turns.clone(),
         scheduler: scheduler.clone(),
         hub: hub.clone(),
+        toolbox,
+        exit: exit_tx.clone(),
     }));
 
     // A letter left waiting for an idle agent is invisible until someone
@@ -412,15 +565,19 @@ pub fn serve_on(config: Config, listen: Listen) -> Result<Handle, String> {
 
     let (ready_tx, ready_rx) = std_mpsc::channel();
     let (stop_tx, stop_rx) = tokio::sync::oneshot::channel();
+    config.processes.set_events(hub.clone());
     let sessions = sessions::SessionWatch::start(config.store.clone(), hub.clone());
     let _ = hub.sessions.set(sessions.clone());
     let hosts = Hosts {
         hub: hub.clone(),
         pty: config.pty,
+        processes: config.processes,
         store: config.store,
         bridge: config.bridge,
         turns: turns.clone(),
         scheduler: scheduler.clone(),
+        browser,
+        exit: exit_tx,
         sessions,
         socks_port: 0,
     };
@@ -443,6 +600,7 @@ pub fn serve_on(config: Config, listen: Listen) -> Result<Handle, String> {
     Ok(Handle {
         info: DaemonInfo { url, token },
         shutdown: Mutex::new(Some(stop_tx)),
+        exit_requests: Mutex::new(Some(exit_rx)),
         turns,
         scheduler,
     })
@@ -515,6 +673,20 @@ async fn run(
     hosts.scheduler.set_runtime(tokio::runtime::Handle::current());
     let scheduler = hosts.scheduler.clone();
     tokio::task::spawn_blocking(move || scheduler.arm());
+    // Like routines, the daemon's to start: a dev server comes up with Crew,
+    // whether or not the window opens its workspace.
+    let processes = hosts.processes.clone();
+    tokio::task::spawn_blocking(move || processes.start_auto());
+    // A lease nobody renews runs out on its own; this is how the window hears
+    // it did, and unpins the tab.
+    let leases = hosts.browser.leases().clone();
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(Duration::from_secs(5));
+        loop {
+            tick.tick().await;
+            leases.sweep(app_state::now_millis());
+        }
+    });
     // The first tick is now: what aged out while the app was closed goes before anyone looks.
     let expiring = hosts.clone();
     tokio::spawn(async move {
@@ -651,6 +823,7 @@ async fn handle_socket(stream: TcpStream, hosts: Hosts, hub: Arc<Hub>, token: St
     }
 
     hub.unsubscribe(client_id);
+    hosts.browser.relay().client_gone(client_id);
     hosts.sessions.drop_client(client_id);
     writer.abort();
 }
@@ -765,6 +938,30 @@ async fn handle_text(hosts: &Hosts, hub: &Arc<Hub>, client_id: u64, text: &str) 
         attach_pty(hosts, hub, client_id, request.id, request.params).await;
         return None;
     }
+    // These speak for the connection itself, so they need to know which one it is.
+    if request.method == "browser_host_register" {
+        hub.hush(client_id);
+        hosts.browser.relay().register_host(client_id);
+        let leases = hosts.browser.leases().list(app_state::now_millis());
+        return Some(encode(&match json(leases) {
+            Ok(value) => proto::ok(request.id, value),
+            Err(error) => proto::err(request.id, error),
+        }));
+    }
+    if request.method == "browser_result" {
+        let result = parse::<proto::BrowserResult>(request.params).and_then(|answer| {
+            let outcome = if answer.ok {
+                Ok(answer.result.unwrap_or(Value::Null))
+            } else {
+                Err(answer.error.unwrap_or_else(|| "The browser tool failed".into()))
+            };
+            hosts.browser.relay().resolve(client_id, answer.call_id, outcome)
+        });
+        return Some(encode(&match result {
+            Ok(()) => proto::ok(request.id, Value::Null),
+            Err(error) => proto::err(request.id, error),
+        }));
+    }
     // A history is read for the windows that hold it open, so these know who asks.
     let result = match request.method.as_str() {
         "session_history_window" => history_window(hosts, client_id, request.params).await,
@@ -792,7 +989,7 @@ async fn attach_pty(hosts: &Hosts, hub: &Arc<Hub>, client_id: u64, req_id: u32, 
     let hub_c = hub.clone();
     let result = block(move || {
         host.attach(&id, from, |attached, stream_id, tail| {
-            hub_c.watch_pty(client_id);
+            hub_c.watch_pty(client_id, stream_id);
             let value = match serde_json::to_value(PtyAttached {
                 start: attached.start,
                 emitted: attached.emitted,
@@ -889,11 +1086,56 @@ async fn block<T: Send + 'static>(
         .map_err(|e| e.to_string())?
 }
 
+/// A terminal session's process, completed so its CLI reaches Crew's tools:
+/// a token of its own in the environment, and the provider's MCP flag.
+///
+/// The token lives as long as the process and is handed back by token when it
+/// is reaped, not by session: a respawn starts the new process before the old
+/// one's exit is seen, and that exit must not take the new token with it.
+fn terminal_launch(
+    store: &Store,
+    bridge: &Bridge,
+    leases: &Leases,
+    session_id: &str,
+    command: Vec<String>,
+) -> Result<(Vec<String>, SpawnOptions), String> {
+    let row = session::get(store, session_id.to_string())?
+        .ok_or_else(|| format!("No session {session_id}"))?;
+    if row.kind != "terminal" {
+        return Err(format!("{} is not a terminal session", row.name));
+    }
+    let info = bridge.info()?;
+    let token = bridge.mint_process(session_id);
+    let launch = crew_core::terminal::launch(
+        &row.provider,
+        command,
+        &crew_core::terminal::BridgeLink { exe: &info.exe, socket: &info.socket_path, token: &token },
+    );
+    let bridge = bridge.clone();
+    let leases = leases.clone();
+    let session = session_id.to_string();
+    // Its browser tabs are numbered for this process like its token, for the same reason.
+    let process = leases.begin_process(session_id);
+    Ok((
+        launch.argv,
+        SpawnOptions {
+            env: launch.env,
+            // The browser tabs it was driving go free with it, rather than at their TTL.
+            on_exit: Some(Box::new(move || {
+                bridge.revoke_token(&token);
+                leases.end_process(&session, process, app_state::now_millis());
+            })),
+            ..SpawnOptions::default()
+        },
+    ))
+}
+
 async fn delete_session(hosts: &Hosts, id: String) -> Result<(), String> {
     let store = hosts.store.clone();
     // Its process may still be running with a token in its environment;
     // a session that no longer exists should not still be able to call.
     hosts.bridge.revoke(&id);
+    hosts.browser.leases().release_all(&id, app_state::now_millis());
     block(move || session::delete(&store, id)).await
 }
 
@@ -929,14 +1171,25 @@ fn json(value: impl serde::Serialize) -> Result<Value, String> {
 async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, String> {
     match method {
         "pty_spawn" => {
-            let PtySpawn { id, cwd, command, cols, rows, reuse, dark } = parse(params)?;
+            let PtySpawn { id, cwd, command, cols, rows, session, reuse, dark } = parse(params)?;
             let host = hosts.pty.clone();
+            let store = hosts.store.clone();
+            let bridge = hosts.bridge.clone();
+            let leases = hosts.browser.leases().clone();
             json(
                 block(move || {
+                    let prepare = move |command: Vec<String>| {
+                        let (command, options) = match session {
+                            Some(session) => terminal_launch(&store, &bridge, &leases, &session, command)?,
+                            None => (command, SpawnOptions::default()),
+                        };
+                        Ok((command, SpawnOptions { dark, ..options }))
+                    };
                     if reuse == Some(true) {
-                        host.open(id, cwd, command, cols, rows, dark)
+                        host.open(id, cwd, command, cols, rows, prepare)
                     } else {
-                        host.spawn(id, cwd, command, cols, rows, dark)
+                        let (command, options) = prepare(command)?;
+                        host.spawn_with(id, cwd, command, cols, rows, options)
                     }
                 })
                 .await?,
@@ -992,7 +1245,13 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
         "workspace_delete" => {
             let Id { id } = parse(params)?;
             let store = hosts.store.clone();
-            block(move || workspace::delete(&store, id)).await?;
+            let processes = hosts.processes.clone();
+            block(move || {
+                // Its rows would go with the workspace, but not its processes.
+                processes.forget_workspace(&id);
+                workspace::delete(&store, id)
+            })
+            .await?;
             Ok(Value::Null)
         }
         "workspace_reorder" => {
@@ -1417,12 +1676,104 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
             block(move || crew_core::browser::page_delete(&store, &page_id)).await?;
             Ok(Value::Null)
         }
+        // "Quit Crew and Stop Everything". Answered before the daemon goes, so
+        // the window hears it was heard.
+        "daemon_shutdown" => {
+            let _ = hosts.exit.send(());
+            Ok(Value::Null)
+        }
+        "browser_leases_list" => json(hosts.browser.leases().list(app_state::now_millis())),
+        // The user takes a tab back from the agent driving it.
+        "browser_lease_release" => {
+            let proto::BrowserTabArg { tab } = parse(params)?;
+            hosts.browser.leases().force_release(&tab, app_state::now_millis());
+            Ok(Value::Null)
+        }
+        // The user closed a tab: no agent's next call may bring it back.
+        "browser_tab_closed" => {
+            let proto::BrowserTabArg { tab } = parse(params)?;
+            hosts.browser.tab_closed(&tab);
+            Ok(Value::Null)
+        }
+        "browser_tool" => {
+            let proto::BrowserToolRun { workspace_id, tool, args } = parse(params)?;
+            let browser = hosts.browser.clone();
+            block(move || browser.call(&workspace_id, &Holder::user(), &tool, &args)).await
+        }
         "browser_cookie_sources" => json(block(|| Ok(crew_core::cookie_import::sources())).await?),
         "browser_cookies_read" => {
             let proto::CookieSourceId { source_id } = parse(params)?;
             json(block(move || crew_core::cookie_import::read(&source_id)).await?)
         }
+        method if method.starts_with("process_") => process_rpc(hosts, method, params).await,
         _ => Err(format!("Unknown method: {method}")),
+    }
+}
+
+/// The window's side of the process manager. It is the user at the keyboard:
+/// nothing it writes waits for approval, and `created_by` stays empty.
+async fn process_rpc(hosts: &Hosts, method: &str, params: Value) -> Result<Value, String> {
+    let host = hosts.processes.clone();
+    match method {
+        "process_list" => {
+            let WorkspaceId { workspace_id } = parse(params)?;
+            json(block(move || host.list(&workspace_id)).await?)
+        }
+        "process_create" => {
+            let proto::ProcessCreate { workspace_id, name, command, cwd, env, auto_start, auto_restart } = parse(params)?;
+            let spec = proto::ProcessSpec {
+                name,
+                command,
+                cwd: cwd.unwrap_or_default(),
+                env: env.unwrap_or_default(),
+                auto_start,
+                auto_restart,
+            };
+            json(block(move || host.create(&workspace_id, spec, None, false)).await?)
+        }
+        "process_update" => {
+            let proto::ProcessUpdate { workspace_id, id, name, command, cwd, env, auto_start, auto_restart } =
+                parse(params)?;
+            let patch = ProcessPatch { name, command, cwd, env, auto_start, auto_restart };
+            json(block(move || host.update(&workspace_id, &id, patch, None, false)).await?)
+        }
+        "process_reorder" => {
+            let proto::ProcessReorder { workspace_id, ids } = parse(params)?;
+            block(move || host.reorder(&workspace_id, &ids)).await?;
+            Ok(Value::Null)
+        }
+        "process_log_tail" => {
+            let proto::ProcessLogTail { workspace_id, id, max_bytes } = parse(params)?;
+            json(block(move || host.log_tail_raw(&workspace_id, &id, max_bytes)).await?)
+        }
+        "process_solo_preview" => {
+            let WorkspaceId { workspace_id } = parse(params)?;
+            json(block(move || host.solo_preview(&workspace_id)).await?)
+        }
+        // What the user confirmed from the preview, not the file as it is now.
+        "process_import_solo" => {
+            let proto::SoloImport { workspace_id, processes } = parse(params)?;
+            json(block(move || host.import_solo(&workspace_id, processes, None, false)).await?)
+        }
+        "process_approve" => {
+            let proto::ProcessApprove { workspace_id, id, revision } = parse(params)?;
+            json(block(move || host.approve(&workspace_id, &id, revision)).await?)
+        }
+        _ => {
+            let proto::ProcessRef { workspace_id, id } = parse(params)?;
+            let method = method.to_string();
+            block(move || match method.as_str() {
+                "process_delete" => host.delete(&workspace_id, &id).map(|()| Value::Null),
+                "process_start" => json(host.start(&workspace_id, &id)?),
+                "process_stop" => json(host.stop(&workspace_id, &id)?),
+                "process_restart" => json(host.restart(&workspace_id, &id)?),
+                "process_pause" => json(host.pause(&workspace_id, &id)?),
+                "process_resume" => json(host.resume(&workspace_id, &id)?),
+                "process_reject" => json(host.reject(&workspace_id, &id)?),
+                other => Err(format!("Unknown method: {other}")),
+            })
+            .await
+        }
     }
 }
 
@@ -1465,9 +1816,12 @@ mod tests {
     /// that never runs a turn has to ask the bridge itself.
     fn test_serve_bridged(dir: &std::path::Path) -> (Handle, Bridge) {
         let bridge = Bridge::start(dir.to_path_buf()).expect("bridge");
+        let pty = PtyHost::new();
+        let store = Store::open(dir.join("crew.sqlite3")).expect("store");
         let handle = serve(Config {
-            pty: PtyHost::new(),
-            store: Store::open(dir.join("crew.sqlite3")).expect("store"),
+            processes: ProcessHost::new(store.clone(), pty.clone(), dir),
+            pty,
+            store,
             agents: AgentHost::new(),
             bridge: bridge.clone(),
         })
@@ -1499,6 +1853,7 @@ mod tests {
                 command: vec!["/bin/sh".into()],
                 cols: 80,
                 rows: 24,
+                session: None,
                 reuse: None,
                 dark: None,
             })
@@ -1528,6 +1883,37 @@ mod tests {
 
         let output = wait_bytes(&mut ws, b"hi").await;
         assert!(output.windows(2).any(|w| w == b"hi"), "output: {output:?}");
+        handle.shutdown();
+    }
+
+    /// A window watching one terminal gets that terminal's frames and no
+    /// other's: bytes from a stream it has not attached would be painted as
+    /// the start of that stream once it did.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn pty_frames_go_only_to_clients_attached_to_that_stream() {
+        let dir = test_dir("pty-route");
+        let handle = test_serve(&dir);
+        let mut quiet = connect_authed(&handle).await;
+        send_json(&mut quiet, &spawn_req(1, "mine")).await;
+        let mine = wait_response(&mut quiet, 1).await.result.and_then(|v| v.as_u64()).expect("stream") as u32;
+        attach_pty(&mut quiet, 2, "mine", 0).await;
+
+        let mut busy = connect_authed(&handle).await;
+        send_json(&mut busy, &spawn_req(1, "theirs")).await;
+        let theirs = wait_response(&mut busy, 1).await.result.and_then(|v| v.as_u64()).expect("stream") as u32;
+        attach_pty(&mut busy, 2, "theirs", 0).await;
+        let mut frame = Vec::from(theirs.to_le_bytes());
+        frame.extend_from_slice(b"echo from-theirs\n");
+        busy.send(Message::Binary(frame.into())).await.expect("write");
+        wait_bytes(&mut busy, b"from-theirs").await;
+
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(500);
+        while let Ok(Some(Ok(msg))) = tokio::time::timeout_at(deadline, quiet.next()).await {
+            if let Message::Binary(bytes) = msg {
+                let stream = u32::from_le_bytes(bytes[..4].try_into().unwrap());
+                assert_eq!(stream, mine, "a frame of a stream this client never attached");
+            }
+        }
         handle.shutdown();
     }
 
@@ -1652,6 +2038,7 @@ mod tests {
                     command: vec!["/usr/bin/yes".into()],
                     cols: 80,
                     rows: 24,
+                    session: None,
                     reuse: None,
                     dark: None,
                 })
@@ -1715,6 +2102,7 @@ mod tests {
                     ],
                     cols: 80,
                     rows: 24,
+                    session: None,
                     reuse: None,
                     dark: None,
                 })
@@ -1784,6 +2172,33 @@ mod tests {
         handle.shutdown();
     }
 
+    /// `crew daemon stop` speaks as the user; an agent that could stop the
+    /// daemon would stop every other session with it. The window asks over
+    /// its own socket. Either only asks: the request lands where `main` waits.
+    #[tokio::test]
+    async fn only_the_user_and_the_window_can_ask_the_daemon_to_stop() {
+        let dir = test_dir("shutdown");
+        let (handle, bridge) = test_serve_bridged(&dir);
+        let requests = handle.exit_requests().expect("requests");
+        assert!(handle.exit_requests().is_none(), "taken once");
+        let mut ws = connect_authed(&handle).await;
+        let agent = seed_agent(&mut ws, dir.to_str().unwrap()).await;
+        let socket = bridge.info().expect("info").socket_path;
+
+        let refused = unix_call(&socket, &serde_json::json!({ "token": bridge.mint(&agent), "method": "daemon/shutdown" }));
+        assert!(refused["error"].as_str().is_some_and(|e| e.contains("Only the user")), "{refused}");
+        assert!(requests.try_recv().is_err(), "an agent asked and was heard");
+
+        let asked = unix_call(&socket, &serde_json::json!({ "token": bridge.user_token(), "method": "daemon/shutdown" }));
+        assert!(asked.get("error").is_none(), "{asked}");
+        requests.recv_timeout(Duration::from_secs(2)).expect("the user's request");
+
+        let reply = rpc(&mut ws, 900, "daemon_shutdown", serde_json::json!({})).await;
+        assert!(reply.ok, "{:?}", reply.error);
+        requests.recv_timeout(Duration::from_secs(2)).expect("the window's request");
+        handle.shutdown();
+    }
+
     /// The token is the identity. An agent's shell inherits CREW_SOCKET and
     /// CREW_TOKEN, and used to be able to name any session on the request and
     /// be believed — which, with a child inheriting its creator's autonomy, is
@@ -1838,6 +2253,256 @@ mod tests {
         let created: proto::SessionCreated = serde_json::from_value(event.payload).expect("created");
         assert_eq!(created.session.name, "B");
         handle.shutdown();
+    }
+
+    /// A workspace with one agent and one terminal session in it.
+    async fn seed_terminal(ws: &mut Ws, cwd: &str) -> (String, String, String) {
+        let workspace: proto::Workspace = serde_json::from_value(
+            rpc(ws, 1, "workspace_create", serde_json::json!({ "name": "w", "path": cwd })).await.result.expect("ws"),
+        )
+        .expect("workspace");
+        let mut ids = Vec::new();
+        for (id, kind) in [(2, "agent"), (3, "terminal")] {
+            let session: proto::Session = serde_json::from_value(
+                rpc(
+                    ws,
+                    id,
+                    "session_create",
+                    serde_json::json!({
+                        "workspaceId": workspace.id,
+                        "kind": kind,
+                        "name": kind,
+                        "provider": "claude",
+                        "model": "",
+                        "description": "",
+                        "autonomy": "ask"
+                    }),
+                )
+                .await
+                .result
+                .expect("session"),
+            )
+            .expect("session");
+            ids.push(session.id);
+        }
+        (workspace.id, ids.remove(0), ids.remove(0))
+    }
+
+    fn list_agents_as(socket: &str, token: &str) -> serde_json::Value {
+        unix_call(
+            socket,
+            &serde_json::json!({
+                "token": token,
+                "method": "tools/call",
+                "params": { "name": "list_agents", "arguments": {} }
+            }),
+        )
+    }
+
+    /// The whole of decision 1: a terminal session's process is handed a token
+    /// of its own, calls with it as that session, and the token goes when the
+    /// process does.
+    #[tokio::test]
+    async fn a_terminal_session_reaches_the_tools_until_its_process_exits() {
+        let dir = test_dir("terminal-bridge");
+        let (handle, bridge) = test_serve_bridged(&dir);
+        let mut ws = connect_authed(&handle).await;
+        let cwd = dir.to_string_lossy().into_owned();
+        let (_, agent, terminal) = seed_terminal(&mut ws, &cwd).await;
+        let token_file = dir.join(format!("token-{}", random_token()));
+        let done = dir.join(format!("done-{}", random_token()));
+        let script = format!(
+            "printf %s \"$CREW_TOKEN\" > '{0}.tmp' && mv '{0}.tmp' '{0}'; while [ ! -e '{1}' ]; do sleep 0.05; done",
+            token_file.display(),
+            done.display()
+        );
+        let spawned = rpc(
+            &mut ws,
+            4,
+            "pty_spawn",
+            serde_json::to_value(PtySpawn {
+                id: format!("pane-{}", random_token()),
+                cwd: cwd.clone(),
+                command: vec!["/bin/sh".into(), "-c".into(), script],
+                cols: 80,
+                rows: 24,
+                session: Some(terminal.clone()),
+                reuse: None,
+                dark: None,
+            })
+            .unwrap(),
+        )
+        .await;
+        assert!(spawned.ok, "{:?}", spawned.error);
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        let token = loop {
+            if let Ok(token) = std::fs::read_to_string(&token_file) {
+                break token;
+            }
+            assert!(std::time::Instant::now() < deadline, "the process never saw a token");
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        };
+        assert!(!token.is_empty(), "CREW_TOKEN was empty");
+
+        let socket = bridge.info().expect("info").socket_path;
+        let reply = list_agents_as(&socket, &token);
+        let text = reply["result"]["content"][0]["text"].as_str().unwrap_or("");
+        assert!(text.contains(&agent), "reply: {reply}");
+        // Seen as a terminal: no turns to continue, and nothing listed but the gateway.
+        let listed = unix_call(&socket, &serde_json::json!({ "token": token, "method": "tools/list" }));
+        let names = listed["result"]["tools"].to_string();
+        assert!(names.contains("find_tool") && !names.contains("message_agent"), "{names}");
+        let catalog = unix_call(&socket, &serde_json::json!({ "token": token, "method": "tools/catalog" }));
+        let names = catalog["result"]["tools"].to_string();
+        assert!(names.contains("message_agent") && !names.contains("continue_after_turn"), "{names}");
+
+        std::fs::write(&done, "").expect("done");
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            if list_agents_as(&socket, &token)["error"].as_str() == Some("Bad token") {
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline, "the token outlived its process");
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        handle.shutdown();
+    }
+
+    #[tokio::test]
+    async fn only_a_terminal_session_is_launched_with_a_token() {
+        let dir = test_dir("terminal-kind");
+        let (handle, _bridge) = test_serve_bridged(&dir);
+        let mut ws = connect_authed(&handle).await;
+        let cwd = dir.to_string_lossy().into_owned();
+        let (_, agent, _) = seed_terminal(&mut ws, &cwd).await;
+        for (id, session) in [(4, agent.as_str()), (5, "no-such-session")] {
+            let spawned = rpc(
+                &mut ws,
+                id,
+                "pty_spawn",
+                serde_json::to_value(PtySpawn {
+                    id: format!("pane-{}", random_token()),
+                    cwd: cwd.clone(),
+                    command: vec!["/bin/sh".into()],
+                    cols: 80,
+                    rows: 24,
+                    session: Some(session.to_string()),
+                    reuse: None,
+                    dark: None,
+                })
+                .unwrap(),
+            )
+            .await;
+            assert!(!spawned.ok, "{session} was launched as a terminal");
+        }
+        handle.shutdown();
+    }
+
+    /// The token in daemon.json speaks as the user, in the workspace the call
+    /// names by a path inside it.
+    #[tokio::test]
+    async fn the_user_token_calls_in_the_workspace_it_names() {
+        let dir = test_dir("user-token");
+        let (handle, bridge) = test_serve_bridged(&dir);
+        let mut ws = connect_authed(&handle).await;
+        let cwd = dir.to_string_lossy().into_owned();
+        let (workspace, agent, _) = seed_terminal(&mut ws, &cwd).await;
+        let socket = bridge.info().expect("info").socket_path;
+        for named in [cwd.clone(), workspace.clone()] {
+            let reply = unix_call(
+                &socket,
+                &serde_json::json!({
+                    "token": bridge.user_token(),
+                    "workspace": named,
+                    "method": "tools/call",
+                    "params": { "name": "list_agents", "arguments": {} }
+                }),
+            );
+            let text = reply["result"]["content"][0]["text"].as_str().unwrap_or("");
+            assert!(text.contains(&agent), "{named}: {reply}");
+        }
+        let reply = list_agents_as(&socket, &bridge.user_token());
+        let text = reply["result"]["content"][0]["text"].as_str().unwrap_or("");
+        assert!(text.contains("--workspace"), "{reply}");
+        handle.shutdown();
+    }
+
+    /// The process tools are registered: listed to an agent, and answering
+    /// with the process the window made, in the caller's workspace.
+    #[tokio::test]
+    async fn list_processes_answers_over_the_bridge() {
+        let dir = test_dir("process-tools");
+        let (handle, bridge) = test_serve_bridged(&dir);
+        let mut ws = connect_authed(&handle).await;
+        let cwd = dir.to_string_lossy().into_owned();
+        let (workspace, agent, _) = seed_terminal(&mut ws, &cwd).await;
+        let created = rpc(
+            &mut ws,
+            4,
+            "process_create",
+            serde_json::json!({ "workspaceId": workspace, "name": "web", "command": "sleep 30" }),
+        )
+        .await;
+        assert!(created.ok, "{:?}", created.error);
+        let socket = bridge.info().expect("info").socket_path;
+        let token = bridge.mint(&agent);
+
+        let listed = unix_call(&socket, &serde_json::json!({ "token": token, "method": "tools/catalog" }));
+        assert!(listed["result"]["tools"].to_string().contains("list_processes"), "{listed}");
+        for (token, workspace) in [(token.clone(), None), (bridge.user_token(), Some(workspace.clone()))] {
+            let reply = unix_call(
+                &socket,
+                &serde_json::json!({
+                    "token": token,
+                    "workspace": workspace,
+                    "method": "tools/call",
+                    "params": { "name": "list_processes", "arguments": {} }
+                }),
+            );
+            let text = reply["result"]["content"][0]["text"].as_str().unwrap_or("");
+            let rows: serde_json::Value = serde_json::from_str(text).unwrap_or_default();
+            assert_eq!(rows[0]["name"], "web", "{reply}");
+            assert_eq!(rows[0]["created_by"], "the user", "{reply}");
+        }
+
+        // The agent's autonomy is ask: what it writes waits for the user.
+        let reply = unix_call(
+            &socket,
+            &serde_json::json!({
+                "token": token,
+                "method": "tools/call",
+                "params": { "name": "call_tool", "arguments": { "name": "create_process", "arguments": { "name": "api", "command": "sleep 30" } } }
+            }),
+        );
+        let text = reply["result"]["content"][0]["text"].as_str().unwrap_or("");
+        assert!(text.contains("pending-approval"), "{reply}");
+        handle.shutdown();
+    }
+
+    #[test]
+    fn daemon_json_is_private_and_goes_with_its_daemon() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = test_dir(&format!("daemon-file-{}", random_token()));
+        let file = proto::DaemonFile {
+            url: "ws://127.0.0.1:1".into(),
+            token: "t".into(),
+            socket: "/s".into(),
+            user_token: "u".into(),
+            version: "0".into(),
+            pid: Some(7),
+        };
+        let path = write_daemon_file(&dir, &file).expect("write");
+        let mode = std::fs::metadata(&path).expect("meta").permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+        let read: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).expect("read")).expect("json");
+        assert_eq!(read["userToken"], "u");
+        assert_eq!(read["socket"], "/s");
+        // Somebody else's file stays.
+        remove_daemon_file(&dir, "ws://127.0.0.1:2");
+        assert!(path.exists());
+        remove_daemon_file(&dir, &file.url);
+        assert!(!path.exists());
     }
 
     fn unix_call(path: &str, payload: &serde_json::Value) -> serde_json::Value {
@@ -2656,6 +3321,7 @@ print(json.dumps({"type":"turn.failed","error":{"message":"Codex exploded"}}), f
                         command: vec!["/usr/bin/python3".into(), "-c".into(), script(mark)],
                         cols: 80,
                         rows: 24,
+                        session: None,
                         reuse: None,
                         dark: None,
                     })

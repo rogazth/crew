@@ -1,5 +1,5 @@
 import { client } from "./client";
-import type { PtyAttached, PtyError, PtyExit } from "./protocol";
+import type { PtyAttached, PtyError, PtyExit, PtySpawn } from "./protocol";
 
 const encoder = new TextEncoder();
 const dataHandlers = new Map<string, (bytes: Uint8Array) => void>();
@@ -25,19 +25,19 @@ async function applyAttach(id: string, from: number): Promise<void> {
   attachHandlers.get(id)?.(attached.start);
 }
 
-function attach(sessionId: string, streamId: number, onData: (bytes: Uint8Array) => void) {
+function attach(sessionId: string, streamId: number, onData: (bytes: Uint8Array) => void, replay = true) {
   streams.get(sessionId)?.stop();
   const wrapped = (bytes: Uint8Array) => {
     delivered.set(sessionId, (delivered.get(sessionId) ?? 0) + bytes.byteLength);
     onData(bytes);
   };
-  streams.set(sessionId, { id: streamId, stop: client.openStream(streamId, wrapped, sessionId) });
+  streams.set(sessionId, { id: streamId, stop: client.openStream(streamId, wrapped, sessionId, replay) });
 }
 
 /**
- * Every PTY shares one event bus, so each terminal filters by id. Stream bytes
- * that arrive before `openStream` are buffered by the client. Spawn after
- * subscribing so the exit listener is already attached.
+ * Every PTY shares one event bus, so each terminal filters by id. The daemon
+ * sends a stream's bytes only once it is attached, from the offset asked for.
+ * Spawn after subscribing so the exit listener is already attached.
  */
 export function subscribePty(
   id: string,
@@ -69,18 +69,32 @@ export function subscribePty(
   };
 }
 
+export type SpawnOptions = {
+  /**
+   * The terminal session the process runs, if any: the daemon then hands it a
+   * token and the provider's MCP flag, so the CLI reaches Crew's tools. Left
+   * out for a plain shell.
+   */
+  session?: string;
+  /** Keep a process still running under this id: a window opening again finds it. */
+  reuse?: boolean;
+  /** Whether the window paints the terminal dark, for COLORFGBG. */
+  dark?: boolean;
+};
+
 export async function spawnPty(
   id: string,
   cwd: string,
   command: string[],
   cols: number,
   rows: number,
-  reuse = false,
-  dark?: boolean,
+  options: SpawnOptions = {},
 ): Promise<number> {
+  const { session, reuse = false, dark } = options;
   const generation = (generations.get(id) ?? 0) + 1;
   generations.set(id, generation);
-  const streamId = await client.request<number>("pty_spawn", { id, cwd, command, cols, rows, reuse, dark });
+  const params: PtySpawn = { id, cwd, command, cols, rows, reuse, ...(dark === undefined ? {} : { dark }), ...(session ? { session } : {}) };
+  const streamId = await client.request<number>("pty_spawn", params);
   if (generations.get(id) !== generation) {
     // The pane was torn down (or respawned) while this spawn was in flight, as
     // StrictMode does to every new terminal. Its process is killed or replaced
@@ -88,13 +102,67 @@ export async function spawnPty(
     client.openStream(streamId, () => {}, id)();
     return streamId;
   }
+  await attachPty(id, streamId);
+  return streamId;
+}
+
+/**
+ * Watch a PTY someone else started, a supervised process's, as `spawnPty`
+ * watches its own: subscribe first, then this.
+ */
+export async function attachPty(id: string, streamId: number): Promise<void> {
+  // A new stream (a respawn, a restarted process) counts from its own first
+  // byte; only the same stream goes on from what this view already has.
+  if (streams.get(id)?.id !== streamId) delivered.set(id, 0);
   // Wire the stream before the replay: the process is already running, so a
-  // rejection here would strand it with no way to reach it again.
+  // rejection here would strand it with no way to reach it again. Anything
+  // buffered for it is dropped: it starts wherever the frames did, not at
+  // `from`, and the ring's replay has those bytes in their place.
   const onData = dataHandlers.get(id);
-  if (onData) attach(id, streamId, onData);
+  if (onData) attach(id, streamId, onData, false);
   else streams.set(id, { id: streamId, stop: () => {} });
   await applyAttach(id, delivered.get(id) ?? 0).catch(() => {});
-  return streamId;
+}
+
+/** After a `pty-resync`: this viewer's frames were dropped, so it repaints from the ring. */
+export function reattachPty(id: string): Promise<void> {
+  delivered.set(id, 0);
+  return applyAttach(id, 0);
+}
+
+/**
+ * The bytes a viewer's xterm has parsed, for `pty_ack`, across resyncs. A
+ * resync resets the count to where the replay starts, but xterm still holds
+ * writes queued before it, and their callbacks come after: counted, they would
+ * ack past what the view has and let the daemon send more than it can take.
+ * Each write is stamped with the generation it belongs to; a resync starts a
+ * new one.
+ */
+export function parsedCount() {
+  let processed = 0;
+  let generation = 0;
+  return {
+    get processed() {
+      return processed;
+    },
+    /** Call before `term.write`; the callback it returns goes to xterm. True if it counted. */
+    write(bytes: number): () => boolean {
+      const mine = generation;
+      return () => {
+        if (mine !== generation) return false;
+        processed += bytes;
+        return true;
+      };
+    },
+    /** What was queued before this no longer counts. */
+    resync(): void {
+      generation += 1;
+    },
+    /** The attach answered: the replay starts here. */
+    attached(start: number): void {
+      processed = start;
+    },
+  };
 }
 
 export function writePty(id: string, data: string): Promise<void> {

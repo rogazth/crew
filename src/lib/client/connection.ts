@@ -125,14 +125,19 @@ export class Connection {
     });
   }
 
-  openStream(id: number, onBytes: (bytes: Uint8Array) => void): () => void {
+  /**
+   * `replay` false drops what arrived before: a viewer about to attach gets
+   * its bytes from the daemon's ring, from a known offset, and a buffer that
+   * starts wherever the frames happened to start would paint ahead of it.
+   */
+  openStream(id: number, onBytes: (bytes: Uint8Array) => void, replay = true): () => void {
     this.closed.delete(id);
     this.streams.set(id, onBytes);
     const queue = this.buffered.get(id);
     if (queue) {
       this.buffered.delete(id);
       this.bufferedBytes.delete(id);
-      for (const chunk of queue) onBytes(chunk);
+      if (replay) for (const chunk of queue) onBytes(chunk);
     }
     return () => {
       if (this.streams.get(id) === onBytes) this.streams.delete(id);

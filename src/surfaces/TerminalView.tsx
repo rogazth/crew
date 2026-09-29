@@ -20,13 +20,8 @@ import { resolveTerminalKey } from "../lib/terminalKeys";
 import { activateZwjUnicode } from "../lib/terminalUnicode";
 import { quotePath, quotePaths } from "../lib/terminalPaths";
 import { fontStack, ligaturesEnabled } from "../lib/terminalPrefs";
-import {
-  ANSI_DARK,
-  ANSI_LIGHT,
-  isOscColorQuery,
-  oscColorReply,
-  rgbToHex,
-} from "../lib/terminalColors";
+import { isOscColorQuery, oscColorReply } from "../lib/terminalColors";
+import { DARK_SCHEME, palette } from "../lib/terminalTheme";
 import { FindBar } from "../chrome/FindBar";
 import "@xterm/xterm/css/xterm.css";
 
@@ -35,6 +30,8 @@ type Props = {
   cwd: string;
   /** Empty spawns the login shell. */
   command: string[];
+  /** The terminal session `command` runs, so the daemon can hand it Crew's tools. Not the shell it falls back to. */
+  session?: string | undefined;
   active: boolean;
   onExit?: ((code: number | null) => void) | undefined;
   /** Once the process exits, fall back to the login shell instead of a dead pane. */
@@ -68,39 +65,13 @@ const SCREEN_CEILING_MS = 1000;
 /** Frames the proposed grid may keep changing before it is applied anyway. */
 const MAX_STABILITY_FRAMES = 8;
 
-const DARK_SCHEME = window.matchMedia("(prefers-color-scheme: dark)");
-
-function cssColor(expr: string, fallback: string): string {
-  const probe = document.createElement("span");
-  probe.style.color = expr;
-  document.body.appendChild(probe);
-  const color = getComputedStyle(probe).color;
-  probe.remove();
-  return rgbToHex(color || fallback);
-}
-
-/** The terminal is the canvas: same background, same text colour, ANSI tuned to it. */
-function palette() {
-  const dark = DARK_SCHEME.matches;
-  const background = cssColor("var(--color-canvas)", dark ? "#1a1a1a" : "#ffffff");
-  const foreground = cssColor("var(--color-text)", dark ? "#e8eef2" : "#2e2e2e");
-  return {
-    background,
-    foreground,
-    cursor: cssColor("var(--color-accent)", foreground),
-    cursorAccent: background,
-    selectionBackground: dark ? "rgba(255,255,255,0.22)" : "rgba(0,0,0,0.16)",
-    selectionInactiveBackground: dark ? "rgba(255,255,255,0.1)" : "rgba(0,0,0,0.07)",
-    ...(dark ? ANSI_DARK : ANSI_LIGHT),
-  };
-}
-
 const isDark = () => DARK_SCHEME.matches;
 
 export function TerminalView({
   id,
   cwd,
   command,
+  session,
   active,
   shellOnExit,
   onExit,
@@ -124,10 +95,10 @@ export function TerminalView({
   const search = useTerminalSearch(termRef, isDark);
   const attachSearch = search.attach;
 
-  const latest = useRef({ onExit, onBell, onActivity, onTitle, onInput, onResize, onOpenPath, onScreen, command, shellOnExit });
+  const latest = useRef({ onExit, onBell, onActivity, onTitle, onInput, onResize, onOpenPath, onScreen, command, session, shellOnExit });
   useEffect(() => {
     // Only `command` at spawn: a later argv must not respawn the running process.
-    latest.current = { onExit, onBell, onActivity, onTitle, onInput, onResize, onOpenPath, onScreen, command, shellOnExit };
+    latest.current = { onExit, onBell, onActivity, onTitle, onInput, onResize, onOpenPath, onScreen, command, session, shellOnExit };
   });
 
   const dropPaths = useCallback((paths: string[]) => {
@@ -349,9 +320,9 @@ export function TerminalView({
 
     // The first spawn reuses a process the daemon still runs under this id, so
     // a window opening again (an update, a relaunch) finds the agent it left.
-    const spawn = (command: string[], reuse = false) => {
+    const spawn = (command: string[], session?: string, reuse = false) => {
       spawned = true;
-      void api.spawnPty(id, cwd, command, term.cols, term.rows, reuse, isDark()).catch((error: unknown) => {
+      void api.spawnPty(id, cwd, command, term.cols, term.rows, { ...(session === undefined ? {} : { session }), reuse, dark: isDark() }).catch((error: unknown) => {
         spawned = false;
         term.writeln(`\x1b[31m${error instanceof Error ? error.message : String(error)}\x1b[0m`);
       });
@@ -368,7 +339,7 @@ export function TerminalView({
         started = true;
         lastCols = cols;
         lastRows = rows;
-        spawn(latest.current.command, true);
+        spawn(latest.current.command, latest.current.session, true);
         return;
       }
       if (cols === lastCols && rows === lastRows) return;

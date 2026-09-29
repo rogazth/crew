@@ -4,7 +4,7 @@
 //! from the installed app, a worktree's app from the main checkout's. That
 //! parent's variables name its own daemon (`CREW_SOCKET`, `CREW_TOKEN`) and its
 //! own data (`CREW_USER_DATA`, `CREW_PORT`), and a child that kept them would
-//! reach the other app: its `crew call` into the wrong daemon, its `npm run app`
+//! reach the other app: its `crew` commands into the wrong daemon, its `npm run app`
 //! onto the wrong data. Claude Code's markers would make claude think it was a
 //! child session with no transcript.
 

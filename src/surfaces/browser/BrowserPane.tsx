@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { FindBar } from "../../chrome/FindBar";
+import { useLease } from "../../hooks/useBrowserLeases";
 import { useBrowserPage } from "../../hooks/useBrowserPage";
+import * as api from "../../lib/api";
 import { useBrowserPrefs } from "../../hooks/useBrowserPrefs";
 import { holdPane, type PaneHandle } from "../../lib/browser/handles";
 import { BLANK_PAGE, pages, type PageState } from "../../lib/browser/pageStore";
@@ -15,6 +17,7 @@ import type { CookieSource } from "../../lib/protocol";
 import { BrowserError } from "./BrowserError";
 import { useGuest } from "./useGuest";
 import { BrowserToolbar, type ToolbarPanel } from "./BrowserToolbar";
+import { DrivenBar } from "./DrivenBar";
 import { PagePrompts } from "./PagePrompt";
 import { CookieImportDialog } from "./CookieImportDialog";
 import { DevToolsPanel } from "./DevToolsPanel";
@@ -59,6 +62,7 @@ export function BrowserPane({
   onPinned,
 }: Props) {
   const page = useBrowserPage(pageId);
+  const lease = useLease(pageId);
   const { prefs, update: updatePrefs } = useBrowserPrefs();
   const container = useRef<HTMLDivElement>(null);
   const address = useRef<AddressBarHandle>(null);
@@ -254,6 +258,9 @@ export function BrowserPane({
         onNavigate={handle.navigate}
         onLeaveAddress={() => guest.current?.focus()}
       />
+      {lease && lease.sessionId && (
+        <DrivenBar lease={lease} onTakeBack={() => void api.browserLeaseRelease(pageId).catch(() => {})} />
+      )}
       <div className={`flex min-h-0 flex-1 ${FLOW[side]}`}>
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
           {viewport && <ResponsiveBar viewport={viewport} onChange={setViewport} onClose={() => setViewport(null)} />}

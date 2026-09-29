@@ -2,7 +2,25 @@ import { client } from "./client";
 import { focusEnv, envOf, RAIL_ORDER } from "./client/registry";
 import { open } from "./host";
 import type { RoutineRow, ScheduledRoutine } from "./routines";
-import type { CookieRead, CookieSource, DirListing, HistoryEntry, HistoryList, MachineInfo, MessagePage, PageSnapshot, RemoteEnv, SearchHit, SearchQuery } from "./protocol";
+import type {
+  BrowserLeases,
+  CookieRead,
+  CookieSource,
+  DirListing,
+  HistoryEntry,
+  HistoryList,
+  LogChunk,
+  MachineInfo,
+  MessagePage,
+  PageSnapshot,
+  Process,
+  ProcessSpec,
+  RemoteEnv,
+  SearchHit,
+  SearchQuery,
+  SoloEntry,
+  SoloImported,
+} from "./protocol";
 import type { Autonomy, ProjectFile, Session, SessionKind, SessionStatus, Workspace, Worktree } from "./types";
 
 /** Native picker. No filters: any document the agent can read. */
@@ -268,6 +286,54 @@ export const browserPageGet = (pageId: string): Promise<PageSnapshot | null> =>
 export const browserPageDelete = (pageId: string): Promise<void> =>
   client.request("browser_page_delete", { pageId });
 
+export const listProcesses = (workspaceId: string): Promise<Process[]> =>
+  client.request("process_list", { workspaceId });
+
+/** From the window, so it is the user's: it never waits for approval. */
+export const createProcess = (workspaceId: string, spec: ProcessSpec): Promise<Process> =>
+  client.request("process_create", { workspaceId, ...spec });
+
+export const updateProcess = (workspaceId: string, id: string, patch: Partial<ProcessSpec>): Promise<Process> =>
+  client.request("process_update", { workspaceId, id, ...patch });
+
+export type ProcessCommand = "start" | "stop" | "restart" | "pause" | "resume" | "reject" | "delete";
+
+/** Stop waits for the exit, which can take the whole grace period. */
+export const processCommand = (command: ProcessCommand, workspaceId: string, id: string): Promise<Process | null> =>
+  client.request(`process_${command}`, { workspaceId, id });
+
+/**
+ * Accepts what an agent wrote, as it stood at `revision`: the one the user
+ * read. The daemon refuses it if anything changed since.
+ */
+export const approveProcess = (workspaceId: string, id: string, revision: number): Promise<Process> =>
+  client.request("process_approve", { workspaceId, id, revision });
+
+export const reorderProcesses = (workspaceId: string, ids: string[]): Promise<void> =>
+  client.request("process_reorder", { workspaceId, ids });
+
+/** The end of the log as written, escapes and all, for a terminal to repaint. */
+export const processLogTail = (workspaceId: string, id: string): Promise<LogChunk> =>
+  client.request("process_log_tail", { workspaceId, id });
+
+/** What `solo.yml` would add, for the user to read before importing. */
+export const soloPreview = (workspaceId: string): Promise<SoloEntry[]> =>
+  client.request("process_solo_preview", { workspaceId });
+
+/** Creates the entries the user confirmed; a name already taken is skipped. */
+export const importSoloYml = (workspaceId: string, processes: ProcessSpec[]): Promise<SoloImported> =>
+  client.request("process_import_solo", { workspaceId, processes });
+
+/** Who drives which browser tab right now. */
+export const browserLeasesList = (): Promise<BrowserLeases> => client.request("browser_leases_list", {});
+
+/** Takes a tab back from the agent driving it. */
+export const browserLeaseRelease = (tab: string): Promise<void> =>
+  client.request("browser_lease_release", { tab });
+
+/** The user closed a tab: its lease goes, and no agent's next call brings it back. */
+export const browserTabClosed = (tab: string): Promise<void> => client.request("browser_tab_closed", { tab });
+
 export const listRemotes = (): Promise<RemoteEnv[]> => client.request("remote_list");
 
 export const upsertRemote = (env: RemoteEnv): Promise<RemoteEnv> => client.request("remote_upsert", env);
@@ -279,4 +345,4 @@ export const listDir = (envId: string, path: string): Promise<DirListing> =>
 
 export const machineInfo = (envId: string): Promise<MachineInfo> => client.request("daemon_info", {}, envId);
 
-export { ackPty, killPty, resizePty, spawnPty, writePty } from "./pty";
+export { ackPty, attachPty, killPty, reattachPty, resizePty, spawnPty, writePty } from "./pty";

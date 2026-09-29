@@ -13,6 +13,7 @@ name = "crewd"
 path = "src/main.rs"
 
 [dependencies]
+crew-cli = { path = "../crew-cli" }
 crew-core = { path = "../crew-core" }
 crew-protocol = { path = "../crew-protocol" }
 futures-util.workspace = true
