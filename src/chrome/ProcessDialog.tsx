@@ -96,7 +96,7 @@ export function ProcessDialog({ workspaceId, process, onClose, onSaved }: Props)
             onChange={setAutoRestart}
           />
         </div>
-        {process && isLive(process) && (
+        {process?.runs.some(isLive) && (
           <p className="text-[12px] text-text-muted">It keeps running as it is until you restart it.</p>
         )}
         {failure && <p className="text-[12px] text-danger">{failure}</p>}

@@ -7,7 +7,7 @@ import { useEffect, useRef } from "react";
 import { useTerminalPrefs } from "../hooks/useTerminalPrefs";
 import * as api from "../lib/api";
 import { client } from "../lib/client";
-import type { Process } from "../lib/processes";
+import type { Process, ProcessRun } from "../lib/processes";
 import type { PtyResync } from "../lib/protocol";
 import { parsedCount, subscribePty } from "../lib/pty";
 import { openLink } from "../lib/terminalLinks";
@@ -18,13 +18,21 @@ import "@xterm/xterm/css/xterm.css";
 
 const ACK_FLUSH_MS = 4;
 
+type Props = {
+  process: Process;
+  /** The worktree whose run this shows; null is the main checkout. */
+  worktree: string | null;
+  /** Absent until it has run there since the daemon came up; its log may still hold an older run's end. */
+  run: ProcessRun | undefined;
+};
+
 /**
- * A process's terminal. While it runs, xterm watches its PTY: typed keys go to
+ * One run's terminal. While it runs, xterm watches its PTY: typed keys go to
  * it and the grid follows the pane. Otherwise the log's end is painted, so an
  * exited server still shows why. Closing the view never touches the process;
  * that is what makes it a process and not a terminal.
  */
-export function ProcessTerminal({ process }: { process: Process }) {
+export function ProcessTerminal({ process, worktree, run }: Props) {
   const hostRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
@@ -77,7 +85,9 @@ export function ProcessTerminal({ process }: { process: Process }) {
     fitRef.current?.fit();
   }, [prefs]);
 
-  const { workspaceId, id, ptyId, streamId } = process;
+  const { workspaceId, id } = process;
+  const ptyId = run?.ptyId ?? null;
+  const streamId = run?.streamId ?? null;
 
   // One run at a time: a restart hands the process a new stream, and the
   // screen starts over with it.
@@ -90,9 +100,9 @@ export function ProcessTerminal({ process }: { process: Process }) {
     term.write("", () => term.reset());
     let closed = false;
 
-    if (streamId === null) {
+    if (streamId === null || ptyId === null) {
       void api
-        .processLogTail(workspaceId, id)
+        .processLogTail(workspaceId, id, worktree)
         .then((tail) => !closed && term.write(tail.text))
         .catch(() => {});
       const observer = new ResizeObserver(() => fit.fit());
@@ -161,7 +171,7 @@ export function ProcessTerminal({ process }: { process: Process }) {
       input.dispose();
       unsubscribe();
     };
-  }, [workspaceId, id, ptyId, streamId]);
+  }, [workspaceId, id, worktree, ptyId, streamId]);
 
   return (
     <div className="crew-terminal h-full min-h-0 w-full min-w-0 bg-canvas p-3">

@@ -1,8 +1,9 @@
 import { useCallback } from "react";
 import * as api from "../lib/api";
-import { fileTabId, newBrowserTab, newTerminalTab, sessionTabId, stubTabId } from "../lib/tabs";
+import { fileTabId, newBrowserTab, newTerminalTab, processTabId, sessionTabId, stubTabId } from "../lib/tabs";
 import { focus as focusBlock } from "../lib/transcript";
 import { discardEdits, fileName, unsavedTabs } from "../lib/unsavedEdits";
+import type { Process } from "../lib/processes";
 import type { ProjectFile, Session, StubKind } from "../lib/types";
 import type { useConfirmations } from "./useConfirmations";
 import type { useTabs } from "./useTabs";
@@ -18,13 +19,17 @@ type Deps = {
    * worktree is made current, and the tab goes to that worktree's strip.
    */
   route: (session: Session) => { context: string | null } | null;
+  /** The same for a worktree by its folder: a command's run belongs to the worktree it runs in. */
+  routeTo: (path: string | null) => { context: string | null } | null;
+  /** The main checkout's folder, for a run that is its. */
+  root: string | null;
 };
 
 /**
  * Everything that brings a tab to the front. Pages stack over the tabs, so each
  * of these leaves the page first.
  */
-export function useNavigation({ tabs, sessions, confirms, removeSession, closePage, route }: Deps) {
+export function useNavigation({ tabs, sessions, confirms, removeSession, closePage, route, routeTo, root }: Deps) {
   /** Wraps a tab action so it lands in view instead of behind whatever page is up. */
   const inTabs = useCallback(
     (act: () => void) => () => {
@@ -88,6 +93,18 @@ export function useNavigation({ tabs, sessions, confirms, removeSession, closePa
     [closePage, tabs],
   );
 
+  /** A command's run, in a tab of its worktree's strip; the same run again comes back to its tab. */
+  const openProcessRun = useCallback(
+    (process: Process, worktree: string | null) => {
+      closePage();
+      const tab = { id: processTabId(process.id, worktree), kind: "process" as const, processId: process.id, title: process.name, worktree };
+      const elsewhere = routeTo(worktree ?? root);
+      if (elsewhere?.context) tabs.openIn(elsewhere.context, tab);
+      else tabs.open(tab);
+    },
+    [closePage, root, routeTo, tabs],
+  );
+
   /** Every call is a new tab: pages have no natural key to dedupe on. */
   const openBrowser = useCallback(
     (url = "", incognito = false) => {
@@ -144,5 +161,17 @@ export function useNavigation({ tabs, sessions, confirms, removeSession, closePa
 
   const closeTab = useCallback((id: string) => closeTabs([id]), [closeTabs]);
 
-  return { inTabs, openSession, openSessionById, openHit, openFile, openStub, openTerminal, openBrowser, closeTab, closeTabs };
+  return {
+    inTabs,
+    openSession,
+    openSessionById,
+    openHit,
+    openFile,
+    openStub,
+    openTerminal,
+    openBrowser,
+    openProcessRun,
+    closeTab,
+    closeTabs,
+  };
 }

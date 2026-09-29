@@ -348,7 +348,7 @@ export type PathBytes = { path: string, base64Contents: string, };
 export type PathContents = { path: string, contents: string, };
 
 /**
- * A process definition with its runtime next to it.
+ * A command of the workspace's inventory, with the runs it has in its worktrees.
  */
 export type Process = { id: string, workspaceId: string, 
 /**
@@ -367,7 +367,58 @@ proposed: ProcessSpec | null,
 /**
  * Who is asking: the creator of an unapproved process, or the proposer.
  */
-requestedBy: string | null, state: ProcessState, pid: number | null, 
+requestedBy: string | null, 
+/**
+ * One per worktree it was started in since the daemon came up, the main
+ * checkout first. A run that ended stays, so its exit can be read.
+ */
+runs: Array<ProcessRun>, 
+/**
+ * Bumped by every change to the definition or to what waits on the
+ * user. An approval names the one the user read, so a change that
+ * lands while they read it is not what they approve.
+ */
+revision: number, name: string, command: string, 
+/**
+ * Relative to the worktree it runs in; empty is its root. Rows from
+ * before worktrees may hold an absolute path, which runs there from any.
+ */
+cwd: string, env: { [key in string]: string }, autoRestart: boolean, };
+
+/**
+ * The user accepts a process, or a change to it, as it stood at `revision`.
+ */
+export type ProcessApprove = { workspaceId: string, id: string, revision: number, };
+
+export type ProcessCreate = { workspaceId: string, name: string, command: string, cwd?: string, env?: { [key in string]: string }, autoRestart: boolean, };
+
+/**
+ * The raw tail of a process's log, escapes and all, for a terminal to paint.
+ */
+export type ProcessLogTail = { workspaceId: string, id: string, worktree?: string, maxBytes?: number, };
+
+/**
+ * One process of a workspace, by id or by name.
+ */
+export type ProcessRef = { workspaceId: string, id: string, 
+/**
+ * The run's worktree; absent is the main checkout. Ignored by the
+ * commands that act on the definition (delete, reject).
+ */
+worktree?: string, };
+
+export type ProcessRemoved = { workspaceId: string, id: string, };
+
+export type ProcessReorder = { workspaceId: string, ids: Array<string>, };
+
+/**
+ * A command running, or last run, in one worktree.
+ */
+export type ProcessRun = { 
+/**
+ * The worktree's path; `None` is the workspace's main checkout.
+ */
+worktree: string | null, state: ProcessState, pid: number | null, 
 /**
  * The PTY stream a viewer reads while it runs.
  */
@@ -377,7 +428,7 @@ streamId: number | null, startedAt: number | null,
  */
 exitCode: number | null, 
 /**
- * Automatic restarts since the user last started it.
+ * Automatic restarts since it was last started by hand.
  */
 restarts: number, 
 /**
@@ -393,51 +444,37 @@ logCursor: number,
  */
 runCursor: number, 
 /**
- * Bumped by every change to the definition or to what waits on the
- * user. An approval names the one the user read, so a change that
- * lands while they read it is not what they approve.
+ * The session that started it; `None` is the user.
  */
-revision: number, name: string, command: string, 
+startedBy: string | null, 
 /**
- * Relative to the workspace folder, or absolute; empty is the folder itself.
+ * Laid over the command's own for this run, e.g. a `PORT` of its own.
  */
-cwd: string, env: { [key in string]: string }, autoRestart: boolean, };
-
-/**
- * The user accepts a process, or a change to it, as it stood at `revision`.
- */
-export type ProcessApprove = { workspaceId: string, id: string, revision: number, };
-
-export type ProcessCreate = { workspaceId: string, name: string, command: string, cwd?: string, env?: { [key in string]: string }, autoRestart: boolean, };
-
-/**
- * The raw tail of a process's log, escapes and all, for a terminal to paint.
- */
-export type ProcessLogTail = { workspaceId: string, id: string, maxBytes?: number, };
-
-/**
- * One process of a workspace, by id or by name.
- */
-export type ProcessRef = { workspaceId: string, id: string, };
-
-export type ProcessRemoved = { workspaceId: string, id: string, };
-
-export type ProcessReorder = { workspaceId: string, ids: Array<string>, };
+env: { [key in string]: string }, };
 
 /**
  * What a process runs: the part an agent may only propose.
  */
 export type ProcessSpec = { name: string, command: string, 
 /**
- * Relative to the workspace folder, or absolute; empty is the folder itself.
+ * Relative to the worktree it runs in; empty is its root. Rows from
+ * before worktrees may hold an absolute path, which runs there from any.
  */
 cwd: string, env: { [key in string]: string }, autoRestart: boolean, };
 
 /**
- * Where a supervised process stands. `PendingApproval` is a definition an
- * agent wrote or changed that the user has not accepted yet: it cannot start.
+ * Starts, or restarts, a command in a worktree.
  */
-export type ProcessState = "stopped" | "starting" | "running" | "paused" | "exited" | "crashed" | "pending-approval";
+export type ProcessStart = { workspaceId: string, id: string, worktree?: string, 
+/**
+ * Over the command's own, for this run. Absent on a restart keeps the last run's.
+ */
+env?: { [key in string]: string }, };
+
+/**
+ * Where one run of a command stands.
+ */
+export type ProcessState = "stopped" | "starting" | "running" | "paused" | "exited" | "crashed";
 
 /**
  * Only the fields present change.

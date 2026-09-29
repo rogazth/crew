@@ -1,19 +1,42 @@
 import { describe, expect, it } from "vitest";
-import { SEPARATOR, type MenuAction } from "./menu";
+import { SEPARATOR, type MenuAction, type MenuEntry } from "./menu";
 import {
   awaitsUser,
   formatEnv,
+  isOrphan,
+  liveRuns,
   parseEnv,
   processActions,
   removeProcess,
   replayEvents,
+  runActions,
+  runIn,
   specChanges,
   specOf,
   stateLabel,
   stateTone,
   upsertProcess,
   type Process,
+  type ProcessRun,
 } from "./processes";
+
+function run(patch: Partial<ProcessRun> = {}): ProcessRun {
+  return {
+    worktree: null,
+    state: "running",
+    pid: 1,
+    streamId: 1,
+    startedAt: 0,
+    exitCode: null,
+    restarts: 0,
+    ptyId: "process:p1:main",
+    logCursor: 0,
+    runCursor: 0,
+    startedBy: null,
+    env: {},
+    ...patch,
+  };
+}
 
 function process(patch: Partial<Process> = {}): Process {
   return {
@@ -28,32 +51,23 @@ function process(patch: Partial<Process> = {}): Process {
     approved: true,
     proposed: null,
     requestedBy: null,
-    state: "stopped",
-    pid: null,
-    streamId: null,
-    startedAt: null,
-    exitCode: null,
-    restarts: 0,
-    ptyId: "process:p1",
-    logCursor: 0,
-    runCursor: 0,
+    runs: [],
     revision: 0,
     ...patch,
   };
 }
 
-const ids = (p: Process) =>
-  processActions(p).map((entry) => (entry === SEPARATOR ? "|" : (entry as MenuAction).id));
+const ids = (entries: MenuEntry[]) => entries.map((entry) => (entry === SEPARATOR ? "|" : (entry as MenuAction).id));
 
 describe("processes", () => {
   it("keeps a known row in place and appends a new one", () => {
     const a = process({ id: "a" });
     const b = process({ id: "b" });
     const list = upsertProcess(upsertProcess([], a), b);
-    const moved = upsertProcess(list, { ...a, state: "running" });
-    expect(moved.map((p) => [p.id, p.state])).toEqual([
-      ["a", "running"],
-      ["b", "stopped"],
+    const moved = upsertProcess(list, { ...a, runs: [run()] });
+    expect(moved.map((p) => [p.id, p.runs.length])).toEqual([
+      ["a", 1],
+      ["b", 0],
     ]);
     expect(removeProcess(moved, "a").map((p) => p.id)).toEqual(["b"]);
     expect(removeProcess(moved, "zzz")).toBe(moved);
@@ -63,43 +77,60 @@ describe("processes", () => {
     // The list was read before "a" started and "b" was deleted.
     const answer = [process({ id: "a" }), process({ id: "b" })];
     const heard = [
-      { kind: "changed" as const, process: process({ id: "a", state: "running" }) },
+      { kind: "changed" as const, process: process({ id: "a", runs: [run()] }) },
       { kind: "removed" as const, id: "b" },
       { kind: "changed" as const, process: process({ id: "c" }) },
     ];
-    expect(replayEvents(answer, heard).map((p) => [p.id, p.state])).toEqual([
-      ["a", "running"],
-      ["c", "stopped"],
+    expect(replayEvents(answer, heard).map((p) => [p.id, p.runs.length])).toEqual([
+      ["a", 1],
+      ["c", 0],
     ]);
     expect(replayEvents(answer, [])).toBe(answer);
   });
 
-  it("says why it is down, and tells a restart from a first start", () => {
-    expect(stateLabel(process({ state: "exited", exitCode: 1 }))).toBe("Exited with code 1");
-    expect(stateLabel(process({ state: "exited", exitCode: null }))).toBe("Stopped by a signal");
-    expect(stateLabel(process({ state: "starting", restarts: 2 }))).toBe("Restarting…");
-    expect(stateLabel(process({ state: "starting" }))).toBe("Starting…");
-    expect(stateTone(process({ state: "exited", exitCode: 0 }))).toBe("quiet");
-    expect(stateTone(process({ state: "exited", exitCode: 2 }))).toBe("danger");
-    expect(stateTone(process({ state: "running" }))).toBe("success");
+  it("says why a run is down, and tells a restart from a first start", () => {
+    expect(stateLabel(run({ state: "exited", exitCode: 1 }))).toBe("Exited with code 1");
+    expect(stateLabel(run({ state: "exited", exitCode: null }))).toBe("Stopped by a signal");
+    expect(stateLabel(run({ state: "starting", restarts: 2 }))).toBe("Restarting…");
+    expect(stateLabel(run({ state: "starting" }))).toBe("Starting…");
+    expect(stateLabel(undefined)).toBe("Stopped");
+    expect(stateTone(run({ state: "exited", exitCode: 0 }))).toBe("quiet");
+    expect(stateTone(run({ state: "exited", exitCode: 2 }))).toBe("danger");
+    expect(stateTone(run())).toBe("success");
+    expect(stateTone(undefined)).toBe("quiet");
   });
 
-  it("offers what fits the state, and the pending decision first", () => {
-    expect(ids(process())).toEqual(["start", "|", "edit", "copy-command", "|", "delete"]);
-    expect(ids(process({ state: "running" }))).toEqual([
-      "stop",
-      "restart",
-      "|",
-      "edit",
-      "copy-command",
-      "|",
-      "delete",
+  it("finds a run by its worktree and counts the live ones", () => {
+    const tree = run({ worktree: "/w-feat", state: "exited", exitCode: 0 });
+    const web = process({ runs: [run(), tree] });
+    const api = process({ id: "p2", runs: [run({ worktree: "/w-feat" })] });
+    expect(runIn(web, "/w-feat")).toBe(tree);
+    expect(runIn(web, "/elsewhere")).toBeUndefined();
+    expect(liveRuns([web, api]).map(({ process, run }) => [process.id, run.worktree])).toEqual([
+      ["p1", null],
+      ["p2", "/w-feat"],
     ]);
-    expect(ids(process({ state: "paused" }))).toContain("resume");
-    const pending = process({ approved: false, state: "pending-approval", createdBy: "s1" });
+  });
+
+  it("calls a live run orphaned once the session that started it is gone", () => {
+    const alive = new Set(["s1"]);
+    expect(isOrphan(run({ startedBy: "s1" }), alive)).toBe(false);
+    expect(isOrphan(run({ startedBy: "s2" }), alive)).toBe(true);
+    expect(isOrphan(run({ startedBy: null }), alive)).toBe(false);
+    expect(isOrphan(run({ startedBy: "s2", state: "exited" }), alive)).toBe(false);
+  });
+
+  it("offers what fits, and the pending decision first", () => {
+    expect(ids(processActions(process()))).toEqual(["edit", "copy-command", "|", "delete"]);
+    const pending = process({ approved: false, createdBy: "s1" });
     expect(awaitsUser(pending)).toBe(true);
+    expect(ids(processActions(pending))).toEqual(["approve", "reject", "|", "edit", "copy-command", "|", "delete"]);
+
+    expect(ids(runActions(process(), undefined))).toEqual(["start", "|", "logs"]);
+    expect(ids(runActions(process(), run()))).toEqual(["stop", "restart", "|", "logs"]);
+    expect(ids(runActions(process(), run({ state: "paused" })))).toEqual(["stop", "restart", "resume", "|", "logs"]);
     // Not approved means it cannot start: no Start to offer.
-    expect(ids(pending)).toEqual(["approve", "reject", "|", "edit", "copy-command", "|", "delete"]);
+    expect(ids(runActions(pending, undefined))).toEqual(["logs"]);
   });
 
   it("reads and writes an environment as NAME=value lines", () => {

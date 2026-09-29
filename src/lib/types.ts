@@ -73,4 +73,6 @@ export type Tab = (
     }
   /** A terminal keeps the worktree it was opened in; null or absent is the main checkout. */
   | { id: string; kind: "stub"; stub: StubKind; title: string; worktree?: string | null }
+  /** One run of a workspace command: its output, in the worktree it runs in (null, the main checkout). */
+  | { id: string; kind: "process"; processId: string; title: string; worktree: string | null }
 ) & { pinned?: true };

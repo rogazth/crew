@@ -55,17 +55,19 @@ export function useWorkContext(
   const tabPath = tabTree ? pathOf(tabTree) : null;
   const current = worktrees.list.find((tree) => tree.path === tabPath) ?? chosen;
 
-  /** The worktree `session` runs in becomes current; the answer says which strip its tab joins. */
-  const route = useCallback(
-    (session: Session) => {
-      const path = pathOf(session);
+  /** The worktree at `path` becomes current; the answer says which strip a tab of it joins. */
+  const routeTo = useCallback(
+    (path: string | null) => {
       if (!workspace || !path || path === current?.path) return null;
       worktrees.select(path);
       const target = contextId(workspace, path, scope);
       return { context: target === context ? null : target };
     },
-    [context, current?.path, pathOf, scope, workspace, worktrees],
+    [context, current?.path, scope, workspace, worktrees],
   );
+
+  /** The same for the worktree `session` runs in. */
+  const route = useCallback((session: Session) => routeTo(pathOf(session)), [pathOf, routeTo]);
 
   /**
    * All together, going to a worktree brings up the tab last used there, or
@@ -172,6 +174,7 @@ export function useWorkContext(
     /** What a new session stores as its worktree: null for the main checkout. */
     placeIn: current && !current.main ? current.path : null,
     route,
+    routeTo,
     selectWorktree,
     selectWorktreeIn,
     step,

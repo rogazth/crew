@@ -62,18 +62,34 @@ export function useProcesses(workspaceId: string | null) {
   const processes = loaded && loaded.workspaceId === workspaceId ? loaded.list : null;
 
   /**
-   * Runs one command; a failure is kept for the view to show, not thrown.
-   * An approval names the revision the user read; refused because the
-   * process changed meanwhile, the list is read again for them to review.
+   * Acts on one run: `worktree` null is the main checkout. A failure is kept
+   * for the view to show, not thrown.
    */
-  const run = useCallback(async (command: api.ProcessCommand | "approve", process: Process) => {
+  const run = useCallback(
+    async (command: api.RunCommand, process: Process, worktree: string | null, env?: Record<string, string>) => {
+      setError(null);
+      try {
+        await api.runCommand(command, process.workspaceId, process.id, worktree, env);
+      } catch (failure) {
+        setError(String(failure).replace(/^Error:\s*/, ""));
+      }
+    },
+    [],
+  );
+
+  /**
+   * The user's answer to what an agent wrote. An approval names the revision
+   * the user read; refused because the process changed meanwhile, the list
+   * is read again for them to review.
+   */
+  const decide = useCallback(async (answer: "approve" | "reject", process: Process) => {
     setError(null);
     try {
-      if (command === "approve") await api.approveProcess(process.workspaceId, process.id, process.revision);
-      else await api.processCommand(command, process.workspaceId, process.id);
+      if (answer === "approve") await api.approveProcess(process.workspaceId, process.id, process.revision);
+      else await api.rejectProcess(process.workspaceId, process.id);
     } catch (failure) {
       setError(String(failure).replace(/^Error:\s*/, ""));
-      if (command === "approve") setReloads((n) => n + 1);
+      if (answer === "approve") setReloads((n) => n + 1);
     }
   }, []);
 
@@ -90,19 +106,23 @@ export function useProcesses(workspaceId: string | null) {
     [workspaceId],
   );
 
-  return { processes, error, clearError: () => setError(null), run, reorder };
+  return { processes, error, clearError: () => setError(null), run, decide, reorder };
 }
 
 export type Processes = ReturnType<typeof useProcesses>;
 
-/** Removed for good, logs and all, once the user says so. */
+/** Removed for good, every run's logs too, once the user says so. */
 export function deleteConfirm(process: Process): Confirm {
+  const live = process.runs.filter(isLive).length;
   return {
     title: `Delete "${process.name}"?`,
-    description: isLive(process) ? "It stops first. Its logs go with it." : "Its logs go with it.",
+    description:
+      live === 0
+        ? "Its logs go with it."
+        : `${live === 1 ? "Its run stops" : `Its ${live} runs stop`} first. The logs go with it.`,
     action: "Delete",
     onConfirm: async () => {
-      await api.processCommand("delete", process.workspaceId, process.id);
+      await api.deleteProcess(process.workspaceId, process.id);
     },
   };
 }

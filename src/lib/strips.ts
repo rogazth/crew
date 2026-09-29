@@ -66,6 +66,7 @@ export function tabPlace(tab: Tab, workspace: Workspace, worktrees: Worktree[], 
     return session ? sessionPath(session, workspace, worktrees) : null;
   }
   if (tab.kind === "stub") return tab.worktree !== undefined ? placePath(tab.worktree, workspace, worktrees) : null;
+  if (tab.kind === "process") return placePath(tab.worktree, workspace, worktrees);
   if (tab.kind !== "file") return null;
   // The deepest folder wins: a worktree can sit inside the main checkout.
   const holders = worktrees.filter((tree) => tab.path.startsWith(`${tree.path}/`));

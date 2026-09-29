@@ -1,10 +1,10 @@
-import { useMemo } from 'react';
+import { useMemo, type ReactNode } from 'react';
 import { Agents } from './Agents';
 import { Browsers } from './Browsers';
 import { DiffsPool } from './DiffsPool';
 import { Previews } from './Previews';
 import { ChatContext, type ChatActions } from './chat/context';
-import { Surface } from './Surface';
+import { Surface, type ProcessTabOf } from './Surface';
 import { Terminals } from './Terminals';
 import type { Confirm } from '../chrome/ConfirmDialog';
 import type { BrowserTabPatch, Pane } from '../lib/tabs';
@@ -37,6 +37,7 @@ type Props = {
   files: ProjectFile[];
   onOpenHistory: (url: string) => void;
   onConfirm: (confirm: Confirm) => void;
+  renderProcess: (tab: ProcessTabOf) => ReactNode;
 };
 
 /** Active surface plus the mounted agent, terminal, page and media overlays, of every workspace. */
@@ -58,6 +59,7 @@ export function WorkspacePanes({
   files,
   onOpenHistory,
   onConfirm,
+  renderProcess,
 }: Props) {
   // Keyed on where each session runs, not on the sessions: a status change
   // must not hand every mounted pane a fresh object.
@@ -112,6 +114,7 @@ export function WorkspacePanes({
           onOpenPath={chat.openPath}
           onOpenHistory={onOpenHistory}
           onConfirm={onConfirm}
+          renderProcess={renderProcess}
         />
       </DiffsPool>
       <ChatContext value={chat}>

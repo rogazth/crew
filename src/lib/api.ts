@@ -294,11 +294,29 @@ export const createProcess = (workspaceId: string, spec: ProcessSpec): Promise<P
 export const updateProcess = (workspaceId: string, id: string, patch: Partial<ProcessSpec>): Promise<Process> =>
   client.request("process_update", { workspaceId, id, ...patch });
 
-export type ProcessCommand = "start" | "stop" | "restart" | "resume" | "reject" | "delete";
+/** What the window does to one run of a command: in a worktree, or the main checkout (null). */
+export type RunCommand = "start" | "stop" | "restart" | "resume";
 
-/** Stop waits for the exit, which can take the whole grace period. */
-export const processCommand = (command: ProcessCommand, workspaceId: string, id: string): Promise<Process | null> =>
-  client.request(`process_${command}`, { workspaceId, id });
+/**
+ * Stop waits for the exit, which can take the whole grace period. `env` is
+ * the run's own, over the command's; a restart without one keeps the last run's.
+ */
+export const runCommand = (
+  command: RunCommand,
+  workspaceId: string,
+  id: string,
+  worktree: string | null,
+  env?: Record<string, string>,
+): Promise<Process> =>
+  client.request(`process_${command}`, { workspaceId, id, ...(worktree && { worktree }), ...(env && { env }) });
+
+/** Every run stops first; the logs of all of them go too. */
+export const deleteProcess = (workspaceId: string, id: string): Promise<null> =>
+  client.request("process_delete", { workspaceId, id });
+
+/** A command an agent wrote is deleted; a change it proposed is dropped. */
+export const rejectProcess = (workspaceId: string, id: string): Promise<Process | null> =>
+  client.request("process_reject", { workspaceId, id });
 
 /**
  * Accepts what an agent wrote, as it stood at `revision`: the one the user
@@ -311,8 +329,8 @@ export const reorderProcesses = (workspaceId: string, ids: string[]): Promise<vo
   client.request("process_reorder", { workspaceId, ids });
 
 /** The end of the log as written, escapes and all, for a terminal to repaint. */
-export const processLogTail = (workspaceId: string, id: string): Promise<LogChunk> =>
-  client.request("process_log_tail", { workspaceId, id });
+export const processLogTail = (workspaceId: string, id: string, worktree: string | null): Promise<LogChunk> =>
+  client.request("process_log_tail", { workspaceId, id, ...(worktree && { worktree }) });
 
 /** Who drives which browser tab right now. */
 export const browserLeasesList = (): Promise<BrowserLeases> => client.request("browser_leases_list", {});

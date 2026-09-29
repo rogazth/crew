@@ -3,7 +3,7 @@ import type { Confirm } from "../chrome/ConfirmDialog";
 import { closePrompt, unsavedCost } from "../lib/confirm";
 import { isBusy } from "../lib/terminalBusy";
 import type { Session, SessionStatus, Workspace, Worktree } from "../lib/types";
-import { isDirtyRefusal, removalCost, worktreeLabel } from "../lib/worktrees";
+import { commandsCost, isDirtyRefusal, removalCost, worktreeLabel } from "../lib/worktrees";
 
 const RUNNING: Record<string, string> = {
   working: "is still working",
@@ -81,10 +81,12 @@ export function useConfirmations({ closeTabsFor, removeSession, removeWorkspace,
    * `unsaved` names the files of its tabs whose edits go with them.
    */
   const askWorktree = useCallback(
-    (tree: Worktree, sessions: Session[], unsaved: string[]) => {
+    (tree: Worktree, sessions: Session[], unsaved: string[], commands: string[] = []) => {
       const prompt = (listed: Worktree, force: boolean): Confirm => ({
         title: `Remove worktree "${worktreeLabel(listed)}"?`,
-        description: [removalCost(listed.dirty, sessions.length), unsavedCost(unsaved)].filter(Boolean).join(" "),
+        description: [removalCost(listed.dirty, sessions.length), commandsCost(commands), unsavedCost(unsaved)]
+          .filter(Boolean)
+          .join(" "),
         action: "Remove",
         onConfirm: async () => {
           try {

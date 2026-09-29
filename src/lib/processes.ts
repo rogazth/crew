@@ -1,14 +1,29 @@
 import { DELETE, SEPARATOR, tidy, type MenuAction, type MenuEntry } from "./menu";
-import type { Process, ProcessSpec } from "./protocol";
+import type { Process, ProcessRun, ProcessSpec, ProcessState } from "./protocol";
 
-export type { Process, ProcessSpec } from "./protocol";
+export type { Process, ProcessRun, ProcessSpec } from "./protocol";
 
 /** Up, or on its way up: the one state where Stop is the answer. */
-export const isLive = (process: Process): boolean =>
-  process.state === "running" || process.state === "paused" || process.state === "starting";
+export const isLive = (run: ProcessRun | undefined): boolean =>
+  run !== undefined && (run.state === "running" || run.state === "paused" || run.state === "starting");
 
 /** An agent wrote it or wants to change it, and the user has not said yes. */
 export const awaitsUser = (process: Process): boolean => !process.approved || process.proposed !== null;
+
+/** Its run in `worktree`; null is the main checkout. */
+export const runIn = (process: Process, worktree: string | null): ProcessRun | undefined =>
+  process.runs.find((run) => run.worktree === worktree);
+
+/** Every run up right now, across the workspace's commands. */
+export const liveRuns = (processes: Process[]): { process: Process; run: ProcessRun }[] =>
+  processes.flatMap((process) => process.runs.flatMap((run) => (isLive(run) ? [{ process, run }] : [])));
+
+/**
+ * Left running by a session that is gone: nobody is watching it but the user.
+ * `sessionIds` are the sessions that still exist.
+ */
+export const isOrphan = (run: ProcessRun, sessionIds: ReadonlySet<string>): boolean =>
+  isLive(run) && run.startedBy !== null && !sessionIds.has(run.startedBy);
 
 /** A new row goes to the end, as the daemon orders it; a known one keeps its place. */
 export function upsertProcess(list: Process[], next: Process): Process[] {
@@ -37,21 +52,20 @@ export function replayEvents(list: Process[], events: ProcessEvent[]): Process[]
   );
 }
 
-export function stateLabel(process: Process): string {
-  switch (process.state) {
+/** How a run stands; no run at all is a command that is stopped. */
+export function stateLabel(run: ProcessRun | undefined): string {
+  switch (run?.state ?? "stopped") {
     case "running":
       return "Running";
     case "paused":
       return "Paused";
     case "starting":
       // A restart waits out its backoff in this state; say which.
-      return process.restarts > 0 ? "Restarting…" : "Starting…";
+      return run && run.restarts > 0 ? "Restarting…" : "Starting…";
     case "exited":
-      return process.exitCode === null ? "Stopped by a signal" : `Exited with code ${process.exitCode}`;
+      return run?.exitCode == null ? "Stopped by a signal" : `Exited with code ${run.exitCode}`;
     case "crashed":
       return "Crashed";
-    case "pending-approval":
-      return "Waiting for approval";
     case "stopped":
       return "Stopped";
   }
@@ -59,19 +73,19 @@ export function stateLabel(process: Process): string {
 
 export type Tone = "success" | "warning" | "danger" | "quiet";
 
-/** The dot beside a process: green up, amber in between, red down on its own. */
-export function stateTone(process: Process): Tone {
-  switch (process.state) {
+/** The dot beside a run: green up, amber in between, red down on its own. */
+export function stateTone(run: ProcessRun | undefined): Tone {
+  const state: ProcessState = run?.state ?? "stopped";
+  switch (state) {
     case "running":
       return "success";
     case "paused":
     case "starting":
-    case "pending-approval":
       return "warning";
     case "crashed":
       return "danger";
     case "exited":
-      return process.exitCode === 0 ? "quiet" : "danger";
+      return run?.exitCode === 0 ? "quiet" : "danger";
     case "stopped":
       return "quiet";
   }
@@ -81,27 +95,32 @@ const START: MenuAction = { id: "start", label: "Start", icon: "play", hotkey: "
 const STOP: MenuAction = { id: "stop", label: "Stop", icon: "stop", hotkey: "S" };
 const RESTART: MenuAction = { id: "restart", label: "Restart", icon: "reopen", hotkey: "R" };
 const RESUME: MenuAction = { id: "resume", label: "Resume", icon: "play", hotkey: "P" };
+const LOGS: MenuAction = { id: "logs", label: "Open Logs", icon: "terminal", hotkey: "L" };
 const APPROVE: MenuAction = { id: "approve", label: "Approve", icon: "read", hotkey: "A" };
 const REJECT: MenuAction = { id: "reject", label: "Reject", icon: "close", hotkey: "X" };
 const EDIT_PROCESS: MenuAction = { id: "edit", label: "Edit…", icon: "edit", hotkey: "E" };
 const COPY_COMMAND: MenuAction = { id: "copy-command", label: "Copy Command", icon: "copy", hotkey: "C" };
 
-/** What a right-click on one process offers; the decision it waits on comes first. */
+/** What a right-click on a command offers: the decision it waits on first, then the definition. */
 export function processActions(process: Process): MenuEntry[] {
-  const running = process.state === "running";
-  const paused = process.state === "paused";
-  const live = isLive(process);
   return tidy([
     ...(awaitsUser(process) ? [APPROVE, REJECT, SEPARATOR] : []),
-    ...(live ? [STOP] : process.approved ? [START] : []),
-    ...(running || paused ? [RESTART] : []),
-    // Pausing is left to agents; one they paused, the user can still wake.
-    ...(paused ? [RESUME] : []),
-    SEPARATOR,
     EDIT_PROCESS,
     COPY_COMMAND,
     SEPARATOR,
     DELETE,
+  ]);
+}
+
+/** What one run offers, by how it stands. Pausing is left to agents; one they paused, the user can still wake. */
+export function runActions(process: Process, run: ProcessRun | undefined): MenuEntry[] {
+  const live = isLive(run);
+  return tidy([
+    ...(live ? [STOP] : process.approved ? [START] : []),
+    ...(run?.state === "running" || run?.state === "paused" ? [RESTART] : []),
+    ...(run?.state === "paused" ? [RESUME] : []),
+    SEPARATOR,
+    LOGS,
   ]);
 }
 

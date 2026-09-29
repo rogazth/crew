@@ -37,7 +37,10 @@ import { worktreeLabel } from "./lib/worktrees";
 import { Pages } from "./surfaces/Pages";
 import { usePages } from "./hooks/usePages";
 import { useProcesses } from "./hooks/useProcesses";
-import { CommandsSection } from "./chrome/CommandsSection";
+import { CommandsButton } from "./chrome/CommandsButton";
+import { awaitsUser, isOrphan, liveRuns } from "./lib/processes";
+import { ProcessTab } from "./surfaces/ProcessTab";
+import type { Place } from "./surfaces/CommandsView";
 import { boot } from "./lib/agentRuntime";
 import { WorkspacePanes } from "./surfaces/WorkspacePanes";
 
@@ -121,12 +124,11 @@ export function App() {
     settings,
     isWorkspace,
     isRoutines,
-    processId,
+    isCommands,
     close: closePage,
     toggle: togglePage,
     openSettings,
     openRoutines,
-    openProcess,
   } = usePages();
   const processes = useProcesses(workspaceId);
 
@@ -150,7 +152,44 @@ export function App() {
     [branches, collapse, collapseOther, collapsed, expand, tabPlaceOf],
   );
 
-  const nav = useNavigation({ tabs, sessions, confirms, removeSession: remove, closePage, route: work.route });
+  const nav = useNavigation({
+    tabs,
+    sessions,
+    confirms,
+    removeSession: remove,
+    closePage,
+    route: work.route,
+    routeTo: work.routeTo,
+    root: active?.path ?? null,
+  });
+
+  // Where each command can run, the main checkout first, and what runs where:
+  // the sidebar marks a worktree with a server up, and counts what waits on the user.
+  const places = useMemo<Place[]>(
+    () =>
+      worktrees.list.map((tree) => ({
+        worktree: tree.main ? null : tree.path,
+        label: worktreeLabel(tree),
+        hue: hues.get(tree.path) ?? 0,
+      })),
+    [hues, worktrees.list],
+  );
+  const commandCounts = useMemo(() => {
+    const list = processes.processes ?? [];
+    const live = liveRuns(list);
+    const alive = new Set(all.map((session) => session.id));
+    const running = new Map<string, string[]>();
+    for (const { process, run } of live) {
+      const path = run.worktree ?? active?.path ?? "";
+      running.set(path, [...(running.get(path) ?? []), process.name]);
+    }
+    return {
+      running,
+      live: live.length,
+      orphans: live.filter(({ run }) => isOrphan(run, alive)).length,
+      asking: list.filter(awaitsUser).length,
+    };
+  }, [active?.path, all, processes.processes]);
   const sheet = useAgentSheet({ create, update, openSession: nav.openSession, createWorktree: worktrees.create });
   const envs = useEnvironments({ workspaces, active, closePage, openSettings, create, openSession: nav.openSession });
 
@@ -257,6 +296,7 @@ export function App() {
                 tree,
                 sessions.filter((session) => work.pathOf(session) === tree.path),
                 tabs.unsavedIn(`${active.id}@${tree.path}`),
+                commandCounts.running.get(tree.path) ?? [],
               ),
             onEdit: sheet.editAgent,
             onRename: (session, name) => void rename(session.id, name),
@@ -264,14 +304,15 @@ export function App() {
             onRemoveMany: confirms.askSessions,
             onReorder: reorder,
             commands: (
-              <CommandsSection
-                workspace={active}
-                processes={processes}
-                activeId={processId}
-                onOpen={(process) => openProcess(process.id)}
-                onConfirm={confirms.ask}
+              <CommandsButton
+                live={commandCounts.live}
+                asking={commandCounts.asking}
+                orphans={commandCounts.orphans}
+                open={isCommands}
+                onToggle={() => togglePage({ kind: "commands" })}
               />
             ),
+            running: commandCounts.running,
             // A refusal from either still lets the other land; the button stops spinning either way.
             onRefresh: () => Promise.allSettled([worktrees.reread(), reloadSessions()]).then(() => {}),
           }}
@@ -287,6 +328,8 @@ export function App() {
           onConfirm={confirms.ask}
           onOpenHit={nav.openHit}
           processes={processes}
+          places={places}
+          onOpenRun={nav.openProcessRun}
           allSessions={all}
           onOpenTerminal={envs.openTerminalOn}
         />
@@ -338,6 +381,16 @@ export function App() {
             onAdoptBrowserTab={tabs.adopt}
             files={files}
             onConfirm={confirms.ask}
+            renderProcess={(tab) => (
+              <ProcessTab
+                key={tab.id}
+                processId={tab.processId}
+                worktree={tab.worktree}
+                place={places.find((place) => place.worktree === tab.worktree)?.label ?? tab.worktree ?? "main"}
+                processes={processes}
+                onOpenCommands={() => togglePage({ kind: "commands" })}
+              />
+            )}
             // Chrome's way: the entry loads where History was, so the tab turns into the page.
             onOpenHistory={(url) => {
               const history = tabs.active;

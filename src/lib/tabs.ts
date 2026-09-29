@@ -5,6 +5,8 @@ import type { Session, StubKind, Tab } from "./types";
 export const sessionTabId = (sessionId: string) => `session:${sessionId}`;
 export const fileTabId = (path: string) => `file:${path}`;
 export const stubTabId = (stub: StubKind) => `stub:${stub}`;
+/** One tab per run: a command opened again in the same worktree comes back to it. */
+export const processTabId = (processId: string, worktree: string | null) => `process:${processId}@${worktree ?? ""}`;
 /** Unlike the other kinds, a page has no natural key: two tabs can show the same URL. */
 export const browserTabId = () => `browser:${crypto.randomUUID()}`;
 
@@ -299,6 +301,12 @@ function isTab(value: unknown): value is Tab {
       (tab.icon === undefined || typeof tab.icon === "string") &&
       (tab.incognito === undefined || tab.incognito === true)
     );
+  if (tab.kind === "process")
+    return (
+      typeof tab.processId === "string" &&
+      typeof tab.title === "string" &&
+      (tab.worktree === null || typeof tab.worktree === "string")
+    );
   if (tab.kind === "stub")
     return (
       typeof tab.title === "string" &&
@@ -336,7 +344,7 @@ export function relativeTo(root: string, path: string): string {
 }
 
 export function tabTitle(tab: Tab, sessions: Session[]): string {
-  if (tab.kind === "stub") return tab.title;
+  if (tab.kind === "stub" || tab.kind === "process") return tab.title;
   if (tab.kind === "browser") return browserTitle(tab.title, tab.url);
   if (tab.kind === "file") return tab.relative.split("/").pop() ?? tab.relative;
   return sessions.find((s) => s.id === tab.sessionId)?.name ?? "Untitled";

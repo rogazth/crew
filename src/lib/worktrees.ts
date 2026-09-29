@@ -85,6 +85,13 @@ export function removalCost(dirty: number, sessions: number): string {
     .join(" ");
 }
 
+/** The commands running in a worktree stop before it goes. */
+export function commandsCost(names: string[]): string {
+  if (names.length === 0) return "";
+  const listed = names.length === 1 ? names[0] : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
+  return `${listed} ${names.length === 1 ? "stops" : "stop"} first.`;
+}
+
 /** crewd refusing an unforced removal over work git sees and the listing did not. */
 export function isDirtyRefusal(error: unknown): boolean {
   return error instanceof Error && error.message.endsWith(" has uncommitted changes");

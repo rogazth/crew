@@ -1,4 +1,4 @@
-import { ChevronRightIcon, FolderIcon, GitBranchIcon, PlusIcon, RotateCwIcon, SearchIcon, XIcon, type LucideIcon as Icon } from "lucide-react";
+import { ChevronRightIcon, FolderIcon, GitBranchIcon, PlusIcon, RotateCwIcon, SearchIcon, ServerIcon, XIcon, type LucideIcon as Icon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
 import { ActionMenu } from "./ActionMenu";
 import { AgentAvatar } from "./AgentAvatar";
@@ -69,8 +69,10 @@ export type SessionSidebarProps = {
   onRemove: (session: Session) => void;
   onRemoveMany: (sessions: Session[]) => void;
   onReorder: (ids: string[]) => void;
-  /** The workspace's long-running commands, under its worktrees. Hidden while searching sessions. */
+  /** The way to the workspace's commands, kept under the list whatever it scrolls to. */
   commands?: ReactNode;
+  /** The names of the commands running in each worktree, by its path. */
+  running?: ReadonlyMap<string, string[]>;
   /** Reads the worktrees and sessions again, for changes made outside this window. */
   onRefresh: () => Promise<void>;
 };
@@ -357,6 +359,7 @@ export function SessionSidebar(props: SessionSidebarProps) {
                   current={isCurrent}
                   open={open}
                   sessions={everyone}
+                  running={props.running?.get(tree.path) ?? NONE}
                   showDiff={shows(prefs, "diff")}
                   keys={index < 9 ? commandKeys(`worktree-${index + 1}` as CommandId) : ""}
                   onFold={(next) => fold(tree.path, next)}
@@ -414,8 +417,8 @@ export function SessionSidebar(props: SessionSidebarProps) {
               </div>
             );
           })}
-        {!filtering && props.commands}
       </div>
+      {props.commands && <div className="shrink-0 border-t border-hairline px-2 py-1.5">{props.commands}</div>}
 
       {menu?.kind === "session" && (
         <ActionMenu
@@ -502,6 +505,7 @@ function WorktreeHeader({
   current,
   open,
   sessions,
+  running,
   showDiff,
   keys,
   onFold,
@@ -513,6 +517,8 @@ function WorktreeHeader({
   current: boolean;
   open: boolean;
   sessions: Session[];
+  /** Commands running here, by name: a server left up shows even with the worktree folded. */
+  running: string[];
   showDiff: boolean;
   keys: string;
   onFold: (open: boolean) => void;
@@ -552,6 +558,17 @@ function WorktreeHeader({
         <span className={`min-w-0 flex-1 truncate ${current ? "font-semibold text-text" : "text-text/85"}`}>
           {worktreeLabel(tree)}
         </span>
+        {running.length > 0 && (
+          <span
+            role="img"
+            aria-label={`Running: ${running.join(", ")}`}
+            title={`Running: ${running.join(", ")}`}
+            className="flex shrink-0 items-center gap-1 text-[11px] text-text-muted transition-opacity group-hover/tree:opacity-0"
+          >
+            <ServerIcon className="size-3 text-success" />
+            {running.length > 1 && <span className="tabular-nums">{running.length}</span>}
+          </span>
+        )}
         {!open && faces.length > 0 && (
           <span className="flex -space-x-1.5 transition-opacity group-hover/tree:opacity-0">
             {faces.map((session) => (
@@ -606,6 +623,8 @@ function MoreRow({ hidden, open, onToggle }: { hidden: number; open: boolean; on
     </button>
   );
 }
+
+const NONE: string[] = [];
 
 function loudest(sessions: Session[]): SessionStatus {
   for (const status of STATUS_ORDER) if (sessions.some((session) => session.status === status)) return status;

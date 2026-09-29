@@ -1,4 +1,4 @@
-import { lazy, Suspense } from "react";
+import { lazy, Suspense, type ReactNode } from "react";
 import { EmptyState } from "./EmptyState";
 import { HistoryView } from "./HistoryView";
 import { StubView } from "./StubView";
@@ -6,6 +6,8 @@ import type { Confirm } from "../chrome/ConfirmDialog";
 import { fileView } from "../lib/browser/files";
 import { commandKeys } from "../lib/commands";
 import type { ProjectFile, Session, Tab } from "../lib/types";
+
+export type ProcessTabOf = Extract<Tab, { kind: "process" }>;
 
 /** The file editors are the heaviest chunks in the app; only a file tab pays for them. */
 const FileView = lazy(() => import("./FileView").then((m) => ({ default: m.FileView })));
@@ -20,10 +22,22 @@ type Props = {
   /** A history entry picked: the history tab becomes the page, as a browser's does. */
   onOpenHistory: (url: string) => void;
   onConfirm: (confirm: Confirm) => void;
+  /** What a command's tab shows: the shell holds the commands, not the panes. */
+  renderProcess: (tab: ProcessTabOf) => ReactNode;
 };
 
 /** Routes the active tab to whatever fills the pane. Agents and terminals stay mounted in their overlays. */
-export function Surface({ tab, sessions, hasWorkspace, onCreateWorkspace, files, onOpenPath, onOpenHistory, onConfirm }: Props) {
+export function Surface({
+  tab,
+  sessions,
+  hasWorkspace,
+  onCreateWorkspace,
+  files,
+  onOpenPath,
+  onOpenHistory,
+  onConfirm,
+  renderProcess,
+}: Props) {
   if (!hasWorkspace) {
     return (
       <EmptyState
@@ -42,6 +56,9 @@ export function Surface({ tab, sessions, hasWorkspace, onCreateWorkspace, files,
     if (tab.stub === "history") return <HistoryView onOpen={onOpenHistory} onConfirm={onConfirm} />;
     return <StubView stub={tab.stub} title={tab.title} />;
   }
+  // Mounted only while on screen: a command runs on in the daemon, and its
+  // terminal paints again from the log when the tab comes back.
+  if (tab.kind === "process") return renderProcess(tab);
   // Pages stay mounted in their own overlay, like terminals.
   if (tab.kind === "browser") return null;
   // So do PDFs and media: unmounting one loses the file, and it loads again when shown.
