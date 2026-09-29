@@ -259,3 +259,45 @@ test("C3: closing other tabs asks once for every unsaved file, and confirming dr
   assert.ok(!(await editor(crew, "app.ts").innerText()).includes(`app edit ${stamp}`), "the code edit is gone");
   await holdsFor(500, async () => (await unsaved(crew).count()) === 0, "the reopened file reads Unsaved");
 });
+
+// C4: ⌘F in a code file longer than the pane. The match is scrolled to the
+// middle of the pane even though its line was not rendered, and the pane
+// scrolls freely afterwards: the editor does not keep pulling it back.
+test("C4: find scrolls to a match off screen, and the file still scrolls after", async (t) => {
+  const lines = Array.from({ length: 600 }, (_, i) => `export const line${i} = ${i};`);
+  lines[450] = "export const needle = 'haystack';";
+  const crew = await launchCrew({ repos: [{ name: "app", files: { "src/big.ts": `${lines.join("\n")}\n` } }] });
+  t.after(() => crew.close());
+  const page = crew.window;
+  const pane = page.locator(".overflow-auto").filter({ has: editor(crew, "big.ts") });
+
+  await openFile(crew, "big.ts", "src/big.ts");
+  await editor(crew, "big.ts").click({ position: { x: 80, y: 10 } });
+  await page.keyboard.press(`${MOD}+f`);
+  await page.keyboard.type("needle");
+
+  // The match's line sits inside the pane, not past it.
+  const shown = await waitFor(
+    async () => {
+      const [line, box] = await Promise.all([
+        page.getByText("needle", { exact: true }).filter({ visible: true }).boundingBox(),
+        pane.boundingBox(),
+      ]);
+      return line != null && box != null && line.y > box.y && line.y + line.height < box.y + box.height;
+    },
+    { timeout: 5000 },
+  ).catch(() => false);
+  assert.ok(shown, "the match is scrolled into the pane");
+
+  // The wheel moves the pane, and it stays where the wheel left it.
+  const box = await pane.boundingBox();
+  assert.ok(box);
+  const top = () => pane.evaluate((el) => el.scrollTop);
+  const before = await top();
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.wheel(0, -1000);
+  const moved = await waitFor(async () => (await top()) < before - 500, { timeout: 5000 }).catch(() => false);
+  assert.ok(moved, `the wheel scrolls the pane up from ${before}, it is at ${await top()}`);
+  const after = await top();
+  await holdsFor(1000, async () => Math.abs((await top()) - after) < 2, "the pane is pulled back after the wheel");
+});
