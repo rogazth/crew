@@ -1,0 +1,321 @@
+#!/usr/bin/env node
+// A stand-in for the Codex CLI 0.154 TUI, installed by `installFakeCodex` for
+// the specs that need it. It takes the argv Crew builds in
+// src/lib/sessionCommand.ts and leaves the traces Crew reads from the real one:
+//
+// - the hooks passed with `-c hooks.<Event>=[{hooks=[{type="command",
+//   command=…}]}]`, run with `sh -c` and the hook's JSON on stdin, as Codex
+//   runs them: SessionStart and UserPromptSubmit with the first prompt,
+//   PermissionRequest when it asks, PostToolUse once the tool ran, Stop at the
+//   end of a turn. Esc stops a turn with no Stop hook.
+// - its rollout, `~/.codex/sessions/YYYY/MM/DD/rollout-<time>-<id>.jsonl`,
+//   written from the first prompt on, in 0.154's "paginated" records
+//   (session_meta, task_started, the model's copy of the user message,
+//   item_completed UserMessage / AgentMessage / CommandExecution,
+//   function_call + function_call_output, task_complete, turn_aborted), the
+//   shapes of crates/crew-core/tests/fixtures/codex.
+// - the trust prompt, unless `-c projects={"<cwd>"={trust_level="trusted"}}`
+//   trusts the folder it runs in.
+//
+//   ask           runs `touch asked.txt` once allowed: y or a allows it, Esc declines
+//   anything else a short turn answering "Done."
+//
+// Every launch appends its argv, cwd and pid as one JSON line to
+// $HOME/fake-codex.log. Ctrl+C twice exits.
+"use strict";
+const { spawnSync } = process.getBuiltinModule("node:child_process");
+const { randomUUID } = process.getBuiltinModule("node:crypto");
+const fs = process.getBuiltinModule("node:fs");
+const os = process.getBuiltinModule("node:os");
+const path = process.getBuiltinModule("node:path");
+
+const HOME = process.env.HOME || os.homedir();
+const CWD = process.cwd();
+const argv = process.argv.slice(2);
+fs.appendFileSync(
+  path.join(HOME, "fake-codex.log"),
+  `${JSON.stringify({ argv, cwd: CWD, pid: process.pid, at: Date.now() })}\n`,
+);
+
+const overrides = [];
+for (let i = 0; i < argv.length; i += 1) if (argv[i] === "-c" && argv[i + 1] !== undefined) overrides.push(argv[++i]);
+const hooks = {};
+let trusted = false;
+for (const override of overrides) {
+  const hook = /^hooks\.([A-Za-z]+)=.*command=("(?:[^"\\]|\\.)*")/.exec(override);
+  if (hook) hooks[hook[1]] = JSON.parse(hook[2]);
+  const trust = /^projects=\{("(?:[^"\\]|\\.)*")=\{trust_level="trusted"\}\}$/.exec(override);
+  if (trust && JSON.parse(trust[1]) === CWD) trusted = true;
+}
+const resumeAt = argv.indexOf("resume");
+let sessionId = resumeAt >= 0 && argv[resumeAt + 1] ? argv[resumeAt + 1] : randomUUID();
+
+const codexHome = process.env.CODEX_HOME || path.join(HOME, ".codex");
+function existingRollout() {
+  const root = path.join(codexHome, "sessions");
+  const walk = (dir) =>
+    fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+      const at = path.join(dir, entry.name);
+      return entry.isDirectory() ? walk(at) : entry.name.endsWith(`-${sessionId}.jsonl`) ? [at] : [];
+    });
+  try {
+    return walk(root)[0] ?? null;
+  } catch {
+    return null;
+  }
+}
+let rollout = existingRollout();
+let ordinal = 0;
+let started = false;
+
+function record(type, payload) {
+  if (!rollout) {
+    const now = new Date();
+    const day = path.join(
+      codexHome,
+      "sessions",
+      String(now.getFullYear()),
+      String(now.getMonth() + 1).padStart(2, "0"),
+      String(now.getDate()).padStart(2, "0"),
+    );
+    fs.mkdirSync(day, { recursive: true });
+    rollout = path.join(day, `rollout-${now.toISOString().slice(0, 19).replace(/:/g, "-")}-${sessionId}.jsonl`);
+    record("session_meta", {
+      session_id: sessionId,
+      id: sessionId,
+      timestamp: now.toISOString(),
+      cwd: CWD,
+      originator: "codex-tui",
+      cli_version: "0.154.0",
+      source: "cli",
+      history_mode: "paginated",
+    });
+  }
+  fs.appendFileSync(rollout, `${JSON.stringify({ timestamp: new Date().toISOString(), ordinal: ordinal++, type, payload })}\n`);
+}
+
+function runHook(event, payload) {
+  const command = hooks[event];
+  if (!command) return;
+  spawnSync("sh", ["-c", command], {
+    input: JSON.stringify({
+      session_id: sessionId,
+      transcript_path: rollout,
+      cwd: CWD,
+      hook_event_name: event,
+      model: "gpt-fake",
+      permission_mode: "default",
+      ...payload,
+    }),
+    stdio: ["pipe", "ignore", "ignore"],
+    cwd: CWD,
+  });
+}
+
+const out = (text) => process.stdout.write(text);
+const prompt = () => out("\r\n› ");
+
+let turnId = null;
+let turnStarted = 0;
+let running = [];
+let pending = null;
+let buffer = "";
+let pasting = false;
+let interrupts = 0;
+
+function beginTurn(text) {
+  turnId = randomUUID();
+  turnStarted = Date.now();
+  record("event_msg", { type: "task_started", turn_id: turnId, started_at: Math.floor(turnStarted / 1000) });
+  if (!started) {
+    started = true;
+    runHook("SessionStart", { source: resumeAt >= 0 ? "resume" : "startup" });
+  }
+  runHook("UserPromptSubmit", { turn_id: turnId, prompt: text });
+  record("response_item", { type: "message", id: `msg_${randomUUID()}`, role: "user", content: [{ type: "input_text", text }] });
+  record("event_msg", {
+    type: "item_completed",
+    thread_id: sessionId,
+    turn_id: turnId,
+    item: { type: "UserMessage", id: randomUUID(), content: [{ type: "text", text, text_elements: [] }] },
+  });
+}
+
+function endTurn(reply) {
+  running = [];
+  const id = `msg_${randomUUID()}`;
+  record("response_item", { type: "message", id, role: "assistant", content: [{ type: "output_text", text: reply }], phase: "final_answer" });
+  record("event_msg", {
+    type: "item_completed",
+    thread_id: sessionId,
+    turn_id: turnId,
+    item: { type: "AgentMessage", id, content: [{ type: "Text", text: reply }], phase: "final_answer" },
+  });
+  record("event_msg", {
+    type: "task_complete",
+    turn_id: turnId,
+    last_agent_message: reply,
+    duration_ms: Date.now() - turnStarted,
+  });
+  out(`\r\n• ${reply}`);
+  runHook("Stop", { turn_id: turnId, stop_hook_active: false, last_assistant_message: reply });
+  prompt();
+}
+
+function interrupt() {
+  for (const timer of running) clearTimeout(timer);
+  running = [];
+  pending = null;
+  record("event_msg", { type: "turn_aborted", turn_id: turnId, reason: "interrupted" });
+  out("\r\n■ Conversation interrupted - tell the model what to do differently.");
+  prompt();
+}
+
+function submit(line) {
+  const text = line.trim();
+  if (!text) return prompt();
+  beginTurn(text);
+  if (text === "ask") {
+    const callId = `call_${randomUUID().slice(0, 8)}`;
+    const args = { cmd: "touch asked.txt", workdir: CWD };
+    running = [
+      setTimeout(() => {
+        record("response_item", { type: "function_call", id: `fc_${callId}`, name: "exec_command", arguments: JSON.stringify(args), call_id: callId });
+        runHook("PermissionRequest", { turn_id: turnId, tool_name: "Bash", tool_input: { command: args.cmd } });
+        out("\r\n  Would you like to run the following command?\r\n  $ touch asked.txt\r\n› 1. Yes, proceed (y)\r\n  3. No, and tell Codex what to do differently (esc)");
+        pending = (key) => {
+          if (key === "y" || key === "a") {
+            fs.writeFileSync(path.join(CWD, "asked.txt"), "");
+            record("event_msg", {
+              type: "item_completed",
+              thread_id: sessionId,
+              turn_id: turnId,
+              item: {
+                type: "CommandExecution",
+                id: callId,
+                command: ["/bin/bash", "-lc", args.cmd],
+                status: "completed",
+                aggregated_output: "",
+                exit_code: 0,
+              },
+            });
+            record("response_item", { type: "function_call_output", call_id: callId, output: "Process exited with code 0\nOutput:\n" });
+            runHook("PostToolUse", { turn_id: turnId, tool_name: "Bash", tool_use_id: callId });
+            running = [setTimeout(() => endTurn("Done."), 500)];
+            return true;
+          }
+          if (key === "\x1b" || key === "n") {
+            interrupt();
+            return true;
+          }
+          return false;
+        };
+      }, 300),
+    ];
+    return;
+  }
+  running = [setTimeout(() => endTurn("Done."), 1000)];
+}
+
+function exit() {
+  if (started) runHook("SessionEnd", { reason: "exit" });
+  out("\x1b[?2004l\r\n");
+  process.exit(0);
+}
+
+function onKey(ch) {
+  if (pending && !pasting) {
+    if (pending(ch)) pending = null;
+    return;
+  }
+  if (ch === "\x1b") {
+    if (running.length > 0) interrupt();
+    return;
+  }
+  if (ch === "\x03") {
+    if (++interrupts >= 2) exit();
+    return;
+  }
+  interrupts = 0;
+  if (ch === "\x15") {
+    buffer = "";
+    out("\r\x1b[2K› ");
+    return;
+  }
+  if (ch === "\r" || ch === "\n") {
+    if (pasting) {
+      buffer += "\n";
+      return;
+    }
+    if (running.length > 0) return;
+    const line = buffer;
+    buffer = "";
+    submit(line);
+    return;
+  }
+  if (ch === "\x7f") {
+    buffer = buffer.slice(0, -1);
+    return;
+  }
+  if (ch < " ") return;
+  buffer += ch;
+  out(ch);
+}
+
+function feed(data) {
+  let i = 0;
+  while (i < data.length) {
+    if (data.startsWith("\x1b[200~", i)) {
+      pasting = true;
+      i += 6;
+      continue;
+    }
+    if (data.startsWith("\x1b[201~", i)) {
+      pasting = false;
+      i += 6;
+      continue;
+    }
+    if (data[i] === "\x1b" && i === data.length - 1) {
+      onKey("\x1b");
+      i += 1;
+      continue;
+    }
+    if (data[i] === "\x1b") {
+      if (data[i + 1] === "[") {
+        let j = i + 2;
+        while (j < data.length && !/[@-~]/.test(data[j])) j++;
+        i = j + 1;
+      } else {
+        i += data[i + 1] === "O" ? 3 : 2;
+      }
+      continue;
+    }
+    const ch = String.fromCodePoint(data.codePointAt(i));
+    i += ch.length;
+    onKey(ch);
+  }
+}
+
+if (process.stdin.isTTY) process.stdin.setRawMode(true);
+process.stdin.setEncoding("utf8");
+for (const signal of ["SIGHUP", "SIGTERM"]) process.on(signal, () => process.exit(0));
+
+function start() {
+  process.stdin.on("data", feed);
+  out("\x1b[?2004h");
+  out(">_ Fake Codex (v0.154.0)\r\n");
+  prompt();
+}
+
+if (trusted) start();
+else {
+  out(`> You are in ${CWD}\r\n  Do you trust the contents of this directory?\r\n› 1. Yes, continue\r\n  2. No, quit\r\n  Press enter to continue`);
+  const answer = (data) => {
+    if (data === "2") process.exit(0);
+    if (data !== "1" && data !== "\r") return;
+    process.stdin.removeListener("data", answer);
+    out("\x1b[2J\x1b[H");
+    start();
+  };
+  process.stdin.on("data", answer);
+}

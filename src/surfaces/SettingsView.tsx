@@ -8,18 +8,18 @@ import { ModelPicker } from "../chrome/ModelPicker";
 import { ProviderIcon } from "../chrome/ProviderIcon";
 import { SettingsRow, SettingsSection } from "../chrome/SettingsRow";
 import { useAgentAvatar } from "../hooks/useAgentAvatar";
-import { useAgentMode } from "../hooks/useAgentMode";
 import { useBrowserPrefs } from "../hooks/useBrowserPrefs";
 import { useColorMode } from "../hooks/useColorMode";
 import { useDefaultAgent } from "../hooks/useDefaultAgent";
 import { useFilePrefs } from "../hooks/useFilePrefs";
+import { useSessionView } from "../hooks/useSessionView";
 import { changeSitePermissions, useSitePermissions } from "../hooks/useSitePermissions";
 import { useTabScope } from "../hooks/useTabScope";
 import { AGENT_AVATARS } from "../lib/agentAvatar";
-import { AGENT_MODES } from "../lib/agentMode";
 import { KEEP_CHOICES, SEARCH_ENGINES } from "../lib/browserPrefs";
 import { forget, PERMISSION_LABELS, SITE_PERMISSIONS } from "../lib/browser/permissions";
 import { COLOR_MODES } from "../lib/colorMode";
+import { SESSION_VIEWS } from "../lib/sessionView";
 import { bindingGroups } from "../lib/commandGroups";
 import { commandKeys } from "../lib/commands";
 import { BROWSER_CLICK } from "../lib/external";
@@ -80,17 +80,8 @@ export function SettingsView({
 
 function General({ onConfirm }: { onConfirm: (confirm: Confirm) => void }) {
   const tabs = useTabScope();
-  const agents = useAgentMode();
   return (
     <>
-      <SettingsSection title="Agents">
-        <SettingsRow
-          label="New agents run in"
-          description="Chat shows the agent's work in Crew's timeline, with its tools, diffs and approvals. Terminal runs the provider's own CLI in a terminal tab. Agents you already have keep the way they run."
-        >
-          <Select label="New agents run in" className="w-40" value={agents.mode} onChange={agents.update} options={AGENT_MODES} />
-        </SettingsRow>
-      </SettingsSection>
       <SettingsSection title="Worktrees">
         <SettingsRow
           label="Tabs"
@@ -140,6 +131,7 @@ const PREVIEW_SEEDS = ["crew", "scout", "atlas", "pilot"];
 function Appearance() {
   const avatar = useAgentAvatar();
   const color = useColorMode();
+  const sessions = useSessionView();
   return (
     <>
       {color.available && (
@@ -155,6 +147,20 @@ function Appearance() {
           </SettingsRow>
         </SettingsSection>
       )}
+      <SettingsSection title="Sessions">
+        <SettingsRow
+          label="Sessions open in"
+          description="Chat shows a session's conversation in Crew's chat while its CLI keeps running underneath. Cursor sessions always open in the terminal."
+        >
+          <Select
+            label="Sessions open in"
+            className="w-40"
+            value={sessions.view}
+            onChange={sessions.update}
+            options={SESSION_VIEWS.map((item) => ({ value: item.id, label: item.label }))}
+          />
+        </SettingsRow>
+      </SettingsSection>
       <SettingsSection title="Agents">
         <SettingsRow label="Avatar style" description="Every agent gets its own face in this style, drawn from its id.">
           <div className="flex items-center gap-3">

@@ -22,6 +22,7 @@ import { useNavigation } from "./hooks/useNavigation";
 import { useProjectFiles } from "./hooks/useProjectFiles";
 import { useSelectAllScope } from "./hooks/useSelectAllScope";
 import { useSessions } from "./hooks/useSessions";
+import { useSessionView } from "./hooks/useSessionView";
 import { useSidebarWidth } from "./hooks/useSidebarWidth";
 import { AgentAvatarProvider } from "./hooks/useAgentAvatar";
 import { BrowserPrefsProvider } from "./hooks/useBrowserPrefs";
@@ -70,6 +71,7 @@ export function App() {
     dropWorkspace: forgetSessions,
     reload: reloadSessions,
   } = useSessions(workspaceId);
+  const { surfaceOf } = useSessionView();
   // Every workspace's: their terminals keep running, and renaming, out of sight.
   useSessionTitle(all, adoptName);
   const work = useWorkContext(active, sessions, { workspaces: workspaces.workspaces, sessions: all });
@@ -188,7 +190,7 @@ export function App() {
     toggleShortcuts: () => setDialog((open) => (open === "shortcuts" ? null : "shortcuts")),
     openWorkspace: envs.openWorkspace,
     openHistory: () => nav.openStub("history", "History"),
-    zoom: tabs.active?.kind === "browser" || isTerminalTab(tabs.active, sessions) ? null : (delta) => void zoomApp(delta),
+    zoom: tabs.active?.kind === "browser" || isTerminalTab(tabs.active, sessions, surfaceOf) ? null : (delta) => void zoomApp(delta),
   });
 
   if (workspaces.loading || sidebar.width === null) return <div className="h-full" />;

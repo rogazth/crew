@@ -534,6 +534,9 @@ fn write_live(live: &LivePty, data: &[u8]) -> Result<(), String> {
         .map_err(|e| format!("Failed to write to terminal: {e}"))
 }
 
+/// The Crew session a terminal runs, for the hooks its CLI runs.
+pub const SESSION_ENV: &str = "CREW_SESSION_ID";
+
 type OnExit = Option<Box<dyn FnOnce() + Send>>;
 
 /// On failure the `on_exit` comes back unrun, for the caller to run: there is
@@ -572,6 +575,13 @@ fn spawn_unix(
         }
     };
     cmd.envs(env);
+
+    // A session's pane is `<workspace>/session:<id>`. Hooks passed on the
+    // command line are the same for every session (Codex asks the user to
+    // review any it has not seen), so they name their session from here.
+    if let Some((_, session)) = id.rsplit_once("/session:") {
+        cmd.env(SESSION_ENV, session);
+    }
 
     let mut child = match cmd.spawn() {
         Ok(child) => child,

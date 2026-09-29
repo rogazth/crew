@@ -20,3 +20,9 @@ export const ChatContext = createContext<ChatActions>({
 export function useChatActions(): ChatActions {
   return useContext(ChatContext);
 }
+
+/**
+ * Whether an approval can take "don't ask again". An agent's turn always can;
+ * a CLI's own prompt offers it only when it has a rule to suggest.
+ */
+export const AlwaysAllow = createContext(true);

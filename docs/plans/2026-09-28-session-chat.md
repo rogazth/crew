@@ -1,6 +1,6 @@
 # Session chat — a chat view over the live CLI
 
-**Status:** planned 2026-09-28, nothing built yet. The plan stands on its own: a
+**Status:** planned 2026-09-28, being built (see §9). The plan stands on its own: a
 fresh session can carry it out without the thread it was decided in. Each phase
 ends with the app working and tests green, and gets a line in §9.
 
@@ -360,8 +360,141 @@ This can ship on its own.
 | Phase | Status |
 | --- | --- |
 | Design | Done 2026-09-28 |
-| 1 · Revert `f984ec8` | Pending |
-| 2 · Setting and overlay | Pending |
-| 3 · Claude | Pending |
-| 4 · Codex | Pending |
-| 5 · opencode | Pending |
+| 1 · Revert `f984ec8` | Done 2026-09-28: reverted; `e2e/new-agent.test.ts` makes an agent with `agents:mode=terminal` saved |
+| 2 · Setting and overlay | Done 2026-09-28 (one commit with phase 3) |
+| 3 · Claude | Done 2026-09-28: run by hand against Claude Code 2.1.284, both renderers; see §10 |
+| 4 · Codex | Done 2026-09-28; run by hand against Codex 0.158.0 once its login was back (see §10) |
+| 5 · opencode | Done 2026-09-28, run by hand against opencode 1.18.33 on a free model (see §10) |
+
+## 10. What building it settled
+
+Measured against the installed CLIs while building phases 2 and 3.
+
+**Claude Code 2.1.283 → 2.1.284** (it updated itself mid-way; both were run):
+
+- The permission hook is `PermissionRequest`, with `tool_name`, `tool_input`
+  and `permission_suggestions`. Questions arrive through it too, as
+  `tool_name: "AskUserQuestion"`, bypass mode or not. PreToolUse is not needed.
+- Approval keys: `1` Yes, `2` "Yes, and don't ask again" (offered when the
+  payload has suggestions), Esc No. Esc runs no Stop hook and no PostToolUse:
+  the turn ends in the history (`[Request interrupted by user for tool use]`
+  and a `turn_duration` record), which crewd reads as the end of the turn.
+- Esc before the model answered ends the turn with no hook and nothing in the
+  history, and Claude puts the message back on its input line. The chat's Stop
+  therefore ends the turn in crewd itself (`session_live_stopped`), drops the
+  queued bubbles, and the chat only shows a turn running while Claude's title
+  spins too, which covers Esc typed in the terminal.
+- Question keys: a digit picks and moves on (and submits a lone single-select
+  question); a multi-select toggles digits and `→` moves on; "Type something"
+  is the row after the options, then the text and Enter; several questions or
+  any multi-select end on a review screen answered with `1`.
+- Trust prompt: "No, exit" is preselected and digits do nothing; Trust is `↓`
+  then Enter, Exit is Esc. SessionStart runs before the prompt, so the composer
+  also waits for no blocking screen.
+- 2.1.284 shows "Try the new fullscreen renderer?" right after the trust
+  prompt. It is recognised by its text, and any other modal prompt of Claude's
+  by "Enter to confirm · Esc to cancel". The chat works under both renderers.
+- **Deviation from §2:** the text is always sent as a bracketed paste, not only
+  when it has several lines. Typed that fast, a file name in it (`hello.txt`)
+  was taken for one to complete and the Enter picked the completion: every
+  other such message was lost. Pasted, 6 of 6 arrived. A pasted `/clear` still
+  runs.
+- An image path pasted before the text becomes `[Image #1]`.
+- `/compact` keeps the session id (SessionStart `source: "compact"`); `/clear`
+  runs SessionEnd then SessionStart `source: "clear"` with the new id and
+  transcript path. Subagents write to a folder of their own, never to the
+  main file.
+
+**Codex 0.154.0** (read in its source, `rust-v0.154.0`, and run here up to the
+model: this machine's Codex login is revoked, so no turn gets an answer):
+
+- `-c` splits its key on every dot, quotes or not: `projects."<path>".…`
+  silently misses. A path goes in as an inline table,
+  `-c 'projects={"<path>"={trust_level="trusted"}}'`, which skips the trust
+  prompt and writes nothing. (An Enter pressed on the prompt writes the trust
+  into `config.toml`; Crew never presses it.)
+- Hooks are accepted through `-c` (`hooks.<Event>=[{hooks=[{type="command",
+  command=…}]}]`), with the same events as Claude plus `PermissionRequest`
+  (`tool_name` `Bash` for the shell, `tool_input`, no suggestions). Codex runs a
+  hook only once trusted, by `hooks.state."/<session-flags>/config.toml:<event>:0:0"
+  .trusted_hash`: sha256 of the canonical JSON of `{event_name, hooks: [the
+  hook, with its default timeout]}` (`hook_hash`, hooks/src/engine/discovery.rs).
+  Crew passes that state with its hooks, as one inline table, so nothing is
+  reviewed and nothing written. The hook command is the same for every
+  session (it names its session from `CREW_SESSION_ID`, which crewd sets in a
+  session's terminal), so a Codex that hashes differently asks the user once.
+- SessionStart runs with the first prompt, not at launch: the composer does
+  not wait for it.
+- Approval keys (default keymap): `y`, `a` for the session, Esc (`n`) to
+  decline and stop the turn.
+- The update offer ("Update available! … Update now … Skip") comes back on
+  every launch until updated or "Skip until next version"; it is named in the
+  chat, not suppressed (`check_for_update_on_startup` is the user's).
+- The rollout differs from the plan's picture: besides `response_item` and
+  `event_msg` it has `session_meta`, `turn_context`, `world_state`, and
+  `event_msg` `item_completed`.
+
+**opencode 1.18.31 → 1.18.33** shows no trust or first-run screen in a new
+folder, and by default runs shell commands without asking. It asks ("△
+Permission required … Allow once / Allow always / Reject") for paths outside
+the project; that screen is named in the chat, and answered in the terminal.
+
+**Status and hooks in the app.** Hooks reach the window as `session-live`
+events: crewd watches the bind folder (`notify`, 40 ms quiet / 250 ms ceiling,
+1 s backstop) instead of the window polling it, follows a `/clear` itself, and
+marks a session's CLI gone when its terminal's process exits. The Notification
+hook and `session_claude_attention` are gone.
+
+**e2e.** `e2e/session-chat.test.ts` drives the fake claude, which now writes
+Claude-shaped records (tool_use, tool_result, `turn_duration`, the interrupt
+marker) and runs the hooks above. Four specs fail the same way on the commit
+before this work (A1, K1, M2, cookies), and T1 and T4 fail there too, now and
+then (their clicks, 2–3 s each with the window hidden, outlast the turns they
+time). The `remote-*` specs cannot run on this
+machine: pairing a machine needs the keychain, and its Xvfb session has none.
+
+**Codex in the chat.** The rollout is decoded the way Codex itself replays it
+(`ThreadHistoryBuilder` / `thread_history_projection.rs`): 0.154 files are
+"paginated", and the words come from `item_completed` records, so nothing
+shows twice. `request_user_input` exists only in plan mode; it shows as a
+question card. The chat finds the file by the hook's `transcript_path`, else by
+the bound id under `~/.codex/sessions`. Its question card is not answered with
+keys yet: that needs a Codex with a working login to measure.
+
+**opencode in the chat.** crewd reads `message` and `part` of `opencode.db`
+read-only, rebuilding only when the session's row count or `time_updated`
+moves; blocks take opencode's part ids, so a rebuild keeps them. opencode 1.18
+writes a text part twice (empty, then whole), so replies arrive whole, as
+Claude's do. It has no hooks: status comes from its output, and Stop is Esc
+twice ("esc again to interrupt"). The screen is read at least once a second
+even while its spinner never stops, or its permission prompt went unseen.
+
+**Titles and hooks.** Once hooks speak, a title at rest that lands within
+1.5 s of the hook that opened a turn is stale (Claude repaints ✳ on `/clear`,
+and it can arrive after the next prompt's hook): obeying it made the status
+flap, and crewd, taking the three writes concurrently, could keep the wrong
+one. Later, a resting title still ends a turn Esc stopped in the terminal.
+
+**crewd and SIGTERM.** crewd announced itself before its signal handlers were
+in place, so a SIGTERM sent the moment the line was read could kill it
+(`exits_on_sigterm` failed under load). They are armed first now.
+
+**Codex 0.158.0, run for real.** It updated itself before its login came back,
+and the whole flow was run against it in the app (reply, approval, denial,
+Stop), on the user's own `~/.codex`, which Crew left byte for byte as it was:
+
+- The hooks and their trust hashes computed for 0.154 still hold: no review
+  screen, and every hook reaches crewd.
+- A shell command in the workspace first fails in Codex's sandbox and is
+  retried with a request for elevated permission, so `PostToolUse` of the
+  failed try arrives before the `PermissionRequest`. Its prompt offers `y`,
+  `p` (don't ask again for this prefix) and Esc; `a` is not offered, and the
+  chat shows no "Always allow" for Codex.
+- **Code mode.** 0.158 runs tools from a script: a `custom_tool_call` named
+  `exec` whose input is JavaScript calling `tools.exec_command(...)`. Codex's
+  own history (`thread_history_projection.rs`) ignores every `response_item`
+  in a paginated file and draws from `item_completed` alone; the decoder now
+  does the same for these calls, so the row is the command Codex showed
+  (`touch made-by-codex.txt`), and the sandboxed try that failed, which has no
+  item, does not show. `tests/fixtures/codex/codex-0158-approval.jsonl` is
+  that real session.

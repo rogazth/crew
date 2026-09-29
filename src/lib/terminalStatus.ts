@@ -22,6 +22,14 @@ export const ECHO_WINDOW = 300;
  */
 export const SETTLE_WINDOW = 1000;
 
+/**
+ * A title at rest this soon after a hook opened a turn was drawn before it:
+ * Claude repaints its resting mark on a `/clear`, and that can land just after
+ * the next prompt's hook. Later, it is Esc typed in the terminal, which runs
+ * no hook, ending the turn.
+ */
+export const HOOK_GRACE = 1500;
+
 /** The mark Claude leaves on the title while it waits for you. */
 const CLAUDE_IDLE = "✳";
 /** The marks Claude turns through the title while a turn runs. */
@@ -87,6 +95,8 @@ export class TerminalActivity {
   #watched: boolean;
   /** The CLI titles its own state, so output stops deciding. */
   #titled = false;
+  /** When a hook last said a turn runs; its hooks are the word from then on. */
+  #hookedAt = Number.NEGATIVE_INFINITY;
   /** Drawing its first screen; over at the first pause, key, or title. */
   #starting = true;
   #lastInput = Number.NEGATIVE_INFINITY;
@@ -168,10 +178,31 @@ export class TerminalActivity {
   title(title: string): void {
     const busy = titleBusy(title);
     if (busy === null) return;
+    if (!busy && this.#clock.now() - this.#hookedAt < HOOK_GRACE) return;
     this.#titled = true;
     this.#starting = false;
     this.#stopQuiet();
     this.#setBusy(busy);
+  }
+
+  /**
+   * The CLI's hooks said whether a turn runs, and whether it stopped to ask.
+   * They are the word on it: output and title only fill in where no hook runs.
+   */
+  hooked(working: boolean, asking: boolean): void {
+    this.#titled = true;
+    if (working && !this.#busy) this.#hookedAt = this.#clock.now();
+    this.#starting = false;
+    this.#stopQuiet();
+    if (asking) {
+      this.#busy = true;
+      this.#onBusy(true);
+      this.#push(this.#watched ? "working" : "needs-input");
+      return;
+    }
+    // Answered: the turn goes on where it stopped to ask.
+    if (working && this.#status === "needs-input") this.#push("working");
+    this.#setBusy(working);
   }
 
   bell(): void {

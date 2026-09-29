@@ -1,8 +1,9 @@
-import { lazy, memo, Suspense, useEffect, useRef } from "react";
+import { lazy, memo, Suspense, useContext, useEffect, useRef } from "react";
 import { ShieldCheckIcon } from "lucide-react";
 import { Button } from "../../chrome/kit";
 import { Kbd } from "../../chrome/Kbd";
 import type { ApprovalDecision, Block } from "../../lib/blocks";
+import { AlwaysAllow } from "./context";
 
 /** The diff renderer is ~300 kB and most turns never raise a card; it loads with the first one. */
 const ApprovalBody = lazy(() => import("./ApprovalBody").then((m) => ({ default: m.ApprovalBody })));
@@ -15,6 +16,7 @@ type Props = {
 };
 
 const EDIT = /^(edit|multiedit|write|notebookedit)$/i;
+
 
 function str(input: Record<string, unknown> | undefined, key: string): string | undefined {
   const value = input?.[key];
@@ -31,6 +33,7 @@ export const ApprovalCard = memo(function ApprovalCard({ block, hot = false, onA
   const name = approval?.name ?? "";
   const input = approval?.input;
   const card = useRef<HTMLDivElement>(null);
+  const always = useContext(AlwaysAllow);
 
   useEffect(() => {
     if (hot) card.current?.focus();
@@ -71,9 +74,11 @@ export const ApprovalCard = memo(function ApprovalCard({ block, hot = false, onA
         <ApprovalBody name={name} input={input} />
       </Suspense>
       <div className="flex items-center gap-1.5">
-        <Button variant="ghost" className="h-7 px-2.5" onClick={() => onApprove(requestId, "always")}>
-          Always allow {name}
-        </Button>
+        {always && (
+          <Button variant="ghost" className="h-7 px-2.5" onClick={() => onApprove(requestId, "always")}>
+            Always allow {name}
+          </Button>
+        )}
         <span className="flex-1" />
         <Button className="h-7 px-2.5" {...(hot ? { keys: "esc" } : {})} onClick={() => onApprove(requestId, "deny")}>
           Deny

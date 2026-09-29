@@ -24,6 +24,8 @@ pub mod routine;
 pub mod schedule;
 pub mod scheduler;
 pub mod session;
+pub mod session_history;
+pub mod session_live;
 pub mod shell_path;
 pub mod store;
 pub mod terminal;

@@ -28,4 +28,6 @@ export type ChatSurfaceProps = {
   onRemoveFile: (path: string) => void;
   onApprove: (requestId: number, decision: ApprovalDecision) => void;
   onAnswer: (requestId: number, answers: Answers | null) => void;
+  /** Nothing to show yet, and no intro either: the conversation is still being read. */
+  loading?: boolean;
 };

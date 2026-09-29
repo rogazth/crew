@@ -5,10 +5,12 @@ use ts_rs::TS;
 mod blocks;
 mod messages;
 mod processes;
+mod sessions;
 mod turns;
 pub use blocks::*;
 pub use messages::*;
 pub use processes::*;
+pub use sessions::*;
 pub use turns::*;
 
 #[derive(Serialize, Deserialize, Clone, Debug, TS)]

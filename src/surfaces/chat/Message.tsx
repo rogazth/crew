@@ -25,8 +25,10 @@ const Markdown = lazy(() => import("./Markdown").then((m) => ({ default: m.Markd
  */
 export const UserMessage = memo(function UserMessage({ block }: { block: Block }) {
   if (block.fromAgent) return <AgentMessage block={block} from={block.fromAgent} />;
+  // A message typed into a session's CLI that its history does not show yet.
+  const queued = block.streaming === true;
   return (
-    <div className="flex flex-col items-end gap-1.5">
+    <div className={`flex flex-col items-end gap-1.5 ${queued ? "opacity-60" : ""}`}>
       {block.text ? (
         <div className="crew-md-row is-user">
           <div className="crew-bubble">
@@ -42,6 +44,7 @@ export const UserMessage = memo(function UserMessage({ block }: { block: Block }
           <AttachmentStrip files={block.files} />
         </div>
       ) : null}
+      {queued ? <span className="text-[11px] text-text-muted">Queued</span> : null}
     </div>
   );
 });

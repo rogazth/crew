@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { QUIET_AFTER, SETTLE_WINDOW, TerminalActivity, titleBusy, titleName } from "./terminalStatus";
+import { HOOK_GRACE, QUIET_AFTER, SETTLE_WINDOW, TerminalActivity, titleBusy, titleName } from "./terminalStatus";
 import type { SessionStatus } from "./types";
 
 function track(initial: SessionStatus = "idle", watched = false) {
@@ -221,5 +221,46 @@ describe("TerminalActivity", () => {
     spin(activity, 500);
     vi.advanceTimersByTime(QUIET_AFTER);
     expect(reported).toEqual(["error"]);
+  });
+});
+
+describe("TerminalActivity with hooks", () => {
+  it("works from the prompt the hook reports until the one that says it stopped", () => {
+    const { activity, reported } = track();
+    activity.hooked(true, false);
+    expect(reported).toEqual(["working"]);
+    activity.hooked(false, false);
+    expect(reported).toEqual(["working", "done"]);
+  });
+
+  it("needs input out of sight while the CLI asks, and works again once answered", () => {
+    const { activity, reported } = track();
+    activity.hooked(true, false);
+    activity.hooked(true, true);
+    // Claude sets its idle mark while it waits; the question still stands.
+    activity.title("✳ Claude Code");
+    expect(activity.status).toBe("needs-input");
+    activity.hooked(true, false);
+    expect(reported.at(-1)).toBe("working");
+  });
+
+  it("takes a resting title drawn before the prompt's hook for what it is", () => {
+    const { activity, reported } = track();
+    activity.hooked(true, false);
+    // The ✳ a /clear painted, landing after the next prompt's hook.
+    activity.title("✳ Claude Code");
+    expect(reported).toEqual(["working"]);
+    // Esc in the terminal, well into the turn: no hook, the title ends it.
+    vi.advanceTimersByTime(HOOK_GRACE);
+    activity.title("✳ Claude Code");
+    expect(reported).toEqual(["working", "done"]);
+  });
+
+  it("stops reading output as work once a hook has spoken", () => {
+    const { activity, reported } = track();
+    started(activity);
+    activity.hooked(false, false);
+    spin(activity, 3000);
+    expect(reported).not.toContain("working");
   });
 });

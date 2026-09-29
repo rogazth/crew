@@ -1,0 +1,35 @@
+// SYNTHESIZED: a legacy-mode rollout (no history_mode in session_meta), as Codex CLIs before paginated
+// history wrote them and 0.154 still writes for the sessions they started.
+// Built from codex-rs 0.154.0 serde and rollout/src/policy.rs for ThreadHistoryMode::Legacy: the words are
+// EventMsg::{UserMessage {message, images, local_images, text_elements}, AgentMessage {message, phase},
+// AgentReasoning {text}, ContextCompacted, ThreadRolledBack {num_turns}} (protocol/src/protocol.rs), no
+// item_completed for them. The `kind` on the environment_context user_message is what older CLIs
+// (InputMessageKind) wrote. The `shell` tool with an argv `command`, its JSON output
+// {output, metadata.exit_code} (older CLIs) and `Exit code: N` text (core/src/tools/mod.rs
+// format_exec_output_for_model) are the pre-unified-exec shapes.
+{"timestamp":"2026-03-02T10:00:00.000Z","ordinal":0,"type":"session_meta","payload":{"session_id":"01a0f2c4-5b10-7a3e-9c41-6d2e8b7f0a11","id":"01a0f2c4-5b10-7a3e-9c41-6d2e8b7f0a11","timestamp":"2026-03-02T10:00:00.000Z","cwd":"/work/app","originator":"codex-tui","cli_version":"0.46.0","source":"cli","thread_source":"user","model_provider":"openai","base_instructions":{"text":"You are Codex, an agent based on GPT-6. (trimmed)"},"git":{}}}
+{"timestamp":"2026-03-02T10:00:00.000Z","ordinal":1,"type":"response_item","payload":{"type":"message","id":"msg_t1-u1","role":"user","content":[{"type":"input_text","text":"<user_instructions>\nBe brief.\n</user_instructions>"}],"internal_chat_message_metadata_passthrough":{"turn_id":"t1","content_item_kinds":["user_instructions"]}}}
+{"timestamp":"2026-03-02T10:00:00.000Z","ordinal":2,"type":"response_item","payload":{"type":"message","id":"msg_t1-u2","role":"user","content":[{"type":"input_text","text":"<environment_context>\n  <cwd>/work/app</cwd>\n</environment_context>"}],"internal_chat_message_metadata_passthrough":{"turn_id":"t1","content_item_kinds":["environments.environment_context"]}}}
+{"timestamp":"2026-03-02T10:00:00.000Z","ordinal":3,"type":"event_msg","payload":{"type":"user_message","message":"<environment_context>\n  <cwd>/work/app</cwd>\n</environment_context>","kind":"environment_context","local_images":[],"text_elements":[]}}
+{"timestamp":"2026-03-02T10:00:05.000Z","ordinal":4,"type":"event_msg","payload":{"type":"task_started","turn_id":"t1","model_context_window":272000}}
+{"timestamp":"2026-03-02T10:00:05.000Z","ordinal":5,"type":"response_item","payload":{"type":"message","id":"msg_t1-u5","role":"user","content":[{"type":"input_text","text":"list the files, then show missing.txt"}],"internal_chat_message_metadata_passthrough":{"turn_id":"t1","content_item_kinds":["user.text"]}}}
+{"timestamp":"2026-03-02T10:00:05.000Z","ordinal":6,"type":"event_msg","payload":{"type":"user_message","message":"list the files, then show missing.txt","kind":"plain","local_images":[],"text_elements":[]}}
+{"timestamp":"2026-03-02T10:00:06.000Z","ordinal":7,"type":"response_item","payload":{"type":"reasoning","id":"rs_l1","summary":[{"type":"summary_text","text":"**Listing files**"}],"encrypted_content":"gAAAAABo-redacted-4"}}
+{"timestamp":"2026-03-02T10:00:06.000Z","ordinal":8,"type":"event_msg","payload":{"type":"agent_reasoning","text":"**Listing files**"}}
+{"timestamp":"2026-03-02T10:00:06.500Z","ordinal":9,"type":"response_item","payload":{"type":"function_call","name":"shell","arguments":"{\"command\": [\"bash\", \"-lc\", \"ls\"], \"workdir\": \"/work/app\"}","call_id":"call_ls"}}
+{"timestamp":"2026-03-02T10:00:06.500Z","ordinal":10,"type":"response_item","payload":{"type":"function_call_output","call_id":"call_ls","output":"{\"output\": \"notes.txt\\n\", \"metadata\": {\"exit_code\": 0, \"duration_seconds\": 0.0}}"}}
+{"timestamp":"2026-03-02T10:00:07.000Z","ordinal":11,"type":"response_item","payload":{"type":"function_call","name":"shell","arguments":"{\"command\": [\"bash\", \"-lc\", \"cat missing.txt\"], \"workdir\": \"/work/app\"}","call_id":"call_miss"}}
+{"timestamp":"2026-03-02T10:00:07.000Z","ordinal":12,"type":"response_item","payload":{"type":"function_call_output","call_id":"call_miss","output":"Exit code: 1\nWall time: 0 seconds\nOutput:\ncat: missing.txt: No such file or directory\n"}}
+{"timestamp":"2026-03-02T10:00:08.000Z","ordinal":13,"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Only notes.txt is there; missing.txt does not exist."}]}}
+{"timestamp":"2026-03-02T10:00:08.000Z","ordinal":14,"type":"event_msg","payload":{"type":"agent_message","message":"Only notes.txt is there; missing.txt does not exist."}}
+{"timestamp":"2026-03-02T10:00:08.000Z","ordinal":15,"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":9120,"cached_input_tokens":8064,"output_tokens":412,"reasoning_output_tokens":128,"total_tokens":9532},"last_token_usage":{"input_tokens":3120,"cached_input_tokens":2944,"output_tokens":96,"reasoning_output_tokens":32,"total_tokens":3216},"model_context_window":258400},"rate_limits":null}}
+{"timestamp":"2026-03-02T10:00:08.100Z","ordinal":16,"type":"event_msg","payload":{"type":"task_complete","turn_id":"t1","last_agent_message":"Only notes.txt is there; missing.txt does not exist."}}
+{"timestamp":"2026-03-02T10:01:00.000Z","ordinal":17,"type":"event_msg","payload":{"type":"thread_rolled_back","num_turns":1}}
+{"timestamp":"2026-03-02T10:01:05.000Z","ordinal":18,"type":"event_msg","payload":{"type":"task_started","turn_id":"t2","model_context_window":272000}}
+{"timestamp":"2026-03-02T10:01:05.000Z","ordinal":19,"type":"response_item","payload":{"type":"message","id":"msg_t2-u19","role":"user","content":[{"type":"input_text","text":"show notes.txt"}],"internal_chat_message_metadata_passthrough":{"turn_id":"t2","content_item_kinds":["user.text"]}}}
+{"timestamp":"2026-03-02T10:01:05.000Z","ordinal":20,"type":"event_msg","payload":{"type":"user_message","message":"show notes.txt","kind":"plain","local_images":[],"text_elements":[]}}
+{"timestamp":"2026-03-02T10:01:07.000Z","ordinal":21,"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"It says hello world."}]}}
+{"timestamp":"2026-03-02T10:01:07.000Z","ordinal":22,"type":"event_msg","payload":{"type":"agent_message","message":"It says hello world."}}
+{"timestamp":"2026-03-02T10:01:07.100Z","ordinal":23,"type":"event_msg","payload":{"type":"task_complete","turn_id":"t2","last_agent_message":"It says hello world."}}
+{"timestamp":"2026-03-02T10:02:00.000Z","ordinal":24,"type":"compacted","payload":{"message":"The user listed files and read notes.txt.","compaction_response_id":null,"latest_token_usage_record":null}}
+{"timestamp":"2026-03-02T10:02:00.000Z","ordinal":25,"type":"event_msg","payload":{"type":"context_compacted"}}
