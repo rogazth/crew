@@ -21,6 +21,11 @@ type Deps = {
   toggleShortcuts: () => void;
   /** History is a tab, beside the pages it lists. */
   openHistory: () => void;
+  /** Commands are a tab too, in the strip on screen. */
+  openCommands: () => void;
+  /** Null while there is nothing to start, or nothing up to stop: the palette leaves it out. */
+  startAllCommands: (() => void) | null;
+  stopAllCommands: (() => void) | null;
   openWorkspace: () => void;
   newAgent: () => void;
   newSession: () => void;
@@ -78,6 +83,9 @@ export function useAppCommands(deps: Deps) {
     "new-incognito-tab": () => deps.newBrowser(true),
     "search-messages": () => pages.toggle({ kind: "search" }),
     "open-history": deps.openHistory,
+    "open-commands": deps.openCommands,
+    "start-all-commands": deps.startAllCommands ?? undefined,
+    "stop-all-commands": deps.stopAllCommands ?? undefined,
     "open-routines": () => pages.toggle({ kind: "routines", draft: null }),
     "open-settings": () => pages.toggle({ kind: "settings", section: SETTINGS_DEFAULT }),
     "open-browser-settings": () => pages.openSettings("browser"),

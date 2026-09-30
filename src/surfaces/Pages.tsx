@@ -2,9 +2,6 @@ import type { Confirm } from "../chrome/ConfirmDialog";
 import type { RoutineDraft } from "../lib/routines";
 import type { SettingsSectionId } from "../lib/settings";
 import type { Session, Workspace } from "../lib/types";
-import type { Processes } from "../hooks/useProcesses";
-import type { Process } from "../lib/processes";
-import { CommandsView, type Place } from "./CommandsView";
 import { RoutinesView } from "./RoutinesView";
 import { SearchView } from "./SearchView";
 import { SettingsView } from "./SettingsView";
@@ -14,9 +11,7 @@ export type Page =
   | { kind: "workspace" }
   | { kind: "settings"; section: SettingsSectionId }
   | { kind: "routines"; draft: RoutineDraft | null }
-  | { kind: "search" }
-  /** The active workspace's commands, and where each runs. */
-  | { kind: "commands" };
+  | { kind: "search" };
 
 type Props = {
   page: Page;
@@ -26,12 +21,6 @@ type Props = {
   onConfirm: (confirm: Confirm) => void;
   onOpenHit: (sessionId: string, pos: number) => void;
   onOpenTerminal: (envId: string) => Promise<void>;
-  processes: Processes;
-  /** The active workspace's worktrees, for where a command runs. */
-  places: Place[];
-  onOpenRun: (process: Process, worktree: string | null) => void;
-  /** Every workspace's, to name who wrote a command. */
-  allSessions: Session[];
 };
 
 /**
@@ -46,10 +35,6 @@ export function Pages({
   onConfirm,
   onOpenHit,
   onOpenTerminal,
-  processes,
-  places,
-  onOpenRun,
-  allSessions,
 }: Props) {
   const agents = sessions.filter((session) => session.kind === "agent");
   if (page.kind === "settings") {
@@ -63,19 +48,6 @@ export function Pages({
     );
   }
   if (page.kind === "search") return <SearchView agents={agents} onOpenHit={onOpenHit} />;
-  if (page.kind === "commands" && activeWorkspace) {
-    return (
-      <CommandsView
-        key={activeWorkspace.id}
-        workspaceId={activeWorkspace.id}
-        processes={processes}
-        places={places}
-        sessions={allSessions}
-        onOpenRun={onOpenRun}
-        onConfirm={onConfirm}
-      />
-    );
-  }
   if (page.kind === "routines" && activeWorkspace) {
     return (
       <RoutinesView

@@ -38,9 +38,9 @@ import { Pages } from "./surfaces/Pages";
 import { usePages } from "./hooks/usePages";
 import { useProcesses } from "./hooks/useProcesses";
 import { CommandsButton } from "./chrome/CommandsButton";
-import { awaitsUser, isOrphan, liveRuns } from "./lib/processes";
+import { awaitsUser, isOrphan, liveRuns, startableIn } from "./lib/processes";
 import { ProcessTab } from "./surfaces/ProcessTab";
-import type { Place } from "./surfaces/CommandsView";
+import { CommandsView, type Place } from "./surfaces/CommandsView";
 import { boot } from "./lib/agentRuntime";
 import { WorkspacePanes } from "./surfaces/WorkspacePanes";
 
@@ -124,7 +124,6 @@ export function App() {
     settings,
     isWorkspace,
     isRoutines,
-    isCommands,
     close: closePage,
     toggle: togglePage,
     openSettings,
@@ -190,6 +189,11 @@ export function App() {
       asking: list.filter(awaitsUser).length,
     };
   }, [active?.path, all, processes.processes]);
+  // The worktree on screen: where a Commands tab opens, and where Start all starts.
+  const here = places.find((place) => place.worktree === work.placeIn) ?? places[0] ?? { worktree: null, label: "main", hue: 0 };
+  const { openStub } = nav;
+  const openCommands = useCallback(() => openStub("commands", "Commands"), [openStub]);
+  const commandsOpen = tabs.active?.kind === "stub" && tabs.active.stub === "commands";
   const sheet = useAgentSheet({ create, update, openSession: nav.openSession, createWorktree: worktrees.create });
   const envs = useEnvironments({ workspaces, active, closePage, openSettings, create, openSession: nav.openSession });
 
@@ -229,6 +233,9 @@ export function App() {
     toggleShortcuts: () => setDialog((open) => (open === "shortcuts" ? null : "shortcuts")),
     openWorkspace: envs.openWorkspace,
     openHistory: () => nav.openStub("history", "History"),
+    openCommands,
+    startAllCommands: startableIn(processes.processes ?? [], here.worktree).length > 0 ? () => void processes.startAll(here.worktree) : null,
+    stopAllCommands: commandCounts.live > 0 ? () => void processes.stopAll() : null,
     zoom: tabs.active?.kind === "browser" || isTerminalTab(tabs.active, sessions, surfaceOf) ? null : (delta) => void zoomApp(delta),
   });
 
@@ -308,8 +315,8 @@ export function App() {
                 live={commandCounts.live}
                 asking={commandCounts.asking}
                 orphans={commandCounts.orphans}
-                open={isCommands}
-                onToggle={() => togglePage({ kind: "commands" })}
+                open={isWorkspace && commandsOpen}
+                onToggle={openCommands}
               />
             ),
             running: commandCounts.running,
@@ -327,10 +334,6 @@ export function App() {
           sessions={sessions}
           onConfirm={confirms.ask}
           onOpenHit={nav.openHit}
-          processes={processes}
-          places={places}
-          onOpenRun={nav.openProcessRun}
-          allSessions={all}
           onOpenTerminal={envs.openTerminalOn}
         />
         {/* Hidden, not unmounted: agent and terminal processes stay alive. */}
@@ -388,9 +391,23 @@ export function App() {
                 worktree={tab.worktree}
                 place={places.find((place) => place.worktree === tab.worktree)?.label ?? tab.worktree ?? "main"}
                 processes={processes}
-                onOpenCommands={() => togglePage({ kind: "commands" })}
+                onOpenCommands={openCommands}
               />
             )}
+            renderCommands={() =>
+              active && (
+                <CommandsView
+                  key={active.id}
+                  workspaceId={active.id}
+                  processes={processes}
+                  places={places}
+                  here={here}
+                  sessions={all}
+                  onOpenRun={nav.openProcessRun}
+                  onConfirm={confirms.ask}
+                />
+              )
+            }
             // Chrome's way: the entry loads where History was, so the tab turns into the page.
             onOpenHistory={(url) => {
               const history = tabs.active;

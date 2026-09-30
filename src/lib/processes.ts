@@ -18,6 +18,19 @@ export const runIn = (process: Process, worktree: string | null): ProcessRun | u
 export const liveRuns = (processes: Process[]): { process: Process; run: ProcessRun }[] =>
   processes.flatMap((process) => process.runs.flatMap((run) => (isLive(run) ? [{ process, run }] : [])));
 
+/** What Start all starts in `worktree`: every approved command not already up there. */
+export const startableIn = (processes: Process[], worktree: string | null): Process[] =>
+  processes.filter((process) => process.approved && !isLive(runIn(process, worktree)));
+
+/**
+ * The env a run starts again with: a run that set its own over the command's
+ * keeps it, so its port stays its own. Undefined takes the command's.
+ */
+export function rerunEnv(process: Process, run: ProcessRun | undefined): Record<string, string> | undefined {
+  if (!run) return undefined;
+  return Object.entries(run.env).some(([key, value]) => process.env[key] !== value) ? run.env : undefined;
+}
+
 /**
  * Left running by a session that is gone: nobody is watching it but the user.
  * `sessionIds` are the sessions that still exist.

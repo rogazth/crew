@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import type { Confirm } from "../chrome/ConfirmDialog";
 import * as api from "../lib/api";
 import { client } from "../lib/client";
-import { isLive, replayEvents, type Process, type ProcessEvent } from "../lib/processes";
+import { isLive, liveRuns, replayEvents, rerunEnv, runIn, startableIn, type Process, type ProcessEvent } from "../lib/processes";
 import type { ProcessRemoved } from "../lib/protocol";
 
 /**
@@ -77,6 +77,22 @@ export function useProcesses(workspaceId: string | null) {
     [],
   );
 
+  /** Every approved command not up in `worktree`, started there, each with the env its run had. */
+  const startAll = useCallback(
+    async (worktree: string | null) => {
+      const list = processes ?? [];
+      await Promise.all(
+        startableIn(list, worktree).map((process) => run("start", process, worktree, rerunEnv(process, runIn(process, worktree)))),
+      );
+    },
+    [processes, run],
+  );
+
+  /** Every run up in the workspace, in any worktree, stopped. */
+  const stopAll = useCallback(async () => {
+    await Promise.all(liveRuns(processes ?? []).map(({ process, run: up }) => run("stop", process, up.worktree)));
+  }, [processes, run]);
+
   /**
    * The user's answer to what an agent wrote. An approval names the revision
    * the user read; refused because the process changed meanwhile, the list
@@ -106,7 +122,7 @@ export function useProcesses(workspaceId: string | null) {
     [workspaceId],
   );
 
-  return { processes, error, clearError: () => setError(null), run, decide, reorder };
+  return { processes, error, clearError: () => setError(null), run, startAll, stopAll, decide, reorder };
 }
 
 export type Processes = ReturnType<typeof useProcesses>;

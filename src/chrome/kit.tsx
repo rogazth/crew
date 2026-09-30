@@ -394,19 +394,22 @@ export function PageFrame({
   subtitle,
   actions,
   width = "max-w-3xl",
+  inTab = false,
   children,
 }: {
   title: string;
   subtitle?: ReactNode;
   actions?: ReactNode;
   width?: string;
+  /** Under a tab strip, which already is the window's title bar. */
+  inTab?: boolean;
   children: ReactNode;
 }) {
   return (
     <div className="flex h-full flex-col">
-      <div data-tauri-drag-region className="h-10 shrink-0" />
+      {!inTab && <div data-tauri-drag-region className="h-10 shrink-0" />}
       <div className="min-h-0 flex-1 overflow-y-auto">
-        <div className={`mx-auto flex ${width} flex-col gap-5 px-8 pt-6 pb-16`}>
+        <div className={`mx-auto flex ${width} flex-col gap-5 px-8 ${inTab ? "pt-10" : "pt-6"} pb-16`}>
           <header className="flex items-end gap-3">
             <div className="flex min-w-0 flex-1 flex-col gap-0.5">
               <h1 className="truncate text-[22px] leading-7 font-semibold tracking-[-0.02em]">{title}</h1>

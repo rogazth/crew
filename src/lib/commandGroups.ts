@@ -33,6 +33,10 @@ const GROUPS: { title: string; entries: Entry[] }[] = [
     entries: ["new-agent", "new-session", "open-routines"],
   },
   {
+    title: "Commands",
+    entries: ["open-commands", "start-all-commands", "stop-all-commands"],
+  },
+  {
     title: "Finding things",
     entries: ["open-palette", "go-to-file", "open-actions", "search-messages", "find"],
   },

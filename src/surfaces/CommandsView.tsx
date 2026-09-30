@@ -15,6 +15,9 @@ import {
   isOrphan,
   parseEnv,
   processActions,
+  rerunEnv,
+  startableIn,
+  liveRuns,
   specChanges,
   specOf,
   stateLabel,
@@ -32,6 +35,8 @@ type Props = {
   processes: Processes;
   /** The workspace's worktrees, the main checkout first. */
   places: Place[];
+  /** The worktree whose strip holds the tab: where Start all starts. */
+  here: Place;
   /** Every session, to name who wrote or started something, and to tell one that is gone. */
   sessions: Session[];
   onOpenRun: (process: Process, worktree: string | null) => void;
@@ -43,12 +48,14 @@ type Props = {
  * command lists where it runs and who started it there, so a dev server an
  * agent left behind is in plain sight, with its Stop beside it.
  */
-export function CommandsView({ workspaceId, processes, places, sessions, onOpenRun, onConfirm }: Props) {
+export function CommandsView({ workspaceId, processes, places, here, sessions, onOpenRun, onConfirm }: Props) {
   const [editing, setEditing] = useState<{ process?: Process } | null>(null);
   const [starting, setStarting] = useState<Process | null>(null);
   const [menu, setMenu] = useState<{ point: MenuPoint; process: Process } | null>(null);
   const list = processes.processes;
   const asking = list?.filter(awaitsUser) ?? [];
+  const startable = startableIn(list ?? [], here.worktree).length;
+  const live = liveRuns(list ?? []).length;
 
   const pick = (id: string, process: Process) => {
     if (id === "edit") setEditing({ process });
@@ -59,12 +66,33 @@ export function CommandsView({ workspaceId, processes, places, sessions, onOpenR
 
   return (
     <PageFrame
+      inTab
       title="Commands"
       subtitle="Dev servers, watchers and workers, defined once for the workspace and run in any of its worktrees."
       actions={
-        <Button variant="primary" icon={PlusIcon} onClick={() => setEditing({})}>
-          New command
-        </Button>
+        <>
+          {live > 0 && (
+            <Button
+              icon={SquareIcon}
+              title={`Stop ${live === 1 ? "the run" : `all ${live} runs`} up in this workspace`}
+              onClick={() => void processes.stopAll()}
+            >
+              Stop all
+            </Button>
+          )}
+          {startable > 0 && (
+            <Button
+              icon={PlayIcon}
+              title={`Start every command not running in ${here.label}`}
+              onClick={() => void processes.startAll(here.worktree)}
+            >
+              Start all
+            </Button>
+          )}
+          <Button variant="primary" icon={PlusIcon} onClick={() => setEditing({})}>
+            New command
+          </Button>
+        </>
       }
     >
       {processes.error && (
@@ -227,7 +255,7 @@ function RunRow({
   const own = Object.entries(run.env).filter(([key, value]) => process.env[key] !== value);
   // Started again from here, a run keeps the env it had: its own port stays its own.
   const act = (command: "start" | "stop" | "restart") =>
-    void processes.run(command, process, run.worktree, command === "start" && own.length > 0 ? run.env : undefined);
+    void processes.run(command, process, run.worktree, command === "start" ? rerunEnv(process, run) : undefined);
   return (
     <li className="group/run flex h-9 items-center gap-2.5 px-3">
       <ProcessDot run={run} />

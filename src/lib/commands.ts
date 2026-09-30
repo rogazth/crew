@@ -86,6 +86,10 @@ export const COMMANDS = {
   "focus-sidebar": { label: "Focus Sidebar", keys: "Mod+Shift+E" },
   // ⌘⇧R is the page's hard reload; Routines is one click away in the sidebar.
   "open-routines": { label: "Routines" },
+  // The workspace's dev servers and watchers, run per worktree.
+  "open-commands": { label: "Commands" },
+  "start-all-commands": { label: "Start All Commands" },
+  "stop-all-commands": { label: "Stop All Commands" },
   "search-messages": { label: "Search Messages", keys: "Mod+Shift+F" },
   "open-settings": { label: "Settings", keys: "Mod+," },
   "open-browser-settings": { label: "Browser Settings" },

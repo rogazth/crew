@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { ArrowLeftIcon, ArrowRightIcon, BotIcon, CodeXmlIcon, CommandIcon, FolderIcon, FolderOpenIcon, GitBranchIcon, GlobeIcon, HatGlassesIcon, HistoryIcon, KeyboardIcon, ListIcon, PanelLeftIcon, PlusIcon, RotateCcwIcon, RotateCwIcon, SaveIcon, SearchIcon, SettingsIcon, SquareTerminalIcon, type LucideIcon as Icon } from "lucide-react";
+import { ArrowLeftIcon, ArrowRightIcon, BotIcon, CodeXmlIcon, CommandIcon, FolderIcon, FolderOpenIcon, GitBranchIcon, GlobeIcon, HatGlassesIcon, HistoryIcon, KeyboardIcon, ListIcon, PanelLeftIcon, PlayIcon, PlusIcon, RotateCcwIcon, RotateCwIcon, SaveIcon, SearchIcon, ServerIcon, SettingsIcon, SquareIcon, SquareTerminalIcon, type LucideIcon as Icon } from "lucide-react";
 import { AgentAvatar } from "./AgentAvatar";
 import { FileTypeIcon } from "./FileTypeIcon";
 import { Footer, GroupHeader } from "./kit";
@@ -332,6 +332,9 @@ const ACTION_ICONS: Partial<Record<CommandId, Icon>> = {
   "browser-hard-reload": RotateCwIcon,
   "browser-devtools": CodeXmlIcon,
   "open-history": HistoryIcon,
+  "open-commands": ServerIcon,
+  "start-all-commands": PlayIcon,
+  "stop-all-commands": SquareIcon,
   shortcuts: KeyboardIcon,
 };
 

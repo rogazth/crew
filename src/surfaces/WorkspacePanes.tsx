@@ -38,6 +38,7 @@ type Props = {
   onOpenHistory: (url: string) => void;
   onConfirm: (confirm: Confirm) => void;
   renderProcess: (tab: ProcessTabOf) => ReactNode;
+  renderCommands: () => ReactNode;
 };
 
 /** Active surface plus the mounted agent, terminal, page and media overlays, of every workspace. */
@@ -60,6 +61,7 @@ export function WorkspacePanes({
   onOpenHistory,
   onConfirm,
   renderProcess,
+  renderCommands,
 }: Props) {
   // Keyed on where each session runs, not on the sessions: a status change
   // must not hand every mounted pane a fresh object.
@@ -115,6 +117,7 @@ export function WorkspacePanes({
           onOpenHistory={onOpenHistory}
           onConfirm={onConfirm}
           renderProcess={renderProcess}
+          renderCommands={renderCommands}
         />
       </DiffsPool>
       <ChatContext value={chat}>

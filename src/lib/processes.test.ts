@@ -9,10 +9,12 @@ import {
   processActions,
   removeProcess,
   replayEvents,
+  rerunEnv,
   runActions,
   runIn,
   specChanges,
   specOf,
+  startableIn,
   stateLabel,
   stateTone,
   upsertProcess,
@@ -152,5 +154,23 @@ describe("processes", () => {
       { field: "Environment", before: "PORT=3000", after: "PORT=4000" },
       { field: "Restart on crash", before: "Off", after: "On" },
     ]);
+  });
+});
+
+describe("start and stop all", () => {
+  it("starts every approved command not already up in the worktree", () => {
+    const up = process({ id: "up", runs: [run({ worktree: "/t" })] });
+    const elsewhere = process({ id: "elsewhere", runs: [run({ worktree: null })] });
+    const crashed = process({ id: "crashed", runs: [run({ worktree: "/t", state: "crashed" })] });
+    const unapproved = process({ id: "new", approved: false });
+    const ids = startableIn([up, elsewhere, crashed, unapproved], "/t").map((p) => p.id);
+    expect(ids).toEqual(["elsewhere", "crashed"]);
+  });
+
+  it("starts a run again with the env it set over the command's, and none otherwise", () => {
+    const web = process({ env: { PORT: "3000" } });
+    expect(rerunEnv(web, undefined)).toBeUndefined();
+    expect(rerunEnv(web, run({ env: { PORT: "3000" } }))).toBeUndefined();
+    expect(rerunEnv(web, run({ env: { PORT: "4011" } }))).toEqual({ PORT: "4011" });
   });
 });

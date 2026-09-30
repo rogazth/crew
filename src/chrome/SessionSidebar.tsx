@@ -1,4 +1,4 @@
-import { ChevronRightIcon, FolderIcon, GitBranchIcon, PlusIcon, RotateCwIcon, SearchIcon, ServerIcon, XIcon, type LucideIcon as Icon } from "lucide-react";
+import { ChevronDownIcon, ChevronRightIcon, ChevronUpIcon, FolderIcon, GitBranchIcon, PlusIcon, RotateCwIcon, SearchIcon, ServerIcon, XIcon, type LucideIcon as Icon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
 import { ActionMenu } from "./ActionMenu";
 import { AgentAvatar } from "./AgentAvatar";
@@ -628,9 +628,11 @@ function MoreRow({ hidden, open, onToggle }: { hidden: number; open: boolean; on
       type="button"
       data-nav
       data-tauri-drag-region="false"
+      aria-expanded={open}
       onClick={() => onToggle(!open)}
-      className="mt-0.5 flex h-7 w-full items-center rounded-md px-2 text-left text-[12px] text-text-muted outline-none hover:bg-hover hover:text-text focus-visible:bg-hover"
+      className="mt-0.5 flex h-7 w-full items-center gap-1.5 rounded-md px-2 text-left text-[12px] text-text-muted outline-none hover:bg-hover hover:text-text focus-visible:bg-hover"
     >
+      {open ? <ChevronUpIcon aria-hidden className="size-3.5 shrink-0" /> : <ChevronDownIcon aria-hidden className="size-3.5 shrink-0" />}
       {open ? "Show less" : `${hidden} more`}
     </button>
   );

@@ -30,12 +30,8 @@ export function usePages() {
     [],
   );
 
-  const openCommands = useCallback(() => setPage({ kind: "commands" }), []);
-
   return {
     page,
-    isCommands: page.kind === "commands",
-    openCommands,
     settings: page.kind === "settings" ? page.section : null,
     isWorkspace: page.kind === "workspace",
     isRoutines: page.kind === "routines",
