@@ -274,6 +274,7 @@ const commands: Record<string, (args: Row) => unknown> = {
     String(path).endsWith(".md") ? MOCK_MARKDOWN : "export const answer = 42;\n",
   write_text_file: () => undefined,
   path_exists: () => false,
+  path_is_file: () => false,
   read_file_base64: () => ({ mime: "image/png", data: MOCK_PNG }),
   write_temp_file: () => "/tmp/crew/mock.png",
   create_file_base64: () => undefined,

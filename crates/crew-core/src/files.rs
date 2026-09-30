@@ -295,6 +295,10 @@ pub fn exists(path: &str) -> bool {
     std::path::Path::new(path).exists()
 }
 
+pub fn is_file(path: &str) -> bool {
+    std::path::Path::new(path).is_file()
+}
+
 /// Clipboard images arrive as bytes with no path, and the CLIs Crew hosts take
 /// paths. The name is generated here so a caller can never walk out of the dir.
 pub fn write_temp(extension: &str, base64_contents: &str) -> Result<String, String> {

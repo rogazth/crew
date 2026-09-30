@@ -7,7 +7,7 @@ import { useTextFile } from "../hooks/useTextFile";
 import { commandKeys } from "../lib/commands";
 import { TOKENIZE_MAX_LENGTH } from "../lib/highlighting";
 import type { ProjectFile } from "../lib/types";
-import { NoPreview } from "./NoPreview";
+import { FileNotice } from "./FileNotice";
 
 type Props = {
   path: string;
@@ -34,9 +34,8 @@ export function FileEditor({ path, relative, files, onOpenPath, actions }: Props
   const [outline, toggleOutline] = useOutlinePref();
   useCommands(isMarkdown ? { "toggle-outline": toggleOutline } : {});
 
-  // The daemon reads text only; anything else says so in Rust's words.
-  if (error?.includes("valid UTF-8")) return <NoPreview path={path} relative={relative} />;
-  if (error) return <p className="p-4 text-red-600">{error}</p>;
+  // The daemon reads text only; anything else says so in Rust's words, which the notice translates.
+  if (error) return <FileNotice path={path} relative={relative} error={error} />;
   if (loaded === null) {
     return <p className="p-4 text-text-muted">Loading {name}…</p>;
   }

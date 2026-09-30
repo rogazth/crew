@@ -1522,6 +1522,10 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
             let PathArg { path } = parse(params)?;
             Ok(Value::from(files::exists(&path)))
         }
+        "path_is_file" => {
+            let PathArg { path } = parse(params)?;
+            Ok(Value::from(files::is_file(&path)))
+        }
         "read_file_base64" => {
             let PathArg { path } = parse(params)?;
             json(block(move || files::read_base64(&path)).await?)

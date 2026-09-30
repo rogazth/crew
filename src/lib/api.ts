@@ -196,6 +196,9 @@ export const writeTextFile = (path: string, contents: string): Promise<void> =>
 
 export const pathExists = (path: string): Promise<boolean> => client.request("path_exists", { path });
 
+/** True only for a file: a directory, or nothing at all, is false. */
+export const pathIsFile = (path: string): Promise<boolean> => client.request("path_is_file", { path });
+
 /** The name Claude Code gave the session behind this transcript, if it named it. */
 /** The provider's new title for the session, once adopted as its name. */
 export const syncSessionTitle = (id: string): Promise<string | null> =>
