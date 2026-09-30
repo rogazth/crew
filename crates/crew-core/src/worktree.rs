@@ -121,7 +121,8 @@ pub fn shortstat(line: &str) -> (u32, u32) {
 }
 
 /// A new worktree of the repo whose main checkout is `path`, on `branch`: the
-/// branch checked out if it exists, otherwise made from the main checkout's HEAD.
+/// branch checked out if it exists, made to track a remote's branch of that name
+/// if only a remote has it, otherwise made from the main checkout's HEAD.
 pub fn add(path: &str, branch: &str) -> Result<Worktree, String> {
     let home = std::env::var("HOME").ok().filter(|home| !home.is_empty()).ok_or("HOME is not set")?;
     add_under(&Path::new(&home).join(".crew").join("worktrees"), path, branch)
@@ -144,9 +145,10 @@ pub fn add_under(root: &Path, path: &str, branch: &str) -> Result<Worktree, Stri
         std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
     }
     let target = dir.to_string_lossy().into_owned();
-    let exists = run(&main, &["show-ref", "--verify", "--quiet", &format!("refs/heads/{branch}")]).is_ok();
-    if exists {
+    if has_ref(&main, &format!("refs/heads/{branch}")) {
         run(&main, &["worktree", "add", &target, branch])?;
+    } else if let Some(remote) = remote_branch(&main, branch) {
+        run(&main, &["worktree", "add", "--track", "-b", branch, &target, &remote])?;
     } else {
         run(&main, &["worktree", "add", "-b", branch, &target, "HEAD"])?;
     }
@@ -204,6 +206,22 @@ pub fn slug(branch: &str) -> String {
         .chars()
         .map(|c| if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') { c } else { '-' })
         .collect()
+}
+
+fn has_ref(dir: &str, name: &str) -> bool {
+    run(dir, &["show-ref", "--verify", "--quiet", name]).is_ok()
+}
+
+/// The remote-tracking ref for `branch`, from `origin` when it has one, else
+/// from the first remote that does. Only what was last fetched is known.
+fn remote_branch(dir: &str, branch: &str) -> Option<String> {
+    let remotes = git(dir, &["remote"])?;
+    let mut remotes: Vec<&str> = remotes.lines().map(str::trim).filter(|r| !r.is_empty()).collect();
+    remotes.sort_by_key(|remote| *remote != "origin");
+    remotes
+        .into_iter()
+        .map(|remote| format!("refs/remotes/{remote}/{branch}"))
+        .find(|name| has_ref(dir, name))
 }
 
 fn canonical(path: &str) -> PathBuf {
@@ -345,6 +363,26 @@ mod tests {
         let again = add_under(&temp("crew-wt-root"), &at(&repo), "old-work");
         // Older git says "already checked out at", newer "already used by worktree at".
         assert!(again.is_err_and(|e| e.contains("'old-work' is already")), "one branch in two worktrees");
+    }
+
+    #[test]
+    fn a_branch_only_a_remote_has_is_tracked_not_forked_from_head() {
+        let upstream = repo();
+        sh(&upstream, &["checkout", "-q", "-b", "feat/remote"]);
+        std::fs::write(upstream.join("remote.txt"), "from the remote\n").unwrap();
+        sh(&upstream, &["add", "."]);
+        sh(&upstream, &["commit", "-q", "-m", "remote work"]);
+        sh(&upstream, &["checkout", "-q", "main"]);
+        let clone = temp("crew-clone").join("app");
+        sh(&upstream, &["clone", "-q", &at(&upstream), &at(&clone)]);
+        let root = temp("crew-wt-root");
+
+        let made = add_under(&root, &at(&clone), "feat/remote").expect("add");
+
+        assert_eq!(made.branch.as_deref(), Some("feat/remote"));
+        assert!(Path::new(&made.path).join("remote.txt").is_file(), "forked from HEAD, not the remote");
+        let upstream_of = run(&made.path, &["rev-parse", "--abbrev-ref", "@{upstream}"]).expect("upstream");
+        assert_eq!(upstream_of.trim(), "origin/feat/remote");
     }
 
     #[test]
