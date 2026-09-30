@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { RotateCwIcon, FolderOpenIcon } from "lucide-react";
+import { FindBar } from "../chrome/FindBar";
 import { Button } from "../chrome/kit";
 import { useCommands } from "../hooks/useCommand";
 import { FILES_PARTITION, fileView, previewRoot } from "../lib/browser/files";
@@ -111,6 +112,9 @@ export function FilePreview({
   const box = useRef<HTMLDivElement>(null);
   const guest = useRef<Guest | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
+  // The find bar: null while closed; the token re-selects the field on a second ⌘F.
+  const [finding, setFinding] = useState<{ query: string; token: number } | null>(null);
+  const [found, setFound] = useState({ index: 0, count: 0 });
   const root = previewRoot(path, relative);
 
   useEffect(() => {
@@ -136,6 +140,7 @@ export function FilePreview({
             if (failure.isMainFrame && failure.errorCode !== -3) setProblem(failure.errorDescription || "It didn't load.");
           },
           gone: () => setProblem("The preview stopped."),
+          found: (result) => setFound({ index: Math.max(0, result.activeMatchOrdinal - 1), count: result.matches }),
         });
       })
       .catch((error: unknown) => !gone && setProblem(String(error)));
@@ -164,9 +169,25 @@ export function FilePreview({
             const id = guest.current?.webContentsId();
             if (id != null) void browserHost()?.toggleDevTools(id);
           },
+          find: () => setFinding((open) => ({ query: open?.query ?? "", token: (open?.token ?? 0) + 1 })),
         }
       : {},
   );
+
+  const search = (query: string) => {
+    setFinding((open) => ({ query, token: open?.token ?? 0 }));
+    if (query) guest.current?.find(query);
+    else {
+      guest.current?.stopFind();
+      setFound({ index: 0, count: 0 });
+    }
+  };
+  const closeFind = () => {
+    guest.current?.stopFind();
+    setFinding(null);
+    setFound({ index: 0, count: 0 });
+    guest.current?.focus();
+  };
 
   return (
     <div className="flex h-full flex-col bg-canvas">
@@ -192,6 +213,17 @@ export function FilePreview({
             <p className="max-w-sm text-text-muted">{problem}</p>
             <Button onClick={reload}>Try again</Button>
           </div>
+        )}
+        {finding && (
+          <FindBar
+            label="Find in file"
+            query={finding.query}
+            results={found}
+            focusToken={finding.token}
+            onQuery={search}
+            onStep={(delta) => finding.query && guest.current?.find(finding.query, { forward: delta > 0 })}
+            onClose={closeFind}
+          />
         )}
       </div>
     </div>

@@ -1,8 +1,8 @@
 diff --git a/node_modules/@pierre/diffs/dist/editor/editor.js b/node_modules/@pierre/diffs/dist/editor/editor.js
-index 0cd91b0..f33a0c6 100644
+index 0cd91b0..0036354 100644
 --- a/node_modules/@pierre/diffs/dist/editor/editor.js
 +++ b/node_modules/@pierre/diffs/dist/editor/editor.js
-@@ -1952,12 +1952,22 @@ var Editor = class {
+@@ -1952,12 +1952,24 @@ var Editor = class {
  		} else {
  			const modelLinePosition = this.#fileInstance?.getLinePosition?.(line + 1);
  			if (modelLinePosition !== void 0) {
@@ -11,14 +11,17 @@ index 0cd91b0..f33a0c6 100644
 -				virtualCaret.scrollIntoView({
 -					block: "center",
 -					inline: "nearest"
+-				});
 +				const codeView = this.#fileInstance?.virtualizer;
 +				const itemId = codeView?.instanceToItem?.get(this.#fileInstance)?.item.id;
-+				if (itemId !== void 0 && typeof codeView.scrollTo === "function") codeView.scrollTo({
++				// CodeView drops a pending scroll on any keydown reaching its root, and the
++				// keydown that asked for this one (↵ in search, ⌘D) is still on its way there.
++				if (itemId !== void 0 && typeof codeView.scrollTo === "function") setTimeout(() => codeView.scrollTo({
 +					type: "line",
 +					id: itemId,
 +					lineNumber: line + 1,
 +					align: "center"
- 				});
++				}));
 +				else {
 +					virtualCaret.style.top = modelLinePosition.top + "px";
 +					this.#fileContainer?.shadowRoot?.appendChild(virtualCaret);
