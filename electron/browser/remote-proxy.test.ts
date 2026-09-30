@@ -130,7 +130,8 @@ async function pageServer(): Promise<{ port: number; server: HttpServer }> {
     req.on("data", (chunk) => (body += chunk));
     req.on("end", () => {
       res.writeHead(200, { "content-type": "text/plain" });
-      res.end(`${req.method} ${req.url} ${req.headers["proxy-authorization"] ? "leaked" : "clean"} ${body}`);
+      const machine = req.headers["x-crew-machine"] ? "machine-leaked" : "no-machine";
+      res.end(`${req.method} ${req.url} ${req.headers["proxy-authorization"] ? "leaked" : "clean"} ${body}${req.url === "/tunnel" ? "" : ` ${machine}`}`);
     });
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -140,7 +141,7 @@ async function pageServer(): Promise<{ port: number; server: HttpServer }> {
 function viaProxy(
   relay: number,
   url: string,
-  opts: { auth?: string; method?: string; body?: string } = {},
+  opts: { auth?: string; method?: string; body?: string; machine?: string } = {},
 ): Promise<{ status: number; body: string }> {
   return new Promise((resolve, reject) => {
     const req = request({
@@ -148,7 +149,10 @@ function viaProxy(
       port: relay,
       method: opts.method ?? "GET",
       path: url,
-      headers: opts.auth ? { "proxy-authorization": opts.auth } : {},
+      headers: {
+        ...(opts.auth ? { "proxy-authorization": opts.auth } : {}),
+        ...(opts.machine ? { "x-crew-machine": opts.machine } : {}),
+      },
     });
     req.on("response", (res) => {
       let body = "";
@@ -189,6 +193,9 @@ describe("startRelay", () => {
 
   /** Hosts off loopback, dialed from this Mac: here they all land on the page server. */
   const directs: string[] = [];
+  const RELAY = "relay-token";
+  const as = basic(RELAY, RELAY);
+  /** The relay knows the machine `box` (reached with `token`) and `gone`, which is not connected. */
   async function setup(token = TOKEN) {
     const socks = await fakeSocks(TOKEN);
     const page = await pageServer();
@@ -200,7 +207,8 @@ describe("startRelay", () => {
         socket.once("connect", () => resolve(socket));
         socket.once("error", reject);
       });
-    const relay: RemoteRelay = await startRelay({ host: "127.0.0.1", port: socks.port, token }, { direct });
+    const relay: RemoteRelay = await startRelay({ token: RELAY, direct });
+    relay.setMachines(new Map([["box", { host: "127.0.0.1", port: socks.port, token }], ["gone", null]]));
     cleanup.push(
       () => relay.close(),
       () => {
@@ -212,61 +220,82 @@ describe("startRelay", () => {
     return { socks, page, relay };
   }
 
-  it("asks for the token before anything goes out", async () => {
+  it("asks for its own token before anything goes out", async () => {
     const { page, relay, socks } = await setup();
-    const answer = await viaProxy(relay.port, `http://localhost:${page.port}/`);
-    expect(answer.status).toBe(407);
+    expect((await viaProxy(relay.port, `http://box.localhost:${page.port}/`)).status).toBe(407);
+    // The machine's token is not the relay's.
+    expect((await viaProxy(relay.port, `http://box.localhost:${page.port}/`, { auth: basic(TOKEN, TOKEN) })).status).toBe(407);
     expect(socks.dials).toEqual([]);
-    expect(await tunnelGet(relay.port, `localhost:${page.port}`)).toMatch(/^HTTP\/1\.1 407/);
+    expect(await tunnelGet(relay.port, `box.localhost:${page.port}`)).toMatch(/^HTTP\/1\.1 407/);
   });
 
-  it("forwards a plain request through the machine's SOCKS, without the proxy credentials", async () => {
+  it("makes up a token of its own when given none", async () => {
+    const relay = await startRelay();
+    cleanup.push(() => relay.close());
+    expect(relay.token).toMatch(/^[0-9a-f]{48}$/);
+  });
+
+  it("forwards a machine's name to its localhost through its SOCKS, without the proxy credentials", async () => {
     const { page, relay, socks } = await setup();
-    const answer = await viaProxy(relay.port, `http://localhost:${page.port}/a?b=1`, { auth: basic(TOKEN, TOKEN), method: "POST", body: "hi" });
-    expect(answer).toEqual({ status: 200, body: "POST /a?b=1 clean hi" });
+    const answer = await viaProxy(relay.port, `http://box.localhost:${page.port}/a?b=1`, { auth: as, method: "POST", body: "hi" });
+    expect(answer).toEqual({ status: 200, body: "POST /a?b=1 clean hi no-machine" });
     expect(socks.dials).toEqual([`localhost:${page.port}`]);
-    const ip = await viaProxy(relay.port, `http://127.0.0.1:${page.port}/ip`, { auth: basic(TOKEN, TOKEN) });
-    expect(ip.body).toBe("GET /ip clean ");
-    expect(socks.dials).toEqual([`localhost:${page.port}`, `127.0.0.1:${page.port}`]);
+    expect(directs).toEqual([]);
   });
 
-  it("tunnels a CONNECT, as a websocket or https page opens one", async () => {
+  it("tunnels a CONNECT to a machine's name, as a websocket or https page opens one", async () => {
     const { page, relay, socks } = await setup();
-    const reply = await tunnelGet(relay.port, `localhost:${page.port}`, basic(TOKEN, TOKEN));
+    const reply = await tunnelGet(relay.port, `box.localhost:${page.port}`, as);
     expect(reply).toMatch(/^HTTP\/1\.1 200 Connection Established\r\n\r\nHTTP\/1\.1 200 OK/);
     expect(reply).toContain("GET /tunnel clean");
     expect(socks.dials).toEqual([`localhost:${page.port}`]);
   });
 
-  it("sends *.localhost to the machine's localhost", async () => {
+  it("sends plain localhost to the machine a request names, and never passes the name on", async () => {
     const { page, relay, socks } = await setup();
-    const answer = await viaProxy(relay.port, `http://app.localhost:${page.port}/sub`, { auth: basic(TOKEN, TOKEN) });
-    expect(answer.body).toBe("GET /sub clean ");
-    expect(socks.dials).toEqual([`localhost:${page.port}`]);
+    const answer = await viaProxy(relay.port, `http://127.0.0.1:${page.port}/ip`, { auth: as, machine: "box" });
+    expect(answer.body).toBe("GET /ip clean  no-machine");
+    expect(socks.dials).toEqual([`127.0.0.1:${page.port}`]);
   });
 
-  it("dials hosts off loopback from this Mac, not through the machine", async () => {
+  it("keeps this Mac's localhost here: plain, named after no machine, or naming an unknown one", async () => {
+    const { page, relay, socks } = await setup();
+    await viaProxy(relay.port, `http://localhost:${page.port}/`, { auth: as });
+    await viaProxy(relay.port, `http://app.localhost:${page.port}/`, { auth: as });
+    await viaProxy(relay.port, `http://localhost:${page.port}/`, { auth: as, machine: "nobody" });
+    expect(await tunnelGet(relay.port, `localhost:${page.port}`, as)).toContain("GET /tunnel clean");
+    expect(directs).toEqual([`localhost:${page.port}`, `localhost:${page.port}`, `localhost:${page.port}`, `localhost:${page.port}`]);
+    expect(socks.dials).toEqual([]);
+  });
+
+  it("dials hosts off loopback from this Mac, whatever machine a request names", async () => {
     const { relay, socks } = await setup();
-    const plain = await viaProxy(relay.port, "http://example.com/x", { auth: basic(TOKEN, TOKEN) });
-    expect(plain.body).toBe("GET /x clean ");
-    expect(await tunnelGet(relay.port, "example.com:443", basic(TOKEN, TOKEN))).toContain("GET /tunnel clean");
+    const plain = await viaProxy(relay.port, "http://example.com/x", { auth: as, machine: "box" });
+    expect(plain.body).toBe("GET /x clean  no-machine");
+    expect(await tunnelGet(relay.port, "example.com:443", as)).toContain("GET /tunnel clean");
     expect(directs).toEqual(["example.com:80", "example.com:443"]);
     expect(socks.dials).toEqual([]);
-    expect((await viaProxy(relay.port, "http://example.com/", {})).status).toBe(407);
+  });
+
+  it("answers 502 for a machine that is not connected, rather than reach this Mac", async () => {
+    const { page, relay } = await setup();
+    expect((await viaProxy(relay.port, `http://gone.localhost:${page.port}/`, { auth: as })).status).toBe(502);
+    expect((await viaProxy(relay.port, `http://localhost:${page.port}/`, { auth: as, machine: "gone" })).status).toBe(502);
+    expect(await tunnelGet(relay.port, `gone.localhost:${page.port}`, as)).toMatch(/^HTTP\/1\.1 502/);
+    expect(directs).toEqual([]);
   });
 
   it("answers 502 when the machine refuses the token, and follows a new one", async () => {
-    const { page, relay } = await setup("stale");
-    const url = `http://localhost:${page.port}/`;
-    expect((await viaProxy(relay.port, url, { auth: basic("stale", "stale") })).status).toBe(502);
-    relay.setToken(TOKEN);
-    expect((await viaProxy(relay.port, url, { auth: basic("stale", "stale") })).status).toBe(407);
-    expect((await viaProxy(relay.port, url, { auth: basic(TOKEN, TOKEN) })).status).toBe(200);
+    const { page, relay, socks } = await setup("stale");
+    const url = `http://box.localhost:${page.port}/`;
+    expect((await viaProxy(relay.port, url, { auth: as })).status).toBe(502);
+    relay.setMachines(new Map([["box", { host: "127.0.0.1", port: socks.port, token: TOKEN }]]));
+    expect((await viaProxy(relay.port, url, { auth: as })).status).toBe(200);
   });
 
   it("answers 502 when the machine is gone", async () => {
     const { page, relay, socks } = await setup();
     await new Promise<void>((resolve) => socks.server.close(() => resolve()));
-    expect((await viaProxy(relay.port, `http://localhost:${page.port}/`, { auth: basic(TOKEN, TOKEN) })).status).toBe(502);
+    expect((await viaProxy(relay.port, `http://box.localhost:${page.port}/`, { auth: as })).status).toBe(502);
   });
 });

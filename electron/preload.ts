@@ -84,15 +84,14 @@ contextBridge.exposeInMainWorld("crewHost", {
       ipcRenderer.invoke(CHANNELS.placeDevtools, webContentsId, bounds),
     closeDevTools: (webContentsId: number) => ipcRenderer.invoke(CHANNELS.closeDevtools, webContentsId),
     snapshot: (webContentsId: number) => ipcRenderer.invoke(CHANNELS.snapshot, webContentsId),
-    prepareRestore: (token: string, entriesJson: string, index: number) =>
-      ipcRenderer.invoke(CHANNELS.prepareRestore, token, entriesJson, index),
-    favicon: (url: string, workspaceId: string, incognito = false) =>
-      ipcRenderer.invoke(CHANNELS.favicon, url, workspaceId, incognito),
-    importCookies: (workspaceId: string, cookies: unknown) =>
-      ipcRenderer.invoke(CHANNELS.importCookies, workspaceId, cookies),
-    setProxy: (workspaceId: string, envId: string | null, socksPort: number | null) =>
-      ipcRenderer.invoke("browser:set-proxy", workspaceId, envId, socksPort),
+    prepareRestore: (token: string, entriesJson: string, index: number, machine: string | null) =>
+      ipcRenderer.invoke(CHANNELS.prepareRestore, token, entriesJson, index, machine),
+    favicon: (url: string, incognito = false) => ipcRenderer.invoke(CHANNELS.favicon, url, incognito),
+    importCookies: (cookies: unknown) => ipcRenderer.invoke(CHANNELS.importCookies, cookies),
+    setMachines: (machines: unknown) => ipcRenderer.invoke(CHANNELS.machines, machines),
     reportGuest: (tab: string, webContentsId: number) => ipcRenderer.send(CHANNELS.pageGuest, tab, webContentsId),
+    reportMachine: (webContentsId: number, machine: string | null) =>
+      ipcRenderer.send(CHANNELS.guestMachine, webContentsId, machine),
     onMount: (cb: (request: MountRequest) => void) => listen(CHANNELS.mount, cb),
   },
 });

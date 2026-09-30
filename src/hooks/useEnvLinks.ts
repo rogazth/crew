@@ -1,4 +1,5 @@
 import { useMemo, useSyncExternalStore } from "react";
+import { machineAliases } from "../lib/browser/machines";
 import { LOCAL, envOf, getLinks, linkOf, subscribeLinks, type EnvLink } from "../lib/client/registry";
 
 /** One row per daemon the window is talking to, this Mac's included. Re-renders on every latency tick. */
@@ -32,4 +33,23 @@ export function useWorkspaceLink(workspaceId: string | null): EnvLink | null {
     return link ? [env, link.status, link.mismatch, link.error ?? ""].join("|") : env;
   });
   return useMemo(() => (key ? linkOf(key.split("|")[0] ?? "") : null), [key]);
+}
+
+/** Each other machine's alias, by its id: the name its pages reach its loopback at. */
+export function remoteAliases(links: EnvLink[]): Map<string, string> {
+  return machineAliases(links.filter((link) => link.id !== LOCAL));
+}
+
+/**
+ * The alias of the machine a workspace lives on: null on this Mac, undefined
+ * while the machine is not known yet, so a page waits rather than loading
+ * this Mac's `localhost` in its place.
+ */
+export function useWorkspaceMachine(workspaceId: string): string | null | undefined {
+  const key = useSyncExternalStore(subscribeLinks, () => {
+    const env = envOf(workspaceId);
+    if (env === LOCAL) return "local";
+    return remoteAliases(getLinks()).get(env) ?? "unknown";
+  });
+  return key === "local" ? null : key === "unknown" ? undefined : key;
 }

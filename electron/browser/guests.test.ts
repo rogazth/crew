@@ -1,4 +1,7 @@
 import { EventEmitter } from "node:events";
+import { mkdir, mkdtemp, readdir, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { LiveCommand } from "../../src/lib/keymap";
 
@@ -6,6 +9,7 @@ const electron = vi.hoisted(() => ({
   sessionHandlers: new Map<string, (...args: unknown[]) => void>(),
   appHandlers: new Map<string, (...args: unknown[]) => void>(),
   partitions: [] as string[],
+  userData: "/nonexistent/crew-guests-test",
   templates: [] as unknown[][],
   openExternal: vi.fn(),
   writeText: vi.fn(),
@@ -14,6 +18,8 @@ const electron = vi.hoisted(() => ({
   permissionRequest: null as null | ((...args: unknown[]) => void),
   permissionCheck: null as null | ((...args: unknown[]) => boolean),
   headers: null as null | ((details: unknown, callback: (response: unknown) => void) => void),
+  beforeRequest: null as null | ((details: unknown, callback: (response: unknown) => void) => void),
+  setProxy: vi.fn((_config: unknown) => Promise.resolve()),
   appForProtocol: vi.fn((_url: string) => "zoom.us.app"),
   mediaStatus: "granted" as string,
   askForMediaAccess: vi.fn(() => Promise.resolve(true)),
@@ -66,6 +72,9 @@ vi.mock("electron", () => {
       onBeforeSendHeaders: (handler: (details: unknown, callback: (response: unknown) => void) => void) => {
         electron.headers = handler;
       },
+      onBeforeRequest: (handler: (details: unknown, callback: (response: unknown) => void) => void) => {
+        electron.beforeRequest = handler;
+      },
     },
     on: (name: string, handler: (...args: unknown[]) => void) => electron.sessionHandlers.set(name, handler),
     clearStorageData: electron.clearStorageData,
@@ -73,11 +82,12 @@ vi.mock("electron", () => {
     clearAuthCache: vi.fn(() => Promise.resolve()),
     clearHostResolverCache: vi.fn(() => Promise.resolve()),
     closeAllConnections: vi.fn(() => Promise.resolve()),
+    setProxy: electron.setProxy,
   };
   return {
     app: {
       on: (name: string, handler: (...args: unknown[]) => void) => electron.appHandlers.set(name, handler),
-      getPath: () => "/tmp",
+      getPath: (name: string) => (name === "userData" ? electron.userData : "/tmp"),
       getApplicationNameForProtocol: electron.appForProtocol,
     },
     BrowserWindow: { fromWebContents: () => ({ isFocused: () => true }) },
@@ -124,8 +134,8 @@ function didAttach(): FakeContents {
   return guest;
 }
 
-const PAGE = { partition: "persist:crew-browser-ws-w1" };
-const INCOGNITO = { partition: "crew-incognito-ws-w1" };
+const PAGE = { partition: "persist:crew-browser" };
+const INCOGNITO = { partition: "crew-incognito" };
 const SNAPSHOT = { entries: [{ url: "https://a.com/", title: "A" }, { url: "https://b.com/", title: "B" }], index: 0 };
 
 beforeEach(async () => {
@@ -138,6 +148,7 @@ beforeEach(async () => {
   electron.partitions.length = 0;
   electron.openExternal.mockClear();
   electron.clearStorageData.mockClear();
+  electron.setProxy.mockClear();
   guests = await import("./guests");
   host = new FakeContents();
   guests.installBrowser({ webContents: host } as never);
@@ -150,16 +161,17 @@ describe("attaching", () => {
     expect(willAttach({ ...PAGE, src: "https://a.com" }).prevented).toBe(false);
   });
 
-  it("gives each workspace its own session, set up once", () => {
+  it("puts every page in one session, set up once, and incognito ones in another", () => {
     willAttach({ ...PAGE, src: "https://a.com" });
     willAttach({ ...PAGE, src: "https://b.com" });
-    const other = willAttach({ partition: "persist:crew-browser-ws-w2", src: "https://a.com" });
-    expect(other.prefs.partition).toBe("persist:crew-browser-ws-w2");
-    expect(electron.partitions).toEqual(["persist:crew-browser-ws-w1", "persist:crew-browser-ws-w2"]);
+    const incognito = willAttach({ ...INCOGNITO, src: "https://a.com" });
+    expect(incognito.prefs.partition).toBe("crew-incognito");
+    expect(electron.partitions).toEqual(["persist:crew-browser", "crew-incognito"]);
   });
 
-  it("refuses the shared partition from before workspaces had their own", () => {
-    expect(willAttach({ partition: "persist:crew-browser", src: "https://a.com" }).prevented).toBe(true);
+  it("refuses the per-workspace partitions pages had before", () => {
+    expect(willAttach({ partition: "persist:crew-browser-ws-w1", src: "https://a.com" }).prevented).toBe(true);
+    expect(willAttach({ partition: "crew-incognito-ws-w1", src: "https://a.com" }).prevented).toBe(true);
   });
 
   it("hardens what the element asked for", () => {
@@ -168,7 +180,7 @@ describe("attaching", () => {
     expect(attached.prefs.preload).toMatch(/guest-preload\.cjs$/);
     expect(attached.prefs.preload).not.toBe("/evil.js");
     expect(attached.prefs).toMatchObject({
-      partition: "persist:crew-browser-ws-w1",
+      partition: "persist:crew-browser",
       nodeIntegration: false,
       sandbox: true,
       contextIsolation: true,
@@ -176,7 +188,7 @@ describe("attaching", () => {
   });
 
   it("restores a stack on the guest the token came with, past refused attaches in between", () => {
-    guests.prepareRestore("t1", SNAPSHOT);
+    guests.prepareRestore("t1", SNAPSHOT, null);
     willAttach({ ...PAGE, src: "https://plain.com" });
     const plain = didAttach();
     willAttach({ partition: "persist:other" });
@@ -194,7 +206,7 @@ describe("attaching", () => {
   });
 
   it("falls back to the active URL when restore fails", async () => {
-    guests.prepareRestore("t2", SNAPSHOT);
+    guests.prepareRestore("t2", SNAPSHOT, null);
     willAttach({ ...PAGE, src: "about:blank#crew-restore=t2" });
     const guest = new FakeContents();
     guest.navigationHistory.restore = vi.fn(() => Promise.reject(new Error("no")));
@@ -286,7 +298,7 @@ describe("popups and navigation", () => {
     const answer = open(guest, "https://login.com/", "new-window", "width=400") as unknown as {
       overrideBrowserWindowOptions: { webPreferences: Record<string, unknown> };
     };
-    expect(answer.overrideBrowserWindowOptions.webPreferences.partition).toBe("crew-incognito-ws-w1");
+    expect(answer.overrideBrowserWindowOptions.webPreferences.partition).toBe("crew-incognito");
   });
 
   it("gives a login popup a window in the same partition", () => {
@@ -298,21 +310,12 @@ describe("popups and navigation", () => {
     };
     expect(answer.action).toBe("allow");
     expect(answer.overrideBrowserWindowOptions.webPreferences).toMatchObject({
-      partition: "persist:crew-browser-ws-w1",
+      partition: "persist:crew-browser",
       sandbox: true,
       nodeIntegration: false,
     });
     // Only the sign-in disguise: the close guard would keep the popup from closing itself.
     expect(answer.overrideBrowserWindowOptions.webPreferences.preload).toMatch(/popup-preload\.cjs$/);
-  });
-
-  it("keeps a login popup in its own workspace's partition", () => {
-    willAttach({ partition: "persist:crew-browser-ws-w2", src: "https://a.com" });
-    const guest = didAttach();
-    const answer = open(guest, "https://login.com/", "new-window", "width=400") as unknown as {
-      overrideBrowserWindowOptions: { webPreferences: Record<string, unknown> };
-    };
-    expect(answer.overrideBrowserWindowOptions.webPreferences.partition).toBe("persist:crew-browser-ws-w2");
   });
 
   it("stops a page that keeps opening windows", () => {
@@ -484,7 +487,7 @@ describe("incognito sessions", () => {
     expect(electron.clearStorageData).not.toHaveBeenCalled();
   });
 
-  it("never wipes a workspace's saved session", async () => {
+  it("never wipes the saved session", async () => {
     willAttach({ ...PAGE, src: "https://a.com" });
     didAttach().destroy();
     await vi.advanceTimersByTimeAsync(5000);
@@ -828,5 +831,120 @@ describe("stress", () => {
       guest.destroy();
     }
     expect(ids.every((id) => guests.ownedGuest(host as never, id) === null)).toBe(true);
+  });
+});
+
+describe("remote machines", () => {
+  type Answer = { redirectURL?: string; requestHeaders?: Record<string, string> };
+  const request = (url: string, webContentsId: number | undefined, resourceType = "mainFrame") => {
+    let answer: Answer = {};
+    electron.beforeRequest?.({ url, webContentsId, resourceType }, (response) => {
+      answer = response as Answer;
+    });
+    return answer;
+  };
+  const headers = (url: string, webContentsId: number | undefined, requestHeaders: Record<string, string> = {}) => {
+    let answer: Answer = {};
+    electron.headers?.({ url, webContentsId, requestHeaders }, (response) => {
+      answer = response as Answer;
+    });
+    return answer.requestHeaders ?? {};
+  };
+  const remotePage = () => {
+    willAttach({ ...PAGE, src: "https://a.com" });
+    const guest = didAttach();
+    guests.setGuestMachine(guest as never, "sandbox");
+    return guest;
+  };
+
+  it("moves a remote page's localhost to its machine's name, and leaves the rest alone", () => {
+    const guest = remotePage();
+    expect(request("http://localhost:3200/login?next=1", guest.id).redirectURL).toBe("http://sandbox.localhost:3200/login?next=1");
+    expect(request("http://127.0.0.1:3000/", guest.id, "subFrame").redirectURL).toBe("http://sandbox.localhost:3000/");
+    expect(request("http://sandbox.localhost:3000/", guest.id)).toEqual({});
+    expect(request("https://example.com/", guest.id)).toEqual({});
+  });
+
+  it("keeps a subresource's URL and names the machine in a header instead", () => {
+    const guest = remotePage();
+    expect(request("http://localhost:4000/api", guest.id, "xhr")).toEqual({});
+    expect(headers("http://localhost:4000/api", guest.id)).toMatchObject({ "x-crew-machine": "sandbox" });
+    // Only plain HTTP shows its headers to the relay.
+    expect(headers("https://localhost:4000/api", guest.id)).not.toHaveProperty("x-crew-machine");
+    expect(headers("http://example.com/", guest.id)).not.toHaveProperty("x-crew-machine");
+  });
+
+  it("drops a machine header a page wrote itself", () => {
+    willAttach({ ...PAGE, src: "https://a.com" });
+    const local = didAttach();
+    expect(request("http://localhost:3000/", local.id)).toEqual({});
+    expect(headers("http://localhost:3000/", local.id, { "X-Crew-Machine": "sandbox" })).not.toHaveProperty("X-Crew-Machine");
+    expect(headers("http://localhost:3000/", undefined, { "x-crew-machine": "sandbox" })).not.toHaveProperty("x-crew-machine");
+  });
+
+  it("forgets a page's machine once it is gone", () => {
+    const guest = remotePage();
+    guest.destroy();
+    expect(request("http://localhost:3000/", guest.id)).toEqual({});
+  });
+
+  it("knows a restored page's machine before its stack loads", () => {
+    guests.prepareRestore("t3", SNAPSHOT, "sandbox");
+    willAttach({ ...PAGE, src: "about:blank#crew-restore=t3" });
+    const guest = didAttach();
+    expect(guest.navigationHistory.restore).toHaveBeenCalled();
+    expect(request("http://localhost:3000/", guest.id).redirectURL).toBe("http://sandbox.localhost:3000/");
+  });
+
+  it("sends loopback through the relay while there is a machine, and straight out once there is none", async () => {
+    await guests.setMachines(new Map([["sandbox", null]]));
+    const proxied = electron.setProxy.mock.calls.map(([config]) => config as { mode: string; proxyRules?: string });
+    expect(proxied.length).toBeGreaterThan(0);
+    expect(proxied.every((config) => config.mode === "fixed_servers" && /^127\.0\.0\.1:\d+$/.test(config.proxyRules ?? ""))).toBe(true);
+    // A machine coming or going keeps the relay: pages' open connections stay up.
+    electron.setProxy.mockClear();
+    await guests.setMachines(new Map([["sandbox", null], ["falcon-heavy", null]]));
+    expect(electron.setProxy).not.toHaveBeenCalled();
+    await guests.setMachines(new Map());
+    expect(electron.setProxy.mock.calls.map(([config]) => (config as { mode: string }).mode)).toEqual(["direct", "direct"]);
+  });
+
+  it("answers the relay's challenge with its token, and no other proxy's", async () => {
+    await guests.setMachines(new Map([["sandbox", null]]));
+    const port = Number((electron.setProxy.mock.calls[0]?.[0] as { proxyRules: string }).proxyRules.split(":")[1]);
+    const challenge = (host: string, at: number) => {
+      const callback = vi.fn();
+      const event = { prevented: false, preventDefault() { this.prevented = true; } };
+      electron.appHandlers.get("login")?.(event, null, { url: "http://localhost:3000/" }, { isProxy: true, host, port: at, realm: "crew" }, callback);
+      return { event, callback };
+    };
+    const ours = challenge("127.0.0.1", port);
+    expect(ours.event.prevented).toBe(true);
+    const [user, pass] = ours.callback.mock.calls[0] as [string, string];
+    expect(user).toMatch(/^[0-9a-f]{48}$/);
+    expect(pass).toBe(user);
+    expect(challenge("127.0.0.1", port + 1).event.prevented).toBe(false);
+    expect(challenge("10.0.0.1", port).event.prevented).toBe(false);
+    await guests.setMachines(new Map());
+  });
+});
+
+describe("the partitions workspaces had", () => {
+  it("are removed, and nothing else is", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "crew-partitions-"));
+    const partitions = path.join(root, "Partitions");
+    for (const name of ["crew-browser", "crew-browser-ws-w1", "crew-browser-ws-w2", "other"]) {
+      await mkdir(path.join(partitions, name, "Network"), { recursive: true });
+    }
+    vi.resetModules();
+    electron.userData = root;
+    try {
+      const fresh: Guests = await import("./guests");
+      await fresh.sweepWorkspacePartitions();
+      expect((await readdir(partitions)).sort()).toEqual(["crew-browser", "other"]);
+    } finally {
+      electron.userData = "/nonexistent/crew-guests-test";
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });

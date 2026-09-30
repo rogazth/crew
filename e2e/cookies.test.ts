@@ -1,5 +1,5 @@
-// C1: each workspace's pages keep their own cookies, and another browser's can
-// be imported into one of them from the page's ⋯ menu. A Chrome profile planted
+// C1: every workspace's pages share one session's cookies, and another
+// browser's can be imported into it from the page's ⋯ menu. A Chrome profile planted
 // in the sandbox's HOME is what the menu offers; the keychain read behind the
 // dialog is left out, since it would ask for the real login keychain, so the
 // cookies go straight to main the way the dialog hands them over.
@@ -10,7 +10,7 @@ import type { AddressInfo } from "node:net";
 import path from "node:path";
 import { after, before, test } from "node:test";
 import { launchCrew, MOD, pressChord, stripTabIds, waitFor, type Crew } from "./harness.ts";
-import { LEGACY_PARTITION, partitionFor } from "../src/lib/browser/bridge.ts";
+import { partitionFor } from "../src/lib/browser/bridge.ts";
 import type { CookieSource, ImportedCookie } from "../src/lib/protocol.ts";
 
 type Visit = { path: string; cookie: string };
@@ -38,12 +38,12 @@ before(async () => {
   await mkdir(path.join(chrome, "Profile 3"), { recursive: true });
   await writeFile(path.join(chrome, "Local State"), JSON.stringify({ profile: { info_cache: { "Profile 2": { name: "Work" } } } }));
 
-  // What an older Crew left: one partition every page shared.
+  // A sign-in from before: the partition every page shared before workspaces had their own, and shares again.
   await crew.app.evaluate(async ({ session }, [partition, url]) => {
     const ses = session.fromPartition(partition!);
     await ses.cookies.set({ url: url!, name: "legacy", value: "kept", expirationDate: Date.now() / 1000 + 3600 });
     await ses.cookies.flushStore();
-  }, [LEGACY_PARTITION, origin]);
+  }, [partitionFor(), origin]);
 });
 
 after(async () => {
@@ -62,11 +62,11 @@ async function openPage(url: string): Promise<void> {
   await waitFor(async () => (await stripTabIds(crew)).length > before, { message: "a browser tab opens" });
 }
 
-function sessionCookies(workspaceId: string): Promise<string[]> {
+function sessionCookies(): Promise<string[]> {
   return crew.app.evaluate(
     async ({ session }, partition) =>
       (await session.fromPartition(partition!).cookies.get({})).map((c) => `${c.name}=${c.value}`).sort(),
-    partitionFor(workspaceId),
+    partitionFor(),
   );
 }
 
@@ -76,12 +76,10 @@ function workspace(index: number) {
   return found;
 }
 
-test("a workspace's first page starts from the cookies pages shared before", async () => {
+test("a page signs in with the cookies pages shared before", async () => {
   await openPage(`${origin}/alpha`);
-  await waitFor(() => visits.some((visit) => visit.path === "/alpha"), { message: "the page loads" });
-  await waitFor(async () => (await sessionCookies(workspace(0).id)).includes("legacy=kept"), {
-    message: "alpha's session holds the shared cookie",
-  });
+  const visit = await waitFor(() => visits.find((v) => v.path === "/alpha"), { message: "the page loads" });
+  assert.match(visit.cookie, /legacy=kept/);
 });
 
 test("the ⋯ menu zooms in place and offers the Chrome profile by its name", async () => {
@@ -115,26 +113,23 @@ test("the daemon lists the profile and refuses anything outside the known browse
   await assert.rejects(crew.request("browser_cookies_read", { sourceId: "firefox/Default" }), /Unknown browser/);
 });
 
-test("imported cookies reach only the workspace they were imported into", async () => {
-  const alpha = workspace(0);
+test("imported cookies reach every workspace's pages", async () => {
   const beta = workspace(1);
   const cookies: (ImportedCookie | { host: string })[] = [
-    { host: "127.0.0.1", name: "sid", value: "alpha-user", path: "/", secure: false, httpOnly: true, sameSite: "lax", expires: Math.floor(Date.now() / 1000) + 3600 },
+    { host: "127.0.0.1", name: "sid", value: "the-user", path: "/", secure: false, httpOnly: true, sameSite: "lax", expires: Math.floor(Date.now() / 1000) + 3600 },
     { host: "bad host" },
   ];
-  const result = await crew.window.evaluate(
-    ([id, list]) => window.crewHost!.browser.importCookies(id as string, list as ImportedCookie[]),
-    [alpha.id, cookies] as const,
-  );
+  const result = await crew.window.evaluate((list) => window.crewHost!.browser.importCookies(list as ImportedCookie[]), cookies);
   assert.deepEqual(result, { imported: 1, failed: 1 });
+  assert.ok((await sessionCookies()).includes("sid=the-user"));
 
   // alpha's page sends it on its next load.
   await pressChord(crew, `${MOD}+r`);
-  await waitFor(() => visits.some((visit) => visit.path === "/alpha" && visit.cookie.includes("sid=alpha-user")), {
+  await waitFor(() => visits.some((visit) => visit.path === "/alpha" && visit.cookie.includes("sid=the-user")), {
     message: "alpha's page loads with the imported cookie",
   });
 
-  // beta's page never sees it.
+  // So does beta's.
   await crew.window
     .locator('nav[aria-label="Workspaces"][data-sidebar-rail]')
     // The mark names the workspace; its path is on the hover card now, not a title.
@@ -142,7 +137,5 @@ test("imported cookies reach only the workspace they were imported into", async 
     .click();
   await openPage(`${origin}/beta`);
   const visit = await waitFor(() => visits.find((v) => v.path === "/beta"), { message: "beta's page loads" });
-  assert.doesNotMatch(visit.cookie, /sid=/);
-  assert.ok(!(await sessionCookies(beta.id)).some((cookie) => cookie.startsWith("sid=")));
-  assert.ok((await sessionCookies(alpha.id)).includes("sid=alpha-user"));
+  assert.match(visit.cookie, /sid=the-user/);
 });

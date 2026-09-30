@@ -10,6 +10,7 @@ import type {
   Responsiveness,
   SitePermissions,
 } from "./browser/bridge";
+import type { MachineRoute } from "./browser/machines";
 import type { NavSnapshot } from "./browser/snapshot";
 import type { KeyboardLayout, LiveCommand } from "./keymap";
 import type { ImportedCookie, RemoteEnv } from "./protocol";
@@ -114,15 +115,18 @@ export type BrowserHost = {
   /** Docked ones only. */
   closeDevTools(webContentsId: number): Promise<void>;
   snapshot(webContentsId: number): Promise<NavSnapshot | null>;
-  prepareRestore(token: string, entriesJson: string, index: number): Promise<boolean>;
-  /** Through the workspace's own session, so an icon behind its sign-in loads; an incognito page's through its in-memory one. */
-  favicon(url: string, workspaceId: string, incognito?: boolean): Promise<string | null>;
-  /** Into the workspace's pages only. */
-  importCookies(workspaceId: string, cookies: ImportedCookie[]): Promise<{ imported: number; failed: number }>;
-  /** Point a workspace's pages at that machine's loopback, or clear the proxy. */
-  setProxy?(workspaceId: string, envId: string | null, socksPort: number | null): Promise<void>;
+  /** `machine`: the alias of the machine the page's workspace lives on, null for this Mac. */
+  prepareRestore(token: string, entriesJson: string, index: number, machine: string | null): Promise<boolean>;
+  /** Through the pages' session, so an icon behind a sign-in loads; an incognito page's through its in-memory one. */
+  favicon(url: string, incognito?: boolean): Promise<string | null>;
+  /** Into every page's session; incognito pages never see them. */
+  importCookies(cookies: ImportedCookie[]): Promise<{ imported: number; failed: number }>;
+  /** Every other machine a workspace lives on, so `<alias>.localhost` reaches its loopback. */
+  setMachines?(machines: MachineRoute[]): Promise<void>;
   /** Tells main which tab a guest shows, so an agent's call on the tab reaches it. */
   reportGuest(tab: string, webContentsId: number): void;
+  /** Tells main which machine a guest's workspace lives on, so its `localhost` goes there. */
+  reportMachine?(webContentsId: number, machine: string | null): void;
   /** An agent needs a tab live that is cold, or not in this window yet. */
   onMount(cb: (request: MountRequest) => void): () => void;
 };

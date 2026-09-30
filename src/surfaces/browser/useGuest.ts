@@ -1,6 +1,7 @@
 import { useEffect, useRef, type RefObject } from "react";
 import * as api from "../../lib/api";
 import { partitionFor, RESTORE_PREFIX } from "../../lib/browser/bridge";
+import { onMachine } from "../../lib/browser/machines";
 import { classifyLoadFailure } from "../../lib/browser/loadError";
 import { pages } from "../../lib/browser/pageStore";
 import { isWebUrl, sameDocument } from "../../lib/browser/url";
@@ -17,7 +18,13 @@ type Options = {
   /** The favicon the tab saved, shown while the page is cold. */
   icon: string | null;
   workspaceId: string;
-  /** Opens in the workspace's in-memory session, and leaves no history, saved stack or cached icon behind. */
+  /**
+   * The alias of the machine the workspace lives on: its pages' `localhost`
+   * is that machine's. Null on this Mac; undefined while not known yet, and
+   * the page waits for it.
+   */
+  machine: string | null | undefined;
+  /** Opens in the in-memory session, and leaves no history, saved stack or cached icon behind. */
   incognito: boolean;
   /** False when the retention budget has sent this page cold: no guest, nothing running. */
   live: boolean;
@@ -53,8 +60,8 @@ const RESTORE_WAIT_MS = 3000;
 const fallbackSrc = (url: string) => (isWebUrl(url) ? url : "about:blank");
 
 /** A restored tab asks main to rebuild its stack; a new one just loads its URL. */
-async function source(pageId: string, url: string): Promise<string> {
-  const fallback = fallbackSrc(url);
+async function source(pageId: string, url: string, machine: string | null): Promise<string> {
+  const fallback = fallbackSrc(onMachine(url, machine));
   const host = browserHost();
   if (!host) return fallback;
   const saved = await Promise.race([
@@ -63,7 +70,7 @@ async function source(pageId: string, url: string): Promise<string> {
   ]);
   if (!saved) return fallback;
   const token = crypto.randomUUID();
-  const ready = await host.prepareRestore(token, saved.entriesJson, saved.activeIndex).catch(() => false);
+  const ready = await host.prepareRestore(token, saved.entriesJson, saved.activeIndex, machine).catch(() => false);
   return ready ? `${RESTORE_PREFIX}${token}` : fallback;
 }
 
@@ -73,7 +80,7 @@ async function source(pageId: string, url: string): Promise<string> {
  * reads is read through a ref: a navigation must never rebuild the guest.
  */
 export function useGuest(options: Options): RefObject<PageGuest | null> {
-  const { pageId, icon: savedIcon, workspaceId, incognito, live, generation, container, address } = options;
+  const { pageId, icon: savedIcon, machine, incognito, live, generation, container, address } = options;
   const guest = useRef<PageGuest | null>(null);
   // Read at build time only: a navigation must never rebuild the guest.
   const latest = useRef(options);
@@ -86,7 +93,7 @@ export function useGuest(options: Options): RefObject<PageGuest | null> {
     if (live || incognito || !savedIcon || pages.get(pageId).favicon) return;
     let cancelled = false;
     void browserHost()
-      ?.favicon(savedIcon, workspaceId, false)
+      ?.favicon(savedIcon, false)
       .then((data) => {
         if (!cancelled && data && !pages.get(pageId).favicon) pages.update(pageId, { favicon: data });
       })
@@ -94,12 +101,12 @@ export function useGuest(options: Options): RefObject<PageGuest | null> {
     return () => {
       cancelled = true;
     };
-  }, [live, incognito, savedIcon, pageId, workspaceId]);
+  }, [live, incognito, savedIcon, pageId]);
 
   useEffect(() => {
-    // The workspace picks the session: its cookies are the ones the page signs in with.
-    const partition = partitionFor(workspaceId, incognito);
-    if (!live || !partition) return;
+    // Every page signs in with the same cookies; an incognito one with its own, kept in memory.
+    const partition = partitionFor(incognito);
+    if (!live || machine === undefined) return;
     let cancelled = false;
     let built: Guest | null = null;
     let patchTimer: ReturnType<typeof setTimeout> | undefined;
@@ -160,7 +167,9 @@ export function useGuest(options: Options): RefObject<PageGuest | null> {
         return built.element;
       },
       webContentsId: () => built?.webContentsId() ?? null,
-      navigate: (url) => {
+      navigate: (typedUrl) => {
+        // A remote workspace's `localhost` is its machine's, typed or clicked.
+        const url = onMachine(typedUrl, machine);
         if (built) {
           built.navigate(url);
           return;
@@ -196,7 +205,9 @@ export function useGuest(options: Options): RefObject<PageGuest | null> {
       // A keystroke resolves `typed` and skips the rest of the wait. The fetch
       // still finishes; its token simply expires unused.
       // An incognito page saved no stack to restore.
-      const opening = incognito ? Promise.resolve(fallbackSrc(latest.current.url)) : source(pageId, latest.current.url);
+      const opening = incognito
+        ? Promise.resolve(fallbackSrc(onMachine(latest.current.url, machine)))
+        : source(pageId, latest.current.url, machine);
       const restored = await Promise.race([opening, typed.then(() => null)]);
       const host = container.current;
       if (cancelled || !host) return;
@@ -209,6 +220,7 @@ export function useGuest(options: Options): RefObject<PageGuest | null> {
           update({ webContentsId, crashed: false, hung: false });
           // Main finds a tab's page by this when an agent drives it.
           browserHost()?.reportGuest(pageId, webContentsId);
+          browserHost()?.reportMachine?.(webContentsId, machine);
         },
         start: (next) => {
           const current = pages.get(pageId);
@@ -247,7 +259,7 @@ export function useGuest(options: Options): RefObject<PageGuest | null> {
           if (!incognito && isWebUrl(pages.get(pageId).url)) patchTab({ icon: icon && isWebUrl(icon) ? icon : "" });
           if (!icon) return update({ favicon: null });
           void browserHost()
-            ?.favicon(icon, latest.current.workspaceId, incognito)
+            ?.favicon(icon, incognito)
             .then((data) => {
               // A slow icon from the previous page must not land on this one, nor on a closed tab.
               if (ask === faviconAsk && !cancelled) update({ favicon: data });
@@ -318,7 +330,7 @@ export function useGuest(options: Options): RefObject<PageGuest | null> {
       if (devtools || docked || playing) latest.current.onPinned(false);
       update({ webContentsId: null, loading: false, devtools: false, hung: false });
     };
-  }, [live, pageId, workspaceId, incognito, generation, container, address]);
+  }, [live, pageId, machine, incognito, generation, container, address]);
 
   return guest;
 }

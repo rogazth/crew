@@ -14,7 +14,7 @@ import {
 import { FILES_PARTITION } from "../../src/lib/browser/files";
 
 const GUEST_PRELOAD = "/app/guest-preload.cjs";
-const PARTITION = partitionFor("0b6f3c1e-8f2a-4d1b-9c55-2f1e7a9d4c10")!;
+const PARTITION = partitionFor();
 
 describe("hardenWebPreferences", () => {
   it("overrides whatever the webview asked for", () => {
@@ -112,15 +112,15 @@ describe("attachDecision", () => {
     expect(attach("https://example.com", "persist:crew-incognito-ws-w1")).toEqual(denied);
     expect(attach("https://example.com", "crew-incognito-ws-../x")).toEqual(denied);
     expect(attach("about:blank", "persist:crew-browser2")).toEqual(denied);
-    // The shared partition from before workspaces had their own is only ever copied from.
-    expect(attach("about:blank", "persist:crew-browser")).toEqual(denied);
-    expect(attach("about:blank", "persist:crew-browser-ws-../x")).toEqual(denied);
-    expect(attach("about:blank", "persist:crew-browser-ws-")).toEqual(denied);
+    expect(attach("about:blank", "crew-incognito2")).toEqual(denied);
+    expect(attach("about:blank", "persist:crew-incognito")).toEqual(denied);
+    // Each workspace had its own before every page shared one.
+    expect(attach("about:blank", "persist:crew-browser-ws-w1")).toEqual(denied);
+    expect(attach("about:blank", "crew-incognito-ws-w1")).toEqual(denied);
   });
 
-  it("allows each workspace's own partition and hands it back", () => {
-    const other = partitionFor("second-workspace")!;
-    expect(attach("about:blank", other)).toEqual({ allow: true, partition: other, restoreToken: null });
+  it("allows the pages' partition and hands it back", () => {
+    expect(attach("about:blank", PARTITION)).toEqual({ allow: true, partition: "persist:crew-browser", restoreToken: null });
   });
 
   it("hands back a restore token", () => {
@@ -148,10 +148,10 @@ describe("attachDecision", () => {
 });
 
 describe("attachDecision for incognito pages", () => {
-  it("allows a workspace's in-memory session", () => {
-    expect(attachDecision({ src: "https://example.com", partition: "crew-incognito-ws-w1" })).toEqual({
+  it("allows the in-memory session", () => {
+    expect(attachDecision({ src: "https://example.com", partition: partitionFor(true) })).toEqual({
       allow: true,
-      partition: "crew-incognito-ws-w1",
+      partition: "crew-incognito",
       restoreToken: null,
     });
   });
@@ -351,6 +351,8 @@ describe("certificateBypass", () => {
     "https://[0:0:0:0:0:0:0:1]:8443/",
     "HTTPS://localhost/",
     "wss://localhost:5173/",
+    "https://sandbox.localhost:3000/",
+    "wss://sandbox.localhost:5173/",
   ])("lets %s past a bad certificate", (url) => {
     expect(certificateBypass(url)).toBe(true);
   });
@@ -362,6 +364,8 @@ describe("certificateBypass", () => {
     "https://localhost.evil.com/",
     "https://127.0.0.1.nip.io/",
     "https://evil.localhost.com/",
+    "https://sandbox.localhost.evil.com/",
+    "https://sandboxlocalhost/",
     "https://localhost@evil.com/",
     "https://evil.com/#@localhost",
     "https://evil.com/?localhost",

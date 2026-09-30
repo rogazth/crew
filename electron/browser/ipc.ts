@@ -2,13 +2,15 @@ import { ipcMain } from "electron";
 import type { KeyboardLayout, LiveCommand } from "../../src/lib/keymap";
 import { capSnapshot, parseSnapshot } from "../../src/lib/browser/snapshot";
 import { CHANNELS, isIncognitoPartition, partitionFor } from "../../src/lib/browser/bridge";
+import { isMachineAlias } from "../../src/lib/browser/machines";
 import { importCookies } from "./cookies";
 import { dockBounds, dockDevTools, placeDevTools, undockDevTools } from "./devtools";
 import { downloadAction, setAskWhereToSave } from "./downloads";
 import {
   ownedGuest,
+  pageSession,
   prepareRestore,
-  readyPageSession,
+  setGuestMachine,
   setKeyboardLayout,
   setLiveCommands,
   setSitePermissions,
@@ -27,7 +29,7 @@ const favicons = new Map<string, Promise<string | null>>();
 async function fetchFavicon(url: string, partition: string): Promise<string | null> {
   if (url.startsWith("data:image/")) return url.length <= FAVICON_BYTES * 2 ? url : null;
   if (!/^https?:\/\//i.test(url)) return null;
-  const response = await (await readyPageSession(partition)).fetch(url);
+  const response = await pageSession(partition).fetch(url);
   const type = response.headers.get("content-type")?.split(";")[0]?.trim() ?? "";
   if (!response.ok || !type.startsWith("image/")) return null;
   const body = Buffer.from(await response.arrayBuffer());
@@ -134,26 +136,26 @@ export function registerBrowserIpc(): void {
     if (guest) bindTab(tab, guest);
   });
 
-  /** Into one workspace's pages only: each workspace keeps its own sign-ins. */
-  ipcMain.handle(CHANNELS.importCookies, async (_event, workspaceId: unknown, list: unknown) => {
-    const partition = typeof workspaceId === "string" ? partitionFor(workspaceId) : null;
-    if (!partition) return { imported: 0, failed: 0 };
-    return importCookies(await readyPageSession(partition), list);
+  ipcMain.on(CHANNELS.guestMachine, (event, id: unknown, alias: unknown) => {
+    const guest = typeof id === "number" ? ownedGuest(event.sender, id) : null;
+    if (guest) setGuestMachine(guest, isMachineAlias(alias) ? alias : null);
   });
 
-  ipcMain.handle(CHANNELS.favicon, (_event, url: unknown, workspaceId: unknown, incognito: unknown) => {
-    const partition = typeof workspaceId === "string" ? partitionFor(workspaceId, incognito === true) : null;
-    return typeof url === "string" && partition ? favicon(url, partition) : null;
-  });
+  /** Into every page's session, never an incognito one. */
+  ipcMain.handle(CHANNELS.importCookies, (_event, list: unknown) => importCookies(pageSession(partitionFor()), list));
+
+  ipcMain.handle(CHANNELS.favicon, (_event, url: unknown, incognito: unknown) =>
+    typeof url === "string" ? favicon(url, partitionFor(incognito === true)) : null,
+  );
 
   /** Takes the daemon's row as-is; parsing it here means main never trusts a renderer-built stack. */
-  ipcMain.handle(CHANNELS.prepareRestore, (_event, token: unknown, entriesJson: unknown, index: unknown) => {
+  ipcMain.handle(CHANNELS.prepareRestore, (_event, token: unknown, entriesJson: unknown, index: unknown, machine: unknown) => {
     if (typeof token !== "string" || !TOKEN.test(token)) return false;
     if (typeof entriesJson !== "string" || typeof index !== "number") return false;
     const parsed = parseSnapshot(entriesJson, index);
     const safe = parsed && capSnapshot(parsed);
     if (!safe) return false;
-    prepareRestore(token, safe);
+    prepareRestore(token, safe, isMachineAlias(machine) ? machine : null);
     return true;
   });
 }
