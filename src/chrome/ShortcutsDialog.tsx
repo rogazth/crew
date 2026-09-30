@@ -44,7 +44,6 @@ function sections(): { group: string; rows: Row[] }[] {
       group: "Sidebar",
       rows: [
         [commandKeys("toggle-sidebar"), "Toggle sidebar"],
-        [commandKeys("focus-sidebar"), "Focus sidebar"],
         ["↑ ↓ ← →", "Move — across the rail, the faces and the rows"],
         ["← →", "Fold a worktree"],
         ["↵", "Open"],
@@ -59,7 +58,8 @@ function sections(): { group: string; rows: Row[] }[] {
       rows: [
         [commandKeys("open-palette"), "Command palette"],
         [commandKeys("open-actions"), "All actions"],
-        [commandKeys("search-messages"), "Search messages"],
+        [commandKeys("toggle-explorer"), "Explorer"],
+        [commandKeys("search-files"), "Search in files"],
         [commandKeys("open-settings"), "Settings"],
         [`${commandKeys("zoom-in")}  ${commandKeys("zoom-out")}  ${commandKeys("zoom-reset")}`, "Zoom in / out / actual size"],
         [commandKeys("shortcuts"), "This sheet"],

@@ -15,7 +15,8 @@ type Deps = {
   sheetOpen: boolean;
   closeSheet: () => void;
   toggleSidebar: () => void;
-  focusSidebar: (scope: "rail" | "panel") => void;
+  toggleExplorer: () => void;
+  searchFiles: () => void;
   worktrees: { step: (delta: number) => void; selectAt: (index: number) => void };
   newWorktree: () => void;
   toggleShortcuts: () => void;
@@ -51,7 +52,6 @@ export function useAppCommands(deps: Deps) {
     "open-actions": () => deps.togglePalette("actions"),
     "open-workspace": deps.openWorkspace,
     "switch-workspace": () => deps.togglePalette("context"),
-    "focus-sidebar": () => deps.focusSidebar("panel"),
     "next-worktree": away(() => deps.worktrees.step(1)),
     "prev-worktree": away(() => deps.worktrees.step(-1)),
     "worktree-1": away(() => deps.worktrees.selectAt(0)),
@@ -77,11 +77,12 @@ export function useAppCommands(deps: Deps) {
     "workspace-8": away(() => workspaces.activateAt(7)),
     "workspace-9": away(() => workspaces.activateAt(8)),
     "toggle-sidebar": deps.toggleSidebar,
+    "toggle-explorer": deps.toggleExplorer,
+    "search-files": deps.searchFiles,
     "new-agent": deps.newAgent,
     "new-session": deps.newSession,
     "new-browser-tab": () => deps.newBrowser(false),
     "new-incognito-tab": () => deps.newBrowser(true),
-    "search-messages": () => pages.toggle({ kind: "search" }),
     "open-history": deps.openHistory,
     "open-commands": deps.openCommands,
     "start-all-commands": deps.startAllCommands ?? undefined,

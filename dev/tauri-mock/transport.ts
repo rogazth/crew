@@ -270,6 +270,26 @@ const commands: Record<string, (args: Row) => unknown> = {
       path: `/Users/me/Developer/experiments/crew/${relative}`,
       relative,
     })),
+  list_folder: ({ path }) =>
+    String(path).endsWith("/src")
+      ? ["App.tsx", "main.tsx"].map((name) => ({ name, path: `${path}/${name}`, dir: false, ignored: false }))
+      : [
+          { name: "src", path: `${path}/src`, dir: true, ignored: false },
+          { name: "node_modules", path: `${path}/node_modules`, dir: true, ignored: true },
+          { name: "README.md", path: `${path}/README.md`, dir: false, ignored: false },
+        ],
+  search_files: ({ cwd, query }) => ({
+    files: [
+      {
+        path: `${cwd}/src/App.tsx`,
+        relative: "src/App.tsx",
+        lines: [{ line: 3, preview: `export function App() { return "${query}"; }`, previewStart: 0, ranges: [[33, 33 + String(query).length]] }],
+      },
+    ],
+    matches: 1,
+    truncated: false,
+    cancelled: false,
+  }),
   read_text_file: ({ path }) =>
     String(path).endsWith(".md") ? MOCK_MARKDOWN : "export const answer = 42;\n",
   write_text_file: () => undefined,

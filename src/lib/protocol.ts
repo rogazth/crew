@@ -159,6 +159,31 @@ export type Event = { event: string, payload: unknown, };
 
 export type FileBytes = { mime: string, data: string, };
 
+export type FileMatches = { path: string, relative: string, lines: Array<LineMatch>, };
+
+export type FileSearchResult = { files: Array<FileMatches>, 
+/**
+ * Every match found, across `files`.
+ */
+matches: number, 
+/**
+ * The search stopped at its cap: there are more.
+ */
+truncated: boolean, 
+/**
+ * A newer search took over before this one finished; its answer is partial.
+ */
+cancelled: boolean, };
+
+/**
+ * One entry of a folder, as the explorer shows it.
+ */
+export type FolderEntry = { name: string, path: string, dir: boolean, 
+/**
+ * git ignores it: shown dimmed, still there to open.
+ */
+ignored: boolean, };
+
 export type HarnessEvent = { "type": "session.started", } | { "type": "session.ended", code?: number | null, } | { "type": "session.error", message: string, } | { "type": "session.note", message: string, } | { "type": "user.message", text: string, hidden?: boolean, files?: Array<AttachedFile>, fromAgent?: AgentRef, } | { "type": "system.message", text: string, } | { "type": "session.providerBound", providerSessionId: string, } | { "type": "message.delta", text: string, } | { "type": "message.completed", } | { "type": "reasoning.delta", text: string, } | { "type": "turn.completed", usage?: TurnUsage, } | { "type": "tool.started", callId: string, name: string, title: string, detail?: ToolDetail, } | { "type": "tool.updated", callId: string, title?: string, status?: ToolStatus, detail?: ToolDetail, } | { "type": "approval.requested", requestId: number, name: string, title: string, input?: Record<string, unknown>, } | { "type": "approval.resolved", requestId: number, decision: ApprovalResolution, } | { "type": "question.requested", requestId: number, questions: Array<Question>, } | { "type": "question.resolved", requestId: number, answers: { [key in string]: string } | null, };
 
 /**
@@ -232,11 +257,28 @@ export type Key = { key: string, };
 
 export type KeyValue = { key: string, value: string, };
 
-export type ListProjectFiles = { cwd: string, 
 /**
- * Folders indexed even when git ignores them or their name starts with a dot.
+ * Offsets count UTF-16 code units, as JavaScript strings do.
  */
-include: Array<string>, };
+export type LineMatch = { 
+/**
+ * One-based.
+ */
+line: number, 
+/**
+ * A window of the line around its first match, leading space trimmed.
+ */
+preview: string, 
+/**
+ * Where `preview` starts in the line.
+ */
+previewStart: number, 
+/**
+ * `[start, end)` of each match in the whole line.
+ */
+ranges: Array<[number, number]>, };
+
+export type ListProjectFiles = { cwd: string, };
 
 /**
  * A stretch of log. `text` is ANSI-free for agents, raw for a terminal.
@@ -558,6 +600,12 @@ export type RoutineRunNow = { routineId: string, };
 export type RoutineUpsert = { id: string | null, sessionId: string, name: string, enabled: boolean, prompt: string, schedule: string, nextRunAt?: number, createdBy: string | null, };
 
 export type ScheduledRoutine = { routine: Routine, session: Session, cwd: string, };
+
+/**
+ * Text to find in the workspace's files. `include` and `exclude` are
+ * comma-separated globs; a bare name matches at any depth, as in VS Code.
+ */
+export type SearchFiles = { cwd: string, query: string, regex?: boolean, caseSensitive?: boolean, wholeWord?: boolean, include?: string, exclude?: string, };
 
 export type SearchHit = { sessionId: string, sessionName: string, pos: number, id: string, role: BlockRole, at: number, 
 /**

@@ -3,11 +3,13 @@ use serde_json::Value;
 use ts_rs::TS;
 
 mod blocks;
+mod files;
 mod messages;
 mod processes;
 mod sessions;
 mod turns;
 pub use blocks::*;
+pub use files::*;
 pub use messages::*;
 pub use processes::*;
 pub use sessions::*;
@@ -451,9 +453,6 @@ pub struct KeyValue {
 #[ts(export, export_to = "../../../src/lib/protocol.ts")]
 pub struct ListProjectFiles {
     pub cwd: String,
-    /// Folders indexed even when git ignores them or their name starts with a dot.
-    #[serde(default)]
-    pub include: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, TS)]

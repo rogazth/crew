@@ -12,6 +12,7 @@ pub mod claude_title;
 pub mod cron;
 pub mod provider_session;
 pub mod providers;
+pub mod file_search;
 pub mod files;
 pub mod mailbox;
 pub mod mcp;

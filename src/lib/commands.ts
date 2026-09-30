@@ -82,15 +82,15 @@ export const COMMANDS = {
   "open-history": { label: "History", keys: "Mod+Y" },
 
   "toggle-sidebar": { label: "Toggle Sidebar", keys: "Mod+B" },
-  // Keyboard into the sidebar: the panel's open item, or the rail's current mark.
-  "focus-sidebar": { label: "Focus Sidebar", keys: "Mod+Shift+E" },
+  // VS Code's chords: the explorer beside the tabs, and search in the workspace's files.
+  "toggle-explorer": { label: "Toggle Explorer", keys: "Mod+Shift+E" },
+  "search-files": { label: "Search in Files", keys: "Mod+Shift+F" },
   // ⌘⇧R is the page's hard reload; Routines is one click away in the sidebar.
   "open-routines": { label: "Routines" },
   // The workspace's dev servers and watchers, run per worktree.
   "open-commands": { label: "Commands" },
   "start-all-commands": { label: "Start All Commands" },
   "stop-all-commands": { label: "Stop All Commands" },
-  "search-messages": { label: "Search Messages", keys: "Mod+Shift+F" },
   "open-settings": { label: "Settings", keys: "Mod+," },
   "open-browser-settings": { label: "Browser Settings" },
   "save-file": { label: "Save File", keys: "Mod+S" },

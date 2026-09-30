@@ -1,7 +1,8 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Editor } from "@pierre/diffs/edit";
 import { CodeView, EditProvider } from "@pierre/diffs/react";
 import { editorSessions } from "../../lib/editorSessions";
+import { onReveal, pendingReveal, type Reveal } from "../../lib/reveal";
 import { onDiscard } from "../../lib/unsavedEdits";
 import {
   THEME,
@@ -41,6 +42,29 @@ export function CodeEditor({ path, name, loaded, onChange }: Props) {
   // Mounts show one file at a time (the Surface is keyed by path), so a file's
   // Editor is never attached twice.
   const [editor] = useState(() => sessions.take(path, loaded, () => new Editor({ persistState: true })));
+
+  // A search result's match: on screen and selected, once the Editor has the document.
+  useEffect(() => {
+    let frame = 0;
+    const reveal = (at: Reveal, tries = 30) => {
+      cancelAnimationFrame(frame);
+      try {
+        const start = { line: at.line - 1, character: at.from };
+        editor.focus({ lineNumber: at.line, character: at.from });
+        editor.setSelections([{ start, end: { line: at.line - 1, character: at.to }, direction: "forward" }]);
+      } catch {
+        // Not attached yet: the document arrives with the CodeView's first paint.
+        if (tries > 0) frame = requestAnimationFrame(() => reveal(at, tries - 1));
+      }
+    };
+    const waiting = pendingReveal(path);
+    if (waiting) frame = requestAnimationFrame(() => reveal(waiting));
+    const off = onReveal(path, reveal);
+    return () => {
+      cancelAnimationFrame(frame);
+      off();
+    };
+  }, [editor, path]);
 
   // One item, so CodeView is really "a virtualized File". A stable cacheKey and
   // id are what the Editor keeps the file's state under. `loaded` never changes

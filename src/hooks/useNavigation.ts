@@ -1,7 +1,6 @@
 import { useCallback } from "react";
 import * as api from "../lib/api";
 import { fileTabId, newBrowserTab, newTerminalTab, processTabId, sessionTabId, stubTabId } from "../lib/tabs";
-import { focus as focusBlock } from "../lib/transcript";
 import { discardEdits, fileName, unsavedTabs } from "../lib/unsavedEdits";
 import type { Process } from "../lib/processes";
 import type { ProjectFile, Session, StubKind } from "../lib/types";
@@ -57,15 +56,6 @@ export function useNavigation({ tabs, sessions, confirms, removeSession, closePa
       if (found) openSession(found);
     },
     [sessions, openSession],
-  );
-
-  /** A search hit: open the agent, then take the reader to the line. */
-  const openHit = useCallback(
-    (id: string, pos: number) => {
-      openSessionById(id);
-      void focusBlock(id, pos);
-    },
-    [openSessionById],
   );
 
   const openFile = useCallback(
@@ -165,7 +155,6 @@ export function useNavigation({ tabs, sessions, confirms, removeSession, closePa
     inTabs,
     openSession,
     openSessionById,
-    openHit,
     openFile,
     openStub,
     openTerminal,
