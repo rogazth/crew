@@ -7,6 +7,7 @@ import {
   parseContext,
   removalCost,
   sessionPath,
+  unlistedWorktrees,
   worktreeOf,
 } from "./worktrees";
 
@@ -48,6 +49,19 @@ describe("sessionPath", () => {
   it("takes the session at its word until git has answered", () => {
     expect(sessionPath(session("/wt/gone"), workspace, null)).toBe("/wt/gone");
     expect(sessionPath(session(null), workspace, null)).toBe("/repo");
+  });
+});
+
+describe("unlistedWorktrees", () => {
+  const of = (worktree: string | null, workspaceId = "ws") => ({ worktree, workspaceId }) as Session;
+
+  it("names the worktrees this workspace's sessions run in that git has not listed yet", () => {
+    const sessions = [of("/wt/new"), of("/wt/feat"), of(null), of("/wt/new"), of("/wt/other", "ws2"), of("/wt/a")];
+    expect(unlistedWorktrees(sessions, workspace, trees)).toBe("/wt/a\n/wt/new");
+  });
+
+  it("is empty when git lists them all", () => {
+    expect(unlistedWorktrees([of("/wt/feat"), of(null)], workspace, trees)).toBe("");
   });
 });
 

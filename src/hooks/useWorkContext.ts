@@ -4,7 +4,7 @@ import { joinStrips, splitStrip, tabPlace } from "../lib/strips";
 import type { PlaceOf } from "../lib/tabGroups";
 import { lastUsed, type TabRegistry } from "../lib/tabs";
 import type { Session, Tab, Workspace, Worktree } from "../lib/types";
-import { asListed, contextId, placePath, sessionPath, worktreeHue, type TabScope } from "../lib/worktrees";
+import { asListed, contextId, placePath, sessionPath, unlistedWorktrees, worktreeHue, type TabScope } from "../lib/worktrees";
 import { useTabRegroup, useTabScope } from "./useTabScope";
 import { useTabs } from "./useTabs";
 import { useWorktrees } from "./useWorktrees";
@@ -43,6 +43,14 @@ export function useWorkContext(
     (session: Session) => (workspace ? sessionPath(session, workspace, listed) : null),
     [listed, workspace],
   );
+  // A worktree an agent made shows up as a session in it first; git is asked
+  // again once per new one, not on every render.
+  const unlisted = workspace && listed ? unlistedWorktrees(sessions, workspace, listed) : "";
+  const { refresh: rereadGit } = worktrees;
+  useEffect(() => {
+    if (unlisted) rereadGit();
+  }, [unlisted, rereadGit]);
+
   /** The same for a worktree of any workspace, a session's or a strip's; only this one's are known. */
   const placeOf = useCallback(
     (worktree: string | null, of: Workspace) => placePath(worktree, of, of.id === workspace?.id ? listed : null),

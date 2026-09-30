@@ -20,6 +20,21 @@ export function placePath(worktree: string | null, workspace: Workspace, worktre
 }
 
 /**
+ * Worktrees this workspace's sessions run in that git's list does not have
+ * yet, as one key: made by an agent's `create_worktree`, the session arrives
+ * before the window asks git again. Empty when there are none.
+ */
+export function unlistedWorktrees(sessions: Session[], workspace: Workspace, worktrees: Worktree[]): string {
+  const listed = new Set(worktrees.map((tree) => tree.path));
+  const missing = new Set(
+    sessions.flatMap((session) =>
+      session.workspaceId === workspace.id && session.worktree && !listed.has(session.worktree) ? [session.worktree] : [],
+    ),
+  );
+  return [...missing].sort().join("\n");
+}
+
+/**
  * A workspace's worktrees as git lists them, the main checkout answering to the
  * workspace's own path: git may spell it resolved (/private/…), and sessions
  * with no worktree run in the workspace folder.

@@ -89,6 +89,14 @@ pub const GROUPS: &[Group] = &[
         ],
     },
     Group {
+        name: "worktrees",
+        about: "Hand work to a new agent on a branch of its own",
+        aliases: &["worktree", "wt"],
+        verbs: &[verb("new", "create_worktree").pos(&["branch"]).eg(
+            "crew worktrees new feat/login --task \"Build the login form; the API is in server/auth.rs\"",
+        )],
+    },
+    Group {
         name: "messages",
         about: "A conversation in Crew: search what was said",
         aliases: &["message"],
