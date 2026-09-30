@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { adminScript, chooseDir, classify, onPath, parseMarkedPath, shellQuote, SYSTEM_BIN } from "./install-cli-plan";
+import { adminRemoveScript, adminScript, chooseDir, classify, onPath, parseMarkedPath, shellQuote, SYSTEM_BIN } from "./install-cli-plan";
 
 describe("parseMarkedPath", () => {
   it("skips whatever the rc files printed", () => {
@@ -29,6 +29,12 @@ describe("adminScript", () => {
     const script = adminScript("/Applications/Crew \"β\".app/Contents/Resources/crew", "/usr/local/bin/crew");
     expect(script).toBe(
       `do shell script "mkdir -p '/usr/local/bin' && ln -sfn '/Applications/Crew \\"β\\".app/Contents/Resources/crew' '/usr/local/bin/crew'" with administrator privileges`,
+    );
+  });
+
+  it("removes only the link it names", () => {
+    expect(adminRemoveScript("/usr/local/bin/crew")).toBe(
+      `do shell script "rm -f '/usr/local/bin/crew'" with administrator privileges`,
     );
   });
 

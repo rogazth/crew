@@ -25,6 +25,18 @@ Kept for one version, for configs that still name it:
   crewd --mcp                   now `crew mcp`";
 
 fn main() -> ExitCode {
+    // A Linux machine gets crewd alone, with `crew` a link to it beside it:
+    // one binary to upload, and the `crew` a session there is told about.
+    if invoked_as_crew(std::env::args_os().next()) {
+        // Outside a session it speaks as the user through daemon.json, which
+        // this crewd writes to the data dir its unit names: `../data`.
+        if std::env::var_os("CREW_DATA_DIR").is_none_or(|dir| dir.is_empty()) {
+            if let Some(dir) = std::env::current_exe().ok().and_then(|exe| served_data_dir(&exe)).filter(|dir| dir.is_dir()) {
+                std::env::set_var("CREW_DATA_DIR", dir);
+            }
+        }
+        return crew_cli::main();
+    }
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
         // Only ever from a session's environment, as before: `crew mcp` also
@@ -38,6 +50,16 @@ fn main() -> ExitCode {
         Some("serve") => daemon(&args[1..], Some(Supervisor::Served)),
         _ => daemon(&args, None),
     }
+}
+
+fn invoked_as_crew(argv0: Option<std::ffi::OsString>) -> bool {
+    argv0.as_deref().map(Path::new).and_then(Path::file_name).is_some_and(|name| name == "crew")
+}
+
+/// `~/.crew/data` for `~/.crew/bin/crewd`: where the app's installer puts
+/// the data dir of a machine it set up.
+fn served_data_dir(exe: &Path) -> Option<PathBuf> {
+    Some(exe.parent()?.parent()?.join("data"))
 }
 
 /// Who started this daemon, which decides how it hears it should stop.
@@ -433,6 +455,15 @@ fn wait_for_exit(
 mod tests {
     use super::*;
     use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+
+    #[test]
+    fn a_link_named_crew_runs_the_cli() {
+        assert!(invoked_as_crew(Some("/home/me/.crew/bin/crew".into())));
+        assert!(invoked_as_crew(Some("crew".into())));
+        assert!(!invoked_as_crew(Some("/home/me/.crew/bin/crewd".into())));
+        assert!(!invoked_as_crew(None));
+        assert_eq!(served_data_dir(Path::new("/home/me/.crew/bin/crewd")), Some(PathBuf::from("/home/me/.crew/data")));
+    }
 
     /// It used to be checked only at startup. What launchd holds is an
     /// appending descriptor, and it has to keep writing into the same, now

@@ -126,7 +126,7 @@ export async function installDaemon(opts: {
       await ssh(opts.target, 'loginctl enable-linger "$(id -un)"', control);
       await ssh(
         opts.target,
-        userctl(`systemctl --user stop ${unit} 2>/dev/null || true; mv "$HOME/${home}/bin/crewd.new" "$HOME/${home}/bin/crewd"`),
+        userctl(swapBinary(layout)),
         control,
       );
       await sshStdin(opts.target, `cat > "$HOME/.config/systemd/user/${unit}.service"`, control, serviceUnit(ip, port, layout));
@@ -191,6 +191,16 @@ export async function daemonLogs(target: SshTarget, layout: RemoteLayout = RELEA
   } finally {
     await closeControl(target, control);
   }
+}
+
+/**
+ * Stops the unit and puts the uploaded crewd in place, with `crew` a link to
+ * it: crewd runs as the CLI under that name, and it is the `crew` a session
+ * on the machine is pointed at, beside the crewd that runs it.
+ */
+export function swapBinary({ unit, home }: RemoteLayout): string {
+  const bin = `"$HOME/${home}/bin"`;
+  return `systemctl --user stop ${unit} 2>/dev/null || true; mv ${bin}/crewd.new ${bin}/crewd && ln -sfn crewd ${bin}/crew`;
 }
 
 /** A user systemd command over ssh, where the session bus is not in the environment. */

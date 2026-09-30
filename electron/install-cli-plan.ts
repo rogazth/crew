@@ -1,4 +1,4 @@
-// Where "Install `crew` Command…" puts its link, worked out without touching
+// Where the Command line setting puts its link, worked out without touching
 // the disk so it can be tested. install-cli.ts does the touching.
 
 import path from "node:path";
@@ -45,7 +45,14 @@ function appleScriptString(text: string): string {
 // One `do shell script` behind macOS's own password prompt: the app never
 // sees the password, and nothing else runs as root.
 export function adminScript(source: string, link: string): string {
-  const command = `mkdir -p ${shellQuote(path.dirname(link))} && ln -sfn ${shellQuote(source)} ${shellQuote(link)}`;
+  return asAdmin(`mkdir -p ${shellQuote(path.dirname(link))} && ln -sfn ${shellQuote(source)} ${shellQuote(link)}`);
+}
+
+export function adminRemoveScript(link: string): string {
+  return asAdmin(`rm -f ${shellQuote(link)}`);
+}
+
+function asAdmin(command: string): string {
   return `do shell script ${appleScriptString(command)} with administrator privileges`;
 }
 
