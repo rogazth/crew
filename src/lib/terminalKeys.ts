@@ -2,7 +2,8 @@
  * What a key chord means inside the terminal, before xterm sees it:
  * ⌘ chords spell the readline line-editing keys so the terminal edits like a
  * native macOS text field, ⌥ arrows and ⌥B/F/D move by word, and every other
- * ⌘ chord belongs to the app. Everything else is xterm's.
+ * ⌘ chord belongs to the app: ⌘C copies, as in any Mac app, and never
+ * interrupts; ⌃C does that. Everything else is xterm's.
  */
 export type TerminalKey =
   | { type: "input"; data: string }
@@ -29,9 +30,8 @@ export function resolveTerminalKey(
   event: Key,
   {
     isMac,
-    hasSelection,
     kittyKeyboard = false,
-  }: { isMac: boolean; hasSelection: boolean; kittyKeyboard?: boolean },
+  }: { isMac: boolean; kittyKeyboard?: boolean },
 ): TerminalKey {
   const { metaKey, ctrlKey, altKey, shiftKey, key, code } = event;
 
@@ -41,9 +41,6 @@ export function resolveTerminalKey(
     switch (key) {
       case "a":
         return { type: "select-all" };
-      // ⌘C over nothing is the interrupt; over a selection it copies.
-      case "c":
-        return hasSelection ? APP : INPUT("\x03");
       case "Backspace":
         return INPUT("\x15");
       case "Delete":

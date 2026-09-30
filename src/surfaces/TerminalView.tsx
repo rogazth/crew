@@ -20,6 +20,7 @@ import { resolveTerminalKey } from "../lib/terminalKeys";
 import { activateZwjUnicode } from "../lib/terminalUnicode";
 import { quotePath, quotePaths } from "../lib/terminalPaths";
 import { fontStack, ligaturesEnabled } from "../lib/terminalPrefs";
+import { oscClipboardText } from "../lib/terminalClipboard";
 import { isOscColorQuery, oscColorReply } from "../lib/terminalColors";
 import { DARK_SCHEME, palette } from "../lib/terminalTheme";
 import { FindBar } from "../chrome/FindBar";
@@ -189,7 +190,6 @@ export function TerminalView({
     term.attachCustomKeyEventHandler((event) => {
       const action = resolveTerminalKey(event, {
         isMac: IS_MAC,
-        hasSelection: term.hasSelection(),
         kittyKeyboard: kittyFlags !== 0,
       });
       switch (action.type) {
@@ -290,6 +290,12 @@ export function TerminalView({
       // OSC 9 is a notification unless it opens with `4;`, which is progress.
       term.parser.registerOscHandler(9, (d) => !d.startsWith("4;") && ring()),
       term.parser.registerOscHandler(777, (d) => d.startsWith("notify") && ring()),
+      // What tmux or a TUI copies from its own mouse selection lands on the Mac's clipboard.
+      term.parser.registerOscHandler(52, (d) => {
+        const text = oscClipboardText(d);
+        if (text !== null) void navigator.clipboard.writeText(text).catch(() => {});
+        return true;
+      }),
     ];
     const kittyParam = (params: (number | number[])[]) =>
       typeof params[0] === "number" ? params[0] : 0;
