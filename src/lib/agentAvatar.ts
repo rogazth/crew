@@ -3,15 +3,14 @@ import { Avatar, Style, type StyleDefinition } from "@dicebear/core";
 type Definition = { default: unknown };
 
 /**
- * DiceBear styles an agent's face can come from. All CC0 except Bottts
- * Neutral, whose author allows personal and commercial use — none of them ask
- * for attribution. Each definition is its own chunk, loaded on first use.
+ * DiceBear styles an agent's face can come from. All CC0, and every one can
+ * move: a working agent's face comes alive. Each definition is its own chunk,
+ * loaded on first use.
  */
 export const AGENT_AVATARS = [
   { id: "gaze", label: "Gaze", load: (): Promise<Definition> => import("@dicebear/styles/gaze.json") },
   { id: "pixelbot", label: "Pixelbot", load: (): Promise<Definition> => import("@dicebear/styles/pixelbot.json") },
   { id: "voxel-bot", label: "Voxel Bot", load: (): Promise<Definition> => import("@dicebear/styles/voxel-bot.json") },
-  { id: "bottts-neutral", label: "Bottts", load: (): Promise<Definition> => import("@dicebear/styles/bottts-neutral.json") },
   { id: "moods", label: "Moods", load: (): Promise<Definition> => import("@dicebear/styles/moods.json") },
   { id: "glass", label: "Glass", load: (): Promise<Definition> => import("@dicebear/styles/glass.json") },
   { id: "blobs", label: "Blobs", load: (): Promise<Definition> => import("@dicebear/styles/blobs.json") },
@@ -79,7 +78,6 @@ const RENDER: Record<AgentAvatarId, Render> = {
   "voxel-bot": { backgroundColor: ["#00000000"] },
   moods: { backgroundColor: ["#00000000"] },
   pixelbot: { borderRadius: 24 },
-  "bottts-neutral": { borderRadius: 24 },
   glass: { borderRadius: 24 },
   blobs: { borderRadius: 24 },
 };
@@ -90,12 +88,16 @@ export function avatarRender(id: AgentAvatarId): Render {
 
 const uris = new Map<string, string>();
 
-/** The same seed always draws the same face, so a rendered one is kept. */
-export function avatarUri(id: AgentAvatarId, style: Style<StyleDefinition>, seed: string): string {
-  const key = `${id}\n${seed}`;
+/**
+ * The same seed always draws the same face, so a rendered one is kept. An
+ * animated face carries the style's own motion (a glance, a blink, a sway),
+ * which holds still for anyone who asked for reduced motion.
+ */
+export function avatarUri(id: AgentAvatarId, style: Style<StyleDefinition>, seed: string, animated = false): string {
+  const key = `${id}\n${seed}\n${animated}`;
   let uri = uris.get(key);
   if (!uri) {
-    uri = new Avatar(style, { seed, ...RENDER[id] }).toDataUri();
+    uri = new Avatar(style, { seed, ...RENDER[id], animationVariant: [animated ? "fast" : "none"] }).toDataUri();
     uris.set(key, uri);
   }
   return uri;

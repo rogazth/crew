@@ -26,7 +26,7 @@ export function TabPeek({ session, branch, anchor }: { session: Session; branch:
     >
       <div className="flex items-center gap-2.5">
         {session.kind === "agent" ? (
-          <AgentAvatar seed={session.id} bare className="size-8" />
+          <AgentAvatar seed={session.id} bare animated={session.status === "working"} className="size-8" />
         ) : (
           <span className="grid size-8 place-items-center rounded-lg bg-card">
             <ProviderIcon provider={session.provider} className="size-4.5" />

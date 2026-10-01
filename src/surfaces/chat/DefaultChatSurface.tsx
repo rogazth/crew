@@ -101,7 +101,7 @@ function Intro({ session, onPick }: { session: ChatSurfaceProps["session"]; onPi
     <div className="mx-auto flex w-full max-w-[760px] flex-col items-center gap-4 px-6 pb-6 text-center">
       {/* A session is its CLI, with no face of its own: the CLI's mark stands in. */}
       {session.kind === "agent" ? (
-        <AgentAvatar seed={session.id} bare className="size-16" />
+        <AgentAvatar seed={session.id} bare animated={session.status === "working"} className="size-16" />
       ) : (
         <span className="grid size-16 place-items-center rounded-2xl bg-card ring-1 ring-border">
           <ProviderIcon provider={session.provider} className="size-8" />

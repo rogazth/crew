@@ -5,7 +5,7 @@ describe("avatarRender", () => {
   it("drops the square behind figures and rounds the styles that are a square", () => {
     expect(avatarRender("voxel-bot").backgroundColor).toEqual(["#00000000"]);
     expect(avatarRender("moods").backgroundColor).toEqual(["#00000000"]);
-    for (const id of ["pixelbot", "bottts-neutral", "glass", "blobs"] as const) {
+    for (const id of ["pixelbot", "glass", "blobs"] as const) {
       expect(avatarRender(id).borderRadius).toBeGreaterThan(0);
     }
   });

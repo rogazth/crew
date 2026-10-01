@@ -9,17 +9,20 @@ import { avatarUri, loadAvatarStyle, type AgentAvatarId } from "../lib/agentAvat
  * An agent's face, drawn from its session id so a rename keeps it. `style`
  * overrides the chosen one, for previews. Until the style's chunk lands the
  * robot glyph holds the spot. `bare` drops the disc, so a face whose shape is
- * its identity keeps its outline.
+ * its identity keeps its outline. `animated` brings the face to life, for an
+ * agent at work.
  */
 export function AgentAvatar({
   seed,
   style,
   bare = false,
+  animated = false,
   className = "size-8",
 }: {
   seed: string;
   style?: AgentAvatarId;
   bare?: boolean;
+  animated?: boolean;
   className?: string;
 }) {
   const { avatar } = useAgentAvatar();
@@ -48,7 +51,7 @@ export function AgentAvatar({
   }
   return (
     <img
-      src={avatarUri(id, loaded.style, drawn)}
+      src={avatarUri(id, loaded.style, drawn, animated)}
       alt=""
       aria-hidden
       draggable={false}

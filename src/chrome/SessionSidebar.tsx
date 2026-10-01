@@ -751,7 +751,7 @@ function Tile({ session, prefs, active, selected, onSelect, onMenu, onClearSelec
       className={`flex w-full min-w-0 flex-col items-center gap-1 rounded-xl px-1 pt-2 pb-1.5 transition-colors duration-150 ease-out ${SURFACE(active, selected)} ${FOCUS}`}
     >
       <span className="relative">
-        <AgentAvatar seed={session.id} bare className="size-10" />
+        <AgentAvatar seed={session.id} bare animated={session.status === "working"} className="size-10" />
         {shows(prefs, "status") && <Badge status={session.status} />}
       </span>
       {shows(prefs, "names") && (
@@ -767,14 +767,18 @@ const BADGE: Partial<Record<SessionStatus, string>> = {
   error: "bg-danger",
 };
 
-/** Status rides the face's corner, like the unread dot on an app icon. */
+/**
+ * Status rides the face's corner, like the unread dot on an app icon. A working
+ * agent's face moves, which says it already: its spinner only shows where
+ * motion is reduced and the face holds still.
+ */
 function Badge({ status }: { status: SessionStatus }) {
   if (status === "idle") return null;
   return (
     <span
       role="img"
       aria-label={statusLabel(status)}
-      className="absolute -right-1 -bottom-1 grid size-4 place-items-center rounded-full bg-sidebar"
+      className={`absolute -right-1 -bottom-1 grid size-4 place-items-center rounded-full bg-sidebar ${status === "working" ? "opacity-0 motion-reduce:opacity-100" : ""}`}
     >
       {status === "working" ? (
         <StatusDot status={status} className="size-3" />
