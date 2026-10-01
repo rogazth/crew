@@ -11,6 +11,7 @@ import type {
   SitePermissions,
 } from "./browser/bridge";
 import type { NavSnapshot } from "./browser/snapshot";
+import type { CliResult, CliStatus } from "./cli";
 import type { KeyboardLayout, LiveCommand } from "./keymap";
 import type { ImportedCookie, RemoteEnv } from "./protocol";
 import type { InstallInput, InstallStep, ManualRemote, SshHost, Tailnet } from "./remotes";
@@ -30,6 +31,7 @@ type CrewHost = {
   /** Steps the whole window's zoom; 0 puts it back to actual size. */
   zoom(delta: number): Promise<void>;
   colorMode: ColorModeHost;
+  cli?: CliHost;
   update: UpdateHost;
   browser: BrowserHost;
   files: FilesHost;
@@ -73,6 +75,13 @@ export type RemotesHost = {
 export type ColorModeHost = {
   get(): Promise<string>;
   set(mode: string): Promise<void>;
+};
+
+/** The `crew` command on this Mac's PATH. Absent outside Electron. */
+export type CliHost = {
+  status(): Promise<CliStatus>;
+  install(): Promise<CliResult>;
+  uninstall(): Promise<CliResult>;
 };
 
 /** The updater's main-process half. Absent outside Electron. */
@@ -156,6 +165,10 @@ export function remotesHost(): RemotesHost | null {
 
 export function colorModeHost(): ColorModeHost | null {
   return crewHost()?.colorMode ?? null;
+}
+
+export function cliHost(): CliHost | null {
+  return crewHost()?.cli ?? null;
 }
 
 export function updateHost(): UpdateHost | null {

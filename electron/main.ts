@@ -28,6 +28,7 @@ import { openExternal } from "./external";
 import { release, sha } from "./build-info";
 import { connectAgent, launchdStandIn, unloadAgent, type AgentLink } from "./daemon-agent";
 import { decideLaunch, translocated, TRANSLOCATED_NOTICE, type Outcome } from "./daemon-agent-plan";
+import { registerCliIpc } from "./install-cli";
 import { buildMenu } from "./menu";
 import { registerRemoteIpc } from "./remotes";
 import { parseColorMode, type ColorMode } from "../src/lib/colorMode";
@@ -410,6 +411,7 @@ function registerIpc(): void {
   registerBrowserIpc();
   registerFileIpc();
   registerRemoteIpc(daemonInfo);
+  registerCliIpc();
 }
 
 registerFileScheme();

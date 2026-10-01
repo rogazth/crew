@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { SearchIcon } from "lucide-react";
 import { AgentAvatar } from "../chrome/AgentAvatar";
 import type { Confirm } from "../chrome/ConfirmDialog";
@@ -20,10 +20,12 @@ import { KEEP_CHOICES, SEARCH_ENGINES } from "../lib/browserPrefs";
 import { forget, PERMISSION_LABELS, SITE_PERMISSIONS } from "../lib/browser/permissions";
 import { COLOR_MODES } from "../lib/colorMode";
 import { SESSION_VIEWS } from "../lib/sessionView";
+import { describeCli, type CliResult, type CliStatus } from "../lib/cli";
 import { bindingGroups } from "../lib/commandGroups";
 import { commandKeys } from "../lib/commands";
 import { BROWSER_CLICK } from "../lib/external";
 import { parseFolders } from "../lib/filePrefs";
+import { cliHost } from "../lib/host";
 import { PROVIDERS } from "../lib/providers";
 import { settingsSection, type SettingsSectionId } from "../lib/settings";
 import type { Workspace } from "../lib/types";
@@ -92,7 +94,60 @@ function General({ onConfirm }: { onConfirm: (confirm: Confirm) => void }) {
       </SettingsSection>
       <SessionSettings onConfirm={onConfirm} />
       <FileSettings />
+      <CommandLineSettings />
     </>
+  );
+}
+
+/** The `crew` command for the user's own terminal. Only in the app: a browser has no PATH to link into. */
+function CommandLineSettings() {
+  const host = cliHost();
+  const [status, setStatus] = useState<CliStatus | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    host
+      ?.status()
+      .then((next) => !cancelled && setStatus(next))
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [host]);
+
+  if (!host || !status) return null;
+  const act = (run: () => Promise<CliResult>) => {
+    setBusy(true);
+    setError(null);
+    run()
+      .then((result) => {
+        setStatus(result.status);
+        setError(result.error ?? null);
+      })
+      .catch((reason: unknown) => setError(String(reason)))
+      .finally(() => setBusy(false));
+  };
+  return (
+    <SettingsSection title="Command line">
+      <SettingsRow label="crew command" description={error ?? describeCli(status)}>
+        {status.state === "installed" ? (
+          <Button variant="ghost" className="h-7 text-[12px]" loading={busy} onClick={() => act(() => host.uninstall())}>
+            Uninstall
+          </Button>
+        ) : (
+          <Button
+            className="h-7 text-[12px]"
+            loading={busy}
+            disabled={status.state === "unavailable"}
+            onClick={() => act(() => host.install())}
+          >
+            Install
+          </Button>
+        )}
+      </SettingsRow>
+    </SettingsSection>
   );
 }
 
