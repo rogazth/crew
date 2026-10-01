@@ -23,6 +23,13 @@ const RING_CAP: usize = FLOW_HIGH as usize;
 /// are dropped. Room for a full ring replay plus a window of live output, or
 /// the replay that answers a resync would itself trip the next one.
 const VIEWER_HIGH: u64 = RING_CAP as u64 + FLOW_HIGH;
+/// A view that attaches past bytes the ring no longer holds gets the child to
+/// draw itself again: its width is narrowed by a column and put back. The
+/// change is held at least this long, so the child reads the narrow size
+/// before it is undone (Node reports a resize only when the size differs)...
+const REDRAW_HOLD_MIN: Duration = Duration::from_millis(100);
+/// ...and then until it writes something, or this long at most.
+const REDRAW_HOLD_MAX: Duration = Duration::from_secs(1);
 /// How long a supervised exit waits for the reader to drain what the child
 /// wrote last. A grandchild still holding the terminal can keep it open forever.
 const DRAIN_ON_EXIT: Duration = Duration::from_secs(1);
@@ -499,7 +506,45 @@ impl PtyHost {
             emitted: state.emitted,
         };
         send(&attached, live.stream_id, &state.ring.buf[skip..]);
+        drop(state);
+        // The view missed bytes the ring let go. A TUI that draws by
+        // difference (Claude Code, anything on Ink) wrote its frame once, long
+        // before the tail it now replays, and only its changes since: without a
+        // fresh frame the view keeps the changed cells and loses the rest.
+        if from < start {
+            self.redraw(id, live);
+        }
         Ok(attached)
+    }
+
+    /// Has the child repaint by changing its width and putting it back: a
+    /// SIGWINCH alone is not enough for a child that ignores one that changes
+    /// nothing. The width goes back unless the window resized it meanwhile.
+    fn redraw(&self, id: &str, live: Arc<LivePty>) {
+        let Some((cols, rows)) = size_fd(live.master_fd) else {
+            return;
+        };
+        let narrow = if cols > 2 { cols - 1 } else { cols + 1 };
+        if resize_fd(live.master_fd, narrow, rows).is_err() {
+            return;
+        }
+        let host = self.clone();
+        let id = id.to_string();
+        thread::spawn(move || {
+            let emitted = || live.state.lock().unwrap_or_else(|e| e.into_inner()).emitted;
+            let before = emitted();
+            let started = Instant::now();
+            thread::sleep(REDRAW_HOLD_MIN);
+            while emitted() == before && started.elapsed() < REDRAW_HOLD_MAX {
+                thread::sleep(Duration::from_millis(10));
+            }
+            // Only this process's own master: a kill or a respawn closed it.
+            let _spawning = host.inner.spawning.lock().unwrap_or_else(|e| e.into_inner());
+            let current = host.get(&id).is_some_and(|now| Arc::ptr_eq(&now, &live));
+            if current && !live.exited.load(Ordering::Acquire) && size_fd(live.master_fd) == Some((narrow, rows)) {
+                let _ = resize_fd(live.master_fd, cols, rows);
+            }
+        });
     }
 
     pub fn is_live(&self, id: &str) -> bool {
@@ -877,6 +922,19 @@ fn resize_fd(fd: i32, cols: u16, rows: u16) -> Result<(), String> {
     Ok(())
 }
 
+fn size_fd(fd: i32) -> Option<(u16, u16)> {
+    let mut size = libc::winsize {
+        ws_row: 0,
+        ws_col: 0,
+        ws_xpixel: 0,
+        ws_ypixel: 0,
+    };
+    if fd < 0 || unsafe { libc::ioctl(fd, libc::TIOCGWINSZ, &mut size) } != 0 {
+        return None;
+    }
+    Some((size.ws_col, size.ws_row))
+}
+
 fn dup_fd(fd: i32) -> Result<i32, String> {
     let next = unsafe { libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, 0) };
     if next < 0 {
@@ -1075,6 +1133,33 @@ mod tests {
         let second = host.open(id.clone(), "/".into(), command, 100, 30, |c| Ok((c, SpawnOptions::default()))).expect("second open");
         assert_eq!(first, second, "open replaced the stream");
         assert_eq!(host.get(&id).expect("still live").pid, pid, "open replaced the process");
+        host.kill(&id);
+    }
+
+    #[test]
+    fn attach_past_the_ring_has_the_child_redraw_at_its_own_size() {
+        let host = PtyHost::new();
+        let id = "session:redraw".to_string();
+        let script = "trap 'printf W' WINCH; while :; do sleep 0.02; done";
+        let command = vec!["/bin/sh".to_string(), "-c".to_string(), script.to_string()];
+        host.open(id.clone(), "/".into(), command, 80, 24, |c| Ok((c, SpawnOptions::default()))).expect("open");
+        let live = host.get(&id).expect("live");
+        let winches = || live.state.lock().unwrap_or_else(|e| e.into_inner()).ring.buf.iter().filter(|b| **b == b'W').count();
+
+        // Within the ring: the replay is whole, and the child is left alone.
+        host.attach(&id, 0, |_, _, _| {}).expect("attach");
+        thread::sleep(Duration::from_millis(300));
+        assert_eq!(winches(), 0, "a whole replay made the child redraw");
+
+        // Past it: the child is narrowed, redraws, and gets its width back.
+        live.state.lock().unwrap_or_else(|e| e.into_inner()).ring.start = 1_000;
+        host.attach(&id, 0, |_, _, _| {}).expect("attach");
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while winches() < 2 && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(winches(), 2, "the child saw the width change and change back");
+        assert_eq!(size_fd(live.master_fd), Some((80, 24)));
         host.kill(&id);
     }
 
