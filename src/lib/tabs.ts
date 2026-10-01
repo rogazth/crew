@@ -341,7 +341,8 @@ function isTab(value: unknown): value is Tab {
 
 export function isAgentTab(tab: Tab | null, sessions: Session[]): boolean {
   if (!tab || tab.kind !== "session") return false;
-  return sessions.find((session) => session.id === tab.sessionId)?.kind === "agent";
+  const kind = sessions.find((session) => session.id === tab.sessionId)?.kind;
+  return kind === "agent" || kind === "child";
 }
 
 /**

@@ -188,7 +188,9 @@ export function useSessions(workspaceId: string | null) {
         const agents = kind === 'agent' ? group : list.filter((session) => session.kind === 'agent');
         const terminals =
           kind === 'terminal' ? group : list.filter((session) => session.kind === 'terminal');
-        return { ...prev, [workspaceId]: [...agents, ...terminals] };
+        // Children are listed under whoever started them, and move with nothing.
+        const children = list.filter((session) => session.kind === 'child');
+        return { ...prev, [workspaceId]: [...agents, ...terminals, ...children] };
       });
       void api.reorderSessions(ids);
     },

@@ -18,7 +18,8 @@ const DOT: Partial<Record<SessionStatus, string>> = {
  * away as a turn that had finished and nobody had opened.
  */
 export function StatusDot({ status, className = "" }: { status: SessionStatus; className?: string }) {
-  if (status === "idle") return null;
+  // An exited session has nothing more to say than an idle one.
+  if (status === "idle" || status === "exited") return null;
   const dot = DOT[status];
   return (
     <span
@@ -27,7 +28,7 @@ export function StatusDot({ status, className = "" }: { status: SessionStatus; c
       title={statusLabel(status)}
       className={`flex size-3.5 shrink-0 items-center justify-center ${className}`}
     >
-      {status === "working" ? (
+      {status === "working" || status === "starting" ? (
         <LoaderCircleIcon className="size-3.5 animate-spin text-warning" />
       ) : (
         dot && <span className={`size-2 rounded-full ${dot}`} />

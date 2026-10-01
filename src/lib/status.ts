@@ -1,7 +1,7 @@
 import type { SessionStatus } from "./types";
 
 /** Loudest first: a status group only earns the top slot while it needs a human. */
-export const STATUS_ORDER: SessionStatus[] = ["needs-input", "error", "working", "done", "idle"];
+export const STATUS_ORDER: SessionStatus[] = ["needs-input", "error", "working", "starting", "done", "idle", "exited"];
 
 const LABEL: Record<SessionStatus, string> = {
   idle: "Idle",
@@ -9,6 +9,8 @@ const LABEL: Record<SessionStatus, string> = {
   "needs-input": "Needs input",
   done: "Unread",
   error: "Error",
+  starting: "Starting",
+  exited: "Exited",
 };
 
 export const statusLabel = (status: SessionStatus): string => LABEL[status];

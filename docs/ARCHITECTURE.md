@@ -1,5 +1,14 @@
 # Architecture
 
+## The words
+
+Models have confused these before, so they are said the same way everywhere a model reads them: here, the MCP `instructions()` and every session tool's description.
+
+- **Agent** — a persistent identity Crew owns: a name, a description, an autonomy, a mailbox and a history. It lives in the `agents` table. `message_agent` reaches it.
+- **Session** — one provider CLI (claude, codex, opencode, cursor) running a conversation. It lives in the `sessions` table and belongs to an agent (the session its turns run in, under the agent's own id), to whoever started it with `start_session` (a *child*), or to nobody (a *terminal* the user drives).
+
+An agent outlives its sessions; a session is one provider CLI process and can be thrown away.
+
 Crew is two processes. Electron is the window. `crewd` is the daemon: it holds the agents, the terminals, the processes, the transcripts, and a SQLite file. The window is a client of the daemon. In the packaged app `crewd` is a LaunchAgent: closing the window leaves it running, with everything it started, and **Crew › Quit Crew and Stop Everything** stops it. In dev it is the window's child and stops with it.
 
 ```mermaid
@@ -45,7 +54,7 @@ On launch the app reads `daemon.json` and asks the bridge `whoami` with the user
 
 ## A turn
 
-A turn is one run of the provider CLI. It starts a clean session. The daemon hands it the tail of the conversation, streams the output back to the window, and writes the transcript when the process exits.
+A turn is one run of the provider CLI. An agent's turn starts a clean provider session; the daemon hands it the tail of the conversation, streams the output back to the window, and writes the transcript when the process exits. A child's turn resumes its own provider session instead (see below).
 
 ```mermaid
 sequenceDiagram
@@ -66,6 +75,31 @@ sequenceDiagram
 ```
 
 Each provider is a module under `crates/crew-core/src/providers/`. It knows how to spawn that CLI and how to read its stream.
+
+## Sessions a caller starts
+
+Any agent, terminal or the user can hand a job to another provider CLI and get its answer back, without that CLI needing a tool to answer: its last message of each turn is its report. The parent starts it, waits on it and reads what it did, the same moves as a dev server's `start_process`, `wait_for_log` and `read_logs`.
+
+```mermaid
+sequenceDiagram
+  participant P as Parent (agent, terminal, user)
+  participant D as crewd
+  participant C as Child CLI
+
+  P->>D: start_session { provider, prompt, worktree }
+  D-->>P: { id, cursor: 0 }
+  D->>C: first turn (a fresh provider session)
+  C-->>D: stream, then exit
+  D->>D: "Turn ended" block, event at its position
+  P->>D: wait_for_session { sessions }
+  D-->>P: { report, cursor }
+  P->>D: send_to_session { text }
+  D->>C: next turn, resuming its own conversation
+```
+
+A child is driven by the same `TurnHost` an agent is, with three differences (`crates/crew-core/src/session_tools.rs`, `turns.rs`): it resumes its provider's conversation (`claude --resume`, `codex exec resume`, `opencode run --session`, `cursor-agent --resume`) where an agent is handed the tail; its persona is the envelope — who started it, and that its final message is its report; and the end of each of its turns is an event. Every event appends a block to its transcript, so the event's position there is a cursor no other event shares: `wait_for_session` and `read_session` count in the same numbers, and a turn that began and ended between two waits is found by position, not by status. Crew keeps what the owner last saw, so a wait without a cursor starts there.
+
+The limits: a child sees no session tool (depth one); a parent has at most four live ones; a child's autonomy is the parent's or lower, and an `ask` parent cannot allow what its child asks for; only the parent, or the user, drives a child; an agent's own session is reached through `message_agent`. An agent parent also finds each report in its mailbox, taken back out if it already read it with a wait. Idle children exit after 30 minutes. A child caught mid-turn by a restart of `crewd` carries on when it comes back. The window lists a child under whoever started it, and opens it as Crew's chat.
 
 ## Agents writing to each other
 

@@ -5,10 +5,15 @@ export type Workspace = {
   createdAt: number;
 };
 
-export type SessionKind = "agent" | "terminal";
+/**
+ * What runs in a session. An agent is a persistent identity whose turns run in
+ * its session; a terminal is a CLI the user drives; a child is a CLI another
+ * session started with `start_session`, driven by Crew turn by turn.
+ */
+export type SessionKind = "agent" | "terminal" | "child";
 
-/** Written by whatever runs the session: the terminal today, the agent runtime later. */
-export type SessionStatus = "idle" | "working" | "needs-input" | "done" | "error";
+/** Written by whatever runs the session: the terminal, or the daemon's turns. A child adds starting and exited. */
+export type SessionStatus = "starting" | "idle" | "working" | "needs-input" | "done" | "error" | "exited";
 
 /** "ask" routes every tool through Allow/Deny; "full" lets the provider run unattended. */
 export type Autonomy = "ask" | "full";
@@ -29,6 +34,12 @@ export type Session = {
   status: SessionStatus;
   createdAt: number;
   updatedAt: number;
+  /** The agent whose turns it runs; absent for a terminal and a child. */
+  agentId?: string;
+  /** Whoever started it with `start_session`; absent when the user did. */
+  parentId?: string;
+  /** How far its transcript had got at its last event. */
+  cursor?: number;
 };
 
 /** A git worktree of a workspace's repo. The main checkout comes first; outside git there is only it, branchless. */

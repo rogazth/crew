@@ -1,5 +1,5 @@
-import { ChevronDownIcon, ChevronRightIcon, ChevronUpIcon, FolderIcon, GitBranchIcon, PlusIcon, RotateCwIcon, SearchIcon, ServerIcon, XIcon, type LucideIcon as Icon } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
+import { ChevronDownIcon, ChevronRightIcon, ChevronUpIcon, CornerDownRightIcon, FolderIcon, GitBranchIcon, PlusIcon, RotateCwIcon, SearchIcon, ServerIcon, XIcon, type LucideIcon as Icon } from "lucide-react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
 import { ActionMenu } from "./ActionMenu";
 import { AgentAvatar } from "./AgentAvatar";
 import {
@@ -38,6 +38,7 @@ import {
 import {
   arrangeSessions,
   canReorder,
+  childrenOf,
   shows,
   trimSection,
   type Arranged,
@@ -96,7 +97,7 @@ const unread = (session: Session) => session.status === "done" || session.status
 
 /** What a right-click on one session offers, loudest last. `running`: its CLI is up, to stop. */
 function sessionActions(session: Session, running: boolean): MenuEntry[] {
-  if (session.kind === "terminal")
+  if (session.kind === "terminal" || session.kind === "child")
     return tidy([
       OPEN,
       RENAME,
@@ -192,6 +193,16 @@ export function SessionSidebar(props: SessionSidebarProps) {
     [filtering, placed, prefs?.scope, props.activeWorktree, props.worktrees],
   );
 
+  // The sessions each listed one started, shown under it.
+  const nested = useMemo(
+    () => (prefs ? childrenOf(props.sessions, prefs, query) : new Map<string, Session[]>()),
+    [prefs, props.sessions, query],
+  );
+  const withChildren = useCallback(
+    (sessions: Session[]) => sessions.flatMap((session) => [session, ...(nested.get(session.id) ?? [])]),
+    [nested],
+  );
+
   // A row ages out of the recency without anything else changing.
   const now = useNow(60_000, prefs !== null && prefs.recency !== "any");
 
@@ -211,9 +222,9 @@ export function SessionSidebar(props: SessionSidebarProps) {
   const visible = useCallback(
     (path: string) => {
       const mine = listed.get(path);
-      return [...(mine?.agents.shown ?? []), ...(mine?.terminals.shown ?? [])];
+      return withChildren([...(mine?.agents.shown ?? []), ...(mine?.terminals.shown ?? [])]);
     },
-    [listed],
+    [listed, withChildren],
   );
 
   const order = useMemo(
@@ -316,6 +327,23 @@ export function SessionSidebar(props: SessionSidebarProps) {
     onRemove: () => removeFrom(session),
   });
 
+  // A session's row, or the field renaming it.
+  const sessionRow = (session: Session, nested = false) =>
+    session.id === renaming ? (
+      <RenameRow
+        key={session.id}
+        className="h-8 px-2"
+        initial={session.name}
+        onCommit={(name) => {
+          props.onRename(session, name);
+          setRenaming(null);
+        }}
+        onCancel={() => setRenaming(null)}
+      />
+    ) : (
+      <Row key={session.id} {...card(session)} nested={nested} onRename={() => setRenaming(session.id)} />
+    );
+
   const draggable = prefs !== null && canReorder(prefs, filtering) && renaming === null;
   const firstVisible = () => shown.flatMap((tree) => visible(tree.path))[0];
 
@@ -407,26 +435,29 @@ export function SessionSidebar(props: SessionSidebarProps) {
                         </SortableList>
                       </div>
                     )}
+                    {agents
+                      .filter((agent) => nested.has(agent.id))
+                      .map((agent) => (
+                        <div key={agent.id} className="flex flex-col gap-0.5 pt-0.5" aria-label={`Sessions ${agent.name} started`}>
+                          <div className="flex h-6 items-center gap-1.5 px-2 text-[11px] text-text-muted">
+                            <AgentAvatar seed={agent.id} bare className="size-4" />
+                            <span className="truncate">{agent.name}</span>
+                          </div>
+                          {(nested.get(agent.id) ?? []).map((child) => sessionRow(child, true))}
+                        </div>
+                      ))}
                     {more("agents")}
                     {terminals.length > 0 && (
                       <div className="flex flex-col gap-0.5 pt-0.5">
                         <SortableList ids={terminals.map((s) => s.id)} disabled={!draggable || mine.terminals.hidden > 0} onReorder={props.onReorder}>
                           {terminals.map((session, at) => (
-                            <SortableItem key={session.id} id={session.id} index={at} group={`terminals:${tree.path}`} disabled={!draggable || mine.terminals.hidden > 0}>
-                              {session.id === renaming ? (
-                                <RenameRow
-                                  className="h-8 px-2"
-                                  initial={session.name}
-                                  onCommit={(name) => {
-                                    props.onRename(session, name);
-                                    setRenaming(null);
-                                  }}
-                                  onCancel={() => setRenaming(null)}
-                                />
-                              ) : (
-                                <Row {...card(session)} onRename={() => setRenaming(session.id)} />
-                              )}
-                            </SortableItem>
+                            <Fragment key={session.id}>
+                              <SortableItem id={session.id} index={at} group={`terminals:${tree.path}`} disabled={!draggable || mine.terminals.hidden > 0}>
+                                {sessionRow(session)}
+                              </SortableItem>
+                              {/* Beside the item, not in it: a drag moves the session and leaves what it started listed under it. */}
+                              {(nested.get(session.id) ?? []).map((child) => sessionRow(child, true))}
+                            </Fragment>
                           ))}
                         </SortableList>
                       </div>
@@ -789,14 +820,14 @@ const BADGE: Partial<Record<SessionStatus, string>> = {
  * motion is reduced and the face holds still.
  */
 function Badge({ status }: { status: SessionStatus }) {
-  if (status === "idle") return null;
+  if (status === "idle" || status === "exited") return null;
   return (
     <span
       role="img"
       aria-label={statusLabel(status)}
       className={`absolute -right-1 -bottom-1 grid size-4 place-items-center rounded-full bg-sidebar ${status === "working" ? "opacity-0 motion-reduce:opacity-100" : ""}`}
     >
-      {status === "working" ? (
+      {status === "working" || status === "starting" ? (
         <StatusDot status={status} className="size-3" />
       ) : (
         <span className={`size-2.5 rounded-full ${BADGE[status]}`} />
@@ -805,7 +836,10 @@ function Badge({ status }: { status: SessionStatus }) {
   );
 }
 
-/** A session row: the provider it runs, its name, how long ago, its status. */
+/**
+ * A session row: the provider it runs, its name, how long ago, its status. A
+ * nested one is a session another started, listed under it.
+ */
 function Row({
   session,
   prefs,
@@ -816,7 +850,8 @@ function Row({
   onClearSelection,
   onRemove,
   onRename,
-}: CardProps & { onRename: () => void }) {
+  nested = false,
+}: CardProps & { onRename: () => void; nested?: boolean }) {
   return (
     <button
       type="button"
@@ -827,10 +862,12 @@ function Row({
       onClick={onSelect}
       onContextMenu={(event) => onMenu(menuFromEvent(event))}
       onKeyDown={cardKeys({ rename: onRename, menu: onMenu, clear: onClearSelection, remove: onRemove })}
-      title={`${session.name} — ${providerLine(session.provider, session.model)}`}
+      title={`${session.name} — ${providerLine(session.provider, session.model)}${session.worktree ? `\n${session.worktree}` : ""}`}
       aria-current={active ? "page" : undefined}
-      className={`flex h-8 w-full items-center gap-2.5 rounded-chrome px-2 text-left transition-colors duration-150 ease-out ${SURFACE(active, selected)} ${FOCUS}`}
+      data-child={nested || undefined}
+      className={`flex h-8 w-full items-center gap-2.5 rounded-chrome text-left transition-colors duration-150 ease-out ${nested ? "pr-2 pl-3" : "px-2"} ${SURFACE(active, selected)} ${FOCUS}`}
     >
+      {nested && <CornerDownRightIcon aria-hidden className="-mr-1 size-3.5 shrink-0 text-icon" />}
       <ProviderIcon provider={session.provider} className="size-4" />
       <span className={`min-w-0 flex-1 truncate ${active ? "font-medium" : ""}`}>{session.name}</span>
       {shows(prefs, "updated") && (

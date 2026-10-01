@@ -21,12 +21,13 @@ export function parseSessionView(raw: string | null | undefined): SessionView {
 export type SessionSurface = "agent" | "chat" | "terminal";
 
 /**
- * Which view a session uses. An agent is always its chat. A session shows the
- * chat when the setting asks for it and Crew can read its CLI's history;
- * anything else is its terminal.
+ * Which view a session uses. An agent is always its chat, and so is a child:
+ * Crew drives both turn by turn, so there is no terminal to show. A session
+ * shows the chat when the setting asks for it and Crew can read its CLI's
+ * history; anything else is its terminal.
  */
 export function sessionSurface(session: Pick<Session, "kind" | "provider">, view: SessionView): SessionSurface {
-  if (session.kind === "agent") return "agent";
+  if (session.kind === "agent" || session.kind === "child") return "agent";
   return view === "chat" && providerOf(session.provider)?.chat ? "chat" : "terminal";
 }
 

@@ -181,7 +181,7 @@ function onStatus(event: SessionStatusEvent) {
   statuses.set(id, status);
   if (status === "done") seenDone.add(id);
   if (status === "idle" || status === "working" || status === "error") seenDone.delete(id);
-  transcript.setWorking(id, status === "working" || status === "needs-input");
+  transcript.setWorking(id, status === "working" || status === "needs-input" || status === "starting");
   const display = unread(status) && foreground === id ? "idle" : status;
   if (display !== status) void api.markSessionRead(id).catch(() => {});
   patch(id, {
@@ -193,9 +193,9 @@ function onStatus(event: SessionStatusEvent) {
     const name = sessionName(id);
     if (name) void notify(name, "Needs your input");
   }
-  if (status === "done" || status === "idle" || status === "error") {
+  if (status === "done" || status === "idle" || status === "error" || status === "exited") {
     finishWaiters(id, status !== "error");
-    if (status !== "idle" && !isWatching(id)) {
+    if (status !== "idle" && status !== "exited" && !isWatching(id)) {
       const name = sessionName(id);
       if (name) void notify(name, status === "error" ? "Ran into an error" : lastReply(id));
     }
@@ -209,7 +209,7 @@ function onStatus(event: SessionStatusEvent) {
  */
 async function resync(id: string) {
   const row = await api.getSession(id).catch(() => null);
-  if (!row || row.kind !== "agent" || row.status === statuses.get(id)) return;
+  if (!row || (row.kind !== "agent" && row.kind !== "child") || row.status === statuses.get(id)) return;
   onStatus({ sessionId: id, status: row.status, updatedAt: row.updatedAt });
 }
 

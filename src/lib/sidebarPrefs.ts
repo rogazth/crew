@@ -102,18 +102,45 @@ function sort(sessions: Session[], ordering: Ordering): Session[] {
   return next;
 }
 
-/** Filter, search and order in one pass, then split by kind. A search ranks by match, not by ordering. */
-export function arrangeSessions(sessions: Session[], prefs: SidebarPrefs, query: string): Arranged {
+function kept(sessions: Session[], prefs: SidebarPrefs): Session[] {
   const hiddenKinds = new Set(prefs.hiddenKinds);
   const hiddenProviders = new Set(prefs.hiddenProviders);
-  const kept = sessions.filter(
-    (session) => !hiddenKinds.has(session.kind) && !hiddenProviders.has(session.provider),
-  );
-  const ordered = query.trim() ? filterSessions(kept, query) : sort(kept, prefs.ordering);
+  return sessions.filter((session) => !hiddenKinds.has(session.kind) && !hiddenProviders.has(session.provider));
+}
+
+/**
+ * Filter, search and order in one pass, then split by kind. A search ranks by match, not by ordering.
+ * A child goes under whoever started it (see `childrenOf`), so it is in neither list unless that
+ * one is not listed: then it stands among the sessions, as one the user started would. A search
+ * lists every match flat.
+ */
+export function arrangeSessions(sessions: Session[], prefs: SidebarPrefs, query: string): Arranged {
+  const listed = kept(sessions, prefs);
+  const searching = query.trim().length > 0;
+  const ordered = searching ? filterSessions(listed, query) : sort(listed, prefs.ordering);
+  const nested = searching ? new Set<string>() : new Set([...childrenOf(sessions, prefs, query).values()].flat().map((s) => s.id));
   return {
     agents: ordered.filter((session) => session.kind === "agent"),
-    terminals: ordered.filter((session) => session.kind === "terminal"),
+    terminals: ordered.filter(
+      (session) => session.kind === "terminal" || (session.kind === "child" && !nested.has(session.id)),
+    ),
   };
+}
+
+/**
+ * The sessions each listed session started, oldest first, by the starter's id: an agent's
+ * or a terminal's children nest under it. Empty while searching, which lists flat.
+ */
+export function childrenOf(sessions: Session[], prefs: SidebarPrefs, query: string): Map<string, Session[]> {
+  const out = new Map<string, Session[]>();
+  if (query.trim()) return out;
+  const listed = kept(sessions, prefs);
+  const present = new Set(listed.map((session) => session.id));
+  for (const session of [...listed].sort((a, b) => a.createdAt - b.createdAt)) {
+    if (session.kind !== "child" || !session.parentId || !present.has(session.parentId)) continue;
+    out.set(session.parentId, [...(out.get(session.parentId) ?? []), session]);
+  }
+  return out;
 }
 
 /** A section's rows as listed, and how many were left out. */
@@ -121,7 +148,7 @@ export type Trimmed = { shown: Session[]; hidden: number };
 
 /** Never left out: the one on screen, and any still working, asking or unread. */
 function held(session: Session, activeId: string | null): boolean {
-  return session.id === activeId || session.status !== "idle";
+  return session.id === activeId || (session.status !== "idle" && session.status !== "exited");
 }
 
 /**

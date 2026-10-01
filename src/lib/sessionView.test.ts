@@ -16,6 +16,12 @@ describe("sessionSurface", () => {
     expect(sessionSurface({ kind: "agent", provider: "cursor" }, "chat")).toBe("agent");
   });
 
+  it("shows a child in Crew's chat, which is what drives it", () => {
+    for (const provider of ["claude", "codex", "opencode", "cursor"]) {
+      expect(sessionSurface({ kind: "child", provider }, "terminal")).toBe("agent");
+    }
+  });
+
   it("opens a session in the chat only when asked and its history can be read", () => {
     for (const provider of ["claude", "codex", "opencode"]) {
       expect(sessionSurface({ kind: "terminal", provider }, "chat")).toBe("chat");
