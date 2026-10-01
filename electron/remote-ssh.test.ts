@@ -15,6 +15,11 @@ describe("linux installer", () => {
     expect(unit).toContain("WantedBy=default.target");
   });
 
+  // One CLI or build killed for memory must not stop the unit, and every session in it.
+  it("keeps the daemon up when the kernel kills one of its processes for memory", () => {
+    expect(serviceUnit("100.127.204.79", 17877)).toContain("\nOOMPolicy=continue\n");
+  });
+
   // A dev or local build adding the machine the release runs on gets a crewd of its own.
   it("keeps each app's crewd apart on the machine", () => {
     const release = remoteLayout("release");

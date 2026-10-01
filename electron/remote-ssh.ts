@@ -66,7 +66,14 @@ export function linuxArch(uname: string): "x64" | "arm64" | null {
   return null;
 }
 
-/** The user unit. `%h` is the remote home, so the same text works for any user. */
+/**
+ * The user unit. `%h` is the remote home, so the same text works for any user.
+ *
+ * Every session's CLI, and every build or test it runs, lives in this unit's
+ * cgroup. systemd's default `OOMPolicy=stop` takes the whole unit down when
+ * the kernel kills any one of them for memory, and every session with it: the
+ * OOM killer ends the one process, and crewd and the other sessions go on.
+ */
 export function serviceUnit(ip: string, port: number, layout: RemoteLayout = RELEASE): string {
   return `[Unit]
 Description=Crew daemon${layout.unit === RELEASE.unit ? "" : ` (${layout.unit})`}
@@ -76,6 +83,7 @@ After=tailscaled.service
 ExecStart=%h/${layout.home}/bin/crewd serve --listen ${ip}:${port} --data-dir %h/${layout.home}/data
 Restart=on-failure
 RestartSec=1
+OOMPolicy=continue
 
 [Install]
 WantedBy=default.target
