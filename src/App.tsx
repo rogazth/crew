@@ -11,12 +11,14 @@ import { LinkRouter } from "./chrome/LinkRouter";
 import { AppSidebar } from "./chrome/AppSidebar";
 import { TabBar, type TabGroups } from "./chrome/TabBar";
 import { UpdateDialog } from "./chrome/UpdateDialog";
+import { Explorer } from "./chrome/explorer/Explorer";
 import { useAgentSheet } from "./hooks/useAgentSheet";
 import { useAppCommands } from "./hooks/useAppCommands";
 import { useBrowserBridge } from "./hooks/useBrowserBridge";
 import { useSessionTitle } from "./hooks/useSessionTitle";
 import { useConfirmations } from "./hooks/useConfirmations";
 import { useEnvironments } from "./hooks/useEnvironments";
+import { useExplorer } from "./hooks/useExplorer";
 import { useLaunch } from "./hooks/useLaunch";
 import { useNavigation } from "./hooks/useNavigation";
 import { useProjectFiles } from "./hooks/useProjectFiles";
@@ -29,7 +31,6 @@ import { BrowserPrefsProvider } from "./hooks/useBrowserPrefs";
 import { TerminalPrefsProvider } from "./hooks/useTerminalPrefs";
 import { useWorkspaces } from "./hooks/useWorkspaces";
 import { useWorkContext } from "./hooks/useWorkContext";
-import { focusSidebar } from "./hooks/useSpatialKeys";
 import * as api from "./lib/api";
 import { zoomApp } from "./lib/host";
 import { isTerminalTab } from "./lib/tabs";
@@ -58,6 +59,8 @@ export function App() {
 
   const workspaces = useWorkspaces();
   const sidebar = useSidebarWidth();
+  const explorer = useExplorer();
+  const explorerWidth = useSidebarWidth("explorer:width", 280);
   const active = workspaces.active;
   const workspaceId = active?.id ?? null;
   const {
@@ -218,10 +221,13 @@ export function App() {
     sheetOpen: sheet.sheet !== null,
     closeSheet: sheet.close,
     toggleSidebar: () => setSidebarOpen((open) => !open),
-    // A hidden sidebar comes back first; the focus waits for it to paint.
-    focusSidebar: (scope) => {
-      setSidebarOpen(true);
-      requestAnimationFrame(() => focusSidebar(scope));
+    toggleExplorer: () => {
+      closePage();
+      explorer.toggle("files");
+    },
+    searchFiles: () => {
+      closePage();
+      explorer.toggle("search", selectedLine());
     },
     newAgent: () => sheet.newAgent(),
     newSession: () => void newSession(),
@@ -333,7 +339,6 @@ export function App() {
           activeWorkspace={active}
           sessions={sessions}
           onConfirm={confirms.ask}
-          onOpenHit={nav.openHit}
           onOpenTerminal={envs.openTerminalOn}
         />
         {/* Hidden, not unmounted: agent and terminal processes stay alive. */}
@@ -367,54 +372,68 @@ export function App() {
             <div className="border-b border-border px-3 py-2 text-danger">{workspaces.error}</div>
           )}
 
-          <WorkspacePanes
-            tab={tabs.active}
-            panes={tabs.panes}
-            workspaces={workspaces.workspaces}
-            sessions={all}
-            placeOf={work.placeOf}
-            cwd={treePath}
-            hasWorkspace={active !== null}
-            onCreateWorkspace={envs.openWorkspace}
-            onStatus={setStatus}
-            onOpenFile={nav.openFile}
-            onOpenSession={nav.openSessionById}
-            onPatchBrowser={tabs.patchBrowser}
-            onOpenBrowserTab={tabs.openIn}
-            onAdoptBrowserTab={tabs.adopt}
-            files={files}
-            onConfirm={confirms.ask}
-            renderProcess={(tab) => (
-              <ProcessTab
-                key={tab.id}
-                processId={tab.processId}
-                worktree={tab.worktree}
-                place={places.find((place) => place.worktree === tab.worktree)?.label ?? tab.worktree ?? "main"}
-                processes={processes}
-                onOpenCommands={openCommands}
+          <div className="flex min-h-0 flex-1">
+            <WorkspacePanes
+              tab={tabs.active}
+              panes={tabs.panes}
+              workspaces={workspaces.workspaces}
+              sessions={all}
+              placeOf={work.placeOf}
+              cwd={treePath}
+              hasWorkspace={active !== null}
+              onCreateWorkspace={envs.openWorkspace}
+              onStatus={setStatus}
+              onOpenFile={nav.openFile}
+              onOpenSession={nav.openSessionById}
+              onPatchBrowser={tabs.patchBrowser}
+              onOpenBrowserTab={tabs.openIn}
+              onAdoptBrowserTab={tabs.adopt}
+              files={files}
+              onConfirm={confirms.ask}
+              renderProcess={(tab) => (
+                <ProcessTab
+                  key={tab.id}
+                  processId={tab.processId}
+                  worktree={tab.worktree}
+                  place={places.find((place) => place.worktree === tab.worktree)?.label ?? tab.worktree ?? "main"}
+                  processes={processes}
+                  onOpenCommands={openCommands}
+                />
+              )}
+              renderCommands={() =>
+                active && (
+                  <CommandsView
+                    key={active.id}
+                    workspaceId={active.id}
+                    processes={processes}
+                    places={places}
+                    here={here}
+                    sessions={all}
+                    onOpenRun={nav.openProcessRun}
+                    onConfirm={confirms.ask}
+                  />
+                )
+              }
+              // Chrome's way: the entry loads where History was, so the tab turns into the page.
+              onOpenHistory={(url) => {
+                const history = tabs.active;
+                nav.openBrowser(url);
+                if (history?.kind === "stub" && history.stub === "history") tabs.close(history.id);
+              }}
+            />
+            {explorer.open && treePath && explorerWidth.width !== null && (
+              <Explorer
+                root={treePath}
+                width={explorerWidth.width}
+                onResize={explorerWidth.resize}
+                mode={explorer.mode}
+                onMode={explorer.setMode}
+                focus={explorer.focus}
+                active={tabs.active?.kind === "file" ? tabs.active.path : null}
+                onOpenFile={nav.openFile}
               />
             )}
-            renderCommands={() =>
-              active && (
-                <CommandsView
-                  key={active.id}
-                  workspaceId={active.id}
-                  processes={processes}
-                  places={places}
-                  here={here}
-                  sessions={all}
-                  onOpenRun={nav.openProcessRun}
-                  onConfirm={confirms.ask}
-                />
-              )
-            }
-            // Chrome's way: the entry loads where History was, so the tab turns into the page.
-            onOpenHistory={(url) => {
-              const history = tabs.active;
-              nav.openBrowser(url);
-              if (history?.kind === "stub" && history.stub === "history") tabs.close(history.id);
-            }}
-          />
+          </div>
         </div>
       </main>
 
@@ -487,4 +506,10 @@ export function App() {
     </BrowserPrefsProvider>
     </TerminalPrefsProvider>
   );
+}
+
+/** What ⌘⇧F starts from: the text selected on one line, as VS Code does. */
+function selectedLine(): string | undefined {
+  const text = window.getSelection()?.toString() ?? "";
+  return text.trim() !== "" && !text.includes("\n") && text.length <= 200 ? text : undefined;
 }

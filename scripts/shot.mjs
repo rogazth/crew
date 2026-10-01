@@ -2,7 +2,6 @@
 // be looked at without a machine with a screen.
 //
 //   node scripts/shot.mjs            → out/shot.png
-//   SHOT=search node scripts/shot.mjs
 //
 // Needs a browser once: npx playwright-core install chromium
 import { spawn } from "node:child_process";
@@ -121,46 +120,6 @@ if (shot === "routines") {
   const trigger = page.locator('[data-sidebar="sidebar"] button').filter({ hasText: "ledger" });
   if ((await trigger.count()) === 0) throw new Error("clicking ledger did not switch to it");
   console.log(`dragged crew below ledger: ${after.join(", ")}; a click still picks`);
-} else if (shot === "search") {
-  await page.keyboard.press("Control+Shift+F");
-  await page.waitForTimeout(600);
-  await page.keyboard.type("sidebar");
-  await page.waitForTimeout(900);
-  const heading = await page.locator("h1").first().textContent();
-  if (heading !== "Search") throw new Error(`the search page never opened (h1 was ${heading})`);
-  const empty = await page.locator("text=Nothing matches").count();
-  if (empty > 0) throw new Error("the search found nothing; the mock may not answer messages_search");
-
-  // Clicking a hit has to land on the line, not just the agent.
-  const hits = page.locator('[data-block]');
-  await page.locator("button", { hasText: "Find where the sidebar" }).first().click();
-  await page.waitForTimeout(1200);
-  const marked = await page.locator(".crew-found").count();
-  if (marked === 0) {
-    const blocks = await hits.count();
-    const tab = await page.locator('[role="tab"], [data-tab]').first().textContent().catch(() => "?");
-    throw new Error(`the hit opened the agent but did not mark the line (blocks=${blocks}, tab=${tab})`);
-  }
-  console.log(`hit opened and marked one of ${await hits.count()} blocks`);
-
-  // A tool row is a hit too — finding the command you ran is the point — and it
-  // only works because activity rows carry the same anchor as messages.
-  await page.keyboard.press("Control+Shift+F");
-  await page.waitForTimeout(500);
-  await page.keyboard.type("sidebarPrefs");
-  await page.waitForTimeout(900);
-  const toolHit = page.locator("button", { hasText: "Read sidebarPrefs.ts" }).first();
-  if ((await toolHit.count()) === 0) throw new Error("no tool row among the hits");
-  await toolHit.click();
-  await page.waitForTimeout(1200);
-  if ((await page.locator(".crew-found").count()) === 0) {
-    throw new Error("a tool row hit opened the agent but could not be scrolled to");
-  }
-  console.log("a tool row hit lands on the row");
-  await page.keyboard.press("Control+Shift+F");
-  await page.waitForTimeout(500);
-  await page.keyboard.type("sidebar");
-  await page.waitForTimeout(900);
 } else {
   // The seeded transcript belongs to the first agent in the sidebar.
   await page.locator('[data-sidebar="sidebar"] button').filter({ hasText: "Planner" }).first().click();

@@ -3,15 +3,13 @@ import type { RoutineDraft } from "../lib/routines";
 import type { SettingsSectionId } from "../lib/settings";
 import type { Session, Workspace } from "../lib/types";
 import { RoutinesView } from "./RoutinesView";
-import { SearchView } from "./SearchView";
 import { SettingsView } from "./SettingsView";
 
 /** A page covers the workspace instead of living in a tab. */
 export type Page =
   | { kind: "workspace" }
   | { kind: "settings"; section: SettingsSectionId }
-  | { kind: "routines"; draft: RoutineDraft | null }
-  | { kind: "search" };
+  | { kind: "routines"; draft: RoutineDraft | null };
 
 type Props = {
   page: Page;
@@ -19,7 +17,6 @@ type Props = {
   activeWorkspace: Workspace | null;
   sessions: Session[];
   onConfirm: (confirm: Confirm) => void;
-  onOpenHit: (sessionId: string, pos: number) => void;
   onOpenTerminal: (envId: string) => Promise<void>;
 };
 
@@ -33,7 +30,6 @@ export function Pages({
   activeWorkspace,
   sessions,
   onConfirm,
-  onOpenHit,
   onOpenTerminal,
 }: Props) {
   const agents = sessions.filter((session) => session.kind === "agent");
@@ -47,7 +43,6 @@ export function Pages({
       />
     );
   }
-  if (page.kind === "search") return <SearchView agents={agents} onOpenHit={onOpenHit} />;
   if (page.kind === "routines" && activeWorkspace) {
     return (
       <RoutinesView

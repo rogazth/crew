@@ -7,6 +7,8 @@ import type {
   CookieRead,
   CookieSource,
   DirListing,
+  FileSearchResult,
+  FolderEntry,
   HistoryEntry,
   HistoryList,
   LogChunk,
@@ -16,8 +18,7 @@ import type {
   Process,
   ProcessSpec,
   RemoteEnv,
-  SearchHit,
-  SearchQuery,
+  SearchFiles,
 } from "./protocol";
 import type { Autonomy, ProjectFile, Session, SessionKind, SessionStatus, Workspace, Worktree } from "./types";
 
@@ -127,9 +128,6 @@ export const transcriptTail = (params: {
   beforePos?: number;
 }): Promise<MessagePage> => client.request("transcript_tail", params);
 
-export const searchMessages = (query: SearchQuery): Promise<SearchHit[]> =>
-  client.request("messages_search", query);
-
 export const turnStop = (sessionId: string): Promise<void> =>
   client.request("turn_stop", { sessionId });
 
@@ -185,8 +183,15 @@ export async function reorderWorkspaces(ids: string[]): Promise<void> {
   if (localIds.length > 0) await client.request("workspace_reorder", { ids: localIds });
 }
 
-export const listProjectFiles = (cwd: string, include: string[] = []): Promise<ProjectFile[]> =>
-  client.request("list_project_files", { cwd, include });
+export const listProjectFiles = (cwd: string): Promise<ProjectFile[]> =>
+  client.request("list_project_files", { cwd });
+
+/** One folder for the explorer: everything on disk, with what git ignores marked. */
+export const listFolder = (path: string): Promise<FolderEntry[]> => client.request("list_folder", { path });
+
+/** A newer search in the same folder cancels this one, which answers with what it had. */
+export const searchFiles = (request: SearchFiles): Promise<FileSearchResult> =>
+  client.request("search_files", request);
 
 export const readTextFile = (path: string): Promise<string> =>
   client.request("read_text_file", { path });

@@ -260,18 +260,7 @@ async function paletteRows(crew: Crew, query: string, settle?: string): Promise<
   return rows;
 }
 
-/** Settings › General › Files › Always include, typed and committed with Enter. */
-async function alwaysInclude(crew: Crew, folders: string): Promise<void> {
-  const page = crew.window;
-  await pressChord(crew, `${MOD}+,`);
-  await page.getByRole("button", { name: "General", exact: true }).click();
-  const field = page.getByRole("textbox", { name: "Always include" });
-  await field.fill(folders);
-  await field.press("Enter");
-  await pressChord(crew, `${MOD}+,`);
-}
-
-test("M2: the outline follows the note and keeps its setting; Always include indexes an ignored folder", async (t) => {
+test("M2: the outline follows the note and keeps its setting; ⌘P finds a small folder git ignores", async (t) => {
   let crew = await launchCrew({
     repos: [
       {
@@ -330,23 +319,14 @@ test("M2: the outline follows the note and keeps its setting; Always include ind
   await page.keyboard.press(`${MOD}+Home`);
   await sectionIs(crew, "Guide", "back at the top, the outline marks the first heading");
 
-  // Git ignores vendor-docs, so ⌘P does not find what is in it…
+  // Git ignores vendor-docs, but a folder that small is notes, not a build: ⌘P finds it.
   assert.ok((await paletteRows(crew, "guide", "notes/guide.md")).includes("notes/guide.md"), "⌘P has indexed the workspace");
   assert.ok(
-    !(await paletteRows(crew, "vendored")).includes("vendor-docs/vendored-api.md"),
-    "an ignored folder is not searched",
-  );
-  // …until Settings › Files › Always include names it.
-  await alwaysInclude(crew, "vendor-docs");
-  await waitFor(async () => (await crew.request("state_get", { key: "files:prefs" })) === JSON.stringify({ include: ["vendor-docs"] }), {
-    message: "crewd keeps the folder",
-  });
-  assert.ok(
     (await paletteRows(crew, "vendored", "vendor-docs/vendored-api.md")).includes("vendor-docs/vendored-api.md"),
-    "⌘P finds the file in the included folder",
+    "⌘P finds the file in the ignored folder",
   );
 
-  // The outline off, then a restart: both settings come back.
+  // The outline off, then a restart: the setting comes back.
   await fileTab(crew, guide).click();
   await toggle.click();
   await outline.waitFor({ state: "detached" });
@@ -365,10 +345,9 @@ test("M2: the outline follows the note and keeps its setting; Always include ind
     message: "the reopened note has its outline off",
   });
   assert.equal(await page2.locator('nav[aria-label="Outline"]').count(), 0, "and shows none");
-  assert.equal(await crew.request("state_get", { key: "files:prefs" }), JSON.stringify({ include: ["vendor-docs"] }));
   assert.ok(
     (await paletteRows(crew, "vendored", "vendor-docs/vendored-api.md")).includes("vendor-docs/vendored-api.md"),
-    "after the restart ⌘P still searches the included folder",
+    "after the restart ⌘P still finds it",
   );
 
   // A folder that is not a repo: its dotfiles are found too (35b5b96).

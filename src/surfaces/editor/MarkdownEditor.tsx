@@ -22,6 +22,7 @@ import { markdownPreview } from "../../lib/markdown/preview";
 import { markTags, obsidianMarkdown } from "../../lib/markdown/syntax";
 import { makeWikiLinkCompletions, noteHost, type NoteHost } from "../../lib/markdown/wikilinks";
 import type { ProjectFile } from "../../lib/types";
+import { onReveal, pendingReveal, type Reveal } from "../../lib/reveal";
 import { onDiscard } from "../../lib/unsavedEdits";
 import { Outline } from "./Outline";
 
@@ -214,8 +215,8 @@ const THEME = EditorView.theme({
   ".cm-md-chip": { padding: "0 8px", borderRadius: "999px", background: CARD },
 
   // Find
-  ".cm-md-find": { background: "light-dark(oklch(91% 0.1 95), oklch(50% 0.1 95 / 0.5))", borderRadius: "2px" },
-  ".cm-md-find-current": { background: "light-dark(oklch(82% 0.15 70), oklch(62% 0.15 65 / 0.7))" },
+  ".cm-md-find": { background: "var(--color-find)", borderRadius: "2px" },
+  ".cm-md-find-current": { background: "var(--color-find-current)" },
 
   // Link completion
   ".cm-tooltip.cm-tooltip-autocomplete": {
@@ -264,6 +265,17 @@ function scrollToHeading(view: EditorView, heading: string, select: boolean) {
 }
 
 /** The line at the top of the pane. */
+/** A search result's match, selected in the middle of the pane. */
+function revealIn(view: EditorView, at: Reveal) {
+  const line = view.state.doc.line(Math.min(Math.max(at.line, 1), view.state.doc.lines));
+  const clamp = (column: number) => line.from + Math.min(column, line.length);
+  view.dispatch({
+    selection: { anchor: clamp(at.from), head: clamp(at.to) },
+    effects: EditorView.scrollIntoView(clamp(at.from), { y: "center" }),
+  });
+  view.focus();
+}
+
 const topLine = (view: EditorView) =>
   view.lineBlockAtHeight(view.scrollDOM.getBoundingClientRect().top - view.documentTop + 8);
 
@@ -376,6 +388,9 @@ export function MarkdownEditor({ path, loaded, onChange, files, onOpenPath, outl
     const heading = pendingHeading.get(path);
     const consumed = heading ? requestAnimationFrame(() => pendingHeading.delete(path)) : 0;
     if (heading) scrollToHeading(view, heading, false);
+    const waiting = pendingReveal(path);
+    if (waiting) revealIn(view, waiting);
+    const offReveal = onReveal(path, (at) => revealIn(view, at));
     setItems(outlineOf(view.state));
 
     const offScheme = onSchemeChange(() => view.dispatch({ effects: refreshPreview.of(null) }));
@@ -407,6 +422,7 @@ export function MarkdownEditor({ path, loaded, onChange, files, onOpenPath, outl
       view.scrollDOM.removeEventListener("scroll", onScroll);
       offScheme();
       offDiscard();
+      offReveal();
       if (!discarded) {
         kept.set(path, {
           json: view.state.toJSON({ history: historyField }),

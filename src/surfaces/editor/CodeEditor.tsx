@@ -1,7 +1,8 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Editor } from "@pierre/diffs/edit";
 import { CodeView, EditProvider } from "@pierre/diffs/react";
 import { editorSessions } from "../../lib/editorSessions";
+import { onReveal, pendingReveal, type Reveal } from "../../lib/reveal";
 import { onDiscard } from "../../lib/unsavedEdits";
 import {
   THEME,
@@ -42,6 +43,33 @@ export function CodeEditor({ path, name, loaded, onChange }: Props) {
   // Editor is never attached twice.
   const [editor] = useState(() => sessions.take(path, loaded, () => new Editor({ persistState: true })));
 
+  const host = useRef<HTMLDivElement>(null);
+
+  // A search result's match: on screen and selected, once the Editor has the document.
+  useEffect(() => {
+    let frame = 0;
+    const reveal = (at: Reveal, tries = 30) => {
+      cancelAnimationFrame(frame);
+      try {
+        const start = { line: at.line - 1, character: at.from };
+        editor.focus({ lineNumber: at.line, character: at.from });
+        editor.setSelections([{ start, end: { line: at.line - 1, character: at.to }, direction: "forward" }]);
+        // The library brings the caret to the nearest edge; a jump from a search reads better centred.
+        frame = requestAnimationFrame(() => centreLine(host.current, at.line));
+      } catch {
+        // Not attached yet: the document arrives with the CodeView's first paint.
+        if (tries > 0) frame = requestAnimationFrame(() => reveal(at, tries - 1));
+      }
+    };
+    const waiting = pendingReveal(path);
+    if (waiting) frame = requestAnimationFrame(() => reveal(waiting));
+    const off = onReveal(path, reveal);
+    return () => {
+      cancelAnimationFrame(frame);
+      off();
+    };
+  }, [editor, path]);
+
   // One item, so CodeView is really "a virtualized File". A stable cacheKey and
   // id are what the Editor keeps the file's state under. `loaded` never changes
   // under a mount: the disk's text taken over the editor's is a new one.
@@ -60,24 +88,40 @@ export function CodeEditor({ path, name, loaded, onChange }: Props) {
   // The `overflow-auto` is on the root itself: the library listens for `scroll`
   // there but never styles it.
   return (
-    <EditProvider
-      createEditor={(options) => {
-        // The options carry this CodeView's change listener.
-        editor.setOptions(options);
-        return editor;
-      }}
-    >
-      <CodeView
-        items={items}
-        options={OPTIONS}
-        editorOptions={{ persistState: true }}
-        className="h-full min-h-0 overflow-auto"
-        onItemEditChange={(_item, file) => {
-          const contents = file.contents;
-          sessions.edited(path, editor, contents);
-          onChange(contents);
+    <div ref={host} className="contents">
+      <EditProvider
+        createEditor={(options) => {
+          // The options carry this CodeView's change listener.
+          editor.setOptions(options);
+          return editor;
         }}
-      />
-    </EditProvider>
+      >
+        <CodeView
+          items={items}
+          options={OPTIONS}
+          editorOptions={{ persistState: true }}
+          className="h-full min-h-0 overflow-auto"
+          onItemEditChange={(_item, file) => {
+            const contents = file.contents;
+            sessions.edited(path, editor, contents);
+            onChange(contents);
+          }}
+        />
+      </EditProvider>
+    </div>
   );
+}
+
+/**
+ * Scrolls the pane so one-based `line` sits in its middle. The lines live in the
+ * library's shadow root; the pane is the CodeView's own root, which scrolls.
+ */
+function centreLine(host: HTMLElement | null, line: number) {
+  const scroller = host?.firstElementChild;
+  const shadow = scroller?.querySelector("diffs-container")?.shadowRoot;
+  const element = shadow?.querySelector(`[data-line="${line}"][data-line-type]`);
+  if (!(scroller instanceof HTMLElement) || !element) return;
+  const pane = scroller.getBoundingClientRect();
+  const box = element.getBoundingClientRect();
+  scroller.scrollTop += box.top - pane.top - (scroller.clientHeight - box.height) / 2;
 }

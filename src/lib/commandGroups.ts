@@ -38,11 +38,11 @@ const GROUPS: { title: string; entries: Entry[] }[] = [
   },
   {
     title: "Finding things",
-    entries: ["open-palette", "go-to-file", "open-actions", "search-messages", "find"],
+    entries: ["open-palette", "go-to-file", "open-actions", "search-files", "find"],
   },
   {
     title: "View",
-    entries: ["toggle-sidebar", "focus-sidebar", "zoom-in", "zoom-out", "zoom-reset", "toggle-outline"],
+    entries: ["toggle-sidebar", "toggle-explorer", "zoom-in", "zoom-out", "zoom-reset", "toggle-outline"],
   },
   {
     title: "Editor",

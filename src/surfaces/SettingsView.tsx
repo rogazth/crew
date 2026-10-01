@@ -3,7 +3,7 @@ import { SearchIcon } from "lucide-react";
 import { AgentAvatar } from "../chrome/AgentAvatar";
 import type { Confirm } from "../chrome/ConfirmDialog";
 import { Kbd } from "../chrome/Kbd";
-import { Button, Select, TextInput, Toggle, type Option } from "../chrome/kit";
+import { Button, Select, Toggle, type Option } from "../chrome/kit";
 import { ModelPicker } from "../chrome/ModelPicker";
 import { ProviderIcon } from "../chrome/ProviderIcon";
 import { SettingsRow, SettingsSection } from "../chrome/SettingsRow";
@@ -11,7 +11,6 @@ import { useAgentAvatar } from "../hooks/useAgentAvatar";
 import { useBrowserPrefs } from "../hooks/useBrowserPrefs";
 import { useColorMode } from "../hooks/useColorMode";
 import { useDefaultAgent } from "../hooks/useDefaultAgent";
-import { useFilePrefs } from "../hooks/useFilePrefs";
 import { useSessionView } from "../hooks/useSessionView";
 import { changeSitePermissions, useSitePermissions } from "../hooks/useSitePermissions";
 import { useTabScope } from "../hooks/useTabScope";
@@ -24,7 +23,6 @@ import { describeCli, type CliResult, type CliStatus } from "../lib/cli";
 import { bindingGroups } from "../lib/commandGroups";
 import { commandKeys } from "../lib/commands";
 import { BROWSER_CLICK } from "../lib/external";
-import { parseFolders } from "../lib/filePrefs";
 import { cliHost } from "../lib/host";
 import { PROVIDERS } from "../lib/providers";
 import { settingsSection, type SettingsSectionId } from "../lib/settings";
@@ -93,7 +91,6 @@ function General({ onConfirm }: { onConfirm: (confirm: Confirm) => void }) {
         </SettingsRow>
       </SettingsSection>
       <SessionSettings onConfirm={onConfirm} />
-      <FileSettings />
       <CommandLineSettings />
     </>
   );
@@ -146,36 +143,6 @@ function CommandLineSettings() {
             Install
           </Button>
         )}
-      </SettingsRow>
-    </SettingsSection>
-  );
-}
-
-function FileSettings() {
-  const { prefs, update } = useFilePrefs();
-  const saved = prefs.include.join(", ");
-  const [draft, setDraft] = useState<string | null>(null);
-  const save = () => {
-    if (draft === null) return;
-    update({ include: parseFolders(draft) });
-    setDraft(null);
-  };
-  return (
-    <SettingsSection title="Files">
-      <SettingsRow
-        label="Always include"
-        description="Folders that file search indexes even when git ignores them. Separate them with commas."
-      >
-        <div className="w-56">
-          <TextInput
-            aria-label="Always include"
-            placeholder=".ai, .claude"
-            value={draft ?? saved}
-            onChange={(event) => setDraft(event.target.value)}
-            onBlur={save}
-            onKeyDown={(event) => event.key === "Enter" && save()}
-          />
-        </div>
       </SettingsRow>
     </SettingsSection>
   );

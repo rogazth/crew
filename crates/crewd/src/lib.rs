@@ -10,6 +10,7 @@ use crew_core::browser_leases::{Holder, Leases};
 use crew_core::browser_relay::BrowserRelay;
 use crew_core::browser_tools::BrowserTools;
 use crew_core::caller::Caller;
+use crew_core::file_search;
 use crew_core::files;
 use crew_core::messages;
 use crew_core::provider_session;
@@ -1472,8 +1473,16 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
             Ok(Value::Null)
         }
         "list_project_files" => {
-            let ListProjectFiles { cwd, include } = parse(params)?;
-            json(block(move || files::list(&cwd, &include)).await?)
+            let ListProjectFiles { cwd } = parse(params)?;
+            json(block(move || files::list(&cwd)).await?)
+        }
+        "list_folder" => {
+            let PathArg { path } = parse(params)?;
+            json(block(move || files::list_folder(&path)).await?)
+        }
+        "search_files" => {
+            let request: proto::SearchFiles = parse(params)?;
+            json(block(move || file_search::search(&request)).await?)
         }
         "worktree_list" => {
             let PathArg { path } = parse(params)?;

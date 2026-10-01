@@ -105,7 +105,7 @@ export function WorkspacePanes({
   );
   return (
     // Its own stacking context: a page an agent drives out of sight sits beneath every pane here, and nothing else.
-    <div className="relative isolate min-h-0 flex-1">
+    <div className="relative isolate min-h-0 min-w-0 flex-1">
       <DiffsPool>
         <Surface
           tab={tab}

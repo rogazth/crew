@@ -32,12 +32,3 @@ export function useSpatialKeys(root: RefObject<HTMLElement | null>) {
     return () => el.removeEventListener("keydown", onKey);
   }, [root]);
 }
-
-/** Puts the keyboard on the sidebar item that stands for what is open, else the first one. */
-export function focusSidebar(scope: "rail" | "panel") {
-  const root = document.querySelector(`[data-sidebar-${scope}]`);
-  const target =
-    root?.querySelector<HTMLElement>("[data-nav][aria-current]") ??
-    root?.querySelector<HTMLElement>("[data-nav]");
-  target?.focus();
-}

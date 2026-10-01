@@ -1,10 +1,10 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex};
 
 use base64::Engine as _;
-use crew_protocol::{AttachedFile, AttachedFileKind};
+use crew_protocol::{AttachedFile, AttachedFileKind, FolderEntry};
 use serde::Serialize;
 
 use crate::providers::InlineImage;
@@ -16,6 +16,19 @@ const MAX_TEMP_FILE_BYTES: usize = 32 * 1024 * 1024;
 const SKIPPED_DIRS: &[&str] = &[
     "node_modules", ".git", "target", "dist", "build", ".next", ".venv", "vendor",
 ];
+/// A git-ignored folder holding more files than this is a cache or a build,
+/// not notes someone keeps out of the repo, and is left out whole.
+const IGNORED_FOLDER_BUDGET: usize = 1_000;
+/// All the ignored folders of a repo together.
+const IGNORED_BUDGET: usize = 2_000;
+/// More loose ignored files than this in one folder are generated, not kept.
+const LOOSE_IGNORED_BUDGET: usize = 20;
+/// Ignored folders that are always caches, however few files they hold.
+const CACHE_DIRS: &[&str] = &[
+    "__pycache__", ".cache", ".turbo", ".parcel-cache", ".pytest_cache", ".mypy_cache",
+    ".ruff_cache", ".gradle", ".terraform", ".svelte-kit", ".nuxt", "coverage", "Pods",
+    "DerivedData",
+];
 
 #[derive(Serialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -25,79 +38,76 @@ pub struct ProjectFile {
     pub relative: String,
 }
 
-/// `include` names folders indexed even when git ignores them or their name starts with a dot.
-pub fn list(cwd: &str, include: &[String]) -> Result<Vec<ProjectFile>, String> {
+/// What ⌘P matches against: what git tracks, what it has not seen yet, and
+/// the small folders it ignores (`.ai/`, `.env`), which are notes more often than builds.
+pub fn list(cwd: &str) -> Result<Vec<ProjectFile>, String> {
+    list_capped(cwd, MAX_PROJECT_FILES)
+}
+
+pub(crate) fn list_capped(cwd: &str, cap: usize) -> Result<Vec<ProjectFile>, String> {
     let root = PathBuf::from(cwd);
     if !root.is_dir() {
         return Err(format!("{cwd}: Not a directory"));
     }
     // git knows the ignore rules already; walking is the slow fallback.
-    let mut files = git_ls_files(&root).unwrap_or_else(|| walk_ignoring(&root));
-    let mut seen: HashSet<String> = files.iter().map(|file| file.relative.clone()).collect();
-    for folder in include.iter().filter_map(|folder| included_folder(folder)) {
-        let start = root.join(&folder);
-        if !start.is_dir() {
-            continue;
-        }
-        let before = files.len();
-        walk(&root, &start, &mut files, &seen);
-        seen.extend(files[before..].iter().map(|file| file.relative.clone()));
-    }
-    Ok(files)
+    Ok(git_ls_files(&root, cap).unwrap_or_else(|| walk_ignoring(&root, cap)))
 }
 
-/// A folder relative to the workspace; anything that could escape it, or name `.git`, is dropped.
-fn included_folder(folder: &str) -> Option<String> {
-    let trimmed = folder.trim().trim_matches('/');
-    let segments: Vec<&str> = trimmed.split('/').filter(|segment| !segment.is_empty()).collect();
-    if segments.is_empty()
-        || folder.trim().starts_with('/')
-        || segments.iter().any(|segment| *segment == "." || *segment == ".." || *segment == ".git")
-    {
-        return None;
-    }
-    Some(segments.join("/"))
-}
-
-fn git_ls_files(root: &Path) -> Option<Vec<ProjectFile>> {
+fn git_ls_files(root: &Path, cap: usize) -> Option<Vec<ProjectFile>> {
     let mut files = Vec::new();
-    ls_repo(root, root, &mut files)?;
+    ls_repo(root, root, &mut files, cap)?;
     Some(files)
 }
 
-/// git lists a nested repo as a single `dir/` entry, so each one is asked for its own files.
-fn ls_repo(root: &Path, repo: &Path, files: &mut Vec<ProjectFile>) -> Option<()> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(repo)
-        .args(["ls-files", "-co", "--exclude-standard", "-z"])
-        .output()
-        .ok()?;
+/// The NUL-separated paths `git ls-files` prints for `args`, relative to the repo.
+fn git_paths(repo: &Path, args: &[&str]) -> Option<Vec<String>> {
+    let output = Command::new("git").arg("-C").arg(repo).args(args).output().ok()?;
     if !output.status.success() {
         return None;
     }
-    let prefix = repo
-        .strip_prefix(root)
-        .ok()?
-        .to_string_lossy()
-        .replace('\\', "/");
+    Some(
+        output
+            .stdout
+            .split(|byte| *byte == 0)
+            .filter(|chunk| !chunk.is_empty())
+            .map(|chunk| String::from_utf8_lossy(chunk).replace('\\', "/"))
+            .collect(),
+    )
+}
 
-    for chunk in output.stdout.split(|byte| *byte == 0) {
-        if files.len() >= MAX_PROJECT_FILES {
-            break;
+fn repo_prefix(root: &Path, repo: &Path) -> Option<String> {
+    Some(repo.strip_prefix(root).ok()?.to_string_lossy().replace('\\', "/"))
+}
+
+fn under(prefix: &str, entry: String) -> String {
+    if prefix.is_empty() {
+        entry
+    } else {
+        format!("{prefix}/{entry}")
+    }
+}
+
+/// git lists a nested repo as a single `dir/` entry, so each one is asked for its own files.
+fn ls_repo(root: &Path, repo: &Path, files: &mut Vec<ProjectFile>, cap: usize) -> Option<()> {
+    // Both listings walk the tree; side by side they take the time of one.
+    let ignored = {
+        let repo = repo.to_path_buf();
+        std::thread::spawn(move || git_paths(&repo, &["ls-files", "-oi", "--exclude-standard", "--directory", "-z"]))
+    };
+    let entries = git_paths(repo, &["ls-files", "-co", "--exclude-standard", "-z"])?;
+    let prefix = repo_prefix(root, repo)?;
+    for entry in entries {
+        if files.len() >= cap {
+            return Some(());
         }
-        if chunk.is_empty() {
-            continue;
-        }
-        let entry = String::from_utf8_lossy(chunk).replace('\\', "/");
-        let relative = if prefix.is_empty() { entry } else { format!("{prefix}/{entry}") };
+        let relative = under(&prefix, entry);
         if has_skipped_dir(&relative) {
             continue;
         }
         if let Some(dir) = relative.strip_suffix('/') {
             let nested = root.join(dir);
             if nested.join(".git").is_dir() {
-                let _ = ls_repo(root, &nested, files);
+                let _ = ls_repo(root, &nested, files, cap);
             }
             continue;
         }
@@ -105,13 +115,67 @@ fn ls_repo(root: &Path, repo: &Path, files: &mut Vec<ProjectFile>) -> Option<()>
             files.push(file);
         }
     }
+    if let Ok(Some(ignored)) = ignored.join() {
+        ls_ignored(root, &prefix, ignored, files, cap);
+    }
     Some(())
+}
+
+/// What the repo ignores, each folder whole or not at all: `--directory` names
+/// an ignored folder without going in, and the walk gives up past the budget.
+/// Loose ignored files go by the folder they sit in: a `.env` is kept, a folder
+/// of compiled views is not.
+fn ls_ignored(root: &Path, prefix: &str, entries: Vec<String>, files: &mut Vec<ProjectFile>, cap: usize) {
+    let mut folders: Vec<String> = Vec::new();
+    let mut loose: HashMap<&str, Vec<String>> = HashMap::new();
+    let entries: Vec<String> = entries
+        .into_iter()
+        .map(|entry| under(prefix, entry))
+        .filter(|relative| {
+            !has_skipped_dir(relative) && !relative.split('/').any(|segment| CACHE_DIRS.contains(&segment))
+        })
+        .collect();
+    for relative in &entries {
+        // A folder of nothing but ignored files is listed, and so are its files.
+        if folders.iter().any(|folder| relative.starts_with(folder.as_str())) {
+            continue;
+        }
+        if relative.ends_with('/') {
+            folders.push(relative.clone());
+        } else {
+            let parent = relative.rsplit_once('/').map_or("", |(parent, _)| parent);
+            loose.entry(parent).or_default().push(relative.clone());
+        }
+    }
+    // Notes sit near the top (`.ai/`); uploads and caches pile up deep inside an
+    // app. The shallow ones go first, until everything ignored reaches the budget.
+    folders.sort_by_key(|folder| (folder.matches('/').count(), folder.clone()));
+    let mut left = IGNORED_BUDGET;
+    for folder in folders {
+        if files.len() >= cap || left == 0 {
+            break;
+        }
+        if let Some(found) = walk(root, &root.join(&folder), IGNORED_FOLDER_BUDGET.min(left)) {
+            left -= found.len();
+            files.extend(found.into_iter().take(cap - files.len()));
+        }
+    }
+    for (_, group) in loose.into_iter().filter(|(_, group)| group.len() <= LOOSE_IGNORED_BUDGET) {
+        for relative in group {
+            if files.len() >= cap {
+                return;
+            }
+            if let Some(file) = make_file(root, relative) {
+                files.push(file);
+            }
+        }
+    }
 }
 
 /// Outside a repo, nested repos list their own files through git, so ignored
 /// caches and logs cannot eat the cap before the real sources are reached.
 /// Worktrees and submodules (a `.git` file) are copies of other code and are skipped.
-fn walk_ignoring(root: &Path) -> Vec<ProjectFile> {
+fn walk_ignoring(root: &Path, cap: usize) -> Vec<ProjectFile> {
     let repos = Arc::new(Mutex::new(Vec::new()));
     let found = Arc::clone(&repos);
     let walker = ignore::WalkBuilder::new(root)
@@ -134,7 +198,7 @@ fn walk_ignoring(root: &Path) -> Vec<ProjectFile> {
         .build();
     let mut files = Vec::new();
     for entry in walker.flatten() {
-        if files.len() >= MAX_PROJECT_FILES {
+        if files.len() >= cap {
             break;
         }
         if !entry.path().is_file() {
@@ -150,42 +214,153 @@ fn walk_ignoring(root: &Path) -> Vec<ProjectFile> {
     let mut repos = std::mem::take(&mut *repos.lock().unwrap());
     repos.sort();
     for repo in repos {
-        if files.len() >= MAX_PROJECT_FILES {
+        if files.len() >= cap {
             break;
         }
-        let _ = ls_repo(root, &repo, &mut files);
+        let _ = ls_repo(root, &repo, &mut files, cap);
     }
     files
 }
 
+/// Every file under `start`, or None once there are more than `budget`.
+/// Folders holding a repo of their own are left out.
 /// Dot-named entries are kept, as git would list them; only the heavy folders are skipped.
-fn walk(root: &Path, start: &Path, files: &mut Vec<ProjectFile>, seen: &HashSet<String>) {
+fn walk(root: &Path, start: &Path, budget: usize) -> Option<Vec<ProjectFile>> {
+    let mut files = Vec::new();
     let mut stack = vec![start.to_path_buf()];
     while let Some(dir) = stack.pop() {
         let Ok(entries) = std::fs::read_dir(&dir) else {
             continue;
         };
         for entry in entries.flatten() {
-            if files.len() >= MAX_PROJECT_FILES {
-                return;
-            }
             let path = entry.path();
             let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
                 continue;
             };
-            if SKIPPED_DIRS.contains(&name) {
+            if SKIPPED_DIRS.contains(&name) || CACHE_DIRS.contains(&name) {
                 continue;
             }
-            if path.is_dir() {
-                stack.push(path);
-            } else if let Ok(relative) = path.strip_prefix(root) {
-                let relative = relative.to_string_lossy().replace('\\', "/");
-                if seen.contains(&relative) {
-                    continue;
+            // Not followed: a link out of the folder is not its size.
+            let Ok(kind) = entry.file_type() else {
+                continue;
+            };
+            if kind.is_dir() {
+                // Another repo or a worktree: someone else's code, or a copy of this one.
+                if !path.join(".git").exists() {
+                    stack.push(path);
                 }
-                if let Some(file) = make_file(root, relative) {
+                continue;
+            }
+            if files.len() >= budget {
+                return None;
+            }
+            if let Ok(relative) = path.strip_prefix(root) {
+                if let Some(file) = make_file(root, relative.to_string_lossy().replace('\\', "/")) {
                     files.push(file);
                 }
+            }
+        }
+    }
+    Some(files)
+}
+
+/// A folder's entries for the explorer: folders first, then by name as a person
+/// sorts them. Everything on disk is here, with what git ignores marked.
+pub fn list_folder(path: &str) -> Result<Vec<FolderEntry>, String> {
+    let dir = Path::new(path);
+    let mut entries: Vec<FolderEntry> = std::fs::read_dir(dir)
+        .map_err(|e| e.to_string())?
+        .flatten()
+        .filter_map(|entry| {
+            let name = entry.file_name().to_str()?.to_string();
+            if name == ".git" || name == ".DS_Store" {
+                return None;
+            }
+            let path = entry.path();
+            // Followed, so a linked folder opens like any other.
+            let is_dir = path.is_dir();
+            Some(FolderEntry { name, path: path.to_string_lossy().into_owned(), dir: is_dir, ignored: false })
+        })
+        .collect();
+    let ignored = git_ignored(dir, entries.iter().map(|entry| entry.name.as_str()));
+    for entry in &mut entries {
+        entry.ignored = ignored.contains(&entry.name);
+    }
+    entries.sort_by(|a, b| b.dir.cmp(&a.dir).then_with(|| natural(&a.name, &b.name)));
+    Ok(entries)
+}
+
+/// Which of `names`, in `dir`, git ignores. Outside a repo, none.
+fn git_ignored<'a>(dir: &Path, names: impl Iterator<Item = &'a str>) -> HashSet<String> {
+    use std::io::Write as _;
+    use std::process::Stdio;
+    let input: Vec<u8> = names.flat_map(|name| name.bytes().chain([0])).collect();
+    if input.is_empty() {
+        return HashSet::new();
+    }
+    let Ok(mut child) = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(["check-ignore", "-z", "--stdin"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+    else {
+        return HashSet::new();
+    };
+    // Written from its own thread: a folder big enough fills the pipe both ways.
+    let stdin = child.stdin.take();
+    let writer = std::thread::spawn(move || {
+        if let Some(mut stdin) = stdin {
+            let _ = stdin.write_all(&input);
+        }
+    });
+    let output = child.wait_with_output();
+    let _ = writer.join();
+    let Ok(output) = output else {
+        return HashSet::new();
+    };
+    output
+        .stdout
+        .split(|byte| *byte == 0)
+        .filter(|chunk| !chunk.is_empty())
+        .map(|chunk| String::from_utf8_lossy(chunk).into_owned())
+        .collect()
+}
+
+/// Case-insensitive, with runs of digits compared as numbers: `file2` before `file10`.
+fn natural(a: &str, b: &str) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    let (mut a, mut b) = (a.chars().peekable(), b.chars().peekable());
+    loop {
+        match (a.peek().copied(), b.peek().copied()) {
+            (None, None) => return Ordering::Equal,
+            (None, Some(_)) => return Ordering::Less,
+            (Some(_), None) => return Ordering::Greater,
+            (Some(x), Some(y)) if x.is_ascii_digit() && y.is_ascii_digit() => {
+                let take = |it: &mut std::iter::Peekable<std::str::Chars>| {
+                    let mut digits = String::new();
+                    while let Some(c) = it.peek().copied().filter(char::is_ascii_digit) {
+                        digits.push(c);
+                        it.next();
+                    }
+                    digits
+                };
+                let (x, y) = (take(&mut a), take(&mut b));
+                let (tx, ty) = (x.trim_start_matches('0'), y.trim_start_matches('0'));
+                let order = tx.len().cmp(&ty.len()).then_with(|| tx.cmp(ty));
+                if order != Ordering::Equal {
+                    return order;
+                }
+            }
+            (Some(x), Some(y)) => {
+                let order = x.to_lowercase().cmp(y.to_lowercase());
+                if order != Ordering::Equal {
+                    return order;
+                }
+                a.next();
+                b.next();
             }
         }
     }
@@ -351,7 +526,7 @@ fn safe_extension(extension: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{image_mime, included_folder, list, load_inline_images, safe_extension};
+    use super::{image_mime, list, list_folder, load_inline_images, safe_extension, IGNORED_FOLDER_BUDGET};
     use crew_protocol::{AttachedFile, AttachedFileKind};
 
     #[test]
@@ -395,13 +570,8 @@ mod tests {
         dir
     }
 
-    fn relatives(dir: &std::path::Path, include: &[&str]) -> Vec<String> {
-        let include: Vec<String> = include.iter().map(|folder| folder.to_string()).collect();
-        let mut found: Vec<String> = list(dir.to_str().unwrap(), &include)
-            .unwrap()
-            .into_iter()
-            .map(|file| file.relative)
-            .collect();
+    fn relatives(dir: &std::path::Path) -> Vec<String> {
+        let mut found: Vec<String> = list(dir.to_str().unwrap()).unwrap().into_iter().map(|file| file.relative).collect();
         found.sort();
         found
     }
@@ -409,20 +579,7 @@ mod tests {
     #[test]
     fn walk_keeps_dot_entries_but_skips_heavy_folders() {
         let dir = scratch(&[".ai/plan.md", ".env.example", "src/main.rs", "node_modules/x/index.js", ".git/HEAD"]);
-        assert_eq!(relatives(&dir, &[]), [".ai/plan.md", ".env.example", "src/main.rs"]);
-    }
-
-    #[test]
-    fn include_brings_back_folders_git_ignores_once() {
-        let dir = scratch(&[".gitignore", ".ai/plan.md", ".ai/notes/a.md", ".ai/node_modules/x.js", "logs/run.log"]);
-        std::fs::write(dir.join(".gitignore"), ".ai/\nlogs/\n").unwrap();
-        let init = std::process::Command::new("git").arg("-C").arg(&dir).arg("init").output().unwrap();
-        assert!(init.status.success());
-        assert_eq!(relatives(&dir, &[]), [".gitignore"]);
-        assert_eq!(
-            relatives(&dir, &[".ai", "/.ai/", "missing", "../"]),
-            [".ai/notes/a.md", ".ai/plan.md", ".gitignore"]
-        );
+        assert_eq!(relatives(&dir), [".ai/plan.md", ".env.example", "src/main.rs"]);
     }
 
     fn git_init(dir: &std::path::Path) {
@@ -431,7 +588,29 @@ mod tests {
     }
 
     #[test]
-    fn walk_outside_a_repo_respects_nested_gitignores() {
+    fn small_ignored_folders_are_listed_and_caches_are_not() {
+        let dir = scratch(&[
+            ".gitignore",
+            ".ai/plan.md",
+            ".ai/notes/a.md",
+            ".ai/node_modules/x.js",
+            ".env",
+            "src/app.ts",
+            "src/__pycache__/app.pyc",
+            "node_modules/x/index.js",
+        ]);
+        let big = dir.join("generated");
+        std::fs::create_dir_all(&big).unwrap();
+        for index in 0..=IGNORED_FOLDER_BUDGET {
+            std::fs::write(big.join(format!("{index}.json")), "").unwrap();
+        }
+        std::fs::write(dir.join(".gitignore"), ".ai/\n.env\ngenerated/\nnode_modules/\n__pycache__/\n").unwrap();
+        git_init(&dir);
+        assert_eq!(relatives(&dir), [".ai/notes/a.md", ".ai/plan.md", ".env", ".gitignore", "src/app.ts"]);
+    }
+
+    #[test]
+    fn walk_outside_a_repo_lists_nested_repos_through_git() {
         let dir = scratch(&[
             "api/.gitignore",
             "api/app.php",
@@ -450,26 +629,40 @@ mod tests {
             .output()
             .unwrap();
         assert!(separate.status.success());
-        assert_eq!(relatives(&dir, &[]), ["api/.gitignore", "api/app.php", "web/src/index.ts"]);
+        assert_eq!(
+            relatives(&dir),
+            ["api/.gitignore", "api/app.php", "api/storage/logs/a.log", "web/src/index.ts"]
+        );
     }
 
     #[test]
     fn nested_repos_inside_a_repo_are_listed() {
-        let dir = scratch(&["README.md", "api/.gitignore", "api/app.php", "api/storage/a.log"]);
-        std::fs::write(dir.join("api/.gitignore"), "storage/\n").unwrap();
+        let dir = scratch(&["README.md", "api/.gitignore", "api/app.php", "api/cache/big/a"]);
+        std::fs::write(dir.join("api/.gitignore"), ".cache/\n").unwrap();
+        std::fs::rename(dir.join("api/cache"), dir.join("api/.cache")).unwrap();
         git_init(&dir);
         git_init(&dir.join("api"));
-        assert_eq!(relatives(&dir, &[]), ["README.md", "api/.gitignore", "api/app.php"]);
+        assert_eq!(relatives(&dir), ["README.md", "api/.gitignore", "api/app.php"]);
     }
 
     #[test]
-    fn included_folder_stays_inside_the_workspace() {
-        assert_eq!(included_folder(" .ai/ ").as_deref(), Some(".ai"));
-        assert_eq!(included_folder("docs//private").as_deref(), Some("docs/private"));
-        assert_eq!(included_folder("/etc"), None);
-        assert_eq!(included_folder("../secrets"), None);
-        assert_eq!(included_folder("a/../../b"), None);
-        assert_eq!(included_folder(".git"), None);
-        assert_eq!(included_folder("  "), None);
+    fn list_folder_puts_folders_first_and_marks_what_git_ignores() {
+        let dir = scratch(&[".gitignore", "b.txt", "file10.md", "file2.md", "A/x", "logs/x.log", ".DS_Store"]);
+        std::fs::write(dir.join(".gitignore"), "logs/\n").unwrap();
+        git_init(&dir);
+        let entries = list_folder(dir.to_str().unwrap()).unwrap();
+        let shown: Vec<(&str, bool, bool)> =
+            entries.iter().map(|entry| (entry.name.as_str(), entry.dir, entry.ignored)).collect();
+        assert_eq!(
+            shown,
+            [
+                ("A", true, false),
+                ("logs", true, true),
+                (".gitignore", false, false),
+                ("b.txt", false, false),
+                ("file2.md", false, false),
+                ("file10.md", false, false),
+            ]
+        );
     }
 }
