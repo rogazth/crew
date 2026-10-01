@@ -53,7 +53,7 @@ const cargo = await readFile(path.join(ROOT, "Cargo.toml"), "utf8");
 const crateVersion = cargo.match(/^version\s*=\s*"([^"]+)"/m)?.[1];
 if (crateVersion !== version) fail(`package.json is ${version} but Cargo.toml is ${crateVersion}.`);
 
-// crew rides in the bundle beside crewd; "Install `crew` Command…" links to it.
+// crew rides in the bundle beside crewd; Settings › General › Command line links to it.
 await run("cargo", ["build", "--release", "-p", "crewd", "-p", "crew-cli"]);
 // The Linux daemons Crew installs on other machines ship inside the app.
 await run("node", ["scripts/crewd-linux.mjs"]);

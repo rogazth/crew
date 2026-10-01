@@ -15,7 +15,7 @@ function run(command, args) {
   });
 }
 
-// crew rides in the bundle beside crewd; "Install `crew` Command…" links to it.
+// crew rides in the bundle beside crewd; Settings › General › Command line links to it.
 await run("cargo", ["build", "--release", "-p", "crewd", "-p", "crew-cli"]);
 await run("node", ["scripts/crewd-linux.mjs"]);
 await run("npm", ["run", "build"]);
