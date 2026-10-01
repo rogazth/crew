@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { CaseSensitiveIcon, ChevronRightIcon, EllipsisIcon, RegexIcon, WholeWordIcon, type LucideIcon } from "lucide-react";
 import { FileTypeIcon } from "../FileTypeIcon";
+import { TextInput } from "../kit";
 import { useVirtualRows } from "../../hooks/useVirtualRows";
 import * as api from "../../lib/api";
 import type { FileMatches, FileSearchResult, LineMatch } from "../../lib/protocol";
@@ -19,7 +20,7 @@ type Answer = { key: string } & ({ result: FileSearchResult; error: null } | { r
 
 type Row = { kind: "file"; file: FileMatches } | { kind: "line"; file: FileMatches; line: LineMatch };
 
-const ROW = 24;
+const ROW = 28;
 /** Long enough that a held key does not start a search per character. */
 const DEBOUNCE_MS = 150;
 
@@ -159,7 +160,8 @@ export function SearchPanel({ root, focus, onOpenFile }: Props) {
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex shrink-0 flex-col gap-1.5 px-2 pt-2 pb-1.5">
         <div className="flex items-center gap-1">
-          <div className="flex h-7 min-w-0 flex-1 items-center rounded-md bg-canvas pr-0.5 ring ring-border focus-within:ring-[1.5px] focus-within:ring-focus/50">
+          {/* The kit's TextInput, with the flags inside it as VS Code has them. */}
+          <div className="flex h-8 min-w-0 flex-1 items-center rounded-md bg-canvas pr-1 ring ring-border transition-shadow focus-within:ring-[1.5px] focus-within:ring-focus/50">
             <input
               ref={input}
               aria-label="Search in files"
@@ -168,7 +170,7 @@ export function SearchPanel({ root, focus, onOpenFile }: Props) {
               value={query}
               onChange={(event) => setQuery(event.target.value)}
               onKeyDown={onInputKey}
-              className="h-full min-w-0 flex-1 bg-transparent px-2 text-[13px] outline-none placeholder:text-placeholder"
+              className="h-full min-w-0 flex-1 bg-transparent px-2.5 outline-none placeholder:text-placeholder"
             />
             <Flag icon={CaseSensitiveIcon} label="Match case" on={caseSensitive} onChange={setCaseSensitive} />
             <Flag icon={WholeWordIcon} label="Match whole word" on={wholeWord} onChange={setWholeWord} />
@@ -209,7 +211,7 @@ export function SearchPanel({ root, focus, onOpenFile }: Props) {
                   open(row);
                 }}
                 style={{ top: index * ROW, height: ROW }}
-                className="absolute inset-x-1 flex items-center gap-1.5 rounded-md pr-2 text-[13px] hover:bg-hover group-focus/results:data-cursor:bg-selected"
+                className="absolute inset-x-1.5 flex items-center gap-1.5 rounded-chrome pr-2 hover:bg-hover group-focus-visible/results:data-cursor:bg-hover group-focus-visible/results:data-cursor:ring-1 group-focus-visible/results:data-cursor:ring-border-strong"
               >
                 {row.kind === "file" ? (
                   <FileRow file={row.file} open={!collapsed.has(row.file.path)} />
@@ -250,7 +252,7 @@ function LineRow({ line }: { line: LineMatch }) {
     <span className="min-w-0 flex-1 truncate pl-9 text-text/85" title={`Line ${line.line}`}>
       {previewRuns(line).map((run, index) =>
         run.hit ? (
-          <mark key={index} className="rounded-[3px] bg-warning/30 text-text">
+          <mark key={index} className="rounded-[2px] bg-find text-text">
             {run.text}
           </mark>
         ) : (
@@ -280,7 +282,7 @@ function Summary({
     const files = result.files.length;
     text = `${count.format(result.matches)} ${result.matches === 1 ? "result" : "results"} in ${count.format(files)} ${
       files === 1 ? "file" : "files"
-    }${result.truncated ? ", the first ones" : ""}`;
+    }${result.truncated ? ". There are more: narrow the search to see them." : ""}`;
   } else if (searching) text = "Searching…";
   if (!text) return null;
   return (
@@ -329,13 +331,7 @@ function Globs({
   return (
     <label className="flex flex-col gap-0.5">
       <span className="px-0.5 text-[11px] text-text-muted">{label}</span>
-      <input
-        spellCheck={false}
-        placeholder={placeholder}
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        className="h-7 rounded-md bg-canvas px-2 text-[13px] ring ring-border outline-none placeholder:text-placeholder focus:ring-[1.5px] focus:ring-focus/50"
-      />
+      <TextInput placeholder={placeholder} value={value} onChange={(event) => onChange(event.target.value)} />
     </label>
   );
 }

@@ -215,8 +215,8 @@ const THEME = EditorView.theme({
   ".cm-md-chip": { padding: "0 8px", borderRadius: "999px", background: CARD },
 
   // Find
-  ".cm-md-find": { background: "light-dark(oklch(91% 0.1 95), oklch(50% 0.1 95 / 0.5))", borderRadius: "2px" },
-  ".cm-md-find-current": { background: "light-dark(oklch(82% 0.15 70), oklch(62% 0.15 65 / 0.7))" },
+  ".cm-md-find": { background: "var(--color-find)", borderRadius: "2px" },
+  ".cm-md-find-current": { background: "var(--color-find-current)" },
 
   // Link completion
   ".cm-tooltip.cm-tooltip-autocomplete": {

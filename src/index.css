@@ -40,6 +40,10 @@
   --color-success: light-dark(oklch(59.6% 0.145 163.2), oklch(76.5% 0.16 163));
   --color-info: light-dark(oklch(60% 0.19 255), oklch(70% 0.15 252));
 
+  /* Text a search found: the editor's find, and the matches in ⌘⇧F's results. */
+  --color-find: light-dark(oklch(91% 0.1 95), oklch(50% 0.1 95 / 0.5));
+  --color-find-current: light-dark(oklch(82% 0.15 70), oklch(62% 0.15 65 / 0.7));
+
   /* The one blue in a neutral palette: a link has to read as a link. */
   --color-link: light-dark(oklch(55% 0.185 258), oklch(75% 0.13 250));
   /* Ink mixed over transparent, not a fixed grey: the same card reads right on

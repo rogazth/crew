@@ -18,7 +18,7 @@ type Props = {
   onOpenFile: (file: ProjectFile) => void;
 };
 
-const ROW = 24;
+const ROW = 28;
 const INDENT = 12;
 
 /** The workspace's folders, opened a level at a time, like VS Code's. */
@@ -134,9 +134,9 @@ export function FileTree({ root, active, live, focusToken, tree, onOpenFile }: P
               title={relativeTo(root, entry.path)}
               onClick={() => open(row)}
               style={{ top: index * ROW, height: ROW, paddingLeft: 8 + row.depth * INDENT }}
-              className={`absolute inset-x-1 flex items-center gap-1.5 rounded-md pr-2 text-[13px] ${
+              className={`absolute inset-x-1.5 flex items-center gap-1.5 rounded-chrome pr-2 ${
                 entry.ignored ? "text-text-muted" : ""
-              } ${entry.path === active ? "bg-selected" : "hover:bg-hover"} group-focus/tree:data-cursor:ring-1 group-focus/tree:data-cursor:ring-focus/60`}
+              } ${entry.path === active ? "bg-selected" : "hover:bg-hover group-focus-visible/tree:data-cursor:bg-hover"} group-focus-visible/tree:data-cursor:ring-1 group-focus-visible/tree:data-cursor:ring-border-strong`}
             >
               {entry.dir ? (
                 row.loading ? (

@@ -63,7 +63,8 @@ export function Explorer({ root, width, onResize, mode, onMode, focus, active, o
       className="relative flex h-full shrink-0 flex-col border-l border-border bg-sidebar"
     >
       <div className="flex h-9 shrink-0 items-center gap-1 border-b border-border pr-1.5 pl-2">
-        <div role="tablist" aria-label="Explorer" className="flex min-w-0 flex-1 items-center gap-0.5">
+        {/* The file header's Preview/Source toggle, so the two headers read as one. */}
+        <div role="tablist" aria-label="Explorer" className="inline-flex h-7 shrink-0 items-center gap-0.5 rounded-md bg-card p-0.5">
           {MODES.map((item) => (
             <button
               key={item.mode}
@@ -72,12 +73,13 @@ export function Explorer({ root, width, onResize, mode, onMode, focus, active, o
               aria-selected={mode === item.mode}
               title={`${item.label} (${commandKeys(item.command)})`}
               onClick={() => onMode(item.mode)}
-              className="h-6 rounded-md px-2 text-[12px] font-medium text-text-muted outline-none transition-colors hover:text-text focus-visible:ring-2 focus-visible:ring-focus/50 aria-selected:bg-selected aria-selected:text-text"
+              className="flex h-6 items-center rounded-[5px] px-2 text-[12px] text-text-muted outline-none transition-colors hover:text-text focus-visible:ring-2 focus-visible:ring-focus/50 aria-selected:bg-canvas aria-selected:text-text aria-selected:shadow-sm"
             >
               {item.label}
             </button>
           ))}
         </div>
+        <div className="flex-1" />
         {mode === "files" && (
           <>
             <HeaderButton icon={RefreshCwIcon} label="Refresh" onClick={() => void tree.refresh()} />
@@ -122,9 +124,9 @@ function HeaderButton({ icon: Glyph, label, onClick }: { icon: typeof RefreshCwI
       aria-label={label}
       title={label}
       onClick={onClick}
-      className="grid size-6 shrink-0 place-items-center rounded-md text-icon outline-none transition-colors hover:bg-hover hover:text-text focus-visible:ring-2 focus-visible:ring-focus/50"
+      className="grid size-6 shrink-0 place-items-center rounded-md text-icon outline-none transition-colors hover:bg-hover hover:text-text focus-visible:bg-hover"
     >
-      <Glyph className="size-3.5" />
+      <Glyph className="size-4" />
     </button>
   );
 }
