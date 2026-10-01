@@ -435,17 +435,19 @@ export function SessionSidebar(props: SessionSidebarProps) {
                         </SortableList>
                       </div>
                     )}
-                    {agents
-                      .filter((agent) => nested.has(agent.id))
-                      .map((agent) => (
+                    {agents.flatMap((agent) => {
+                      const started = nested.get(agent.id);
+                      if (!started) return [];
+                      return [
                         <div key={agent.id} className="flex flex-col gap-0.5 pt-0.5" aria-label={`Sessions ${agent.name} started`}>
                           <div className="flex h-6 items-center gap-1.5 px-2 text-[11px] text-text-muted">
                             <AgentAvatar seed={agent.id} bare className="size-4" />
                             <span className="truncate">{agent.name}</span>
                           </div>
-                          {(nested.get(agent.id) ?? []).map((child) => sessionRow(child, true))}
-                        </div>
-                      ))}
+                          {started.map((child) => sessionRow(child, true))}
+                        </div>,
+                      ];
+                    })}
                     {more("agents")}
                     {terminals.length > 0 && (
                       <div className="flex flex-col gap-0.5 pt-0.5">
