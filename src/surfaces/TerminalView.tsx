@@ -224,18 +224,18 @@ export function TerminalView({
       event.clipboardData?.setData("text/plain", text);
       event.preventDefault();
     };
+    // Text is xterm's to paste. A screenshot is not text: xterm would send an
+    // empty paste, which only a CLI on this Mac can answer by reading the
+    // clipboard itself. It is written to the workspace's machine and pasted as
+    // a path. Captured, because xterm stops the event at its textarea.
     const onPaste = (event: ClipboardEvent) => {
-      const text = event.clipboardData?.getData("text/plain");
-      if (text) {
-        event.preventDefault();
-        term.paste(text);
-        return;
-      }
+      if (event.clipboardData?.getData("text/plain")) return;
       const image = [...(event.clipboardData?.files ?? [])].find((file) =>
         file.type.startsWith("image/"),
       );
       if (!image) return;
       event.preventDefault();
+      event.stopPropagation();
       void api
         .writeTempFile(image)
         .then((path) => {
@@ -245,7 +245,7 @@ export function TerminalView({
         .catch(() => {});
     };
     host.addEventListener("copy", onCopy);
-    host.addEventListener("paste", onPaste);
+    host.addEventListener("paste", onPaste, true);
 
     const flushAck = () => {
       ackTimer = 0;
@@ -423,7 +423,7 @@ export function TerminalView({
       observer.disconnect();
       DARK_SCHEME.removeEventListener("change", onScheme);
       host.removeEventListener("copy", onCopy);
-      host.removeEventListener("paste", onPaste);
+      host.removeEventListener("paste", onPaste, true);
       input.dispose();
       bell.dispose();
       title.dispose();
