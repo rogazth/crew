@@ -391,7 +391,11 @@ impl SessionTools {
                 if !events.is_empty() {
                     news.push((row.clone(), events));
                 }
-                running |= matches!(row.status.as_str(), "starting" | "working") || self.turns.is_running(&row.id);
+                // Idle with a message waiting is a turn about to start: the
+                // drain at the end of the last one has not got to it yet.
+                let queued = matches!(row.status.as_str(), "idle" | "error")
+                    && mailbox::waiting_count(&self.store, &row.id)? > 0;
+                running |= matches!(row.status.as_str(), "starting" | "working") || self.turns.is_running(&row.id) || queued;
                 rows.push(row);
             }
             if !news.is_empty() {
@@ -511,13 +515,15 @@ impl SessionTools {
         let row = self.owned(caller, &id)?;
         match mode.as_str() {
             "auto" | "queue" => {}
-            "steer" => {
+            "steer" if row.provider != "claude" => {
                 return Err(format!(
-                    "steer is not available yet: {} runs one process per turn, so there is no live turn to steer. \
-                     Use mode queue: it is read the moment this turn ends.",
+                    "steer needs a CLI that takes a message in the middle of a turn. Claude does; {} runs each \
+                     turn as one command, so there is nothing to steer. Use mode queue: it is read the moment \
+                     this turn ends.",
                     row.provider
                 ))
             }
+            "steer" => {}
             other => return Err(format!("mode is auto, queue or steer, not \"{other}\"")),
         }
         match row.status.as_str() {
@@ -537,6 +543,17 @@ impl SessionTools {
             _ => {}
         }
         let cursor = self.turns.transcripts().len(&row.id) as i64;
+        // Into the turn that is running, when Claude can take it there; a turn
+        // that is not running yet, or has just ended, gets it queued instead.
+        if mode == "steer" && self.turns.is_running(&row.id) && self.turns.steer(&row.id, &body, caller.sender()).is_ok() {
+            return Ok(json!({
+                "session": row.id,
+                "steered": true,
+                "cursor": cursor,
+                "note": "It reads this at its next step and takes it into the turn it is in, so this turn's report \
+                         answers it. Should the turn end before it gets there, it becomes the next turn."
+            }));
+        }
         mailbox::enqueue(&self.store, &row.id, &caller.sender(), &body)?;
         // The same drain an agent's box has: an idle session starts a turn on
         // the oldest message now; a busy one takes it when its turn ends.
@@ -886,13 +903,13 @@ pub fn catalog() -> Vec<Tool> {
         },
         Tool {
             name: "send_to_session",
-            description: "Give a session you started more work, in the same conversation: it remembers its earlier turns. Idle (or after an error), it starts a turn now; busy, the text waits and is read the moment its turn ends (mode queue, the same as auto). steer, changing a running turn, is not available yet. A session waiting for an answer takes respond_to_session, not this; an exited one takes nothing.",
+            description: "Give a session you started more work, in the same conversation: it remembers its earlier turns. Idle (or after an error), it starts a turn now; busy, the text waits and is read the moment its turn ends (auto and queue). mode steer puts it into the running turn instead, read at the CLI's next step, so that turn's report answers it: Claude takes that; the other CLIs run each turn as one command and are refused. A session waiting for an answer takes respond_to_session, not this; an exited one takes nothing.",
             schema: json!({
                 "type": "object",
                 "properties": {
                     "session": session_arg(),
                     "text": { "type": "string" },
-                    "mode": { "type": "string", "enum": ["auto", "queue", "steer"], "description": "auto (the default) or queue; steer is not available yet." }
+                    "mode": { "type": "string", "enum": ["auto", "queue", "steer"], "description": "auto (the default) and queue wait for the turn to end; steer goes into the running turn (Claude only)." }
                 },
                 "required": ["session", "text"]
             }),
@@ -1015,6 +1032,65 @@ print(json.dumps({{"type": "step_finish", "sessionID": sid, "part": {{"id": "sf"
         (path.to_string_lossy().into_owned(), log)
     }
 
+    /// A Claude Code on stream-json: it answers the initialize request, echoes
+    /// each user message as it takes it in (`--replay-user-messages`), and
+    /// folds whatever arrived during a turn's `SLEEP n` into that turn.
+    fn fake_claude(dir: &Path) -> String {
+        let path = dir.join("fake-claude");
+        std::fs::write(
+            &path,
+            r#"#!/usr/bin/env python3
+import json, sys, threading, time, re, uuid, queue
+args = sys.argv[1:]
+sid = args[args.index("--resume") + 1] if "--resume" in args else args[args.index("--session-id") + 1]
+replay = "--replay-user-messages" in args
+inbox = queue.Queue()
+def out(obj):
+    print(json.dumps(obj), flush=True)
+def text_of(rec):
+    return rec["message"]["content"][-1]["text"]
+def reader():
+    for line in sys.stdin:
+        try:
+            rec = json.loads(line)
+        except Exception:
+            continue
+        if rec.get("type") == "control_request":
+            out({"type": "control_response", "response": {"subtype": "success", "request_id": rec["request_id"], "response": {}}})
+        elif rec.get("type") == "user":
+            inbox.put(rec)
+threading.Thread(target=reader, daemon=True).start()
+while True:
+    first = inbox.get()
+    heard = [text_of(first)]
+    if replay:
+        out({"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": heard[0]}]}, "session_id": sid})
+    b = re.search(r"BACKGROUND (\d+(?:\.\d+)?)", heard[0])
+    if b:
+        out({"type": "system", "subtype": "task_started", "task_id": "bg1", "is_backgrounded": True, "session_id": sid})
+        out({"type": "assistant", "message": {"id": "m0", "role": "assistant", "content": [{"type": "text", "text": "started it in the background"}]}, "session_id": sid})
+        out({"type": "result", "subtype": "success", "is_error": False, "result": "started", "session_id": sid, "total_cost_usd": 0, "usage": {}})
+        time.sleep(float(b.group(1)))
+        out({"type": "system", "subtype": "task_notification", "task_id": "bg1", "status": "completed", "session_id": sid})
+        heard.append("the background command finished")
+    m = re.search(r"SLEEP (\d+(?:\.\d+)?)", heard[0])
+    if m:
+        time.sleep(float(m.group(1)))
+    while not inbox.empty():
+        more = text_of(inbox.get())
+        if replay:
+            out({"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": more}]}, "session_id": sid})
+        heard.append(more)
+    reply = "report: " + " + ".join(h.strip().splitlines()[-1] for h in heard)
+    out({"type": "assistant", "message": {"id": "m" + uuid.uuid4().hex[:6], "role": "assistant", "content": [{"type": "text", "text": reply}]}, "session_id": sid})
+    out({"type": "result", "subtype": "success", "is_error": False, "result": reply, "session_id": sid, "total_cost_usd": 0, "usage": {}})
+"#,
+        )
+        .expect("write fake");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        path.to_string_lossy().into_owned()
+    }
+
     struct Fanout(TurnHost);
 
     impl crate::agent::AgentEvents for Fanout {
@@ -1032,6 +1108,7 @@ print(json.dumps({{"type": "step_finish", "sessionID": sid, "part": {{"id": "sf"
         workspace: String,
         log: PathBuf,
         made: Arc<Mutex<Vec<String>>>,
+        dir: PathBuf,
     }
 
     fn world() -> World {
@@ -1047,6 +1124,7 @@ print(json.dumps({{"type": "step_finish", "sessionID": sid, "part": {{"id": "sf"
         let made = Arc::new(Mutex::new(Vec::new()));
         let seen = made.clone();
         let trees = dir.join("trees");
+        let dir_kept = dir.clone();
         let tools = SessionTools::with_worktrees(
             turns.clone(),
             Arc::new(move |row: &Session| seen.lock().unwrap().push(row.id.clone())),
@@ -1063,7 +1141,7 @@ print(json.dumps({{"type": "step_finish", "sessionID": sid, "part": {{"id": "sf"
                 })
             }),
         );
-        World { turns, tools, workspace, log, made }
+        World { turns, tools, workspace, log, made, dir: dir_kept }
     }
 
     impl World {
@@ -1251,7 +1329,47 @@ print(json.dumps({{"type": "step_finish", "sessionID": sid, "part": {{"id": "sf"
         let second = w.wait(&parent, &id, json!({}));
         assert_eq!(second["sessions"][0]["report"], "report: then this", "{second}");
         let steer = w.call(&parent, "send_to_session", json!({ "session": id, "text": "x", "mode": "steer" }));
-        assert!(steer.is_err_and(|e| e.contains("steer is not available")));
+        assert!(steer.is_err_and(|e| e.contains("Use mode queue")), "an opencode turn was steered");
+    }
+
+    #[test]
+    fn a_claude_session_takes_a_steer_into_the_turn_it_is_in() {
+        let w = world();
+        w.turns.override_binary("claude", fake_claude(&w.dir));
+        let parent = w.session("terminal", "shell", "full");
+        let started = w.call(&parent, "start_session", json!({ "provider": "claude", "prompt": "SLEEP 2" })).expect("start");
+        let id = started["id"].as_str().unwrap().to_string();
+        std::thread::sleep(Duration::from_millis(700));
+        let steered = w.call(&parent, "send_to_session", json!({ "session": id, "text": "and this", "mode": "steer" })).expect("steer");
+        assert_eq!(steered["steered"], true, "{steered}");
+        let out = w.wait(&parent, &id, json!({}));
+        assert_eq!(out["sessions"][0]["report"], "report: SLEEP 2 + and this", "{out}");
+        // One turn took both, and the steer shows where it was read.
+        let read = w.call(&parent, "read_session", json!({ "session": id })).expect("read");
+        let text = read["text"].as_str().unwrap();
+        let steer = text.find("] and this").expect("the steer is not in the transcript");
+        assert!(steer < text.find("report: SLEEP 2 + and this").unwrap(), "{text}");
+        assert_eq!(text.matches("Turn ended").count(), 1, "{text}");
+        // Nothing running: a steer starts a turn, like any message.
+        w.settle(&id);
+        let idle = w.call(&parent, "send_to_session", json!({ "session": id, "text": "next", "mode": "steer" })).expect("send");
+        assert_eq!(idle["delivered"], true, "{idle}");
+        assert_eq!(w.wait(&parent, &id, json!({}))["sessions"][0]["report"], "report: next");
+    }
+
+    /// Claude carries on by itself when a command it backgrounded ends, with
+    /// a second result. The child's report is what it says then.
+    #[test]
+    fn a_claude_session_turn_waits_for_what_it_left_running_in_the_background() {
+        let w = world();
+        w.turns.override_binary("claude", fake_claude(&w.dir));
+        let parent = w.session("terminal", "shell", "full");
+        let started = w.call(&parent, "start_session", json!({ "provider": "claude", "prompt": "BACKGROUND 1.5" })).expect("start");
+        let id = started["id"].as_str().unwrap().to_string();
+        let out = w.wait(&parent, &id, json!({}));
+        assert_eq!(out["sessions"][0]["report"], "report: BACKGROUND 1.5 + the background command finished", "{out}");
+        let read = w.call(&parent, "read_session", json!({ "session": id })).expect("read");
+        assert_eq!(read["text"].as_str().unwrap().matches("Turn ended").count(), 1, "{read}");
     }
 
     /// A turn's CLI is installed on the turn's own thread. A message that

@@ -18,6 +18,10 @@ pub struct ClaudeSpawn {
     /// A conversation to carry on (`--resume`), for a child session; an agent's
     /// turns never resume, they start clean with the tail (`session_id`).
     pub resume: Option<String>,
+    /// Have Claude echo each user message as it takes it in. A message
+    /// written mid-turn (a steer) is read at its next step, not when it
+    /// arrives; the echo is how Crew knows it was read.
+    pub replay_user_messages: bool,
     pub system_prompt: Option<String>,
     pub autonomy: Autonomy,
     pub mcp_config: Option<String>,
@@ -64,11 +68,36 @@ pub fn build_claude_spawn_args(input: &ClaudeSpawn) -> Vec<String> {
         args.push("--session-id".into());
         args.push(session_id.into());
     }
+    if input.replay_user_messages {
+        args.push("--replay-user-messages".into());
+    }
     if let Some(mcp) = input.mcp_config.as_deref().filter(|c| !c.is_empty()) {
         args.push("--mcp-config".into());
         args.push(mcp.into());
     }
     args
+}
+
+/// The text of a user message Claude echoed back (`--replay-user-messages`),
+/// when it is one: a string, or the text parts of a list. A tool result is a
+/// user message too, and has none.
+pub fn replayed_text(rec: &Map<String, Value>) -> Option<String> {
+    let content = rec.get("message").and_then(as_record)?.get("content")?;
+    let text = match content {
+        Value::String(text) => text.clone(),
+        Value::Array(parts) => parts
+            .iter()
+            .filter_map(|part| {
+                let part = as_record(part)?;
+                (string_field(Some(part), "type").as_deref() == Some("text"))
+                    .then(|| part.get("text").and_then(Value::as_str).unwrap_or_default().to_string())
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+        _ => return None,
+    };
+    let text = text.trim().to_string();
+    (!text.is_empty()).then_some(text)
 }
 
 pub use super::persona_prompt;

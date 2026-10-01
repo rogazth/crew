@@ -53,6 +53,12 @@ const INIT_TIMEOUT: Duration = Duration::from_secs(15);
 /// How long a provider may stay silent before its first line.
 const FIRST_OUTPUT_TIMEOUT: Duration = Duration::from_secs(120);
 const INTERRUPT_GRACE: Duration = Duration::from_millis(1500);
+/// How long a child's Claude turn may wait, after a `result`, for the
+/// background commands it left running: Claude picks the conversation up by
+/// itself when they finish, with another `result`. Past this, the turn ends on
+/// the result it had, so a server left running in the background cannot hold
+/// it forever.
+const BACKGROUND_GRACE: Duration = Duration::from_secs(600);
 /// A self-addressed letter is how an agent keeps working. This many laps in a
 /// row without anyone else speaking is a runaway, not a plan.
 const MAX_SELF_TURNS: u32 = 25;
@@ -217,8 +223,29 @@ struct InFlightTool {
     partial_json: String,
 }
 
+/// A message written into a running Claude turn, not yet read by it.
+struct Steer {
+    /// Exactly what was written, to know its echo.
+    sent: String,
+    /// What the transcript shows, and who it is from.
+    text: String,
+    from: crew_protocol::AgentRef,
+}
+
 struct ClaudeLive {
     claude_session_id: String,
+    /// Steers written and not yet echoed, oldest first.
+    steers: Vec<Steer>,
+    /// Background commands Claude started and has not heard the end of, by
+    /// task id. While any is open, a child's `result` is not the end of its
+    /// turn: the CLI carries on when they finish.
+    background: HashSet<String>,
+    /// Whether a `result` waits for those: a child's turn does, since its
+    /// report is the last thing it says. An agent's ends on its first.
+    waits_for_background: bool,
+    /// Results that ended nothing yet, so the grace timer can tell its own
+    /// wait from a later one.
+    held_results: u64,
     approvals: HashMap<u64, PendingApproval>,
     questions: HashMap<u64, PendingQuestion>,
     next_ui: u64,
@@ -1104,11 +1131,46 @@ impl TurnHost {
         let outcome = self
             .block_on(turn_rx)
             .unwrap_or(TurnOutcome::Failed("Turn channel closed".into()));
+        // A steer the turn ended before reading is not lost: it waits in the
+        // box, and the end of this turn hands it over as the next one.
+        let unread = match self.lock().get_mut(&session_id) {
+            Some(Live::Claude(live)) => std::mem::take(&mut live.steers),
+            _ => Vec::new(),
+        };
+        for steer in unread {
+            let _ = mailbox::enqueue(&self.store, &session_id, &steer.from, &steer.text);
+        }
         // The agent is disposable: the turn is over, so the CLI goes. What it
         // knew is in the transcript, and the next turn is handed the tail.
         self.agents.kill(&session_id);
         self.detach(&session_id);
         outcome
+    }
+
+    /// Write a message into a Claude child's running turn. Claude reads it at
+    /// its next step and takes it into the turn it is in; its echo puts the
+    /// message in the transcript. Refused when no Claude turn is live to take
+    /// it, so the caller can queue it instead.
+    pub fn steer(&self, session_id: &str, text: &str, from: crew_protocol::AgentRef) -> Result<(), String> {
+        let sent = child_envelope(&from, text);
+        let message = {
+            let mut map = self.lock();
+            let Some(Live::Claude(live)) = map.get_mut(session_id) else {
+                return Err("No Claude turn is running to take it.".into());
+            };
+            if !live.active || live.cancelled || !live.initialized {
+                return Err("No Claude turn is running to take it.".into());
+            }
+            live.steers.push(Steer { sent: sent.clone(), text: text.to_string(), from });
+            build_claude_user_message(&live.claude_session_id, None, &sent, &[], &[])
+        };
+        if let Err(error) = self.agents.write(session_id, &serde_json::to_string(&message).unwrap_or_default()) {
+            if let Some(Live::Claude(live)) = self.lock().get_mut(session_id) {
+                live.steers.retain(|steer| steer.sent != sent);
+            }
+            return Err(error);
+        }
+        Ok(())
     }
 
     /// How much a turn may do alone: the session's own autonomy, unless
@@ -1136,6 +1198,10 @@ impl TurnHost {
 
         let live = ClaudeLive {
             claude_session_id: claude_session_id.clone(),
+            steers: Vec::new(),
+            background: HashSet::new(),
+            waits_for_background: session.kind == "child",
+            held_results: 0,
             approvals: HashMap::new(),
             questions: HashMap::new(),
             next_ui: 1,
@@ -1170,6 +1236,7 @@ impl TurnHost {
             model: Some(session.model.clone()).filter(|m| !m.is_empty()),
             session_id: Some(claude_session_id.clone()),
             resume,
+            replay_user_messages: session.kind == "child",
             system_prompt: Some(persona),
             autonomy,
             mcp_config: mcp.map(|(command, args)| crate::providers::claude::claude_mcp_config(&command, &args)),
@@ -1569,6 +1636,7 @@ impl TurnHost {
 
         let mut events = Vec::new();
         let mut bind: Option<String> = None;
+        let mut hold: Option<u64> = None;
         {
             let mut map = self.lock();
             let Some(Live::Claude(live)) = map.get_mut(session_id) else {
@@ -1597,6 +1665,31 @@ impl TurnHost {
                 }
                 return;
             }
+            if type_name.as_deref() == Some("system") {
+                match subtype.as_deref() {
+                    Some("task_started") if rec.get("is_backgrounded").and_then(Value::as_bool) == Some(true) => {
+                        if let Some(task) = string_field(Some(&rec), "task_id") {
+                            live.background.insert(task);
+                        }
+                    }
+                    Some("task_notification") => {
+                        if let Some(task) = string_field(Some(&rec), "task_id") {
+                            live.background.remove(&task);
+                        }
+                    }
+                    Some("task_updated") => {
+                        let done = rec
+                            .get("patch")
+                            .and_then(|patch| patch.get("status"))
+                            .and_then(Value::as_str)
+                            .is_some_and(|status| matches!(status, "completed" | "failed" | "killed" | "stopped"));
+                        if let (true, Some(task)) = (done, string_field(Some(&rec), "task_id")) {
+                            live.background.remove(&task);
+                        }
+                    }
+                    _ => {}
+                }
+            }
             if is_compact_boundary(&rec) {
                 events.push(HarnessEvent::SessionNote {
                     message: "Context compacted".into(),
@@ -1606,6 +1699,19 @@ impl TurnHost {
             } else if type_name.as_deref() == Some("assistant") {
                 claude_assistant(live, &rec, &mut events);
             } else if type_name.as_deref() == Some("user") {
+                // A steer Claude has just taken in: it goes in the transcript
+                // here, where the model read it.
+                if let Some(echo) = crate::providers::claude::replayed_text(&rec) {
+                    if let Some(at) = live.steers.iter().position(|steer| steer.sent.trim() == echo) {
+                        let steer = live.steers.remove(at);
+                        events.push(HarnessEvent::UserMessage {
+                            text: steer.text,
+                            hidden: None,
+                            files: None,
+                            from_agent: Some(steer.from),
+                        });
+                    }
+                }
                 for result in tool_results_from_user_message(&rec) {
                     // The result names only the call, so the input the row was
                     // opened with is what turns it back into a detail.
@@ -1632,12 +1738,19 @@ impl TurnHost {
                 events.push(HarnessEvent::TurnCompleted {
                     usage: Some(claude_turn_usage(&rec)),
                 });
-                live.active = false;
-                if let Some(tx) = live.turn_tx.take() {
-                    let _ = tx.send(match failed {
-                        Some(message) => TurnOutcome::Failed(message),
-                        None => TurnOutcome::Completed,
-                    });
+                if live.waits_for_background && !live.background.is_empty() && failed.is_none() && !live.cancelled {
+                    // Not over: Claude carries on by itself once its
+                    // background commands finish, and that is the report.
+                    live.held_results += 1;
+                    hold = Some(live.held_results);
+                } else {
+                    live.active = false;
+                    if let Some(tx) = live.turn_tx.take() {
+                        let _ = tx.send(match failed {
+                            Some(message) => TurnOutcome::Failed(message),
+                            None => TurnOutcome::Completed,
+                        });
+                    }
                 }
             }
         }
@@ -1651,6 +1764,19 @@ impl TurnHost {
         }
         for event in events {
             self.transcripts.apply(session_id, event);
+        }
+        if let Some(held) = hold {
+            let host = self.clone();
+            let id = session_id.to_string();
+            self.after(BACKGROUND_GRACE, move || {
+                let still = matches!(
+                    host.lock().get(&id),
+                    Some(Live::Claude(live)) if live.active && live.held_results == held
+                );
+                if still {
+                    host.signal(&id, TurnOutcome::Completed);
+                }
+            });
         }
     }
 
@@ -2441,6 +2567,10 @@ impl TurnHost {
             id.to_string(),
             Live::Claude(Box::new(ClaudeLive {
                 claude_session_id: String::new(),
+                steers: Vec::new(),
+                background: HashSet::new(),
+                waits_for_background: false,
+                held_results: 0,
                 approvals: HashMap::new(),
                 questions: HashMap::new(),
                 next_ui: 1,

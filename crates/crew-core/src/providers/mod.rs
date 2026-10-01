@@ -510,6 +510,7 @@ mod tests {
             model: Some("claude-haiku-4-5-20251001".into()),
             session_id: Some("sid".into()),
             resume: None,
+            replay_user_messages: false,
             system_prompt: Some(persona.clone()),
             autonomy: Autonomy::Full,
             mcp_config: None,
@@ -533,6 +534,7 @@ mod tests {
                 model: None,
                 session_id: Some("sid".into()),
                 resume: None,
+                replay_user_messages: false,
                 system_prompt: Some("persona".into()),
                 autonomy: Autonomy::Ask,
                 mcp_config: None,
@@ -576,12 +578,14 @@ mod tests {
             model: None,
             session_id: Some("sid".into()),
             resume: Some("conv-1".into()),
+            replay_user_messages: true,
             system_prompt: None,
             autonomy: Autonomy::Ask,
             mcp_config: None,
         });
         assert!(claude.windows(2).any(|pair| pair == ["--resume", "conv-1"]), "{claude:?}");
         assert!(!claude.contains(&"--session-id".to_string()), "a resume that also names a new session: {claude:?}");
+        assert!(claude.contains(&"--replay-user-messages".to_string()), "a steer could never be seen read: {claude:?}");
 
         let codex = codex::build_codex_spawn_args(&codex::CodexSpawn {
             prompt: "more".into(),
