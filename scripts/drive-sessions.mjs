@@ -16,7 +16,7 @@
 import { spawn, execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { connect } from "node:net";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 
 const REPO = new URL("..", import.meta.url).pathname;
@@ -48,7 +48,11 @@ function installed(provider) {
 // --- the daemon -------------------------------------------------------------
 
 const dataDir = mkdtempSync(join(tmpdir(), "crew-sl-"));
-const repo = join(dataDir, "repo");
+// Named apart from every other run: Crew keeps the worktrees it makes under
+// ~/.crew/worktrees/<repo name>, and this run removes its own when it ends.
+const repoName = `drive-sessions-${Math.random().toString(36).slice(2, 8)}`;
+const repo = join(dataDir, repoName);
+const worktreesHome = join(homedir(), ".crew", "worktrees", repoName);
 mkdirSync(repo);
 const git = (...args) => execFileSync("git", args, { cwd: repo, stdio: "pipe" }).toString().trim();
 git("init", "-q", "-b", "main");
@@ -264,15 +268,28 @@ async function untilStatus(id, wanted, seconds = 300) {
   throw new Error(`${id} never got to ${wanted.join("/")} (it is ${(await row(id)).status})`);
 }
 
-/** Until the session's transcript shows a tool started: its CLI is mid-turn, in the shell. */
-async function untilTool(token, id, seconds = 180) {
+/**
+ * Until the session's CLI has been running its turn for `settle` seconds: mid-turn.
+ * Not "until a tool shows": opencode reports a tool only once it has finished.
+ */
+async function untilTool(token, id, settle = 12, seconds = 180) {
   const until = Date.now() + seconds * 1000;
   while (Date.now() < until) {
-    const read = await must(token, "read_session", { session: id });
-    if (/\[tool\]/.test(read.text)) return read;
-    await sleep(1000);
+    const now = await row(id);
+    if (now.status === "working" && cliIn(await cwdOf(now))) {
+      await sleep(settle * 1000);
+      const later = await row(id);
+      assert(later.status === "working", `${id} ended its turn before it could be caught mid-turn: ${later.status}`);
+      return later;
+    }
+    await sleep(500);
   }
-  throw new Error(`${id} never ran a tool`);
+  throw new Error(`${id} never got going`);
+}
+
+/** The folder a session's CLI runs in, as /proc shows it. */
+async function cwdOf(session) {
+  return execFileSync("realpath", [session.worktree ?? repo]).toString().trim();
 }
 
 /** The process group of the CLI crewd runs for a session working in `cwd`. */
@@ -484,6 +501,7 @@ const scenarios = {
     assert(stopped.status === "exited", `stopped: ${JSON.stringify(stopped)}`);
     const read = await must(shell.token, "read_session", { session: id, include_tools: true });
     assert(/sleep 90/.test(read.text) && /Stopped by/.test(read.text), read.text);
+    assert(!/\[assistant\]\W*DONE\W*$/m.test(read.text), "the turn had finished before the stop");
     const sent = await tool(shell.token, "send_to_session", { session: id, text: "more" });
     assert(!sent.ok && /exited/.test(sent.text), "an exited session took a message");
     const waited = await must(shell.token, "wait_for_session", { sessions: [id], timeout_s: 5 });
@@ -538,9 +556,8 @@ const scenarios = {
     const shell = await terminal(`i-${provider}`);
     const id = await start(shell.token, provider, "Run the shell command `sleep 60`, then reply with the word DONE.", { worktree: "new" });
     await untilTool(shell.token, id);
-    const tree = (await row(id)).worktree;
-    const pid = cliIn(execFileSync("realpath", [tree]).toString().trim()) ?? cliIn(tree);
-    assert(pid, `no CLI process in ${tree}`);
+    const pid = cliIn(await cwdOf(await row(id)));
+    assert(pid, "no CLI process for the session");
     process.kill(-pid, "SIGKILL");
     const out = await waitEvent(shell.token, id, 120);
     assert(out.sessions[0].event === "error" && out.sessions[0].status === "error", JSON.stringify(out));
@@ -648,6 +665,7 @@ for (const provider of ALL.filter((p) => !usable.includes(p))) {
   for (const scenario of SCENARIOS) record(scenario, provider, { status: "not available", note: "CLI not installed" });
 }
 await stopDaemon();
+rmSync(worktreesHome, { recursive: true, force: true });
 
 console.log("\n| Scenario | " + ALL.join(" | ") + " |");
 console.log("| --- |" + ALL.map(() => " --- |").join(""));

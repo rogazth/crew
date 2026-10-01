@@ -68,6 +68,8 @@ The app ships a CLI. **Settings › General › Command line** links it into `~/
 crew status                        # is Crew running, and who does it take you for
 crew agents list                   # the agents of the workspace you are in
 crew agents send Reviewer "look at the diff on main"
+crew sessions start codex --worktree new -- fix the login test   # another CLI on a job
+crew sessions wait --timeout-s 60 <id>   # until it ends its turn: its report
 crew processes list                # and start, stop, restart, logs -f, add, edit…
 crew tabs snapshot                 # the browser: open, navigate, click, fill, screenshot…
 crew --help                        # every group; `crew <group> --help` for its commands
@@ -88,6 +90,7 @@ node scripts/drive.mjs              # two agents and a message between them, hea
 SCENARIO=code node scripts/drive.mjs
 SCENARIO=loop node scripts/drive.mjs
 SCENARIO=routine node scripts/drive.mjs
+node scripts/drive-sessions.mjs     # the session tools on every CLI installed, scenario × provider
 node scripts/sessions.mjs           # claude, opencode and cursor tabs: status and title, end to end
 node scripts/shot.mjs               # a screenshot of the chat against the mock
 npm run app:design                  # the app on a seeded profile of its own (port 1421)
