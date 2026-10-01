@@ -75,7 +75,8 @@ const daemon = vi.hoisted(() => {
 
 vi.mock("./client", () => ({ client: daemon.client }));
 
-import { killPty, spawnPty, subscribePty } from "./pty";
+import { detachPty, killPty, spawnPty, subscribePty } from "./pty";
+import { isRunning } from "./runningSessions";
 
 const decoder = new TextDecoder();
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
@@ -130,5 +131,54 @@ describe("a terminal's first output", () => {
 
     expect(second.text).toBe("second$ ");
     expect(first.text).toBe("");
+  });
+});
+
+describe("a session's terminal whose tab closes", () => {
+  beforeEach(() => daemon.reset());
+
+  it("is let go of, runs on, and its reopened tab attaches to the same process", async () => {
+    const id = "ws/session:s1";
+    const first = screen();
+    const stopFirst = subscribePty(id, first.write, () => {});
+    const spawned = spawnPty(id, "/repo", ["claude"], 80, 24, { session: "s1", reuse: true });
+    const stream = daemon.start(id, "claude> hello\r\n");
+    daemon.spawns[0]!.resolve(stream);
+    await spawned;
+    await flush();
+    expect(first.text).toBe("claude> hello\r\n");
+    expect(isRunning("s1")).toBe(true);
+
+    stopFirst();
+    await detachPty(id);
+    expect(daemon.client.request).toHaveBeenCalledWith("pty_detach", { id });
+    expect(daemon.client.request).not.toHaveBeenCalledWith("pty_kill", { id });
+    expect(isRunning("s1"), "closing the tab stopped the session").toBe(true);
+
+    // crewd keeps the process under `reuse` and hands back its stream: the ring repaints the new pane.
+    const second = screen();
+    subscribePty(id, second.write, () => {});
+    const reopened = spawnPty(id, "/repo", ["claude"], 80, 24, { session: "s1", reuse: true });
+    daemon.spawns[1]!.resolve(stream);
+    await reopened;
+    await flush();
+    expect(second.text).toBe("claude> hello\r\n");
+
+    await killPty(id);
+    expect(isRunning("s1")).toBe(false);
+  });
+
+  it("ignores a spawn that answers after its pane let go", async () => {
+    const id = "ws/session:s2";
+    const pane = screen();
+    const stop = subscribePty(id, pane.write, () => {});
+    const spawned = spawnPty(id, "/repo", ["claude"], 80, 24, { session: "s2", reuse: true });
+    stop();
+    void detachPty(id);
+    daemon.spawns[0]!.resolve(daemon.start(id, "late$ "));
+    await spawned;
+    await flush();
+    expect(pane.text).toBe("");
+    expect(daemon.client.request).not.toHaveBeenCalledWith("pty_attach", expect.objectContaining({ id }));
   });
 });

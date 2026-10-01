@@ -106,7 +106,7 @@ export function useNavigation({ tabs, sessions, confirms, removeSession, closePa
 
   /**
    * A session tab that never held a turn goes with its session; any other
-   * leaves the session in the sidebar. Running terminals and files with
+   * leaves the session in the sidebar, a terminal's CLI running on. Files with
    * unsaved edits ask first, once for the whole batch; closing discards the edits.
    */
   const closeTabs = useCallback(
@@ -122,7 +122,6 @@ export function useNavigation({ tabs, sessions, confirms, removeSession, closePa
       if (targets.length === 0) return;
       const unsaved = unsavedTabs(targets);
       confirms.askCloseTabs(
-        [...owned.values()],
         unsaved.map(fileName),
         targets.length,
         () => {

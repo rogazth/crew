@@ -87,6 +87,9 @@ struct PtyState {
     acked: u64,
     /// Supervised only: frames are dropped until the viewer attaches again.
     behind: bool,
+    /// The window let go of it, its tab closed. It drains as if read: a CLI
+    /// left working must not block on a write nobody is there to take.
+    detached: bool,
 }
 
 pub struct PtyAttached {
@@ -127,6 +130,7 @@ impl LivePty {
                 emitted: 0,
                 acked: 0,
                 behind: false,
+                detached: false,
             }),
             credit: Condvar::new(),
             supervised: None,
@@ -329,6 +333,47 @@ impl PtyHost {
         }
     }
 
+    /// Ends every terminal whose id `doomed` picks, as `kill` would each.
+    pub fn kill_where(&self, doomed: impl Fn(&str) -> bool) {
+        let _spawning = self.inner.spawning.lock().unwrap_or_else(|e| e.into_inner());
+        let ids: Vec<String> = self
+            .inner
+            .sessions
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .keys()
+            .filter(|id| doomed(id))
+            .cloned()
+            .collect();
+        let waits: Vec<_> = ids
+            .iter()
+            .filter_map(|id| self.remove(id))
+            .filter_map(|live| {
+                let wait = terminate(&live);
+                close_fd(live.master_fd);
+                wait
+            })
+            .collect();
+        for wait in waits {
+            let _ = wait.join();
+        }
+    }
+
+    /// Ends the terminals a Crew session runs in, wherever the window put them.
+    pub fn kill_session(&self, session: &str) {
+        self.kill_where(|id| session_of(id) == Some(session));
+    }
+
+    /// Whether a terminal of the session still runs, its tab open or not.
+    pub fn runs_session(&self, session: &str) -> bool {
+        self.inner
+            .sessions
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .keys()
+            .any(|id| session_of(id) == Some(session))
+    }
+
     /// Like `spawn`, but a process still running under `id` is kept: it gets
     /// the new size and its stream id comes back. `prepare` runs only when a
     /// process is started, so what it mints (a token, a lease number) is never
@@ -491,11 +536,12 @@ impl PtyHost {
             .ok_or_else(|| "Terminal is not running".to_string())?;
         let mut state = live.state.lock().unwrap_or_else(|e| e.into_inner());
         let start = from.max(state.ring.start);
-        if live.supervised.is_some() {
+        if live.supervised.is_some() || state.detached {
             // The replay is all this viewer has in flight: its credit starts
             // over from there, and live frames flow to it again.
             state.acked = start;
             state.behind = false;
+            state.detached = false;
         } else if from < state.ring.start {
             state.acked = state.acked.max(state.ring.start);
             live.credit.notify_all();
@@ -545,6 +591,20 @@ impl PtyHost {
                 let _ = resize_fd(live.master_fd, cols, rows);
             }
         });
+    }
+
+    /// Nobody watches it any more, but it runs on: until the next attach it
+    /// drains without waiting for credit, into the ring a reattach replays.
+    /// The stream id it had, for whoever has to stop sending its frames.
+    pub fn detach(&self, id: &str) -> Option<u32> {
+        let live = self.get(id)?;
+        if live.supervised.is_none() {
+            let mut state = live.state.lock().unwrap_or_else(|e| e.into_inner());
+            state.detached = true;
+            state.acked = state.emitted;
+            live.credit.notify_all();
+        }
+        Some(live.stream_id)
     }
 
     pub fn is_live(&self, id: &str) -> bool {
@@ -621,10 +681,10 @@ fn spawn_unix(
     };
     cmd.envs(env);
 
-    // A session's pane is `<workspace>/session:<id>`. Hooks passed on the
-    // command line are the same for every session (Codex asks the user to
-    // review any it has not seen), so they name their session from here.
-    if let Some((_, session)) = id.rsplit_once("/session:") {
+    // Hooks passed on the command line are the same for every session (Codex
+    // asks the user to review any it has not seen), so they name their
+    // session from here.
+    if let Some(session) = session_of(&id) {
         cmd.env(SESSION_ENV, session);
     }
 
@@ -846,6 +906,11 @@ fn apply_path(cmd: &mut std::process::Command) {
     cmd.env("PATH", crate::shell_path::joined());
 }
 
+/// The Crew session a terminal runs: its id is `<workspace>/session:<id>`.
+pub fn session_of(id: &str) -> Option<&str> {
+    id.rsplit_once("/session:").map(|(_, session)| session)
+}
+
 /// The child was started with setsid(), so its pid is also its process group.
 fn terminate(live: &Arc<LivePty>) -> Option<thread::JoinHandle<()>> {
     if live.pid <= 1 || live.exited.load(Ordering::Acquire) {
@@ -1026,6 +1091,9 @@ fn emit_data(host: &PtyHost, stream_id: u32, bytes: &[u8]) {
         let mut state = live.state.lock().unwrap_or_else(|e| e.into_inner());
         state.ring.push(bytes);
         state.emitted += bytes.len() as u64;
+        if state.detached {
+            state.acked = state.emitted;
+        }
         if live.supervised.is_some() {
             match forward(&mut state) {
                 Forward::Send => {}
@@ -1401,6 +1469,52 @@ mod tests {
     }
 
     #[test]
+    fn a_detached_terminal_drains_and_its_next_attach_takes_credit_again() {
+        let host = PtyHost::new();
+        let recorder = Arc::new(Recorder::default());
+        host.set_events(recorder.clone());
+        // `yes` until killed: a CLI that keeps writing with its tab closed.
+        let endless = vec!["/bin/sh".into(), "-c".into(), "yes 0123456789abcdef".into()];
+        host.spawn("t".into(), "/".into(), endless, 80, 24, None).expect("spawn");
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while emitted(&host, "t") < FLOW_HIGH && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(20));
+        }
+        assert!(host.detach("t").is_some());
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while emitted(&host, "t") < 8 * FLOW_HIGH && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(20));
+        }
+        let drained = emitted(&host, "t");
+        assert!(drained >= 8 * FLOW_HIGH, "a detached terminal stalled at {drained}");
+
+        // Attached again, the replay is what it has in flight: nobody acks, so it stops.
+        let attached = host.attach("t", 0, |_, _, _| {}).expect("attach");
+        assert!(attached.start > 0, "the ring let go of the start");
+        thread::sleep(Duration::from_millis(500));
+        let held = emitted(&host, "t");
+        thread::sleep(Duration::from_millis(500));
+        assert!(emitted(&host, "t") - held <= 2 * READ_CHUNK as u64, "drained with no credit after the attach");
+        host.kill("t");
+    }
+
+    #[test]
+    fn kill_session_ends_that_sessions_terminals_and_no_other() {
+        let host = PtyHost::new();
+        let sleep = || vec!["/bin/sh".to_string(), "-c".to_string(), "sleep 30".to_string()];
+        for id in ["ws/session:a", "ws@/wt/session:a", "ws/session:ab", "ws/stub:terminal:x"] {
+            host.spawn(id.into(), "/".into(), sleep(), 80, 24, None).expect("spawn");
+        }
+        assert!(host.runs_session("a"));
+        host.kill_session("a");
+        assert!(!host.runs_session("a"));
+        assert!(!host.is_live("ws/session:a") && !host.is_live("ws@/wt/session:a"));
+        assert!(host.runs_session("ab"), "a session whose id starts the same was taken too");
+        assert!(host.is_live("ws/stub:terminal:x"));
+        host.kill_all();
+    }
+
+    #[test]
     fn a_supervised_pty_drains_everything_with_nobody_watching() {
         let host = PtyHost::new();
         let recorder = Arc::new(Recorder::default());
@@ -1432,6 +1546,7 @@ mod tests {
             emitted: VIEWER_HIGH,
             acked: 0,
             behind: false,
+            detached: false,
         };
         assert_eq!(forward(&mut state), Forward::Send);
         state.emitted += 1;

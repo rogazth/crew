@@ -71,8 +71,13 @@ const REAL_CLOCK: Clock = {
 
 type Options = {
   report: (status: SessionStatus) => void;
-  /** Whether the process still has something running, for the close prompt. */
+  /** Whether the process still has something running, for the stop prompt. */
   onBusy?: (busy: boolean) => void;
+  /**
+   * The process is up already: a CLI whose tab closed while it ran on. A
+   * stored `working` may well be so.
+   */
+  running?: boolean;
   clock?: Clock;
 };
 
@@ -108,12 +113,17 @@ export class TerminalActivity {
   readonly #onBusy: (busy: boolean) => void;
   readonly #clock: Clock;
 
-  constructor(initial: SessionStatus, watched: boolean, { report, onBusy = () => {}, clock = REAL_CLOCK }: Options) {
+  constructor(initial: SessionStatus, watched: boolean, { report, onBusy = () => {}, running = false, clock = REAL_CLOCK }: Options) {
     this.#status = initial;
     this.#watched = watched;
     this.#report = report;
     this.#onBusy = onBusy;
     this.#clock = clock;
+    if (running && initial === "working") {
+      this.#busy = true;
+      this.#onBusy(true);
+      return;
+    }
     // Nothing runs before the process spawns: a stored `working` is left over
     // from a window that closed mid-turn, and a watched tab has been read.
     if (initial === "working" || (watched && initial !== "error")) this.#push("idle");

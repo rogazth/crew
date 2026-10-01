@@ -78,6 +78,8 @@ export const EXPAND_WORKTREE: MenuAction = { id: "expand", label: "Expand Tabs",
 export const CLOSE_WORKTREE: MenuAction = { id: "close-group", label: "Close Worktree Tabs", icon: "close", hotkey: "W" };
 export const COPY_NAME: MenuAction = { id: "copy-name", label: "Copy Name", icon: "copy", hotkey: "C" };
 export const MARK_READ: MenuAction = { id: "mark-read", label: "Mark as Read", icon: "read", hotkey: "M" };
+/** Ends a terminal session's CLI, which closing its tab leaves running. */
+export const STOP: MenuAction = { id: "stop", label: "Stop", icon: "stop", hotkey: "S" };
 
 export function menuFromEvent(event: MouseEvent): MenuPoint {
   event.preventDefault();

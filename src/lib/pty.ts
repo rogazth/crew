@@ -1,5 +1,6 @@
 import { client } from "./client";
 import type { PtyAttached, PtyError, PtyExit, PtySpawn } from "./protocol";
+import { markRunning, markStopped, sessionOfPty } from "./runningSessions";
 
 const encoder = new TextEncoder();
 const dataHandlers = new Map<string, (bytes: Uint8Array) => void>();
@@ -95,10 +96,13 @@ export async function spawnPty(
   generations.set(id, generation);
   const params: PtySpawn = { id, cwd, command, cols, rows, reuse, ...(dark === undefined ? {} : { dark }), ...(session ? { session } : {}) };
   const streamId = await client.request<number>("pty_spawn", params);
+  const owner = session ? sessionOfPty(id) : null;
+  if (owner) markRunning(owner.session, owner.workspace);
   if (generations.get(id) !== generation) {
     // The pane was torn down (or respawned) while this spawn was in flight, as
-    // StrictMode does to every new terminal. Its process is killed or replaced
-    // already; wiring it would write its output into the pane that replaced it.
+    // StrictMode does to every new terminal. Its process is killed, replaced or
+    // let go already; wiring it would write its output into the pane that
+    // replaced it.
     client.openStream(streamId, () => {}, id)();
     return streamId;
   }
@@ -177,12 +181,36 @@ export const resizePty = (id: string, cols: number, rows: number): Promise<void>
 export const ackPty = (id: string, processed: number): Promise<void> =>
   client.request("pty_ack", { id, processed });
 
-export const killPty = (id: string): Promise<void> => {
+/** Stops watching `id`: a spawn still in flight is stale, and its frames go nowhere. */
+function release(id: string) {
   generations.set(id, (generations.get(id) ?? 0) + 1);
   streams.get(id)?.stop();
   streams.delete(id);
   dataHandlers.delete(id);
   attachHandlers.delete(id);
   delivered.delete(id);
+}
+
+/** The process of `id` ended, whether or not a pane watches it. */
+export function onPtyExit(id: string, onExit: (code: number | null) => void): () => void {
+  return client.on("pty-exit", (payload) => {
+    const event = payload as PtyExit;
+    if (event.id === id) onExit(event.code);
+  });
+}
+
+export const killPty = (id: string): Promise<void> => {
+  release(id);
+  const owner = sessionOfPty(id);
+  if (owner) markStopped(owner.session);
   return client.request("pty_kill", { id });
+};
+
+/**
+ * Lets go of `id` and leaves its process running: crewd keeps its output in
+ * the ring, and the next `spawnPty` with `reuse` attaches to it again.
+ */
+export const detachPty = (id: string): Promise<void> => {
+  release(id);
+  return client.request("pty_detach", { id });
 };

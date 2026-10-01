@@ -199,6 +199,20 @@ describe("TerminalActivity", () => {
     expect(reported).toEqual(["idle"]);
   });
 
+  it("keeps the working of a CLI whose tab closed while it ran, until its hook says the turn ended", () => {
+    const reported: SessionStatus[] = [];
+    const busy: boolean[] = [];
+    const activity = new TerminalActivity("working", false, {
+      report: (s) => reported.push(s),
+      onBusy: (b) => busy.push(b),
+      running: true,
+    });
+    expect(reported).toEqual([]);
+    expect(busy).toEqual([true]);
+    activity.hooked(false, false);
+    expect(reported).toEqual(["done"]);
+  });
+
   it("keeps an unread flag until the tab is opened", () => {
     const { reported } = track("done");
     expect(reported).toEqual([]);

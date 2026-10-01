@@ -27,7 +27,7 @@ import { DefaultChatSurface } from "./chat/DefaultChatSurface";
 type Props = {
   session: Session;
   /** The terminal the CLI runs in, which the chat types into. */
-  paneId: string;
+  ptyId: string;
   cwd: string;
   active: boolean;
   /** A screen the CLI stopped on that a message cannot answer. */
@@ -47,7 +47,7 @@ const pending = new Map<string, Queued[]>();
  * the terminal is the only thing talking to the provider: the chat reads its
  * history, types into it, and answers what it asks with the keys it expects.
  */
-export function SessionChat({ session, paneId, cwd, active, blocked, busy, onShowTerminal }: Props) {
+export function SessionChat({ session, ptyId, cwd, active, blocked, busy, onShowTerminal }: Props) {
   const id = session.id;
   const [draft, setDraft] = useState(() => drafts.get(id) ?? "");
   const [files, setFiles] = useState<AttachedFile[]>([]);
@@ -78,7 +78,7 @@ export function SessionChat({ session, paneId, cwd, active, blocked, busy, onSho
   const ready = !blocked && (!hooked || !startsAtLaunch(session.provider) || live?.started === true);
   const ask = live?.ask ?? null;
 
-  const queue = useMemo(() => ptyQueue(paneId, (data) => api.writePty(paneId, data)), [paneId]);
+  const queue = useMemo(() => ptyQueue(ptyId, (data) => api.writePty(ptyId, data)), [ptyId]);
   const type = useCallback((keys: Keystroke[]) => queue.send(keys).done, [queue]);
 
   const editDraft = useCallback(

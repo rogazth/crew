@@ -9,26 +9,28 @@ import type { Session, SessionStatus } from '../lib/types';
  * when it wants you. Opening the tab reads it.
  *
  * Whether the terminal is *running* something is tracked either way, watched or
- * not: closing the tab ends the process, and that prompt cannot depend on which
- * tab happened to be in front.
+ * not: stopping it asks first, and that prompt cannot depend on which tab
+ * happened to be in front. `running`: the CLI is up already, its tab closed.
  */
 export function useSessionActivity(
   session: Session,
   active: boolean,
   onStatus: (id: string, status: SessionStatus) => void,
+  running = false,
 ) {
   const id = session.id;
   const activity = useRef<TerminalActivity | null>(null);
-  const latest = useRef({ onStatus, status: session.status, active });
+  const latest = useRef({ onStatus, status: session.status, active, running });
   useEffect(() => {
-    latest.current = { onStatus, status: session.status, active };
+    latest.current = { onStatus, status: session.status, active, running };
   });
 
   useEffect(() => {
-    const { status, active: watched } = latest.current;
+    const { status, active: watched, running } = latest.current;
     const tracker = new TerminalActivity(status, watched, {
       report: (next) => latest.current.onStatus(id, next),
       onBusy: (busy) => setBusy(id, busy),
+      running,
     });
     activity.current = tracker;
     return () => {

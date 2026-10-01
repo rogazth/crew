@@ -100,6 +100,9 @@ export const staleSessions = (days: number): Promise<number> => client.request("
 /** Deletes them; every window hears `sessions-deleted`. */
 export const expireSessions = (days: number): Promise<string[]> => client.request("sessions_expire", { days });
 
+/** Ends the terminal the session runs in, its tab open or closed; the session stays. */
+export const stopSession = (id: string): Promise<void> => client.request("session_stop", { id });
+
 /** An unnamed terminal nothing was said in: closing its tab can delete it. */
 export const isSessionDisposable = (id: string): Promise<boolean> =>
   client.request("session_is_disposable", { id });
@@ -361,4 +364,4 @@ export const listDir = (envId: string, path: string): Promise<DirListing> =>
 
 export const machineInfo = (envId: string): Promise<MachineInfo> => client.request("daemon_info", {}, envId);
 
-export { ackPty, attachPty, killPty, reattachPty, resizePty, spawnPty, writePty } from "./pty";
+export { ackPty, attachPty, detachPty, killPty, onPtyExit, reattachPty, resizePty, spawnPty, writePty } from "./pty";

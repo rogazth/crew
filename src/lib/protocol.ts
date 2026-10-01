@@ -536,6 +536,11 @@ export type PtyAttach = { id: string, from: number, };
 
 export type PtyAttached = { start: number, emitted: number, };
 
+/**
+ * The window let go of a terminal it watched; the process runs on.
+ */
+export type PtyDetach = { id: string, };
+
 export type PtyError = { id: string, error: string, };
 
 export type PtyExit = { id: string, code: number | null, };

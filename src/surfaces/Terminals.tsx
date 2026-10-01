@@ -15,9 +15,10 @@ import { BYPASS_KEY } from '../lib/permissions';
 import { providerOf } from '../lib/providers';
 import { reportsLive, sessionSurface } from '../lib/sessionView';
 import { readLive, subscribeLive } from '../lib/sessionLive';
+import { useRunningSessions } from '../lib/runningSessions';
 import { sessionCommand } from '../lib/sessionCommand';
 import { titleName } from '../lib/terminalStatus';
-import { isTerminalTab, relativeTo } from '../lib/tabs';
+import { isTerminalTab, relativeTo, sessionPtyId } from '../lib/tabs';
 import { activeTerminal } from '../lib/terminalFocus';
 import { clamp, DEFAULT_TERMINAL_PREFS, LIMITS } from '../lib/terminalPrefs';
 import { BackToChat, SessionChat } from './SessionChat';
@@ -35,12 +36,18 @@ type Props = {
 };
 
 /**
- * Every open terminal tab stays mounted, shown or not, and of every workspace:
- * unmounting a terminal kills its process, so neither a tab switch nor a
- * workspace switch may end a claude session. Only closing the tab does.
+ * Every open terminal tab stays mounted, shown or not, and of every workspace,
+ * so a tab or workspace switch never has to repaint a terminal from the ring.
+ * Unmounting a shell's terminal kills it. A session's lets go of its CLI,
+ * which runs on in crewd: its tab reopens onto the same process, and only
+ * Stop, or removing the session, ends it. While its tab is closed a row still
+ * tells what it does, from its hooks and its exit.
  */
 export function Terminals({ panes, sessions, onStatus, onOpenFile }: Props) {
   const focused = panes.find((pane) => pane.visible) ?? null;
+  const running = useRunningSessions();
+  const shown = new Set(panes.flatMap((pane) => (pane.tab.kind === 'session' ? [pane.tab.sessionId] : [])));
+  const detached = sessions.filter((s) => s.kind === 'terminal' && running.has(s.id) && !shown.has(s.id));
   const { prefs, update } = useTerminalPrefs();
   const { view, surfaceOf, showTerminal } = useSessionView();
   const zoom = (delta: number) =>
@@ -74,7 +81,7 @@ export function Terminals({ panes, sessions, onStatus, onOpenFile }: Props) {
     [onOpenFile],
   );
 
-  return panes.map((pane) => {
+  const mounted = panes.map((pane) => {
     const { tab, cwd, visible } = pane;
     if (tab.kind === 'stub' && tab.stub === 'terminal') {
       return (
@@ -97,7 +104,7 @@ export function Terminals({ panes, sessions, onStatus, onOpenFile }: Props) {
     return (
       <Pane key={pane.id} active={visible}>
         <SessionTerminal
-          paneId={pane.id}
+          ptyId={sessionPtyId(session.workspaceId, session.id)}
           session={session}
           cwd={here}
           active={visible}
@@ -111,6 +118,10 @@ export function Terminals({ panes, sessions, onStatus, onOpenFile }: Props) {
       </Pane>
     );
   });
+  return [
+    ...mounted,
+    ...detached.map((session) => <DetachedSession key={`detached:${session.id}`} session={session} onStatus={onStatus} />),
+  ];
 }
 
 function Pane({ active, children }: { active: boolean; children: React.ReactNode }) {
@@ -156,7 +167,8 @@ async function launchCommand(session: Session, cwd: string): Promise<string[]> {
 }
 
 type SessionProps = {
-  paneId: string;
+  /** Its session's, not its pane's: the tab can close and open again in another strip. */
+  ptyId: string;
   session: Session;
   cwd: string;
   active: boolean;
@@ -171,7 +183,7 @@ type SessionProps = {
 
 /** Settles which provider session to resume before the first spawn, and learns it after when the CLI names its own. */
 function SessionTerminal({
-  paneId,
+  ptyId,
   session,
   cwd,
   active,
@@ -240,33 +252,21 @@ function SessionTerminal({
     return () => window.clearInterval(timer);
   }, [learns, startedAt, session.id, cwd]);
 
-  // What the CLI's hooks say it does is the word on its status: a turn, a question.
-  const hooked = reportsLive(session.provider);
-  useEffect(() => {
-    if (!hooked) return;
-    let last: string | null = null;
-    return subscribeLive(session.id, () => {
-      const live = readLive(session.id);
-      if (!live) return;
-      const now = `${live.working}:${live.ask?.id ?? ''}`;
-      if (now === last) return;
-      last = now;
-      onLive(live.working, live.ask !== undefined);
-    });
-  }, [hooked, session.id, onLive]);
+  useLiveHooks(session, onLive);
 
   return (
     <>
       {command && (
         <Suspense fallback={null}>
           <TerminalView
-            id={paneId}
+            id={ptyId}
             cwd={cwd}
             command={command}
             session={session.id}
             active={active}
             covered={chat}
             shellOnExit
+            detach
             onExit={onExit}
             onBell={onBell}
             onActivity={onActivity}
@@ -283,7 +283,7 @@ function SessionTerminal({
       {chat && (
         <SessionChat
           session={session}
-          paneId={paneId}
+          ptyId={ptyId}
           cwd={cwd}
           active={active}
           blocked={blocked}
@@ -294,4 +294,34 @@ function SessionTerminal({
       {revealed && <BackToChat onClick={() => onShowTerminal(false)} />}
     </>
   );
+}
+
+/** What the CLI's hooks say it does is the word on its status: a turn, a question. */
+function useLiveHooks(session: Session, onLive: (working: boolean, asking: boolean) => void) {
+  const hooked = reportsLive(session.provider);
+  useEffect(() => {
+    if (!hooked) return;
+    let last: string | null = null;
+    return subscribeLive(session.id, () => {
+      const live = readLive(session.id);
+      if (!live) return;
+      const now = `${live.working}:${live.ask?.id ?? ''}`;
+      if (now === last) return;
+      last = now;
+      onLive(live.working, live.ask !== undefined);
+    });
+  }, [hooked, session.id, onLive]);
+}
+
+/**
+ * A session whose tab closed while its CLI ran on: nothing to draw, but its row
+ * still says when a turn ends unseen or stops to ask, and when the CLI exits.
+ * A CLI without hooks keeps the status it had when its tab closed.
+ */
+function DetachedSession({ session, onStatus }: { session: Session; onStatus: (id: string, status: SessionStatus) => void }) {
+  const { onExit, onLive } = useSessionActivity(session, false, onStatus, true);
+  useLiveHooks(session, onLive);
+  const ptyId = sessionPtyId(session.workspaceId, session.id);
+  useEffect(() => api.onPtyExit(ptyId, onExit), [ptyId, onExit]);
+  return null;
 }

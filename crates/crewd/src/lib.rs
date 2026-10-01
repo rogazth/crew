@@ -17,7 +17,7 @@ use crew_core::messages;
 use crew_core::provider_session;
 use crew_core::process::{ProcessEvents, ProcessHost, ProcessPatch, RunRequest};
 use crew_core::process_tools::ProcessTools;
-use crew_core::pty::{PtyEvents, PtyHost, SpawnOptions};
+use crew_core::pty::{self, PtyEvents, PtyHost, SpawnOptions};
 use crew_core::remote;
 use crew_core::routine;
 use crew_core::scheduler::Scheduler;
@@ -30,7 +30,7 @@ use crew_core::workspace;
 use crew_core::worktree;
 use crew_protocol::{
     self as proto, Auth, DaemonInfo, Id, IdName, IdStatus, Ids, Key, KeyValue, ListProjectFiles, Name, NamePath, Names, ProviderDiscover,
-    OptionalId, PathArg, PathBytes, PathContents, PtyAck, PtyAttach, PtyAttached, PtyKill, PtyResize, PtySpawn, PtyWrite,
+    OptionalId, PathArg, PathBytes, PathContents, PtyAck, PtyAttach, PtyAttached, PtyDetach, PtyKill, PtyResize, PtySpawn, PtyWrite,
     RemoteEnv, Request, RoutineRunNow, RoutineUpsert, SessionCreate, SessionCreated, SessionId, SessionUpdated, SessionUpdate, SessionsDeleted,
     SessionsRetention, TempFile,
     SearchQuery, TranscriptApply, TranscriptTail, TurnAnswer, TurnRespond,
@@ -237,6 +237,13 @@ impl Hub {
             .insert(stream_id);
     }
 
+    /// The client let go of the stream: its frames stop reaching it.
+    fn unwatch_pty(&self, id: u64, stream_id: u32) {
+        if let Some(streams) = self.pty_attached.lock().unwrap_or_else(|e| e.into_inner()).get_mut(&id) {
+            streams.remove(&stream_id);
+        }
+    }
+
     fn unsubscribe(&self, id: u64) {
         self.clients
             .lock()
@@ -359,8 +366,8 @@ impl PtyEvents for Hub {
 
     fn exit(&self, id: &str, code: Option<i32>) {
         self.emit("pty-exit", proto::PtyExit { id: id.to_string(), code });
-        // A session's pane is `<workspace>/session:<id>`; a CLI that crashed ran no SessionEnd hook.
-        if let (Some(sessions), Some((_, session))) = (self.sessions.get(), id.rsplit_once("/session:")) {
+        // A CLI that crashed ran no SessionEnd hook.
+        if let (Some(sessions), Some(session)) = (self.sessions.get(), pty::session_of(id)) {
             sessions.exited(self, session);
         }
     }
@@ -950,6 +957,20 @@ async fn handle_text(hosts: &Hosts, hub: &Arc<Hub>, client_id: u64, text: &str) 
         attach_pty(hosts, hub, client_id, request.id, request.params).await;
         return None;
     }
+    // Its tab closed: this client stops getting the frames, and the process
+    // runs on without waiting for it to read them.
+    if request.method == "pty_detach" {
+        let result = parse::<PtyDetach>(request.params).map(|PtyDetach { id }| {
+            if let Some(stream_id) = hosts.pty.detach(&id) {
+                hub.unwatch_pty(client_id, stream_id);
+            }
+            Value::Null
+        });
+        return Some(encode(&match result {
+            Ok(value) => proto::ok(request.id, value),
+            Err(error) => proto::err(request.id, error),
+        }));
+    }
     // These speak for the connection itself, so they need to know which one it is.
     if request.method == "browser_host_register" {
         hub.hush(client_id);
@@ -1154,7 +1175,15 @@ fn terminal_launch(
 
 async fn delete_session(hosts: &Hosts, id: String) -> Result<(), String> {
     let store = hosts.store.clone();
-    // Its process may still be running with a token in its environment;
+    // Closing its tab left its terminal running; the session going takes it.
+    let host = hosts.pty.clone();
+    let session = id.clone();
+    block(move || {
+        host.kill_session(&session);
+        Ok(())
+    })
+    .await?;
+    // A process that outlived that still has a token in its environment;
     // a session that no longer exists should not still be able to call.
     hosts.bridge.revoke(&id);
     hosts.browser.leases().release_all(&id, app_state::now_millis());
@@ -1176,7 +1205,7 @@ async fn expire_sessions(hosts: &Hosts, days: u32) -> Result<Vec<String>, String
     let store = hosts.store.clone();
     let stale = block(move || session::stale(&store, stale_before(days))).await?;
     let mut gone = Vec::new();
-    for id in stale.into_iter().filter(|id| !hosts.pty.is_live(id)) {
+    for id in stale.into_iter().filter(|id| !hosts.pty.runs_session(id)) {
         delete_session(hosts, id.clone()).await?;
         gone.push(id);
     }
@@ -1268,9 +1297,14 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
             let Id { id } = parse(params)?;
             let store = hosts.store.clone();
             let processes = hosts.processes.clone();
+            let pty = hosts.pty.clone();
             block(move || {
-                // Its rows would go with the workspace, but not its processes.
+                // Its rows would go with the workspace, but not its processes,
+                // nor the terminals its closed tabs left running.
                 processes.forget_workspace(&id);
+                for session in session::list(&store, id.clone())? {
+                    pty.kill_session(&session.id);
+                }
                 workspace::delete(&store, id)
             })
             .await?;
@@ -1349,11 +1383,35 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
             delete_session(hosts, id).await?;
             Ok(Value::Null)
         }
+        // The session stays; the terminal it runs in, tab open or closed, ends.
+        "session_stop" => {
+            let Id { id } = parse(params)?;
+            let host = hosts.pty.clone();
+            block(move || {
+                host.kill_session(&id);
+                Ok(())
+            })
+            .await?;
+            Ok(Value::Null)
+        }
+        // The workspace's sessions whose terminal runs, its tab open or not.
+        "sessions_running" => {
+            let WorkspaceId { workspace_id } = parse(params)?;
+            let store = hosts.store.clone();
+            let host = hosts.pty.clone();
+            json(
+                block(move || {
+                    let rows = session::list(&store, workspace_id)?;
+                    Ok(rows.into_iter().map(|row| row.id).filter(|id| host.runs_session(id)).collect::<Vec<_>>())
+                })
+                .await?,
+            )
+        }
         "sessions_stale" => {
             let SessionsRetention { days } = parse(params)?;
             let store = hosts.store.clone();
             let stale = block(move || session::stale(&store, stale_before(days))).await?;
-            json(stale.iter().filter(|id| !hosts.pty.is_live(id)).count())
+            json(stale.iter().filter(|id| !hosts.pty.runs_session(id)).count())
         }
         "sessions_expire" => {
             let SessionsRetention { days } = parse(params)?;
@@ -3406,6 +3464,73 @@ print(json.dumps({"type":"turn.failed","error":{"message":"Codex exploded"}}), f
         assert!(!b.contains(&b'P') && !b.windows(2).any(|w| w == b"xa"), "a leaked into b");
         assert!(a.windows(4).any(|w| w == b"INxa") && b.windows(4).any(|w| w == b"INyb"), "input did not arrive");
         handle.shutdown();
+    }
+
+    /// A terminal session's tab closing detaches its terminal: it runs on, and
+    /// stops only when asked to, or with its session or its workspace.
+    #[tokio::test]
+    async fn a_detached_session_terminal_runs_until_stopped_or_deleted() {
+        let dir = test_dir("detach");
+        let handle = test_serve(&dir);
+        let mut ws = connect_authed(&handle).await;
+        let workspace = rpc(&mut ws, 1, "workspace_create", serde_json::json!({ "name": "w", "path": dir.to_string_lossy() })).await;
+        let workspace: proto::Workspace = serde_json::from_value(workspace.result.expect("ws")).expect("workspace");
+        let (stopped, stopped_pty) = detached_session(&mut ws, 10, &workspace.id).await;
+        let (deleted, deleted_pty) = detached_session(&mut ws, 20, &workspace.id).await;
+        let (kept, kept_pty) = detached_session(&mut ws, 30, &workspace.id).await;
+        let mut all = vec![stopped.clone(), deleted.clone(), kept.clone()];
+        all.sort();
+        assert_eq!(running(&mut ws, 100, &workspace.id).await, all, "a detached terminal stopped running");
+
+        assert!(rpc(&mut ws, 101, "session_stop", serde_json::json!({ "id": stopped })).await.ok);
+        assert!(rpc(&mut ws, 102, "session_delete", serde_json::json!({ "id": deleted })).await.ok);
+        assert_eq!(running(&mut ws, 103, &workspace.id).await, vec![kept.clone()]);
+        for (id, pty) in [(104, &stopped_pty), (105, &deleted_pty)] {
+            let attach = rpc(&mut ws, id, "pty_attach", serde_json::json!({ "id": pty, "from": 0 })).await;
+            assert!(!attach.ok, "{pty} still runs");
+        }
+        assert!(rpc(&mut ws, 106, "session_get", serde_json::json!({ "id": stopped })).await.result.is_some_and(|row| !row.is_null()), "stop took the session");
+
+        // Reopened, the tab finds the same process.
+        attach_pty(&mut ws, 107, &kept_pty, 0).await;
+        assert!(rpc(&mut ws, 108, "workspace_delete", serde_json::json!({ "id": workspace.id })).await.ok);
+        let attach = rpc(&mut ws, 109, "pty_attach", serde_json::json!({ "id": kept_pty, "from": 0 })).await;
+        assert!(!attach.ok, "the workspace went, its terminal stayed");
+        handle.shutdown();
+    }
+
+    /// A terminal session whose terminal was spawned, watched, and let go: its tab closed.
+    async fn detached_session(ws: &mut Ws, id: u32, workspace: &str) -> (String, String) {
+        let created = rpc(
+            ws,
+            id,
+            "session_create",
+            serde_json::json!({
+                "workspaceId": workspace,
+                "kind": "terminal",
+                "name": "T",
+                "provider": "claude",
+                "model": "m",
+                "description": "",
+                "autonomy": "ask"
+            }),
+        )
+        .await;
+        let session: proto::Session = serde_json::from_value(created.result.expect("session")).expect("session");
+        let pty = format!("{workspace}/session:{}", session.id);
+        send_json(ws, &spawn_req(id + 1, &pty)).await;
+        assert!(wait_response(ws, id + 1).await.ok);
+        attach_pty(ws, id + 2, &pty, 0).await;
+        let detached = rpc(ws, id + 3, "pty_detach", serde_json::json!({ "id": pty })).await;
+        assert!(detached.ok, "{}", detached.error.unwrap_or_default());
+        (session.id, pty)
+    }
+
+    async fn running(ws: &mut Ws, id: u32, workspace: &str) -> Vec<String> {
+        let listed = rpc(ws, id, "sessions_running", serde_json::json!({ "workspaceId": workspace })).await;
+        let mut ids: Vec<String> = serde_json::from_value(listed.result.expect("running")).expect("ids");
+        ids.sort();
+        ids
     }
 
     async fn rpc(ws: &mut Ws, id: u32, method: &str, params: Value) -> proto::Response {

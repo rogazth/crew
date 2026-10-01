@@ -395,6 +395,13 @@ export type TabRegistry = Record<string, TabState>;
  */
 export const paneId = (workspaceId: string, tabId: string) => `${workspaceId}/${tabId}`;
 
+/**
+ * A terminal session's pty, whichever strip its tab is in: a tab reopened, or
+ * moved by a regroup, finds the process it left running. crewd reads the
+ * session back off it.
+ */
+export const sessionPtyId = (workspaceId: string, sessionId: string) => `${workspaceId}/session:${sessionId}`;
+
 export type Pane = { id: string; workspaceId: string; tab: Tab; visible: boolean };
 
 /** Every open tab of every restored workspace. Only one of them is on screen. */

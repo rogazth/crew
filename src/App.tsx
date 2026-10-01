@@ -33,7 +33,9 @@ import { useWorkspaces } from "./hooks/useWorkspaces";
 import { useWorkContext } from "./hooks/useWorkContext";
 import * as api from "./lib/api";
 import { zoomApp } from "./lib/host";
-import { isTerminalTab } from "./lib/tabs";
+import { markStopped, useRunningSessions } from "./lib/runningSessions";
+import { isTerminalTab, sessionPtyId } from "./lib/tabs";
+import type { Session } from "./lib/types";
 import { worktreeLabel } from "./lib/worktrees";
 import { Pages } from "./surfaces/Pages";
 import { usePages } from "./hooks/usePages";
@@ -85,7 +87,8 @@ export function App() {
   const treePath = current?.path ?? active?.path ?? null;
   const files = useProjectFiles(treePath);
 
-  // Its panes go first: dropping them is what stops the terminals it was running.
+  // Its panes go first: dropping them ends its shells. Its sessions' CLIs,
+  // tabs open or closed, crewd ends with the workspace.
   const { dropWorkspace: forgetTabs } = tabs;
   const { remove: deleteWorkspace } = workspaces;
   const removeWorkspace = useCallback(
@@ -116,6 +119,23 @@ export function App() {
     removeWorktree,
     rereadWorktrees: worktrees.reread,
   });
+
+  // A closed tab leaves its CLI running; Stop is what ends it. Its tabs go with
+  // it: the session stays in the sidebar, and opening it starts the CLI again.
+  const workspaceIds = useMemo(() => workspaces.workspaces.map((workspace) => workspace.id), [workspaces.workspaces]);
+  const runningSessions = useRunningSessions(workspaceIds);
+  const { askStop } = confirms;
+  const { closeForSession } = tabs;
+  const stopSession = useCallback(
+    (session: Session) =>
+      askStop(session, () => {
+        closeForSession(session.id);
+        markStopped(session.id);
+        // A crewd from before Stop knows the terminal by its id alone.
+        void api.stopSession(session.id).catch(() => api.killPty(sessionPtyId(session.workspaceId, session.id)));
+      }),
+    [askStop, closeForSession],
+  );
 
   const [palette, setPalette] = useState<PaletteMode | null>(null);
   const [dialog, setDialog] = useState<"new-worktree" | "shortcuts" | null>(null);
@@ -315,6 +335,8 @@ export function App() {
             onRename: (session, name) => void rename(session.id, name),
             onRemove: confirms.askSession,
             onRemoveMany: confirms.askSessions,
+            runningSessions,
+            onStop: stopSession,
             onReorder: reorder,
             commands: (
               <CommandsButton
@@ -353,6 +375,8 @@ export function App() {
             onCloseMany={nav.closeTabs}
             onReopen={tabs.reopen}
             onEditSession={sheet.editAgent}
+            runningSessions={runningSessions}
+            onStopSession={stopSession}
             onReorder={tabs.reorder}
             onPin={tabs.pin}
             onUnpin={tabs.unpin}

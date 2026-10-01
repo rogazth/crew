@@ -89,8 +89,8 @@ export function routeEnv(
 }
 
 /**
- * The environment of a terminal's PTY. Its id is the pane's, not the
- * session's: `<workspace>[@<worktree>]/session:<session>`.
+ * The environment of a terminal's PTY. Its id is the pane's, or for a
+ * session's terminal, the session's: `<workspace>[@<worktree>]/session:<session>`.
  */
 export function envForPane(id: string, maps: Pick<RouteMaps, "session" | "workspace">): string | null {
   const direct = maps.session.get(id);

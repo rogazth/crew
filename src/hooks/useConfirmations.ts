@@ -1,6 +1,6 @@
 import { useCallback, useState } from "react";
 import type { Confirm } from "../chrome/ConfirmDialog";
-import { closePrompt, unsavedCost } from "../lib/confirm";
+import { closePrompt, stopPrompt, unsavedCost } from "../lib/confirm";
 import { isBusy } from "../lib/terminalBusy";
 import type { Session, SessionStatus, Workspace, Worktree } from "../lib/types";
 import { commandsCost, isDirtyRefusal, removalCost, worktreeLabel } from "../lib/worktrees";
@@ -105,38 +105,35 @@ export function useConfirmations({ closeTabsFor, removeSession, removeWorkspace,
   );
 
   /**
-   * An agent turn belongs to the daemon, so its tab closes without a word and
-   * the turn runs on. A terminal *is* its process: closing the tab ends it, and
-   * the status cannot answer that — a watched tab reads idle whatever it runs —
-   * so this asks the terminal itself. `unsaved` names the files whose edits
-   * the close loses; confirming is what discards them.
+   * A session's tab closes without a word, whatever runs in it: an agent's
+   * turn belongs to the daemon, and a terminal session's CLI runs on in crewd
+   * until it is stopped. `unsaved` names the files whose edits the close
+   * loses; confirming is what discards them.
    */
-  const askCloseTabs = useCallback(
-    (sessions: Session[], unsaved: string[], count: number, onConfirm: () => void) => {
-      const running = sessions.flatMap((session) => {
-        if (session.kind !== "terminal") return [];
-        const label = runningLabel(session.status) ?? (isBusy(session.id) ? "is still working" : null);
-        return label ? [{ name: session.name, label }] : [];
-      });
-      const prompt = closePrompt(count, running, unsaved);
-      if (prompt) setConfirm({ ...prompt, onConfirm });
-      else onConfirm();
-    },
-    [],
-  );
+  const askCloseTabs = useCallback((unsaved: string[], count: number, onConfirm: () => void) => {
+    const prompt = closePrompt(count, unsaved);
+    if (prompt) setConfirm({ ...prompt, onConfirm });
+    else onConfirm();
+  }, []);
 
-  const askCloseTab = useCallback(
-    (session: Session, onConfirm: () => void) => askCloseTabs([session], [], 1, onConfirm),
-    [askCloseTabs],
-  );
+  /**
+   * Stopping a terminal session ends its CLI. The status cannot say whether
+   * that loses work — a watched tab reads idle whatever it runs — so this asks
+   * the terminal itself, and asks first only while it is at work.
+   */
+  const askStop = useCallback((session: Session, onConfirm: () => void) => {
+    const label = runningLabel(session.status) ?? (isBusy(session.id) ? "is still working" : null);
+    if (label) setConfirm({ ...stopPrompt(session.name, label), onConfirm });
+    else onConfirm();
+  }, []);
 
   const close = useCallback(() => setConfirm(null), []);
 
   return {
     confirm,
     ask: setConfirm,
-    askCloseTab,
     askCloseTabs,
+    askStop,
     askSession,
     askSessions,
     askWorkspace,

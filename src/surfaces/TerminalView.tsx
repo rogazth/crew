@@ -37,6 +37,12 @@ type Props = {
   onExit?: ((code: number | null) => void) | undefined;
   /** Once the process exits, fall back to the login shell instead of a dead pane. */
   shellOnExit?: boolean | undefined;
+  /**
+   * Unmounting lets go of the process instead of ending it: a session's CLI
+   * runs on with its tab closed, and the next mount on this id attaches to it.
+   * The shell that replaced an exited CLI holds nothing, and ends all the same.
+   */
+  detach?: boolean | undefined;
   /** The process asked for attention: a bell, or an OSC notification. */
   onBell?: (() => void) | undefined;
   /** Output arrived. Throttled, so it reads as "this session is busy". */
@@ -80,6 +86,7 @@ export function TerminalView({
   session,
   active,
   shellOnExit,
+  detach = false,
   onExit,
   onBell,
   onActivity,
@@ -102,10 +109,10 @@ export function TerminalView({
   const search = useTerminalSearch(termRef, isDark);
   const attachSearch = search.attach;
 
-  const latest = useRef({ onExit, onBell, onActivity, onTitle, onInput, onResize, onOpenPath, onScreen, command, session, shellOnExit, eager });
+  const latest = useRef({ onExit, onBell, onActivity, onTitle, onInput, onResize, onOpenPath, onScreen, command, session, shellOnExit, detach, eager });
   useEffect(() => {
     // Only `command` at spawn: a later argv must not respawn the running process.
-    latest.current = { onExit, onBell, onActivity, onTitle, onInput, onResize, onOpenPath, onScreen, command, session, shellOnExit, eager };
+    latest.current = { onExit, onBell, onActivity, onTitle, onInput, onResize, onOpenPath, onScreen, command, session, shellOnExit, detach, eager };
   });
 
   const dropPaths = useCallback((paths: string[]) => {
@@ -432,7 +439,8 @@ export function TerminalView({
       for (const handler of osc) handler.dispose();
       for (const handler of csi) handler.dispose();
       unsubscribe();
-      if (started) void api.killPty(id);
+      if (started && latest.current.detach && !shellFallback) void api.detachPty(id).catch(() => {});
+      else if (started) void api.killPty(id);
       term.dispose();
       ligaturesRef.current = null;
       termRef.current = null;

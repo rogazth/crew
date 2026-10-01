@@ -11,6 +11,7 @@ import {
   OPEN,
   RENAME,
   SEPARATOR,
+  STOP,
   menuFromEvent,
   tidy,
   type MenuAction,
@@ -68,6 +69,9 @@ export type SessionSidebarProps = {
   onRename: (session: Session, name: string) => void;
   onRemove: (session: Session) => void;
   onRemoveMany: (sessions: Session[]) => void;
+  /** Terminal sessions whose CLI runs, tab open or not: those offer Stop. */
+  runningSessions: ReadonlyMap<string, string>;
+  onStop: (session: Session) => void;
   onReorder: (ids: string[]) => void;
   /** The way to the workspace's commands, kept under the list whatever it scrolls to. */
   commands?: ReactNode;
@@ -87,10 +91,18 @@ const NEW_SESSION_HERE: MenuAction = { id: "new-session", label: "New Session He
 const COPY_BRANCH: MenuAction = { id: "copy-branch", label: "Copy Branch", icon: "branch", hotkey: "B" };
 const REMOVE_WORKTREE: MenuAction = { ...DELETE, id: "remove-worktree", label: "Remove Worktree…" };
 
-/** What a right-click on one session offers, loudest last. */
-function sessionActions(session: Session): MenuEntry[] {
+/** What a right-click on one session offers, loudest last. `running`: its CLI is up, to stop. */
+function sessionActions(session: Session, running: boolean): MenuEntry[] {
   if (session.kind === "terminal")
-    return [OPEN, RENAME, ...(session.status === "done" ? [MARK_READ] : []), COPY_NAME, SEPARATOR, DELETE];
+    return tidy([
+      OPEN,
+      RENAME,
+      ...(session.status === "done" ? [MARK_READ] : []),
+      COPY_NAME,
+      SEPARATOR,
+      ...(running ? [STOP] : []),
+      DELETE,
+    ]);
   return tidy([
     OPEN,
     EDIT,
@@ -440,7 +452,7 @@ export function SessionSidebar(props: SessionSidebarProps) {
           actions={
             selected.size > 1 && selected.has(menu.session.id)
               ? [{ ...DELETE, label: `Delete ${selected.size} Items` }]
-              : sessionActions(menu.session)
+              : sessionActions(menu.session, props.runningSessions.has(menu.session.id))
           }
           onPick={(id) => {
             const session = menu.session;
@@ -454,6 +466,7 @@ export function SessionSidebar(props: SessionSidebarProps) {
             if (id === "notifications") props.onToggleNotifications(session);
             if (id === "mark-read") props.onMarkRead(session);
             if (id === "copy-name") void navigator.clipboard.writeText(session.name);
+            if (id === "stop") props.onStop(session);
             if (id === "delete") removeFrom(session);
           }}
           onClose={() => setMenu(null)}

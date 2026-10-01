@@ -18,15 +18,17 @@ let hooked = false;
 function ensureBridge() {
   if (hooked) return;
   hooked = true;
-  client.on("session-live", (payload) => {
-    const live = payload as SessionLive;
-    const known = lives.get(live.sessionId);
-    if (known && known.updatedAt > live.updatedAt) return;
-    set(live);
-  });
+  client.on("session-live", (payload) => offer(payload as SessionLive));
   client.onReconnect((here = () => true) => {
     for (const id of listeners.keys()) if (here(id)) void fetchLive(id);
   });
+}
+
+/** Kept unless what is known is newer: a fetch can answer after the event that changed it. */
+function offer(live: SessionLive) {
+  const known = lives.get(live.sessionId);
+  if (known && known.updatedAt > live.updatedAt) return;
+  set(live);
 }
 
 function set(live: SessionLive) {
@@ -37,7 +39,7 @@ function set(live: SessionLive) {
 async function fetchLive(id: string): Promise<void> {
   try {
     const live = await client.request<SessionLive | null>("session_live_get", { id });
-    if (live) set(live);
+    if (live) offer(live);
   } catch (error) {
     if (!isUnknownMethod(error)) return;
     unheard.add(id);
