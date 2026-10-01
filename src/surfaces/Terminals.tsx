@@ -15,7 +15,7 @@ import { BYPASS_KEY } from '../lib/permissions';
 import { providerOf } from '../lib/providers';
 import { reportsLive, sessionSurface } from '../lib/sessionView';
 import { readLive, subscribeLive } from '../lib/sessionLive';
-import { useRunningSessions } from '../lib/runningSessions';
+import { onSessionLost, useRunningSessions } from '../lib/runningSessions';
 import { sessionCommand } from '../lib/sessionCommand';
 import { titleName } from '../lib/terminalStatus';
 import { isTerminalTab, relativeTo, sessionPtyId } from '../lib/tabs';
@@ -204,6 +204,8 @@ function SessionTerminal({
     [provider],
   );
   const [startedAt, setStartedAt] = useState(0);
+  /** Bumped when the CLI has to be started again: its daemon restarted without it. */
+  const [launch, setLaunch] = useState(0);
   const { onBell, onActivity, onTitle, onInput, onResize, onExit, onLive } = useSessionActivity(session, active, onStatus);
   const named = useRef('');
   const retitled = useCallback(
@@ -229,7 +231,14 @@ function SessionTerminal({
     };
     // The session row changes on rename; the process is already running by then.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session.id, cwd]);
+  }, [session.id, cwd, launch]);
+
+  // As a window opening finds it: the CLI resumes its conversation in a new pane.
+  const relaunch = useCallback(() => {
+    onExit(null);
+    setCommand(null);
+    setLaunch((n) => n + 1);
+  }, [onExit]);
 
   // Claude's moves to a new conversation reach the window from the daemon,
   // which follows its SessionStart hook; the others name theirs once, later.
@@ -268,6 +277,7 @@ function SessionTerminal({
             shellOnExit
             detach
             onExit={onExit}
+            onLost={relaunch}
             onBell={onBell}
             onActivity={onActivity}
             onTitle={retitled}
@@ -324,5 +334,7 @@ function DetachedSession({ session, onStatus }: { session: Session; onStatus: (i
   useLiveHooks(session, onLive);
   const ptyId = sessionPtyId(session.workspaceId, session.id);
   useEffect(() => api.onPtyExit(ptyId, onExit), [ptyId, onExit]);
+  // Its daemon restarted and the CLI went with it: as good as an exit nobody announced.
+  useEffect(() => onSessionLost((id) => id === session.id && onExit(null)), [session.id, onExit]);
   return null;
 }

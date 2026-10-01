@@ -271,6 +271,9 @@ fn run(dir: &Path, supervisor: Supervisor, listen: Listen) -> Result<(), Failure
         eprintln!("[crewd] stopping");
     }
 
+    // Before anything is stopped: a CLI that got the same signal (systemd
+    // signals the whole unit) may be gone before `kill_all` reaches it.
+    pty.begin_shutdown();
     remove_daemon_file(dir, &info.url);
     // First, so a process killed below is not restarted on its way out, and
     // so supervised ones get their stop grace before the PTY host's one second.

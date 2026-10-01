@@ -43,6 +43,11 @@ type Props = {
    * The shell that replaced an exited CLI holds nothing, and ends all the same.
    */
   detach?: boolean | undefined;
+  /**
+   * The daemon came back without the process and never said it ended: it
+   * restarted, and took it along. Left out, that reads as an exit.
+   */
+  onLost?: (() => void) | undefined;
   /** The process asked for attention: a bell, or an OSC notification. */
   onBell?: (() => void) | undefined;
   /** Output arrived. Throttled, so it reads as "this session is busy". */
@@ -88,6 +93,7 @@ export function TerminalView({
   shellOnExit,
   detach = false,
   onExit,
+  onLost,
   onBell,
   onActivity,
   onTitle,
@@ -109,10 +115,10 @@ export function TerminalView({
   const search = useTerminalSearch(termRef, isDark);
   const attachSearch = search.attach;
 
-  const latest = useRef({ onExit, onBell, onActivity, onTitle, onInput, onResize, onOpenPath, onScreen, command, session, shellOnExit, detach, eager });
+  const latest = useRef({ onExit, onLost, onBell, onActivity, onTitle, onInput, onResize, onOpenPath, onScreen, command, session, shellOnExit, detach, eager });
   useEffect(() => {
     // Only `command` at spawn: a later argv must not respawn the running process.
-    latest.current = { onExit, onBell, onActivity, onTitle, onInput, onResize, onOpenPath, onScreen, command, session, shellOnExit, detach, eager };
+    latest.current = { onExit, onLost, onBell, onActivity, onTitle, onInput, onResize, onOpenPath, onScreen, command, session, shellOnExit, detach, eager };
   });
 
   const dropPaths = useCallback((paths: string[]) => {
@@ -258,6 +264,18 @@ export function TerminalView({
       ackTimer = 0;
       if (spawned) void api.ackPty(id, processed);
     };
+    const exited = (code: number | null) => {
+      if (closed) return;
+      spawned = false;
+      kittyFlags = 0;
+      term.writeln(`\r\n\x1b[2m[process exited${code == null ? "" : ` (${code})`}]\x1b[0m`);
+      latest.current.onExit?.(code);
+      // The shell replaces the agent once; when the user exits that shell too,
+      // the pane stays dead instead of looping a new prompt forever.
+      if (!latest.current.shellOnExit || shellFallback) return;
+      shellFallback = true;
+      spawn([]);
+    };
     const unsubscribe = subscribePty(
       id,
       (bytes) => {
@@ -271,20 +289,17 @@ export function TerminalView({
         lastActivity = now;
         latest.current.onActivity?.();
       },
-      (code) => {
-        if (closed) return;
-        spawned = false;
-        kittyFlags = 0;
-        term.writeln(`\r\n\x1b[2m[process exited${code == null ? "" : ` (${code})`}]\x1b[0m`);
-        latest.current.onExit?.(code);
-        // The shell replaces the agent once; when the user exits that shell too,
-        // the pane stays dead instead of looping a new prompt forever.
-        if (!latest.current.shellOnExit || shellFallback) return;
-        shellFallback = true;
-        spawn([]);
-      },
+      exited,
       (start) => {
         processed = start;
+      },
+      () => {
+        if (closed) return;
+        const lost = latest.current.onLost;
+        if (!lost) return exited(null);
+        spawned = false;
+        term.writeln(`\r\n\x1b[2m[crewd restarted, and this process went with it]\x1b[0m`);
+        lost();
       },
     );
 

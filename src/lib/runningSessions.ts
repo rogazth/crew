@@ -11,6 +11,8 @@ import type { PtyExit } from "./protocol";
  */
 let running: ReadonlyMap<string, string> = new Map();
 const listeners = new Set<() => void>();
+/** Told of sessions the daemon stopped running with no exit sent: it restarted, and they went with it. */
+const lostListeners = new Set<(sessionId: string) => void>();
 /** The workspaces asked once already: a reconnect asks them again. */
 const loaded = new Set<string>();
 let bridged = false;
@@ -54,8 +56,23 @@ async function load(workspaceId: string): Promise<void> {
   const next = new Map(running);
   for (const id of answered) next.set(id, workspaceId);
   // What started while the daemon answered is not in its answer, and still runs.
-  for (const [id, workspace] of asked) if (workspace === workspaceId && !answered.has(id)) next.delete(id);
+  const lost: string[] = [];
+  for (const [id, workspace] of asked) {
+    if (workspace !== workspaceId || answered.has(id)) continue;
+    next.delete(id);
+    if (running.has(id)) lost.push(id);
+  }
+  // Before they leave the list, while whatever tracks them is still there to hear it.
+  for (const id of lost) for (const listener of lostListeners) listener(id);
   publish(next);
+}
+
+/** `listener` hears of each session whose CLI the daemon no longer runs, though no exit said so. */
+export function onSessionLost(listener: (sessionId: string) => void): () => void {
+  lostListeners.add(listener);
+  return () => {
+    lostListeners.delete(listener);
+  };
 }
 
 function bridge() {

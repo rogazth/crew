@@ -200,6 +200,8 @@ struct Hub {
     runtime: Mutex<Option<tokio::runtime::Handle>>,
     /// Told when a session's terminal ends: its CLI is not there to type into any more.
     sessions: std::sync::OnceLock<sessions::SessionWatch>,
+    /// Told when the last client watching a terminal goes.
+    unwatch: std::sync::OnceLock<Box<dyn Fn(u32) + Send + Sync>>,
 }
 
 impl Hub {
@@ -211,6 +213,7 @@ impl Hub {
             next: AtomicU64::new(1),
             runtime: Mutex::new(None),
             sessions: std::sync::OnceLock::new(),
+            unwatch: std::sync::OnceLock::new(),
         }
     }
 
@@ -249,11 +252,19 @@ impl Hub {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .remove(&id);
-        self.pty_attached
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .remove(&id);
+        let orphaned: Vec<u32> = {
+            let mut attached = self.pty_attached.lock().unwrap_or_else(|e| e.into_inner());
+            let mine = attached.remove(&id).unwrap_or_default();
+            mine.into_iter()
+                .filter(|stream| !attached.values().any(|streams| streams.contains(stream)))
+                .collect()
+        };
         self.quiet.lock().unwrap_or_else(|e| e.into_inner()).remove(&id);
+        if let Some(unwatch) = self.unwatch.get() {
+            for stream in orphaned {
+                unwatch(stream);
+            }
+        }
     }
 
     fn hush(&self, id: u64) {
@@ -548,6 +559,7 @@ pub fn serve_on(config: Config, listen: Listen) -> Result<Handle, String> {
     let to_all = hub.clone();
     leases.set_on_change(move |all| to_all.emit("browser-leases", all));
     config.pty.set_events(hub.clone());
+    let _ = hub.unwatch.set(Box::new(config.pty.unwatcher()));
     config.agents.set_events(Arc::new(AgentFanout {
         turns: turns.clone(),
     }));
@@ -719,6 +731,7 @@ async fn run(
                 // behind another) until the last one is acked: one extra round
                 // trip per burst to a remote window.
                 let _ = stream.set_nodelay(true);
+                notice_dead_peer(&stream);
                 let hosts = hosts.clone();
                 let hub = hub.clone();
                 let token = token.clone();
@@ -730,6 +743,42 @@ async fn run(
     }
     hosts.scheduler.stop();
     hosts.turns.transcripts().flush_all();
+}
+
+/// How long a window may go without answering before its socket is given up.
+const PEER_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// A Mac that sleeps, or drops off the tailnet, never closes its socket: the
+/// daemon would go on attached to a window that is not there, holding each
+/// terminal it watched to that window's credit. Keepalive probes find a peer
+/// that answers nothing, and the user timeout one that leaves what was sent
+/// unacknowledged; either ends the socket, and the terminals run free.
+fn notice_dead_peer(stream: &TcpStream) {
+    use std::os::fd::AsRawFd;
+    let fd = stream.as_raw_fd();
+    let set = |level: libc::c_int, name: libc::c_int, value: libc::c_int| unsafe {
+        libc::setsockopt(
+            fd,
+            level,
+            name,
+            (&value as *const libc::c_int).cast(),
+            std::mem::size_of::<libc::c_int>() as libc::socklen_t,
+        )
+    };
+    set(libc::SOL_SOCKET, libc::SO_KEEPALIVE, 1);
+    #[cfg(target_os = "linux")]
+    {
+        set(libc::IPPROTO_TCP, libc::TCP_KEEPIDLE, 20);
+        set(libc::IPPROTO_TCP, libc::TCP_KEEPINTVL, 10);
+        set(libc::IPPROTO_TCP, libc::TCP_KEEPCNT, 4);
+        set(libc::IPPROTO_TCP, libc::TCP_USER_TIMEOUT, PEER_TIMEOUT.as_millis() as libc::c_int);
+    }
+    #[cfg(target_os = "macos")]
+    {
+        set(libc::IPPROTO_TCP, libc::TCP_KEEPALIVE, 20);
+        set(libc::IPPROTO_TCP, libc::TCP_KEEPINTVL, 10);
+        set(libc::IPPROTO_TCP, libc::TCP_KEEPCNT, 4);
+    }
 }
 
 async fn handle_socket(stream: TcpStream, hosts: Hosts, hub: Arc<Hub>, token: String) {
@@ -2161,24 +2210,77 @@ mod tests {
         let replay = next_binary(&mut ws).await;
         assert_eq!(replay.len() as u64, attached.emitted - attached.start);
 
-        send_json(
-            &mut ws,
-            &Request {
-                id: 2,
-                method: "pty_ack".into(),
-                params: serde_json::json!({ "id": "t", "processed": attached.start + replay.len() as u64 }),
-            },
-        )
-        .await;
-        let ack = wait_response(&mut ws, 2).await;
-        assert!(ack.ok, "{}", ack.error.unwrap_or_default());
+        // Acking what it is sent, as xterm does, the window gets more: the
+        // reader refills. What was flushed as the attach ran is acked too.
+        let mut processed = attached.start + replay.len() as u64;
+        let mut refilled = 0u64;
+        let mut req = 2;
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+        while refilled < 128 * 1024 {
+            send_json(
+                &mut ws,
+                &Request {
+                    id: req,
+                    method: "pty_ack".into(),
+                    params: serde_json::json!({ "id": "t", "processed": processed }),
+                },
+            )
+            .await;
+            req += 1;
+            let msg = tokio::time::timeout_at(deadline, ws.next())
+                .await
+                .expect("reader did not refill the window")
+                .expect("closed")
+                .expect("ws");
+            if let Message::Binary(bytes) = msg {
+                let n = bytes.len().saturating_sub(4) as u64;
+                refilled += n;
+                processed += n;
+            }
+        }
 
+        // And once it stops acking, it is held to the window again.
         let extra = collect_bytes(&mut ws, std::time::Duration::from_secs(1)).await;
         assert!(
             extra <= 256 * 1024 + 64 * 1024,
             "flow control disabled: extra={extra}"
         );
-        assert!(extra >= 128 * 1024, "reader did not refill the window: extra={extra}");
+        handle.shutdown();
+    }
+
+    // The window closes, or its Mac sleeps, while a CLI works: the CLI goes on
+    // instead of stopping at the credit that window will never give.
+    #[tokio::test]
+    async fn a_terminal_runs_on_once_its_window_is_gone() {
+        let dir = test_dir("pty-unwatched");
+        let handle = test_serve(&dir);
+        let mut ws = connect_authed(&handle).await;
+        let params = serde_json::to_value(PtySpawn {
+            id: "t".into(),
+            cwd: std::env::temp_dir().to_string_lossy().into_owned(),
+            command: vec!["/usr/bin/yes".into()],
+            cols: 80,
+            rows: 24,
+            session: None,
+            reuse: None,
+            dark: None,
+        })
+        .unwrap();
+        let spawn = rpc(&mut ws, 1, "pty_spawn", params).await;
+        assert!(spawn.ok, "{}", spawn.error.unwrap_or_default());
+        // Watched and never acked: held at the window's limit.
+        attach_pty(&mut ws, 2, "t", 0).await;
+        tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+        drop(ws);
+        tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+
+        let mut ws = connect_authed(&handle).await;
+        let attached = attach_pty(&mut ws, 1, "t", 0).await;
+        assert!(
+            attached.emitted > 1024 * 1024,
+            "the terminal stopped once its window went: emitted={}",
+            attached.emitted
+        );
         handle.shutdown();
     }
 

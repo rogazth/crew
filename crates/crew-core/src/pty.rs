@@ -208,6 +208,10 @@ struct Inner {
     streams: Mutex<HashMap<u32, String>>,
     next_stream: AtomicU32,
     events: Mutex<Option<Arc<dyn PtyEvents>>>,
+    /// The daemon is going down: the processes it ends on the way out were not
+    /// done, so no exit is announced for them. A window that finds them gone
+    /// once a daemon answers again starts them over.
+    closing: AtomicBool,
 }
 
 #[derive(Clone)]
@@ -230,6 +234,7 @@ impl PtyHost {
                 streams: Mutex::new(HashMap::new()),
                 next_stream: AtomicU32::new(1),
                 events: Mutex::new(None),
+                closing: AtomicBool::new(false),
             }),
         }
     }
@@ -311,6 +316,13 @@ impl PtyHost {
             .unwrap_or_else(|e| e.into_inner())
             .remove(&live.stream_id);
         Some(live)
+    }
+
+    /// From here on no exit is announced: whatever ends now, ends because the
+    /// daemon does. Called before anything is stopped, since a CLI may get the
+    /// same signal and be gone before `kill_all` reaches it.
+    pub fn begin_shutdown(&self) {
+        self.inner.closing.store(true, Ordering::Release);
     }
 
     pub fn kill_all(&self) {
@@ -607,6 +619,25 @@ impl PtyHost {
         Some(live.stream_id)
     }
 
+    /// The last window attached to `stream_id` went away, closed or its Mac
+    /// asleep: the terminal is detached as a closed tab's is, and a CLI left
+    /// working does not stop at a full terminal nobody will read.
+    pub fn unwatch(&self, stream_id: u32) {
+        if let Some(id) = self.session_of_stream(stream_id) {
+            let _ = self.detach(&id);
+        }
+    }
+
+    /// `unwatch` for whoever tracks the windows, without keeping the host alive.
+    pub fn unwatcher(&self) -> impl Fn(u32) + Send + Sync + 'static {
+        let inner = Arc::downgrade(&self.inner);
+        move |stream_id| {
+            if let Some(inner) = inner.upgrade() {
+                PtyHost { inner }.unwatch(stream_id);
+            }
+        }
+    }
+
     pub fn is_live(&self, id: &str) -> bool {
         self.get(id).is_some()
     }
@@ -788,7 +819,8 @@ fn spawn_unix(
         // PTY from the host or paint its exit onto it.
         if wait_host.remove_if_pid(&id, pid).is_some() {
             close_fd(live.master_fd);
-            if let Some(events) = wait_host.events() {
+            let closing = wait_host.inner.closing.load(Ordering::Acquire);
+            if let (Some(events), false) = (wait_host.events(), closing) {
                 events.exit(&id, code);
             }
         }
@@ -1189,6 +1221,59 @@ mod tests {
 
         assert_eq!(spawned, 1, "two concurrent spawns left {spawned} children");
         assert_eq!(survivors, 0, "kill left {survivors} children running");
+    }
+
+    /// How far a child that counts its writes got, once it stops moving or after `within`.
+    fn settled_count(path: &std::path::Path, within: Duration) -> (u64, bool) {
+        // The child truncates the file on every count; a read can land in between.
+        let read = || {
+            (0..200)
+                .find_map(|_| {
+                    let count = std::fs::read_to_string(path).ok().and_then(|s| s.trim().parse::<u64>().ok());
+                    if count.is_none() {
+                        thread::sleep(Duration::from_millis(1));
+                    }
+                    count
+                })
+                .unwrap_or(0)
+        };
+        let started = Instant::now();
+        let mut last = read();
+        while started.elapsed() < within {
+            thread::sleep(Duration::from_millis(400));
+            let now = read();
+            if now == last {
+                return (now, true);
+            }
+            last = now;
+        }
+        (last, false)
+    }
+
+    // A window that is closed, or whose Mac sleeps, acks nothing: the CLI it
+    // left working must not stop at a full terminal.
+    #[test]
+    fn a_terminal_runs_on_once_its_window_goes() {
+        let counter = std::env::temp_dir().join(format!("crew_pty_unwatched_{}", std::process::id()));
+        let script = format!(
+            "i=0; while true; do i=$((i+1)); echo $i > {}; printf '%01000d' 0; done",
+            counter.display()
+        );
+        let host = PtyHost::new();
+        let id = "session:unwatched".to_string();
+        let command = vec!["/bin/sh".to_string(), "-c".to_string(), script];
+        let stream = host.spawn(id.clone(), "/".into(), command, 80, 24, None).expect("spawn");
+        // A window attaches and never acks: the child stops at the window's limit.
+        host.attach(&id, 0, |_, _, _| {}).expect("attach");
+        let (held, stalled) = settled_count(&counter, Duration::from_secs(10));
+        assert!(stalled, "a window that acks nothing must hold the child back");
+
+        // That window goes: the child runs again.
+        host.unwatch(stream);
+        let (after, _) = settled_count(&counter, Duration::from_secs(2));
+        host.kill(&id);
+        let _ = std::fs::remove_file(&counter);
+        assert!(after > held + 50, "the child stayed at {held} once nobody watched ({after})");
     }
 
     #[test]

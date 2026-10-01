@@ -5,6 +5,7 @@ import { markRunning, markStopped, sessionOfPty } from "./runningSessions";
 const encoder = new TextEncoder();
 const dataHandlers = new Map<string, (bytes: Uint8Array) => void>();
 const attachHandlers = new Map<string, (start: number) => void>();
+const lostHandlers = new Map<string, () => void>();
 const streams = new Map<string, { id: number; stop: () => void }>();
 const delivered = new Map<string, number>();
 /** Bumped by every spawn and kill: a spawn that answers after a newer one, or after its kill, is stale. */
@@ -14,10 +15,21 @@ let reconnectHook: (() => void) | null = null;
 function ensureReconnect() {
   if (reconnectHook) return;
   reconnectHook = client.onReconnect((here = () => true) => {
-    for (const [id] of streams) {
-      if (here(id)) void applyAttach(id, delivered.get(id) ?? 0).catch(() => {});
+    for (const [id, stream] of streams) {
+      if (!here(id)) continue;
+      void applyAttach(id, delivered.get(id) ?? 0).catch((error: unknown) => {
+        // The daemon came back without it: it restarted (an update, the
+        // kernel killing it for memory) and took its processes along, and
+        // no exit was sent to say so. Only the stream that was asked about.
+        if (streams.get(id)?.id === stream.id && isNotRunning(error)) lostHandlers.get(id)?.();
+      });
     }
   });
+}
+
+/** What the daemon answers for a terminal it has no process for. */
+function isNotRunning(error: unknown): boolean {
+  return error instanceof Error && error.message === "Terminal is not running";
 }
 
 async function applyAttach(id: string, from: number): Promise<void> {
@@ -39,16 +51,21 @@ function attach(sessionId: string, streamId: number, onData: (bytes: Uint8Array)
  * Every PTY shares one event bus, so each terminal filters by id. The daemon
  * sends a stream's bytes only once it is attached, from the offset asked for.
  * Spawn after subscribing so the exit listener is already attached.
+ *
+ * `onLost` is a process that went without an exit: once the link comes back,
+ * the daemon has nothing under this id.
  */
 export function subscribePty(
   id: string,
   onData: (bytes: Uint8Array) => void,
   onExit: (code: number | null) => void,
   onAttach?: (start: number) => void,
+  onLost?: () => void,
 ): () => void {
   ensureReconnect();
   dataHandlers.set(id, onData);
   if (onAttach) attachHandlers.set(id, onAttach);
+  if (onLost) lostHandlers.set(id, onLost);
   const existing = streams.get(id);
   if (existing) attach(id, existing.id, onData);
   const stopExit = client.on("pty-exit", (payload) => {
@@ -64,6 +81,7 @@ export function subscribePty(
     stopError();
     if (dataHandlers.get(id) === onData) dataHandlers.delete(id);
     if (attachHandlers.get(id) === onAttach) attachHandlers.delete(id);
+    if (lostHandlers.get(id) === onLost) lostHandlers.delete(id);
     streams.get(id)?.stop();
     streams.delete(id);
     delivered.delete(id);
@@ -188,6 +206,7 @@ function release(id: string) {
   streams.delete(id);
   dataHandlers.delete(id);
   attachHandlers.delete(id);
+  lostHandlers.delete(id);
   delivered.delete(id);
 }
 
