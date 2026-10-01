@@ -156,7 +156,9 @@ fn line_match(matcher: &RegexMatcher, number: u64, line: &str) -> LineMatch {
     let line = line.trim_end_matches(['\n', '\r']);
     let mut spans = Vec::new();
     let _ = matcher.find_iter(line.as_bytes(), |found| {
-        spans.push((found.start(), found.end()));
+        // A byte-level pattern (`(?-u:.)`) can match inside a character; the
+        // span widens to whole ones, so slicing the line below cannot panic.
+        spans.push((floor_char(line, found.start()), ceil_char(line, found.end())));
         // An empty match (`^`, `x*`) highlights nothing, and is found once;
         // a minified line full of hits shows the first few.
         !found.is_empty() && spans.len() < MAX_RANGES
@@ -183,6 +185,20 @@ fn line_match(matcher: &RegexMatcher, number: u64, line: &str) -> LineMatch {
         preview_start: units[&start],
         ranges: spans.into_iter().map(|(from, to)| (units[&from], units[&to])).collect(),
     }
+}
+
+fn floor_char(line: &str, mut at: usize) -> usize {
+    while !line.is_char_boundary(at) {
+        at -= 1;
+    }
+    at
+}
+
+fn ceil_char(line: &str, mut at: usize) -> usize {
+    while !line.is_char_boundary(at) {
+        at += 1;
+    }
+    at
 }
 
 fn utf16(text: &str) -> u32 {
@@ -247,6 +263,15 @@ mod tests {
         let mut broken = request(&dir, "needle(");
         broken.regex = Some(true);
         assert_eq!(search(&broken).unwrap_err(), "Unclosed group");
+    }
+
+    #[test]
+    fn a_byte_level_match_widens_to_whole_characters() {
+        let dir = scratch(&[("a.txt", "ñandú\n")]);
+        let mut bytes = request(&dir, "(?-u:.)");
+        bytes.regex = Some(true);
+        let result = search(&bytes).unwrap();
+        assert_eq!(result.files[0].lines[0].ranges[0], (0, 1));
     }
 
     #[test]
