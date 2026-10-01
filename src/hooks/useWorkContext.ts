@@ -1,8 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import * as api from "../lib/api";
+import { client } from "../lib/client";
+import { markHanded } from "../lib/handedSessions";
+import type { SessionCreated } from "../lib/protocol";
 import { joinStrips, splitStrip, tabPlace } from "../lib/strips";
 import type { PlaceOf } from "../lib/tabGroups";
-import { lastUsed, type TabRegistry } from "../lib/tabs";
+import { lastUsed, sessionTabId, type TabRegistry } from "../lib/tabs";
 import type { Session, Tab, Workspace, Worktree } from "../lib/types";
 import { asListed, contextId, placePath, sessionPath, unlistedWorktrees, worktreeHue, type TabScope } from "../lib/worktrees";
 import { useTabRegroup, useTabScope } from "./useTabScope";
@@ -136,10 +139,29 @@ export function useWorkContext(
   // Switching between tabs per worktree and all together rearranges every
   // workspace's strips: this one's as the screen has them, the others' as crewd
   // keeps them.
-  const latest = useRef({ workspace, current, tabs, worktrees, everywhere });
+  const latest = useRef({ workspace, current, tabs, worktrees, everywhere, scope });
   useEffect(() => {
-    latest.current = { workspace, current, tabs, worktrees, everywhere };
+    latest.current = { workspace, current, tabs, worktrees, everywhere, scope };
   });
+
+  // A session `create_worktree` handed work joins its worktree's strip behind
+  // whatever is on screen, and its CLI starts on the task out of sight: the
+  // window stays where it was.
+  useEffect(() => {
+    const unsubscribe = client.on("session-created", (payload) => {
+      const { session, open } = payload as SessionCreated;
+      const { tabs, everywhere, scope } = latest.current;
+      const of = everywhere.workspaces.find((ws) => ws.id === session.workspaceId);
+      if (!open || !of) return;
+      markHanded(session.id);
+      tabs.adopt(contextId(of, session.worktree ?? of.path, scope), {
+        id: sessionTabId(session.id),
+        kind: "session",
+        sessionId: session.id,
+      });
+    });
+    return () => unsubscribe();
+  }, []);
   const regroup = useCallback(async (to: TabScope, commit: () => void) => {
     const { workspace: shown, current: here, tabs, worktrees, everywhere } = latest.current;
     const plans = await Promise.all(

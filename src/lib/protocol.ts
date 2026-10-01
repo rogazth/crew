@@ -660,7 +660,12 @@ export type SessionCreate = { workspaceId: string, kind: string, name: string, p
  */
 worktree?: string | null, };
 
-export type SessionCreated = { session: Session, };
+export type SessionCreated = { session: Session, 
+/**
+ * The window opens its tab behind the one on screen, so its CLI starts
+ * on the task it was handed.
+ */
+open: boolean, };
 
 /**
  * New or changed blocks at the end of a session's history, while a chat reads it.

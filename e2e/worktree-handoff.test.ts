@@ -1,7 +1,7 @@
 // A session in the main checkout hands its work to a branch of its own:
-// `create_worktree` makes the worktree, an agent in it, and gives that agent
-// the task. The caller stays where it was, and the window shows the new
-// worktree and its agent without being refocused.
+// `create_worktree` makes the worktree and a terminal session in it, whose CLI
+// starts with the task as its first prompt. The caller stays where it was, and
+// the window shows the new worktree and its session without being refocused.
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
@@ -18,9 +18,7 @@ import {
   worktreeHeader,
 } from "./harness.ts";
 
-type Transcript = { blocks: { text: string }[] };
-
-test("a terminal in the main checkout hands its task to a new agent on a worktree", async (t) => {
+test("a terminal in the main checkout hands its task to a new session on a worktree", async (t) => {
   const crew = await launchCrew();
   t.after(() => crew.close());
   const [main] = crew.workspaces;
@@ -41,9 +39,9 @@ test("a terminal in the main checkout hands its task to a new agent on a worktre
     timeout: 30_000,
     message: "crew worktrees new answers",
   });
-  const handed = JSON.parse(answer) as { worktree: string; branch: string; agent: { id: string; name: string } };
+  const handed = JSON.parse(answer) as { worktree: string; branch: string; session: { id: string; name: string } };
   assert.equal(handed.branch, "feat/handoff", answer);
-  assert.equal(handed.agent.name, "feat/handoff", answer);
+  assert.equal(handed.session.name, "feat/handoff", answer);
 
   // Git has it where Crew keeps worktrees, on the branch.
   const trees = await gitWorktrees(crew, main.path);
@@ -52,25 +50,24 @@ test("a terminal in the main checkout hands its task to a new agent on a worktre
   assert.equal(tree.branch, "refs/heads/feat/handoff");
   assert.ok(handed.worktree.startsWith(path.join(crew.home, ".crew/worktrees/")), handed.worktree);
 
-  // The agent works in it; the terminal stays in the main checkout.
+  // The session works in it; the terminal stays in the main checkout.
   const rows = await sessions(crew, main.id);
-  const agent = rows.find((row: Session) => row.id === handed.agent.id);
-  assert.ok(agent, "crewd has the new agent");
-  assert.equal(agent.kind, "agent");
-  assert.equal(agent.worktree, handed.worktree);
+  const handedTo = rows.find((row: Session) => row.id === handed.session.id);
+  assert.ok(handedTo, "crewd has the new session");
+  assert.equal(handedTo.kind, "terminal");
+  assert.equal(handedTo.worktree, handed.worktree);
   assert.equal(rows.find((row: Session) => row.id === shell.id)?.worktree ?? null, null);
 
-  // It has the task: its first turn is on it.
-  await waitFor(
-    async () => {
-      const chat = await crew.request<Transcript>("transcript_tail", { sessionId: agent.id });
-      return chat.blocks.some((block) => block.text.includes(task));
-    },
-    { timeout: 15_000, message: "the new agent reads the task" },
+  // Its tab opens behind the one on screen, and its CLI starts on the task.
+  const started = await waitFor(
+    async () =>
+      (await crew.claudeLaunches()).find((row) => row.argv.includes(handedTo.id) && row.argv.some((arg) => arg.includes(task))),
+    { timeout: 15_000, message: "the new session's CLI starts on the task" },
   );
+  assert.equal(started.cwd, handed.worktree);
 
   // The window lists the worktree, with no focus to prompt a reread, and the
-  // agent under it. The window stays on the main checkout, so it comes folded.
+  // session under it. The window stays on the main checkout, so it comes folded.
   const header = worktreeHeader(crew, "feat/handoff");
   await header.waitFor({ timeout: 15_000 });
   assert.equal(await header.getAttribute("aria-expanded"), "false");

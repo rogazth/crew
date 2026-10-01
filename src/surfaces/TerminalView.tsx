@@ -55,6 +55,11 @@ type Props = {
   covered?: boolean | undefined;
   /** The rows on screen, after output settles; for a view drawn over the terminal to read. */
   onScreen?: ((lines: string[]) => void) | undefined;
+  /**
+   * Starts the process out of sight, at xterm's own grid, instead of when the
+   * pane is first shown: a session handed work starts on it at once.
+   */
+  eager?: boolean | undefined;
 };
 
 const ACTIVITY_INTERVAL = 400;
@@ -84,6 +89,7 @@ export function TerminalView({
   onOpenPath,
   covered = false,
   onScreen,
+  eager = false,
 }: Props) {
   const paneRef = useRef<HTMLDivElement>(null);
   const hostRef = useRef<HTMLDivElement>(null);
@@ -96,10 +102,10 @@ export function TerminalView({
   const search = useTerminalSearch(termRef, isDark);
   const attachSearch = search.attach;
 
-  const latest = useRef({ onExit, onBell, onActivity, onTitle, onInput, onResize, onOpenPath, onScreen, command, session, shellOnExit });
+  const latest = useRef({ onExit, onBell, onActivity, onTitle, onInput, onResize, onOpenPath, onScreen, command, session, shellOnExit, eager });
   useEffect(() => {
     // Only `command` at spawn: a later argv must not respawn the running process.
-    latest.current = { onExit, onBell, onActivity, onTitle, onInput, onResize, onOpenPath, onScreen, command, session, shellOnExit };
+    latest.current = { onExit, onBell, onActivity, onTitle, onInput, onResize, onOpenPath, onScreen, command, session, shellOnExit, eager };
   });
 
   const dropPaths = useCallback((paths: string[]) => {
@@ -395,6 +401,13 @@ export function TerminalView({
     const observer = new ResizeObserver(schedule);
     observer.observe(host);
     schedule();
+    // Out of sight there is no grid to measure; the first look fits this one.
+    if (latest.current.eager && !visible()) {
+      started = true;
+      lastCols = term.cols;
+      lastRows = term.rows;
+      spawn(latest.current.command, latest.current.session, true);
+    }
 
     const onScheme = () => {
       colors = palette();

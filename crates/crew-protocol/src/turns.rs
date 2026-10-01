@@ -90,6 +90,10 @@ pub struct SessionStatusEvent {
 #[ts(export, export_to = "../../../src/lib/protocol.ts")]
 pub struct SessionCreated {
     pub session: Session,
+    /// The window opens its tab behind the one on screen, so its CLI starts
+    /// on the task it was handed.
+    #[serde(default)]
+    pub open: bool,
 }
 
 /// A session's row changed outside the window's hands: a terminal Claude

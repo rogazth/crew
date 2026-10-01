@@ -321,13 +321,13 @@ pub(crate) fn catalog() -> Vec<Tool> {
         },
         Tool {
             name: "create_worktree",
-            description: "Move work onto a git branch of its own: Crew makes a worktree for the branch, creates an agent in it with your provider, model and autonomy, and sends it the task, which it starts on at once. You stay in this checkout; the work carries on there. Use this instead of running `git worktree add` yourself, which leaves you working here and the worktree out of Crew's sidebar. Changes nobody committed stay in this checkout.",
+            description: "Move work onto a git branch of its own: Crew makes a worktree for the branch and opens a terminal session in it with your provider, model and autonomy, whose CLI starts with the task as its first prompt. You stay in this checkout; the work carries on there, in a tab of that worktree. Use this instead of running `git worktree add` yourself, which leaves you working here and the worktree out of Crew's sidebar. Changes nobody committed stay in this checkout.",
             schema: json!({
                 "type": "object",
                 "properties": {
                     "branch": { "type": "string", "description": "The branch to work on. Checked out if it exists, tracked from a remote if only a remote has it, otherwise made from the main checkout's HEAD." },
-                    "task": { "type": "string", "description": "Everything the new agent needs to carry on: the goal, what was decided, what is done and what is left, the files involved. It cannot see your conversation." },
-                    "name": { "type": "string", "description": "The new agent's name. Defaults to the branch." }
+                    "task": { "type": "string", "description": "Everything the new session needs to carry on: the goal, what was decided, what is done and what is left, the files involved. It cannot see your conversation, and message_agent does not reach it later." },
+                    "name": { "type": "string", "description": "The new session's name. Defaults to the branch." }
                 },
                 "required": ["branch", "task"]
             }),
@@ -1039,11 +1039,16 @@ fn create_agent(
     }))
 }
 
-/// Work handed to a new agent on a branch of its own, rather than the caller
-/// moved there. A running CLI's folder is fixed at launch, and the transcript
-/// a later resume looks for is filed under that folder, so a session that
-/// changed worktrees would come back with its conversation lost. A new agent
-/// starts where it works and nothing has to follow it.
+/// Work handed to a new terminal session on a branch of its own, rather than
+/// the caller moved there. A running CLI's folder is fixed at launch, and the
+/// transcript a later resume looks for is filed under that folder, so a
+/// session that changed worktrees would come back with its conversation lost.
+/// A new session starts where it works and nothing has to follow it.
+///
+/// A session, not an agent: it is the caller's work carried on, in a CLI the
+/// user can watch and talk to, where an agent is a worker of its own. The
+/// task waits in its box until its CLI launches, which takes it as its first
+/// prompt (see `terminal::launch`); the window opens its tab for that.
 ///
 /// `make` is `worktree::add`, taken as an argument so a test can put the
 /// worktree somewhere other than the real home.
@@ -1059,38 +1064,35 @@ fn create_worktree(
         .ok_or_else(|| "create_worktree needs a session to hand the work from.".to_string())?;
     let branch = text(args.get("branch")).ok_or_else(|| "branch is required".to_string())?;
     let task = text(args.get("task"))
-        .ok_or_else(|| "task is required: the new agent cannot see your conversation".to_string())?;
+        .ok_or_else(|| "task is required: the new session cannot see your conversation".to_string())?;
     let name = text(args.get("name")).unwrap_or_else(|| branch.clone());
     let tree = make(&session::cwd(store, me)?, &branch)?;
     let session = session::create_in_worktree(
         store,
         me.workspace_id.clone(),
-        "agent".into(),
+        "terminal".into(),
         name.clone(),
         me.provider.clone(),
         me.model.clone(),
-        format!("You work on the branch {branch}, in the worktree at {}.", tree.path),
+        String::new(),
         // Inherited, as create_agent's is.
         me.autonomy.clone(),
         Some(tree.path.clone()),
     )
-    .map_err(|error| format!("The worktree is at {}, but its agent could not be made: {error}", tree.path))?;
+    .map_err(|error| format!("The worktree is at {}, but its session could not be made: {error}", tree.path))?;
+    mailbox::enqueue(store, &session.id, &caller.sender(), &task)?;
     (host.on_created)(&session);
-    host.transcripts
-        .append_system(&session.id, &format!("Handed {branch} by {}", me.name));
     if matches!(caller, Caller::Agent(_)) {
         host.transcripts
             .append_system(&me.id, &format!("Handed {branch} to {name} ({})", session.id));
     }
-    mailbox::enqueue(store, &session.id, &caller.sender(), &task)?;
-    let delivered = (host.deliver)(&session);
     Ok(json!({
         "worktree": tree.path,
         "branch": branch,
-        "agent": { "id": session.id, "name": name },
-        "delivered": delivered,
+        "session": { "id": session.id, "name": name },
         "note": format!(
-            "{name} has the task and works in {}. Leave that work to it; anything more goes through message_agent.",
+            "{name} opens in a tab of that worktree and starts on the task in {}. Leave that work to it: \
+             it is a terminal session, so message_agent does not reach it.",
             tree.path
         )
     }))
@@ -2116,10 +2118,11 @@ mod tests {
         assert_eq!(made.worktree.as_deref(), Some("/wt/feat"));
     }
 
-    /// The work leaves on a branch of its own with a new agent, which starts
-    /// on the task at once; the caller stays where it was.
+    /// The work leaves on a branch of its own with a new terminal session,
+    /// whose box holds the task for its CLI's first prompt; the caller stays
+    /// where it was.
     #[test]
-    fn create_worktree_hands_the_task_to_a_new_agent_in_it() {
+    fn create_worktree_hands_the_task_to_a_new_session_in_it() {
         let store = store();
         let transcripts = TranscriptHub::new(store.clone());
         let root = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
@@ -2171,16 +2174,18 @@ mod tests {
             .expect("list")
             .into_iter()
             .find(|row| row.name == "feat/login")
-            .expect("the agent");
+            .expect("the session");
         assert_eq!(made.worktree.as_deref(), Some(path.as_str()));
-        assert_eq!((made.kind.as_str(), made.provider.as_str(), made.autonomy.as_str()), ("agent", "claude", "ask"));
+        assert_eq!((made.kind.as_str(), made.provider.as_str(), made.autonomy.as_str()), ("terminal", "claude", "ask"));
+        assert_eq!(out["session"]["id"], json!(made.id));
         assert_eq!(created.borrow().as_slice(), [made.id.clone()], "the window hears of it");
+        let waiting = mailbox::waiting(&store, &made.id).expect("box");
         assert_eq!(
-            postman.handed.borrow().as_slice(),
-            [("feat/login".to_string(), "Build the login form.".to_string())],
-            "it starts on the task"
+            waiting.iter().map(|letter| (letter.from.name.as_str(), letter.text.as_str())).collect::<Vec<_>>(),
+            [("Coder", "Build the login form.")],
+            "the task waits for its CLI"
         );
-        assert_eq!(out["delivered"], true);
+        assert!(postman.handed.borrow().is_empty(), "no agent turn is started");
         let me = session::get(&store, coder.id.clone()).expect("get").expect("coder");
         assert_eq!(me.worktree, None, "the caller stays in its checkout");
 

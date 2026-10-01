@@ -9,6 +9,7 @@ import * as api from '../lib/api';
 import { homeFor, sessionCwd } from '../lib/client/registry';
 import { claudeSessionId, transcriptPath } from '../lib/claudeStorage';
 import { bindProviderSession } from '../lib/agentRuntime';
+import { isHanded } from '../lib/handedSessions';
 import { blockingScreen, type BlockingScreen } from '../lib/blockingScreen';
 import { BYPASS_KEY } from '../lib/permissions';
 import { providerOf } from '../lib/providers';
@@ -274,6 +275,8 @@ function SessionTerminal({
             onResize={onResize}
             onOpenPath={onOpenPath}
             onScreen={chat ? readScreen : undefined}
+            // Not before git lists its worktree: until then it reads as the main checkout.
+            eager={isHanded(session.id) && cwd === session.worktree}
           />
         </Suspense>
       )}

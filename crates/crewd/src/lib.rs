@@ -12,6 +12,7 @@ use crew_core::browser_tools::BrowserTools;
 use crew_core::caller::Caller;
 use crew_core::file_search;
 use crew_core::files;
+use crew_core::mailbox;
 use crew_core::messages;
 use crew_core::provider_session;
 use crew_core::process::{ProcessEvents, ProcessHost, ProcessPatch, RunRequest};
@@ -468,6 +469,9 @@ impl ToolHost for ToolDispatch {
                 "session-created",
                 SessionCreated {
                     session: proto_session(created),
+                    // The only terminal a tool makes is one `create_worktree`
+                    // handed work: the window opens its tab and starts its CLI.
+                    open: created.kind == "terminal",
                 },
             );
         };
@@ -1081,7 +1085,7 @@ fn rebind_claude_session(store: &Store, hub: &Hub, id: String) -> Result<Option<
 
 fn announce(hub: &Hub, followed: &session::Followed) {
     for split in &followed.split {
-        hub.emit("session-created", SessionCreated { session: proto_session(split) });
+        hub.emit("session-created", SessionCreated { session: proto_session(split), open: false });
     }
     hub.emit("session-updated", SessionUpdated { session: proto_session(&followed.session) });
 }
@@ -1114,11 +1118,21 @@ fn terminal_launch(
     }
     let info = bridge.info()?;
     let token = bridge.mint_process(session_id);
+    // The task `create_worktree` handed it, taken by the first launch whose
+    // CLI can start on it; a shell leaves it in the box.
+    let letter = mailbox::claim(store, session_id)?;
+    let opening = letter
+        .as_ref()
+        .map(|letter| mailbox::envelope(&letter.from, &letter.text, letter.at, false));
     let launch = crew_core::terminal::launch(
         &row.provider,
         command,
+        opening.as_deref(),
         &crew_core::terminal::BridgeLink { exe: &info.exe, socket: &info.socket_path, token: &token },
     );
+    if let Some(letter) = letter.filter(|_| !launch.prompted) {
+        mailbox::release(store, &letter.id)?;
+    }
     let bridge = bridge.clone();
     let leases = leases.clone();
     let session = session_id.to_string();
