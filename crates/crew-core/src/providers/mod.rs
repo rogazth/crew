@@ -6,6 +6,8 @@ pub mod runtime;
 
 pub use runtime::{Autonomy, InlineImage};
 
+use std::borrow::Cow;
+
 use serde_json::{Map, Value};
 
 pub fn as_record(value: &Value) -> Option<&Map<String, Value>> {
@@ -155,21 +157,28 @@ pub fn crew_tool(name: &str) -> Option<&str> {
 /// The Crew tool a call runs, and its arguments. Only `find_tool` and
 /// `call_tool` are listed, so most calls are `call_tool` naming the tool; a
 /// row read as the gateway would show every message as "call tool" and a blob.
-pub fn crew_call<'a>(name: &'a str, input: &'a Map<String, Value>) -> Option<(&'a str, &'a Map<String, Value>)> {
+///
+/// A model often writes `arguments` as a JSON string rather than an object.
+/// Claude Code parses it against the schema before the call reaches the MCP
+/// server, so the call works, but its stream carries the string: read as an
+/// object only, a message sent that way showed up with no detail at all.
+pub fn crew_call<'a>(name: &'a str, input: &'a Map<String, Value>) -> Option<(&'a str, Cow<'a, Map<String, Value>>)> {
     let verb = crew_tool(name)?;
     if verb != "call_tool" {
-        return Some((verb, input));
+        return Some((verb, Cow::Borrowed(input)));
     }
     let inner = input.get("name").and_then(Value::as_str).filter(|inner| !inner.is_empty());
-    let arguments = input.get("arguments").and_then(Value::as_object);
+    let arguments = match input.get("arguments") {
+        Some(Value::Object(arguments)) => Some(Cow::Borrowed(arguments)),
+        Some(Value::String(raw)) => serde_json::from_str::<Map<String, Value>>(raw).ok().map(Cow::Owned),
+        _ => None,
+    };
     match (inner, arguments) {
         (Some(inner), Some(arguments)) => Some((inner, arguments)),
-        (Some(inner), None) => Some((inner, &EMPTY)),
-        _ => Some((verb, input)),
+        (Some(inner), None) => Some((inner, Cow::Owned(Map::new()))),
+        _ => Some((verb, Cow::Borrowed(input))),
     }
 }
-
-static EMPTY: std::sync::LazyLock<Map<String, Value>> = std::sync::LazyLock::new(Map::new);
 
 /// What a Crew tool did, for the one that is worth reading in a transcript: a
 /// message to another agent is half of a conversation happening in two places.
@@ -179,8 +188,8 @@ pub fn crew_tool_detail(name: &str, input: &Map<String, Value>) -> Option<crew_p
         return None;
     }
     Some(crew_protocol::ToolDetail::Message {
-        to: string_field(Some(input), "to")?,
-        text: string_field(Some(input), "text").unwrap_or_default(),
+        to: string_field(Some(&input), "to")?,
+        text: string_field(Some(&input), "text").unwrap_or_default(),
     })
 }
 
@@ -405,6 +414,20 @@ mod tests {
         let empty = serde_json::Map::new();
         assert_eq!(crew_call("mcp__crew__call_tool", &empty).map(|(verb, _)| verb), Some("call_tool"));
         assert_eq!(crate::providers::claude::tool_label("mcp__crew__call_tool", input), "Crew message agent abc");
+    }
+
+    /// Measured on Claude Code 2.1.286: the stream carries `arguments` as the
+    /// JSON string the model wrote, and the MCP call gets it parsed.
+    #[test]
+    fn arguments_written_as_a_string_are_read_as_the_object_they_hold() {
+        let input = serde_json::json!({ "name": "message_agent", "arguments": "{\"to\": \"abc\", \"text\": \"the branch is green\"}" });
+        let input = input.as_object().unwrap();
+        assert!(matches!(
+            crew_tool_detail("mcp__crew__call_tool", input),
+            Some(crew_protocol::ToolDetail::Message { ref to, ref text }) if to == "abc" && text == "the branch is green"
+        ));
+        let junk = serde_json::json!({ "name": "list_agents", "arguments": "not json" });
+        assert_eq!(crew_call("mcp__crew__call_tool", junk.as_object().unwrap()).map(|(verb, _)| verb), Some("list_agents"));
     }
 
     #[test]

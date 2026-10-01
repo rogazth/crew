@@ -563,6 +563,7 @@ pub fn is_compact_boundary(rec: &Map<String, Value>) -> bool {
 
 pub fn tool_label(name: &str, input: &Map<String, Value>) -> String {
     if let Some((verb_raw, input)) = name.strip_prefix("mcp__crew__").and(super::crew_call(name, input)) {
+        let input: &Map<String, Value> = &input;
         if !verb_raw.is_empty()
             && verb_raw
                 .chars()

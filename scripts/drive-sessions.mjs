@@ -129,7 +129,8 @@ function bridge(token, method, params = {}, timeoutMs = 90_000) {
       conn.destroy();
       reject(new Error(`${method} ${params.name ?? ""} timed out`));
     }, timeoutMs);
-    conn.on("connect", () => conn.write(JSON.stringify({ token, method, params }) + "\n"));
+    // The user's token names its workspace on every call; a session's is ignored.
+    conn.on("connect", () => conn.write(JSON.stringify({ token, method, params, workspace: workspace?.id }) + "\n"));
     conn.on("data", (chunk) => (buffer += chunk));
     conn.on("error", (error) => {
       clearTimeout(timer);
@@ -569,6 +570,7 @@ const scenarios = {
     const shell = await terminal(`j-${provider}`);
     const idle = await start(shell.token, provider, "Reply with the word KEPT.");
     const kept = await waitEvent(shell.token, idle);
+    assert(kept.sessions[0].event === "turn", `the first session's turn failed before any restart: ${JSON.stringify(kept.sessions[0])}`);
     const busy = await start(shell.token, provider, "Run the shell command `sleep 20`, then reply with the word RESTARTED.");
     await untilTool(shell.token, busy);
     const before = await must(shell.token, "wait_for_session", { sessions: [busy], timeout_s: 1 });
@@ -661,7 +663,7 @@ for (const scenario of SCENARIOS.filter((s) => s !== "j").concat(SCENARIOS.inclu
     }
   }
 }
-for (const provider of ALL.filter((p) => !usable.includes(p))) {
+for (const provider of ALL.filter((p) => !installed(p))) {
   for (const scenario of SCENARIOS) record(scenario, provider, { status: "not available", note: "CLI not installed" });
 }
 await stopDaemon();

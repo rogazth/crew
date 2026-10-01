@@ -368,6 +368,7 @@ pub fn tool_label(item: &Map<String, Value>) -> String {
                 let named = format!("crew.{tool}");
                 let arguments = item.get("arguments").and_then(as_record).cloned().unwrap_or_default();
                 if let Some((verb, input)) = super::crew_call(&named, &arguments) {
+                    let input: &Map<String, Value> = &input;
                     let verb = format!("Crew {}", verb.replace('_', " "));
                     let subject = string_field(Some(input), "to")
                         .or_else(|| string_field(Some(input), "name"))
