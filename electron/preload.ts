@@ -12,6 +12,7 @@ import {
   type SitePermissions,
 } from "../src/lib/browser/bridge";
 import { FILE_CHANNELS } from "../src/lib/browser/files";
+import { CLI_CHANNELS } from "../src/lib/cli";
 import type { InstallInput, InstallStep, ManualRemote } from "../src/lib/remotes";
 import { UPDATE_CHANNELS, type UpdateState } from "../src/lib/update";
 
@@ -51,6 +52,11 @@ contextBridge.exposeInMainWorld("crewHost", {
     onWake: (cb: () => void) => listen("remotes:wake", cb),
   },
   zoom: (delta: number) => ipcRenderer.invoke("app-zoom", delta),
+  cli: {
+    status: () => ipcRenderer.invoke(CLI_CHANNELS.status),
+    install: () => ipcRenderer.invoke(CLI_CHANNELS.install),
+    uninstall: () => ipcRenderer.invoke(CLI_CHANNELS.uninstall),
+  },
   colorMode: {
     get: () => ipcRenderer.invoke("color-mode-get"),
     set: (mode: string) => ipcRenderer.invoke("color-mode-set", mode),

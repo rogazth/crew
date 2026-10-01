@@ -1,5 +1,4 @@
 import { Menu } from "electron";
-import { installCli } from "./install-cli";
 import { checkForUpdates } from "./update";
 
 type Actions = { quitAndStopEverything: () => void };
@@ -11,7 +10,6 @@ export function buildMenu({ quitAndStopEverything }: Actions): Menu {
       submenu: [
         { role: "about" },
         { label: "Check for Updates\u2026", click: () => void checkForUpdates(true) },
-        { label: "Install `crew` Command\u2026", click: () => void installCli() },
         { type: "separator" },
         { role: "hide" },
         { role: "hideOthers" },

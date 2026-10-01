@@ -62,7 +62,7 @@ The bundle is ad-hoc signed (`identity: "-"`): that is what arm64 needs to launc
 
 ## The `crew` command
 
-The app ships a CLI. **Crew › Install `crew` Command…** links it into `~/.local/bin` when your shell looks there, or into `/usr/local/bin` with your password.
+The app ships a CLI. **Settings › General › Command line** links it into `~/.local/bin` when your shell looks there, or into `/usr/local/bin` with your password, and removes it again. A Linux machine added under Environments gets it too, as `~/.crew/bin/crew` beside `crewd`.
 
 ```bash
 crew status                        # is Crew running, and who does it take you for

@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { test, type TestContext } from "node:test";
 import { fileURLToPath } from "node:url";
@@ -311,72 +311,4 @@ test("T4: crew mcp speaks MCP on stdio, lists only the gateway and finds the bro
   // Nothing else is in the prompt: the rest is behind find_tool.
   const names = (listed?.result as { tools: { name: string }[] }).tools.map((tool) => tool.name);
   assert.deepEqual(names, ["find_tool", "call_tool"], stdout);
-});
-
-
-test("T5: Install `crew` Command… links the CLI onto the shell's PATH, and the link works", async (t) => {
-  const crew = await launchCrew();
-  t.after(() => crew.close());
-  const [workspace] = crew.workspaces;
-  assert.ok(workspace);
-
-  // The menu item, clicked from main with its dialogs answered "Replace" and recorded.
-  const install = () =>
-    crew.app.evaluate(async ({ Menu, dialog }) => {
-      const said: string[] = [];
-      const original = dialog.showMessageBox;
-      dialog.showMessageBox = (async (...args: unknown[]) => {
-        const options = args.find((arg) => typeof arg === "object" && arg !== null && "message" in arg) as {
-          message: string;
-          detail?: string;
-        };
-        said.push(`${options.message}: ${options.detail ?? ""}`);
-        return { response: 0, checkboxChecked: false };
-      }) as typeof dialog.showMessageBox;
-      try {
-        type Item = { label: string; click?: (...args: unknown[]) => unknown; submenu?: { items: Item[] } | null };
-        const find = (items: Item[]): Item | undefined => {
-          for (const item of items) {
-            if (item.label.startsWith("Install") && item.label.includes("crew")) return item;
-            const inner = item.submenu ? find(item.submenu.items) : undefined;
-            if (inner) return inner;
-          }
-          return undefined;
-        };
-        const item = find((Menu.getApplicationMenu()?.items ?? []) as unknown as Item[]);
-        if (!item?.click) return ["no menu item"];
-        await item.click();
-        // The handler runs on its own; its last dialog closes it.
-        for (let i = 0; i < 100 && !said.some((line) => /Installed|already installed|Couldn't/.test(line)); i++) {
-          await new Promise((resolve) => setTimeout(resolve, 100));
-        }
-        return said;
-      } finally {
-        dialog.showMessageBox = original;
-      }
-    });
-
-  const link = path.join(crew.home, ".local/bin/crew");
-  const first = await install();
-  assert.ok(first.some((line) => line.startsWith("Installed the crew command")), first.join("\n"));
-  assert.equal(await realpath(link), await realpath(CREW));
-
-  const again = await install();
-  assert.ok(again.some((line) => line.startsWith("The crew command is already installed")), again.join("\n"));
-
-  // Something else in its place is replaced only when the user says so (answered Replace here).
-  await rm(link);
-  await writeFile(link, "#!/bin/sh\necho not crew\n");
-  const replaced = await install();
-  assert.ok(replaced.some((line) => /already exists/.test(line)), replaced.join("\n"));
-  assert.ok(replaced.some((line) => line.startsWith("Installed the crew command")), replaced.join("\n"));
-  assert.equal(await realpath(link), await realpath(CREW));
-
-  // The installed name works from a plain shell in the workspace.
-  const { CREW_SOCKET: _socket, CREW_TOKEN: _token, ...env } = process.env;
-  const { stdout } = await execFileAsync("/bin/bash", ["-lc", "crew status && crew processes list"], {
-    cwd: workspace.path,
-    env: { ...env, HOME: crew.home, CREW_DATA_DIR: crew.userData, PATH: `${path.dirname(link)}:/usr/bin:/bin` },
-  });
-  assert.match(stdout, /daemon\s+running/);
 });

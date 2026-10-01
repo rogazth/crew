@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isTailnetIp, linuxArch, remoteLayout, serviceUnit } from "./remote-ssh";
+import { isTailnetIp, linuxArch, remoteLayout, serviceUnit, swapBinary } from "./remote-ssh";
 
 describe("linux installer", () => {
   it("maps uname to the builds Crew ships", () => {
@@ -26,6 +26,13 @@ describe("linux installer", () => {
     const dev = serviceUnit("100.127.204.79", 17879, remoteLayout("dev"));
     expect(dev).toContain("ExecStart=%h/.crew-dev/bin/crewd serve --listen 100.127.204.79:17879 --data-dir %h/.crew-dev/data");
     expect(dev).not.toContain("%h/.crew/");
+  });
+
+  // Sessions on the machine are told to run the `crew` beside crewd.
+  it("links crew to crewd beside it", () => {
+    const swap = swapBinary(remoteLayout("dev"));
+    expect(swap).toContain('mv "$HOME/.crew-dev/bin"/crewd.new "$HOME/.crew-dev/bin"/crewd');
+    expect(swap).toContain('ln -sfn crewd "$HOME/.crew-dev/bin"/crew');
   });
 
   it("only takes a tailnet address as the one crewd listens on", () => {
