@@ -3,7 +3,7 @@
 //! is not this machine's loopback is refused: the proxy is for the dev server
 //! running here, not an exit onto the rest of the network.
 
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -43,11 +43,11 @@ async fn handle(mut client: TcpStream, token: &str) -> std::io::Result<()> {
         return Ok(());
     }
 
-    let dest = match read_request(&mut client).await? {
-        Some(dest) => dest,
+    let dests = match read_request(&mut client).await? {
+        Some(dests) => dests,
         None => return Ok(()),
     };
-    let mut upstream = match TcpStream::connect(dest).await {
+    let mut upstream = match TcpStream::connect(&dests[..]).await {
         Ok(stream) => stream,
         Err(_) => {
             let _ = reply(&mut client, 0x05).await;
@@ -74,15 +74,15 @@ async fn authenticate(client: &mut TcpStream, token: &str) -> std::io::Result<bo
     Ok(ok)
 }
 
-async fn read_request(client: &mut TcpStream) -> std::io::Result<Option<SocketAddr>> {
+async fn read_request(client: &mut TcpStream) -> std::io::Result<Option<Vec<SocketAddr>>> {
     let mut head = [0u8; 4];
     client.read_exact(&mut head).await?;
     if head[0] != 5 || head[1] != CONNECT {
         reply(client, 0x07).await?;
         return Ok(None);
     }
-    let dest = match decode_addr(client, head[3]).await? {
-        Some(dest) if loopback(&dest) => dest,
+    let dests = match decode_addr(client, head[3]).await? {
+        Some(dests) if dests.iter().all(loopback) => dests,
         Some(_) => {
             reply(client, 0x02).await?;
             return Ok(None);
@@ -92,7 +92,7 @@ async fn read_request(client: &mut TcpStream) -> std::io::Result<Option<SocketAd
             return Ok(None);
         }
     };
-    Ok(Some(dest))
+    Ok(Some(dests))
 }
 
 fn loopback(addr: &SocketAddr) -> bool {
@@ -102,7 +102,9 @@ fn loopback(addr: &SocketAddr) -> bool {
     }
 }
 
-async fn decode_addr(client: &mut TcpStream, atyp: u8) -> std::io::Result<Option<SocketAddr>> {
+/// `localhost` is both loopbacks, IPv6 first as the resolver has it: a dev
+/// server bound to `localhost` often listens on `::1` alone.
+async fn decode_addr(client: &mut TcpStream, atyp: u8) -> std::io::Result<Option<Vec<SocketAddr>>> {
     let ip = match atyp {
         ATYP_V4 => {
             let mut buf = [0u8; 4];
@@ -120,12 +122,15 @@ async fn decode_addr(client: &mut TcpStream, atyp: u8) -> std::io::Result<Option
             if name != "localhost" {
                 return Ok(None);
             }
-            return Ok(Some(SocketAddr::from((Ipv4Addr::LOCALHOST, port))));
+            return Ok(Some(vec![
+                SocketAddr::from((Ipv6Addr::LOCALHOST, port)),
+                SocketAddr::from((Ipv4Addr::LOCALHOST, port)),
+            ]));
         }
         _ => return Ok(None),
     };
     let port = read_port(client).await?;
-    Ok(Some(SocketAddr::from((ip, port))))
+    Ok(Some(vec![SocketAddr::from((ip, port))]))
 }
 
 async fn read_port(client: &mut TcpStream) -> std::io::Result<u16> {
@@ -216,6 +221,35 @@ mod tests {
         let mut status = [0u8; 2];
         rejected.read_exact(&mut status).await.unwrap();
         assert_eq!(status[1], 1);
+    }
+
+    /// A dev server bound to `localhost` may listen on `::1` alone, or on `127.0.0.1` alone.
+    #[tokio::test]
+    async fn localhost_reaches_either_loopback() {
+        for bind in ["[::1]:0", "127.0.0.1:0"] {
+            let Ok(server) = TcpListener::bind(bind).await else {
+                continue;
+            };
+            let port = server.local_addr().unwrap().port().to_be_bytes();
+            tokio::spawn(async move {
+                let (mut stream, _) = server.accept().await.unwrap();
+                stream.write_all(b"pong").await.unwrap();
+            });
+
+            let (addr, _) = socks().await;
+            let mut client = TcpStream::connect(addr).await.unwrap();
+            greet(&mut client, "secret", "secret").await;
+            let mut request = vec![5, CONNECT, 0, ATYP_DOMAIN, 9];
+            request.extend_from_slice(b"localhost");
+            request.extend_from_slice(&port);
+            client.write_all(&request).await.unwrap();
+            let mut reply = [0u8; 10];
+            client.read_exact(&mut reply).await.unwrap();
+            assert_eq!(reply[1], 0, "connect refused for {bind}");
+            let mut body = [0u8; 4];
+            client.read_exact(&mut body).await.unwrap();
+            assert_eq!(&body, b"pong");
+        }
     }
 
     #[tokio::test]
