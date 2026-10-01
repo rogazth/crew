@@ -18,6 +18,12 @@ async function closeChord(crew: Crew): Promise<void> {
   await pressChord(crew, `${MOD}+w`);
 }
 
+/** ⌘⇧T, with the page let go. */
+async function reopenChord(crew: Crew): Promise<void> {
+  await crew.window.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+  await pressChord(crew, `${MOD}+Shift+t`);
+}
+
 async function expectActive(crew: Crew, id: string, message: string): Promise<void> {
   await waitFor(async () => (await activeId(crew)) === id, { message });
 }
@@ -71,4 +77,48 @@ test("closing the tab on screen returns to the tab last on screen, not the one b
   await closeChord(crew);
   await expectActive(crew, three, "closing the first tab returns to the third");
   assert.deepEqual(await stripTabIds(crew), [two, three, four]);
+});
+
+test("reopening a closed tab brings it back where it stood in the strip", async (t) => {
+  const crew = await launchCrew();
+  t.after(() => crew.close());
+  const paths = ["/one", "/two", "/three", "/four"];
+  const server = await servePages(Object.fromEntries(paths.map((at) => [at, at.slice(1)])));
+  t.after(() => server.close());
+
+  const openPage = async (at: string) => {
+    const before = await stripTabIds(crew);
+    await crew.window.getByRole("button", { name: /^New tab/ }).click();
+    const search = crew.window.getByRole("textbox", { name: "Open a tab" });
+    const typed = `${server.origin}${at}`.replace(/^http:\/\//, "");
+    await search.fill(typed);
+    await crew.window.getByRole("button", { name: `Open ${typed}`, exact: true }).click();
+    return waitFor(async () => (await stripTabIds(crew)).find((id) => !before.includes(id)), {
+      message: `a tab opens for ${at}`,
+    });
+  };
+
+  const [one, two, three, four] = [
+    await openPage("/one"),
+    await openPage("/two"),
+    await openPage("/three"),
+    await openPage("/four"),
+  ];
+  const strip = await stripTabIds(crew);
+
+  // The second and third closed, then ⌘⇧T twice: each lands where it stood.
+  await tab(crew, two).click();
+  await expectActive(crew, two, "the second tab is on screen");
+  await closeChord(crew);
+  await tab(crew, three).click();
+  await expectActive(crew, three, "the third tab is on screen");
+  await closeChord(crew);
+  await waitFor(async () => (await stripTabIds(crew)).length === strip.length - 2, { message: "two tabs close" });
+
+  await reopenChord(crew);
+  await expectActive(crew, three, "⌘⇧T brings the third tab back on screen");
+  await reopenChord(crew);
+  await expectActive(crew, two, "⌘⇧T brings the second tab back on screen");
+  assert.deepEqual(await stripTabIds(crew), strip, "both are back where they stood");
+  assert.deepEqual(strip.slice(-4), [one, two, three, four]);
 });

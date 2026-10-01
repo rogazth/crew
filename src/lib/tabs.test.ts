@@ -129,6 +129,36 @@ describe("closeTab", () => {
     expect(state.activeId).toBe("session:b");
   });
 
+  it("brings a closed tab back where it was in the strip", () => {
+    const state = reopenTab(closeTab(opened("a", "b", "c"), "session:b"));
+    expect(state.tabs.map((tab) => tab.id)).toEqual(["session:a", "session:b", "session:c"]);
+    expect(state.activeId).toBe("session:b");
+  });
+
+  it("brings the first tab back first", () => {
+    const state = reopenTab(closeTab(opened("a", "b"), "session:a"));
+    expect(state.tabs.map((tab) => tab.id)).toEqual(["session:a", "session:b"]);
+  });
+
+  it("brings back tabs closed side by side in their order, whichever closed first", () => {
+    const strip = opened("a", "b", "c", "d");
+    const leftFirst = reopenTab(reopenTab(closeTab(closeTab(strip, "session:b"), "session:c")));
+    const rightFirst = reopenTab(reopenTab(closeTab(closeTab(strip, "session:c"), "session:b")));
+    for (const state of [leftFirst, rightFirst])
+      expect(state.tabs.map((tab) => tab.id)).toEqual(["session:a", "session:b", "session:c", "session:d"]);
+  });
+
+  it("falls back to where it stood when the tab left of it has closed too", () => {
+    let state = closeTab(opened("a", "b", "c", "d"), "session:c");
+    state = closeSessionTab(state, "b");
+    expect(reopenTab(state).tabs.map((tab) => tab.id)).toEqual(["session:a", "session:d", "session:c"]);
+  });
+
+  it("forgets where it was once it is open again", () => {
+    const state = reopenTab(closeTab(opened("a", "b", "c"), "session:b"));
+    expect(state.tabs[1]).toEqual(sessionTab("b"));
+  });
+
   it("keeps only the last ten closed tabs", () => {
     let state = opened(...Array.from({ length: 12 }, (_, n) => `s${n}`));
     for (let n = 0; n < 12; n += 1) state = closeTab(state, `session:s${n}`);

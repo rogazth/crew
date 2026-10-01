@@ -45,11 +45,17 @@ export function newTerminalTab(worktree: string | null): Tab {
 export type TabState = {
   tabs: Tab[];
   activeId: string | null;
-  closed: Tab[];
+  closed: ClosedTab[];
   recent?: string[];
   /** Worktrees whose tabs are folded into one chip, all together only. */
   collapsed?: string[];
 };
+
+/**
+ * A tab in the reopen stack, with where it stood: past the tab then on its
+ * left (`null` when it led the strip), else at its index once that one is gone.
+ */
+export type ClosedTab = Tab & { closedAt?: { after: string | null; index: number } };
 
 /** Which tabs a strip shows; the ones folded into a chip are left out. */
 export type Visible = (tab: Tab) => boolean;
@@ -61,23 +67,23 @@ export const CLOSED_LIMIT = 10;
 /**
  * Opens a tab, or focuses it if it is already open. `after` places it next to
  * the tab that asked for it, the way a link opened in a new tab lands beside
- * its page; `background` leaves the active tab alone.
+ * its page, and `at` at an index; `background` leaves the active tab alone.
  */
 export function openTab(
   state: TabState,
   tab: Tab,
-  { after, background = false }: { after?: string; background?: boolean } = {},
+  { after, at, background = false }: { after?: string; at?: number; background?: boolean } = {},
 ): TabState {
   const exists = state.tabs.some((t) => t.id === tab.id);
   let tabs = state.tabs;
   if (!exists) {
-    // Pinned tabs lead the strip: a pinned one lands at their end, any other past them.
+    // Pinned tabs lead the strip: a pinned one lands among them, at their end
+    // unless placed, any other past them.
     const pins = pinnedCount(state.tabs);
     const anchor = after === undefined ? -1 : state.tabs.findIndex((t) => t.id === after);
-    const at = tab.pinned
-      ? pins
-      : Math.max(pins, anchor === -1 ? state.tabs.length : anchor + 1);
-    tabs = [...state.tabs.slice(0, at), tab, ...state.tabs.slice(at)];
+    const wanted = Math.min(at ?? (anchor === -1 ? state.tabs.length : anchor + 1), state.tabs.length);
+    const index = tab.pinned ? Math.min(wanted, pins) : Math.max(pins, wanted);
+    tabs = [...state.tabs.slice(0, index), tab, ...state.tabs.slice(index)];
   }
   const activeId = background && exists === false ? state.activeId : tab.id;
   return tabs === state.tabs && activeId === state.activeId ? state : { ...state, tabs, activeId };
@@ -108,7 +114,7 @@ export function patchBrowserTab(
   return { ...state, tabs };
 }
 
-function withoutTab(state: TabState, id: string, closed: Tab[], visible?: Visible): TabState {
+function withoutTab(state: TabState, id: string, closed: ClosedTab[], visible?: Visible): TabState {
   return {
     ...state,
     tabs: state.tabs.filter((t) => t.id !== id),
@@ -118,9 +124,11 @@ function withoutTab(state: TabState, id: string, closed: Tab[], visible?: Visibl
 }
 
 export function closeTab(state: TabState, id: string, visible?: Visible): TabState {
-  const tab = state.tabs.find((t) => t.id === id);
+  const index = state.tabs.findIndex((t) => t.id === id);
+  const tab = state.tabs[index];
   if (!tab) return state;
-  return withoutTab(state, id, [tab, ...state.closed].slice(0, CLOSED_LIMIT), visible);
+  const closed: ClosedTab = { ...tab, closedAt: { after: state.tabs[index - 1]?.id ?? null, index } };
+  return withoutTab(state, id, [closed, ...state.closed].slice(0, CLOSED_LIMIT), visible);
 }
 
 /** Its session is gone, so the tab must not land in the reopen stack. */
@@ -129,10 +137,14 @@ export function closeSessionTab(state: TabState, sessionId: string): TabState {
   return tab ? withoutTab(state, tab.id, state.closed) : state;
 }
 
+/** The last tab closed, back where it stood, the way a browser's ⌘⇧T brings it. */
 export function reopenTab(state: TabState): TabState {
-  const [tab, ...rest] = state.closed;
-  if (!tab) return state;
-  return openTab({ ...state, closed: rest }, tab);
+  const [closed, ...rest] = state.closed;
+  if (!closed) return state;
+  const { closedAt, ...tab } = closed;
+  const left = closedAt?.after ? state.tabs.findIndex((t) => t.id === closedAt.after) : -1;
+  const at = closedAt?.after === null ? 0 : left === -1 ? closedAt?.index : left + 1;
+  return openTab({ ...state, closed: rest }, tab as Tab, at === undefined ? {} : { at });
 }
 
 /** Chromium's Ctrl+Tab: strip order, wrapping at both ends, past the tabs folded away. */
