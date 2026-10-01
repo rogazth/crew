@@ -130,7 +130,7 @@ fn parts(block: &Block) -> Option<(String, String)> {
     }
 }
 
-fn detail_line(detail: &ToolDetail) -> String {
+pub(crate) fn detail_line(detail: &ToolDetail) -> String {
     match detail {
         ToolDetail::Command { command, exit_code, .. } => {
             let command = clip(command, LINE_LIMIT);
@@ -166,7 +166,7 @@ fn detail_line(detail: &ToolDetail) -> String {
     }
 }
 
-fn outcome(status: &ToolStatus) -> &'static str {
+pub(crate) fn outcome(status: &ToolStatus) -> &'static str {
     match status {
         ToolStatus::Completed => "",
         ToolStatus::Failed => " (failed)",

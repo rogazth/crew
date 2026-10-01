@@ -370,7 +370,64 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         )?;
         tx.commit()?;
     }
+    if current < 23 {
+        let tx = conn.unchecked_transaction()?;
+        split_agents_from_sessions(&tx)?;
+        tx.execute(
+            "INSERT INTO schema_migrations (version, applied_at) VALUES (23, ?1)",
+            params![now_millis()],
+        )?;
+        tx.commit()?;
+    }
     Ok(())
+}
+
+/// Two words that shared one table. An agent is an identity Crew keeps — a
+/// name, a description, an autonomy, its mailbox and its history; a session is
+/// one provider CLI, and can be thrown away. `agents` takes the identity;
+/// `sessions` keeps the CLIs, now with who started each one and how far its
+/// transcript had got at its last event.
+///
+/// An agent keeps the session its turns already ran in, under the agent's own
+/// id, so its transcript, its mailbox and its routines keep their keys and no
+/// row that points at them moves. Each step checks before it acts: a database
+/// wound back to an earlier version keeps whatever this left.
+pub(crate) fn split_agents_from_sessions(conn: &Connection) -> rusqlite::Result<()> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS agents (
+           id            TEXT PRIMARY KEY,
+           workspace_id  TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+           name          TEXT NOT NULL,
+           description   TEXT NOT NULL DEFAULT '',
+           notifications INTEGER NOT NULL DEFAULT 1,
+           autonomy      TEXT NOT NULL DEFAULT 'ask',
+           created_at    INTEGER NOT NULL,
+           updated_at    INTEGER NOT NULL
+         );
+         CREATE INDEX IF NOT EXISTS agents_workspace_idx ON agents (workspace_id);
+         INSERT OR IGNORE INTO agents
+           (id, workspace_id, name, description, notifications, autonomy, created_at, updated_at)
+         SELECT id, workspace_id, name, description, notifications, autonomy, created_at, updated_at
+         FROM sessions WHERE kind = 'agent';",
+    )?;
+    // NULL defaults, so SQLite takes a column with a foreign key on it.
+    if !has_column(conn, "sessions", "agent_id")? {
+        conn.execute_batch("ALTER TABLE sessions ADD COLUMN agent_id TEXT REFERENCES agents(id) ON DELETE CASCADE;")?;
+    }
+    if !has_column(conn, "sessions", "parent_id")? {
+        conn.execute_batch("ALTER TABLE sessions ADD COLUMN parent_id TEXT REFERENCES sessions(id) ON DELETE SET NULL;")?;
+    }
+    if !has_column(conn, "sessions", "cursor")? {
+        conn.execute_batch("ALTER TABLE sessions ADD COLUMN cursor INTEGER NOT NULL DEFAULT 0;")?;
+    }
+    if !has_column(conn, "sessions", "seen")? {
+        conn.execute_batch("ALTER TABLE sessions ADD COLUMN seen INTEGER NOT NULL DEFAULT 0;")?;
+    }
+    conn.execute_batch(
+        "UPDATE sessions SET agent_id = id WHERE kind = 'agent' AND agent_id IS NULL;
+         CREATE INDEX IF NOT EXISTS sessions_parent_idx ON sessions (parent_id) WHERE parent_id IS NOT NULL;",
+    )?;
+    conn.execute_batch(crate::session_events::MIGRATION)
 }
 
 /// Small durable key/value for chrome that has to survive a restart: the active
@@ -429,23 +486,30 @@ pub fn set_order(conn: &Connection, table: &str, ids: &[String]) -> rusqlite::Re
 }
 
 /// A turn that was running when the daemon stopped left tool rows spinning.
+///
+/// An agent's turn is over: it goes back to idle. A child's is not given up:
+/// it goes back to `starting`, and the daemon resumes it once it is up
+/// (`TurnHost::resume_interrupted`), so whoever waits on it still gets a report.
 fn settle_open_turns(conn: &Connection) -> rusqlite::Result<()> {
-    let mut stmt =
-        conn.prepare("SELECT id FROM sessions WHERE status IN ('working', 'needs-input')")?;
-    let ids = stmt
-        .query_map([], |row| row.get::<_, String>(0))?
+    let mut stmt = conn.prepare(
+        "SELECT id, kind FROM sessions
+         WHERE status IN ('working', 'needs-input') OR (kind = 'child' AND status = 'starting')",
+    )?;
+    let rows = stmt
+        .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     drop(stmt);
-    for id in ids {
+    for (id, kind) in rows {
         let settled = crate::blocks::settle_turn(
             crate::messages::all(conn, &id)?,
             crew_protocol::ToolStatus::Interrupted,
         );
         let mut prior = crate::messages::fingerprints(conn, &id)?;
         crate::messages::sync(conn, &id, &settled, &mut prior)?;
+        let status = if kind == "child" { "starting" } else { "idle" };
         conn.execute(
-            "UPDATE sessions SET status = 'idle', updated_at = ?2 WHERE id = ?1",
-            params![id, now_millis()],
+            "UPDATE sessions SET status = ?3, updated_at = ?2 WHERE id = ?1",
+            params![id, now_millis(), status],
         )?;
     }
     Ok(())
@@ -520,6 +584,145 @@ mod migration_tests {
         let session = crate::session::get(&store, id).unwrap().expect("the session survived");
         assert_eq!(session.worktree, None);
         assert_eq!(crate::session::cwd(&store, &session).unwrap(), dir.to_string_lossy());
+    }
+}
+
+#[cfg(test)]
+mod split_tests {
+    use super::*;
+
+    fn fresh() -> (std::path::PathBuf, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!("crew-v23-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        (dir.join("crew.sqlite3"), dir)
+    }
+
+    /// A v22 database — agents and terminals in one table, the agent's
+    /// identity on its session's row — comes out of migration 23 with the
+    /// identity in `agents`, under the same id, and nothing lost on the way:
+    /// the transcript, the mailbox and the routine keep their keys.
+    #[test]
+    fn a_v22_database_keeps_every_agent_terminal_and_transcript() {
+        let (path, dir) = fresh();
+        let (agent, terminal) = {
+            let store = Store::open(path.clone()).expect("open");
+            let ws = crate::workspace::create(&store, "w".into(), dir.to_string_lossy().into()).expect("ws");
+            let agent = crate::session::create(
+                &store, ws.id.clone(), "agent".into(), "Planner".into(), "claude".into(), "m".into(),
+                "You keep the roadmap.".into(), "full".into(),
+            )
+            .expect("agent");
+            let terminal = crate::session::create(
+                &store, ws.id.clone(), "terminal".into(), "Refactor".into(), "codex".into(), "".into(),
+                "".into(), "ask".into(),
+            )
+            .expect("terminal");
+            let blocks = vec![crate::blocks::new_block(crew_protocol::BlockRole::User, "what did we decide?")];
+            store
+                .with(|conn| crate::messages::sync(conn, &agent.id, &blocks, &mut Vec::new()))
+                .expect("transcript");
+            let from = crew_protocol::AgentRef::agent(terminal.id.clone(), terminal.name.clone());
+            crate::mailbox::enqueue(&store, &agent.id, &from, "a letter").expect("letter");
+            // Back to v22: the identity on the session row and nothing else.
+            store
+                .with(|conn| {
+                    conn.execute_batch(
+                        "DROP TABLE session_events;
+                         DROP INDEX sessions_parent_idx;
+                         ALTER TABLE sessions DROP COLUMN agent_id;
+                         ALTER TABLE sessions DROP COLUMN parent_id;
+                         ALTER TABLE sessions DROP COLUMN cursor;
+                         ALTER TABLE sessions DROP COLUMN seen;
+                         DROP TABLE agents;
+                         DELETE FROM schema_migrations WHERE version >= 23;",
+                    )
+                })
+                .expect("downgrade");
+            (agent.id, terminal.id)
+        };
+
+        let store = Store::open(path).expect("reopen");
+
+        let row = crate::session::get(&store, agent.clone()).unwrap().expect("the agent survived");
+        assert_eq!(
+            (row.kind.as_str(), row.agent_id.as_deref(), row.name.as_str(), row.description.as_str(), row.autonomy.as_str()),
+            ("agent", Some(agent.as_str()), "Planner", "You keep the roadmap.", "full")
+        );
+        let shell = crate::session::get(&store, terminal.clone()).unwrap().expect("the terminal survived");
+        assert_eq!((shell.kind.as_str(), shell.agent_id), ("terminal", None));
+        let named: Vec<(String, String)> = store
+            .with(|conn| {
+                conn.prepare("SELECT id, name FROM agents")?
+                    .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+                    .collect()
+            })
+            .unwrap();
+        assert_eq!(named, vec![(agent.clone(), "Planner".to_string())], "a terminal became an agent, or the agent was lost");
+        let transcript = store.with(|conn| crate::messages::all(conn, &agent)).unwrap();
+        assert_eq!(transcript.len(), 1);
+        assert_eq!(crate::mailbox::waiting_count(&store, &agent).unwrap(), 1);
+
+        // Opening again changes nothing: every step looks before it acts.
+        drop(store);
+        let store = Store::open(dir.join("crew.sqlite3")).expect("third open");
+        assert_eq!(crate::session::get(&store, agent).unwrap().unwrap().name, "Planner");
+    }
+
+    /// Identity is written where it lives: the agent's, to `agents`; a
+    /// terminal's, to its own row. Deleting either id takes both rows.
+    #[test]
+    fn an_agents_identity_is_written_to_agents_and_goes_with_its_session() {
+        let (path, dir) = fresh();
+        let store = Store::open(path).expect("open");
+        let ws = crate::workspace::create(&store, "w".into(), dir.to_string_lossy().into()).expect("ws");
+        let agent = crate::session::create(
+            &store, ws.id.clone(), "agent".into(), "Planner".into(), "claude".into(), "m".into(), "".into(), "ask".into(),
+        )
+        .expect("agent");
+        crate::session::update(
+            &store, agent.id.clone(), "Architect".into(), "codex".into(), "gpt".into(), "Design it.".into(), false, "full".into(),
+        )
+        .expect("update");
+        crate::session::rename(&store, agent.id.clone(), "Lead".into()).expect("rename");
+        let (name, description, autonomy, notifications): (String, String, String, bool) = store
+            .with(|conn| {
+                conn.query_row(
+                    "SELECT name, description, autonomy, notifications FROM agents WHERE id = ?1",
+                    params![agent.id],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                )
+            })
+            .unwrap();
+        assert_eq!((name.as_str(), description.as_str(), autonomy.as_str(), notifications), ("Lead", "Design it.", "full", false));
+        let row = crate::session::get(&store, agent.id.clone()).unwrap().unwrap();
+        assert_eq!((row.name.as_str(), row.provider.as_str(), row.autonomy.as_str()), ("Lead", "codex", "full"));
+
+        crate::session::delete(&store, agent.id.clone()).expect("delete");
+        assert!(crate::session::get(&store, agent.id.clone()).unwrap().is_none());
+        let left: i64 = store.with(|conn| conn.query_row("SELECT COUNT(*) FROM agents", [], |row| row.get(0))).unwrap();
+        assert_eq!(left, 0, "the agent outlived its session's deletion");
+    }
+
+    /// A child names who started it; deleting the parent leaves the child, the
+    /// user's now, with its transcript.
+    #[test]
+    fn a_child_outlives_its_parent_as_the_users() {
+        let (path, dir) = fresh();
+        let store = Store::open(path).expect("open");
+        let ws = crate::workspace::create(&store, "w".into(), dir.to_string_lossy().into()).expect("ws");
+        let parent = crate::session::create(
+            &store, ws.id.clone(), "terminal".into(), "Shell".into(), "claude".into(), "".into(), "".into(), "full".into(),
+        )
+        .expect("terminal");
+        let child = crate::session::create_child(
+            &store, ws.id.clone(), "codex: fix".into(), "codex".into(), "m".into(), "full".into(), None, Some(parent.id.clone()),
+        )
+        .expect("child");
+        assert_eq!((child.kind.as_str(), child.status.as_str()), ("child", "starting"));
+        assert_eq!(crate::session::get(&store, child.id.clone()).unwrap().unwrap().parent_id, Some(parent.id.clone()));
+        crate::session::delete(&store, parent.id).expect("delete");
+        let orphan = crate::session::get(&store, child.id).unwrap().expect("the child went with its parent");
+        assert_eq!(orphan.parent_id, None);
     }
 }
 

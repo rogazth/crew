@@ -55,6 +55,37 @@ pub fn persona_prompt(name: &str, description: &str, tools: Option<&str>) -> Str
     }
 }
 
+/// What a child session is told before its first turn: who started it, and
+/// that its last message is its report. It is not an agent and has no job
+/// description; the job is the prompt it was started with.
+pub fn child_persona(parent: &str, tools: Option<&str>) -> String {
+    let persona = format!(
+        "Started by {parent} through Crew, a desktop app that runs provider CLIs. Today is {}. \
+         Your final message of each turn is your report: end with what you did, what is left, \
+         and any question. {parent} reads it when your turn ends and may send you more in this \
+         same conversation; nothing else you write reaches it.",
+        today()
+    );
+    match tools {
+        Some(tools) if !tools.is_empty() => format!("{persona}\n\n{tools}"),
+        _ => persona,
+    }
+}
+
+/// A message and the files attached to it, as one text.
+pub fn with_files(text: &str, files: &[String]) -> String {
+    if files.is_empty() {
+        return text.to_string();
+    }
+    let list = files.iter().map(|path| format!("- {path}")).collect::<Vec<_>>().join("\n");
+    let note = format!("Attached files. Read them if you need their contents:\n{list}");
+    if text.is_empty() {
+        note
+    } else {
+        format!("{text}\n\n{note}")
+    }
+}
+
 /// The prompt a turn is: what the agent is, what has been said, then what is
 /// being asked now.
 ///
@@ -478,6 +509,7 @@ mod tests {
         let args = claude::build_claude_spawn_args(&claude::ClaudeSpawn {
             model: Some("claude-haiku-4-5-20251001".into()),
             session_id: Some("sid".into()),
+            resume: None,
             system_prompt: Some(persona.clone()),
             autonomy: Autonomy::Full,
             mcp_config: None,
@@ -493,19 +525,21 @@ mod tests {
     }
 
     /// The whole point: an agent's memory is the tail Crew hands it, so nothing
-    /// asks a CLI to pick a conversation back up.
+    /// asks a CLI to pick a conversation back up for an agent's turn.
     #[test]
-    fn no_provider_asks_its_cli_to_resume_anything() {
+    fn no_provider_asks_its_cli_to_resume_an_agents_turn() {
         let runs = [
             claude::build_claude_spawn_args(&claude::ClaudeSpawn {
                 model: None,
                 session_id: Some("sid".into()),
+                resume: None,
                 system_prompt: Some("persona".into()),
                 autonomy: Autonomy::Ask,
                 mcp_config: None,
             }),
             codex::build_codex_spawn_args(&codex::CodexSpawn {
                 prompt: "hi".into(),
+                resume: None,
                 model: None,
                 cwd: Some("/tmp".into()),
                 autonomy: Autonomy::Ask,
@@ -516,10 +550,12 @@ mod tests {
                 prompt: "hi".into(),
                 model: None,
                 autonomy: Autonomy::Ask,
+                resume: None,
             }),
             opencode::build_opencode_spawn_args(&opencode::OpencodeSpawn {
                 model: None,
                 autonomy: Autonomy::Ask,
+                resume: None,
             }),
         ];
         for args in runs {
@@ -530,6 +566,61 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// A child session is the opposite case: it is its provider's own
+    /// conversation, so every turn after the first carries it on.
+    #[test]
+    fn a_child_carries_its_conversation_on_the_way_each_cli_takes_it() {
+        let claude = claude::build_claude_spawn_args(&claude::ClaudeSpawn {
+            model: None,
+            session_id: Some("sid".into()),
+            resume: Some("conv-1".into()),
+            system_prompt: None,
+            autonomy: Autonomy::Ask,
+            mcp_config: None,
+        });
+        assert!(claude.windows(2).any(|pair| pair == ["--resume", "conv-1"]), "{claude:?}");
+        assert!(!claude.contains(&"--session-id".to_string()), "a resume that also names a new session: {claude:?}");
+
+        let codex = codex::build_codex_spawn_args(&codex::CodexSpawn {
+            prompt: "more".into(),
+            resume: Some("thread-1".into()),
+            model: Some("gpt".into()),
+            cwd: Some("/work".into()),
+            autonomy: Autonomy::Ask,
+            mcp: None,
+            mcp_env: Vec::new(),
+        });
+        assert_eq!(&codex[..2], ["exec", "resume"], "{codex:?}");
+        assert_eq!(&codex[codex.len() - 2..], ["thread-1", "more"], "the id and the prompt are resume's positionals: {codex:?}");
+        // `resume` takes neither: the sandbox goes as config, the folder is the process's.
+        assert!(!codex.contains(&"--sandbox".to_string()) && !codex.contains(&"-C".to_string()), "{codex:?}");
+        assert!(codex.windows(2).any(|pair| pair == ["-c", "sandbox_mode=\"workspace-write\""]), "{codex:?}");
+
+        let cursor = cursor::build_cursor_spawn_args(&cursor::CursorSpawn {
+            prompt: "more".into(),
+            model: None,
+            autonomy: Autonomy::Ask,
+            resume: Some("chat-1".into()),
+        });
+        assert!(cursor.contains(&"--resume=chat-1".to_string()), "{cursor:?}");
+        assert_eq!(cursor.last().map(String::as_str), Some("more"));
+
+        let opencode = opencode::build_opencode_spawn_args(&opencode::OpencodeSpawn {
+            model: None,
+            autonomy: Autonomy::Ask,
+            resume: Some("ses_1".into()),
+        });
+        assert!(opencode.windows(2).any(|pair| pair == ["--session", "ses_1"]), "{opencode:?}");
+    }
+
+    #[test]
+    fn a_childs_persona_says_who_started_it_and_what_its_report_is() {
+        let persona = child_persona("Planner (agent a1)", Some("Tools: x."));
+        assert!(persona.starts_with("Started by Planner (agent a1)"), "{persona}");
+        assert!(persona.contains("Your final message of each turn is your report: end with what you did, what is left, and any question."), "{persona}");
+        assert!(persona.ends_with("\n\nTools: x."), "{persona}");
     }
 
     #[test]

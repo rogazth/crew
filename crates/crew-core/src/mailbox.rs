@@ -72,6 +72,12 @@ pub fn envelope(from: &AgentRef, body: &str, at: i64, to_self: bool) -> String {
              and what you write here is read by the user, not by it.",
             from.name, from.id
         )
+    } else if from.kind.as_deref() == Some("session") {
+        format!(
+            "{} (session {}). A session is a provider CLI Crew runs, not an agent: message_agent does \
+             not reach it. If you started it, wait_for_session, read_session and send_to_session do.",
+            from.name, from.id
+        )
     } else if from.id.is_empty() {
         format!("{} (agent, no longer in this workspace)", from.name)
     } else {
@@ -164,6 +170,26 @@ pub fn release(store: &Store, id: &str) -> Result<(), String> {
             .execute(params![id])
     })?;
     Ok(())
+}
+
+/// Throw away whatever still waits for a session that has exited: nobody is
+/// left to hand it to.
+pub fn drop_waiting(store: &Store, to_session: &str) -> Result<usize, String> {
+    store.with(|conn| {
+        conn.prepare_cached("DELETE FROM mailbox WHERE to_session = ?1 AND delivered_at IS NULL")?
+            .execute(params![to_session])
+    })
+}
+
+/// Take back the reports a child left in its parent's box that the parent has
+/// since read some other way: a wait or a read already showed it the turn.
+pub fn take_back(store: &Store, to_session: &str, from_session: &str) -> Result<usize, String> {
+    store.with(|conn| {
+        conn.prepare_cached(
+            "DELETE FROM mailbox WHERE to_session = ?1 AND from_session = ?2 AND delivered_at IS NULL",
+        )?
+        .execute(params![to_session, from_session])
+    })
 }
 
 /// How many letters are waiting. The sidebar shows it; the tool answers with it

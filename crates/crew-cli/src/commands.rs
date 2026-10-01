@@ -89,6 +89,24 @@ pub const GROUPS: &[Group] = &[
         ],
     },
     Group {
+        name: "sessions",
+        about: "Provider CLIs you start on a job: start one, wait for its report, read it, give it more",
+        aliases: &["session"],
+        verbs: &[
+            verb("start", "start_session").rest(&["provider", "prompt"]).eg(
+                "crew sessions start codex fix the failing login test\n  crew sessions start claude --worktree new --model claude-opus-5 -- review the diff on main",
+            ),
+            verb("list", "list_sessions").alias(&["ls"]).eg("crew sessions list\n  crew sessions list --mine=false"),
+            verb("wait", "wait_for_session").rest(&["sessions"]).eg(
+                "crew sessions wait --timeout-s 60 3f2a…\n  crew sessions wait --timeout-s 30 3f2a… 9c1d…",
+            ),
+            verb("read", "read_session").pos(&["session"]).eg("crew sessions read 3f2a…\n  crew sessions read 3f2a… --since 12 --include-tools"),
+            verb("send", "send_to_session").rest(&["session", "text"]).eg("crew sessions send 3f2a… now run the e2e and fix what fails"),
+            verb("respond", "respond_to_session").pos(&["session", "request_id"]).eg("crew sessions respond 3f2a… 1 --decision allow"),
+            verb("stop", "stop_session").pos(&["session"]).eg("crew sessions stop 3f2a…"),
+        ],
+    },
+    Group {
         name: "worktrees",
         about: "Hand work to a new session on a branch of its own",
         aliases: &["worktree", "wt"],

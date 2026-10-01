@@ -93,22 +93,29 @@ pub struct Tool {
 pub struct Audience {
     pub agent: bool,
     pub terminal: bool,
+    /// A session another caller started. It is depth one: nothing that makes
+    /// sessions, agents or worktrees, because its work is its parent's.
+    pub child: bool,
     pub user: bool,
 }
 
 impl Audience {
-    pub const EVERYONE: Self = Self { agent: true, terminal: true, user: true };
-    /// Agents and terminal sessions: it needs a session behind the call.
-    pub const SESSIONS: Self = Self { agent: true, terminal: true, user: false };
+    pub const EVERYONE: Self = Self { agent: true, terminal: true, child: true, user: true };
+    /// Agents and terminal sessions: it needs a session behind the call, and
+    /// one that may start work of its own.
+    pub const SESSIONS: Self = Self { agent: true, terminal: true, child: false, user: false };
     /// Agents alone: it needs turns.
-    pub const AGENTS: Self = Self { agent: true, terminal: false, user: false };
+    pub const AGENTS: Self = Self { agent: true, terminal: false, child: false, user: false };
     /// Agents and the user, who both have a conversation to look through.
-    pub const AGENTS_AND_USER: Self = Self { agent: true, terminal: false, user: true };
+    pub const AGENTS_AND_USER: Self = Self { agent: true, terminal: false, child: false, user: true };
+    /// Whoever may start sessions and drive them: everyone but a child.
+    pub const PARENTS: Self = Self { agent: true, terminal: true, child: false, user: true };
 
     pub fn admits(self, kind: CallerKind) -> bool {
         match kind {
             CallerKind::Agent => self.agent,
             CallerKind::Terminal => self.terminal,
+            CallerKind::Child => self.child,
             CallerKind::User => self.user,
         }
     }
@@ -231,7 +238,7 @@ pub struct Host<'a> {
 
 /// The provider names, from the one place they are listed. The enum used to be
 /// written out again in the schema, which is a second list to keep in step.
-fn provider_names() -> Vec<&'static str> {
+pub(crate) fn provider_names() -> Vec<&'static str> {
     PROVIDERS.iter().map(|(id, _)| *id).collect()
 }
 
@@ -244,7 +251,7 @@ fn provider_names() -> Vec<&'static str> {
 /// them. Without it an agent guesses from memory — `grok-4.6` under codex,
 /// which is neither the provider nor the spelling — and reports back that the
 /// model does not exist here.
-fn model_sheet() -> String {
+pub(crate) fn model_sheet() -> String {
     PROVIDERS
         .iter()
         .map(|(provider, models)| format!("{provider}: {}", models.join(", ")))
@@ -257,6 +264,7 @@ fn model_sheet() -> String {
 pub fn every_tool() -> Vec<Tool> {
     catalog()
         .into_iter()
+        .chain(crate::session_tools::catalog())
         .chain(crate::process_tools::catalog())
         .chain(crate::browser_tools::catalog())
         .collect()
@@ -504,6 +512,7 @@ fn gateway() -> Vec<Tool> {
 fn describe(tool: &Tool, kind: CallerKind) -> Value {
     let description = match (tool.name, kind) {
         ("message_agent", CallerKind::Terminal) => "Send a message to an agent in this workspace. It arrives as a turn with your name on it, marked as coming from a terminal session, and is worked on in its own time. You cannot receive a reply: ask it to do what you need, not to answer you.",
+        ("message_agent", CallerKind::Child) => "Send a message to an agent in this workspace. It arrives as a turn with your name on it, marked as coming from a session, and is worked on in its own time. You cannot receive a reply through it: whoever started you reads your report when your turn ends.",
         ("message_agent", CallerKind::User) => "Send a message to an agent in this workspace, as the user. It arrives as a turn and is answered in its own chat, in its own time.",
         _ => tool.description,
     };
@@ -578,6 +587,10 @@ fn find_tool(toolbox: &Toolbox, caller: &Caller, args: &Value) -> Result<Value, 
     }))
 }
 
+/// The two words models have mixed up before, said the same way wherever a
+/// model reads them: here, in `instructions()`, and in the session tools.
+pub const GLOSSARY: &str = "An agent is a persistent identity Crew keeps: a name, a mailbox and a history; message_agent reaches it. A session is one provider CLI (claude, codex, opencode, cursor) running a conversation; it belongs to an agent, to whoever started it, or to nobody (a terminal). An agent outlives its sessions; a session is one provider CLI process and can be thrown away.";
+
 /// What `initialize` tells a model about Crew's tools, before it has listed
 /// any. Every provider with MCP shows it to the model; for a terminal session
 /// it is the only place this is said, because the prompt of a session the user
@@ -597,12 +610,18 @@ pub fn instructions(toolbox: &Toolbox, caller: &Caller) -> String {
             " You are the terminal session \"{}\": agents you message can act on it, but cannot write back to you.",
             session.name
         ),
+        Caller::Child(session) => format!(
+            " You are the session \"{}\", started by {}: your final message of each turn is your report to it.",
+            session.name,
+            session.parent_id.as_deref().map(|id| format!("session {id}")).unwrap_or_else(|| "the user".into())
+        ),
         Caller::User { .. } => " You are calling as the user.".to_string(),
     };
     let listed = if listed.is_empty() { String::new() } else { format!("Always listed: {}.\n", listed.join(", ")) };
     let notes: String = toolbox.notes(caller).into_iter().map(|note| format!("\n{note}")).collect();
     format!(
         "Crew is the app this runs in: it holds a workspace of agents, and these tools reach them.{who}\n\
+         {GLOSSARY}\n\
          {listed}\
          Its tools are not listed, to keep them out of the prompt: find_tool searches them by what you \
          want to do and returns each match with its arguments, and call_tool runs one by name with \
@@ -685,6 +704,7 @@ fn whoami(store: &Store, caller: &Caller) -> Result<Value, String> {
     let kind = match caller.kind() {
         CallerKind::Agent => "agent",
         CallerKind::Terminal => "terminal",
+        CallerKind::Child => "child",
         CallerKind::User => "user",
     };
     let workspace = match caller.workspace_id() {
@@ -878,7 +898,7 @@ fn message_agent(
         format!("{} is busy; it will read this when its turn ends.", target.name)
     };
     match caller {
-        Caller::Terminal(_) => note.push_str(" It knows it cannot write back to you."),
+        Caller::Terminal(_) | Caller::Child(_) => note.push_str(" It knows it cannot write back to you."),
         Caller::User { .. } => note.push_str(" Its reply will be in its chat."),
         Caller::Agent(_) => {}
     }
@@ -1300,7 +1320,7 @@ fn like(wanted: &str) -> Vec<(&'static str, &'static str)> {
 
 /// A refusal that ends the guessing: where the model actually is, or the whole
 /// catalogue when it is nowhere. Paid once, on a miss.
-fn unknown_model(wanted: &str, provider: &str, models: &[&str]) -> String {
+pub(crate) fn unknown_model(wanted: &str, provider: &str, models: &[&str]) -> String {
     let found = like(wanted);
     if !found.is_empty() {
         let where_ = found
@@ -1325,14 +1345,14 @@ fn unknown_model(wanted: &str, provider: &str, models: &[&str]) -> String {
     )
 }
 
-fn provider_models(id: &str) -> Option<Vec<&'static str>> {
+pub(crate) fn provider_models(id: &str) -> Option<Vec<&'static str>> {
     PROVIDERS
         .iter()
         .find(|(name, _)| *name == id)
         .map(|(_, models)| models.to_vec())
 }
 
-fn text(value: Option<&Value>) -> Option<String> {
+pub(crate) fn text(value: Option<&Value>) -> Option<String> {
     value
         .and_then(Value::as_str)
         .map(str::trim)
@@ -1414,6 +1434,9 @@ mod tests {
             worktree: None,
             created_at: 0,
             updated_at: 0,
+            agent_id: None,
+            parent_id: None,
+            cursor: 0,
         })
     }
 

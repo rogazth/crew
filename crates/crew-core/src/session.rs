@@ -28,21 +28,34 @@ pub struct Session {
     pub worktree: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
+    /// The agent whose turns this session runs; `None` for a terminal and for
+    /// a child. An agent's session shares the agent's id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_id: Option<String>,
+    /// Who started it: the session that called `start_session`. `None` is the
+    /// user, or nobody.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_id: Option<String>,
+    /// How far its transcript had got at its last event, in blocks: the
+    /// cursor `wait_for_session` and `read_session` count in.
+    #[serde(default)]
+    pub cursor: i64,
 }
 
-/// Aliased on `s`, so a join can read a session at an offset and whatever it
-/// joined at `SESSION_COLUMN_COUNT`.
-pub const SESSION_COLUMNS: &str = "s.id, s.workspace_id, s.kind, s.name, s.provider, s.model,
-                                   s.provider_session_id, s.description, s.notifications,
-                                   s.status, s.created_at, s.updated_at, s.autonomy, s.worktree";
-pub const SESSION_COLUMN_COUNT: usize = 14;
+/// Aliased on `s`, with the agent it runs for on `a` (see [`SESSIONS`]), so a
+/// join can read a session at an offset and whatever it joined at
+/// `SESSION_COLUMN_COUNT`. An agent's identity is the agent's: its name,
+/// description, notifications and autonomy come from `agents`, and the
+/// session's own columns hold them only for a session with no agent.
+pub const SESSION_COLUMNS: &str = "s.id, s.workspace_id, s.kind, COALESCE(a.name, s.name), s.provider, s.model,
+                                   s.provider_session_id, COALESCE(a.description, s.description),
+                                   COALESCE(a.notifications, s.notifications),
+                                   s.status, s.created_at, s.updated_at, COALESCE(a.autonomy, s.autonomy), s.worktree,
+                                   s.agent_id, s.parent_id, s.cursor";
+pub const SESSION_COLUMN_COUNT: usize = 17;
 
-const SELECT_BY_WORKSPACE: &str = "SELECT id, workspace_id, kind, name, provider, model,
-                                          provider_session_id, description, notifications,
-                                          status, created_at, updated_at, autonomy, worktree
-                                   FROM sessions
-                                   WHERE workspace_id = ?1
-                                   ORDER BY sort_order ASC, created_at ASC";
+/// What [`SESSION_COLUMNS`] reads from.
+pub const SESSIONS: &str = "sessions s LEFT JOIN agents a ON a.id = s.agent_id";
 
 pub fn row_to_session(row: &rusqlite::Row, at: usize) -> rusqlite::Result<Session> {
     Ok(Session {
@@ -60,12 +73,19 @@ pub fn row_to_session(row: &rusqlite::Row, at: usize) -> rusqlite::Result<Sessio
         created_at: row.get(at + 10)?,
         updated_at: row.get(at + 11)?,
         worktree: row.get(at + 13)?,
+        agent_id: row.get(at + 14)?,
+        parent_id: row.get(at + 15)?,
+        cursor: row.get(at + 16)?,
     })
 }
 
 pub fn list(store: &Store, workspace_id: String) -> Result<Vec<Session>, String> {
     store.with(|conn| {
-        let mut stmt = conn.prepare_cached(SELECT_BY_WORKSPACE)?;
+        let mut stmt = conn.prepare_cached(&format!(
+            "SELECT {SESSION_COLUMNS} FROM {SESSIONS}
+             WHERE s.workspace_id = ?1
+             ORDER BY s.sort_order ASC, s.created_at ASC"
+        ))?;
         let rows = stmt.query_map(params![workspace_id], |row| row_to_session(row, 0))?;
         rows.collect()
     })
@@ -75,7 +95,7 @@ pub fn list(store: &Store, workspace_id: String) -> Result<Vec<Session>, String>
 pub fn list_all(store: &Store) -> Result<Vec<Session>, String> {
     store.with(|conn| {
         let mut stmt = conn.prepare_cached(&format!(
-            "SELECT {SESSION_COLUMNS} FROM sessions s ORDER BY s.created_at ASC"
+            "SELECT {SESSION_COLUMNS} FROM {SESSIONS} ORDER BY s.created_at ASC"
         ))?;
         let rows = stmt.query_map([], |row| row_to_session(row, 0))?;
         rows.collect()
@@ -84,14 +104,11 @@ pub fn list_all(store: &Store) -> Result<Vec<Session>, String> {
 
 pub fn list_busy(store: &Store) -> Result<Vec<Session>, String> {
     store.with(|conn| {
-        let mut stmt = conn.prepare_cached(
-            "SELECT id, workspace_id, kind, name, provider, model,
-                    provider_session_id, description, notifications,
-                    status, created_at, updated_at, autonomy, worktree
-             FROM sessions
-             WHERE status IN ('working', 'needs-input')
-             ORDER BY updated_at ASC",
-        )?;
+        let mut stmt = conn.prepare_cached(&format!(
+            "SELECT {SESSION_COLUMNS} FROM {SESSIONS}
+             WHERE s.status IN ('working', 'needs-input')
+             ORDER BY s.updated_at ASC"
+        ))?;
         let rows = stmt.query_map([], |row| row_to_session(row, 0))?;
         rows.collect()
     })
@@ -99,7 +116,7 @@ pub fn list_busy(store: &Store) -> Result<Vec<Session>, String> {
 
 pub fn get(store: &Store, id: String) -> Result<Option<Session>, String> {
     store.with(|conn| {
-        conn.prepare_cached(&format!("SELECT {SESSION_COLUMNS} FROM sessions s WHERE s.id = ?1"))?
+        conn.prepare_cached(&format!("SELECT {SESSION_COLUMNS} FROM {SESSIONS} WHERE s.id = ?1"))?
             .query_row(params![id], |row| row_to_session(row, 0))
             .optional()
     })
@@ -151,18 +168,55 @@ pub fn create_in_worktree(
     autonomy: String,
     worktree: Option<String>,
 ) -> Result<Session, String> {
+    if kind != "agent" && kind != "terminal" {
+        return Err(format!("Unknown session kind: {kind}"));
+    }
+    insert(store, workspace_id, kind, name, provider, model, description, autonomy, worktree, None)
+}
+
+/// A session started for `parent` (a session id; `None` is the user): a
+/// provider CLI Crew drives turn by turn, with no agent behind it. It starts
+/// as `starting`, until its first turn does.
+#[allow(clippy::too_many_arguments)]
+pub fn create_child(
+    store: &Store,
+    workspace_id: String,
+    name: String,
+    provider: String,
+    model: String,
+    autonomy: String,
+    worktree: Option<String>,
+    parent: Option<String>,
+) -> Result<Session, String> {
+    insert(store, workspace_id, "child".into(), name, provider, model, String::new(), autonomy, worktree, parent)
+}
+
+/// The row, and for an agent the agent it runs for, under the same id: the
+/// identity goes to `agents`, the CLI to `sessions`.
+#[allow(clippy::too_many_arguments)]
+fn insert(
+    store: &Store,
+    workspace_id: String,
+    kind: String,
+    name: String,
+    provider: String,
+    model: String,
+    description: String,
+    autonomy: String,
+    worktree: Option<String>,
+    parent: Option<String>,
+) -> Result<Session, String> {
     let name = name.trim().to_string();
     if name.is_empty() {
         return Err("Name is required".into());
     }
-    if kind != "agent" && kind != "terminal" {
-        return Err(format!("Unknown session kind: {kind}"));
-    }
-
     let now = now_millis();
+    let id = uuid::Uuid::new_v4().to_string();
     let session = Session {
-        id: uuid::Uuid::new_v4().to_string(),
+        agent_id: (kind == "agent").then(|| id.clone()),
+        id,
         workspace_id,
+        status: if kind == "child" { "starting".into() } else { "idle".into() },
         kind,
         name,
         provider,
@@ -171,18 +225,38 @@ pub fn create_in_worktree(
         description,
         notifications: true,
         autonomy: autonomy_or_default(autonomy),
-        status: "idle".into(),
         worktree: worktree.filter(|path| !path.is_empty()),
         created_at: now,
         updated_at: now,
+        parent_id: parent,
+        cursor: 0,
     };
 
     store.with(|conn| {
-        conn.execute(
+        let tx = conn.unchecked_transaction()?;
+        if session.agent_id.is_some() {
+            tx.execute(
+                "INSERT INTO agents
+                   (id, workspace_id, name, description, notifications, autonomy, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![
+                    session.id,
+                    session.workspace_id,
+                    session.name,
+                    session.description,
+                    session.notifications,
+                    session.autonomy,
+                    session.created_at,
+                    session.updated_at
+                ],
+            )?;
+        }
+        tx.execute(
             "INSERT INTO sessions
                (id, workspace_id, kind, name, provider, model, description,
-                notifications, created_at, updated_at, sort_order, autonomy, worktree)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+                notifications, created_at, updated_at, sort_order, autonomy, worktree,
+                status, agent_id, parent_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
             params![
                 session.id,
                 session.workspace_id,
@@ -196,9 +270,13 @@ pub fn create_in_worktree(
                 session.updated_at,
                 session.created_at,
                 session.autonomy,
-                session.worktree
+                session.worktree,
+                session.status,
+                session.agent_id,
+                session.parent_id
             ],
-        )
+        )?;
+        tx.commit()
     })?;
 
     Ok(session)
@@ -221,15 +299,36 @@ pub fn update(
     }
     let autonomy = autonomy_or_default(autonomy);
     store.with(|conn| {
-        conn.execute(
-            "UPDATE sessions
-             SET name = ?2, provider = ?3, model = ?4, description = ?5,
-                 notifications = ?6, updated_at = ?7, autonomy = ?8,
-                 provider_session_id = CASE WHEN provider = ?3 THEN provider_session_id END,
-                 provider_title = CASE WHEN provider = ?3 THEN provider_title END
+        let tx = conn.unchecked_transaction()?;
+        let now = now_millis();
+        // The identity is the agent's when there is one; the session keeps its
+        // CLI, and its name as the label it is listed under.
+        let agent = tx.execute(
+            "UPDATE agents SET name = ?2, description = ?3, notifications = ?4, autonomy = ?5, updated_at = ?6
              WHERE id = ?1",
-            params![id, name, provider, model, description, notifications, now_millis(), autonomy],
-        )
+            params![id, name, description, notifications, autonomy, now],
+        )?;
+        if agent > 0 {
+            tx.execute(
+                "UPDATE sessions
+                 SET name = ?2, provider = ?3, model = ?4, updated_at = ?5,
+                     provider_session_id = CASE WHEN provider = ?3 THEN provider_session_id END,
+                     provider_title = CASE WHEN provider = ?3 THEN provider_title END
+                 WHERE id = ?1",
+                params![id, name, provider, model, now],
+            )?;
+        } else {
+            tx.execute(
+                "UPDATE sessions
+                 SET name = ?2, provider = ?3, model = ?4, description = ?5,
+                     notifications = ?6, updated_at = ?7, autonomy = ?8,
+                     provider_session_id = CASE WHEN provider = ?3 THEN provider_session_id END,
+                     provider_title = CASE WHEN provider = ?3 THEN provider_title END
+                 WHERE id = ?1",
+                params![id, name, provider, model, description, notifications, now, autonomy],
+            )?;
+        }
+        tx.commit()
     })?;
     Ok(())
 }
@@ -248,9 +347,11 @@ pub fn rename(store: &Store, id: String, name: String) -> Result<(), String> {
         return Err("Name is required".into());
     }
     store.with(|conn| {
+        let now = now_millis();
+        conn.execute("UPDATE agents SET name = ?2, updated_at = ?3 WHERE id = ?1", params![id, name, now])?;
         conn.execute(
             "UPDATE sessions SET name = ?2, updated_at = ?3 WHERE id = ?1",
-            params![id, name, now_millis()],
+            params![id, name, now],
         )
     })?;
     Ok(())
@@ -313,8 +414,15 @@ fn is_placeholder_name(name: &str, provider: &str) -> bool {
     }
 }
 
+/// An agent goes with its session, and its session with it: deleting either
+/// id deletes both, with the transcript, the mailbox and the routines.
 pub fn delete(store: &Store, id: String) -> Result<(), String> {
-    store.with(|conn| conn.execute("DELETE FROM sessions WHERE id = ?1", params![id]))?;
+    store.with(|conn| {
+        let tx = conn.unchecked_transaction()?;
+        tx.execute("DELETE FROM agents WHERE id = ?1", params![id])?;
+        tx.execute("DELETE FROM sessions WHERE id = ?1", params![id])?;
+        tx.commit()
+    })?;
     Ok(())
 }
 
@@ -356,7 +464,7 @@ pub fn claimed_provider_sessions(store: &Store, except: &str) -> Result<Vec<Stri
 
 /// The runtime owns this; the UI only renders whatever the last writer left.
 pub fn set_status(store: &Store, id: String, status: String) -> Result<(), String> {
-    const KNOWN: [&str; 5] = ["idle", "working", "needs-input", "done", "error"];
+    const KNOWN: [&str; 7] = ["starting", "idle", "working", "needs-input", "done", "error", "exited"];
     if !KNOWN.contains(&status.as_str()) {
         return Err(format!("Unknown session status: {status}"));
     }
@@ -417,7 +525,7 @@ fn sweep_disposable_in(store: &Store, dirs: &ClaudeDirs) -> Result<usize, String
     let (terminals, tabs) = store.with(|conn| {
         let terminals = conn
             .prepare(&format!(
-                "SELECT {SESSION_COLUMNS}, w.path FROM sessions s
+                "SELECT {SESSION_COLUMNS}, w.path FROM {SESSIONS}
                  JOIN workspaces w ON w.id = s.workspace_id
                  WHERE s.kind = 'terminal'"
             ))?

@@ -597,6 +597,9 @@ mod tests {
             worktree: None,
             created_at: 0,
             updated_at: 0,
+            agent_id: None,
+            parent_id: None,
+            cursor: 0,
         })
     }
 

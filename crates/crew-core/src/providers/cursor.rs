@@ -10,6 +10,8 @@ pub struct CursorSpawn {
     pub prompt: String,
     pub model: Option<String>,
     pub autonomy: Autonomy,
+    /// A chat to carry on (`--resume <id>`), for a child session.
+    pub resume: Option<String>,
 }
 
 pub fn build_cursor_spawn_args(input: &CursorSpawn) -> Vec<String> {
@@ -26,6 +28,9 @@ pub fn build_cursor_spawn_args(input: &CursorSpawn) -> Vec<String> {
     }
     if input.autonomy == Autonomy::Full {
         args.push("-f".into());
+    }
+    if let Some(chat) = input.resume.as_deref().filter(|id| !id.is_empty()) {
+        args.push(format!("--resume={chat}"));
     }
     args.push(input.prompt.clone());
     args

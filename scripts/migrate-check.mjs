@@ -2,12 +2,15 @@
 // existed, opens it with the current daemon, and checks the conversation is
 // still there afterwards. The blob column is dropped by migration 13, so this
 // is the one path where a mistake loses history rather than breaking a build.
+// Migration 23 splits agents from sessions: the agent, the terminal and the
+// routine seeded here must come out the other side as they went in.
 //
 //   cargo build -p crewd && node scripts/migrate-check.mjs
 import { spawn } from "node:child_process";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 
 const REPO = new URL("..", import.meta.url).pathname;
@@ -63,8 +66,25 @@ function seedOldDatabase() {
     `INSERT INTO sessions (id, workspace_id, kind, name, provider, model, blocks_json, created_at, updated_at)
      VALUES (?, ?, 'agent', 'Planner', 'claude', 'claude-opus-5', ?, ?, ?)`,
   ).run("s1", "w1", JSON.stringify(blocks), Date.now(), Date.now());
+  // An agent with a job, a terminal next to it (named, or the startup sweep
+  // takes it for an empty one), and a routine on the agent.
+  db.prepare("UPDATE sessions SET description = ?, autonomy = 'full' WHERE id = 's1'").run("You keep the roadmap.");
+  db.prepare(
+    `INSERT INTO sessions (id, workspace_id, kind, name, provider, model, created_at, updated_at)
+     VALUES ('t1', 'w1', 'terminal', 'Refactor', 'claude', '', ?, ?)`,
+  ).run(Date.now(), Date.now());
+  db.prepare(
+    `INSERT INTO routines (id, session_id, name, prompt, schedule, created_at, updated_at)
+     VALUES ('r1', 's1', 'standup', 'Sum up yesterday', '{"kind":"daily","hour":9,"minute":0}', ?, ?)`,
+  ).run(Date.now(), Date.now());
   db.close();
   return blocks;
+}
+
+/** The newest migration store.rs knows: what the daemon must leave the database at. */
+function latestVersion() {
+  const source = readFileSync(join(REPO, "crates/crew-core/src/store.rs"), "utf8");
+  return Math.max(...[...source.matchAll(/if current < (\d+)/g)].map((match) => Number(match[1])));
 }
 
 /**
@@ -144,6 +164,21 @@ const answer = new Promise((resolve) => {
 ws.send(JSON.stringify({ id: 1, method: "transcript_tail", params: { sessionId: "s1", limit: 100 } }));
 const page = await answer;
 
+const call = (id, method, params) =>
+  new Promise((resolve) => {
+    const listen = (message) => {
+      const parsed = JSON.parse(message.data);
+      if (parsed.id === id) {
+        ws.removeEventListener("message", listen);
+        resolve(parsed);
+      }
+    };
+    ws.addEventListener("message", listen);
+    ws.send(JSON.stringify({ id, method, params }));
+  });
+const listed = (await call(2, "session_list", { workspaceId: "w1" })).result ?? [];
+const routines = (await call(3, "routine_list_for_session", { sessionId: "s1" })).result ?? [];
+
 const checks = [];
 checks.push(["the daemon opened the old database", page.ok, page.error ?? ""]);
 const texts = (page.result?.blocks ?? []).map((block) => block.text);
@@ -153,6 +188,16 @@ checks.push([
   `${texts.length} blocks back`,
 ]);
 checks.push(["they came back in order", texts.join("|") === seeded.map((b) => b.text).join("|"), texts[0] ?? ""]);
+const planner = listed.find((row) => row.id === "s1");
+const shell = listed.find((row) => row.id === "t1");
+checks.push([
+  "the agent is still an agent, with its identity",
+  planner?.kind === "agent" && planner?.agentId === "s1" && planner?.name === "Planner" &&
+    planner?.description === "You keep the roadmap." && planner?.autonomy === "full",
+  JSON.stringify(planner ?? null),
+]);
+checks.push(["the terminal is a session with no agent", shell?.kind === "terminal" && !shell?.agentId, JSON.stringify(shell ?? null)]);
+checks.push(["the agent's routine is still its own", routines.length === 1 && routines[0]?.name === "standup", `${routines.length} routines`]);
 
 ws.close();
 daemon.kill("SIGTERM");
@@ -162,7 +207,15 @@ const db = new DatabaseSync(dbPath);
 const columns = db.prepare("PRAGMA table_info(sessions)").all().map((row) => row.name);
 checks.push(["the blob column is gone", !columns.includes("blocks_json"), columns.join(",")]);
 const version = db.prepare("SELECT MAX(version) AS v FROM schema_migrations").get().v;
-checks.push(["the schema is at 13", version === 13, String(version)]);
+const latest = latestVersion();
+checks.push([`the schema is at ${latest}`, version === latest, String(version)]);
+const agents = db.prepare("SELECT id, name, description, autonomy FROM agents").all();
+checks.push([
+  "agents holds the identity, sessions the CLIs",
+  agents.length === 1 && agents[0].id === "s1" && agents[0].name === "Planner" &&
+    db.prepare("SELECT agent_id FROM sessions WHERE id = 't1'").get().agent_id === null,
+  JSON.stringify(agents),
+]);
 const searchable = db
   .prepare("SELECT COUNT(*) AS n FROM messages_fts WHERE messages_fts MATCH 'sidebar'")
   .get().n;

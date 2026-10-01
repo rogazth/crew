@@ -68,6 +68,7 @@ pub fn list(store: &Store) -> Result<Vec<ScheduledRoutine>, String> {
             "SELECT {ROUTINE_COLUMNS}, {SESSION_COLUMNS}, w.path
              FROM routines r
              JOIN sessions s ON s.id = r.session_id
+             LEFT JOIN agents a ON a.id = s.agent_id
              JOIN workspaces w ON w.id = s.workspace_id
              ORDER BY r.created_at"
         );
@@ -93,6 +94,7 @@ pub fn scheduled(store: &Store, id: String) -> Result<Option<ScheduledRoutine>, 
             "SELECT {ROUTINE_COLUMNS}, {SESSION_COLUMNS}, w.path
              FROM routines r
              JOIN sessions s ON s.id = r.session_id
+             LEFT JOIN agents a ON a.id = s.agent_id
              JOIN workspaces w ON w.id = s.workspace_id
              WHERE r.id = ?1"
         );

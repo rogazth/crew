@@ -11,6 +11,8 @@ pub use super::parse_json_line;
 pub struct OpencodeSpawn {
     pub model: Option<String>,
     pub autonomy: Autonomy,
+    /// A session to carry on (`--session <id>`), for a child session.
+    pub resume: Option<String>,
 }
 
 /// The prompt is not in here: `opencode run` re-quotes every argument that holds
@@ -25,6 +27,10 @@ pub fn build_opencode_spawn_args(input: &OpencodeSpawn) -> Vec<String> {
     }
     if input.autonomy == Autonomy::Full {
         args.push("--auto".into());
+    }
+    if let Some(session) = input.resume.as_deref().filter(|id| !id.is_empty()) {
+        args.push("--session".into());
+        args.push(session.into());
     }
     args
 }

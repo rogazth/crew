@@ -550,6 +550,19 @@ pub struct Session {
     pub created_at: i64,
     #[ts(type = "number")]
     pub updated_at: i64,
+    /// The agent whose turns it runs; absent for a terminal and a child.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub agent_id: Option<String>,
+    /// The session that started it with `start_session`; absent when the user
+    /// did, or nobody.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub parent_id: Option<String>,
+    /// How far its transcript had got at its last event.
+    #[serde(default)]
+    #[ts(type = "number")]
+    pub cursor: i64,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, TS)]

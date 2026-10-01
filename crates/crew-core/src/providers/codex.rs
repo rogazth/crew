@@ -11,6 +11,8 @@ pub use super::parse_json_line;
 
 pub struct CodexSpawn {
     pub prompt: String,
+    /// A thread to carry on (`codex exec resume <id>`), for a child session.
+    pub resume: Option<String>,
     pub model: Option<String>,
     pub cwd: Option<String>,
     pub autonomy: Autonomy,
@@ -56,7 +58,13 @@ pub fn codex_mcp_overrides(command: &str, mcp_args: &[String], env: &[(String, S
 }
 
 pub fn build_codex_spawn_args(input: &CodexSpawn) -> Vec<String> {
+    let resume = input.resume.as_deref().filter(|id| !id.is_empty());
     let mut args = vec!["exec".into()];
+    // `resume` takes fewer flags than `exec`: no --sandbox and no -C. The
+    // sandbox goes as config, and the folder is the process's own.
+    if resume.is_some() {
+        args.push("resume".into());
+    }
     if let Some((command, mcp_args)) = &input.mcp {
         args.extend(codex_mcp_overrides(command, mcp_args, &input.mcp_env));
     }
@@ -68,13 +76,21 @@ pub fn build_codex_spawn_args(input: &CodexSpawn) -> Vec<String> {
     }
     if input.autonomy == Autonomy::Full {
         args.push("--dangerously-bypass-approvals-and-sandbox".into());
+    } else if resume.is_some() {
+        args.push("-c".into());
+        args.push("sandbox_mode=\"workspace-write\"".into());
     } else {
         args.push("--sandbox".into());
         args.push("workspace-write".into());
     }
-    if let Some(cwd) = input.cwd.as_deref().filter(|c| !c.is_empty()) {
-        args.push("-C".into());
-        args.push(cwd.into());
+    match resume {
+        Some(thread) => args.push(thread.into()),
+        None => {
+            if let Some(cwd) = input.cwd.as_deref().filter(|c| !c.is_empty()) {
+                args.push("-C".into());
+                args.push(cwd.into());
+            }
+        }
     }
     args.push(input.prompt.clone());
     args
@@ -176,6 +192,7 @@ mod spawn_tests {
     fn the_mcp_server_is_told_how_to_reach_the_bridge() {
         let args = build_codex_spawn_args(&CodexSpawn {
             prompt: "hi".into(),
+            resume: None,
             model: None,
             cwd: None,
             autonomy: Autonomy::Ask,
@@ -199,6 +216,7 @@ mod spawn_tests {
     fn no_mcp_means_no_env_for_it() {
         let args = build_codex_spawn_args(&CodexSpawn {
             prompt: "hi".into(),
+            resume: None,
             model: None,
             cwd: None,
             autonomy: Autonomy::Ask,

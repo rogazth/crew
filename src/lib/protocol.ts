@@ -640,7 +640,20 @@ export type Session = { id: string, workspaceId: string, kind: string, name: str
 /**
  * The git worktree it runs in; `None` is the workspace folder.
  */
-worktree: string | null, createdAt: number, updatedAt: number, };
+worktree: string | null, createdAt: number, updatedAt: number, 
+/**
+ * The agent whose turns it runs; absent for a terminal and a child.
+ */
+agentId?: string, 
+/**
+ * The session that started it with `start_session`; absent when the user
+ * did, or nobody.
+ */
+parentId?: string, 
+/**
+ * How far its transcript had got at its last event.
+ */
+cursor: number, };
 
 /**
  * A permission prompt or a question form on the CLI's screen.

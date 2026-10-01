@@ -7,6 +7,10 @@
 //!   this one;
 //! - a terminal session runs a CLI Crew does not drive: it has no turns, so a
 //!   reply to it would reach nobody;
+//! - a child is a session another caller started with `start_session`: Crew
+//!   drives its turns, and its last message of each one is its report to
+//!   whoever started it, so it needs no way to answer and gets no way to start
+//!   sessions of its own;
 //! - the user, from the `crew` command line, is no session at all and names
 //!   its workspace on each call.
 
@@ -20,6 +24,7 @@ use crate::store::Store;
 pub enum Caller {
     Agent(Session),
     Terminal(Session),
+    Child(Session),
     /// `None` when the call named no workspace, or one that resolved to none.
     /// Tools that need one say so through [`Caller::workspace_id`].
     User { workspace_id: Option<String> },
@@ -30,6 +35,7 @@ pub enum Caller {
 pub enum CallerKind {
     Agent,
     Terminal,
+    Child,
     User,
 }
 
@@ -55,10 +61,10 @@ impl Caller {
     /// A session, as the kind its row says it is. A terminal session is one the
     /// user runs a CLI in; everything else Crew drives turn by turn.
     pub fn from_session(session: Session) -> Self {
-        if session.kind == "terminal" {
-            Caller::Terminal(session)
-        } else {
-            Caller::Agent(session)
+        match session.kind.as_str() {
+            "terminal" => Caller::Terminal(session),
+            "child" => Caller::Child(session),
+            _ => Caller::Agent(session),
         }
     }
 
@@ -66,6 +72,7 @@ impl Caller {
         match self {
             Caller::Agent(_) => CallerKind::Agent,
             Caller::Terminal(_) => CallerKind::Terminal,
+            Caller::Child(_) => CallerKind::Child,
             Caller::User { .. } => CallerKind::User,
         }
     }
@@ -73,7 +80,7 @@ impl Caller {
     /// The session behind the call; the user has none.
     pub fn session(&self) -> Option<&Session> {
         match self {
-            Caller::Agent(session) | Caller::Terminal(session) => Some(session),
+            Caller::Agent(session) | Caller::Terminal(session) | Caller::Child(session) => Some(session),
             Caller::User { .. } => None,
         }
     }
@@ -86,7 +93,7 @@ impl Caller {
     /// has one; the user has one only when the call named it.
     pub fn workspace_id(&self) -> Result<&str, String> {
         match self {
-            Caller::Agent(session) | Caller::Terminal(session) => Ok(&session.workspace_id),
+            Caller::Agent(session) | Caller::Terminal(session) | Caller::Child(session) => Ok(&session.workspace_id),
             Caller::User { workspace_id: Some(id) } => Ok(id),
             Caller::User { workspace_id: None } => Err(
                 "No workspace: run this from inside a workspace's folder, or name one with --workspace (an id or a path)."
@@ -106,6 +113,7 @@ impl Caller {
         match self {
             Caller::Agent(session) => format!("{} (agent {})", session.name, session.id),
             Caller::Terminal(session) => format!("{} (terminal {})", session.name, session.id),
+            Caller::Child(session) => format!("{} (session {})", session.name, session.id),
             Caller::User { .. } => "the user".to_string(),
         }
     }
@@ -114,7 +122,7 @@ impl Caller {
     /// who would be asked, so the user has full autonomy.
     pub fn autonomy(&self) -> &str {
         match self {
-            Caller::Agent(session) | Caller::Terminal(session) => &session.autonomy,
+            Caller::Agent(session) | Caller::Terminal(session) | Caller::Child(session) => &session.autonomy,
             Caller::User { .. } => "full",
         }
     }
@@ -132,6 +140,11 @@ impl Caller {
                 id: session.id.clone(),
                 name: session.name.clone(),
                 kind: Some("terminal".into()),
+            },
+            Caller::Child(session) => AgentRef {
+                id: session.id.clone(),
+                name: session.name.clone(),
+                kind: Some("session".into()),
             },
             Caller::User { .. } => AgentRef {
                 id: String::new(),

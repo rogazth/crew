@@ -15,6 +15,9 @@ pub use super::{parse_json_line, try_parse_json_record};
 pub struct ClaudeSpawn {
     pub model: Option<String>,
     pub session_id: Option<String>,
+    /// A conversation to carry on (`--resume`), for a child session; an agent's
+    /// turns never resume, they start clean with the tail (`session_id`).
+    pub resume: Option<String>,
     pub system_prompt: Option<String>,
     pub autonomy: Autonomy,
     pub mcp_config: Option<String>,
@@ -54,7 +57,10 @@ pub fn build_claude_spawn_args(input: &ClaudeSpawn) -> Vec<String> {
         args.push("--append-system-prompt".into());
         args.push(prompt.into());
     }
-    if let Some(session_id) = input.session_id.as_deref().filter(|s| !s.is_empty()) {
+    if let Some(resume) = input.resume.as_deref().filter(|s| !s.is_empty()) {
+        args.push("--resume".into());
+        args.push(resume.into());
+    } else if let Some(session_id) = input.session_id.as_deref().filter(|s| !s.is_empty()) {
         args.push("--session-id".into());
         args.push(session_id.into());
     }

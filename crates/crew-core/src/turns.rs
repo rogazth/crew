@@ -119,7 +119,7 @@ fn opencode_tools_hint(hidden: &[&str]) -> String {
 fn shell_tools_hint(crew: &str) -> String {
     format!(
         "Crew's tools are not in your tool list; they are commands of `{crew}`, run in the shell. \
-         `{crew} --help` lists its groups (agents, messages, routines, processes, tabs) and \
+         `{crew} --help` lists its groups (agents, sessions, messages, routines, processes, tabs) and \
          `{crew} <group> --help` what each does. The ones most turns need:\n\
          - `{crew} agents list` — the other agents here, each with the id it is addressed by.\n\
          - `{crew} agents send <id> <text>` — write to one of them, by id. It arrives as a turn \
@@ -134,6 +134,48 @@ fn shell_tools_hint(crew: &str) -> String {
          A turn that opens with `## Message` was written by another agent, not by the user. \
          What you write in the chat is read by the user and does not reach that agent; \
          `{crew} agents send` to the id on that line is what does."
+    )
+}
+
+/// The provider conversation a child carries on, once its first turn bound
+/// one. An agent never resumes: its memory is the tail Crew hands it.
+fn child_resume(session: &crate::session::Session) -> Option<String> {
+    (session.kind == "child")
+        .then(|| session.provider_session_id.clone())
+        .flatten()
+        .filter(|id| !id.is_empty())
+}
+
+/// A message a child is handed from whoever started it: who it is from, then
+/// the text. The persona already said what a report is.
+fn child_envelope(from: &crew_protocol::AgentRef, text: &str) -> String {
+    let who = match from.kind.as_deref() {
+        Some("user") => "the user".to_string(),
+        Some(kind) => format!("{} ({kind} {})", from.name, from.id),
+        None => format!("{} (agent {})", from.name, from.id),
+    };
+    format!("## From {who}\n\n{text}")
+}
+
+/// What a child is told about Crew's tools: where they are, and that starting
+/// sessions of its own is not among them.
+fn child_tools_hint(spell: &dyn Fn(&str) -> String) -> String {
+    format!(
+        "Crew's tools reach you through its crew MCP server: {} searches them by what you want to do \
+         (run or watch the workspace's dev servers, drive a browser tab, write to one of its agents) \
+         and {} runs one. Starting sessions of your own is not among them: if the job needs more \
+         hands, say so in your report.",
+        spell("find_tool"),
+        spell("call_tool")
+    )
+}
+
+/// The same for Cursor, which reaches Crew through the `crew` command.
+fn child_shell_hint(crew: &str) -> String {
+    format!(
+        "Crew's tools are commands of `{crew}` in your shell: `{crew} --help` lists them (processes, \
+         tabs, agents). Starting sessions of your own is not among them: if the job needs more hands, \
+         say so in your report."
     )
 }
 
@@ -234,6 +276,16 @@ pub struct TurnHost {
     /// The tool families beside Crew's own, so the sheet in an agent's prompt
     /// names theirs too.
     toolbox: crate::tools::Toolbox,
+    /// Wakes whoever waits on a child session when one of its events lands.
+    signal: crate::session_events::Signal,
+    /// Child sessions being stopped for good, and who stopped them: the end of
+    /// their turn is an exit, not a pause.
+    exiting: Arc<Mutex<HashMap<String, String>>>,
+    /// Sessions with a turn from `start` until its outcome is in, claimed in
+    /// one step. The live CLI is installed later, on the turn's own thread, so
+    /// a check on it alone let a message that arrived in between start a
+    /// second turn on the same session.
+    running: Arc<Mutex<HashSet<String>>>,
 }
 
 impl TurnHost {
@@ -249,7 +301,19 @@ impl TurnHost {
             cancelled: Arc::new(Mutex::new(HashSet::new())),
             loops: Arc::new(Mutex::new(HashMap::new())),
             toolbox: crate::tools::Toolbox::default(),
+            signal: crate::session_events::Signal::default(),
+            exiting: Arc::new(Mutex::new(HashMap::new())),
+            running: Arc::new(Mutex::new(HashSet::new())),
         }
+    }
+
+    /// What a waiter on a child session sleeps on.
+    pub fn waiters(&self) -> crate::session_events::Signal {
+        self.signal.clone()
+    }
+
+    pub fn store(&self) -> &Store {
+        &self.store
     }
 
     pub fn transcripts(&self) -> &TranscriptHub {
@@ -339,19 +403,24 @@ impl TurnHost {
     pub fn start(&self, mut params: TurnStart) -> Result<TurnStarted, String> {
         let session = session::get(&self.store, params.session_id.clone())?
             .ok_or_else(|| "Session not found".to_string())?;
-        if session.kind != "agent" {
+        let child = session.kind == "child";
+        if session.kind != "agent" && !child {
             return Err("Not an agent session".into());
         }
-        self.clear_stop(&params.session_id);
+        if child && session.status == "exited" {
+            return Err("This session has exited. Start another one.".into());
+        }
         {
-            let map = self.lock();
-            if map.get(&params.session_id).is_some_and(|live| match live {
+            let mut running = self.running.lock().unwrap_or_else(|e| e.into_inner());
+            let live = self.lock().get(&params.session_id).is_some_and(|live| match live {
                 Live::Claude(row) => row.active,
                 Live::Codex(row) | Live::Cursor(row) | Live::Opencode(row) => row.active,
-            }) {
+            });
+            if live || !running.insert(params.session_id.clone()) {
                 return Err("Turn already running".into());
             }
         }
+        self.clear_stop(&params.session_id);
         // A turn nobody else asked for is you: that clears the lap budget, so
         // the message the transcript tells you to send actually frees the loop.
         if params.from_agent.is_none() {
@@ -361,13 +430,18 @@ impl TurnHost {
                 .remove(&params.session_id);
         }
         // Read before the new message is appended: the tail is what the agent
-        // is reminded of, and this turn is not history yet.
-        let history = working_set::history(
-            &self
-                .transcripts
-                .window(&params.session_id, Some(working_set::TAIL_BLOCKS), None)
-                .blocks,
-        );
+        // is reminded of, and this turn is not history yet. A child carries on
+        // its provider's own conversation instead, so it is handed none.
+        let history = if child {
+            None
+        } else {
+            working_set::history(
+                &self
+                    .transcripts
+                    .window(&params.session_id, Some(working_set::TAIL_BLOCKS), None)
+                    .blocks,
+            )
+        };
         let hidden = params.hidden.unwrap_or(false);
         match params.from_agent.clone() {
             Some(from) => {
@@ -376,12 +450,16 @@ impl TurnHost {
                 // on the block for the reader.
                 self.transcripts
                     .append_from_agent(&params.session_id, &params.text, from.clone());
-                params.text = mailbox::envelope(
-                    &from,
-                    &params.text,
-                    params.sent_at.unwrap_or_else(crate::store::now_millis),
-                    from.id == params.session_id,
-                );
+                params.text = if child {
+                    child_envelope(&from, &params.text)
+                } else {
+                    mailbox::envelope(
+                        &from,
+                        &params.text,
+                        params.sent_at.unwrap_or_else(crate::store::now_millis),
+                        from.id == params.session_id,
+                    )
+                };
             }
             None => self
                 .transcripts
@@ -615,6 +693,7 @@ impl TurnHost {
 
     fn run_turn(&self, session: crate::session::Session, params: TurnStart, history: Option<String>) {
         let session_id = session.id.clone();
+        let row = session.clone();
         let outcome = match session.provider.as_str() {
             "claude" => self.run_claude(session, params, history),
             "codex" => self.run_codex(session, params, history),
@@ -624,6 +703,13 @@ impl TurnHost {
                 "{other} agents are not wired up yet. Pick Claude for now."
             )),
         };
+        // The turn is over: the next one may start, and the drain below is
+        // what starts it.
+        self.running.lock().unwrap_or_else(|e| e.into_inner()).remove(&session_id);
+        if row.kind == "child" {
+            self.settle_child(&row, outcome);
+            return;
+        }
         match outcome {
             TurnOutcome::Completed => {
                 self.transcripts.set_status(&session_id, "done", None);
@@ -724,13 +810,237 @@ impl TurnHost {
             return;
         };
         for session in sessions {
-            if session.kind != "agent" || session.status == "working" || session.status == "needs-input" {
+            let idle = !matches!(session.status.as_str(), "working" | "needs-input" | "starting" | "exited");
+            if !(session.kind == "agent" || session.kind == "child") || !idle {
                 continue;
             }
             if mailbox::waiting_count(&self.store, &session.id).unwrap_or(0) > 0 {
                 self.deliver_to(&session);
             }
         }
+    }
+
+    /// The end of a child session's turn, in the order a waiter depends on:
+    /// the block that marks it, the status, the event at that block's
+    /// position, the letter to an agent parent, and only then the wake-up.
+    /// A message queued behind the turn goes over last, so the event it
+    /// follows is already written.
+    fn settle_child(&self, session: &crate::session::Session, outcome: TurnOutcome) {
+        let id = session.id.as_str();
+        let exit_by = self.exiting.lock().unwrap_or_else(|e| e.into_inner()).remove(id);
+        let (kind, detail, status) = match (outcome, exit_by) {
+            (_, Some(by)) => {
+                self.transcripts.apply(id, HarnessEvent::SessionEnded { code: None });
+                self.transcripts.append_system(id, &format!("Stopped by {by}. The session has exited; its transcript stays here."));
+                ("exited", format!("stopped by {by}"), "exited")
+            }
+            (TurnOutcome::Completed, None) => {
+                self.transcripts.append_system(id, "Turn ended");
+                ("turn", "completed".to_string(), "idle")
+            }
+            (TurnOutcome::Failed(message), None) => {
+                self.transcripts.apply(id, HarnessEvent::SessionError { message: message.clone() });
+                ("error", message, "error")
+            }
+            (TurnOutcome::Stopped, None) => {
+                self.transcripts.apply(id, HarnessEvent::SessionEnded { code: None });
+                self.transcripts.append_system(id, "Stopped");
+                ("turn", "stopped".to_string(), "idle")
+            }
+        };
+        self.transcripts.set_status(id, status, None);
+        self.transcripts.flush(id);
+        self.child_event(session, kind, &detail, None);
+        if status == "exited" {
+            let _ = mailbox::drop_waiting(&self.store, id);
+            return;
+        }
+        // Stopped from the window is the user saying enough: what is queued
+        // waits for them, as it does for an agent.
+        if detail != "stopped" {
+            self.drain_mailbox(id);
+        }
+    }
+
+    /// Write a child's event at the end of its transcript, tell an agent
+    /// parent, and wake whoever waits.
+    fn child_event(&self, session: &crate::session::Session, kind: &str, outcome: &str, request: Option<&Value>) {
+        let id = session.id.as_str();
+        let cursor = self.transcripts.len(id) as i64;
+        let (_, report) = self.transcripts.since(id, cursor as usize);
+        let report = if kind == "needs-input" { String::new() } else { report };
+        if let Err(error) = crate::session_events::record(&self.store, id, cursor, kind, outcome, &report, request) {
+            eprintln!("[crewd] session {id}: the event was not written: {error}");
+        }
+        self.report_to_parent(session, kind, outcome, &report, request);
+        self.signal.notify();
+    }
+
+    /// A child stopped to ask. Only a child has anyone to tell.
+    fn child_asks(&self, session_id: &str, request: Value) {
+        let Ok(Some(session)) = session::get(&self.store, session_id.to_string()) else {
+            return;
+        };
+        if session.kind == "child" {
+            self.child_event(&session, "needs-input", "", Some(&request));
+        }
+    }
+
+    /// An agent that started a session hears how each turn ended in its own
+    /// box, so it does not have to sit in a wait to find out. A terminal or
+    /// the user has no turns to hand it to: they wait, or read.
+    fn report_to_parent(
+        &self,
+        session: &crate::session::Session,
+        kind: &str,
+        outcome: &str,
+        report: &str,
+        request: Option<&Value>,
+    ) {
+        let Some(parent) = session
+            .parent_id
+            .as_deref()
+            .and_then(|id| session::get(&self.store, id.to_string()).ok().flatten())
+        else {
+            return;
+        };
+        if parent.kind != "agent" {
+            return;
+        }
+        let what = match (kind, outcome) {
+            ("turn", "completed") => "Its turn ended. Its report:".to_string(),
+            ("turn", _) => "Its turn was stopped. What it said last:".to_string(),
+            ("error", message) => format!("Its turn failed: {message}\nWhat it said last:"),
+            ("exited", why) => format!("It exited ({why})."),
+            _ => {
+                let asked = request.map(|request| request.to_string()).unwrap_or_default();
+                format!(
+                    "It is waiting for an answer before it can go on. respond_to_session answers it, \
+                     or the user does in Crew.\n{asked}"
+                )
+            }
+        };
+        let body = if report.trim().is_empty() { what } else { format!("{what}\n\n{}", report.trim()) };
+        let from = crew_protocol::AgentRef {
+            id: session.id.clone(),
+            name: session.name.clone(),
+            kind: Some("session".into()),
+        };
+        if mailbox::enqueue(&self.store, &parent.id, &from, &body).is_ok() {
+            self.deliver_to(&parent);
+        }
+    }
+
+    /// Stop a child for good: its turn ends as an exit. An idle child has no
+    /// turn to end, so the caller settles it with [`TurnHost::exit_idle_child`].
+    /// Returns whether a turn was running.
+    pub fn exit_child(&self, session_id: &str, by: &str) -> bool {
+        if !self.is_running(session_id) {
+            return false;
+        }
+        self.exiting
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(session_id.to_string(), by.to_string());
+        self.cancel(session_id, true);
+        true
+    }
+
+    /// An idle child that exits: there is no turn to end, so the block and the
+    /// event are written here.
+    pub fn exit_idle_child(&self, session: &crate::session::Session, why: &str, note: &str) {
+        self.transcripts.append_system(&session.id, note);
+        self.transcripts.set_status(&session.id, "exited", None);
+        self.transcripts.flush(&session.id);
+        let _ = mailbox::drop_waiting(&self.store, &session.id);
+        self.child_event(session, "exited", why, None);
+    }
+
+    /// Children a restart of the daemon caught mid-turn: `settle_open_turns`
+    /// left them `starting`. Each carries on in its own conversation, told
+    /// why its turn broke off, so whoever waits on it still gets a report. One
+    /// whose first turn never bound a conversation starts that turn again.
+    pub fn resume_interrupted(&self) {
+        let Ok(rows) = session::list_all(&self.store) else {
+            return;
+        };
+        for row in rows.into_iter().filter(|row| row.kind == "child" && row.status == "starting") {
+            if self.is_running(&row.id) {
+                continue;
+            }
+            let cwd = session::cwd(&self.store, &row).unwrap_or_default();
+            let (text, from, hidden) = if row.provider_session_id.is_some() {
+                (
+                    "Crew restarted while you were working, which broke off your last turn. Carry on where you \
+                     left off; your final message is still your report."
+                        .to_string(),
+                    None,
+                    Some(true),
+                )
+            } else {
+                let (blocks, _) = self.transcripts.since(&row.id, 0);
+                match blocks.into_iter().find(|block| block.role == crew_protocol::BlockRole::User) {
+                    Some(first) => (first.text, first.from_agent, None),
+                    None => {
+                        self.transcripts.set_status(&row.id, "error", None);
+                        self.child_event(&row, "error", "Crew restarted before its first turn began", None);
+                        continue;
+                    }
+                }
+            };
+            self.transcripts.append_system(&row.id, "Crew restarted mid-turn; the turn carries on.");
+            let started = self.start(TurnStart {
+                session_id: row.id.clone(),
+                cwd,
+                text,
+                files: None,
+                mentions: None,
+                hidden,
+                from_agent: from,
+                sent_at: None,
+                nonce: None,
+            });
+            if let Err(error) = started {
+                self.transcripts.apply(&row.id, HarnessEvent::SessionError { message: error.clone() });
+                self.transcripts.set_status(&row.id, "error", None);
+                self.child_event(&row, "error", &error, None);
+            }
+        }
+    }
+
+    /// Whether a session has a turn: from `start` until its outcome is in.
+    pub fn is_running(&self, session_id: &str) -> bool {
+        self.running.lock().unwrap_or_else(|e| e.into_inner()).contains(session_id)
+    }
+
+    /// Who started a child, the way it is told: "Planner (agent <id>)", or
+    /// the user.
+    fn parent_label(&self, session: &crate::session::Session) -> String {
+        match session.parent_id.as_deref().and_then(|id| session::get(&self.store, id.to_string()).ok().flatten()) {
+            Some(parent) => crate::caller::Caller::from_session(parent).label(),
+            None => "the user".to_string(),
+        }
+    }
+
+    /// The prompt of a child's turn for a CLI that takes it as one document:
+    /// the envelope and the job on the first turn, the text alone once its
+    /// conversation is being carried on.
+    fn child_prompt(
+        &self,
+        session: &crate::session::Session,
+        resumed: bool,
+        tools: Option<&str>,
+        params: &TurnStart,
+    ) -> String {
+        let text = crate::providers::with_files(params.text.trim(), &path_list(params, &HashSet::new()));
+        if resumed {
+            return text;
+        }
+        crate::providers::assemble(
+            crate::providers::child_persona(&self.parent_label(session), tools),
+            None,
+            &text,
+        )
     }
 
     fn run_claude(
@@ -820,7 +1130,9 @@ impl TurnHost {
             self.agents.kill(&session_id);
             self.detach(&session_id);
         }
-        let claude_session_id = uuid::Uuid::new_v4().to_string();
+        // A child carries on its own conversation; an agent starts a clean one.
+        let resume = child_resume(session);
+        let claude_session_id = resume.clone().unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
         let live = ClaudeLive {
             claude_session_id: claude_session_id.clone(),
@@ -847,11 +1159,17 @@ impl TurnHost {
 
         let path = self.resolve_bin("claude").or_else(|_| self.resolve_bin("claude"))?;
         let mcp = self.mcp();
-        let hint = mcp.as_ref().map(|_| mcp_tools_hint(&self.hidden_tools()));
-        let persona = claude_persona(&session.name, &session.description, hint.as_deref());
+        let persona = if session.kind == "child" {
+            let hint = mcp.as_ref().map(|_| child_tools_hint(&|tool| format!("`mcp__crew__{tool}`")));
+            crate::providers::child_persona(&self.parent_label(session), hint.as_deref())
+        } else {
+            let hint = mcp.as_ref().map(|_| mcp_tools_hint(&self.hidden_tools()));
+            claude_persona(&session.name, &session.description, hint.as_deref())
+        };
         let spawn = ClaudeSpawn {
             model: Some(session.model.clone()).filter(|m| !m.is_empty()),
             session_id: Some(claude_session_id.clone()),
+            resume,
             system_prompt: Some(persona),
             autonomy,
             mcp_config: mcp.map(|(command, args)| crate::providers::claude::claude_mcp_config(&command, &args)),
@@ -937,6 +1255,11 @@ impl TurnHost {
             Ok(pair) => pair,
             Err(error) => return TurnOutcome::Failed(error),
         };
+        // A stop that came before the CLI was there to take it.
+        if self.stop_requested(&session_id) {
+            self.detach(&session_id);
+            return TurnOutcome::Stopped;
+        }
         let path = match self.resolve_bin("codex") {
             Ok(path) => path,
             Err(error) => return TurnOutcome::Failed(error),
@@ -947,19 +1270,26 @@ impl TurnHost {
         // does the MCP server codex starts for it. A second mint would retire
         // the first.
         let env = self.agent_env(&session_id);
-        let prompt = build_codex_prompt(
-            &session.name,
-            &session.description,
-            history.as_deref(),
-            &params.text,
-            &path_list(&params, &HashSet::new()),
-            hint.as_deref(),
-        );
+        let resume = child_resume(&session);
+        let prompt = if session.kind == "child" {
+            let hint = mcp.as_ref().map(|_| child_tools_hint(&|tool| format!("`mcp__crew__{tool}`")));
+            self.child_prompt(&session, resume.is_some(), hint.as_deref(), &params)
+        } else {
+            build_codex_prompt(
+                &session.name,
+                &session.description,
+                history.as_deref(),
+                &params.text,
+                &path_list(&params, &HashSet::new()),
+                hint.as_deref(),
+            )
+        };
         if let Err(error) = self.agents.spawn(
             session_id.clone(),
             path,
             build_codex_spawn_args(&CodexSpawn {
                 prompt,
+                resume,
                 model: Some(session.model.clone()).filter(|m| !m.is_empty()),
                 cwd: Some(params.cwd.clone()),
                 autonomy: self.autonomy(&session),
@@ -993,21 +1323,32 @@ impl TurnHost {
             Ok(pair) => pair,
             Err(error) => return TurnOutcome::Failed(error),
         };
+        // A stop that came before the CLI was there to take it.
+        if self.stop_requested(&session_id) {
+            self.detach(&session_id);
+            return TurnOutcome::Stopped;
+        }
         let path = match self.resolve_bin("cursor-agent") {
             Ok(path) => path,
             Err(error) => return TurnOutcome::Failed(error),
         };
         let mcp = self.mcp();
         // Cursor takes no MCP config, so the bridge is a command it runs.
-        let hint = mcp.as_ref().map(|(exe, _)| shell_tools_hint(&crew_beside(exe)));
-        let prompt = build_cursor_prompt(
-            &session.name,
-            &session.description,
-            history.as_deref(),
-            &params.text,
-            &path_list(&params, &HashSet::new()),
-            hint.as_deref(),
-        );
+        let resume = child_resume(&session);
+        let prompt = if session.kind == "child" {
+            let hint = mcp.as_ref().map(|(exe, _)| child_shell_hint(&crew_beside(exe)));
+            self.child_prompt(&session, resume.is_some(), hint.as_deref(), &params)
+        } else {
+            let hint = mcp.as_ref().map(|(exe, _)| shell_tools_hint(&crew_beside(exe)));
+            build_cursor_prompt(
+                &session.name,
+                &session.description,
+                history.as_deref(),
+                &params.text,
+                &path_list(&params, &HashSet::new()),
+                hint.as_deref(),
+            )
+        };
         if let Err(error) = self.agents.spawn(
             session_id.clone(),
             path,
@@ -1015,6 +1356,7 @@ impl TurnHost {
                 prompt,
                 model: Some(session.model.clone()).filter(|m| !m.is_empty()),
                 autonomy: self.autonomy(&session),
+                resume,
             }),
             params.cwd,
             Some(self.agent_env(&session_id)),
@@ -1043,23 +1385,35 @@ impl TurnHost {
             Ok(pair) => pair,
             Err(error) => return TurnOutcome::Failed(error),
         };
+        // A stop that came before the CLI was there to take it.
+        if self.stop_requested(&session_id) {
+            self.detach(&session_id);
+            return TurnOutcome::Stopped;
+        }
         let path = match self.resolve_bin("opencode") {
             Ok(path) => path,
             Err(error) => return TurnOutcome::Failed(error),
         };
-        let hint = mcp.as_ref().map(|_| opencode_tools_hint(&self.hidden_tools()));
-        let prompt = build_opencode_prompt(
-            &session.name,
-            &session.description,
-            history.as_deref(),
-            &params.text,
-            &path_list(&params, &HashSet::new()),
-            hint.as_deref(),
-        );
+        let resume = child_resume(&session);
+        let prompt = if session.kind == "child" {
+            let hint = mcp.as_ref().map(|_| child_tools_hint(&|tool| format!("`crew_{tool}`")));
+            self.child_prompt(&session, resume.is_some(), hint.as_deref(), &params)
+        } else {
+            let hint = mcp.as_ref().map(|_| opencode_tools_hint(&self.hidden_tools()));
+            build_opencode_prompt(
+                &session.name,
+                &session.description,
+                history.as_deref(),
+                &params.text,
+                &path_list(&params, &HashSet::new()),
+                hint.as_deref(),
+            )
+        };
         // opencode has no approval channel: without --auto it falls back to the
         // user's own permission config, which Crew cannot answer for. Saying so
         // once beats an "ask" that silently never asks.
-        if history.is_none() && self.autonomy(&session) != Autonomy::Full {
+        let first = if session.kind == "child" { resume.is_none() } else { history.is_none() };
+        if first && self.autonomy(&session) != Autonomy::Full {
             self.transcripts.append_system(
                 &session_id,
                 "opencode decides its own permissions: it has no way to ask Crew, so it runs under your opencode config.",
@@ -1075,6 +1429,7 @@ impl TurnHost {
             build_opencode_spawn_args(&OpencodeSpawn {
                 model: Some(session.model.clone()).filter(|m| !m.is_empty()),
                 autonomy: self.autonomy(&session),
+                resume,
             }),
             params.cwd,
             Some(env),
@@ -1353,6 +1708,7 @@ impl TurnHost {
                 ui_id
             };
             self.transcripts.set_status(&session_id, "needs-input", None);
+            let asked = json!({ "request_id": ui_id, "kind": "question", "questions": questions });
             self.transcripts.apply(
                 &session_id,
                 HarnessEvent::QuestionRequested {
@@ -1360,6 +1716,7 @@ impl TurnHost {
                     questions,
                 },
             );
+            self.child_asks(&session_id, asked);
             let reply = rx.recv().unwrap_or(QuestionReply::Dismiss);
             match reply {
                 QuestionReply::Cancelled => {
@@ -1429,6 +1786,13 @@ impl TurnHost {
         };
         let title = claude_tool_label(&tool_name, &control.input);
         self.transcripts.set_status(&session_id, "needs-input", None);
+        let asked = json!({
+            "request_id": ui_id,
+            "kind": "approval",
+            "tool": tool_name,
+            "title": title,
+            "input": Value::Object(control.input.clone()),
+        });
         self.transcripts.apply(
             &session_id,
             HarnessEvent::ApprovalRequested {
@@ -1438,6 +1802,7 @@ impl TurnHost {
                 input: Some(Value::Object(control.input.clone())),
             },
         );
+        self.child_asks(&session_id, asked);
         let decision = rx.recv().unwrap_or(ApprovalResolution::Deny);
         self.transcripts.apply(
             &session_id,

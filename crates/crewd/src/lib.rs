@@ -17,6 +17,7 @@ use crew_core::messages;
 use crew_core::provider_session;
 use crew_core::process::{ProcessEvents, ProcessHost, ProcessPatch, RunRequest};
 use crew_core::process_tools::ProcessTools;
+use crew_core::session_tools::SessionTools;
 use crew_core::pty::{self, PtyEvents, PtyHost, SpawnOptions};
 use crew_core::remote;
 use crew_core::routine;
@@ -73,6 +74,8 @@ struct Hosts {
     exit: std_mpsc::Sender<()>,
     /// Sessions' CLIs: what their hooks say, and their histories while a chat reads them.
     sessions: sessions::SessionWatch,
+    /// Sessions started with `start_session`: the tools, and the reaper of idle ones.
+    children: Arc<SessionTools>,
     /// `crewd serve` only. Zero on the window's daemon.
     socks_port: u16,
 }
@@ -522,6 +525,9 @@ fn proto_session(row: &crew_core::session::Session) -> proto::Session {
         worktree: row.worktree.clone(),
         created_at: row.created_at,
         updated_at: row.updated_at,
+        agent_id: row.agent_id.clone(),
+        parent_id: row.parent_id.clone(),
+        cursor: row.cursor,
     }
 }
 
@@ -568,6 +574,14 @@ pub fn serve_on(config: Config, listen: Listen) -> Result<Handle, String> {
     // Tool families register here, with the host handles they need.
     let toolbox = turns.toolbox();
     let (exit_tx, exit_rx) = std_mpsc::channel();
+    let made = hub.clone();
+    let children = Arc::new(SessionTools::new(
+        turns.clone(),
+        Arc::new(move |created: &crew_core::session::Session| {
+            made.emit("session-created", SessionCreated { session: proto_session(created), open: false });
+        }),
+    ));
+    toolbox.register(children.clone());
     toolbox.register(Arc::new(ProcessTools::new(config.processes.clone(), config.store.clone())));
     toolbox.register(Arc::new(browser.clone()));
     config.bridge.set_handler(Arc::new(ToolDispatch {
@@ -583,6 +597,9 @@ pub fn serve_on(config: Config, listen: Listen) -> Result<Handle, String> {
     // A letter left waiting for an idle agent is invisible until someone
     // messages it: only the end of a turn looks in a box.
     turns.deliver_waiting();
+    // A session somebody started, caught mid-turn by the restart, carries on:
+    // its parent is still waiting for its report.
+    turns.resume_interrupted();
 
     // Before the window can list them, or it would show rows already gone.
     let _ = session::sweep_disposable(&config.store);
@@ -603,6 +620,7 @@ pub fn serve_on(config: Config, listen: Listen) -> Result<Handle, String> {
         browser,
         exit: exit_tx,
         sessions,
+        children,
         socks_port: 0,
     };
 
@@ -705,6 +723,19 @@ async fn run(
         loop {
             tick.tick().await;
             leases.sweep(app_state::now_millis());
+        }
+    });
+    // A session nobody has given work for a while exits and frees its
+    // parent's slot. Nothing runs between turns, so nothing is killed.
+    let children = hosts.children.clone();
+    tokio::spawn(async move {
+        let mut every = tokio::time::interval(REAP_EVERY);
+        loop {
+            every.tick().await;
+            let children = children.clone();
+            if let Ok(Err(error)) = tokio::task::spawn_blocking(move || children.reap(SessionTools::idle_limit())).await {
+                eprintln!("[crewd] reaping idle sessions: {error}");
+            }
         }
     });
     // The first tick is now: what aged out while the app was closed goes before anyone looks.
@@ -1232,6 +1263,12 @@ async fn delete_session(hosts: &Hosts, id: String) -> Result<(), String> {
         Ok(())
     })
     .await?;
+    // A turn still running would write into a transcript that is gone.
+    if hosts.turns.is_running(&id) {
+        let turns = hosts.turns.clone();
+        let running = id.clone();
+        block(move || turns.stop(&running)).await?;
+    }
     // A process that outlived that still has a token in its environment;
     // a session that no longer exists should not still be able to call.
     hosts.bridge.revoke(&id);
@@ -1243,6 +1280,9 @@ const DAY_MS: i64 = 24 * 60 * 60 * 1000;
 
 /// How often the daemon lets go of sessions Settings no longer keeps.
 const EXPIRE_EVERY: Duration = Duration::from_secs(60 * 60);
+
+/// How often idle child sessions are looked at.
+const REAP_EVERY: Duration = Duration::from_secs(20);
 
 fn stale_before(days: u32) -> i64 {
     app_state::now_millis() - i64::from(days) * DAY_MS

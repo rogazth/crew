@@ -153,6 +153,25 @@ impl TranscriptHub {
         }
     }
 
+    /// How many blocks the transcript holds: the cursor a child session's
+    /// events are written at.
+    pub fn len(&self, session_id: &str) -> usize {
+        self.ensure(session_id);
+        self.lock().get(session_id).map(|row| row.blocks.len()).unwrap_or(0)
+    }
+
+    /// The blocks from index `from` (0-based, so a cursor) to the end, and
+    /// the final message of the turn the transcript ends on.
+    pub fn since(&self, session_id: &str, from: usize) -> (Vec<Block>, String) {
+        self.ensure(session_id);
+        let map = self.lock();
+        let Some(row) = map.get(session_id) else {
+            return (Vec::new(), String::new());
+        };
+        let start = from.min(row.blocks.len());
+        (row.blocks[start..].to_vec(), crate::session_events::report(&row.blocks))
+    }
+
     pub fn append_user(
         &self,
         session_id: &str,
