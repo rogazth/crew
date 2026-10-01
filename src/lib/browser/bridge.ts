@@ -7,44 +7,30 @@
 import type { SitePermission, SitePermissions } from "./permissions";
 
 /**
- * Where pages kept their cookies before each workspace had its own. A new
- * workspace session starts from a copy of it, so an upgrade keeps its sign-ins.
+ * The one session every page lives in, whatever its workspace: the app signs
+ * in once. It is where pages kept their cookies before workspaces had their
+ * own, so a sign-in from then is still there.
  */
-export const LEGACY_PARTITION = "persist:crew-browser";
-
-const PARTITION_PREFIX = "persist:crew-browser-ws-";
-/** No `persist:`: Electron keeps the session in memory, so nothing it stores reaches the disk. */
-const INCOGNITO_PREFIX = "crew-incognito-ws-";
-const WORKSPACE_ID = /^[A-Za-z0-9-]{1,64}$/;
-
+const PAGE_PARTITION = "persist:crew-browser";
 /**
- * The session a workspace's pages live in: its own cookies and storage, so two
- * workspaces can be signed in as different people. An incognito page gets the
- * workspace's in-memory session instead, shared by its incognito tabs and
- * wiped once the last of them closes. Null for an id that could not have come
- * from the daemon.
+ * No `persist:`: Electron keeps the session in memory, so nothing it stores
+ * reaches the disk. Shared by every incognito tab and wiped once the last of
+ * them closes.
  */
-export function partitionFor(workspaceId: string, incognito = false): string | null {
-  if (!WORKSPACE_ID.test(workspaceId)) return null;
-  return `${incognito ? INCOGNITO_PREFIX : PARTITION_PREFIX}${workspaceId}`;
+const INCOGNITO_PARTITION = "crew-incognito";
+
+/** The session a page lives in: the app's own, or the in-memory one an incognito page gets. */
+export function partitionFor(incognito = false): string {
+  return incognito ? INCOGNITO_PARTITION : PAGE_PARTITION;
 }
 
 export function isIncognitoPartition(partition: unknown): partition is string {
-  return (
-    typeof partition === "string" &&
-    partition.startsWith(INCOGNITO_PREFIX) &&
-    WORKSPACE_ID.test(partition.slice(INCOGNITO_PREFIX.length))
-  );
+  return partition === INCOGNITO_PARTITION;
 }
 
 /** Main refuses a webview in any partition this doesn't recognize. */
 export function isPagePartition(partition: unknown): partition is string {
-  return (
-    isIncognitoPartition(partition) ||
-    (typeof partition === "string" &&
-      partition.startsWith(PARTITION_PREFIX) &&
-      WORKSPACE_ID.test(partition.slice(PARTITION_PREFIX.length)))
-  );
+  return partition === PAGE_PARTITION || partition === INCOGNITO_PARTITION;
 }
 
 /** A webview whose src starts with this asks main to restore a saved back/forward stack instead of loading. */
@@ -89,10 +75,14 @@ export const CHANNELS = {
   /** Ends a hung page's process so it can load again. */
   kill: "browser:kill",
   print: "browser:print",
-  /** window → main: cookies the daemon read from another browser, to write into one workspace's session. */
+  /** window → main: cookies the daemon read from another browser, to write into the pages' session. */
   importCookies: "browser:import-cookies",
   /** window → main: this guest is that tab's page, so an agent's call on the tab finds it. */
   pageGuest: "browser:page-guest",
+  /** window → main: every other machine a workspace lives on, by the name its pages reach it at. */
+  machines: "browser:machines",
+  /** window → main: the machine a guest's workspace lives on, or null for this Mac. */
+  guestMachine: "browser:guest-machine",
   /** main → window: an agent needs this tab live; mount it (hidden) and pin it, or add it first. */
   mount: "browser:mount",
 } as const;

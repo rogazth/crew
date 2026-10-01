@@ -9,7 +9,6 @@ type Step = { kind: "ask" } | { kind: "busy" } | { kind: "done"; summary: string
 
 type Props = {
   source: CookieSource | null;
-  workspaceId: string;
   onClose: () => void;
   /** Cookies landed: the page can load again, signed in. */
   onImported: () => void;
@@ -19,7 +18,7 @@ type Props = {
  * Asks before reading another browser's cookies, then says what came over.
  * Enter confirms, Escape cancels; neither while macOS is asking for the keychain.
  */
-export function CookieImportDialog({ source, workspaceId, onClose, onImported }: Props) {
+export function CookieImportDialog({ source, onClose, onImported }: Props) {
   const action = useRef<HTMLButtonElement>(null);
   // Held against the source it belongs to: the next one starts at the question.
   const [run, setRun] = useState<{ of: CookieSource; step: Step } | null>(null);
@@ -37,7 +36,7 @@ export function CookieImportDialog({ source, workspaceId, onClose, onImported }:
     setRun({ of: source, step: { kind: "busy" } });
     try {
       const read = await browserCookiesRead(source.id);
-      const written = await host.importCookies(workspaceId, read.cookies);
+      const written = await host.importCookies(read.cookies);
       const summary = importSummary(written.imported, read.skipped + written.failed, read.google ?? 0);
       setRun({ of: source, step: { kind: "done", summary } });
       if (written.imported > 0) onImported();
@@ -56,8 +55,8 @@ export function CookieImportDialog({ source, workspaceId, onClose, onImported }:
     ) : (
       <div className="flex flex-col gap-2">
         <p>
-          Pages in this workspace open signed in wherever {label} is. Other workspaces keep their own cookies. macOS
-          asks to let Crew read {browser}'s keychain entry.
+          Pages in every workspace open signed in wherever {label} is. macOS asks to let Crew read {browser}'s
+          keychain entry.
         </p>
         <p>
           Google and YouTube accounts don't come over: sign in to Google here. Some sites end a sign-in that two browsers share, so

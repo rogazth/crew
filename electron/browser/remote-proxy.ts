@@ -1,24 +1,36 @@
 import { createServer, request as httpRequest, type IncomingMessage, type RequestOptions, type Server, type ServerResponse } from "node:http";
 import { connect, type AddressInfo, type Socket } from "node:net";
+import { randomBytes } from "node:crypto";
 import type { Duplex } from "node:stream";
+import { aliasOfHost, isPlainLoopback, MACHINE_HEADER } from "../../src/lib/browser/machines";
 
 /**
- * A proxy on this Mac's loopback that a remote workspace's pages go through.
- * Their `localhost` is the machine's: the relay dials the SOCKS proxy beside
- * that machine's `crewd serve`, with the daemon token as the password. Every
- * other host it dials from here, so browsing does not egress from the machine.
+ * A proxy on this Mac's loopback that every page's loopback goes through once
+ * a workspace lives on another machine. `<machine>.localhost` is that
+ * machine's `localhost`: the relay dials the SOCKS proxy beside its
+ * `crewd serve`, with the daemon token as the password. So is a plain
+ * `localhost` request that names a machine in MACHINE_HEADER, which only a
+ * plain-HTTP request can show. Everything else it dials from here, so
+ * browsing does not egress from a machine.
  *
  * Chromium can do neither half itself: its SOCKS5 client sends no password,
  * and it never hands loopback to a PAC script, so a session can only send its
  * `localhost` somewhere through fixed proxy rules, and those take every host.
- * Pages talk HTTP proxy to the relay; a 407 asks them for the token, which the
- * app's `login` handler answers, so nothing else on this Mac can use it.
+ * Pages talk HTTP proxy to the relay; a 407 asks them for the relay's own
+ * token, which the app's `login` handler answers, so nothing else on this Mac
+ * can use it.
  */
 export type RemoteRelay = {
   /** The port on 127.0.0.1 pages are pointed at. */
   port: number;
-  /** A re-paired machine hands out a new token; the relay follows. */
-  setToken(token: string): void;
+  /** What a page presents as its proxy credentials. */
+  token: string;
+  /**
+   * Every machine, by alias; null for one it can't reach now, whose name then
+   * fails rather than reach this Mac. A re-paired machine hands out a new
+   * token; the relay follows.
+   */
+  setMachines(machines: ReadonlyMap<string, Upstream | null>): void;
   close(): Promise<void>;
 };
 
@@ -53,16 +65,27 @@ export type Upstream = { host: string; port: number; token: string };
 
 export type Destination = { host: string; port: number; loopback: boolean };
 type Dial = (dest: Destination) => Promise<Socket>;
+/** `machine` is what the request's MACHINE_HEADER named, if anything. */
+type Route = (dest: Destination, machine: string | null) => Promise<Socket>;
 
-/** `direct` is how hosts off loopback are reached; tests stand in for the network. */
-export async function startRelay(upstream: Upstream, opts: { direct?: Dial } = {}): Promise<RemoteRelay> {
-  let token = upstream.token;
+/** `direct` is how this Mac's hosts are reached; tests stand in for the network. */
+export async function startRelay(opts: { token?: string; direct?: Dial } = {}): Promise<RemoteRelay> {
+  const token = opts.token ?? randomBytes(24).toString("hex");
   const direct = opts.direct ?? directConnect;
-  const current = () => token;
-  const dial: Dial = (dest) =>
-    dest.loopback ? socksConnect({ ...upstream, token }, { host: dest.host.endsWith(".localhost") ? "localhost" : dest.host, port: dest.port }) : direct(dest);
-  const server: Server = createServer((req, res) => forward(req, res, current(), dial));
-  server.on("connect", (req: IncomingMessage, client: Duplex, head: Buffer) => tunnel(req, client, head, current(), dial));
+  let machines: ReadonlyMap<string, Upstream | null> = new Map();
+  const reach = (alias: string, dest: { host: string; port: number }) => {
+    const upstream = machines.get(alias);
+    return upstream ? socksConnect(upstream, dest) : Promise.reject(new Error(`${alias} is not connected`));
+  };
+  const route: Route = (dest, machine) => {
+    const named = aliasOfHost(dest.host);
+    if (named && machines.has(named)) return reach(named, { host: "localhost", port: dest.port });
+    if (machine && machines.has(machine) && isPlainLoopback(dest.host)) return reach(machine, { host: dest.host, port: dest.port });
+    // A `*.localhost` no machine answers to is this Mac's, as Chromium would have it.
+    return direct(dest.host.endsWith(".localhost") ? { ...dest, host: "localhost" } : dest);
+  };
+  const server: Server = createServer((req, res) => forward(req, res, token, route));
+  server.on("connect", (req: IncomingMessage, client: Duplex, head: Buffer) => tunnel(req, client, head, token, route));
   // Proxied pages reuse their connections; a dev server's HMR socket stays open for hours.
   server.keepAliveTimeout = 60_000;
   server.headersTimeout = 30_000;
@@ -76,8 +99,9 @@ export async function startRelay(upstream: Upstream, opts: { direct?: Dial } = {
   });
   return {
     port: (server.address() as AddressInfo).port,
-    setToken: (next) => {
-      token = next;
+    token,
+    setMachines: (next) => {
+      machines = new Map(next);
     },
     close: () =>
       new Promise<void>((resolve) => {
@@ -119,7 +143,7 @@ function directConnect(dest: Destination): Promise<Socket> {
 
 const PROXY_AUTH = `Proxy-Authenticate: Basic realm="crew"`;
 
-function forward(req: IncomingMessage, res: ServerResponse, token: string, dial: Dial): void {
+function forward(req: IncomingMessage, res: ServerResponse, token: string, route: Route): void {
   if (!authorized(req.headers["proxy-authorization"], token)) {
     res.writeHead(407, { "Proxy-Authenticate": 'Basic realm="crew"', "Content-Length": "0" }).end();
     return;
@@ -137,14 +161,17 @@ function forward(req: IncomingMessage, res: ServerResponse, token: string, dial:
     return;
   }
   const headers = { ...req.headers };
+  const named = headers[MACHINE_HEADER];
+  const machine = typeof named === "string" ? named : null;
   delete headers["proxy-authorization"];
   delete headers["proxy-connection"];
+  delete headers[MACHINE_HEADER];
   const options: RequestOptions = {
     method: req.method,
     path: `${url.pathname}${url.search}`,
     headers,
     createConnection: (_opts, done) => {
-      dial(dest).then(
+      route(dest, machine).then(
         (socket) => {
           done(null, socket);
           // The request attaches its reader first; both run on the next tick, in this order.
@@ -168,7 +195,7 @@ function forward(req: IncomingMessage, res: ServerResponse, token: string, dial:
   req.pipe(out);
 }
 
-function tunnel(req: IncomingMessage, client: Duplex, head: Buffer, token: string, dial: Dial): void {
+function tunnel(req: IncomingMessage, client: Duplex, head: Buffer, token: string, route: Route): void {
   client.on("error", () => client.destroy());
   if (!authorized(req.headers["proxy-authorization"], token)) {
     client.end(`HTTP/1.1 407 Proxy Authentication Required\r\n${PROXY_AUTH}\r\nContent-Length: 0\r\n\r\n`);
@@ -180,7 +207,8 @@ function tunnel(req: IncomingMessage, client: Duplex, head: Buffer, token: strin
     client.end("HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n");
     return;
   }
-  dial(dest).then(
+  // A CONNECT carries none of the page's headers: only the name says which machine.
+  route(dest, null).then(
     (socket) => {
       if (client.destroyed) {
         socket.destroy();

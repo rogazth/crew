@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { readdir, rm } from "node:fs/promises";
 import path from "node:path";
 import {
   app,
@@ -18,14 +18,8 @@ import {
 } from "electron";
 import { resolveForward, type KeyboardLayout, type LiveCommand } from "../../src/lib/keymap";
 import type { NavSnapshot } from "../../src/lib/browser/snapshot";
-import {
-  CHANNELS,
-  isIncognitoPartition,
-  isPagePartition,
-  LEGACY_PARTITION,
-  partitionFor,
-  type OpenTabRequest,
-} from "../../src/lib/browser/bridge";
+import { CHANNELS, isIncognitoPartition, partitionFor, type OpenTabRequest } from "../../src/lib/browser/bridge";
+import { machineHeaders, onMachine } from "../../src/lib/browser/machines";
 import { FILES_PARTITION } from "../../src/lib/browser/files";
 import {
   alwaysAllowed,
@@ -39,13 +33,12 @@ import {
   type SitePermission,
   type SitePermissions,
 } from "../../src/lib/browser/permissions";
-import { copyCookies } from "./cookies";
 import { openExternal } from "../external";
 import { forgetHost, saveNextAs, trackDownload } from "./downloads";
 import { followFile, serveFiles } from "./files";
 import { chromeUserAgent, firefoxUserAgent, isGoogleSignIn, outgoingHeaders } from "./identity";
 import { ask, dropHost, dropPrompts, type PromptTarget } from "./prompts";
-import { relayBypassRules, startRelay, type RemoteRelay } from "./remote-proxy";
+import { relayBypassRules, startRelay, type RemoteRelay, type Upstream } from "./remote-proxy";
 import {
   attachDecision,
   certificateBypass,
@@ -82,7 +75,8 @@ const popups = new Map<number, PromptTarget>();
 /** What each window can run right now; a chord inside one of its pages is checked against this. */
 const liveCommands = new WeakMap<WebContents, LiveCommand[]>();
 const keyboardLayouts = new WeakMap<WebContents, KeyboardLayout>();
-const pendingRestores = new Map<string, { snapshot: NavSnapshot; expires: number }>();
+/** `machine`: where the page's workspace lives, known before its stack loads. */
+const pendingRestores = new Map<string, { snapshot: NavSnapshot; machine: string | null; expires: number }>();
 /**
  * will-attach-webview sees the webview's params, did-attach-webview sees its
  * webContents, and nothing carries an id from one to the other. Both fire in
@@ -91,24 +85,19 @@ const pendingRestores = new Map<string, { snapshot: NavSnapshot; expires: number
 const attachQueues = new WeakMap<WebContents, Attach[]>();
 type Attach = { partition: string; token: string | null };
 
-/** Each workspace's page session, set up the first time one of its pages attaches. */
-const pageSessions = new Map<string, { ses: Session; seeded: Promise<void> }>();
+/** The pages' session and the incognito one, each set up the first time a page needs it. */
+const pageSessions = new Map<string, Session>();
 const pageSessionSet = new WeakSet<Session>();
 /** The guests attached in each incognito session, by webContents id. */
 const incognitoGuests = new Map<string, Set<number>>();
 const incognitoWipes = new Map<string, ReturnType<typeof setTimeout>>();
 
-/** Where Electron keeps a persistent partition on disk. */
-function partitionDir(partition: string): string {
-  return path.join(app.getPath("userData"), "Partitions", partition.replace(/^persist:/, ""));
-}
-
-/** Each relay's token, by its port: proxy auth can come without a page (a service worker's fetch). */
-const relayTokens = new Map<number, string>();
+/** Where the relay listens and what it asks for: proxy auth can come without a page (a service worker's fetch). */
+let relayAuth: { port: number; token: string } | null = null;
 let loginHooked = false;
 
 /**
- * Electron 44 delivers proxy and site auth on `app`. A relay's challenge is
+ * Electron 44 delivers proxy and site auth on `app`. The relay's challenge is
  * answered with its token; a page's own sign-in (basic or digest auth) asks
  * the person over that page. Anything else keeps Electron's default: no answer.
  */
@@ -117,11 +106,9 @@ function hookLogin(): void {
   loginHooked = true;
   app.on("login", (event, webContents, details, authInfo, callback) => {
     if (authInfo.isProxy) {
-      if (authInfo.host !== "127.0.0.1") return;
-      const token = relayTokens.get(authInfo.port);
-      if (!token) return;
+      if (authInfo.host !== "127.0.0.1" || !relayAuth || authInfo.port !== relayAuth.port) return;
       event.preventDefault();
-      callback(token, token);
+      callback(relayAuth.token, relayAuth.token);
       return;
     }
     if (!webContents || !pageSessionSet.has(webContents.session)) return;
@@ -141,105 +128,92 @@ function hookLogin(): void {
   });
 }
 
-/** One relay per machine, shared by its workspaces' sessions. */
-const relays = new Map<string, { relay: Promise<RemoteRelay>; users: Set<Session> }>();
-const relayOf = new WeakMap<Session, string>();
+/** The machine each guest's workspace lives on, by webContents id; a guest on this Mac has none. */
+const guestMachines = new Map<number, string>();
 
-async function releaseRelay(ses: Session): Promise<void> {
-  const key = relayOf.get(ses);
-  if (!key) return;
-  relayOf.delete(ses);
-  const entry = relays.get(key);
-  if (!entry) return;
-  entry.users.delete(ses);
-  if (entry.users.size > 0) return;
-  relays.delete(key);
-  const relay = await entry.relay.catch(() => null);
-  if (!relay) return;
-  relayTokens.delete(relay.port);
-  await relay.close();
+/** A login popup reaches the machine its opener does. */
+function machineOf(webContentsId: number | undefined): string | null {
+  if (webContentsId === undefined) return null;
+  const opener = popups.get(webContentsId)?.pageId;
+  return guestMachines.get(webContentsId) ?? (opener === undefined ? null : (guestMachines.get(opener) ?? null));
 }
+
+/** The window says which machine a page's workspace lives on, as soon as it attaches. */
+export function setGuestMachine(guest: WebContents, alias: string | null): void {
+  if (alias) guestMachines.set(guest.id, alias);
+  else guestMachines.delete(guest.id);
+}
+
+let relay: RemoteRelay | null = null;
+let machinesQueue: Promise<void> = Promise.resolve();
 
 /**
- * A remote workspace's pages reach that machine's loopback through its SOCKS
- * proxy, by way of a relay on this Mac (see remote-proxy.ts). Names that
- * cannot be loopback skip the relay; what it does get that is not loopback it
- * dials from here. Either way the browser does not egress from the VPS.
+ * Every other machine a workspace lives on, by alias; null for one that is
+ * not connected, so its name fails instead of reaching this Mac. While there
+ * is any, every page's loopback goes through the relay (see remote-proxy.ts),
+ * which takes `<alias>.localhost` to that machine and the rest to this Mac.
+ * Names that cannot be loopback skip it, so browsing never egresses from a VPS.
  */
-export async function setWorkspaceProxy(workspaceId: string, proxy: RemoteProxy | null): Promise<void> {
-  // Its incognito pages reach the machine the same way, so their session is set up now, before any attaches.
-  for (const partition of [partitionFor(workspaceId), partitionFor(workspaceId, true)]) {
-    if (partition) await proxySession(pageSession(partition).ses, proxy);
-  }
+export function setMachines(machines: ReadonlyMap<string, Upstream | null>): Promise<void> {
+  const apply = () => applyMachines(machines);
+  machinesQueue = machinesQueue.then(apply, apply);
+  return machinesQueue;
 }
 
-type RemoteProxy = { host: string; port: number; token: string };
-
-async function proxySession(ses: Session, proxy: RemoteProxy | null): Promise<void> {
+async function applyMachines(machines: ReadonlyMap<string, Upstream | null>): Promise<void> {
   hookLogin();
-  const key = proxy ? `${proxy.host}:${proxy.port}` : null;
-  if (relayOf.get(ses) !== key) await releaseRelay(ses);
-  if (!proxy || !key) {
-    await ses.setProxy({ mode: "direct" });
+  const sessions = [pageSession(partitionFor()), pageSession(partitionFor(true))];
+  if (machines.size === 0) {
+    if (!relay) return;
+    const closing = relay;
+    relay = null;
+    relayAuth = null;
+    await Promise.all(sessions.map((ses) => ses.setProxy({ mode: "direct" })));
+    await closing.close();
     return;
   }
-  let entry = relays.get(key);
-  if (!entry) {
-    const started = startRelay(proxy);
-    entry = { relay: started, users: new Set() };
-    relays.set(key, entry);
-    // A relay that could not listen is not kept: the next call starts another.
-    started.catch(() => {
-      if (relays.get(key)?.relay === started) relays.delete(key);
-    });
-  }
-  entry.users.add(ses);
-  relayOf.set(ses, key);
-  let relay: RemoteRelay;
-  try {
-    relay = await entry.relay;
-  } catch (error) {
-    relayOf.delete(ses);
-    await ses.setProxy({ mode: "direct" });
-    throw error;
-  }
-  relay.setToken(proxy.token);
-  relayTokens.set(relay.port, proxy.token);
+  const started = !relay;
+  relay ??= await startRelay();
+  relay.setMachines(machines);
+  relayAuth = { port: relay.port, token: relay.token };
+  if (!started) return;
+  const rules = { mode: "fixed_servers" as const, proxyRules: `127.0.0.1:${relay.port}`, proxyBypassRules: relayBypassRules() };
   // `<-loopback>` drops Chromium's implicit bypass, so `localhost` reaches the relay too.
-  await ses.setProxy({ mode: "fixed_servers", proxyRules: `127.0.0.1:${relay.port}`, proxyBypassRules: relayBypassRules() });
+  await Promise.all(sessions.map((ses) => ses.setProxy(rules)));
   // Pages already open kept their direct connections; new ones go through the relay.
-  await ses.closeAllConnections();
+  await Promise.all(sessions.map((ses) => ses.closeAllConnections()));
+}
+
+/** A page of a remote workspace that asks for plain loopback: the main frame moves to the machine's name, the rest says which machine. */
+function routeToMachines(ses: Session): void {
+  ses.webRequest.onBeforeRequest((details, callback) => {
+    const alias = details.resourceType === "mainFrame" || details.resourceType === "subFrame" ? machineOf(details.webContentsId) : null;
+    const moved = onMachine(details.url, alias);
+    callback(moved === details.url ? {} : { redirectURL: moved });
+  });
 }
 
 /**
- * A workspace's pages: their own cookies, and none of the app window's CSP.
- * A partition seen for the first time starts from the shared one pages used
- * before workspaces had their own, so an upgrade keeps its sign-ins. The copy
- * takes milliseconds, once per workspace; a page that loads inside that window
- * shows signed out until its next load.
+ * The pages' session, the incognito one, or the previews': none of the app
+ * window's CSP, and the same guards for each.
  */
-function pageSession(partition: string): { ses: Session; seeded: Promise<void> } {
+export function pageSession(partition: string): Session {
   const existing = pageSessions.get(partition);
   if (existing) return existing;
-  // An incognito session starts empty: nothing is copied in, and nothing it holds is on disk to find.
-  const fresh =
-    isPagePartition(partition) &&
-    !isIncognitoPartition(partition) &&
-    !existsSync(partitionDir(partition)) &&
-    existsSync(partitionDir(LEGACY_PARTITION));
   const ses = session.fromPartition(partition);
   if (partition === FILES_PARTITION) serveFiles(ses);
-  const seeded = fresh
-    ? copyCookies(session.fromPartition(LEGACY_PARTITION), ses).then(
-        () => {},
-        () => {},
-      )
-    : Promise.resolve();
+  else routeToMachines(ses);
   ses.setUserAgent(chromeUserAgent(ses.getUserAgent()));
   const chrome = chromeVersion();
   // The only onBeforeSendHeaders on a page session: Electron keeps one listener per event.
   ses.webRequest.onBeforeSendHeaders((details, callback) =>
-    callback({ requestHeaders: outgoingHeaders(details.requestHeaders, details.url, chrome) }),
+    callback({
+      requestHeaders: machineHeaders(
+        outgoingHeaders(details.requestHeaders, details.url, chrome),
+        details.url,
+        machineOf(details.webContentsId),
+      ),
+    }),
   );
   ses.setPermissionRequestHandler((contents, permission, callback, details) => {
     void requestPermission(contents, permission, details, partition).then(callback, () => callback(false));
@@ -259,16 +233,8 @@ function pageSession(partition: string): { ses: Session; seeded: Promise<void> }
     const target = contents ? promptTarget(contents) : null;
     trackDownload(item, target ? { host: target.host, pageId: target.pageId } : null);
   });
-  const entry = { ses, seeded };
-  pageSessions.set(partition, entry);
+  pageSessions.set(partition, ses);
   pageSessionSet.add(ses);
-  return entry;
-}
-
-/** A workspace's page session once any first-time copy has landed, so a write after it wins. */
-export async function readyPageSession(partition: string): Promise<Session> {
-  const { ses, seeded } = pageSession(partition);
-  await seeded;
   return ses;
 }
 
@@ -434,8 +400,29 @@ function attachQueue(host: WebContents): Attach[] {
   return queue;
 }
 
+let partitionsSwept: Promise<void> | null = null;
+
+/**
+ * For a while each workspace kept its own sign-ins, in a partition of its
+ * own. Every page shares the app's session now, so those go: nothing reads
+ * them, and nothing is copied out of them.
+ */
+export function sweepWorkspacePartitions(): Promise<void> {
+  partitionsSwept ??= (async () => {
+    const dir = path.join(app.getPath("userData"), "Partitions");
+    const names = await readdir(dir).catch(() => [] as string[]);
+    await Promise.all(
+      names
+        .filter((name) => name.startsWith("crew-browser-ws-"))
+        .map((name) => rm(path.join(dir, name), { recursive: true, force: true }).catch(() => {})),
+    );
+  })();
+  return partitionsSwept;
+}
+
 /** Hooks a window so every <webview> it creates is vetted, hardened, and wired before its page runs. */
 export function installBrowser(win: BrowserWindow): void {
+  void sweepWorkspacePartitions();
   guardCertificates();
   hookLogin();
   const host = win.webContents;
@@ -477,6 +464,8 @@ function restore(guest: WebContents, token: string): void {
   const pending = pendingRestores.get(token);
   pendingRestores.delete(token);
   if (!pending) return;
+  // Before the stack loads, so a saved `localhost` goes to the machine and not to this Mac.
+  setGuestMachine(guest, pending.machine);
   const { snapshot } = pending;
   guest.navigationHistory.restore(snapshot).catch(() => {
     // The stack is a convenience; the page is not. Fall back to its URL.
@@ -485,10 +474,10 @@ function restore(guest: WebContents, token: string): void {
   });
 }
 
-export function prepareRestore(token: string, snapshot: NavSnapshot): void {
+export function prepareRestore(token: string, snapshot: NavSnapshot, machine: string | null): void {
   const now = Date.now();
   for (const [key, entry] of pendingRestores) if (entry.expires < now) pendingRestores.delete(key);
-  pendingRestores.set(token, { snapshot, expires: now + RESTORE_TTL_MS });
+  pendingRestores.set(token, { snapshot, machine, expires: now + RESTORE_TTL_MS });
 }
 
 export function setLiveCommands(host: WebContents, commands: LiveCommand[]): void {
@@ -518,9 +507,8 @@ function openTab(host: WebContents, request: OpenTabRequest): void {
  */
 async function wipeIncognito(partition: string): Promise<void> {
   incognitoDecisions.delete(partition);
-  const entry = pageSessions.get(partition);
-  if (!entry) return;
-  const { ses } = entry;
+  const ses = pageSessions.get(partition);
+  if (!ses) return;
   await Promise.allSettled([ses.clearStorageData(), ses.clearCache(), ses.clearAuthCache(), ses.clearHostResolverCache()]);
   await ses.closeAllConnections().catch(() => {});
 }
@@ -555,6 +543,7 @@ function register(host: WebContents, guest: WebContents, partition: string): voi
   guests.set(id, { guest, host });
   guest.once("destroyed", () => {
     if (guests.get(id)?.guest === guest) guests.delete(id);
+    guestMachines.delete(id);
     appLimits.delete(id);
     dropPrompts(id);
   });

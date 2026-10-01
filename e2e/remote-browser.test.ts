@@ -1,10 +1,12 @@
 // A remote workspace's pages open the machine's loopback: `localhost:<port>`
-// there goes through a relay on this Mac to the SOCKS proxy beside the
-// machine's `crewd serve`, which is what makes a dev server on a VPS open in
-// Crew. Here the machine is a second crewd on this loopback, so a page that
-// loads proves nothing by itself; the machine going away does: its pages stop
-// loading while this Mac's workspace keeps opening the same server, and they
-// load again once it is back. A dev server's HMR websocket rides the same way.
+// there becomes `<machine>.localhost:<port>`, which goes through a relay on
+// this Mac to the SOCKS proxy beside the machine's `crewd serve`, which is
+// what makes a dev server on a VPS open in Crew. Every page shares one
+// session, so the machine is in the name, not in the session. Here the
+// machine is a second crewd on this loopback, so a page that loads proves
+// nothing by itself; the machine going away does: its pages stop loading
+// while this Mac's workspace keeps opening the same server, and they load
+// again once it is back. A dev server's HMR websocket rides the same way.
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { createServer, type Server } from "node:http";
@@ -30,7 +32,21 @@ async function devServer(): Promise<{ port: number; requests: string[]; server: 
       response.end(`self.addEventListener("install", (event) => event.waitUntil(fetch("/from-sw")));`);
       return;
     }
+    if (at === "/api") {
+      response.writeHead(200, { "content-type": "text/plain", "access-control-allow-origin": "*" });
+      response.end(request.headers["x-crew-machine"] ? "machine header leaked" : "api ok");
+      return;
+    }
     response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+    if (at === "/fetch-page") {
+      // The page's code spells out plain localhost, as a VITE_API_URL would.
+      response.end(`<!doctype html><title>fetching</title><script>
+        window.hit = () => fetch("http://localhost:" + location.port + "/api").then((r) => r.text()).then(
+          (text) => { document.title = text; }, () => { document.title = "fetch failed"; });
+        hit();
+      </script>`);
+      return;
+    }
     if (at === "/sw-page") {
       response.end(`<!doctype html><title>registering</title><script>
         navigator.serviceWorker.register("/sw.js").then(
@@ -69,11 +85,11 @@ function mark(crew: Crew, name: string) {
   return crew.window.locator(`nav[aria-label="Workspaces"][data-sidebar-rail] button[data-nav][aria-label="${name}"]`);
 }
 
-/** How a workspace's pages would reach `url`, as its session's proxy settles it; `incognito` asks its in-memory one. */
-function route(crew: Crew, workspaceId: string, url: string, incognito = false): Promise<string> {
+/** How pages would reach `url`, as their session's proxy settles it; `incognito` asks the in-memory one. */
+function route(crew: Crew, url: string, incognito = false): Promise<string> {
   return crew.app.evaluate(
     ({ session }, [partition, target]) => session.fromPartition(partition!).resolveProxy(target!),
-    [partitionFor(workspaceId, incognito), url],
+    [partitionFor(incognito), url],
   );
 }
 
@@ -87,84 +103,108 @@ async function openPage(crew: Crew, url: string): Promise<void> {
   await waitFor(async () => (await stripTabIds(crew)).length > before, { message: "a browser tab opens" });
 }
 
-/** The title of the page in `workspaceId`'s session showing `url`, once it has one. */
-function pageTitle(crew: Crew, workspaceId: string, url: string): Promise<string | null> {
+/** The page showing `url`, once it has loaded. */
+function guestShowing(crew: Crew, url: string): Promise<number | null> {
   return crew.app.evaluate(
     ({ webContents, session }, [partition, target]) => {
       const guest = webContents
         .getAllWebContents()
         .find((wc) => wc.getURL() === target && wc.session === session.fromPartition(partition!));
-      return guest && !guest.isLoading() ? guest.getTitle() : null;
+      return guest && !guest.isLoading() ? guest.id : null;
     },
-    [partitionFor(workspaceId), url],
+    [partitionFor(), url],
   );
 }
 
-test("a remote workspace's pages open the machine's localhost, websockets too, and only while it answers", async () => {
+/** The title of the page showing `url`, once it has one. */
+async function pageTitle(crew: Crew, url: string): Promise<string | null> {
+  const id = await guestShowing(crew, url);
+  if (id === null) return null;
+  return crew.app.evaluate(({ webContents }, guest) => webContents.fromId(guest)?.getTitle() ?? null, id);
+}
+
+/** Runs `script` in the page showing `url`. */
+async function inPage(crew: Crew, url: string, script: string): Promise<void> {
+  const id = await guestShowing(crew, url);
+  assert.ok(id !== null, `a page shows ${url}`);
+  await crew.app.evaluate(({ webContents }, [guest, code]) => webContents.fromId(guest as number)?.executeJavaScript(code as string), [id, script] as const);
+}
+
+test("a remote workspace's pages open the machine's localhost at its name, websockets too, and only while it answers", async () => {
   const crew = await launchCrew();
   const dev = await devServer();
   let remote: RemoteDaemon | null = null;
   try {
     remote = await addRemote(crew, "devbox");
-    const local = crew.workspaces[0]!;
     const web = await crew.makeRepo("web");
-    const workspace = await remoteRequest<Workspace>(remote, "workspace_create", { name: "web", path: web });
+    await remoteRequest<Workspace>(remote, "workspace_create", { name: "web", path: web });
     await crew.reload();
     await mark(crew, "web").waitFor({ timeout: 15_000 });
 
-    // Loopback names go to the relay; names that cannot be loopback skip it; this Mac's workspace goes direct.
-    await waitFor(async () => (await route(crew, workspace.id, "http://localhost:3000/")).startsWith("PROXY 127.0.0.1:"), {
-      message: "the remote workspace's session routes localhost through the relay",
+    // Once a machine is known, every page's loopback goes to the relay; names that cannot be loopback skip it.
+    await waitFor(async () => (await route(crew, "http://localhost:3000/")).startsWith("PROXY 127.0.0.1:"), {
+      message: "the pages' session routes loopback through the relay",
       timeout: 15_000,
     });
-    const relay = await route(crew, workspace.id, "http://localhost:3000/");
-    assert.equal(await route(crew, workspace.id, "http://127.0.0.1:3000/"), relay);
-    assert.equal(await route(crew, workspace.id, "http://[::1]:3000/"), relay);
-    assert.equal(await route(crew, workspace.id, "http://app.localhost:3000/"), relay);
-    assert.equal(await route(crew, workspace.id, "http://devbox:3000/"), relay, "a single-label name may be loopback: the relay decides");
-    assert.equal(await route(crew, workspace.id, "https://example.com/"), "DIRECT");
-    assert.equal(await route(crew, workspace.id, "https://github.io/"), "DIRECT");
-    assert.equal(await route(crew, workspace.id, "http://10.0.0.1/"), "DIRECT");
-    assert.equal(await route(crew, local.id, "http://localhost:3000/"), "DIRECT");
-    // Its incognito pages reach the machine the same way.
-    assert.equal(await route(crew, workspace.id, "http://localhost:3000/", true), relay);
-    assert.equal(await route(crew, workspace.id, "https://example.com/", true), "DIRECT");
-    assert.equal(await route(crew, local.id, "http://localhost:3000/", true), "DIRECT");
+    const relay = await route(crew, "http://localhost:3000/");
+    assert.equal(await route(crew, "http://127.0.0.1:3000/"), relay);
+    assert.equal(await route(crew, "http://[::1]:3000/"), relay);
+    assert.equal(await route(crew, "http://devbox.localhost:3000/"), relay);
+    assert.equal(await route(crew, "http://devbox:3000/"), relay, "a single-label name may be loopback: the relay decides");
+    assert.equal(await route(crew, "https://example.com/"), "DIRECT");
+    assert.equal(await route(crew, "https://github.io/"), "DIRECT");
+    assert.equal(await route(crew, "http://10.0.0.1/"), "DIRECT");
+    // Incognito pages reach the machine the same way.
+    assert.equal(await route(crew, "http://devbox.localhost:3000/", true), relay);
+    assert.equal(await route(crew, "https://example.com/", true), "DIRECT");
 
-    // A dev server page and its HMR socket, through the machine.
+    // Typed as the terminal prints it, a dev server page opens at the machine's name, and its HMR socket follows.
     await mark(crew, "web").click();
-    const page = `http://localhost:${dev.port}/page`;
-    await openPage(crew, page);
-    await waitFor(async () => (await pageTitle(crew, workspace.id, page)) === "hmr ok", {
+    await openPage(crew, `http://localhost:${dev.port}/page`);
+    const page = `http://devbox.localhost:${dev.port}/page`;
+    await waitFor(async () => (await pageTitle(crew, page)) === "hmr ok", {
       message: "the page loads through the machine and its websocket answers",
       timeout: 15_000,
     });
     assert.deepEqual(dev.requests, ["/page", "/hmr"]);
 
     // By IP as well.
-    const byIp = `http://127.0.0.1:${dev.port}/by-ip`;
-    await openPage(crew, byIp);
-    await waitFor(async () => (await pageTitle(crew, workspace.id, byIp)) === "/by-ip", { message: "127.0.0.1 loads too" });
+    await openPage(crew, `http://127.0.0.1:${dev.port}/by-ip`);
+    await waitFor(async () => (await pageTitle(crew, `http://devbox.localhost:${dev.port}/by-ip`)) === "/by-ip", {
+      message: "127.0.0.1 opens at the machine's name too",
+    });
+
+    // A fetch the page's code aims at plain localhost goes to the machine, and the relay keeps the header to itself.
+    await openPage(crew, `http://localhost:${dev.port}/fetch-page`);
+    const fetching = `http://devbox.localhost:${dev.port}/fetch-page`;
+    await waitFor(async () => (await pageTitle(crew, fetching)) === "api ok", { message: "the page's own localhost fetch answers" });
 
     // A service worker's own fetches ride the relay too.
-    const swPage = `http://localhost:${dev.port}/sw-page`;
-    await openPage(crew, swPage);
-    await waitFor(async () => /^sw (installed|activating|activated)$/.test((await pageTitle(crew, workspace.id, swPage)) ?? ""), {
+    await openPage(crew, `http://localhost:${dev.port}/sw-page`);
+    const swPage = `http://devbox.localhost:${dev.port}/sw-page`;
+    await waitFor(async () => /^sw (installed|activating|activated)$/.test((await pageTitle(crew, swPage)) ?? ""), {
       message: "the service worker installs",
     });
     assert.ok(dev.requests.includes("/from-sw"), "the worker's fetch reached the dev server");
 
-    // The machine goes away: its pages cannot reach the dev server, this Mac's still can.
+    // The machine goes away: its pages cannot reach the dev server, not even through their code's plain localhost.
     await remote.stop();
-    const gone = `http://localhost:${dev.port}/while-gone`;
-    await openPage(crew, gone);
-    await waitFor(async () => (await pageTitle(crew, workspace.id, gone)) !== null, { message: "the page settles" });
+    await openPage(crew, `http://localhost:${dev.port}/while-gone`);
+    await waitFor(async () => (await guestShowing(crew, `http://devbox.localhost:${dev.port}/while-gone`)) !== null, {
+      message: "the page settles",
+    });
     assert.ok(!dev.requests.includes("/while-gone"), "nothing reached the dev server without the machine");
+    const apiHits = dev.requests.filter((at) => at === "/api").length;
+    await mark(crew, "web").click();
+    await inPage(crew, fetching, "hit()");
+    await waitFor(async () => (await pageTitle(crew, fetching)) === "fetch failed", { message: "the page's own fetch fails with the machine" });
+    assert.equal(dev.requests.filter((at) => at === "/api").length, apiHits);
 
+    // This Mac's workspace opens the same server at plain localhost, relay or not.
     await mark(crew, "app").click();
     const direct = `http://localhost:${dev.port}/from-mac`;
     await openPage(crew, direct);
-    await waitFor(async () => (await pageTitle(crew, local.id, direct)) === "/from-mac", { message: "this Mac's workspace loads direct" });
+    await waitFor(async () => (await pageTitle(crew, direct)) === "/from-mac", { message: "this Mac's workspace loads its own localhost" });
 
     // It comes back: the remote workspace's pages load again.
     await remote.start();
@@ -173,48 +213,10 @@ test("a remote workspace's pages open the machine's localhost, websockets too, a
       { message: "the machine answers again", timeout: 20_000 },
     );
     await mark(crew, "web").click();
-    const back = `http://localhost:${dev.port}/back`;
-    await openPage(crew, back);
-    await waitFor(async () => (await pageTitle(crew, workspace.id, back)) === "/back", { message: "pages load once the machine is back" });
-  } finally {
-    await remote?.stop();
-    await crew.close();
-    dev.server.closeAllConnections();
-    dev.server.close();
-  }
-});
-
-test("two workspaces on one machine share its relay, and one leaving goes back to direct without breaking the other", async () => {
-  const crew = await launchCrew();
-  const dev = await devServer();
-  let remote: RemoteDaemon | null = null;
-  try {
-    remote = await addRemote(crew, "devbox");
-    const web = await remoteRequest<Workspace>(remote, "workspace_create", { name: "web", path: await crew.makeRepo("web") });
-    const api = await remoteRequest<Workspace>(remote, "workspace_create", { name: "api", path: await crew.makeRepo("api") });
-    await crew.reload();
-    await mark(crew, "api").waitFor({ timeout: 15_000 });
-
-    const proxied = async (id: string) => (await route(crew, id, "http://localhost:3000/")).startsWith("PROXY 127.0.0.1:");
-    await waitFor(async () => (await proxied(web.id)) && (await proxied(api.id)), {
-      message: "both workspaces route through a relay",
-      timeout: 15_000,
+    await openPage(crew, `http://localhost:${dev.port}/back`);
+    await waitFor(async () => (await pageTitle(crew, `http://devbox.localhost:${dev.port}/back`)) === "/back", {
+      message: "pages load once the machine is back",
     });
-    assert.equal(await route(crew, web.id, "http://localhost:3000/"), await route(crew, api.id, "http://localhost:3000/"), "one relay per machine");
-
-    // `api` goes away on the machine: its session is direct again, `web` keeps the relay and loads.
-    await remoteRequest(remote, "workspace_delete", { id: api.id });
-    await crew.reload();
-    await mark(crew, "api").waitFor({ state: "detached", timeout: 15_000 });
-    await waitFor(async () => (await route(crew, api.id, "http://localhost:3000/")) === "DIRECT", {
-      message: "the removed workspace's session goes direct",
-      timeout: 15_000,
-    });
-    assert.ok(await proxied(web.id));
-    await mark(crew, "web").click();
-    const page = `http://localhost:${dev.port}/still-here`;
-    await openPage(crew, page);
-    await waitFor(async () => (await pageTitle(crew, web.id, page)) === "/still-here", { message: "the other workspace still loads" });
   } finally {
     await remote?.stop();
     await crew.close();

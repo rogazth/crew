@@ -172,15 +172,16 @@ export function popupVerdict(details: { url: string; disposition: string; featur
 const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
 
 /**
- * Local dev servers sign their own certificates; nothing else gets past a bad
- * one. The parsed hostname is compared whole, so localhost.evil.com and
- * 127.0.0.1.nip.io stay refused.
+ * Local dev servers sign their own certificates, on this Mac or on a machine
+ * reached at `<alias>.localhost`, which Chromium never resolves off loopback;
+ * nothing else gets past a bad one. The parsed hostname is compared whole, so
+ * localhost.evil.com and 127.0.0.1.nip.io stay refused.
  */
 export function certificateBypass(url: string): boolean {
   const parsed = parse(url);
   // wss: too, for the live-reload socket a dev server opens over the same certificate.
   const secure = parsed?.protocol === "https:" || parsed?.protocol === "wss:";
-  return secure && LOOPBACK_HOSTS.has(parsed.hostname);
+  return secure && (LOOPBACK_HOSTS.has(parsed.hostname) || parsed.hostname.endsWith(".localhost"));
 }
 
 /** A sliding window: the returned function says whether one more action fits now, and counts it if so. */

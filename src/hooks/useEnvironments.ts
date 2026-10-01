@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import * as api from "../lib/api";
 import { LOCAL, envOf, linkOf, pinSessionCwd, setFocusEnv, wakeAll, type EnvLink } from "../lib/client/registry";
+import type { MachineRoute } from "../lib/browser/machines";
 import { browserHost, filesHost, remotesHost } from "../lib/host";
 import { requestAddRemote, setOpenWorkspaceOn, setSettingsOpener, WAKE_ON } from "../lib/remoteUi";
 import type { SettingsSectionId } from "../lib/settings";
 import type { Session, SessionKind, Workspace } from "../lib/types";
 import type { useWorkspaces } from "./useWorkspaces";
 import { useDefaultAgent } from "./useDefaultAgent";
-import { useEnvStates } from "./useEnvLinks";
+import { remoteAliases, useEnvStates } from "./useEnvLinks";
 
 type Deps = {
   workspaces: ReturnType<typeof useWorkspaces>;
@@ -114,30 +115,40 @@ export function useEnvironments({ workspaces, active, closePage, openSettings, c
     setFocusEnv(active ? envOf(active.id) : LOCAL);
   }, [active]);
 
-  // A remote workspace's previews are served by its daemon, and its pages reach that machine's localhost.
+  // A remote workspace's previews are served by its daemon.
   const bound = useRef(new Map<string, string>());
   useEffect(() => {
     const files = filesHost();
-    const browser = browserHost();
     const next = new Map<string, string>();
-    const byId = new Map(links.map((link) => [link.id, link]));
     for (const workspace of workspaces.workspaces) {
       const env = envOf(workspace.id);
       if (env === LOCAL) continue;
-      const link = byId.get(env);
-      next.set(workspace.id, `${env}|${workspace.path}|${link?.socksPort ?? ""}`);
+      next.set(workspace.id, `${env}|${workspace.path}`);
       if (bound.current.get(workspace.id) === next.get(workspace.id)) continue;
       void files?.bindRemote?.(workspace.path, env);
-      if (link?.socksPort) void browser?.setProxy?.(workspace.id, env, link.socksPort);
     }
     for (const [id, key] of bound.current) {
       if (next.has(id)) continue;
       const root = key.split("|")[1];
       if (root) void files?.unbindRemote?.(root);
-      void browser?.setProxy?.(id, null, null);
     }
     bound.current = next;
   }, [links, workspaces.workspaces]);
+
+  // Every page reaches each machine's localhost at its alias; main hears only when that changes.
+  const routed = useRef("");
+  useEffect(() => {
+    const aliases = remoteAliases(links);
+    const machines: MachineRoute[] = links.flatMap((link) => {
+      const alias = aliases.get(link.id);
+      if (!alias) return [];
+      return [{ alias, envId: link.id, socksPort: link.socksPort }];
+    });
+    const key = JSON.stringify(machines);
+    if (key === routed.current) return;
+    routed.current = key;
+    void browserHost()?.setMachines?.(machines);
+  }, [links]);
 
   useEffect(() => {
     const host = remotesHost();

@@ -85,7 +85,7 @@ async function go(url: string): Promise<void> {
   await waitFor(() => sessionOf(url), { message: `${url} commits` });
 }
 
-/** Which of the workspace's sessions the page showing `url` lives in. */
+/** Which session the page showing `url` lives in. */
 function sessionOf(url: string): Promise<"saved" | "incognito" | null> {
   return crew.app.evaluate(
     ({ webContents, session }, [target, saved, incognito]) => {
@@ -95,7 +95,7 @@ function sessionOf(url: string): Promise<"saved" | "incognito" | null> {
       if (guest.session === session.fromPartition(incognito!)) return "incognito";
       return null;
     },
-    [url, partitionFor(workspaceId()), partitionFor(workspaceId(), true)] as const,
+    [url, partitionFor(), partitionFor(true)] as const,
   );
 }
 
@@ -103,7 +103,7 @@ function cookiesIn(incognito: boolean): Promise<string[]> {
   return crew.app.evaluate(
     async ({ session }, partition) =>
       (await session.fromPartition(partition!).cookies.get({})).map((c) => `${c.name}=${c.value}`).sort(),
-    partitionFor(workspaceId(), incognito),
+    partitionFor(incognito),
   );
 }
 

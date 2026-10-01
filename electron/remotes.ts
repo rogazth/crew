@@ -3,10 +3,13 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import { promisify } from "node:util";
 import { app, BrowserWindow, ipcMain, powerMonitor } from "electron";
+import { CHANNELS } from "../src/lib/browser/bridge";
+import { isMachineAlias } from "../src/lib/browser/machines";
 import type { RemoteEnv } from "../src/lib/protocol";
 import { DEFAULT_PORT, INSTALL_JOB, type InstallInput, type ManualRemote } from "../src/lib/remotes";
 import { bindRemoteRoot, unbindRemoteRoot } from "./browser/files";
-import { setWorkspaceProxy } from "./browser/guests";
+import { setMachines } from "./browser/guests";
+import type { Upstream } from "./browser/remote-proxy";
 import { release } from "./build-info";
 import { daemonLogs, installDaemon, remoteLayout, removeDaemon, restartDaemon, rpc, type SshTarget } from "./remote-ssh";
 import { dropToken, getToken, putToken } from "./remote-tokens";
@@ -170,19 +173,19 @@ export function registerRemoteIpc(getDaemon: () => Daemon | null): void {
     if (typeof root === "string") unbindRemoteRoot(root);
   });
 
-  ipcMain.handle("browser:set-proxy", async (_event, workspaceId: unknown, envId: unknown, socksPort: unknown) => {
-    if (typeof workspaceId !== "string") return;
-    if (typeof envId !== "string" || !envId || typeof socksPort !== "number") {
-      await setWorkspaceProxy(workspaceId, null);
-      return;
+  /** Each machine the window knows, by alias; one not connected, or with no proxy, is kept with none. */
+  ipcMain.handle(CHANNELS.machines, async (_event, list: unknown) => {
+    if (!Array.isArray(list)) return;
+    const rows = await localRpc<RemoteEnv[]>(getDaemon, "remote_list", {}).catch(() => []);
+    const machines = new Map<string, Upstream | null>();
+    for (const item of list.slice(0, 64) as Array<{ alias?: unknown; envId?: unknown; socksPort?: unknown }>) {
+      if (typeof item !== "object" || item === null || !isMachineAlias(item.alias)) continue;
+      const row = rows.find((candidate) => candidate.id === item.envId);
+      const port = item.socksPort;
+      const token = row && typeof port === "number" ? await getToken(row.id) : null;
+      machines.set(item.alias, row && token && typeof port === "number" ? { host: row.host, port, token } : null);
     }
-    const token = await getToken(envId);
-    const row = (await localRpc<RemoteEnv[]>(getDaemon, "remote_list", {}).catch(() => [])).find((item) => item.id === envId);
-    if (!token || !row) {
-      await setWorkspaceProxy(workspaceId, null);
-      return;
-    }
-    await setWorkspaceProxy(workspaceId, { host: row.host, port: socksPort, token });
+    await setMachines(machines);
   });
 }
 

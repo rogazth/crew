@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { FindBar } from "../../chrome/FindBar";
 import { useLease } from "../../hooks/useBrowserLeases";
 import { useBrowserPage } from "../../hooks/useBrowserPage";
+import { useWorkspaceMachine } from "../../hooks/useEnvLinks";
 import * as api from "../../lib/api";
 import { useBrowserPrefs } from "../../hooks/useBrowserPrefs";
 import { holdPane, type PaneHandle } from "../../lib/browser/handles";
@@ -83,11 +84,13 @@ export function BrowserPane({
   // A move to a window is under way while the panel is still up; it keeps its side meanwhile.
   const side = prefs.devtoolsDock === "window" ? "bottom" : prefs.devtoolsDock;
 
+  const machine = useWorkspaceMachine(workspaceId);
   const guest = useGuest({
     pageId,
     url,
     icon,
     workspaceId,
+    machine,
     incognito,
     live,
     generation,
@@ -247,7 +250,7 @@ export function BrowserPane({
         onSettings={() => runCommand("open-browser-settings")}
         onPrint={() => printPage(guest.current?.webContentsId())}
         onImportCookies={setImporting}
-        // Imported cookies go to the workspace's saved session, which an incognito page never sees.
+        // Imported cookies go to the pages' saved session, which an incognito page never sees.
         canImport={browserHost() !== null && !incognito}
         site={site}
         panel={panel}
@@ -318,7 +321,6 @@ export function BrowserPane({
       </div>
       <CookieImportDialog
         source={importing}
-        workspaceId={workspaceId}
         onClose={() => {
           setImporting(null);
           guest.current?.focus();
