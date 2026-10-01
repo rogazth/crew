@@ -2,10 +2,11 @@
 // tag. .github/workflows/release.yml runs it on a macOS runner; cut a release with
 // `npm run release` instead of calling this. Re-running on a tag that already has
 // a release replaces its files, which is how a failed publish is retried.
-// Needs cargo, zig + cargo-zigbuild and a gh token (GH_TOKEN).
+// Needs the daemons the workflow's other jobs build (in target/release and
+// target/linux) and a gh token (GH_TOKEN).
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { createReadStream } from "node:fs";
+import { createReadStream, existsSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { compileElectron } from "./compile-electron.mjs";
@@ -53,10 +54,10 @@ const cargo = await readFile(path.join(ROOT, "Cargo.toml"), "utf8");
 const crateVersion = cargo.match(/^version\s*=\s*"([^"]+)"/m)?.[1];
 if (crateVersion !== version) fail(`package.json is ${version} but Cargo.toml is ${crateVersion}.`);
 
-// crew rides in the bundle beside crewd; Settings › General › Command line links to it.
-await run("cargo", ["build", "--release", "-p", "crewd", "-p", "crew-cli"]);
-// The Linux daemons Crew installs on other machines ship inside the app.
-await run("node", ["scripts/crewd-linux.mjs"]);
+const daemons = ["target/release/crewd", "target/release/crew", "target/linux/crewd-linux-x64", "target/linux/crewd-linux-arm64"];
+const missing = daemons.filter((file) => !existsSync(path.join(ROOT, file)));
+if (missing.length > 0) fail(`Missing ${missing.join(", ")}; the release workflow's daemon jobs build them.`);
+
 await run("npm", ["run", "build"]);
 await compileElectron({ release: true });
 // Without --publish never, electron-builder publishes on its own when it sees CI and a tag.

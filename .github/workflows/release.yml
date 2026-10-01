@@ -2,11 +2,18 @@
 # Started by the tag `npm run release` pushes; commits to master never run it.
 # Run it by hand (Actions › Release › Run workflow, or
 # `gh workflow run release.yml -f tag=v0.1.18`) to retry a tag whose publish failed.
+#
+# The daemons build in their own jobs, side by side, and the release job packages
+# them. A tag run can only restore caches saved on master, never another tag's, so
+# the weekly scheduled run builds the daemons on master to keep the Rust cache warm
+# and publishes nothing.
 name: Release
 
 on:
   push:
     tags: ["v*"]
+  schedule:
+    - cron: "0 6 * * 1"
   workflow_dispatch:
     inputs:
       tag:
@@ -14,16 +21,81 @@ on:
         required: true
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
-  group: release
+  group: release${{ github.event_name == 'schedule' && '-cache' || '' }}
   cancel-in-progress: false
 
 jobs:
-  release:
+  daemon-mac:
     runs-on: macos-15
-    timeout-minutes: 60
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      # rust-toolchain.toml picks the toolchain. Only the scheduled run saves: a tag's cache is unreachable from the next tag.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.event_name == 'schedule' }}
+
+      # crew rides in the bundle beside crewd; Settings › General › Command line links to it.
+      - run: cargo build --release -p crewd -p crew-cli
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: daemon-mac
+          path: |
+            target/release/crewd
+            target/release/crew
+          if-no-files-found: error
+
+  # The Linux daemons Crew installs on other machines ship inside the app.
+  daemon-linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      matrix:
+        arch: [x64, arm64]
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - run: rustup toolchain install
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.arch }}
+          save-if: ${{ github.event_name == 'schedule' }}
+
+      # zig links against an old glibc, so the daemon runs on older distributions than the runner's.
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: latest
+          use-cache: false
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-zigbuild
+
+      - run: node scripts/crewd-linux.mjs ${{ matrix.arch }}
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: daemon-linux-${{ matrix.arch }}
+          path: target/linux/crewd-linux-${{ matrix.arch }}
+          if-no-files-found: error
+
+  release:
+    if: github.event_name != 'schedule'
+    needs: [daemon-mac, daemon-linux]
+    runs-on: macos-15
+    timeout-minutes: 30
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v5
         with:
@@ -41,15 +113,22 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: 24
-          cache: npm
-
-      # rust-toolchain.toml picks the toolchain; the cache keeps target/ between releases.
-      - uses: Swatinem/rust-cache@v2
-
-      - name: Install zig and cargo-zigbuild
-        run: brew install zig cargo-zigbuild
 
       - run: npm ci
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: daemon-mac
+          path: target/release
+
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: daemon-linux-*
+          merge-multiple: true
+          path: target/linux
+
+      # Artifacts drop the executable bit.
+      - run: chmod +x target/release/crewd target/release/crew target/linux/crewd-linux-*
 
       # The certificate scripts/signing-cert.mjs made, in a keychain of the run's own.
       # scripts/sign-mac.cjs signs with it; without it the app is signed ad hoc, and

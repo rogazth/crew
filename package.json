@@ -101,7 +101,8 @@
     "files": [
       "electron-dist/**/*",
       "dist/**/*",
-      "package.json"
+      "package.json",
+      "!node_modules/**/*"
     ],
     "extraResources": [
       {
