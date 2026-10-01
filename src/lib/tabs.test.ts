@@ -31,6 +31,10 @@ function opened(...ids: string[]): TabState {
   return ids.reduce((state, id) => openTab(state, sessionTab(id)), NO_TABS);
 }
 
+// Each step as useTabs takes it: the change, then the order brought up to date.
+const visit = (state: TabState, ...ids: string[]) =>
+  ids.reduce((s, id) => withRecent(selectTab(s, sessionTabId(id))), withRecent(state));
+
 const agent = (id: string, name = id): Session =>
   ({ id, kind: "agent", name }) as Session;
 const terminal = (id: string): Session => ({ id, kind: "terminal", name: id, provider: "claude" }) as Session;
@@ -50,9 +54,6 @@ describe("openTab", () => {
 });
 
 describe("the recent order", () => {
-  // Each step as useTabs takes it: the change, then the order brought up to date.
-  const visit = (state: TabState, ...ids: string[]) =>
-    ids.reduce((s, id) => withRecent(selectTab(s, sessionTabId(id))), withRecent(state));
   const recent = (state: TabState) => state.recent?.map((id) => id.slice("session:".length));
 
   it("puts the tab on screen first, each tab once", () => {
@@ -85,7 +86,24 @@ describe("the recent order", () => {
 });
 
 describe("closeTab", () => {
-  it("moves focus to the right neighbour", () => {
+  it("hands focus back to the tab last on screen, not the one beside it", () => {
+    const state = visit(opened("a", "b", "c", "d", "e"), "c", "e");
+    expect(closeTab(state, "session:e").activeId).toBe("session:c");
+  });
+
+  it("walks back through the recent order as tabs keep closing", () => {
+    let state = visit(opened("a", "b", "c", "d"), "b", "d", "a");
+    state = withRecent(closeTab(state, "session:a"));
+    expect(state.activeId).toBe("session:d");
+    expect(closeTab(state, "session:d").activeId).toBe("session:b");
+  });
+
+  it("skips a recent tab that is folded away", () => {
+    const state = visit(opened("a", "b", "c"), "a", "c");
+    expect(closeTab(state, "session:c", (tab) => tab.id !== "session:a").activeId).toBe("session:b");
+  });
+
+  it("moves focus to the right neighbour without a recent order", () => {
     const state = closeTab(selectTab(opened("a", "b", "c"), "session:b"), "session:b");
     expect(state.activeId).toBe("session:c");
   });

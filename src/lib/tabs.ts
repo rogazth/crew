@@ -112,7 +112,7 @@ function withoutTab(state: TabState, id: string, closed: Tab[], visible?: Visibl
   return {
     ...state,
     tabs: state.tabs.filter((t) => t.id !== id),
-    activeId: state.activeId === id ? neighbourId(state.tabs, id, visible) : state.activeId,
+    activeId: state.activeId === id ? successorId(state, id, visible) : state.activeId,
     closed,
   };
 }
@@ -226,8 +226,19 @@ export function lastUsed(state: TabState, keep: (tab: Tab) => boolean = () => tr
 }
 
 /**
- * After closing the active tab, focus its nearest shown neighbour, the right
- * one first; with none shown, the nearest folded one.
+ * After closing the active tab, focus the shown tab last on screen before it,
+ * the way an editor does, so a quick look elsewhere hands back where you were.
+ * A strip with no such tab in its recent order falls back to the neighbour.
+ */
+function successorId(state: TabState, closingId: string, visible: Visible = () => true): string | null {
+  const byId = new Map(state.tabs.map((tab) => [tab.id, tab]));
+  const previous = recentIds(state).find((id) => id !== closingId && visible(byId.get(id)!));
+  return previous ?? neighbourId(state.tabs, closingId, visible);
+}
+
+/**
+ * The nearest shown neighbour of a tab, the right one first; with none shown,
+ * the nearest folded one.
  */
 function neighbourId(tabs: Tab[], closingId: string, visible: Visible = () => true): string | null {
   const index = tabs.findIndex((t) => t.id === closingId);
