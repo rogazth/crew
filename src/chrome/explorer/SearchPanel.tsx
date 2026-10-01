@@ -30,7 +30,8 @@ const count = new Intl.NumberFormat();
 export function SearchPanel({ root, focus, onOpenFile }: Props) {
   const input = useRef<HTMLInputElement>(null);
   const list = useRef<HTMLDivElement>(null);
-  const [query, setQuery] = useState("");
+  // Mounted by the shortcut itself when the explorer was closed: the token is new, and so is the text.
+  const [query, setQuery] = useState(focus?.query ?? "");
   const [caseSensitive, setCaseSensitive] = useState(false);
   const [wholeWord, setWholeWord] = useState(false);
   const [regex, setRegex] = useState(false);
