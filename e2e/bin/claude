@@ -23,6 +23,11 @@
 // bracketed paste is accepted and a newline inside a paste does not submit.
 //
 //   work N        a turn that keeps printing for N seconds
+//   background N  a short turn that leaves a shell running in the background
+//                 and ends on it (Stop names it in `background_tasks`, as
+//                 Claude Code 2.1.286's does); N seconds later the shell's
+//                 notification starts a turn of its own, which ends with
+//                 nothing left running
 //   title <text>  names the session (ai-title record + OSC title)
 //   rename <text> names it in the transcript alone (ai-title record); the
 //                 terminal's title keeps the old name until its next repaint
@@ -197,7 +202,7 @@ function stopSpin() {
 let running = [];
 
 /** A turn that prints steadily for `ms`, then settles back at the prompt. */
-function turn(ms, after, reply = "Done.") {
+function turn(ms, after, reply = "Done.", tasks) {
   startSpin();
   let n = 0;
   const ticker = setInterval(() => out(`\r\n  working… ${++n}`), 150);
@@ -209,10 +214,21 @@ function turn(ms, after, reply = "Done.") {
     out(`\r\n● ${reply}`);
     stopSpin();
     if (after) after();
-    runHooks("Stop", { stop_hook_active: false });
+    runHooks("Stop", { stop_hook_active: false, ...(tasks ? { background_tasks: tasks, session_crons: [] } : {}) });
     prompt();
   }, ms);
   running = [ticker, end];
+}
+
+/** A turn that ends on a shell left running; the shell's notification wakes the CLI `ms` later. */
+function background(ms) {
+  const task = { id: `b${randomUUID().slice(0, 8)}`, type: "shell", status: "running", description: "Run the build", command: "sleep" };
+  turn(300, undefined, "Started the build in the background.", [task]);
+  setTimeout(() => {
+    const notice = `<task-notification>\n<task-id>${task.id}</task-id>\n<status>completed</status>\n</task-notification>`;
+    runHooks("UserPromptSubmit", { prompt: notice });
+    turn(300, undefined, "The build passed.", []);
+  }, ms);
 }
 
 /** Esc while a turn runs: it stops where it is, and no Stop hook says so. */
@@ -261,6 +277,7 @@ function submit(line) {
   // Every command from here on is a turn of the model's.
   if (command !== "rename") runHooks("UserPromptSubmit", { prompt: text });
   if (command === "work") return turn(Math.max(0, Number(arg) || 1) * 1000);
+  if (command === "background") return background(Math.max(0, Number(arg) || 1) * 1000);
   if (command === "title" && arg) {
     return turn(300, () => {
       name = arg;

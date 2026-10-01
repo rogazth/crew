@@ -62,8 +62,11 @@ export async function reconcile(sessions: Session[]): Promise<Session[]> {
 /** The chat the user is looking at; its turns end quiet instead of flagged. */
 export function setForeground(id: string | null): void {
   foreground = id;
-  if (id && (statuses.get(id) === "done" || seenDone.has(id))) markIdle(id);
+  if (id && (unread(statuses.get(id)) || seenDone.has(id))) markIdle(id);
 }
+
+/** A finished turn, or a failed one, is news until the chat is looked at. */
+const unread = (status: SessionStatus | undefined) => status === "done" || status === "error";
 
 export function isWorking(id: string): boolean {
   return transcript.read(id).working;
@@ -179,7 +182,7 @@ function onStatus(event: SessionStatusEvent) {
   if (status === "done") seenDone.add(id);
   if (status === "idle" || status === "working" || status === "error") seenDone.delete(id);
   transcript.setWorking(id, status === "working" || status === "needs-input");
-  const display = status === "done" && foreground === id ? "idle" : status;
+  const display = unread(status) && foreground === id ? "idle" : status;
   if (display !== status) void api.markSessionRead(id).catch(() => {});
   patch(id, {
     status: display,

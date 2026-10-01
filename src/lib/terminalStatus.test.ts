@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { HOOK_GRACE, QUIET_AFTER, SETTLE_WINDOW, TerminalActivity, titleBusy, titleName } from "./terminalStatus";
+import { HOOK_GRACE, HOOK_LAG, QUIET_AFTER, SETTLE_WINDOW, TerminalActivity, titleBusy, titleName } from "./terminalStatus";
 import type { SessionStatus } from "./types";
 
 function track(initial: SessionStatus = "idle", watched = false) {
@@ -236,6 +236,35 @@ describe("TerminalActivity", () => {
     vi.advanceTimersByTime(QUIET_AFTER);
     expect(reported).toEqual(["error"]);
   });
+
+  // A failure is news like a finished turn, not a mark the session wears for good.
+  it("lets a failure go once the tab is looked at", () => {
+    const { activity, reported } = track();
+    activity.exit(1);
+    activity.setWatched(true);
+    expect(reported).toEqual(["error", "idle"]);
+    expect(track("error", true).reported).toEqual(["idle"]);
+  });
+
+  it("lets a failure go once its row marks it read", () => {
+    const { activity, reported } = track("error");
+    activity.read();
+    activity.exit(1);
+    expect(reported).toEqual(["error"]);
+  });
+
+  it("does not flag a failure the user watched happen", () => {
+    const { activity, reported } = track("idle", true);
+    activity.exit(1);
+    expect(reported).toEqual([]);
+  });
+
+  it("clears a failure once the CLI works again", () => {
+    const { activity, reported } = track("error");
+    activity.hooked(true, false);
+    activity.hooked(false, false);
+    expect(reported).toEqual(["working", "done"]);
+  });
 });
 
 describe("TerminalActivity with hooks", () => {
@@ -267,6 +296,31 @@ describe("TerminalActivity with hooks", () => {
     // Esc in the terminal, well into the turn: no hook, the title ends it.
     vi.advanceTimersByTime(HOOK_GRACE);
     activity.title("✳ Claude Code");
+    vi.advanceTimersByTime(HOOK_LAG);
+    expect(reported).toEqual(["working", "done"]);
+  });
+
+  // Claude ends a turn on a build it left running and is woken when the build
+  // ends: the session is still at work, with nothing new to read.
+  it("keeps working through a turn that ended on work left in the background", () => {
+    const { activity, reported } = track();
+    activity.hooked(true, false);
+    vi.advanceTimersByTime(HOOK_GRACE);
+    // Claude rests its title as the turn ends, a moment before its Stop hook lands.
+    activity.title("✳ Run the build");
+    vi.advanceTimersByTime(HOOK_LAG / 4);
+    activity.hooked(false, false, true);
+    vi.advanceTimersByTime(HOOK_LAG * 2);
+    expect(activity.status).toBe("working");
+    // And again while it waits on the build.
+    activity.title("◐ Run the build");
+    activity.title("✳ Run the build");
+    vi.advanceTimersByTime(HOOK_LAG * 2);
+    expect(activity.status).toBe("working");
+    // The build reports back; the turn it starts ends with nothing left running.
+    activity.hooked(true, false);
+    activity.title("◐ Run the build");
+    activity.hooked(false, false);
     expect(reported).toEqual(["working", "done"]);
   });
 

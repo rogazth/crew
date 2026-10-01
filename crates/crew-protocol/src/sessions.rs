@@ -18,6 +18,12 @@ pub struct SessionLive {
     pub started: bool,
     /// A turn is running: from the prompt being submitted until it stops.
     pub working: bool,
+    /// The last turn stopped with work it started still running in the
+    /// background (a shell, a subagent): the CLI takes it up again on its own
+    /// when that work reports back, so the session is not done. Missing from
+    /// a crewd that predates it.
+    #[serde(default)]
+    pub background: bool,
     /// Something the CLI stopped to ask; answered by keys in its terminal.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]

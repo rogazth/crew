@@ -297,7 +297,7 @@ function SessionTerminal({
 }
 
 /** What the CLI's hooks say it does is the word on its status: a turn, a question. */
-function useLiveHooks(session: Session, onLive: (working: boolean, asking: boolean) => void) {
+function useLiveHooks(session: Session, onLive: (working: boolean, asking: boolean, background: boolean) => void) {
   const hooked = reportsLive(session.provider);
   useEffect(() => {
     if (!hooked) return;
@@ -305,10 +305,11 @@ function useLiveHooks(session: Session, onLive: (working: boolean, asking: boole
     return subscribeLive(session.id, () => {
       const live = readLive(session.id);
       if (!live) return;
-      const now = `${live.working}:${live.ask?.id ?? ''}`;
+      const background = live.background === true;
+      const now = `${live.working}:${live.ask?.id ?? ''}:${background}`;
       if (now === last) return;
       last = now;
-      onLive(live.working, live.ask !== undefined);
+      onLive(live.working, live.ask !== undefined, background);
     });
   }, [hooked, session.id, onLive]);
 }

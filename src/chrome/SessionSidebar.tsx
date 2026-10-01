@@ -91,13 +91,16 @@ const NEW_SESSION_HERE: MenuAction = { id: "new-session", label: "New Session He
 const COPY_BRANCH: MenuAction = { id: "copy-branch", label: "Copy Branch", icon: "branch", hotkey: "B" };
 const REMOVE_WORKTREE: MenuAction = { ...DELETE, id: "remove-worktree", label: "Remove Worktree…" };
 
+/** A finished turn or a failure nobody has looked at. */
+const unread = (session: Session) => session.status === "done" || session.status === "error";
+
 /** What a right-click on one session offers, loudest last. `running`: its CLI is up, to stop. */
 function sessionActions(session: Session, running: boolean): MenuEntry[] {
   if (session.kind === "terminal")
     return tidy([
       OPEN,
       RENAME,
-      ...(session.status === "done" ? [MARK_READ] : []),
+      ...(unread(session) ? [MARK_READ] : []),
       COPY_NAME,
       SEPARATOR,
       ...(running ? [STOP] : []),
@@ -108,7 +111,7 @@ function sessionActions(session: Session, running: boolean): MenuEntry[] {
     EDIT,
     SEPARATOR,
     { id: "notifications", label: "Notifications", icon: "bell", hotkey: "N", checked: session.notifications },
-    ...(session.status === "done" ? [MARK_READ] : []),
+    ...(unread(session) ? [MARK_READ] : []),
     COPY_NAME,
     SEPARATOR,
     DELETE,

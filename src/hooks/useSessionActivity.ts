@@ -56,7 +56,8 @@ export function useSessionActivity(
       onInput: () => activity.current?.input(),
       onResize: () => activity.current?.settle(),
       onExit: (code: number | null) => activity.current?.exit(code),
-      onLive: (working: boolean, asking: boolean) => activity.current?.hooked(working, asking),
+      onLive: (working: boolean, asking: boolean, background: boolean) =>
+        activity.current?.hooked(working, asking, background),
     }),
     [],
   );

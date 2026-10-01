@@ -723,6 +723,13 @@ started: boolean,
  */
 working: boolean, 
 /**
+ * The last turn stopped with work it started still running in the
+ * background (a shell, a subagent): the CLI takes it up again on its own
+ * when that work reports back, so the session is not done. Missing from
+ * a crewd that predates it.
+ */
+background: boolean, 
+/**
  * Something the CLI stopped to ask; answered by keys in its terminal.
  */
 ask?: SessionAsk, 

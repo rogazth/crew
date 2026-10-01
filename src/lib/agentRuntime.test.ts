@@ -148,6 +148,17 @@ describe("the status the sidebar sees", () => {
     expect(seen).toEqual(["idle"]);
   });
 
+  // A failure is news like a finished turn: it does not stay on the row for good.
+  it("clears a failure when the reader opens the chat", () => {
+    status("error");
+    const seen: string[] = [];
+    const off = runtime.onSessionPatch((_id, patch) => patch.status && seen.push(patch.status));
+    runtime.setForeground(agent.id);
+    off();
+    expect(seen).toEqual(["idle"]);
+    expect(request).toHaveBeenCalledWith("session_mark_read", { id: agent.id });
+  });
+
   // The turn ended while the socket was down, and its event went with it.
   it("catches up on a turn that ended during a reconnect", async () => {
     status("working");

@@ -22,6 +22,7 @@ pub struct LiveBoard {
 struct Entry {
     started: bool,
     working: bool,
+    background: bool,
     ask: Option<SessionAsk>,
     provider_session_id: Option<String>,
     transcript_path: Option<String>,
@@ -41,6 +42,7 @@ impl LiveBoard {
             "SessionStart" => {
                 entry.started = true;
                 entry.working = false;
+                entry.background = false;
                 entry.ask = None;
                 if let Some(id) = hook.get("session_id").and_then(Value::as_str) {
                     entry.provider_session_id = Some(id.to_string());
@@ -68,12 +70,14 @@ impl LiveBoard {
             }
             "Stop" | "StopFailure" => {
                 entry.working = false;
+                entry.background = runs_in_background(hook);
                 entry.ask = None;
             }
             // A `/clear` ends one conversation before the next starts; quitting ends the last.
             "SessionEnd" => {
                 entry.started = false;
                 entry.working = false;
+                entry.background = false;
                 entry.ask = None;
             }
             _ => return None,
@@ -108,6 +112,7 @@ impl LiveBoard {
         let before = entry.snapshot(crew_id);
         entry.started = false;
         entry.working = false;
+        entry.background = false;
         entry.ask = None;
         entry.changed(crew_id, before, now)
     }
@@ -132,6 +137,7 @@ impl Entry {
             session_id: crew_id.to_string(),
             started: self.started,
             working: self.working,
+            background: self.background,
             ask: self.ask.clone(),
             provider_session_id: self.provider_session_id.clone(),
             updated_at: self.updated_at,
@@ -148,6 +154,14 @@ impl Entry {
         after.updated_at = now;
         Some(after)
     }
+}
+
+/// Claude's Stop names the background tasks the turn leaves behind; one still
+/// running reports back when it ends, and that starts the next turn.
+fn runs_in_background(hook: &Map<String, Value>) -> bool {
+    hook.get("background_tasks")
+        .and_then(Value::as_array)
+        .is_some_and(|tasks| tasks.iter().any(|task| task.get("status").and_then(Value::as_str) == Some("running")))
 }
 
 fn has_suggestions(hook: &Map<String, Value>) -> bool {
@@ -187,6 +201,31 @@ mod tests {
         let stopped = board.hook("crew-1", STOP, 3).unwrap();
         assert!(!stopped.working);
         assert_eq!(stopped.updated_at, 3);
+    }
+
+    // Claude Code 2.1.286: a turn that ends on a shell it left running, and the
+    // one that shell's notification starts once it is done.
+    const STOP_BACKGROUND: &str = r#"{"session_id":"ac29cbcc","hook_event_name":"Stop","last_assistant_message":"started","background_tasks":[{"id":"bf9zorro8","type":"shell","status":"running","description":"Sleep 15 seconds then print finished","command":"sleep 15; echo finished"}],"session_crons":[]}"#;
+    const NOTIFIED: &str = r#"{"session_id":"ac29cbcc","hook_event_name":"UserPromptSubmit","prompt":"<task-notification>\n<task-id>bf9zorro8</task-id>\n<status>completed</status>\n</task-notification>"}"#;
+    const STOP_CLEAR: &str = r#"{"session_id":"ac29cbcc","hook_event_name":"Stop","last_assistant_message":"DONE","background_tasks":[],"session_crons":[]}"#;
+
+    #[test]
+    fn a_turn_that_leaves_work_in_the_background_is_not_over() {
+        let mut board = LiveBoard::default();
+        board.hook("crew-1", START, 1);
+        board.hook("crew-1", PROMPT, 2);
+        let left = board.hook("crew-1", STOP_BACKGROUND, 3).unwrap();
+        assert!(!left.working && left.background);
+        let woken = board.hook("crew-1", NOTIFIED, 4).unwrap();
+        assert!(woken.working);
+        let done = board.hook("crew-1", STOP_CLEAR, 5).unwrap();
+        assert!(!done.working && !done.background);
+        // A plain Stop, from a Claude that names no tasks, leaves nothing behind.
+        board.hook("crew-1", PROMPT, 6);
+        board.hook("crew-1", STOP_BACKGROUND, 7);
+        assert!(board.exited("crew-1", 8).is_some_and(|gone| !gone.background));
+        board.hook("crew-1", PROMPT, 9);
+        assert!(!board.hook("crew-1", STOP, 10).unwrap().background);
     }
 
     #[test]

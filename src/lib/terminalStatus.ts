@@ -30,6 +30,14 @@ export const SETTLE_WINDOW = 1000;
  */
 export const HOOK_GRACE = 1500;
 
+/**
+ * Claude rests its title as a turn ends, and the Stop hook that says how it
+ * ended (with work left running in the background, say) reaches the window a
+ * little after, through a file crewd watches. A resting title waits this long
+ * for that word before it ends the turn itself, as it does for Esc.
+ */
+export const HOOK_LAG = 1000;
+
 /** The mark Claude leaves on the title while it waits for you. */
 const CLAUDE_IDLE = "✳";
 /** The marks Claude turns through the title while a turn runs. */
@@ -85,7 +93,11 @@ type Options = {
  * What a terminal session's indicator says, from what its process does.
  *
  * - `working` while the CLI is busy, looked at or not, as an agent chat does.
+ *   That includes a turn that ended on work it left running in the
+ *   background: the CLI takes it up again when that work reports back.
  * - `done` once it finishes while you are elsewhere; `idle` when you watched.
+ * - `error` once its process failed while you were elsewhere. Like `done`, it
+ *   is news: looking at the tab, or marking it read, makes it `idle`.
  * - `needs-input` when it rings for you from the background.
  *
  * Busy comes from the title where the CLI states it (Claude), and from output
@@ -102,6 +114,10 @@ export class TerminalActivity {
   #titled = false;
   /** When a hook last said a turn runs; its hooks are the word from then on. */
   #hookedAt = Number.NEGATIVE_INFINITY;
+  /** The last turn ended on work still running in the background. */
+  #background = false;
+  /** The CLI's hooks have spoken: they are the word on its turns. */
+  #hooks = false;
   /** Drawing its first screen; over at the first pause, key, or title. */
   #starting = true;
   #lastInput = Number.NEGATIVE_INFINITY;
@@ -126,7 +142,7 @@ export class TerminalActivity {
     }
     // Nothing runs before the process spawns: a stored `working` is left over
     // from a window that closed mid-turn, and a watched tab has been read.
-    if (initial === "working" || (watched && initial !== "error")) this.#push("idle");
+    if (initial === "working" || watched) this.#push("idle");
   }
 
   get status(): SessionStatus {
@@ -189,18 +205,29 @@ export class TerminalActivity {
     const busy = titleBusy(title);
     if (busy === null) return;
     if (!busy && this.#clock.now() - this.#hookedAt < HOOK_GRACE) return;
+    // Claude rests its title between turns while its background work runs.
+    if (!busy && this.#background) return;
     this.#titled = true;
     this.#starting = false;
     this.#stopQuiet();
+    if (!busy && this.#hooks && this.#busy) {
+      this.#armQuiet(() => this.#setBusy(false), HOOK_LAG);
+      return;
+    }
     this.#setBusy(busy);
   }
 
   /**
-   * The CLI's hooks said whether a turn runs, and whether it stopped to ask.
-   * They are the word on it: output and title only fill in where no hook runs.
+   * The CLI's hooks said whether a turn runs, whether it stopped to ask, and
+   * whether the last one left work running in the background, which wakes it
+   * when it ends. They are the word on it: output and title only fill in
+   * where no hook runs.
    */
-  hooked(working: boolean, asking: boolean): void {
+  hooked(working: boolean, asking: boolean, background = false): void {
     this.#titled = true;
+    this.#hooks = true;
+    this.#background = !working && background;
+    if (this.#background) working = true;
     if (working && !this.#busy) this.#hookedAt = this.#clock.now();
     this.#starting = false;
     this.#stopQuiet();
@@ -223,18 +250,20 @@ export class TerminalActivity {
 
   /** Marked as read from its row: the finished turn is idle, and the next one to end unseen is unread again. */
   read(): void {
-    if (this.#status === "done") this.#status = "idle";
+    if (this.#status === "done" || this.#status === "error") this.#status = "idle";
   }
 
   /** The process ended; the shell that replaces it starts over. */
   exit(code: number | null): void {
     this.#stopQuiet();
     this.#titled = false;
+    this.#background = false;
+    this.#hooks = false;
     this.#starting = true;
     this.#busy = false;
     this.#onBusy(false);
-    if (code !== 0 && code !== null) this.#push("error");
-    else this.#push(this.#watched ? "idle" : "done");
+    if (this.#watched) this.#push("idle");
+    else this.#push(code !== 0 && code !== null ? "error" : "done");
   }
 
   dispose(): void {
@@ -257,12 +286,12 @@ export class TerminalActivity {
     else if (this.#status === "working") this.#push("done");
   }
 
-  #armQuiet(run: () => void): void {
+  #armQuiet(run: () => void, ms = QUIET_AFTER): void {
     this.#stopQuiet();
     this.#quiet = this.#clock.setTimeout(() => {
       this.#quiet = null;
       run();
-    }, QUIET_AFTER);
+    }, ms);
   }
 
   #stopQuiet(): void {
