@@ -383,7 +383,8 @@ async function listAllWorkspaces(): Promise<Workspace[]> {
   for (const [env, conn] of connections) {
     if (env === LOCAL) continue;
     if (!conn.ready) fresh = false;
-    groups.push(workspaceCache.get(env) ?? []);
+    // Home is this Mac's; another machine's is not a second one.
+    groups.push((workspaceCache.get(env) ?? []).filter((row) => !row.home));
   }
   const byId = new Map(groups.flat().map((row) => [row.id, row]));
   const sorted: Workspace[] = [];

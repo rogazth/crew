@@ -21,6 +21,7 @@ const LOCAL_METHODS = new Set([
   "active_workspace_get",
   "active_workspace_set",
   "workspace_reorder",
+  "workspace_home",
   "messages_search",
   "remote_list",
   "remote_upsert",

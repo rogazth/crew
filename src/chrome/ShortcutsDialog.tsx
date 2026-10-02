@@ -14,6 +14,7 @@ function sections(): { group: string; rows: Row[] }[] {
     {
       group: "Context",
       rows: [
+        [commandKeys("go-home"), "Go home"],
         [range("workspace-1"), "Go to workspace"],
         [pair("prev-workspace", "next-workspace"), "Previous / next workspace"],
         [range("worktree-1"), "Go to worktree"],

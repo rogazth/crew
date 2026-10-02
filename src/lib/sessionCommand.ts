@@ -13,6 +13,8 @@ type Options = {
   bypass?: boolean;
   /** Where it runs: Codex is told to trust it, rather than ask. */
   cwd?: string;
+  /** The first message, typed in before the session existed; only its first launch carries it. */
+  prompt?: string;
 };
 
 /**
@@ -24,10 +26,11 @@ type Options = {
  * Claude paints from its own configured theme and never asks the terminal, so
  * the theme is forced to match the app.
  */
-export function sessionCommand(session: Session, { resume, theme, bypass = false, cwd }: Options): string[] {
+export function sessionCommand(session: Session, { resume, theme, bypass = false, cwd, prompt }: Options): string[] {
   const provider = providerOf(session.provider);
   if (!provider) return [session.provider];
   const bypassing = bypass ? [provider.bypassFlag] : [];
+  const first = prompt ? provider.promptArgs(prompt) : [];
   if (provider.binding !== "own") {
     const bound = session.providerSessionId;
     return [
@@ -36,6 +39,7 @@ export function sessionCommand(session: Session, { resume, theme, bypass = false
       ...(bound ? provider.resumeArgs(bound) : []),
       ...(session.model ? [provider.modelFlag, session.model] : []),
       ...bypassing,
+      ...first,
     ];
   }
   const argv = [provider.binary, "--settings", JSON.stringify({ theme, hooks: bindHooks(session.id) })];
@@ -43,7 +47,7 @@ export function sessionCommand(session: Session, { resume, theme, bypass = false
   if (resume) return [...argv, "--resume", id, ...bypassing];
   argv.push("--session-id", id);
   if (session.model) argv.push("--model", session.model);
-  return [...argv, ...bypassing];
+  return [...argv, ...bypassing, ...first];
 }
 
 /** What the chat follows a session's CLI by: its turns, and what it stops to ask. */

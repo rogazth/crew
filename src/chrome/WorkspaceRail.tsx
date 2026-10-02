@@ -3,6 +3,7 @@ import { RestrictToElement } from "@dnd-kit/dom/modifiers";
 import { PlusIcon, RefreshCwIcon, ServerIcon, SettingsIcon, type LucideIcon as Icon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { ActionMenu } from "./ActionMenu";
+import { CrewGlyph } from "./CrewGlyph";
 import { SortableItem, SortableList } from "./SortableList";
 import { StatusDot } from "./StatusDot";
 import { WorkspacePeek, type WorkspacePeekAnchor } from "./WorkspacePeek";
@@ -15,7 +16,10 @@ import type { EnvLink } from "../lib/client/registry";
 import { workspaceMark } from "../lib/workspaces";
 
 type Props = {
+  /** The projects, home aside. */
   workspaces: Workspace[];
+  /** Home, pinned above the projects; null until the daemon has made it. */
+  home: Workspace | null;
   activeId: string;
   /** Every workspace's sessions, so a workspace out of sight can still call for attention. */
   sessions: Session[];
@@ -92,6 +96,15 @@ export function WorkspaceRail(props: Props) {
       aria-label="Workspaces"
       className="flex min-h-0 w-[52px] shrink-0 flex-col items-center gap-2 pt-1 pb-3"
     >
+      {props.home && (
+        <HomeMark
+          active={props.home.id === props.activeId && !props.settingsOpen}
+          current={props.home.id === props.activeId}
+          status={props.home.id === props.activeId ? null : loudest(byWorkspace.get(props.home.id) ?? [])}
+          onSelect={() => props.onSelect(props.home!.id)}
+        />
+      )}
+
       {/* The marks scroll; the + under them and the foot stay put, however many there are. */}
       <RailScroll activeId={props.activeId}>
       <div data-rail-marks className="flex flex-col items-center gap-2">
@@ -169,6 +182,60 @@ export function WorkspaceRail(props: Props) {
         />
       )}
     </nav>
+  );
+}
+
+/**
+ * Home: the app's own faces instead of initials, and a hairline under it that
+ * keeps it out of the projects' order. It is not dragged, renamed or removed.
+ */
+function HomeMark({
+  active,
+  current,
+  status,
+  onSelect,
+}: {
+  active: boolean;
+  current: boolean;
+  status: SessionStatus | null;
+  onSelect: () => void;
+}) {
+  const label = `Home ${commandKeys("go-home")}`;
+  return (
+    <div className="flex shrink-0 flex-col items-center gap-2 pt-1">
+      <button
+        type="button"
+        data-nav
+        data-home-mark
+        data-tauri-drag-region="false"
+        aria-current={current ? "true" : undefined}
+        aria-label="Home"
+        title={label}
+        onClick={onSelect}
+        className="group relative grid size-9 place-items-center rounded-xl outline-none focus-visible:ring-2 focus-visible:ring-focus/50"
+      >
+        <span
+          aria-hidden
+          className={`absolute -left-2 w-[3px] rounded-r-full bg-text transition-[height] duration-150 ${
+            active ? "h-6" : current ? "h-2" : "h-0 group-hover:h-3"
+          }`}
+        />
+        <span
+          aria-hidden
+          className={`grid size-9 place-items-center transition-[border-radius,background-color] duration-150 ${
+            current ? "rounded-xl bg-card ring-1 ring-border" : "rounded-[18px] group-hover:rounded-xl group-hover:bg-hover"
+          }`}
+        >
+          <CrewGlyph className="size-7" />
+        </span>
+        {status && (
+          <span className="absolute -right-1 -bottom-1 grid place-items-center rounded-full bg-sidebar p-0.5">
+            <StatusDot status={status} className="size-3" />
+          </span>
+        )}
+      </button>
+      <span aria-hidden className="h-px w-5 bg-border-strong" />
+    </div>
   );
 }
 

@@ -29,6 +29,11 @@ pub fn info(agents_running: u32) -> MachineInfo {
     }
 }
 
+/// Home's folder: `~/Crew`, or `CREW_HOME_DIR` for a test that keeps it out of the real home.
+pub fn home_folder() -> PathBuf {
+    std::env::var_os("CREW_HOME_DIR").map_or_else(|| home().join("Crew"), PathBuf::from)
+}
+
 fn home() -> PathBuf {
     std::env::var_os("HOME").map_or_else(|| PathBuf::from("/"), PathBuf::from)
 }

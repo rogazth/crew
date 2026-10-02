@@ -46,6 +46,9 @@ import { ProcessTab } from "./surfaces/ProcessTab";
 import { CommandsView, type Place } from "./surfaces/CommandsView";
 import { boot } from "./lib/agentRuntime";
 import { WorkspacePanes } from "./surfaces/WorkspacePanes";
+import { HomeStart } from "./surfaces/HomeStart";
+import { HomeActions, TourFoot } from "./chrome/HomePanel";
+import { useTour } from "./hooks/useTour";
 
 /**
  * Pages take over the main area; only settings swaps the sidebar too. They stack over
@@ -65,6 +68,8 @@ export function App() {
   const explorerWidth = useSidebarWidth("explorer:width", 280);
   const active = workspaces.active;
   const workspaceId = active?.id ?? null;
+  // Home is a workspace with no project: one folder, no git, its own panel and start page.
+  const isHome = active?.home === true;
   const {
     sessions,
     all,
@@ -84,6 +89,13 @@ export function App() {
   useSessionTitle(all, adoptName);
   const work = useWorkContext(active, sessions, { workspaces: workspaces.workspaces, sessions: all });
   const { tabs, worktrees, current } = work;
+  const tour = useTour(workspaces.home, workspaces.projects, all);
+  // A page opened anywhere ticks the tour's last step.
+  const { triedBrowser } = tour;
+  const openedPage = tabs.tabs.some((tab) => tab.kind === "browser");
+  useEffect(() => {
+    if (openedPage) triedBrowser();
+  }, [openedPage, triedBrowser]);
   const treePath = current?.path ?? active?.path ?? null;
   const files = useProjectFiles(treePath);
 
@@ -268,7 +280,7 @@ export function App() {
     closeTab: nav.closeTab,
     inTabs: nav.inTabs,
     worktrees: work,
-    newWorktree: () => setDialog("new-worktree"),
+    newWorktree: () => !isHome && setDialog("new-worktree"),
     toggleShortcuts: () => setDialog((open) => (open === "shortcuts" ? null : "shortcuts")),
     openWorkspace: envs.openWorkspace,
     openHistory: () => nav.openStub("history", "History"),
@@ -298,7 +310,8 @@ export function App() {
           onSelectSettings={openSettings}
           onCloseSettings={closePage}
           rail={{
-            workspaces: workspaces.workspaces,
+            workspaces: workspaces.projects,
+            home: workspaces.home,
             activeId: active.id,
             sessions: all,
             settingsOpen: settings !== null,
@@ -351,7 +364,19 @@ export function App() {
             runningSessions,
             onStop: stopSession,
             onReorder: reorder,
-            commands: (
+            home: isHome
+              ? {
+                  actions: (
+                    <HomeActions
+                      onNewSession={() => void newSession()}
+                      onNewAgent={() => sheet.newAgent()}
+                      onOpenFolder={envs.openWorkspace}
+                    />
+                  ),
+                  foot: tour.shown ? <TourFoot steps={tour.steps} onDismiss={tour.dismiss} /> : null,
+                }
+              : undefined,
+            commands: isHome ? undefined : (
               <CommandsButton
                 live={commandCounts.live}
                 asking={commandCounts.asking}
@@ -395,8 +420,8 @@ export function App() {
             onUnpin={tabs.unpin}
             onLaunch={launch}
             context={{
-              workspace: active?.name ?? "",
-              branch: current ? worktreeLabel(current) : "",
+              workspace: isHome ? "Home" : (active?.name ?? ""),
+              branch: current && !isHome ? worktreeLabel(current) : "",
               onSwitch: () => openPalette("context"),
             }}
             groups={groups}
@@ -413,6 +438,17 @@ export function App() {
           <div className="flex min-h-0 flex-1">
             <WorkspacePanes
               tab={tabs.active}
+              empty={
+                isHome ? (
+                  <HomeStart
+                    firstRun={workspaces.projects.length === 0}
+                    onAsk={(text, provider) => void newSession(provider, null, text)}
+                    onOpenFolder={envs.openWorkspace}
+                    onNewAgent={() => sheet.newAgent()}
+                    onOpenBrowser={() => nav.openBrowser("")}
+                  />
+                ) : undefined
+              }
               panes={tabs.panes}
               workspaces={workspaces.workspaces}
               sessions={all}

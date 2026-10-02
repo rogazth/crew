@@ -11,6 +11,7 @@ import { claudeSessionId, transcriptPath } from '../lib/claudeStorage';
 import { bindProviderSession } from '../lib/agentRuntime';
 import { isHanded } from '../lib/handedSessions';
 import { blockingScreen, type BlockingScreen } from '../lib/blockingScreen';
+import { clearFirstPrompt, peekFirstPrompt } from '../lib/firstPrompt';
 import { BYPASS_KEY } from '../lib/permissions';
 import { providerOf } from '../lib/providers';
 import { reportsLive, sessionSurface } from '../lib/sessionView';
@@ -145,6 +146,7 @@ async function launchCommand(session: Session, cwd: string): Promise<string[]> {
     .then((raw) => raw?.trim() === 'on')
     .catch(() => false);
   const binding = providerOf(session.provider)?.binding;
+  const prompt = peekFirstPrompt(session.id);
   if (binding === 'own') {
     // A `/clear` from its last run the daemon never read: resume where the CLI went.
     const moved = await api.rebindClaudeSession(session.id).catch(() => null);
@@ -154,16 +156,16 @@ async function launchCommand(session: Session, cwd: string): Promise<string[]> {
     const resume = await Promise.resolve(homeFor(cwd) ?? homeDir())
       .then((home) => api.pathExists(transcriptPath(home, cwd, claudeSessionId(current))))
       .catch(() => false);
-    return sessionCommand(current, { resume, theme, bypass });
+    return sessionCommand(current, { resume, theme, bypass, ...(resume || !prompt ? {} : { prompt }) });
   }
   if (binding === 'before' && !session.providerSessionId) {
     const created = await api.createProviderSession(session.id).catch(() => null);
     if (created) {
       bindProviderSession(session.id, created);
-      return sessionCommand({ ...session, providerSessionId: created }, { resume: true, theme, bypass, cwd });
+      return sessionCommand({ ...session, providerSessionId: created }, { resume: true, theme, bypass, cwd, ...(prompt ? { prompt } : {}) });
     }
   }
-  return sessionCommand(session, { resume: false, theme, bypass, cwd });
+  return sessionCommand(session, { resume: false, theme, bypass, cwd, ...(prompt && !session.providerSessionId ? { prompt } : {}) });
 }
 
 type SessionProps = {
@@ -223,6 +225,8 @@ function SessionTerminal({
     let cancelled = false;
     launchCommand(session, cwd).then((argv) => {
       if (cancelled) return;
+      // Taken only by the launch that runs: a cancelled one leaves it for the next.
+      clearFirstPrompt(session.id);
       setStartedAt(Date.now());
       setCommand(argv);
     });

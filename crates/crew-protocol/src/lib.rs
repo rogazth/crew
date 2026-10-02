@@ -527,6 +527,9 @@ pub struct Workspace {
     pub path: String,
     #[ts(type = "number")]
     pub created_at: i64,
+    /// Home: the window's own workspace, not a project the user opened.
+    #[serde(default)]
+    pub home: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, TS)]

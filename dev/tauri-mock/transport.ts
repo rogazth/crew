@@ -45,6 +45,8 @@ const workspaces: Row[] = [
   { id: "w3", name: "ledger", path: "/Users/me/Developer/ledger", createdAt: now - 2e6 },
   { id: "w4", name: "dotfiles", path: "/Users/me/dotfiles", createdAt: now - 1e6 },
 ];
+// `?first=1` is a fresh install: no projects, so the window lands in home.
+if (typeof location !== "undefined" && new URLSearchParams(location.search).get("first") === "1") workspaces.length = 0;
 const MOCK_WORKTREES = "/Users/me/.crew/worktrees";
 const AVATARS = `${MOCK_WORKTREES}/crew/feat-avatars`;
 const SOCKET_REPLAY = `${MOCK_WORKTREES}/crew/fix-socket-replay`;
@@ -232,13 +234,23 @@ function session(
 
 const commands: Record<string, (args: Row) => unknown> = {
   workspace_list: () => workspaces,
+  workspace_home: () => {
+    const found = workspaces.find((w) => w.home);
+    if (found) return found;
+    const row = { id: "home", name: "Home", path: "/Users/me/Crew", createdAt: now - 5e6, home: true };
+    workspaces.unshift(row);
+    return row;
+  },
   workspace_create: ({ name, path }) => {
     const row = { id: `w${Date.now()}`, name, path, createdAt: Date.now() };
     workspaces.push(row);
     return row;
   },
   workspace_rename: ({ id, name }) => void Object.assign(workspaces.find((w) => w.id === id) ?? {}, { name }),
-  workspace_delete: ({ id }) => void workspaces.splice(workspaces.findIndex((w) => w.id === id) >>> 0, 1),
+  workspace_delete: ({ id }) => {
+    if (workspaces.find((w) => w.id === id)?.home) throw new Error("Home cannot be removed");
+    void workspaces.splice(workspaces.findIndex((w) => w.id === id) >>> 0, 1);
+  },
   workspace_reorder: () => undefined,
   active_workspace_get: () => state.get("active_workspace_id") ?? null,
   active_workspace_set: ({ id }) => void (id ? state.set("active_workspace_id", id as string) : state.delete("active_workspace_id")),

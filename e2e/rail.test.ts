@@ -38,8 +38,9 @@ function railNames(crew: Crew): Promise<string[]> {
     .evaluateAll((buttons) => buttons.map((button) => button.getAttribute("aria-label") ?? ""));
 }
 
+/** The projects crewd lists, in its order; home stands apart from them. */
 async function listed(crew: Crew): Promise<Workspace[]> {
-  return crew.request<Workspace[]>("workspace_list");
+  return (await crew.request<Workspace[]>("workspace_list")).filter((workspace) => !workspace.home);
 }
 
 /** The session rows the panel beside the rail shows. */

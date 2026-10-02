@@ -31,6 +31,9 @@ export async function pickFiles(): Promise<string[]> {
 
 export const listWorkspaces = (): Promise<Workspace[]> => client.request("workspace_list");
 
+/** Home, on this Mac: made with its folder the first time it is asked for. */
+export const homeWorkspace = (): Promise<Workspace> => client.request("workspace_home");
+
 /** `envId` is the machine the folder is on. Omitted, the folder is on this Mac. */
 export const createWorkspace = (name: string, path: string, envId = "local"): Promise<Workspace> =>
   client.request("workspace_create", { name, path }, envId);

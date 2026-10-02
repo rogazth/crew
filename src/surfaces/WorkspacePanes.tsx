@@ -18,6 +18,8 @@ export type MountedPane = Pane & { cwd: string };
 
 type Props = {
   tab: Tab | null;
+  /** What the pane shows with no tab open. */
+  empty?: ReactNode;
   panes: Pane[];
   workspaces: Workspace[];
   sessions: Session[];
@@ -45,6 +47,7 @@ type Props = {
 /** Active surface plus the mounted agent, terminal and page overlays, of every workspace. */
 export function WorkspacePanes({
   tab,
+  empty,
   panes,
   workspaces,
   sessions,
@@ -111,6 +114,7 @@ export function WorkspacePanes({
       <DiffsPool>
         <Surface
           tab={tab}
+          empty={empty}
           sessions={sessions}
           hasWorkspace={hasWorkspace}
           onCreateWorkspace={onCreateWorkspace}

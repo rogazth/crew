@@ -20,6 +20,8 @@ export type ProviderDef = {
   resumeArgs: (id: string) => string[];
   /** Runs the interactive CLI without asking before it edits or runs anything. */
   bypassFlag: string;
+  /** The first message, handed to the interactive CLI as it starts. After `--`, so it is never read as a flag or a subcommand. */
+  promptArgs: (text: string) => string[];
   /**
    * Crew reads the CLI's own history, so its sessions can open in the chat.
    * cursor-agent keeps its CLI chats where nothing else can load them.
@@ -37,6 +39,7 @@ export const PROVIDERS: ProviderDef[] = [
     binding: "own",
     resumeArgs: (id) => ["--resume", id],
     bypassFlag: "--dangerously-skip-permissions",
+    promptArgs: (text) => ["--", text],
     chat: true,
     models: [
       { id: "claude-fable-5-1", label: "Fable 5.1", note: "Toughest" },
@@ -60,6 +63,7 @@ export const PROVIDERS: ProviderDef[] = [
     binding: "before",
     resumeArgs: (id) => ["--resume", id],
     bypassFlag: "--force",
+    promptArgs: (text) => ["--", text],
     chat: false,
     models: [
       { id: "auto", label: "Auto", note: "Default" },
@@ -89,6 +93,7 @@ export const PROVIDERS: ProviderDef[] = [
     binding: "after",
     resumeArgs: (id) => ["resume", id],
     bypassFlag: "--dangerously-bypass-approvals-and-sandbox",
+    promptArgs: (text) => ["--", text],
     chat: true,
     models: [
       { id: "gpt-6-astra", label: "GPT-6 Astra", note: "Most capable" },
@@ -108,6 +113,8 @@ export const PROVIDERS: ProviderDef[] = [
     binding: "after",
     resumeArgs: (id) => ["--session", id],
     bypassFlag: "--auto",
+    // Its one positional is the project folder.
+    promptArgs: (text) => [`--prompt=${text}`],
     chat: true,
     models: [
       { id: "opencode/ling-3.0-flash-fin-free", label: "Ling 3.0 Flash", note: "Free" },

@@ -65,6 +65,7 @@ export function useAppCommands(deps: Deps) {
     "worktree-9": away(() => deps.worktrees.selectAt(8)),
     "new-worktree": deps.newWorktree,
     shortcuts: deps.toggleShortcuts,
+    "go-home": away(() => workspaces.activateHome()),
     "next-workspace": away(() => workspaces.step(1)),
     "prev-workspace": away(() => workspaces.step(-1)),
     "workspace-1": away(() => workspaces.activateAt(0)),

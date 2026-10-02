@@ -30,6 +30,19 @@ const argv = (patch: Partial<Session>, resume = false) =>
 describe("sessionCommand", () => {
   const settings = (a: string[]) => JSON.parse(a[a.indexOf("--settings") + 1] ?? "");
 
+  it("hands a first message to every CLI after its flags, never as a flag or a subcommand", () => {
+    const first = (provider: string, prompt: string) =>
+      sessionCommand({ ...base, provider }, { resume: false, theme: "dark", bypass: true, prompt });
+    expect(first("claude", "update my notes").slice(-3)).toEqual(["--dangerously-skip-permissions", "--", "update my notes"]);
+    expect(first("codex", "-h means help?").slice(-2)).toEqual(["--", "-h means help?"]);
+    expect(first("cursor", "hi").slice(-2)).toEqual(["--", "hi"]);
+    expect(first("opencode", "hi").at(-1)).toBe("--prompt=hi");
+  });
+
+  it("starts without a message when none was written", () => {
+    expect(argv({})).not.toContain("--");
+  });
+
   it("leaves the model to Claude's own config when none is picked", () => {
     expect(argv({}).slice(3)).toEqual(["--session-id", "crew-1"]);
     expect(argv({ model: "claude-opus-5-5" })).toContain("--model");

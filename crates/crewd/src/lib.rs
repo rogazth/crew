@@ -1371,6 +1371,10 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
             let store = hosts.store.clone();
             json(block(move || workspace::list(&store)).await?)
         }
+        "workspace_home" => {
+            let store = hosts.store.clone();
+            json(block(move || workspace::home(&store, &machine::home_folder())).await?)
+        }
         "workspace_create" => {
             let NamePath { name, path } = parse(params)?;
             let store = hosts.store.clone();

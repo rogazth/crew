@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 use crate::store::{now_millis, read_state, set_order, write_state, Store};
 
 const ACTIVE_WORKSPACE_KEY: &str = "active_workspace_id";
+/// The workspace with no project: where sessions go when there is no folder to give them.
+const HOME_WORKSPACE_KEY: &str = "home_workspace_id";
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -12,28 +14,27 @@ pub struct Workspace {
     pub name: String,
     pub path: String,
     pub created_at: i64,
+    /// Home: the window's own workspace, not a project the user opened.
+    #[serde(default)]
+    pub home: bool,
 }
 
 pub fn list(store: &Store) -> Result<Vec<Workspace>, String> {
     store.with(|conn| {
+        let home = read_state(conn, HOME_WORKSPACE_KEY)?;
         let mut stmt = conn.prepare_cached(
             "SELECT id, name, path, created_at FROM workspaces ORDER BY sort_order ASC, created_at ASC",
         )?;
-        let rows = stmt.query_map([], |row| {
-            Ok(Workspace {
-                id: row.get(0)?,
-                name: row.get(1)?,
-                path: row.get(2)?,
-                created_at: row.get(3)?,
-            })
-        })?;
+        let rows = stmt.query_map([], |row| row_to_workspace(row, home.as_deref()))?;
         rows.collect()
     })
 }
 
-fn row_to_workspace(row: &rusqlite::Row) -> rusqlite::Result<Workspace> {
+fn row_to_workspace(row: &rusqlite::Row, home: Option<&str>) -> rusqlite::Result<Workspace> {
+    let id: String = row.get(0)?;
     Ok(Workspace {
-        id: row.get(0)?,
+        home: home == Some(id.as_str()),
+        id,
         name: row.get(1)?,
         path: row.get(2)?,
         created_at: row.get(3)?,
@@ -42,10 +43,35 @@ fn row_to_workspace(row: &rusqlite::Row) -> rusqlite::Result<Workspace> {
 
 pub fn get(store: &Store, id: String) -> Result<Option<Workspace>, String> {
     store.with(|conn| {
+        let home = read_state(conn, HOME_WORKSPACE_KEY)?;
         conn.prepare_cached("SELECT id, name, path, created_at FROM workspaces WHERE id = ?1")?
-            .query_row(params![id], row_to_workspace)
+            .query_row(params![id], |row| row_to_workspace(row, home.as_deref()))
             .optional()
     })
+}
+
+/// Home, made the first time the window asks for it, in `folder`. A folder
+/// already open as a workspace becomes home as it is, sessions and all. The
+/// folder is made again if it was removed, so its sessions still have
+/// somewhere to start.
+pub fn home(store: &Store, folder: &std::path::Path) -> Result<Workspace, String> {
+    let id: Option<String> = store.with(|conn| read_state(conn, HOME_WORKSPACE_KEY))?;
+    if let Some(found) = id.map(|id| get(store, id)).transpose()?.flatten() {
+        std::fs::create_dir_all(&found.path).map_err(|e| format!("{}: {e}", found.path))?;
+        return Ok(found);
+    }
+    std::fs::create_dir_all(folder).map_err(|e| format!("{}: {e}", folder.display()))?;
+    let path = folder.to_string_lossy().into_owned();
+    let existing: Option<String> = store.with(|conn| {
+        conn.query_row("SELECT id FROM workspaces WHERE path = ?1", params![path], |row| row.get(0))
+            .optional()
+    })?;
+    let id = match existing {
+        Some(id) => id,
+        None => create(store, "Home".into(), path)?.id,
+    };
+    store.with(|conn| write_state(conn, HOME_WORKSPACE_KEY, Some(&id)))?;
+    get(store, id)?.ok_or_else(|| "Home was not saved".into())
 }
 
 pub fn create(store: &Store, name: String, path: String) -> Result<Workspace, String> {
@@ -62,6 +88,7 @@ pub fn create(store: &Store, name: String, path: String) -> Result<Workspace, St
         name,
         path,
         created_at: now_millis(),
+        home: false,
     };
 
     let existing: Option<String> = store.with(|conn| {
@@ -108,6 +135,9 @@ pub fn rename(store: &Store, id: String, name: String) -> Result<(), String> {
 
 /// The chrome it kept goes with it: its tab strip, one per worktree, and the worktree it had on screen.
 pub fn delete(store: &Store, id: String) -> Result<(), String> {
+    if store.with(|conn| read_state(conn, HOME_WORKSPACE_KEY))?.as_deref() == Some(id.as_str()) {
+        return Err("Home cannot be removed".into());
+    }
     store.with(|conn| {
         conn.execute("DELETE FROM workspaces WHERE id = ?1", params![id])?;
         conn.execute(
@@ -228,6 +258,50 @@ mod tests {
         let again = create(&store, "crew again".into(), path);
 
         assert!(again.is_err_and(|e| e.contains("Already open as \"crew\"")), "the folder opened twice");
+    }
+
+    #[test]
+    fn home_is_made_once_with_its_folder() {
+        let store = store();
+        let folder = std::path::Path::new(&a_folder()).join("Crew");
+
+        let first = home(&store, &folder).expect("home");
+        let again = home(&store, &folder).expect("home again");
+
+        assert!(folder.is_dir(), "home's folder was not made");
+        assert!(first.home, "home was not marked as home");
+        assert_eq!(first.id, again.id, "a second home was made");
+        let all = list(&store).expect("list");
+        assert_eq!(all.iter().filter(|w| w.home).count(), 1, "home is not listed once");
+        assert!(delete(&store, first.id.clone()).is_err(), "home was removed");
+        assert!(get(&store, first.id).expect("get").is_some_and(|w| w.home));
+    }
+
+    /// Its sessions start there, so a folder removed behind Crew's back comes back.
+    #[test]
+    fn home_makes_its_folder_again() {
+        let store = store();
+        let folder = std::path::Path::new(&a_folder()).join("Crew");
+        home(&store, &folder).expect("home");
+        std::fs::remove_dir(&folder).expect("remove");
+
+        home(&store, &folder).expect("home again");
+
+        assert!(folder.is_dir(), "home's folder stayed gone");
+    }
+
+    /// A folder already open as a project becomes home rather than clash on its path.
+    #[test]
+    fn a_folder_already_open_becomes_home() {
+        let store = store();
+        let path = a_folder();
+        let opened = create(&store, "Crew".into(), path.clone()).expect("workspace");
+
+        let made = home(&store, std::path::Path::new(&path)).expect("home");
+
+        assert_eq!(made.id, opened.id);
+        assert!(made.home);
+        assert_eq!(list(&store).expect("list").len(), 1);
     }
 
     /// A strip left behind would come back as ghost tabs if a workspace ever got the same id.

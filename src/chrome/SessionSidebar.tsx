@@ -80,6 +80,11 @@ export type SessionSidebarProps = {
   running?: ReadonlyMap<string, string[]>;
   /** Reads the worktrees and sessions again, for changes made outside this window. */
   onRefresh: () => Promise<void>;
+  /**
+   * Home's panel: no path and no worktrees, its sessions in one list under
+   * `actions`, and `foot` where a project keeps its commands.
+   */
+  home?: { actions: ReactNode; foot: ReactNode } | undefined;
 };
 
 type Menu =
@@ -358,9 +363,11 @@ export function SessionSidebar(props: SessionSidebarProps) {
   return (
     <div ref={panel} data-sidebar-panel onKeyDown={onPanelKey} className="flex min-h-0 flex-1 flex-col">
       <div className="shrink-0 px-3 pt-3 pb-2" title={props.workspace.path}>
-        <div className="truncate text-[15px] font-semibold tracking-[-0.01em]">{props.workspace.name}</div>
-        <div className="truncate text-[11px] text-text-muted">{shortenPath(props.workspace.path)}</div>
+        <div className="truncate text-[15px] font-semibold tracking-[-0.01em]">{props.home ? "Home" : props.workspace.name}</div>
+        {!props.home && <div className="truncate text-[11px] text-text-muted">{shortenPath(props.workspace.path)}</div>}
       </div>
+
+      {props.home && <div className="shrink-0 px-2 pb-1">{props.home.actions}</div>}
 
       <div className="shrink-0 px-2">
         {searching ? (
@@ -379,8 +386,10 @@ export function SessionSidebar(props: SessionSidebarProps) {
           />
         ) : (
           <div className="flex h-8 items-center gap-0.5 pl-2">
-            <span className="min-w-0 flex-1 truncate text-text-muted">Worktrees</span>
-            <HeaderButton icon={PlusIcon} label={`New worktree ${commandKeys("new-worktree")}`} onClick={props.onNewWorktree} />
+            <span className="min-w-0 flex-1 truncate text-text-muted">{props.home ? "Sessions" : "Worktrees"}</span>
+            {!props.home && (
+              <HeaderButton icon={PlusIcon} label={`New worktree ${commandKeys("new-worktree")}`} onClick={props.onNewWorktree} />
+            )}
             <HeaderButton icon={RotateCwIcon} label="Refresh" spinning={refreshing} onClick={refresh} />
             <HeaderButton icon={SearchIcon} label="Find  /" onClick={() => setSearching(true)} />
             {prefs && <SidebarPrefsMenu prefs={prefs} onChange={setPrefs} />}
@@ -393,7 +402,8 @@ export function SessionSidebar(props: SessionSidebarProps) {
           shown.map((tree) => {
             const index = props.worktrees.indexOf(tree);
             const isCurrent = tree.path === props.activeWorktree;
-            const open = filtering || (folds.get(tree.path) ?? isCurrent);
+            // Home has the one folder and no git: its sessions are the whole list, never folded.
+            const open = Boolean(props.home) || filtering || (folds.get(tree.path) ?? isCurrent);
             const mine = listed.get(tree.path) ?? { agents: { shown: [], hidden: 0 }, terminals: { shown: [], hidden: 0 } };
             const agents = mine.agents.shown;
             const terminals = mine.terminals.shown;
@@ -409,7 +419,7 @@ export function SessionSidebar(props: SessionSidebarProps) {
             );
             return (
               <div key={tree.path} className="mt-0.5 first:mt-0">
-                <WorktreeHeader
+                {!props.home && <WorktreeHeader
                   tree={tree}
                   current={isCurrent}
                   open={open}
@@ -421,9 +431,9 @@ export function SessionSidebar(props: SessionSidebarProps) {
                   onAdd={() => props.onNewAgent(tree.path)}
                   onMenu={(point) => setMenu({ kind: "worktree", point, tree })}
                   onRemove={() => !tree.main && props.onRemoveWorktree(tree)}
-                />
+                />}
                 {open && (
-                  <div className="pb-2 pl-2">
+                  <div className={props.home ? "pb-2" : "pb-2 pl-2"}>
                     {agents.length > 0 && (
                       <div className="grid grid-cols-3 gap-0.5">
                         <SortableList ids={agents.map((s) => s.id)} disabled={!draggable || mine.agents.hidden > 0} onReorder={props.onReorder}>
@@ -479,6 +489,7 @@ export function SessionSidebar(props: SessionSidebarProps) {
           })}
       </div>
       {props.commands && <div className="shrink-0 border-t border-hairline px-2 py-1.5">{props.commands}</div>}
+      {props.home?.foot}
 
       {menu?.kind === "session" && (
         <ActionMenu

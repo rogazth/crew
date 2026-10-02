@@ -49,6 +49,9 @@
 // Enter answers (trusting removes the file). Esc exits. SessionStart runs
 // once it is trusted, as the real one's does.
 //
+// A prompt after `--` is its first message, submitted as soon as it starts
+// (after the trust prompt, if any), as the real one takes `claude -- <prompt>`.
+//
 // Resumed (`--resume`), it repaints the conversation for about a second before
 // its title settles, the way Claude redraws a loaded transcript.
 //
@@ -529,6 +532,12 @@ function start() {
   } else {
     title(IDLE);
     out("> ");
+    const dash = argv.indexOf("--");
+    const first = dash >= 0 ? argv.slice(dash + 1).join(" ") : "";
+    if (first) {
+      out(first);
+      submit(first);
+    }
   }
 }
 

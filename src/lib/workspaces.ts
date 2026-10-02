@@ -8,12 +8,18 @@ export function nameFromPath(path: string): string {
   return parts[parts.length - 1] ?? "";
 }
 
+/** The workspace on screen: the one saved, else the first project, else home. */
 export function resolveActive(
   workspaces: Workspace[],
   activeId: string | null,
 ): Workspace | null {
   if (workspaces.length === 0) return null;
-  return workspaces.find((w) => w.id === activeId) ?? workspaces[0] ?? null;
+  return (
+    workspaces.find((w) => w.id === activeId) ??
+    workspaces.find((w) => !w.home) ??
+    workspaces[0] ??
+    null
+  );
 }
 
 /** Inline rail filter. Matches the name first, then the path. */

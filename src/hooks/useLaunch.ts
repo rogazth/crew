@@ -1,5 +1,6 @@
 import { useCallback } from "react";
 import type { Launch } from "../chrome/TabLauncher";
+import { setFirstPrompt } from "../lib/firstPrompt";
 import { DEFAULT_MODEL, type ProviderId } from "../lib/providers";
 import type { Session, StubKind } from "../lib/types";
 import { nextSessionName } from "../lib/workspaces";
@@ -24,8 +25,11 @@ export function useLaunch({ sessions, worktree, create, openSession, openStub, o
 
   // Sessions open straight away; the name is derived, never prompted.
   const newSession = useCallback(
-    /** `place` puts it in a worktree other than the one on screen; null is the main checkout. */
-    async (provider: ProviderId = defaultAgent.provider, place: string | null = worktree) => {
+    /**
+     * `place` puts it in a worktree other than the one on screen; null is the
+     * main checkout. `prompt` is its first message, handed to the CLI as it starts.
+     */
+    async (provider: ProviderId = defaultAgent.provider, place: string | null = worktree, prompt?: string) => {
       const model = provider === defaultAgent.provider ? defaultAgent.model : DEFAULT_MODEL;
       const session = await create("terminal", {
         name: nextSessionName(sessions, provider),
@@ -35,7 +39,9 @@ export function useLaunch({ sessions, worktree, create, openSession, openStub, o
         autonomy: "ask",
         worktree: place,
       });
-      if (session) openSession(session);
+      if (!session) return;
+      if (prompt) setFirstPrompt(session.id, prompt);
+      openSession(session);
     },
     [create, defaultAgent, openSession, sessions, worktree],
   );

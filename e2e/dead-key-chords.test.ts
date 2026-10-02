@@ -3,6 +3,7 @@
 // switching through that, press after press.
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import type { Workspace } from "../src/lib/types.ts";
 import { launchCrew, newTerminal, waitFor } from "./harness.ts";
 
 test("K1: ⌘⌥ dead-key chord switches workspaces repeatedly while a terminal is composing", async (t) => {
@@ -21,7 +22,10 @@ test("K1: ⌘⌥ dead-key chord switches workspaces repeatedly while a terminal 
     );
   });
 
-  const order = crew.workspaces.map((w) => w.id);
+  // The chord walks the rail top to bottom: home first, then the projects.
+  const home = (await crew.request<Workspace[]>("workspace_list")).find((w) => w.home);
+  assert.ok(home, "home was never made");
+  const order = [home.id, ...crew.workspaces.map((w) => w.id)];
   const withTerminal = new Set<string>();
   for (let i = 0; i < 6; i++) {
     const before = (await crew.request<string>("active_workspace_get")) as string;

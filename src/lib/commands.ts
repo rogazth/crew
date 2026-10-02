@@ -30,6 +30,7 @@ export const COMMANDS = {
   "switch-workspace": { label: "Switch Workspace or Worktree", keys: "Mod+Shift+O" },
   // The digits belong to workspaces; the tab strip keeps only the cycling pair.
   // Each level up the ladder takes a harder chord: tabs ⌘⇧, worktrees ⌃⌘, workspaces ⌘⌥.
+  "go-home": { label: "Go Home", keys: "Mod+Shift+H" },
   "next-workspace": { label: "Next Workspace", keys: { key: "]", mod: true, alt: true } },
   "prev-workspace": { label: "Previous Workspace", keys: { key: "[", mod: true, alt: true } },
   "workspace-1": { label: "Go to Workspace 1", keys: "Mod+1" },

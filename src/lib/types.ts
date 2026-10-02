@@ -3,6 +3,8 @@ export type Workspace = {
   name: string;
   path: string;
   createdAt: number;
+  /** Home: the window's own workspace in ~/Crew, not a project the user opened. */
+  home?: boolean;
 };
 
 /**

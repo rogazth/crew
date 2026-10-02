@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import * as api from "../lib/api";
 import { onWorkspacesChanged } from "../lib/client/registry";
 import { open } from "../lib/host";
@@ -13,7 +13,12 @@ export function useWorkspaces() {
 
   useEffect(() => {
     let cancelled = false;
-    Promise.all([api.listWorkspaces(), api.getActiveWorkspace()])
+    // Home is made before the first list, so a fresh install lands in it. A
+    // daemon that cannot make it still shows the projects.
+    api
+      .homeWorkspace()
+      .catch(() => null)
+      .then(() => Promise.all([api.listWorkspaces(), api.getActiveWorkspace()]))
       .then(([list, active]) => {
         if (cancelled) return;
         setWorkspaces(list);
@@ -68,42 +73,56 @@ export function useWorkspaces() {
     await api.renameWorkspace(id, name);
   }, []);
 
+  // Home stands apart from the projects: first on the rail, never reordered or removed.
+  const home = useMemo(() => workspaces.find((w) => w.home) ?? null, [workspaces]);
+  const projects = useMemo(() => workspaces.filter((w) => !w.home), [workspaces]);
+
   const remove = useCallback(
     async (id: string) => {
       const next = workspaces.filter((w) => w.id !== id);
       await api.deleteWorkspace(id);
       setWorkspaces(next);
-      if (id === activeId) activate(next[0]?.id ?? null);
+      if (id === activeId) activate(next.find((w) => !w.home)?.id ?? home?.id ?? null);
     },
-    [workspaces, activeId, activate],
+    [workspaces, activeId, activate, home],
   );
 
-  // Keyboard switching walks the sidebar order and wraps, like tab cycling.
+  // Keyboard switching walks the rail top to bottom, home first, and wraps, like tab cycling.
   const step = useCallback(
     (delta: number) => {
-      const index = workspaces.findIndex((w) => w.id === activeId);
-      const count = workspaces.length;
+      const order = home ? [home, ...projects] : projects;
+      const index = order.findIndex((w) => w.id === activeId);
+      const count = order.length;
       if (count < 2) return;
-      const next = workspaces[(((index === -1 ? 0 : index) + delta) % count + count) % count];
+      const next = order[(((index === -1 ? 0 : index) + delta) % count + count) % count];
       if (next) activate(next.id);
     },
-    [activate, activeId, workspaces],
+    [activate, activeId, home, projects],
   );
 
+  /** ⌘1‥9: the projects, counted from the first under home. */
   const activateAt = useCallback(
     (index: number) => {
-      const target = workspaces[index];
+      const target = projects[index];
       if (target && target.id !== activeId) activate(target.id);
     },
-    [activate, activeId, workspaces],
+    [activate, activeId, projects],
   );
 
+  const activateHome = useCallback(() => {
+    if (home && home.id !== activeId) activate(home.id);
+  }, [activate, activeId, home]);
+
+  /** `ids` are the projects in their new order; home keeps its place. */
   const reorder = useCallback((ids: string[]) => {
     setWorkspaces((prev) => {
       const map = new Map(prev.map((workspace) => [workspace.id, workspace]));
-      const next = ids
-        .map((id) => map.get(id))
-        .filter((workspace): workspace is Workspace => workspace !== undefined);
+      const next = [
+        ...prev.filter((workspace) => workspace.home),
+        ...ids
+          .map((id) => map.get(id))
+          .filter((workspace): workspace is Workspace => workspace !== undefined && !workspace.home),
+      ];
       return next.length === prev.length ? next : prev;
     });
     void api.reorderWorkspaces(ids);
@@ -112,11 +131,14 @@ export function useWorkspaces() {
   const active = resolveActive(workspaces, activeId);
   return {
     workspaces,
+    home,
+    projects,
     active,
     loading,
     error,
     activate,
     activateAt,
+    activateHome,
     step,
     create,
     adopt,

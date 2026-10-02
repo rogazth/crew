@@ -46,6 +46,9 @@ pub struct Launch {
 /// flags Crew knows. The environment goes on regardless, so `crew` works
 /// from any shell the session opens.
 pub fn launch(provider: &str, mut argv: Vec<String>, opening: Option<&str>, link: &BridgeLink<'_>) -> Launch {
+    // A first message the window wrote rides after `--`; a task then waits
+    // for a launch that has no message of its own.
+    let opening = opening.filter(|_| !argv.iter().any(|arg| arg == "--"));
     let mut env = vec![
         ("CREW_SOCKET".to_string(), link.socket.to_string()),
         ("CREW_TOKEN".to_string(), link.token.to_string()),
@@ -60,11 +63,12 @@ pub fn launch(provider: &str, mut argv: Vec<String>, opening: Option<&str>, link
     let mut prompted = opening.is_some();
     match (provider, binary.as_str()) {
         // Last, because `--mcp-config` takes every value up to the next flag;
-        // the prompt goes before it, where nothing swallows it.
+        // the prompt goes before it, where nothing swallows it. A message
+        // after `--` stays last, the flag before the separator.
         ("claude", "claude") => {
-            argv.extend(opening.map(String::from));
-            argv.push("--mcp-config".into());
-            argv.push(claude_mcp_config(link.exe, &mcp_args));
+            let mcp = ["--mcp-config".to_string(), claude_mcp_config(link.exe, &mcp_args)];
+            let at = argv.iter().position(|arg| arg == "--").unwrap_or(argv.len());
+            argv.splice(at..at, opening.map(String::from).into_iter().chain(mcp));
         }
         // Right after the binary, on the root command: codex hands root `-c`
         // overrides to `resume` as well, and `resume <id>` wants its id next
@@ -195,6 +199,18 @@ mod tests {
         let opencode = launch("opencode", argv(&["opencode"]), task, &LINK);
         assert_eq!(opencode.argv, argv(&["opencode", "--prompt", "## Message\n\nBuild it."]));
         assert!([claude, codex, cursor, opencode].iter().all(|out| out.prompted));
+    }
+
+    /// The window's first message is after `--`: the MCP flag goes before it,
+    /// where its variadic value cannot take the message, and a task waits.
+    #[test]
+    fn a_first_message_stays_after_the_separator() {
+        let out = launch("claude", argv(&["claude", "--session-id", "s1", "--", "say hi"]), Some("Build it."), &LINK);
+        assert_eq!(out.argv, argv(&["claude", "--session-id", "s1", "--mcp-config", CLAUDE_MCP, "--", "say hi"]));
+        assert!(!out.prompted);
+        let codex = launch("codex", argv(&["codex", "--", "say hi"]), Some("Build it."), &LINK);
+        assert_eq!(codex.argv[codex.argv.len() - 2..], argv(&["--", "say hi"]));
+        assert!(!codex.prompted);
     }
 
     /// A shell has nowhere to put a prompt: the task is not taken.

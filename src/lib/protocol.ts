@@ -842,7 +842,11 @@ export type TurnUsage = { inputTokens?: number, outputTokens?: number, costUsd?:
 
 export type UrlKey = { urlKey: string, };
 
-export type Workspace = { id: string, name: string, path: string, createdAt: number, };
+export type Workspace = { id: string, name: string, path: string, createdAt: number, 
+/**
+ * Home: the window's own workspace, not a project the user opened.
+ */
+home: boolean, };
 
 export type WorkspaceId = { workspaceId: string, };
 

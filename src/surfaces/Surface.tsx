@@ -13,6 +13,8 @@ const FileView = lazy(() => import("./FileView").then((m) => ({ default: m.FileV
 
 type Props = {
   tab: Tab | null;
+  /** What shows with no tab open, in place of the hint to open one. */
+  empty?: ReactNode;
   sessions: Session[];
   hasWorkspace: boolean;
   onCreateWorkspace: () => void;
@@ -32,6 +34,7 @@ type Props = {
 /** Routes the active tab to whatever fills the pane. Agents and terminals stay mounted in their overlays. */
 export function Surface({
   tab,
+  empty,
   sessions,
   hasWorkspace,
   onCreateWorkspace,
@@ -52,6 +55,7 @@ export function Surface({
     );
   }
   if (!tab) {
+    if (empty) return empty;
     return (
       <EmptyState title={`Open an agent, a session, or ${commandKeys("go-to-file")} for a file.`} />
     );

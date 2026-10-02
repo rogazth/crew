@@ -19,6 +19,7 @@ const GROUPS: { title: string; entries: Entry[] }[] = [
     entries: [
       "open-workspace",
       "switch-workspace",
+      "go-home",
       { run: "workspace", label: "Go to Workspace 1–9" },
       "next-workspace",
       "prev-workspace",
