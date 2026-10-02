@@ -21,22 +21,33 @@ const hex = (value) => [
   parseInt(value.slice(5, 7), 16),
 ]
 
+// The app's canvas: white at the top, settling into its lightest grey.
 const PLATE_STOPS = [
-  [0, hex('#FB8347')],
-  [0.48, hex('#E2521F')],
-  [1, hex('#B02C0D')],
+  [0, hex('#FFFFFF')],
+  [1, hex('#EBEBED')],
 ]
-const CREW_STOPS = [
-  [0, hex('#FFFBF4')],
-  [1, hex('#F2E6D4')],
-]
-const SHADOW = hex('#6B1A05')
+const PLATE_SHADOW = hex('#000000')
+const CREW_SHADOW = hex('#2D2D38')
+const EYE = hex('#0F172A')
 
+// The crew: three agents in the colours of gaze, the faces the agents wear in
+// the app, each taken one step deeper so it holds on white. The two at the
+// sides look to the middle one, and it looks at you.
 const PILLS = [
-  { cx: 328, width: 150, height: 292 },
-  { cx: 696, width: 150, height: 292 },
-  { cx: CENTER, width: 190, height: 400 },
+  { cx: 322, cy: CENTER, width: 150, height: 292, color: hex('#85BCF9'), look: 22 },
+  { cx: 702, cy: CENTER, width: 150, height: 292, color: hex('#83D586'), look: -22 },
+  { cx: CENTER, cy: CENTER, width: 190, height: 400, color: hex('#FBA962'), look: 0 },
 ]
+
+// gaze's bean eyes, measured on the middle pill and scaled to the other two.
+const EYES = PILLS.flatMap((pill) => {
+  const scale = pill.width / 190
+  const cx = pill.cx + pill.look * scale
+  const cy = pill.cy - pill.height / 2 + (pill.look ? 150 : 140) * scale
+  const gap = 78 * scale
+  const eye = { cy, width: 34 * scale, height: 62 * scale }
+  return [{ ...eye, cx: cx - gap / 2 }, { ...eye, cx: cx + gap / 2 }]
+})
 
 function rampAt(stops, t) {
   const clamped = Math.min(1, Math.max(0, t))
@@ -72,10 +83,11 @@ function plateDistance(x, y) {
   return slope === 0 ? -RADIUS : (field - 1) / slope
 }
 
+// A vertical pill: the crew's bodies and their eyes alike.
 function pillDistance(x, y, pill) {
   const radius = pill.width / 2
   const dx = Math.abs(x - pill.cx) - (pill.width / 2 - radius)
-  const dy = Math.abs(y - CENTER) - (pill.height / 2 - radius)
+  const dy = Math.abs(y - pill.cy) - (pill.height / 2 - radius)
   const ox = Math.max(dx, 0)
   const oy = Math.max(dy, 0)
   return Math.min(Math.max(dx, dy), 0) + Math.sqrt(ox * ox + oy * oy) - radius
@@ -111,11 +123,12 @@ function boxBlur(source, radius) {
   return buffer
 }
 
-const pixels = new Float32Array(SIZE * SIZE * 4)
+const plateMask = new Float32Array(SIZE * SIZE)
 const crewMask = new Float32Array(SIZE * SIZE)
 
 for (let y = 0; y < SIZE; y++) {
   for (let x = 0; x < SIZE; x++) {
+    plateMask[y * SIZE + x] = coverage(plateDistance(x + 0.5, y + 0.5))
     let mask = 0
     for (const pill of PILLS) {
       mask = Math.max(mask, coverage(pillDistance(x + 0.5, y + 0.5, pill)))
@@ -124,56 +137,43 @@ for (let y = 0; y < SIZE; y++) {
   }
 }
 
-const shadowMask = boxBlur(crewMask, 11)
+const plateShadow = boxBlur(plateMask, 12)
+const crewShadow = boxBlur(crewMask, 10)
+
+// What a mask held `drop` pixels up: a shadow cast straight down lands here.
+const dropped = (mask, x, y, drop) => (y >= drop ? mask[(y - drop) * SIZE + x] : 0)
+
+// Straight-alpha "over": each layer lands on what the pixel already holds.
+function paint(pixel, color, alpha) {
+  if (alpha <= 0) return
+  const below = pixel[3] * (1 - alpha)
+  const total = alpha + below
+  for (let c = 0; c < 3; c++) pixel[c] = (color[c] * alpha + pixel[c] * below) / total
+  pixel[3] = total
+}
+
+const pixels = new Float32Array(SIZE * SIZE * 4)
+const pixel = [0, 0, 0, 0]
 
 for (let y = 0; y < SIZE; y++) {
   for (let x = 0; x < SIZE; x++) {
     const px = x + 0.5
     const py = y + 0.5
+    pixel.fill(0)
+
+    // A white plate needs the shadow every macOS icon sits on to stay apart
+    // from a light Dock; the crew casts a softer one onto the plate.
+    paint(pixel, PLATE_SHADOW, dropped(plateShadow, x, y, 10) * 0.22)
+    paint(pixel, rampAt(PLATE_STOPS, (py - INSET) / PLATE), plateMask[y * SIZE + x])
+    paint(pixel, CREW_SHADOW, dropped(crewShadow, x, y, 8) * 0.18)
+    for (const pill of PILLS) paint(pixel, pill.color, coverage(pillDistance(px, py, pill)))
+    for (const eye of EYES) paint(pixel, EYE, coverage(pillDistance(px, py, eye)))
+
     const i = (y * SIZE + x) * 4
-
-    const distance = plateDistance(px, py)
-    const plateAlpha = coverage(distance)
-    if (plateAlpha <= 0 && crewMask[y * SIZE + x] <= 0) continue
-
-    // Plate gradient, angled the way the SVG source describes it: top-left
-    // highlight falling to a deep bottom-right.
-    const t = ((px - INSET) * 0.35 + (py - INSET) * 1) / (PLATE * (0.35 * 0.35 + 1))
-    let [r, g, b] = rampAt(PLATE_STOPS, t)
-
-    const sheen = Math.max(0, 1 - (py - INSET) / (PLATE * 0.45)) * 0.26
-    r += (255 - r) * sheen
-    g += (255 - g) * sheen
-    b += (255 - b) * sheen
-
-    const rim = Math.max(0, 1 - Math.abs(distance + 1.5) / 1.5) * 0.18
-    r += (255 - r) * rim
-    g += (255 - g) * rim
-    b += (255 - b) * rim
-
-    let alpha = plateAlpha
-
-    const shadow = (shadowMask[Math.min(SIZE - 1, y - 10) * SIZE + x] ?? 0) * 0.34
-    if (shadow > 0) {
-      r += (SHADOW[0] - r) * shadow
-      g += (SHADOW[1] - g) * shadow
-      b += (SHADOW[2] - b) * shadow
-    }
-
-    const crew = crewMask[y * SIZE + x]
-    if (crew > 0) {
-      const [cr, cg, cb] = rampAt(CREW_STOPS, (py - 312) / 400)
-      const blended = alpha + crew * (1 - alpha)
-      r = (r * alpha * (1 - crew) + cr * crew) / blended
-      g = (g * alpha * (1 - crew) + cg * crew) / blended
-      b = (b * alpha * (1 - crew) + cb * crew) / blended
-      alpha = blended
-    }
-
-    pixels[i] = r
-    pixels[i + 1] = g
-    pixels[i + 2] = b
-    pixels[i + 3] = alpha * 255
+    pixels[i] = pixel[0]
+    pixels[i + 1] = pixel[1]
+    pixels[i + 2] = pixel[2]
+    pixels[i + 3] = pixel[3] * 255
   }
 }
 
