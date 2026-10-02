@@ -10,6 +10,12 @@ describe("avatarRender", () => {
     }
   });
 
+  it("crops in on the styles that leave a margin around the face", () => {
+    for (const id of ["gaze", "pixelbot", "voxel-bot", "moods"] as const) {
+      expect(avatarRender(id).scale).toBeGreaterThan(1);
+    }
+  });
+
   it("has an answer for every style", () => {
     for (const { id } of AGENT_AVATARS) expect(avatarRender(id)).toBeDefined();
   });

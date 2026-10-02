@@ -70,14 +70,16 @@ export function loadAvatarStyle(id: AgentAvatarId): Promise<Style<StyleDefinitio
  * How each style sits in the chrome. Faces that are a figure on a square
  * (voxel bots, moods) drop the square and stand on the surface; styles whose
  * square is the face keep it, rounded like every other shape in the app.
+ * Styles that leave a margin around the face crop in, as DiceBear's own Close
+ * Up preset does, so the face fills the frame at chrome sizes.
  */
-type Render = { backgroundColor?: string[]; borderRadius?: number };
+type Render = { backgroundColor?: string[]; borderRadius?: number; scale?: number };
 
 const RENDER: Record<AgentAvatarId, Render> = {
-  gaze: {},
-  "voxel-bot": { backgroundColor: ["#00000000"] },
-  moods: { backgroundColor: ["#00000000"] },
-  pixelbot: { borderRadius: 24 },
+  gaze: { scale: 1.3 },
+  "voxel-bot": { backgroundColor: ["#00000000"], scale: 1.2 },
+  moods: { backgroundColor: ["#00000000"], scale: 1.3 },
+  pixelbot: { borderRadius: 24, scale: 1.3 },
   glass: { borderRadius: 24 },
   blobs: { borderRadius: 24 },
 };
