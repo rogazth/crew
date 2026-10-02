@@ -132,7 +132,7 @@ export function WorkspacePanes({
           onOpenFile={onOpenFile}
         />
       </ChatContext>
-      <Browsers panes={mounted} onPatch={onPatchBrowser} onOpenTab={onOpenBrowserTab} onAdopt={onAdoptBrowserTab} />
+      <Browsers panes={mounted} sessions={sessions} onPatch={onPatchBrowser} onOpenTab={onOpenBrowserTab} onAdopt={onAdoptBrowserTab} />
       <ChatContext value={chat}>
         <Agents panes={mounted} sessions={sessions} />
       </ChatContext>

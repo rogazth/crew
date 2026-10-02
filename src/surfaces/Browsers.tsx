@@ -13,7 +13,7 @@ import { prompts } from "../lib/browser/prompts";
 import { liveGuests, touch } from "../lib/browser/retention";
 import { browserHost } from "../lib/host";
 import { newBrowserTab, paneId, type BrowserTabPatch } from "../lib/tabs";
-import type { Tab } from "../lib/types";
+import type { Session, Tab } from "../lib/types";
 import type { MountedPane } from "./WorkspacePanes";
 
 /** The toolbar, the address bar and the guest wiring load with the first page, not with the window. */
@@ -24,6 +24,7 @@ type BrowserMount = MountedPane & { tab: BrowserTab };
 
 type Props = {
   panes: MountedPane[];
+  sessions: Session[];
   onPatch: (workspaceId: string, tabId: string, patch: BrowserTabPatch) => void;
   onOpenTab: (workspaceId: string, tab: Tab, opts: { after: string; background: boolean }) => void;
   onAdopt: (context: string, tab: Tab) => void;
@@ -36,7 +37,7 @@ const isBrowser = (pane: MountedPane): pane is BrowserMount => pane.tab.kind ===
  * that leaves the DOM loses its page. Only the most recently shown ones keep
  * a live guest; the rest go cold until they are looked at again.
  */
-export function Browsers({ panes, onPatch, onOpenTab, onAdopt }: Props) {
+export function Browsers({ panes, sessions, onPatch, onOpenTab, onAdopt }: Props) {
   const { prefs } = useBrowserPrefs();
   const browsers = panes.filter(isBrowser);
   const visible = browsers.find((pane) => pane.visible) ?? null;
@@ -221,6 +222,7 @@ export function Browsers({ panes, onPatch, onOpenTab, onAdopt }: Props) {
             live={live.has(pane.id)}
             visible={pane.visible}
             searchTemplate={prefs.searchTemplate}
+            sessions={sessions}
             onPatch={(patch) => onPatch(pane.workspaceId, pane.tab.id, patch)}
             onPinned={(on) =>
               setPinned((current) => {

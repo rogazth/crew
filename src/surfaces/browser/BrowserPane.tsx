@@ -15,6 +15,7 @@ import type { DevToolsDock } from "../../lib/browserPrefs";
 import { runCommand } from "../../lib/commands";
 import { browserHost, type BrowserHost } from "../../lib/host";
 import type { CookieSource } from "../../lib/protocol";
+import type { Session } from "../../lib/types";
 import { BrowserError } from "./BrowserError";
 import { useGuest } from "./useGuest";
 import { BrowserToolbar, type ToolbarPanel } from "./BrowserToolbar";
@@ -47,6 +48,8 @@ type Props = {
   live: boolean;
   visible: boolean;
   searchTemplate: string;
+  /** The workspace's sessions, to show whoever drives the page. */
+  sessions: Session[];
   onPatch: (patch: BrowserTabPatch) => void;
   /** DevTools open or audio playing: discarding the guest would lose what it's doing. */
   onPinned: (pinned: boolean) => void;
@@ -62,6 +65,7 @@ export function BrowserPane({
   live,
   visible,
   searchTemplate,
+  sessions,
   onPatch,
   onPinned,
 }: Props) {
@@ -273,7 +277,10 @@ export function BrowserPane({
         onLeaveAddress={() => guest.current?.focus()}
       />
       {lease && lease.sessionId && (
-        <DrivenBar lease={lease} onTakeBack={() => void api.browserLeaseRelease(pageId).catch(() => {})} />
+        <DrivenBar
+          lease={lease}
+          driver={sessions.find((s) => s.id === lease.sessionId)}
+          onTakeBack={() => void api.browserLeaseRelease(pageId).catch(() => {})} />
       )}
       <div className={`flex min-h-0 flex-1 ${FLOW[side]}`}>
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">

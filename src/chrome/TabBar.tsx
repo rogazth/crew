@@ -8,6 +8,7 @@ import { ActionMenu } from "./ActionMenu";
 import { BranchDot, BranchTag } from "./BranchDot";
 import { AgentAvatar } from "./AgentAvatar";
 import { TOGGLE_RESERVE } from "../lib/chrome";
+import { DriverFace } from "./DriverFace";
 import { FileTypeIcon } from "./FileTypeIcon";
 import { ProviderIcon } from "./ProviderIcon";
 import { SortableList } from "./SortableList";
@@ -462,7 +463,7 @@ const TabPill = memo(function TabPill({
       } ${isDragging ? "cursor-grabbing" : ""}`}
     >
       {tab.kind === "browser" ? (
-        <BrowserTabFace tab={tab} />
+        <BrowserTabFace tab={tab} sessions={sessions} />
       ) : (
         <>
           <TabIcon tab={tab} sessions={sessions} tone={tone} />
@@ -554,7 +555,7 @@ const PinnedPill = memo(function PinnedPill({
       } ${isDragging ? "cursor-grabbing" : ""}`}
     >
       {tab.kind === "browser" ? (
-        <BrowserTabFace tab={tab} bare />
+        <BrowserTabFace tab={tab} sessions={sessions} bare />
       ) : (
         <TabIcon tab={tab} sessions={sessions} tone={tone} />
       )}
@@ -709,9 +710,18 @@ function TabIcon({ tab, sessions, tone }: { tab: Tab; sessions: Session[]; tone:
  * nothing else in the strip. A cold page has no live state yet and falls back
  * to what its tab saved.
  */
-function BrowserTabFace({ tab, bare = false }: { tab: Extract<Tab, { kind: "browser" }>; bare?: boolean }) {
+function BrowserTabFace({
+  tab,
+  sessions,
+  bare = false,
+}: {
+  tab: Extract<Tab, { kind: "browser" }>;
+  sessions: Session[];
+  bare?: boolean;
+}) {
   const page = useBrowserPage(tab.id);
   const lease = useLease(tab.id);
+  const driver = lease?.sessionId ? sessions.find((s) => s.id === lease.sessionId) : undefined;
   // A file's page that hasn't named itself yet goes by the file's name, which its tab holds.
   const named = page.webContentsId !== null && !(tab.file && !page.title);
   const title = named ? browserTitle(page.title, page.url) : browserTitle(tab.title, tab.url);
@@ -721,10 +731,10 @@ function BrowserTabFace({ tab, bare = false }: { tab: Extract<Tab, { kind: "brow
         <PageIcon tab={tab} loading={page.loading} favicon={page.favicon} />
       </span>
       {!bare && <span className="min-w-0 flex-1 truncate">{title}</span>}
-      {/* An agent driving the page wears its face on the tab; the page's own bar has the way to take it back. */}
-      {lease?.sessionId && (
+      {/* Whoever drives the page shows on the tab; the page's own bar has the way to take it back. */}
+      {lease && driver && (
         <span title={`${lease.holder} is using this page`} className="flex shrink-0 items-center" data-tab-driver={lease.holder}>
-          <AgentAvatar seed={lease.sessionId} className="size-3.5" />
+          <DriverFace session={driver} className="size-3.5" />
         </span>
       )}
     </>
