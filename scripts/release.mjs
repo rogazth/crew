@@ -90,7 +90,13 @@ await edit("package.json", (text) =>
 // The lockfile carries the version twice: at the top and under packages[""].
 await edit("package-lock.json", (text) => {
   const top = replaceOnce(text, `^  "version": "${current}",$`, `  "version": "${version}",`, "package-lock.json");
-  return replaceOnce(top, `^      "version": "${current}",$`, `      "version": "${version}",`, "package-lock.json");
+  // Keyed on the name, since a dependency can sit at the same version.
+  return replaceOnce(
+    top,
+    `^      "name": "crew",\\n      "version": "${current}",$`,
+    `      "name": "crew",\n      "version": "${version}",`,
+    "package-lock.json",
+  );
 });
 await edit("Cargo.toml", (text) =>
   replaceOnce(text, `^version = "${current}"$`, `version = "${version}"`, "Cargo.toml"),
