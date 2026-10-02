@@ -73,11 +73,17 @@ export const createSession = (
     name: string;
     provider: string;
     model: string;
+    /** Left out, the CLI's own. */
+    effort?: string;
     description: string;
     autonomy: Autonomy;
     worktree?: string | null;
   },
 ): Promise<Session> => client.request("session_create", { workspaceId, kind, ...input });
+
+/** The composer's chips: model, effort and access. Every window hears it as `session-updated`. */
+export const setSessionOptions = (id: string, input: { model: string; effort: string; autonomy: Autonomy }): Promise<void> =>
+  client.request("session_set_options", { id, ...input });
 
 export const updateSession = (
   id: string,

@@ -9,6 +9,7 @@ import type { BlockingScreen } from "../lib/blockingScreen";
 import {
   approvalKeys,
   messageKeys,
+  modeKeys,
   ptyQueue,
   questionKeys,
   stopKeys,
@@ -18,7 +19,9 @@ import {
 import { delivered, openQuestion, queuedBlock, withAsk, type Queued } from "../lib/sessionChat";
 import { holdHistory, loadEarlierHistory, readHistory, subscribeHistory } from "../lib/sessionHistory";
 import { answeredAsk, liveHeard, readLive, stoppedTurn, subscribeLive } from "../lib/sessionLive";
-import { providerLine } from "../lib/providers";
+import { providerLine, type AgentChoice } from "../lib/providers";
+import { applyFor, readLaunched, setLaunched, subscribeLaunched } from "../lib/sessionOptions";
+import { quotePath } from "../lib/terminalPaths";
 import { reportsLive, startsAtLaunch } from "../lib/sessionView";
 import type { Session } from "../lib/types";
 import { AlwaysAllow } from "./chat/context";
@@ -35,6 +38,8 @@ type Props = {
   /** The terminal's own reading of whether the CLI is busy: its title, its output. */
   busy: boolean;
   onShowTerminal: () => void;
+  /** Ends the CLI and starts it again on its conversation, with the row's options and `message` to start on. */
+  onRestart: (message: string) => Promise<void>;
 };
 
 /** What each session's chat had in its composer; the chat comes and goes with the setting and the tab. */
@@ -47,7 +52,7 @@ const pending = new Map<string, Queued[]>();
  * the terminal is the only thing talking to the provider: the chat reads its
  * history, types into it, and answers what it asks with the keys it expects.
  */
-export function SessionChat({ session, ptyId, cwd, active, blocked, busy, onShowTerminal }: Props) {
+export function SessionChat({ session, ptyId, cwd, active, blocked, busy, onShowTerminal, onRestart }: Props) {
   const id = session.id;
   const [draft, setDraft] = useState(() => drafts.get(id) ?? "");
   const [files, setFiles] = useState<AttachedFile[]>([]);
@@ -109,6 +114,45 @@ export function SessionChat({ session, ptyId, cwd, active, blocked, busy, onShow
   }, []);
   const over = useFileDrop(root, addPaths);
 
+  const launched = useSyncExternalStore(
+    useCallback((listener: () => void) => subscribeLaunched(id, listener), [id]),
+    () => readLaunched(id),
+  );
+  const apply = applyFor(session, launched);
+
+  // ⇧Tab is the one change Claude takes as it runs: it lasts the session and saves nothing.
+  // One walk at a time: presses counted from a mode the last walk is still leaving would overshoot.
+  const shifting = useRef<Promise<boolean> | null>(null);
+  const shiftMode = useCallback(
+    (presses: number) => {
+      if (shifting.current) return shifting.current;
+      const running = readLaunched(id);
+      if (!running) return Promise.resolve(true);
+      const walk = type(modeKeys(presses)).then((ok) => {
+        if (ok) setLaunched(id, { ...running, access: session.autonomy });
+        shifting.current = null;
+        return ok;
+      });
+      shifting.current = walk;
+      return walk;
+    },
+    [id, session.autonomy, type],
+  );
+
+  const changeOptions = useCallback(
+    (next: AgentChoice) => {
+      void api.setSessionOptions(id, { model: next.model, effort: next.effort, autonomy: next.access }).catch(() => {});
+    },
+    [id],
+  );
+
+  // A mode change reaches an idle CLI at once; mid-turn or on a prompt, keys would answer something else.
+  const idle = ready && !working && !ask;
+  const presses = apply.kind === "keys" ? apply.presses : 0;
+  useEffect(() => {
+    if (presses > 0 && idle) void shiftMode(presses);
+  }, [presses, idle, shiftMode]);
+
   const submit = useCallback(() => {
     const text = draft.trim();
     if ((!text && files.length === 0) || !ready) return;
@@ -118,10 +162,19 @@ export function SessionChat({ session, ptyId, cwd, active, blocked, busy, onShow
     // The ones the history has by now go; this one waits for its turn.
     keepQueued(() => [...waiting, sent]);
     const paths = files.map((file) => file.path);
-    void type(messageKeys(session.provider, text, paths)).then((ok) => {
-      if (!ok) keepQueued((prev) => prev.filter((row) => row.id !== sent.id));
-    });
-  }, [draft, editDraft, files, keepQueued, ready, session.provider, type, waiting]);
+    const now = applyFor(session, readLaunched(id));
+    if (now.kind === "relaunch") {
+      // The message is the restarted CLI's first: no keys to time against its start.
+      void onRestart([...paths.map(quotePath), text].filter(Boolean).join(" "));
+      return;
+    }
+    const mode = now.kind === "keys" ? shiftMode(now.presses) : Promise.resolve(true);
+    void mode
+      .then(() => type(messageKeys(session.provider, text, paths)))
+      .then((ok) => {
+        if (!ok) keepQueued((prev) => prev.filter((row) => row.id !== sent.id));
+      });
+  }, [draft, editDraft, files, id, keepQueued, onRestart, ready, session, shiftMode, type, waiting]);
 
   // Esc takes back what the CLI had not started on: Claude puts it back on its
   // own line, where the next send clears it. It is not coming.
@@ -202,6 +255,8 @@ export function SessionChat({ session, ptyId, cwd, active, blocked, busy, onShow
             onApprove={approve}
             onAnswer={reply}
             loading={history.loading}
+            onOptions={changeOptions}
+            optionsPending={apply.kind === "relaunch"}
           />
         </AlwaysAllow>
       )}

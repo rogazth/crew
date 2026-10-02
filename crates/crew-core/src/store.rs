@@ -379,6 +379,18 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         )?;
         tx.commit()?;
     }
+    if current < 24 {
+        let tx = conn.unchecked_transaction()?;
+        // How hard its model thinks, beside the model; '' is the CLI's own setting.
+        if !has_column(&tx, "sessions", "effort")? {
+            tx.execute_batch("ALTER TABLE sessions ADD COLUMN effort TEXT NOT NULL DEFAULT '';")?;
+        }
+        tx.execute(
+            "INSERT INTO schema_migrations (version, applied_at) VALUES (24, ?1)",
+            params![now_millis()],
+        )?;
+        tx.commit()?;
+    }
     Ok(())
 }
 

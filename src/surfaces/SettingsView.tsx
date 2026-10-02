@@ -24,7 +24,16 @@ import { bindingGroups } from "../lib/commandGroups";
 import { commandKeys } from "../lib/commands";
 import { BROWSER_CLICK } from "../lib/external";
 import { cliHost } from "../lib/host";
-import { PROVIDERS } from "../lib/providers";
+import {
+  ACCESSES,
+  DEFAULT_EFFORT,
+  EFFORT_LABELS,
+  PROVIDERS,
+  accessesOf,
+  effortsOf,
+  fitChoice,
+  type Effort,
+} from "../lib/providers";
 import { settingsSection, type SettingsSectionId } from "../lib/settings";
 import type { Workspace } from "../lib/types";
 import type { TabScope } from "../lib/worktrees";
@@ -310,15 +319,38 @@ function Providers() {
       <SettingsSection title="New sessions">
         <SettingsRow
           label="Default agent"
-          description={`What ${commandKeys("new-session")} opens. Default runs the model the CLI is configured with.`}
+          description={`What ${commandKeys("new-session")} and Home open. Default runs the model the CLI is configured with.`}
         >
           <div className="w-72">
             <ModelPicker
               provider={preferred.provider}
               model={preferred.model}
-              onChange={(provider, model) => update({ provider, model })}
+              onChange={(provider, model) => update(fitChoice({ ...preferred, provider, model }))}
             />
           </div>
+        </SettingsRow>
+        {effortsOf(preferred.provider, preferred.model).length > 0 && (
+          <SettingsRow label="Effort" description="How hard the model thinks. Default leaves it to the CLI.">
+            <Select
+              label="Effort"
+              className="w-40"
+              value={preferred.effort || "default"}
+              onChange={(effort) => update({ ...preferred, effort: effort === "default" ? DEFAULT_EFFORT : (effort as Effort) })}
+              options={[
+                { value: "default", label: "Default" },
+                ...effortsOf(preferred.provider, preferred.model).map((effort) => ({ value: effort, label: EFFORT_LABELS[effort] })),
+              ]}
+            />
+          </SettingsRow>
+        )}
+        <SettingsRow label="Access" description={ACCESSES.find((a) => a.id === preferred.access)?.description ?? ""}>
+          <Select
+            label="Access"
+            className="w-40"
+            value={preferred.access}
+            onChange={(access) => update({ ...preferred, access })}
+            options={ACCESSES.filter((a) => accessesOf(preferred.provider).includes(a.id)).map((a) => ({ value: a.id, label: a.label }))}
+          />
         </SettingsRow>
       </SettingsSection>
       <SettingsSection title="Installed">

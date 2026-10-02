@@ -9,13 +9,26 @@ type Options = {
   /** Claude already has a transcript for its current session. Other providers resume by `providerSessionId`. */
   resume: boolean;
   theme: ClaudeTheme;
-  /** Settings bypasses permissions: the CLI runs without asking. */
+  /** Settings bypasses permissions: the CLI runs without asking, whatever the session's access. */
   bypass?: boolean;
   /** Where it runs: Codex is told to trust it, rather than ask. */
   cwd?: string;
-  /** The first message, typed in before the session existed; only its first launch carries it. */
+  /** A message the CLI starts on: the first one, or the one a relaunch carries. */
   prompt?: string;
 };
+
+/** The model, effort and access a CLI starts in: what the session's row says, as flags. */
+export function optionArgs(session: Pick<Session, "provider" | "model" | "effort" | "autonomy">, bypass = false): string[] {
+  const provider = providerOf(session.provider);
+  if (!provider) return [];
+  const access = bypass ? "full" : session.autonomy;
+  const effort = provider.efforts.find((e) => e === session.effort);
+  return [
+    ...(session.model ? [provider.modelFlag, session.model] : []),
+    ...(effort ? provider.effortArgs(effort) : []),
+    ...(provider.access[access] ?? provider.access.ask ?? []),
+  ];
+}
 
 /**
  * argv for the provider CLI that fills a session's terminal. Crew's session id
@@ -24,12 +37,14 @@ type Options = {
  * `--name` is deliberately absent: it lands as a `custom-title`, which outranks
  * the name Claude generates, so passing one means Claude never names anything.
  * Claude paints from its own configured theme and never asks the terminal, so
- * the theme is forced to match the app.
+ * the theme is forced to match the app. Model, effort and access go on every
+ * launch, a resume too: a relaunch is how a change to them reaches the CLI,
+ * since its own `/model` and `/effort` would rewrite the user's defaults.
  */
 export function sessionCommand(session: Session, { resume, theme, bypass = false, cwd, prompt }: Options): string[] {
   const provider = providerOf(session.provider);
   if (!provider) return [session.provider];
-  const bypassing = bypass ? [provider.bypassFlag] : [];
+  const options = optionArgs(session, bypass);
   const first = prompt ? provider.promptArgs(prompt) : [];
   if (provider.binding !== "own") {
     const bound = session.providerSessionId;
@@ -37,17 +52,14 @@ export function sessionCommand(session: Session, { resume, theme, bypass = false
       provider.binary,
       ...(provider.id === "codex" && cwd ? codexOverrides(cwd) : []),
       ...(bound ? provider.resumeArgs(bound) : []),
-      ...(session.model ? [provider.modelFlag, session.model] : []),
-      ...bypassing,
+      ...options,
       ...first,
     ];
   }
   const argv = [provider.binary, "--settings", JSON.stringify({ theme, hooks: bindHooks(session.id) })];
   const id = claudeSessionId(session);
-  if (resume) return [...argv, "--resume", id, ...bypassing];
-  argv.push("--session-id", id);
-  if (session.model) argv.push("--model", session.model);
-  return [...argv, ...bypassing, ...first];
+  argv.push(...(resume ? ["--resume", id] : ["--session-id", id]));
+  return [...argv, ...options, ...first];
 }
 
 /** What the chat follows a session's CLI by: its turns, and what it stops to ask. */

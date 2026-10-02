@@ -91,6 +91,10 @@ try {
 }
 const resumeId = flag("--resume");
 const model = flag("--model");
+// ⇧Tab walks the modes as Claude Code 2.1.288 does without bypass on offer;
+// each user record carries the one it was sent in, as the real transcript's do.
+const MODES = ["default", "acceptEdits", "plan", "auto"];
+let mode = argv.includes("--dangerously-skip-permissions") ? "bypassPermissions" : flag("--permission-mode") || "default";
 let sessionId = resumeId || flag("--session-id") || randomUUID();
 
 // Claude files a project's sessions under its cwd with every UTF-16 unit that
@@ -268,7 +272,7 @@ function submit(line) {
     title(IDLE);
     return prompt();
   }
-  record({ type: "user", message: { role: "user", content: text } });
+  record({ type: "user", permissionMode: mode, message: { role: "user", content: text } });
   turnStarted = Date.now();
   if (text.startsWith("!")) {
     const result = spawnSync("sh", ["-c", text.slice(1)], { cwd: CWD, encoding: "utf8" });
@@ -486,6 +490,11 @@ function feed(data) {
       i += 1;
       continue;
     }
+    if (data.startsWith("\x1b[Z", i)) {
+      if (MODES.includes(mode)) mode = MODES[(MODES.indexOf(mode) + 1) % MODES.length];
+      i += 3;
+      continue;
+    }
     if (data[i] === "\x1b") {
       // CSI (ESC [ … final byte), SS3 (ESC O x) or a lone Alt+key: none of them type text.
       if (data[i + 1] === "[") {
@@ -523,21 +532,22 @@ function start() {
   out("\x1b[?2004h\x1b[?1004h");
   out(`Fake Claude Code${model ? ` (${model})` : ""}\r\n`);
   out(`  session ${sessionId}\r\n  cwd ${CWD}\r\n`);
-  if (resumeId) {
-    out("  resumed\r\n");
-    redraw(() => {
-      title(IDLE);
-      out("> ");
-    });
-  } else {
+  // A message after `--` is the first turn, a resume's too (`claude -r <id> -- "query"`).
+  const dash = argv.indexOf("--");
+  const first = dash >= 0 ? argv.slice(dash + 1).join(" ") : "";
+  const ready = () => {
     title(IDLE);
     out("> ");
-    const dash = argv.indexOf("--");
-    const first = dash >= 0 ? argv.slice(dash + 1).join(" ") : "";
     if (first) {
       out(first);
       submit(first);
     }
+  };
+  if (resumeId) {
+    out("  resumed\r\n");
+    redraw(ready);
+  } else {
+    ready();
   }
 }
 

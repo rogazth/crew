@@ -13,6 +13,8 @@ type CreateInput = {
   name: string;
   provider: string;
   model: string;
+  /** Left out, the CLI's own. */
+  effort?: string;
   description: string;
   autonomy: Autonomy;
   /** The worktree it runs in; left out, the workspace folder. */
@@ -126,6 +128,9 @@ export function useSessions(workspaceId: string | null) {
       patchSession(row.id, (session) => ({
         ...session,
         name: row.name,
+        model: row.model,
+        effort: row.effort,
+        autonomy: row.autonomy,
         providerSessionId: row.providerSessionId,
         status: session.status === 'done' ? row.status : session.status,
       }));

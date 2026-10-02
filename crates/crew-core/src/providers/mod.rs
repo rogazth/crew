@@ -531,6 +531,7 @@ mod tests {
         let persona = persona_prompt("Planner", "You keep the roadmap.", Some("You have: x."));
         let args = claude::build_claude_spawn_args(&claude::ClaudeSpawn {
             model: Some("claude-haiku-4-5-20251001".into()),
+            effort: None,
             session_id: Some("sid".into()),
             resume: None,
             replay_user_messages: false,
@@ -548,6 +549,41 @@ mod tests {
         assert!(text.trim_end().ends_with("y ahora?"), "{text}");
     }
 
+    /// What the composer picks reaches the CLI: the mode it starts in, and
+    /// how hard its model thinks.
+    #[test]
+    fn access_and_effort_become_flags() {
+        let claude = |autonomy| {
+            claude::build_claude_spawn_args(&claude::ClaudeSpawn {
+                model: None,
+                effort: Some("xhigh".into()),
+                session_id: None,
+                resume: None,
+                replay_user_messages: false,
+                system_prompt: None,
+                autonomy,
+                mcp_config: None,
+            })
+        };
+        let pair = |args: &[String], flag: &str, value: &str| args.windows(2).any(|w| w[0] == flag && w[1] == value);
+        assert!(pair(&claude(Autonomy::Edits), "--permission-mode", "acceptEdits"));
+        assert!(pair(&claude(Autonomy::Auto), "--permission-mode", "auto"));
+        assert!(pair(&claude(Autonomy::Ask), "--permission-mode", "default"));
+        assert!(pair(&claude(Autonomy::Ask), "--effort", "xhigh"));
+        assert!(!claude(Autonomy::Full).iter().any(|a| a == "--permission-mode"));
+        let codex = codex::build_codex_spawn_args(&codex::CodexSpawn {
+            prompt: "hi".into(),
+            resume: None,
+            model: None,
+            effort: Some("high".into()),
+            cwd: None,
+            autonomy: Autonomy::Ask,
+            mcp: None,
+            mcp_env: Vec::new(),
+        });
+        assert!(pair(&codex, "-c", "model_reasoning_effort=\"high\""), "{codex:?}");
+    }
+
     /// The whole point: an agent's memory is the tail Crew hands it, so nothing
     /// asks a CLI to pick a conversation back up for an agent's turn.
     #[test]
@@ -555,6 +591,7 @@ mod tests {
         let runs = [
             claude::build_claude_spawn_args(&claude::ClaudeSpawn {
                 model: None,
+                effort: None,
                 session_id: Some("sid".into()),
                 resume: None,
                 replay_user_messages: false,
@@ -566,6 +603,7 @@ mod tests {
                 prompt: "hi".into(),
                 resume: None,
                 model: None,
+                effort: None,
                 cwd: Some("/tmp".into()),
                 autonomy: Autonomy::Ask,
                 mcp: None,
@@ -599,6 +637,7 @@ mod tests {
     fn a_child_carries_its_conversation_on_the_way_each_cli_takes_it() {
         let claude = claude::build_claude_spawn_args(&claude::ClaudeSpawn {
             model: None,
+            effort: None,
             session_id: Some("sid".into()),
             resume: Some("conv-1".into()),
             replay_user_messages: true,
@@ -614,6 +653,7 @@ mod tests {
             prompt: "more".into(),
             resume: Some("thread-1".into()),
             model: Some("gpt".into()),
+            effort: None,
             cwd: Some("/work".into()),
             autonomy: Autonomy::Ask,
             mcp: None,

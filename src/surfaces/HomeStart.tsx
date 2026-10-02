@@ -1,16 +1,15 @@
 import { ArrowUpIcon, BotIcon, FolderPlusIcon, GlobeIcon, type LucideIcon as Icon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { CrewGlyph } from "../chrome/CrewGlyph";
-import { Select } from "../chrome/kit";
-import { ProviderIcon } from "../chrome/ProviderIcon";
+import { AccessPicker, ModelControls } from "../chrome/ComposerControls";
 import { useDefaultAgent } from "../hooks/useDefaultAgent";
-import type { ProviderId } from "../lib/providers";
+import type { AgentChoice } from "../lib/providers";
 
 type Props = {
   /** No project is open yet: the page greets a new user and shows the way in. */
   firstRun: boolean;
-  /** A new session in home, with `text` as its first message. */
-  onAsk: (text: string, provider: ProviderId) => void;
+  /** A new session in home, with `text` as its first message, in what the chips say. */
+  onAsk: (text: string, choice: AgentChoice) => void;
   onOpenFolder: () => void;
   onNewAgent: () => void;
   onOpenBrowser: () => void;
@@ -20,13 +19,13 @@ const SUGGESTIONS = ["Explain a concept", "Draft an email", "Write a shell one-l
 
 /**
  * Home with no tab open: a composer in the middle of the page. What is sent
- * starts a session in home's folder with that message, in the provider picked
- * here; the tab it opens is the session's, chat or terminal as Settings say.
+ * starts a session in home's folder with that message, in the model, effort
+ * and access the chips say; the tab it opens is the session's, chat or
+ * terminal as Settings say. The chips are the default every new session
+ * starts with, so a pick here is the next ⌘N's too.
  */
 export function HomeStart({ firstRun, onAsk, onOpenFolder, onNewAgent, onOpenBrowser }: Props) {
-  const { effective, installed } = useDefaultAgent();
-  const [picked, setPicked] = useState<ProviderId | null>(null);
-  const provider = picked && installed.some((p) => p.id === picked) ? picked : effective.provider;
+  const { effective, update } = useDefaultAgent();
   const [draft, setDraft] = useState("");
   const field = useRef<HTMLTextAreaElement>(null);
 
@@ -36,7 +35,7 @@ export function HomeStart({ firstRun, onAsk, onOpenFolder, onNewAgent, onOpenBro
     const text = draft.trim();
     if (!text) return;
     setDraft("");
-    onAsk(text, provider);
+    onAsk(text, effective);
   };
 
   return (
@@ -77,25 +76,20 @@ export function HomeStart({ firstRun, onAsk, onOpenFolder, onNewAgent, onOpenBro
             className="crew-composer-field resize-none text-text placeholder:text-placeholder"
           />
           <div className="mt-1.5 flex h-8 items-center justify-between gap-2">
-            <Select
-              label="Provider"
-              value={provider}
-              onChange={setPicked}
-              className="w-40 rounded-full! ring-hairline!"
-              options={installed.map((p) => ({
-                value: p.id,
-                label: p.label,
-                icon: <ProviderIcon provider={p.id} className="size-3.5" />,
-              }))}
-            />
-            <button
-              type="submit"
-              aria-label="Send"
-              disabled={!draft.trim()}
-              className="grid size-[30px] place-items-center rounded-full bg-text text-inverse transition-colors focus-visible:ring-[1.5px] focus-visible:ring-focus/50 focus-visible:outline-none disabled:bg-hover disabled:text-placeholder"
-            >
-              <ArrowUpIcon className="size-4" />
-            </button>
+            <div className="flex min-w-0 items-center gap-1.5">
+              <ModelControls value={effective} onChange={update} />
+            </div>
+            <div className="flex shrink-0 items-center gap-1.5">
+              <AccessPicker provider={effective.provider} value={effective.access} onChange={(access) => update({ ...effective, access })} />
+              <button
+                type="submit"
+                aria-label="Send"
+                disabled={!draft.trim()}
+                className="grid size-[30px] place-items-center rounded-full bg-text text-inverse transition-colors focus-visible:ring-[1.5px] focus-visible:ring-focus/50 focus-visible:outline-none disabled:bg-hover disabled:text-placeholder"
+              >
+                <ArrowUpIcon className="size-4" />
+              </button>
+            </div>
           </div>
         </form>
 

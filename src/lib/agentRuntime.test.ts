@@ -33,6 +33,7 @@ const agent = {
   name: "Planner",
   provider: "claude",
   model: "m",
+  effort: "",
   providerSessionId: null,
   worktree: null,
   description: "",

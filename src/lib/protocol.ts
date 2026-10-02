@@ -636,7 +636,7 @@ offset?: number, sort?: SearchSort, };
 
 export type SearchSort = "relevance" | "newest";
 
-export type Session = { id: string, workspaceId: string, kind: string, name: string, provider: string, model: string, providerSessionId: string | null, description: string, notifications: boolean, autonomy: string, status: string, 
+export type Session = { id: string, workspaceId: string, kind: string, name: string, provider: string, model: string, effort: string, providerSessionId: string | null, description: string, notifications: boolean, autonomy: string, status: string, 
 /**
  * The git worktree it runs in; `None` is the workspace folder.
  */
@@ -672,7 +672,11 @@ questions: Array<Question>,
  */
 always: boolean, };
 
-export type SessionCreate = { workspaceId: string, kind: string, name: string, provider: string, model: string, description: string, autonomy: string, 
+export type SessionCreate = { workspaceId: string, kind: string, name: string, provider: string, model: string, 
+/**
+ * The model's reasoning effort; empty or absent is the CLI's own setting.
+ */
+effort?: string, description: string, autonomy: string, 
 /**
  * The git worktree the session runs in; absent means the workspace folder.
  */
@@ -755,6 +759,11 @@ providerSessionId?: string, updatedAt: number, };
  * The chat answered ask `ask_id` with keys.
  */
 export type SessionLiveAnswered = { id: string, askId: number, };
+
+/**
+ * What a session's composer changes: its model, effort and autonomy.
+ */
+export type SessionOptions = { id: string, model: string, effort: string, autonomy: string, };
 
 export type SessionStatusEvent = { sessionId: string, status: string, providerSessionId?: string, updatedAt: number, };
 

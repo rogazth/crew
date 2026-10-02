@@ -32,7 +32,7 @@ use crew_core::worktree;
 use crew_protocol::{
     self as proto, Auth, DaemonInfo, Id, IdName, IdStatus, Ids, Key, KeyValue, ListProjectFiles, Name, NamePath, Names, ProviderDiscover,
     OptionalId, PathArg, PathBytes, PathContents, PtyAck, PtyAttach, PtyAttached, PtyDetach, PtyKill, PtyResize, PtySpawn, PtyWrite,
-    RemoteEnv, Request, RoutineRunNow, RoutineUpsert, SessionCreate, SessionCreated, SessionId, SessionUpdated, SessionUpdate, SessionsDeleted,
+    RemoteEnv, Request, RoutineRunNow, RoutineUpsert, SessionCreate, SessionCreated, SessionId, SessionOptions, SessionUpdated, SessionUpdate, SessionsDeleted,
     SessionsRetention, TempFile,
     SearchQuery, TranscriptApply, TranscriptTail, TurnAnswer, TurnRespond,
     TurnStart, TurnStarted, WorkspaceId, WorktreeAdd, WorktreeRemove,
@@ -517,6 +517,7 @@ fn proto_session(row: &crew_core::session::Session) -> proto::Session {
         name: row.name.clone(),
         provider: row.provider.clone(),
         model: row.model.clone(),
+        effort: row.effort.clone(),
         provider_session_id: row.provider_session_id.clone(),
         description: row.description.clone(),
         notifications: row.notifications,
@@ -1433,7 +1434,7 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
             let p: SessionCreate = parse(params)?;
             let store = hosts.store.clone();
             json(block(move || {
-                session::create_in_worktree(
+                let mut row = session::create_in_worktree(
                     &store,
                     p.workspace_id,
                     p.kind,
@@ -1443,9 +1444,29 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
                     p.description,
                     p.autonomy,
                     p.worktree,
-                )
+                )?;
+                if let Some(effort) = p.effort.filter(|effort| !effort.is_empty()) {
+                    session::set_options(&store, row.id.clone(), row.model.clone(), effort.clone(), row.autonomy.clone())?;
+                    row.effort = effort;
+                }
+                Ok::<_, String>(row)
             })
             .await?)
+        }
+        "session_set_options" => {
+            let p: SessionOptions = parse(params)?;
+            let store = hosts.store.clone();
+            let id = p.id.clone();
+            let row = block(move || {
+                session::set_options(&store, p.id, p.model, p.effort, p.autonomy)?;
+                session::get(&store, id)
+            })
+            .await?;
+            // Every window's composer shows the same chips.
+            if let Some(row) = row {
+                hosts.hub.emit("session-updated", SessionUpdated { session: proto_session(&row) });
+            }
+            Ok(Value::Null)
         }
         "session_update" => {
             let p: SessionUpdate = parse(params)?;

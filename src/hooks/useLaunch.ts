@@ -1,7 +1,7 @@
 import { useCallback } from "react";
 import type { Launch } from "../chrome/TabLauncher";
 import { setFirstPrompt } from "../lib/firstPrompt";
-import { DEFAULT_MODEL, type ProviderId } from "../lib/providers";
+import { DEFAULT_MODEL, fitChoice, type AgentChoice, type ProviderId } from "../lib/providers";
 import type { Session, StubKind } from "../lib/types";
 import { nextSessionName } from "../lib/workspaces";
 import { useDefaultAgent } from "./useDefaultAgent";
@@ -26,17 +26,24 @@ export function useLaunch({ sessions, worktree, create, openSession, openStub, o
   // Sessions open straight away; the name is derived, never prompted.
   const newSession = useCallback(
     /**
-     * `place` puts it in a worktree other than the one on screen; null is the
-     * main checkout. `prompt` is its first message, handed to the CLI as it starts.
+     * `pick` is a whole choice, as Home's composer makes one, or a provider,
+     * which takes the default's model when it is the default's and its effort
+     * and access where they fit. `place` puts it in a worktree other than the
+     * one on screen; null is the main checkout. `prompt` is its first message,
+     * handed to the CLI as it starts.
      */
-    async (provider: ProviderId = defaultAgent.provider, place: string | null = worktree, prompt?: string) => {
-      const model = provider === defaultAgent.provider ? defaultAgent.model : DEFAULT_MODEL;
+    async (pick: ProviderId | AgentChoice = defaultAgent, place: string | null = worktree, prompt?: string) => {
+      const choice =
+        typeof pick === "object"
+          ? pick
+          : fitChoice({ ...defaultAgent, provider: pick, model: pick === defaultAgent.provider ? defaultAgent.model : DEFAULT_MODEL });
       const session = await create("terminal", {
-        name: nextSessionName(sessions, provider),
-        provider,
-        model,
+        name: nextSessionName(sessions, choice.provider),
+        provider: choice.provider,
+        model: choice.model,
+        effort: choice.effort,
         description: "",
-        autonomy: "ask",
+        autonomy: choice.access,
         worktree: place,
       });
       if (!session) return;

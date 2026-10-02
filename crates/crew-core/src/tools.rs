@@ -1426,6 +1426,7 @@ mod tests {
             name: "Someone".into(),
             provider: "claude".into(),
             model: String::new(),
+            effort: String::new(),
             provider_session_id: None,
             description: String::new(),
             notifications: false,

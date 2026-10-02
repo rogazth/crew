@@ -442,7 +442,7 @@ export function App() {
                 isHome ? (
                   <HomeStart
                     firstRun={workspaces.projects.length === 0}
-                    onAsk={(text, provider) => void newSession(provider, null, text)}
+                    onAsk={(text, choice) => void newSession(choice, null, text)}
                     onOpenFolder={envs.openWorkspace}
                     onNewAgent={() => sheet.newAgent()}
                     onOpenBrowser={() => nav.openBrowser("")}

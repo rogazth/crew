@@ -16,10 +16,16 @@ pub struct Session {
     pub name: String,
     pub provider: String,
     pub model: String,
+    /// The model's reasoning effort ("low" … "max"); empty is the CLI's own setting.
+    #[serde(default)]
+    pub effort: String,
     pub provider_session_id: Option<String>,
     pub description: String,
     pub notifications: bool,
-    /// "ask" prompts for every tool; "full" lets the provider run unattended.
+    /// What the provider may do without asking: "ask" prompts for every tool,
+    /// "edits" lets it edit files, "auto" lets it run what its own reviewer
+    /// deems routine, "full" lets it run unattended. Crew's own tools treat
+    /// anything short of "full" as "ask".
     pub autonomy: String,
     /// "idle" | "working" | "needs-input" | "error". Set by the runtime, never by the UI.
     pub status: String,
@@ -51,8 +57,8 @@ pub const SESSION_COLUMNS: &str = "s.id, s.workspace_id, s.kind, COALESCE(a.name
                                    s.provider_session_id, COALESCE(a.description, s.description),
                                    COALESCE(a.notifications, s.notifications),
                                    s.status, s.created_at, s.updated_at, COALESCE(a.autonomy, s.autonomy), s.worktree,
-                                   s.agent_id, s.parent_id, s.cursor";
-pub const SESSION_COLUMN_COUNT: usize = 17;
+                                   s.agent_id, s.parent_id, s.cursor, s.effort";
+pub const SESSION_COLUMN_COUNT: usize = 18;
 
 /// What [`SESSION_COLUMNS`] reads from.
 pub const SESSIONS: &str = "sessions s LEFT JOIN agents a ON a.id = s.agent_id";
@@ -76,6 +82,7 @@ pub fn row_to_session(row: &rusqlite::Row, at: usize) -> rusqlite::Result<Sessio
         agent_id: row.get(at + 14)?,
         parent_id: row.get(at + 15)?,
         cursor: row.get(at + 16)?,
+        effort: row.get(at + 17)?,
     })
 }
 
@@ -221,6 +228,7 @@ fn insert(
         name,
         provider,
         model,
+        effort: String::new(),
         provider_session_id: None,
         description,
         notifications: true,
@@ -333,12 +341,35 @@ pub fn update(
     Ok(())
 }
 
+/// The autonomies a session can have, least to most.
+pub const AUTONOMIES: [&str; 4] = ["ask", "edits", "auto", "full"];
+
 fn autonomy_or_default(value: String) -> String {
-    if value == "full" {
+    if AUTONOMIES.contains(&value.as_str()) {
         value
     } else {
         "ask".into()
     }
+}
+
+/// What the composer's chips change: the model, its effort and what it may do
+/// alone. The provider stays; the autonomy is the agent's when there is one.
+pub fn set_options(store: &Store, id: String, model: String, effort: String, autonomy: String) -> Result<(), String> {
+    let autonomy = autonomy_or_default(autonomy);
+    store.with(|conn| {
+        let tx = conn.unchecked_transaction()?;
+        let now = now_millis();
+        tx.execute(
+            "UPDATE agents SET autonomy = ?2, updated_at = ?3 WHERE id = (SELECT agent_id FROM sessions WHERE id = ?1)",
+            params![id, autonomy, now],
+        )?;
+        tx.execute(
+            "UPDATE sessions SET model = ?2, effort = ?3, autonomy = ?4, updated_at = ?5 WHERE id = ?1",
+            params![id, model, effort, autonomy, now],
+        )?;
+        tx.commit()
+    })?;
+    Ok(())
 }
 
 pub fn rename(store: &Store, id: String, name: String) -> Result<(), String> {

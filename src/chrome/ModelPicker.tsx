@@ -17,17 +17,19 @@ type Props = {
   /** "field" is the sheet's full-width control; "chip" is the composer's compact trigger. */
   trigger?: "field" | "chip";
   disabled?: boolean;
+  /** A running session keeps its CLI: only its own provider's models are offered. */
+  lockProvider?: boolean;
   onChange: (provider: ProviderId, model: string) => void;
 };
 
 /** Providers beside their models, the way ChatGPT and Grok pick one: hover a provider, click a model. */
-export function ModelPicker({ provider, model, trigger = "field", disabled = false, onChange }: Props) {
+export function ModelPicker({ provider, model, trigger = "field", disabled = false, lockProvider = false, onChange }: Props) {
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState<ProviderId>(provider as ProviderId);
   const chip = trigger === "chip";
   const installed = useInstalledProviders(open);
   // The session's own provider stays reachable even after its CLI is gone.
-  const tabs = PROVIDERS.filter((p) => p.id === provider || installed.includes(p));
+  const tabs = PROVIDERS.filter((p) => p.id === provider || (!lockProvider && installed.includes(p)));
 
   function openChange(next: boolean) {
     if (next) setTab(provider as ProviderId);

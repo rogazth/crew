@@ -1176,10 +1176,14 @@ impl TurnHost {
     /// How much a turn may do alone: the session's own autonomy, unless
     /// Settings bypasses permissions for every session.
     fn autonomy(&self, session: &crate::session::Session) -> Autonomy {
-        if session.autonomy == "full" || crate::session::bypass_permissions(&self.store) {
-            Autonomy::Full
-        } else {
-            Autonomy::Ask
+        if crate::session::bypass_permissions(&self.store) {
+            return Autonomy::Full;
+        }
+        match session.autonomy.as_str() {
+            "full" => Autonomy::Full,
+            "auto" => Autonomy::Auto,
+            "edits" => Autonomy::Edits,
+            _ => Autonomy::Ask,
         }
     }
 
@@ -1234,6 +1238,7 @@ impl TurnHost {
         };
         let spawn = ClaudeSpawn {
             model: Some(session.model.clone()).filter(|m| !m.is_empty()),
+            effort: Some(session.effort.clone()).filter(|e| !e.is_empty()),
             session_id: Some(claude_session_id.clone()),
             resume,
             replay_user_messages: session.kind == "child",
@@ -1358,6 +1363,7 @@ impl TurnHost {
                 prompt,
                 resume,
                 model: Some(session.model.clone()).filter(|m| !m.is_empty()),
+                effort: Some(session.effort.clone()).filter(|e| !e.is_empty()),
                 cwd: Some(params.cwd.clone()),
                 autonomy: self.autonomy(&session),
                 mcp,

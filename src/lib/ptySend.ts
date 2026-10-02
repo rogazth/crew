@@ -50,6 +50,15 @@ export function messageKeys(provider: string, text: string, paths: readonly stri
   return keys;
 }
 
+const SHIFT_TAB = "\x1b[Z";
+/** Claude redraws its mode line between presses; one landing mid-redraw is still taken. */
+export const MODE_STEP_MS = 120;
+
+/** Claude's access, `presses` ⇧Tabs along its cycle. It lasts the session; nothing is saved. */
+export function modeKeys(presses: number): Keystroke[] {
+  return Array.from({ length: presses }, (_, at) => ({ data: SHIFT_TAB, wait: at === 0 ? 0 : MODE_STEP_MS }));
+}
+
 /** A second Esc, once the CLI has taken the first as "press again". */
 export const AGAIN_MS = 300;
 

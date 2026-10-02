@@ -1,7 +1,19 @@
 /** Provider + model registry. Adding a provider is a row here, never an `if`. */
 export type ProviderId = "claude" | "cursor" | "codex" | "opencode";
 
-export type Model = { id: string; label: string; note?: string };
+/** How hard the model thinks, least to most. */
+export type Effort = "low" | "medium" | "high" | "xhigh" | "max";
+
+/** What a session may do without asking, least to most. */
+export type Access = "ask" | "edits" | "auto" | "full";
+
+export type Model = {
+  id: string;
+  label: string;
+  note?: string;
+  /** Where its effort stops short of the provider's: Opus 4.5 has no max. */
+  efforts?: Effort[];
+};
 
 /**
  * How a terminal session learns its provider's session id: Crew hands Claude
@@ -18,8 +30,15 @@ export type ProviderDef = {
   modelFlag: string;
   binding: SessionBinding;
   resumeArgs: (id: string) => string[];
-  /** Runs the interactive CLI without asking before it edits or runs anything. */
-  bypassFlag: string;
+  /**
+   * The flags each access starts the CLI in. A mode the CLI has no flag for is
+   * left out, and is not offered for it. Claude's "ask" is said out loud: the
+   * user's own `defaultMode` would otherwise decide where it starts.
+   */
+  access: Partial<Record<Access, string[]>>;
+  /** The efforts its CLI takes, and the flags that set one. None: it has no such knob. */
+  efforts: Effort[];
+  effortArgs: (effort: Effort) => string[];
   /** The first message, handed to the interactive CLI as it starts. After `--`, so it is never read as a flag or a subcommand. */
   promptArgs: (text: string) => string[];
   /**
@@ -38,7 +57,14 @@ export const PROVIDERS: ProviderDef[] = [
     modelFlag: "--model",
     binding: "own",
     resumeArgs: (id) => ["--resume", id],
-    bypassFlag: "--dangerously-skip-permissions",
+    access: {
+      ask: ["--permission-mode", "default"],
+      edits: ["--permission-mode", "acceptEdits"],
+      auto: ["--permission-mode", "auto"],
+      full: ["--dangerously-skip-permissions"],
+    },
+    efforts: ["low", "medium", "high", "xhigh", "max"],
+    effortArgs: (effort) => ["--effort", effort],
     promptArgs: (text) => ["--", text],
     chat: true,
     models: [
@@ -50,9 +76,9 @@ export const PROVIDERS: ProviderDef[] = [
       { id: "claude-opus-4-8", label: "Opus 4.8" },
       { id: "claude-opus-4-7", label: "Opus 4.7" },
       { id: "claude-opus-4-6", label: "Opus 4.6" },
-      { id: "claude-opus-4-5", label: "Opus 4.5" },
+      { id: "claude-opus-4-5", label: "Opus 4.5", efforts: ["low", "medium", "high"] },
       { id: "claude-sonnet-4-6", label: "Sonnet 4.6" },
-      { id: "claude-sonnet-4-5", label: "Sonnet 4.5" },
+      { id: "claude-sonnet-4-5", label: "Sonnet 4.5", efforts: ["low", "medium", "high"] },
     ],
   },
   {
@@ -62,7 +88,10 @@ export const PROVIDERS: ProviderDef[] = [
     modelFlag: "--model",
     binding: "before",
     resumeArgs: (id) => ["--resume", id],
-    bypassFlag: "--force",
+    access: { ask: [], auto: ["--auto-review"], full: ["--force"] },
+    // Its model ids carry their effort: `…-high`.
+    efforts: [],
+    effortArgs: () => [],
     promptArgs: (text) => ["--", text],
     chat: false,
     models: [
@@ -92,7 +121,9 @@ export const PROVIDERS: ProviderDef[] = [
     modelFlag: "-m",
     binding: "after",
     resumeArgs: (id) => ["resume", id],
-    bypassFlag: "--dangerously-bypass-approvals-and-sandbox",
+    access: { ask: [], auto: ["--approve-for-me"], full: ["--dangerously-bypass-approvals-and-sandbox"] },
+    efforts: ["low", "medium", "high", "xhigh"],
+    effortArgs: (effort) => ["-c", `model_reasoning_effort="${effort}"`],
     promptArgs: (text) => ["--", text],
     chat: true,
     models: [
@@ -112,7 +143,9 @@ export const PROVIDERS: ProviderDef[] = [
     modelFlag: "-m",
     binding: "after",
     resumeArgs: (id) => ["--session", id],
-    bypassFlag: "--auto",
+    access: { ask: [], full: ["--auto"] },
+    efforts: [],
+    effortArgs: () => [],
     // Its one positional is the project folder.
     promptArgs: (text) => [`--prompt=${text}`],
     chat: true,
@@ -132,7 +165,28 @@ export const DEFAULT_MODEL = "";
 
 const CLI_DEFAULT: Model = { id: DEFAULT_MODEL, label: "Default", note: "The CLI's own setting" };
 
-export type AgentChoice = { provider: ProviderId; model: string };
+/** What a new session starts with: who runs it, on what, how hard and how freely. */
+export type AgentChoice = { provider: ProviderId; model: string; effort: Effort | ""; access: Access };
+
+/** No `--effort`: the CLI thinks as hard as the user configured it to. */
+export const DEFAULT_EFFORT = "";
+/** A fresh install runs without asking; the composer says so, and one click asks. */
+export const DEFAULT_ACCESS: Access = "full";
+
+export const ACCESSES: { id: Access; label: string; description: string }[] = [
+  { id: "ask", label: "Ask permission", description: "Asks before every edit and command." },
+  { id: "edits", label: "Accept edits", description: "Edits files on its own, asks before commands." },
+  { id: "auto", label: "Auto", description: "Runs routine actions, asks only for risky ones." },
+  { id: "full", label: "Full access", description: "Edits and runs anything without asking." },
+];
+
+export const EFFORT_LABELS: Record<Effort, string> = {
+  low: "Low",
+  medium: "Medium",
+  high: "High",
+  xhigh: "Extra high",
+  max: "Max",
+};
 
 export const providerOf = (id: string): ProviderDef | undefined =>
   PROVIDERS.find((p) => p.id === id);
@@ -146,11 +200,37 @@ export function modelLabel(providerId: string, modelId: string): string {
   return modelsOf(providerId).find((m) => m.id === modelId)?.label ?? modelId;
 }
 
+/** The efforts a model takes: its own, else its provider's. */
+export function effortsOf(providerId: string, modelId: string): Effort[] {
+  const provider = providerOf(providerId);
+  if (!provider) return [];
+  return provider.models.find((m) => m.id === modelId)?.efforts ?? provider.efforts;
+}
+
+/** The accesses a provider's CLI can start in, least to most. */
+export function accessesOf(providerId: string): Access[] {
+  const provider = providerOf(providerId);
+  return ACCESSES.map((a) => a.id).filter((id) => provider?.access[id] !== undefined);
+}
+
+export const accessLabel = (access: string): string => ACCESSES.find((a) => a.id === access)?.label ?? access;
+
+/**
+ * A choice carried to another provider or model keeps what still fits: an
+ * effort it does not take goes back to the CLI's own, an access it has no
+ * mode for asks.
+ */
+export function fitChoice(choice: AgentChoice): AgentChoice {
+  const effort = choice.effort && effortsOf(choice.provider, choice.model).includes(choice.effort) ? choice.effort : DEFAULT_EFFORT;
+  const access = accessesOf(choice.provider).includes(choice.access) ? choice.access : "ask";
+  return { ...choice, effort, access };
+}
+
 /** The preferred provider when its CLI is installed, else the first one that is. */
 export function pickProvider(preferred: AgentChoice, installed: ProviderDef[]): AgentChoice {
   if (installed.some((p) => p.id === preferred.provider)) return preferred;
   const fallback = PROVIDERS.find((p) => installed.includes(p));
-  return fallback ? { provider: fallback.id, model: DEFAULT_MODEL } : preferred;
+  return fallback ? fitChoice({ ...preferred, provider: fallback.id, model: DEFAULT_MODEL }) : preferred;
 }
 
 /** "Claude Opus 5" — the top line of a sidebar row. */
@@ -163,9 +243,14 @@ export function parseAgentChoice(raw: string | null): AgentChoice | null {
   try {
     const value: unknown = JSON.parse(raw ?? "");
     if (typeof value !== "object" || value === null) return null;
-    const { provider, model } = value as Record<string, unknown>;
+    const { provider, model, effort, access } = value as Record<string, unknown>;
     if (typeof provider !== "string" || !providerOf(provider)) return null;
-    return { provider: provider as ProviderId, model: typeof model === "string" ? model : DEFAULT_MODEL };
+    return fitChoice({
+      provider: provider as ProviderId,
+      model: typeof model === "string" ? model : DEFAULT_MODEL,
+      effort: typeof effort === "string" && effort in EFFORT_LABELS ? (effort as Effort) : DEFAULT_EFFORT,
+      access: ACCESSES.some((a) => a.id === access) ? (access as Access) : DEFAULT_ACCESS,
+    });
   } catch {
     return null;
   }

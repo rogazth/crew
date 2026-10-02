@@ -17,8 +17,12 @@ export type SessionKind = "agent" | "terminal" | "child";
 /** Written by whatever runs the session: the terminal, or the daemon's turns. A child adds starting and exited. */
 export type SessionStatus = "starting" | "idle" | "working" | "needs-input" | "done" | "error" | "exited";
 
-/** "ask" routes every tool through Allow/Deny; "full" lets the provider run unattended. */
-export type Autonomy = "ask" | "full";
+/**
+ * What it may do without asking: "ask" routes every tool through Allow/Deny,
+ * "edits" lets file edits through, "auto" leaves routine actions to the
+ * provider's own reviewer, "full" runs unattended.
+ */
+export type Autonomy = "ask" | "edits" | "auto" | "full";
 
 export type Session = {
   id: string;
@@ -27,6 +31,8 @@ export type Session = {
   name: string;
   provider: string;
   model: string;
+  /** How hard its model thinks; empty is the CLI's own setting. */
+  effort: string;
   providerSessionId: string | null;
   /** The git worktree it runs in; null is the workspace folder itself. */
   worktree: string | null;

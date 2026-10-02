@@ -14,6 +14,8 @@ pub struct CodexSpawn {
     /// A thread to carry on (`codex exec resume <id>`), for a child session.
     pub resume: Option<String>,
     pub model: Option<String>,
+    /// `model_reasoning_effort`; `None` is the CLI's own.
+    pub effort: Option<String>,
     pub cwd: Option<String>,
     pub autonomy: Autonomy,
     pub mcp: Option<(String, Vec<String>)>,
@@ -73,6 +75,10 @@ pub fn build_codex_spawn_args(input: &CodexSpawn) -> Vec<String> {
     if let Some(model) = input.model.as_deref().filter(|m| !m.is_empty()) {
         args.push("-m".into());
         args.push(model.into());
+    }
+    if let Some(effort) = input.effort.as_deref().filter(|e| !e.is_empty()) {
+        args.push("-c".into());
+        args.push(format!("model_reasoning_effort=\"{effort}\""));
     }
     if input.autonomy == Autonomy::Full {
         args.push("--dangerously-bypass-approvals-and-sandbox".into());
@@ -194,6 +200,7 @@ mod spawn_tests {
             prompt: "hi".into(),
             resume: None,
             model: None,
+            effort: None,
             cwd: None,
             autonomy: Autonomy::Ask,
             mcp: Some(("/bin/crewd".into(), vec!["--mcp".into()])),
@@ -218,6 +225,7 @@ mod spawn_tests {
             prompt: "hi".into(),
             resume: None,
             model: None,
+            effort: None,
             cwd: None,
             autonomy: Autonomy::Ask,
             mcp: None,

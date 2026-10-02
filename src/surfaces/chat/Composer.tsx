@@ -10,7 +10,10 @@ import {
   type Ref,
 } from "react";
 import { ArrowUpIcon, PaperclipIcon, SquareIcon } from "lucide-react";
+import { AccessPicker, ModelControls } from "../../chrome/ComposerControls";
 import type { AttachedFile } from "../../lib/blocks";
+import { accessesOf, type Access, type AgentChoice, type Effort, type ProviderId } from "../../lib/providers";
+import { nextAccess } from "../../lib/sessionOptions";
 import { completeMention, mentionAt, searchFiles, splitMentions } from "../../lib/mentions";
 import type { ProjectFile, Session } from "../../lib/types";
 import { AttachmentStrip } from "./Attachments";
@@ -35,7 +38,19 @@ type Props = {
   onRemoveFile: (path: string) => void;
   onSend: () => void;
   onStop: () => void;
+  /** The chips changed; absent, the composer has none. */
+  onOptions?: (next: AgentChoice) => void;
+  /** A change the next message carries to the CLI by relaunching it. */
+  optionsPending?: boolean;
 };
+
+/** What the session's row says it runs, as the chips show it. */
+const choiceOf = (session: Session): AgentChoice => ({
+  provider: session.provider as ProviderId,
+  model: session.model,
+  effort: session.effort as Effort | "",
+  access: session.autonomy as Access,
+});
 
 const MAX_FIELD_PX = 160;
 
@@ -55,6 +70,8 @@ export function Composer({
   onRemoveFile,
   onSend,
   onStop,
+  onOptions,
+  optionsPending = false,
 }: Props) {
   const field = useRef<HTMLTextAreaElement>(null);
   const overlay = useRef<HTMLDivElement>(null);
@@ -132,6 +149,13 @@ export function Composer({
         return;
       }
     }
+    // ⇧Tab steps through the access modes, the way it does in Claude's own terminal.
+    if (event.key === "Tab" && event.shiftKey && onOptions) {
+      const next = nextAccess(session.autonomy, accessesOf(session.provider));
+      event.preventDefault();
+      if (next) onOptions({ ...choiceOf(session), access: next });
+      return;
+    }
     if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
     event.preventDefault();
     if (working) onStop();
@@ -202,23 +226,45 @@ export function Composer({
             >
               <PaperclipIcon className="size-4" />
             </button>
+            {onOptions && <ModelControls lockProvider value={choiceOf(session)} onChange={onOptions} />}
           </div>
-          <button
-            type="submit"
-            disabled={!working && !canSend}
-            aria-label={working ? "Stop" : "Send"}
-            className={`flex size-[30px] shrink-0 items-center justify-center rounded-full transition-colors duration-100 focus-visible:ring-[1.5px] focus-visible:ring-focus/50 focus-visible:outline-none ${
-              working || canSend
-                ? "crew-ink hover:bg-accent-hover"
-                : "bg-card text-text-muted"
-            }`}
-          >
-            {working ? <SquareIcon className="size-2.5 fill-current" /> : <ArrowUpIcon className="size-4" />}
-          </button>
+          <div className="flex shrink-0 items-center gap-1.5">
+            {onOptions && (
+              <AccessPicker
+                provider={session.provider}
+                value={session.autonomy as Access}
+                onChange={(access) => onOptions({ ...choiceOf(session), access })}
+                hint="⇧Tab in the message box cycles them."
+              />
+            )}
+            <button
+              type="submit"
+              disabled={!working && !canSend}
+              aria-label={working ? "Stop" : "Send"}
+              className={`flex size-[30px] shrink-0 items-center justify-center rounded-full transition-colors duration-100 focus-visible:ring-[1.5px] focus-visible:ring-focus/50 focus-visible:outline-none ${
+                working || canSend
+                  ? "crew-ink hover:bg-accent-hover"
+                  : "bg-card text-text-muted"
+              }`}
+            >
+              {working ? <SquareIcon className="size-2.5 fill-current" /> : <ArrowUpIcon className="size-4" />}
+            </button>
+          </div>
         </div>
       </form>
       <p className="mt-2 text-center text-[11px] text-placeholder">
-        <kbd className="font-sans">↵</kbd> send · <kbd className="font-sans">⇧↵</kbd> new line · @ file · drop or paste to attach
+        {optionsPending ? (
+          <>The new model and effort apply with your next message, which restarts {session.name} where it left off</>
+        ) : (
+          <>
+            <kbd className="font-sans">↵</kbd> send · <kbd className="font-sans">⇧↵</kbd> new line · @ file · drop or paste to attach
+            {onOptions && (
+              <>
+                {" "}· <kbd className="font-sans">⇧⇥</kbd> access
+              </>
+            )}
+          </>
+        )}
       </p>
     </div>
   );

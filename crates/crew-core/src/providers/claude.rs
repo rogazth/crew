@@ -14,6 +14,8 @@ pub use super::{parse_json_line, try_parse_json_record};
 #[derive(Clone, Debug, PartialEq)]
 pub struct ClaudeSpawn {
     pub model: Option<String>,
+    /// `--effort`: low, medium, high, xhigh or max; `None` is the CLI's own.
+    pub effort: Option<String>,
     pub session_id: Option<String>,
     /// A conversation to carry on (`--resume`), for a child session; an agent's
     /// turns never resume, they start clean with the tail (`session_id`).
@@ -47,15 +49,26 @@ pub fn build_claude_spawn_args(input: &ClaudeSpawn) -> Vec<String> {
         "--settings".into(),
         json!({ "autoMemoryEnabled": false }).to_string(),
     ];
-    if input.autonomy == Autonomy::Full {
-        args.push("--dangerously-skip-permissions".into());
-    } else {
-        args.push("--permission-prompt-tool".into());
-        args.push("stdio".into());
+    match input.autonomy {
+        Autonomy::Full => args.push("--dangerously-skip-permissions".into()),
+        ref mode => {
+            let permission = match mode {
+                Autonomy::Edits => "acceptEdits",
+                Autonomy::Auto => "auto",
+                _ => "default",
+            };
+            args.extend(["--permission-mode".into(), permission.into()]);
+            args.push("--permission-prompt-tool".into());
+            args.push("stdio".into());
+        }
     }
     if let Some(model) = input.model.as_deref().filter(|m| !m.is_empty()) {
         args.push("--model".into());
         args.push(model.into());
+    }
+    if let Some(effort) = input.effort.as_deref().filter(|e| !e.is_empty()) {
+        args.push("--effort".into());
+        args.push(effort.into());
     }
     if let Some(prompt) = input.system_prompt.as_deref().filter(|p| !p.is_empty()) {
         args.push("--append-system-prompt".into());

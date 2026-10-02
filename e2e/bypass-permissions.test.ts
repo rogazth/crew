@@ -1,6 +1,7 @@
 // B1: Settings › General › "Bypass permissions" reaches every provider's CLI.
-// A session opened from ⌘T starts its CLI with the provider's own bypass flag
-// once the setting is on, and without it before. claude is the harness's fake;
+// A fresh install starts sessions with full access; once the default asks, a
+// session opened from ⌘T starts its CLI with the provider's own bypass flag
+// only while the setting is on. claude is the harness's fake;
 // cursor-agent, codex and opencode are stand-ins that only log their argv.
 import assert from "node:assert/strict";
 import { chmod, readFile, writeFile } from "node:fs/promises";
@@ -65,10 +66,20 @@ test("B1: Bypass permissions starts every provider's session with its bypass fla
     if (provider.binary !== "claude") await installFake(crew, provider.binary);
   }
   const page = crew.window;
+  const full = (provider: ProviderDef) => provider.access.full![0]!;
 
+  const claude = PROVIDERS.find((provider) => provider.id === "claude")!;
+  assert.ok((await startSession(crew, claude)).includes(full(claude)), "a fresh install runs with full access");
+
+  // The default the composer's access chip writes, read again by a reloaded window.
+  await crew.request("state_set", {
+    key: "providers:default",
+    value: JSON.stringify({ provider: "claude", model: "", effort: "", access: "ask" }),
+  });
+  await crew.reload();
   for (const provider of PROVIDERS) {
     const argv = await startSession(crew, provider);
-    assert.ok(!argv.includes(provider.bypassFlag), `${provider.label} asks by default: ${argv.join(" ")}`);
+    assert.ok(!argv.includes(full(provider)), `${provider.label} asks once the default does: ${argv.join(" ")}`);
   }
 
   // Settings › General › Bypass permissions, through its confirmation.
@@ -87,6 +98,6 @@ test("B1: Bypass permissions starts every provider's session with its bypass fla
 
   for (const provider of PROVIDERS) {
     const argv = await startSession(crew, provider);
-    assert.ok(argv.includes(provider.bypassFlag), `${provider.label} bypasses: ${argv.join(" ")}`);
+    assert.ok(argv.includes(full(provider)), `${provider.label} bypasses: ${argv.join(" ")}`);
   }
 });

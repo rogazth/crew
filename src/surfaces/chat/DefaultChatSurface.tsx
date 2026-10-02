@@ -29,6 +29,8 @@ export function DefaultChatSurface({
   onApprove,
   onAnswer,
   loading = false,
+  onOptions,
+  optionsPending = false,
 }: ChatSurfaceProps) {
   return (
     <>
@@ -79,6 +81,8 @@ export function DefaultChatSurface({
         onRemoveFile={onRemoveFile}
         onSend={onSend}
         onStop={onStop}
+        {...(onOptions ? { onOptions } : {})}
+        optionsPending={optionsPending}
       />
       {blocks.length === 0 && <div className="min-h-0 flex-[6]" />}
     </>

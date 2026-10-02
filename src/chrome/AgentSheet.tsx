@@ -8,7 +8,7 @@ import { useAgentAvatar } from "../hooks/useAgentAvatar";
 import { useAgentFaces } from "../hooks/useAgentFaces";
 import { useDefaultAgent } from "../hooks/useDefaultAgent";
 import { AGENT_AVATARS, dealSeeds, type AgentAvatarId, type AgentFace } from "../lib/agentAvatar";
-import { DEFAULT_MODEL, DEFAULT_PROVIDER, type ProviderId } from "../lib/providers";
+import { ACCESSES, DEFAULT_MODEL, DEFAULT_PROVIDER, accessesOf, type ProviderId } from "../lib/providers";
 import type { Autonomy, Session, Worktree } from "../lib/types";
 import { branchError, worktreeLabel } from "../lib/worktrees";
 
@@ -190,7 +190,19 @@ export function AgentSheet({ session, worktrees, initialWorktree, existingNames,
             <ModelPicker
               provider={draft.provider}
               model={draft.model}
-              onChange={(provider: ProviderId, model) => update({ provider, model })}
+              onChange={(provider: ProviderId, model) =>
+                update({ provider, model, ...(accessesOf(provider).includes(draft.autonomy) ? {} : { autonomy: "ask" }) })
+              }
+            />
+          </Field>
+
+          <Field label="Access" hint={ACCESSES.find((a) => a.id === draft.autonomy)?.description}>
+            <Select
+              label="Access"
+              className="w-full"
+              value={draft.autonomy}
+              onChange={(autonomy) => update({ autonomy })}
+              options={ACCESSES.filter((a) => accessesOf(draft.provider).includes(a.id)).map((a) => ({ value: a.id, label: a.label }))}
             />
           </Field>
 
@@ -204,12 +216,6 @@ export function AgentSheet({ session, worktrees, initialWorktree, existingNames,
           </Field>
 
           <Card>
-            <Toggle
-              checked={draft.autonomy === "full"}
-              onChange={(checked) => update({ autonomy: checked ? "full" : "ask" })}
-              label="Run autonomously"
-              description="Tools run without asking. Off, every edit and command waits for Allow."
-            />
             <Toggle
               checked={draft.notifications}
               onChange={(checked) => update({ notifications: checked })}

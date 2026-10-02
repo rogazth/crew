@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useThread } from "../hooks/useThread";
 import { answer, respond, send, stop } from "../lib/agentRuntime";
-import { pickFiles, writeTempFile } from "../lib/api";
+import { pickFiles, setSessionOptions, writeTempFile } from "../lib/api";
 import { attachedFrom } from "../lib/attachments";
 import { mentionedFiles } from "../lib/mentions";
 import { useChatActions } from "./chat/context";
@@ -101,6 +101,10 @@ export function AgentChat({ session, cwd, active }: Props) {
         onRemoveFile={(path) => setFiles((prev) => prev.filter((file) => file.path !== path))}
         onApprove={approve}
         onAnswer={reply}
+        // Each turn starts its CLI from the row: the next one runs what the chips say.
+        onOptions={(next) =>
+          void setSessionOptions(session.id, { model: next.model, effort: next.effort, autonomy: next.access }).catch(() => {})
+        }
       />
     </div>
   );

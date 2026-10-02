@@ -236,6 +236,55 @@ test("a question from the CLI is answered from its card, in the CLI's own form",
   assert.deepEqual((answered?.toolUseResult as { answers?: unknown } | undefined)?.answers, { "Tea or coffee?": "Coffee" });
 });
 
+test("the composer's chips reach the CLI: access with ⇧Tab as it runs, effort by resuming it with the next message", async () => {
+  const [workspace] = crew.workspaces;
+  assert.ok(workspace);
+  await crew.request("state_set", { key: "sessions:view", value: "chat" });
+  await crew.request("state_set", {
+    key: "providers:default",
+    value: JSON.stringify({ provider: "claude", model: "", effort: "", access: "ask" }),
+  });
+  await crew.reload();
+  const session = await newTerminal(crew, workspace.id);
+  const chat = chatOf(session);
+  await chat.waitFor();
+  const modes = async () =>
+    (await records(workspace.path, session.id)).flatMap((record) => (record.type === "user" ? [record.permissionMode] : []));
+
+  await sendFromChat(session, "asking first");
+  await chat.getByText("Done.").waitFor();
+  assert.deepEqual(await modes(), ["default"]);
+  const launched = (await crew.claudeLaunches()).length;
+
+  // ⇧Tab in the composer moves the chip and Claude's own mode, with no restart.
+  await chat.getByRole("textbox").press("Shift+Tab");
+  await chat.getByRole("button", { name: "Access" }).getByText("Accept edits").waitFor();
+  await waitFor(async () => (await crew.request<Session>("session_get", { id: session.id })).autonomy === "edits", {
+    message: "the row keeps the access",
+  });
+  await sendFromChat(session, "editing now");
+  await waitFor(async () => (await modes()).length === 2, { message: "the second message lands" });
+  assert.deepEqual(await modes(), ["default", "acceptEdits"]);
+  assert.equal((await crew.claudeLaunches()).length, launched, "⇧Tab restarted the CLI");
+
+  // An effort waits for the next message, which starts the CLI again on its conversation.
+  await chat.getByRole("button", { name: "Effort" }).click();
+  await crew.window.getByRole("menuitemradio", { name: "High", exact: true }).click();
+  await chat.getByText(/apply with your next message/).waitFor();
+  await sendFromChat(session, "thinking harder");
+  const relaunch = await waitFor(async () => (await crew.claudeLaunches())[launched], { message: "the CLI starts again" });
+  assert.ok(relaunch.argv.join(" ").includes("--effort high"), relaunch.argv.join(" "));
+  assert.ok(relaunch.argv.join(" ").includes("--permission-mode acceptEdits"), relaunch.argv.join(" "));
+  assert.deepEqual(relaunch.argv.slice(relaunch.argv.indexOf("--resume"), relaunch.argv.indexOf("--resume") + 2), ["--resume", session.id]);
+  assert.deepEqual(relaunch.argv.slice(-2), ["--", "thinking harder"]);
+  await waitFor(async () => (await prompts(workspace.path, session.id)).at(-1) === "thinking harder", {
+    message: "the message is the resumed CLI's first turn",
+  });
+  await waitFor(async () => (await chat.getByText(/apply with your next message/).count()) === 0, {
+    message: "nothing is pending once it runs",
+  });
+});
+
 test("Stop from the chat stops the CLI's turn", async () => {
   const [workspace] = crew.workspaces;
   assert.ok(workspace);

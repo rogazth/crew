@@ -369,6 +369,10 @@ pub struct SessionCreate {
     pub name: String,
     pub provider: String,
     pub model: String,
+    /// The model's reasoning effort; empty or absent is the CLI's own setting.
+    #[serde(default)]
+    #[ts(optional)]
+    pub effort: Option<String>,
     pub description: String,
     pub autonomy: String,
     /// The git worktree the session runs in; absent means the workspace folder.
@@ -386,6 +390,16 @@ pub struct SessionUpdate {
     pub model: String,
     pub description: String,
     pub notifications: bool,
+    pub autonomy: String,
+}
+
+/// What a session's composer changes: its model, effort and autonomy.
+#[derive(Serialize, Deserialize, Clone, Debug, TS)]
+#[ts(export, export_to = "../../../src/lib/protocol.ts")]
+pub struct SessionOptions {
+    pub id: String,
+    pub model: String,
+    pub effort: String,
     pub autonomy: String,
 }
 
@@ -542,6 +556,7 @@ pub struct Session {
     pub name: String,
     pub provider: String,
     pub model: String,
+    pub effort: String,
     pub provider_session_id: Option<String>,
     pub description: String,
     pub notifications: bool,

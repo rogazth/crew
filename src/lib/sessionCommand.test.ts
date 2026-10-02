@@ -14,6 +14,7 @@ const base: Session = {
   name: "s",
   provider: "claude",
   model: "",
+  effort: "",
   providerSessionId: null,
   worktree: null,
   description: "",
@@ -43,15 +44,41 @@ describe("sessionCommand", () => {
     expect(argv({})).not.toContain("--");
   });
 
-  it("leaves the model to Claude's own config when none is picked", () => {
-    expect(argv({}).slice(3)).toEqual(["--session-id", "crew-1"]);
+  const ASK = ["--permission-mode", "default"];
+
+  it("leaves the model and effort to Claude's own config when none is picked", () => {
+    expect(argv({}).slice(3)).toEqual(["--session-id", "crew-1", ...ASK]);
     expect(argv({ model: "claude-opus-5-5" })).toContain("--model");
   });
 
   it("resumes Claude by Crew's own id until a /clear moves it", () => {
-    expect(argv({}, true).slice(3)).toEqual(["--resume", "crew-1"]);
-    expect(argv({ providerSessionId: "cleared" }, true).slice(3)).toEqual(["--resume", "cleared"]);
-    expect(argv({ providerSessionId: "cleared" }).slice(3)).toEqual(["--session-id", "cleared"]);
+    expect(argv({}, true).slice(3)).toEqual(["--resume", "crew-1", ...ASK]);
+    expect(argv({ providerSessionId: "cleared" }, true).slice(3)).toEqual(["--resume", "cleared", ...ASK]);
+    expect(argv({ providerSessionId: "cleared" }).slice(3)).toEqual(["--session-id", "cleared", ...ASK]);
+  });
+
+  it("starts in the session's model, effort and access, on a resume too", () => {
+    const picked = { model: "claude-opus-5-5", effort: "xhigh", autonomy: "edits" as const };
+    expect(argv(picked, true).slice(3)).toEqual([
+      "--resume",
+      "crew-1",
+      "--model",
+      "claude-opus-5-5",
+      "--effort",
+      "xhigh",
+      "--permission-mode",
+      "acceptEdits",
+    ]);
+    expect(argv({ provider: "codex", providerSessionId: "t1", effort: "high", autonomy: "auto" })).toEqual([
+      "codex",
+      "resume",
+      "t1",
+      "-c",
+      'model_reasoning_effort="high"',
+      "--approve-for-me",
+    ]);
+    // An effort or access the CLI has no flag for is left to it.
+    expect(argv({ provider: "opencode", effort: "high", autonomy: "edits" })).toEqual(["opencode"]);
   });
 
   it("has Claude report every session it moves to, silently, one record each", () => {
@@ -135,9 +162,10 @@ describe("sessionCommand", () => {
     const bypassed = (patch: Partial<Session>, resume = false) =>
       sessionCommand({ ...base, ...patch }, { resume, theme: "dark", bypass: true });
     for (const provider of PROVIDERS) {
-      expect(argv({ provider: provider.id })).not.toContain(provider.bypassFlag);
-      expect(bypassed({ provider: provider.id })).toContain(provider.bypassFlag);
-      expect(bypassed({ provider: provider.id, providerSessionId: "id" }, true)).toContain(provider.bypassFlag);
+      const full = provider.access.full![0]!;
+      expect(argv({ provider: provider.id })).not.toContain(full);
+      expect(bypassed({ provider: provider.id })).toContain(full);
+      expect(bypassed({ provider: provider.id, providerSessionId: "id" }, true)).toContain(full);
     }
     expect(bypassed({}, true).slice(3)).toEqual(["--resume", "crew-1", "--dangerously-skip-permissions"]);
     expect(bypassed({ provider: "codex", providerSessionId: "t1" })).toEqual([
@@ -159,14 +187,16 @@ describe("pickProvider", () => {
   const only = (...ids: string[]) => PROVIDERS.filter((p) => ids.includes(p.id));
 
   it("keeps the preference while its CLI is installed", () => {
-    const choice = { provider: "codex" as const, model: "gpt-5.5" };
+    const choice = { provider: "codex" as const, model: "gpt-5.5", effort: "" as const, access: "ask" as const };
     expect(pickProvider(choice, only("claude", "codex"))).toBe(choice);
   });
 
   it("falls back to the first installed provider on its default model", () => {
-    expect(pickProvider({ provider: "codex", model: "gpt-5.5" }, only("opencode", "cursor"))).toEqual({
+    expect(pickProvider({ provider: "codex", model: "gpt-5.5", effort: "high", access: "edits" }, only("opencode", "cursor"))).toEqual({
       provider: "cursor",
       model: "",
+      effort: "",
+      access: "ask",
     });
   });
 });
@@ -175,6 +205,12 @@ describe("parseAgentChoice", () => {
   it("rejects what is not a known provider", () => {
     expect(parseAgentChoice(null)).toBeNull();
     expect(parseAgentChoice('{"provider":"gemini"}')).toBeNull();
-    expect(parseAgentChoice('{"provider":"codex"}')).toEqual({ provider: "codex", model: "" });
+    expect(parseAgentChoice('{"provider":"codex"}')).toEqual({ provider: "codex", model: "", effort: "", access: "full" });
+    expect(parseAgentChoice('{"provider":"codex","effort":"max","access":"edits"}')).toEqual({
+      provider: "codex",
+      model: "",
+      effort: "",
+      access: "ask",
+    });
   });
 });

@@ -11,13 +11,14 @@ import { claudeSessionId, transcriptPath } from '../lib/claudeStorage';
 import { bindProviderSession } from '../lib/agentRuntime';
 import { isHanded } from '../lib/handedSessions';
 import { blockingScreen, type BlockingScreen } from '../lib/blockingScreen';
-import { clearFirstPrompt, peekFirstPrompt } from '../lib/firstPrompt';
+import { clearFirstPrompt, peekFirstPrompt, setFirstPrompt } from '../lib/firstPrompt';
 import { BYPASS_KEY } from '../lib/permissions';
 import { providerOf } from '../lib/providers';
 import { reportsLive, sessionSurface } from '../lib/sessionView';
 import { readLive, subscribeLive } from '../lib/sessionLive';
 import { onSessionLost, useRunningSessions } from '../lib/runningSessions';
 import { sessionCommand } from '../lib/sessionCommand';
+import { setLaunched } from '../lib/sessionOptions';
 import { titleName } from '../lib/terminalStatus';
 import { isTerminalTab, relativeTo, sessionPtyId } from '../lib/tabs';
 import { activeTerminal } from '../lib/terminalFocus';
@@ -138,13 +139,18 @@ const DARK_SCHEME = window.matchMedia('(prefers-color-scheme: dark)');
 /** codex and opencode write their session only once the first message is sent. */
 const DISCOVER_MS = 3000;
 
-async function launchCommand(session: Session, cwd: string): Promise<string[]> {
-  const theme = DARK_SCHEME.matches ? 'dark' : 'light';
+/** argv for the session's CLI, and whether Settings bypassed its permissions. */
+async function launchCommand(session: Session, cwd: string): Promise<{ argv: string[]; bypass: boolean }> {
   // Read at every launch, so a change in Settings reaches the next session started.
   const bypass = await api
     .stateGet(BYPASS_KEY)
     .then((raw) => raw?.trim() === 'on')
     .catch(() => false);
+  return { argv: await sessionArgv(session, cwd, bypass), bypass };
+}
+
+async function sessionArgv(session: Session, cwd: string, bypass: boolean): Promise<string[]> {
+  const theme = DARK_SCHEME.matches ? 'dark' : 'light';
   const binding = providerOf(session.provider)?.binding;
   const prompt = peekFirstPrompt(session.id);
   if (binding === 'own') {
@@ -156,7 +162,7 @@ async function launchCommand(session: Session, cwd: string): Promise<string[]> {
     const resume = await Promise.resolve(homeFor(cwd) ?? homeDir())
       .then((home) => api.pathExists(transcriptPath(home, cwd, claudeSessionId(current))))
       .catch(() => false);
-    return sessionCommand(current, { resume, theme, bypass, ...(resume || !prompt ? {} : { prompt }) });
+    return sessionCommand(current, { resume, theme, bypass, ...(prompt ? { prompt } : {}) });
   }
   if (binding === 'before' && !session.providerSessionId) {
     const created = await api.createProviderSession(session.id).catch(() => null);
@@ -165,7 +171,7 @@ async function launchCommand(session: Session, cwd: string): Promise<string[]> {
       return sessionCommand({ ...session, providerSessionId: created }, { resume: true, theme, bypass, cwd, ...(prompt ? { prompt } : {}) });
     }
   }
-  return sessionCommand(session, { resume: false, theme, bypass, cwd, ...(prompt && !session.providerSessionId ? { prompt } : {}) });
+  return sessionCommand(session, { resume: false, theme, bypass, cwd, ...(prompt ? { prompt } : {}) });
 }
 
 type SessionProps = {
@@ -223,10 +229,11 @@ function SessionTerminal({
 
   useEffect(() => {
     let cancelled = false;
-    launchCommand(session, cwd).then((argv) => {
+    launchCommand(session, cwd).then(({ argv, bypass }) => {
       if (cancelled) return;
       // Taken only by the launch that runs: a cancelled one leaves it for the next.
       clearFirstPrompt(session.id);
+      setLaunched(session.id, { model: session.model, effort: session.effort, access: session.autonomy, bypass });
       setStartedAt(Date.now());
       setCommand(argv);
     });
@@ -243,6 +250,21 @@ function SessionTerminal({
     setCommand(null);
     setLaunch((n) => n + 1);
   }, [onExit]);
+
+  // The chat changed the model or effort: the CLI ends and starts again on
+  // its conversation with the new flags, `message` as what it starts on.
+  const restart = useCallback(
+    async (message: string) => {
+      setFirstPrompt(session.id, message);
+      onExit(null);
+      // The pane lets go of the process before it is ended, so its exit opens no shell.
+      setCommand(null);
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+      await api.stopSession(session.id).catch(() => {});
+      setLaunch((n) => n + 1);
+    },
+    [onExit, session.id],
+  );
 
   // Claude's moves to a new conversation reach the window from the daemon,
   // which follows its SessionStart hook; the others name theirs once, later.
@@ -303,6 +325,7 @@ function SessionTerminal({
           blocked={blocked}
           busy={session.status === 'working' || session.status === 'needs-input'}
           onShowTerminal={() => onShowTerminal(true)}
+          onRestart={restart}
         />
       )}
       {revealed && <BackToChat onClick={() => onShowTerminal(false)} />}
