@@ -2,7 +2,6 @@ import { useMemo, type ReactNode } from 'react';
 import { Agents } from './Agents';
 import { Browsers } from './Browsers';
 import { DiffsPool } from './DiffsPool';
-import { Previews } from './Previews';
 import { ChatContext, type ChatActions } from './chat/context';
 import { Surface, type ProcessTabOf } from './Surface';
 import { Terminals } from './Terminals';
@@ -29,6 +28,8 @@ type Props = {
   onCreateWorkspace: () => void;
   onStatus: (id: string, status: SessionStatus) => void;
   onOpenFile: (file: ProjectFile) => void;
+  /** An HTML or SVG file rendered in a page tab. */
+  onOpenFileInBrowser: (file: { path: string; relative: string }) => void;
   onOpenSession: (sessionId: string) => void;
   onPatchBrowser: (workspaceId: string, tabId: string, patch: BrowserTabPatch) => void;
   onOpenBrowserTab: (workspaceId: string, tab: Tab, opts: { after: string; background: boolean }) => void;
@@ -41,7 +42,7 @@ type Props = {
   renderCommands: () => ReactNode;
 };
 
-/** Active surface plus the mounted agent, terminal, page and media overlays, of every workspace. */
+/** Active surface plus the mounted agent, terminal and page overlays, of every workspace. */
 export function WorkspacePanes({
   tab,
   panes,
@@ -53,6 +54,7 @@ export function WorkspacePanes({
   onCreateWorkspace,
   onStatus,
   onOpenFile,
+  onOpenFileInBrowser,
   onOpenSession,
   onPatchBrowser,
   onOpenBrowserTab,
@@ -114,6 +116,7 @@ export function WorkspacePanes({
           onCreateWorkspace={onCreateWorkspace}
           files={files}
           onOpenPath={chat.openPath}
+          onOpenInBrowser={onOpenFileInBrowser}
           onOpenHistory={onOpenHistory}
           onConfirm={onConfirm}
           renderProcess={renderProcess}
@@ -130,7 +133,6 @@ export function WorkspacePanes({
         />
       </ChatContext>
       <Browsers panes={mounted} onPatch={onPatchBrowser} onOpenTab={onOpenBrowserTab} onAdopt={onAdoptBrowserTab} />
-      <Previews panes={mounted} />
       <ChatContext value={chat}>
         <Agents panes={mounted} sessions={sessions} />
       </ChatContext>

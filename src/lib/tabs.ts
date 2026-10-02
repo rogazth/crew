@@ -1,3 +1,4 @@
+import { fileView } from "./browser/files";
 import { STUB_KINDS } from "./types";
 import type { SessionSurface } from "./sessionView";
 import type { Session, StubKind, Tab } from "./types";
@@ -12,6 +13,21 @@ export const browserTabId = () => `browser:${crypto.randomUUID()}`;
 
 export function newBrowserTab(url = "", incognito = false): Tab {
   return { id: browserTabId(), kind: "browser", url, title: "", ...(incognito && { incognito: true as const }) };
+}
+
+/** One page tab per file: opening it again comes back to it. */
+export const fileBrowserTabId = (path: string) => `browser:file:${path}`;
+
+export function newFileBrowserTab(path: string, relative: string): Tab {
+  const title = relative.split("/").pop() || relative;
+  return { id: fileBrowserTabId(path), kind: "browser", url: "", title, file: { path, relative } };
+}
+
+/** The file a tab shows, in the editor or in a page. */
+export function tabFile(tab: Tab | null): { path: string; relative: string } | null {
+  if (tab?.kind === "file") return { path: tab.path, relative: tab.relative };
+  if (tab?.kind === "browser" && tab.file) return tab.file;
+  return null;
 }
 
 export const isIncognitoTab = (tab: Tab) => tab.kind === "browser" && tab.incognito === true;
@@ -101,7 +117,8 @@ export function patchBrowserTab(
   const index = state.tabs.findIndex((tab) => tab.id === id);
   const tab = state.tabs[index];
   if (!tab || tab.kind !== "browser") return state;
-  const url = patch.url ?? tab.url;
+  // A file's URL lasts one run; the tab finds the file again by its path.
+  const url = tab.file ? tab.url : (patch.url ?? tab.url);
   const title = patch.title ?? tab.title;
   // An empty icon is a page that has none.
   const icon = patch.icon === undefined ? tab.icon : patch.icon || undefined;
@@ -278,6 +295,12 @@ export function parseTabs(raw: string | null): TabState {
     let activeId = savedActive;
     const kept = pinnedFirst(
       tabs.flatMap((value: unknown) => {
+        if (isBrowserFileTab(value)) {
+          // A PDF or a video opened in a file tab before pages showed them.
+          const tab = newFileBrowserTab(value.path, value.relative);
+          if (activeId === value.id) activeId = tab.id;
+          return [value.pinned ? { ...tab, pinned: true as const } : tab];
+        }
         if (!isLegacyBrowserStub(value)) return isTab(value) ? [value] : [];
         // The browser used to be a placeholder stub; it comes back as a blank page.
         const tab = newBrowserTab();
@@ -303,6 +326,10 @@ export function parseTabs(raw: string | null): TabState {
   }
 }
 
+function isBrowserFileTab(value: unknown): value is Extract<Tab, { kind: "file" }> {
+  return isTab(value) && value.kind === "file" && fileView(value.relative) === "browser";
+}
+
 function isLegacyBrowserStub(value: unknown): value is { id: string } {
   if (typeof value !== "object" || value === null) return false;
   const tab = value as { id?: unknown; kind?: unknown; stub?: unknown };
@@ -322,7 +349,12 @@ function isTab(value: unknown): value is Tab {
       typeof tab.url === "string" &&
       typeof tab.title === "string" &&
       (tab.icon === undefined || typeof tab.icon === "string") &&
-      (tab.incognito === undefined || tab.incognito === true)
+      (tab.incognito === undefined || tab.incognito === true) &&
+      (tab.file === undefined ||
+        (typeof tab.file === "object" &&
+          tab.file !== null &&
+          typeof tab.file.path === "string" &&
+          typeof tab.file.relative === "string"))
     );
   if (tab.kind === "process")
     return (

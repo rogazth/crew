@@ -15,7 +15,7 @@ type Props = {
   /** The workspace index, which `[[wikilinks]]` resolve against. */
   files: ProjectFile[];
   onOpenPath: (path: string) => void;
-  /** Sits at the header's right end: a page file's Preview/Source switch. */
+  /** Sits at the header's right end: a page file's button to render it. */
   actions?: ReactNode;
 };
 

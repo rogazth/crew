@@ -20,15 +20,16 @@ export const FILE_CHANNELS = {
 } as const;
 
 /**
- * How a file tab shows a file. `page` renders it and has a source to edit;
- * `image` opens in the app's viewer; `media` renders in Chromium's own;
- * `text` is the editor.
+ * Where a file opens. `browser`: a page tab, Chromium's own viewer, with
+ * nothing to edit (a PDF, a video); `image`: the app's viewer; `text`: the
+ * editor, whose page files have a button to render them in a page tab.
  */
-export type FileView = "page" | "image" | "media" | "text";
+export type FileView = "browser" | "image" | "text";
 
+/** Source a page tab can render: the editor offers to open it there. */
 const PAGE = new Set(["html", "htm", "svg"]);
 const IMAGE = new Set(["png", "jpg", "jpeg", "gif", "webp", "avif", "bmp", "ico"]);
-const MEDIA = new Set([
+const BROWSER = new Set([
   "pdf",
   "mp4",
   "webm",
@@ -41,13 +42,22 @@ const MEDIA = new Set([
   "flac",
 ]);
 
+function extension(name: string): string {
+  const base = name.slice(name.lastIndexOf("/") + 1);
+  const dot = base.lastIndexOf(".");
+  return dot > 0 ? base.slice(dot + 1).toLowerCase() : "";
+}
+
 export function fileView(name: string): FileView {
-  const dot = name.lastIndexOf(".");
-  const ext = dot > 0 ? name.slice(dot + 1).toLowerCase() : "";
-  if (PAGE.has(ext)) return "page";
+  const ext = extension(name);
   if (IMAGE.has(ext)) return "image";
-  if (MEDIA.has(ext)) return "media";
+  if (BROWSER.has(ext)) return "browser";
   return "text";
+}
+
+/** An HTML or SVG file, which the editor can hand to a page tab to render. */
+export function rendersAsPage(name: string): boolean {
+  return PAGE.has(extension(name));
 }
 
 /**

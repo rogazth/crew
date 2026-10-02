@@ -18,6 +18,7 @@ import { TabPeek, type PeekAnchor } from "./TabPeek";
 import { toneOf, type TabTone } from "../lib/tabStyle";
 import { useBrowserPage } from "../hooks/useBrowserPage";
 import { useCommand } from "../hooks/useCommand";
+import { useFileDrop } from "../hooks/useFileDrop";
 import { useTabOverflow } from "../hooks/useTabOverflow";
 import { commandKeys } from "../lib/commands";
 import {
@@ -81,6 +82,8 @@ type Props = {
   /** Said on the strip while the sidebar is away: where you are, and the door to switch. */
   context: { workspace: string; branch: string; onSwitch: () => void };
   groups: TabGroups | null;
+  /** Files dropped on the strip from Finder, each to open in a tab. */
+  onDropFiles: (paths: string[]) => void;
 };
 
 type GroupItem = Extract<StripItem, { kind: "group" }>;
@@ -177,7 +180,10 @@ export function TabBar({
   onLaunch,
   context,
   groups,
+  onDropFiles,
 }: Props) {
+  const bar = useRef<HTMLDivElement>(null);
+  const dropping = useFileDrop(bar, onDropFiles);
   const [launcher, setLauncher] = useState(false);
   const [menu, setMenu] = useState<Menu | null>(null);
   // A tab held still under the pointer for a beat shows what its session is doing.
@@ -219,8 +225,12 @@ export function TabBar({
 
   return (
     <div
+      ref={bar}
       data-tauri-drag-region
-      className="flex h-10 shrink-0 items-stretch border-b border-border bg-sidebar"
+      data-file-drop={dropping || undefined}
+      className={`flex h-10 shrink-0 items-stretch border-b border-border bg-sidebar ${
+        dropping ? "ring-2 ring-accent ring-inset" : ""
+      }`}
     >
       {inset && (
         <div className="flex shrink-0 items-center">
@@ -702,23 +712,13 @@ function TabIcon({ tab, sessions, tone }: { tab: Tab; sessions: Session[]; tone:
 function BrowserTabFace({ tab, bare = false }: { tab: Extract<Tab, { kind: "browser" }>; bare?: boolean }) {
   const page = useBrowserPage(tab.id);
   const lease = useLease(tab.id);
-  const [broken, setBroken] = useState<string | null>(null);
-  const live = page.webContentsId !== null;
-  const title = live ? browserTitle(page.title, page.url) : browserTitle(tab.title, tab.url);
-  const icon = page.favicon && page.favicon !== broken ? page.favicon : null;
+  // A file's page that hasn't named itself yet goes by the file's name, which its tab holds.
+  const named = page.webContentsId !== null && !(tab.file && !page.title);
+  const title = named ? browserTitle(page.title, page.url) : browserTitle(tab.title, tab.url);
   return (
     <>
       <span className="flex size-3.5 shrink-0 items-center justify-center">
-        {page.loading ? (
-          <LoaderCircleIcon className="size-3.5 animate-spin text-icon" />
-        ) : tab.incognito ? (
-          // Pages of both kinds share the strip, so the private one wears its mark instead of the site's.
-          <IncognitoIcon />
-        ) : icon ? (
-          <img src={icon} alt="" className="size-3.5" onError={() => setBroken(icon)} />
-        ) : (
-          <GlobeIcon className="size-3.5 text-icon" />
-        )}
+        <PageIcon tab={tab} loading={page.loading} favicon={page.favicon} />
       </span>
       {!bare && <span className="min-w-0 flex-1 truncate">{title}</span>}
       {/* An agent driving the page wears its face on the tab; the page's own bar has the way to take it back. */}
@@ -729,6 +729,25 @@ function BrowserTabFace({ tab, bare = false }: { tab: Extract<Tab, { kind: "brow
       )}
     </>
   );
+}
+
+function PageIcon({
+  tab,
+  loading,
+  favicon,
+}: {
+  tab: Extract<Tab, { kind: "browser" }>;
+  loading: boolean;
+  favicon: string | null;
+}) {
+  const [broken, setBroken] = useState<string | null>(null);
+  const icon = favicon && favicon !== broken ? favicon : null;
+  if (loading) return <LoaderCircleIcon className="size-3.5 animate-spin text-icon" />;
+  // Pages of both kinds share the strip, so the private one wears its mark instead of the site's.
+  if (tab.incognito) return <IncognitoIcon />;
+  if (tab.file) return <FileTypeIcon name={tab.file.relative} className="size-3.5" />;
+  if (icon) return <img src={icon} alt="" className="size-3.5" onError={() => setBroken(icon)} />;
+  return <GlobeIcon className="size-3.5 text-icon" />;
 }
 
 function IncognitoIcon() {

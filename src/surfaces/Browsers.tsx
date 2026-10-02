@@ -217,6 +217,7 @@ export function Browsers({ panes, onPatch, onOpenTab, onAdopt }: Props) {
             url={pane.tab.url}
             icon={pane.tab.icon ?? null}
             incognito={pane.tab.incognito === true}
+            file={pane.tab.file ?? null}
             live={live.has(pane.id)}
             visible={pane.visible}
             searchTemplate={prefs.searchTemplate}

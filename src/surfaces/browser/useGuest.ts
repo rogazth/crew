@@ -6,8 +6,9 @@ import { classifyLoadFailure } from "../../lib/browser/loadError";
 import { pages } from "../../lib/browser/pageStore";
 import { isWebUrl, sameDocument } from "../../lib/browser/url";
 import { openingSrc } from "../../lib/browser/opening";
+import { FILES_PARTITION, isFileUrl, previewRoot } from "../../lib/browser/files";
 import { createGuest, type Guest } from "../../lib/browser/webview";
-import { browserHost } from "../../lib/host";
+import { browserHost, filesHost } from "../../lib/host";
 import type { BrowserTabPatch } from "../../lib/tabs";
 import type { AddressBarHandle } from "./AddressBar";
 
@@ -26,6 +27,12 @@ type Options = {
   machine: string | null | undefined;
   /** Opens in the in-memory session, and leaves no history, saved stack or cached icon behind. */
   incognito: boolean;
+  /**
+   * The file the page renders, in the previews' session instead of the
+   * pages'. Like an incognito page it leaves no history or saved stack: its
+   * URL is good for one run only.
+   */
+  file: { path: string; relative: string } | null;
   /** False when the retention budget has sent this page cold: no guest, nothing running. */
   live: boolean;
   /** Bumped to throw a dead guest away and build a new one. */
@@ -59,6 +66,21 @@ const RESTORE_WAIT_MS = 3000;
 
 const fallbackSrc = (url: string) => (isWebUrl(url) ? url : "about:blank");
 
+/** A page or a file: anything but the blank page, which shows the canvas underneath. */
+const shows = (url: string) => isWebUrl(url) || isFileUrl(url);
+
+const fileName = (relative: string) => relative.split("/").pop() || relative;
+
+/** ERR_FILE_NOT_FOUND, for a file the scheme won't serve. */
+const FILE_NOT_FOUND = -6;
+
+/** The URL that serves the file this run, or null when it lies nowhere the scheme serves. */
+async function fileSource(file: { path: string; relative: string }): Promise<string | null> {
+  const host = filesHost();
+  if (!host) return null;
+  return host.url(previewRoot(file.path, file.relative), file.path).catch(() => null);
+}
+
 /** A restored tab asks main to rebuild its stack; a new one just loads its URL. */
 async function source(pageId: string, url: string, machine: string | null): Promise<string> {
   const fallback = fallbackSrc(onMachine(url, machine));
@@ -81,6 +103,7 @@ async function source(pageId: string, url: string, machine: string | null): Prom
  */
 export function useGuest(options: Options): RefObject<PageGuest | null> {
   const { pageId, icon: savedIcon, machine, incognito, live, generation, container, address } = options;
+  const filePath = options.file?.path ?? null;
   const guest = useRef<PageGuest | null>(null);
   // Read at build time only: a navigation must never rebuild the guest.
   const latest = useRef(options);
@@ -105,7 +128,11 @@ export function useGuest(options: Options): RefObject<PageGuest | null> {
 
   useEffect(() => {
     // Every page signs in with the same cookies; an incognito one with its own, kept in memory.
-    const partition = partitionFor(incognito);
+    // A file has a session of its own, which holds none of the pages' sign-ins.
+    const file = latest.current.file;
+    const partition = file ? FILES_PARTITION : partitionFor(incognito);
+    // Nothing of a file's page outlives the run, as nothing of an incognito one outlives the app.
+    const ephemeral = incognito || file !== null;
     if (!live || machine === undefined) return;
     let cancelled = false;
     let built: Guest | null = null;
@@ -129,7 +156,7 @@ export function useGuest(options: Options): RefObject<PageGuest | null> {
       }, PATCH_MS);
     };
     const saveStack = () => {
-      if (incognito) return;
+      if (ephemeral) return;
       clearTimeout(snapshotTimer);
       snapshotTimer = setTimeout(() => {
         snapshotTimer = undefined;
@@ -169,7 +196,7 @@ export function useGuest(options: Options): RefObject<PageGuest | null> {
       webContentsId: () => built?.webContentsId() ?? null,
       navigate: (typedUrl) => {
         // A remote workspace's `localhost` is its machine's, typed or clicked.
-        const url = onMachine(typedUrl, machine);
+        const url = file ? typedUrl : onMachine(typedUrl, machine);
         if (built) {
           built.navigate(url);
           return;
@@ -202,6 +229,22 @@ export function useGuest(options: Options): RefObject<PageGuest | null> {
     guest.current = facade;
 
     void (async () => {
+      if (file) {
+        // The previews' session takes only its own scheme, so the guest is born at the file.
+        const src = await fileSource(file);
+        if (cancelled) return;
+        if (!src) {
+          update({
+            error: { code: FILE_NOT_FOUND, description: "The file can't be shown.", url: file.path },
+            loading: false,
+          });
+          return;
+        }
+        // A file's page is the file: a URL typed meanwhile is not its to load.
+        queued = null;
+        build({ src, restoring: false });
+        return;
+      }
       // A keystroke resolves `typed` and skips the rest of the wait. The fetch
       // still finishes; its token simply expires unused.
       // An incognito page saved no stack to restore.
@@ -209,10 +252,15 @@ export function useGuest(options: Options): RefObject<PageGuest | null> {
         ? Promise.resolve(fallbackSrc(onMachine(latest.current.url, machine)))
         : source(pageId, latest.current.url, machine);
       const restored = await Promise.race([opening, typed.then(() => null)]);
-      const host = container.current;
-      if (cancelled || !host) return;
+      if (cancelled) return;
       const open = openingSrc(restored, queued);
       queued = null;
+      build(open);
+    })();
+
+    function build(open: { src: string; restoring: boolean }) {
+      const host = container.current;
+      if (cancelled || !host) return;
       // A restored stack re-commits its page; that is the same visit, not a new one.
       let restoring = open.restoring;
       built = createGuest(host, open.src, partition, {
@@ -220,7 +268,7 @@ export function useGuest(options: Options): RefObject<PageGuest | null> {
           update({ webContentsId, crashed: false, hung: false });
           // Main finds a tab's page by this when an agent drives it.
           browserHost()?.reportGuest(pageId, webContentsId);
-          browserHost()?.reportMachine?.(webContentsId, machine);
+          browserHost()?.reportMachine?.(webContentsId, machine ?? null);
         },
         start: (next) => {
           const current = pages.get(pageId);
@@ -233,7 +281,7 @@ export function useGuest(options: Options): RefObject<PageGuest | null> {
           update({ url: next, crashed: false, zoom: built?.zoom() ?? 1, ...history() });
           latest.current.onNavigate(inPage);
           // A blank page shows the canvas underneath, not the guest's white.
-          if (built) built.element.style.visibility = isWebUrl(next) ? "" : "hidden";
+          if (built) built.element.style.visibility = shows(next) ? "" : "hidden";
           if (!isWebUrl(next)) return;
           patchTab({ url: next });
           saveStack();
@@ -243,15 +291,22 @@ export function useGuest(options: Options): RefObject<PageGuest | null> {
             restoring = false;
             return;
           }
-          if (!incognito) void api.browserHistoryVisit(next, "", latest.current.workspaceId).catch(() => {});
+          if (!ephemeral) void api.browserHistoryVisit(next, "", latest.current.workspaceId).catch(() => {});
         },
         loading: (loading) => update({ loading, ...history() }),
         title: (title) => {
-          update({ title });
           const current = pages.get(pageId).url;
+          if (file) {
+            // Chromium names an untitled page after its URL, which says nothing a file's name doesn't.
+            const named = !title || current.endsWith(title) ? fileName(file.relative) : title;
+            update({ title: named });
+            patchTab({ title: named });
+            return;
+          }
+          update({ title });
           if (!isWebUrl(current)) return;
           patchTab({ title });
-          if (!incognito) void api.browserHistoryTitle(current, title).catch(() => {});
+          if (!ephemeral) void api.browserHistoryTitle(current, title).catch(() => {});
         },
         favicon: (icon) => {
           const ask = ++faviconAsk;
@@ -294,7 +349,7 @@ export function useGuest(options: Options): RefObject<PageGuest | null> {
           latest.current.onFound({ index: Math.max(0, activeMatchOrdinal - 1), count: matches }),
       });
       // A second URL can land while the element is being created. It is a navigation, not a restore.
-      let show = isWebUrl(open.src) || open.restoring;
+      let show = shows(open.src) || open.restoring;
       if (queued) {
         const extra = queued;
         queued = null;
@@ -304,7 +359,7 @@ export function useGuest(options: Options): RefObject<PageGuest | null> {
       }
       built.element.style.visibility = show ? "" : "hidden";
       if (focusWhenReady) built.focus();
-    })();
+    }
 
     return () => {
       cancelled = true;
@@ -330,7 +385,8 @@ export function useGuest(options: Options): RefObject<PageGuest | null> {
       if (devtools || docked || playing) latest.current.onPinned(false);
       update({ webContentsId: null, loading: false, devtools: false, hung: false });
     };
-  }, [live, pageId, machine, incognito, generation, container, address]);
+    // The file's path stands for it: the object is made afresh with every render.
+  }, [live, pageId, machine, incognito, filePath, generation, container, address]);
 
   return guest;
 }

@@ -81,6 +81,11 @@ export type Tab = (
       /** Where the page's favicon lives, so a cold tab can show it before its page comes back. */
       icon?: string;
       incognito?: true;
+      /**
+       * A file the page renders, in the previews' session. Its URL is made
+       * afresh each run, so the tab keeps the file and never a `url`.
+       */
+      file?: { path: string; relative: string };
     }
   /** A terminal keeps the worktree it was opened in; null or absent is the main checkout. */
   | { id: string; kind: "stub"; stub: StubKind; title: string; worktree?: string | null }

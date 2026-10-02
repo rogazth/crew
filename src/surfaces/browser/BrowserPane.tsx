@@ -42,6 +42,8 @@ type Props = {
   /** The favicon the tab saved, shown while the page is cold. */
   icon: string | null;
   incognito: boolean;
+  /** The file the page renders, when it is a file's tab. */
+  file: { path: string; relative: string } | null;
   live: boolean;
   visible: boolean;
   searchTemplate: string;
@@ -56,6 +58,7 @@ export function BrowserPane({
   url,
   icon,
   incognito,
+  file,
   live,
   visible,
   searchTemplate,
@@ -92,6 +95,7 @@ export function BrowserPane({
     workspaceId,
     machine,
     incognito,
+    file,
     live,
     generation,
     container,
@@ -111,6 +115,7 @@ export function BrowserPane({
 
   // What the tab opened with, read until the guest reports its own URL.
   const initialUrl = useRef(url);
+  const hasFile = useRef(file !== null);
   // Hiding a guest that holds focus makes macOS hand the keyboard to another app.
   // Showing one puts the keyboard where it's useful: the bar on a blank tab, else the page.
   useEffect(() => {
@@ -118,6 +123,9 @@ export function BrowserPane({
       guest.current?.release();
       return;
     }
+    // A file's page leaves the keyboard with the window, as a preview always did:
+    // the PDF viewer keeps the keys it holds from the app, ⌘P among them.
+    if (hasFile.current) return;
     // A tab opened with a URL shows before its guest reports one; the store still says blank.
     const current = pages.get(pageId);
     const shown = current === BLANK_PAGE ? initialUrl.current : current.url;
@@ -153,13 +161,16 @@ export function BrowserPane({
     forward: () => guest.current?.forward(),
     reload: () => {
       const error = pages.get(pageId).error;
+      // A file that wasn't served has no page to go back to; its page is built again.
+      if (error && file) restart();
       // After a failed load, reload() only refreshes Chromium's error page; go to the address again.
-      if (error) guest.current?.navigate(error.url);
+      else if (error) guest.current?.navigate(error.url);
       else guest.current?.reload();
     },
     hardReload: () => {
       const error = pages.get(pageId).error;
-      if (error) guest.current?.navigate(error.url);
+      if (error && file) restart();
+      else if (error) guest.current?.navigate(error.url);
       else guest.current?.hardReload();
     },
     focusAddress,
@@ -250,8 +261,8 @@ export function BrowserPane({
         onSettings={() => runCommand("open-browser-settings")}
         onPrint={() => printPage(guest.current?.webContentsId())}
         onImportCookies={setImporting}
-        // Imported cookies go to the pages' saved session, which an incognito page never sees.
-        canImport={browserHost() !== null && !incognito}
+        // Imported cookies go to the pages' saved session, which an incognito page or a file never sees.
+        canImport={browserHost() !== null && !incognito && !file}
         site={site}
         panel={panel}
         onPanel={onPanel}

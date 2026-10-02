@@ -1,8 +1,8 @@
-// F1: a file that is not text opens as a page. An HTML report renders with
-// its stylesheet beside it, reloads when it is rewritten, and shows its source
-// a toggle away; its links to the web open browser tabs. It reads the worktree
+// F1: an HTML report opens in the editor, and a button renders it in a page
+// tab, with its stylesheet beside it; the page reloads when the file is
+// rewritten, and its links to the web open browser tabs. It reads the worktree
 // it was opened from, but never a hidden file in it. A binary file with no
-// preview offers Finder and the default app instead of an error.
+// viewer offers Finder and the default app instead of an error.
 import assert from "node:assert/strict";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -64,9 +64,26 @@ function inPreview<T>(script: string): Promise<T> {
 
 const title = () => inPreview<string>("document.title");
 
-test("an HTML report renders with the stylesheet beside it", async () => {
+const activeTabId = () =>
+  crew.window.locator('[data-tab-strip] [role="tab"][aria-selected="true"]').getAttribute("data-tab-id");
+
+test("an HTML report opens in the editor, and renders in a page with the stylesheet beside it", async () => {
   await openFile("report", "out/report.html");
+  assert.equal(await activeTabId(), `file:${repo}/out/report.html`);
+  const editor = crew.window.getByRole("textbox", { name: "report.html", exact: true }).filter({ visible: true });
+  await waitFor(async () => (await editor.innerText()).includes("<title>First run</title>"), { message: "the source shows" });
+
+  await crew.window.getByRole("button", { name: "Open in Browser" }).click();
   await waitFor(async () => (await title()) === "First run", { message: "the report renders" });
+  assert.equal(await activeTabId(), `browser:file:${repo}/out/report.html`);
+  assert.ok(
+    await crew.app.evaluate(({ webContents, session }) =>
+      webContents
+        .getAllWebContents()
+        .some((wc) => wc.getURL().startsWith("crew-file://") && wc.session === session.fromPartition("crew-files")),
+    ),
+    "the page lives in the previews' session",
+  );
   const color = await inPreview<string>("getComputedStyle(document.querySelector('h1')).color");
   assert.equal(color, "rgb(1, 2, 3)");
 });
@@ -92,16 +109,19 @@ test("a link to the web opens a browser tab", async () => {
   await waitFor(() => web.requests.includes("/docs"), { message: "the page loads in the tab" });
 });
 
-test("Source shows the report's HTML in the editor", async () => {
+test("the page goes by the report's title, and its editor stays open with the new source", async () => {
+  await crew.window.locator('[data-tab-strip] [role="tab"][data-tab-id^="browser:file:"]').filter({ hasText: "Second run" }).waitFor();
   const tab = crew.window.locator('[data-tab-strip] [role="tab"][data-tab-id^="file:"]').filter({ hasText: "report.html" });
   await tab.click();
-  await crew.window.getByRole("radio", { name: "Source" }).click();
   const editor = crew.window.getByRole("textbox", { name: "report.html", exact: true }).filter({ visible: true });
   await waitFor(async () => (await editor.innerText()).includes("<title>Second run</title>"), {
     message: "the source shows",
   });
-  await crew.window.getByRole("radio", { name: "Preview" }).click();
-  await waitFor(async () => (await title()) === "Second run", { message: "the preview comes back" });
+  // Rendering it again comes back to its page.
+  const pages = (await stripTabIds(crew)).filter((id) => id.startsWith("browser:file:")).length;
+  await crew.window.getByRole("button", { name: "Open in Browser" }).click();
+  assert.equal(await activeTabId(), `browser:file:${repo}/out/report.html`);
+  assert.equal((await stripTabIds(crew)).filter((id) => id.startsWith("browser:file:")).length, pages);
 });
 
 test("an image opens in the viewer, fitted, and zooms", async () => {

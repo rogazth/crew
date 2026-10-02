@@ -1,6 +1,6 @@
 // F1: find reaches every match. In the code editor ↵ in its search field and
-// ⌘D bring each next match on screen; a PDF and an HTML preview answer ⌘F
-// with the find bar, which counts and steps through their matches.
+// ⌘D bring each next match on screen; a PDF and an HTML file in their page
+// tabs answer ⌘F with the find bar, which counts and steps through their matches.
 import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
 import { launchCrew, MOD, pressChord, waitFor, type Crew } from "./harness.ts";
@@ -115,18 +115,19 @@ test("⌘D brings the match it adds on screen", async () => {
   await shows("needle = 290;", "the third ⌘D scrolls to the match it adds");
 });
 
-/** Opens the find bar over a preview, types, and steps once. */
+/** Opens the find bar over a file's page, types, and steps once. An HTML file gets there from its editor. */
 async function findsIn(relative: string, query: string, first: string, second: string): Promise<void> {
-  // The last preview kept the keyboard; the palette's chord is the window's.
+  // The last page kept the keyboard; the palette's chord is the window's.
   await crew.window.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
   await openFile(relative.split("/").pop()!.split(".")[0]!, relative);
+  if (relative.endsWith(".html")) await crew.window.getByRole("button", { name: "Open in Browser" }).click();
   await waitFor(async () => (await crew.window.locator("webview:visible").count()) > 0, {
-    message: `${relative} opens in its preview`,
+    message: `${relative} opens in its page`,
   });
   await new Promise((resolve) => setTimeout(resolve, 1500));
   await crew.window.locator("webview:visible").focus();
   await pressChord(crew, `${MOD}+f`);
-  const field = crew.window.getByRole("textbox", { name: "Find in file" }).filter({ visible: true });
+  const field = crew.window.getByRole("textbox", { name: "Find in page" }).filter({ visible: true });
   await field.waitFor({ timeout: 3000 });
   await field.fill(query);
   const bar = field.locator("..");
@@ -137,7 +138,7 @@ async function findsIn(relative: string, query: string, first: string, second: s
   await field.waitFor({ state: "detached" });
 }
 
-test("⌘F finds in an HTML preview", async () => {
+test("⌘F finds in an HTML file's page", async () => {
   await findsIn("docs/page.html", "needle", "1 of 4", "2 of 4");
 });
 

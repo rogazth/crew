@@ -1,21 +1,35 @@
 import { describe, expect, it } from "vitest";
-import { fileView, isFileUrl, previewRoot } from "./files";
+import { fileView, isFileUrl, previewRoot, rendersAsPage } from "./files";
 
 describe("fileView", () => {
   it.each([
-    ["report.html", "page"],
-    ["INDEX.HTM", "page"],
-    ["logo.svg", "page"],
+    ["report.html", "text"],
+    ["INDEX.HTM", "text"],
+    ["logo.svg", "text"],
     ["shot.PNG", "image"],
     ["icon.ico", "image"],
-    ["doc.pdf", "media"],
-    ["clip.mp4", "media"],
+    ["doc.pdf", "browser"],
+    ["docs/Manual.PDF", "browser"],
+    ["clip.mp4", "browser"],
     ["notes.md", "text"],
     ["main.ts", "text"],
     ["Makefile", "text"],
     [".html", "text"],
   ])("%s → %s", (name, view) => {
     expect(fileView(name)).toBe(view);
+  });
+});
+
+describe("rendersAsPage", () => {
+  it.each([
+    ["report.html", true],
+    ["out/INDEX.HTM", true],
+    ["logo.svg", true],
+    ["doc.pdf", false],
+    ["notes.md", false],
+    ["dir.html/notes", false],
+  ])("%s → %s", (name, renders) => {
+    expect(rendersAsPage(name)).toBe(renders);
   });
 });
 

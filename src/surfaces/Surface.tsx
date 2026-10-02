@@ -3,7 +3,6 @@ import { EmptyState } from "./EmptyState";
 import { HistoryView } from "./HistoryView";
 import { StubView } from "./StubView";
 import type { Confirm } from "../chrome/ConfirmDialog";
-import { fileView } from "../lib/browser/files";
 import { commandKeys } from "../lib/commands";
 import type { ProjectFile, Session, Tab } from "../lib/types";
 
@@ -19,6 +18,8 @@ type Props = {
   onCreateWorkspace: () => void;
   files: ProjectFile[];
   onOpenPath: (path: string) => void;
+  /** An HTML or SVG file rendered in a page tab. */
+  onOpenInBrowser: (file: { path: string; relative: string }) => void;
   /** A history entry picked: the history tab becomes the page, as a browser's does. */
   onOpenHistory: (url: string) => void;
   onConfirm: (confirm: Confirm) => void;
@@ -36,6 +37,7 @@ export function Surface({
   onCreateWorkspace,
   files,
   onOpenPath,
+  onOpenInBrowser,
   onOpenHistory,
   onConfirm,
   renderProcess,
@@ -63,10 +65,8 @@ export function Surface({
   // Mounted only while on screen: a command runs on in the daemon, and its
   // terminal paints again from the log when the tab comes back.
   if (tab.kind === "process") return renderProcess(tab);
-  // Pages stay mounted in their own overlay, like terminals.
+  // Pages stay mounted in their own overlay, like terminals: a file's too.
   if (tab.kind === "browser") return null;
-  // So do PDFs and media: unmounting one loses the file, and it loads again when shown.
-  if (tab.kind === "file" && fileView(tab.relative) === "media") return null;
   if (tab.kind === "file") {
     // Keyed by path: CodeView keeps its previous item when only props change,
     // which rendered the old file's contents under the new tab's header.
@@ -78,6 +78,7 @@ export function Surface({
           relative={tab.relative}
           files={files}
           onOpenPath={onOpenPath}
+          onOpenInBrowser={onOpenInBrowser}
         />
       </Suspense>
     );

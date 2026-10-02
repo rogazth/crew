@@ -1,6 +1,7 @@
 import { useCallback } from "react";
 import * as api from "../lib/api";
-import { fileTabId, newBrowserTab, newTerminalTab, processTabId, sessionTabId, stubTabId } from "../lib/tabs";
+import { fileView } from "../lib/browser/files";
+import { fileTabId, newBrowserTab, newFileBrowserTab, newTerminalTab, processTabId, sessionTabId, stubTabId } from "../lib/tabs";
 import { discardEdits, fileName, unsavedTabs } from "../lib/unsavedEdits";
 import type { Process } from "../lib/processes";
 import type { ProjectFile, Session, StubKind } from "../lib/types";
@@ -58,10 +59,21 @@ export function useNavigation({ tabs, sessions, confirms, removeSession, closePa
     [sessions, openSession],
   );
 
+  /** A PDF or a video opens in a page; anything else in the editor or the image viewer. */
   const openFile = useCallback(
     (file: ProjectFile) => {
       closePage();
-      tabs.open({ id: fileTabId(file.path), kind: "file", path: file.path, relative: file.relative });
+      if (fileView(file.relative) === "browser") tabs.open(newFileBrowserTab(file.path, file.relative));
+      else tabs.open({ id: fileTabId(file.path), kind: "file", path: file.path, relative: file.relative });
+    },
+    [closePage, tabs],
+  );
+
+  /** An HTML file rendered in a page, its editor left open. */
+  const openFileInBrowser = useCallback(
+    (file: { path: string; relative: string }) => {
+      closePage();
+      tabs.open(newFileBrowserTab(file.path, file.relative));
     },
     [closePage, tabs],
   );
@@ -155,6 +167,7 @@ export function useNavigation({ tabs, sessions, confirms, removeSession, closePa
     openSession,
     openSessionById,
     openFile,
+    openFileInBrowser,
     openStub,
     openTerminal,
     openBrowser,

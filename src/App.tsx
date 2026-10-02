@@ -34,7 +34,7 @@ import { useWorkContext } from "./hooks/useWorkContext";
 import * as api from "./lib/api";
 import { zoomApp } from "./lib/host";
 import { markStopped, useRunningSessions } from "./lib/runningSessions";
-import { isTerminalTab, sessionPtyId } from "./lib/tabs";
+import { isTerminalTab, sessionPtyId, tabFile } from "./lib/tabs";
 import type { Session } from "./lib/types";
 import { worktreeLabel } from "./lib/worktrees";
 import { Pages } from "./surfaces/Pages";
@@ -216,6 +216,19 @@ export function App() {
   const here = places.find((place) => place.worktree === work.placeIn) ?? places[0] ?? { worktree: null, label: "main", hue: 0 };
   const { openStub } = nav;
   const openCommands = useCallback(() => openStub("commands", "Commands"), [openStub]);
+  // A file dropped on the strip opens as ⌘P would open it: one in the worktree
+  // keeps its path there, one from elsewhere resolves against its own folder.
+  const { openFile } = nav;
+  const openDropped = useCallback(
+    (paths: string[]) => {
+      for (const path of paths) {
+        const name = path.split("/").pop() ?? path;
+        const relative = treePath && path.startsWith(`${treePath}/`) ? path.slice(treePath.length + 1) : name;
+        openFile({ path, relative, name });
+      }
+    },
+    [openFile, treePath],
+  );
   const commandsOpen = tabs.active?.kind === "stub" && tabs.active.stub === "commands";
   const sheet = useAgentSheet({ create, update, openSession: nav.openSession, createWorktree: worktrees.create });
   const envs = useEnvironments({ workspaces, active, closePage, openSettings, create, openSession: nav.openSession });
@@ -387,6 +400,7 @@ export function App() {
               onSwitch: () => openPalette("context"),
             }}
             groups={groups}
+            onDropFiles={openDropped}
           />
 
 
@@ -408,6 +422,7 @@ export function App() {
               onCreateWorkspace={envs.openWorkspace}
               onStatus={setStatus}
               onOpenFile={nav.openFile}
+              onOpenFileInBrowser={nav.openFileInBrowser}
               onOpenSession={nav.openSessionById}
               onPatchBrowser={tabs.patchBrowser}
               onOpenBrowserTab={tabs.openIn}
@@ -453,7 +468,7 @@ export function App() {
                 mode={explorer.mode}
                 onMode={explorer.setMode}
                 focus={explorer.focus}
-                active={tabs.active?.kind === "file" ? tabs.active.path : null}
+                active={tabFile(tabs.active)?.path ?? null}
                 onOpenFile={nav.openFile}
               />
             )}

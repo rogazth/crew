@@ -7,8 +7,10 @@ import {
   isAgentTab,
   isTerminalTab,
   lastUsed,
+  newFileBrowserTab,
   openTab,
   parseTabs,
+  patchBrowserTab,
   panesOf,
   pinTab,
   relativeTo,
@@ -17,6 +19,7 @@ import {
   selectTab,
   sessionTabId,
   stepTab,
+  tabFile,
   tabTitle,
   type TabState,
   unpinTab,
@@ -226,7 +229,67 @@ describe("reorderTabs", () => {
   });
 });
 
+describe("file pages", () => {
+  const pdf = newFileBrowserTab("/repo/docs/manual.pdf", "docs/manual.pdf");
+
+  it("are one tab per file, named after it", () => {
+    expect(pdf).toEqual({
+      id: "browser:file:/repo/docs/manual.pdf",
+      kind: "browser",
+      url: "",
+      title: "manual.pdf",
+      file: { path: "/repo/docs/manual.pdf", relative: "docs/manual.pdf" },
+    });
+    const state = openTab(openTab(NO_TABS, pdf), newFileBrowserTab("/repo/docs/manual.pdf", "docs/manual.pdf"));
+    expect(state.tabs).toHaveLength(1);
+  });
+
+  it("keep their title but never the URL of one run", () => {
+    const state = openTab(NO_TABS, pdf);
+    const next = patchBrowserTab(state, pdf.id, { url: "crew-file://a1b2/docs/manual.pdf", title: "Manual" });
+    expect(next.tabs[0]).toMatchObject({ url: "", title: "Manual" });
+  });
+
+  it("name their file, as an editor tab does", () => {
+    expect(tabFile(pdf)).toEqual({ path: "/repo/docs/manual.pdf", relative: "docs/manual.pdf" });
+    expect(tabFile({ id: "file:/repo/a.ts", kind: "file", path: "/repo/a.ts", relative: "a.ts" })).toEqual({
+      path: "/repo/a.ts",
+      relative: "a.ts",
+    });
+    expect(tabFile(sessionTab("a"))).toBeNull();
+    expect(tabFile(null)).toBeNull();
+  });
+
+  it("come back from disk", () => {
+    const raw = JSON.stringify({ tabs: [pdf], activeId: pdf.id });
+    expect(parseTabs(raw).tabs).toEqual([pdf]);
+  });
+});
+
 describe("parseTabs", () => {
+  it("turns a PDF's file tab, saved before pages showed them, into its page", () => {
+    const raw = JSON.stringify({
+      tabs: [
+        { id: "file:/repo/docs/manual.pdf", kind: "file", path: "/repo/docs/manual.pdf", relative: "docs/manual.pdf", pinned: true },
+        { id: "file:/repo/index.html", kind: "file", path: "/repo/index.html", relative: "index.html" },
+      ],
+      activeId: "file:/repo/docs/manual.pdf",
+    });
+    const state = parseTabs(raw);
+    expect(state.tabs).toEqual([
+      { ...newFileBrowserTab("/repo/docs/manual.pdf", "docs/manual.pdf"), pinned: true },
+      { id: "file:/repo/index.html", kind: "file", path: "/repo/index.html", relative: "index.html" },
+    ]);
+    expect(state.activeId).toBe("browser:file:/repo/docs/manual.pdf");
+  });
+
+  it("drops a page whose file is malformed", () => {
+    const raw = JSON.stringify({
+      tabs: [{ id: "browser:file:/x.pdf", kind: "browser", url: "", title: "x.pdf", file: { path: 3 } }],
+    });
+    expect(parseTabs(raw).tabs).toEqual([]);
+  });
+
   it("restores what was written", () => {
     const raw = JSON.stringify({ tabs: [sessionTab("a")], activeId: "session:a" });
     expect(parseTabs(raw).tabs).toHaveLength(1);
