@@ -156,12 +156,21 @@ impl Entry {
     }
 }
 
+/// The background work that reports back to Claude when it ends, and so starts
+/// the next turn. A monitor is not among them: an Artifact's watch or a log
+/// being followed runs for as long as the session does, and would leave it
+/// Working for good.
+const WAKES: [&str; 4] = ["shell", "subagent", "workflow", "cloud session"];
+
 /// Claude's Stop names the background tasks the turn leaves behind; one still
 /// running reports back when it ends, and that starts the next turn.
 fn runs_in_background(hook: &Map<String, Value>) -> bool {
-    hook.get("background_tasks")
-        .and_then(Value::as_array)
-        .is_some_and(|tasks| tasks.iter().any(|task| task.get("status").and_then(Value::as_str) == Some("running")))
+    hook.get("background_tasks").and_then(Value::as_array).is_some_and(|tasks| {
+        tasks.iter().any(|task| {
+            task.get("status").and_then(Value::as_str) == Some("running")
+                && task.get("type").and_then(Value::as_str).is_some_and(|kind| WAKES.contains(&kind))
+        })
+    })
 }
 
 fn has_suggestions(hook: &Map<String, Value>) -> bool {
@@ -226,6 +235,19 @@ mod tests {
         assert!(board.exited("crew-1", 8).is_some_and(|gone| !gone.background));
         board.hook("crew-1", PROMPT, 9);
         assert!(!board.hook("crew-1", STOP, 10).unwrap().background);
+    }
+
+    // Claude Code 2.1.287: publishing an Artifact leaves a watch on it running
+    // for the rest of the session. It wakes nobody when a turn ends.
+    const STOP_WATCHING: &str = r#"{"session_id":"ac29cbcc","hook_event_name":"Stop","last_assistant_message":"Published","background_tasks":[{"id":"m1x2","type":"monitor","status":"running","description":"Watch artifact DGGobvZrmHFW4uSogiU5nx"}],"session_crons":[]}"#;
+
+    #[test]
+    fn a_watch_left_running_does_not_keep_the_turn_open() {
+        let mut board = LiveBoard::default();
+        board.hook("crew-1", START, 1);
+        board.hook("crew-1", PROMPT, 2);
+        let stopped = board.hook("crew-1", STOP_WATCHING, 3).unwrap();
+        assert!(!stopped.working && !stopped.background);
     }
 
     #[test]
