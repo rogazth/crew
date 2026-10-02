@@ -278,7 +278,7 @@ dependencies = [
 
 [[package]]
 name = "crew-cli"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "base64",
  "clap",
@@ -293,7 +293,7 @@ dependencies = [
 
 [[package]]
 name = "crew-core"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "aes",
  "base64",
@@ -319,7 +319,7 @@ dependencies = [
 
 [[package]]
 name = "crew-protocol"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "serde",
  "serde_json",
@@ -328,7 +328,7 @@ dependencies = [
 
 [[package]]
 name = "crewd"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "crew-cli",
  "crew-core",
