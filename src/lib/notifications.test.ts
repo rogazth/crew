@@ -8,7 +8,7 @@ vi.mock("./api", () => ({ stateGet: async () => null, stateSet: async () => {} }
 const showToast = vi.fn();
 vi.mock("./toasts", () => ({ showToast: (...args: unknown[]) => showToast(...args) }));
 
-const { askNews, COOLDOWN_MS, dispatchNotification, reserveCooldown, resetNotifications, setVisibleSession } =
+const { announceStatus, askNews, COOLDOWN_MS, dispatchNotification, reserveCooldown, resetNotifications, setVisibleSession } =
   await import("./notifications");
 const { DEFAULT_NOTIFICATION_PREFS, updateNotificationPrefs } = await import("./notificationPrefs");
 
@@ -163,5 +163,25 @@ describe("askNews", () => {
     expect(askNews({ ...ask, questions: [question] })).toEqual(["needs-input", "Asks: Which branch?"]);
     expect(askNews({ ...ask, input: { command: "rm -rf dist" } })).toEqual(["approval", "Wants to run Bash: rm -rf dist"]);
     expect(askNews({ ...ask, tool: "WebFetch" })).toEqual(["approval", "Wants to use WebFetch"]);
+  });
+});
+
+describe("announceStatus", () => {
+  const terminal = { id: "t1", workspaceId: "w1", name: "Shell", notifications: true };
+  const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+  it("says a turn finished only when one ran", async () => {
+    announceStatus(terminal, "done", "idle");
+    await flush();
+    expect(notify).not.toHaveBeenCalled();
+    announceStatus(terminal, "done", "working");
+    await flush();
+    expect(notify).toHaveBeenCalledWith(expect.objectContaining({ title: "Shell", body: "Finished" }));
+  });
+
+  it("says an exit with an error whatever came before", async () => {
+    announceStatus(terminal, "error", "idle");
+    await flush();
+    expect(notify).toHaveBeenCalledWith(expect.objectContaining({ body: "Exited with an error" }));
   });
 });

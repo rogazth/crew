@@ -29,10 +29,13 @@ export function useSessionActivity(
 
   useEffect(() => {
     const { status, active: watched, running } = latest.current;
+    let reported = status;
     const tracker = new TerminalActivity(status, watched, {
       report: (next) => {
+        const prev = reported;
+        reported = next;
         latest.current.onStatus(id, next);
-        announceStatus(latest.current.session, next);
+        announceStatus(latest.current.session, next, prev);
       },
       onBusy: (busy) => setBusy(id, busy),
       running,

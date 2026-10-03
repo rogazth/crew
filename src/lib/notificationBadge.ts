@@ -4,7 +4,9 @@ import type { Session, SessionStatus } from "./types";
 const ATTENTION = new Set<SessionStatus>(["needs-input", "done", "error"]);
 
 export function attentionOf(sessions: readonly Pick<Session, "id" | "status" | "notifications">[]): Set<string> {
-  return new Set(sessions.filter((session) => session.notifications && ATTENTION.has(session.status)).map((s) => s.id));
+  const waiting = new Set<string>();
+  for (const session of sessions) if (session.notifications && ATTENTION.has(session.status)) waiting.add(session.id);
+  return waiting;
 }
 
 /** What the Dock counts: sessions waiting since the user last had Crew in front. */

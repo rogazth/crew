@@ -50,6 +50,7 @@ export type DispatchResult = { delivered: true } | { delivered: false; reason: S
  * rings again says the same thing three times in a second.
  */
 export const COOLDOWN_MS = 5000;
+const PREFS_WAIT_MS = 1000;
 const COOLDOWN_KEYS = 50;
 
 /** The session whose tab is on screen, when no page covers it. */
@@ -94,7 +95,8 @@ function windowFocused(): boolean {
  * pressing it means it; it sounds like a session waiting on the user.
  */
 export async function dispatchNotification(event: NotificationEvent): Promise<DispatchResult> {
-  await loadNotificationPrefs();
+  // The saved prefs, if the daemon answers in time; news does not wait on a socket.
+  await Promise.race([loadNotificationPrefs(), new Promise((resolve) => setTimeout(resolve, PREFS_WAIT_MS))]);
   const prefs = notificationPrefs();
   const test = event.source === "test";
   const kind: KindPrefs = event.source === "test" ? { ...prefs.kinds["needs-input"], banner: true } : prefs.kinds[event.source];
@@ -155,7 +157,13 @@ const TERMINAL_NEWS: Partial<Record<SessionStatus, [NotificationSource, string]>
   error: ["error", "Exited with an error"],
 };
 
-export function announceStatus(session: Announced, status: SessionStatus): void {
+/**
+ * Only a turn that ran is finished: a CLI that was idle and goes (its daemon
+ * restarted, the user quit it) ends `done` too, and that is no news.
+ */
+export function announceStatus(session: Announced, status: SessionStatus, prev: SessionStatus): void {
+  if (status === prev) return;
+  if (status === "done" && prev !== "working" && prev !== "needs-input") return;
   const news = TERMINAL_NEWS[status];
   if (news) announceSession(session, news[0], news[1]);
 }
