@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { oscClipboardText } from "./terminalClipboard";
+import { osc777Message, oscClipboardText } from "./terminalClipboard";
 
 const b64 = (text: string) => btoa(String.fromCharCode(...new TextEncoder().encode(text)));
 
@@ -18,5 +18,14 @@ describe("oscClipboardText", () => {
     expect(oscClipboardText("c;?")).toBeNull();
     expect(oscClipboardText("nope")).toBeNull();
     expect(oscClipboardText("c;%%%")).toBeNull();
+  });
+});
+
+describe("osc777Message", () => {
+  it("reads the body, and the title when there is none", () => {
+    expect(osc777Message("notify;Codex;Turn complete")).toBe("Turn complete");
+    expect(osc777Message("notify;Codex;a; b")).toBe("a; b");
+    expect(osc777Message("notify;Codex;")).toBe("Codex");
+    expect(osc777Message("notify")).toBeUndefined();
   });
 });

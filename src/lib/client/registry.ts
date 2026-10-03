@@ -1,5 +1,5 @@
 import { daemonInfo, remotesHost } from "../host";
-import { notify } from "../notify";
+import { dispatchNotification } from "../notifications";
 import type { MachineInfo, RemoteEnv, Workspace } from "../protocol";
 import { RETENTION_KEY } from "../retention";
 import { Connection, EnvDown, type ConnStatus } from "./connection";
@@ -303,9 +303,16 @@ function wire(conn: Connection) {
       const name = rows.get(conn.envId)?.name ?? "A machine";
       if (now === "offline" && conn.ever && !dropped.has(conn.envId)) {
         dropped.add(conn.envId);
-        void notify(name, "Lost the connection. Crew keeps trying.");
+        void dispatchNotification({
+          source: "connection",
+          title: name,
+          body: "Lost the connection. Crew keeps trying.",
+          key: `${conn.envId}:offline`,
+        });
       }
-      if (now === "online" && dropped.delete(conn.envId)) void notify(name, "Back online");
+      if (now === "online" && dropped.delete(conn.envId)) {
+        void dispatchNotification({ source: "connection", title: name, body: "Back online", key: `${conn.envId}:online` });
+      }
     }
     before = now;
     publish();

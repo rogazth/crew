@@ -21,6 +21,7 @@ import { useEnvironments } from "./hooks/useEnvironments";
 import { useExplorer } from "./hooks/useExplorer";
 import { useLaunch } from "./hooks/useLaunch";
 import { useNavigation } from "./hooks/useNavigation";
+import { useNotificationTarget } from "./hooks/useNotificationTarget";
 import { useProjectFiles } from "./hooks/useProjectFiles";
 import { useSelectAllScope } from "./hooks/useSelectAllScope";
 import { useSessions } from "./hooks/useSessions";
@@ -244,6 +245,16 @@ export function App() {
   const commandsOpen = tabs.active?.kind === "stub" && tabs.active.stub === "commands";
   const sheet = useAgentSheet({ create, update, openSession: nav.openSession, createWorktree: worktrees.create });
   const envs = useEnvironments({ workspaces, active, closePage, openSettings, create, openSession: nav.openSession });
+
+  const { activate } = workspaces;
+  useNotificationTarget({
+    sessions: all,
+    activeWorkspaceId: workspaceId,
+    visibleSessionId: isWorkspace && tabs.active?.kind === "session" ? tabs.active.sessionId : null,
+    activate,
+    openSession: nav.openSession,
+    closePage,
+  });
 
   const { newSession, launch } = useLaunch({
     sessions,

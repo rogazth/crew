@@ -21,9 +21,10 @@ vi.mock("./client", () => ({
 }));
 
 const notify = vi.fn();
-vi.mock("./notify", () => ({ notify: (...args: unknown[]) => notify(...args) }));
+vi.mock("./host", () => ({ notify: (...args: unknown[]) => notify(...args) }));
 
 const runtime = await import("./agentRuntime");
+const notifications = await import("./notifications");
 const transcript = await import("./transcript");
 
 const agent = {
@@ -61,6 +62,8 @@ beforeEach(async () => {
   vi.stubGlobal("document", { hasFocus: () => true });
   request.mockReset();
   notify.mockReset();
+  notify.mockResolvedValue("shown");
+  notifications.resetNotifications();
   request.mockResolvedValue({ blocks: [], seq: 0, working: false, status: "idle" });
   await runtime.dispose(agent.id);
   runtime.setForeground(null);
@@ -194,11 +197,16 @@ describe("the status the sidebar sees", () => {
 describe("notifications", () => {
   it("says what the agent said when the turn ends off screen", () => {
     status("done");
-    expect(notify).toHaveBeenCalledWith("Planner", expect.any(String));
+    expect(notify).toHaveBeenCalledWith({
+      title: "Planner",
+      body: expect.any(String),
+      target: { workspaceId: "w1", sessionId: agent.id },
+    });
   });
 
   it("says nothing for a turn the reader watched end", () => {
     runtime.setForeground(agent.id);
+    notifications.setVisibleSession(agent.id);
     status("done");
     expect(notify).not.toHaveBeenCalled();
   });
@@ -212,7 +220,7 @@ describe("notifications", () => {
 
   it("asks for input out loud, because nothing moves until the reader answers", () => {
     status("needs-input");
-    expect(notify).toHaveBeenCalledWith("Planner", "Needs your input");
+    expect(notify).toHaveBeenCalledWith(expect.objectContaining({ title: "Planner", body: "Needs your input" }));
   });
 
   it("stays quiet when a turn simply goes idle", () => {

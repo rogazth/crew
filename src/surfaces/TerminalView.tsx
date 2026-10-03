@@ -20,7 +20,7 @@ import { resolveTerminalKey } from "../lib/terminalKeys";
 import { activateZwjUnicode } from "../lib/terminalUnicode";
 import { quotePath, quotePaths } from "../lib/terminalPaths";
 import { fontStack, ligaturesEnabled } from "../lib/terminalPrefs";
-import { oscClipboardText } from "../lib/terminalClipboard";
+import { osc777Message, oscClipboardText } from "../lib/terminalClipboard";
 import { isOscColorQuery, oscColorReply } from "../lib/terminalColors";
 import { DARK_SCHEME, palette } from "../lib/terminalTheme";
 import { FindBar } from "../chrome/FindBar";
@@ -49,7 +49,8 @@ type Props = {
    */
   onLost?: (() => void) | undefined;
   /** The process asked for attention: a bell, or an OSC notification. */
-  onBell?: (() => void) | undefined;
+  /** A bell, or an OSC 9 / 777 notification with what it says. */
+  onBell?: ((message?: string) => void) | undefined;
   /** Output arrived. Throttled, so it reads as "this session is busy". */
   onActivity?: (() => void) | undefined;
   /** The process retitled its terminal. */
@@ -307,8 +308,8 @@ export function TerminalView({
       void api.writePty(id, oscColorReply(code, hex));
       return true;
     };
-    const ring = () => {
-      latest.current.onBell?.();
+    const ring = (message?: string) => {
+      latest.current.onBell?.(message);
       return true;
     };
     const osc = [
@@ -316,8 +317,8 @@ export function TerminalView({
       term.parser.registerOscHandler(11, (d) => isOscColorQuery(d) && reply(11, colors.background)),
       term.parser.registerOscHandler(12, (d) => isOscColorQuery(d) && reply(12, colors.cursor)),
       // OSC 9 is a notification unless it opens with `4;`, which is progress.
-      term.parser.registerOscHandler(9, (d) => !d.startsWith("4;") && ring()),
-      term.parser.registerOscHandler(777, (d) => d.startsWith("notify") && ring()),
+      term.parser.registerOscHandler(9, (d) => !d.startsWith("4;") && ring(d)),
+      term.parser.registerOscHandler(777, (d) => d.startsWith("notify") && ring(osc777Message(d))),
       // What tmux or a TUI copies from its own mouse selection lands on the Mac's clipboard.
       term.parser.registerOscHandler(52, (d) => {
         const text = oscClipboardText(d);

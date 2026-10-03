@@ -12,6 +12,7 @@ import {
   type SitePermissions,
 } from "../src/lib/browser/bridge";
 import { FILE_CHANNELS } from "../src/lib/browser/files";
+import { NOTIFY_CHANNELS, type Banner, type NotificationTarget } from "../src/lib/notify";
 import { CLI_CHANNELS } from "../src/lib/cli";
 import type { InstallInput, InstallStep, ManualRemote } from "../src/lib/remotes";
 import { UPDATE_CHANNELS, type UpdateState } from "../src/lib/update";
@@ -29,7 +30,8 @@ contextBridge.exposeInMainWorld("crewHost", {
   open: (opts: { multiple?: boolean; directory?: boolean }) => ipcRenderer.invoke("dialog-open", opts),
   homeDir: () => ipcRenderer.invoke("home-dir"),
   openUrl: (url: string) => ipcRenderer.invoke("open-url", url),
-  notify: (title: string, body: string) => ipcRenderer.invoke("notify", { title, body }),
+  notify: (banner: Banner) => ipcRenderer.invoke(NOTIFY_CHANNELS.show, banner),
+  onNotificationClick: (cb: (target: NotificationTarget | null) => void) => listen(NOTIFY_CHANNELS.click, cb),
   pathForFile: (file: File) => webUtils.getPathForFile(file),
   files: {
     url: (root: string, path: string) => ipcRenderer.invoke(FILE_CHANNELS.url, root, path),

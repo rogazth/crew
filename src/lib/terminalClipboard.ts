@@ -15,3 +15,13 @@ export function oscClipboardText(data: string): string | null {
     return null;
   }
 }
+
+/**
+ * What an OSC 777 notification says (`notify;title;body`): its body, or its
+ * title when the body is empty. The title is often just the program's name.
+ */
+export function osc777Message(data: string): string | undefined {
+  const [, title = "", ...body] = data.split(";");
+  const text = body.join(";").trim() || title.trim();
+  return text || undefined;
+}

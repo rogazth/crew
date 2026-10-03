@@ -30,6 +30,7 @@ import { connectAgent, launchdStandIn, unloadAgent, type AgentLink } from "./dae
 import { decideLaunch, translocated, TRANSLOCATED_NOTICE, type Outcome } from "./daemon-agent-plan";
 import { registerCliIpc } from "./install-cli";
 import { buildMenu } from "./menu";
+import { registerNotifyIpc } from "./notifications";
 import { registerRemoteIpc } from "./remotes";
 import { parseColorMode, type ColorMode } from "../src/lib/colorMode";
 import { watchForUpdates } from "./update";
@@ -404,10 +405,7 @@ function registerIpc(): void {
     if (!allowedUrl(url)) return;
     await openExternal(url);
   });
-  ipcMain.handle("notify", (_event, payload: { title: string; body: string }) => {
-    if (!Notification.isSupported()) return;
-    new Notification({ title: payload.title, body: payload.body }).show();
-  });
+  registerNotifyIpc(() => win, createWindow);
   registerBrowserIpc();
   registerFileIpc();
   registerRemoteIpc(daemonInfo);

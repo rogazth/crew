@@ -1,7 +1,7 @@
 import * as api from "./api";
 import { client } from "./client";
 import { type Answers, type ApprovalDecision, type AttachedFile, type HarnessEvent } from "./blocks";
-import { notify } from "./notify";
+import { announceSession, type NotificationSource } from "./notifications";
 import * as transcript from "./transcript";
 import type { Session, SessionStatus } from "./types";
 import type { SessionStatusEvent, TranscriptApply, TurnStart } from "./protocol";
@@ -11,7 +11,7 @@ export type SessionPatch = Partial<Pick<Session, "status" | "providerSessionId" 
 
 type PatchListener = (id: string, patch: SessionPatch) => void;
 
-type KnownSession = { name: string; notifications: boolean };
+type KnownSession = { name: string; workspaceId: string; notifications: boolean };
 
 const patchListeners = new Set<PatchListener>();
 const statuses = new Map<string, SessionStatus>();
@@ -164,14 +164,10 @@ export async function dispose(id: string): Promise<void> {
 }
 
 function onHarness(id: string, event: HarnessEvent) {
-  if (event.type === "approval.requested") {
-    const name = sessionName(id);
-    if (name && !isWatching(id)) void notify(name, `Wants to run: ${event.title}`);
-  }
+  if (event.type === "approval.requested") announce(id, "needs-input", `Wants to run: ${event.title}`);
   if (event.type === "question.requested") {
-    const name = sessionName(id);
     const first = event.questions[0];
-    if (name && first && !isWatching(id)) void notify(name, `Asks: ${first.question}`);
+    if (first) announce(id, "needs-input", `Asks: ${first.question}`);
   }
 }
 
@@ -189,16 +185,11 @@ function onStatus(event: SessionStatusEvent) {
     updatedAt: event.updatedAt,
     ...(event.providerSessionId ? { providerSessionId: event.providerSessionId } : {}),
   });
-  if (status === "needs-input" && !isWatching(id)) {
-    const name = sessionName(id);
-    if (name) void notify(name, "Needs your input");
-  }
+  if (status === "needs-input") announce(id, "needs-input", "Needs your input");
   if (status === "done" || status === "idle" || status === "error" || status === "exited") {
     finishWaiters(id, status !== "error");
-    if (status !== "idle" && status !== "exited" && !isWatching(id)) {
-      const name = sessionName(id);
-      if (name) void notify(name, status === "error" ? "Ran into an error" : lastReply(id));
-    }
+    if (status === "error") announce(id, "error", "Ran into an error");
+    if (status === "done") announce(id, "done", lastReply(id));
   }
 }
 
@@ -220,17 +211,13 @@ function markIdle(id: string) {
 }
 
 function remember(session: Session) {
-  known.set(session.id, { name: session.name, notifications: session.notifications });
+  known.set(session.id, { name: session.name, workspaceId: session.workspaceId, notifications: session.notifications });
 }
 
-function sessionName(id: string): string | null {
-  return known.get(id)?.name ?? null;
-}
-
-function isWatching(id: string): boolean {
+/** News of a session this window knows; one it never listed has no name to put on it. */
+function announce(id: string, source: NotificationSource, body: string) {
   const row = known.get(id);
-  if (row && !row.notifications) return true;
-  return foreground === id && typeof document !== "undefined" && document.hasFocus();
+  if (row) announceSession({ id, ...row }, source, body);
 }
 
 function whenSettled(id: string): Promise<boolean> {

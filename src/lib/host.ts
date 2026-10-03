@@ -14,6 +14,7 @@ import type { MachineRoute } from "./browser/machines";
 import type { NavSnapshot } from "./browser/snapshot";
 import type { CliResult, CliStatus } from "./cli";
 import type { KeyboardLayout, LiveCommand } from "./keymap";
+import type { Banner, BannerResult, NotificationTarget } from "./notify";
 import type { ImportedCookie, RemoteEnv } from "./protocol";
 import type { InstallInput, InstallStep, ManualRemote, SshHost, Tailnet } from "./remotes";
 import type { UpdateState } from "./update";
@@ -27,7 +28,8 @@ type CrewHost = {
   open(opts: OpenOptions): Promise<string | string[] | null>;
   homeDir(): Promise<string>;
   openUrl(url: string): Promise<void>;
-  notify(title: string, body: string): Promise<void>;
+  notify(banner: Banner): Promise<BannerResult>;
+  onNotificationClick(cb: (target: NotificationTarget | null) => void): () => void;
   pathForFile(file: File): string;
   /** Steps the whole window's zoom; 0 puts it back to actual size. */
   zoom(delta: number): Promise<void>;
@@ -218,21 +220,37 @@ export async function openUrl(url: string): Promise<void> {
 }
 
 let allowed: Promise<boolean> | null = null;
+const clicks = new Set<(target: NotificationTarget | null) => void>();
 
-export async function notify(title: string, body: string): Promise<void> {
+export async function notify(banner: Banner): Promise<BannerResult> {
   const host = crewHost();
-  if (host) return host.notify(title, body);
-  if (typeof Notification === "undefined") return;
-  if (Notification.permission === "denied") return;
+  if (host) return host.notify(banner);
+  if (typeof Notification === "undefined") return "unsupported";
+  if (Notification.permission === "denied") return "blocked";
   if (Notification.permission !== "granted") {
     if (!allowed) {
       allowed = Notification.requestPermission()
         .then((state) => state === "granted")
         .catch(() => false);
     }
-    if (!(await allowed)) return;
+    if (!(await allowed)) return "blocked";
   }
-  new Notification(title, { body });
+  const note = new Notification(banner.title, { body: banner.body, silent: banner.silent ?? false });
+  note.onclick = () => {
+    window.focus();
+    for (const cb of clicks) cb(banner.target ?? null);
+  };
+  return "shown";
+}
+
+/** A banner was clicked: the window is already in front, `target` is where to go. */
+export function onNotificationClick(cb: (target: NotificationTarget | null) => void): () => void {
+  const host = crewHost();
+  if (host) return host.onNotificationClick(cb);
+  clicks.add(cb);
+  return () => {
+    clicks.delete(cb);
+  };
 }
 
 export function pathForFile(file: File): string {
