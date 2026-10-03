@@ -23,6 +23,7 @@ vi.mock("./client", () => ({
 const notify = vi.fn();
 vi.mock("./host", () => ({ notify: (...args: unknown[]) => notify(...args) }));
 vi.mock("./notificationSound", () => ({ playSound: vi.fn() }));
+vi.mock("./toasts", () => ({ showToast: vi.fn() }));
 
 const runtime = await import("./agentRuntime");
 const notifications = await import("./notifications");

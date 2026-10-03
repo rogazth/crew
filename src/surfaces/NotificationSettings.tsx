@@ -103,11 +103,32 @@ export function NotificationSettings() {
             label="Banners only when Crew is in the background"
             description={
               prefs.onlyWhenUnfocused
-                ? "With Crew in front, news of another session plays its sound and shows no banner."
+                ? "With Crew in front, news of another session shows in the window instead."
                 : "Banners show for any session but the one on screen, Crew in front or not."
             }
             checked={prefs.onlyWhenUnfocused}
             onChange={(checked) => set("onlyWhenUnfocused", checked)}
+          />
+          <Toggle
+            label="Show toasts"
+            description="A note in the corner for news of another session, with a button to open it."
+            checked={prefs.toasts}
+            onChange={(checked) => set("toasts", checked)}
+          />
+        </SettingsSection>
+
+        <SettingsSection title="Dock">
+          <Toggle
+            label="Badge"
+            description="Counts the sessions that finished or stopped to ask while Crew was in the background. Coming back to Crew clears it."
+            checked={prefs.badge}
+            onChange={(checked) => set("badge", checked)}
+          />
+          <Toggle
+            label="Bounce"
+            description="The icon bounces once when that count goes up."
+            checked={prefs.bounce}
+            onChange={(checked) => set("bounce", checked)}
           />
         </SettingsSection>
       </div>

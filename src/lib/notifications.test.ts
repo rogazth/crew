@@ -5,6 +5,8 @@ vi.mock("./host", () => ({ notify: (...args: unknown[]) => notify(...args) }));
 const playSound = vi.fn();
 vi.mock("./notificationSound", () => ({ playSound: (...args: unknown[]) => playSound(...args) }));
 vi.mock("./api", () => ({ stateGet: async () => null, stateSet: async () => {} }));
+const showToast = vi.fn();
+vi.mock("./toasts", () => ({ showToast: (...args: unknown[]) => showToast(...args) }));
 
 const { COOLDOWN_MS, dispatchNotification, reserveCooldown, resetNotifications, setVisibleSession } = await import(
   "./notifications"
@@ -26,6 +28,7 @@ beforeEach(() => {
   notify.mockReset();
   notify.mockResolvedValue("shown");
   playSound.mockReset();
+  showToast.mockReset();
   resetNotifications();
   prefs({});
 });
@@ -96,14 +99,33 @@ describe("dispatchNotification", () => {
     expect(await dispatchNotification(done)).toEqual({ delivered: true });
   });
 
-  it("only plays the sound for another session while the window is in front", async () => {
+  it("shows a toast for another session while the window is in front, not a banner", async () => {
     focused = true;
     expect(await dispatchNotification(done)).toEqual({ delivered: true });
     expect(notify).not.toHaveBeenCalled();
     expect(playSound).toHaveBeenCalled();
+    expect(showToast).toHaveBeenCalledWith({
+      title: "Planner",
+      body: "All green",
+      source: "done",
+      target: { workspaceId: "w1", sessionId: "s1" },
+    });
+  });
+
+  it("shows a banner in front instead, when asked to", async () => {
+    focused = true;
     prefs({ onlyWhenUnfocused: false });
-    await dispatchNotification({ ...done, session: { ...session, id: "s2" } });
+    await dispatchNotification(done);
     expect(notify).toHaveBeenCalled();
+    expect(showToast).not.toHaveBeenCalled();
+  });
+
+  it("only plays the sound in front with toasts off", async () => {
+    focused = true;
+    prefs({ toasts: false });
+    expect(await dispatchNotification(done)).toEqual({ delivered: true });
+    expect(showToast).not.toHaveBeenCalled();
+    expect(playSound).toHaveBeenCalled();
   });
 
   it("says a burst once", async () => {

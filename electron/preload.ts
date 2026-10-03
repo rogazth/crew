@@ -12,7 +12,7 @@ import {
   type SitePermissions,
 } from "../src/lib/browser/bridge";
 import { FILE_CHANNELS } from "../src/lib/browser/files";
-import { NOTIFY_CHANNELS, type Banner, type NotificationTarget } from "../src/lib/notify";
+import { NOTIFY_CHANNELS, type Banner, type DockBadge, type NotificationTarget } from "../src/lib/notify";
 import { CLI_CHANNELS } from "../src/lib/cli";
 import type { InstallInput, InstallStep, ManualRemote } from "../src/lib/remotes";
 import { UPDATE_CHANNELS, type UpdateState } from "../src/lib/update";
@@ -37,6 +37,7 @@ contextBridge.exposeInMainWorld("crewHost", {
     readSound: (path: string) => ipcRenderer.invoke(NOTIFY_CHANNELS.sound, path),
     status: () => ipcRenderer.invoke(NOTIFY_CHANNELS.status),
     openSettings: () => ipcRenderer.invoke(NOTIFY_CHANNELS.settings),
+    setBadge: (badge: DockBadge) => ipcRenderer.send(NOTIFY_CHANNELS.badge, badge),
   },
   pathForFile: (file: File) => webUtils.getPathForFile(file),
   files: {

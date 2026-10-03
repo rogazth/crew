@@ -8,6 +8,7 @@ import {
   type Banner,
   type BannerResult,
   type BannerState,
+  type DockBadge,
 } from "../src/lib/notify";
 
 /** How long a banner gets to say it showed or failed before it counts as shown. */
@@ -43,12 +44,24 @@ export function registerNotifyIpc(window: () => BrowserWindow | null, reopen: ()
   ipcMain.on(NOTIFY_CHANNELS.beep, () => shell.beep());
   ipcMain.handle(NOTIFY_CHANNELS.sound, (_event, path: string) => readSound(path));
   ipcMain.handle(NOTIFY_CHANNELS.status, () => (Notification.isSupported() ? state : "unsupported"));
+  ipcMain.on(NOTIFY_CHANNELS.badge, (_event, badge: DockBadge) => setBadge(badge));
+  // In front, nothing is waiting unseen; the window says so too, a beat later.
+  app.on("browser-window-focus", () => app.setBadgeCount(0));
+  app.once("will-quit", () => app.setBadgeCount(0));
   ipcMain.handle(NOTIFY_CHANNELS.settings, () => {
     if (process.platform !== "darwin") return;
     return shell.openExternal(
       `x-apple.systempreferences:com.apple.Notifications-Settings.extension?id=${encodeURIComponent(BUNDLE_ID)}`,
     );
   });
+}
+
+function setBadge(badge: DockBadge): void {
+  const focused = BrowserWindow.getFocusedWindow() !== null;
+  const count = Number.isFinite(badge.count) ? Math.max(0, Math.floor(badge.count)) : 0;
+  app.setBadgeCount(focused ? 0 : count);
+  // Informational: once, and only while Crew is not the active app.
+  if (badge.bounce && !focused && count > 0) app.dock?.bounce("informational");
 }
 
 /** Only an audio file, and only a short one: the renderer asks by path. */

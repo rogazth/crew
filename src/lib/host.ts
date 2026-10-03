@@ -14,7 +14,7 @@ import type { MachineRoute } from "./browser/machines";
 import type { NavSnapshot } from "./browser/snapshot";
 import type { CliResult, CliStatus } from "./cli";
 import type { KeyboardLayout, LiveCommand } from "./keymap";
-import type { Banner, BannerResult, BannerState, NotificationTarget } from "./notify";
+import type { Banner, BannerResult, BannerState, DockBadge, NotificationTarget } from "./notify";
 import type { ImportedCookie, RemoteEnv } from "./protocol";
 import type { InstallInput, InstallStep, ManualRemote, SshHost, Tailnet } from "./remotes";
 import type { UpdateState } from "./update";
@@ -51,6 +51,7 @@ export type NotificationsHost = {
   status(): Promise<BannerState>;
   /** Crew's page in System Settings › Notifications. */
   openSettings(): Promise<void>;
+  setBadge(badge: DockBadge): void;
 };
 
 /** Files shown as pages, and handed to Finder. Absent outside Electron. */

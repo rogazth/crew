@@ -22,6 +22,8 @@ import { useExplorer } from "./hooks/useExplorer";
 import { useLaunch } from "./hooks/useLaunch";
 import { useNavigation } from "./hooks/useNavigation";
 import { useNotificationTarget } from "./hooks/useNotificationTarget";
+import { useDockBadge } from "./hooks/useDockBadge";
+import { Toaster } from "./chrome/Toaster";
 import { useProjectFiles } from "./hooks/useProjectFiles";
 import { useSelectAllScope } from "./hooks/useSelectAllScope";
 import { useSessions } from "./hooks/useSessions";
@@ -249,7 +251,7 @@ export function App() {
   const envs = useEnvironments({ workspaces, active, closePage, openSettings, create, openSession: nav.openSession });
 
   const { activate } = workspaces;
-  useNotificationTarget({
+  const openNotified = useNotificationTarget({
     sessions: all,
     activeWorkspaceId: workspaceId,
     visibleSessionId: isWorkspace && tabs.active?.kind === "session" ? tabs.active.sessionId : null,
@@ -257,6 +259,8 @@ export function App() {
     openSession: nav.openSession,
     closePage,
   });
+
+  useDockBadge(all);
 
   const { newSession, launch } = useLaunch({
     sessions,
@@ -312,6 +316,7 @@ export function App() {
     <TerminalPrefsProvider>
     <BrowserPrefsProvider>
     <LinkRouter open={nav.openBrowser} />
+    <Toaster onOpen={openNotified} />
     <AgentAvatarProvider>
     <div className="flex h-full">
       {active && (

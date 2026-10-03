@@ -9,7 +9,11 @@ export const NOTIFY_CHANNELS = {
   sound: "notify:sound",
   status: "notify:status",
   settings: "notify:settings",
+  badge: "notify:badge",
 } as const;
+
+/** The Dock's count of sessions waiting on the user; `bounce` asks for one informational bounce. */
+export type DockBadge = { count: number; bounce: boolean };
 
 /** The session a banner is about: clicking it brings the window up on that session. */
 export type NotificationTarget = { workspaceId: string; sessionId: string };

@@ -8,6 +8,7 @@ import {
 } from "./notificationPrefs";
 import { playSound } from "./notificationSound";
 import { BODY_LIMIT, type NotificationTarget } from "./notify";
+import { showToast } from "./toasts";
 import type { Session, SessionStatus } from "./types";
 
 /** What a notification is news of; each kind has its own switch in Settings. `test` is the button there. */
@@ -107,12 +108,15 @@ export async function dispatchNotification(event: NotificationEvent): Promise<Di
   if (session && session.id === visible && focused) return skip("suppressed-focus");
   if (!test && !reserveCooldown(recent, cooldownKey(event), Date.now())) return skip("cooldown");
 
+  const target: NotificationTarget | null = session ? { workspaceId: session.workspaceId, sessionId: session.id } : null;
   const banner = kind.banner && (test || !(prefs.onlyWhenUnfocused && focused));
+  // In front, the window says it itself, where a banner would have.
+  const toast = kind.banner && !banner && focused && prefs.toasts;
   // The OS's own sound rides on the banner; with no banner the window plays it.
   if (kind.sound !== "system" || !banner) void playSound(kind.sound, prefs.volume, prefs.customSound);
-  if (!banner) return kind.sound === "none" ? skip("suppressed-focus") : { delivered: true };
+  if (toast) showToast({ title: event.title, body: event.body, source: event.source, target });
+  if (!banner) return kind.sound === "none" && !toast ? skip("suppressed-focus") : { delivered: true };
 
-  const target: NotificationTarget | null = session ? { workspaceId: session.workspaceId, sessionId: session.id } : null;
   try {
     const result = await notify({
       title: event.title,

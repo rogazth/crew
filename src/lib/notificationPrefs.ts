@@ -30,8 +30,14 @@ export type NotificationPrefs = {
   /** The master switch: off, nothing is shown or played. */
   enabled: boolean;
   kinds: Record<NotificationKind, KindPrefs>;
-  /** Banners only while Crew is in the background; in front, a sound (and a toast) is enough. */
+  /** Banners only while Crew is in the background; in front, a sound and a toast are enough. */
   onlyWhenUnfocused: boolean;
+  /** In front, news of another session shows in the window, with a way to open it. */
+  toasts: boolean;
+  /** The Dock icon counts sessions waiting on the user. */
+  badge: boolean;
+  /** The Dock icon bounces once when that count goes up with Crew in the background. */
+  bounce: boolean;
   /** 0 to 100, for the sounds Crew plays itself. */
   volume: number;
   /** The file the `custom` sound plays. */
@@ -52,6 +58,9 @@ export const DEFAULT_NOTIFICATION_PREFS: NotificationPrefs = {
     connection: { banner: true, sound: "none" },
   },
   onlyWhenUnfocused: true,
+  toasts: true,
+  badge: true,
+  bounce: false,
   volume: 70,
   customSound: null,
   pausedUntil: null,
@@ -86,6 +95,9 @@ export function parseNotificationPrefs(raw: string | null): NotificationPrefs {
     kinds,
     onlyWhenUnfocused:
       typeof parsed.onlyWhenUnfocused === "boolean" ? parsed.onlyWhenUnfocused : defaults.onlyWhenUnfocused,
+    toasts: typeof parsed.toasts === "boolean" ? parsed.toasts : defaults.toasts,
+    badge: typeof parsed.badge === "boolean" ? parsed.badge : defaults.badge,
+    bounce: typeof parsed.bounce === "boolean" ? parsed.bounce : defaults.bounce,
     volume:
       typeof parsed.volume === "number" && Number.isFinite(parsed.volume)
         ? Math.round(Math.min(100, Math.max(0, parsed.volume)))
