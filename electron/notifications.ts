@@ -1,5 +1,14 @@
-import { app, BrowserWindow, ipcMain, Notification } from "electron";
-import { BODY_LIMIT, NOTIFY_CHANNELS, type Banner, type BannerResult } from "../src/lib/notify";
+import { readFile, stat } from "node:fs/promises";
+import { app, BrowserWindow, ipcMain, Notification, shell } from "electron";
+import {
+  BODY_LIMIT,
+  isSoundFile,
+  NOTIFY_CHANNELS,
+  SOUND_LIMIT,
+  type Banner,
+  type BannerResult,
+  type BannerState,
+} from "../src/lib/notify";
 
 /** How long a banner gets to say it showed or failed before it counts as shown. */
 const SETTLE_MS = 1500;
@@ -11,18 +20,47 @@ const KEEP = 50;
  * handler with it, so each one is held until it is clicked, closed or replaced.
  */
 const live = new Set<Notification>();
+/** What the last banner said: Settings warns while macOS blocks them. */
+let state: BannerState = "unknown";
+
+/** The bundle macOS keys notification permission to: the release's, or Electron's own in dev. */
+const BUNDLE_ID = app.isPackaged ? "rogazth.crew" : "com.github.Electron";
 
 /**
  * A banner's click brings the window up on the session it is about. `window`
  * is the app's one window, if it has one; `reopen` makes it when it was closed.
  */
 export function registerNotifyIpc(window: () => BrowserWindow | null, reopen: () => void): void {
-  ipcMain.handle(NOTIFY_CHANNELS.show, (event, banner: Banner) => show(banner, () => {
-    const win = window();
-    if (!win || win.isDestroyed()) return reopen();
-    reveal(win);
-    if (!event.sender.isDestroyed()) event.sender.send(NOTIFY_CHANNELS.click, banner.target ?? null);
-  }));
+  ipcMain.handle(NOTIFY_CHANNELS.show, async (event, banner: Banner) => {
+    state = await show(banner, () => {
+      const win = window();
+      if (!win || win.isDestroyed()) return reopen();
+      reveal(win);
+      if (!event.sender.isDestroyed()) event.sender.send(NOTIFY_CHANNELS.click, banner.target ?? null);
+    });
+    return state;
+  });
+  ipcMain.on(NOTIFY_CHANNELS.beep, () => shell.beep());
+  ipcMain.handle(NOTIFY_CHANNELS.sound, (_event, path: string) => readSound(path));
+  ipcMain.handle(NOTIFY_CHANNELS.status, () => (Notification.isSupported() ? state : "unsupported"));
+  ipcMain.handle(NOTIFY_CHANNELS.settings, () => {
+    if (process.platform !== "darwin") return;
+    return shell.openExternal(
+      `x-apple.systempreferences:com.apple.Notifications-Settings.extension?id=${encodeURIComponent(BUNDLE_ID)}`,
+    );
+  });
+}
+
+/** Only an audio file, and only a short one: the renderer asks by path. */
+async function readSound(path: unknown): Promise<Uint8Array | null> {
+  if (typeof path !== "string" || !isSoundFile(path)) return null;
+  try {
+    const info = await stat(path);
+    if (!info.isFile() || info.size > SOUND_LIMIT) return null;
+    return new Uint8Array(await readFile(path));
+  } catch {
+    return null;
+  }
 }
 
 function show(banner: Banner, onClick: () => void): Promise<BannerResult> {

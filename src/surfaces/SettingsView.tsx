@@ -38,6 +38,7 @@ import { settingsSection, type SettingsSectionId } from "../lib/settings";
 import type { Workspace } from "../lib/types";
 import type { TabScope } from "../lib/worktrees";
 import { EnvironmentSettings } from "./EnvironmentSettings";
+import { NotificationSettings } from "./NotificationSettings";
 import { SessionSettings } from "./SessionSettings";
 import { TerminalSettings } from "./TerminalSettings";
 
@@ -67,6 +68,7 @@ export function SettingsView({
         <div className="flex flex-col gap-8">
           {section === "general" && <General onConfirm={onConfirm} />}
           {section === "appearance" && <Appearance />}
+          {section === "notifications" && <NotificationSettings />}
           {section === "keybindings" && <Keybindings />}
           {section === "terminal" && <TerminalSettings />}
           {section === "browser" && <Browser />}
@@ -74,6 +76,7 @@ export function SettingsView({
           {section === "providers" && <Providers />}
           {section !== "general" &&
             section !== "appearance" &&
+            section !== "notifications" &&
             section !== "keybindings" &&
             section !== "terminal" &&
             section !== "browser" &&

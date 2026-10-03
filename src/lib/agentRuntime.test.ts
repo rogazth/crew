@@ -22,6 +22,7 @@ vi.mock("./client", () => ({
 
 const notify = vi.fn();
 vi.mock("./host", () => ({ notify: (...args: unknown[]) => notify(...args) }));
+vi.mock("./notificationSound", () => ({ playSound: vi.fn() }));
 
 const runtime = await import("./agentRuntime");
 const notifications = await import("./notifications");
@@ -50,6 +51,11 @@ function status(next: string, id = agent.id): void {
   listeners.get("session-status")?.({ sessionId: id, status: next, updatedAt: 1 });
 }
 
+/** The dispatcher reads its prefs before it decides; this lets it. */
+const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+let focused = false;
+
 /** The transcript store paints through window, and vitest runs this file in node. */
 let frames: Array<() => void> = [];
 
@@ -59,7 +65,8 @@ beforeEach(async () => {
     requestAnimationFrame: (fn: () => void) => frames.push(fn),
     cancelAnimationFrame: () => {},
   });
-  vi.stubGlobal("document", { hasFocus: () => true });
+  focused = false;
+  vi.stubGlobal("document", { hasFocus: () => focused });
   request.mockReset();
   notify.mockReset();
   notify.mockResolvedValue("shown");
@@ -195,19 +202,23 @@ describe("the status the sidebar sees", () => {
 });
 
 describe("notifications", () => {
-  it("says what the agent said when the turn ends off screen", () => {
+  it("says what the agent said when the turn ends off screen", async () => {
     status("done");
+    await flush();
     expect(notify).toHaveBeenCalledWith({
       title: "Planner",
       body: expect.any(String),
       target: { workspaceId: "w1", sessionId: agent.id },
+      silent: true,
     });
   });
 
-  it("says nothing for a turn the reader watched end", () => {
+  it("says nothing for a turn the reader watched end", async () => {
+    focused = true;
     runtime.setForeground(agent.id);
     notifications.setVisibleSession(agent.id);
     status("done");
+    await flush();
     expect(notify).not.toHaveBeenCalled();
   });
 
@@ -215,16 +226,19 @@ describe("notifications", () => {
     await runtime.reconcile([{ ...agent, notifications: false }]);
     status("done");
     status("needs-input");
+    await flush();
     expect(notify).not.toHaveBeenCalled();
   });
 
-  it("asks for input out loud, because nothing moves until the reader answers", () => {
+  it("asks for input out loud, because nothing moves until the reader answers", async () => {
     status("needs-input");
+    await flush();
     expect(notify).toHaveBeenCalledWith(expect.objectContaining({ title: "Planner", body: "Needs your input" }));
   });
 
-  it("stays quiet when a turn simply goes idle", () => {
+  it("stays quiet when a turn simply goes idle", async () => {
     status("idle");
+    await flush();
     expect(notify).not.toHaveBeenCalled();
   });
 });

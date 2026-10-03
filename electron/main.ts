@@ -161,6 +161,8 @@ function csp(): string {
     // Google's favicon service answers from www.google.com by redirecting to a gstatic host.
     "img-src 'self' data: blob: crew-file: https://www.google.com https://*.gstatic.com",
     "font-src 'self' data:",
+    // blob: is a custom notification sound, read by main and played by the window.
+    "media-src 'self' blob:",
     `connect-src ${connect}`,
     "object-src 'none'",
     "base-uri 'self'",

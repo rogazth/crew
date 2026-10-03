@@ -14,7 +14,7 @@ import type { MachineRoute } from "./browser/machines";
 import type { NavSnapshot } from "./browser/snapshot";
 import type { CliResult, CliStatus } from "./cli";
 import type { KeyboardLayout, LiveCommand } from "./keymap";
-import type { Banner, BannerResult, NotificationTarget } from "./notify";
+import type { Banner, BannerResult, BannerState, NotificationTarget } from "./notify";
 import type { ImportedCookie, RemoteEnv } from "./protocol";
 import type { InstallInput, InstallStep, ManualRemote, SshHost, Tailnet } from "./remotes";
 import type { UpdateState } from "./update";
@@ -30,6 +30,7 @@ type CrewHost = {
   openUrl(url: string): Promise<void>;
   notify(banner: Banner): Promise<BannerResult>;
   onNotificationClick(cb: (target: NotificationTarget | null) => void): () => void;
+  notifications: NotificationsHost;
   pathForFile(file: File): string;
   /** Steps the whole window's zoom; 0 puts it back to actual size. */
   zoom(delta: number): Promise<void>;
@@ -39,6 +40,17 @@ type CrewHost = {
   browser: BrowserHost;
   files: FilesHost;
   remotes?: RemotesHost;
+};
+
+/** The rest of what a notification needs from main. */
+export type NotificationsHost = {
+  /** The OS's own alert sound. */
+  beep(): void;
+  /** A custom sound's bytes; null for a file that is not audio, too big, or gone. */
+  readSound(path: string): Promise<Uint8Array | null>;
+  status(): Promise<BannerState>;
+  /** Crew's page in System Settings › Notifications. */
+  openSettings(): Promise<void>;
 };
 
 /** Files shown as pages, and handed to Finder. Absent outside Electron. */
@@ -241,6 +253,27 @@ export async function notify(banner: Banner): Promise<BannerResult> {
     for (const cb of clicks) cb(banner.target ?? null);
   };
   return "shown";
+}
+
+export function beep(): void {
+  crewHost()?.notifications.beep();
+}
+
+export async function readSound(path: string): Promise<Uint8Array | null> {
+  const host = crewHost();
+  return host ? host.notifications.readSound(path) : null;
+}
+
+/** Whether banners get through. A browser answers from its own permission. */
+export async function notificationStatus(): Promise<BannerState> {
+  const host = crewHost();
+  if (host) return host.notifications.status();
+  if (typeof Notification === "undefined") return "unsupported";
+  return Notification.permission === "denied" ? "blocked" : Notification.permission === "granted" ? "shown" : "unknown";
+}
+
+export function notificationsHost(): NotificationsHost | null {
+  return crewHost()?.notifications ?? null;
 }
 
 /** A banner was clicked: the window is already in front, `target` is where to go. */

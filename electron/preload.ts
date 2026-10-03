@@ -32,6 +32,12 @@ contextBridge.exposeInMainWorld("crewHost", {
   openUrl: (url: string) => ipcRenderer.invoke("open-url", url),
   notify: (banner: Banner) => ipcRenderer.invoke(NOTIFY_CHANNELS.show, banner),
   onNotificationClick: (cb: (target: NotificationTarget | null) => void) => listen(NOTIFY_CHANNELS.click, cb),
+  notifications: {
+    beep: () => ipcRenderer.send(NOTIFY_CHANNELS.beep),
+    readSound: (path: string) => ipcRenderer.invoke(NOTIFY_CHANNELS.sound, path),
+    status: () => ipcRenderer.invoke(NOTIFY_CHANNELS.status),
+    openSettings: () => ipcRenderer.invoke(NOTIFY_CHANNELS.settings),
+  },
   pathForFile: (file: File) => webUtils.getPathForFile(file),
   files: {
     url: (root: string, path: string) => ipcRenderer.invoke(FILE_CHANNELS.url, root, path),

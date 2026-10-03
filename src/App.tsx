@@ -46,6 +46,7 @@ import { awaitsUser, isOrphan, liveRuns, startableIn } from "./lib/processes";
 import { ProcessTab } from "./surfaces/ProcessTab";
 import { CommandsView, type Place } from "./surfaces/CommandsView";
 import { boot } from "./lib/agentRuntime";
+import { unlockNotificationAudio } from "./lib/notificationSound";
 import { WorkspacePanes } from "./surfaces/WorkspacePanes";
 import { HomeStart } from "./surfaces/HomeStart";
 import { HomeActions, TourFoot } from "./chrome/HomePanel";
@@ -60,6 +61,7 @@ export function App() {
   // due, an agent writes to another — so the window listens from the moment it
   // opens rather than from the first thing the user sends.
   useEffect(() => void boot(), []);
+  useEffect(unlockNotificationAudio, []);
   useSelectAllScope();
   useBrowserBridge();
 

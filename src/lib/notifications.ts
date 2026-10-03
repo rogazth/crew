@@ -1,9 +1,17 @@
 import { notify } from "./host";
+import {
+  isPaused,
+  loadNotificationPrefs,
+  notificationPrefs,
+  type KindPrefs,
+  type NotificationKind,
+} from "./notificationPrefs";
+import { playSound } from "./notificationSound";
 import { BODY_LIMIT, type NotificationTarget } from "./notify";
 import type { Session, SessionStatus } from "./types";
 
-/** What a notification is news of; each has its own switch in Settings. */
-export type NotificationSource = "done" | "needs-input" | "error" | "bell" | "connection" | "test";
+/** What a notification is news of; each kind has its own switch in Settings. `test` is the button there. */
+export type NotificationSource = NotificationKind | "test";
 
 export type NotificationEvent = {
   source: NotificationSource;
@@ -17,9 +25,15 @@ export type NotificationEvent = {
 
 /** Why a notification was not shown. */
 export type SkipReason =
+  /** Notifications are off altogether. */
+  | "disabled"
+  /** Do not disturb is on. */
+  | "paused"
+  /** This kind has no banner and no sound. */
+  | "source-disabled"
   /** The session's own switch is off. */
   | "muted"
-  /** The window is focused on the very session it is about. */
+  /** The window is focused on the very session it is about, or in front with banners and sound off. */
   | "suppressed-focus"
   /** The same news went out moments ago. */
   | "cooldown"
@@ -73,17 +87,39 @@ function windowFocused(): boolean {
 }
 
 /**
- * Every notification goes through here: it is shown, or the answer says why
- * not. The test button skips the cooldown, since pressing it twice means it.
+ * Every notification goes through here: it is shown, played, or the answer
+ * says why not. The test button skips the switches and the cooldown, since
+ * pressing it means it; it sounds like a session waiting on the user.
  */
 export async function dispatchNotification(event: NotificationEvent): Promise<DispatchResult> {
+  await loadNotificationPrefs();
+  const prefs = notificationPrefs();
+  const test = event.source === "test";
+  const kind: KindPrefs = event.source === "test" ? { ...prefs.kinds["needs-input"], banner: true } : prefs.kinds[event.source];
+  if (!test) {
+    if (!prefs.enabled) return skip("disabled");
+    if (isPaused(prefs, Date.now())) return skip("paused");
+    if (!kind.banner && kind.sound === "none") return skip("source-disabled");
+  }
   const { session } = event;
   if (session && !session.notifications) return skip("muted");
-  if (session && session.id === visible && windowFocused()) return skip("suppressed-focus");
-  if (event.source !== "test" && !reserveCooldown(recent, cooldownKey(event), Date.now())) return skip("cooldown");
+  const focused = windowFocused();
+  if (session && session.id === visible && focused) return skip("suppressed-focus");
+  if (!test && !reserveCooldown(recent, cooldownKey(event), Date.now())) return skip("cooldown");
+
+  const banner = kind.banner && (test || !(prefs.onlyWhenUnfocused && focused));
+  // The OS's own sound rides on the banner; with no banner the window plays it.
+  if (kind.sound !== "system" || !banner) void playSound(kind.sound, prefs.volume, prefs.customSound);
+  if (!banner) return kind.sound === "none" ? skip("suppressed-focus") : { delivered: true };
+
   const target: NotificationTarget | null = session ? { workspaceId: session.workspaceId, sessionId: session.id } : null;
   try {
-    const result = await notify({ title: event.title, body: event.body.slice(0, BODY_LIMIT), target });
+    const result = await notify({
+      title: event.title,
+      body: event.body.slice(0, BODY_LIMIT),
+      target,
+      silent: kind.sound !== "system",
+    });
     return result === "shown" ? { delivered: true } : skip(result);
   } catch {
     // The banner is a courtesy; the transcript already has the news.

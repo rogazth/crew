@@ -15,6 +15,7 @@
     "seed": "node scripts/seed.mjs",
     "app:build": "node scripts/app-build.mjs",
     "icon": "node scripts/icon.mjs",
+    "sounds": "node scripts/sounds.mjs",
     "prepare": "husky",
     "postinstall": "patch-package",
     "lint": "eslint src",

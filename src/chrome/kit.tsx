@@ -1,7 +1,7 @@
 import { AlertDialog } from "@base-ui/react/alert-dialog";
 import { Menu } from "@base-ui/react/menu";
 import { Select as BaseSelect } from "@base-ui/react/select";
-import { Switch } from "@base-ui/react/switch";
+import { Switch as BaseSwitch } from "@base-ui/react/switch";
 import { Tooltip as BaseTooltip } from "@base-ui/react/tooltip";
 import { CheckIcon, ChevronDownIcon, ChevronsUpDownIcon, LoaderCircleIcon, type LucideIcon as Icon } from "lucide-react";
 import type {
@@ -130,14 +130,30 @@ export function Toggle({
         <span>{label}</span>
         {description && <span className="text-[12px] text-text-muted">{description}</span>}
       </span>
-      <Switch.Root
-        checked={checked}
-        onCheckedChange={onChange}
-        className="relative inline-flex h-5 w-8 shrink-0 items-center rounded-full bg-selected p-0.5 outline-none transition-colors focus-visible:ring-2 focus-visible:ring-focus/50 data-checked:bg-accent"
-      >
-        <Switch.Thumb className="size-4 rounded-full bg-canvas shadow-sm transition-transform data-checked:translate-x-3" />
-      </Switch.Root>
+      <Switch checked={checked} onChange={onChange} />
     </label>
+  );
+}
+
+/** The Toggle's switch alone, for a row that has other controls; `label` names it when nothing visible does. */
+export function Switch({
+  checked,
+  onChange,
+  label,
+}: {
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+  label?: string;
+}) {
+  return (
+    <BaseSwitch.Root
+      checked={checked}
+      onCheckedChange={onChange}
+      aria-label={label}
+      className="relative inline-flex h-5 w-8 shrink-0 items-center rounded-full bg-selected p-0.5 outline-none transition-colors focus-visible:ring-2 focus-visible:ring-focus/50 data-checked:bg-accent"
+    >
+      <BaseSwitch.Thumb className="size-4 rounded-full bg-canvas shadow-sm transition-transform data-checked:translate-x-3" />
+    </BaseSwitch.Root>
   );
 }
 
