@@ -12,7 +12,7 @@ const TIMEOUT_MS = 6000;
 const ASKING_TIMEOUT_MS = 12000;
 
 export function showToast(toast: { title: string; body: string } & ToastData): void {
-  const asking = toast.source === "needs-input" || toast.source === "error";
+  const asking = toast.source === "needs-input" || toast.source === "approval" || toast.source === "error";
   toastManager.add({
     // One per session: news of it replaces the last instead of piling up.
     ...(toast.target ? { id: `session:${toast.target.sessionId}` } : {}),

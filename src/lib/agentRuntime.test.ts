@@ -1,15 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const request = vi.fn();
-const listeners = new Map<string, (payload: unknown) => void>();
+const listeners = new Map<string, Set<(payload: unknown) => void>>();
 const reconnects: Array<() => void> = [];
 
 vi.mock("./client", () => ({
   client: {
     request,
     on: (event: string, listener: (payload: unknown) => void) => {
-      listeners.set(event, listener);
-      return () => listeners.delete(event);
+      const set = listeners.get(event) ?? new Set();
+      set.add(listener);
+      listeners.set(event, set);
+      return () => set.delete(listener);
     },
     onReconnect: (hook: () => void) => {
       reconnects.push(hook);
@@ -49,7 +51,11 @@ const agent = {
 
 /** What the daemon would broadcast when a session moves. */
 function status(next: string, id = agent.id): void {
-  listeners.get("session-status")?.({ sessionId: id, status: next, updatedAt: 1 });
+  emit("session-status", { sessionId: id, status: next, updatedAt: 1 });
+}
+
+function emit(event: string, payload: unknown): void {
+  for (const listener of listeners.get(event) ?? []) listener(payload);
 }
 
 /** The dispatcher reads its prefs before it decides; this lets it. */
@@ -235,6 +241,40 @@ describe("notifications", () => {
     status("needs-input");
     await flush();
     expect(notify).toHaveBeenCalledWith(expect.objectContaining({ title: "Planner", body: "Needs your input" }));
+  });
+
+  it("tells a permission prompt from a question", async () => {
+    emit("transcript-apply", {
+      sessionId: agent.id,
+      seq: 1,
+      event: { type: "approval.requested", requestId: 1, name: "Bash", title: "npm test" },
+    });
+    await flush();
+    expect(notify).toHaveBeenCalledWith(expect.objectContaining({ body: "Wants to run: npm test" }));
+  });
+
+  it("says when another agent writes, once that is switched on", async () => {
+    const letter = (kind?: string) => ({
+      sessionId: agent.id,
+      seq: 1,
+      event: { type: "user.message", text: "Review #42\nthanks", fromAgent: { id: "s9", name: "Scout", ...(kind ? { kind } : {}) } },
+    });
+    emit("transcript-apply", letter());
+    await flush();
+    expect(notify).not.toHaveBeenCalled();
+
+    const { DEFAULT_NOTIFICATION_PREFS, updateNotificationPrefs } = await import("./notificationPrefs");
+    updateNotificationPrefs({
+      ...DEFAULT_NOTIFICATION_PREFS,
+      kinds: { ...DEFAULT_NOTIFICATION_PREFS.kinds, mailbox: { banner: true, sound: "none" } },
+    });
+    emit("transcript-apply", letter("user"));
+    await flush();
+    expect(notify).not.toHaveBeenCalled();
+    emit("transcript-apply", letter());
+    await flush();
+    expect(notify).toHaveBeenCalledWith(expect.objectContaining({ body: "From Scout: Review #42" }));
+    updateNotificationPrefs(DEFAULT_NOTIFICATION_PREFS);
   });
 
   it("stays quiet when a turn simply goes idle", async () => {

@@ -49,6 +49,7 @@ import { ProcessTab } from "./surfaces/ProcessTab";
 import { CommandsView, type Place } from "./surfaces/CommandsView";
 import { boot } from "./lib/agentRuntime";
 import { unlockNotificationAudio } from "./lib/notificationSound";
+import { watchProcesses } from "./lib/processAlerts";
 import { WorkspacePanes } from "./surfaces/WorkspacePanes";
 import { HomeStart } from "./surfaces/HomeStart";
 import { HomeActions, TourFoot } from "./chrome/HomePanel";
@@ -141,6 +142,7 @@ export function App() {
   // it: the session stays in the sidebar, and opening it starts the CLI again.
   const workspaceIds = useMemo(() => workspaces.workspaces.map((workspace) => workspace.id), [workspaces.workspaces]);
   const runningSessions = useRunningSessions(workspaceIds);
+  useEffect(() => watchProcesses(workspaceIds), [workspaceIds]);
   const { askStop } = confirms;
   const { closeForSession } = tabs;
   const stopSession = useCallback(

@@ -9,6 +9,7 @@ import {
 import { playSound } from "./notificationSound";
 import { BODY_LIMIT, type NotificationTarget } from "./notify";
 import { showToast } from "./toasts";
+import type { SessionAsk } from "./protocol";
 import type { Session, SessionStatus } from "./types";
 
 /** What a notification is news of; each kind has its own switch in Settings. `test` is the button there. */
@@ -157,6 +158,15 @@ const TERMINAL_NEWS: Partial<Record<SessionStatus, [NotificationSource, string]>
 export function announceStatus(session: Announced, status: SessionStatus): void {
   const news = TERMINAL_NEWS[status];
   if (news) announceSession(session, news[0], news[1]);
+}
+
+/** What a CLI's hooks say it stopped on: a question form, or a permission prompt for a tool. */
+export function askNews(ask: SessionAsk): [NotificationSource, string] {
+  const question = ask.questions[0]?.question;
+  if (question) return ["needs-input", `Asks: ${question}`];
+  const input = ask.input;
+  const what = [input.command, input.file_path, input.path, input.url].find((value) => typeof value === "string" && value);
+  return ["approval", what ? `Wants to run ${ask.tool}: ${String(what)}` : `Wants to use ${ask.tool}`];
 }
 
 /** Forgets what went out, for tests. */

@@ -10,6 +10,7 @@ import { homeFor, sessionCwd } from '../lib/client/registry';
 import { claudeSessionId, transcriptPath } from '../lib/claudeStorage';
 import { bindProviderSession } from '../lib/agentRuntime';
 import { isHanded } from '../lib/handedSessions';
+import { announceSession, askNews } from '../lib/notifications';
 import { blockingScreen, type BlockingScreen } from '../lib/blockingScreen';
 import { clearFirstPrompt, peekFirstPrompt, setFirstPrompt } from '../lib/firstPrompt';
 import { BYPASS_KEY } from '../lib/permissions';
@@ -333,18 +334,30 @@ function SessionTerminal({
   );
 }
 
-/** What the CLI's hooks say it does is the word on its status: a turn, a question. */
+/**
+ * What the CLI's hooks say it does is the word on its status: a turn, a
+ * question. A new ask is news under its own kind, a question or a permission,
+ * said before the status that follows it is.
+ */
 function useLiveHooks(session: Session, onLive: (working: boolean, asking: boolean, background: boolean) => void) {
   const hooked = reportsLive(session.provider);
+  const latest = useRef(session);
+  useEffect(() => {
+    latest.current = session;
+  });
   useEffect(() => {
     if (!hooked) return;
     let last: string | null = null;
+    let asked: number | null = null;
     return subscribeLive(session.id, () => {
       const live = readLive(session.id);
       if (!live) return;
       const background = live.background === true;
       const now = `${live.working}:${live.ask?.id ?? ''}:${background}`;
       if (now === last) return;
+      // The first word heard may be an ask from before this window opened; only a new one is news.
+      if (live.ask && last !== null && live.ask.id !== asked) announceSession(latest.current, ...askNews(live.ask));
+      asked = live.ask?.id ?? null;
       last = now;
       onLive(live.working, live.ask !== undefined, background);
     });

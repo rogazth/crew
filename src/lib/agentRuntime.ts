@@ -164,11 +164,20 @@ export async function dispose(id: string): Promise<void> {
 }
 
 function onHarness(id: string, event: HarnessEvent) {
-  if (event.type === "approval.requested") announce(id, "needs-input", `Wants to run: ${event.title}`);
+  if (event.type === "approval.requested") announce(id, "approval", `Wants to run: ${event.title}`);
   if (event.type === "question.requested") {
     const first = event.questions[0];
     if (first) announce(id, "needs-input", `Asks: ${first.question}`);
   }
+  // A letter from another agent or a terminal; the user's own, and a note an agent left itself, are not news.
+  const from = event.type === "user.message" ? event.fromAgent : undefined;
+  if (event.type === "user.message" && from && from.kind !== "user" && from.id !== id) {
+    announce(id, "mailbox", `From ${from.name}: ${firstLine(event.text)}`);
+  }
+}
+
+function firstLine(text: string): string {
+  return text.trim().split("\n")[0] ?? "";
 }
 
 function onStatus(event: SessionStatusEvent) {

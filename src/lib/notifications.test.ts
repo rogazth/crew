@@ -8,9 +8,8 @@ vi.mock("./api", () => ({ stateGet: async () => null, stateSet: async () => {} }
 const showToast = vi.fn();
 vi.mock("./toasts", () => ({ showToast: (...args: unknown[]) => showToast(...args) }));
 
-const { COOLDOWN_MS, dispatchNotification, reserveCooldown, resetNotifications, setVisibleSession } = await import(
-  "./notifications"
-);
+const { askNews, COOLDOWN_MS, dispatchNotification, reserveCooldown, resetNotifications, setVisibleSession } =
+  await import("./notifications");
 const { DEFAULT_NOTIFICATION_PREFS, updateNotificationPrefs } = await import("./notificationPrefs");
 
 const session = { id: "s1", workspaceId: "w1", notifications: true };
@@ -153,5 +152,16 @@ describe("dispatchNotification", () => {
   it("cuts a long body down to a glance", async () => {
     await dispatchNotification({ ...done, body: "x".repeat(500) });
     expect(notify.mock.calls[0]?.[0].body).toHaveLength(200);
+  });
+});
+
+describe("askNews", () => {
+  const ask = { id: 1, always: false, questions: [], tool: "Bash", input: {} };
+
+  it("tells a question from a permission prompt", () => {
+    const question = { question: "Which branch?", header: "", multiSelect: false, options: [] };
+    expect(askNews({ ...ask, questions: [question] })).toEqual(["needs-input", "Asks: Which branch?"]);
+    expect(askNews({ ...ask, input: { command: "rm -rf dist" } })).toEqual(["approval", "Wants to run Bash: rm -rf dist"]);
+    expect(askNews({ ...ask, tool: "WebFetch" })).toEqual(["approval", "Wants to use WebFetch"]);
   });
 });

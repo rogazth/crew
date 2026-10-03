@@ -3,7 +3,10 @@ import {
   BellIcon,
   CheckIcon,
   CircleAlertIcon,
+  MailIcon,
   MessageCircleQuestionIcon,
+  ShieldQuestionIcon,
+  SquareTerminalIcon,
   WifiIcon,
   XIcon,
   type LucideIcon as Icon,
@@ -15,8 +18,11 @@ import { SURFACE } from "./kit";
 
 const ICONS: Record<NotificationSource, Icon> = {
   "needs-input": MessageCircleQuestionIcon,
+  approval: ShieldQuestionIcon,
   done: CheckIcon,
   error: CircleAlertIcon,
+  process: SquareTerminalIcon,
+  mailbox: MailIcon,
   bell: BellIcon,
   connection: WifiIcon,
   test: BellIcon,
@@ -53,7 +59,7 @@ function Toasts({ onOpen }: { onOpen: (target: NotificationTarget) => void }) {
         <Toast.Content className="flex items-start gap-3 overflow-hidden p-3 transition-opacity duration-200 data-behind:opacity-0 data-expanded:opacity-100">
           <Glyph
             aria-hidden
-            className={`mt-0.5 size-4 shrink-0 ${source === "error" ? "text-danger" : "text-icon"}`}
+            className={`mt-0.5 size-4 shrink-0 ${source === "error" || source === "process" ? "text-danger" : "text-icon"}`}
           />
           <div className="flex min-w-0 flex-1 flex-col gap-0.5">
             <Toast.Title className="truncate font-medium" />
