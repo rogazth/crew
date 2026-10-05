@@ -12,6 +12,7 @@
     "preview": "vite preview",
     "app": "node scripts/app.mjs",
     "app:design": "node scripts/app-design.mjs",
+    "prototype": "CREW_MOCK=1 vite --port 1431",
     "seed": "node scripts/seed.mjs",
     "app:build": "node scripts/app-build.mjs",
     "icon": "node scripts/icon.mjs",
