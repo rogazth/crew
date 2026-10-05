@@ -11,7 +11,7 @@
 //! `wait_for_log`, `read_logs` — so a model that has driven a dev server knows
 //! the moves. The child's reply is the end of its turn: it needs no tool to
 //! answer, which is what lets a terminal (that cannot be written back to) be a
-//! parent, and Cursor (that has no MCP) be a child.
+//! parent.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -1558,6 +1558,225 @@ while True:
         let (id, _) = w.codex(&parent, "FAIL", None);
         let out = w.wait(&parent, &id, json!({}));
         assert_eq!((out["sessions"][0]["event"].clone(), out["sessions"][0]["outcome"].clone()), (json!("error"), json!("boom")), "{out}");
+    }
+
+    impl World {
+        /// A Cursor child on the fake `cursor-agent acp`, and the log of what it was sent.
+        fn cursor(&self, parent: &Caller, prompt: &str, autonomy: Option<&str>) -> (String, PathBuf) {
+            let (fake, log) = crate::turns::fake_cursor(&self.dir);
+            self.turns.override_binary("cursor-agent", fake);
+            let mut args = json!({ "provider": "cursor", "model": "composer-2.5", "prompt": prompt });
+            if let Some(autonomy) = autonomy {
+                args["autonomy"] = json!(autonomy);
+            }
+            let started = self.call(parent, "start_session", args).expect("start");
+            (started["id"].as_str().unwrap().to_string(), log)
+        }
+    }
+
+    fn launches_of(log: &std::path::Path) -> Vec<Value> {
+        std::fs::read_to_string(log)
+            .unwrap_or_default()
+            .lines()
+            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+            .filter(|line| line.get("argv").is_some())
+            .map(|line| line["argv"].clone())
+            .collect()
+    }
+
+    /// One `cursor-agent acp` per turn: the first opens a session with Crew's
+    /// server on it and the persona in the message, the next loads that
+    /// session. The history the load replays is not shown twice.
+    #[test]
+    fn a_cursor_session_opens_a_session_and_the_next_turn_loads_it() {
+        let w = world();
+        let parent = w.session("terminal", "shell", "full");
+        let (id, log) = w.cursor(&parent, "remember 4817", None);
+        let out = w.wait(&parent, &id, json!({}));
+        assert_eq!(out["sessions"][0]["report"], "report: remember 4817", "{out}");
+        w.settle(&id);
+        let bound = w.row(&id).provider_session_id.expect("bound");
+
+        assert_eq!(launches_of(&log)[0], json!(["--model", "composer-2.5", "--force", "acp"]));
+        assert_eq!(sent(&log, "initialize")[0]["protocolVersion"], 1);
+        assert_eq!(sent(&log, "authenticate")[0]["methodId"], "cursor_login");
+        let opened = sent(&log, "session/new");
+        assert_eq!(opened.len(), 1, "{opened:?}");
+        let crew = &opened[0]["mcpServers"][0];
+        assert_eq!((crew["name"].clone(), crew["args"].clone()), (json!("crew"), json!(["--mcp"])), "{crew}");
+        let token = crew["env"].as_array().unwrap().iter().find(|pair| pair["name"] == "CREW_TOKEN").expect("token");
+        assert!(token["value"].as_str().is_some_and(|t| !t.is_empty()), "{crew}");
+        let first = sent(&log, "session/prompt")[0]["prompt"][0]["text"].as_str().unwrap().to_string();
+        assert!(first.contains("Your final message of each turn is your report"), "the persona is in the message: {first}");
+        assert!(first.contains("`find_tool` (MCP server `crew`)"), "the MCP tools, not the crew CLI: {first}");
+        assert!(first.trim_end().ends_with("remember 4817"), "{first}");
+
+        let more = w.call(&parent, "send_to_session", json!({ "session": id, "text": "what number?" })).expect("send");
+        assert_eq!(more["delivered"], true, "{more}");
+        assert_eq!(w.wait(&parent, &id, json!({}))["sessions"][0]["report"], "report: what number?");
+        let loaded = sent(&log, "session/load");
+        assert_eq!(loaded.len(), 1, "{loaded:?}");
+        assert_eq!(loaded[0]["sessionId"], json!(bound));
+        assert_eq!(loaded[0]["mcpServers"][0]["name"], "crew", "{}", loaded[0]);
+        assert_eq!(sent(&log, "session/new").len(), 1, "a load that worked opened another session");
+        let second = sent(&log, "session/prompt")[1]["prompt"][0]["text"].as_str().unwrap().to_string();
+        assert!(second.starts_with("## From shell (terminal") && !second.contains("Your final message"), "{second}");
+        let read = w.call(&parent, "read_session", json!({ "session": id })).expect("read");
+        let text = read["text"].as_str().unwrap();
+        assert_eq!(text.matches("report: remember 4817").count(), 1, "the replay was shown again: {text}");
+        assert!(!text.contains("echo old"), "{text}");
+        assert_eq!(launches_of(&log).len(), 2);
+        assert!(w.turns.test_agents().running().is_empty());
+    }
+
+    /// Cursor takes nothing into a running turn: a steer is queued, says so,
+    /// and is the next turn. Crew never sends a second prompt mid-turn.
+    #[test]
+    fn a_cursor_steer_is_queued_for_the_next_turn() {
+        let w = world();
+        let parent = w.session("terminal", "shell", "full");
+        let (id, log) = w.cursor(&parent, "SLEEP 2", None);
+        until_tool(&w, &parent, &id);
+        let steer = w.call(&parent, "send_to_session", json!({ "session": id, "text": "and this", "mode": "steer" })).expect("steer");
+        assert_eq!((steer["steered"].clone(), steer["queued"].clone()), (json!(false), json!(true)), "{steer}");
+        assert!(steer["note"].as_str().unwrap().contains("cursor cannot take a message"), "{steer}");
+        assert_eq!(w.wait(&parent, &id, json!({}))["sessions"][0]["report"], "report: SLEEP 2");
+        let next = w.wait(&parent, &id, json!({}));
+        assert_eq!(next["sessions"][0]["report"], "report: and this", "{next}");
+        assert_eq!(sent(&log, "session/prompt").len(), 2);
+        assert_eq!(launches_of(&log).len(), 2, "each prompt had its own process");
+    }
+
+    /// An ask child's command waits on the card, and Crew's "always" goes back
+    /// as `allow-once`: `allow-always` would write the user's global config.
+    /// Cursor's first request is id 0.
+    #[test]
+    fn a_cursor_approval_is_a_card_and_always_is_allowed_once() {
+        let w = world();
+        let parent = w.session("terminal", "shell", "full");
+        let (id, log) = w.cursor(&parent, "ASK", Some("ask"));
+        let asked = w.wait(&parent, &id, json!({}));
+        assert_eq!(asked["sessions"][0]["event"], "needs-input", "{asked}");
+        let request = &asked["sessions"][0]["request"];
+        assert_eq!((request["kind"].clone(), request["tool"].clone(), request["title"].clone()), (json!("approval"), json!("bash"), json!("touch asked.txt")), "{request}");
+        assert_eq!(request["input"]["reason"], "Shell allowlist is empty", "{request}");
+        assert_eq!(w.row(&id).status, "needs-input");
+        w.call(&parent, "respond_to_session", json!({ "session": id, "request_id": request["request_id"], "decision": "always" }))
+            .expect("respond");
+        let done = w.wait(&parent, &id, json!({}));
+        assert_eq!(done["sessions"][0]["report"], "report: ASK + decision: allow-once", "{done}");
+        assert_eq!(launches_of(&log)[0], json!(["--model", "composer-2.5", "acp"]), "ask runs without --force");
+        let answered: Vec<Value> = std::fs::read_to_string(&log)
+            .unwrap()
+            .lines()
+            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+            .filter(|line| line.get("answer").is_some())
+            .collect();
+        assert_eq!(answered[0]["answer"], 0, "{answered:?}");
+    }
+
+    /// Crew's own MCP calls are allowed without a card; a question is a card
+    /// answered by its label and sent back by id; a plan is accepted and shown.
+    #[test]
+    fn a_cursor_child_calls_crew_freely_asks_by_card_and_plans() {
+        let w = world();
+        let parent = w.session("terminal", "shell", "full");
+        let (id, _) = w.cursor(&parent, "MCP QUESTION PLAN", Some("ask"));
+        let asked = w.wait(&parent, &id, json!({}));
+        let request = &asked["sessions"][0]["request"];
+        assert_eq!(request["kind"], "question", "the Crew call asked: {asked}");
+        assert_eq!(request["questions"][0]["question"], "Which color?");
+        w.call(&parent, "respond_to_session", json!({ "session": id, "request_id": request["request_id"], "answers": { "Which color?": "Blue" } }))
+            .expect("answer");
+        let done = w.wait(&parent, &id, json!({}));
+        assert_eq!(
+            done["sessions"][0]["report"],
+            r#"report: MCP QUESTION PLAN + crew: allow-once + answers: {"answers": [{"questionId": "color", "selectedOptionIds": ["b"]}], "outcome": "answered"} + plan: accepted"#,
+            "{done}"
+        );
+        let (blocks, _) = w.turns.transcripts().since(&id, 0);
+        assert!(blocks.iter().any(|block| block.text == "Crew list bots"), "{blocks:?}");
+        assert!(blocks.iter().any(|block| block.text == "Plan: Hello"), "{blocks:?}");
+        assert!(blocks.iter().any(|block| block.text == "Todos"), "{blocks:?}");
+    }
+
+    /// Stopped: the prompt is cancelled, and the turn ends when it says so;
+    /// one that does not say so in time is killed under it.
+    #[test]
+    fn a_stopped_cursor_turn_is_cancelled_then_killed_if_it_hangs_on() {
+        let w = world();
+        let parent = w.session("terminal", "shell", "full");
+        let (id, log) = w.cursor(&parent, "SLEEP 30", None);
+        until_tool(&w, &parent, &id);
+        let at = Instant::now();
+        let stopped = w.call(&parent, "stop_session", json!({ "session": id })).expect("stop");
+        assert_eq!(stopped["status"], "exited", "{stopped}");
+        assert!(at.elapsed() < Duration::from_secs(2), "the cancel was not taken: {:?}", at.elapsed());
+        assert_eq!(sent(&log, "session/cancel").len(), 1);
+        let (blocks, _) = w.turns.transcripts().since(&id, 0);
+        let row = blocks.iter().find_map(|block| block.tool.as_ref()).expect("the command row");
+        assert_eq!(row.status, crew_protocol::ToolStatus::Interrupted);
+
+        let (stubborn, _) = w.cursor(&parent, "STUBBORN SLEEP 30", None);
+        until_tool(&w, &parent, &stubborn);
+        let at = Instant::now();
+        let stopped = w.call(&parent, "stop_session", json!({ "session": stubborn })).expect("stop");
+        assert_eq!(stopped["status"], "exited", "{stopped}");
+        let took = at.elapsed();
+        assert!(took >= Duration::from_secs(2) && took < Duration::from_secs(6), "{took:?}");
+        std::thread::sleep(Duration::from_millis(300));
+        assert!(w.turns.test_agents().running().is_empty(), "the hung cursor-agent was left running");
+    }
+
+    #[test]
+    fn a_failed_cursor_turn_reports_why() {
+        let w = world();
+        let parent = w.session("terminal", "shell", "full");
+        let (id, _) = w.cursor(&parent, "FAIL", None);
+        let out = w.wait(&parent, &id, json!({}));
+        assert_eq!((out["sessions"][0]["event"].clone(), out["sessions"][0]["outcome"].clone()), (json!("error"), json!("boom")), "{out}");
+    }
+
+    /// A child from before ACP: migration 27 dropped the `-p` chat it cannot
+    /// load, and its next turn starts a new conversation with a note. One
+    /// whose conversation is gone for another reason says so and starts anew.
+    #[test]
+    fn a_cursor_child_from_before_acp_starts_a_new_conversation_with_a_note() {
+        let w = world();
+        let parent = w.session("terminal", "shell", "full");
+        let (id, log) = w.cursor(&parent, "first", None);
+        w.wait(&parent, &id, json!({}));
+        w.settle(&id);
+        crate::session::set_provider_session(w.turns.store(), id.clone(), "4496282a-p-chat".into()).unwrap();
+        w.turns.store().with(|conn| crate::store::cursor_children_to_acp(conn)).unwrap();
+        assert_eq!(w.row(&id).provider_session_id, None);
+
+        w.call(&parent, "send_to_session", json!({ "session": id, "text": "second" })).expect("send");
+        assert_eq!(w.wait(&parent, &id, json!({}))["sessions"][0]["report"], "report: second");
+        assert!(sent(&log, "session/load").is_empty(), "it tried the old chat");
+        let second = sent(&log, "session/prompt")[1]["prompt"][0]["text"].as_str().unwrap().to_string();
+        assert!(second.contains("Your final message of each turn is your report"), "a new conversation gets the persona: {second}");
+        let notes = |w: &World| {
+            let (blocks, _) = w.turns.transcripts().since(&id, 0);
+            blocks.iter().filter(|block| block.text == crate::turns::CURSOR_ACP_NOTE).count()
+        };
+        assert_eq!(notes(&w), 1);
+
+        // Later turns load the new conversation, and say nothing more.
+        w.settle(&id);
+        w.call(&parent, "send_to_session", json!({ "session": id, "text": "third" })).expect("send");
+        assert_eq!(w.wait(&parent, &id, json!({}))["sessions"][0]["report"], "report: third");
+        assert_eq!(sent(&log, "session/load").len(), 1);
+        assert_eq!(notes(&w), 1);
+
+        // A conversation cursor no longer has.
+        w.settle(&id);
+        crate::session::set_provider_session(w.turns.store(), id.clone(), "gone".into()).unwrap();
+        w.call(&parent, "send_to_session", json!({ "session": id, "text": "fourth" })).expect("send");
+        assert_eq!(w.wait(&parent, &id, json!({}))["sessions"][0]["report"], "report: fourth");
+        let read = w.call(&parent, "read_session", json!({ "session": id })).expect("read");
+        assert!(read["text"].as_str().unwrap().contains("Cursor could not load this session's conversation"), "{read}");
+        assert_ne!(w.row(&id).provider_session_id.as_deref(), Some("gone"));
     }
 
     /// Claude carries on by itself when a command it backgrounded ends, with

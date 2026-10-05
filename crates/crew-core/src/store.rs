@@ -423,7 +423,39 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         )?;
         tx.commit()?;
     }
+    if current < 27 {
+        let tx = conn.unchecked_transaction()?;
+        cursor_children_to_acp(&tx)?;
+        tx.execute(
+            "INSERT INTO schema_migrations (version, applied_at) VALUES (27, ?1)",
+            params![now_millis()],
+        )?;
+        tx.commit()?;
+    }
     Ok(())
+}
+
+/// The `app_state` key, before a session's id, that marks a Cursor child
+/// whose `-p` chat stayed behind: its next turn says it starts anew.
+pub const CURSOR_ACP_NOTE: &str = "cursor:acp-note:";
+
+/// Crew drives Cursor over ACP now (plan §7e.6), and an ACP session cannot
+/// load a chat `cursor-agent -p` kept: they live apart, in `acp-sessions/`
+/// and `chats/`. A Cursor child forgets its chat, so its next turn opens a
+/// new conversation instead of failing to load the old one; what it said
+/// stays in Crew's transcript. One that had a chat is marked, and that turn
+/// tells the user. A bot never resumed one; a terminal still runs the TUI.
+pub(crate) fn cursor_children_to_acp(conn: &Connection) -> rusqlite::Result<()> {
+    conn.execute(
+        "INSERT OR REPLACE INTO app_state (key, value)
+         SELECT ?1 || id, provider_session_id FROM sessions
+          WHERE kind = 'child' AND provider = 'cursor' AND COALESCE(provider_session_id, '') <> ''",
+        params![CURSOR_ACP_NOTE],
+    )?;
+    conn.execute_batch(
+        "UPDATE sessions SET provider_session_id = NULL
+          WHERE kind = 'child' AND provider = 'cursor' AND provider_session_id IS NOT NULL;",
+    )
 }
 
 pub(crate) fn has_table(conn: &Connection, table: &str) -> rusqlite::Result<bool> {
@@ -1075,6 +1107,70 @@ mod lifecycle_tests {
         drop(store);
         let store = Store::open(dir.join("crew.sqlite3")).expect("third open");
         assert_eq!(crate::mailbox::waiting_count(&store, &bot).unwrap(), 2);
+    }
+}
+
+#[cfg(test)]
+mod acp_tests {
+    use super::*;
+
+    /// A v26 database with Cursor sessions of every kind. Migration 27 drops
+    /// the `-p` chat of each Cursor child, marks the ones that had one for the
+    /// note, and leaves everything else as it was.
+    #[test]
+    fn a_v26_database_comes_out_of_27_with_its_cursor_children_unbound() {
+        let dir = std::env::temp_dir().join(format!("crew-v27-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let path = dir.join("crew.sqlite3");
+        let ids = {
+            let store = Store::open(path.clone()).expect("open");
+            let ws = crate::workspace::create(&store, "w".into(), dir.to_string_lossy().into()).expect("ws");
+            let make = |kind: &str, provider: &str, bound: Option<&str>| {
+                let row = if kind == "child" {
+                    crate::session::create_child(&store, ws.id.clone(), format!("{provider}: x"), provider.into(), "m".into(), "full".into(), None, None)
+                } else {
+                    crate::session::create(&store, ws.id.clone(), kind.into(), "x".into(), provider.into(), "m".into(), "".into(), "full".into())
+                }
+                .expect("session");
+                if let Some(bound) = bound {
+                    crate::session::set_provider_session(&store, row.id.clone(), bound.into()).unwrap();
+                }
+                row.id
+            };
+            let ids = [
+                make("child", "cursor", Some("chat-1")),
+                make("child", "cursor", None),
+                make("bot", "cursor", Some("chat-2")),
+                make("terminal", "cursor", Some("chat-3")),
+                make("child", "codex", Some("thread-1")),
+            ];
+            store
+                .with(|conn| conn.execute_batch("DELETE FROM schema_migrations WHERE version >= 27;"))
+                .expect("downgrade");
+            ids
+        };
+
+        let store = Store::open(path.clone()).expect("reopen");
+        let version: i64 = store
+            .with(|conn| conn.query_row("SELECT MAX(version) FROM schema_migrations", [], |row| row.get(0)))
+            .unwrap();
+        assert!(version >= 27, "{version}");
+        let bound = |id: &str| crate::session::get(&store, id.to_string()).unwrap().unwrap().provider_session_id;
+        let noted = |id: &str| get(&store, format!("{CURSOR_ACP_NOTE}{id}")).unwrap();
+        assert_eq!(bound(&ids[0]), None);
+        assert_eq!(noted(&ids[0]).as_deref(), Some("chat-1"));
+        assert_eq!((bound(&ids[1]), noted(&ids[1])), (None, None));
+        assert_eq!((bound(&ids[2]).as_deref(), noted(&ids[2])), (Some("chat-2"), None), "a bot never resumed");
+        assert_eq!((bound(&ids[3]).as_deref(), noted(&ids[3])), (Some("chat-3"), None), "a terminal runs the TUI");
+        assert_eq!((bound(&ids[4]).as_deref(), noted(&ids[4])), (Some("thread-1"), None));
+
+        // Opening again changes nothing: a child bound over ACP since keeps it.
+        crate::session::set_provider_session(&store, ids[1].clone(), "acp-1".into()).unwrap();
+        drop(store);
+        let store = Store::open(path).expect("third open");
+        let bound = crate::session::get(&store, ids[1].clone()).unwrap().unwrap().provider_session_id;
+        assert_eq!(bound.as_deref(), Some("acp-1"));
+        assert!(get(&store, format!("{CURSOR_ACP_NOTE}{}", ids[0])).unwrap().is_some());
     }
 }
 

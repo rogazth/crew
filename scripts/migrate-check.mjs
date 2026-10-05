@@ -7,6 +7,9 @@
 // 25 renames agents to bots: the identity, its kind and the window's keys
 // in app_state come out under the new word. Migration 26 gives letters a kind
 // and a lifecycle: a delivered one stays delivered, a waiting one pending.
+// Migration 27 moves Cursor children to ACP: the `-p` chat a child was bound
+// to is dropped (and marked for the note its next turn shows), its
+// conversation in Crew stays, and a Cursor terminal keeps its chat.
 //
 //   cargo build -p crewd && node scripts/migrate-check.mjs
 import { spawn } from "node:child_process";
@@ -80,6 +83,20 @@ function seedOldDatabase() {
   db.prepare(
     `INSERT INTO routines (id, session_id, name, prompt, schedule, created_at, updated_at)
      VALUES ('r1', 's1', 'standup', 'Sum up yesterday', '{"kind":"daily","hour":9,"minute":0}', ?, ?)`,
+  ).run(Date.now(), Date.now());
+  // A Cursor child bound to a `-p` chat, with what it said, and a Cursor
+  // terminal bound to its own.
+  const cursorBlocks = [
+    { id: "c1b1", role: "user", text: "fix the flaky login test", at: Date.now() - 30_000 },
+    { id: "c1b2", role: "assistant", text: "the retry was racing the cookie write", at: Date.now() - 20_000 },
+  ];
+  db.prepare(
+    `INSERT INTO sessions (id, workspace_id, kind, name, provider, model, provider_session_id, blocks_json, created_at, updated_at)
+     VALUES ('c1', 'w1', 'child', 'cursor: fix', 'cursor', 'auto', 'chat-p1', ?, ?, ?)`,
+  ).run(JSON.stringify(cursorBlocks), Date.now(), Date.now());
+  db.prepare(
+    `INSERT INTO sessions (id, workspace_id, kind, name, provider, model, provider_session_id, created_at, updated_at)
+     VALUES ('c2', 'w1', 'terminal', 'Cursor shell', 'cursor', 'auto', 'chat-t1', ?, ?)`,
   ).run(Date.now(), Date.now());
   const state = db.prepare("INSERT INTO app_state (key, value) VALUES (?, ?)");
   state.run("agent:faces", JSON.stringify({ s1: { seed: "s1" } }));
@@ -192,6 +209,7 @@ const call = (id, method, params) =>
     ws.send(JSON.stringify({ id, method, params }));
   });
 const listed = (await call(2, "session_list", { workspaceId: "w1" })).result ?? [];
+const cursorPage = await call(4, "transcript_tail", { sessionId: "c1", limit: 100 });
 const routines = (await call(3, "routine_list_for_session", { sessionId: "s1" })).result ?? [];
 
 const checks = [];
@@ -212,6 +230,12 @@ checks.push([
   JSON.stringify(planner ?? null),
 ]);
 checks.push(["the terminal is a session with no bot", shell?.kind === "terminal" && !shell?.botId, JSON.stringify(shell ?? null)]);
+const cursorTexts = (cursorPage.result?.blocks ?? []).map((block) => block.text);
+checks.push([
+  "the Cursor child's conversation is still in Crew",
+  cursorTexts.includes("fix the flaky login test") && cursorTexts.includes("the retry was racing the cookie write"),
+  cursorTexts.join("|"),
+]);
 checks.push(["the bot's routine is still its own", routines.length === 1 && routines[0]?.name === "standup", `${routines.length} routines`]);
 
 ws.close();
@@ -256,6 +280,14 @@ checks.push([
   ["kind", "event_cursor", "claimed_at", "disposed_at"].every((name) => mailboxColumns.includes(name)) &&
     ["handed_off_by", "user_seen"].every((name) => columns.includes(name)),
   `${mailboxColumns.join(",")} · ${columns.join(",")}`,
+]);
+const cursorRows = Object.fromEntries(
+  db.prepare("SELECT id, provider_session_id FROM sessions WHERE provider = 'cursor'").all().map((row) => [row.id, row.provider_session_id]),
+);
+checks.push([
+  "the Cursor child lost its -p chat and is marked for the note; the terminal kept its own",
+  cursorRows.c1 === null && state["cursor:acp-note:c1"] === "chat-p1" && cursorRows.c2 === "chat-t1" && !("cursor:acp-note:c2" in state),
+  JSON.stringify(cursorRows),
 ]);
 if (process.env.CASE === "behind") {
   const letters = Object.fromEntries(

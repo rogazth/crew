@@ -753,6 +753,23 @@ those sessions and their history in Crew, clears their provider session id,
 and their next turn starts a new conversation with a note saying so.
 Terminals the user runs are not affected.
 
+*Built (phase 3b):* `turns/cursor.rs` drives `cursor-agent [--model m]
+[--force | --auto-review] acp`, one process per turn; a child's next turn
+`session/load`s, muting the replay. The model goes on argv, not
+`session/set_config_option`: argv takes Crew's ids (`gpt-5.6-sol-medium`),
+ACP only its own (`gpt-5.6-sol`). Crew's MCP calls and, under the edits
+autonomy, edits are answered `allow-once` at once; the rest are cards, and
+"always" goes back as `allow-once`. A load that fails starts a new session
+with a note. Migration 27 clears the provider session of Cursor children and
+marks those that had one (`app_state` `cursor:acp-note:<id>`) for the note.
+`cursor/ask_question` (`{toolCallId, title, questions: [{id, prompt,
+options: [{id, label}], allowMultiple}]}`, answered `{outcome: {outcome:
+"answered", answers: [{questionId, selectedOptionIds}]}}`) is wired to the
+question card, but no model offered it: composer-2.5, gpt-5.6-sol,
+claude-sonnet-5-5, gemini-3.8-flash and auto, in agent and plan mode, all
+said the tool is not in their tool list (it is decided server-side; the
+client name did not change it).
+
 ### 7e.7 Codex moves to app-server
 
 T3 runs `codex app-server`; zeron and opencodex too. Against `codex exec` it

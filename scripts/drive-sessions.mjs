@@ -457,7 +457,8 @@ const scenarios = {
   },
 
   // A message steered into a running turn (Claude over stream-json, Codex
-  // with turn/steer); queued, and saying so, where a turn is one command.
+  // with turn/steer); queued, and saying so, where the CLI cannot take one
+  // mid-turn (opencode, Cursor's ACP).
   async s(provider) {
     const shell = await terminal(`s-${provider}`);
     const id = await start(shell.token, provider, "Run the shell command `sleep 20` in the foreground and wait for it to finish, then reply with the word ALPHA.");
@@ -466,7 +467,7 @@ const scenarios = {
     if (provider !== "claude" && provider !== "codex") {
       assert(steer.ok && steer.value.steered === false && steer.value.queued === true, `steer was not queued: ${steer.text}`);
       await waitEvent(shell.token, id);
-      return "n/a: it runs each turn as one command, so the steer is queued and says so";
+      return "n/a: it takes nothing mid-turn, so the steer is queued and says so";
     }
     assert(steer.ok && steer.value.steered === true, `not steered: ${steer.text}`);
     const out = await waitEvent(shell.token, id);
@@ -500,14 +501,21 @@ const scenarios = {
   },
 
   // The child asks for approval; the parent answers. Codex works in its
-  // workspace without asking, so its command reaches outside it.
+  // workspace without asking, so its command reaches outside it. Cursor asks
+  // only under a config that does not run everything: CURSOR_CONFIG_DIR at a
+  // copy of ~/.cursor with "approvalMode": "allowlist".
   async f(provider) {
-    if (provider !== "claude" && provider !== "codex") return "n/a: headless, it has no channel to ask Crew for approval";
+    if (provider === "opencode") return "n/a: headless, it has no channel to ask Crew for approval";
+    if (provider === "cursor" && !process.env.CURSOR_CONFIG_DIR) {
+      return "n/a: set CURSOR_CONFIG_DIR to a Cursor config with approvalMode allowlist; the default runs everything";
+    }
     const target = (name) => (provider === "codex" ? join(dataDir, name) : join(repo, name));
     const job = (name) =>
       provider === "codex"
         ? `Run exactly this shell command: touch ${target(name)} — it is outside your workspace, so ask for escalated permissions to run it. Then reply DONE.`
-        : `Use your Bash tool to run exactly this command: touch ${name} — then reply DONE.`;
+        : provider === "cursor"
+          ? `Use your shell tool to run exactly this command: touch ${name} — then reply DONE.`
+          : `Use your Bash tool to run exactly this command: touch ${name} — then reply DONE.`;
     const shell = await terminal(`f-full-${provider}`);
     const id = await start(shell.token, provider, job("approved.txt"), { autonomy: "ask" });
     const asked = await waitEvent(shell.token, id);

@@ -195,6 +195,21 @@ pub fn crew_tool_detail(name: &str, input: &Map<String, Value>) -> Option<crew_p
     })
 }
 
+/// The row line for a Crew call: `Crew message agent abc`, the tool it ran
+/// (through `call_tool` or not) and whom or what it was about.
+pub fn crew_label(name: &str, input: &Map<String, Value>) -> Option<String> {
+    let (verb, input) = crew_call(name, input)?;
+    let input: &Map<String, Value> = &input;
+    let verb = format!("Crew {}", verb.replace('_', " "));
+    let subject = string_field(Some(input), "to")
+        .or_else(|| string_field(Some(input), "name"))
+        .or_else(|| string_field(Some(input), "query"));
+    Some(match subject {
+        Some(subject) => format!("{verb} {}", clip(&subject, 40)),
+        None => verb,
+    })
+}
+
 /// An MCP tool's server and tool, from Claude's `mcp__server__tool` name.
 /// Crew's own server is left to `crew_tool`.
 pub fn mcp_name(name: &str) -> Option<(String, String)> {
@@ -596,12 +611,7 @@ mod tests {
                 autonomy: Autonomy::Ask,
                 mcp_config: None,
             }),
-            cursor::build_cursor_spawn_args(&cursor::CursorSpawn {
-                prompt: "hi".into(),
-                model: None,
-                autonomy: Autonomy::Ask,
-                resume: None,
-            }),
+            cursor::build_cursor_spawn_args(&cursor::CursorSpawn { model: None, autonomy: Autonomy::Ask }),
             opencode::build_opencode_spawn_args(&opencode::OpencodeSpawn {
                 model: None,
                 autonomy: Autonomy::Ask,
@@ -619,6 +629,8 @@ mod tests {
         let (method, params) = codex::thread_request(&codex_thread(None, None));
         assert_eq!(method, "thread/start", "{params}");
         assert!(params.get("threadId").is_none(), "{params}");
+        let (method, params) = cursor::session_request("/w", None, &serde_json::json!([]));
+        assert_eq!(method, "session/new", "{params}");
     }
 
     /// A child session is the opposite case: it is its provider's own
@@ -644,14 +656,9 @@ mod tests {
         assert_eq!(codex["threadId"], "thread-1", "{codex}");
         assert_eq!(codex["model"], "gpt", "a resume without its model runs config.toml's: {codex}");
 
-        let cursor = cursor::build_cursor_spawn_args(&cursor::CursorSpawn {
-            prompt: "more".into(),
-            model: None,
-            autonomy: Autonomy::Ask,
-            resume: Some("chat-1".into()),
-        });
-        assert!(cursor.contains(&"--resume=chat-1".to_string()), "{cursor:?}");
-        assert_eq!(cursor.last().map(String::as_str), Some("more"));
+        let (method, cursor) = cursor::session_request("/w", Some("acp-1"), &serde_json::json!([]));
+        assert_eq!(method, "session/load", "{cursor}");
+        assert_eq!(cursor["sessionId"], "acp-1", "{cursor}");
 
         let opencode = opencode::build_opencode_spawn_args(&opencode::OpencodeSpawn {
             model: None,

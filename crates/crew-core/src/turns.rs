@@ -25,11 +25,6 @@ use crate::providers::claude::{
     ClaudeSpawn,
 };
 use crate::providers::parse_json_line;
-use crate::providers::cursor::{
-    assistant_delta_text, build_cursor_prompt, build_cursor_spawn_args, parse_tool_call,
-    session_id_from_event, tool_status as cursor_tool_status, turn_failed as cursor_turn_failed,
-    turn_usage as cursor_turn_usage, CursorSpawn, ToolPhase,
-};
 use crate::providers::opencode::{
     opencode_config, step_failure as opencode_step_failure,
     add_step_usage, build_opencode_prompt, build_opencode_spawn_args,
@@ -44,9 +39,13 @@ use crate::store::Store;
 use crate::transcript::TranscriptHub;
 
 mod codex;
+mod cursor;
 use codex::CodexLive;
+use cursor::CursorLive;
 #[cfg(test)]
 pub(crate) use codex::fake_codex;
+#[cfg(test)]
+pub(crate) use cursor::{fake_cursor, ACP_NOTE as CURSOR_ACP_NOTE};
 
 const INIT_TIMEOUT: Duration = Duration::from_secs(15);
 /// How long a provider may stay silent before its first line.
@@ -119,27 +118,14 @@ fn opencode_tools_hint(hidden: &[&str]) -> String {
     tools_hint(&|tool| format!("`crew_{tool}`"), hidden)
 }
 
-/// Cursor has no MCP, so it reaches the same bridge through the `crew`
-/// command, whose `--help` is the gateway: nothing to spell as JSON.
-fn shell_tools_hint(crew: &str) -> String {
-    format!(
-        "Crew's tools are not in your tool list; they are commands of `{crew}`, run in the shell. \
-         `{crew} --help` lists its groups (bots, sessions, messages, routines, processes, tabs) and \
-         `{crew} <group> --help` what each does. The ones most turns need:\n\
-         - `{crew} bots list` — the other bots here, each with the id it is addressed by.\n\
-         - `{crew} bots send <id> <text>` — write to one of them, by id. It arrives as a turn \
-         with your name and id on it, and it is read in its own time. You are not waiting here, \
-         and anything it sends back reaches you as a message of its own.\n\
-         - `{crew} bots continue <text>` — leave yourself the next step. It arrives as a new \
-         turn the moment this one ends, with the tail of this conversation, so it is how you \
-         carry on past work that does not fit in one turn.\n\
-         - `{crew} messages search <query>` — look up what was already said in this \
-         conversation. It does not reach anybody else's; what another bot knows, you ask it for.\n\
-         A command that sounds like one of these but is not `{crew}` does not reach this workspace.\n\n\
-         A turn that opens with `## Message` was written by another bot, not by the user. \
-         What you write in the chat is read by the user and does not reach that bot; \
-         `{crew} bots send` to the id on that line is what does."
-    )
+/// Cursor finds an MCP server's tools under the server's name and calls them
+/// with its own `CallDynamicTool`: a tool is named with its server.
+fn cursor_spell(tool: &str) -> String {
+    format!("`{tool}` (MCP server `crew`)")
+}
+
+fn cursor_tools_hint(hidden: &[&str]) -> String {
+    tools_hint(&cursor_spell, hidden)
 }
 
 /// The provider conversation a child carries on, once its first turn bound
@@ -173,21 +159,6 @@ fn child_tools_hint(spell: &dyn Fn(&str) -> String) -> String {
         spell("find_tool"),
         spell("call_tool")
     )
-}
-
-/// The same for Cursor, which reaches Crew through the `crew` command.
-fn child_shell_hint(crew: &str) -> String {
-    format!(
-        "Crew's tools are commands of `{crew}` in your shell: `{crew} --help` lists them (processes, \
-         tabs, bots). Starting sessions of your own is not among them: if the job needs more hands, \
-         say so in your report."
-    )
-}
-
-/// The `crew` beside `crewd`: the app ships the two together, and so does a
-/// cargo build.
-fn crew_beside(crewd: &str) -> String {
-    std::path::Path::new(crewd).with_file_name("crew").to_string_lossy().into_owned()
 }
 
 type Answers = HashMap<String, String>;
@@ -282,7 +253,6 @@ struct StreamLive {
     turn_tx: Option<oneshot::Sender<TurnOutcome>>,
     seen_tools: HashSet<String>,
     stderr: Vec<String>,
-    saw_text: bool,
     /// Any line at all, of any shape. A provider that answers nothing is hung.
     saw_output: bool,
     settled: bool,
@@ -297,7 +267,7 @@ struct StreamLive {
 enum Live {
     Claude(Box<ClaudeLive>),
     Codex(Box<CodexLive>),
-    Cursor(StreamLive),
+    Cursor(Box<CursorLive>),
     Opencode(StreamLive),
 }
 
@@ -463,7 +433,8 @@ impl TurnHost {
             let live = self.lock().get(&params.session_id).is_some_and(|live| match live {
                 Live::Claude(row) => row.active,
                 Live::Codex(row) => row.active,
-                Live::Cursor(row) | Live::Opencode(row) => row.active,
+                Live::Cursor(row) => row.active,
+                Live::Opencode(row) => row.active,
             });
             if live || !running.insert(params.session_id.clone()) {
                 return Err("Turn already running".into());
@@ -550,7 +521,9 @@ impl TurnHost {
     }
 
     pub fn respond(&self, session_id: &str, request_id: u64, decision: ApprovalDecision) -> Result<(), String> {
-        if self.codex_respond(session_id, request_id, decision.clone()).is_some() {
+        if self.codex_respond(session_id, request_id, decision.clone()).is_some()
+            || self.cursor_respond(session_id, request_id, decision.clone()).is_some()
+        {
             return Ok(());
         }
         let mut map = self.lock();
@@ -568,7 +541,9 @@ impl TurnHost {
     }
 
     pub fn answer(&self, session_id: &str, request_id: u64, answers: Option<Answers>) -> Result<(), String> {
-        if self.codex_answer(session_id, request_id, answers.clone()).is_some() {
+        if self.codex_answer(session_id, request_id, answers.clone()).is_some()
+            || self.cursor_answer(session_id, request_id, answers.clone()).is_some()
+        {
             return Ok(());
         }
         let mut map = self.lock();
@@ -591,7 +566,8 @@ impl TurnHost {
                 let stderr = match live {
                     Live::Claude(row) => &mut row.stderr,
                     Live::Codex(row) => &mut row.stderr,
-                    Live::Cursor(row) | Live::Opencode(row) => &mut row.stderr,
+                    Live::Cursor(row) => &mut row.stderr,
+                    Live::Opencode(row) => &mut row.stderr,
                 };
                 for line in lines {
                     stderr.push(line);
@@ -649,7 +625,20 @@ impl TurnHost {
                     self.signal(session_id, TurnOutcome::Failed(exit_message(provider, code, &stderr)));
                 }
             }
-            Live::Cursor(row) | Live::Opencode(row) => {
+            Live::Cursor(row) => {
+                row.release();
+                if row.cancelled || row.settled {
+                    return;
+                }
+                let mid = row.active;
+                let stderr = row.stderr.clone();
+                if mid {
+                    drop(map);
+                    self.transcripts.apply(session_id, HarnessEvent::SessionEnded { code });
+                    self.signal(session_id, TurnOutcome::Failed(exit_message(provider, code, &stderr)));
+                }
+            }
+            Live::Opencode(row) => {
                 if row.cancelled || row.settled {
                     return;
                 }
@@ -681,7 +670,14 @@ impl TurnHost {
                         let _ = tx.send(outcome);
                     }
                 }
-                Live::Cursor(row) | Live::Opencode(row) => {
+                Live::Cursor(row) => {
+                    row.active = false;
+                    row.settled = true;
+                    if let Some(tx) = row.turn_tx.take() {
+                        let _ = tx.send(outcome);
+                    }
+                }
+                Live::Opencode(row) => {
                     row.active = false;
                     row.settled = true;
                     if let Some(tx) = row.turn_tx.take() {
@@ -694,9 +690,10 @@ impl TurnHost {
 
     fn cancel(&self, session_id: &str, kill: bool) {
         self.mark_stop(session_id);
-        // Codex is asked to stop its turn, and its end ends this one; the
-        // process goes with it. Without a turn to interrupt, it settles here.
-        if self.codex_interrupt(session_id) {
+        // Codex and Cursor are asked to stop their turn, and its end ends
+        // this one; the process goes with it. Without a turn to interrupt, it
+        // settles here.
+        if self.codex_interrupt(session_id) || self.cursor_interrupt(session_id) {
             return;
         }
         let interrupt = {
@@ -735,7 +732,16 @@ impl TurnHost {
                             let _ = tx.send(TurnOutcome::Stopped);
                         }
                     }
-                    Live::Cursor(row) | Live::Opencode(row) => {
+                    Live::Cursor(row) => {
+                        row.cancelled = true;
+                        row.active = false;
+                        row.settled = true;
+                        row.release();
+                        if let Some(tx) = row.turn_tx.take() {
+                            let _ = tx.send(TurnOutcome::Stopped);
+                        }
+                    }
+                    Live::Opencode(row) => {
                         row.cancelled = true;
                         row.active = false;
                         row.settled = true;
@@ -1281,8 +1287,18 @@ impl TurnHost {
     /// message in the transcript. Refused when no Claude turn is live to take
     /// it, so the caller can queue it instead.
     pub fn steer(&self, session_id: &str, text: &str, from: crew_protocol::BotRef) -> Result<(), String> {
-        if matches!(self.lock().get(session_id), Some(Live::Codex(_))) {
+        // The kind first, out of the lock: `codex_steer` takes it again.
+        let (codex, cursor) = match self.lock().get(session_id) {
+            Some(Live::Codex(_)) => (true, false),
+            Some(Live::Cursor(_)) => (false, true),
+            _ => (false, false),
+        };
+        if codex {
             return self.codex_steer(session_id, text, from);
+        }
+        if cursor {
+            // No `session/steer`, and a second prompt cancels the first.
+            return Err("Cursor cannot take a message in the middle of a turn".into());
         }
         let sent = child_envelope(&from, text);
         let message = {
@@ -1448,67 +1464,6 @@ impl TurnHost {
         Ok(())
     }
 
-    fn run_cursor(
-        &self,
-        session: crate::session::Session,
-        params: TurnStart,
-        history: Option<String>,
-    ) -> TurnOutcome {
-        let session_id = session.id.clone();
-        let (turn_rx, _) = match self.install_stream(&session_id, params.cwd.clone(), Live::Cursor) {
-            Ok(pair) => pair,
-            Err(error) => return TurnOutcome::Failed(error),
-        };
-        // A stop that came before the CLI was there to take it.
-        if self.stop_requested(&session_id) {
-            self.detach(&session_id);
-            return TurnOutcome::Stopped;
-        }
-        let path = match self.resolve_bin("cursor-agent") {
-            Ok(path) => path,
-            Err(error) => return TurnOutcome::Failed(error),
-        };
-        let mcp = self.mcp();
-        // Cursor takes no MCP config, so the bridge is a command it runs.
-        let resume = child_resume(&session);
-        let prompt = if session.kind == "child" {
-            let hint = mcp.as_ref().map(|(exe, _)| child_shell_hint(&crew_beside(exe)));
-            self.child_prompt(&session, resume.is_some(), hint.as_deref(), &params)
-        } else {
-            let hint = mcp.as_ref().map(|(exe, _)| shell_tools_hint(&crew_beside(exe)));
-            build_cursor_prompt(
-                &session.name,
-                &session.description,
-                history.as_deref(),
-                &params.text,
-                &path_list(&params, &HashSet::new()),
-                hint.as_deref(),
-            )
-        };
-        if let Err(error) = self.agents.spawn(
-            session_id.clone(),
-            path,
-            build_cursor_spawn_args(&CursorSpawn {
-                prompt,
-                model: Some(session.model.clone()).filter(|m| !m.is_empty()),
-                autonomy: self.autonomy(&session),
-                resume,
-            }),
-            params.cwd,
-            Some(self.agent_env(&session_id)),
-        ) {
-            return TurnOutcome::Failed(error);
-        }
-        self.transcripts
-            .apply(&session_id, HarnessEvent::SessionStarted {});
-        let outcome = self
-            .block_on(turn_rx)
-            .unwrap_or(TurnOutcome::Failed("Turn channel closed".into()));
-        self.agents.kill(&session_id);
-        self.detach(&session_id);
-        outcome
-    }
-
     fn run_opencode(
         &self,
         session: crate::session::Session,
@@ -1599,7 +1554,6 @@ impl TurnHost {
             turn_tx: Some(tx),
             seen_tools: HashSet::new(),
             stderr: Vec::new(),
-            saw_text: false,
             saw_output: false,
             settled: false,
             text_parts: HashMap::new(),
@@ -1622,7 +1576,8 @@ impl TurnHost {
                 let map = host.lock();
                 match map.get(&id) {
                     Some(Live::Codex(live)) => live.active && !live.saw_output && !live.cancelled,
-                    Some(Live::Cursor(live)) | Some(Live::Opencode(live)) => {
+                    Some(Live::Cursor(live)) => live.active && !live.saw_output && !live.cancelled,
+                    Some(Live::Opencode(live)) => {
                         live.active && !live.saw_output && !live.cancelled
                     }
                     _ => false,
@@ -1645,7 +1600,8 @@ impl TurnHost {
             let mut map = self.lock();
             match map.get_mut(session_id) {
                 Some(Live::Codex(live)) => live.saw_output = true,
-                Some(Live::Cursor(live) | Live::Opencode(live)) => live.saw_output = true,
+                Some(Live::Cursor(live)) => live.saw_output = true,
+                Some(Live::Opencode(live)) => live.saw_output = true,
                 _ => {}
             }
         }
@@ -2032,124 +1988,6 @@ impl TurnHost {
         );
     }
 
-    pub(crate) fn handle_cursor_line(&self, session_id: &str, line: &str) {
-        let Some(rec) = parse_json_line(line) else {
-            return;
-        };
-        if let Some(chat_id) = session_id_from_event(&rec) {
-            self.transcripts.apply(
-                session_id,
-                HarnessEvent::SessionProviderBound {
-                    provider_session_id: chat_id,
-                },
-            );
-        }
-        let blocked = {
-            let map = self.lock();
-            matches!(
-                map.get(session_id),
-                Some(Live::Cursor(row)) if row.settled || row.cancelled
-            )
-        };
-        if blocked {
-            return;
-        }
-        let type_name = string_field(Some(&rec), "type");
-        if type_name.as_deref() == Some("assistant") {
-            if let Some(text) = assistant_delta_text(&rec) {
-                if let Some(Live::Cursor(live)) = self.lock().get_mut(session_id) {
-                    live.saw_text = true;
-                }
-                self.transcripts
-                    .apply(session_id, HarnessEvent::MessageDelta { text });
-            }
-            return;
-        }
-        if type_name.as_deref() == Some("thinking") {
-            if string_field(Some(&rec), "subtype").as_deref() == Some("delta") {
-                if let Some(text) = rec.get("text").and_then(Value::as_str).filter(|t| !t.is_empty()) {
-                    self.transcripts.apply(
-                        session_id,
-                        HarnessEvent::ReasoningDelta {
-                            text: text.to_string(),
-                        },
-                    );
-                }
-            }
-            return;
-        }
-        if type_name.as_deref() == Some("tool_call") {
-            let Some(call) = parse_tool_call(&rec) else {
-                return;
-            };
-            let first = {
-                let mut map = self.lock();
-                let Some(Live::Cursor(live)) = map.get_mut(session_id) else {
-                    return;
-                };
-                live.seen_tools.insert(call.call_id.clone())
-            };
-            if first {
-                self.transcripts.apply(
-                    session_id,
-                    HarnessEvent::ToolStarted {
-                        call_id: call.call_id.clone(),
-                        name: call.name,
-                        title: call.title,
-                        detail: call.detail.clone(),
-                    },
-                );
-            }
-            if call.phase == ToolPhase::Completed {
-                self.transcripts.apply(
-                    session_id,
-                    HarnessEvent::ToolUpdated {
-                        call_id: call.call_id,
-                        title: None,
-                        status: Some(cursor_tool_status(call.failed)),
-                        detail: call.detail,
-                    },
-                );
-            }
-            return;
-        }
-        if type_name.as_deref() != Some("result") {
-            return;
-        }
-        let failed = cursor_turn_failed(&rec);
-        let fallback = string_field(Some(&rec), "result");
-        let saw = {
-            let map = self.lock();
-            matches!(map.get(session_id), Some(Live::Cursor(row)) if row.saw_text)
-        };
-        if !saw {
-            if let Some(fallback) = fallback {
-                if failed.is_none() {
-                    if let Some(Live::Cursor(live)) = self.lock().get_mut(session_id) {
-                        live.saw_text = true;
-                    }
-                    self.transcripts.apply(
-                        session_id,
-                        HarnessEvent::MessageDelta { text: fallback },
-                    );
-                }
-            }
-        }
-        self.transcripts
-            .apply(session_id, HarnessEvent::MessageCompleted {});
-        self.transcripts.apply(
-            session_id,
-            HarnessEvent::TurnCompleted {
-                usage: Some(cursor_turn_usage(&rec)),
-            },
-        );
-        if let Some(error) = failed {
-            self.signal(session_id, TurnOutcome::Failed(error));
-        } else {
-            self.signal(session_id, TurnOutcome::Completed);
-        }
-    }
-
     pub(crate) fn handle_opencode_line(&self, session_id: &str, line: &str) {
         let Some(rec) = parse_json_line(line) else {
             return;
@@ -2520,7 +2358,7 @@ impl TurnHost {
     }
 
     pub(crate) fn test_install_cursor(&self, id: &str) {
-        let _ = self.install_stream(id, String::new(), Live::Cursor);
+        self.lock().insert(id.to_string(), Live::Cursor(Box::new(CursorLive::new(None, Autonomy::Ask))));
     }
 
     pub(crate) fn test_install_opencode(&self, id: &str) {
@@ -3090,12 +2928,21 @@ print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type
         assert!(mcp.contains("`mcp__crew__find_tool`"), "{mcp}");
         let opencode = opencode_tools_hint(&crate::tools::hidden_names());
         assert!(opencode.contains(r#"`crew_call_tool` with `{"name": "message_agent""#), "{opencode}");
-        let shell = shell_tools_hint("/usr/local/bin/crew");
-        assert!(shell.contains("`/usr/local/bin/crew bots send <id> <text>`"), "{shell}");
+        // Cursor calls an MCP tool by its server and its name, apart.
+        let cursor = cursor_tools_hint(&crate::tools::hidden_names());
+        assert!(
+            cursor.contains(r#"`call_tool` (MCP server `crew`) with `{"name": "message_agent""#),
+            "{cursor}"
+        );
 
         // The bare name never appears on its own: that is the one an agent
-        // cannot call, and the one it will go looking for elsewhere.
-        for sheet in [&mcp, &opencode, &shell] {
+        // cannot call, and the one it will go looking for elsewhere. Cursor's
+        // always comes with its server.
+        for tool in ["find_tool", "call_tool"] {
+            let named = format!("`{tool}`");
+            assert_eq!(cursor.matches(&named).count(), cursor.matches(&cursor_spell(tool)).count(), "{cursor}");
+        }
+        for sheet in [&mcp, &opencode] {
             for tool in [
                 "list_agents",
                 "message_agent",
@@ -3117,7 +2964,11 @@ print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type
     fn a_tool_sheet_covers_the_whole_standing_set() {
         let standing: Vec<&str> = crate::tools::standing(crate::caller::CallerKind::Bot).iter().map(|tool| tool.name).collect();
         assert_eq!(standing, ["find_tool", "call_tool"]);
-        for sheet in [mcp_tools_hint(&crate::tools::hidden_names()), opencode_tools_hint(&crate::tools::hidden_names())] {
+        for sheet in [
+            mcp_tools_hint(&crate::tools::hidden_names()),
+            opencode_tools_hint(&crate::tools::hidden_names()),
+            cursor_tools_hint(&crate::tools::hidden_names()),
+        ] {
             for name in standing.iter() {
                 assert!(sheet.contains(name), "{name} is not on the sheet: {sheet}");
             }
@@ -3133,20 +2984,14 @@ print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type
     /// Crew offers" gave it no reason to look.
     #[test]
     fn a_tool_sheet_names_what_is_behind_the_gateway() {
-        for sheet in [mcp_tools_hint(&crate::tools::hidden_names()), opencode_tools_hint(&crate::tools::hidden_names())] {
+        for sheet in [
+            mcp_tools_hint(&crate::tools::hidden_names()),
+            opencode_tools_hint(&crate::tools::hidden_names()),
+            cursor_tools_hint(&crate::tools::hidden_names()),
+        ] {
             for name in crate::tools::hidden_names() {
                 assert!(sheet.contains(name), "{name} is not on the sheet: {sheet}");
             }
         }
-        // For Cursor the gateway is `crew --help`, and the sheet names its groups.
-        let shell = shell_tools_hint("crew");
-        for group in ["bots", "messages", "routines", "processes", "tabs"] {
-            assert!(shell.contains(group), "{group} is not on the sheet: {shell}");
-        }
-    }
-
-    #[test]
-    fn crew_is_found_beside_crewd() {
-        assert_eq!(crew_beside("/Applications/Crew.app/Contents/Resources/crewd"), "/Applications/Crew.app/Contents/Resources/crew");
     }
 }

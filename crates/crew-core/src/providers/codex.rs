@@ -592,16 +592,8 @@ pub fn tool_label(item: &Map<String, Value>) -> String {
             let server = string_field(Some(item), "server");
             if let Some(named) = crew_name(item) {
                 let arguments = item.get("arguments").and_then(as_record).cloned().unwrap_or_default();
-                if let Some((verb, input)) = super::crew_call(&named, &arguments) {
-                    let input: &Map<String, Value> = &input;
-                    let verb = format!("Crew {}", verb.replace('_', " "));
-                    let subject = string_field(Some(input), "to")
-                        .or_else(|| string_field(Some(input), "name"))
-                        .or_else(|| string_field(Some(input), "query"));
-                    return match subject {
-                        Some(subject) => format!("{verb} {}", clip(&subject, 40)),
-                        None => verb,
-                    };
+                if let Some(label) = super::crew_label(&named, &arguments) {
+                    return label;
                 }
             }
             match (tool, server) {
