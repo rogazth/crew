@@ -13,7 +13,7 @@ Examples:
   crew status                         is Crew running, and who does it take you for
   crew processes list                 the processes of the workspace you are in
   crew processes logs web -f          follow a process's output
-  crew agents send Reviewer \"look at the diff on main\"
+  crew bots send Reviewer \"look at the diff on main\"
   crew tabs snapshot --json
   crew <group> --help                 what a group's commands do
 
@@ -27,7 +27,7 @@ Exit status: 0 done, 1 the tool or command failed, 2 bad usage, 3 Crew isn't run
 #[command(
     name = "crew",
     version,
-    about = "Drive Crew from a shell: its agents, processes, browser tabs and routines.",
+    about = "Drive Crew from a shell: its bots, processes, browser tabs and routines.",
     after_help = EXAMPLES,
     propagate_version = true,
     max_term_width = 100
@@ -121,11 +121,11 @@ pub struct LogsArgs {
     pub context: Option<u32>,
 }
 
-/// `agents send`: an agent by id or by name, and the words to send it.
+/// `bots send`: a bot by id or by name, and the words to send it.
 #[derive(Args, Debug, Clone)]
 pub struct SendArgs {
-    /// The agent, by id or by name.
-    pub agent: String,
+    /// The bot, by id or by name.
+    pub bot: String,
     /// What to say. Several words are joined with spaces; `-` reads stdin.
     #[arg(required = true, num_args = 1.., trailing_var_arg = true, allow_hyphen_values = true)]
     pub text: Vec<String>,
@@ -240,7 +240,7 @@ mod tests {
 
     #[test]
     fn global_flags_go_anywhere() {
-        let root = matches(&["agents", "list", "--json", "-w", "/tmp/x", "--data-dir", "/d"]);
+        let root = matches(&["bots", "list", "--json", "-w", "/tmp/x", "--data-dir", "/d"]);
         let global = Global::from_arg_matches(&root).expect("global");
         assert!(global.json);
         assert_eq!(global.workspace.as_deref(), Some("/tmp/x"));
@@ -263,11 +263,11 @@ mod tests {
     }
 
     #[test]
-    fn send_joins_the_words_after_the_agent() {
-        let send: SendArgs = verb(&["agents", "send", "Reviewer", "look", "at", "-this"]);
-        assert_eq!(send.agent, "Reviewer");
+    fn send_joins_the_words_after_the_bot() {
+        let send: SendArgs = verb(&["bots", "send", "Reviewer", "look", "at", "-this"]);
+        assert_eq!(send.bot, "Reviewer");
         assert_eq!(send.text, ["look", "at", "-this"]);
-        assert!(command().try_get_matches_from(["crew", "agents", "send", "Reviewer"]).is_err(), "nothing to say");
+        assert!(command().try_get_matches_from(["crew", "bots", "send", "Reviewer"]).is_err(), "nothing to say");
     }
 
     #[test]

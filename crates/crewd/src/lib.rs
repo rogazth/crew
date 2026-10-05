@@ -457,13 +457,13 @@ struct ToolDispatch {
     scheduler: Scheduler,
     hub: Arc<Hub>,
     /// Shared with `turns`, so what is registered here is also named on the
-    /// tool sheet in an agent's prompt.
+    /// tool sheet in a bot's prompt.
     toolbox: Toolbox,
     exit: std_mpsc::Sender<()>,
 }
 
 impl ToolDispatch {
-    /// Hand the target its next letter. A busy agent refuses, and the letter
+    /// Hand the target its next letter. A busy bot refuses, and the letter
     /// waits in the box for the drain that runs when its turn ends.
     fn deliver(&self, target: &crew_core::session::Session) -> bool {
         self.turns.deliver_to(target)
@@ -526,7 +526,7 @@ fn proto_session(row: &crew_core::session::Session) -> proto::Session {
         worktree: row.worktree.clone(),
         created_at: row.created_at,
         updated_at: row.updated_at,
-        agent_id: row.agent_id.clone(),
+        bot_id: row.bot_id.clone(),
         parent_id: row.parent_id.clone(),
         cursor: row.cursor,
     }
@@ -595,7 +595,7 @@ pub fn serve_on(config: Config, listen: Listen) -> Result<Handle, String> {
         exit: exit_tx.clone(),
     }));
 
-    // A letter left waiting for an idle agent is invisible until someone
+    // A letter left waiting for an idle bot is invisible until someone
     // messages it: only the end of a turn looks in a box.
     turns.deliver_waiting();
     // A session somebody started, caught mid-turn by the restart, carries on:
@@ -2425,7 +2425,7 @@ mod tests {
         let dir = test_dir("tool-headless");
         let (handle, bridge) = test_serve_bridged(&dir);
         let mut ws = connect_authed(&handle).await;
-        let session_id = seed_agent(&mut ws, dir.to_str().unwrap()).await;
+        let session_id = seed_bot(&mut ws, dir.to_str().unwrap()).await;
         let info = bridge.info().expect("info");
         drop(ws);
         let payload = serde_json::json!({
@@ -2449,12 +2449,12 @@ mod tests {
         let requests = handle.exit_requests().expect("requests");
         assert!(handle.exit_requests().is_none(), "taken once");
         let mut ws = connect_authed(&handle).await;
-        let agent = seed_agent(&mut ws, dir.to_str().unwrap()).await;
+        let bot = seed_bot(&mut ws, dir.to_str().unwrap()).await;
         let socket = bridge.info().expect("info").socket_path;
 
-        let refused = unix_call(&socket, &serde_json::json!({ "token": bridge.mint(&agent), "method": "daemon/shutdown" }));
+        let refused = unix_call(&socket, &serde_json::json!({ "token": bridge.mint(&bot), "method": "daemon/shutdown" }));
         assert!(refused["error"].as_str().is_some_and(|e| e.contains("Only the user")), "{refused}");
-        assert!(requests.try_recv().is_err(), "an agent asked and was heard");
+        assert!(requests.try_recv().is_err(), "a bot asked and was heard");
 
         let asked = unix_call(&socket, &serde_json::json!({ "token": bridge.user_token(), "method": "daemon/shutdown" }));
         assert!(asked.get("error").is_none(), "{asked}");
@@ -2469,13 +2469,13 @@ mod tests {
     /// The token is the identity. An agent's shell inherits CREW_SOCKET and
     /// CREW_TOKEN, and used to be able to name any session on the request and
     /// be believed — which, with a child inheriting its creator's autonomy, is
-    /// how an `ask` agent would have had a `full` one built for it.
+    /// how an `ask` bot would have had a `full` one built for it.
     #[tokio::test]
     async fn a_token_speaks_only_for_the_session_it_was_minted_for() {
         let dir = test_dir("tool-identity");
         let (handle, bridge) = test_serve_bridged(&dir);
         let mut ws = connect_authed(&handle).await;
-        let mine = seed_agent(&mut ws, dir.to_str().unwrap()).await;
+        let mine = seed_bot(&mut ws, dir.to_str().unwrap()).await;
         let info = bridge.info().expect("info");
         drop(ws);
 
@@ -2502,16 +2502,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn create_agent_emits_session_created() {
+    async fn create_bot_emits_session_created() {
         let dir = test_dir("tool-created");
         let (handle, bridge) = test_serve_bridged(&dir);
         let mut ws = connect_authed(&handle).await;
-        let session_id = seed_agent(&mut ws, dir.to_str().unwrap()).await;
+        let session_id = seed_bot(&mut ws, dir.to_str().unwrap()).await;
         let info = bridge.info().expect("info");
         let payload = serde_json::json!({
             "token": bridge.mint(&session_id),
             "method": "tools/call",
-            "params": { "name": "create_agent", "arguments": { "name": "B", "description": "does B" } }
+            "params": { "name": "create_bot", "arguments": { "name": "B", "description": "does B" } }
         });
         let reply = unix_call(&info.socket_path, &payload);
         let text = reply["result"]["content"][0]["text"].as_str().unwrap_or("");
@@ -2522,14 +2522,14 @@ mod tests {
         handle.shutdown();
     }
 
-    /// A workspace with one agent and one terminal session in it.
+    /// A workspace with one bot and one terminal session in it.
     async fn seed_terminal(ws: &mut Ws, cwd: &str) -> (String, String, String) {
         let workspace: proto::Workspace = serde_json::from_value(
             rpc(ws, 1, "workspace_create", serde_json::json!({ "name": "w", "path": cwd })).await.result.expect("ws"),
         )
         .expect("workspace");
         let mut ids = Vec::new();
-        for (id, kind) in [(2, "agent"), (3, "terminal")] {
+        for (id, kind) in [(2, "bot"), (3, "terminal")] {
             let session: proto::Session = serde_json::from_value(
                 rpc(
                     ws,
@@ -2575,7 +2575,7 @@ mod tests {
         let (handle, bridge) = test_serve_bridged(&dir);
         let mut ws = connect_authed(&handle).await;
         let cwd = dir.to_string_lossy().into_owned();
-        let (_, agent, terminal) = seed_terminal(&mut ws, &cwd).await;
+        let (_, bot, terminal) = seed_terminal(&mut ws, &cwd).await;
         let token_file = dir.join(format!("token-{}", random_token()));
         let done = dir.join(format!("done-{}", random_token()));
         let script = format!(
@@ -2615,7 +2615,7 @@ mod tests {
         let socket = bridge.info().expect("info").socket_path;
         let reply = list_agents_as(&socket, &token);
         let text = reply["result"]["content"][0]["text"].as_str().unwrap_or("");
-        assert!(text.contains(&agent), "reply: {reply}");
+        assert!(text.contains(&bot), "reply: {reply}");
         // Seen as a terminal: no turns to continue, and nothing listed but the gateway.
         let listed = unix_call(&socket, &serde_json::json!({ "token": token, "method": "tools/list" }));
         let names = listed["result"]["tools"].to_string();
@@ -2642,8 +2642,8 @@ mod tests {
         let (handle, _bridge) = test_serve_bridged(&dir);
         let mut ws = connect_authed(&handle).await;
         let cwd = dir.to_string_lossy().into_owned();
-        let (_, agent, _) = seed_terminal(&mut ws, &cwd).await;
-        for (id, session) in [(4, agent.as_str()), (5, "no-such-session")] {
+        let (_, bot, _) = seed_terminal(&mut ws, &cwd).await;
+        for (id, session) in [(4, bot.as_str()), (5, "no-such-session")] {
             let spawned = rpc(
                 &mut ws,
                 id,
@@ -2674,7 +2674,7 @@ mod tests {
         let (handle, bridge) = test_serve_bridged(&dir);
         let mut ws = connect_authed(&handle).await;
         let cwd = dir.to_string_lossy().into_owned();
-        let (workspace, agent, _) = seed_terminal(&mut ws, &cwd).await;
+        let (workspace, bot, _) = seed_terminal(&mut ws, &cwd).await;
         let socket = bridge.info().expect("info").socket_path;
         for named in [cwd.clone(), workspace.clone()] {
             let reply = unix_call(
@@ -2687,7 +2687,7 @@ mod tests {
                 }),
             );
             let text = reply["result"]["content"][0]["text"].as_str().unwrap_or("");
-            assert!(text.contains(&agent), "{named}: {reply}");
+            assert!(text.contains(&bot), "{named}: {reply}");
         }
         let reply = list_agents_as(&socket, &bridge.user_token());
         let text = reply["result"]["content"][0]["text"].as_str().unwrap_or("");
@@ -2695,7 +2695,7 @@ mod tests {
         handle.shutdown();
     }
 
-    /// The process tools are registered: listed to an agent, and answering
+    /// The process tools are registered: listed to a bot, and answering
     /// with the process the window made, in the caller's workspace.
     #[tokio::test]
     async fn list_processes_answers_over_the_bridge() {
@@ -2703,7 +2703,7 @@ mod tests {
         let (handle, bridge) = test_serve_bridged(&dir);
         let mut ws = connect_authed(&handle).await;
         let cwd = dir.to_string_lossy().into_owned();
-        let (workspace, agent, _) = seed_terminal(&mut ws, &cwd).await;
+        let (workspace, bot, _) = seed_terminal(&mut ws, &cwd).await;
         let created = rpc(
             &mut ws,
             4,
@@ -2713,7 +2713,7 @@ mod tests {
         .await;
         assert!(created.ok, "{:?}", created.error);
         let socket = bridge.info().expect("info").socket_path;
-        let token = bridge.mint(&agent);
+        let token = bridge.mint(&bot);
 
         let listed = unix_call(&socket, &serde_json::json!({ "token": token, "method": "tools/catalog" }));
         assert!(listed["result"]["tools"].to_string().contains("list_processes"), "{listed}");
@@ -2733,7 +2733,7 @@ mod tests {
             assert_eq!(rows[0]["created_by"], "the user", "{reply}");
         }
 
-        // The agent's autonomy is ask: what it writes waits for the user.
+        // The bot's autonomy is ask: what it writes waits for the user.
         let reply = unix_call(
             &socket,
             &serde_json::json!({
@@ -2920,11 +2920,11 @@ print(json.dumps({"type":"turn.failed","error":{"message":"Codex exploded"}}), f
         path
     }
 
-    async fn seed_agent(ws: &mut Ws, cwd: &str) -> String {
-        seed_agent_provider(ws, cwd, "claude").await
+    async fn seed_bot(ws: &mut Ws, cwd: &str) -> String {
+        seed_bot_provider(ws, cwd, "claude").await
     }
 
-    async fn seed_agent_provider(ws: &mut Ws, cwd: &str, provider: &str) -> String {
+    async fn seed_bot_provider(ws: &mut Ws, cwd: &str, provider: &str) -> String {
         send_json(
             ws,
             &Request {
@@ -2943,7 +2943,7 @@ print(json.dumps({"type":"turn.failed","error":{"message":"Codex exploded"}}), f
                 method: "session_create".into(),
                 params: serde_json::json!({
                     "workspaceId": workspace.id,
-                    "kind": "agent",
+                    "kind": "bot",
                     "name": "A",
                     "provider": provider,
                     "model": "m",
@@ -2965,7 +2965,7 @@ print(json.dumps({"type":"turn.failed","error":{"message":"Codex exploded"}}), f
         let fake = write_fake_claude(&dir);
         handle.override_agent_binary("claude", fake.to_string_lossy().into_owned());
         let mut ws = connect_authed(&handle).await;
-        let session_id = seed_agent(&mut ws, dir.to_str().unwrap()).await;
+        let session_id = seed_bot(&mut ws, dir.to_str().unwrap()).await;
         send_json(
             &mut ws,
             &Request {
@@ -3008,7 +3008,7 @@ print(json.dumps({"type":"turn.failed","error":{"message":"Codex exploded"}}), f
         let fake = write_fake_claude_approval(&dir);
         handle.override_agent_binary("claude", fake.to_string_lossy().into_owned());
         let mut ws = connect_authed(&handle).await;
-        let session_id = seed_agent(&mut ws, dir.to_str().unwrap()).await;
+        let session_id = seed_bot(&mut ws, dir.to_str().unwrap()).await;
         send_json(
             &mut ws,
             &Request {
@@ -3072,7 +3072,7 @@ print(json.dumps({"type":"turn.failed","error":{"message":"Codex exploded"}}), f
         let fake = write_fake_claude_approval_tool(&dir);
         handle.override_agent_binary("claude", fake.to_string_lossy().into_owned());
         let mut ws = connect_authed(&handle).await;
-        let session_id = seed_agent(&mut ws, dir.to_str().unwrap()).await;
+        let session_id = seed_bot(&mut ws, dir.to_str().unwrap()).await;
         start_turn(&mut ws, 3, &session_id, dir.to_str().unwrap()).await;
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
         let mut request_id = None;
@@ -3235,7 +3235,7 @@ print(json.dumps({"type":"turn.failed","error":{"message":"Codex exploded"}}), f
         let fake = write_fake_claude_hang_init(&dir);
         handle.override_agent_binary("claude", fake.to_string_lossy().into_owned());
         let mut ws = connect_authed(&handle).await;
-        let session_id = seed_agent(&mut ws, dir.to_str().unwrap()).await;
+        let session_id = seed_bot(&mut ws, dir.to_str().unwrap()).await;
         start_turn(&mut ws, 3, &session_id, dir.to_str().unwrap()).await;
         let stop = Request {
             id: 4,
@@ -3263,7 +3263,7 @@ print(json.dumps({"type":"turn.failed","error":{"message":"Codex exploded"}}), f
         let fake = write_fake_claude_error(&dir);
         handle.override_agent_binary("claude", fake.to_string_lossy().into_owned());
         let mut ws = connect_authed(&handle).await;
-        let session_id = seed_agent(&mut ws, dir.to_str().unwrap()).await;
+        let session_id = seed_bot(&mut ws, dir.to_str().unwrap()).await;
         start_turn_until(&mut ws, 3, &session_id, dir.to_str().unwrap(), "error").await;
         let snap = transcript_of(&mut ws, 4, &session_id).await;
         assert_eq!(snap.status, "error");
@@ -3279,7 +3279,7 @@ print(json.dumps({"type":"turn.failed","error":{"message":"Codex exploded"}}), f
         let fake = write_fake_codex_failed(&dir);
         handle.override_agent_binary("codex", fake.to_string_lossy().into_owned());
         let mut ws = connect_authed(&handle).await;
-        let session_id = seed_agent_provider(&mut ws, dir.to_str().unwrap(), "codex").await;
+        let session_id = seed_bot_provider(&mut ws, dir.to_str().unwrap(), "codex").await;
         start_turn_until(&mut ws, 3, &session_id, dir.to_str().unwrap(), "error").await;
         let snap = transcript_of(&mut ws, 4, &session_id).await;
         assert_eq!(snap.status, "error");
@@ -3296,7 +3296,7 @@ print(json.dumps({"type":"turn.failed","error":{"message":"Codex exploded"}}), f
         handle.override_agent_binary("claude", fake.to_string_lossy().into_owned());
         let mut starter = connect_authed(&handle).await;
         let mut watcher = connect_authed(&handle).await;
-        let session_id = seed_agent(&mut starter, dir.to_str().unwrap()).await;
+        let session_id = seed_bot(&mut starter, dir.to_str().unwrap()).await;
         start_turn(&mut starter, 3, &session_id, dir.to_str().unwrap()).await;
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
         let mut saw_user = false;
@@ -3748,7 +3748,7 @@ print(json.dumps({"type":"turn.failed","error":{"message":"Codex exploded"}}), f
                 n,
                 "session_create",
                 serde_json::json!({
-                    "workspaceId": workspace.id, "kind": "agent", "name": "A", "provider": "claude",
+                    "workspaceId": workspace.id, "kind": "bot", "name": "A", "provider": "claude",
                     "model": "m", "description": "", "autonomy": "ask", "worktree": worktree
                 }),
             )

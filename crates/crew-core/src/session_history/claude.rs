@@ -201,7 +201,7 @@ impl ClaudeDecoder {
                     text: prompt,
                     hidden: None,
                     files: None,
-                    from_agent: None,
+                    from_bot: None,
                 });
             }
             Some(Said::Note(note)) => out.note(note),
@@ -245,7 +245,7 @@ impl ClaudeDecoder {
                         text: prompt,
                         hidden: None,
                         files: None,
-                        from_agent: None,
+                        from_bot: None,
                     }),
                     Some(Said::Note(note)) => out.note(note),
                     _ => {}

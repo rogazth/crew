@@ -187,7 +187,7 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         )?;
     }
     if current < 8 {
-        // Several routines per agent, each with a name and a run history. SQLite
+        // Several routines per bot, each with a name and a run history. SQLite
         // cannot drop the UNIQUE on session_id, so the table is rebuilt.
         conn.execute_batch(
             "CREATE TABLE routines_v8 (
@@ -391,6 +391,68 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         )?;
         tx.commit()?;
     }
+    if current < 25 {
+        let tx = conn.unchecked_transaction()?;
+        rename_agents_to_bots(&tx)?;
+        tx.execute(
+            "INSERT INTO schema_migrations (version, applied_at) VALUES (25, ?1)",
+            params![now_millis()],
+        )?;
+        tx.commit()?;
+    }
+    Ok(())
+}
+
+pub(crate) fn has_table(conn: &Connection, table: &str) -> rusqlite::Result<bool> {
+    conn.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1")?
+        .exists(params![table])
+}
+
+/// What Crew called an agent — a persistent identity: a name, a description,
+/// a mailbox, a history, routines — is a bot. An agent is a model in a harness,
+/// which in Crew is a session. Everything stored under the old word moves:
+/// the table and its index, the session's column and kind, the sender on a
+/// message, and the window's keys in `app_state`.
+///
+/// Renaming the table rewrites the foreign keys that point at it (SQLite does
+/// since 3.26, unless `legacy_alter_table` is on). Each step checks before it
+/// acts, so a database wound back to an earlier version gets here again intact.
+pub(crate) fn rename_agents_to_bots(conn: &Connection) -> rusqlite::Result<()> {
+    if has_table(conn, "agents")? && !has_table(conn, "bots")? {
+        conn.execute_batch("ALTER TABLE agents RENAME TO bots;")?;
+    }
+    conn.execute_batch(
+        "DROP INDEX IF EXISTS agents_workspace_idx;
+         CREATE INDEX IF NOT EXISTS bots_workspace_idx ON bots (workspace_id);",
+    )?;
+    if has_column(conn, "sessions", "agent_id")? && !has_column(conn, "sessions", "bot_id")? {
+        conn.execute_batch("ALTER TABLE sessions RENAME COLUMN agent_id TO bot_id;")?;
+    }
+    conn.execute_batch(
+        "UPDATE sessions SET kind = 'bot' WHERE kind = 'agent';
+         UPDATE messages
+            SET extra_json = json_remove(json_set(extra_json, '$.from_bot', json_extract(extra_json, '$.from_agent')), '$.from_agent')
+          WHERE json_valid(extra_json) AND json_type(extra_json, '$.from_agent') IS NOT NULL;
+         INSERT OR IGNORE INTO app_state (key, value) SELECT 'bot:faces', value FROM app_state WHERE key = 'agent:faces';
+         DELETE FROM app_state WHERE key = 'agent:faces';
+         INSERT OR IGNORE INTO app_state (key, value) SELECT 'bot:avatar', value FROM app_state WHERE key = 'agent:avatar';
+         DELETE FROM app_state WHERE key = 'agent:avatar';",
+    )?;
+    // The sidebar's kind filter names kinds by their stored spelling.
+    if let Some(raw) = read_state(conn, "sidebar:prefs")? {
+        if let Ok(mut prefs) = serde_json::from_str::<serde_json::Value>(&raw) {
+            let mut changed = false;
+            if let Some(kinds) = prefs.get_mut("hiddenKinds").and_then(|kinds| kinds.as_array_mut()) {
+                for kind in kinds.iter_mut().filter(|kind| kind.as_str() == Some("agent")) {
+                    *kind = serde_json::Value::String("bot".into());
+                    changed = true;
+                }
+            }
+            if changed {
+                write_state(conn, "sidebar:prefs", Some(&prefs.to_string()))?;
+            }
+        }
+    }
     Ok(())
 }
 
@@ -404,27 +466,35 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
 /// id, so its transcript, its mailbox and its routines keep their keys and no
 /// row that points at them moves. Each step checks before it acts: a database
 /// wound back to an earlier version keeps whatever this left.
+///
+/// The names are the ones of its time: v25 renames them to bots. A database
+/// wound back from there already keeps its identities in `bots`, so this
+/// leaves them where they are and does only the rest.
 pub(crate) fn split_agents_from_sessions(conn: &Connection) -> rusqlite::Result<()> {
-    conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS agents (
-           id            TEXT PRIMARY KEY,
-           workspace_id  TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-           name          TEXT NOT NULL,
-           description   TEXT NOT NULL DEFAULT '',
-           notifications INTEGER NOT NULL DEFAULT 1,
-           autonomy      TEXT NOT NULL DEFAULT 'ask',
-           created_at    INTEGER NOT NULL,
-           updated_at    INTEGER NOT NULL
-         );
-         CREATE INDEX IF NOT EXISTS agents_workspace_idx ON agents (workspace_id);
-         INSERT OR IGNORE INTO agents
-           (id, workspace_id, name, description, notifications, autonomy, created_at, updated_at)
-         SELECT id, workspace_id, name, description, notifications, autonomy, created_at, updated_at
-         FROM sessions WHERE kind = 'agent';",
-    )?;
-    // NULL defaults, so SQLite takes a column with a foreign key on it.
-    if !has_column(conn, "sessions", "agent_id")? {
-        conn.execute_batch("ALTER TABLE sessions ADD COLUMN agent_id TEXT REFERENCES agents(id) ON DELETE CASCADE;")?;
+    let renamed = has_table(conn, "bots")?;
+    if !renamed {
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS agents (
+               id            TEXT PRIMARY KEY,
+               workspace_id  TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+               name          TEXT NOT NULL,
+               description   TEXT NOT NULL DEFAULT '',
+               notifications INTEGER NOT NULL DEFAULT 1,
+               autonomy      TEXT NOT NULL DEFAULT 'ask',
+               created_at    INTEGER NOT NULL,
+               updated_at    INTEGER NOT NULL
+             );
+             CREATE INDEX IF NOT EXISTS agents_workspace_idx ON agents (workspace_id);
+             INSERT OR IGNORE INTO agents
+               (id, workspace_id, name, description, notifications, autonomy, created_at, updated_at)
+             SELECT id, workspace_id, name, description, notifications, autonomy, created_at, updated_at
+             FROM sessions WHERE kind = 'agent';",
+        )?;
+        // NULL defaults, so SQLite takes a column with a foreign key on it.
+        if !has_column(conn, "sessions", "agent_id")? {
+            conn.execute_batch("ALTER TABLE sessions ADD COLUMN agent_id TEXT REFERENCES agents(id) ON DELETE CASCADE;")?;
+        }
+        conn.execute_batch("UPDATE sessions SET agent_id = id WHERE kind = 'agent' AND agent_id IS NULL;")?;
     }
     if !has_column(conn, "sessions", "parent_id")? {
         conn.execute_batch("ALTER TABLE sessions ADD COLUMN parent_id TEXT REFERENCES sessions(id) ON DELETE SET NULL;")?;
@@ -436,8 +506,7 @@ pub(crate) fn split_agents_from_sessions(conn: &Connection) -> rusqlite::Result<
         conn.execute_batch("ALTER TABLE sessions ADD COLUMN seen INTEGER NOT NULL DEFAULT 0;")?;
     }
     conn.execute_batch(
-        "UPDATE sessions SET agent_id = id WHERE kind = 'agent' AND agent_id IS NULL;
-         CREATE INDEX IF NOT EXISTS sessions_parent_idx ON sessions (parent_id) WHERE parent_id IS NOT NULL;",
+        "CREATE INDEX IF NOT EXISTS sessions_parent_idx ON sessions (parent_id) WHERE parent_id IS NOT NULL;",
     )?;
     conn.execute_batch(crate::session_events::MIGRATION)
 }
@@ -499,7 +568,7 @@ pub fn set_order(conn: &Connection, table: &str, ids: &[String]) -> rusqlite::Re
 
 /// A turn that was running when the daemon stopped left tool rows spinning.
 ///
-/// An agent's turn is over: it goes back to idle. A child's is not given up:
+/// A bot's turn is over: it goes back to idle. A child's is not given up:
 /// it goes back to `starting`, and the daemon resumes it once it is up
 /// (`TurnHost::resume_interrupted`), so whoever waits on it still gets a report.
 fn settle_open_turns(conn: &Connection) -> rusqlite::Result<()> {
@@ -571,7 +640,7 @@ mod migration_tests {
             let session = crate::session::create(
                 &store,
                 workspace.id,
-                "agent".into(),
+                "bot".into(),
                 "Planner".into(),
                 "claude".into(),
                 "m".into(),
@@ -611,19 +680,20 @@ mod split_tests {
 
     /// A v22 database — agents and terminals in one table, the agent's
     /// identity on its session's row — comes out of migration 23 with the
-    /// identity in `agents`, under the same id, and nothing lost on the way:
-    /// the transcript, the mailbox and the routine keep their keys.
+    /// identity in `agents`, under the same id, and out of 25 with it in
+    /// `bots`, nothing lost on the way: the transcript, the mailbox and the
+    /// routine keep their keys.
     #[test]
-    fn a_v22_database_keeps_every_agent_terminal_and_transcript() {
+    fn a_v22_database_keeps_every_bot_terminal_and_transcript() {
         let (path, dir) = fresh();
-        let (agent, terminal) = {
+        let (bot, terminal) = {
             let store = Store::open(path.clone()).expect("open");
             let ws = crate::workspace::create(&store, "w".into(), dir.to_string_lossy().into()).expect("ws");
-            let agent = crate::session::create(
-                &store, ws.id.clone(), "agent".into(), "Planner".into(), "claude".into(), "m".into(),
+            let bot = crate::session::create(
+                &store, ws.id.clone(), "bot".into(), "Planner".into(), "claude".into(), "m".into(),
                 "You keep the roadmap.".into(), "full".into(),
             )
-            .expect("agent");
+            .expect("bot");
             let terminal = crate::session::create(
                 &store, ws.id.clone(), "terminal".into(), "Refactor".into(), "codex".into(), "".into(),
                 "".into(), "ask".into(),
@@ -631,88 +701,90 @@ mod split_tests {
             .expect("terminal");
             let blocks = vec![crate::blocks::new_block(crew_protocol::BlockRole::User, "what did we decide?")];
             store
-                .with(|conn| crate::messages::sync(conn, &agent.id, &blocks, &mut Vec::new()))
+                .with(|conn| crate::messages::sync(conn, &bot.id, &blocks, &mut Vec::new()))
                 .expect("transcript");
-            let from = crew_protocol::AgentRef::agent(terminal.id.clone(), terminal.name.clone());
-            crate::mailbox::enqueue(&store, &agent.id, &from, "a letter").expect("letter");
-            // Back to v22: the identity on the session row and nothing else.
+            let from = crew_protocol::BotRef::bot(terminal.id.clone(), terminal.name.clone());
+            crate::mailbox::enqueue(&store, &bot.id, &from, "a letter").expect("letter");
+            // Back to v22: the identity on the session row, under the old
+            // kind, and nothing else.
             store
                 .with(|conn| {
                     conn.execute_batch(
                         "DROP TABLE session_events;
                          DROP INDEX sessions_parent_idx;
-                         ALTER TABLE sessions DROP COLUMN agent_id;
+                         ALTER TABLE sessions DROP COLUMN bot_id;
                          ALTER TABLE sessions DROP COLUMN parent_id;
                          ALTER TABLE sessions DROP COLUMN cursor;
                          ALTER TABLE sessions DROP COLUMN seen;
-                         DROP TABLE agents;
+                         DROP TABLE bots;
+                         UPDATE sessions SET kind = 'agent' WHERE kind = 'bot';
                          DELETE FROM schema_migrations WHERE version >= 23;",
                     )
                 })
                 .expect("downgrade");
-            (agent.id, terminal.id)
+            (bot.id, terminal.id)
         };
 
         let store = Store::open(path).expect("reopen");
 
-        let row = crate::session::get(&store, agent.clone()).unwrap().expect("the agent survived");
+        let row = crate::session::get(&store, bot.clone()).unwrap().expect("the bot survived");
         assert_eq!(
-            (row.kind.as_str(), row.agent_id.as_deref(), row.name.as_str(), row.description.as_str(), row.autonomy.as_str()),
-            ("agent", Some(agent.as_str()), "Planner", "You keep the roadmap.", "full")
+            (row.kind.as_str(), row.bot_id.as_deref(), row.name.as_str(), row.description.as_str(), row.autonomy.as_str()),
+            ("bot", Some(bot.as_str()), "Planner", "You keep the roadmap.", "full")
         );
         let shell = crate::session::get(&store, terminal.clone()).unwrap().expect("the terminal survived");
-        assert_eq!((shell.kind.as_str(), shell.agent_id), ("terminal", None));
+        assert_eq!((shell.kind.as_str(), shell.bot_id), ("terminal", None));
         let named: Vec<(String, String)> = store
             .with(|conn| {
-                conn.prepare("SELECT id, name FROM agents")?
+                conn.prepare("SELECT id, name FROM bots")?
                     .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
                     .collect()
             })
             .unwrap();
-        assert_eq!(named, vec![(agent.clone(), "Planner".to_string())], "a terminal became an agent, or the agent was lost");
-        let transcript = store.with(|conn| crate::messages::all(conn, &agent)).unwrap();
+        assert_eq!(named, vec![(bot.clone(), "Planner".to_string())], "a terminal became a bot, or the bot was lost");
+        let transcript = store.with(|conn| crate::messages::all(conn, &bot)).unwrap();
         assert_eq!(transcript.len(), 1);
-        assert_eq!(crate::mailbox::waiting_count(&store, &agent).unwrap(), 1);
+        assert_eq!(crate::mailbox::waiting_count(&store, &bot).unwrap(), 1);
 
         // Opening again changes nothing: every step looks before it acts.
         drop(store);
         let store = Store::open(dir.join("crew.sqlite3")).expect("third open");
-        assert_eq!(crate::session::get(&store, agent).unwrap().unwrap().name, "Planner");
+        assert_eq!(crate::session::get(&store, bot).unwrap().unwrap().name, "Planner");
     }
 
-    /// Identity is written where it lives: the agent's, to `agents`; a
+    /// Identity is written where it lives: the bot's, to `bots`; a
     /// terminal's, to its own row. Deleting either id takes both rows.
     #[test]
-    fn an_agents_identity_is_written_to_agents_and_goes_with_its_session() {
+    fn a_bots_identity_is_written_to_bots_and_goes_with_its_session() {
         let (path, dir) = fresh();
         let store = Store::open(path).expect("open");
         let ws = crate::workspace::create(&store, "w".into(), dir.to_string_lossy().into()).expect("ws");
-        let agent = crate::session::create(
-            &store, ws.id.clone(), "agent".into(), "Planner".into(), "claude".into(), "m".into(), "".into(), "ask".into(),
+        let bot = crate::session::create(
+            &store, ws.id.clone(), "bot".into(), "Planner".into(), "claude".into(), "m".into(), "".into(), "ask".into(),
         )
-        .expect("agent");
+        .expect("bot");
         crate::session::update(
-            &store, agent.id.clone(), "Architect".into(), "codex".into(), "gpt".into(), "Design it.".into(), false, "full".into(),
+            &store, bot.id.clone(), "Architect".into(), "codex".into(), "gpt".into(), "Design it.".into(), false, "full".into(),
         )
         .expect("update");
-        crate::session::rename(&store, agent.id.clone(), "Lead".into()).expect("rename");
+        crate::session::rename(&store, bot.id.clone(), "Lead".into()).expect("rename");
         let (name, description, autonomy, notifications): (String, String, String, bool) = store
             .with(|conn| {
                 conn.query_row(
-                    "SELECT name, description, autonomy, notifications FROM agents WHERE id = ?1",
-                    params![agent.id],
+                    "SELECT name, description, autonomy, notifications FROM bots WHERE id = ?1",
+                    params![bot.id],
                     |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
                 )
             })
             .unwrap();
         assert_eq!((name.as_str(), description.as_str(), autonomy.as_str(), notifications), ("Lead", "Design it.", "full", false));
-        let row = crate::session::get(&store, agent.id.clone()).unwrap().unwrap();
+        let row = crate::session::get(&store, bot.id.clone()).unwrap().unwrap();
         assert_eq!((row.name.as_str(), row.provider.as_str(), row.autonomy.as_str()), ("Lead", "codex", "full"));
 
-        crate::session::delete(&store, agent.id.clone()).expect("delete");
-        assert!(crate::session::get(&store, agent.id.clone()).unwrap().is_none());
-        let left: i64 = store.with(|conn| conn.query_row("SELECT COUNT(*) FROM agents", [], |row| row.get(0))).unwrap();
-        assert_eq!(left, 0, "the agent outlived its session's deletion");
+        crate::session::delete(&store, bot.id.clone()).expect("delete");
+        assert!(crate::session::get(&store, bot.id.clone()).unwrap().is_none());
+        let left: i64 = store.with(|conn| conn.query_row("SELECT COUNT(*) FROM bots", [], |row| row.get(0))).unwrap();
+        assert_eq!(left, 0, "the bot outlived its session's deletion");
     }
 
     /// A child names who started it; deleting the parent leaves the child, the
@@ -735,6 +807,137 @@ mod split_tests {
         crate::session::delete(&store, parent.id).expect("delete");
         let orphan = crate::session::get(&store, child.id).unwrap().expect("the child went with its parent");
         assert_eq!(orphan.parent_id, None);
+    }
+}
+
+#[cfg(test)]
+mod rename_tests {
+    use super::*;
+
+    /// A v24 database — identities in `agents`, sessions pointing at them by
+    /// `agent_id`, the old kind, the old sender key on a message and the
+    /// window's old keys — comes out of migration 25 speaking of bots
+    /// everywhere, with the foreign keys following the table.
+    #[test]
+    fn a_v24_database_comes_out_of_25_with_bots() {
+        let dir = std::env::temp_dir().join(format!("crew-v25-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let path = dir.join("crew.sqlite3");
+        let (bot, child, terminal) = {
+            let store = Store::open(path.clone()).expect("open");
+            let ws = crate::workspace::create(&store, "w".into(), dir.to_string_lossy().into()).expect("ws");
+            let bot = crate::session::create(
+                &store, ws.id.clone(), "bot".into(), "Planner".into(), "claude".into(), "m".into(),
+                "You keep the roadmap.".into(), "full".into(),
+            )
+            .expect("bot");
+            let terminal = crate::session::create(
+                &store, ws.id.clone(), "terminal".into(), "Shell".into(), "claude".into(), "".into(), "".into(), "ask".into(),
+            )
+            .expect("terminal");
+            let child = crate::session::create_child(
+                &store, ws.id.clone(), "codex: fix".into(), "codex".into(), "m".into(), "full".into(), None, Some(bot.id.clone()),
+            )
+            .expect("child");
+            let mut letter = crate::blocks::new_block(crew_protocol::BlockRole::User, "the branch is green");
+            letter.from_bot = Some(crew_protocol::BotRef::bot(bot.id.clone(), "Planner"));
+            store
+                .with(|conn| {
+                    // A child that runs for the bot, so the column carries a value across.
+                    conn.execute("UPDATE sessions SET bot_id = ?2 WHERE id = ?1", params![child.id, bot.id])?;
+                    crate::messages::sync(conn, &child.id, &[letter], &mut Vec::new())?;
+                    write_state(conn, "bot:faces", Some(r#"{"x":{"seed":"y"}}"#))?;
+                    write_state(conn, "bot:avatar", Some("robot"))?;
+                    write_state(conn, "sidebar:prefs", Some(r#"{"hiddenKinds":["bot","terminal"],"hiddenProviders":["codex"]}"#))
+                })
+                .expect("seed");
+            // Back to v24: every name as it was before the rename.
+            store
+                .with(|conn| {
+                    conn.execute_batch(
+                        r#"ALTER TABLE bots RENAME TO agents;
+                         DROP INDEX bots_workspace_idx;
+                         CREATE INDEX agents_workspace_idx ON agents (workspace_id);
+                         ALTER TABLE sessions RENAME COLUMN bot_id TO agent_id;
+                         UPDATE sessions SET kind = 'agent' WHERE kind = 'bot';
+                         UPDATE messages
+                            SET extra_json = json_remove(json_set(extra_json, '$.from_agent', json_extract(extra_json, '$.from_bot')), '$.from_bot')
+                          WHERE json_type(extra_json, '$.from_bot') IS NOT NULL;
+                         UPDATE app_state SET key = 'agent:faces' WHERE key = 'bot:faces';
+                         UPDATE app_state SET key = 'agent:avatar' WHERE key = 'bot:avatar';
+                         UPDATE app_state SET value = '{"hiddenKinds":["agent","terminal"],"hiddenProviders":["codex"]}'
+                          WHERE key = 'sidebar:prefs';
+                         DELETE FROM schema_migrations WHERE version >= 25;"#,
+                    )
+                })
+                .expect("downgrade");
+            let old = store
+                .with(|conn| {
+                    Ok((
+                        has_column(conn, "sessions", "agent_id")?,
+                        conn.query_row("SELECT extra_json FROM messages WHERE session_id = ?1", params![child.id], |row| {
+                            row.get::<_, String>(0)
+                        })?,
+                    ))
+                })
+                .expect("v24");
+            assert!(old.0 && old.1.contains("from_agent"), "the downgrade did not reach v24: {old:?}");
+            (bot.id, child.id, terminal.id)
+        };
+
+        let store = Store::open(path.clone()).expect("reopen");
+
+        let (tables, columns, references, version): (Vec<String>, Vec<String>, Vec<String>, i64) = store
+            .with(|conn| {
+                let names = |sql: &str| -> rusqlite::Result<Vec<String>> {
+                    conn.prepare(sql)?.query_map([], |row| row.get(0))?.collect()
+                };
+                Ok((
+                    names("SELECT name FROM sqlite_master WHERE name IN ('agents', 'bots', 'agents_workspace_idx', 'bots_workspace_idx') ORDER BY name")?,
+                    names("SELECT name FROM pragma_table_info('sessions') WHERE name IN ('agent_id', 'bot_id')")?,
+                    names("SELECT DISTINCT \"table\" FROM pragma_foreign_key_list('sessions') ORDER BY 1")?,
+                    conn.query_row("SELECT MAX(version) FROM schema_migrations", [], |row| row.get(0))?,
+                ))
+            })
+            .unwrap();
+        assert_eq!(tables, ["bots", "bots_workspace_idx"]);
+        assert_eq!(columns, ["bot_id"]);
+        assert_eq!(references, ["bots", "sessions", "workspaces"], "a foreign key still points at the old table");
+        assert_eq!(version, 25);
+
+        let row = crate::session::get(&store, bot.clone()).unwrap().expect("the bot survived");
+        assert_eq!(
+            (row.kind.as_str(), row.bot_id.as_deref(), row.name.as_str(), row.description.as_str()),
+            ("bot", Some(bot.as_str()), "Planner", "You keep the roadmap.")
+        );
+        let ran = crate::session::get(&store, child.clone()).unwrap().expect("the child survived");
+        assert_eq!((ran.kind.as_str(), ran.bot_id.as_deref(), ran.parent_id.as_deref()), ("child", Some(bot.as_str()), Some(bot.as_str())));
+        assert_eq!(crate::session::get(&store, terminal).unwrap().expect("terminal").kind, "terminal");
+
+        let transcript = store.with(|conn| crate::messages::all(conn, &child)).unwrap();
+        assert_eq!(transcript[0].from_bot.as_ref().map(|from| (from.id.as_str(), from.name.as_str())), Some((bot.as_str(), "Planner")));
+        let extra: String = store
+            .with(|conn| conn.query_row("SELECT extra_json FROM messages WHERE session_id = ?1", params![child], |row| row.get(0)))
+            .unwrap();
+        assert!(!extra.contains("from_agent"), "{extra}");
+
+        assert_eq!(get(&store, "bot:faces".into()).unwrap().as_deref(), Some(r#"{"x":{"seed":"y"}}"#));
+        assert_eq!(get(&store, "bot:avatar".into()).unwrap().as_deref(), Some("robot"));
+        assert_eq!(get(&store, "agent:faces".into()).unwrap(), None);
+        assert_eq!(get(&store, "agent:avatar".into()).unwrap(), None);
+        let prefs: serde_json::Value = serde_json::from_str(&get(&store, "sidebar:prefs".into()).unwrap().unwrap()).unwrap();
+        assert_eq!(prefs, serde_json::json!({ "hiddenKinds": ["bot", "terminal"], "hiddenProviders": ["codex"] }));
+
+        // The foreign key follows the table: a bot deleted takes the sessions
+        // that run for it.
+        store.with(|conn| conn.execute("DELETE FROM bots WHERE id = ?1", params![bot])).unwrap();
+        assert!(crate::session::get(&store, child.clone()).unwrap().is_none(), "the child outlived its bot");
+
+        // Opening again changes nothing: every step looks before it acts.
+        drop(store);
+        let store = Store::open(path).expect("third open");
+        let prefs = get(&store, "sidebar:prefs".into()).unwrap().unwrap();
+        assert!(prefs.contains(r#""bot""#), "{prefs}");
     }
 }
 

@@ -204,7 +204,7 @@ mod tests {
             data_dir: None,
             session: true,
             daemon: Some(file("0.0.1")),
-            caller: Some(json!({ "label": "Coder (agent a1)", "workspace": null })),
+            caller: Some(json!({ "label": "Coder (bot a1)", "workspace": null })),
             running: true,
             problem: None,
         };

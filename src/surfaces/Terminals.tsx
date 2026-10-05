@@ -8,7 +8,7 @@ import { useTerminalPrefs } from '../hooks/useTerminalPrefs';
 import * as api from '../lib/api';
 import { homeFor, sessionCwd } from '../lib/client/registry';
 import { claudeSessionId, transcriptPath } from '../lib/claudeStorage';
-import { bindProviderSession } from '../lib/agentRuntime';
+import { bindProviderSession } from '../lib/turnRuntime';
 import { isHanded } from '../lib/handedSessions';
 import { announceSession, askNews } from '../lib/notifications';
 import { blockingScreen, type BlockingScreen } from '../lib/blockingScreen';

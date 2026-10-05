@@ -1,4 +1,4 @@
-// Drives a real crewd end to end: two agents on real provider CLIs, a message
+// Drives a real crewd end to end: two bots on real provider CLIs, a message
 // between them, and assertions on what came out. This is the demo, headless.
 //
 //   node scripts/drive.mjs
@@ -86,7 +86,7 @@ async function settle(sessionId, seconds = 180) {
 function show(name, snapshot) {
   console.log(`\n=== ${name} (${snapshot.status}) ===`);
   for (const block of snapshot.blocks) {
-    const from = block.fromAgent ? ` from:${block.fromAgent.name}` : "";
+    const from = block.fromBot ? ` from:${block.fromBot.name}` : "";
     const tool = block.tool ? ` [${block.tool.name} ${block.tool.status}]` : "";
     const detail = block.tool?.detail ? ` detail:${JSON.stringify(block.tool.detail).slice(0, 160)}` : "";
     const text = block.text.replace(/\s+/g, " ").slice(0, 200);
@@ -96,10 +96,10 @@ function show(name, snapshot) {
 
 const workspace = await rpc("workspace_create", { name: "drive", path: workDir });
 
-async function agent(name, description) {
+async function bot(name, description) {
   return rpc("session_create", {
     workspaceId: workspace.id,
-    kind: "agent",
+    kind: "bot",
     name,
     provider: PROVIDER,
     model: MODEL,
@@ -108,63 +108,63 @@ async function agent(name, description) {
   });
 }
 
-const coder = await agent("Coder", "You write code and report to Cuddles.");
-const cuddles = await agent("Cuddles", "You coordinate. When an agent reports, acknowledge briefly.");
+const coder = await bot("Coder", "You write code and report to Cuddles.");
+const cuddles = await bot("Cuddles", "You coordinate. When a bot reports, acknowledge briefly.");
 console.log(`coder=${coder.id} cuddles=${cuddles.id}`);
 
 const SCENARIOS = {
-  // One agent writes to another and the message shows up on both sides.
+  // One bot writes to another and the message shows up on both sides.
   message: {
-    // Named, not addressed: agents are reached by id, so the way through is
+    // Named, not addressed: bots are reached by id, so the way through is
     // list_agents first. A prompt that handed over the id would skip the half
     // of this that goes wrong in practice.
     prompt:
-      "Send the agent called Cuddles exactly this text: 'the branch is green'. Then reply to me with one short sentence saying you sent it.",
+      "Send the bot called Cuddles exactly this text: 'the branch is green'. Then reply to me with one short sentence saying you sent it.",
     check(coderEnd, cuddlesEnd) {
       const sent = coderEnd.blocks.find((b) => b.tool?.detail?.kind === "message");
-      const received = cuddlesEnd.blocks.find((b) => b.role === "user" && b.fromAgent);
+      const received = cuddlesEnd.blocks.find((b) => b.role === "user" && b.fromBot);
       return [
         ["the sender's transcript shows the message it wrote", Boolean(sent), sent ? `to ${sent.tool.detail.to}` : "no message row"],
         [
           "the reader's transcript shows who wrote to it",
           Boolean(received),
-          received ? `from ${received.fromAgent.name}: ${received.text.slice(0, 60)}` : "no incoming turn",
+          received ? `from ${received.fromBot.name}: ${received.text.slice(0, 60)}` : "no incoming turn",
         ],
         ["the reader answered", cuddlesEnd.blocks.some((b) => b.role === "assistant" && b.text.trim()), ""],
       ];
     },
   },
-  // The agent carries itself past the end of a turn by writing to itself.
+  // The bot carries itself past the end of a turn by writing to itself.
   loop: {
     prompt:
       "Do this in two turns, not one. Turn one: create a file called step1.txt containing the word one, then call continue_after_turn with text='turn two: create step2.txt containing the word two, then stop'. Say nothing else. You will receive that note as your next turn; carry it out then.",
     check(coderEnd) {
       const turns = coderEnd.blocks.filter((b) => b.role === "user");
-      const woken = turns.filter((b) => b.fromAgent);
+      const woken = turns.filter((b) => b.fromBot);
       const wrote = coderEnd.blocks.filter((b) => b.tool?.detail?.kind === "edit");
       return [
-        ["the agent left itself a note", woken.length >= 1, ""],
-        ["the note came back as a second turn", woken.length >= 1, `${turns.length} turns, ${woken.length} from an agent`],
+        ["the bot left itself a note", woken.length >= 1, ""],
+        ["the note came back as a second turn", woken.length >= 1, `${turns.length} turns, ${woken.length} from a bot`],
         ["both steps ran", wrote.length >= 2, wrote.map((b) => b.tool.detail.path.split("/").pop()).join(", ")],
       ];
     },
   },
   // Naming a model the way a person does, under a provider that does not have
-  // it. A codex agent asked for "grok 4.6" and reported back that Grok was not
+  // it. A codex bot asked for "grok 4.6" and reported back that Grok was not
   // available here; it is, under cursor, spelled cursor-grok-4.6-high.
   create: {
     prompt:
-      "Create an agent called Scout that runs on Grok 4.6 and reads documentation. Then reply with one short sentence saying what provider and model it ended up on.",
+      "Create a bot called Scout that runs on Grok 4.6 and reads documentation. Then reply with one short sentence saying what provider and model it ended up on.",
     async check(coderEnd) {
       const made = (await rpc("session_list", { workspaceId: workspace.id })).find(
         (s) => s.name === "Scout",
       );
       // Through the gateway or straight at it: either way, one round.
       const asked = coderEnd.blocks.filter((b) =>
-        ["create_agent", "call_tool"].some((name) => b.tool?.name?.includes(name)),
+        ["create_bot", "call_tool"].some((name) => b.tool?.name?.includes(name)),
       );
       return [
-        ["the agent was created at all", Boolean(made), made ? `${made.provider}/${made.model}` : "no Scout"],
+        ["the bot was created at all", Boolean(made), made ? `${made.provider}/${made.model}` : "no Scout"],
         [
           "it landed on the provider that has Grok",
           made?.provider === "cursor" && made?.model?.includes("grok-4.6"),
@@ -174,7 +174,7 @@ const SCENARIOS = {
       ];
     },
   },
-  // A standing order comes due and the daemon wakes the agent for it, with no
+  // A standing order comes due and the daemon wakes the bot for it, with no
   // window open anywhere.
   routine: {
     async start() {
@@ -199,7 +199,7 @@ const SCENARIOS = {
       return [
         ["the daemon fired it with no client asking", Boolean(note), note?.text ?? "no routine note"],
         [
-          "the agent was woken with the standing order",
+          "the bot was woken with the standing order",
           Boolean(woken?.text.includes("the branch is green")),
           woken ? woken.text.slice(0, 60) : "no hidden turn",
         ],
@@ -207,7 +207,7 @@ const SCENARIOS = {
       ];
     },
   },
-  // The agent does real work, and the transcript says what it did.
+  // The bot does real work, and the transcript says what it did.
   code: {
     prompt:
       "Write a file called greet.js in this directory holding a function greet(name) that returns `Hello, ${name}!`, then run `node -e \"console.log(require('./greet.js')('crew'))\"` to prove it works. Reply with the output.",
@@ -217,7 +217,7 @@ const SCENARIOS = {
       const ran = tools.find((b) => b.tool.detail?.kind === "command");
       const greeted = Boolean(ran?.tool.detail.output?.includes("Hello, crew!"));
       return [
-        ["the agent called tools at all", tools.length > 0, `${tools.length} rows`],
+        ["the bot called tools at all", tools.length > 0, `${tools.length} rows`],
         ["a file it wrote is named in the transcript", Boolean(wrote), wrote ? wrote.tool.detail.path : "no edit row"],
         // Claude's protocol carries no exit code, so the claim is the command
         // itself; a failure still shows through the row's status.

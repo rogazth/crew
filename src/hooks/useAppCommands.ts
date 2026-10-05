@@ -28,7 +28,7 @@ type Deps = {
   startAllCommands: (() => void) | null;
   stopAllCommands: (() => void) | null;
   openWorkspace: () => void;
-  newAgent: () => void;
+  newBot: () => void;
   newSession: () => void;
   /** A blank page, the address bar ready; `incognito` keeps it off the disk. */
   newBrowser: (incognito: boolean) => void;
@@ -80,7 +80,7 @@ export function useAppCommands(deps: Deps) {
     "toggle-sidebar": deps.toggleSidebar,
     "toggle-explorer": deps.toggleExplorer,
     "search-files": deps.searchFiles,
-    "new-agent": deps.newAgent,
+    "new-bot": deps.newBot,
     "new-session": deps.newSession,
     "new-browser-tab": () => deps.newBrowser(false),
     "new-incognito-tab": () => deps.newBrowser(true),

@@ -3,7 +3,7 @@ import type { Answers, ApprovalDecision, AttachedFile, Block } from "../../lib/b
 import type { AgentChoice } from "../../lib/providers";
 import type { Session } from "../../lib/types";
 
-/** The contract the chat surface renders; AgentChat owns the state behind it. */
+/** The contract the chat surface renders; TurnChat or SessionChat owns the state behind it. */
 export type ChatSurfaceProps = {
   session: Session;
   blocks: Block[];

@@ -3,7 +3,9 @@
 // still there afterwards. The blob column is dropped by migration 13, so this
 // is the one path where a mistake loses history rather than breaking a build.
 // Migration 23 splits agents from sessions: the agent, the terminal and the
-// routine seeded here must come out the other side as they went in.
+// routine seeded here must come out the other side as they went in. Migration
+// 25 renames agents to bots: the identity, its kind and the window's keys
+// in app_state come out under the new word.
 //
 //   cargo build -p crewd && node scripts/migrate-check.mjs
 import { spawn } from "node:child_process";
@@ -67,7 +69,8 @@ function seedOldDatabase() {
      VALUES (?, ?, 'agent', 'Planner', 'claude', 'claude-opus-5', ?, ?, ?)`,
   ).run("s1", "w1", JSON.stringify(blocks), Date.now(), Date.now());
   // An agent with a job, a terminal next to it (named, or the startup sweep
-  // takes it for an empty one), and a routine on the agent.
+  // takes it for an empty one), a routine on the agent, and the window's keys
+  // as an old build left them.
   db.prepare("UPDATE sessions SET description = ?, autonomy = 'full' WHERE id = 's1'").run("You keep the roadmap.");
   db.prepare(
     `INSERT INTO sessions (id, workspace_id, kind, name, provider, model, created_at, updated_at)
@@ -77,6 +80,10 @@ function seedOldDatabase() {
     `INSERT INTO routines (id, session_id, name, prompt, schedule, created_at, updated_at)
      VALUES ('r1', 's1', 'standup', 'Sum up yesterday', '{"kind":"daily","hour":9,"minute":0}', ?, ?)`,
   ).run(Date.now(), Date.now());
+  const state = db.prepare("INSERT INTO app_state (key, value) VALUES (?, ?)");
+  state.run("agent:faces", JSON.stringify({ s1: { seed: "s1" } }));
+  state.run("agent:avatar", "robot");
+  state.run("sidebar:prefs", JSON.stringify({ hiddenKinds: ["agent"], hiddenProviders: ["codex"] }));
   db.close();
   return blocks;
 }
@@ -191,13 +198,13 @@ checks.push(["they came back in order", texts.join("|") === seeded.map((b) => b.
 const planner = listed.find((row) => row.id === "s1");
 const shell = listed.find((row) => row.id === "t1");
 checks.push([
-  "the agent is still an agent, with its identity",
-  planner?.kind === "agent" && planner?.agentId === "s1" && planner?.name === "Planner" &&
+  "the agent is a bot now, with its identity",
+  planner?.kind === "bot" && planner?.botId === "s1" && planner?.name === "Planner" &&
     planner?.description === "You keep the roadmap." && planner?.autonomy === "full",
   JSON.stringify(planner ?? null),
 ]);
-checks.push(["the terminal is a session with no agent", shell?.kind === "terminal" && !shell?.agentId, JSON.stringify(shell ?? null)]);
-checks.push(["the agent's routine is still its own", routines.length === 1 && routines[0]?.name === "standup", `${routines.length} routines`]);
+checks.push(["the terminal is a session with no bot", shell?.kind === "terminal" && !shell?.botId, JSON.stringify(shell ?? null)]);
+checks.push(["the bot's routine is still its own", routines.length === 1 && routines[0]?.name === "standup", `${routines.length} routines`]);
 
 ws.close();
 daemon.kill("SIGTERM");
@@ -209,12 +216,31 @@ checks.push(["the blob column is gone", !columns.includes("blocks_json"), column
 const version = db.prepare("SELECT MAX(version) AS v FROM schema_migrations").get().v;
 const latest = latestVersion();
 checks.push([`the schema is at ${latest}`, version === latest, String(version)]);
-const agents = db.prepare("SELECT id, name, description, autonomy FROM agents").all();
+const bots = db.prepare("SELECT id, name, description, autonomy FROM bots").all();
 checks.push([
-  "agents holds the identity, sessions the CLIs",
-  agents.length === 1 && agents[0].id === "s1" && agents[0].name === "Planner" &&
-    db.prepare("SELECT agent_id FROM sessions WHERE id = 't1'").get().agent_id === null,
-  JSON.stringify(agents),
+  "bots holds the identity, sessions the CLIs",
+  bots.length === 1 && bots[0].id === "s1" && bots[0].name === "Planner" &&
+    db.prepare("SELECT bot_id FROM sessions WHERE id = 't1'").get().bot_id === null,
+  JSON.stringify(bots),
+]);
+const tables = db
+  .prepare("SELECT name FROM sqlite_master WHERE name IN ('agents', 'agents_workspace_idx') OR name LIKE 'bots%'")
+  .all()
+  .map((row) => row.name)
+  .sort();
+const references = db.prepare("SELECT DISTINCT \"table\" AS t FROM pragma_foreign_key_list('sessions')").all().map((row) => row.t);
+checks.push([
+  "nothing is called agents any more, and the foreign keys followed",
+  tables.join(",") === "bots,bots_workspace_idx" && !columns.includes("agent_id") && !references.includes("agents"),
+  `${tables.join(",")} · ${references.join(",")}`,
+]);
+const state = Object.fromEntries(db.prepare("SELECT key, value FROM app_state").all().map((row) => [row.key, row.value]));
+checks.push([
+  "the window's keys moved to bot:",
+  state["bot:faces"] === JSON.stringify({ s1: { seed: "s1" } }) && state["bot:avatar"] === "robot" &&
+    !("agent:faces" in state) && !("agent:avatar" in state) &&
+    JSON.stringify(JSON.parse(state["sidebar:prefs"] ?? "{}").hiddenKinds) === JSON.stringify(["bot"]),
+  JSON.stringify(state),
 ]);
 const searchable = db
   .prepare("SELECT COUNT(*) AS n FROM messages_fts WHERE messages_fts MATCH 'sidebar'")

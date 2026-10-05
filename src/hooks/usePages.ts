@@ -20,7 +20,7 @@ export function usePages() {
     (section: SettingsSectionId = SETTINGS_DEFAULT) => setPage({ kind: "settings", section }),
     [],
   );
-  /** From an agent's drawer: the routines page, already editing a new one. */
+  /** From a bot's drawer: the routines page, already editing a new one. */
   const openRoutines = useCallback(
     (sessionId?: string) =>
       setPage({

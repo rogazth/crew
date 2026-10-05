@@ -2,7 +2,7 @@
 // a bot's children are gone from the list (they live in its chat), and a handoff is a
 // top-level session like any of yours. Background work is the chat's business, not the list's.
 import { FolderIcon, GitBranchIcon, PlusIcon, RotateCwIcon, SearchIcon, SlidersHorizontalIcon, type LucideIcon as Icon } from "lucide-react";
-import { AgentAvatar } from "../../chrome/AgentAvatar";
+import { BotAvatar } from "../../chrome/BotAvatar";
 import { ProviderIcon } from "../../chrome/ProviderIcon";
 import { StatusDot } from "../../chrome/StatusDot";
 import { statusLabel } from "../../lib/status";
@@ -14,9 +14,9 @@ const SURFACE = (active: boolean) => (active ? "bg-selected" : "hover:bg-hover f
 const FOCUS = "outline-none focus-visible:ring-1 focus-visible:ring-border-strong";
 
 export function ProtoSidebar({ world }: { world: World }) {
-  const bots = world.sessions.filter((s) => s.kind === "agent");
+  const bots = world.sessions.filter((s) => s.kind === "bot");
   // Children are not listed: they are their bot's business, shown in its chat.
-  const listed = world.sessions.filter((s) => s.kind !== "agent" && s.owner !== "me");
+  const listed = world.sessions.filter((s) => s.kind !== "bot" && s.owner !== "me");
   const main = listed.filter((s) => !s.worktree);
   const elsewhere = listed.filter((s) => s.worktree);
 
@@ -103,7 +103,7 @@ function Tile({ bot, active }: { bot: ProtoSession; active: boolean }) {
       className={`flex w-full min-w-0 flex-col items-center gap-1 rounded-xl px-1 pt-2 pb-1.5 transition-colors duration-150 ease-out ${SURFACE(active)} ${FOCUS}`}
     >
       <span className="relative">
-        <AgentAvatar seed={bot.id} bare animated={bot.status === "working"} className="size-10" />
+        <BotAvatar seed={bot.id} bare animated={bot.status === "working"} className="size-10" />
         <Badge status={bot.status} />
       </span>
       <span className={`w-full truncate text-center text-[12px] ${active ? "font-medium" : ""}`}>{bot.name}</span>

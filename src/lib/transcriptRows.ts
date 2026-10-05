@@ -28,9 +28,9 @@ export type Speaker = "user" | "agent" | "meta";
 export function speaker(row: Row): Speaker {
   if (row.kind === "activity" || row.kind === "footer" || row.kind === "fold") return "agent";
   if (row.kind === "date") return "meta";
-  // A letter from another agent is a row in the run, not a side of the
+  // A letter from a bot is a row in the run, not a side of the
   // conversation: it gets a note's room, not a change of speaker's.
-  if (row.block.role === "user") return row.block.fromAgent ? "meta" : "user";
+  if (row.block.role === "user") return row.block.fromBot ? "meta" : "user";
   if (row.block.role === "system") return "meta";
   return "agent";
 }

@@ -1,6 +1,6 @@
 //! Who the CLI speaks as, and where it finds the daemon.
 //!
-//! Inside an agent or a terminal session Crew put `CREW_SOCKET` and
+//! Inside a bot or a terminal session Crew put `CREW_SOCKET` and
 //! `CREW_TOKEN` in the environment, and those are the session: the CLI acts as
 //! it, in its workspace. Anywhere else it is the user, and the way in is
 //! `<data-dir>/daemon.json`.

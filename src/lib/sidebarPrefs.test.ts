@@ -29,18 +29,18 @@ describe("parsePrefs", () => {
 });
 
 describe("arrangeSessions", () => {
-  const list = [session("a", "agent", 1), session("t", "terminal", 3), session("b", "agent", 2, "codex")];
+  const list = [session("a", "bot", 1), session("t", "terminal", 3), session("b", "bot", 2, "codex")];
 
   it("splits by kind, newest first", () => {
-    const { agents, terminals } = arrangeSessions(list, DEFAULT_PREFS, "");
-    expect(agents.map((s) => s.id)).toEqual(["b", "a"]);
+    const { bots, terminals } = arrangeSessions(list, DEFAULT_PREFS, "");
+    expect(bots.map((s) => s.id)).toEqual(["b", "a"]);
     expect(terminals.map((s) => s.id)).toEqual(["t"]);
   });
 
   it("hides filtered kinds and providers", () => {
     const prefs = { ...DEFAULT_PREFS, hiddenKinds: ["terminal" as const], hiddenProviders: ["codex"] };
-    const { agents, terminals } = arrangeSessions(list, prefs, "");
-    expect(agents.map((s) => s.id)).toEqual(["a"]);
+    const { bots, terminals } = arrangeSessions(list, prefs, "");
+    expect(bots.map((s) => s.id)).toEqual(["a"]);
     expect(terminals).toEqual([]);
   });
 });
@@ -49,7 +49,7 @@ describe("childrenOf", () => {
   const child = (id: string, parentId: string | undefined, createdAt: number) =>
     ({ ...session(id, "child", createdAt, "codex"), parentId, createdAt }) as Session;
   const list = [
-    session("planner", "agent", 1),
+    session("planner", "bot", 1),
     session("shell", "terminal", 2),
     child("c2", "shell", 20),
     child("c1", "shell", 10),
@@ -65,8 +65,8 @@ describe("childrenOf", () => {
   });
 
   it("lists the nested ones under their parent only, and the rest among the sessions", () => {
-    const { agents, terminals } = arrangeSessions(list, DEFAULT_PREFS, "");
-    expect(agents.map((s) => s.id)).toEqual(["planner"]);
+    const { bots, terminals } = arrangeSessions(list, DEFAULT_PREFS, "");
+    expect(bots.map((s) => s.id)).toEqual(["planner"]);
     expect(terminals.map((s) => s.id).sort()).toEqual(["loose", "orphan", "shell"]);
   });
 

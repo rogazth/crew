@@ -568,10 +568,10 @@ pub struct Session {
     pub created_at: i64,
     #[ts(type = "number")]
     pub updated_at: i64,
-    /// The agent whose turns it runs; absent for a terminal and a child.
+    /// The bot whose turns it runs; absent for a terminal and a child.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
-    pub agent_id: Option<String>,
+    pub bot_id: Option<String>,
     /// The session that started it with `start_session`; absent when the user
     /// did, or nobody.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -866,7 +866,7 @@ pub struct BrowserResult {
 pub struct BrowserLease {
     pub tab: String,
     pub workspace_id: String,
-    /// What the holder is called: an agent's or a terminal's name, or "you".
+    /// What the holder is called: a bot's or a terminal's name, or "you".
     pub holder: String,
     /// The session behind it, for its face; none when it is the user.
     #[serde(default)]

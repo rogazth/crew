@@ -1,10 +1,10 @@
 import { useEffect, useSyncExternalStore } from "react";
 import * as api from "../lib/api";
-import { parseFaces, type AgentFace, type AgentFaces } from "../lib/agentAvatar";
+import { parseFaces, type BotFace, type BotFaces } from "../lib/botAvatar";
 
-const KEY = "agent:faces";
+const KEY = "bot:faces";
 
-let faces: AgentFaces = {};
+let faces: BotFaces = {};
 let requested = false;
 const listeners = new Set<() => void>();
 
@@ -12,14 +12,14 @@ const listeners = new Set<() => void>();
  * What is stored, under the faces picked here since: those are on their way to
  * the store. crewd also writes one, for a conversation split off a terminal.
  */
-export function reloadAgentFaces() {
+export function reloadBotFaces() {
   api
     .stateGet(KEY)
     .then((raw) => publish({ ...parseFaces(raw), ...faces }))
     .catch(() => {});
 }
 
-function publish(next: AgentFaces) {
+function publish(next: BotFaces) {
   faces = next;
   for (const listener of listeners) listener();
 }
@@ -31,21 +31,21 @@ function subscribe(listener: () => void) {
   };
 }
 
-/** Faces agents were given by hand, by session id; one read for every avatar on screen. */
-export function useAgentFaces() {
+/** Faces bots were given by hand, by session id; one read for every avatar on screen. */
+export function useBotFaces() {
   const current = useSyncExternalStore(subscribe, () => faces);
 
   useEffect(() => {
     if (requested) return;
     requested = true;
-    reloadAgentFaces();
+    reloadBotFaces();
   }, []);
 
   return current;
 }
 
-/** A face picked in the agent sheet; an empty one hands the agent back to the default. */
-export function setAgentFace(sessionId: string, face: AgentFace) {
+/** A face picked in the bot sheet; an empty one hands the bot back to the default. */
+export function setBotFace(sessionId: string, face: BotFace) {
   const next = { ...faces };
   if (face.style || face.seed) next[sessionId] = face;
   else delete next[sessionId];

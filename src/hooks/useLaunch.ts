@@ -16,11 +16,11 @@ type Deps = {
   openStub: (stub: StubKind, title: string) => void;
   openTerminal: (worktree: string | null) => void;
   openBrowser: (url?: string, incognito?: boolean) => void;
-  newAgent: () => void;
+  newBot: () => void;
 };
 
 /** New sessions and the tab launcher's picks. */
-export function useLaunch({ sessions, worktree, create, openSession, openStub, openTerminal, openBrowser, newAgent }: Deps) {
+export function useLaunch({ sessions, worktree, create, openSession, openStub, openTerminal, openBrowser, newBot }: Deps) {
   const { effective: defaultAgent } = useDefaultAgent();
 
   // Sessions open straight away; the name is derived, never prompted.
@@ -60,11 +60,11 @@ export function useLaunch({ sessions, worktree, create, openSession, openStub, o
         else openStub(item.stub, item.title);
       }
       if (item.kind === "browser") openBrowser(item.url, item.incognito);
-      if (item.kind === "new-agent") newAgent();
+      if (item.kind === "new-bot") newBot();
       if (item.kind === "new-session") void newSession(item.provider);
       if (item.kind === "session") openSession(item.session);
     },
-    [newAgent, newSession, openSession, openStub, openTerminal, openBrowser, worktree],
+    [newBot, newSession, openSession, openStub, openTerminal, openBrowser, worktree],
   );
 
   return { newSession, launch };

@@ -169,8 +169,8 @@ function onHarness(id: string, event: HarnessEvent) {
     const first = event.questions[0];
     if (first) announce(id, "needs-input", `Asks: ${first.question}`);
   }
-  // A letter from another agent or a terminal; the user's own, and a note an agent left itself, are not news.
-  const from = event.type === "user.message" ? event.fromAgent : undefined;
+  // A letter from a bot or a terminal; the user's own, and a note a bot left itself, are not news.
+  const from = event.type === "user.message" ? event.fromBot : undefined;
   if (event.type === "user.message" && from && from.kind !== "user" && from.id !== id) {
     announce(id, "mailbox", `From ${from.name}: ${firstLine(event.text)}`);
   }
@@ -209,7 +209,7 @@ function onStatus(event: SessionStatusEvent) {
  */
 async function resync(id: string) {
   const row = await api.getSession(id).catch(() => null);
-  if (!row || (row.kind !== "agent" && row.kind !== "child") || row.status === statuses.get(id)) return;
+  if (!row || (row.kind !== "bot" && row.kind !== "child") || row.status === statuses.get(id)) return;
   onStatus({ sessionId: id, status: row.status, updatedAt: row.updatedAt });
 }
 

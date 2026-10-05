@@ -92,7 +92,7 @@ type Options = {
 /**
  * What a terminal session's indicator says, from what its process does.
  *
- * - `working` while the CLI is busy, looked at or not, as an agent chat does.
+ * - `working` while the CLI is busy, looked at or not, as a chat Crew drives does.
  *   That includes a turn that ended on work it left running in the
  *   background: the CLI takes it up again when that work reports back.
  * - `done` once it finishes while you are elsewhere; `idle` when you watched.

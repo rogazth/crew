@@ -1,5 +1,5 @@
-//! `crew mcp` and the bridge client under every `crew` command. Inside an
-//! agent or a terminal session they only see the environment Crew handed the
+//! `crew mcp` and the bridge client under every `crew` command. Inside a
+//! bot or a terminal session they only see the environment Crew handed the
 //! process at spawn; from the user's own shell the `crew` CLI builds the link
 //! out of `daemon.json` instead.
 
@@ -45,7 +45,7 @@ impl Link {
     /// The link Crew handed this process, if it handed it one.
     pub fn from_env() -> Result<Self, String> {
         let var = |key: &str| {
-            std::env::var(key).map_err(|_| format!("{key} is not set; run this from an agent or a terminal session Crew started"))
+            std::env::var(key).map_err(|_| format!("{key} is not set; run this from a bot or a terminal session Crew started"))
         };
         Ok(Self {
             socket: var("CREW_SOCKET")?,

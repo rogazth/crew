@@ -49,7 +49,7 @@ async function transcripts(crew: Crew, cwd: string): Promise<string[]> {
 type Faces = Record<string, { style?: string; seed?: string }>;
 
 async function faces(crew: Crew): Promise<Faces> {
-  const raw = await crew.request<string | null>("state_get", { key: "agent:faces" });
+  const raw = await crew.request<string | null>("state_get", { key: "bot:faces" });
   return raw ? (JSON.parse(raw) as Faces) : {};
 }
 
@@ -179,7 +179,7 @@ test("S4: the session split off keeps the face the terminal wore", async (t) => 
 
   const live = await newTerminal(crew, workspace.id);
   const face = { style: "moods", seed: "picked by hand" };
-  await crew.request("state_set", { key: "agent:faces", value: JSON.stringify({ [live.id]: face }) });
+  await crew.request("state_set", { key: "bot:faces", value: JSON.stringify({ [live.id]: face }) });
   await turn(crew, live, "hello");
   await typeInTerminal(crew, "/clear");
 

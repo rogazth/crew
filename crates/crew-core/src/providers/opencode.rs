@@ -689,7 +689,7 @@ mod tests {
     }
 
     #[test]
-    fn a_message_to_another_agent_reads_as_the_message() {
+    fn a_message_to_another_bot_reads_as_the_message() {
         let events = events(&[json!({
             "type": "tool_use",
             "sessionID": "ses_1",

@@ -1,7 +1,7 @@
 import { Popover } from "@base-ui/react/popover";
 import { BotIcon, GitBranchIcon, GlobeIcon, HatGlassesIcon, HistoryIcon, PlusIcon, SquareTerminalIcon } from "lucide-react";
 import { Fragment, cloneElement, isValidElement, useEffect, useMemo, useRef, useState } from "react";
-import { AgentAvatar } from "./AgentAvatar";
+import { BotAvatar } from "./BotAvatar";
 import { Footer, GroupHeader } from "./kit";
 import { Kbd } from "./Kbd";
 import { ProviderIcon } from "./ProviderIcon";
@@ -20,14 +20,14 @@ import { filterSessions } from "../lib/workspaces";
 export type Launch =
   | { kind: "stub"; stub: StubKind; title: string }
   | { kind: "browser"; url?: string; incognito?: boolean }
-  | { kind: "new-agent" }
+  | { kind: "new-bot" }
   | { kind: "new-session"; provider?: ProviderId }
   | { kind: "session"; session: Session };
 
 type Action = { id: string; label: string; icon: React.ReactNode; launch: Launch; hint?: string };
 
 type Item = Action & { status?: SessionStatus; meta?: string };
-/** `tiles` lay out as the sidebar's agent grid; the rest are rows. */
+/** `tiles` lay out as the sidebar's bot grid; the rest are rows. */
 type Group = { heading?: string; tiles?: boolean; items: Item[] };
 
 const PAGES = 5;
@@ -44,11 +44,11 @@ const CREATE: Action[] = [
     launch: { kind: "stub", stub: "terminal", title: "Terminal" },
   },
   {
-    id: "new-agent",
-    label: "Agent",
+    id: "new-bot",
+    label: "Bot",
     icon: <BotIcon className={TILE_ICON} />,
-    launch: { kind: "new-agent" },
-    hint: commandKeys("new-agent"),
+    launch: { kind: "new-bot" },
+    hint: commandKeys("new-bot"),
   },
   {
     id: "browser",
@@ -90,7 +90,7 @@ type Props = {
   onLaunch: (launch: Launch) => void;
 };
 
-/** The plus next to the tabs: fixed surfaces on top, the workspace's own agents and sessions below. */
+/** The plus next to the tabs: fixed surfaces on top, the workspace's own bots and sessions below. */
 export function TabLauncher({ open, onOpenChange, sessions, onLaunch }: Props) {
   function pick(launch: Launch) {
     onLaunch(launch);
@@ -146,8 +146,8 @@ function LauncherPopup({ sessions, onPick }: { sessions: Session[]; onPick: (lau
         id: session.id,
         label: session.name,
         icon:
-          session.kind === "agent" ? (
-            <AgentAvatar seed={session.id} bare className="size-5" />
+          session.kind === "bot" ? (
+            <BotAvatar seed={session.id} bare className="size-5" />
           ) : (
             <ProviderIcon provider={session.provider} className="size-4 shrink-0" />
           ),
@@ -187,7 +187,7 @@ function LauncherPopup({ sessions, onPick }: { sessions: Session[]; onPick: (lau
     const trailing = open && !address?.lead ? [open] : [];
     return [
       { items: [...lead, ...actions] },
-      { heading: "Agents & sessions", items: found },
+      { heading: "Bots & sessions", items: found },
       { heading: "Pages", items: [...trailing, ...visited] },
     ];
   }, [query, typing, providers, matches, history]);
@@ -247,7 +247,7 @@ function LauncherPopup({ sessions, onPick }: { sessions: Session[]; onPick: (lau
         <input
           ref={search}
           value={query}
-          placeholder="New tab, or open an agent, session or URL…"
+          placeholder="New tab, or open a bot, session or URL…"
           aria-label="Open a tab"
           spellCheck={false}
           onChange={(event) => {
@@ -314,7 +314,7 @@ function smaller(icon: React.ReactNode): React.ReactNode {
   return isValidElement<{ className?: string }>(icon) ? cloneElement(icon, { className: ICON }) : icon;
 }
 
-/** The sidebar's agent tile, as a door: glyph over label, lit under the cursor. */
+/** The sidebar's bot tile, as a door: glyph over label, lit under the cursor. */
 function Tile({ item, active, onHover, onPick }: { item: Item; active: boolean; onHover: () => void; onPick: () => void }) {
   return (
     <button

@@ -1,4 +1,4 @@
-import { agentLabel } from "./agentNames";
+import { botLabel } from "./botNames";
 import type { Block, TodoItem, ToolDetail } from "./protocol";
 
 export type { ToolDetail };
@@ -106,7 +106,7 @@ export function toolLine(block: Block): ToolLine {
     case "fetch":
       return { text: detail.title ?? host(detail.url), mono: false, suffix: host(detail.url), failed };
     case "message":
-      return { text: firstLine(detail.text), mono: false, suffix: `to ${agentLabel(detail.to)}`, failed };
+      return { text: firstLine(detail.text), mono: false, suffix: `to ${botLabel(detail.to)}`, failed };
     case "todo": {
       // What the agent is on now says more than the word "todos" does.
       const current = detail.items.find((item) => item.status === "inProgress");

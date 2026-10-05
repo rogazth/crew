@@ -7,7 +7,7 @@ export type Schedule =
   | { kind: "daily"; hour: number; minute: number; days: number[] }
   | { kind: "cron"; expression: string };
 
-/** `skipped`: it came due while the agent was still working on something else. */
+/** `skipped`: it came due while the bot was still working on something else. */
 export type RunStatus = "running" | "ok" | "error" | "skipped";
 
 export type RoutineRun = {

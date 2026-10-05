@@ -3,11 +3,11 @@ import { Avatar, Style, type StyleDefinition } from "@dicebear/core";
 type Definition = { default: unknown };
 
 /**
- * DiceBear styles an agent's face can come from. All CC0, and every one can
- * move: a working agent's face comes alive. Each definition is its own chunk,
+ * DiceBear styles a bot's face can come from. All CC0, and every one can
+ * move: a working bot's face comes alive. Each definition is its own chunk,
  * loaded on first use.
  */
-export const AGENT_AVATARS = [
+export const BOT_AVATARS = [
   { id: "gaze", label: "Gaze", load: (): Promise<Definition> => import("@dicebear/styles/gaze.json") },
   { id: "pixelbot", label: "Pixelbot", load: (): Promise<Definition> => import("@dicebear/styles/pixelbot.json") },
   { id: "voxel-bot", label: "Voxel Bot", load: (): Promise<Definition> => import("@dicebear/styles/voxel-bot.json") },
@@ -16,27 +16,27 @@ export const AGENT_AVATARS = [
   { id: "blobs", label: "Blobs", load: (): Promise<Definition> => import("@dicebear/styles/blobs.json") },
 ] as const;
 
-export type AgentAvatarId = (typeof AGENT_AVATARS)[number]["id"];
+export type BotAvatarId = (typeof BOT_AVATARS)[number]["id"];
 
-export const DEFAULT_AGENT_AVATAR: AgentAvatarId = "gaze";
+export const DEFAULT_BOT_AVATAR: BotAvatarId = "gaze";
 
-export function parseAgentAvatar(raw: string | null): AgentAvatarId {
-  return AGENT_AVATARS.some((avatar) => avatar.id === raw)
-    ? (raw as AgentAvatarId)
-    : DEFAULT_AGENT_AVATAR;
+export function parseBotAvatar(raw: string | null): BotAvatarId {
+  return BOT_AVATARS.some((avatar) => avatar.id === raw)
+    ? (raw as BotAvatarId)
+    : DEFAULT_BOT_AVATAR;
 }
 
-/** A face picked for one agent: a style other than everyone's, a seed other than its id, or both. */
-export type AgentFace = { style?: AgentAvatarId; seed?: string };
-export type AgentFaces = Record<string, AgentFace>;
+/** A face picked for one bot: a style other than everyone's, a seed other than its id, or both. */
+export type BotFace = { style?: BotAvatarId; seed?: string };
+export type BotFaces = Record<string, BotFace>;
 
-export function parseFaces(raw: string | null): AgentFaces {
+export function parseFaces(raw: string | null): BotFaces {
   if (!raw) return {};
   try {
     const parsed = JSON.parse(raw) as Record<string, { style?: unknown; seed?: unknown }>;
-    const out: AgentFaces = {};
+    const out: BotFaces = {};
     for (const [id, face] of Object.entries(parsed)) {
-      const style = AGENT_AVATARS.some((avatar) => avatar.id === face?.style) ? (face.style as AgentAvatarId) : undefined;
+      const style = BOT_AVATARS.some((avatar) => avatar.id === face?.style) ? (face.style as BotAvatarId) : undefined;
       const seed = typeof face?.seed === "string" && face.seed ? face.seed : undefined;
       if (style || seed) out[id] = { ...(style ? { style } : {}), ...(seed ? { seed } : {}) };
     }
@@ -51,13 +51,13 @@ export function dealSeeds(count: number): string[] {
   return Array.from({ length: count }, () => crypto.randomUUID().slice(0, 8));
 }
 
-const styles = new Map<AgentAvatarId, Promise<Style<StyleDefinition>>>();
+const styles = new Map<BotAvatarId, Promise<Style<StyleDefinition>>>();
 
 /** One parsed style per id, shared by every avatar that draws from it. */
-export function loadAvatarStyle(id: AgentAvatarId): Promise<Style<StyleDefinition>> {
+export function loadAvatarStyle(id: BotAvatarId): Promise<Style<StyleDefinition>> {
   let style = styles.get(id);
   if (!style) {
-    const entry = AGENT_AVATARS.find((avatar) => avatar.id === id)!;
+    const entry = BOT_AVATARS.find((avatar) => avatar.id === id)!;
     style = entry.load().then((module) => new Style(module.default as StyleDefinition));
     // A failed chunk load shouldn't stick; the next render gets to try again.
     style.catch(() => styles.delete(id));
@@ -75,7 +75,7 @@ export function loadAvatarStyle(id: AgentAvatarId): Promise<Style<StyleDefinitio
  */
 type Render = { backgroundColor?: string[]; borderRadius?: number; scale?: number };
 
-const RENDER: Record<AgentAvatarId, Render> = {
+const RENDER: Record<BotAvatarId, Render> = {
   gaze: { scale: 1.3 },
   "voxel-bot": { backgroundColor: ["#00000000"], scale: 1.2 },
   moods: { backgroundColor: ["#00000000"], scale: 1.3 },
@@ -84,7 +84,7 @@ const RENDER: Record<AgentAvatarId, Render> = {
   blobs: { borderRadius: 24 },
 };
 
-export function avatarRender(id: AgentAvatarId): Render {
+export function avatarRender(id: BotAvatarId): Render {
   return RENDER[id];
 }
 
@@ -95,7 +95,7 @@ const uris = new Map<string, string>();
  * animated face carries the style's own motion (a glance, a blink, a sway),
  * which holds still for anyone who asked for reduced motion.
  */
-export function avatarUri(id: AgentAvatarId, style: Style<StyleDefinition>, seed: string, animated = false): string {
+export function avatarUri(id: BotAvatarId, style: Style<StyleDefinition>, seed: string, animated = false): string {
   const key = `${id}\n${seed}\n${animated}`;
   let uri = uris.get(key);
   if (!uri) {

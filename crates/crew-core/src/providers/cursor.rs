@@ -394,7 +394,7 @@ fn grep_output(success: Option<&Map<String, Value>>) -> Option<String> {
 }
 
 /// The Crew command a shell command runs, when cursor reaches one the only
-/// way it can: `…/crew agents send <id> <text>`. The group and verb, and what
+/// way it can: `…/crew bots send <id> <text>`. The group and verb, and what
 /// follows them.
 fn crew_command(command: &str) -> Option<(String, Vec<String>)> {
     let words = shell_words(command);
@@ -424,13 +424,14 @@ fn crew_command(command: &str) -> Option<(String, Vec<String>)> {
     Some((format!("{group} {verb}"), rest[2..].to_vec()))
 }
 
-/// Cursor reaches Crew's tools through the shell (`crew agents send <id>
-/// <text>`), so a message to another agent arrives as a command. Read back as
+/// Cursor reaches Crew's tools through the shell (`crew bots send <id>
+/// <text>`), so a message to another bot arrives as a command. Read back as
 /// the message it is, it shows who it went to and what it said, as it does for
-/// the providers that call the tool by name.
+/// the providers that call the tool by name. Transcripts from before the
+/// rename say `crew agents send`, and they are read the same way.
 fn bridge_message(command: &str) -> Option<ToolDetail> {
     let (path, args) = crew_command(command)?;
-    if path != "agents send" {
+    if path != "bots send" && path != "agents send" {
         return None;
     }
     let (to, words) = args.split_first()?;
@@ -724,8 +725,8 @@ mod tests {
 
     #[test]
     fn a_crew_tool_called_through_the_shell_is_named_as_crews() {
-        let args = json!({ "command": "/Users/me/crew/target/debug/crew agents list --json" });
-        assert_eq!(tool_label("Shell", args.as_object().unwrap()), "Crew agents list");
+        let args = json!({ "command": "/Users/me/crew/target/debug/crew bots list --json" });
+        assert_eq!(tool_label("Shell", args.as_object().unwrap()), "Crew bots list");
         let result = json!({ "success": { "exitCode": 0, "stdout": "[{\"name\": \"Ada\"}]" } });
         assert_eq!(
             tool_detail("Shell", args.as_object().unwrap(), result.as_object()),
@@ -882,7 +883,7 @@ mod tests {
     /// The failed read of `crates/crew-core/tests/fixtures/protocols/cursor.jsonl`: an error result repeats
     /// no arguments, so the row keeps the detail it already had.
     #[test]
-    fn a_bridge_call_to_message_an_agent_reads_as_the_message() {
+    fn a_bridge_call_to_message_a_bot_reads_as_the_message() {
         let args = |command: &str| {
             let mut map = Map::new();
             map.insert("command".into(), Value::String(command.into()));
@@ -890,7 +891,7 @@ mod tests {
         };
         let ok = serde_json::json!({ "success": { "exitCode": 0 } });
         let ok = ok.as_object();
-        let sent = r#"/bin/crew agents send abc 'it'\''s' "green, \"really\"" 2>/dev/null || true"#;
+        let sent = r#"/bin/crew bots send abc 'it'\''s' "green, \"really\"" 2>/dev/null || true"#;
         match tool_detail("shell", &args(sent), ok) {
             Some(ToolDetail::Message { to, text }) => {
                 assert_eq!(to, "abc");
@@ -898,13 +899,16 @@ mod tests {
             }
             other => panic!("expected a message, got {other:?}"),
         }
+        // A transcript from before the rename still reads as the message it was.
+        let old = "crew agents send abc green";
+        assert!(matches!(tool_detail("shell", &args(old), ok), Some(ToolDetail::Message { .. })));
         // Text on stdin, a failed call, or another command stay the command they were.
-        let piped = "git diff | crew agents send abc -";
+        let piped = "git diff | crew bots send abc -";
         assert!(matches!(tool_detail("shell", &args(piped), ok), Some(ToolDetail::Command { .. })));
         let failed = serde_json::json!({ "success": { "exitCode": 1 } });
         assert!(matches!(tool_detail("shell", &args(sent), failed.as_object()), Some(ToolDetail::Command { .. })));
-        let listed = "crew -w /tmp/x agents list";
-        assert_eq!(tool_label("shell", &args(listed)), "Crew agents list");
+        let listed = "crew -w /tmp/x bots list";
+        assert_eq!(tool_label("shell", &args(listed)), "Crew bots list");
         assert!(matches!(tool_detail("shell", &args(listed), ok), Some(ToolDetail::Command { .. })));
     }
 

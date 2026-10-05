@@ -2,7 +2,7 @@
 //!
 //! `sessions.blocks_json` keeps the whole conversation in one column, which is
 //! right for rendering one open chat and wrong for everything else: a tail
-//! costs a full parse, a date filter is impossible, and searching across agents
+//! costs a full parse, a date filter is impossible, and searching across sessions
 //! means loading every transcript into memory. The same blocks live here as
 //! rows with an FTS5 index over their text.
 //!
@@ -14,7 +14,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
 use crew_protocol::{
-    AgentRef, AttachedFile, Block, BlockApproval, BlockQuestion, BlockRole, BlockTool,
+    BotRef, AttachedFile, Block, BlockApproval, BlockQuestion, BlockRole, BlockTool,
     SearchHit, SearchQuery, SearchSort, TurnUsage,
 };
 use rusqlite::{params, Connection};
@@ -42,7 +42,7 @@ struct Extra {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     usage: Option<TurnUsage>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    from_agent: Option<AgentRef>,
+    from_bot: Option<BotRef>,
 }
 
 const DEFAULT_LIMIT: u32 = 50;
@@ -138,7 +138,7 @@ struct ExtraRef<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     usage: Option<&'a TurnUsage>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    from_agent: Option<&'a AgentRef>,
+    from_bot: Option<&'a BotRef>,
 }
 
 fn extra_of(block: &Block) -> ExtraRef<'_> {
@@ -150,7 +150,7 @@ fn extra_of(block: &Block) -> ExtraRef<'_> {
         approval: block.approval.as_ref(),
         question: block.question.as_ref(),
         usage: block.usage.as_ref(),
-        from_agent: block.from_agent.as_ref(),
+        from_bot: block.from_bot.as_ref(),
     }
 }
 
@@ -194,7 +194,7 @@ fn row_to_block(row: &rusqlite::Row, at: usize) -> rusqlite::Result<Block> {
         approval: extra.approval,
         question: extra.question,
         usage: extra.usage,
-        from_agent: extra.from_agent,
+        from_bot: extra.from_bot,
     })
 }
 
@@ -476,7 +476,7 @@ mod tests {
         crate::session::create(
             store,
             workspace.id,
-            "agent".into(),
+            "bot".into(),
             name.into(),
             "claude".into(),
             "m".into(),
@@ -814,7 +814,7 @@ mod review_tests {
         crate::session::create(
             store,
             workspace.id,
-            "agent".into(),
+            "bot".into(),
             name.into(),
             "claude".into(),
             "m".into(),
@@ -1075,7 +1075,7 @@ mod plan_tests {
             let id = crate::session::create(
                 &store,
                 ws.id.clone(),
-                "agent".into(),
+                "bot".into(),
                 format!("a{n}"),
                 "claude".into(),
                 "m".into(),
@@ -1224,7 +1224,7 @@ mod drop_column_review {
         crate::session::create(
             store,
             workspace.id,
-            "agent".into(),
+            "bot".into(),
             name.into(),
             "claude".into(),
             "m".into(),
@@ -1323,7 +1323,7 @@ mod drop_column_review {
     /// block and `Transcript.tsx` looks for `[data-block=<id>]`. Only user,
     /// assistant and system rows carry that attribute — `groupRows` folds tool,
     /// reasoning, approval and question blocks into an ActivityGroup and skips
-    /// `hidden` ones outright — so a hit on anything else opens the agent and
+    /// `hidden` ones outright — so a hit on anything else opens the session and
     /// then silently does nothing, leaving `focusId` set forever because
     /// `onFocused` is only called when the element is found.
     #[test]

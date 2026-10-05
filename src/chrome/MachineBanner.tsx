@@ -6,7 +6,7 @@ import { Button } from "./kit";
 
 /**
  * Over a workspace whose machine is not answering: what is going on and what
- * to do. Its agents keep running over there; only the window lost them.
+ * to do. Its bots keep running over there; only the window lost them.
  */
 export function MachineBanner({ workspaceId }: { workspaceId: string | null }) {
   const link = useWorkspaceLink(workspaceId);
@@ -32,13 +32,13 @@ export function MachineBanner({ workspaceId }: { workspaceId: string | null }) {
         ) : connecting ? (
           <>
             <b className="font-medium">Connecting to {link.name}…</b>{" "}
-            <span className="text-text-muted">Its agents and terminals keep running there.</span>
+            <span className="text-text-muted">Its bots and terminals keep running there.</span>
           </>
         ) : (
           <>
             <b className="font-medium">{link.name} is offline.</b>{" "}
             <span className="text-text-muted">
-              {link.error ? `${link.error}. ` : ""}Its agents keep running there, and Crew reconnects on its own.
+              {link.error ? `${link.error}. ` : ""}Its bots keep running there, and Crew reconnects on its own.
             </span>
           </>
         )}

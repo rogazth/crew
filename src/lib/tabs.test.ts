@@ -4,7 +4,7 @@ import {
   activateTab,
   closeSessionTab,
   closeTab,
-  isAgentTab,
+  isTurnTab,
   isTerminalTab,
   lastUsed,
   newFileBrowserTab,
@@ -38,8 +38,8 @@ function opened(...ids: string[]): TabState {
 const visit = (state: TabState, ...ids: string[]) =>
   ids.reduce((s, id) => withRecent(selectTab(s, sessionTabId(id))), withRecent(state));
 
-const agent = (id: string, name = id): Session =>
-  ({ id, kind: "agent", name }) as Session;
+const bot = (id: string, name = id): Session =>
+  ({ id, kind: "bot", name }) as Session;
 const terminal = (id: string): Session => ({ id, kind: "terminal", name: id, provider: "claude" }) as Session;
 
 describe("openTab", () => {
@@ -345,12 +345,12 @@ describe("parseTabs", () => {
 });
 
 describe("what a tab is", () => {
-  const sessions = [agent("a", "Planner"), terminal("t")];
+  const sessions = [bot("a", "Planner"), terminal("t")];
   const terminals = (session: Session) => sessionSurface(session, "terminal");
 
-  it("knows an agent tab from a terminal one", () => {
-    expect(isAgentTab(sessionTab("a"), sessions)).toBe(true);
-    expect(isAgentTab(sessionTab("t"), sessions)).toBe(false);
+  it("knows a bot tab from a terminal one", () => {
+    expect(isTurnTab(sessionTab("a"), sessions)).toBe(true);
+    expect(isTurnTab(sessionTab("t"), sessions)).toBe(false);
     expect(isTerminalTab(sessionTab("t"), sessions, terminals)).toBe(true);
   });
 
@@ -363,7 +363,7 @@ describe("what a tab is", () => {
   it("counts the terminal stub as a terminal", () => {
     const stub: Tab = { id: "stub:terminal", kind: "stub", stub: "terminal", title: "Terminal" };
     expect(isTerminalTab(stub, sessions, terminals)).toBe(true);
-    expect(isAgentTab(stub, sessions)).toBe(false);
+    expect(isTurnTab(stub, sessions)).toBe(false);
   });
 
   it("titles a tab after its session, its file or its stub", () => {

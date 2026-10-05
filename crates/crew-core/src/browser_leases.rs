@@ -14,7 +14,7 @@ use crew_protocol::{BrowserLease, BrowserLeases};
 /// How long a tab stays taken after its holder's last call.
 pub const TTL_MS: i64 = 120_000;
 
-/// Whoever asks for a tab: a session (agent or terminal) or the user.
+/// Whoever asks for a tab: a session (bot or terminal) or the user.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Holder {
     /// What leases are compared by: the session id, or "user".

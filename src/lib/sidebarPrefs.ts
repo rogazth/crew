@@ -35,8 +35,8 @@ export const DEFAULT_PREFS: SidebarPrefs = {
   limit: 10,
 };
 
-/** The panel's two fixed sections: agents as a grid of faces, sessions as rows. */
-export type Arranged = { agents: Session[]; terminals: Session[] };
+/** The panel's two fixed sections: bots as a grid of faces, sessions as rows. */
+export type Arranged = { bots: Session[]; terminals: Session[] };
 
 export function shows(prefs: SidebarPrefs, detail: Detail): boolean {
   return prefs.show.includes(detail);
@@ -77,7 +77,7 @@ export function parsePrefs(raw: string | null): SidebarPrefs {
         ? (parsed.show.filter((d) => KNOWN_DETAILS.has(d)) as Detail[])
         : DEFAULT_PREFS.show,
       hiddenKinds: Array.isArray(parsed.hiddenKinds)
-        ? (parsed.hiddenKinds.filter((k) => k === "agent" || k === "terminal") as SessionKind[])
+        ? (parsed.hiddenKinds.filter((k) => k === "bot" || k === "terminal") as SessionKind[])
         : [],
       hiddenProviders: Array.isArray(parsed.hiddenProviders)
         ? parsed.hiddenProviders.filter((p): p is string => typeof p === "string")
@@ -120,7 +120,7 @@ export function arrangeSessions(sessions: Session[], prefs: SidebarPrefs, query:
   const ordered = searching ? filterSessions(listed, query) : sort(listed, prefs.ordering);
   const nested = searching ? new Set<string>() : new Set([...childrenOf(sessions, prefs, query).values()].flat().map((s) => s.id));
   return {
-    agents: ordered.filter((session) => session.kind === "agent"),
+    bots: ordered.filter((session) => session.kind === "bot"),
     terminals: ordered.filter(
       (session) => session.kind === "terminal" || (session.kind === "child" && !nested.has(session.id)),
     ),
@@ -128,7 +128,7 @@ export function arrangeSessions(sessions: Session[], prefs: SidebarPrefs, query:
 }
 
 /**
- * The sessions each listed session started, oldest first, by the starter's id: an agent's
+ * The sessions each listed session started, oldest first, by the starter's id: a bot's
  * or a terminal's children nest under it. Empty while searching, which lists flat.
  */
 export function childrenOf(sessions: Session[], prefs: SidebarPrefs, query: string): Map<string, Session[]> {

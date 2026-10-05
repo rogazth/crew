@@ -582,10 +582,10 @@ mod tests {
     }
 
     fn session(workspace_id: &str, autonomy: &str) -> Caller {
-        Caller::Agent(crate::session::Session {
+        Caller::Bot(crate::session::Session {
             id: format!("s-{autonomy}"),
             workspace_id: workspace_id.into(),
-            kind: "agent".into(),
+            kind: "bot".into(),
             name: "Ada".into(),
             provider: "claude".into(),
             model: String::new(),
@@ -598,7 +598,7 @@ mod tests {
             worktree: None,
             created_at: 0,
             updated_at: 0,
-            agent_id: None,
+            bot_id: None,
             parent_id: None,
             cursor: 0,
         })

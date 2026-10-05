@@ -481,7 +481,7 @@ impl ProcessTools {
         Some(format!("Processes defined in this workspace: {}.", listed.join("; ")))
     }
 
-    /// A session id as "Name (agent id)"; `None` is the user.
+    /// A session id as "Name (bot id)"; `None` is the user.
     fn who(&self, session_id: Option<&str>) -> String {
         let Some(id) = session_id else {
             return "the user".to_string();
@@ -691,20 +691,20 @@ mod tests {
         let wait = tools.iter().find(|tool| tool.name == "wait_for_log").unwrap();
         assert!(wait.schema["required"].as_array().unwrap().contains(&json!("timeout_s")));
 
-        for kind in [CallerKind::Agent, CallerKind::Terminal, CallerKind::User] {
+        for kind in [CallerKind::Bot, CallerKind::Terminal, CallerKind::User] {
             let hidden = f.toolbox.hidden_names(kind);
             assert!(hidden.contains(&"read_logs") && hidden.contains(&"list_processes"), "{kind:?}: {hidden:?}");
         }
-        let agent = f.session(&f.workspace, "agent", "Coder", "ask");
-        let found = f.call(&agent, "find_tool", json!({ "query": "tail the dev server logs" })).unwrap();
+        let bot = f.session(&f.workspace, "bot", "Coder", "ask");
+        let found = f.call(&bot, "find_tool", json!({ "query": "tail the dev server logs" })).unwrap();
         assert_eq!(found["matches"][0]["name"], "read_logs", "{found}");
     }
 
     #[test]
-    fn what_an_ask_agent_creates_waits_for_the_user_and_cannot_start() {
+    fn what_an_ask_bot_creates_waits_for_the_user_and_cannot_start() {
         let f = fixture("approval");
-        let careful = f.session(&f.workspace, "agent", "Careful", "ask");
-        let trusted = f.session(&f.workspace, "agent", "Trusted", "full");
+        let careful = f.session(&f.workspace, "bot", "Careful", "ask");
+        let trusted = f.session(&f.workspace, "bot", "Trusted", "full");
 
         let asked = f
             .call(&careful, "create_process", json!({ "name": "dev", "command": "echo hi; sleep 30", "env": { "PORT": 5173 } }))
@@ -758,7 +758,7 @@ mod tests {
     fn read_logs_hands_back_a_cursor_that_reads_only_what_is_new() {
         let f = fixture("cursor");
         let user = f.user();
-        let careful = f.session(&f.workspace, "agent", "Careful", "ask");
+        let careful = f.session(&f.workspace, "bot", "Careful", "ask");
         let trusted = f.session(&f.workspace, "terminal", "Trusted", "full");
         f.call(&user, "create_process", json!({ "name": "repl", "command": "echo one; read x; echo two-$x; sleep 30" }))
             .unwrap();
@@ -837,7 +837,7 @@ mod tests {
         let session = session::create_in_worktree(
             &f.store,
             f.workspace.clone(),
-            "agent".into(),
+            "bot".into(),
             "Careful".into(),
             "claude".into(),
             "".into(),

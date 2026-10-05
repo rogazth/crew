@@ -15,7 +15,7 @@ const ICONS: Record<MenuIcon, Icon> = {
   open: ExternalLinkIcon,
   bell: BellIcon,
   read: CheckCheckIcon,
-  agent: BotIcon,
+  bot: BotIcon,
   terminal: SquareTerminalIcon,
   branch: GitBranchIcon,
   reopen: RotateCcwIcon,

@@ -10,12 +10,12 @@ import type { Session, Workspace } from "../lib/types";
 import { RoutineEditor } from "./RoutineEditor";
 
 type Props = {
-  /** Set when the page opens straight into a new routine, e.g. from an agent's drawer. */
+  /** Set when the page opens straight into a new routine, e.g. from a bot's drawer. */
   draft: RoutineDraft | null;
   workspaces: Workspace[];
   activeWorkspaceId: string | null;
-  /** Agents of the active workspace; a new routine starts on the first of them. */
-  agents: Session[];
+  /** Bots of the active workspace; a new routine starts on the first of them. */
+  bots: Session[];
   onConfirm: (confirm: Confirm) => void;
 };
 
@@ -30,7 +30,7 @@ const FILTERS: Option<Filter>[] = [
 type Open = { kind: "new"; draft: RoutineDraft; workspaceId: string } | { kind: "edit"; id: string };
 
 /** The routines screen: every standing order in the app, and one editor for them. */
-export function RoutinesView({ draft, workspaces, activeWorkspaceId, agents, onConfirm }: Props) {
+export function RoutinesView({ draft, workspaces, activeWorkspaceId, bots, onConfirm }: Props) {
   const entries = useRoutines();
   const [open, setOpen] = useState<Open | null>(() =>
     draft && activeWorkspaceId ? { kind: "new", draft, workspaceId: activeWorkspaceId } : null,
@@ -48,9 +48,9 @@ export function RoutinesView({ draft, workspaces, activeWorkspaceId, agents, onC
   );
 
   const startNew = () => {
-    const agent = agents[0];
-    if (!agent || !activeWorkspaceId) return;
-    setOpen({ kind: "new", draft: newRoutineDraft(agent.id), workspaceId: activeWorkspaceId });
+    const bot = bots[0];
+    if (!bot || !activeWorkspaceId) return;
+    setOpen({ kind: "new", draft: newRoutineDraft(bot.id), workspaceId: activeWorkspaceId });
   };
 
   const confirmDelete = (entry: RoutineEntry) =>
@@ -105,9 +105,9 @@ export function RoutinesView({ draft, workspaces, activeWorkspaceId, agents, onC
   return (
     <PageFrame
       title="Routines"
-      subtitle="Standing orders: an agent wakes on a schedule with a saved instruction."
+      subtitle="Standing orders: a bot wakes on a schedule with a saved instruction."
       actions={
-        <Button variant="primary" icon={PlusIcon} disabled={agents.length === 0} onClick={startNew}>
+        <Button variant="primary" icon={PlusIcon} disabled={bots.length === 0} onClick={startNew}>
           New routine
         </Button>
       }
@@ -142,7 +142,7 @@ export function RoutinesView({ draft, workspaces, activeWorkspaceId, agents, onC
       )}
 
       {entries !== null && shown.length === 0 ? (
-        <Empty hasAny={entries.length > 0} hasAgents={agents.length > 0} filter={filter} />
+        <Empty hasAny={entries.length > 0} hasBots={bots.length > 0} filter={filter} />
       ) : (
         <div className="-mx-3 flex flex-col gap-0.5">
           {shown.map((entry) => (
@@ -163,12 +163,12 @@ export function RoutinesView({ draft, workspaces, activeWorkspaceId, agents, onC
   );
 }
 
-function Empty({ hasAny, hasAgents, filter }: { hasAny: boolean; hasAgents: boolean; filter: Filter }) {
+function Empty({ hasAny, hasBots, filter }: { hasAny: boolean; hasBots: boolean; filter: Filter }) {
   const line = hasAny
     ? `No ${filter} routines.`
-    : hasAgents
-      ? "No routines yet. A routine wakes an agent on a schedule with a saved instruction."
-      : "Routines run inside an agent's conversation. Create an agent first.";
+    : hasBots
+      ? "No routines yet. A routine wakes a bot on a schedule with a saved instruction."
+      : "Routines run inside a bot's conversation. Create a bot first.";
   return (
     <p className="rounded-xl border border-dashed border-border px-4 py-10 text-center text-text-muted">
       {line}

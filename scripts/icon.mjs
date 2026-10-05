@@ -30,7 +30,7 @@ const PLATE_SHADOW = hex('#000000')
 const CREW_SHADOW = hex('#2D2D38')
 const EYE = hex('#0F172A')
 
-// The crew: three agents in the colours of gaze, the faces the agents wear in
+// The crew: three bots in the colours of gaze, the faces the bots wear in
 // the app, each taken one step deeper so it holds on white. The two at the
 // sides look to the middle one, and it looks at you.
 const PILLS = [

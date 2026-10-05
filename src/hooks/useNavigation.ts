@@ -50,7 +50,7 @@ export function useNavigation({ tabs, sessions, confirms, removeSession, closePa
     [closePage, route, tabs],
   );
 
-  /** A message from another agent names its sender; the name opens its tab. */
+  /** A message from a bot names its sender; the name opens its tab. */
   const openSessionById = useCallback(
     (id: string) => {
       const found = sessions.find((session) => session.id === id);

@@ -1,4 +1,4 @@
-// Seeds a dev data set of its own: workspaces, worktrees with diffs, agents and
+// Seeds a dev data set of its own: workspaces, worktrees with diffs, bots and
 // sessions in every status, transcripts, routines and open tabs. The app then
 // runs on it without touching `Crew Dev`.
 //
@@ -145,7 +145,7 @@ function rpc(method, params = {}) {
   });
 }
 
-// ---------- workspaces, agents, sessions ----------
+// ---------- workspaces, bots, sessions ----------
 
 const MIN = 60_000;
 const HOUR = 60 * MIN;
@@ -192,72 +192,72 @@ async function session(ws, kind, name, { provider = "claude", model = "", worktr
 }
 
 // crew — the busy one: every status, every provider, a worktree per story.
-const lead = await session("crew", "agent", "Planner", {
+const lead = await session("crew", "bot", "Planner", {
   model: "claude-opus-5-5",
   description: "Breaks the design pass into tickets and hands them out.",
   status: "working",
   ago: 0,
 });
-const showcase = await session("crew", "agent", "Showcase", {
+const showcase = await session("crew", "bot", "Showcase", {
   model: "claude-opus-5-5",
   description: "Every tool and every block the chat can draw, in one transcript.",
   status: "done",
   ago: 1 * MIN,
 });
-const reviewer = await session("crew", "agent", "Reviewer", {
+const reviewer = await session("crew", "bot", "Reviewer", {
   provider: "codex",
   model: "gpt-5.5-codex",
   description: "Reviews every diff before it lands.",
   status: "needs-input",
   ago: 3 * MIN,
 });
-const scribe = await session("crew", "agent", "Scribe", {
+const scribe = await session("crew", "bot", "Scribe", {
   provider: "opencode",
   description: "Keeps the docs in step with the code.",
   status: "done",
   ago: 12 * MIN,
 });
-await session("crew", "agent", "Tester", { provider: "cursor", status: "error", ago: 40 * MIN, description: "Runs the e2e suite." });
-await session("crew", "agent", "Archivist", { ago: 3 * 24 * HOUR, description: "Idle for days." });
+await session("crew", "bot", "Tester", { provider: "cursor", status: "error", ago: 40 * MIN, description: "Runs the e2e suite." });
+await session("crew", "bot", "Archivist", { ago: 3 * 24 * HOUR, description: "Idle for days." });
 await session("crew", "terminal", "claude — design tokens", { status: "working", ago: 0 });
 await session("crew", "terminal", "codex — release notes", { provider: "codex", status: "done", ago: 25 * MIN });
 await session("crew", "terminal", "opencode", { provider: "opencode", ago: 5 * HOUR });
 
-const tabsAgent = await session("crew", "agent", "Indicator", {
+const tabsBot = await session("crew", "bot", "Indicator", {
   worktree: crewTrees.tabs,
   status: "working",
   description: "Explores tab status indicators.",
   ago: 0,
 });
-await session("crew", "agent", "Pixel", { worktree: crewTrees.tabs, provider: "codex", status: "needs-input", ago: 2 * MIN });
+await session("crew", "bot", "Pixel", { worktree: crewTrees.tabs, provider: "codex", status: "needs-input", ago: 2 * MIN });
 await session("crew", "terminal", "claude — tabs", { worktree: crewTrees.tabs, status: "done", ago: 8 * MIN });
-await session("crew", "agent", "Keys", { worktree: crewTrees.keymap, provider: "cursor", status: "error", ago: 30 * MIN });
+await session("crew", "bot", "Keys", { worktree: crewTrees.keymap, provider: "cursor", status: "error", ago: 30 * MIN });
 await session("crew", "terminal", "vitest --watch", { worktree: crewTrees.keymap, provider: "opencode", ago: 2 * HOUR });
-await session("crew", "agent", "Sweeper", { worktree: crewTrees.kumo, status: "done", ago: 50 * MIN });
+await session("crew", "bot", "Sweeper", { worktree: crewTrees.kumo, status: "done", ago: 50 * MIN });
 // crewTrees.avatars stays empty: a worktree with nobody in it.
 
 // spendo — a quiet workspace with one thing waiting on you.
-await session("spendo", "agent", "Ledger", { status: "needs-input", ago: 6 * MIN, description: "Imports bank statements." });
-await session("spendo", "agent", "Budgeteer", { provider: "codex", ago: 26 * HOUR });
+await session("spendo", "bot", "Ledger", { status: "needs-input", ago: 6 * MIN, description: "Imports bank statements." });
+await session("spendo", "bot", "Budgeteer", { provider: "codex", ago: 26 * HOUR });
 await session("spendo", "terminal", "php artisan test", { provider: "claude", ago: 3 * HOUR });
-await session("spendo", "agent", "Biweekly", { worktree: spendoTrees.budgets, status: "working", ago: 0 });
+await session("spendo", "bot", "Biweekly", { worktree: spendoTrees.budgets, status: "working", ago: 0 });
 
-// orca — lots of agents, to see the grid wrap and the folded faces stack.
+// orca — lots of bots, to see the grid wrap and the folded faces stack.
 for (const [i, name] of ["Atlas", "Beacon", "Comet", "Delta", "Echo", "Flint", "Gale"].entries()) {
-  await session("orca", "agent", name, {
+  await session("orca", "bot", name, {
     provider: ["claude", "codex", "cursor", "opencode"][i % 4],
     status: ["idle", "working", "idle", "done", "idle", "idle", "error"][i],
     ago: i * 17 * MIN,
   });
 }
-await session("orca", "agent", "Handoff", { worktree: orcaTrees.a, status: "working" });
-await session("orca", "agent", "Timeout", { worktree: orcaTrees.b, status: "needs-input", ago: MIN });
+await session("orca", "bot", "Handoff", { worktree: orcaTrees.a, status: "working" });
+await session("orca", "bot", "Timeout", { worktree: orcaTrees.b, status: "needs-input", ago: MIN });
 await session("orca", "terminal", "go test ./...", { worktree: orcaTrees.b, provider: "opencode", status: "done" });
-await session("orca", "agent", "Commenter", { worktree: orcaTrees.c, ago: 4 * HOUR });
-await session("orca", "agent", "A very long agent name that should truncate", { worktree: orcaTrees.c, provider: "codex", ago: 5 * HOUR });
+await session("orca", "bot", "Commenter", { worktree: orcaTrees.c, ago: 4 * HOUR });
+await session("orca", "bot", "A very long bot name that should truncate", { worktree: orcaTrees.c, provider: "codex", ago: 5 * HOUR });
 
-// landing — one agent, nothing else. notes — empty.
-await session("landing", "agent", "Copywriter", { provider: "opencode", ago: 2 * 24 * HOUR });
+// landing — one bot, nothing else. notes — empty.
+await session("landing", "bot", "Copywriter", { provider: "opencode", ago: 2 * 24 * HOUR });
 
 // ---------- routines ----------
 
@@ -276,7 +276,7 @@ async function routine(sessionId, name, schedule, { enabled = true, prompt = "" 
 const digest = await routine(lead.id, "Morning digest", { kind: "daily", hour: 9, minute: 0, days: [] });
 const sweep = await routine(reviewer.id, "PR sweep", { kind: "interval", minutes: 60 });
 await routine(scribe.id, "Changelog", { kind: "daily", hour: 17, minute: 30, days: [5] }, { enabled: false });
-await routine(tabsAgent.id, "Nightly e2e", { kind: "cron", expression: "0 2 * * 1-5" });
+await routine(tabsBot.id, "Nightly e2e", { kind: "cron", expression: "0 2 * * 1-5" });
 
 // ---------- app state ----------
 
@@ -297,7 +297,7 @@ await rpc("state_set", {
   key: `tabs:${workspaces.crew.id}@${crewTrees.tabs}`,
   value: JSON.stringify({
     tabs: sessions.filter((s) => s.worktree === crewTrees.tabs).map(sessionTab),
-    activeId: `session:${tabsAgent.id}`,
+    activeId: `session:${tabsBot.id}`,
   }),
 });
 await rpc("active_workspace_set", { id: workspaces.crew.id });
@@ -536,7 +536,7 @@ transcript(showcase.id, [
     path: "src/lib/toolDetail.ts",
     lineStart: 1,
     lineEnd: 12,
-    preview: 'import { agentLabel } from "./agentNames";\nimport type { Block, ToolDetail } from "./protocol";\n\nexport type ToolLine = {\n  text: string;\n  mono: boolean;\n};',
+    preview: 'import { botLabel } from "./botNames";\nimport type { Block, ToolDetail } from "./protocol";\n\nexport type ToolLine = {\n  text: string;\n  mono: boolean;\n};',
   }),
   tool("Grep", "Grep toolLine", {
     kind: "search",
@@ -556,7 +556,7 @@ transcript(showcase.id, [
     server: "chrome-devtools",
     tool: "take_snapshot",
     input: '{\n  "verbose": false\n}',
-    output: '[{"uid":"1_0","role":"RootWebArea","name":"Crew"},{"uid":"1_1","role":"button","name":"New agent"}]',
+    output: '[{"uid":"1_0","role":"RootWebArea","name":"Crew"},{"uid":"1_1","role":"button","name":"New bot"}]',
   }),
   tool("mcp__crew__list_agents", "mcp__crew__list_agents", {
     kind: "output",
@@ -609,7 +609,7 @@ transcript(scribe.id, [
   {
     role: "user",
     text: "Heads up: the dev profile moved. `npm run app:design` now seeds its own data — please document it.\n\nThanks!",
-    from_agent: { id: lead.id, name: "Planner" },
+    from_bot: { id: lead.id, name: "Planner" },
   },
   tool("Read", "Read README.md", { kind: "file", path: "README.md" }),
   tool("Edit", "Edit README.md", { kind: "edit", path: "README.md", added: 12, removed: 2 }),
@@ -617,7 +617,7 @@ transcript(scribe.id, [
   { role: "assistant", text: "Done. `npm run app:design` is documented under **Development**, with the reseed flag.", ...usage(38, 9_100, 410, 0.05) },
 ]);
 
-transcript(tabsAgent.id, [
+transcript(tabsBot.id, [
   { role: "user", text: "Explore how tabs could say more: working, waiting, unread, failed.", ago: 6 * MIN },
   { role: "assistant", text: "Trying three treatments on the pill: a ring on the face, a tinted pill when it waits on you, and a progress sliver while it works." },
   tool("Bash", "Run npm run dev", { kind: "command", command: "npm run dev" }, "pending"),

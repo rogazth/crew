@@ -12,7 +12,7 @@ export type LauncherAddress = {
 
 /**
  * Only an address gets a row: a search would show up for every query typed
- * into a launcher of agents and sessions. `notes.md` also reads as a host, so
+ * into a launcher of bots and sessions. `notes.md` also reads as a host, so
  * a bare dotted name only leads while nothing else matches; a scheme, a port,
  * a path or a local host is unmistakable.
  * `contested`: an action or a session also matches the query.

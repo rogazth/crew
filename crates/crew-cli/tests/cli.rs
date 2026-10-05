@@ -53,9 +53,9 @@ impl Daemon {
         }
     }
 
-    /// A workspace at `folder` with one agent in it, made the way the window
+    /// A workspace at `folder` with one bot in it, made the way the window
     /// makes them.
-    fn seed(&self, folder: &Path, agent: &str) -> (String, String) {
+    fn seed(&self, folder: &Path, bot: &str) -> (String, String) {
         let (mut ws, _) = connect(self.url.as_str()).expect("connect");
         ws.send(Message::Text(json!({ "auth": self.token }).to_string().into())).expect("auth");
         let mut rpc = |id: u32, method: &str, params: Value| -> Value {
@@ -76,8 +76,8 @@ impl Daemon {
             "session_create",
             json!({
                 "workspaceId": workspace["id"],
-                "kind": "agent",
-                "name": agent,
+                "kind": "bot",
+                "name": bot,
                 "provider": "claude",
                 "model": "",
                 "description": "",
@@ -120,24 +120,24 @@ fn crew_speaks_as_the_user_through_daemon_json() {
     let daemon = Daemon::start("user");
     let folder = daemon.dir.join("repo");
     std::fs::create_dir_all(folder.join("src")).expect("folder");
-    let (workspace, agent) = daemon.seed(&folder, "Reviewer");
+    let (workspace, bot) = daemon.seed(&folder, "Reviewer");
 
     // From a folder inside the workspace, which is the default workspace.
-    let out = crew(&daemon.dir, &folder.join("src"), &["agents", "list"]);
+    let out = crew(&daemon.dir, &folder.join("src"), &["bots", "list"]);
     assert!(out.status.success(), "{out:?}");
     let table = stdout(&out);
     assert!(table.starts_with("NAME"), "{table}");
-    assert!(table.contains("Reviewer") && table.contains(&agent), "{table}");
+    assert!(table.contains("Reviewer") && table.contains(&bot), "{table}");
 
     // The tool's answer as data, under --json.
-    let out = crew(&daemon.dir, &folder, &["agents", "list", "--json"]);
+    let out = crew(&daemon.dir, &folder, &["bots", "list", "--json"]);
     assert!(out.status.success(), "{out:?}");
     let rows: Value = serde_json::from_slice(&out.stdout).expect("json");
-    assert_eq!(rows[0]["id"], agent.as_str(), "{rows}");
+    assert_eq!(rows[0]["id"], bot.as_str(), "{rows}");
 
     // Named by id from anywhere.
     let elsewhere = std::env::temp_dir();
-    let out = crew(&daemon.dir, &elsewhere, &["agents", "list", "--json", "--workspace", &workspace]);
+    let out = crew(&daemon.dir, &elsewhere, &["bots", "list", "--json", "--workspace", &workspace]);
     assert!(out.status.success(), "{out:?}");
     let rows: Value = serde_json::from_slice(&out.stdout).expect("json");
     assert_eq!(rows[0]["name"], "Reviewer");
@@ -152,7 +152,7 @@ fn crew_speaks_as_the_user_through_daemon_json() {
     assert_eq!(status["version"], env!("CARGO_PKG_VERSION"));
 
     // A command built from a tool's schema runs it: routines has no hand-written one.
-    let out = crew(&daemon.dir, &folder, &["routines", "list", "--agent-id", &agent, "--json"]);
+    let out = crew(&daemon.dir, &folder, &["routines", "list", "--bot-id", &bot, "--json"]);
     assert!(out.status.success(), "{out:?}");
     serde_json::from_slice::<Value>(&out.stdout).expect("json");
 
@@ -162,7 +162,7 @@ fn crew_speaks_as_the_user_through_daemon_json() {
     assert!(String::from_utf8_lossy(&out.stderr).starts_with("crew: "), "{out:?}");
 
     // Outside any workspace, a tool that needs one says how to name one.
-    let out = crew(&daemon.dir, &elsewhere, &["agents", "list"]);
+    let out = crew(&daemon.dir, &elsewhere, &["bots", "list"]);
     assert_eq!(out.status.code(), Some(1), "{out:?}");
     assert!(String::from_utf8_lossy(&out.stderr).contains("--workspace"), "{out:?}");
 
@@ -174,7 +174,7 @@ fn crew_says_when_crew_is_not_running() {
     let daemon = Daemon::start("gone");
     let dir = daemon.dir.clone();
     daemon.stop();
-    let out = crew(&dir, &dir, &["agents", "list"]);
+    let out = crew(&dir, &dir, &["bots", "list"]);
     assert_eq!(out.status.code(), Some(3), "{out:?}");
     assert!(String::from_utf8_lossy(&out.stderr).contains("Crew isn't running"), "{out:?}");
     let out = crew(&dir, &dir, &["status"]);

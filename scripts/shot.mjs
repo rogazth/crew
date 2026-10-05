@@ -48,7 +48,7 @@ if (shot === "routines") {
   await page.waitForTimeout(700);
   await page.locator("text=Run history").scrollIntoViewIfNeeded();
   await page.waitForTimeout(400);
-  // A run that came due while the agent was busy gets its own mark, which is
+  // A run that came due while the bot was busy gets its own mark, which is
   // neither a tick nor a cross.
   const marks = await page.locator("svg").count();
   if (marks === 0) throw new Error("the run history rendered no marks");
@@ -121,7 +121,7 @@ if (shot === "routines") {
   if ((await trigger.count()) === 0) throw new Error("clicking ledger did not switch to it");
   console.log(`dragged crew below ledger: ${after.join(", ")}; a click still picks`);
 } else {
-  // The seeded transcript belongs to the first agent in the sidebar.
+  // The seeded transcript belongs to the first bot in the sidebar.
   await page.locator('[data-sidebar="sidebar"] button').filter({ hasText: "Planner" }).first().click();
   await page.waitForTimeout(1500);
   await page.mouse.wheel(0, 20000);

@@ -1,7 +1,7 @@
 // PROTOTYPE — Crew's tab strip, copied: same pill, same face ring, plus the
 // dashed ring for a turn that ended with work still running in the background.
 import { XIcon } from "lucide-react";
-import { AgentAvatar } from "../../chrome/AgentAvatar";
+import { BotAvatar } from "../../chrome/BotAvatar";
 import { ProviderIcon } from "../../chrome/ProviderIcon";
 import { TOGGLE_RESERVE } from "../../lib/chrome";
 import { toneOf } from "../../lib/tabStyle";
@@ -39,8 +39,8 @@ function Pill({ session, active, background }: { session: ProtoSession; active: 
       }`}
     >
       <span className="crew-tab-face size-3.5 shrink-0" data-ring={ring ?? undefined} data-badge={tone.badge ?? undefined}>
-        {session.kind === "agent" ? (
-          <AgentAvatar seed={session.id} bare className="size-3.5" />
+        {session.kind === "bot" ? (
+          <BotAvatar seed={session.id} bare className="size-3.5" />
         ) : (
           <ProviderIcon provider={session.provider} className="size-3.5" />
         )}

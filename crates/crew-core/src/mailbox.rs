@@ -1,14 +1,14 @@
-//! Messages between agents.
+//! Messages between bots.
 //!
-//! An agent never calls another one. It drops a letter here; the daemon hands
+//! A bot never calls another one. It drops a letter here; the daemon hands
 //! it to the target as a user turn with the sender's name on it, and the reply
 //! comes back the same way. Nothing blocks: if the target is mid-turn the
 //! letter waits, and a turn that ends drains the box.
 //!
-//! Blocking would deadlock the obvious case — two agents that message each
+//! Blocking would deadlock the obvious case — two bots that message each
 //! other — so `message_agent` answers "delivered" and never waits for a reply.
 
-use crew_protocol::AgentRef;
+use crew_protocol::BotRef;
 use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
@@ -18,7 +18,7 @@ use crate::store::{now_millis, stamp, Store};
 pub struct Letter {
     pub id: String,
     pub to_session: String,
-    pub from: AgentRef,
+    pub from: BotRef,
     pub text: String,
     pub at: i64,
 }
@@ -34,15 +34,15 @@ CREATE TABLE IF NOT EXISTS mailbox (
   delivered_at INTEGER
 );
 
--- Reading the box is "what is still waiting for this agent", so the index
+-- Reading the box is "what is still waiting for this bot", so the index
 -- covers exactly that.
 CREATE INDEX IF NOT EXISTS mailbox_waiting_idx
   ON mailbox (to_session, at) WHERE delivered_at IS NULL;
 "#;
 
-/// Who wrote it, when that was not an agent: `terminal` or `user`. A terminal
+/// Who wrote it, when that was not a bot: `terminal` or `user`. A terminal
 /// session has no turns to hand a reply to, and the user reads the reply in the
-/// chat, so both change what the envelope tells the agent about answering.
+/// chat, so both change what the envelope tells the bot about answering.
 pub const MIGRATION_FROM_KIND: &str = "ALTER TABLE mailbox ADD COLUMN from_kind TEXT;";
 
 /// The header a letter is handed over under.
@@ -50,18 +50,18 @@ pub const MIGRATION_FROM_KIND: &str = "ALTER TABLE mailbox ADD COLUMN from_kind 
 /// A letter arrives as a user turn — the same shape as something the person
 /// typed — so the header is what tells them apart. It carries facts and no
 /// instructions: who wrote it, the id they are reached at, and when they wrote
-/// it. What to do about it is the agent's to decide, with the tool sheet in
+/// it. What to do about it is the bot's to decide, with the tool sheet in
 /// the persona and the tail above.
 ///
-/// The id and not the name, because the name is the user's: they rename an
-/// agent and a reply addressed to the old one reaches nobody. A sender that
+/// The id and not the name, because the name is the user's: they rename a
+/// bot and a reply addressed to the old one reaches nobody. A sender that
 /// has been deleted since has no id left (`ON DELETE SET NULL`), and saying so
 /// is better than offering an address that is not one.
 ///
-/// The two senders that are not agents are said so, with what that means for
-/// a reply: the envelope is the only place the agent learns it, and an agent
-/// that answers a terminal with `message_agent` is told "no agent" and guesses.
-pub fn envelope(from: &AgentRef, body: &str, at: i64, to_self: bool) -> String {
+/// The two senders that are not bots are said so, with what that means for
+/// a reply: the envelope is the only place the bot learns it, and a bot
+/// that answers a terminal with `message_agent` is told "no bot" and guesses.
+pub fn envelope(from: &BotRef, body: &str, at: i64, to_self: bool) -> String {
     let who = if to_self {
         "yourself, to continue".to_string()
     } else if from.kind.as_deref() == Some("user") {
@@ -74,19 +74,19 @@ pub fn envelope(from: &AgentRef, body: &str, at: i64, to_self: bool) -> String {
         )
     } else if from.kind.as_deref() == Some("session") {
         format!(
-            "{} (session {}). A session is a provider CLI Crew runs, not an agent: message_agent does \
+            "{} (session {}). A session is a provider CLI Crew runs, not a bot: message_agent does \
              not reach it. If you started it, wait_for_session, read_session and send_to_session do.",
             from.name, from.id
         )
     } else if from.id.is_empty() {
-        format!("{} (agent, no longer in this workspace)", from.name)
+        format!("{} (bot, no longer in this workspace)", from.name)
     } else {
-        format!("{} (agent {})", from.name, from.id)
+        format!("{} (bot {})", from.name, from.id)
     };
     format!("## Message\nFrom: {who}\nAt: {}\n\n{body}", stamp(at))
 }
 
-pub fn enqueue(store: &Store, to_session: &str, from: &AgentRef, text: &str) -> Result<Letter, String> {
+pub fn enqueue(store: &Store, to_session: &str, from: &BotRef, text: &str) -> Result<Letter, String> {
     let letter = Letter {
         id: uuid::Uuid::new_v4().to_string(),
         to_session: to_session.to_string(),
@@ -119,7 +119,7 @@ fn row_to_letter(row: &rusqlite::Row) -> rusqlite::Result<Letter> {
     Ok(Letter {
         id: row.get(0)?,
         to_session: row.get(1)?,
-        from: AgentRef {
+        from: BotRef {
             // The sender may have been deleted since; its name is what the
             // transcript needs, and that was copied in at send time.
             id: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
@@ -131,7 +131,7 @@ fn row_to_letter(row: &rusqlite::Row) -> rusqlite::Result<Letter> {
     })
 }
 
-/// Everything still waiting for one agent, oldest first.
+/// Everything still waiting for one bot, oldest first.
 pub fn waiting(store: &Store, to_session: &str) -> Result<Vec<Letter>, String> {
     store.with(|conn| {
         let mut stmt = conn.prepare_cached(&format!(
@@ -222,7 +222,7 @@ mod tests {
         crate::session::create(
             store,
             workspace.id,
-            "agent".into(),
+            "bot".into(),
             name.into(),
             "claude".into(),
             "m".into(),
@@ -233,19 +233,19 @@ mod tests {
         .id
     }
 
-    fn sender(id: &str) -> AgentRef {
-        AgentRef::agent(id, "Coder")
+    fn sender(id: &str) -> BotRef {
+        BotRef::bot(id, "Coder")
     }
 
     #[test]
     fn the_envelope_carries_the_id_the_sender_is_reached_at() {
         let letter = envelope(&sender("s1"), "the branch is green", 0, false);
-        assert!(letter.starts_with("## Message\nFrom: Coder (agent s1)\nAt: "), "{letter}");
+        assert!(letter.starts_with("## Message\nFrom: Coder (bot s1)\nAt: "), "{letter}");
         assert!(letter.ends_with("\n\nthe branch is green"), "{letter}");
     }
 
     /// The time it was written, not the time it was handed over: a letter that
-    /// waited an hour in a busy agent's box still says when it was written.
+    /// waited an hour in a busy bot's box still says when it was written.
     #[test]
     fn the_envelope_says_when_it_was_written() {
         let at = crate::store::now_millis() - 3_600_000;
@@ -257,12 +257,12 @@ mod tests {
     /// empty id would be offering a reply that goes nowhere.
     #[test]
     fn a_deleted_sender_is_named_without_an_address() {
-        let letter = envelope(&AgentRef::agent("", "Coder"), "hi", 0, false);
-        assert!(letter.contains("Coder (agent, no longer in this workspace)"), "{letter}");
+        let letter = envelope(&BotRef::bot("", "Coder"), "hi", 0, false);
+        assert!(letter.contains("Coder (bot, no longer in this workspace)"), "{letter}");
     }
 
-    /// A note an agent left itself is not the user either, and saying who wrote
-    /// it is the whole point: "Coder (agent)" in your own transcript reads like
+    /// A note a bot left itself is not the user either, and saying who wrote
+    /// it is the whole point: "Coder (bot)" in your own transcript reads like
     /// somebody else.
     #[test]
     fn a_note_to_yourself_says_so() {
@@ -315,7 +315,7 @@ mod tests {
     }
 
     #[test]
-    fn a_box_belongs_to_one_agent() {
+    fn a_box_belongs_to_one_bot() {
         let store = store();
         let mine = session(&store, "mine");
         let yours = session(&store, "yours");

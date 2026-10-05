@@ -1,20 +1,20 @@
 import { useEffect, useState } from "react";
 import { SearchIcon } from "lucide-react";
-import { AgentAvatar } from "../chrome/AgentAvatar";
+import { BotAvatar } from "../chrome/BotAvatar";
 import type { Confirm } from "../chrome/ConfirmDialog";
 import { Kbd } from "../chrome/Kbd";
 import { Button, Select, Toggle, type Option } from "../chrome/kit";
 import { ModelPicker } from "../chrome/ModelPicker";
 import { ProviderIcon } from "../chrome/ProviderIcon";
 import { SettingsRow, SettingsSection } from "../chrome/SettingsRow";
-import { useAgentAvatar } from "../hooks/useAgentAvatar";
+import { useBotAvatar } from "../hooks/useBotAvatar";
 import { useBrowserPrefs } from "../hooks/useBrowserPrefs";
 import { useColorMode } from "../hooks/useColorMode";
 import { useDefaultAgent } from "../hooks/useDefaultAgent";
 import { useSessionView } from "../hooks/useSessionView";
 import { changeSitePermissions, useSitePermissions } from "../hooks/useSitePermissions";
 import { useTabScope } from "../hooks/useTabScope";
-import { AGENT_AVATARS } from "../lib/agentAvatar";
+import { BOT_AVATARS } from "../lib/botAvatar";
 import { KEEP_CHOICES, SEARCH_ENGINES } from "../lib/browserPrefs";
 import { forget, PERMISSION_LABELS, SITE_PERMISSIONS } from "../lib/browser/permissions";
 import { COLOR_MODES } from "../lib/colorMode";
@@ -162,7 +162,7 @@ function CommandLineSettings() {
 const PREVIEW_SEEDS = ["crew", "scout", "atlas", "pilot"];
 
 function Appearance() {
-  const avatar = useAgentAvatar();
+  const avatar = useBotAvatar();
   const color = useColorMode();
   const sessions = useSessionView();
   return (
@@ -194,12 +194,12 @@ function Appearance() {
           />
         </SettingsRow>
       </SettingsSection>
-      <SettingsSection title="Agents">
-        <SettingsRow label="Avatar style" description="Every agent gets its own face in this style, drawn from its id.">
+      <SettingsSection title="Bots">
+        <SettingsRow label="Avatar style" description="Every bot gets its own face in this style, drawn from its id.">
           <div className="flex items-center gap-3">
             <div className="flex gap-1" aria-hidden>
               {PREVIEW_SEEDS.map((seed) => (
-                <AgentAvatar key={seed} seed={seed} bare className="size-6" />
+                <BotAvatar key={seed} seed={seed} bare className="size-6" />
               ))}
             </div>
             <Select
@@ -207,7 +207,7 @@ function Appearance() {
               className="w-40"
               value={avatar.avatar}
               onChange={avatar.update}
-              options={AGENT_AVATARS.map((item) => ({ value: item.id, label: item.label }))}
+              options={BOT_AVATARS.map((item) => ({ value: item.id, label: item.label }))}
             />
           </div>
         </SettingsRow>
@@ -369,7 +369,7 @@ function Providers() {
   );
 }
 
-/** Every binding, grouped the way the app is: tabs, places, agents, finding, view. */
+/** Every binding, grouped the way the app is: tabs, places, bots, finding, view. */
 function Keybindings() {
   const [query, setQuery] = useState("");
   const text = query.trim().toLowerCase();

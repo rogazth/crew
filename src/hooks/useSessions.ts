@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { rememberAgents } from '../lib/agentNames';
-import { dispose, onSessionPatch, reconcile } from '../lib/agentRuntime';
+import { rememberBots } from '../lib/botNames';
+import { dispose, onSessionPatch, reconcile } from '../lib/turnRuntime';
 import { client } from '../lib/client';
 import * as api from '../lib/api';
 import { droppedOnReload, mergeReloaded } from '../lib/sessionList';
-import { reloadAgentFaces } from './useAgentFaces';
+import { reloadBotFaces } from './useBotFaces';
 import { useWorkspaceLink } from './useEnvLinks';
 import type { SessionCreated, SessionsDeleted, SessionUpdated } from '../lib/protocol';
 import type { Autonomy, Session, SessionKind, SessionStatus } from '../lib/types';
@@ -48,7 +48,7 @@ export function useSessions(workspaceId: string | null) {
       .then((list) => {
         // Before the render that shows them, not in an effect after it: a tool
         // row painted with an empty map keeps its uuid for the life of the mount.
-        rememberAgents(list);
+        rememberBots(list);
         // Anything made while the list was in flight is already here; the load
         // fills in around it rather than dropping it.
         setRegistry((prev) => {
@@ -64,7 +64,7 @@ export function useSessions(workspaceId: string | null) {
 
   // The backstop, for the ways a session is made or renamed that do not go
   // through the load above.
-  useEffect(() => rememberAgents(all), [all]);
+  useEffect(() => rememberBots(all), [all]);
 
   /** A session is edited by id, whichever workspace holds it. */
   const patchSession = useCallback((id: string, change: (session: Session) => Session) => {
@@ -76,7 +76,7 @@ export function useSessions(workspaceId: string | null) {
     });
   }, []);
 
-  // The agent runtime keeps going while a tab is closed; its status and resume
+  // The turn runtime keeps going while a tab is closed; its status and resume
   // id land here, whichever workspace is showing.
   useEffect(
     () => onSessionPatch((id, patch) => patchSession(id, (session) => ({ ...session, ...patch }))),
@@ -112,7 +112,7 @@ export function useSessions(workspaceId: string | null) {
       const created = payload as SessionCreated;
       const session = created.session as unknown as Session;
       // One split off a terminal comes with the face the terminal showed.
-      reloadAgentFaces();
+      reloadBotFaces();
       madeSince.current?.add(session.id);
       setRegistry((prev) => {
         const list = prev[session.workspaceId];
@@ -190,12 +190,12 @@ export function useSessions(workspaceId: string | null) {
         const group = ids
           .map((id) => list.find((session) => session.id === id))
           .filter((session): session is Session => session !== undefined);
-        const agents = kind === 'agent' ? group : list.filter((session) => session.kind === 'agent');
+        const bots = kind === 'bot' ? group : list.filter((session) => session.kind === 'bot');
         const terminals =
           kind === 'terminal' ? group : list.filter((session) => session.kind === 'terminal');
         // Children are listed under whoever started them, and move with nothing.
         const children = list.filter((session) => session.kind === 'child');
-        return { ...prev, [workspaceId]: [...agents, ...terminals, ...children] };
+        return { ...prev, [workspaceId]: [...bots, ...terminals, ...children] };
       });
       void api.reorderSessions(ids);
     },
@@ -211,7 +211,7 @@ export function useSessions(workspaceId: string | null) {
     [patchSession],
   );
 
-  /** Terminals report through here; agent sessions are written by the runtime. */
+  /** Terminals report through here; bot and child sessions are written by the runtime. */
   const setStatus = useCallback(
     (id: string, status: SessionStatus) => {
       // The daemon stamps the row as it stores the status; the list keeps pace.
@@ -233,8 +233,8 @@ export function useSessions(workspaceId: string | null) {
       const known = new Set(held.map((session) => session.id));
       // Only the newcomers take their status from the daemon; the rest are the window's to report.
       await reconcile(list.filter((session) => !known.has(session.id)));
-      rememberAgents(list);
-      reloadAgentFaces();
+      rememberBots(list);
+      reloadBotFaces();
       await forget(droppedOnReload(held, list, since));
       setRegistry((prev) => ({ ...prev, [id]: mergeReloaded(prev[id] ?? [], list, since) }));
     } finally {

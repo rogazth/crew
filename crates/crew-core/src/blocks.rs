@@ -18,7 +18,7 @@ pub fn new_block(role: BlockRole, text: impl Into<String>) -> Block {
         approval: None,
         question: None,
         usage: None,
-        from_agent: None,
+        from_bot: None,
     }
 }
 
@@ -304,7 +304,7 @@ pub fn apply_event(blocks: Vec<Block>, event: HarnessEvent) -> Vec<Block> {
             text,
             hidden,
             files,
-            from_agent,
+            from_bot,
         } => {
             let mut block = new_block(BlockRole::User, text);
             if hidden == Some(true) {
@@ -313,7 +313,7 @@ pub fn apply_event(blocks: Vec<Block>, event: HarnessEvent) -> Vec<Block> {
             if let Some(files) = files.filter(|rows| !rows.is_empty()) {
                 block.files = Some(files);
             }
-            block.from_agent = from_agent;
+            block.from_bot = from_bot;
             let mut next = blocks;
             next.push(block);
             next
@@ -579,7 +579,7 @@ mod tests {
                     text: "hi".into(),
                     hidden: Some(true),
                     files: None,
-                    from_agent: None,
+                    from_bot: None,
                 },
                 HarnessEvent::SystemMessage {
                     text: "Stopped".into(),
@@ -744,7 +744,7 @@ mod tests {
                 text: "hi".into(),
                 files: None,
                 hidden: None,
-                from_agent: None,
+                from_bot: None,
             },
             HarnessEvent::SystemMessage { text: "note".into() },
             HarnessEvent::SessionNote { message: "note".into() },
@@ -796,7 +796,7 @@ mod tests {
                     text: "earlier".into(),
                     files: None,
                     hidden: None,
-                    from_agent: None,
+                    from_bot: None,
                 },
                 HarnessEvent::MessageDelta { text: "earlier answer".into() },
                 HarnessEvent::MessageCompleted {},

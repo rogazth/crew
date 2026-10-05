@@ -58,7 +58,7 @@ export const COMMANDS = {
   "worktree-9": { label: "Go to Worktree 9", keys: { key: "9", ctrl: true, meta: true } },
 
   // Making things
-  "new-agent": { label: "New Agent", keys: "Mod+Shift+A" },
+  "new-bot": { label: "New Bot", keys: "Mod+Shift+A" },
   "new-session": { label: "New Session", keys: "Mod+N" },
   "new-worktree": { label: "New Worktree", keys: { key: "N", ctrl: true, meta: true } },
   // ⇧⌘N is Chrome's incognito window, so the muscle memory transfers; B is for browser.

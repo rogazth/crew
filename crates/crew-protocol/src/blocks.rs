@@ -68,15 +68,15 @@ pub struct AttachedFile {
     pub size: Option<u64>,
 }
 
-/// Who wrote a message, when it was not the user. Agents address each other by
+/// Who wrote a message, when it was not the user. Bots address each other by
 /// name; the id is what the UI opens when you click it.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
-pub struct AgentRef {
+pub struct BotRef {
     pub id: String,
     pub name: String,
-    /// Absent for an agent. `terminal` is a terminal session, which has no
+    /// Absent for a bot. `terminal` is a terminal session, which has no
     /// turns and so reads no reply; `user` is the person, from the `crew` CLI,
     /// who reads the reply in this chat.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -84,8 +84,8 @@ pub struct AgentRef {
     pub kind: Option<String>,
 }
 
-impl AgentRef {
-    pub fn agent(id: impl Into<String>, name: impl Into<String>) -> Self {
+impl BotRef {
+    pub fn bot(id: impl Into<String>, name: impl Into<String>) -> Self {
         Self { id: id.into(), name: name.into(), kind: None }
     }
 }
@@ -200,7 +200,7 @@ pub enum ToolDetail {
         #[ts(optional)]
         output: Option<String>,
     },
-    /// One of Crew's own tools: a message to another agent.
+    /// One of Crew's own tools: a message to another bot.
     Message { to: String, text: String },
     /// The agent's checklist, whole: every call restates all of it.
     Todo { items: Vec<TodoItem> },
@@ -447,10 +447,10 @@ pub struct Block {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub usage: Option<TurnUsage>,
-    /// Set when another agent wrote this line instead of the user.
+    /// Set when another bot wrote this line instead of the user.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
-    pub from_agent: Option<AgentRef>,
+    pub from_bot: Option<BotRef>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, TS)]
@@ -485,9 +485,9 @@ pub enum HarnessEvent {
         files: Option<Vec<AttachedFile>>,
         // Named as the block is: one spelling on the wire, so a reducer that
         // reads it off the event cannot miss it.
-        #[serde(default, rename = "fromAgent", skip_serializing_if = "Option::is_none")]
-        #[ts(optional, rename = "fromAgent")]
-        from_agent: Option<AgentRef>,
+        #[serde(default, rename = "fromBot", skip_serializing_if = "Option::is_none")]
+        #[ts(optional, rename = "fromBot")]
+        from_bot: Option<BotRef>,
     },
     #[serde(rename = "system.message")]
     #[ts(rename = "system.message")]

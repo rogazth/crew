@@ -607,7 +607,7 @@ The wake exists (§1, corrected). What breaks it, and the fix:
 - **No letter kinds.** The `mailbox` table cannot tell a report from a
   message, so `take_back` (`mailbox.rs` ~186), which matches on
   `from_session` only, also deletes a message the child sent its parent.
-  *Fix:* `mailbox.kind` (`message | report | question`) in the v25 migration.
+  *Fix:* `mailbox.kind` (`message | report | question`) in the v26 migration.
   The envelope depends on the kind (`## Report from session…`,
   `## Question from session…`, `## Message`).
 - **No batching.** `drain_mailbox` claims one letter per turn (`turns.rs`
@@ -783,7 +783,7 @@ The prototype shows things the backend does not have:
 
 | UI | Backend needed |
 |---|---|
-| Handoff "Handed off by Lead · yours" | `sessions.handed_off_by` (nullable), v25. "Mine" stays `parent_id`. |
+| Handoff "Handed off by Lead · yours" | `sessions.handed_off_by` (nullable), v26. "Mine" stays `parent_id`. |
 | Child chip status (reported, failed) | Derived from `session_events`, sent on the wire; no new column. |
 | Unread dot on a finished handoff | `sessions.user_seen` cursor, like `seen`. |
 | Checkpoints and pair threads | Every `send_message` and `start_session` makes a letter with an id; the sender's tool block and the receiver's block both carry `letter_id`; a pair thread is a query on `(from, to)` over the mailbox. The same id replaces the text matching of §7c. Refused sends show only in the sender's transcript, as the tool's error. |
@@ -855,7 +855,7 @@ Inventory (~2,800 hits; about a quarter are other meanings and stay):
     `sidebar:prefs.hiddenKinds` value `"agent"` → `"bot"`
   - SQL strings in `session.rs` (`SESSIONS` join and 5 more), `routine.rs`;
     `scripts/migrate-check.mjs`
-  - Not a rename, but in the same migration (§7e): `mailbox.kind`
+  - Not a rename, so in its own migration, v26, with phase 2 (§7e): `mailbox.kind`
     (`message | report | question`), `mailbox.event_cursor`,
     `mailbox.claimed_at` (beside `delivered_at`) and a `disposed_at` in place
     of deletes; `sessions.handed_off_by`, `sessions.user_seen`.
@@ -953,10 +953,12 @@ and the three UI points above. None of them blocks phases 1–4.
 
 Implementation order:
 
-1. **Rename** agent → bot (§7d), with the v25 migration, which also carries
-   the new columns of §7e. Its own commit.
+1. **Rename** agent → bot (§7d), with the v25 migration (rename only). Its
+   own commit.
 2. **Mailbox and wake** (§7e.1): letter kinds, batching, seen marks, one
-   transaction, claimed/delivered, no deletes, wakes always queued. With the
+   transaction, claimed/delivered, no deletes, wakes always queued; the new
+   columns of §7e in migration v26 (a dev database that already ran v25 would
+   not rerun an edited v25). With the
    chat fix for wake replies (§7c-3). Together with removing
    `continue_after_turn` (step 5) this alone fixes the Manager case (§1).
 3. **Providers**: Codex on `codex app-server` (§7e.7), Cursor on

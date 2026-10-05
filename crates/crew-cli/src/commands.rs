@@ -2,7 +2,7 @@
 //!
 //! Most are built from the tool's own schema, so an argument added to a tool
 //! reaches the CLI with it and `--help` says what the tool says. A few read
-//! better written by hand (`processes logs` follows and greps, `agents send`
+//! better written by hand (`processes logs` follows and greps, `bots send`
 //! takes a name), and those take their flags from `args`.
 
 use std::process::ExitCode;
@@ -14,7 +14,7 @@ use crew_core::tools::{every_tool, Tool};
 
 use crate::args::{LogsArgs, ProcAdd, ProcEdit, SendArgs};
 use crate::output;
-use crate::{agents, processes, read_stdin, CliError, Ctx};
+use crate::{bots, processes, read_stdin, CliError, Ctx};
 
 pub struct Group {
     pub name: &'static str,
@@ -42,7 +42,7 @@ pub enum Shape {
     Schema,
     /// Built from the schema, answered with the process in one line.
     Process,
-    ListAgents,
+    ListBots,
     Send,
     ListProcesses,
     AddProcess,
@@ -75,17 +75,17 @@ impl Verb {
 
 pub const GROUPS: &[Group] = &[
     Group {
-        name: "agents",
-        about: "The workspace's agents: list them, write to them, make new ones",
-        aliases: &["agent"],
+        name: "bots",
+        about: "The workspace's bots: list them, write to them, make new ones",
+        aliases: &["bot"],
         verbs: &[
-            verb("list", "list_agents").alias(&["ls"]).shape(Shape::ListAgents).eg("crew agents list\n  crew agents list --json | jq '.[].id'"),
+            verb("list", "list_agents").alias(&["ls"]).shape(Shape::ListBots).eg("crew bots list\n  crew bots list --json | jq '.[].id'"),
             verb("send", "message_agent").shape(Shape::Send).eg(
-                "crew agents send Reviewer \"look at the diff on main\"\n  crew agents send 3f2a… run the tests and fix what fails\n  git diff | crew agents send Reviewer -",
+                "crew bots send Reviewer \"look at the diff on main\"\n  crew bots send 3f2a… run the tests and fix what fails\n  git diff | crew bots send Reviewer -",
             ),
-            verb("create", "create_agent").pos(&["name"]).eg("crew agents create Reviewer --description \"Review every diff on main\""),
-            verb("continue", "continue_after_turn").rest(&["text"]).eg("crew agents continue \"run the e2e next and fix what fails\""),
-            verb("set-description", "update_description").rest(&["text"]).eg("crew agents set-description \"You review diffs on main.\""),
+            verb("create", "create_bot").pos(&["name"]).eg("crew bots create Reviewer --description \"Review every diff on main\""),
+            verb("continue", "continue_after_turn").rest(&["text"]).eg("crew bots continue \"run the e2e next and fix what fails\""),
+            verb("set-description", "update_description").rest(&["text"]).eg("crew bots set-description \"You review diffs on main.\""),
         ],
     },
     Group {
@@ -122,12 +122,12 @@ pub const GROUPS: &[Group] = &[
     },
     Group {
         name: "routines",
-        about: "Standing orders that wake an agent on a schedule",
+        about: "Standing orders that wake a bot on a schedule",
         aliases: &["routine"],
         verbs: &[
-            verb("list", "list_routines").alias(&["ls"]).eg("crew routines list --agent-id 3f2a…"),
+            verb("list", "list_routines").alias(&["ls"]).eg("crew routines list --bot-id 3f2a…"),
             verb("set", "upsert_routine").eg(
-                "crew routines set --agent-id 3f2a… --name standup --prompt \"Sum up yesterday\" \\\n      --schedule '{\"kind\": \"daily\", \"hour\": 9, \"minute\": 0}'",
+                "crew routines set --bot-id 3f2a… --name standup --prompt \"Sum up yesterday\" \\\n      --schedule '{\"kind\": \"daily\", \"hour\": 9, \"minute\": 0}'",
             ),
             verb("rm", "delete_routine").pos(&["routine_id"]).eg("crew routines rm 7c1e…"),
         ],
@@ -418,10 +418,10 @@ pub fn run(ctx: &Ctx, group: &str, matches: &ArgMatches) -> Result<ExitCode, Cli
     let verb = group.verbs.iter().find(|verb| verb.name == name).ok_or_else(|| CliError::Usage(format!("No command {name}")))?;
     let parsed = |error: clap::Error| CliError::Usage(error.to_string());
     match verb.shape {
-        Shape::ListAgents => agents::list(ctx),
-        Shape::ListTabs => agents::tabs(ctx),
+        Shape::ListBots => bots::list(ctx),
+        Shape::ListTabs => bots::tabs(ctx),
         Shape::ListProcesses => processes::ps(ctx),
-        Shape::Send => agents::send(ctx, &SendArgs::from_arg_matches(matches).map_err(parsed)?),
+        Shape::Send => bots::send(ctx, &SendArgs::from_arg_matches(matches).map_err(parsed)?),
         Shape::Logs => processes::logs(ctx, &LogsArgs::from_arg_matches(matches).map_err(parsed)?),
         Shape::AddProcess => processes::add(ctx, ProcAdd::from_arg_matches(matches).map_err(parsed)?),
         Shape::EditProcess => processes::edit(ctx, ProcEdit::from_arg_matches(matches).map_err(parsed)?),
@@ -490,9 +490,9 @@ mod tests {
 
     #[test]
     fn a_rest_positional_joins_its_words() {
-        let (group, verb, matches) = parse(&["agents", "continue", "run", "the", "-e2e"]);
-        assert_eq!((group.as_str(), verb.as_str()), ("agents", "continue"));
-        let (verb, tool) = find("agents", "continue");
+        let (group, verb, matches) = parse(&["bots", "continue", "run", "the", "-e2e"]);
+        assert_eq!((group.as_str(), verb.as_str()), ("bots", "continue"));
+        let (verb, tool) = find("bots", "continue");
         assert_eq!(arguments(&matches, &tool, verb).expect("args"), json!({ "text": "run the -e2e" }));
     }
 
@@ -541,9 +541,9 @@ mod tests {
 
     #[test]
     fn a_tool_only_a_session_can_run_says_so() {
-        let help = root().find_subcommand_mut("agents").expect("agents").find_subcommand_mut("continue").expect("continue").render_help().to_string();
+        let help = root().find_subcommand_mut("bots").expect("bots").find_subcommand_mut("continue").expect("continue").render_help().to_string();
         assert!(help.contains("From a Crew session only."), "{help}");
-        let help = root().find_subcommand_mut("agents").expect("agents").find_subcommand_mut("send").expect("send").render_help().to_string();
+        let help = root().find_subcommand_mut("bots").expect("bots").find_subcommand_mut("send").expect("send").render_help().to_string();
         assert!(!help.contains("session only"), "{help}");
     }
 }

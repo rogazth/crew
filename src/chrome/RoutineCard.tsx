@@ -1,5 +1,5 @@
 import { CircleAlertIcon, ClockIcon } from "lucide-react";
-import { AgentAvatar } from "./AgentAvatar";
+import { BotAvatar } from "./BotAvatar";
 import type { RoutineEntry } from "../hooks/useRoutines";
 import { describeSchedule, parseSchedule, summarize, type RunStatus } from "../lib/routines";
 import { until } from "../lib/time";
@@ -39,7 +39,7 @@ export function RoutineCard({ entry, workspace, onOpen }: Props) {
         routine.enabled ? "" : "opacity-60 hover:opacity-100"
       }`}
     >
-      <AgentAvatar seed={session.id} bare className="size-7" />
+      <BotAvatar seed={session.id} bare className="size-7" />
       <span className="flex min-w-0 flex-1 flex-col">
         <span className="flex min-w-0 items-center gap-2">
           <span className="truncate font-medium">{routine.name || "Untitled routine"}</span>

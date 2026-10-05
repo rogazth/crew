@@ -1,5 +1,5 @@
 import { useMemo, type ReactNode } from 'react';
-import { Agents } from './Agents';
+import { TurnChats } from './TurnChats';
 import { Browsers } from './Browsers';
 import { DiffsPool } from './DiffsPool';
 import { ChatContext, type ChatActions } from './chat/context';
@@ -44,7 +44,7 @@ type Props = {
   renderCommands: () => ReactNode;
 };
 
-/** Active surface plus the mounted agent, terminal and page overlays, of every workspace. */
+/** Active surface plus the mounted turn chat, terminal and page overlays, of every workspace. */
 export function WorkspacePanes({
   tab,
   empty,
@@ -138,7 +138,7 @@ export function WorkspacePanes({
       </ChatContext>
       <Browsers panes={mounted} sessions={sessions} onPatch={onPatchBrowser} onOpenTab={onOpenBrowserTab} onAdopt={onAdoptBrowserTab} />
       <ChatContext value={chat}>
-        <Agents panes={mounted} sessions={sessions} />
+        <TurnChats panes={mounted} sessions={sessions} />
       </ChatContext>
     </div>
   );

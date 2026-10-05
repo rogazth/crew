@@ -272,7 +272,7 @@ describe("focus", () => {
  */
 describe("review: the window against live events", () => {
   it("focuses the line a search hit names, on a thread that was empty when it opened", async () => {
-    // A brand new agent: the chat opens on an empty transcript, so the daemon
+    // A brand new bot: the chat opens on an empty transcript, so the daemon
     // answers fromPos 0 (MessagePage::from_pos is 0 for an empty page), and
     // everything after it arrives as live events.
     request.mockResolvedValue(page([], 0));

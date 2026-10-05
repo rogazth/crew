@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { AGENT_AVATARS, avatarRender } from "./agentAvatar";
+import { BOT_AVATARS, avatarRender } from "./botAvatar";
 
 describe("avatarRender", () => {
   it("drops the square behind figures and rounds the styles that are a square", () => {
@@ -17,6 +17,6 @@ describe("avatarRender", () => {
   });
 
   it("has an answer for every style", () => {
-    for (const { id } of AGENT_AVATARS) expect(avatarRender(id)).toBeDefined();
+    for (const { id } of BOT_AVATARS) expect(avatarRender(id)).toBeDefined();
   });
 });

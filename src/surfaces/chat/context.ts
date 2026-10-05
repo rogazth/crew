@@ -5,7 +5,7 @@ import type { ProjectFile } from "../../lib/types";
 export type ChatActions = {
   /** Workspace-relative or absolute; opens a file tab. */
   openPath: (path: string) => void;
-  /** Opens another agent's tab: the name on a message from one is a link. */
+  /** Opens a bot's tab: the name on a message from one is a link. */
   openSession: (sessionId: string) => void;
   /** The workspace index, for `@` mentions. */
   files: ProjectFile[];
@@ -22,7 +22,7 @@ export function useChatActions(): ChatActions {
 }
 
 /**
- * Whether an approval can take "don't ask again". An agent's turn always can;
+ * Whether an approval can take "don't ask again". A turn Crew drives always can;
  * a CLI's own prompt offers it only when it has a rule to suggest.
  */
 export const AlwaysAllow = createContext(true);

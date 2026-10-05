@@ -8,7 +8,7 @@ type Props = {
   workspace: Workspace;
   /** The worktree on screen; a new branch starts from the main checkout's HEAD. */
   from: Worktree | undefined;
-  onCreate: (branch: string, withAgent: boolean) => Promise<void>;
+  onCreate: (branch: string, withBot: boolean) => Promise<void>;
   onClose: () => void;
 };
 
@@ -19,7 +19,7 @@ function preview(workspace: Workspace, branch: string): string {
   return `~/.crew/worktrees/${repo}/${slug}`;
 }
 
-/** A branch name and nothing else; ↵ makes the worktree, ⌘↵ makes it and an agent to work in it. */
+/** A branch name and nothing else; ↵ makes the worktree, ⌘↵ makes it and a bot to work in it. */
 export function NewWorktreeDialog({ workspace, from, onCreate, onClose }: Props) {
   const [branch, setBranch] = useState("feat/");
   const [failure, setFailure] = useState<string | null>(null);
@@ -32,11 +32,11 @@ export function NewWorktreeDialog({ workspace, from, onCreate, onClose }: Props)
 
   const invalid = branchError(branch);
 
-  async function submit(withAgent: boolean) {
+  async function submit(withBot: boolean) {
     if (invalid || busy) return;
     setBusy(true);
     try {
-      await onCreate(branch.trim(), withAgent);
+      await onCreate(branch.trim(), withBot);
     } catch (error) {
       setFailure(String(error).replace(/^Error:\s*/, ""));
       setBusy(false);
@@ -60,7 +60,7 @@ export function NewWorktreeDialog({ workspace, from, onCreate, onClose }: Props)
           }}
           onKeyDown={(event) => {
             if (event.key !== "Enter") return;
-            // The agent sheet this can open listens for ⌘↵ too; the press is spent here.
+            // The bot sheet this can open listens for ⌘↵ too; the press is spent here.
             event.preventDefault();
             event.stopPropagation();
             event.nativeEvent.stopImmediatePropagation();
@@ -81,7 +81,7 @@ export function NewWorktreeDialog({ workspace, from, onCreate, onClose }: Props)
       <Footer
         hints={[
           ["↵", busy ? "creating…" : "create"],
-          ["⌘↵", "create + agent"],
+          ["⌘↵", "create + bot"],
           ["esc", "cancel"],
         ]}
       />

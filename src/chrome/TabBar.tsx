@@ -6,7 +6,7 @@ import { ChevronLeftIcon, ChevronRightIcon, GitBranchIcon, GlobeIcon, HatGlasses
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { ActionMenu } from "./ActionMenu";
 import { BranchDot, BranchTag } from "./BranchDot";
-import { AgentAvatar } from "./AgentAvatar";
+import { BotAvatar } from "./BotAvatar";
 import { TOGGLE_RESERVE } from "../lib/chrome";
 import { DriverFace } from "./DriverFace";
 import { FileTypeIcon } from "./FileTypeIcon";
@@ -128,7 +128,7 @@ function tabActions(
   const places = new Set(groups ? tabs.flatMap((t) => (t.pinned ? [] : [groups.placeOf(t)])) : []);
   const folded = new Set(groups?.collapsed);
   return tidy([
-    ...(session?.kind === "agent" ? [EDIT] : []),
+    ...(session?.kind === "bot" ? [EDIT] : []),
     ...(tab.kind === "file" ? [COPY_PATH] : []),
     ...(tab.kind === "browser" && tab.url ? [COPY_URL] : []),
     SEPARATOR,
@@ -688,8 +688,8 @@ function TabIcon({ tab, sessions, tone }: { tab: Tab; sessions: Session[]; tone:
       return tab.incognito ? <IncognitoIcon /> : <GlobeIcon className="size-3.5 text-icon" />;
     const session = sessions.find((s) => s.id === tab.sessionId);
     if (!session) return null;
-    return session.kind === "agent" ? (
-      <AgentAvatar seed={session.id} bare className="size-3.5" />
+    return session.kind === "bot" ? (
+      <BotAvatar seed={session.id} bare className="size-3.5" />
     ) : (
       <ProviderIcon provider={session.provider} className="size-3.5" />
     );

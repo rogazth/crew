@@ -2,9 +2,9 @@
 
 A desktop app for the coding agent CLIs you already pay for: Claude Code, Codex, Cursor, and opencode.
 
-You run a roster of agents, each with its own chat. They can message each other and keep working on a schedule.
+You run a roster of bots, each with its own chat. They can message each other and keep working on a schedule.
 
-Everything runs on your machine. A Rust daemon holds the agents, the transcripts, and a SQLite store; the Electron app is a client over it. No account, no sync, no keys of ours. You bring the CLIs; they stay logged in the way you already use them.
+Everything runs on your machine. A Rust daemon holds the bots, the transcripts, and a SQLite store; the Electron app is a client over it. No account, no sync, no keys of ours. You bring the CLIs; they stay logged in the way you already use them.
 
 A workspace can also live on another Linux machine on your Tailscale network. Settings › Environments installs `crewd` there over SSH, and ⌘O opens a folder on it. The window stays on this Mac and talks to that daemon directly. Agent CLIs have to be logged in on the machine that runs them. Ubuntu, with Tailscale, is the supported remote. Windows is not.
 
@@ -66,8 +66,8 @@ The app ships a CLI. **Settings › General › Command line** links it into `~/
 
 ```bash
 crew status                        # is Crew running, and who does it take you for
-crew agents list                   # the agents of the workspace you are in
-crew agents send Reviewer "look at the diff on main"
+crew bots list                     # the bots of the workspace you are in
+crew bots send Reviewer "look at the diff on main"
 crew sessions start codex --worktree new -- fix the login test   # another CLI on a job
 crew sessions wait --timeout-s 60 <id>   # until it ends its turn: its report
 crew processes list                # and start, stop, restart, logs -f, add, edit…
@@ -86,7 +86,7 @@ For a checkout, `scripts/crew-dev dev` runs the app from source, `scripts/crew-d
 npm run check                       # eslint + tsc + vitest + react-doctor
 cargo test --workspace
 
-node scripts/drive.mjs              # two agents and a message between them, headless
+node scripts/drive.mjs              # two bots and a message between them, headless
 SCENARIO=code node scripts/drive.mjs
 SCENARIO=loop node scripts/drive.mjs
 SCENARIO=routine node scripts/drive.mjs
@@ -97,7 +97,7 @@ npm run app:design                  # the app on a seeded profile of its own (po
 npm run app:design -- --reseed      # wipe that profile and seed it again
 ```
 
-`npm run app:design` runs next to a regular `npm run app`: it keeps its data in `~/Library/Application Support/Crew Design` and seeds it on first run with five workspaces (git repos, worktrees with diffs, a non-git folder, an empty one), agents and sessions on every provider and in every status, transcripts, routines with run history and open tabs. Statuses stay as seeded (`CREW_KEEP_STATUS`), so a working or waiting agent can be looked at without a live turn.
+`npm run app:design` runs next to a regular `npm run app`: it keeps its data in `~/Library/Application Support/Crew Design` and seeds it on first run with five workspaces (git repos, worktrees with diffs, a non-git folder, an empty one), bots and sessions on every provider and in every status, transcripts, routines with run history and open tabs. Statuses stay as seeded (`CREW_KEEP_STATUS`), so a working or waiting bot can be looked at without a live turn.
 
 `scripts/drive.mjs` defaults to opencode's free models, which need no credentials, so it runs on a machine with nothing logged in.
 
@@ -111,7 +111,7 @@ Protocol types live in `crates/crew-protocol` and generate `src/lib/protocol.ts`
 
 Convention over configuration. One process, one repo, one way. A majestic monolith.
 
-- Name things after the product (`Agent`, `Turn`, `Memory`), not after patterns (`AgentService`).
+- Name things after the product (`Bot`, `Turn`, `Memory`), not after patterns (`BotService`).
 - Prefer many small files over a catch-all `services/` folder.
 - Extract a layer when it hurts, not on day one.
 - A new feature copies an existing one. If you have to invent a folder, the feature is not shaped yet.

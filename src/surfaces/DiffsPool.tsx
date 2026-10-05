@@ -15,7 +15,7 @@ type Provider = ComponentType<{
  *
  * Only `CodeView` reads this context — the chat's diffs pass `disableWorkerPool`
  * — so nothing below here is mounted yet when the provider slots in. Terminals
- * and agents stay outside it: appearing in the tree would remount them.
+ * and turn chats stay outside it: appearing in the tree would remount them.
  */
 export function DiffsPool({ children }: { children: ReactNode }) {
   const [pool, setPool] = useState<{ Provider: Provider; worker: () => Worker } | null>(null);

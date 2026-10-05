@@ -17,7 +17,7 @@ export const NOTIFICATION_KINDS: { id: NotificationKind; label: string; descript
   { id: "done", label: "Turn finished", description: "A session finished its turn while you were elsewhere." },
   { id: "error", label: "Error", description: "A turn failed, or a session's CLI exited with an error." },
   { id: "process", label: "Command crashed", description: "A command exited with an error, or kept crashing and was left stopped." },
-  { id: "mailbox", label: "Agent message", description: "An agent got a message from another agent or a terminal." },
+  { id: "mailbox", label: "Bot message", description: "A bot got a message from another bot or a terminal." },
   { id: "bell", label: "Terminal bell", description: "A session's terminal rang its bell or sent a notification." },
   { id: "connection", label: "Connection", description: "A machine lost its connection, or came back." },
 ];
@@ -67,7 +67,7 @@ export const DEFAULT_NOTIFICATION_PREFS: NotificationPrefs = {
     done: { banner: true, sound: "chime" },
     error: { banner: true, sound: "alert" },
     process: { banner: true, sound: "alert" },
-    // Agents that work together write to each other often; each turn still ends with its own news.
+    // Bots that work together write to each other often; each turn still ends with its own news.
     mailbox: { banner: false, sound: "none" },
     bell: { banner: true, sound: "tap" },
     connection: { banner: true, sound: "none" },

@@ -3,7 +3,7 @@
 //! and do.
 //!
 //! Three kinds, because they differ in what a tool can promise them:
-//! - an agent has turns, so it can be written back to and can carry on after
+//! - a bot has turns, so it can be written back to and can carry on after
 //!   this one;
 //! - a terminal session runs a CLI Crew does not drive: it has no turns, so a
 //!   reply to it would reach nobody;
@@ -14,7 +14,7 @@
 //! - the user, from the `crew` command line, is no session at all and names
 //!   its workspace on each call.
 
-use crew_protocol::AgentRef;
+use crew_protocol::BotRef;
 
 use crate::bridge::Bearer;
 use crate::session::{self, Session};
@@ -22,7 +22,7 @@ use crate::store::Store;
 
 #[derive(Clone, Debug)]
 pub enum Caller {
-    Agent(Session),
+    Bot(Session),
     Terminal(Session),
     Child(Session),
     /// `None` when the call named no workspace, or one that resolved to none.
@@ -33,7 +33,7 @@ pub enum Caller {
 /// The kind alone, for deciding which tools a caller is shown.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CallerKind {
-    Agent,
+    Bot,
     Terminal,
     Child,
     User,
@@ -64,13 +64,13 @@ impl Caller {
         match session.kind.as_str() {
             "terminal" => Caller::Terminal(session),
             "child" => Caller::Child(session),
-            _ => Caller::Agent(session),
+            _ => Caller::Bot(session),
         }
     }
 
     pub fn kind(&self) -> CallerKind {
         match self {
-            Caller::Agent(_) => CallerKind::Agent,
+            Caller::Bot(_) => CallerKind::Bot,
             Caller::Terminal(_) => CallerKind::Terminal,
             Caller::Child(_) => CallerKind::Child,
             Caller::User { .. } => CallerKind::User,
@@ -80,7 +80,7 @@ impl Caller {
     /// The session behind the call; the user has none.
     pub fn session(&self) -> Option<&Session> {
         match self {
-            Caller::Agent(session) | Caller::Terminal(session) | Caller::Child(session) => Some(session),
+            Caller::Bot(session) | Caller::Terminal(session) | Caller::Child(session) => Some(session),
             Caller::User { .. } => None,
         }
     }
@@ -93,7 +93,7 @@ impl Caller {
     /// has one; the user has one only when the call named it.
     pub fn workspace_id(&self) -> Result<&str, String> {
         match self {
-            Caller::Agent(session) | Caller::Terminal(session) | Caller::Child(session) => Ok(&session.workspace_id),
+            Caller::Bot(session) | Caller::Terminal(session) | Caller::Child(session) => Ok(&session.workspace_id),
             Caller::User { workspace_id: Some(id) } => Ok(id),
             Caller::User { workspace_id: None } => Err(
                 "No workspace: run this from inside a workspace's folder, or name one with --workspace (an id or a path)."
@@ -111,7 +111,7 @@ impl Caller {
     /// by …". Names are the user's and change, so the id rides along.
     pub fn label(&self) -> String {
         match self {
-            Caller::Agent(session) => format!("{} (agent {})", session.name, session.id),
+            Caller::Bot(session) => format!("{} (bot {})", session.name, session.id),
             Caller::Terminal(session) => format!("{} (terminal {})", session.name, session.id),
             Caller::Child(session) => format!("{} (session {})", session.name, session.id),
             Caller::User { .. } => "the user".to_string(),
@@ -122,7 +122,7 @@ impl Caller {
     /// who would be asked, so the user has full autonomy.
     pub fn autonomy(&self) -> &str {
         match self {
-            Caller::Agent(session) | Caller::Terminal(session) | Caller::Child(session) => &session.autonomy,
+            Caller::Bot(session) | Caller::Terminal(session) | Caller::Child(session) => &session.autonomy,
             Caller::User { .. } => "full",
         }
     }
@@ -133,20 +133,20 @@ impl Caller {
 
     /// What goes on a letter this caller sends. `kind` is what lets the
     /// envelope tell the reader whether a reply can reach the sender.
-    pub fn sender(&self) -> AgentRef {
+    pub fn sender(&self) -> BotRef {
         match self {
-            Caller::Agent(session) => AgentRef::agent(session.id.clone(), session.name.clone()),
-            Caller::Terminal(session) => AgentRef {
+            Caller::Bot(session) => BotRef::bot(session.id.clone(), session.name.clone()),
+            Caller::Terminal(session) => BotRef {
                 id: session.id.clone(),
                 name: session.name.clone(),
                 kind: Some("terminal".into()),
             },
-            Caller::Child(session) => AgentRef {
+            Caller::Child(session) => BotRef {
                 id: session.id.clone(),
                 name: session.name.clone(),
                 kind: Some("session".into()),
             },
-            Caller::User { .. } => AgentRef {
+            Caller::User { .. } => BotRef {
                 id: String::new(),
                 name: "You".into(),
                 kind: Some("user".into()),
@@ -200,7 +200,7 @@ mod tests {
         crate::session::create_in_worktree(
             &store,
             ws.id.clone(),
-            "agent".into(),
+            "bot".into(),
             "A".into(),
             "claude".into(),
             "".into(),
@@ -221,9 +221,9 @@ mod tests {
                 .expect("session")
                 .id
         };
-        let agent = Caller::resolve(&store, &Bearer::Session(make("agent")), None).expect("agent");
+        let bot = Caller::resolve(&store, &Bearer::Session(make("bot")), None).expect("bot");
         let shell = Caller::resolve(&store, &Bearer::Session(make("terminal")), Some("elsewhere")).expect("terminal");
-        assert_eq!(agent.kind(), CallerKind::Agent);
+        assert_eq!(bot.kind(), CallerKind::Bot);
         assert_eq!(shell.kind(), CallerKind::Terminal);
         // A session's workspace is its own, whatever the call named.
         assert_eq!(shell.workspace_id(), Ok(ws.id.as_str()));

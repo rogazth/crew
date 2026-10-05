@@ -52,7 +52,7 @@ pub trait ToolHost: Send + Sync {
 }
 
 /// A token's lifetime is its process's, and the two kinds of process end
-/// differently: an agent's turn is replaced by the next turn, a terminal's
+/// differently: a bot's turn is replaced by the next turn, a terminal's
 /// process by nothing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Lease {

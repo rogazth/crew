@@ -1,4 +1,4 @@
-import { AgentAvatar } from "../../chrome/AgentAvatar";
+import { BotAvatar } from "../../chrome/BotAvatar";
 import { ProviderIcon } from "../../chrome/ProviderIcon";
 import { awaitsUser } from "../../lib/blocks";
 import { modelLabel, providerLine, providerOf } from "../../lib/providers";
@@ -89,7 +89,7 @@ export function DefaultChatSurface({
   );
 }
 
-/** Starters that fit any agent in any repo; a click drafts it, it never sends. */
+/** Starters that fit any session in any repo; a click drafts it, it never sends. */
 const STARTERS = [
   "Summarize what this repo does and how it's laid out",
   "Find the TODOs and FIXMEs worth doing first",
@@ -97,15 +97,15 @@ const STARTERS = [
 ];
 
 /**
- * A new agent's first screen, the way ChatGPT and Grok open one: who it is,
+ * A new chat's first screen, the way ChatGPT and Grok open one: who it is,
  * what runs it, and a few ways in, above the composer.
  */
 function Intro({ session, onPick }: { session: ChatSurfaceProps["session"]; onPick: (text: string) => void }) {
   return (
     <div className="mx-auto flex w-full max-w-[760px] flex-col items-center gap-4 px-6 pb-6 text-center">
       {/* A session is its CLI, with no face of its own: the CLI's mark stands in. */}
-      {session.kind === "agent" ? (
-        <AgentAvatar seed={session.id} bare animated={session.status === "working"} className="size-16" />
+      {session.kind === "bot" ? (
+        <BotAvatar seed={session.id} bare animated={session.status === "working"} className="size-16" />
       ) : (
         <span className="grid size-16 place-items-center rounded-2xl bg-card ring-1 ring-border">
           <ProviderIcon provider={session.provider} className="size-8" />
@@ -115,7 +115,7 @@ function Intro({ session, onPick }: { session: ChatSurfaceProps["session"]; onPi
         <h2 className="text-[22px] leading-7 font-semibold tracking-[-0.02em]">{session.name}</h2>
         <p className="flex items-center gap-1.5 text-[13px] text-text-muted">
           <ProviderIcon provider={session.provider} className="size-3.5" />
-          {session.kind === "agent"
+          {session.kind === "bot"
             ? `${providerOf(session.provider)?.label} ${modelLabel(session.provider, session.model)}`
             : providerLine(session.provider, session.model)}
         </p>

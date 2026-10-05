@@ -1,10 +1,10 @@
 //! Sessions as MCP tools: start a provider CLI on a job, wait for it, read what
 //! it did, give it more, answer it, stop it.
 //!
-//! The words, as every model that reads these tools is told: an agent is a
+//! The words, as every model that reads these tools is told: a bot is a
 //! persistent identity Crew keeps; a session is one provider CLI and can be
 //! thrown away. These tools are about sessions a caller starts for itself
-//! (children). An agent's own session is reached through `message_agent`, and
+//! (children). A bot's own session is reached through `message_agent`, and
 //! a terminal is the user's CLI.
 //!
 //! They are modelled on the process tools on purpose — `start_process`,
@@ -103,7 +103,7 @@ impl SessionTools {
     }
 
     /// The session `id`, if this caller may drive it: one it started, or any
-    /// at all for the user. An agent's session and a terminal are refused with
+    /// at all for the user. A bot's session and a terminal are refused with
     /// what reaches them instead.
     fn owned(&self, caller: &Caller, id: &str) -> Result<Session, String> {
         let workspace = caller.workspace_id()?;
@@ -111,12 +111,12 @@ impl SessionTools {
             .filter(|row| row.workspace_id == workspace)
             .ok_or_else(|| format!("No session {id} in this workspace. list_sessions has the ones you started."))?;
         match found.kind.as_str() {
-            "agent" => {
+            "bot" => {
                 return Err(format!(
-                    "{id} is the session that runs the agent {}'s turns. An agent is reached with message_agent, \
+                    "{id} is the session that runs the bot {}'s turns. A bot is reached with message_agent, \
                      by its id {}, not driven as a session.",
                     found.name,
-                    found.agent_id.as_deref().unwrap_or(&found.id)
+                    found.bot_id.as_deref().unwrap_or(&found.id)
                 ))
             }
             "terminal" => {
@@ -146,7 +146,7 @@ impl SessionTools {
     }
 
     /// The owner has now seen `row` up to `cursor`: the next wait starts
-    /// there, and a report still in an agent parent's box goes back out.
+    /// there, and a report still in a bot parent's box goes back out.
     fn saw(&self, caller: &Caller, row: &Session, cursor: i64) {
         if !Self::is_owner(caller, row) {
             return;
@@ -157,7 +157,7 @@ impl SessionTools {
         }
     }
 
-    /// A session id as "Name (agent id)"; `None` is the user.
+    /// A session id as "Name (bot id)"; `None` is the user.
     fn who(&self, session_id: Option<&str>) -> String {
         let Some(id) = session_id else {
             return "the user".to_string();
@@ -196,9 +196,9 @@ impl SessionTools {
                     }
                 }
             }
-            "agent" => {
-                out["agent"] = json!(row.name);
-                out["note"] = json!("Runs an agent's turns: reach it with message_agent.");
+            "bot" => {
+                out["bot"] = json!(row.name);
+                out["note"] = json!("Runs a bot's turns: reach it with message_agent.");
             }
             _ => {}
         }
@@ -267,7 +267,7 @@ impl SessionTools {
             caller.session_id().map(str::to_string),
         )?;
         (self.on_created)(&row);
-        if let Caller::Agent(me) = caller {
+        if let Caller::Bot(me) = caller {
             self.turns
                 .transcripts()
                 .append_system(&me.id, &format!("Started session {name} ({})", row.id));
@@ -284,7 +284,7 @@ impl SessionTools {
             files: None,
             mentions: None,
             hidden: None,
-            from_agent: from,
+            from_bot: from,
             sent_at: None,
             nonce: None,
         }) {
@@ -555,7 +555,7 @@ impl SessionTools {
             }));
         }
         mailbox::enqueue(&self.store, &row.id, &caller.sender(), &body)?;
-        // The same drain an agent's box has: an idle session starts a turn on
+        // The same drain a bot's box has: an idle session starts a turn on
         // the oldest message now; a busy one takes it when its turn ends.
         let delivered = self.turns.deliver_to(&row);
         let waiting = mailbox::waiting_count(&self.store, &row.id)?;
@@ -730,7 +730,7 @@ fn open(block: &Block) -> bool {
 fn render(block: &Block, position: usize, tools: bool) -> String {
     let (who, body) = match block.role {
         BlockRole::User => {
-            let who = match &block.from_agent {
+            let who = match &block.from_bot {
                 Some(from) if from.id.is_empty() => from.name.clone(),
                 Some(from) => format!("{} {}", from.name, from.id),
                 None => "user".into(),
@@ -838,7 +838,7 @@ pub fn catalog() -> Vec<Tool> {
             description: concat!(
                 "Start a session: one provider CLI (claude, codex, opencode or cursor) working on a prompt, in this workspace. It returns at once, with the session's id; you are its parent. Its reply is the end of each turn: wait_for_session blocks until it ends one and answers with its final message, its report. read_session shows everything it did; send_to_session gives it more in the same conversation; stop_session ends it. ",
                 "worktree is where it works: current (yours, the default), new (a fresh branch and worktree of its own, for work that must not touch your checkout), or a branch name or worktree path. It runs with your autonomy, or ask; never more than yours. At most 4 live sessions each. ",
-                "An agent outlives its sessions; a session is one provider CLI process and can be thrown away. To hand work to an agent (a persistent identity with a mailbox), use message_agent instead."
+                "A bot outlives its sessions; a session is one provider CLI process and can be thrown away. To hand work to a bot (a persistent identity with a mailbox), use message_agent instead."
             ),
             schema: json!({
                 "type": "object",
@@ -858,7 +858,7 @@ pub fn catalog() -> Vec<Tool> {
         },
         Tool {
             name: "list_sessions",
-            description: "List the sessions you started (the default), or with mine false every session in this workspace: id, provider, model, status (starting, working, idle, needs-input, exited, error), parent, worktree and cursor; self marks your own. A session is one provider CLI process; an agent is the identity some sessions run for (list_agents), reached with message_agent.",
+            description: "List the sessions you started (the default), or with mine false every session in this workspace: id, provider, model, status (starting, working, idle, needs-input, exited, error), parent, worktree and cursor; self marks your own. A session is one provider CLI process; a bot is the identity some sessions run for (list_agents), reached with message_agent.",
             schema: json!({
                 "type": "object",
                 "properties": { "mine": { "type": "boolean", "description": "Only the ones you started. Defaults to true." } }
@@ -1386,7 +1386,7 @@ while True:
             files: None,
             mentions: None,
             hidden: None,
-            from_agent: None,
+            from_bot: None,
             sent_at: None,
             nonce: None,
         });
@@ -1471,7 +1471,7 @@ while True:
         let w = world();
         let parent = w.session("terminal", "mine", "full");
         let stranger = w.session("terminal", "other", "full");
-        let agent = w.session("agent", "Planner", "full");
+        let bot = w.session("bot", "Planner", "full");
         let id = w.start(&parent, "SLEEP 1");
         for (tool, args) in [
             ("read_session", json!({ "session": id })),
@@ -1482,13 +1482,13 @@ while True:
         ] {
             let out = w.call(&stranger, tool, args.clone());
             assert!(out.as_ref().is_err_and(|e| e.contains("not by you")), "{tool}: {out:?}");
-            let out = w.call(&agent, tool, args);
+            let out = w.call(&bot, tool, args);
             assert!(out.is_err_and(|e| e.contains("not by you")), "{tool}");
         }
         // The user may, from the command line, as in the window.
         assert!(w.call(&w.user(), "read_session", json!({ "session": id })).is_ok());
-        // An agent's session is reached as the agent; a terminal is the user's CLI.
-        let theirs = w.call(&parent, "read_session", json!({ "session": agent.session_id().unwrap() }));
+        // A bot's session is reached as the bot; a terminal is the user's CLI.
+        let theirs = w.call(&parent, "read_session", json!({ "session": bot.session_id().unwrap() }));
         assert!(theirs.is_err_and(|e| e.contains("message_agent")));
         let shell = w.call(&parent, "read_session", json!({ "session": stranger.session_id().unwrap() }));
         assert!(shell.is_err_and(|e| e.contains("terminal session")));
@@ -1513,18 +1513,18 @@ while True:
         let toolbox = crate::tools::Toolbox::default();
         toolbox.register(Arc::new(catalog_only()));
         let hidden = toolbox.hidden_names(CallerKind::Child);
-        for name in ["start_session", "list_sessions", "wait_for_session", "read_session", "send_to_session", "respond_to_session", "stop_session", "create_agent", "create_worktree"] {
+        for name in ["start_session", "list_sessions", "wait_for_session", "read_session", "send_to_session", "respond_to_session", "stop_session", "create_bot", "create_worktree"] {
             assert!(!hidden.contains(&name), "a child can find {name}");
         }
         assert!(hidden.contains(&"message_agent") && hidden.contains(&"list_agents"));
-        for parent in [CallerKind::Agent, CallerKind::Terminal, CallerKind::User] {
+        for parent in [CallerKind::Bot, CallerKind::Terminal, CallerKind::User] {
             assert!(toolbox.hidden_names(parent).contains(&"start_session"), "{parent:?}");
         }
         w.settle(&id);
     }
 
     /// Models have confused the two words before, so each place a model reads
-    /// about sessions says what one is, and what an agent is.
+    /// about sessions says what one is, and what a bot is.
     #[test]
     fn the_words_are_said_wherever_a_model_reads_them() {
         let w = world();
@@ -1532,10 +1532,10 @@ while True:
         toolbox.register(Arc::new(catalog_only()));
         let shell = w.session("terminal", "shell", "full");
         let told = crate::tools::instructions(&toolbox, &shell);
-        assert!(told.contains("An agent outlives its sessions; a session is one provider CLI process and can be thrown away."), "{told}");
+        assert!(told.contains("A bot outlives its sessions; a session is one provider CLI process and can be thrown away."), "{told}");
         let start = catalog().into_iter().find(|tool| tool.name == "start_session").unwrap();
-        assert!(start.description.contains("An agent outlives its sessions"), "{}", start.description);
-        assert!(w.tools.instructions(&shell).unwrap().contains("An agent outlives its sessions"));
+        assert!(start.description.contains("A bot outlives its sessions"), "{}", start.description);
+        assert!(w.tools.instructions(&shell).unwrap().contains("A bot outlives its sessions"));
         let id = w.start(&shell, "x");
         assert!(w.tools.instructions(&shell).unwrap().contains(&id), "the parent is not reminded of its sessions");
         let child = Caller::from_session(w.row(&id));
@@ -1643,25 +1643,25 @@ while True:
     }
 
     #[test]
-    fn an_agent_parent_hears_each_turn_in_its_box_unless_it_already_looked() {
+    fn a_bot_parent_hears_each_turn_in_its_box_unless_it_already_looked() {
         let w = world();
-        let agent = w.session("agent", "Planner", "full");
-        let me = agent.session_id().unwrap().to_string();
-        let id = w.start(&agent, "x");
+        let bot = w.session("bot", "Planner", "full");
+        let me = bot.session_id().unwrap().to_string();
+        let id = w.start(&bot, "x");
         w.settle(&id);
-        // The letter woke the agent: its turn ran on it.
+        // The letter woke the bot: its turn ran on it.
         for _ in 0..200 {
-            if w.turns.transcripts().since(&me, 0).0.iter().any(|b| b.from_agent.as_ref().is_some_and(|f| f.id == id)) {
+            if w.turns.transcripts().since(&me, 0).0.iter().any(|b| b.from_bot.as_ref().is_some_and(|f| f.id == id)) {
                 break;
             }
             std::thread::sleep(Duration::from_millis(25));
         }
         let blocks = w.turns.transcripts().since(&me, 0).0;
-        let letter = blocks.iter().find(|b| b.from_agent.as_ref().is_some_and(|f| f.id == id)).expect("no report reached the agent");
+        let letter = blocks.iter().find(|b| b.from_bot.as_ref().is_some_and(|f| f.id == id)).expect("no report reached the bot");
         assert!(letter.text.contains("Its turn ended") && letter.text.contains("report: x"), "{}", letter.text);
         // A report the parent read itself does not come again.
         crate::mailbox::enqueue(w.turns.store(), &me, &crate::caller::Caller::from_session(w.row(&id)).sender(), "late").unwrap();
-        w.call(&agent, "read_session", json!({ "session": id })).expect("read");
+        w.call(&bot, "read_session", json!({ "session": id })).expect("read");
         assert_eq!(crate::mailbox::waiting_count(w.turns.store(), &me).unwrap(), 0);
     }
 

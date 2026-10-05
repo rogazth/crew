@@ -119,29 +119,29 @@ pub struct Tool {
 /// Which kinds of caller a tool is for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Audience {
-    pub agent: bool,
+    pub bot: bool,
     pub terminal: bool,
     /// A session another caller started. It is depth one: nothing that makes
-    /// sessions, agents or worktrees, because its work is its parent's.
+    /// sessions, bots or worktrees, because its work is its parent's.
     pub child: bool,
     pub user: bool,
 }
 
 impl Audience {
-    pub const EVERYONE: Self = Self { agent: true, terminal: true, child: true, user: true };
-    /// Agents and terminal sessions: it needs a session behind the call, and
+    pub const EVERYONE: Self = Self { bot: true, terminal: true, child: true, user: true };
+    /// Bots and terminal sessions: it needs a session behind the call, and
     /// one that may start work of its own.
-    pub const SESSIONS: Self = Self { agent: true, terminal: true, child: false, user: false };
-    /// Agents alone: it needs turns.
-    pub const AGENTS: Self = Self { agent: true, terminal: false, child: false, user: false };
-    /// Agents and the user, who both have a conversation to look through.
-    pub const AGENTS_AND_USER: Self = Self { agent: true, terminal: false, child: false, user: true };
+    pub const SESSIONS: Self = Self { bot: true, terminal: true, child: false, user: false };
+    /// Bots alone: it needs turns.
+    pub const BOTS: Self = Self { bot: true, terminal: false, child: false, user: false };
+    /// Bots and the user, who both have a conversation to look through.
+    pub const BOTS_AND_USER: Self = Self { bot: true, terminal: false, child: false, user: true };
     /// Whoever may start sessions and drive them: everyone but a child.
-    pub const PARENTS: Self = Self { agent: true, terminal: true, child: false, user: true };
+    pub const PARENTS: Self = Self { bot: true, terminal: true, child: false, user: true };
 
     pub fn admits(self, kind: CallerKind) -> bool {
         match kind {
-            CallerKind::Agent => self.agent,
+            CallerKind::Bot => self.bot,
             CallerKind::Terminal => self.terminal,
             CallerKind::Child => self.child,
             CallerKind::User => self.user,
@@ -187,7 +187,7 @@ pub trait ToolFamily: Send + Sync {
 
 /// The tool families registered beside Crew's own. Cloned handles share one
 /// list, so a family registered after the dispatcher and the turn host were
-/// built is seen by both: the tool sheet in an agent's prompt names its tools
+/// built is seen by both: the tool sheet in a bot's prompt names its tools
 /// too.
 #[derive(Clone, Default)]
 pub struct Toolbox {
@@ -272,11 +272,11 @@ pub(crate) fn provider_names() -> Vec<&'static str> {
 
 /// Every model there is, grouped by the provider that has it.
 ///
-/// It rides in `create_agent`'s own schema rather than behind a tool of its
-/// own: the moment an agent needs a model id is the moment it is reading this
+/// It rides in `create_bot`'s own schema rather than behind a tool of its
+/// own: the moment a bot needs a model id is the moment it is reading this
 /// schema, and there is no second moment. Thirty-six ids are shorter than most
-/// tools' arguments, and only a turn that looks up `create_agent` pays for
-/// them. Without it an agent guesses from memory — `grok-4.6` under codex,
+/// tools' arguments, and only a turn that looks up `create_bot` pays for
+/// them. Without it a bot guesses from memory — `grok-4.6` under codex,
 /// which is neither the provider nor the spelling — and reports back that the
 /// model does not exist here.
 pub(crate) fn model_sheet() -> String {
@@ -303,10 +303,10 @@ pub fn every_tool() -> Vec<Tool> {
 /// Who sees what: a terminal session has no turns, so nothing that leaves a
 /// note for a next turn or rewrites the persona a turn is handed, and no
 /// transcript in Crew to search. The user, from the command line, is no
-/// session: nothing that acts on "yourself", and no `create_agent`, whose
+/// session: nothing that acts on "yourself", and no `create_bot`, whose
 /// provider, model and autonomy default to the caller's own. What the user may
-/// do is what the window already lets them: read the roster, write to an
-/// agent, search the chats and manage routines.
+/// do is what the window already lets them: read the roster, write to a
+/// bot, search the chats and manage routines.
 pub(crate) fn catalog() -> Vec<Tool> {
     let schedule = json!({
         "type": "object",
@@ -324,15 +324,15 @@ pub(crate) fn catalog() -> Vec<Tool> {
     vec![
         Tool {
             name: "list_agents",
-            description: "List the agents in this workspace, including yourself.",
+            description: "List the bots in this workspace, including yourself.",
             schema: json!({ "type": "object", "properties": {} }),
-            keywords: &["roster", "team", "who", "agents"],
+            keywords: &["roster", "team", "who", "bots"],
             core: false,
             audience: Audience::EVERYONE,
         },
         Tool {
-            name: "create_agent",
-            description: "Create a new agent in this workspace. It stays idle until the user messages it or a routine wakes it. Provider and model default to yours, and it runs with your autonomy: you cannot make one that is allowed more than you are.",
+            name: "create_bot",
+            description: "Create a new bot in this workspace. It stays idle until the user messages it or a routine wakes it. Provider and model default to yours, and it runs with your autonomy: you cannot make one that is allowed more than you are.",
             schema: json!({
                 "type": "object",
                 "properties": {
@@ -351,7 +351,7 @@ pub(crate) fn catalog() -> Vec<Tool> {
                 },
                 "required": ["name", "description"]
             }),
-            keywords: &["new", "hire", "spawn", "agent"],
+            keywords: &["new", "hire", "spawn", "bot"],
             core: false,
             audience: Audience::SESSIONS,
         },
@@ -373,11 +373,11 @@ pub(crate) fn catalog() -> Vec<Tool> {
         },
         Tool {
             name: "message_agent",
-            description: "Send a message to another agent in this workspace. It arrives as a turn with your name and id on it and is answered in its own time, or not at all: you are not waiting here, and anything it sends back reaches you as a message of its own. If the agent is busy the message waits in its box.",
+            description: "Send a message to another bot in this workspace. It arrives as a turn with your name and id on it and is answered in its own time, or not at all: you are not waiting here, and anything it sends back reaches you as a message of its own. If the bot is busy the message waits in its box.",
             schema: json!({
                 "type": "object",
                 "properties": {
-                    "to": { "type": "string", "description": "The agent's id — from list_agents, or from the line a message arrived on. Not its name: names are the user's to change." },
+                    "to": { "type": "string", "description": "The bot's id — from list_agents, or from the line a message arrived on. Not its name: names are the user's to change." },
                     "text": { "type": "string", "description": "What to say. Give it everything it needs; it cannot see your conversation." }
                 },
                 "required": ["to", "text"]
@@ -398,7 +398,7 @@ pub(crate) fn catalog() -> Vec<Tool> {
             }),
             keywords: &["continue", "carry", "loop", "next", "self", "resume"],
             core: false,
-            audience: Audience::AGENTS,
+            audience: Audience::BOTS,
         },
         Tool {
             name: "update_description",
@@ -412,11 +412,11 @@ pub(crate) fn catalog() -> Vec<Tool> {
             }),
             keywords: &["persona", "instructions", "description", "myself", "rewrite"],
             core: false,
-            audience: Audience::AGENTS,
+            audience: Audience::BOTS,
         },
         Tool {
             name: "search_messages",
-            description: "Search your own conversation: everything you, the user and whoever wrote to you have said in it. Use it before asking the user something they may already have said. What another agent knows is not in here; that you ask it for.",
+            description: "Search your own conversation: everything you, the user and whoever wrote to you have said in it. Use it before asking the user something they may already have said. What another bot knows is not in here; that you ask it for.",
             schema: json!({
                 "type": "object",
                 "properties": {
@@ -428,14 +428,14 @@ pub(crate) fn catalog() -> Vec<Tool> {
             }),
             keywords: &["find", "grep", "history", "transcript", "said"],
             core: false,
-            audience: Audience::AGENTS_AND_USER,
+            audience: Audience::BOTS_AND_USER,
         },
         Tool {
             name: "list_routines",
-            description: "List the routines of an agent: standing orders that wake it on a schedule with a saved prompt. Defaults to your own.",
+            description: "List the routines of a bot: standing orders that wake it on a schedule with a saved prompt. Defaults to your own.",
             schema: json!({
                 "type": "object",
-                "properties": { "agent_id": { "type": "string", "description": "Omit for yourself." } }
+                "properties": { "bot_id": { "type": "string", "description": "Omit for yourself." } }
             }),
             keywords: &["schedule", "cron", "standing", "orders"],
             core: false,
@@ -448,9 +448,9 @@ pub(crate) fn catalog() -> Vec<Tool> {
                 "type": "object",
                 "properties": {
                     "routine_id": { "type": "string", "description": "Set to update an existing routine." },
-                    "agent_id": { "type": "string", "description": "Whose routine. Omit for yourself." },
+                    "bot_id": { "type": "string", "description": "Whose routine. Omit for yourself." },
                     "name": { "type": "string" },
-                    "prompt": { "type": "string", "description": "What the agent does each time it fires." },
+                    "prompt": { "type": "string", "description": "What the bot does each time it fires." },
                     "schedule": schedule,
                     "enabled": { "type": "boolean" }
                 }
@@ -461,7 +461,7 @@ pub(crate) fn catalog() -> Vec<Tool> {
         },
         Tool {
             name: "delete_routine",
-            description: "Delete a routine by id. Works on any agent in this workspace.",
+            description: "Delete a routine by id. Works on any bot in this workspace.",
             schema: json!({
                 "type": "object",
                 "properties": { "routine_id": { "type": "string" } },
@@ -478,19 +478,19 @@ pub(crate) fn catalog() -> Vec<Tool> {
 /// The names behind the gateway, for the sheet to list.
 ///
 /// Names only, never schemas — the schemas are what the gateway exists to keep
-/// out of the prompt, and `create_agent` alone now carries the whole model
-/// catalogue. But an agent that is told only that "everything else" exists has
-/// no reason to go looking: asked to create an agent, a codex one reached for
+/// out of the prompt, and `create_bot` alone now carries the whole model
+/// catalogue. But a bot that is told only that "everything else" exists has
+/// no reason to go looking: asked to create a bot, a codex one reached for
 /// its own `spawn_agent`, which sounds exactly like the job and is not Crew's.
 ///
-/// Crew's own, for an agent. [`Toolbox::hidden_names`] adds the families'.
+/// Crew's own, for a bot. [`Toolbox::hidden_names`] adds the families'.
 pub fn hidden_names() -> Vec<&'static str> {
-    Toolbox::default().hidden_names(CallerKind::Agent)
+    Toolbox::default().hidden_names(CallerKind::Bot)
 }
 
 /// Exactly what `tools/list` answers with for this kind of caller, before any
-/// family is registered, and exactly what the sheet in an agent's prompt
-/// names: the two have to agree or the agent is told about a tool it cannot
+/// family is registered, and exactly what the sheet in a bot's prompt
+/// names: the two have to agree or the bot is told about a tool it cannot
 /// call.
 #[cfg(test)]
 pub(crate) fn standing(kind: CallerKind) -> Vec<Tool> {
@@ -498,7 +498,7 @@ pub(crate) fn standing(kind: CallerKind) -> Vec<Tool> {
 }
 
 /// The two tools that stand in for everything not listed. They are described
-/// so an agent reaches for them instead of guessing a name.
+/// so a model reaches for them instead of guessing a name.
 fn gateway() -> Vec<Tool> {
     vec![
         Tool {
@@ -535,13 +535,13 @@ fn gateway() -> Vec<Tool> {
 }
 
 /// A tool as this caller is told about it. One description is written for
-/// the agent that can be written back to; a terminal session or the user
+/// the bot that can be written back to; a terminal session or the user
 /// cannot, and being promised a reply that never comes is worse than none.
 fn describe(tool: &Tool, kind: CallerKind) -> Value {
     let description = match (tool.name, kind) {
-        ("message_agent", CallerKind::Terminal) => "Send a message to an agent in this workspace. It arrives as a turn with your name on it, marked as coming from a terminal session, and is worked on in its own time. You cannot receive a reply: ask it to do what you need, not to answer you.",
-        ("message_agent", CallerKind::Child) => "Send a message to an agent in this workspace. It arrives as a turn with your name on it, marked as coming from a session, and is worked on in its own time. You cannot receive a reply through it: whoever started you reads your report when your turn ends.",
-        ("message_agent", CallerKind::User) => "Send a message to an agent in this workspace, as the user. It arrives as a turn and is answered in its own chat, in its own time.",
+        ("message_agent", CallerKind::Terminal) => "Send a message to a bot in this workspace. It arrives as a turn with your name on it, marked as coming from a terminal session, and is worked on in its own time. You cannot receive a reply: ask it to do what you need, not to answer you.",
+        ("message_agent", CallerKind::Child) => "Send a message to a bot in this workspace. It arrives as a turn with your name on it, marked as coming from a session, and is worked on in its own time. You cannot receive a reply through it: whoever started you reads your report when your turn ends.",
+        ("message_agent", CallerKind::User) => "Send a message to a bot in this workspace, as the user. It arrives as a turn and is answered in its own chat, in its own time.",
         _ => tool.description,
     };
     json!({
@@ -617,7 +617,7 @@ fn find_tool(toolbox: &Toolbox, caller: &Caller, args: &Value) -> Result<Value, 
 
 /// The two words models have mixed up before, said the same way wherever a
 /// model reads them: here, in `instructions()`, and in the session tools.
-pub const GLOSSARY: &str = "An agent is a persistent identity Crew keeps: a name, a mailbox and a history; message_agent reaches it. A session is one provider CLI (claude, codex, opencode, cursor) running a conversation; it belongs to an agent, to whoever started it, or to nobody (a terminal). An agent outlives its sessions; a session is one provider CLI process and can be thrown away.";
+pub const GLOSSARY: &str = "A bot is a persistent identity Crew keeps: a name, a mailbox and a history; message_agent reaches it. A session is one provider CLI (claude, codex, opencode, cursor) running a conversation; it belongs to a bot, to whoever started it, or to nobody (a terminal). A bot outlives its sessions; a session is one provider CLI process and can be thrown away.";
 
 /// What `initialize` tells a model about Crew's tools, before it has listed
 /// any. Every provider with MCP shows it to the model; for a terminal session
@@ -633,9 +633,9 @@ pub fn instructions(toolbox: &Toolbox, caller: &Caller) -> String {
         .collect();
     let hidden = toolbox.hidden_names(kind);
     let who = match caller {
-        Caller::Agent(_) => String::new(),
+        Caller::Bot(_) => String::new(),
         Caller::Terminal(session) => format!(
-            " You are the terminal session \"{}\": agents you message can act on it, but cannot write back to you.",
+            " You are the terminal session \"{}\": bots you message can act on it, but cannot write back to you.",
             session.name
         ),
         Caller::Child(session) => format!(
@@ -648,7 +648,7 @@ pub fn instructions(toolbox: &Toolbox, caller: &Caller) -> String {
     let listed = if listed.is_empty() { String::new() } else { format!("Always listed: {}.\n", listed.join(", ")) };
     let notes: String = toolbox.notes(caller).into_iter().map(|note| format!("\n{note}")).collect();
     format!(
-        "Crew is the app this runs in: it holds a workspace of agents, and these tools reach them.{who}\n\
+        "Crew is the app this runs in: it holds a workspace of bots, and these tools reach them.{who}\n\
          {GLOSSARY}\n\
          {listed}\
          Its tools are not listed, to keep them out of the prompt: find_tool searches them by what you \
@@ -658,11 +658,11 @@ pub fn instructions(toolbox: &Toolbox, caller: &Caller) -> String {
     )
 }
 
-/// Drain an agent's box now: claim its oldest letter and start a turn on it.
+/// Drain a bot's box now: claim its oldest letter and start a turn on it.
 /// Returns whether one went over. Starting a turn belongs to whoever owns the
 /// runtime, which is why this arrives as a callback.
 ///
-/// It takes the agent, not the letter, so that claiming stays in one place. A
+/// It takes the bot, not the letter, so that claiming stays in one place. A
 /// caller that claimed first and handed the letter over would hide it from the
 /// drain that runs when the target's turn ends, and a letter nobody can see is
 /// a letter nobody delivers.
@@ -712,7 +712,7 @@ pub fn handle(host: &Host<'_>, caller: &Caller, method: &str, params: Value) -> 
                     Ok(json!({ "content": [{ "type": "text", "text": body }] }))
                 }
                 Ok(ToolOutput::Content(blocks)) => Ok(json!({ "content": blocks })),
-                // A refusal carries the arguments the tool wanted. An agent
+                // A refusal carries the arguments the tool wanted. A model
                 // that guessed one field name has usually guessed the others,
                 // and a round trip per field is a turn spent on paperwork.
                 Err(error) => Ok(json!({
@@ -730,7 +730,7 @@ pub fn handle(host: &Host<'_>, caller: &Caller, method: &str, params: Value) -> 
 /// be able to see so before it acts.
 fn whoami(store: &Store, caller: &Caller) -> Result<Value, String> {
     let kind = match caller.kind() {
-        CallerKind::Agent => "agent",
+        CallerKind::Bot => "bot",
         CallerKind::Terminal => "terminal",
         CallerKind::Child => "child",
         CallerKind::User => "user",
@@ -810,17 +810,17 @@ fn run(host: &Host<'_>, caller: &Caller, name: &str, args: &Value) -> Result<Too
 }
 
 /// Crew's own tools. The audience was checked on the way in; the ones that
-/// need a session or an agent still ask for it, so a tool moved to a wider
+/// need a session or a bot still ask for it, so a tool moved to a wider
 /// audience fails with a sentence rather than acting on nobody.
 fn own(host: &Host<'_>, caller: &Caller, name: &str, args: &Value) -> Result<Value, String> {
     let store = host.store;
     match name {
-        "list_agents" => list_agents(store, caller),
-        "create_agent" => create_agent(store, host.transcripts, host.on_created, caller, args),
+        "list_agents" => list_bots(store, caller),
+        "create_bot" => create_bot(store, host.transcripts, host.on_created, caller, args),
         "create_worktree" => create_worktree(host, caller, args, crate::worktree::add),
-        "message_agent" => message_agent(store, host.deliver, caller, args),
-        "continue_after_turn" => continue_after_turn(store, agent(caller, name)?, args),
-        "update_description" => update_description(store, host.transcripts, agent(caller, name)?, args),
+        "message_agent" => message_bot(store, host.deliver, caller, args),
+        "continue_after_turn" => continue_after_turn(store, bot(caller, name)?, args),
+        "update_description" => update_description(store, host.transcripts, bot(caller, name)?, args),
         "search_messages" => search_messages(store, caller, args),
         "list_routines" => list_routines(store, caller, args),
         "upsert_routine" => upsert_routine(store, host.transcripts, host.on_routines, caller, args),
@@ -829,19 +829,19 @@ fn own(host: &Host<'_>, caller: &Caller, name: &str, args: &Value) -> Result<Val
     }
 }
 
-/// The agent behind a call, for a tool that acts on its own turns or persona.
-fn agent<'a>(caller: &'a Caller, tool: &str) -> Result<&'a Session, String> {
+/// The bot behind a call, for a tool that acts on its own turns or persona.
+fn bot<'a>(caller: &'a Caller, tool: &str) -> Result<&'a Session, String> {
     match caller {
-        Caller::Agent(session) => Ok(session),
-        _ => Err(format!("{tool} is for agents: it acts on the caller's own turns.")),
+        Caller::Bot(session) => Ok(session),
+        _ => Err(format!("{tool} is for bots: it acts on the caller's own turns.")),
     }
 }
 
-fn list_agents(store: &Store, caller: &Caller) -> Result<Value, String> {
+fn list_bots(store: &Store, caller: &Caller) -> Result<Value, String> {
     let sessions = session::list(store, caller.workspace_id()?.to_string())?;
     let rows: Vec<Value> = sessions
         .into_iter()
-        .filter(|session| session.kind == "agent")
+        .filter(|session| session.kind == "bot")
         .map(|session| {
             let mut row = json!({
                 "id": session.id,
@@ -863,27 +863,27 @@ fn list_agents(store: &Store, caller: &Caller) -> Result<Value, String> {
 
 /// Who a message is addressed to. An id, and only an id.
 ///
-/// A name is the user's: they rename an agent in the sheet and every name that
-/// ever resolved goes stale, sometimes onto a different agent. An id outlives
+/// A name is the user's: they rename a bot in the sheet and every name that
+/// ever resolved goes stale, sometimes onto a different bot. An id outlives
 /// that. A name that arrives anyway is answered with the id it meant, so the
 /// recovery is one call and not a round of guessing.
-fn find_agent(store: &Store, caller: &Caller, who: &str) -> Result<Session, String> {
+fn find_bot(store: &Store, caller: &Caller, who: &str) -> Result<Session, String> {
     let who = who.trim();
-    let agents: Vec<Session> = session::list(store, caller.workspace_id()?.to_string())?
+    let bots: Vec<Session> = session::list(store, caller.workspace_id()?.to_string())?
         .into_iter()
-        .filter(|row| row.kind == "agent")
+        .filter(|row| row.kind == "bot")
         .collect();
-    if let Some(found) = agents.iter().find(|row| row.id == who) {
+    if let Some(found) = bots.iter().find(|row| row.id == who) {
         return Ok(found.clone());
     }
-    Err(match agents.iter().find(|row| row.name.eq_ignore_ascii_case(who)) {
+    Err(match bots.iter().find(|row| row.name.eq_ignore_ascii_case(who)) {
         Some(named) => format!(
-            "Agents are addressed by id, not by name. {} is {}.",
+            "Bots are addressed by id, not by name. {} is {}.",
             named.name, named.id
         ),
         None => format!(
-            "No agent {who} in this workspace. list_agents has the ids: {}",
-            agents
+            "No bot {who} in this workspace. list_agents has the ids: {}",
+            bots
                 .iter()
                 .map(|row| format!("{} {}", row.name, row.id))
                 .collect::<Vec<_>>()
@@ -892,7 +892,7 @@ fn find_agent(store: &Store, caller: &Caller, who: &str) -> Result<Session, Stri
     })
 }
 
-fn message_agent(
+fn message_bot(
     store: &Store,
     deliver: Deliver<'_>,
     caller: &Caller,
@@ -901,16 +901,16 @@ fn message_agent(
     let who = text(args.get("to")).ok_or_else(|| "to is required".to_string())?;
     let body = text(args.get("text")).ok_or_else(|| "text is required".to_string())?;
     // Two intentions that used to share one argument: a name that resolved to
-    // the caller started a turn nobody had asked for, and the agent read it as
+    // the caller started a turn nobody had asked for, and the bot read it as
     // a message from somebody else.
-    if let Caller::Agent(me) = caller {
+    if let Caller::Bot(me) = caller {
         if who.trim() == me.id || who.trim().eq_ignore_ascii_case(&me.name) {
             return Err(
                 "That is you. To carry on after this turn ends, use continue_after_turn.".to_string(),
             );
         }
     }
-    let target = find_agent(store, caller, &who)?;
+    let target = find_bot(store, caller, &who)?;
 
     // The sender's kind rides on the letter, so the envelope can tell the
     // reader whether a reply has anywhere to go.
@@ -928,7 +928,7 @@ fn message_agent(
     match caller {
         Caller::Terminal(_) | Caller::Child(_) => note.push_str(" It knows it cannot write back to you."),
         Caller::User { .. } => note.push_str(" Its reply will be in its chat."),
-        Caller::Agent(_) => {}
+        Caller::Bot(_) => {}
     }
     Ok(json!({
         "to": target.name,
@@ -939,12 +939,12 @@ fn message_agent(
     }))
 }
 
-/// A note an agent leaves itself, which the end of this turn hands back as the
+/// A note a bot leaves itself, which the end of this turn hands back as the
 /// next one. No delivery attempt: the caller is mid-turn by definition, so the
 /// letter would only bounce and go back in the box. `run_turn` drains it.
 fn continue_after_turn(store: &Store, caller: &Session, args: &Value) -> Result<Value, String> {
     let body = text(args.get("text")).ok_or_else(|| "text is required".to_string())?;
-    let from = crew_protocol::AgentRef::agent(caller.id.clone(), caller.name.clone());
+    let from = crew_protocol::BotRef::bot(caller.id.clone(), caller.name.clone());
     mailbox::enqueue(store, &caller.id, &from, &body)?;
     Ok(json!({
         "waiting": mailbox::waiting_count(store, &caller.id)?,
@@ -952,8 +952,8 @@ fn continue_after_turn(store: &Store, caller: &Session, args: &Value) -> Result<
     }))
 }
 
-/// The standing instructions an agent is handed every turn, rewritten by the
-/// agent itself. Whole, not patched: a description assembled from edits nobody
+/// The standing instructions a bot is handed every turn, rewritten by the
+/// bot itself. Whole, not patched: a description assembled from edits nobody
 /// read end to end is one nobody can predict the next turn from.
 fn update_description(
     store: &Store,
@@ -983,8 +983,8 @@ fn search_messages(store: &Store, caller: &Caller, args: &Value) -> Result<Value
     let query = text(args.get("query")).ok_or_else(|| "query is required".to_string())?;
     let limit = args.get("limit").and_then(Value::as_u64).unwrap_or(10).clamp(1, 50) as u32;
     let days = args.get("days").and_then(Value::as_u64);
-    // An agent searches one conversation, its own. The transcript is the only
-    // memory an agent has, and the mailbox is the only way into somebody
+    // A bot searches one conversation, its own. The transcript is the only
+    // memory a bot has, and the mailbox is the only way into somebody
     // else's: a search across the workspace would be a second channel that
     // shows up in no chat. The user already reads every chat in the window, so
     // for them the workspace is the one conversation.
@@ -1009,7 +1009,7 @@ fn search_messages(store: &Store, caller: &Caller, args: &Value) -> Result<Value
         .into_iter()
         .map(|hit| {
             json!({
-                "agent": hit.session_name,
+                "session": hit.session_name,
                 "when": when(hit.at),
                 "role": format!("{:?}", hit.role).to_lowercase(),
                 // The marks are for painting a UI; a model reads the words.
@@ -1020,7 +1020,7 @@ fn search_messages(store: &Store, caller: &Caller, args: &Value) -> Result<Value
     Ok(Value::Array(rows))
 }
 
-fn create_agent(
+fn create_bot(
     store: &Store,
     transcripts: &TranscriptHub,
     on_created: &dyn Fn(&Session),
@@ -1029,10 +1029,10 @@ fn create_agent(
 ) -> Result<Value, String> {
     let me = caller
         .session()
-        .ok_or_else(|| "create_agent needs a session to inherit from.".to_string())?;
+        .ok_or_else(|| "create_bot needs a session to inherit from.".to_string())?;
     let name = text(args.get("name")).ok_or_else(|| "name is required".to_string())?;
     let description = text(args.get("description"))
-        .ok_or_else(|| "description is required: say what the agent is for".to_string())?;
+        .ok_or_else(|| "description is required: say what the bot is for".to_string())?;
     let provider = text(args.get("provider")).unwrap_or_else(|| me.provider.clone());
     let models = provider_models(&provider).ok_or_else(|| {
         format!(
@@ -1053,7 +1053,7 @@ fn create_agent(
             default_model(&provider).to_string()
         }
     });
-    // Inherited, never asked for. An agent that has to stop at every command
+    // Inherited, never asked for. A session that has to stop at every command
     // could otherwise build one that does not, and then send it the command.
     let autonomy = me.autonomy.clone();
     // It works on the same checkout as whoever made it, so what the two of
@@ -1061,7 +1061,7 @@ fn create_agent(
     let session = session::create_in_worktree(
         store,
         me.workspace_id.clone(),
-        "agent".into(),
+        "bot".into(),
         name.clone(),
         provider.clone(),
         model.clone(),
@@ -1074,8 +1074,8 @@ fn create_agent(
     // The creator's own chat, so the roster growing is something the user reads
     // where they are, not something they find in the sidebar. A terminal
     // session's chat is its screen, which Crew does not write on.
-    if matches!(caller, Caller::Agent(_)) {
-        transcripts.append_system(&me.id, &format!("Created agent {name} ({})", session.id));
+    if matches!(caller, Caller::Bot(_)) {
+        transcripts.append_system(&me.id, &format!("Created bot {name} ({})", session.id));
     }
     Ok(json!({
         "id": session.id,
@@ -1093,8 +1093,8 @@ fn create_agent(
 /// session that changed worktrees would come back with its conversation lost.
 /// A new session starts where it works and nothing has to follow it.
 ///
-/// A session, not an agent: it is the caller's work carried on, in a CLI the
-/// user can watch and talk to, where an agent is a worker of its own. The
+/// A session, not a bot: it is the caller's work carried on, in a CLI the
+/// user can watch and talk to, where a bot is a worker of its own. The
 /// task waits in its box until its CLI launches, which takes it as its first
 /// prompt (see `terminal::launch`); the window opens its tab for that.
 ///
@@ -1123,14 +1123,14 @@ fn create_worktree(
         me.provider.clone(),
         me.model.clone(),
         String::new(),
-        // Inherited, as create_agent's is.
+        // Inherited, as create_bot's is.
         me.autonomy.clone(),
         Some(tree.path.clone()),
     )
     .map_err(|error| format!("The worktree is at {}, but its session could not be made: {error}", tree.path))?;
     mailbox::enqueue(store, &session.id, &caller.sender(), &task)?;
     (host.on_created)(&session);
-    if matches!(caller, Caller::Agent(_)) {
+    if matches!(caller, Caller::Bot(_)) {
         host.transcripts
             .append_system(&me.id, &format!("Handed {branch} to {name} ({})", session.id));
     }
@@ -1147,7 +1147,7 @@ fn create_worktree(
 }
 
 fn list_routines(store: &Store, caller: &Caller, args: &Value) -> Result<Value, String> {
-    let target = resolve_agent(store, caller, args.get("agent_id"))?;
+    let target = resolve_bot(store, caller, args.get("bot_id"))?;
     let rows = routine::list_for_session(store, target.id.clone())?;
     let listed: Vec<Value> = rows
         .into_iter()
@@ -1172,7 +1172,7 @@ fn upsert_routine(
     caller: &Caller,
     args: &Value,
 ) -> Result<Value, String> {
-    let target = resolve_agent(store, caller, args.get("agent_id"))?;
+    let target = resolve_bot(store, caller, args.get("bot_id"))?;
     let id = text(args.get("routine_id"));
     let existing = if let Some(id) = &id {
         let found = routine::list_for_session(store, target.id.clone())?
@@ -1244,17 +1244,17 @@ fn delete_routine(
     )))
 }
 
-/// The agent a routine tool acts on: the one named, or the caller itself. Only
-/// an agent is a "yourself" here; a routine wakes an agent with a turn, and a
+/// The bot a routine tool acts on: the one named, or the caller itself. Only
+/// a bot is a "yourself" here; a routine wakes a bot with a turn, and a
 /// terminal session or the user has none.
-fn resolve_agent(store: &Store, caller: &Caller, agent_id: Option<&Value>) -> Result<Session, String> {
+fn resolve_bot(store: &Store, caller: &Caller, bot_id: Option<&Value>) -> Result<Session, String> {
     let me = match caller {
-        Caller::Agent(session) => Some(session),
+        Caller::Bot(session) => Some(session),
         _ => None,
     };
-    let Some(id) = text(agent_id) else {
+    let Some(id) = text(bot_id) else {
         return me.cloned().ok_or_else(|| {
-            "agent_id is required: routines belong to an agent. Use list_agents for ids.".to_string()
+            "bot_id is required: routines belong to a bot. Use list_agents for ids.".to_string()
         });
     };
     if let Some(me) = me.filter(|me| me.id == id) {
@@ -1262,16 +1262,16 @@ fn resolve_agent(store: &Store, caller: &Caller, agent_id: Option<&Value>) -> Re
     }
     let workspace_id = caller.workspace_id()?;
     let target = session::get(store, id.clone())?
-        .filter(|session| session.kind == "agent" && session.workspace_id == workspace_id)
-        .ok_or_else(|| format!("No agent {id} in this workspace. Use list_agents for ids."))?;
+        .filter(|session| session.kind == "bot" && session.workspace_id == workspace_id)
+        .ok_or_else(|| format!("No bot {id} in this workspace. Use list_agents for ids."))?;
     Ok(target)
 }
 
 fn find_routine(store: &Store, caller: &Caller, id: &str) -> Result<(Session, Routine), String> {
-    let agents = session::list(store, caller.workspace_id()?.to_string())?
+    let bots = session::list(store, caller.workspace_id()?.to_string())?
         .into_iter()
-        .filter(|session| session.kind == "agent");
-    for owner in agents {
+        .filter(|session| session.kind == "bot");
+    for owner in bots {
         if let Some(routine) = routine::list_for_session(store, owner.id.clone())?
             .into_iter()
             .find(|row| row.id == id)
@@ -1288,8 +1288,8 @@ fn describe_routine(routine: &Routine, owner: &Session) -> Value {
     let schedule = parse_schedule(&routine.schedule);
     json!({
         "id": routine.id,
-        "agent": owner.name,
-        "agent_id": owner.id,
+        "bot": owner.name,
+        "bot_id": owner.id,
         "name": routine.name,
         "enabled": routine.enabled,
         "schedule": schedule.as_ref().map(describe_schedule).unwrap_or_else(|| routine.schedule.clone()),
@@ -1431,18 +1431,18 @@ mod tests {
             .id
     }
 
-    fn agent(store: &Store, workspace_id: &str, name: &str) -> Session {
+    fn bot(store: &Store, workspace_id: &str, name: &str) -> Session {
         session::create(
             store,
             workspace_id.to_string(),
-            "agent".into(),
+            "bot".into(),
             name.into(),
             "claude".into(),
             "claude-opus-5".into(),
             "".into(),
             "ask".into(),
         )
-        .expect("agent")
+        .expect("bot")
     }
 
     /// A caller with no row behind it, for tools that never read the store.
@@ -1463,13 +1463,13 @@ mod tests {
             worktree: None,
             created_at: 0,
             updated_at: 0,
-            agent_id: None,
+            bot_id: None,
             parent_id: None,
             cursor: 0,
         })
     }
 
-    /// Records who was handed what, and can refuse like a busy agent would.
+    /// Records who was handed what, and can refuse like a busy bot would.
     #[derive(Default)]
     struct Postman {
         handed: RefCell<Vec<(String, String)>>,
@@ -1562,7 +1562,7 @@ mod tests {
         let store = store();
         let transcripts = TranscriptHub::new(store.clone());
         let ws = workspace(&store);
-        let coder = agent(&store, &ws, "Coder");
+        let coder = bot(&store, &ws, "Coder");
         let names = listed(&store, &transcripts, &coder);
 
         // An exact set: a tool that quietly becomes core would otherwise slip
@@ -1572,7 +1572,7 @@ mod tests {
 
     #[test]
     fn find_tool_answers_with_something_callable() {
-        let out = find_tool(&Toolbox::default(), &someone("agent"), &json!({ "query": "run something every morning" })).expect("find");
+        let out = find_tool(&Toolbox::default(), &someone("bot"), &json!({ "query": "run something every morning" })).expect("find");
         let names: Vec<&str> = out["matches"]
             .as_array()
             .expect("matches")
@@ -1586,20 +1586,20 @@ mod tests {
 
     #[test]
     fn find_tool_ranks_the_name_over_a_passing_mention() {
-        let out = find_tool(&Toolbox::default(), &someone("agent"), &json!({ "query": "create_agent" })).expect("find");
-        assert_eq!(out["matches"][0]["name"], "create_agent");
+        let out = find_tool(&Toolbox::default(), &someone("bot"), &json!({ "query": "create_bot" })).expect("find");
+        assert_eq!(out["matches"][0]["name"], "create_bot");
     }
 
     #[test]
     fn find_tool_says_so_when_nothing_fits() {
-        let out = find_tool(&Toolbox::default(), &someone("agent"), &json!({ "query": "order a pizza" })).expect("find");
+        let out = find_tool(&Toolbox::default(), &someone("bot"), &json!({ "query": "order a pizza" })).expect("find");
         assert!(out["matches"].as_array().expect("matches").is_empty());
         assert!(out["note"].as_str().unwrap_or_default().contains("list_agents"));
     }
 
     #[test]
     fn find_tool_honours_its_limit() {
-        let out = find_tool(&Toolbox::default(), &someone("agent"), &json!({ "query": "agent routine message", "limit": 2 })).expect("find");
+        let out = find_tool(&Toolbox::default(), &someone("bot"), &json!({ "query": "bot routine message", "limit": 2 })).expect("find");
         assert_eq!(out["matches"].as_array().expect("matches").len(), 2);
     }
 
@@ -1608,8 +1608,8 @@ mod tests {
         let store = store();
         let transcripts = TranscriptHub::new(store.clone());
         let ws = workspace(&store);
-        let coder = agent(&store, &ws, "Coder");
-        let cuddles = agent(&store, &ws, "Cuddles");
+        let coder = bot(&store, &ws, "Coder");
+        let cuddles = bot(&store, &ws, "Cuddles");
         let postman = Postman::default();
         let out = call(
             &store,
@@ -1629,7 +1629,7 @@ mod tests {
         let store = store();
         let transcripts = TranscriptHub::new(store.clone());
         let ws = workspace(&store);
-        let coder = agent(&store, &ws, "Coder");
+        let coder = bot(&store, &ws, "Coder");
         let postman = Postman::default();
         // With arguments, so that a missing guard would recurse rather than
         // fail on a missing field and look like the guard worked.
@@ -1647,11 +1647,11 @@ mod tests {
     }
 
     #[test]
-    fn an_agent_can_search_what_was_said() {
+    fn a_bot_can_search_what_was_said() {
         let store = store();
         let transcripts = TranscriptHub::new(store.clone());
         let ws = workspace(&store);
-        let coder = agent(&store, &ws, "Coder");
+        let coder = bot(&store, &ws, "Coder");
         transcripts.append_user(&coder.id, "the staging password is in 1password", false, None);
         transcripts.flush(&coder.id);
 
@@ -1672,7 +1672,7 @@ mod tests {
         assert!(!text.contains(crate::messages::MARK_OPEN));
     }
 
-    /// The mailbox is the only way into another agent's conversation. A search
+    /// The mailbox is the only way into another bot's conversation. A search
     /// that reached it would be a second channel, read-only and silent, that
     /// shows up in no chat.
     #[test]
@@ -1680,8 +1680,8 @@ mod tests {
         let store = store();
         let transcripts = TranscriptHub::new(store.clone());
         let ws = workspace(&store);
-        let coder = agent(&store, &ws, "Coder");
-        let cuddles = agent(&store, &ws, "Cuddles");
+        let coder = bot(&store, &ws, "Coder");
+        let cuddles = bot(&store, &ws, "Cuddles");
         transcripts.append_user(&cuddles.id, "the client is Acme", false, None);
         transcripts.flush(&cuddles.id);
 
@@ -1700,12 +1700,12 @@ mod tests {
     }
 
     #[test]
-    fn a_message_reaches_an_idle_agent_right_away() {
+    fn a_message_reaches_an_idle_bot_right_away() {
         let store = store();
         let transcripts = TranscriptHub::new(store.clone());
         let ws = workspace(&store);
-        let coder = agent(&store, &ws, "Coder");
-        let cuddles = agent(&store, &ws, "Cuddles");
+        let coder = bot(&store, &ws, "Coder");
+        let cuddles = bot(&store, &ws, "Cuddles");
         let postman = Postman::default();
 
         let out = call(
@@ -1726,12 +1726,12 @@ mod tests {
     }
 
     #[test]
-    fn a_message_to_a_busy_agent_waits_in_its_box() {
+    fn a_message_to_a_busy_bot_waits_in_its_box() {
         let store = store();
         let transcripts = TranscriptHub::new(store.clone());
         let ws = workspace(&store);
-        let coder = agent(&store, &ws, "Coder");
-        let cuddles = agent(&store, &ws, "Cuddles");
+        let coder = bot(&store, &ws, "Coder");
+        let cuddles = bot(&store, &ws, "Cuddles");
         let postman = Postman { busy: true, ..Postman::default() };
 
         let out = call(
@@ -1757,8 +1757,8 @@ mod tests {
         let store = store();
         let transcripts = TranscriptHub::new(store.clone());
         let ws = workspace(&store);
-        let coder = agent(&store, &ws, "Coder");
-        let cuddles = agent(&store, &ws, "Cuddles");
+        let coder = bot(&store, &ws, "Coder");
+        let cuddles = bot(&store, &ws, "Cuddles");
 
         let busy = Postman { busy: true, ..Postman::default() };
         call(&store, &transcripts, &busy, &coder, "message_agent", json!({ "to": cuddles.id, "text": "first" }))
@@ -1772,11 +1772,11 @@ mod tests {
     }
 
     #[test]
-    fn a_note_to_yourself_is_how_an_agent_carries_on() {
+    fn a_note_to_yourself_is_how_a_bot_carries_on() {
         let store = store();
         let transcripts = TranscriptHub::new(store.clone());
         let ws = workspace(&store);
-        let coder = agent(&store, &ws, "Coder");
+        let coder = bot(&store, &ws, "Coder");
         let postman = Postman::default();
         let out = call(
             &store,
@@ -1797,14 +1797,14 @@ mod tests {
         assert_eq!(waiting[0].from.id, coder.id);
     }
 
-    /// The bug this closes: the agent meant the one it had just created, wrote
+    /// The bug this closes: the bot meant the one it had just created, wrote
     /// its own name, and started a turn nobody asked for.
     #[test]
     fn message_agent_sends_you_to_the_other_tool_when_you_address_yourself() {
         let store = store();
         let transcripts = TranscriptHub::new(store.clone());
         let ws = workspace(&store);
-        let coder = agent(&store, &ws, "Coder");
+        let coder = bot(&store, &ws, "Coder");
         let postman = Postman::default();
         for who in [coder.id.as_str(), "Coder", "  coder "] {
             let out = call(
@@ -1822,14 +1822,14 @@ mod tests {
         assert_eq!(mailbox::waiting_count(&store, &coder.id).expect("count"), 0);
     }
 
-    /// A description written by another model is fine; one the agent cannot
+    /// A description written by another model is fine; one the bot cannot
     /// revise is a persona it is stuck with.
     #[test]
-    fn an_agent_can_rewrite_what_it_is() {
+    fn a_bot_can_rewrite_what_it_is() {
         let store = store();
         let transcripts = TranscriptHub::new(store.clone());
         let ws = workspace(&store);
-        let coder = agent(&store, &ws, "Coder");
+        let coder = bot(&store, &ws, "Coder");
         let postman = Postman::default();
         let out = call(
             &store,
@@ -1842,7 +1842,7 @@ mod tests {
         .expect("call");
         assert!(!is_error(&out), "{}", body(&out));
 
-        let after = session::get(&store, coder.id.clone()).expect("get").expect("agent");
+        let after = session::get(&store, coder.id.clone()).expect("get").expect("bot");
         assert_eq!(after.description, "You keep the release notes.");
         // Untouched: they are the user's to change.
         assert_eq!(after.name, "Coder");
@@ -1856,12 +1856,12 @@ mod tests {
     }
 
     #[test]
-    fn an_unknown_name_lists_the_agents_there_are() {
+    fn an_unknown_name_lists_the_bots_there_are() {
         let store = store();
         let transcripts = TranscriptHub::new(store.clone());
         let ws = workspace(&store);
-        let coder = agent(&store, &ws, "Coder");
-        agent(&store, &ws, "Cuddles");
+        let coder = bot(&store, &ws, "Coder");
+        bot(&store, &ws, "Cuddles");
         let postman = Postman::default();
         let out = call(&store, &transcripts, &postman, &coder, "message_agent", json!({ "to": "Nobody", "text": "hi" }))
             .expect("call");
@@ -1869,7 +1869,7 @@ mod tests {
         assert!(body(&out).contains("Cuddles"), "{}", body(&out));
     }
 
-    /// Names are the user's and go stale the moment they rename an agent, so
+    /// Names are the user's and go stale the moment they rename a bot, so
     /// one that arrives is refused — and answered with the id it meant, which
     /// costs a call instead of a round of guessing.
     #[test]
@@ -1877,8 +1877,8 @@ mod tests {
         let store = store();
         let transcripts = TranscriptHub::new(store.clone());
         let ws = workspace(&store);
-        let coder = agent(&store, &ws, "Coder");
-        let cuddles = agent(&store, &ws, "Cuddles");
+        let coder = bot(&store, &ws, "Coder");
+        let cuddles = bot(&store, &ws, "Cuddles");
         let postman = Postman::default();
         let out = call(&store, &transcripts, &postman, &coder, "message_agent", json!({ "to": "  cuddles ", "text": "hi" }))
             .expect("call");
@@ -1888,13 +1888,13 @@ mod tests {
     }
 
     #[test]
-    fn an_agent_in_another_workspace_is_out_of_reach() {
+    fn a_bot_in_another_workspace_is_out_of_reach() {
         let store = store();
         let transcripts = TranscriptHub::new(store.clone());
         let here = workspace(&store);
         let there = workspace(&store);
-        let coder = agent(&store, &here, "Coder");
-        let stranger = agent(&store, &there, "Stranger");
+        let coder = bot(&store, &here, "Coder");
+        let stranger = bot(&store, &there, "Stranger");
         let postman = Postman::default();
         // By id, so the workspace is what refuses it and not the name lookup.
         let out = call(&store, &transcripts, &postman, &coder, "message_agent", json!({ "to": stranger.id, "text": "hi" }))
@@ -1904,12 +1904,12 @@ mod tests {
     }
 
     #[test]
-    fn an_id_is_how_an_agent_is_addressed() {
+    fn an_id_is_how_a_bot_is_addressed() {
         let store = store();
         let transcripts = TranscriptHub::new(store.clone());
         let ws = workspace(&store);
-        let coder = agent(&store, &ws, "Coder");
-        let cuddles = agent(&store, &ws, "Cuddles");
+        let coder = bot(&store, &ws, "Coder");
+        let cuddles = bot(&store, &ws, "Cuddles");
         let postman = Postman::default();
         call(
             &store,
@@ -1928,8 +1928,8 @@ mod tests {
         let store = store();
         let transcripts = TranscriptHub::new(store.clone());
         let ws = workspace(&store);
-        let coder = agent(&store, &ws, "Coder");
-        let cuddles = agent(&store, &ws, "Cuddles");
+        let coder = bot(&store, &ws, "Coder");
+        let cuddles = bot(&store, &ws, "Cuddles");
         let postman = Postman::default();
         let out = call(&store, &transcripts, &postman, &coder, "message_agent", json!({ "to": cuddles.id }))
             .expect("call");
@@ -1941,15 +1941,15 @@ mod tests {
     /// target will take it, and only puts it back afterwards. `drain_mailbox`
     /// runs on the target's own turn thread the moment that turn ends, so it
     /// can land inside that window — and then it drains an empty box and the
-    /// agent goes idle with a letter still queued and nobody left to hand it
+    /// bot goes idle with a letter still queued and nobody left to hand it
     /// over. The callback below stands in for that turn ending.
     #[test]
     fn a_turn_ending_while_a_letter_is_in_flight_still_sees_it() {
         let store = store();
         let transcripts = TranscriptHub::new(store.clone());
         let ws = workspace(&store);
-        let coder = agent(&store, &ws, "Coder");
-        let cuddles = agent(&store, &ws, "Cuddles");
+        let coder = bot(&store, &ws, "Coder");
+        let cuddles = bot(&store, &ws, "Cuddles");
 
         let drained: RefCell<Option<String>> = RefCell::new(None);
         let deliver = |_target: &Session| {
@@ -1984,7 +1984,7 @@ mod tests {
         assert_eq!(
             drained.borrow().as_deref(),
             Some("the branch is green"),
-            "the drain saw an empty box; {left} letter(s) are now queued for an idle agent that will never be woken"
+            "the drain saw an empty box; {left} letter(s) are now queued for an idle bot that will never be woken"
         );
     }
 
@@ -1992,24 +1992,24 @@ mod tests {
     // Adversarial review additions (tool gateway).
     // ---------------------------------------------------------------
 
-    fn agent_with_provider(store: &Store, workspace_id: &str, name: &str, provider: &str) -> Session {
+    fn bot_with_provider(store: &Store, workspace_id: &str, name: &str, provider: &str) -> Session {
         session::create(
             store,
             workspace_id.to_string(),
-            "agent".into(),
+            "bot".into(),
             name.into(),
             provider.into(),
             "".into(),
             "".into(),
             "ask".into(),
         )
-        .expect("agent")
+        .expect("bot")
     }
 
     /// opencode shipped as a provider but never reached `PROVIDERS`, so an
-    /// opencode agent inherits its own provider as the default and is told it
-    /// does not exist. It cannot create any agent at all without naming someone
-    /// else's provider, and nobody can create an opencode agent.
+    /// opencode bot inherits its own provider as the default and is told it
+    /// does not exist. It cannot create any bot at all without naming someone
+    /// else's provider, and nobody can create an opencode bot.
     /// The catalogue lives in one const and is read into the schema, so a model
     /// added to one cannot go missing from the other — which is how an agent
     /// ends up guessing a spelling.
@@ -2017,9 +2017,9 @@ mod tests {
     fn the_create_schema_names_every_model_there_is() {
         let tool = catalog()
             .into_iter()
-            .find(|tool| tool.name == "create_agent")
-            .expect("create_agent");
-        let schema = describe(&tool, CallerKind::Agent).to_string();
+            .find(|tool| tool.name == "create_bot")
+            .expect("create_bot");
+        let schema = describe(&tool, CallerKind::Bot).to_string();
         for (provider, models) in PROVIDERS {
             assert!(schema.contains(provider), "{provider} is not in the schema");
             for model in *models {
@@ -2028,7 +2028,7 @@ mod tests {
         }
     }
 
-    /// Measured, not guessed: a codex agent asked for "grok-4.6", `create_agent`
+    /// Measured, not guessed: a codex agent asked for "grok-4.6", `create_bot`
     /// defaulted the provider to its own, and the refusal listed five codex
     /// models. The agent reported back that Grok was not available here. It is
     /// — under cursor, spelled `cursor-grok-4.6-high`.
@@ -2040,14 +2040,14 @@ mod tests {
         let luna = session::create(
             &store,
             ws.clone(),
-            "agent".into(),
+            "bot".into(),
             "Luna".into(),
             "codex".into(),
             "gpt-5.6-luna".into(),
             "".into(),
             "ask".into(),
         )
-        .expect("agent");
+        .expect("bot");
         let postman = Postman::default();
 
         for asked in ["grok-4.6", "Grok 4.6", "grok_4_6"] {
@@ -2056,7 +2056,7 @@ mod tests {
                 &transcripts,
                 &postman,
                 &luna,
-                "create_agent",
+                "create_bot",
                 json!({ "name": "Grok", "description": "You think.", "model": asked }),
             )
             .expect("call");
@@ -2074,7 +2074,7 @@ mod tests {
         let store = store();
         let transcripts = TranscriptHub::new(store.clone());
         let ws = workspace(&store);
-        let coder = agent(&store, &ws, "Coder");
+        let coder = bot(&store, &ws, "Coder");
         let postman = Postman::default();
 
         let out = call(
@@ -2082,7 +2082,7 @@ mod tests {
             &transcripts,
             &postman,
             &coder,
-            "create_agent",
+            "create_bot",
             json!({ "name": "X", "description": "You do X.", "model": "llama-9" }),
         )
         .expect("call");
@@ -2094,11 +2094,11 @@ mod tests {
     }
 
     #[test]
-    fn an_agent_cannot_create_one_that_is_allowed_more_than_it_is() {
+    fn a_bot_cannot_create_one_that_is_allowed_more_than_it_is() {
         let store = store();
         let transcripts = TranscriptHub::new(store.clone());
         let ws = workspace(&store);
-        let coder = agent(&store, &ws, "Coder");
+        let coder = bot(&store, &ws, "Coder");
         assert_eq!(coder.autonomy, "ask");
         let postman = Postman::default();
 
@@ -2107,7 +2107,7 @@ mod tests {
             &transcripts,
             &postman,
             &coder,
-            "create_agent",
+            "create_bot",
             // The old escape hatch, now not a field the schema has.
             json!({ "name": "Runner", "description": "You run things.", "autonomy": "full" }),
         )
@@ -2118,14 +2118,14 @@ mod tests {
             .expect("list")
             .into_iter()
             .find(|row| row.name == "Runner")
-            .expect("the agent");
+            .expect("the bot");
         assert_eq!(made.autonomy, "ask", "autonomy was granted, not inherited");
 
         // Both chats say it happened: the child's, and the one the user is in.
         let mine = transcripts.window(&coder.id, None, None).blocks;
         assert!(
-            mine.iter().any(|block| block.text.contains(&format!("Created agent Runner ({})", made.id))),
-            "the creator's chat does not say a new agent exists"
+            mine.iter().any(|block| block.text.contains(&format!("Created bot Runner ({})", made.id))),
+            "the creator's chat does not say a new bot exists"
         );
         let theirs = transcripts.window(&made.id, None, None).blocks;
         assert!(theirs.iter().any(|block| block.text.contains("Created by Coder")), "{theirs:?}");
@@ -2134,14 +2134,14 @@ mod tests {
     /// A helper made from inside a worktree works on that checkout, not on the
     /// main one next to it.
     #[test]
-    fn an_agent_is_created_in_its_creators_worktree() {
+    fn a_bot_is_created_in_its_creators_worktree() {
         let store = store();
         let transcripts = TranscriptHub::new(store.clone());
         let ws = workspace(&store);
         let coder = session::create_in_worktree(
             &store,
             ws.clone(),
-            "agent".into(),
+            "bot".into(),
             "Coder".into(),
             "claude".into(),
             "claude-opus-5".into(),
@@ -2156,7 +2156,7 @@ mod tests {
             &transcripts,
             &Postman::default(),
             &coder,
-            "create_agent",
+            "create_bot",
             json!({ "name": "Helper", "description": "You help." }),
         )
         .expect("call");
@@ -2166,7 +2166,7 @@ mod tests {
             .expect("list")
             .into_iter()
             .find(|row| row.name == "Helper")
-            .expect("the agent");
+            .expect("the bot");
         assert_eq!(made.worktree.as_deref(), Some("/wt/feat"));
     }
 
@@ -2195,7 +2195,7 @@ mod tests {
         let ws = crate::workspace::create(&store, "w".into(), repo.to_string_lossy().into())
             .expect("workspace")
             .id;
-        let coder = agent(&store, &ws, "Coder");
+        let coder = bot(&store, &ws, "Coder");
         let postman = Postman::default();
         let deliver = |target: &Session| postman.deliver(&store, target);
         let toolbox = Toolbox::default();
@@ -2237,7 +2237,7 @@ mod tests {
             [("Coder", "Build the login form.")],
             "the task waits for its CLI"
         );
-        assert!(postman.handed.borrow().is_empty(), "no agent turn is started");
+        assert!(postman.handed.borrow().is_empty(), "no bot turn is started");
         let me = session::get(&store, coder.id.clone()).expect("get").expect("coder");
         assert_eq!(me.worktree, None, "the caller stays in its checkout");
 
@@ -2254,18 +2254,18 @@ mod tests {
     }
 
     #[test]
-    fn review_an_opencode_agent_can_create_an_agent() {
+    fn review_an_opencode_bot_can_create_a_bot() {
         let store = store();
         let transcripts = TranscriptHub::new(store.clone());
         let ws = workspace(&store);
-        let coder = agent_with_provider(&store, &ws, "Coder", "opencode");
+        let coder = bot_with_provider(&store, &ws, "Coder", "opencode");
         let postman = Postman::default();
         let out = call(
             &store,
             &transcripts,
             &postman,
             &coder,
-            "create_agent",
+            "create_bot",
             json!({ "name": "Helper", "description": "runs errands" }),
         )
         .expect("call");
@@ -2282,8 +2282,8 @@ mod tests {
         let store = store();
         let transcripts = TranscriptHub::new(store.clone());
         let ws = workspace(&store);
-        let coder = agent(&store, &ws, "Coder");
-        let cuddles = agent(&store, &ws, "Cuddles");
+        let coder = bot(&store, &ws, "Coder");
+        let cuddles = bot(&store, &ws, "Cuddles");
         let postman = Postman::default();
         let out = call(
             &store,
@@ -2314,9 +2314,9 @@ mod tests {
         let store = store();
         let transcripts = TranscriptHub::new(store.clone());
         let ws = workspace(&store);
-        let coder = agent(&store, &ws, "Coder");
-        let cuddles = agent(&store, &ws, "Cuddles");
-        let victim = agent(&store, &ws, "Victim");
+        let coder = bot(&store, &ws, "Coder");
+        let cuddles = bot(&store, &ws, "Cuddles");
+        let victim = bot(&store, &ws, "Victim");
         // Busy, so the letter queues and its sender can be read back.
         let postman = Postman { busy: true, ..Postman::default() };
         // Handed Cuddles as the caller, the letter is from Cuddles.
@@ -2345,7 +2345,7 @@ mod tests {
         let store = store();
         let transcripts = TranscriptHub::new(store.clone());
         let ws = workspace(&store);
-        let coder = agent(&store, &ws, "Coder");
+        let coder = bot(&store, &ws, "Coder");
         let postman = Postman::default();
 
         let answer = call(
@@ -2354,7 +2354,7 @@ mod tests {
             &postman,
             &coder,
             "message_agent",
-            json!({ "agent_id": "x", "message": "hi" }),
+            json!({ "bot_id": "x", "message": "hi" }),
         )
         .expect("handled");
 
@@ -2367,7 +2367,7 @@ mod tests {
         let store = store();
         let transcripts = TranscriptHub::new(store.clone());
         let ws = workspace(&store);
-        let coder = agent(&store, &ws, "Coder");
+        let coder = bot(&store, &ws, "Coder");
         let postman = Postman::default();
 
         let answer = call(&store, &transcripts, &postman, &coder, "no_such_tool", json!({}))
@@ -2452,14 +2452,14 @@ mod tests {
     }
 
     /// The letter says it came from a terminal, and that a reply has nowhere
-    /// to go: an agent that answers with message_agent is told "no agent".
+    /// to go: a bot that answers with message_agent is told "no bot".
     #[test]
     fn a_letter_from_a_terminal_says_it_cannot_be_answered() {
         let store = store();
         let transcripts = TranscriptHub::new(store.clone());
         let ws = workspace(&store);
         let shell = terminal(&store, &ws, "Shell");
-        let coder = agent(&store, &ws, "Coder");
+        let coder = bot(&store, &ws, "Coder");
         let postman = Postman { busy: true, ..Postman::default() };
         let out = call(&store, &transcripts, &postman, &shell, "message_agent", json!({ "to": coder.id, "text": "tests pass" }))
             .expect("call");
@@ -2493,7 +2493,7 @@ mod tests {
         let store = store();
         let transcripts = TranscriptHub::new(store.clone());
         let ws = workspace(&store);
-        let coder = agent(&store, &ws, "Coder");
+        let coder = bot(&store, &ws, "Coder");
         let postman = Postman { busy: true, ..Postman::default() };
         let out = call_as(&store, &transcripts, &postman, &user(Some(&ws)), "message_agent", json!({ "to": coder.id, "text": "ship it" }))
             .expect("call");
@@ -2513,18 +2513,18 @@ mod tests {
         assert!(body(&out).contains("--workspace"), "{}", body(&out));
     }
 
-    /// A routine belongs to an agent; only an agent is a "yourself".
+    /// A routine belongs to a bot; only a bot is a "yourself".
     #[test]
     fn the_user_names_whose_routines() {
         let store = store();
         let transcripts = TranscriptHub::new(store.clone());
         let ws = workspace(&store);
-        let coder = agent(&store, &ws, "Coder");
+        let coder = bot(&store, &ws, "Coder");
         let postman = Postman::default();
         let out = call_as(&store, &transcripts, &postman, &user(Some(&ws)), "list_routines", json!({})).expect("call");
         assert!(is_error(&out));
-        assert!(body(&out).contains("agent_id is required"), "{}", body(&out));
-        let out = call_as(&store, &transcripts, &postman, &user(Some(&ws)), "list_routines", json!({ "agent_id": coder.id }))
+        assert!(body(&out).contains("bot_id is required"), "{}", body(&out));
+        let out = call_as(&store, &transcripts, &postman, &user(Some(&ws)), "list_routines", json!({ "bot_id": coder.id }))
             .expect("call");
         assert!(!is_error(&out), "{}", body(&out));
     }
@@ -2571,13 +2571,13 @@ mod tests {
         let store = store();
         let transcripts = TranscriptHub::new(store.clone());
         let ws = workspace(&store);
-        let coder = agent(&store, &ws, "Coder");
+        let coder = bot(&store, &ws, "Coder");
         let toolbox = Toolbox::default();
         toolbox.register(Arc::new(Kettle));
         let me = Caller::from_session(coder.clone());
 
         assert!(listed_as(&store, &transcripts, &toolbox, &me).contains(&"list_kettles".to_string()));
-        assert!(toolbox.hidden_names(CallerKind::Agent).contains(&"boil_kettle"));
+        assert!(toolbox.hidden_names(CallerKind::Bot).contains(&"boil_kettle"));
         assert!(!toolbox.hidden_names(CallerKind::User).contains(&"boil_kettle"));
         let found = find_tool(&toolbox, &me, &json!({ "query": "make tea" })).expect("find");
         assert_eq!(found["matches"][0]["name"], "boil_kettle");
@@ -2587,7 +2587,7 @@ mod tests {
         let host = Host { store: &store, transcripts: &transcripts, on_created: &|_| {}, on_routines: &|| {}, deliver: &deliver, toolbox: &toolbox };
         let out = handle(&host, &me, "tools/call", json!({ "name": "call_tool", "arguments": { "name": "boil_kettle", "arguments": { "kettle": "blue" } } }))
             .expect("call");
-        assert_eq!(body(&out), format!("blue boiled by Coder (agent {})", coder.id));
+        assert_eq!(body(&out), format!("blue boiled by Coder (bot {})", coder.id));
         // Its refusals carry its arguments, like Crew's own.
         let out = handle(&host, &me, "tools/call", json!({ "name": "boil_kettle", "arguments": {} })).expect("call");
         assert!(body(&out).contains("boil_kettle takes: kettle."), "{}", body(&out));
@@ -2616,7 +2616,7 @@ mod tests {
         assert_eq!(named("list_routines").expect("hidden")["core"], false);
         assert!(named("list_kettles").is_some());
         assert!(named("boil_kettle").is_none(), "not the user's");
-        assert!(named("create_agent").is_none(), "not the user's");
+        assert!(named("create_bot").is_none(), "not the user's");
         assert!(named("find_tool").is_none(), "a person needs no gateway");
     }
 
@@ -2625,13 +2625,13 @@ mod tests {
         let store = store();
         let transcripts = TranscriptHub::new(store.clone());
         let ws = workspace(&store);
-        let coder = agent(&store, &ws, "Coder");
+        let coder = bot(&store, &ws, "Coder");
         let toolbox = Toolbox::default();
         let postman = Postman::default();
         let deliver = |target: &Session| postman.deliver(&store, target);
         let host = Host { store: &store, transcripts: &transcripts, on_created: &|_| {}, on_routines: &|| {}, deliver: &deliver, toolbox: &toolbox };
         let me = handle(&host, &Caller::from_session(coder.clone()), "whoami", json!({})).expect("whoami");
-        assert_eq!(me["kind"], "agent");
+        assert_eq!(me["kind"], "bot");
         assert_eq!(me["sessionId"], coder.id);
         assert_eq!(me["workspace"]["id"], ws);
         let nobody = handle(&host, &user(None), "whoami", json!({})).expect("whoami");
@@ -2642,8 +2642,8 @@ mod tests {
     #[test]
     fn the_instructions_name_what_this_caller_has() {
         let toolbox = Toolbox::default();
-        let agent = instructions(&toolbox, &someone("agent"));
-        assert!(agent.contains("continue_after_turn") && agent.contains("find_tool") && agent.contains("create_agent"), "{agent}");
+        let bot = instructions(&toolbox, &someone("bot"));
+        assert!(bot.contains("continue_after_turn") && bot.contains("find_tool") && bot.contains("create_bot"), "{bot}");
         let shell = instructions(&toolbox, &someone("terminal"));
         assert!(!shell.contains("continue_after_turn"), "{shell}");
         assert!(shell.contains("cannot write back"), "{shell}");

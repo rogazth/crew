@@ -1,18 +1,18 @@
 import type { Style, StyleDefinition } from "@dicebear/core";
 import { BotIcon } from "lucide-react";
 import { useEffect, useState } from "react";
-import { useAgentAvatar } from "../hooks/useAgentAvatar";
-import { useAgentFaces } from "../hooks/useAgentFaces";
-import { avatarUri, loadAvatarStyle, type AgentAvatarId } from "../lib/agentAvatar";
+import { useBotAvatar } from "../hooks/useBotAvatar";
+import { useBotFaces } from "../hooks/useBotFaces";
+import { avatarUri, loadAvatarStyle, type BotAvatarId } from "../lib/botAvatar";
 
 /**
- * An agent's face, drawn from its session id so a rename keeps it. `style`
+ * A bot's face, drawn from its session id so a rename keeps it. `style`
  * overrides the chosen one, for previews. Until the style's chunk lands the
  * robot glyph holds the spot. `bare` drops the disc, so a face whose shape is
  * its identity keeps its outline. `animated` brings the face to life, for an
- * agent at work.
+ * bot at work.
  */
-export function AgentAvatar({
+export function BotAvatar({
   seed,
   style,
   bare = false,
@@ -20,17 +20,17 @@ export function AgentAvatar({
   className = "size-8",
 }: {
   seed: string;
-  style?: AgentAvatarId;
+  style?: BotAvatarId;
   bare?: boolean;
   animated?: boolean;
   className?: string;
 }) {
-  const { avatar } = useAgentAvatar();
-  // A face picked for this agent wins over everyone's style; a preview's own `style` wins over both.
-  const picked = useAgentFaces()[seed];
+  const { avatar } = useBotAvatar();
+  // A face picked for this bot wins over everyone's style; a preview's own `style` wins over both.
+  const picked = useBotFaces()[seed];
   const id = style ?? picked?.style ?? avatar;
   const drawn = picked?.seed ?? seed;
-  const [loaded, setLoaded] = useState<{ id: AgentAvatarId; style: Style<StyleDefinition> } | null>(null);
+  const [loaded, setLoaded] = useState<{ id: BotAvatarId; style: Style<StyleDefinition> } | null>(null);
 
   useEffect(() => {
     let cancelled = false;

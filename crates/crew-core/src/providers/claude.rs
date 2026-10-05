@@ -17,7 +17,7 @@ pub struct ClaudeSpawn {
     /// `--effort`: low, medium, high, xhigh or max; `None` is the CLI's own.
     pub effort: Option<String>,
     pub session_id: Option<String>,
-    /// A conversation to carry on (`--resume`), for a child session; an agent's
+    /// A conversation to carry on (`--resume`), for a child session; a bot's
     /// turns never resume, they start clean with the tail (`session_id`).
     pub resume: Option<String>,
     /// Have Claude echo each user message as it takes it in. A message
@@ -44,7 +44,7 @@ pub fn build_claude_spawn_args(input: &ClaudeSpawn) -> Vec<String> {
         "stream-json".into(),
         "--include-partial-messages".into(),
         // Only the workspace's own settings: the persona and Crew's rules are the
-        // agent's whole configuration, and ~/.claude would inject a competing one.
+        // bot's whole configuration, and ~/.claude would inject a competing one.
         "--setting-sources=project,local".into(),
         "--settings".into(),
         json!({ "autoMemoryEnabled": false }).to_string(),
@@ -586,6 +586,8 @@ pub fn tool_label(name: &str, input: &Map<String, Value>) -> String {
             let subject = string_field(Some(input), "to")
                 .or_else(|| string_field(Some(input), "name"))
                 .or_else(|| string_field(Some(input), "routine_id"))
+                .or_else(|| string_field(Some(input), "bot_id"))
+                // Older transcripts named the owner of a routine this way.
                 .or_else(|| string_field(Some(input), "agent_id"));
             return match subject {
                 Some(subject) => format!("{verb} {}", clip(&subject, 40)),
@@ -1364,7 +1366,7 @@ mod tests {
     }
 
     #[test]
-    fn a_message_to_another_agent_reads_as_the_message() {
+    fn a_message_to_another_bot_reads_as_the_message() {
         let details = tool_details(&[json!({
             "type": "assistant",
             "message": { "content": [{

@@ -1,7 +1,7 @@
 import { ChevronDownIcon, ChevronRightIcon, ChevronUpIcon, CornerDownRightIcon, FolderIcon, GitBranchIcon, PlusIcon, RotateCwIcon, SearchIcon, ServerIcon, XIcon, type LucideIcon as Icon } from "lucide-react";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
 import { ActionMenu } from "./ActionMenu";
-import { AgentAvatar } from "./AgentAvatar";
+import { BotAvatar } from "./BotAvatar";
 import {
   COPY_NAME,
   COPY_PATH,
@@ -60,7 +60,7 @@ export type SessionSidebarProps = {
   activeSessionId: string | null;
   onSelect: (session: Session) => void;
   onSelectWorktree: (path: string) => void;
-  onNewAgent: (worktree?: string) => void;
+  onNewBot: (worktree?: string) => void;
   onNewSession: (worktree?: string) => void;
   onToggleNotifications: (session: Session) => void;
   onMarkRead: (session: Session) => void;
@@ -92,7 +92,7 @@ type Menu =
   | { kind: "worktree"; point: MenuPoint; tree: Worktree };
 
 const SWITCH_HERE: MenuAction = { id: "switch", label: "Switch to Worktree", icon: "open", hotkey: "O" };
-const NEW_AGENT_HERE: MenuAction = { id: "new-agent", label: "New Agent Here", icon: "agent", hotkey: "A" };
+const NEW_BOT_HERE: MenuAction = { id: "new-bot", label: "New Bot Here", icon: "bot", hotkey: "A" };
 const NEW_SESSION_HERE: MenuAction = { id: "new-session", label: "New Session Here", icon: "terminal", hotkey: "S" };
 const COPY_BRANCH: MenuAction = { id: "copy-branch", label: "Copy Branch", icon: "branch", hotkey: "B" };
 const REMOVE_WORKTREE: MenuAction = { ...DELETE, id: "remove-worktree", label: "Remove Worktree…" };
@@ -127,7 +127,7 @@ function sessionActions(session: Session, running: boolean): MenuEntry[] {
 function worktreeActions(tree: Worktree, current: boolean): MenuEntry[] {
   return tidy([
     ...(current ? [] : [SWITCH_HERE, SEPARATOR]),
-    NEW_AGENT_HERE,
+    NEW_BOT_HERE,
     NEW_SESSION_HERE,
     SEPARATOR,
     COPY_PATH,
@@ -149,7 +149,7 @@ function pointOf(element: HTMLElement): MenuPoint {
 
 /**
  * The panel beside the rail: the workspace's name, then its worktrees. The one
- * on screen opens as a card holding its agents as faces and its sessions as
+ * on screen opens as a card holding its bots as faces and its sessions as
  * rows; the others fold to a line with who works there. Search and the view
  * menu sit on the Worktrees line.
  */
@@ -162,7 +162,7 @@ export function SessionSidebar(props: SessionSidebarProps) {
   const [refreshing, setRefreshing] = useState(false);
   // A worktree folded or unfolded by hand; the rest follow the default: open while on screen.
   const [folds, setFolds] = useState<Map<string, boolean>>(() => new Map());
-  // Sections unfolded past the limit, as `agents:<path>` or `terminals:<path>`; for this run only.
+  // Sections unfolded past the limit, as `bots:<path>` or `terminals:<path>`; for this run only.
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const panel = useRef<HTMLDivElement>(null);
   const filtering = query.trim().length > 0;
@@ -170,15 +170,15 @@ export function SessionSidebar(props: SessionSidebarProps) {
   // Each worktree's share of the arranged sessions; a session whose worktree is gone shows under the main checkout.
   const placed = useMemo(() => {
     const out = new Map<string, Arranged>();
-    for (const tree of props.worktrees) out.set(tree.path, { agents: [], terminals: [] });
+    for (const tree of props.worktrees) out.set(tree.path, { bots: [], terminals: [] });
     if (!prefs) return out;
     const main = props.worktrees.find((tree) => tree.main)?.path ?? props.workspace.path;
-    const { agents, terminals } = arrangeSessions(props.sessions, prefs, query);
+    const { bots, terminals } = arrangeSessions(props.sessions, prefs, query);
     const put = (session: Session, key: keyof Arranged) => {
       const path = sessionPath(session, props.workspace, props.worktrees);
       (out.get(path) ?? out.get(main))?.[key].push(session);
     };
-    for (const session of agents) put(session, "agents");
+    for (const session of bots) put(session, "bots");
     for (const session of terminals) put(session, "terminals");
     return out;
   }, [prefs, props.sessions, props.workspace, props.worktrees, query]);
@@ -188,11 +188,11 @@ export function SessionSidebar(props: SessionSidebarProps) {
       props.worktrees.filter((tree) => {
         const current = tree.path === props.activeWorktree;
         const mine = placed.get(tree.path);
-        const count = (mine?.agents.length ?? 0) + (mine?.terminals.length ?? 0);
+        const count = (mine?.bots.length ?? 0) + (mine?.terminals.length ?? 0);
         if (filtering) return current || count > 0;
         if (prefs?.scope === "current") return current;
         if (prefs?.scope === "busy")
-          return current || [...(mine?.agents ?? []), ...(mine?.terminals ?? [])].some((s) => s.status !== "idle");
+          return current || [...(mine?.bots ?? []), ...(mine?.terminals ?? [])].some((s) => s.status !== "idle");
         return true;
       }),
     [filtering, placed, prefs?.scope, props.activeWorktree, props.worktrees],
@@ -219,7 +219,7 @@ export function SessionSidebar(props: SessionSidebarProps) {
         !prefs || filtering || expanded.has(`${key}:${path}`)
           ? { shown: mine[key], hidden: 0 }
           : trimSection(mine[key], prefs, props.activeSessionId, now);
-      out.set(path, { agents: trim("agents"), terminals: trim("terminals") });
+      out.set(path, { bots: trim("bots"), terminals: trim("terminals") });
     }
     return out;
   }, [expanded, filtering, now, placed, prefs, props.activeSessionId]);
@@ -227,7 +227,7 @@ export function SessionSidebar(props: SessionSidebarProps) {
   const visible = useCallback(
     (path: string) => {
       const mine = listed.get(path);
-      return withChildren([...(mine?.agents.shown ?? []), ...(mine?.terminals.shown ?? [])]);
+      return withChildren([...(mine?.bots.shown ?? []), ...(mine?.terminals.shown ?? [])]);
     },
     [listed, withChildren],
   );
@@ -404,8 +404,8 @@ export function SessionSidebar(props: SessionSidebarProps) {
             const isCurrent = tree.path === props.activeWorktree;
             // Home has the one folder and no git: its sessions are the whole list, never folded.
             const open = Boolean(props.home) || filtering || (folds.get(tree.path) ?? isCurrent);
-            const mine = listed.get(tree.path) ?? { agents: { shown: [], hidden: 0 }, terminals: { shown: [], hidden: 0 } };
-            const agents = mine.agents.shown;
+            const mine = listed.get(tree.path) ?? { bots: { shown: [], hidden: 0 }, terminals: { shown: [], hidden: 0 } };
+            const bots = mine.bots.shown;
             const terminals = mine.terminals.shown;
             const more = (key: keyof Arranged) => (
               <MoreRow
@@ -428,37 +428,37 @@ export function SessionSidebar(props: SessionSidebarProps) {
                   showDiff={shows(prefs, "diff")}
                   keys={index < 9 ? commandKeys(`worktree-${index + 1}` as CommandId) : ""}
                   onFold={(next) => fold(tree.path, next)}
-                  onAdd={() => props.onNewAgent(tree.path)}
+                  onAdd={() => props.onNewBot(tree.path)}
                   onMenu={(point) => setMenu({ kind: "worktree", point, tree })}
                   onRemove={() => !tree.main && props.onRemoveWorktree(tree)}
                 />}
                 {open && (
                   <div className={props.home ? "pb-2" : "pb-2 pl-2"}>
-                    {agents.length > 0 && (
+                    {bots.length > 0 && (
                       <div className="grid grid-cols-3 gap-0.5">
-                        <SortableList ids={agents.map((s) => s.id)} disabled={!draggable || mine.agents.hidden > 0} onReorder={props.onReorder}>
-                          {agents.map((session, at) => (
-                            <SortableItem key={session.id} id={session.id} index={at} group={`agents:${tree.path}`} disabled={!draggable || mine.agents.hidden > 0}>
+                        <SortableList ids={bots.map((s) => s.id)} disabled={!draggable || mine.bots.hidden > 0} onReorder={props.onReorder}>
+                          {bots.map((session, at) => (
+                            <SortableItem key={session.id} id={session.id} index={at} group={`bots:${tree.path}`} disabled={!draggable || mine.bots.hidden > 0}>
                               <Tile {...card(session)} onEdit={() => props.onEdit(session)} />
                             </SortableItem>
                           ))}
                         </SortableList>
                       </div>
                     )}
-                    {agents.flatMap((agent) => {
-                      const started = nested.get(agent.id);
+                    {bots.flatMap((bot) => {
+                      const started = nested.get(bot.id);
                       if (!started) return [];
                       return [
-                        <div key={agent.id} className="flex flex-col gap-0.5 pt-0.5" aria-label={`Sessions ${agent.name} started`}>
+                        <div key={bot.id} className="flex flex-col gap-0.5 pt-0.5" aria-label={`Sessions ${bot.name} started`}>
                           <div className="flex h-6 items-center gap-1.5 px-2 text-[11px] text-text-muted">
-                            <AgentAvatar seed={agent.id} bare className="size-4" />
-                            <span className="truncate">{agent.name}</span>
+                            <BotAvatar seed={bot.id} bare className="size-4" />
+                            <span className="truncate">{bot.name}</span>
                           </div>
                           {started.map((child) => sessionRow(child, true))}
                         </div>,
                       ];
                     })}
-                    {more("agents")}
+                    {more("bots")}
                     {terminals.length > 0 && (
                       <div className="flex flex-col gap-0.5 pt-0.5">
                         <SortableList ids={terminals.map((s) => s.id)} disabled={!draggable || mine.terminals.hidden > 0} onReorder={props.onReorder}>
@@ -475,7 +475,7 @@ export function SessionSidebar(props: SessionSidebarProps) {
                       </div>
                     )}
                     {more("terminals")}
-                    {agents.length + terminals.length + mine.agents.hidden + mine.terminals.hidden === 0 && (
+                    {bots.length + terminals.length + mine.bots.hidden + mine.terminals.hidden === 0 && (
                       <p className="px-2 py-1.5 text-[12px] text-placeholder">
                         {filtering
                           ? "No matches"
@@ -529,7 +529,7 @@ export function SessionSidebar(props: SessionSidebarProps) {
             const tree = menu.tree;
             setMenu(null);
             if (id === "switch") props.onSelectWorktree(tree.path);
-            if (id === "new-agent") props.onNewAgent(tree.path);
+            if (id === "new-bot") props.onNewBot(tree.path);
             if (id === "new-session") props.onNewSession(tree.path);
             if (id === "copy-path") void navigator.clipboard.writeText(tree.path);
             if (id === "copy-branch" && tree.branch) void navigator.clipboard.writeText(tree.branch);
@@ -568,7 +568,7 @@ function HeaderButton({
 }
 
 /**
- * A worktree's line. A click or ←/→ folds it; its plus starts an agent there;
+ * A worktree's line. A click or ←/→ folds it; its plus starts a bot there;
  * opening one of its sessions, its menu or ⌥⌘1‥9 makes it the one on screen.
  * Folded, it shows who works there and how loud.
  */
@@ -598,7 +598,7 @@ function WorktreeHeader({
   onMenu: (point: MenuPoint) => void;
   onRemove: () => void;
 }) {
-  const faces = sessions.filter((session) => session.kind === "agent").slice(0, 3);
+  const faces = sessions.filter((session) => session.kind === "bot").slice(0, 3);
   function onKeyDown(event: KeyboardEvent<HTMLButtonElement>) {
     if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
       if ((event.key === "ArrowRight") === open) return;
@@ -644,7 +644,7 @@ function WorktreeHeader({
         {!open && faces.length > 0 && (
           <span className="flex -space-x-1.5 transition-opacity group-hover/tree:opacity-0">
             {faces.map((session) => (
-              <AgentAvatar key={session.id} seed={session.id} bare className="size-5" />
+              <BotAvatar key={session.id} seed={session.id} bare className="size-5" />
             ))}
           </span>
         )}
@@ -669,8 +669,8 @@ function WorktreeHeader({
       <button
         type="button"
         tabIndex={-1}
-        aria-label={`New agent in ${worktreeLabel(tree)}`}
-        title={`New agent in ${worktreeLabel(tree)}`}
+        aria-label={`New bot in ${worktreeLabel(tree)}`}
+        title={`New bot in ${worktreeLabel(tree)}`}
         onClick={onAdd}
         className="absolute top-1 right-1 grid size-6 place-items-center rounded-md text-icon opacity-0 transition-opacity group-hover/tree:opacity-100 hover:bg-hover hover:text-text"
       >
@@ -726,8 +726,8 @@ function SearchField({
       <input
         ref={input}
         value={query}
-        placeholder="Find agents and sessions"
-        aria-label="Find agents and sessions"
+        placeholder="Find bots and sessions"
+        aria-label="Find bots and sessions"
         spellCheck={false}
         onChange={(event) => onChange(event.target.value)}
         // Emptied and left, it has nothing to hold on to.
@@ -793,7 +793,7 @@ function cardKeys(on: { rename?: (() => void) | undefined; menu: (point: MenuPoi
   };
 }
 
-/** An agent is its face and its name; what runs it is the tab's business, not the list's. */
+/** A bot is its face and its name; what runs it is the tab's business, not the list's. */
 function Tile({ session, prefs, active, selected, onSelect, onMenu, onClearSelection, onRemove, onEdit }: CardProps & { onEdit: () => void }) {
   return (
     <button
@@ -811,7 +811,7 @@ function Tile({ session, prefs, active, selected, onSelect, onMenu, onClearSelec
       className={`flex w-full min-w-0 flex-col items-center gap-1 rounded-xl px-1 pt-2 pb-1.5 transition-colors duration-150 ease-out ${SURFACE(active, selected)} ${FOCUS}`}
     >
       <span className="relative">
-        <AgentAvatar seed={session.id} bare animated={session.status === "working"} className="size-10" />
+        <BotAvatar seed={session.id} bare animated={session.status === "working"} className="size-10" />
         {shows(prefs, "status") && <Badge status={session.status} />}
       </span>
       {shows(prefs, "names") && (
@@ -829,7 +829,7 @@ const BADGE: Partial<Record<SessionStatus, string>> = {
 
 /**
  * Status rides the face's corner, like the unread dot on an app icon. A working
- * agent's face moves, which says it already: its spinner only shows where
+ * bot's face moves, which says it already: its spinner only shows where
  * motion is reduced and the face holds still.
  */
 function Badge({ status }: { status: SessionStatus }) {

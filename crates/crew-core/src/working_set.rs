@@ -1,6 +1,6 @@
 //! The conversation the model is shown at the top of every turn.
 //!
-//! A turn starts a clean provider session, so this is the only memory an agent
+//! A turn starts a clean provider session, so this is the only memory a bot
 //! has of what it already did. It renders the tail of the transcript the way
 //! the chat renders it folded — text as text, a tool as the one line it did,
 //! never its output — and stops at a whole block when the budget runs out.
@@ -83,8 +83,8 @@ fn parts(block: &Block) -> Option<(String, String)> {
             let text = clip(&block.text, MESSAGE_LIMIT);
             let text = with_files(block, text);
             // The id, so the line is an address and not only a label: names go
-            // stale the moment the user renames an agent.
-            Some(match &block.from_agent {
+            // stale the moment the user renames a bot.
+            Some(match &block.from_bot {
                 Some(from) if from.id.is_empty() => (from.name.clone(), text),
                 Some(from) => (format!("{} {}", from.name, from.id), text),
                 None => ("user".to_string(), text),
@@ -207,7 +207,7 @@ fn clip(text: &str, limit: usize) -> String {
 mod tests {
     use super::*;
     use crate::blocks::new_block;
-    use crew_protocol::{AgentRef, BlockTool};
+    use crew_protocol::{BotRef, BlockTool};
 
     /// The rendered body with the stamps taken off, so an assertion can be
     /// about who said what. The stamps have their own test.
@@ -294,11 +294,11 @@ mod tests {
     }
 
     #[test]
-    fn a_letter_from_another_agent_keeps_the_name_on_it() {
+    fn a_letter_from_another_bot_keeps_the_name_on_it() {
         let mut block = new_block(BlockRole::User, "revisa el PR");
-        block.from_agent = Some(AgentRef::agent("a1", "Cuddles"));
+        block.from_bot = Some(BotRef::bot("a1", "Cuddles"));
         let out = render(&[block], TAIL_BUDGET).expect("history");
-        // The id as well as the name: a line an agent may answer to is an
+        // The id as well as the name: a line a bot may answer to is an
         // address, and a name stops being one the moment it is changed.
         assert!(unstamped(&out).contains("[Cuddles a1] revisa el PR"), "{out}");
     }

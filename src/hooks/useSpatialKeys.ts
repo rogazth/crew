@@ -3,7 +3,7 @@ import { ARROWS, nearest } from "../lib/spatial";
 
 /**
  * Arrow keys move focus between the `[data-nav]` items under `root` by where
- * they sit on screen, so the rail, the agent grid and the session rows share
+ * they sit on screen, so the rail, the bot grid and the session rows share
  * one set of keys. A field keeps its arrows.
  */
 export function useSpatialKeys(root: RefObject<HTMLElement | null>) {

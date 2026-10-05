@@ -371,10 +371,10 @@ function isTab(value: unknown): value is Tab {
   return false;
 }
 
-export function isAgentTab(tab: Tab | null, sessions: Session[]): boolean {
+export function isTurnTab(tab: Tab | null, sessions: Session[]): boolean {
   if (!tab || tab.kind !== "session") return false;
   const kind = sessions.find((session) => session.id === tab.sessionId)?.kind;
-  return kind === "agent" || kind === "child";
+  return kind === "bot" || kind === "child";
 }
 
 /**

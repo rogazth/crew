@@ -322,7 +322,7 @@ pub fn opencode_db() -> Option<PathBuf> {
 }
 
 /// Rollouts live at `sessions/YYYY/MM/DD/rollout-*.jsonl`, and the first line
-/// is the session's meta. Only interactive ones count: Crew's own agent turns
+/// is the session's meta. Only interactive ones count: Crew's own bot turns
 /// run `codex exec` in the same folders.
 fn codex_sessions(codex_home: &Path, since_ms: i64) -> Vec<Found> {
     let mut found = Vec::new();

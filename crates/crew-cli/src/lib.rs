@@ -8,7 +8,7 @@ use clap::FromArgMatches;
 use serde_json::Value;
 
 pub mod args;
-mod agents;
+mod bots;
 mod app;
 mod client;
 mod commands;
@@ -181,7 +181,7 @@ mod tests {
         let mut script = Vec::new();
         clap_complete::generate(clap_complete::Shell::Zsh, &mut args::command(), "crew", &mut script);
         let script = String::from_utf8(script).expect("utf8");
-        for command in ["logs", "agents", "processes", "tabs", "snapshot", "daemon"] {
+        for command in ["logs", "bots", "processes", "tabs", "snapshot", "daemon"] {
             assert!(script.contains(command), "{command} missing");
         }
     }

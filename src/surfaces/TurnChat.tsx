@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useThread } from "../hooks/useThread";
-import { answer, respond, send, stop } from "../lib/agentRuntime";
+import { answer, respond, send, stop } from "../lib/turnRuntime";
 import { pickFiles, setSessionOptions, writeTempFile } from "../lib/api";
 import { attachedFrom } from "../lib/attachments";
 import { mentionedFiles } from "../lib/mentions";
@@ -16,7 +16,7 @@ type Props = {
   active: boolean;
 };
 
-export function AgentChat({ session, cwd, active }: Props) {
+export function TurnChat({ session, cwd, active }: Props) {
   const { blocks, ready, working, more, loadingEarlier, loadEarlier, focusId } = useThread(session.id);
   const [draft, setDraft] = useState("");
   const [files, setFiles] = useState<AttachedFile[]>([]);
@@ -24,7 +24,7 @@ export function AgentChat({ session, cwd, active }: Props) {
   const pane = useRef<HTMLDivElement>(null);
   const { files: projectFiles } = useChatActions();
 
-  // Opening the tab means "talk to this agent"; the caret should already be there.
+  // Opening the tab means "talk to this session"; the caret should already be there.
   useEffect(() => {
     if (active) field.current?.focus();
   }, [active]);

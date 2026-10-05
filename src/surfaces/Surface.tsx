@@ -31,7 +31,7 @@ type Props = {
   renderCommands: () => ReactNode;
 };
 
-/** Routes the active tab to whatever fills the pane. Agents and terminals stay mounted in their overlays. */
+/** Routes the active tab to whatever fills the pane. Turn chats and terminals stay mounted in their overlays. */
 export function Surface({
   tab,
   empty,
@@ -57,7 +57,7 @@ export function Surface({
   if (!tab) {
     if (empty) return empty;
     return (
-      <EmptyState title={`Open an agent, a session, or ${commandKeys("go-to-file")} for a file.`} />
+      <EmptyState title={`Open a bot, a session, or ${commandKeys("go-to-file")} for a file.`} />
     );
   }
   if (tab.kind === "stub") {

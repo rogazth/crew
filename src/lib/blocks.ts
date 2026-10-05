@@ -1,5 +1,5 @@
 import type {
-  AgentRef,
+  BotRef,
   ApprovalDecision,
   AttachedFile,
   Block,
@@ -11,7 +11,7 @@ import type {
 } from "./protocol";
 
 export type {
-  AgentRef,
+  BotRef,
   ApprovalDecision,
   AttachedFile,
   Block,
@@ -221,7 +221,7 @@ export function applyEvent(blocks: Block[], event: HarnessEvent): Block[] {
         ...newBlock("user", event.text),
         ...(event.hidden ? { hidden: true } : {}),
         ...(event.files && event.files.length > 0 ? { files: event.files } : {}),
-        ...(event.fromAgent ? { fromAgent: event.fromAgent } : {}),
+        ...(event.fromBot ? { fromBot: event.fromBot } : {}),
       };
       return [...blocks, block];
     }

@@ -13,8 +13,8 @@ describe("tourSteps", () => {
   });
 
   it("reads each step off what is there", () => {
-    const sessions = [session("h", "terminal"), session("p", "agent")];
-    expect(done(tourSteps(home, [project], sessions, { browser: true, dismissed: false }))).toEqual(["ask", "folder", "agent", "browser"]);
+    const sessions = [session("h", "terminal"), session("p", "bot")];
+    expect(done(tourSteps(home, [project], sessions, { browser: true, dismissed: false }))).toEqual(["ask", "folder", "bot", "browser"]);
   });
 
   it("counts only a session in home as asking", () => {

@@ -1,5 +1,5 @@
-// W6, an agent on a new branch: the agent sheet's "Works in" makes the
-// worktree and puts the agent in it. A branch that cannot be made says so in
+// W6, a bot on a new branch: the bot sheet's "Works in" makes the
+// worktree and puts the bot in it. A branch that cannot be made says so in
 // the sheet and leaves git, the disk and crewd as they were.
 import assert from "node:assert/strict";
 import { existsSync, readdirSync } from "node:fs";
@@ -45,10 +45,10 @@ async function snapshot() {
 }
 
 /** ⇧⌘A, a name, and a new branch in "Works in"; the sheet is returned still open. */
-async function agentOnBranch(name: string, branch: string): Promise<Locator> {
+async function botOnBranch(name: string, branch: string): Promise<Locator> {
   const page = crew.window;
   await pressChord(crew, `${MOD}+Shift+a`);
-  const sheet = page.getByRole("dialog", { name: "New agent" });
+  const sheet = page.getByRole("dialog", { name: "New bot" });
   await sheet.waitFor();
   await sheet.getByPlaceholder("e.g. Research").fill(name);
   await sheet.getByRole("radiogroup", { name: "Works in" }).getByRole("radio", { name: "New branch" }).fill(branch);
@@ -57,7 +57,7 @@ async function agentOnBranch(name: string, branch: string): Promise<Locator> {
 
 /** Create, and wait for the attempt to settle: the button spins while it saves. */
 async function create(sheet: Locator): Promise<void> {
-  const button = sheet.getByRole("button", { name: "Create agent" });
+  const button = sheet.getByRole("button", { name: "Create bot" });
   await button.click();
   await waitFor(async () => (await sheet.count()) === 0 || (await button.isEnabled({ timeout: 100 }).catch(() => false)), {
     message: "the sheet settles after Create",
@@ -67,7 +67,7 @@ async function create(sheet: Locator): Promise<void> {
 /** A branch the sheet cannot use: an error in the sheet, and nothing new anywhere. */
 async function refused(branch: string, name: string): Promise<void> {
   const before = await snapshot();
-  const sheet = await agentOnBranch(name, branch);
+  const sheet = await botOnBranch(name, branch);
   try {
     await create(sheet);
     assert.ok(await sheet.isVisible(), `the sheet stays open on "${branch}"`);
@@ -80,26 +80,26 @@ async function refused(branch: string, name: string): Promise<void> {
   }
 }
 
-test("W6: an agent made on a new branch gets its own worktree and works in it", async () => {
+test("W6: a bot made on a new branch gets its own worktree and works in it", async () => {
   const [workspace] = crew.workspaces;
   assert.ok(workspace);
-  const tree = path.join(crew.home, ".crew/worktrees/app/feat-agent-work");
+  const tree = path.join(crew.home, ".crew/worktrees/app/feat-bot-work");
 
-  const sheet = await agentOnBranch("Builder", "feat/agent-work");
+  const sheet = await botOnBranch("Builder", "feat/bot-work");
   await create(sheet);
   await sheet.waitFor({ state: "detached" });
 
   const made = await waitFor(async () => (await gitWorktrees(crew, workspace.path)).find((entry) => entry.path === tree), {
-    message: "git lists the agent's worktree",
+    message: "git lists the bot's worktree",
   });
-  assert.equal(made.branch, "refs/heads/feat/agent-work");
-  const agent = await waitFor(
-    async () => (await sessions(crew, workspace.id)).find((row) => row.kind === "agent" && row.name === "Builder"),
-    { message: "crewd has the agent" },
+  assert.equal(made.branch, "refs/heads/feat/bot-work");
+  const bot = await waitFor(
+    async () => (await sessions(crew, workspace.id)).find((row) => row.kind === "bot" && row.name === "Builder"),
+    { message: "crewd has the bot" },
   );
-  assert.equal(agent.worktree, tree);
-  // The window follows the agent into its worktree.
-  await worktreeHeader(crew, "feat/agent-work").and(currentWorktree(crew)).waitFor();
+  assert.equal(bot.worktree, tree);
+  // The window follows the bot into its worktree.
+  await worktreeHeader(crew, "feat/bot-work").and(currentWorktree(crew)).waitFor();
 });
 
 test("W6b: a branch name the sheet knows is invalid is refused in the sheet", async () => {

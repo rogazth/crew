@@ -34,10 +34,10 @@ pub struct Session {
     pub worktree: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
-    /// The agent whose turns this session runs; `None` for a terminal and for
-    /// a child. An agent's session shares the agent's id.
+    /// The bot whose turns this session runs; `None` for a terminal and for
+    /// a child. A bot's session shares the bot's id.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub agent_id: Option<String>,
+    pub bot_id: Option<String>,
     /// Who started it: the session that called `start_session`. `None` is the
     /// user, or nobody.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -48,20 +48,20 @@ pub struct Session {
     pub cursor: i64,
 }
 
-/// Aliased on `s`, with the agent it runs for on `a` (see [`SESSIONS`]), so a
+/// Aliased on `s`, with the bot it runs for on `b` (see [`SESSIONS`]), so a
 /// join can read a session at an offset and whatever it joined at
-/// `SESSION_COLUMN_COUNT`. An agent's identity is the agent's: its name,
-/// description, notifications and autonomy come from `agents`, and the
-/// session's own columns hold them only for a session with no agent.
-pub const SESSION_COLUMNS: &str = "s.id, s.workspace_id, s.kind, COALESCE(a.name, s.name), s.provider, s.model,
-                                   s.provider_session_id, COALESCE(a.description, s.description),
-                                   COALESCE(a.notifications, s.notifications),
-                                   s.status, s.created_at, s.updated_at, COALESCE(a.autonomy, s.autonomy), s.worktree,
-                                   s.agent_id, s.parent_id, s.cursor, s.effort";
+/// `SESSION_COLUMN_COUNT`. A bot's identity is the bot's: its name,
+/// description, notifications and autonomy come from `bots`, and the
+/// session's own columns hold them only for a session with no bot.
+pub const SESSION_COLUMNS: &str = "s.id, s.workspace_id, s.kind, COALESCE(b.name, s.name), s.provider, s.model,
+                                   s.provider_session_id, COALESCE(b.description, s.description),
+                                   COALESCE(b.notifications, s.notifications),
+                                   s.status, s.created_at, s.updated_at, COALESCE(b.autonomy, s.autonomy), s.worktree,
+                                   s.bot_id, s.parent_id, s.cursor, s.effort";
 pub const SESSION_COLUMN_COUNT: usize = 18;
 
 /// What [`SESSION_COLUMNS`] reads from.
-pub const SESSIONS: &str = "sessions s LEFT JOIN agents a ON a.id = s.agent_id";
+pub const SESSIONS: &str = "sessions s LEFT JOIN bots b ON b.id = s.bot_id";
 
 pub fn row_to_session(row: &rusqlite::Row, at: usize) -> rusqlite::Result<Session> {
     let provider: String = row.get(at + 4)?;
@@ -82,7 +82,7 @@ pub fn row_to_session(row: &rusqlite::Row, at: usize) -> rusqlite::Result<Sessio
         created_at: row.get(at + 10)?,
         updated_at: row.get(at + 11)?,
         worktree: row.get(at + 13)?,
-        agent_id: row.get(at + 14)?,
+        bot_id: row.get(at + 14)?,
         parent_id: row.get(at + 15)?,
         cursor: row.get(at + 16)?,
         effort,
@@ -196,14 +196,14 @@ pub fn create_in_worktree(
     autonomy: String,
     worktree: Option<String>,
 ) -> Result<Session, String> {
-    if kind != "agent" && kind != "terminal" {
+    if kind != "bot" && kind != "terminal" {
         return Err(format!("Unknown session kind: {kind}"));
     }
     insert(store, workspace_id, kind, name, provider, model, description, autonomy, worktree, None)
 }
 
 /// A session started for `parent` (a session id; `None` is the user): a
-/// provider CLI Crew drives turn by turn, with no agent behind it. It starts
+/// provider CLI Crew drives turn by turn, with no bot behind it. It starts
 /// as `starting`, until its first turn does.
 #[allow(clippy::too_many_arguments)]
 pub fn create_child(
@@ -219,8 +219,8 @@ pub fn create_child(
     insert(store, workspace_id, "child".into(), name, provider, model, String::new(), autonomy, worktree, parent)
 }
 
-/// The row, and for an agent the agent it runs for, under the same id: the
-/// identity goes to `agents`, the CLI to `sessions`.
+/// The row, and for a bot the bot it runs for, under the same id: the
+/// identity goes to `bots`, the CLI to `sessions`.
 #[allow(clippy::too_many_arguments)]
 fn insert(
     store: &Store,
@@ -241,7 +241,7 @@ fn insert(
     let now = now_millis();
     let id = uuid::Uuid::new_v4().to_string();
     let session = Session {
-        agent_id: (kind == "agent").then(|| id.clone()),
+        bot_id: (kind == "bot").then(|| id.clone()),
         id,
         workspace_id,
         status: if kind == "child" { "starting".into() } else { "idle".into() },
@@ -263,9 +263,9 @@ fn insert(
 
     store.with(|conn| {
         let tx = conn.unchecked_transaction()?;
-        if session.agent_id.is_some() {
+        if session.bot_id.is_some() {
             tx.execute(
-                "INSERT INTO agents
+                "INSERT INTO bots
                    (id, workspace_id, name, description, notifications, autonomy, created_at, updated_at)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
                 params![
@@ -284,7 +284,7 @@ fn insert(
             "INSERT INTO sessions
                (id, workspace_id, kind, name, provider, model, description,
                 notifications, created_at, updated_at, sort_order, autonomy, worktree,
-                status, agent_id, parent_id)
+                status, bot_id, parent_id)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
             params![
                 session.id,
@@ -301,7 +301,7 @@ fn insert(
                 session.autonomy,
                 session.worktree,
                 session.status,
-                session.agent_id,
+                session.bot_id,
                 session.parent_id
             ],
         )?;
@@ -330,14 +330,14 @@ pub fn update(
     store.with(|conn| {
         let tx = conn.unchecked_transaction()?;
         let now = now_millis();
-        // The identity is the agent's when there is one; the session keeps its
+        // The identity is the bot's when there is one; the session keeps its
         // CLI, and its name as the label it is listed under.
-        let agent = tx.execute(
-            "UPDATE agents SET name = ?2, description = ?3, notifications = ?4, autonomy = ?5, updated_at = ?6
+        let bot = tx.execute(
+            "UPDATE bots SET name = ?2, description = ?3, notifications = ?4, autonomy = ?5, updated_at = ?6
              WHERE id = ?1",
             params![id, name, description, notifications, autonomy, now],
         )?;
-        if agent > 0 {
+        if bot > 0 {
             tx.execute(
                 "UPDATE sessions
                  SET name = ?2, provider = ?3, model = ?4, updated_at = ?5,
@@ -374,14 +374,14 @@ fn autonomy_or_default(value: String) -> String {
 }
 
 /// What the composer's chips change: the model, its effort and what it may do
-/// alone. The provider stays; the autonomy is the agent's when there is one.
+/// alone. The provider stays; the autonomy is the bot's when there is one.
 pub fn set_options(store: &Store, id: String, model: String, effort: String, autonomy: String) -> Result<(), String> {
     let autonomy = autonomy_or_default(autonomy);
     store.with(|conn| {
         let tx = conn.unchecked_transaction()?;
         let now = now_millis();
         tx.execute(
-            "UPDATE agents SET autonomy = ?2, updated_at = ?3 WHERE id = (SELECT agent_id FROM sessions WHERE id = ?1)",
+            "UPDATE bots SET autonomy = ?2, updated_at = ?3 WHERE id = (SELECT bot_id FROM sessions WHERE id = ?1)",
             params![id, autonomy, now],
         )?;
         tx.execute(
@@ -400,7 +400,7 @@ pub fn rename(store: &Store, id: String, name: String) -> Result<(), String> {
     }
     store.with(|conn| {
         let now = now_millis();
-        conn.execute("UPDATE agents SET name = ?2, updated_at = ?3 WHERE id = ?1", params![id, name, now])?;
+        conn.execute("UPDATE bots SET name = ?2, updated_at = ?3 WHERE id = ?1", params![id, name, now])?;
         conn.execute(
             "UPDATE sessions SET name = ?2, updated_at = ?3 WHERE id = ?1",
             params![id, name, now],
@@ -466,12 +466,12 @@ fn is_placeholder_name(name: &str, provider: &str) -> bool {
     }
 }
 
-/// An agent goes with its session, and its session with it: deleting either
+/// A bot goes with its session, and its session with it: deleting either
 /// id deletes both, with the transcript, the mailbox and the routines.
 pub fn delete(store: &Store, id: String) -> Result<(), String> {
     store.with(|conn| {
         let tx = conn.unchecked_transaction()?;
-        tx.execute("DELETE FROM agents WHERE id = ?1", params![id])?;
+        tx.execute("DELETE FROM bots WHERE id = ?1", params![id])?;
         tx.execute("DELETE FROM sessions WHERE id = ?1", params![id])?;
         tx.commit()
     })?;
@@ -818,8 +818,8 @@ fn follow_claude_in(store: &Store, id: String, dirs: &ClaudeDirs) -> Result<Opti
     }))
 }
 
-/// Faces agents were given, by session id: `{ "<id>": { "style"?, "seed"? } }`.
-const FACES: &str = "agent:faces";
+/// Faces bots were given, by session id: `{ "<id>": { "style"?, "seed"? } }`.
+const FACES: &str = "bot:faces";
 
 /// The face each split-off session keeps: the one its terminal showed. With no
 /// face of its own, a terminal draws from its id, so the seed is written down.
@@ -902,11 +902,11 @@ mod tests {
         (store, workspace.id)
     }
 
-    fn agent(store: &Store, workspace: &str, name: &str, autonomy: &str) -> Result<Session, String> {
+    fn bot(store: &Store, workspace: &str, name: &str, autonomy: &str) -> Result<Session, String> {
         create(
             store,
             workspace.to_string(),
-            "agent".into(),
+            "bot".into(),
             name.into(),
             "claude".into(),
             "m".into(),
@@ -972,8 +972,8 @@ mod tests {
     #[test]
     fn switching_provider_drops_the_old_providers_session() {
         let (store, workspace) = world();
-        let a = agent(&store, &workspace, "a", "ask").expect("a");
-        let b = agent(&store, &workspace, "b", "ask").expect("b");
+        let a = bot(&store, &workspace, "a", "ask").expect("a");
+        let b = bot(&store, &workspace, "b", "ask").expect("b");
         set_provider_session(&store, a.id.clone(), "claude-1".into()).expect("bind");
         set_provider_session(&store, b.id.clone(), "claude-2".into()).expect("bind");
         assert_eq!(claimed_provider_sessions(&store, &a.id).expect("claimed"), vec!["claude-2"]);
@@ -988,9 +988,9 @@ mod tests {
     }
 
     #[test]
-    fn an_agent_needs_a_name_and_a_kind_crew_knows() {
+    fn a_bot_needs_a_name_and_a_kind_crew_knows() {
         let (store, workspace) = world();
-        assert!(agent(&store, &workspace, "   ", "ask").is_err_and(|e| e.contains("Name is required")));
+        assert!(bot(&store, &workspace, "   ", "ask").is_err_and(|e| e.contains("Name is required")));
         let wrong_kind = create(
             &store,
             workspace.clone(),
@@ -1009,10 +1009,10 @@ mod tests {
     #[test]
     fn autonomy_falls_back_to_asking() {
         let (store, workspace) = world();
-        assert_eq!(agent(&store, &workspace, "A", "full").unwrap().autonomy, "full");
-        assert_eq!(agent(&store, &workspace, "B", "ask").unwrap().autonomy, "ask");
-        assert_eq!(agent(&store, &workspace, "C", "FULL").unwrap().autonomy, "ask");
-        assert_eq!(agent(&store, &workspace, "D", "").unwrap().autonomy, "ask");
+        assert_eq!(bot(&store, &workspace, "A", "full").unwrap().autonomy, "full");
+        assert_eq!(bot(&store, &workspace, "B", "ask").unwrap().autonomy, "ask");
+        assert_eq!(bot(&store, &workspace, "C", "FULL").unwrap().autonomy, "ask");
+        assert_eq!(bot(&store, &workspace, "D", "").unwrap().autonomy, "ask");
     }
 
     /// The runtime owns status. A value the UI invented would render as nothing
@@ -1020,7 +1020,7 @@ mod tests {
     #[test]
     fn reading_clears_only_a_finished_or_failed_turn_and_keeps_its_place() {
         let (store, workspace) = world();
-        let made = agent(&store, &workspace, "Planner", "ask").expect("agent");
+        let made = bot(&store, &workspace, "Planner", "ask").expect("bot");
         set_status(&store, made.id.clone(), "done".into()).expect("done");
         let finished = get(&store, made.id.clone()).unwrap().unwrap().updated_at;
         mark_read(&store, made.id.clone()).expect("read");
@@ -1037,7 +1037,7 @@ mod tests {
     #[test]
     fn only_the_statuses_the_runtime_writes_are_accepted() {
         let (store, workspace) = world();
-        let made = agent(&store, &workspace, "Planner", "ask").expect("agent");
+        let made = bot(&store, &workspace, "Planner", "ask").expect("bot");
         for status in ["idle", "working", "needs-input", "done", "error"] {
             set_status(&store, made.id.clone(), status.into()).expect(status);
         }
@@ -1055,8 +1055,8 @@ mod tests {
                 .expect("workspace")
                 .id
         };
-        agent(&store, &workspace, "Planner", "ask").expect("agent");
-        agent(&store, &other, "Stranger", "ask").expect("agent");
+        bot(&store, &workspace, "Planner", "ask").expect("bot");
+        bot(&store, &other, "Stranger", "ask").expect("bot");
 
         let names: Vec<String> = list(&store, workspace).unwrap().into_iter().map(|s| s.name).collect();
         assert_eq!(names, vec!["Planner"]);
@@ -1091,7 +1091,7 @@ mod tests {
         let busy = terminal(&store, &workspace, "Busy", "codex");
         let unread = terminal(&store, &workspace, "Unread", "codex");
         let open = terminal(&store, &workspace, "Open", "codex");
-        let scheduled = agent(&store, &workspace, "Nightly", "ask").expect("agent");
+        let scheduled = bot(&store, &workspace, "Nightly", "ask").expect("bot");
         set_status(&store, busy.id.clone(), "working".into()).expect("busy");
         set_status(&store, unread.id.clone(), "done".into()).expect("unread");
         for id in [&old.id, &busy.id, &unread.id, &open.id, &scheduled.id] {
@@ -1156,7 +1156,7 @@ mod tests {
         set_provider_session(&store, spoken.id.clone(), "rollout".into()).expect("bind");
         let open = terminal(&store, &workspace, "codex 3", "codex");
         let unread = terminal(&store, &workspace, "grok", "grok");
-        let planner = agent(&store, &workspace, "codex", "ask").expect("agent");
+        let planner = bot(&store, &workspace, "codex", "ask").expect("bot");
         crate::store::set(
             &store,
             format!("tabs:{workspace}"),
@@ -1176,7 +1176,7 @@ mod tests {
         create_in_worktree(
             store,
             workspace.to_string(),
-            "agent".into(),
+            "bot".into(),
             "Branched".into(),
             "claude".into(),
             "m".into(),
@@ -1184,7 +1184,7 @@ mod tests {
             "ask".into(),
             Some(tree.into()),
         )
-        .expect("agent")
+        .expect("bot")
     }
 
     fn a_folder() -> String {
@@ -1197,7 +1197,7 @@ mod tests {
     fn a_session_works_in_its_worktree_or_else_the_workspace_folder() {
         let (store, workspace) = world();
         let root = crate::workspace::get(&store, workspace.clone()).unwrap().unwrap().path;
-        let main = agent(&store, &workspace, "Main", "ask").expect("agent");
+        let main = bot(&store, &workspace, "Main", "ask").expect("bot");
         let tree = a_folder();
         let branched = branched(&store, &workspace, &tree);
 
@@ -1256,7 +1256,7 @@ mod tests {
             create_in_worktree(
                 &store,
                 workspace.clone(),
-                "agent".into(),
+                "bot".into(),
                 name.into(),
                 "claude".into(),
                 "m".into(),
@@ -1264,7 +1264,7 @@ mod tests {
                 "ask".into(),
                 worktree.map(Into::into),
             )
-            .expect("agent")
+            .expect("bot")
             .id
         };
         let a = make("A", Some("/wt/feat"));
@@ -1479,7 +1479,7 @@ mod tests {
     #[test]
     fn deleting_a_workspace_takes_its_sessions_with_it() {
         let (store, workspace) = world();
-        let made = agent(&store, &workspace, "Planner", "ask").expect("agent");
+        let made = bot(&store, &workspace, "Planner", "ask").expect("bot");
 
         crate::workspace::delete(&store, workspace).expect("delete");
 

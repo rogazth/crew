@@ -6,17 +6,17 @@ import { SidebarRow } from "./SidebarRow";
 /** Home's ways to start, over its sessions: there are no worktrees to add one to. */
 export function HomeActions({
   onNewSession,
-  onNewAgent,
+  onNewBot,
   onOpenFolder,
 }: {
   onNewSession: () => void;
-  onNewAgent: () => void;
+  onNewBot: () => void;
   onOpenFolder: () => void;
 }) {
   return (
     <div className="flex flex-col gap-0.5">
       <SidebarRow icon={SquarePenIcon} label="New session" keys={commandKeys("new-session")} onClick={onNewSession} />
-      <SidebarRow icon={BotIcon} label="New agent" keys={commandKeys("new-agent")} onClick={onNewAgent} />
+      <SidebarRow icon={BotIcon} label="New bot" keys={commandKeys("new-bot")} onClick={onNewBot} />
       <SidebarRow icon={FolderPlusIcon} label="Open a project folder" keys={commandKeys("open-workspace")} onClick={onOpenFolder} />
     </div>
   );

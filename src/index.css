@@ -1022,9 +1022,9 @@ body:has(button[data-sidebar="resize-handle"]:active) * {
   margin: 4px 0 6px;
 }
 
-/* A message from another agent: a letter in the timeline, framed rather than
+/* A message from a bot: a letter in the timeline, framed rather than
    filled, so the right-hand side stays the things you typed. */
-.crew-bubble.is-from-agent {
+.crew-bubble.is-from-bot {
   max-width: 100%;
   border-radius: 14px;
   background: var(--color-canvas);

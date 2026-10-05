@@ -5,7 +5,7 @@ use crate::schedule::{describe_schedule, Schedule};
 use crate::session::{folder, row_to_session, Session, SESSION_COLUMNS, SESSION_COLUMN_COUNT};
 use crate::store::{now_millis, Store};
 
-/// A standing order for one agent. `schedule` and `runs_json` are JSON the UI
+/// A standing order for one bot. `schedule` and `runs_json` are JSON the UI
 /// owns; Rust only stores the next due time and hands the rows back.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -19,7 +19,7 @@ pub struct Routine {
     pub last_run_at: Option<i64>,
     pub next_run_at: Option<i64>,
     pub runs_json: String,
-    /// Session that set it up when it was an agent, not the user; the wake prompt names it.
+    /// Session that set it up when it was a bot, not the user; the wake prompt names it.
     pub created_by: Option<String>,
 }
 
@@ -68,7 +68,7 @@ pub fn list(store: &Store) -> Result<Vec<ScheduledRoutine>, String> {
             "SELECT {ROUTINE_COLUMNS}, {SESSION_COLUMNS}, w.path
              FROM routines r
              JOIN sessions s ON s.id = r.session_id
-             LEFT JOIN agents a ON a.id = s.agent_id
+             LEFT JOIN bots b ON b.id = s.bot_id
              JOIN workspaces w ON w.id = s.workspace_id
              ORDER BY r.created_at"
         );
@@ -94,7 +94,7 @@ pub fn scheduled(store: &Store, id: String) -> Result<Option<ScheduledRoutine>, 
             "SELECT {ROUTINE_COLUMNS}, {SESSION_COLUMNS}, w.path
              FROM routines r
              JOIN sessions s ON s.id = r.session_id
-             LEFT JOIN agents a ON a.id = s.agent_id
+             LEFT JOIN bots b ON b.id = s.bot_id
              JOIN workspaces w ON w.id = s.workspace_id
              WHERE r.id = ?1"
         );
@@ -209,7 +209,7 @@ fn read_runs(conn: &rusqlite::Connection, id: &str) -> rusqlite::Result<Vec<Rout
 /// Newest first, capped, so the JSON column never grows past a screen of history.
 pub const MAX_RUNS: usize = 20;
 
-/// `Skipped`: it came due while the agent was still working on something else.
+/// `Skipped`: it came due while the bot was still working on something else.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum RunStatus {
@@ -258,7 +258,7 @@ pub fn runs_json(runs: &[RoutineRun]) -> String {
     serde_json::to_string(runs).unwrap_or_else(|_| "[]".into())
 }
 
-/// The hidden turn that wakes the agent. It says who is talking so the reply
+/// The hidden turn that wakes the bot. It says who is talking so the reply
 /// does not read the schedule back, and it allows silence: a routine that
 /// found nothing should say nothing.
 pub fn wake_prompt(
@@ -314,10 +314,10 @@ mod tests {
         std::fs::create_dir_all(&root).expect("root");
         let workspace = crate::workspace::create(store, "w".into(), root.to_string_lossy().into())
             .expect("workspace");
-        let agent = crate::session::create(
+        let bot = crate::session::create(
             store,
             workspace.id,
-            "agent".into(),
+            "bot".into(),
             "Coder".into(),
             "claude".into(),
             "m".into(),
@@ -328,7 +328,7 @@ mod tests {
         upsert(
             store,
             None,
-            agent.id,
+            bot.id,
             "Standup".into(),
             true,
             "check the board".into(),
@@ -465,10 +465,10 @@ mod tests {
         assert!(parse_runs("{}").is_empty());
     }
 
-    /// A routine fires where its agent works: the worktree when it has one,
+    /// A routine fires where its bot works: the worktree when it has one,
     /// the workspace folder otherwise, or once that worktree's folder is gone.
     #[test]
-    fn a_routine_runs_in_its_agents_worktree() {
+    fn a_routine_runs_in_its_bots_worktree() {
         let store = store();
         let routine = a_routine(&store);
         let before = scheduled(&store, routine.id.clone()).unwrap().unwrap();

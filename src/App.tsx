@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { AgentSheetHost } from "./chrome/AgentSheet";
+import { BotSheetHost } from "./chrome/BotSheet";
 import { CommandPalette, type PaletteMode } from "./chrome/CommandPalette";
 import { MachineBanner } from "./chrome/MachineBanner";
 import { MachinePalette } from "./chrome/MachinePalette";
@@ -12,7 +12,7 @@ import { AppSidebar } from "./chrome/AppSidebar";
 import { TabBar, type TabGroups } from "./chrome/TabBar";
 import { UpdateDialog } from "./chrome/UpdateDialog";
 import { Explorer } from "./chrome/explorer/Explorer";
-import { useAgentSheet } from "./hooks/useAgentSheet";
+import { useBotSheet } from "./hooks/useBotSheet";
 import { useAppCommands } from "./hooks/useAppCommands";
 import { useBrowserBridge } from "./hooks/useBrowserBridge";
 import { useSessionTitle } from "./hooks/useSessionTitle";
@@ -29,7 +29,7 @@ import { useSelectAllScope } from "./hooks/useSelectAllScope";
 import { useSessions } from "./hooks/useSessions";
 import { useSessionView } from "./hooks/useSessionView";
 import { useSidebarWidth } from "./hooks/useSidebarWidth";
-import { AgentAvatarProvider } from "./hooks/useAgentAvatar";
+import { BotAvatarProvider } from "./hooks/useBotAvatar";
 import { BrowserPrefsProvider } from "./hooks/useBrowserPrefs";
 import { TerminalPrefsProvider } from "./hooks/useTerminalPrefs";
 import { useWorkspaces } from "./hooks/useWorkspaces";
@@ -47,7 +47,7 @@ import { CommandsButton } from "./chrome/CommandsButton";
 import { awaitsUser, isOrphan, liveRuns, startableIn } from "./lib/processes";
 import { ProcessTab } from "./surfaces/ProcessTab";
 import { CommandsView, type Place } from "./surfaces/CommandsView";
-import { boot } from "./lib/agentRuntime";
+import { boot } from "./lib/turnRuntime";
 import { unlockNotificationAudio } from "./lib/notificationSound";
 import { watchProcesses } from "./lib/processAlerts";
 import { WorkspacePanes } from "./surfaces/WorkspacePanes";
@@ -61,7 +61,7 @@ import { useTour } from "./hooks/useTour";
  */
 export function App() {
   // The daemon runs turns whether or not anyone asked for one — a routine comes
-  // due, an agent writes to another — so the window listens from the moment it
+  // due, a bot writes to another — so the window listens from the moment it
   // opens rather than from the first thing the user sends.
   useEffect(() => void boot(), []);
   useEffect(unlockNotificationAudio, []);
@@ -249,7 +249,7 @@ export function App() {
     [openFile, treePath],
   );
   const commandsOpen = tabs.active?.kind === "stub" && tabs.active.stub === "commands";
-  const sheet = useAgentSheet({ create, update, openSession: nav.openSession, createWorktree: worktrees.create });
+  const sheet = useBotSheet({ create, update, openSession: nav.openSession, createWorktree: worktrees.create });
   const envs = useEnvironments({ workspaces, active, closePage, openSettings, create, openSession: nav.openSession });
 
   const { activate } = workspaces;
@@ -272,7 +272,7 @@ export function App() {
     openStub: nav.openStub,
     openTerminal: nav.openTerminal,
     openBrowser: (url, incognito) => nav.openBrowser(url, incognito),
-    newAgent: sheet.newAgent,
+    newBot: sheet.newBot,
   });
 
   useAppCommands({
@@ -293,7 +293,7 @@ export function App() {
       closePage();
       explorer.toggle("search", selectedLine());
     },
-    newAgent: () => sheet.newAgent(),
+    newBot: () => sheet.newBot(),
     newSession: () => void newSession(),
     newBrowser: (incognito) => nav.openBrowser("", incognito),
     closeTab: nav.closeTab,
@@ -319,7 +319,7 @@ export function App() {
     <BrowserPrefsProvider>
     <LinkRouter open={nav.openBrowser} />
     <Toaster onOpen={openNotified} />
-    <AgentAvatarProvider>
+    <BotAvatarProvider>
     <div className="flex h-full">
       {active && (
         <AppSidebar
@@ -360,7 +360,7 @@ export function App() {
               closePage();
               work.selectWorktree(path);
             },
-            onNewAgent: sheet.newAgent,
+            onNewBot: sheet.newBot,
             // A worktree's own menu passes its path; the main checkout is stored as null.
             onNewSession: (path) =>
               void newSession(undefined, path === undefined ? work.placeIn : path === active.path ? null : path),
@@ -377,7 +377,7 @@ export function App() {
                 tabs.unsavedIn(`${active.id}@${tree.path}`),
                 commandCounts.running.get(tree.path) ?? [],
               ),
-            onEdit: sheet.editAgent,
+            onEdit: sheet.editBot,
             onRename: (session, name) => void rename(session.id, name),
             onRemove: confirms.askSession,
             onRemoveMany: confirms.askSessions,
@@ -389,7 +389,7 @@ export function App() {
                   actions: (
                     <HomeActions
                       onNewSession={() => void newSession()}
-                      onNewAgent={() => sheet.newAgent()}
+                      onNewBot={() => sheet.newBot()}
                       onOpenFolder={envs.openWorkspace}
                     />
                   ),
@@ -421,7 +421,7 @@ export function App() {
           onConfirm={confirms.ask}
           onOpenTerminal={envs.openTerminalOn}
         />
-        {/* Hidden, not unmounted: agent and terminal processes stay alive. */}
+        {/* Hidden, not unmounted: bot and terminal processes stay alive. */}
         <div hidden={!isWorkspace} className="flex min-h-0 flex-1 flex-col">
           <TabBar
             inset={!sidebarOpen}
@@ -432,7 +432,7 @@ export function App() {
             onClose={nav.closeTab}
             onCloseMany={nav.closeTabs}
             onReopen={tabs.reopen}
-            onEditSession={sheet.editAgent}
+            onEditSession={sheet.editBot}
             runningSessions={runningSessions}
             onStopSession={stopSession}
             onReorder={tabs.reorder}
@@ -464,7 +464,7 @@ export function App() {
                     firstRun={workspaces.projects.length === 0}
                     onAsk={(text, choice) => void newSession(choice, null, text)}
                     onOpenFolder={envs.openWorkspace}
-                    onNewAgent={() => sheet.newAgent()}
+                    onNewBot={() => sheet.newBot()}
                     onOpenBrowser={() => nav.openBrowser("")}
                   />
                 ) : undefined
@@ -573,11 +573,11 @@ export function App() {
           workspace={active}
           from={worktrees.list.find((tree) => tree.main)}
           onClose={() => setDialog(null)}
-          onCreate={async (branch, withAgent) => {
+          onCreate={async (branch, withBot) => {
             const tree = await worktrees.create(branch);
             setDialog(null);
             closePage();
-            if (withAgent) sheet.newAgent(tree.path);
+            if (withBot) sheet.newBot(tree.path);
           }}
         />
       )}
@@ -589,7 +589,7 @@ export function App() {
 
       <UpdateDialog />
 
-      <AgentSheetHost
+      <BotSheetHost
         sheet={sheet}
         sessions={sessions}
         worktrees={worktrees.list}
@@ -597,7 +597,7 @@ export function App() {
         onNewRoutine={openRoutines}
       />
     </div>
-    </AgentAvatarProvider>
+    </BotAvatarProvider>
     </BrowserPrefsProvider>
     </TerminalPrefsProvider>
   );

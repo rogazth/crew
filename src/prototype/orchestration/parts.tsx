@@ -1,6 +1,6 @@
 // PROTOTYPE — the small pieces every orchestration surface shares: a participant's face, a command's state.
 import { BotIcon, UserIcon } from "lucide-react";
-import { AgentAvatar } from "../../chrome/AgentAvatar";
+import { BotAvatar } from "../../chrome/BotAvatar";
 import { ProviderIcon } from "../../chrome/ProviderIcon";
 import type { ProtoSession, Task } from "./store";
 
@@ -9,8 +9,8 @@ export function Face({ name, sessions, className = "size-4" }: { name: string; s
   if (name === "You") return <UserIcon className={`${className} shrink-0 rounded-full bg-card p-[2px] text-icon`} />;
   const session = sessions.find((s) => s.name === name);
   if (!session) return <BotIcon className={`${className} shrink-0 text-icon`} />;
-  return session.kind === "agent" ? (
-    <AgentAvatar seed={session.id} bare className={className} />
+  return session.kind === "bot" ? (
+    <BotAvatar seed={session.id} bare className={className} />
   ) : (
     <ProviderIcon provider={session.provider} className={className} />
   );

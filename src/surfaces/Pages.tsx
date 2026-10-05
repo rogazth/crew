@@ -32,7 +32,7 @@ export function Pages({
   onConfirm,
   onOpenTerminal,
 }: Props) {
-  const agents = sessions.filter((session) => session.kind === "agent");
+  const bots = sessions.filter((session) => session.kind === "bot");
   if (page.kind === "settings") {
     return (
       <SettingsView
@@ -46,13 +46,13 @@ export function Pages({
   if (page.kind === "routines" && activeWorkspace) {
     return (
       <RoutinesView
-        // A draft arriving from the agent drawer has to reopen the editor even
+        // A draft arriving from the bot drawer has to reopen the editor even
         // when the page is already up.
         key={page.draft?.key ?? "routines"}
         draft={page.draft}
         workspaces={workspaces}
         activeWorkspaceId={activeWorkspace.id}
-        agents={agents}
+        bots={bots}
         onConfirm={onConfirm}
       />
     );

@@ -12,7 +12,7 @@
 // The parent is a terminal session of this daemon: a shell in one of its PTYs
 // hands this script its token, so every call goes over the bridge exactly as
 // that terminal's CLI would make it. Scenario a puts a real Claude Code in that
-// terminal instead; b puts a real Claude agent in charge.
+// terminal instead; b puts a real Claude bot in charge.
 import { spawn, execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { connect } from "node:net";
@@ -354,28 +354,28 @@ const scenarios = {
     return `report: ${readFileSync(out, "utf8").trim().slice(0, 80)}`;
   },
 
-  // An agent starts a session and gets its result.
+  // A bot starts a session and gets its result.
   async b(provider) {
-    const agent = await rpc("session_create", {
-      workspaceId: workspace.id, kind: "agent", name: `Boss ${provider}`, provider: "claude", model: MODELS.claude,
+    const bot = await rpc("session_create", {
+      workspaceId: workspace.id, kind: "bot", name: `Boss ${provider}`, provider: "claude", model: MODELS.claude,
       description: "You hand arithmetic to other CLIs and pass on what they find.", autonomy: "full",
     });
     await rpc("turn_start", {
-      sessionId: agent.id, cwd: repo,
+      sessionId: bot.id, cwd: repo,
       text: `Use Crew's session tools: start_session with provider "${provider}", model "${MODELS[provider]}" and prompt "What is 17 times 23? Reply with the number only." Then wait for it with wait_for_session (timeout_s 60; call again until the result is an event) and tell me the number it reported, written as RESULT: <number>.`,
     });
     const until = Date.now() + 15 * 60_000;
     let text = "";
     while (Date.now() < until) {
       await sleep(3000);
-      const tail = await rpc("transcript_tail", { sessionId: agent.id, limit: 200 });
+      const tail = await rpc("transcript_tail", { sessionId: bot.id, limit: 200 });
       text = tail.blocks.filter((b) => b.role === "assistant").map((b) => b.text).join("\n");
       if (!tail.working && /RESULT:\s*\**391/.test(text)) break;
     }
-    assert(/RESULT:\s*\**391/.test(text), `the agent said: ${text.slice(-300)}`);
+    assert(/RESULT:\s*\**391/.test(text), `the bot said: ${text.slice(-300)}`);
     const sessions = await rpc("session_list", { workspaceId: workspace.id });
-    const child = sessions.find((s) => s.kind === "child" && s.parentId === agent.id);
-    assert(child && child.provider === provider, "no child of the agent's");
+    const child = sessions.find((s) => s.kind === "child" && s.parentId === bot.id);
+    assert(child && child.provider === provider, "no child of the bot's");
     return "RESULT: 391";
   },
 
@@ -594,8 +594,8 @@ const scenarios = {
   // Nothing that was there before broke.
   async k() {
     const shell = await terminal("k-parent");
-    const agents = await must(shell.token, "list_agents", {});
-    assert(Array.isArray(agents), "list_agents");
+    const bots = await must(shell.token, "list_agents", {});
+    assert(Array.isArray(bots), "list_agents");
     const tree = await must(shell.token, "create_worktree", { branch: word("k-branch-"), task: "Nothing to do; this is a test." });
     assert(existsSync(tree.worktree), `create_worktree made no worktree: ${JSON.stringify(tree)}`);
     const made = await row(tree.session.id);

@@ -185,20 +185,20 @@ impl TranscriptHub {
                 text: text.to_string(),
                 hidden: if hidden { Some(true) } else { None },
                 files: files.filter(|rows| !rows.is_empty()),
-                from_agent: None,
+                from_bot: None,
             },
         );
     }
 
-    /// A line another agent wrote into this transcript.
-    pub fn append_from_agent(&self, session_id: &str, text: &str, from: crew_protocol::AgentRef) {
+    /// A line another bot wrote into this transcript.
+    pub fn append_from_bot(&self, session_id: &str, text: &str, from: crew_protocol::BotRef) {
         self.apply(
             session_id,
             HarnessEvent::UserMessage {
                 text: text.to_string(),
                 hidden: None,
                 files: None,
-                from_agent: Some(from),
+                from_bot: Some(from),
             },
         );
     }
@@ -389,7 +389,7 @@ mod tests {
         let session = crate::session::create(
             &store,
             workspace.id,
-            "agent".into(),
+            "bot".into(),
             "A".into(),
             "claude".into(),
             "m".into(),
@@ -427,7 +427,7 @@ mod review_tests {
         Store::open(dir.join("crew.sqlite3")).expect("store")
     }
 
-    pub(super) fn agent(store: &Store) -> String {
+    pub(super) fn bot(store: &Store) -> String {
         let root = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
         let _ = std::fs::create_dir_all(&root);
         let workspace =
@@ -435,7 +435,7 @@ mod review_tests {
         crate::session::create(
             store,
             workspace.id,
-            "agent".into(),
+            "bot".into(),
             "A".into(),
             "claude".into(),
             "m".into(),
@@ -453,7 +453,7 @@ mod review_tests {
     #[test]
     fn concurrent_flushes_do_not_lose_blocks() {
         let store = tmp_store();
-        let id = agent(&store);
+        let id = bot(&store);
         let hub = TranscriptHub::new(store.clone());
 
         let threads: Vec<_> = (0..6)
@@ -487,7 +487,7 @@ mod review_tests {
     #[test]
     fn a_flush_that_could_not_write_is_tried_again() {
         let store = tmp_store();
-        let id = agent(&store);
+        let id = bot(&store);
         let hub = TranscriptHub::new(store.clone());
         hub.append_system(&id, "first");
 
@@ -524,7 +524,7 @@ mod window_tests {
         Store::open(dir.join("crew.sqlite3")).expect("store")
     }
 
-    pub(super) fn agent(store: &Store) -> String {
+    pub(super) fn bot(store: &Store) -> String {
         let root = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
         let _ = std::fs::create_dir_all(&root);
         let workspace =
@@ -532,7 +532,7 @@ mod window_tests {
         crate::session::create(
             store,
             workspace.id,
-            "agent".into(),
+            "bot".into(),
             "A".into(),
             "claude".into(),
             "m".into(),
@@ -556,7 +556,7 @@ mod window_tests {
     #[test]
     fn a_window_is_the_last_blocks_with_their_positions() {
         let store = tmp_store();
-        let id = agent(&store);
+        let id = bot(&store);
         let hub = TranscriptHub::new(store);
         lines(&hub, &id, 10);
 
@@ -570,7 +570,7 @@ mod window_tests {
     #[test]
     fn the_default_window_is_the_last_two_hundred_blocks() {
         let store = tmp_store();
-        let id = agent(&store);
+        let id = bot(&store);
         let blocks: Vec<Block> = (1..=250)
             .map(|n| new_block(BlockRole::Assistant, format!("line {n}")))
             .collect();
@@ -589,7 +589,7 @@ mod window_tests {
     #[test]
     fn a_window_pages_backwards_without_a_gap_or_an_overlap() {
         let store = tmp_store();
-        let id = agent(&store);
+        let id = bot(&store);
         let hub = TranscriptHub::new(store);
         lines(&hub, &id, 10);
 
@@ -615,7 +615,7 @@ mod window_tests {
     #[test]
     fn a_transcript_shorter_than_the_limit_says_there_is_nothing_older() {
         let store = tmp_store();
-        let id = agent(&store);
+        let id = bot(&store);
         let hub = TranscriptHub::new(store);
         lines(&hub, &id, 2);
 
@@ -629,7 +629,7 @@ mod window_tests {
     #[test]
     fn an_empty_transcript_answers_an_empty_page() {
         let store = tmp_store();
-        let id = agent(&store);
+        let id = bot(&store);
         let hub = TranscriptHub::new(store);
 
         let page = hub.window(&id, None, None);
@@ -651,7 +651,7 @@ mod window_tests {
     #[test]
     fn the_window_shows_a_block_that_has_not_reached_the_table() {
         let store = tmp_store();
-        let id = agent(&store);
+        let id = bot(&store);
         let hub = TranscriptHub::new(store.clone());
         hub.append_system(&id, "flushed");
 
@@ -681,7 +681,7 @@ mod window_tests {
     #[test]
     fn the_window_carries_the_live_state_the_hub_holds() {
         let store = tmp_store();
-        let id = agent(&store);
+        let id = bot(&store);
         let hub = TranscriptHub::new(store);
         hub.set_status(&id, "working", None);
         let seq = hub.apply(
@@ -707,7 +707,7 @@ mod window_tests {
 #[cfg(test)]
 mod cost_tests {
     use super::*;
-    use super::review_tests::{agent, tmp_store};
+    use super::review_tests::{bot, tmp_store};
     use crew_protocol::{BlockTool, ToolDetail, ToolStatus};
 
     fn tool_block(n: usize) -> Block {
@@ -731,7 +731,7 @@ mod cost_tests {
     #[test]
     fn what_a_flush_costs_on_a_long_transcript() {
         let store = tmp_store();
-        let id = agent(&store);
+        let id = bot(&store);
         let hub = TranscriptHub::new(store.clone());
         {
             let mut map = hub.lock();
@@ -778,7 +778,7 @@ mod cost_tests {
 /// Adversarial review of A5/A6. Added by review; no production code is touched.
 #[cfg(test)]
 mod window_review {
-    use super::review_tests::{agent, tmp_store};
+    use super::review_tests::{bot, tmp_store};
     use super::*;
     use crew_protocol::{BlockTool, ToolDetail, ToolStatus};
 
@@ -813,7 +813,7 @@ mod window_review {
     #[test]
     fn hydrate_agrees_with_the_rows_it_read() {
         let store = tmp_store();
-        let id = agent(&store);
+        let id = bot(&store);
         seed(&store, &id, 40);
         let row = TranscriptHub::new(store.clone()).hydrate(&id);
         let stored = store
@@ -829,7 +829,7 @@ mod window_review {
     #[test]
     fn a_window_larger_than_the_ceiling_says_where_it_starts() {
         let store = tmp_store();
-        let id = agent(&store);
+        let id = bot(&store);
         seed(&store, &id, 1000);
         let hub = TranscriptHub::new(store);
 
@@ -856,7 +856,7 @@ mod window_review {
     #[ignore]
     fn hydrating_a_session_reads_the_transcript_once() {
         let store = tmp_store();
-        let id = agent(&store);
+        let id = bot(&store);
         seed(&store, &id, 2000);
         let hub = TranscriptHub::new(store.clone());
 
@@ -900,7 +900,7 @@ mod window_review {
 #[cfg(test)]
 mod window_cost_tests {
     use super::*;
-    use super::review_tests::{agent, tmp_store};
+    use super::review_tests::{bot, tmp_store};
 
     /// A page is a page. `window` used to clone the whole transcript before
     /// slicing 200 out of it, so every read of a chat — every resync, every
@@ -911,13 +911,13 @@ mod window_cost_tests {
     #[ignore]
     fn a_window_does_not_cost_the_whole_transcript() {
         let big = tmp_store();
-        let big_id = agent(&big);
+        let big_id = bot(&big);
         super::window_review::seed(&big, &big_id, 4000);
         let big_hub = TranscriptHub::new(big.clone());
         let _ = big_hub.window(&big_id, None, None);
 
         let small = tmp_store();
-        let small_id = agent(&small);
+        let small_id = bot(&small);
         super::window_review::seed(&small, &small_id, 200);
         let small_hub = TranscriptHub::new(small.clone());
         let _ = small_hub.window(&small_id, None, None);

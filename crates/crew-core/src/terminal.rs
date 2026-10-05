@@ -5,7 +5,7 @@
 //! client cannot: in remote mode the bridge's socket and the `crewd` binary are
 //! the VM's, not the window's.
 //!
-//! Each provider takes the MCP server the way it does for an agent's turn,
+//! Each provider takes the MCP server the way it does for a bot's turn,
 //! with one difference for Claude: no `--strict-mcp-config`, so Crew is added
 //! to the user's own servers instead of replacing them. Cursor has no MCP flag
 //! and gets the environment alone, for `crew` from its shell.

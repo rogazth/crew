@@ -230,7 +230,7 @@ mod tests {
             approval: None,
             question: None,
             usage: None,
-            from_agent: None,
+            from_bot: None,
         }
     }
 

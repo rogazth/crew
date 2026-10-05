@@ -33,7 +33,7 @@ export function RoutineEditor({
 }: Props) {
   const [draft, setDraft] = useState(initial);
   const [workspaceId, setWorkspaceId] = useState(initialWorkspaceId);
-  const [agents, setAgents] = useState<Session[]>([]);
+  const [bots, setBots] = useState<Session[]>([]);
   const [saving, setSaving] = useState(false);
   const [running, setRunning] = useState(false);
   const [runError, setRunError] = useState<string | null>(null);
@@ -44,17 +44,17 @@ export function RoutineEditor({
       .listSessions(workspaceId)
       .then((list) => {
         if (cancelled) return;
-        const found = list.filter((session) => session.kind === "agent");
-        setAgents(found);
-        // Moving the routine to another workspace hands it to that workspace's first agent.
+        const found = list.filter((session) => session.kind === "bot");
+        setBots(found);
+        // Moving the routine to another workspace hands it to that workspace's first bot.
         setDraft((prev) =>
-          found.some((agent) => agent.id === prev.sessionId)
+          found.some((bot) => bot.id === prev.sessionId)
             ? prev
             : { ...prev, sessionId: found[0]?.id ?? "" },
         );
       })
       .catch(() => {
-        if (!cancelled) setAgents([]);
+        if (!cancelled) setBots([]);
       });
     return () => {
       cancelled = true;
@@ -139,7 +139,7 @@ export function RoutineEditor({
             <TextArea
               rows={10}
               value={draft.prompt}
-              placeholder="What the agent should do every time this routine fires."
+              placeholder="What the bot should do every time this routine fires."
               onChange={(event) => setDraft({ ...draft, prompt: event.target.value })}
             />
           </Field>
@@ -154,16 +154,16 @@ export function RoutineEditor({
                 options={workspaces.map((workspace) => ({ value: workspace.id, label: workspace.name }))}
               />
             </Group>
-            <Group label="Agent">
-              {agents.length === 0 ? (
-                <TextInput disabled readOnly aria-label="Agent" value="No agents in this workspace" />
+            <Group label="Bot">
+              {bots.length === 0 ? (
+                <TextInput disabled readOnly aria-label="Bot" value="No bots in this workspace" />
               ) : (
                 <Select
-                  label="Agent"
+                  label="Bot"
                   className="w-full"
                   value={draft.sessionId}
                   onChange={(sessionId) => setDraft({ ...draft, sessionId })}
-                  options={agents.map((agent) => ({ value: agent.id, label: agent.name }))}
+                  options={bots.map((bot) => ({ value: bot.id, label: bot.name }))}
                 />
               )}
             </Group>
@@ -220,7 +220,7 @@ function RunMark({ run }: { run: RoutineRun }) {
   if (run.status === "running")
     return <LoaderCircleIcon className="size-3.5 shrink-0 animate-spin text-warning" />;
   if (run.status === "ok") return <CheckIcon className="size-3.5 shrink-0 text-success" />;
-  // Came due while the agent was busy: nothing ran, and nothing went wrong.
+  // Came due while the bot was busy: nothing ran, and nothing went wrong.
   if (run.status === "skipped") return <MinusIcon className="size-3.5 shrink-0 text-placeholder" />;
   return <XIcon className="size-3.5 shrink-0 text-danger" />;
 }

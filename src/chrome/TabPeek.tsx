@@ -1,6 +1,6 @@
 import { GitBranchIcon } from "lucide-react";
 import { createPortal } from "react-dom";
-import { AgentAvatar } from "./AgentAvatar";
+import { BotAvatar } from "./BotAvatar";
 import { ProviderIcon } from "./ProviderIcon";
 import { StatusDot } from "./StatusDot";
 import { useThread } from "../hooks/useThread";
@@ -25,8 +25,8 @@ export function TabPeek({ session, branch, anchor }: { session: Session; branch:
       className="pointer-events-none fixed z-50 flex w-[300px] flex-col gap-2.5 rounded-float bg-surface p-3 text-text shadow-float"
     >
       <div className="flex items-center gap-2.5">
-        {session.kind === "agent" ? (
-          <AgentAvatar seed={session.id} bare animated={session.status === "working"} className="size-8" />
+        {session.kind === "bot" ? (
+          <BotAvatar seed={session.id} bare animated={session.status === "working"} className="size-8" />
         ) : (
           <span className="grid size-8 place-items-center rounded-lg bg-card">
             <ProviderIcon provider={session.provider} className="size-4.5" />
@@ -57,13 +57,13 @@ export function TabPeek({ session, branch, anchor }: { session: Session; branch:
         </span>
       </div>
 
-      {session.kind === "agent" && <LastWords sessionId={session.id} />}
+      {session.kind === "bot" && <LastWords sessionId={session.id} />}
     </div>,
     document.body,
   );
 }
 
-/** The newest line the agent wrote, or what it is doing if it is mid-turn. */
+/** The newest line the bot wrote, or what it is doing if it is mid-turn. */
 function LastWords({ sessionId }: { sessionId: string }) {
   const { blocks, ready } = useThread(sessionId);
   if (!ready) return null;

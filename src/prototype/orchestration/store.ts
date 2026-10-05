@@ -147,7 +147,7 @@ class ChatBuilder {
   /** A message that opened a turn here: a user row, so turns fold where they really start. */
   received(from: string, to: string, what: Checkpoint["what"], turn: "new" | "batched", text: string, at: number, failed = false) {
     const id = nid("in");
-    this.chat.blocks.push({ id, role: "user", text, at, fromAgent: { id: from, name: from } });
+    this.chat.blocks.push({ id, role: "user", text, at, fromBot: { id: from, name: from } });
     this.chat.marks[id] = { kind: "checkpoint", from, to, what, turn, text, at, ...(failed ? { failed } : {}) };
     return this;
   }
@@ -345,8 +345,8 @@ Report written to dist/stats.html`,
 
 function baseSessions(): ProtoSession[] {
   return [
-    session("lead", "agent", LEAD, "claude", "claude-opus-5", "idle", { description: "Plans work and hands it out." }),
-    session("reviewer", "agent", "Reviewer", "codex", "gpt-5", "idle"),
+    session("lead", "bot", LEAD, "claude", "claude-opus-5", "idle", { description: "Plans work and hands it out." }),
+    session("reviewer", "bot", "Reviewer", "codex", "gpt-5", "idle"),
     session("auth", "child", AUTH, "claude", "claude-sonnet-5", "working", { parentId: "lead", parentName: LEAD, owner: "me", childState: "working", branch: "feat/auth-refactor" }),
     session("billing", "child", BILLING, "codex", "gpt-5", "working", { parentId: "lead", parentName: LEAD, owner: "me", childState: "working", branch: "test/billing" }),
     session("docs", "child", "Docs pass", "claude", "claude-sonnet-5", "idle", { parentId: "reviewer", parentName: "Reviewer", owner: "me", childState: "reported" }),

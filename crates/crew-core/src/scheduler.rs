@@ -3,7 +3,7 @@
 //! A routine that only runs while a window is open is not a standing order, so
 //! the timer lives in the daemon: one timer for the earliest due routine, and
 //! a tick that wakes every routine whose time has passed. Firing joins the
-//! agent's own conversation as a hidden turn — what it found last time is
+//! bot's own conversation as a hidden turn — what it found last time is
 //! context for this time — and the note is the only visible trace of the
 //! wake-up.
 
@@ -25,7 +25,7 @@ use crate::turns::TurnHost;
 /// The bounds on one sleep; see `wait_for`.
 const MAX_WAIT_MS: i64 = 60_000;
 const MIN_WAIT_MS: i64 = 1_000;
-/// How often the tail of a fire looks at the agent it woke.
+/// How often the tail of a fire looks at the bot it woke.
 const SETTLE_POLL: Duration = Duration::from_millis(100);
 /// …backing off to this, so a turn waiting on the user costs a read every few seconds.
 const SETTLE_MAX: Duration = Duration::from_secs(5);
@@ -123,7 +123,7 @@ impl Scheduler {
         {
             // The same door a sweep goes through. Without it, Run now and a
             // tick that came due at the same moment both read a row nobody has
-            // written yet and the agent is woken twice for one routine.
+            // written yet and the bot is woken twice for one routine.
             let _one_at_a_time = self.ticking.lock().unwrap_or_else(|e| e.into_inner());
             self.fire(row, RunTrigger::Manual);
         }
@@ -183,7 +183,7 @@ impl Scheduler {
             None
         };
         // The status now, not the one the tick's snapshot read: an earlier
-        // routine in this same sweep may already have woken this agent.
+        // routine in this same sweep may already have woken this bot.
         let busy = match session::get(&self.store, row.session.id.clone()) {
             Ok(Some(live)) => live.status == "working" || live.status == "needs-input",
             // A session we cannot read is one we will not start a turn on.
@@ -228,7 +228,7 @@ impl Scheduler {
             files: None,
             mentions: None,
             hidden: Some(true),
-            from_agent: None,
+            from_bot: None,
             sent_at: None,
             nonce: None,
         });
@@ -236,7 +236,7 @@ impl Scheduler {
             self.finish(&row.routine.id, &run, RunStatus::Error);
             return;
         }
-        // The run is over when the agent is, so the history keeps saying
+        // The run is over when the bot is, so the history keeps saying
         // "running" while the turn it woke is still going.
         let scheduler = self.clone();
         thread::spawn(move || {
@@ -261,7 +261,7 @@ impl Scheduler {
                 return None;
             }
             // A read that failed says nothing about the turn. A row that is
-            // gone says everything: the agent was deleted, and the turn with
+            // gone says everything: the bot was deleted, and the turn with
             // it. Only the failure is worth waiting through.
             let live = match session::get(&self.store, session_id.to_string()) {
                 Ok(Some(live)) => live,
@@ -295,7 +295,7 @@ impl Scheduler {
         }
     }
 
-    /// None when the user or the agent itself wrote the routine.
+    /// None when the user or the bot itself wrote the routine.
     fn creator_name(&self, routine: &Routine, session: &Session) -> Option<String> {
         let by = routine
             .created_by
@@ -306,7 +306,7 @@ impl Scheduler {
                 .ok()
                 .flatten()
                 .map(|creator| creator.name)
-                .unwrap_or_else(|| "another agent".into()),
+                .unwrap_or_else(|| "another bot".into()),
         )
     }
 
@@ -398,25 +398,25 @@ print(json.dumps({"type":"step_finish","sessionID":sid,"part":{"id":"s1","type":
             self.host.test_store()
         }
 
-        fn agent(&self, name: &str) -> Session {
+        fn bot(&self, name: &str) -> Session {
             session::create(
                 self.store(),
                 self.workspace.clone(),
-                "agent".into(),
+                "bot".into(),
                 name.into(),
                 "opencode".into(),
                 "m".into(),
                 "".into(),
                 "full".into(),
             )
-            .expect("agent")
+            .expect("bot")
         }
 
-        fn routine(&self, agent: &Session, name: &str, due: Option<i64>) -> Routine {
+        fn routine(&self, bot: &Session, name: &str, due: Option<i64>) -> Routine {
             routine::upsert(
                 self.store(),
                 None,
-                agent.id.clone(),
+                bot.id.clone(),
                 name.into(),
                 true,
                 "check the board".into(),
@@ -488,9 +488,9 @@ print(json.dumps({"type":"step_finish","sessionID":sid,"part":{"id":"s1","type":
     }
 
     #[test]
-    fn a_due_routine_wakes_its_agent_with_a_hidden_turn() {
+    fn a_due_routine_wakes_its_bot_with_a_hidden_turn() {
         let world = world();
-        let coder = world.agent("Coder");
+        let coder = world.bot("Coder");
         world.routine(&coder, "Standup", Some(now_millis() - 1_000));
 
         world.tick();
@@ -514,7 +514,7 @@ print(json.dumps({"type":"step_finish","sessionID":sid,"part":{"id":"s1","type":
     #[test]
     fn an_armed_timer_fires_a_routine_that_is_already_due() {
         let world = world();
-        let coder = world.agent("Coder");
+        let coder = world.bot("Coder");
         let routine = world.routine(&coder, "Standup", Some(now_millis() - 1_000));
 
         world.scheduler.arm();
@@ -536,7 +536,7 @@ print(json.dumps({"type":"step_finish","sessionID":sid,"part":{"id":"s1","type":
         let world = world();
         let said = Arc::new(AtomicU64::new(0));
         world.scheduler.set_events(Arc::new(Counter(said.clone())));
-        let coder = world.agent("Coder");
+        let coder = world.bot("Coder");
         let routine = world.routine(&coder, "Standup", Some(now_millis() - 1_000));
 
         world.tick();
@@ -550,7 +550,7 @@ print(json.dumps({"type":"step_finish","sessionID":sid,"part":{"id":"s1","type":
     #[test]
     fn a_fire_moves_the_next_run_forward_and_records_ok() {
         let world = world();
-        let coder = world.agent("Coder");
+        let coder = world.bot("Coder");
         let due = now_millis() - 1_000;
         let routine = world.routine(&coder, "Standup", Some(due));
 
@@ -572,7 +572,7 @@ print(json.dumps({"type":"step_finish","sessionID":sid,"part":{"id":"s1","type":
     #[test]
     fn a_disabled_routine_never_fires() {
         let world = world();
-        let coder = world.agent("Coder");
+        let coder = world.bot("Coder");
         let routine = routine::upsert(
             world.store(),
             None,
@@ -588,14 +588,14 @@ print(json.dumps({"type":"step_finish","sessionID":sid,"part":{"id":"s1","type":
 
         world.tick();
 
-        assert!(world.blocks(&coder.id).is_empty(), "a disabled routine woke its agent");
+        assert!(world.blocks(&coder.id).is_empty(), "a disabled routine woke its bot");
         assert!(world.runs(&routine.id).is_empty(), "a disabled routine wrote history");
     }
 
     #[test]
-    fn a_busy_agent_skips_the_run() {
+    fn a_busy_bot_skips_the_run() {
         let world = world();
-        let coder = world.agent("Coder");
+        let coder = world.bot("Coder");
         let routine = world.routine(&coder, "Standup", Some(now_millis() - 1_000));
         session::set_status(world.store(), coder.id.clone(), "working".into()).expect("status");
 
@@ -605,16 +605,16 @@ print(json.dumps({"type":"step_finish","sessionID":sid,"part":{"id":"s1","type":
         assert_eq!(runs.len(), 1);
         assert_eq!(runs[0].status, RunStatus::Skipped);
         assert!(runs[0].finished_at.is_some());
-        assert!(world.blocks(&coder.id).is_empty(), "a busy agent was woken anyway");
+        assert!(world.blocks(&coder.id).is_empty(), "a busy bot was woken anyway");
     }
 
     /// A tick reads every routine once and then fires them one after another,
-    /// so the second routine on an agent holds a status from before the first
+    /// so the second routine on a bot holds a status from before the first
     /// one woke it. Trusting it appends a note for a turn that never starts.
     #[test]
     fn a_fire_reads_the_status_now_not_the_one_the_tick_read() {
         let world = world();
-        let coder = world.agent("Coder");
+        let coder = world.bot("Coder");
         let routine = world.routine(&coder, "Standup", Some(now_millis() - 1_000));
         let row = routine::scheduled(world.store(), routine.id.clone())
             .expect("scheduled")
@@ -624,7 +624,7 @@ print(json.dumps({"type":"step_finish","sessionID":sid,"part":{"id":"s1","type":
 
         world.scheduler.fire(row, RunTrigger::Schedule);
 
-        assert!(world.blocks(&coder.id).is_empty(), "it woke an agent that was working");
+        assert!(world.blocks(&coder.id).is_empty(), "it woke a bot that was working");
         assert_eq!(world.runs(&routine.id)[0].status, RunStatus::Skipped);
     }
 
@@ -634,14 +634,14 @@ print(json.dumps({"type":"step_finish","sessionID":sid,"part":{"id":"s1","type":
     #[test]
     fn a_skip_moves_the_clock_but_not_the_last_run() {
         let world = world();
-        let coder = world.agent("Coder");
+        let coder = world.bot("Coder");
         let due = now_millis() - 1_000;
         let routine = world.routine(&coder, "Standup", Some(due));
         world.tick();
         world.settled_run(&routine.id);
         let ran_at = world.reload(&routine.id).last_run_at.expect("the first run");
 
-        // Now it comes due again while the agent is busy with something else.
+        // Now it comes due again while the bot is busy with something else.
         routine::record_run(world.store(), &routine.id, None, Some(due), &RoutineRun {
             id: "seed".into(),
             started_at: ran_at,
@@ -666,7 +666,7 @@ print(json.dumps({"type":"step_finish","sessionID":sid,"part":{"id":"s1","type":
     #[test]
     fn a_disabled_row_is_not_a_time_to_wait_for() {
         let world = world();
-        let coder = world.agent("Coder");
+        let coder = world.bot("Coder");
         let routine = world.routine(&coder, "Standup", Some(now_millis() - 60_000));
         assert!(world.scheduler.due_at().is_some(), "an enabled routine was not waited for");
 
@@ -691,7 +691,7 @@ print(json.dumps({"type":"step_finish","sessionID":sid,"part":{"id":"s1","type":
     #[test]
     fn a_routine_deleted_between_the_sweep_and_the_fire_wakes_nobody() {
         let world = world();
-        let coder = world.agent("Coder");
+        let coder = world.bot("Coder");
         let routine = world.routine(&coder, "Standup", Some(now_millis() - 1_000));
         let row = routine::scheduled(world.store(), routine.id.clone())
             .expect("scheduled")
@@ -700,13 +700,13 @@ print(json.dumps({"type":"step_finish","sessionID":sid,"part":{"id":"s1","type":
 
         world.scheduler.fire(row, RunTrigger::Schedule);
 
-        assert!(world.blocks(&coder.id).is_empty(), "a deleted routine woke its agent");
+        assert!(world.blocks(&coder.id).is_empty(), "a deleted routine woke its bot");
     }
 
     #[test]
     fn a_routine_switched_off_between_the_sweep_and_the_fire_stays_off() {
         let world = world();
-        let coder = world.agent("Coder");
+        let coder = world.bot("Coder");
         let routine = world.routine(&coder, "Standup", Some(now_millis() - 1_000));
         let row = routine::scheduled(world.store(), routine.id.clone())
             .expect("scheduled")
@@ -734,12 +734,12 @@ print(json.dumps({"type":"step_finish","sessionID":sid,"part":{"id":"s1","type":
         );
     }
 
-    /// The agent was deleted while its turn ran. The turn went with it, and the
+    /// The bot was deleted while its turn ran. The turn went with it, and the
     /// thread watching for its end has to notice rather than poll for ever.
     #[test]
     fn a_session_that_is_gone_ends_the_run() {
         let world = world();
-        let coder = world.agent("Coder");
+        let coder = world.bot("Coder");
         session::delete(world.store(), coder.id.clone()).expect("delete");
 
         // On its own thread with a deadline: the bug this pins is a loop that
@@ -751,7 +751,7 @@ print(json.dumps({"type":"step_finish","sessionID":sid,"part":{"id":"s1","type":
 
         let ended = heard.recv_timeout(Duration::from_secs(5));
         world.scheduler.stop();
-        assert_eq!(ended.ok(), Some(Some(false)), "the watcher never noticed the agent was gone");
+        assert_eq!(ended.ok(), Some(Some(false)), "the watcher never noticed the bot was gone");
     }
 
     /// A turn can outlast the row that started it. What the user saved while it
@@ -759,7 +759,7 @@ print(json.dumps({"type":"step_finish","sessionID":sid,"part":{"id":"s1","type":
     #[test]
     fn the_end_of_a_run_does_not_write_back_the_schedule_it_started_with() {
         let world = world();
-        let coder = world.agent("Coder");
+        let coder = world.bot("Coder");
         let routine = world.routine(&coder, "Standup", Some(now_millis() - 1_000));
         let run = RoutineRun {
             id: "run-1".into(),
@@ -806,7 +806,7 @@ print(json.dumps({"type":"step_finish","sessionID":sid,"part":{"id":"s1","type":
     #[test]
     fn a_disabled_row_that_is_past_due_does_not_spin_the_timer() {
         let world = world();
-        let coder = world.agent("Coder");
+        let coder = world.bot("Coder");
         routine::upsert(
             world.store(),
             None,
@@ -847,7 +847,7 @@ print(json.dumps({"type":"step_finish","sessionID":sid,"part":{"id":"s1","type":
     #[test]
     fn a_timer_that_was_replaced_fires_nothing() {
         let world = world();
-        let coder = world.agent("Coder");
+        let coder = world.bot("Coder");
         let routine = world.routine(&coder, "Standup", Some(now_millis() - 1_000));
         let stale = world.scheduler.generation.load(Ordering::Relaxed);
         world.scheduler.arm();
@@ -864,7 +864,7 @@ print(json.dumps({"type":"step_finish","sessionID":sid,"part":{"id":"s1","type":
     #[test]
     fn a_stopped_scheduler_does_not_fire_or_arm() {
         let world = world();
-        let coder = world.agent("Coder");
+        let coder = world.bot("Coder");
         let routine = world.routine(&coder, "Standup", Some(now_millis() - 1_000));
         world.scheduler.stop();
         let armed = world.scheduler.generation.load(Ordering::Relaxed);
@@ -881,8 +881,8 @@ print(json.dumps({"type":"step_finish","sessionID":sid,"part":{"id":"s1","type":
     #[test]
     fn the_wake_prompt_says_who_set_the_routine_up() {
         let world = world();
-        let coder = world.agent("Coder");
-        let cuddles = world.agent("Cuddles");
+        let coder = world.bot("Coder");
+        let cuddles = world.bot("Cuddles");
         routine::upsert(
             world.store(),
             None,
@@ -906,9 +906,9 @@ print(json.dumps({"type":"step_finish","sessionID":sid,"part":{"id":"s1","type":
     }
 
     #[test]
-    fn a_routine_an_agent_set_up_for_itself_names_nobody() {
+    fn a_routine_a_bot_set_up_for_itself_names_nobody() {
         let world = world();
-        let coder = world.agent("Coder");
+        let coder = world.bot("Coder");
         routine::upsert(
             world.store(),
             None,
@@ -932,7 +932,7 @@ print(json.dumps({"type":"step_finish","sessionID":sid,"part":{"id":"s1","type":
     #[test]
     fn run_now_fires_one_routine_on_demand() {
         let world = world();
-        let coder = world.agent("Coder");
+        let coder = world.bot("Coder");
         // Not due for half an hour: only the manual trigger can start it.
         let routine = world.routine(&coder, "Standup", Some(now_millis() + 1_800_000));
 
@@ -951,7 +951,7 @@ print(json.dumps({"type":"step_finish","sessionID":sid,"part":{"id":"s1","type":
     #[test]
     fn the_run_history_stays_capped_and_newest_first() {
         let world = world();
-        let coder = world.agent("Coder");
+        let coder = world.bot("Coder");
         let routine = world.routine(&coder, "Standup", Some(now_millis() - 1_000));
         let old: Vec<RoutineRun> = (0..MAX_RUNS)
             .map(|i| RoutineRun {

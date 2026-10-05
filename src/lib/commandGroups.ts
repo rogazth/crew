@@ -30,8 +30,8 @@ const GROUPS: { title: string; entries: Entry[] }[] = [
     ],
   },
   {
-    title: "Agents and sessions",
-    entries: ["new-agent", "new-session", "open-routines"],
+    title: "Bots and sessions",
+    entries: ["new-bot", "new-session", "open-routines"],
   },
   {
     title: "Commands",

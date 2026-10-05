@@ -59,18 +59,18 @@ const INTERRUPT_GRACE: Duration = Duration::from_millis(1500);
 /// the result it had, so a server left running in the background cannot hold
 /// it forever.
 const BACKGROUND_GRACE: Duration = Duration::from_secs(600);
-/// A self-addressed letter is how an agent keeps working. This many laps in a
+/// A self-addressed letter is how a bot keeps working. This many laps in a
 /// row without anyone else speaking is a runaway, not a plan.
 const MAX_SELF_TURNS: u32 = 25;
 const STDERR_TAIL: usize = 12;
-/// The four an agent reaches for on most turns: named here with their
+/// The four a bot reaches for on most turns: named here with their
 /// arguments, so a turn that needs one does not first spend a `find_tool` on it.
 const EVERYDAY: [&str; 4] = ["list_agents", "message_agent", "continue_after_turn", "search_messages"];
 
-/// The Crew tools an agent is handed, spelled the way its own harness will
+/// The Crew tools a bot is handed, spelled the way its own harness will
 /// accept them.
 ///
-/// The names matter more than they look. An agent told about `message_agent`
+/// The names matter more than they look. A bot told about `message_agent`
 /// goes looking for `message_agent`, and what it finds is whatever else it has
 /// of that shape — with Claude Code that is its own cross-session SendMessage,
 /// which writes to another machine entirely. Measured, not guessed: it happened
@@ -78,7 +78,7 @@ const EVERYDAY: [&str; 4] = ["list_agents", "message_agent", "continue_after_tur
 ///
 /// For a provider with MCP: nothing is in `tools/list` but the gateway, so
 /// every tool is spelled as a `call_tool` of it. Never the bare name on its
-/// own, which is the one the agent cannot call.
+/// own, which is the one the bot cannot call.
 fn tools_hint(spell: &dyn Fn(&str) -> String, hidden: &[&str]) -> String {
     let find = spell("find_tool");
     let call = spell("call_tool");
@@ -88,7 +88,7 @@ fn tools_hint(spell: &dyn Fn(&str) -> String, hidden: &[&str]) -> String {
         "Crew gives you tools through its crew MCP server. Only two are in your tool list: {find} \
          searches the rest by what you want to do and returns each with its arguments, and {call} \
          runs one by name. The ones most turns need:\n\
-         - {} — the other agents here, each with the id it is addressed by.\n\
+         - {} — the other bots here, each with the id it is addressed by.\n\
          - {} — write to one of them, by id. It arrives as a turn with your name and id on \
          it, and it is read in its own time. You are not waiting here, and anything it sends \
          back reaches you as a message of its own.\n\
@@ -96,11 +96,11 @@ fn tools_hint(spell: &dyn Fn(&str) -> String, hidden: &[&str]) -> String {
          ends, with the tail of this conversation, so it is how you carry on past work that \
          does not fit in one turn.\n\
          - {} — look up what was already said in this conversation. It does not reach anybody \
-         else's; what another agent knows, you ask it for.\n\
+         else's; what another bot knows, you ask it for.\n\
          - And, through {find} first: {}. One of your own tools whose name sounds like one of \
          these is not Crew's and does not reach this workspace.\n\n\
-         A turn that opens with `## Message` was written by another agent, not by the user. \
-         What you write in the chat is read by the user and does not reach that agent; \
+         A turn that opens with `## Message` was written by another bot, not by the user. \
+         What you write in the chat is read by the user and does not reach that bot; \
          messaging the id on that line through {call} is what does.",
         via("list_agents", "{}"),
         via("message_agent", "{\"to\": \"<id>\", \"text\": \"…\"}"),
@@ -125,26 +125,26 @@ fn opencode_tools_hint(hidden: &[&str]) -> String {
 fn shell_tools_hint(crew: &str) -> String {
     format!(
         "Crew's tools are not in your tool list; they are commands of `{crew}`, run in the shell. \
-         `{crew} --help` lists its groups (agents, sessions, messages, routines, processes, tabs) and \
+         `{crew} --help` lists its groups (bots, sessions, messages, routines, processes, tabs) and \
          `{crew} <group> --help` what each does. The ones most turns need:\n\
-         - `{crew} agents list` — the other agents here, each with the id it is addressed by.\n\
-         - `{crew} agents send <id> <text>` — write to one of them, by id. It arrives as a turn \
+         - `{crew} bots list` — the other bots here, each with the id it is addressed by.\n\
+         - `{crew} bots send <id> <text>` — write to one of them, by id. It arrives as a turn \
          with your name and id on it, and it is read in its own time. You are not waiting here, \
          and anything it sends back reaches you as a message of its own.\n\
-         - `{crew} agents continue <text>` — leave yourself the next step. It arrives as a new \
+         - `{crew} bots continue <text>` — leave yourself the next step. It arrives as a new \
          turn the moment this one ends, with the tail of this conversation, so it is how you \
          carry on past work that does not fit in one turn.\n\
          - `{crew} messages search <query>` — look up what was already said in this \
-         conversation. It does not reach anybody else's; what another agent knows, you ask it for.\n\
+         conversation. It does not reach anybody else's; what another bot knows, you ask it for.\n\
          A command that sounds like one of these but is not `{crew}` does not reach this workspace.\n\n\
-         A turn that opens with `## Message` was written by another agent, not by the user. \
-         What you write in the chat is read by the user and does not reach that agent; \
-         `{crew} agents send` to the id on that line is what does."
+         A turn that opens with `## Message` was written by another bot, not by the user. \
+         What you write in the chat is read by the user and does not reach that bot; \
+         `{crew} bots send` to the id on that line is what does."
     )
 }
 
 /// The provider conversation a child carries on, once its first turn bound
-/// one. An agent never resumes: its memory is the tail Crew hands it.
+/// one. A bot never resumes: its memory is the tail Crew hands it.
 fn child_resume(session: &crate::session::Session) -> Option<String> {
     (session.kind == "child")
         .then(|| session.provider_session_id.clone())
@@ -154,11 +154,11 @@ fn child_resume(session: &crate::session::Session) -> Option<String> {
 
 /// A message a child is handed from whoever started it: who it is from, then
 /// the text. The persona already said what a report is.
-fn child_envelope(from: &crew_protocol::AgentRef, text: &str) -> String {
+fn child_envelope(from: &crew_protocol::BotRef, text: &str) -> String {
     let who = match from.kind.as_deref() {
         Some("user") => "the user".to_string(),
         Some(kind) => format!("{} ({kind} {})", from.name, from.id),
-        None => format!("{} (agent {})", from.name, from.id),
+        None => format!("{} (bot {})", from.name, from.id),
     };
     format!("## From {who}\n\n{text}")
 }
@@ -168,7 +168,7 @@ fn child_envelope(from: &crew_protocol::AgentRef, text: &str) -> String {
 fn child_tools_hint(spell: &dyn Fn(&str) -> String) -> String {
     format!(
         "Crew's tools reach you through its crew MCP server: {} searches them by what you want to do \
-         (run or watch the workspace's dev servers, drive a browser tab, write to one of its agents) \
+         (run or watch the workspace's dev servers, drive a browser tab, write to one of its bots) \
          and {} runs one. Starting sessions of your own is not among them: if the job needs more \
          hands, say so in your report.",
         spell("find_tool"),
@@ -180,7 +180,7 @@ fn child_tools_hint(spell: &dyn Fn(&str) -> String) -> String {
 fn child_shell_hint(crew: &str) -> String {
     format!(
         "Crew's tools are commands of `{crew}` in your shell: `{crew} --help` lists them (processes, \
-         tabs, agents). Starting sessions of your own is not among them: if the job needs more hands, \
+         tabs, bots). Starting sessions of your own is not among them: if the job needs more hands, \
          say so in your report."
     )
 }
@@ -229,7 +229,7 @@ struct Steer {
     sent: String,
     /// What the transcript shows, and who it is from.
     text: String,
-    from: crew_protocol::AgentRef,
+    from: crew_protocol::BotRef,
 }
 
 struct ClaudeLive {
@@ -241,7 +241,7 @@ struct ClaudeLive {
     /// turn: the CLI carries on when they finish.
     background: HashSet<String>,
     /// Whether a `result` waits for those: a child's turn does, since its
-    /// report is the last thing it says. An agent's ends on its first.
+    /// report is the last thing it says. A bot's ends on its first.
     waits_for_background: bool,
     /// Results that ended nothing yet, so the grace timer can tell its own
     /// wait from a later one.
@@ -298,9 +298,9 @@ pub struct TurnHost {
     binaries: Arc<Mutex<HashMap<String, String>>>,
     runtime: Arc<Mutex<Option<tokio::runtime::Handle>>>,
     cancelled: Arc<Mutex<HashSet<String>>>,
-    /// Consecutive turns an agent has started by writing to itself.
+    /// Consecutive turns a bot has started by writing to itself.
     loops: Arc<Mutex<HashMap<String, u32>>>,
-    /// The tool families beside Crew's own, so the sheet in an agent's prompt
+    /// The tool families beside Crew's own, so the sheet in a bot's prompt
     /// names theirs too.
     toolbox: crate::tools::Toolbox,
     /// Wakes whoever waits on a child session when one of its events lands.
@@ -354,7 +354,7 @@ impl TurnHost {
     }
 
     fn hidden_tools(&self) -> Vec<&'static str> {
-        self.toolbox.hidden_names(crate::caller::CallerKind::Agent)
+        self.toolbox.hidden_names(crate::caller::CallerKind::Bot)
     }
 
     pub fn set_runtime(&self, handle: tokio::runtime::Handle) {
@@ -431,8 +431,8 @@ impl TurnHost {
         let session = session::get(&self.store, params.session_id.clone())?
             .ok_or_else(|| "Session not found".to_string())?;
         let child = session.kind == "child";
-        if session.kind != "agent" && !child {
-            return Err("Not an agent session".into());
+        if session.kind != "bot" && !child {
+            return Err("Not a bot session".into());
         }
         if child && session.status == "exited" {
             return Err("This session has exited. Start another one.".into());
@@ -450,13 +450,13 @@ impl TurnHost {
         self.clear_stop(&params.session_id);
         // A turn nobody else asked for is you: that clears the lap budget, so
         // the message the transcript tells you to send actually frees the loop.
-        if params.from_agent.is_none() {
+        if params.from_bot.is_none() {
             self.loops
                 .lock()
                 .unwrap_or_else(|error| error.into_inner())
                 .remove(&params.session_id);
         }
-        // Read before the new message is appended: the tail is what the agent
+        // Read before the new message is appended: the tail is what the bot
         // is reminded of, and this turn is not history yet. A child carries on
         // its provider's own conversation instead, so it is handed none.
         let history = if child {
@@ -470,13 +470,13 @@ impl TurnHost {
             )
         };
         let hidden = params.hidden.unwrap_or(false);
-        match params.from_agent.clone() {
+        match params.from_bot.clone() {
             Some(from) => {
                 // The transcript keeps the letter as it was written: the
                 // envelope is for the model, and the sender's name is already
                 // on the block for the reader.
                 self.transcripts
-                    .append_from_agent(&params.session_id, &params.text, from.clone());
+                    .append_from_bot(&params.session_id, &params.text, from.clone());
                 params.text = if child {
                     child_envelope(&from, &params.text)
                 } else {
@@ -757,15 +757,15 @@ impl TurnHost {
                 self.transcripts.set_status(&session_id, "idle", None);
                 self.transcripts.flush(&session_id);
                 // A stop is the user saying enough; whatever is queued waits
-                // for them, it does not restart the agent.
+                // for them, it does not restart the bot.
                 return;
             }
         }
         self.drain_mailbox(&session_id);
     }
 
-    /// Hand over the next letter waiting for an agent that has just gone quiet.
-    /// This is also how an agent loops: it writes to itself, the letter cannot
+    /// Hand over the next letter waiting for a bot that has just gone quiet.
+    /// This is also how a bot loops: it writes to itself, the letter cannot
     /// be delivered while it is working, and it arrives the moment it stops.
     ///
     /// The one place a letter is claimed, so two callers racing cannot lose one
@@ -787,7 +787,7 @@ impl TurnHost {
             }
         };
         if laps > MAX_SELF_TURNS {
-            // The note stays in the box: it is what the agent told itself to do
+            // The note stays in the box: it is what the bot told itself to do
             // next, and the cap is a pause, not a decision to drop the work.
             let _ = mailbox::release(&self.store, &letter.id);
             self.transcripts.append_system(
@@ -809,12 +809,12 @@ impl TurnHost {
             files: None,
             mentions: None,
             hidden: None,
-            from_agent: Some(letter.from.clone()),
+            from_bot: Some(letter.from.clone()),
             sent_at: Some(letter.at),
             nonce: None,
         });
         if started.is_err() {
-            // Something else took the agent between the turn ending and this
+            // Something else took the bot between the turn ending and this
             // line. The letter goes back at the head of the queue, and that
             // turn's own ending will come back for it.
             let _ = mailbox::release(&self.store, &letter.id);
@@ -823,13 +823,13 @@ impl TurnHost {
         true
     }
 
-    /// Drain an agent's box by id, for a caller that has only that. Used when a
+    /// Drain a bot's box by id, for a caller that has only that. Used when a
     /// letter has just been dropped in.
     pub fn deliver_to(&self, target: &crate::session::Session) -> bool {
         self.drain_mailbox(&target.id)
     }
 
-    /// Letters left waiting for an idle agent — a delivery that raced a turn
+    /// Letters left waiting for an idle bot — a delivery that raced a turn
     /// ending, or a daemon that stopped between the two — are invisible: only
     /// the end of a turn looks in a box. This is the sweep at startup.
     pub fn deliver_waiting(&self) {
@@ -838,7 +838,7 @@ impl TurnHost {
         };
         for session in sessions {
             let idle = !matches!(session.status.as_str(), "working" | "needs-input" | "starting" | "exited");
-            if !(session.kind == "agent" || session.kind == "child") || !idle {
+            if !(session.kind == "bot" || session.kind == "child") || !idle {
                 continue;
             }
             if mailbox::waiting_count(&self.store, &session.id).unwrap_or(0) > 0 {
@@ -849,7 +849,7 @@ impl TurnHost {
 
     /// The end of a child session's turn, in the order a waiter depends on:
     /// the block that marks it, the status, the event at that block's
-    /// position, the letter to an agent parent, and only then the wake-up.
+    /// position, the letter to a bot parent, and only then the wake-up.
     /// A message queued behind the turn goes over last, so the event it
     /// follows is already written.
     fn settle_child(&self, session: &crate::session::Session, outcome: TurnOutcome) {
@@ -883,13 +883,13 @@ impl TurnHost {
             return;
         }
         // Stopped from the window is the user saying enough: what is queued
-        // waits for them, as it does for an agent.
+        // waits for them, as it does for a bot.
         if detail != "stopped" {
             self.drain_mailbox(id);
         }
     }
 
-    /// Write a child's event at the end of its transcript, tell an agent
+    /// Write a child's event at the end of its transcript, tell a bot
     /// parent, and wake whoever waits.
     fn child_event(&self, session: &crate::session::Session, kind: &str, outcome: &str, request: Option<&Value>) {
         let id = session.id.as_str();
@@ -913,7 +913,7 @@ impl TurnHost {
         }
     }
 
-    /// An agent that started a session hears how each turn ended in its own
+    /// A bot that started a session hears how each turn ended in its own
     /// box, so it does not have to sit in a wait to find out. A terminal or
     /// the user has no turns to hand it to: they wait, or read.
     fn report_to_parent(
@@ -931,7 +931,7 @@ impl TurnHost {
         else {
             return;
         };
-        if parent.kind != "agent" {
+        if parent.kind != "bot" {
             return;
         }
         let what = match (kind, outcome) {
@@ -948,7 +948,7 @@ impl TurnHost {
             }
         };
         let body = if report.trim().is_empty() { what } else { format!("{what}\n\n{}", report.trim()) };
-        let from = crew_protocol::AgentRef {
+        let from = crew_protocol::BotRef {
             id: session.id.clone(),
             name: session.name.clone(),
             kind: Some("session".into()),
@@ -1007,7 +1007,7 @@ impl TurnHost {
             } else {
                 let (blocks, _) = self.transcripts.since(&row.id, 0);
                 match blocks.into_iter().find(|block| block.role == crew_protocol::BlockRole::User) {
-                    Some(first) => (first.text, first.from_agent, None),
+                    Some(first) => (first.text, first.from_bot, None),
                     None => {
                         self.transcripts.set_status(&row.id, "error", None);
                         self.child_event(&row, "error", "Crew restarted before its first turn began", None);
@@ -1023,7 +1023,7 @@ impl TurnHost {
                 files: None,
                 mentions: None,
                 hidden,
-                from_agent: from,
+                from_bot: from,
                 sent_at: None,
                 nonce: None,
             });
@@ -1040,7 +1040,7 @@ impl TurnHost {
         self.running.lock().unwrap_or_else(|e| e.into_inner()).contains(session_id)
     }
 
-    /// Who started a child, the way it is told: "Planner (agent <id>)", or
+    /// Who started a child, the way it is told: "Planner (bot <id>)", or
     /// the user.
     fn parent_label(&self, session: &crate::session::Session) -> String {
         match session.parent_id.as_deref().and_then(|id| session::get(&self.store, id.to_string()).ok().flatten()) {
@@ -1151,7 +1151,7 @@ impl TurnHost {
     /// its next step and takes it into the turn it is in; its echo puts the
     /// message in the transcript. Refused when no Claude turn is live to take
     /// it, so the caller can queue it instead.
-    pub fn steer(&self, session_id: &str, text: &str, from: crew_protocol::AgentRef) -> Result<(), String> {
+    pub fn steer(&self, session_id: &str, text: &str, from: crew_protocol::BotRef) -> Result<(), String> {
         let sent = child_envelope(&from, text);
         let message = {
             let mut map = self.lock();
@@ -1187,7 +1187,7 @@ impl TurnHost {
         }
     }
 
-    /// A turn gets its own Claude session, every time. What the agent remembers
+    /// A turn gets its own Claude session, every time. What the bot remembers
     /// is the tail Crew hands it, not whatever the CLI kept.
     fn ensure_claude(&self, session: &crate::session::Session, params: &TurnStart) -> Result<(), String> {
         let session_id = session.id.clone();
@@ -1196,7 +1196,7 @@ impl TurnHost {
             self.agents.kill(&session_id);
             self.detach(&session_id);
         }
-        // A child carries on its own conversation; an agent starts a clean one.
+        // A child carries on its own conversation; a bot starts a clean one.
         let resume = child_resume(session);
         let claude_session_id = resume.clone().unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
@@ -1714,7 +1714,7 @@ impl TurnHost {
                             text: steer.text,
                             hidden: None,
                             files: None,
-                            from_agent: Some(steer.from),
+                            from_bot: Some(steer.from),
                         });
                     }
                 }
@@ -2642,7 +2642,7 @@ mod mailbox_tests {
     }
 
     use super::*;
-    use crew_protocol::{AgentRef, BlockRole};
+    use crew_protocol::{BotRef, BlockRole};
 
     /// An opencode that answers once and stops. Enough to end a turn, which is
     /// the moment the box is drained. `pause` makes it slow enough to interrupt.
@@ -2722,18 +2722,18 @@ print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type
         World { host, dir }
     }
 
-    fn agent(world: &World, workspace_id: &str, name: &str) -> crate::session::Session {
+    fn bot(world: &World, workspace_id: &str, name: &str) -> crate::session::Session {
         crate::session::create(
             world.host.test_store(),
             workspace_id.to_string(),
-            "agent".into(),
+            "bot".into(),
             name.into(),
             "opencode".into(),
             "m".into(),
             "".into(),
             "full".into(),
         )
-        .expect("agent")
+        .expect("bot")
     }
 
     fn workspace(world: &World) -> String {
@@ -2746,7 +2746,7 @@ print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type
         .id
     }
 
-    /// Turns run on their own thread; wait for the agent to go quiet.
+    /// Turns run on their own thread; wait for the bot to go quiet.
     fn settle(world: &World, session_id: &str) {
         for _ in 0..200 {
             let status = crate::session::get(world.host.test_store(), session_id.to_string())
@@ -2780,7 +2780,7 @@ print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type
                 files: None,
                 mentions: None,
                 hidden: None,
-                from_agent: None,
+                from_bot: None,
                 sent_at: None,
                 nonce: None,
             })
@@ -2792,13 +2792,13 @@ print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type
         world.host.transcripts().window(session_id, Some(500), None).blocks
     }
 
-    /// A provider that starts and says nothing must not leave the agent
+    /// A provider that starts and says nothing must not leave the bot
     /// "working" forever.
     #[test]
-    fn a_provider_that_says_nothing_does_not_hang_the_agent() {
+    fn a_provider_that_says_nothing_does_not_hang_the_bot() {
         let world = world();
         let ws = workspace(&world);
-        let coder = agent(&world, &ws, "Coder");
+        let coder = bot(&world, &ws, "Coder");
         let path = world.dir.join("mute-opencode");
         std::fs::write(&path, "#!/usr/bin/env python3\nimport sys, time\nsys.stdin.read()\ntime.sleep(600)\n")
             .expect("write");
@@ -2817,7 +2817,7 @@ print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type
                 files: None,
                 mentions: None,
                 hidden: None,
-                from_agent: None,
+                from_bot: None,
                 sent_at: None,
                 nonce: None,
             })
@@ -2838,12 +2838,12 @@ print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type
     fn a_letter_waiting_is_read_as_soon_as_the_turn_ends() {
         let world = world();
         let ws = workspace(&world);
-        let coder = agent(&world, &ws, "Coder");
-        let cuddles = agent(&world, &ws, "Cuddles");
+        let coder = bot(&world, &ws, "Coder");
+        let cuddles = bot(&world, &ws, "Cuddles");
         mailbox::enqueue(
             world.host.test_store(),
             &cuddles.id,
-            &AgentRef::agent(coder.id.clone(), "Coder"),
+            &BotRef::bot(coder.id.clone(), "Coder"),
             "the branch is green",
         )
         .expect("enqueue");
@@ -2856,7 +2856,7 @@ print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type
             .iter()
             .find(|block| block.role == BlockRole::User && block.text == "the branch is green")
             .expect("the letter never arrived");
-        assert_eq!(delivered.from_agent.as_ref().map(|from| from.name.as_str()), Some("Coder"));
+        assert_eq!(delivered.from_bot.as_ref().map(|from| from.name.as_str()), Some("Coder"));
         assert_eq!(
             mailbox::waiting_count(world.host.test_store(), &cuddles.id).expect("count"),
             0
@@ -2864,7 +2864,7 @@ print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type
     }
 
     /// The turn is the whole prompt: every turn is a new provider session, so
-    /// nothing an agent knows survives except what Crew hands it back.
+    /// nothing a bot knows survives except what Crew hands it back.
     #[test]
     fn a_second_turn_is_handed_the_first_one() {
         let world = world();
@@ -2873,7 +2873,7 @@ print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type
             .host
             .override_binary("opencode", fake_opencode_recording(&world.dir, &seen));
         let ws = workspace(&world);
-        let coder = agent(&world, &ws, "Coder");
+        let coder = bot(&world, &ws, "Coder");
 
         turn(&world, &coder, "el parser se cae con tabs");
         let first = std::fs::read_to_string(&seen).expect("the provider was never spawned");
@@ -2891,10 +2891,10 @@ print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type
         );
     }
 
-    /// The setting overrides an agent that asks: its next turn is spawned the
-    /// way a "full" one is, and turning it off gives the agent its own back.
+    /// The setting overrides a bot that asks: its next turn is spawned the
+    /// way a "full" one is, and turning it off gives the bot its own back.
     #[test]
-    fn bypass_permissions_runs_an_asking_agent_without_asking() {
+    fn bypass_permissions_runs_an_asking_bot_without_asking() {
         let world = world();
         let argv = world.dir.join("argv.txt");
         let fake = world.dir.join("fake-opencode-argv");
@@ -2920,21 +2920,21 @@ print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type
         let asker = crate::session::create(
             world.host.test_store(),
             ws,
-            "agent".into(),
+            "bot".into(),
             "Asker".into(),
             "opencode".into(),
             "m".into(),
             "".into(),
             "ask".into(),
         )
-        .expect("agent");
+        .expect("bot");
         let ran_auto = || {
             let raw = std::fs::read_to_string(&argv).expect("the provider was never spawned");
             serde_json::from_str::<Vec<String>>(&raw).expect("argv").iter().any(|arg| arg == "--auto")
         };
 
         turn(&world, &asker, "one");
-        assert!(!ran_auto(), "an asking agent asks by default");
+        assert!(!ran_auto(), "an asking bot asks by default");
 
         crate::store::set(world.host.test_store(), crate::session::BYPASS_KEY.into(), "on".into()).expect("set");
         turn(&world, &asker, "two");
@@ -2955,12 +2955,12 @@ print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type
             .host
             .override_binary("opencode", fake_opencode_recording(&world.dir, &seen));
         let ws = workspace(&world);
-        let coder = agent(&world, &ws, "Coder");
-        let cuddles = agent(&world, &ws, "Cuddles");
+        let coder = bot(&world, &ws, "Coder");
+        let cuddles = bot(&world, &ws, "Cuddles");
         mailbox::enqueue(
             world.host.test_store(),
             &cuddles.id,
-            &AgentRef::agent(coder.id.clone(), "Coder"),
+            &BotRef::bot(coder.id.clone(), "Coder"),
             "the branch is green",
         )
         .expect("enqueue");
@@ -2973,7 +2973,7 @@ print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type
         // time it was written rather than the time it was handed over.
         assert!(
             prompt.contains(&format!(
-                "## Message\nFrom: Coder (agent {})\nAt: ",
+                "## Message\nFrom: Coder (bot {})\nAt: ",
                 coder.id
             )),
             "{prompt}"
@@ -2984,24 +2984,24 @@ print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type
         assert!(
             rows.iter().any(|block| block.role == BlockRole::User
                 && block.text == "the branch is green"
-                && block.from_agent.is_some()),
+                && block.from_bot.is_some()),
             "the transcript should hold the letter as written: {rows:?}"
         );
     }
 
     #[test]
-    fn a_note_an_agent_left_itself_is_not_the_user_either() {
+    fn a_note_a_bot_left_itself_is_not_the_user_either() {
         let world = world();
         let seen = world.dir.join("prompt.txt");
         world
             .host
             .override_binary("opencode", fake_opencode_recording(&world.dir, &seen));
         let ws = workspace(&world);
-        let coder = agent(&world, &ws, "Coder");
+        let coder = bot(&world, &ws, "Coder");
         mailbox::enqueue(
             world.host.test_store(),
             &coder.id,
-            &AgentRef::agent(coder.id.clone(), "Coder"),
+            &BotRef::bot(coder.id.clone(), "Coder"),
             "next: run the tests",
         )
         .expect("enqueue");
@@ -3015,14 +3015,14 @@ print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type
     }
 
     #[test]
-    fn an_agent_carries_on_by_writing_to_itself() {
+    fn a_bot_carries_on_by_writing_to_itself() {
         let world = world();
         let ws = workspace(&world);
-        let coder = agent(&world, &ws, "Coder");
+        let coder = bot(&world, &ws, "Coder");
         mailbox::enqueue(
             world.host.test_store(),
             &coder.id,
-            &AgentRef::agent(coder.id.clone(), "Coder"),
+            &BotRef::bot(coder.id.clone(), "Coder"),
             "next: run the tests",
         )
         .expect("enqueue");
@@ -3033,7 +3033,7 @@ print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type
         let rows = blocks(&world, &coder.id);
         assert!(
             rows.iter().any(|block| block.text == "next: run the tests"),
-            "the agent did not pick its own note back up"
+            "the bot did not pick its own note back up"
         );
     }
 
@@ -3041,8 +3041,8 @@ print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type
     fn a_runaway_loop_stops_itself() {
         let world = world();
         let ws = workspace(&world);
-        let coder = agent(&world, &ws, "Coder");
-        let me = AgentRef::agent(coder.id.clone(), "Coder");
+        let coder = bot(&world, &ws, "Coder");
+        let me = BotRef::bot(coder.id.clone(), "Coder");
         for _ in 0..(MAX_SELF_TURNS + 2) {
             mailbox::enqueue(world.host.test_store(), &coder.id, &me, "again").expect("enqueue");
         }
@@ -3064,12 +3064,12 @@ print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type
     fn a_stopped_turn_leaves_the_box_alone() {
         let world = world();
         let ws = workspace(&world);
-        let coder = agent(&world, &ws, "Coder");
-        let cuddles = agent(&world, &ws, "Cuddles");
+        let coder = bot(&world, &ws, "Coder");
+        let cuddles = bot(&world, &ws, "Cuddles");
         mailbox::enqueue(
             world.host.test_store(),
             &cuddles.id,
-            &AgentRef::agent(coder.id.clone(), "Coder"),
+            &BotRef::bot(coder.id.clone(), "Coder"),
             "later",
         )
         .expect("enqueue");
@@ -3087,7 +3087,7 @@ print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type
                 files: None,
                 mentions: None,
                 hidden: None,
-                from_agent: None,
+                from_bot: None,
                 sent_at: None,
                 nonce: None,
             })
@@ -3099,18 +3099,18 @@ print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type
         assert_eq!(
             mailbox::waiting_count(world.host.test_store(), &cuddles.id).expect("count"),
             1,
-            "a stop should not hand the agent its next letter"
+            "a stop should not hand the bot its next letter"
         );
     }
 
     /// The cap consumes the letter that trips it: it is claimed, refused, and
-    /// never released. What the agent told itself to do next is gone.
+    /// never released. What the bot told itself to do next is gone.
     #[test]
     fn the_letter_the_cap_refuses_goes_back_in_the_box() {
         let world = world();
         let ws = workspace(&world);
-        let coder = agent(&world, &ws, "Coder");
-        let me = AgentRef::agent(coder.id.clone(), "Coder");
+        let coder = bot(&world, &ws, "Coder");
+        let me = BotRef::bot(coder.id.clone(), "Coder");
         for _ in 0..(MAX_SELF_TURNS + 1) {
             mailbox::enqueue(world.host.test_store(), &coder.id, &me, "again").expect("enqueue");
         }
@@ -3127,13 +3127,13 @@ print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type
 
     /// The transcript says "Send it a message to continue". Doing that does not
     /// reset the lap counter, because only a letter from someone *else* clears
-    /// it, and a user turn is not a letter. The agent can never loop again.
+    /// it, and a user turn is not a letter. The bot can never loop again.
     #[test]
-    fn a_message_from_the_user_lets_the_agent_loop_again() {
+    fn a_message_from_the_user_lets_the_bot_loop_again() {
         let world = world();
         let ws = workspace(&world);
-        let coder = agent(&world, &ws, "Coder");
-        let me = AgentRef::agent(coder.id.clone(), "Coder");
+        let coder = bot(&world, &ws, "Coder");
+        let me = BotRef::bot(coder.id.clone(), "Coder");
         for _ in 0..MAX_SELF_TURNS {
             mailbox::enqueue(world.host.test_store(), &coder.id, &me, "again").expect("enqueue");
         }
@@ -3152,7 +3152,7 @@ print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type
 
         assert!(
             blocks(&world, &coder.id).iter().any(|b| b.text == "one more lap"),
-            "after the user spoke the agent still cannot pick up its own note"
+            "after the user spoke the bot still cannot pick up its own note"
         );
     }
 
@@ -3171,7 +3171,7 @@ print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type
         let opencode = opencode_tools_hint(&crate::tools::hidden_names());
         assert!(opencode.contains(r#"`crew_call_tool` with `{"name": "message_agent""#), "{opencode}");
         let shell = shell_tools_hint("/usr/local/bin/crew");
-        assert!(shell.contains("`/usr/local/bin/crew agents send <id> <text>`"), "{shell}");
+        assert!(shell.contains("`/usr/local/bin/crew bots send <id> <text>`"), "{shell}");
 
         // The bare name never appears on its own: that is the one an agent
         // cannot call, and the one it will go looking for elsewhere.
@@ -3195,7 +3195,7 @@ print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type
     /// Nothing but the gateway is in `tools/list`, and the sheet names it.
     #[test]
     fn a_tool_sheet_covers_the_whole_standing_set() {
-        let standing: Vec<&str> = crate::tools::standing(crate::caller::CallerKind::Agent).iter().map(|tool| tool.name).collect();
+        let standing: Vec<&str> = crate::tools::standing(crate::caller::CallerKind::Bot).iter().map(|tool| tool.name).collect();
         assert_eq!(standing, ["find_tool", "call_tool"]);
         for sheet in [mcp_tools_hint(&crate::tools::hidden_names()), opencode_tools_hint(&crate::tools::hidden_names())] {
             for name in standing.iter() {
@@ -3206,11 +3206,11 @@ print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type
 
     /// And the ones behind the gateway are named too, by name alone.
     ///
-    /// Measured, not guessed: asked to create an agent, a codex agent did not
-    /// find `create_agent` in `tools/list` — it is behind `find_tool` — saw its
-    /// own `spawn_agent`, which sounds exactly like the job, and used that. Then
-    /// it drove the app's window. "Everything else Crew offers" gave it no
-    /// reason to look.
+    /// Measured, not guessed: asked to create a bot, a codex agent did not
+    /// find `create_agent` (now `create_bot`) in `tools/list` — it is behind
+    /// `find_tool` — saw its own `spawn_agent`, which sounds exactly like the
+    /// job, and used that. Then it drove the app's window. "Everything else
+    /// Crew offers" gave it no reason to look.
     #[test]
     fn a_tool_sheet_names_what_is_behind_the_gateway() {
         for sheet in [mcp_tools_hint(&crate::tools::hidden_names()), opencode_tools_hint(&crate::tools::hidden_names())] {
@@ -3220,7 +3220,7 @@ print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type
         }
         // For Cursor the gateway is `crew --help`, and the sheet names its groups.
         let shell = shell_tools_hint("crew");
-        for group in ["agents", "messages", "routines", "processes", "tabs"] {
+        for group in ["bots", "messages", "routines", "processes", "tabs"] {
             assert!(shell.contains(group), "{group} is not on the sheet: {shell}");
         }
     }

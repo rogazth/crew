@@ -2,18 +2,6 @@
 
 export type AgentBinary = { path: string, };
 
-/**
- * Who wrote a message, when it was not the user. Agents address each other by
- * name; the id is what the UI opens when you click it.
- */
-export type AgentRef = { id: string, name: string, 
-/**
- * Absent for an agent. `terminal` is a terminal session, which has no
- * turns and so reads no reply; `user` is the person, from the `crew` CLI,
- * who reads the reply in this chat.
- */
-kind?: string, };
-
 export type ApprovalDecision = "allow" | "always" | "deny";
 
 export type ApprovalResolution = "allow" | "always" | "deny" | "cancelled";
@@ -26,9 +14,9 @@ export type Auth = { auth: string, };
 
 export type Block = { id: string, role: BlockRole, text: string, at?: number, hidden?: boolean, streaming?: boolean, files?: Array<AttachedFile>, tool?: BlockTool, approval?: BlockApproval, question?: BlockQuestion, usage?: TurnUsage, 
 /**
- * Set when another agent wrote this line instead of the user.
+ * Set when another bot wrote this line instead of the user.
  */
-fromAgent?: AgentRef, };
+fromBot?: BotRef, };
 
 export type BlockApproval = { requestId: number, name: string, input?: Record<string, unknown>, decided?: ApprovalDecision, };
 
@@ -37,6 +25,18 @@ export type BlockQuestion = { requestId: number, questions: Array<Question>, ans
 export type BlockRole = "user" | "assistant" | "reasoning" | "tool" | "approval" | "question" | "system";
 
 export type BlockTool = { callId: string, name: string, title: string, status: ToolStatus, detail?: ToolDetail, };
+
+/**
+ * Who wrote a message, when it was not the user. Bots address each other by
+ * name; the id is what the UI opens when you click it.
+ */
+export type BotRef = { id: string, name: string, 
+/**
+ * Absent for a bot. `terminal` is a terminal session, which has no
+ * turns and so reads no reply; `user` is the person, from the `crew` CLI,
+ * who reads the reply in this chat.
+ */
+kind?: string, };
 
 /**
  * crewd → the browser host (Electron main), as the `browser-call` event: run
@@ -55,7 +55,7 @@ deadline: number, };
  */
 export type BrowserLease = { tab: string, workspaceId: string, 
 /**
- * What the holder is called: an agent's or a terminal's name, or "you".
+ * What the holder is called: a bot's or a terminal's name, or "you".
  */
 holder: string, 
 /**
@@ -184,7 +184,7 @@ export type FolderEntry = { name: string, path: string, dir: boolean,
  */
 ignored: boolean, };
 
-export type HarnessEvent = { "type": "session.started", } | { "type": "session.ended", code?: number | null, } | { "type": "session.error", message: string, } | { "type": "session.note", message: string, } | { "type": "user.message", text: string, hidden?: boolean, files?: Array<AttachedFile>, fromAgent?: AgentRef, } | { "type": "system.message", text: string, } | { "type": "session.providerBound", providerSessionId: string, } | { "type": "message.delta", text: string, } | { "type": "message.completed", } | { "type": "reasoning.delta", text: string, } | { "type": "turn.completed", usage?: TurnUsage, } | { "type": "tool.started", callId: string, name: string, title: string, detail?: ToolDetail, } | { "type": "tool.updated", callId: string, title?: string, status?: ToolStatus, detail?: ToolDetail, } | { "type": "approval.requested", requestId: number, name: string, title: string, input?: Record<string, unknown>, } | { "type": "approval.resolved", requestId: number, decision: ApprovalResolution, } | { "type": "question.requested", requestId: number, questions: Array<Question>, } | { "type": "question.resolved", requestId: number, answers: { [key in string]: string } | null, };
+export type HarnessEvent = { "type": "session.started", } | { "type": "session.ended", code?: number | null, } | { "type": "session.error", message: string, } | { "type": "session.note", message: string, } | { "type": "user.message", text: string, hidden?: boolean, files?: Array<AttachedFile>, fromBot?: BotRef, } | { "type": "system.message", text: string, } | { "type": "session.providerBound", providerSessionId: string, } | { "type": "message.delta", text: string, } | { "type": "message.completed", } | { "type": "reasoning.delta", text: string, } | { "type": "turn.completed", usage?: TurnUsage, } | { "type": "tool.started", callId: string, name: string, title: string, detail?: ToolDetail, } | { "type": "tool.updated", callId: string, title?: string, status?: ToolStatus, detail?: ToolDetail, } | { "type": "approval.requested", requestId: number, name: string, title: string, input?: Record<string, unknown>, } | { "type": "approval.resolved", requestId: number, decision: ApprovalResolution, } | { "type": "question.requested", requestId: number, questions: Array<Question>, } | { "type": "question.resolved", requestId: number, answers: { [key in string]: string } | null, };
 
 /**
  * The daemon's first message after a good `auth`, sent as the `hello` event.
@@ -642,9 +642,9 @@ export type Session = { id: string, workspaceId: string, kind: string, name: str
  */
 worktree: string | null, createdAt: number, updatedAt: number, 
 /**
- * The agent whose turns it runs; absent for a terminal and a child.
+ * The bot whose turns it runs; absent for a terminal and a child.
  */
-agentId?: string, 
+botId?: string, 
 /**
  * The session that started it with `start_session`; absent when the user
  * did, or nobody.
@@ -831,12 +831,12 @@ export type TurnRespond = { sessionId: string, requestId: number, decision: Appr
 
 export type TurnStart = { sessionId: string, cwd: string, text: string, files?: Array<AttachedFile>, mentions?: Array<string>, hidden?: boolean, 
 /**
- * Set when this turn is another agent's message, not yours.
+ * Set when this turn is another bot's message, not yours.
  */
-fromAgent?: AgentRef, 
+fromBot?: BotRef, 
 /**
  * When the letter was written, which is not when it was handed over: one
- * that waited in a busy agent's box still says when it was written.
+ * that waited in a busy bot's box still says when it was written.
  */
 sentAt?: number, 
 /**

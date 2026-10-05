@@ -165,7 +165,7 @@ impl Out {
             text,
             hidden: None,
             files: None,
-            from_agent: None,
+            from_bot: None,
         });
     }
 

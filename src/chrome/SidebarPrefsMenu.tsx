@@ -39,14 +39,14 @@ const RECENCIES: { id: Recency; label: string; short: string }[] = [
 const limitLabel = (limit: Limit) => (limit === 0 ? "No limit" : String(limit));
 
 const DETAILS: { id: Detail; label: string; icon: Icon }[] = [
-  { id: "names", label: "Agent names", icon: ALargeSmallIcon },
+  { id: "names", label: "Bot names", icon: ALargeSmallIcon },
   { id: "diff", label: "Diff stats", icon: GitCompareArrowsIcon },
   { id: "status", label: "Status", icon: CircleDashedIcon },
   { id: "updated", label: "Updated", icon: ClockIcon },
 ];
 
 const KINDS: { id: SessionKind; label: string; icon: Icon }[] = [
-  { id: "agent", label: "Agents", icon: BotIcon },
+  { id: "bot", label: "Bots", icon: BotIcon },
   { id: "terminal", label: "Sessions", icon: SquareTerminalIcon },
 ];
 

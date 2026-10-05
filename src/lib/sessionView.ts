@@ -18,16 +18,16 @@ export function parseSessionView(raw: string | null | undefined): SessionView {
 }
 
 /** What fills a session's tab. */
-export type SessionSurface = "agent" | "chat" | "terminal";
+export type SessionSurface = "turns" | "chat" | "terminal";
 
 /**
- * Which view a session uses. An agent is always its chat, and so is a child:
+ * Which view a session uses. A bot is always its chat, and so is a child:
  * Crew drives both turn by turn, so there is no terminal to show. A session
  * shows the chat when the setting asks for it and Crew can read its CLI's
  * history; anything else is its terminal.
  */
 export function sessionSurface(session: Pick<Session, "kind" | "provider">, view: SessionView): SessionSurface {
-  if (session.kind === "agent" || session.kind === "child") return "agent";
+  if (session.kind === "bot" || session.kind === "child") return "turns";
   return view === "chat" && providerOf(session.provider)?.chat ? "chat" : "terminal";
 }
 

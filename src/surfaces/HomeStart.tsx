@@ -11,7 +11,7 @@ type Props = {
   /** A new session in home, with `text` as its first message, in what the chips say. */
   onAsk: (text: string, choice: AgentChoice) => void;
   onOpenFolder: () => void;
-  onNewAgent: () => void;
+  onNewBot: () => void;
   onOpenBrowser: () => void;
 };
 
@@ -24,7 +24,7 @@ const SUGGESTIONS = ["Explain a concept", "Draft an email", "Write a shell one-l
  * terminal as Settings say. The chips are the default every new session
  * starts with, so a pick here is the next ⌘N's too.
  */
-export function HomeStart({ firstRun, onAsk, onOpenFolder, onNewAgent, onOpenBrowser }: Props) {
+export function HomeStart({ firstRun, onAsk, onOpenFolder, onNewBot, onOpenBrowser }: Props) {
   const { effective, update } = useDefaultAgent();
   const [draft, setDraft] = useState("");
   const field = useRef<HTMLTextAreaElement>(null);
@@ -112,7 +112,7 @@ export function HomeStart({ firstRun, onAsk, onOpenFolder, onNewAgent, onOpenBro
         {firstRun && (
           <div className="mt-10 grid grid-cols-3 gap-2">
             <StartCard icon={FolderPlusIcon} title="Open a project folder" hint="Agents get its code, worktrees and commands" onClick={onOpenFolder} />
-            <StartCard icon={BotIcon} title="Meet your first agent" hint="A teammate with a name, a mailbox and a history" onClick={onNewAgent} />
+            <StartCard icon={BotIcon} title="Meet your first bot" hint="A teammate with a name, a mailbox and a history" onClick={onNewBot} />
             <StartCard icon={GlobeIcon} title="Drive a browser tab" hint="Agents can click, fill and screenshot for you" onClick={onOpenBrowser} />
           </div>
         )}

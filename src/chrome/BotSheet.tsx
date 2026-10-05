@@ -1,21 +1,21 @@
 import { FolderIcon, GitBranchIcon, PlusIcon, RefreshCwIcon, ShuffleIcon } from "lucide-react";
 import { useState, type KeyboardEvent, type ReactNode } from "react";
-import { AgentAvatar } from "./AgentAvatar";
+import { BotAvatar } from "./BotAvatar";
 import { Button, Card, Field, Footer, Overlay, Select, TextArea, Toggle, type Option } from "./kit";
 import { ModelPicker } from "./ModelPicker";
-import { BranchRefused, type useAgentSheet } from "../hooks/useAgentSheet";
-import { useAgentAvatar } from "../hooks/useAgentAvatar";
-import { useAgentFaces } from "../hooks/useAgentFaces";
+import { BranchRefused, type useBotSheet } from "../hooks/useBotSheet";
+import { useBotAvatar } from "../hooks/useBotAvatar";
+import { useBotFaces } from "../hooks/useBotFaces";
 import { useDefaultAgent } from "../hooks/useDefaultAgent";
-import { AGENT_AVATARS, dealSeeds, type AgentAvatarId, type AgentFace } from "../lib/agentAvatar";
+import { BOT_AVATARS, dealSeeds, type BotAvatarId, type BotFace } from "../lib/botAvatar";
 import { ACCESSES, DEFAULT_PROVIDER, accessesOf, defaultModelOf, type ProviderId } from "../lib/providers";
 import type { Autonomy, Session, Worktree } from "../lib/types";
 import { branchError, worktreeLabel } from "../lib/worktrees";
 
-/** Where a new agent works: a worktree that exists (null path: the main checkout), or a branch to make one for. */
+/** Where a new bot works: a worktree that exists (null path: the main checkout), or a branch to make one for. */
 export type Place = { kind: "worktree"; path: string | null } | { kind: "branch"; branch: string };
 
-export type AgentDraft = {
+export type BotDraft = {
   name: string;
   provider: string;
   model: string;
@@ -23,34 +23,34 @@ export type AgentDraft = {
   notifications: boolean;
   autonomy: Autonomy;
   place: Place;
-  /** The face it wears: saved against the agent once it exists. */
-  face: AgentFace;
+  /** The face it wears: saved against the bot once it exists. */
+  face: BotFace;
 };
 
 type Props = {
   /** null = creating. */
   session: Session | null;
   worktrees: Worktree[];
-  /** Where a new agent starts out working; null is the main checkout. */
+  /** Where a new bot starts out working; null is the main checkout. */
   initialWorktree: string | null;
   existingNames: string[];
-  /** null while creating: a routine needs an agent that already exists. */
+  /** null while creating: a routine needs a bot that already exists. */
   onNewRoutine: (() => void) | null;
-  onSave: (draft: AgentDraft) => Promise<void>;
+  onSave: (draft: BotDraft) => Promise<void>;
   onClose: () => void;
 };
 
 const VARIANTS = 7;
 
-/** The open sheet, keyed so switching between agents starts a fresh draft. */
-export function AgentSheetHost({
+/** The open sheet, keyed so switching between bots starts a fresh draft. */
+export function BotSheetHost({
   sheet,
   sessions,
   worktrees,
   activeWorktree,
   onNewRoutine,
 }: {
-  sheet: ReturnType<typeof useAgentSheet>;
+  sheet: ReturnType<typeof useBotSheet>;
   sessions: Session[];
   worktrees: Worktree[];
   /** The worktree on screen; null is the main checkout. */
@@ -62,12 +62,12 @@ export function AgentSheetHost({
   const asked = sheet.sheet.worktree;
   const main = worktrees.find((tree) => tree.main)?.path;
   return (
-    <AgentSheet
+    <BotSheet
       key={editing?.id ?? "new"}
       session={editing}
       worktrees={worktrees}
       initialWorktree={asked === undefined ? activeWorktree : asked === main ? null : asked}
-      existingNames={sessions.flatMap((s) => (s.kind === "agent" ? [s.name] : []))}
+      existingNames={sessions.flatMap((s) => (s.kind === "bot" ? [s.name] : []))}
       onNewRoutine={editing ? () => onNewRoutine(editing.id) : null}
       onSave={sheet.save}
       onClose={sheet.close}
@@ -79,20 +79,20 @@ function nameError(name: string, existingNames: string[], current: string | unde
   if (!name) return "Name is required";
   const lower = name.toLowerCase();
   return existingNames.some((n) => n.toLowerCase() === lower && n !== current)
-    ? "An agent with this name already exists"
+    ? "A bot with this name already exists"
     : null;
 }
 
 /**
- * Making or tuning an agent, in the palette's frame: who it is (face and name),
+ * Making or tuning a bot, in the palette's frame: who it is (face and name),
  * where it works, what runs it, how it behaves. ⌘↵ saves from anywhere in it.
  */
-export function AgentSheet({ session, worktrees, initialWorktree, existingNames, onNewRoutine, onSave, onClose }: Props) {
+export function BotSheet({ session, worktrees, initialWorktree, existingNames, onNewRoutine, onSave, onClose }: Props) {
   // Seeded once per mount (the parent keys us by session): the CLI probe landing
   // mid-edit must not wipe what was typed.
   const { effective } = useDefaultAgent();
-  const saved = useAgentFaces()[session?.id ?? ""];
-  const [draft, setDraft] = useState<AgentDraft>(() =>
+  const saved = useBotFaces()[session?.id ?? ""];
+  const [draft, setDraft] = useState<BotDraft>(() =>
     session
       ? {
           name: session.name,
@@ -112,7 +112,7 @@ export function AgentSheet({ session, worktrees, initialWorktree, existingNames,
           notifications: true,
           autonomy: "ask",
           place: { kind: "worktree", path: initialWorktree },
-          // A new agent has no id to draw from yet, so it starts on a seed of its own.
+          // A new bot has no id to draw from yet, so it starts on a seed of its own.
           face: { seed: dealSeeds(1)[0]! },
         },
   );
@@ -120,7 +120,7 @@ export function AgentSheet({ session, worktrees, initialWorktree, existingNames,
   const [saving, setSaving] = useState(false);
   // What git said of the new branch; it stands until "Works in" is touched again.
   const [refused, setRefused] = useState<string | null>(null);
-  const update = (patch: Partial<AgentDraft>) => setDraft((prev) => ({ ...prev, ...patch }));
+  const update = (patch: Partial<BotDraft>) => setDraft((prev) => ({ ...prev, ...patch }));
 
   const name = draft.name.trim();
   const named = nameError(name, existingNames, session?.name);
@@ -148,7 +148,7 @@ export function AgentSheet({ session, worktrees, initialWorktree, existingNames,
   }
 
   return (
-    <Overlay onClose={onClose} width="w-[540px]" label={session ? "Agent settings" : "New agent"}>
+    <Overlay onClose={onClose} width="w-[540px]" label={session ? "Bot settings" : "New bot"}>
       <div onKeyDown={onKeyDown} className="flex min-h-0 flex-1 flex-col">
         <div className="min-h-0 flex-1 space-y-5 overflow-y-auto p-4">
           {/* The name is the sheet's title, as Linear titles a new issue: typed where it will read. */}
@@ -158,7 +158,7 @@ export function AgentSheet({ session, worktrees, initialWorktree, existingNames,
             onChange={(face) => update({ face })}
             heading={
               <div className="flex min-w-0 flex-1 flex-col">
-                <span className="text-[11.5px] text-text-muted">{session ? "Agent settings" : "New agent"}</span>
+                <span className="text-[11.5px] text-text-muted">{session ? "Bot settings" : "New bot"}</span>
                 <input
                   autoFocus
                   spellCheck={false}
@@ -243,7 +243,7 @@ export function AgentSheet({ session, worktrees, initialWorktree, existingNames,
             Cancel
           </Button>
           <Button variant="primary" loading={saving} onClick={() => void submit()}>
-            {session ? "Save" : "Create agent"}
+            {session ? "Save" : "Create bot"}
           </Button>
         </Footer>
       </div>
@@ -253,7 +253,7 @@ export function AgentSheet({ session, worktrees, initialWorktree, existingNames,
 
 /**
  * The face, big, with a hand of others in the same style to swap it for. The
- * style is everyone's unless this agent is given its own.
+ * style is everyone's unless this bot is given its own.
  */
 function FacePicker({
   id,
@@ -262,23 +262,23 @@ function FacePicker({
   onChange,
 }: {
   id: string | null;
-  face: AgentFace;
+  face: BotFace;
   heading: ReactNode;
-  onChange: (face: AgentFace) => void;
+  onChange: (face: BotFace) => void;
 }) {
-  const { avatar } = useAgentAvatar();
+  const { avatar } = useBotAvatar();
   const [hand, setHand] = useState(() => dealSeeds(VARIANTS));
   const style = face.style ?? avatar;
-  // What the face is drawn from: its own seed, else the agent's id.
+  // What the face is drawn from: its own seed, else the bot's id.
   const seed = face.seed ?? id ?? "";
-  const styles: Option<"default" | AgentAvatarId>[] = [
-    { value: "default", label: `Default (${AGENT_AVATARS.find((a) => a.id === avatar)?.label ?? avatar})` },
-    ...AGENT_AVATARS.map((a) => ({ value: a.id, label: a.label })),
+  const styles: Option<"default" | BotAvatarId>[] = [
+    { value: "default", label: `Default (${BOT_AVATARS.find((a) => a.id === avatar)?.label ?? avatar})` },
+    ...BOT_AVATARS.map((a) => ({ value: a.id, label: a.label })),
   ];
 
   return (
     <div className="flex items-start gap-4">
-      <AgentAvatar seed={seed} style={style} bare className="size-16" />
+      <BotAvatar seed={seed} style={style} bare className="size-16" />
       <div className="flex min-w-0 flex-1 flex-col gap-2">
         <div className="flex items-center gap-2">
           {heading}
@@ -305,7 +305,7 @@ function FacePicker({
                 candidate === face.seed ? "bg-selected" : "hover:bg-hover"
               }`}
             >
-              <AgentAvatar seed={candidate} style={style} bare className="size-7" />
+              <BotAvatar seed={candidate} style={style} bare className="size-7" />
             </button>
           ))}
           <button
@@ -323,7 +323,7 @@ function FacePicker({
   );
 }
 
-/** Where a new agent works: one of the workspace's worktrees, or a new branch that gets its own. */
+/** Where a new bot works: one of the workspace's worktrees, or a new branch that gets its own. */
 function WorksIn({
   worktrees,
   place,

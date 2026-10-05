@@ -1,10 +1,10 @@
 import { Collapsible } from "@base-ui/react/collapsible";
 import { Tooltip } from "../../chrome/kit";
 import { ChevronRightIcon, InfoIcon } from "lucide-react";
-import { AgentAvatar } from "../../chrome/AgentAvatar";
+import { BotAvatar } from "../../chrome/BotAvatar";
 import { lazy, memo, Suspense, useState } from "react";
 import { FileTypeIcon } from "../../chrome/FileTypeIcon";
-import type { AgentRef, Block, TurnUsage } from "../../lib/blocks";
+import type { BotRef, Block, TurnUsage } from "../../lib/blocks";
 import { splitMentions } from "../../lib/mentions";
 import { AttachmentStrip } from "./Attachments";
 import { useChatActions } from "./context";
@@ -19,12 +19,12 @@ const Markdown = lazy(() => import("./Markdown").then((m) => ({ default: m.Markd
  * in grey. Attachments are their own row under the bubble: a picture inside it
  * would set the bubble's width, not the words.
  *
- * A turn another agent sent is still `role=user`, but it is not you: it reads
+ * A turn a bot sent is still `role=user`, but it is not you: it reads
  * as an event in the run, like the row the sender sees for having written it,
  * so the bubbles stay the conversation you are actually in.
  */
 export const UserMessage = memo(function UserMessage({ block }: { block: Block }) {
-  if (block.fromAgent) return <AgentMessage block={block} from={block.fromAgent} />;
+  if (block.fromBot) return <Letter block={block} from={block.fromBot} />;
   // A message typed into a session's CLI that its history does not show yet.
   const queued = block.streaming === true;
   return (
@@ -50,11 +50,11 @@ export const UserMessage = memo(function UserMessage({ block }: { block: Block }
 });
 
 /**
- * A letter another agent wrote, folded to one line: who sent it and how it
+ * A letter a bot (or a terminal) wrote, folded to one line: who sent it and how it
  * opens. Folded it still shows the first line — a message you cannot see at
  * all is one you have to click to know you can ignore.
  */
-function AgentMessage({ block, from }: { block: Block; from: AgentRef }) {
+function Letter({ block, from }: { block: Block; from: BotRef }) {
   const { openSession } = useChatActions();
   const [open, setOpen] = useState(false);
   const first = block.text.split("\n").find((line) => line.trim() !== "") ?? "";
@@ -64,7 +64,7 @@ function AgentMessage({ block, from }: { block: Block; from: AgentRef }) {
         className="group flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-left text-[13px] leading-[18px] ring-1 ring-hairline transition-colors hover:bg-hover"
         data-block={block.id}
       >
-        <AgentAvatar seed={from.id} bare className="size-5" />
+        <BotAvatar seed={from.id} bare className="size-5" />
         {from.kind === "user" ? (
           <span className="shrink-0 text-text-muted">You sent this from the command line</span>
         ) : (
@@ -82,7 +82,7 @@ function AgentMessage({ block, from }: { block: Block; from: AgentRef }) {
         <div className="flex flex-col items-start gap-1.5 pt-2">
           {block.text ? (
             <div className="crew-md-row">
-              <div className="crew-bubble is-from-agent">
+              <div className="crew-bubble is-from-bot">
                 <p className="whitespace-pre-wrap">{block.text}</p>
               </div>
               <CopyButton text={block.text} className="crew-copy crew-copy-aside" />

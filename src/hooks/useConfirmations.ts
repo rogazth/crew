@@ -31,7 +31,7 @@ export function useConfirmations({ closeTabsFor, removeSession, removeWorkspace,
   const askSession = useCallback(
     (session: Session) =>
       setConfirm({
-        title: `Delete ${session.kind === "agent" ? "agent" : "session"} "${session.name}"?`,
+        title: `Delete ${session.kind === "bot" ? "bot" : "session"} "${session.name}"?`,
         description: "Its history is removed from this workspace. This cannot be undone.",
         action: "Delete",
         onConfirm: async () => {
@@ -64,7 +64,7 @@ export function useConfirmations({ closeTabsFor, removeSession, removeWorkspace,
     (workspace: Workspace, unsaved: string[]) =>
       setConfirm({
         title: `Remove workspace "${workspace.name}"?`,
-        description: ["Agents and sessions inside it are deleted. Files on disk are untouched.", unsavedCost(unsaved)]
+        description: ["Bots and sessions inside it are deleted. Files on disk are untouched.", unsavedCost(unsaved)]
           .filter(Boolean)
           .join(" "),
         action: "Remove",
@@ -105,7 +105,7 @@ export function useConfirmations({ closeTabsFor, removeSession, removeWorkspace,
   );
 
   /**
-   * A session's tab closes without a word, whatever runs in it: an agent's
+   * A session's tab closes without a word, whatever runs in it: a bot's
    * turn belongs to the daemon, and a terminal session's CLI runs on in crewd
    * until it is stopped. `unsaved` names the files whose edits the close
    * loses; confirming is what discards them.

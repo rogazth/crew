@@ -86,7 +86,7 @@ export function openQuestion(blocks: readonly Block[]): Block | null {
 /**
  * The blocks with what the CLI asks drawn in: a permission takes the place of
  * the pending call it is about (the history already has that call), so the
- * card stands where the call will run, as an agent's does.
+ * card stands where the call will run, as it does in a chat Crew drives.
  */
 export function withAsk(blocks: readonly Block[], ask: SessionAsk | null): Block[] {
   const card = ask ? askBlock(ask, blocks) : null;

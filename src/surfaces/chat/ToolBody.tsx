@@ -1,5 +1,5 @@
 import { memo, type ReactNode } from "react";
-import { agentLabel } from "../../lib/agentNames";
+import { botLabel } from "../../lib/botNames";
 import type { Block } from "../../lib/blocks";
 import type { ToolDetail } from "../../lib/protocol";
 import { detailOf, langProp } from "../../lib/toolDetail";
@@ -15,7 +15,7 @@ const BODIES: { [K in Kind]: Render<K> } = {
   edit: (detail) => <EditBody detail={detail} />,
   search: (detail, failed) => (detail.output ? <Result head="results" text={detail.output} danger={failed} /> : null),
   fetch: (detail, failed) => (detail.output ? <FetchBody text={detail.output} failed={failed} /> : null),
-  message: (detail) => <Pre head={`to ${agentLabel(detail.to)}`} text={detail.text} />,
+  message: (detail) => <Pre head={`to ${botLabel(detail.to)}`} text={detail.text} />,
   todo: (detail) => <Todos items={detail.items} />,
   agent: (detail) => (
     <Pair

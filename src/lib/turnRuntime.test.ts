@@ -27,14 +27,14 @@ vi.mock("./host", () => ({ notify: (...args: unknown[]) => notify(...args) }));
 vi.mock("./notificationSound", () => ({ playSound: vi.fn() }));
 vi.mock("./toasts", () => ({ showToast: vi.fn() }));
 
-const runtime = await import("./agentRuntime");
+const runtime = await import("./turnRuntime");
 const notifications = await import("./notifications");
 const transcript = await import("./transcript");
 
-const agent = {
+const bot = {
   id: "s1",
   workspaceId: "w1",
-  kind: "agent" as const,
+  kind: "bot" as const,
   name: "Planner",
   provider: "claude",
   model: "m",
@@ -50,7 +50,7 @@ const agent = {
 };
 
 /** What the daemon would broadcast when a session moves. */
-function status(next: string, id = agent.id): void {
+function status(next: string, id = bot.id): void {
   emit("session-status", { sessionId: id, status: next, updatedAt: 1 });
 }
 
@@ -79,18 +79,18 @@ beforeEach(async () => {
   notify.mockResolvedValue("shown");
   notifications.resetNotifications();
   request.mockResolvedValue({ blocks: [], seq: 0, working: false, status: "idle" });
-  await runtime.dispose(agent.id);
+  await runtime.dispose(bot.id);
   runtime.setForeground(null);
-  await runtime.reconcile([agent]);
+  await runtime.reconcile([bot]);
 });
 
 describe("send", () => {
   it("does not start a second turn while one is running", async () => {
     request.mockResolvedValue({ blocks: [], fromPos: 0, toPos: 0, more: false, seq: 0, working: true, status: "working" });
-    await transcript.load(agent.id);
+    await transcript.load(bot.id);
     request.mockClear();
 
-    expect(await runtime.send(agent, "/tmp", "hello")).toBe(false);
+    expect(await runtime.send(bot, "/tmp", "hello")).toBe(false);
     expect(request).not.toHaveBeenCalledWith("turn_start", expect.anything());
   });
 
@@ -102,9 +102,9 @@ describe("send", () => {
       if (method !== "turn_start") return Promise.resolve({ blocks: [], seq: 0, working: false, status: "idle" });
       calls.push(params);
       if (calls.length === 1) return Promise.reject(new Error("Crew daemon is not reachable"));
-      return Promise.resolve({ sessionId: agent.id });
+      return Promise.resolve({ sessionId: bot.id });
     });
-    const settled = runtime.send(agent, "/tmp", "hello");
+    const settled = runtime.send(bot, "/tmp", "hello");
     await vi.waitFor(() => expect(calls).toHaveLength(2));
     status("idle");
     expect(await settled).toBe(true);
@@ -120,17 +120,17 @@ describe("send", () => {
       starts += 1;
       return Promise.reject(new Error("Turn already running"));
     });
-    expect(await runtime.send(agent, "/tmp", "hello")).toBe(false);
+    expect(await runtime.send(bot, "/tmp", "hello")).toBe(false);
     expect(starts).toBe(1);
   });
 
   it("answers false when the turn ends in an error", async () => {
     request.mockImplementation((method: string) =>
       method === "turn_start"
-        ? Promise.resolve({ sessionId: agent.id })
+        ? Promise.resolve({ sessionId: bot.id })
         : Promise.resolve({ blocks: [], seq: 0, working: false, status: "idle" }),
     );
-    const settled = runtime.send(agent, "/tmp", "hello");
+    const settled = runtime.send(bot, "/tmp", "hello");
     await vi.waitFor(() => expect(request).toHaveBeenCalledWith("turn_start", expect.anything()));
     status("error");
     expect(await settled).toBe(false);
@@ -149,7 +149,7 @@ describe("the status the sidebar sees", () => {
   // The user is already looking at it; a badge for something they watched
   // happen is noise.
   it("shows it as idle when it is the chat on screen", () => {
-    runtime.setForeground(agent.id);
+    runtime.setForeground(bot.id);
     const seen: string[] = [];
     const off = runtime.onSessionPatch((_id, patch) => patch.status && seen.push(patch.status));
     status("done");
@@ -161,7 +161,7 @@ describe("the status the sidebar sees", () => {
     status("done");
     const seen: string[] = [];
     const off = runtime.onSessionPatch((_id, patch) => patch.status && seen.push(patch.status));
-    runtime.setForeground(agent.id);
+    runtime.setForeground(bot.id);
     off();
     expect(seen).toEqual(["idle"]);
   });
@@ -171,10 +171,10 @@ describe("the status the sidebar sees", () => {
     status("error");
     const seen: string[] = [];
     const off = runtime.onSessionPatch((_id, patch) => patch.status && seen.push(patch.status));
-    runtime.setForeground(agent.id);
+    runtime.setForeground(bot.id);
     off();
     expect(seen).toEqual(["idle"]);
-    expect(request).toHaveBeenCalledWith("session_mark_read", { id: agent.id });
+    expect(request).toHaveBeenCalledWith("session_mark_read", { id: bot.id });
   });
 
   // The turn ended while the socket was down, and its event went with it.
@@ -183,7 +183,7 @@ describe("the status the sidebar sees", () => {
     request.mockImplementation((method: string) =>
       Promise.resolve(
         method === "session_get"
-          ? { ...agent, status: "done", updatedAt: 5 }
+          ? { ...bot, status: "done", updatedAt: 5 }
           : { blocks: [], seq: 0, working: false, status: "done" },
       ),
     );
@@ -195,9 +195,9 @@ describe("the status the sidebar sees", () => {
   });
 
   it("leaves a terminal's status to its terminal", async () => {
-    await runtime.reconcile([{ ...agent, id: "t1", kind: "terminal" }]);
+    await runtime.reconcile([{ ...bot, id: "t1", kind: "terminal" }]);
     request.mockImplementation((method: string) =>
-      Promise.resolve(method === "session_get" ? { ...agent, id: "t1", kind: "terminal", status: "working" } : { blocks: [] }),
+      Promise.resolve(method === "session_get" ? { ...bot, id: "t1", kind: "terminal", status: "working" } : { blocks: [] }),
     );
     const seen: string[] = [];
     const off = runtime.onSessionPatch((id, patch) => id === "t1" && patch.status && seen.push(patch.status));
@@ -209,28 +209,28 @@ describe("the status the sidebar sees", () => {
 });
 
 describe("notifications", () => {
-  it("says what the agent said when the turn ends off screen", async () => {
+  it("says what the bot said when the turn ends off screen", async () => {
     status("done");
     await flush();
     expect(notify).toHaveBeenCalledWith({
       title: "Planner",
       body: expect.any(String),
-      target: { workspaceId: "w1", sessionId: agent.id },
+      target: { workspaceId: "w1", sessionId: bot.id },
       silent: true,
     });
   });
 
   it("says nothing for a turn the reader watched end", async () => {
     focused = true;
-    runtime.setForeground(agent.id);
-    notifications.setVisibleSession(agent.id);
+    runtime.setForeground(bot.id);
+    notifications.setVisibleSession(bot.id);
     status("done");
     await flush();
     expect(notify).not.toHaveBeenCalled();
   });
 
-  it("says nothing at all for an agent with notifications off", async () => {
-    await runtime.reconcile([{ ...agent, notifications: false }]);
+  it("says nothing at all for a bot with notifications off", async () => {
+    await runtime.reconcile([{ ...bot, notifications: false }]);
     status("done");
     status("needs-input");
     await flush();
@@ -245,7 +245,7 @@ describe("notifications", () => {
 
   it("tells a permission prompt from a question", async () => {
     emit("transcript-apply", {
-      sessionId: agent.id,
+      sessionId: bot.id,
       seq: 1,
       event: { type: "approval.requested", requestId: 1, name: "Bash", title: "npm test" },
     });
@@ -253,11 +253,11 @@ describe("notifications", () => {
     expect(notify).toHaveBeenCalledWith(expect.objectContaining({ body: "Wants to run: npm test" }));
   });
 
-  it("says when another agent writes, once that is switched on", async () => {
+  it("says when another bot writes, once that is switched on", async () => {
     const letter = (kind?: string) => ({
-      sessionId: agent.id,
+      sessionId: bot.id,
       seq: 1,
-      event: { type: "user.message", text: "Review #42\nthanks", fromAgent: { id: "s9", name: "Scout", ...(kind ? { kind } : {}) } },
+      event: { type: "user.message", text: "Review #42\nthanks", fromBot: { id: "s9", name: "Scout", ...(kind ? { kind } : {}) } },
     });
     emit("transcript-apply", letter());
     await flush();
@@ -287,14 +287,14 @@ describe("notifications", () => {
 describe("dispose", () => {
   it("kills a turn that is still running and forgets the session", async () => {
     status("working");
-    await runtime.dispose(agent.id);
-    expect(request).toHaveBeenCalledWith("turn_stop", { sessionId: agent.id });
+    await runtime.dispose(bot.id);
+    expect(request).toHaveBeenCalledWith("turn_stop", { sessionId: bot.id });
   });
 
   it("leaves an idle session's daemon alone", async () => {
     status("idle");
     request.mockClear();
-    await runtime.dispose(agent.id);
+    await runtime.dispose(bot.id);
     expect(request).not.toHaveBeenCalledWith("turn_stop", expect.anything());
   });
 });

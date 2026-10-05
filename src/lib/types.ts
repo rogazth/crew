@@ -8,11 +8,11 @@ export type Workspace = {
 };
 
 /**
- * What runs in a session. An agent is a persistent identity whose turns run in
+ * What runs in a session. A bot is a persistent identity whose turns run in
  * its session; a terminal is a CLI the user drives; a child is a CLI another
  * session started with `start_session`, driven by Crew turn by turn.
  */
-export type SessionKind = "agent" | "terminal" | "child";
+export type SessionKind = "bot" | "terminal" | "child";
 
 /** Written by whatever runs the session: the terminal, or the daemon's turns. A child adds starting and exited. */
 export type SessionStatus = "starting" | "idle" | "working" | "needs-input" | "done" | "error" | "exited";
@@ -42,8 +42,8 @@ export type Session = {
   status: SessionStatus;
   createdAt: number;
   updatedAt: number;
-  /** The agent whose turns it runs; absent for a terminal and a child. */
-  agentId?: string;
+  /** The bot whose turns it runs; absent for a terminal and a child. */
+  botId?: string;
   /** Whoever started it with `start_session`; absent when the user did. */
   parentId?: string;
   /** How far its transcript had got at its last event. */

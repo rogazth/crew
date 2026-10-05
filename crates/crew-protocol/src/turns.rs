@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use crate::{AgentRef, ApprovalDecision, AttachedFile, HarnessEvent, Session};
+use crate::{BotRef, ApprovalDecision, AttachedFile, HarnessEvent, Session};
 
 #[derive(Serialize, Deserialize, Clone, Debug, TS)]
 #[serde(rename_all = "camelCase")]
@@ -21,12 +21,12 @@ pub struct TurnStart {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub hidden: Option<bool>,
-    /// Set when this turn is another agent's message, not yours.
+    /// Set when this turn is another bot's message, not yours.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
-    pub from_agent: Option<AgentRef>,
+    pub from_bot: Option<BotRef>,
     /// When the letter was written, which is not when it was handed over: one
-    /// that waited in a busy agent's box still says when it was written.
+    /// that waited in a busy bot's box still says when it was written.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional, type = "number")]
     pub sent_at: Option<i64>,

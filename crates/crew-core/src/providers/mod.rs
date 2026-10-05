@@ -28,8 +28,8 @@ pub fn string_field(rec: Option<&Map<String, Value>>, key: &str) -> Option<Strin
 
 /// What every provider is told before the first word of the conversation.
 ///
-/// It says where the agent is and what the reply is for, and stops there. How
-/// the model writes is the model's; a house style here would reach every agent
+/// It says where the bot is and what the reply is for, and stops there. How
+/// the model writes is the model's; a house style here would reach every bot
 /// the user ever makes, and they did not ask for one.
 ///
 /// Every turn gets this, because every turn is a new session. The date is part
@@ -37,7 +37,7 @@ pub fn string_field(rec: Option<&Map<String, Value>>, key: &str) -> Option<Strin
 /// know what day it is except the one it was trained on.
 pub fn persona_prompt(name: &str, description: &str, tools: Option<&str>) -> String {
     let who = match name.trim() {
-        "" => "the user's agent",
+        "" => "the user's bot",
         named => named,
     };
     let job = description.trim();
@@ -58,7 +58,7 @@ pub fn persona_prompt(name: &str, description: &str, tools: Option<&str>) -> Str
 }
 
 /// What a child session is told before its first turn: who started it, and
-/// that its last message is its report. It is not an agent and has no job
+/// that its last message is its report. It is not a bot and has no job
 /// description; the job is the prompt it was started with.
 pub fn child_persona(parent: &str, tools: Option<&str>) -> String {
     let persona = format!(
@@ -88,7 +88,7 @@ pub fn with_files(text: &str, files: &[String]) -> String {
     }
 }
 
-/// The prompt a turn is: what the agent is, what has been said, then what is
+/// The prompt a turn is: what the bot is, what has been said, then what is
 /// being asked now.
 ///
 /// The turn goes last because it is the instruction, and the tail above it is
@@ -145,7 +145,7 @@ fn today() -> String {
 ///
 /// Getting one wrong is not a crash, which is what makes it worth a test: the
 /// call still runs and the row still appears, but with no detail — a message to
-/// another agent shows as a blob of result JSON instead of who it went to and
+/// another bot shows as a blob of result JSON instead of who it went to and
 /// what it said, in the chat and in the sender's own tail.
 pub fn crew_tool(name: &str) -> Option<&str> {
     ["mcp__crew__", "crew_", "crew."]
@@ -181,7 +181,7 @@ pub fn crew_call<'a>(name: &'a str, input: &'a Map<String, Value>) -> Option<(&'
 }
 
 /// What a Crew tool did, for the one that is worth reading in a transcript: a
-/// message to another agent is half of a conversation happening in two places.
+/// message to another bot is half of a conversation happening in two places.
 pub fn crew_tool_detail(name: &str, input: &Map<String, Value>) -> Option<crew_protocol::ToolDetail> {
     let (verb, input) = crew_call(name, input)?;
     if verb != "message_agent" {
@@ -431,18 +431,18 @@ mod tests {
     }
 
     #[test]
-    fn the_persona_names_the_agent_and_its_job() {
+    fn the_persona_names_the_bot_and_its_job() {
         let prompt = persona_prompt("Planner", "You keep the roadmap.", None);
         assert!(prompt.starts_with("You are Planner. You keep the roadmap."), "{prompt}");
         assert!(prompt.contains("chatting inside Crew"), "{prompt}");
     }
 
     #[test]
-    fn an_agent_with_no_job_is_still_somebody() {
+    fn a_bot_with_no_job_is_still_somebody() {
         let prompt = persona_prompt("Planner", "   ", None);
         assert!(prompt.starts_with("You are Planner. You are chatting"), "{prompt}");
         let unnamed = persona_prompt("  ", "", None);
-        assert!(unnamed.starts_with("You are the user's agent."), "{unnamed}");
+        assert!(unnamed.starts_with("You are the user's bot."), "{unnamed}");
     }
 
     /// The user asked for a harness that does not tell the model how to talk.
@@ -498,7 +498,7 @@ mod tests {
     }
 
     /// The bug this replaced: every provider was resumed, so the persona and the
-    /// tool sheet reached an agent once, on the turn it was created. By its
+    /// tool sheet reached a bot once, on the turn it was created. By its
     /// fortieth turn it was running on whatever its CLI happened to have kept.
     #[test]
     fn every_provider_sends_the_persona_and_the_tail_on_every_turn() {
@@ -584,10 +584,10 @@ mod tests {
         assert!(pair(&codex, "-c", "model_reasoning_effort=\"high\""), "{codex:?}");
     }
 
-    /// The whole point: an agent's memory is the tail Crew hands it, so nothing
-    /// asks a CLI to pick a conversation back up for an agent's turn.
+    /// The whole point: a bot's memory is the tail Crew hands it, so nothing
+    /// asks a CLI to pick a conversation back up for a bot's turn.
     #[test]
-    fn no_provider_asks_its_cli_to_resume_an_agents_turn() {
+    fn no_provider_asks_its_cli_to_resume_a_bots_turn() {
         let runs = [
             claude::build_claude_spawn_args(&claude::ClaudeSpawn {
                 model: None,
@@ -684,8 +684,8 @@ mod tests {
 
     #[test]
     fn a_childs_persona_says_who_started_it_and_what_its_report_is() {
-        let persona = child_persona("Planner (agent a1)", Some("Tools: x."));
-        assert!(persona.starts_with("Started by Planner (agent a1)"), "{persona}");
+        let persona = child_persona("Planner (bot a1)", Some("Tools: x."));
+        assert!(persona.starts_with("Started by Planner (bot a1)"), "{persona}");
         assert!(persona.contains("Your final message of each turn is your report: end with what you did, what is left, and any question."), "{persona}");
         assert!(persona.ends_with("\n\nTools: x."), "{persona}");
     }

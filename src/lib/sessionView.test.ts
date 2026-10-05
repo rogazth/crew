@@ -6,19 +6,19 @@ describe("parseSessionView", () => {
     expect(parseSessionView("chat")).toBe("chat");
     expect(parseSessionView("terminal")).toBe("terminal");
     expect(parseSessionView(null)).toBe("terminal");
-    expect(parseSessionView("agent")).toBe("terminal");
+    expect(parseSessionView("bot")).toBe("terminal");
   });
 });
 
 describe("sessionSurface", () => {
-  it("keeps an agent in its chat whatever the setting says", () => {
-    expect(sessionSurface({ kind: "agent", provider: "claude" }, "terminal")).toBe("agent");
-    expect(sessionSurface({ kind: "agent", provider: "cursor" }, "chat")).toBe("agent");
+  it("keeps a bot in its chat whatever the setting says", () => {
+    expect(sessionSurface({ kind: "bot", provider: "claude" }, "terminal")).toBe("turns");
+    expect(sessionSurface({ kind: "bot", provider: "cursor" }, "chat")).toBe("turns");
   });
 
   it("shows a child in Crew's chat, which is what drives it", () => {
     for (const provider of ["claude", "codex", "opencode", "cursor"]) {
-      expect(sessionSurface({ kind: "child", provider }, "terminal")).toBe("agent");
+      expect(sessionSurface({ kind: "child", provider }, "terminal")).toBe("turns");
     }
   });
 

@@ -4,12 +4,12 @@
 
 Models have confused these before, so they are said the same way everywhere a model reads them: here, the MCP `instructions()` and every session tool's description.
 
-- **Agent** — a persistent identity Crew owns: a name, a description, an autonomy, a mailbox and a history. It lives in the `agents` table. `message_agent` reaches it.
-- **Session** — one provider CLI (claude, codex, opencode, cursor) running a conversation. It lives in the `sessions` table and belongs to an agent (the session its turns run in, under the agent's own id), to whoever started it with `start_session` (a *child*), or to nobody (a *terminal* the user drives).
+- **Bot** — a persistent identity Crew owns: a name, a description, an autonomy, a mailbox and a history. It lives in the `bots` table. `message_agent` reaches it. ("Agent" is not a Crew noun: in the industry's sense, a model plus its harness, it is what Crew calls a session.)
+- **Session** — one provider CLI (claude, codex, opencode, cursor) running a conversation. It lives in the `sessions` table and belongs to a bot (the session its turns run in, under the bot's own id), to whoever started it with `start_session` (a *child*), or to nobody (a *terminal* the user drives).
 
-An agent outlives its sessions; a session is one provider CLI process and can be thrown away.
+A bot outlives its sessions; a session is one provider CLI process and can be thrown away.
 
-Crew is two processes. Electron is the window. `crewd` is the daemon: it holds the agents, the terminals, the processes, the transcripts, and a SQLite file. The window is a client of the daemon. In the packaged app `crewd` is a LaunchAgent: closing the window leaves it running, with everything it started, and **Crew › Quit Crew and Stop Everything** stops it. In dev it is the window's child and stops with it.
+Crew is two processes. Electron is the window. `crewd` is the daemon: it holds the bots, the terminals, the processes, the transcripts, and a SQLite file. The window is a client of the daemon. In the packaged app `crewd` is a LaunchAgent: closing the window leaves it running, with everything it started, and **Crew › Quit Crew and Stop Everything** stops it. In dev it is the window's child and stops with it.
 
 ```mermaid
 flowchart TB
@@ -54,7 +54,7 @@ On launch the app reads `daemon.json` and asks the bridge `whoami` with the user
 
 ## A turn
 
-A turn is one run of the provider CLI. An agent's turn starts a clean provider session; the daemon hands it the tail of the conversation, streams the output back to the window, and writes the transcript when the process exits. A child's turn resumes its own provider session instead (see below).
+A turn is one run of the provider CLI. A bot's turn starts a clean provider session; the daemon hands it the tail of the conversation, streams the output back to the window, and writes the transcript when the process exits. A child's turn resumes its own provider session instead (see below).
 
 ```mermaid
 sequenceDiagram
@@ -78,11 +78,11 @@ Each provider is a module under `crates/crew-core/src/providers/`. It knows how 
 
 ## Sessions a caller starts
 
-Any agent, terminal or the user can hand a job to another provider CLI and get its answer back, without that CLI needing a tool to answer: its last message of each turn is its report. The parent starts it, waits on it and reads what it did, the same moves as a dev server's `start_process`, `wait_for_log` and `read_logs`.
+Any bot, terminal or the user can hand a job to another provider CLI and get its answer back, without that CLI needing a tool to answer: its last message of each turn is its report. The parent starts it, waits on it and reads what it did, the same moves as a dev server's `start_process`, `wait_for_log` and `read_logs`.
 
 ```mermaid
 sequenceDiagram
-  participant P as Parent (agent, terminal, user)
+  participant P as Parent (bot, terminal, user)
   participant D as crewd
   participant C as Child CLI
 
@@ -97,20 +97,20 @@ sequenceDiagram
   D->>C: next turn, resuming its own conversation
 ```
 
-A child is driven by the same `TurnHost` an agent is, with three differences (`crates/crew-core/src/session_tools.rs`, `turns.rs`): it resumes its provider's conversation (`claude --resume`, `codex exec resume`, `opencode run --session`, `cursor-agent --resume`) where an agent is handed the tail; its persona is the envelope — who started it, and that its final message is its report; and the end of each of its turns is an event. Every event appends a block to its transcript, so the event's position there is a cursor no other event shares: `wait_for_session` and `read_session` count in the same numbers, and a turn that began and ended between two waits is found by position, not by status. Crew keeps what the owner last saw, so a wait without a cursor starts there.
+A child is driven by the same `TurnHost` a bot is, with three differences (`crates/crew-core/src/session_tools.rs`, `turns.rs`): it resumes its provider's conversation (`claude --resume`, `codex exec resume`, `opencode run --session`, `cursor-agent --resume`) where a bot is handed the tail; its persona is the envelope — who started it, and that its final message is its report; and the end of each of its turns is an event. Every event appends a block to its transcript, so the event's position there is a cursor no other event shares: `wait_for_session` and `read_session` count in the same numbers, and a turn that began and ended between two waits is found by position, not by status. Crew keeps what the owner last saw, so a wait without a cursor starts there.
 
-The limits: a child sees no session tool (depth one); a parent has at most four live ones; a child's autonomy is the parent's or lower, and an `ask` parent cannot allow what its child asks for; only the parent, or the user, drives a child; an agent's own session is reached through `message_agent`. An agent parent also finds each report in its mailbox, taken back out if it already read it with a wait. `send_to_session` queues behind a running turn; `mode: steer` writes into it instead, which Claude takes at its next step (its `--replay-user-messages` echo says when), and the others refuse. Idle children exit after 30 minutes. A child caught mid-turn by a restart of `crewd` carries on when it comes back. The window lists a child under whoever started it, and opens it as Crew's chat.
+The limits: a child sees no session tool (depth one); a parent has at most four live ones; a child's autonomy is the parent's or lower, and an `ask` parent cannot allow what its child asks for; only the parent, or the user, drives a child; a bot's own session is reached through `message_agent`. A bot parent also finds each report in its mailbox, taken back out if it already read it with a wait. `send_to_session` queues behind a running turn; `mode: steer` writes into it instead, which Claude takes at its next step (its `--replay-user-messages` echo says when), and the others refuse. Idle children exit after 30 minutes. A child caught mid-turn by a restart of `crewd` carries on when it comes back. The window lists a child under whoever started it, and opens it as Crew's chat.
 
-## Agents writing to each other
+## Bots writing to each other
 
-An agent leaves a letter. The daemon delivers it as a turn on the other agent, with the sender on it. If that agent is busy, the letter waits until the current turn ends.
+A bot leaves a letter. The daemon delivers it as a turn on the other bot, with the sender on it. If that bot is busy, the letter waits until the current turn ends.
 
 ```mermaid
 sequenceDiagram
-  participant A as Agent A
+  participant A as Bot A
   participant D as crewd
   participant M as mailbox
-  participant B as Agent B
+  participant B as Bot B
 
   A->>D: message_agent
   D->>M: insert the letter
@@ -123,23 +123,23 @@ sequenceDiagram
   end
 ```
 
-Claude, Codex, and opencode reach Crew through an MCP server (`crewd --mcp`) whose `tools/list` is only `find_tool` and `call_tool`: every other tool is found and run through them, so no schema sits in a prompt that does not need it, and the chat reads a `call_tool` row as the tool it named. Cursor reaches the same bridge by running `crew` commands in the shell (`crew agents send <id> <text>`), found with `crew --help`.
+Claude, Codex, and opencode reach Crew through an MCP server (`crewd --mcp`) whose `tools/list` is only `find_tool` and `call_tool`: every other tool is found and run through them, so no schema sits in a prompt that does not need it, and the chat reads a `call_tool` row as the tool it named. Cursor reaches the same bridge by running `crew` commands in the shell (`crew bots send <id> <text>`), found with `crew --help`.
 
 ## Who is calling
 
 The bridge is a UNIX socket in the data dir. Every request carries a token, and the token alone says who is calling (`crates/crew-core/src/caller.rs`):
 
-- **An agent.** A token per session, minted when a turn starts and retired by the next one.
-- **A terminal session.** `pty_spawn` with `session` has the daemon complete the argv the window built: the provider's MCP flag (Claude's `--mcp-config` is added to the user's own servers, not in place of them) and `CREW_SOCKET`/`CREW_TOKEN` in the environment. The token belongs to that one process and is handed back when it is reaped. A terminal has no turns, so it is not offered `continue_after_turn`, and a letter it sends tells the agent that no reply can reach it. Its terminal is keyed by the session (`<workspace>/session:<id>`), not by the tab: closing the tab sends `pty_detach`, and the CLI runs on, draining into the ring without waiting for a viewer's credit, until a tab opened again attaches to it (`pty_spawn` with `reuse`). `session_stop` ends it, and so does deleting the session, its worktree or its workspace; `sessions_running` tells a reloaded window which are still up.
+- **A bot.** A token per session, minted when a turn starts and retired by the next one.
+- **A terminal session.** `pty_spawn` with `session` has the daemon complete the argv the window built: the provider's MCP flag (Claude's `--mcp-config` is added to the user's own servers, not in place of them) and `CREW_SOCKET`/`CREW_TOKEN` in the environment. The token belongs to that one process and is handed back when it is reaped. A terminal has no turns, so it is not offered `continue_after_turn`, and a letter it sends tells the bot that no reply can reach it. Its terminal is keyed by the session (`<workspace>/session:<id>`), not by the tab: closing the tab sends `pty_detach`, and the CLI runs on, draining into the ring without waiting for a viewer's credit, until a tab opened again attaches to it (`pty_spawn` with `reuse`). `session_stop` ends it, and so does deleting the session, its worktree or its workspace; `sessions_running` tells a reloaded window which are still up.
 - **The user.** `<data-dir>/daemon.json` (0600) holds the WebSocket `url` and `token`, the bridge `socket`, a `userToken` and the `version`. It is written when the daemon starts and removed when it stops cleanly. A call with the user token names its workspace with `workspace`, an id or a path inside it. This is what the `crew` CLI reads.
 
-This is policy, not isolation. Every process Crew starts, agents and terminals included, runs as the user's UID and can read `daemon.json`, whose `userToken` speaks as the user (no process approval, `daemon/shutdown`) and whose WebSocket `token` has every power the window has. The 0600 mode keeps it from other users, not from sessions. What keeps a session to its own identity is that the tools it is handed use its own token: `crew` inside a session never falls back to `daemon.json`, and a process that goes and reads the file itself is not stopped.
+This is policy, not isolation. Every process Crew starts, bots and terminals included, runs as the user's UID and can read `daemon.json`, whose `userToken` speaks as the user (no process approval, `daemon/shutdown`) and whose WebSocket `token` has every power the window has. The 0600 mode keeps it from other users, not from sessions. What keeps a session to its own identity is that the tools it is handed use its own token: `crew` inside a session never falls back to `daemon.json`, and a process that goes and reads the file itself is not stopped.
 
 `tools/list`, `find_tool` and every tool answer according to the caller. The `initialize` of `crewd --mcp` carries `instructions` naming the caller's tools, so a terminal session learns them without Crew touching its prompt. A family of tools that lives in its own module implements `ToolFamily` and is registered on the `Toolbox` in `crewd::serve`.
 
 ## The `crew` command
 
-`crew` (`crates/crew-cli`) is a client of the same bridge. Inside a session (`CREW_SOCKET` or `CREW_TOKEN` set) it takes them and is that session: `--data-dir` does not change that, half a session is refused rather than taken for the user, and `crew daemon` is refused outright, since the daemon runs every session. Only `--as-user`, meant for a human typing at a Crew terminal, makes it the user there. Anywhere else it reads `daemon.json` from `--data-dir`, `$CREW_DATA_DIR` or the installed app's folder, and speaks as the user in the workspace holding the current directory. Its commands are `crew <group> <verb>` (agents, messages, routines, processes, tabs), one per tool and built from the tool's schema (`crates/crew-cli/src/commands.rs`), so the CLI and MCP cannot drift apart: a test fails if a tool has no command. A few are written by hand where a shell wants more than the tool (`processes logs -f`, `agents send <name>`). The bridge answers two methods for it beside `tools/*`: `tools/catalog`, every tool the caller may run; and `whoami`, for `crew status`. `crew mcp` is the stdio server; `crewd --mcp` stays one version as an alias. The app bundles `crew` next to `crewd`, and **Settings › General › Command line** links it onto the user's PATH. A Linux machine gets `crewd` alone, with `crew` a symlink to it: `crewd` run under that name is the CLI, so the `crew` beside `crewd` that a Cursor session is told to run is there too. When the LaunchAgent serves the data dir, `crew daemon stop` asks for `daemon/shutdown`, `restart` is `launchctl kickstart -k` and `status` adds what `launchctl print` says; otherwise they go through the pid in `daemon.json`. `crew daemon install|uninstall` write or remove the plist and bootstrap or boot it out.
+`crew` (`crates/crew-cli`) is a client of the same bridge. Inside a session (`CREW_SOCKET` or `CREW_TOKEN` set) it takes them and is that session: `--data-dir` does not change that, half a session is refused rather than taken for the user, and `crew daemon` is refused outright, since the daemon runs every session. Only `--as-user`, meant for a human typing at a Crew terminal, makes it the user there. Anywhere else it reads `daemon.json` from `--data-dir`, `$CREW_DATA_DIR` or the installed app's folder, and speaks as the user in the workspace holding the current directory. Its commands are `crew <group> <verb>` (bots, messages, routines, processes, tabs), one per tool and built from the tool's schema (`crates/crew-cli/src/commands.rs`), so the CLI and MCP cannot drift apart: a test fails if a tool has no command. A few are written by hand where a shell wants more than the tool (`processes logs -f`, `bots send <name>`). The bridge answers two methods for it beside `tools/*`: `tools/catalog`, every tool the caller may run; and `whoami`, for `crew status`. `crew mcp` is the stdio server; `crewd --mcp` stays one version as an alias. The app bundles `crew` next to `crewd`, and **Settings › General › Command line** links it onto the user's PATH. A Linux machine gets `crewd` alone, with `crew` a symlink to it: `crewd` run under that name is the CLI, so the `crew` beside `crewd` that a Cursor session is told to run is there too. When the LaunchAgent serves the data dir, `crew daemon stop` asks for `daemon/shutdown`, `restart` is `launchctl kickstart -k` and `status` adds what `launchctl print` says; otherwise they go through the pid in `daemon.json`. `crew daemon install|uninstall` write or remove the plist and bootstrap or boot it out.
 
 ## Files
 
@@ -151,7 +151,7 @@ The explorer (⌘⇧E, `src/chrome/explorer`) does not use that list: it reads o
 
 ## Notifications
 
-Every notification goes through `dispatchNotification` (`src/lib/notifications.ts`), which shows it or answers why not: notifications off, do not disturb, the kind switched off, the session's own switch off, the window focused on that very session, or the same news within five seconds (keyed by session, so a CLI that rings and then stops to ask is one notification). Its sources are agent sessions' status and harness events in `agentRuntime.ts` (a question, a permission prompt, a letter from another agent), terminal sessions' tracker and bells, OSC 9 and 777 included (`useSessionActivity`), a CLI's hooks reporting a new ask (`Terminals.tsx`), a command that exits with an error or that auto-restart gave up on (`processAlerts.ts`), and a remote machine dropping or coming back. Each kind has a banner switch and a sound in **Settings › Notifications**, kept in the daemon's state as `notifications:prefs`. Crew in the background gets a native banner; in front, a toast with Open (`chrome/Toaster.tsx`). The window plays the sound itself (`notificationSound.ts`, bundled WAVs made by `scripts/sounds.mjs`, or a file the user picked, which main reads) and keeps the banner silent, unless the sound is the system's. Main (`electron/notifications.ts`) holds each banner until it is clicked, which brings the window up and sends the target back so the window opens that session, switching workspace first if it must; a banner that fails to show is the sign macOS has Crew's notifications off, and Settings links to System Settings. The Dock badge counts sessions that started waiting while Crew was in the background and clears when it comes forward (`notificationBadge.ts`).
+Every notification goes through `dispatchNotification` (`src/lib/notifications.ts`), which shows it or answers why not: notifications off, do not disturb, the kind switched off, the session's own switch off, the window focused on that very session, or the same news within five seconds (keyed by session, so a CLI that rings and then stops to ask is one notification). Its sources are the status and harness events of the chats Crew drives, in `turnRuntime.ts` (a question, a permission prompt, a letter from a bot), terminal sessions' tracker and bells, OSC 9 and 777 included (`useSessionActivity`), a CLI's hooks reporting a new ask (`Terminals.tsx`), a command that exits with an error or that auto-restart gave up on (`processAlerts.ts`), and a remote machine dropping or coming back. Each kind has a banner switch and a sound in **Settings › Notifications**, kept in the daemon's state as `notifications:prefs`. Crew in the background gets a native banner; in front, a toast with Open (`chrome/Toaster.tsx`). The window plays the sound itself (`notificationSound.ts`, bundled WAVs made by `scripts/sounds.mjs`, or a file the user picked, which main reads) and keeps the banner silent, unless the sound is the system's. Main (`electron/notifications.ts`) holds each banner until it is clicked, which brings the window up and sends the target back so the window opens that session, switching workspace first if it must; a banner that fails to show is the sign macOS has Crew's notifications off, and Settings links to System Settings. The Dock badge counts sessions that started waiting while Crew was in the background and clears when it comes forward (`notificationBadge.ts`).
 
 ## A machine that is not this Mac
 

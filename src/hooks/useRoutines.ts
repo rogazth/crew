@@ -5,7 +5,7 @@ import { fromRow, type Routine } from "../lib/routines";
 import { onRoutinesChanged } from "../lib/scheduler";
 import type { Session } from "../lib/types";
 
-/** A routine with the agent that owns it and the directory it runs in. */
+/** A routine with the bot that owns it and the directory it runs in. */
 export type RoutineEntry = { routine: Routine; session: Session; cwd: string };
 
 /**

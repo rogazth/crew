@@ -249,9 +249,9 @@ test("incognito tabs do not come back after a restart; regular ones do", async (
   assert.equal((await browserTabs()).length, 1);
 });
 
-test("⇧⌘A still opens the new agent sheet", async () => {
+test("⇧⌘A still opens the new bot sheet", async () => {
   await chord(`${MOD}+Shift+a`);
-  const sheet = crew.window.getByRole("dialog", { name: "New agent" });
+  const sheet = crew.window.getByRole("dialog", { name: "New bot" });
   await sheet.waitFor();
   await sheet.getByPlaceholder("e.g. Research").click();
   await crew.window.keyboard.press("Escape");

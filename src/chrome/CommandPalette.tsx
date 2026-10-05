@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ArrowLeftIcon, ArrowRightIcon, BotIcon, CodeXmlIcon, CommandIcon, FolderIcon, FolderOpenIcon, GitBranchIcon, GlobeIcon, HatGlassesIcon, HistoryIcon, KeyboardIcon, ListIcon, PanelLeftIcon, PlayIcon, PlusIcon, RotateCcwIcon, RotateCwIcon, SaveIcon, SearchIcon, ServerIcon, SettingsIcon, SquareIcon, SquareTerminalIcon, type LucideIcon as Icon } from "lucide-react";
-import { AgentAvatar } from "./AgentAvatar";
+import { BotAvatar } from "./BotAvatar";
 import { FileTypeIcon } from "./FileTypeIcon";
 import { Footer, GroupHeader } from "./kit";
 import { Kbd } from "./Kbd";
@@ -13,7 +13,7 @@ import type { ProjectFile, Session, Workspace, Worktree } from "../lib/types";
 import { workspaceMark } from "../lib/workspaces";
 import { worktreeLabel, worktreeOf } from "../lib/worktrees";
 
-/** ⌘K agents, worktrees and commands; ⌘P files; ⇧⌘P commands; ⇧⌘O where to work: repo › worktree. */
+/** ⌘K bots, worktrees and commands; ⌘P files; ⇧⌘P commands; ⇧⌘O where to work: repo › worktree. */
 export type PaletteMode = "all" | "files" | "actions" | "context";
 
 const FILE_LIMIT = 50;
@@ -47,7 +47,7 @@ type Props = {
 };
 
 const PLACEHOLDERS: Record<PaletteMode, string> = {
-  all: "Search agents, worktrees, commands…",
+  all: "Search bots, worktrees, commands…",
   files: "Open a file…",
   actions: "Run a command…",
   context: "Switch to repo › worktree…",
@@ -99,12 +99,12 @@ export function CommandPalette(props: Props) {
           const tree = worktreeOf(session, active, props.worktrees);
           return {
             key: `session:${session.id}`,
-            group: "Agents & sessions",
+            group: "Bots & sessions",
             label: session.name,
             detail: tree ? worktreeLabel(tree) : undefined,
             icon:
-              session.kind === "agent" ? (
-                <AgentAvatar seed={session.id} bare className="size-5" />
+              session.kind === "bot" ? (
+                <BotAvatar seed={session.id} bare className="size-5" />
               ) : (
                 <ProviderIcon provider={session.provider} className="size-4" />
               ),
@@ -315,7 +315,7 @@ const ACTION_ICONS: Partial<Record<CommandId, Icon>> = {
   "open-workspace": FolderOpenIcon,
   "switch-workspace": FolderIcon,
   "toggle-sidebar": PanelLeftIcon,
-  "new-agent": BotIcon,
+  "new-bot": BotIcon,
   "new-session": SquareTerminalIcon,
   "new-worktree": GitBranchIcon,
   "new-browser-tab": GlobeIcon,

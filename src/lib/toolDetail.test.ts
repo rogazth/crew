@@ -1,4 +1,4 @@
-import { rememberAgents } from "./agentNames";
+import { rememberBots } from "./botNames";
 import { describe, expect, it } from "vitest";
 import { applyEvent, newBlock } from "./blocks";
 import type { Block, ToolDetail, ToolStatus } from "./protocol";
@@ -89,8 +89,8 @@ describe("toolLine", () => {
   });
 
   // list_agents hands the model ids, so half the message rows arrive as a uuid.
-  it("says the name of the agent an id belongs to", () => {
-    rememberAgents([{ id: "4be7e9ad-a184", name: "Cuddles" }]);
+  it("says the name of the bot an id belongs to", () => {
+    rememberBots([{ id: "4be7e9ad-a184", name: "Cuddles" }]);
     const line = toolLine(tool({ kind: "message", to: "4be7e9ad-a184", text: "done" }));
     expect(line.suffix).toBe("to Cuddles");
   });

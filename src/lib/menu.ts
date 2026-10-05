@@ -12,7 +12,7 @@ export type MenuIcon =
   | "open"
   | "bell"
   | "read"
-  | "agent"
+  | "bot"
   | "terminal"
   | "branch"
   | "reopen"
@@ -54,7 +54,7 @@ export function tidy(entries: MenuEntry[]): MenuEntry[] {
 export type MenuPoint = { x: number; y: number };
 
 export const RENAME: MenuAction = { id: "rename", label: "Rename", icon: "edit", hotkey: "R" };
-export const EDIT: MenuAction = { id: "edit", label: "Agent Settings…", icon: "settings", hotkey: "E" };
+export const EDIT: MenuAction = { id: "edit", label: "Bot Settings…", icon: "settings", hotkey: "E" };
 export const DELETE: MenuAction = {
   id: "delete",
   label: "Delete",

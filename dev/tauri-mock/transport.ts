@@ -53,12 +53,12 @@ const MOCK_WORKTREES = "/Users/me/.crew/worktrees";
 const AVATARS = `${MOCK_WORKTREES}/crew/feat-avatars`;
 const SOCKET_REPLAY = `${MOCK_WORKTREES}/crew/fix-socket-replay`;
 const sessions: Row[] = [
-  session("s1", "w1", "agent", "Planner", "claude", "claude-opus-5", "needs-input"),
-  session("s2", "w1", "agent", "Reviewer", "codex", "gpt-5", "idle", AVATARS),
+  session("s1", "w1", "bot", "Planner", "claude", "claude-opus-5", "needs-input"),
+  session("s2", "w1", "bot", "Reviewer", "codex", "gpt-5", "idle", AVATARS),
   session("s3", "w1", "terminal", "claude", "claude", "claude-sonnet-5", "working"),
   session("s4", "w1", "terminal", "claude 2", "claude", "claude-sonnet-5", "done", SOCKET_REPLAY),
   session("s5", "w2", "terminal", "claude", "claude", "", "idle"),
-  session("s6", "w3", "agent", "Bookkeeper", "cursor", "cursor-grok-4.6", "idle"),
+  session("s6", "w3", "bot", "Bookkeeper", "cursor", "cursor-grok-4.6", "idle"),
 ];
 const state = new Map<string, string>([["active_workspace_id", "w1"]]);
 
@@ -524,7 +524,7 @@ const SEED_BLOCKS = [
     role: "user",
     at: now - 3 * 60e3,
     text: "The sidebar grouping is fixed on my side. Can you run the suite before I open the MR?",
-    fromAgent: { id: "s2", name: "Reviewer" },
+    fromBot: { id: "s2", name: "Reviewer" },
   },
   {
     id: "b13",
@@ -619,7 +619,7 @@ function search(args: Row): Row[] {
   const from = args.from as number | undefined;
   const hits: Row[] = [];
   for (const session of sessions) {
-    if (session.kind !== "agent") continue;
+    if (session.kind !== "bot") continue;
     if (only.length > 0 && !only.includes(session.id as string)) continue;
     // thread() materializes the seed; a search should not depend on
     // whether someone opened the chat first.
@@ -656,9 +656,9 @@ function search(args: Row): Row[] {
   return hits.slice(0, (args.limit as number | undefined) ?? 50);
 }
 
-type MockAgent = { sessionId: string; stage: "idle" | "question" | "approval" };
+type MockTurn = { sessionId: string; stage: "idle" | "question" | "approval" };
 type TranscriptRow = { blocks: Row[]; seq: number; working: boolean; status: string };
-const agents = new Map<string, MockAgent>();
+const turns = new Map<string, MockTurn>();
 const transcripts = new Map<string, TranscriptRow>();
 
 /**
@@ -767,7 +767,7 @@ const QUESTIONS = [
  * approval, a reply with code. Everything the chat has to paint, in order.
  */
 function playTurn(sessionId: string) {
-  agents.set(sessionId, { sessionId, stage: "idle" });
+  turns.set(sessionId, { sessionId, stage: "idle" });
   say(sessionId, "Let me look at how the lookup is built.", 300, () => {
     emitApply(sessionId, {
       type: "tool.started",
@@ -785,8 +785,8 @@ function playTurn(sessionId: string) {
       600,
     );
     setTimeout(() => {
-      const agent = agents.get(sessionId);
-      if (agent) agent.stage = "question";
+      const turn = turns.get(sessionId);
+      if (turn) turn.stage = "question";
       emitStatus(sessionId, "needs-input");
       emitApply(sessionId, { type: "question.requested", requestId: 1, questions: QUESTIONS });
     }, 800);
@@ -794,16 +794,16 @@ function playTurn(sessionId: string) {
 }
 
 function mockAnswer(sessionId: string, requestId: number, answers: Row | null) {
-  const agent = agents.get(sessionId);
-  if (!agent || agent.stage !== "question") return;
-  agent.stage = "idle";
+  const turn = turns.get(sessionId);
+  if (!turn || turn.stage !== "question") return;
+  turn.stage = "idle";
   emitApply(sessionId, { type: "question.resolved", requestId, answers });
   emitStatus(sessionId, "working");
   const summary = answers
     ? `Going with ${Object.values(answers).join(" and ")}.`
     : "No answer, so I will keep the current behaviour.";
   say(sessionId, summary, 300, () => {
-    agent.stage = "approval";
+    turn.stage = "approval";
     emitStatus(sessionId, "needs-input");
     emitApply(sessionId, {
       type: "approval.requested",
@@ -816,9 +816,9 @@ function mockAnswer(sessionId: string, requestId: number, answers: Row | null) {
 }
 
 function mockRespond(sessionId: string, requestId: number, decision: string) {
-  const agent = agents.get(sessionId);
-  if (!agent || agent.stage !== "approval") return;
-  agent.stage = "idle";
+  const turn = turns.get(sessionId);
+  if (!turn || turn.stage !== "approval") return;
+  turn.stage = "idle";
   emitApply(sessionId, { type: "approval.resolved", requestId, decision });
   emitStatus(sessionId, "working");
   const allowed = decision === "allow" || decision === "always";
