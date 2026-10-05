@@ -5,7 +5,8 @@
 // Migration 23 splits agents from sessions: the agent, the terminal and the
 // routine seeded here must come out the other side as they went in. Migration
 // 25 renames agents to bots: the identity, its kind and the window's keys
-// in app_state come out under the new word.
+// in app_state come out under the new word. Migration 26 gives letters a kind
+// and a lifecycle: a delivered one stays delivered, a waiting one pending.
 //
 //   cargo build -p crewd && node scripts/migrate-check.mjs
 import { spawn } from "node:child_process";
@@ -137,6 +138,13 @@ function leaveRowsBehind(blocks) {
   blocks.slice(0, -1).forEach((block, index) => {
     insert.run("s1", index + 1, block.id, block.role, block.text, block.at);
   });
+  // One letter already handed over, one still waiting (for the terminal, so
+  // the startup sweep does not start a turn on it).
+  const letter = db.prepare(
+    "INSERT INTO mailbox (id, to_session, from_session, from_name, text, at, delivered_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+  );
+  letter.run("l1", "s1", "t1", "Refactor", "tests pass", Date.now() - 30_000, Date.now() - 20_000);
+  letter.run("l2", "t1", "s1", "Planner", "rebase on master", Date.now() - 10_000, null);
   for (const version of [10, 11, 12]) {
     db.prepare("INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)").run(version, Date.now());
   }
@@ -242,6 +250,28 @@ checks.push([
     JSON.stringify(JSON.parse(state["sidebar:prefs"] ?? "{}").hiddenKinds) === JSON.stringify(["bot"]),
   JSON.stringify(state),
 ]);
+const mailboxColumns = db.prepare("PRAGMA table_info(mailbox)").all().map((row) => row.name);
+checks.push([
+  "letters have a kind and a lifecycle, sessions the hand-off columns",
+  ["kind", "event_cursor", "claimed_at", "disposed_at"].every((name) => mailboxColumns.includes(name)) &&
+    ["handed_off_by", "user_seen"].every((name) => columns.includes(name)),
+  `${mailboxColumns.join(",")} · ${columns.join(",")}`,
+]);
+if (process.env.CASE === "behind") {
+  const letters = Object.fromEntries(
+    db
+      .prepare("SELECT id, kind, claimed_at, delivered_at, disposed_at FROM mailbox ORDER BY id")
+      .all()
+      .map((row) => [row.id, row]),
+  );
+  const { l1, l2 } = letters;
+  checks.push([
+    "a delivered letter stays delivered, a waiting one pending",
+    l1?.kind === "message" && l1.delivered_at !== null && l1.claimed_at === l1.delivered_at && l1.disposed_at === null &&
+      l2?.kind === "message" && l2.claimed_at === null && l2.delivered_at === null && l2.disposed_at === null,
+    JSON.stringify(letters),
+  ]);
+}
 const searchable = db
   .prepare("SELECT COUNT(*) AS n FROM messages_fts WHERE messages_fts MATCH 'sidebar'")
   .get().n;

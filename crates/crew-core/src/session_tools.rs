@@ -146,14 +146,16 @@ impl SessionTools {
     }
 
     /// The owner has now seen `row` up to `cursor`: the next wait starts
-    /// there, and a report still in a bot parent's box goes back out.
+    /// there, and a report of what it has now seen, still waiting in a bot
+    /// parent's box, is set aside. A message the session wrote is not.
     fn saw(&self, caller: &Caller, row: &Session, cursor: i64) {
         if !Self::is_owner(caller, row) {
             return;
         }
         let _ = session_events::mark_seen(&self.store, &row.id, cursor);
         if let Some(parent) = row.parent_id.as_deref() {
-            let _ = mailbox::take_back(&self.store, parent, &row.id);
+            let seen = session_events::seen(&self.store, &row.id).unwrap_or(cursor);
+            let _ = mailbox::take_back(&self.store, parent, &row.id, seen);
         }
     }
 
@@ -1642,6 +1644,20 @@ while True:
         assert!(out["sessions"][0]["outcome"].as_str().unwrap().contains("idle"));
     }
 
+    impl World {
+        /// Until a block from `from` is in `to`'s transcript.
+        fn heard(&self, to: &str, from: &str) -> Vec<Block> {
+            for _ in 0..200 {
+                let blocks = self.turns.transcripts().since(to, 0).0;
+                if blocks.iter().any(|b| b.from_bot.as_ref().is_some_and(|f| f.id == from)) {
+                    return blocks;
+                }
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            panic!("nothing from {from} reached {to}");
+        }
+    }
+
     #[test]
     fn a_bot_parent_hears_each_turn_in_its_box_unless_it_already_looked() {
         let w = world();
@@ -1650,19 +1666,131 @@ while True:
         let id = w.start(&bot, "x");
         w.settle(&id);
         // The letter woke the bot: its turn ran on it.
-        for _ in 0..200 {
-            if w.turns.transcripts().since(&me, 0).0.iter().any(|b| b.from_bot.as_ref().is_some_and(|f| f.id == id)) {
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(25));
-        }
-        let blocks = w.turns.transcripts().since(&me, 0).0;
+        let blocks = w.heard(&me, &id);
         let letter = blocks.iter().find(|b| b.from_bot.as_ref().is_some_and(|f| f.id == id)).expect("no report reached the bot");
-        assert!(letter.text.contains("Its turn ended") && letter.text.contains("report: x"), "{}", letter.text);
-        // A report the parent read itself does not come again.
-        crate::mailbox::enqueue(w.turns.store(), &me, &crate::caller::Caller::from_session(w.row(&id)).sender(), "late").unwrap();
+        assert_eq!(letter.text, "report: x");
+        w.settle(&me);
+        // A report the parent read itself does not come again; a message the
+        // child wrote it still does.
+        let cursor = w.row(&id).cursor;
+        let from = crate::caller::Caller::from_session(w.row(&id)).sender();
+        let stale = crate::mailbox::Letter::new(&me, &from, "report: x", crate::mailbox::REPORT, Some(cursor));
+        w.turns.store().with(|conn| crate::mailbox::insert(conn, &stale)).unwrap();
+        let message = crate::mailbox::enqueue(w.turns.store(), &me, &from, "which branch?").unwrap();
         w.call(&bot, "read_session", json!({ "session": id })).expect("read");
+        let left: Vec<String> = crate::mailbox::waiting(w.turns.store(), &me).unwrap().into_iter().map(|l| l.id).collect();
+        assert_eq!(left, [message.id]);
+    }
+
+    /// The prompt the bot's turn was handed: what it read.
+    fn prompts(w: &World) -> Vec<String> {
+        w.launches().iter().filter_map(|launch| launch["prompt"].as_str().map(str::to_string)).collect()
+    }
+
+    /// The report that woke the bot is what it has seen of the child: a wait
+    /// afterwards does not hand the same turn out again.
+    #[test]
+    fn a_report_handed_over_is_not_handed_out_again_by_a_wait() {
+        let w = world();
+        let bot = w.session("bot", "Planner", "full");
+        let me = bot.session_id().unwrap().to_string();
+        let id = w.start(&bot, "x");
+        w.settle(&id);
+        w.heard(&me, &id);
+        w.settle(&me);
+        assert_eq!(session_events::seen(w.turns.store(), &id).unwrap(), w.row(&id).cursor);
+        let out = w.wait(&bot, &id, json!({ "timeout_s": 1 }));
+        assert_eq!(out["result"], "nothing-running", "{out}");
+        let woke = prompts(&w).into_iter().find(|p| p.contains("## Report from session")).expect("the bot was never woken");
+        assert!(woke.contains(&format!("## Report from session {} ({id})\n\nreport: x", w.row(&id).name)), "{woke}");
+    }
+
+    /// Reports that land while the bot is busy wait, and the end of its turn
+    /// hands them over together: one turn, one section each, each kept in the
+    /// transcript under the session that wrote it.
+    #[test]
+    fn reports_that_land_while_the_bot_is_busy_wake_it_once() {
+        let w = world();
+        let bot = w.session("bot", "Planner", "full");
+        let me = bot.session_id().unwrap().to_string();
+        let row = w.row(&me);
+        let kids: Vec<Session> = (0..3)
+            .map(|n| {
+                session::create_child(
+                    w.turns.store(), w.workspace.clone(), format!("kid {n}"), "opencode".into(), "m".into(), "full".into(),
+                    None, Some(me.clone()),
+                )
+                .unwrap()
+            })
+            .collect();
+        w.turns
+            .start(TurnStart {
+                session_id: me.clone(),
+                cwd: session::cwd(w.turns.store(), &row).unwrap(),
+                text: "SLEEP 1.5".into(),
+                files: None,
+                mentions: None,
+                hidden: None,
+                from_bot: None,
+                sent_at: None,
+                nonce: None,
+            })
+            .expect("busy");
+        for (n, kid) in kids.iter().enumerate() {
+            let from = crate::caller::Caller::from_session(kid.clone()).sender();
+            let cursor = n as i64 + 2;
+            let letter = crate::mailbox::Letter::new(&me, &from, &format!("kid {n} is done"), crate::mailbox::REPORT, Some(cursor));
+            session_events::record_reporting(w.turns.store(), &kid.id, cursor, "turn", "completed", "", None, Some(&letter))
+                .unwrap();
+            assert!(!w.turns.deliver_to(&row), "a busy bot took a letter mid-turn");
+        }
+        w.heard(&me, &kids[2].id);
+        w.settle(&me);
+        let woke: Vec<String> = prompts(&w).into_iter().filter(|p| p.contains("## Report from session")).collect();
+        assert_eq!(woke.len(), 1, "{woke:?}");
+        assert_eq!(woke[0].matches("## Report from session").count(), 3, "{}", woke[0]);
+        for (n, kid) in kids.iter().enumerate() {
+            assert!(woke[0].contains(&format!("## Report from session kid {n} ({})\n\nkid {n} is done", kid.id)), "{}", woke[0]);
+            assert_eq!(session_events::seen(w.turns.store(), &kid.id).unwrap(), n as i64 + 2);
+        }
+        let letters: Vec<Block> = w
+            .turns
+            .transcripts()
+            .since(&me, 0)
+            .0
+            .into_iter()
+            .filter(|b| b.from_bot.is_some())
+            .collect();
+        let senders: Vec<String> = letters.iter().map(|b| b.from_bot.as_ref().unwrap().id.clone()).collect();
+        assert_eq!(senders, kids.iter().map(|k| k.id.clone()).collect::<Vec<_>>());
         assert_eq!(crate::mailbox::waiting_count(w.turns.store(), &me).unwrap(), 0);
+        let undelivered: i64 = w
+            .turns
+            .store()
+            .with(|conn| conn.query_row("SELECT COUNT(*) FROM mailbox WHERE delivered_at IS NULL", [], |row| row.get(0)))
+            .unwrap();
+        assert_eq!(undelivered, 0, "the turn that carried them ended, so they are delivered");
+    }
+
+    /// A letter a turn was carrying when the daemon stopped is handed over
+    /// again once it is back.
+    #[test]
+    fn a_letter_a_dead_turn_carried_is_handed_over_again() {
+        let w = world();
+        let bot = w.session("bot", "Planner", "full");
+        let me = bot.session_id().unwrap().to_string();
+        let shell = w.session("terminal", "Shell", "full");
+        crate::mailbox::enqueue(w.turns.store(), &me, &shell.sender(), "tests pass").unwrap();
+        // Claimed by a turn that never ended, as a daemon killed mid-turn leaves it.
+        crate::mailbox::claim(w.turns.store(), &me).unwrap().expect("claimed");
+        w.turns.deliver_waiting();
+        assert!(w.turns.transcripts().since(&me, 0).0.is_empty(), "a claimed letter is not handed over twice while it is");
+        // What opening the store does on the way back up.
+        w.turns.store().with(crate::mailbox::release_unfinished).unwrap();
+        w.turns.deliver_waiting();
+        let blocks = w.heard(&me, shell.session_id().unwrap());
+        assert!(blocks.iter().any(|b| b.text == "tests pass"));
+        w.settle(&me);
     }
 
     #[test]

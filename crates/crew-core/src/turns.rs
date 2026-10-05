@@ -232,6 +232,17 @@ struct Steer {
     from: crew_protocol::BotRef,
 }
 
+/// The note that says what woke the model, once it speaks: every summary held
+/// since it last did, as one line.
+fn woken(live: &mut ClaudeLive, events: &mut Vec<HarnessEvent>) {
+    if live.woken_by.is_empty() {
+        return;
+    }
+    events.push(HarnessEvent::SessionNote {
+        message: std::mem::take(&mut live.woken_by).join(" · "),
+    });
+}
+
 struct ClaudeLive {
     claude_session_id: String,
     /// Steers written and not yet echoed, oldest first.
@@ -240,6 +251,10 @@ struct ClaudeLive {
     /// task id. While any is open, a child's `result` is not the end of its
     /// turn: the CLI carries on when they finish.
     background: HashSet<String>,
+    /// What the background work that finished says of itself, held until the
+    /// model speaks again: then it goes in as one note, the marker of what
+    /// woke it, as the history decoder writes it from the CLI's own file.
+    woken_by: Vec<String>,
     /// Whether a `result` waits for those: a child's turn does, since its
     /// report is the last thing it says. A bot's ends on its first.
     waits_for_background: bool,
@@ -427,7 +442,15 @@ impl TurnHost {
             .remove(session_id);
     }
 
-    pub fn start(&self, mut params: TurnStart) -> Result<TurnStarted, String> {
+    pub fn start(&self, params: TurnStart) -> Result<TurnStarted, String> {
+        self.begin(params, Vec::new())
+    }
+
+    /// Start a turn. With `letters`, the turn carries them: each goes in the
+    /// transcript as its own message, with its own sender, and the model is
+    /// handed their envelopes one after the other. They count as delivered
+    /// when this turn ends.
+    fn begin(&self, mut params: TurnStart, letters: Vec<mailbox::Letter>) -> Result<TurnStarted, String> {
         let session = session::get(&self.store, params.session_id.clone())?
             .ok_or_else(|| "Session not found".to_string())?;
         let child = session.kind == "child";
@@ -470,33 +493,54 @@ impl TurnHost {
             )
         };
         let hidden = params.hidden.unwrap_or(false);
-        match params.from_bot.clone() {
-            Some(from) => {
-                // The transcript keeps the letter as it was written: the
-                // envelope is for the model, and the sender's name is already
-                // on the block for the reader.
+        if !letters.is_empty() {
+            // The transcript keeps each letter as it was written, under the
+            // name of whoever wrote it; the envelopes are for the model.
+            for letter in &letters {
                 self.transcripts
-                    .append_from_bot(&params.session_id, &params.text, from.clone());
-                params.text = if child {
-                    child_envelope(&from, &params.text)
-                } else {
-                    mailbox::envelope(
-                        &from,
-                        &params.text,
-                        params.sent_at.unwrap_or_else(crate::store::now_millis),
-                        from.id == params.session_id,
-                    )
-                };
+                    .append_from_bot(&params.session_id, &letter.text, letter.from.clone());
             }
-            None => self
-                .transcripts
-                .append_user(&params.session_id, &params.text, hidden, params.files.clone()),
+            params.text = letters
+                .iter()
+                .map(|letter| {
+                    if child && letter.kind == mailbox::MESSAGE {
+                        child_envelope(&letter.from, &letter.text)
+                    } else {
+                        mailbox::render(letter)
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("\n\n");
+        } else {
+            match params.from_bot.clone() {
+                Some(from) => {
+                    // The transcript keeps the letter as it was written: the
+                    // envelope is for the model, and the sender's name is already
+                    // on the block for the reader.
+                    self.transcripts
+                        .append_from_bot(&params.session_id, &params.text, from.clone());
+                    params.text = if child {
+                        child_envelope(&from, &params.text)
+                    } else {
+                        mailbox::envelope(
+                            &from,
+                            &params.text,
+                            params.sent_at.unwrap_or_else(crate::store::now_millis),
+                            from.id == params.session_id,
+                        )
+                    };
+                }
+                None => self
+                    .transcripts
+                    .append_user(&params.session_id, &params.text, hidden, params.files.clone()),
+            }
         }
         self.transcripts.set_working(&params.session_id, true);
         self.transcripts.set_status(&params.session_id, "working", session.provider_session_id.as_deref());
         let host = self.clone();
+        let carried: Vec<String> = letters.into_iter().map(|letter| letter.id).collect();
         thread::spawn(move || {
-            host.run_turn(session, params, history);
+            host.run_turn(session, params, history, carried);
         });
         Ok(TurnStarted { working: true })
     }
@@ -718,7 +762,7 @@ impl TurnHost {
         Some((info.exe, vec!["--mcp".into()]))
     }
 
-    fn run_turn(&self, session: crate::session::Session, params: TurnStart, history: Option<String>) {
+    fn run_turn(&self, session: crate::session::Session, params: TurnStart, history: Option<String>, carried: Vec<String>) {
         let session_id = session.id.clone();
         let row = session.clone();
         let outcome = match session.provider.as_str() {
@@ -730,6 +774,10 @@ impl TurnHost {
                 "{other} agents are not wired up yet. Pick Claude for now."
             )),
         };
+        // The letters it carried are delivered now that it has ended, however
+        // it ended. A daemon that dies first leaves them claimed, and the next
+        // start hands them over again.
+        let _ = mailbox::delivered(&self.store, &carried);
         // The turn is over: the next one may start, and the drain below is
         // what starts it.
         self.running.lock().unwrap_or_else(|e| e.into_inner()).remove(&session_id);
@@ -764,17 +812,26 @@ impl TurnHost {
         self.drain_mailbox(&session_id);
     }
 
-    /// Hand over the next letter waiting for a bot that has just gone quiet.
+    /// Hand over what is waiting for a bot that has just gone quiet: every
+    /// letter in its box, oldest first, in one turn (up to
+    /// [`mailbox::BATCH_CHARS`] of text; the rest waits for the next turn).
     /// This is also how a bot loops: it writes to itself, the letter cannot
     /// be delivered while it is working, and it arrives the moment it stops.
     ///
-    /// The one place a letter is claimed, so two callers racing cannot lose one
-    /// between them: the loser finds an empty box, which is the truth.
+    /// The one place a turn's letters are claimed, so two callers racing cannot
+    /// lose one between them: the loser finds an empty box, which is the truth.
+    /// Always queued, never steered into a running turn.
     pub fn drain_mailbox(&self, session_id: &str) -> bool {
-        let Ok(Some(letter)) = mailbox::claim(&self.store, session_id) else {
-            return false;
+        let letters = match mailbox::claim_batch(&self.store, session_id, mailbox::BATCH_CHARS) {
+            Ok(letters) if !letters.is_empty() => letters,
+            _ => return false,
         };
-        let to_self = letter.from.id == session_id;
+        let put_back = |letters: &[mailbox::Letter]| {
+            for letter in letters {
+                let _ = mailbox::release(&self.store, &letter.id);
+            }
+        };
+        let to_self = letters.iter().all(|letter| letter.from.id == session_id);
         let laps = {
             let mut laps = self.loops.lock().unwrap_or_else(|error| error.into_inner());
             if to_self {
@@ -789,7 +846,7 @@ impl TurnHost {
         if laps > MAX_SELF_TURNS {
             // The note stays in the box: it is what the bot told itself to do
             // next, and the cap is a pause, not a decision to drop the work.
-            let _ = mailbox::release(&self.store, &letter.id);
+            put_back(&letters);
             self.transcripts.append_system(
                 session_id,
                 &format!("Stopped after {MAX_SELF_TURNS} turns writing to itself. Send it a message to continue."),
@@ -802,23 +859,37 @@ impl TurnHost {
             .flatten()
             .and_then(|session| crate::session::cwd(&self.store, &session).ok())
             .unwrap_or_default();
-        let started = self.start(TurnStart {
-            session_id: session_id.to_string(),
-            cwd,
-            text: letter.text.clone(),
-            files: None,
-            mentions: None,
-            hidden: None,
-            from_bot: Some(letter.from.clone()),
-            sent_at: Some(letter.at),
-            nonce: None,
-        });
+        // What each report shows of its child, to mark seen once it is handed
+        // over: a read or a wait after this does not hand it out again.
+        let reported: Vec<(String, i64)> = letters
+            .iter()
+            .filter(|letter| letter.is_report() && !letter.from.id.is_empty())
+            .filter_map(|letter| letter.event_cursor.map(|cursor| (letter.from.id.clone(), cursor)))
+            .collect();
+        let first = letters[0].clone();
+        let started = self.begin(
+            TurnStart {
+                session_id: session_id.to_string(),
+                cwd,
+                text: String::new(),
+                files: None,
+                mentions: None,
+                hidden: None,
+                from_bot: Some(first.from.clone()),
+                sent_at: Some(first.at),
+                nonce: None,
+            },
+            letters.clone(),
+        );
         if started.is_err() {
             // Something else took the bot between the turn ending and this
-            // line. The letter goes back at the head of the queue, and that
-            // turn's own ending will come back for it.
-            let _ = mailbox::release(&self.store, &letter.id);
+            // line. The letters go back at the head of the queue, and that
+            // turn's own ending will come back for them.
+            put_back(&letters);
             return false;
+        }
+        for (child, cursor) in reported {
+            let _ = crate::session_events::mark_seen(&self.store, &child, cursor);
         }
         true
     }
@@ -889,18 +960,32 @@ impl TurnHost {
         }
     }
 
-    /// Write a child's event at the end of its transcript, tell a bot
-    /// parent, and wake whoever waits.
+    /// Write a child's event at the end of its transcript, with the report
+    /// to a bot parent in the same transaction; then wake whoever waits, and
+    /// only then try to hand the report over.
     fn child_event(&self, session: &crate::session::Session, kind: &str, outcome: &str, request: Option<&Value>) {
         let id = session.id.as_str();
         let cursor = self.transcripts.len(id) as i64;
         let (_, report) = self.transcripts.since(id, cursor as usize);
         let report = if kind == "needs-input" { String::new() } else { report };
-        if let Err(error) = crate::session_events::record(&self.store, id, cursor, kind, outcome, &report, request) {
+        let letter = self.report_letter(session, kind, outcome, &report, request, cursor);
+        let written = crate::session_events::record_reporting(
+            &self.store,
+            id,
+            cursor,
+            kind,
+            outcome,
+            &report,
+            request,
+            letter.as_ref(),
+        );
+        if let Err(error) = &written {
             eprintln!("[crewd] session {id}: the event was not written: {error}");
         }
-        self.report_to_parent(session, kind, outcome, &report, request);
         self.signal.notify();
+        if let (Ok(()), Some(letter)) = (written, letter) {
+            self.drain_mailbox(&letter.to_session);
+        }
     }
 
     /// A child stopped to ask. Only a child has anyone to tell.
@@ -914,48 +999,51 @@ impl TurnHost {
     }
 
     /// A bot that started a session hears how each turn ended in its own
-    /// box, so it does not have to sit in a wait to find out. A terminal or
-    /// the user has no turns to hand it to: they wait, or read.
-    fn report_to_parent(
+    /// box, as a `report` letter that wakes it, so it never sits in a wait to
+    /// find out. A terminal or the user has no turns to hand it to: they wait,
+    /// or read. `None` when there is no bot parent to tell.
+    fn report_letter(
         &self,
         session: &crate::session::Session,
         kind: &str,
         outcome: &str,
         report: &str,
         request: Option<&Value>,
-    ) {
-        let Some(parent) = session
+        cursor: i64,
+    ) -> Option<mailbox::Letter> {
+        let parent = session
             .parent_id
             .as_deref()
-            .and_then(|id| session::get(&self.store, id.to_string()).ok().flatten())
-        else {
-            return;
-        };
+            .and_then(|id| session::get(&self.store, id.to_string()).ok().flatten())?;
         if parent.kind != "bot" {
-            return;
+            return None;
         }
         let what = match (kind, outcome) {
-            ("turn", "completed") => "Its turn ended. Its report:".to_string(),
-            ("turn", _) => "Its turn was stopped. What it said last:".to_string(),
-            ("error", message) => format!("Its turn failed: {message}\nWhat it said last:"),
-            ("exited", why) => format!("It exited ({why})."),
+            ("turn", "completed") => None,
+            ("turn", _) => Some("Its turn was stopped. What it said last:".to_string()),
+            ("error", message) => Some(format!("Its turn failed: {message}\nWhat it said last:")),
+            ("exited", why) => Some(format!("It exited ({why}).")),
             _ => {
                 let asked = request.map(|request| request.to_string()).unwrap_or_default();
-                format!(
+                Some(format!(
                     "It is waiting for an answer before it can go on. respond_to_session answers it, \
                      or the user does in Crew.\n{asked}"
-                )
+                ))
             }
         };
-        let body = if report.trim().is_empty() { what } else { format!("{what}\n\n{}", report.trim()) };
+        let report = report.trim();
+        let body = match (what, report.is_empty()) {
+            (None, true) => "It ended its turn without a final message.".to_string(),
+            (None, false) => report.to_string(),
+            (Some(what), true) => what,
+            (Some(what), false) => format!("{what}\n\n{report}"),
+        };
         let from = crew_protocol::BotRef {
             id: session.id.clone(),
             name: session.name.clone(),
             kind: Some("session".into()),
         };
-        if mailbox::enqueue(&self.store, &parent.id, &from, &body).is_ok() {
-            self.deliver_to(&parent);
-        }
+        Some(mailbox::Letter::new(&parent.id, &from, &body, mailbox::REPORT, Some(cursor)))
     }
 
     /// Stop a child for good: its turn ends as an exit. An idle child has no
@@ -1204,6 +1292,7 @@ impl TurnHost {
             claude_session_id: claude_session_id.clone(),
             steers: Vec::new(),
             background: HashSet::new(),
+            woken_by: Vec::new(),
             waits_for_background: session.kind == "child",
             held_results: 0,
             approvals: HashMap::new(),
@@ -1682,6 +1771,12 @@ impl TurnHost {
                         if let Some(task) = string_field(Some(&rec), "task_id") {
                             live.background.remove(&task);
                         }
+                        if let Some(summary) = string_field(Some(&rec), "summary").filter(|s| !s.trim().is_empty()) {
+                            let summary = summary.trim().to_string();
+                            if !live.woken_by.contains(&summary) {
+                                live.woken_by.push(summary);
+                            }
+                        }
                     }
                     Some("task_updated") => {
                         let done = rec
@@ -1701,8 +1796,10 @@ impl TurnHost {
                     message: "Context compacted".into(),
                 });
             } else if type_name.as_deref() == Some("stream_event") {
+                woken(live, &mut events);
                 claude_stream(live, &rec, &mut events);
             } else if type_name.as_deref() == Some("assistant") {
+                woken(live, &mut events);
                 claude_assistant(live, &rec, &mut events);
             } else if type_name.as_deref() == Some("user") {
                 // A steer Claude has just taken in: it goes in the transcript
@@ -2575,6 +2672,7 @@ impl TurnHost {
                 claude_session_id: String::new(),
                 steers: Vec::new(),
                 background: HashSet::new(),
+                woken_by: Vec::new(),
                 waits_for_background: false,
                 held_results: 0,
                 approvals: HashMap::new(),

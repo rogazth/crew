@@ -32,6 +32,16 @@ pub struct ClaudeDecoder {
     /// The last prompt shown, by `promptId`: `/compact` is written once as
     /// typed and again as a command after the boundary.
     last_prompt: Option<(String, String)>,
+    /// Background work that reported back and woke the model, not shown yet:
+    /// reports that land together are one wake, so the line waits for
+    /// whatever the CLI writes next.
+    woken: Option<Wake>,
+}
+
+/// The reports that started a turn the CLI began by itself.
+struct Wake {
+    summaries: Vec<String>,
+    at_ms: Option<i64>,
 }
 
 /// The flags that mark a record the CLI wrote for itself or for the model.
@@ -81,7 +91,16 @@ impl Decoder for ClaudeDecoder {
             Some("system") => self.system(&rec, &mut out),
             _ => {}
         }
+        if !out.items.is_empty() {
+            if let Some(wake) = self.woken.take() {
+                out.items.insert(0, wake.marker());
+            }
+        }
         out.items
+    }
+
+    fn finish(&mut self) -> Vec<Decoded> {
+        self.woken.take().map(Wake::marker).into_iter().collect()
     }
 
     fn is_message(&self, line: &[u8]) -> bool {
@@ -179,13 +198,18 @@ impl ClaudeDecoder {
     }
 
     fn user_text(&mut self, rec: &Map<String, Value>, out: &mut Out) {
+        let text = user_text(rec);
         // A background task reporting back is the harness talking to the
-        // model; its result shows on the task's own row.
+        // model: its result shows on the task's own row, and the turn it
+        // starts gets a line saying what woke it where a question would be.
         let origin = rec.get("origin").and_then(as_record);
-        if string_field(origin, "kind").as_deref() == Some("task-notification") {
+        if string_field(origin, "kind").as_deref() == Some("task-notification")
+            || text.as_deref().is_some_and(|text| text.trim_start().starts_with("<task-notification>"))
+        {
+            self.woke(text.as_deref().unwrap_or_default(), out.at_ms);
             return;
         }
-        let Some(text) = user_text(rec) else {
+        let Some(text) = text else {
             return;
         };
         match classify(&text) {
@@ -214,6 +238,18 @@ impl ClaudeDecoder {
                 out.turn_ended();
             }
             None => {}
+        }
+    }
+
+    fn woke(&mut self, text: &str, at_ms: Option<i64>) {
+        let wake = self.woken.get_or_insert(Wake { summaries: Vec::new(), at_ms });
+        for notification in text.split("<task-notification>").skip(1) {
+            let Some(summary) = tag(notification, "summary").map(str::trim).filter(|s| !s.is_empty()) else {
+                continue;
+            };
+            if !wake.summaries.iter().any(|seen| seen == summary) {
+                wake.summaries.push(summary.to_string());
+            }
         }
     }
 
@@ -252,6 +288,20 @@ impl ClaudeDecoder {
                 }
             }
             _ => {}
+        }
+    }
+}
+
+impl Wake {
+    fn marker(self) -> Decoded {
+        let message = if self.summaries.is_empty() {
+            "A background task finished".to_string()
+        } else {
+            self.summaries.join(" · ")
+        };
+        Decoded::Event {
+            event: HarnessEvent::SessionNote { message },
+            at_ms: self.at_ms,
         }
     }
 }
@@ -590,7 +640,8 @@ mod tests {
                 User, Question, Assistant, // tea or coffee
                 User, Tool, System, // the interrupted sleep
                 User, Tool, Tool, Assistant, // read, edit
-                User, Tool, Assistant, Assistant, // the subagent, and its report
+                User, Tool, Assistant, // the subagent, sent to the background
+                System, Assistant, // its report, and what it woke
                 User, System, System, // /compact
                 User, Assistant, // after it
             ]
@@ -614,17 +665,18 @@ mod tests {
         // the call and what the parent said once it reported back.
         let agent = blocks[11].tool.as_ref().expect("tool");
         assert_eq!(agent.name, "Agent");
-        assert_eq!(blocks[13].text, "The file notes.txt has **3 lines**.");
+        assert_eq!(blocks[13].text, "Agent \"Count lines in notes.txt\" finished");
+        assert_eq!(blocks[14].text, "The file notes.txt has **3 lines**.");
         assert!(blocks.iter().all(|block| !block.text.contains("task-notification")));
 
         // Typed once, written twice: before the boundary and after it.
-        assert_eq!(blocks[14].text, "/compact");
-        assert_eq!(blocks[15].text, "Context compacted");
-        assert!(blocks[16].text.starts_with("Compacted (ctrl+o to see full summary)"));
-        assert!(!blocks[16].text.contains('\u{1b}'));
+        assert_eq!(blocks[15].text, "/compact");
+        assert_eq!(blocks[16].text, "Context compacted");
+        assert!(blocks[17].text.starts_with("Compacted (ctrl+o to see full summary)"));
+        assert!(!blocks[17].text.contains('\u{1b}'));
         assert!(blocks.iter().all(|block| !block.text.starts_with("This session is being continued")));
-        assert_eq!(blocks[17].text, "What file did we edit? One line.");
-        assert_eq!(blocks[18].usage.as_ref().and_then(|usage| usage.duration_ms), Some(1568));
+        assert_eq!(blocks[18].text, "What file did we edit? One line.");
+        assert_eq!(blocks[19].usage.as_ref().and_then(|usage| usage.duration_ms), Some(1568));
     }
 
     #[test]
@@ -742,6 +794,85 @@ mod tests {
         );
         let ended = run(&[user(serde_json::json!("[Request interrupted by user for tool use]"))]);
         assert!(matches!(ended.last(), Some(Decoded::TurnEnded { .. })));
+    }
+
+    fn notified(summary: &str, at: &str) -> String {
+        let text = format!(
+            "<task-notification>\n<task-id>t</task-id>\n<status>completed</status>\n<summary>{summary}</summary>\n<result>long report</result>\n</task-notification>"
+        );
+        record(serde_json::json!({
+            "type": "user", "timestamp": at,
+            "origin": { "kind": "task-notification", "producer": "session-task" },
+            "message": { "role": "user", "content": text },
+        }))
+    }
+
+    fn reply(text: &str, at: &str) -> String {
+        record(serde_json::json!({
+            "type": "assistant", "timestamp": at,
+            "message": { "content": [{ "type": "text", "text": text }] },
+        }))
+    }
+
+    fn turn_duration(ms: u64) -> String {
+        record(serde_json::json!({ "type": "system", "subtype": "turn_duration", "durationMs": ms }))
+    }
+
+    fn blocks_of(lines: &[String]) -> Vec<Block> {
+        events(lines).into_iter().fold(Vec::new(), crate::blocks::apply_event)
+    }
+
+    #[test]
+    fn a_report_that_wakes_the_model_opens_its_turn_with_a_line() {
+        let lines = [
+            reply("sent it off", "2026-10-05T10:00:00Z"),
+            turn_duration(1000),
+            notified("Agent \"Backend\" finished", "2026-10-05T10:05:00Z"),
+            reply("the backend says", "2026-10-05T10:05:09Z"),
+            turn_duration(9000),
+        ];
+        let blocks = blocks_of(&lines);
+        assert_eq!(roles(&blocks), [BlockRole::Assistant, BlockRole::System, BlockRole::Assistant]);
+        assert_eq!(blocks[1].text, "Agent \"Backend\" finished");
+        assert!(blocks.iter().all(|block| !block.text.contains("long report")));
+        // Dated by the report, not by the reply it brought.
+        let at = run(&lines[2..4]).into_iter().find_map(|decoded| match decoded {
+            Decoded::Event { event: HarnessEvent::SessionNote { .. }, at_ms } => at_ms,
+            _ => None,
+        });
+        assert_eq!(at, parse_timestamp("2026-10-05T10:05:00Z"));
+        assert_eq!(blocks[2].usage.as_ref().and_then(|usage| usage.duration_ms), Some(9000));
+    }
+
+    #[test]
+    fn reports_that_land_together_are_one_line() {
+        let both = record(serde_json::json!({
+            "type": "user",
+            "message": { "content": "<task-notification>\n<summary>Background command \"Build\" completed (exit code 0)</summary>\n</task-notification>\n<task-notification>\n<summary>Monitor event: \"tick\"</summary>\n</task-notification>" },
+        }));
+        let blocks = blocks_of(&[
+            notified("Agent \"A\" finished", "2026-10-05T10:00:00Z"),
+            notified("Agent \"B\" finished", "2026-10-05T10:00:00.050Z"),
+            both,
+            reply("both are back", "2026-10-05T10:00:04Z"),
+        ]);
+        assert_eq!(roles(&blocks), [BlockRole::System, BlockRole::Assistant]);
+        assert_eq!(
+            blocks[0].text,
+            "Agent \"A\" finished · Agent \"B\" finished · Background command \"Build\" completed (exit code 0) · Monitor event: \"tick\""
+        );
+    }
+
+    #[test]
+    fn a_report_at_the_end_of_what_was_read_waits_for_the_next_line_or_the_page_end() {
+        let mut decoder = ClaudeDecoder::default();
+        assert!(decoder.decode(&notified("Agent \"A\" finished", "2026-10-05T10:00:00Z")).is_empty());
+        let finished = decoder.finish();
+        assert!(matches!(
+            finished.as_slice(),
+            [Decoded::Event { event: HarnessEvent::SessionNote { message }, .. }] if message == "Agent \"A\" finished"
+        ));
+        assert!(decoder.finish().is_empty());
     }
 
     #[test]

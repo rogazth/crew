@@ -1232,8 +1232,14 @@ fn terminal_launch(
         opening.as_deref(),
         &crew_core::terminal::BridgeLink { exe: &info.exe, socket: &info.socket_path, token: &token },
     );
-    if let Some(letter) = letter.filter(|_| !launch.prompted) {
-        mailbox::release(store, &letter.id)?;
+    // Handed over as the CLI's opening prompt, or back in the box for the
+    // next launch that can take one.
+    if let Some(letter) = letter {
+        if launch.prompted {
+            mailbox::delivered(store, &[letter.id])?;
+        } else {
+            mailbox::release(store, &letter.id)?;
+        }
     }
     let bridge = bridge.clone();
     let leases = leases.clone();

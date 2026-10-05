@@ -58,6 +58,9 @@ impl Store {
         conn.pragma_update(None, "cache_size", -8192)
             .map_err(|e| e.to_string())?;
         migrate(&conn).map_err(|e| e.to_string())?;
+        // Letters a turn was carrying when the daemon stopped: that turn is
+        // gone, so they are handed over again (`TurnHost::deliver_waiting`).
+        crate::mailbox::release_unfinished(&conn).map_err(|e| e.to_string())?;
         // The seeded design profile keeps its working and waiting rows as seeded,
         // so every status can be looked at without a live turn behind it.
         if std::env::var_os("CREW_KEEP_STATUS").is_none() {
@@ -396,6 +399,26 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         rename_agents_to_bots(&tx)?;
         tx.execute(
             "INSERT INTO schema_migrations (version, applied_at) VALUES (25, ?1)",
+            params![now_millis()],
+        )?;
+        tx.commit()?;
+    }
+    if current < 26 {
+        let tx = conn.unchecked_transaction()?;
+        // Letter kinds and their lifecycle (see `mailbox`).
+        crate::mailbox::migrate_lifecycle(&tx)?;
+        // Who handed a session over to whom, and how far the user has read
+        // it: kept for the phases that use them.
+        if !has_column(&tx, "sessions", "handed_off_by")? {
+            tx.execute_batch(
+                "ALTER TABLE sessions ADD COLUMN handed_off_by TEXT REFERENCES sessions(id) ON DELETE SET NULL;",
+            )?;
+        }
+        if !has_column(&tx, "sessions", "user_seen")? {
+            tx.execute_batch("ALTER TABLE sessions ADD COLUMN user_seen INTEGER NOT NULL DEFAULT 0;")?;
+        }
+        tx.execute(
+            "INSERT INTO schema_migrations (version, applied_at) VALUES (26, ?1)",
             params![now_millis()],
         )?;
         tx.commit()?;
@@ -903,7 +926,7 @@ mod rename_tests {
         assert_eq!(tables, ["bots", "bots_workspace_idx"]);
         assert_eq!(columns, ["bot_id"]);
         assert_eq!(references, ["bots", "sessions", "workspaces"], "a foreign key still points at the old table");
-        assert_eq!(version, 25);
+        assert!(version >= 25, "{version}");
 
         let row = crate::session::get(&store, bot.clone()).unwrap().expect("the bot survived");
         assert_eq!(
@@ -938,6 +961,120 @@ mod rename_tests {
         let store = Store::open(path).expect("third open");
         let prefs = get(&store, "sidebar:prefs".into()).unwrap().unwrap();
         assert!(prefs.contains(r#""bot""#), "{prefs}");
+    }
+}
+
+#[cfg(test)]
+mod lifecycle_tests {
+    use super::*;
+
+    /// A v25 database: letters with no kind and no lifecycle, delivered ones
+    /// marked by `delivered_at` alone. Migration 26 gives each a kind (a
+    /// letter a child left its parent is a report, of the child's last event
+    /// before it), counts the delivered as claimed and delivered, and leaves
+    /// the waiting ones pending.
+    #[test]
+    fn a_v25_database_comes_out_of_26_with_kinds_and_states() {
+        let dir = std::env::temp_dir().join(format!("crew-v26-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let path = dir.join("crew.sqlite3");
+        let (bot, child, shell) = {
+            let store = Store::open(path.clone()).expect("open");
+            let ws = crate::workspace::create(&store, "w".into(), dir.to_string_lossy().into()).expect("ws");
+            let bot = crate::session::create(
+                &store, ws.id.clone(), "bot".into(), "Planner".into(), "claude".into(), "m".into(), "".into(), "full".into(),
+            )
+            .expect("bot");
+            let shell = crate::session::create(
+                &store, ws.id.clone(), "terminal".into(), "Shell".into(), "claude".into(), "".into(), "".into(), "ask".into(),
+            )
+            .expect("terminal");
+            let child = crate::session::create_child(
+                &store, ws.id.clone(), "codex: fix".into(), "codex".into(), "m".into(), "full".into(), None, Some(bot.id.clone()),
+            )
+            .expect("child");
+            crate::session_events::record(&store, &child.id, 4, "turn", "completed", "done", None).expect("event");
+            // Back to v25, and the letters written the way v25 wrote them.
+            store
+                .with(|conn| {
+                    conn.execute_batch(
+                        "DROP INDEX mailbox_pending_idx;
+                         CREATE INDEX mailbox_waiting_idx ON mailbox (to_session, at) WHERE delivered_at IS NULL;
+                         ALTER TABLE mailbox DROP COLUMN kind;
+                         ALTER TABLE mailbox DROP COLUMN event_cursor;
+                         ALTER TABLE mailbox DROP COLUMN claimed_at;
+                         ALTER TABLE mailbox DROP COLUMN disposed_at;
+                         ALTER TABLE sessions DROP COLUMN handed_off_by;
+                         ALTER TABLE sessions DROP COLUMN user_seen;
+                         DELETE FROM schema_migrations WHERE version >= 26;",
+                    )?;
+                    let at = now_millis();
+                    let letter = conn.prepare(
+                        "INSERT INTO mailbox (id, to_session, from_session, from_name, text, at, from_kind, delivered_at)
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                    )?;
+                    let mut letter = letter;
+                    letter.execute(params!["report", bot.id, child.id, "codex: fix", "Its turn ended.", at, "session", None::<i64>])?;
+                    letter.execute(params!["read", bot.id, shell.id, "Shell", "old news", at - 10, "terminal", Some(at - 5)])?;
+                    letter.execute(params!["waiting", bot.id, shell.id, "Shell", "tests pass", at + 1, "terminal", None::<i64>])?;
+                    Ok(())
+                })
+                .expect("downgrade");
+            (bot.id, child.id, shell.id)
+        };
+
+        let store = Store::open(path).expect("reopen");
+        let version: i64 = store
+            .with(|conn| conn.query_row("SELECT MAX(version) FROM schema_migrations", [], |row| row.get(0)))
+            .unwrap();
+        assert!(version >= 26, "{version}");
+        let rows: Vec<(String, String, Option<i64>, bool, bool, bool)> = store
+            .with(|conn| {
+                conn.prepare(
+                    "SELECT id, kind, event_cursor, claimed_at IS NOT NULL, delivered_at IS NOT NULL, disposed_at IS NOT NULL
+                       FROM mailbox ORDER BY id",
+                )?
+                .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)))?
+                .collect()
+            })
+            .unwrap();
+        assert_eq!(
+            rows,
+            [
+                ("read".to_string(), "message".to_string(), None, true, true, false),
+                ("report".to_string(), "report".to_string(), Some(4), false, false, false),
+                ("waiting".to_string(), "message".to_string(), None, false, false, false),
+            ]
+        );
+        let waiting: Vec<String> = crate::mailbox::waiting(&store, &bot).unwrap().into_iter().map(|letter| letter.id).collect();
+        assert_eq!(waiting, ["report", "waiting"]);
+        let (columns, index): (Vec<String>, Vec<String>) = store
+            .with(|conn| {
+                let names = |sql: &str| -> rusqlite::Result<Vec<String>> {
+                    conn.prepare(sql)?.query_map([], |row| row.get(0))?.collect()
+                };
+                Ok((
+                    names("SELECT name FROM pragma_table_info('sessions') WHERE name IN ('handed_off_by', 'user_seen') ORDER BY name")?,
+                    names("SELECT name FROM sqlite_master WHERE type = 'index' AND name LIKE 'mailbox_%' ORDER BY name")?,
+                ))
+            })
+            .unwrap();
+        assert_eq!(columns, ["handed_off_by", "user_seen"]);
+        assert_eq!(index, ["mailbox_pending_idx"]);
+        // The new reference holds: whoever handed a session over can go.
+        store
+            .with(|conn| conn.execute("UPDATE sessions SET handed_off_by = ?2 WHERE id = ?1", params![shell, child]))
+            .unwrap();
+        crate::session::delete(&store, child).unwrap();
+        let handed: Option<String> = store
+            .with(|conn| conn.query_row("SELECT handed_off_by FROM sessions WHERE id = ?1", params![shell], |row| row.get(0)))
+            .unwrap();
+        assert_eq!(handed, None);
+
+        // Opening again changes nothing.
+        drop(store);
+        let store = Store::open(dir.join("crew.sqlite3")).expect("third open");
+        assert_eq!(crate::mailbox::waiting_count(&store, &bot).unwrap(), 2);
     }
 }
 

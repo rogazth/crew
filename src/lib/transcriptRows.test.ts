@@ -158,7 +158,10 @@ describe("foldTurns", () => {
   });
 
   it("leaves the turn the agent is still working on alone", () => {
-    const rows = foldTurns(groupRows(turn()), true);
+    // Running, it has no footer yet: that closes it.
+    const blocks = turn();
+    blocks[4] = block("assistant", "green", { streaming: true });
+    const rows = foldTurns(groupRows(blocks), true);
     expect(rows.some((row) => row.kind === "fold")).toBe(false);
   });
 
@@ -186,7 +189,91 @@ describe("foldTurns", () => {
   });
 
   it("folds every finished turn but the live one", () => {
-    const rows = foldTurns(groupRows([...turn(), ...turn()]), true);
+    const blocks = [...turn(), ...turn()];
+    blocks[blocks.length - 1] = block("assistant", "still going", { streaming: true });
+    const rows = foldTurns(groupRows(blocks), true);
     expect(rows.filter((row) => row.kind === "fold")).toHaveLength(1);
+  });
+});
+
+// The agent sends work to the background and ends its turn; each report wakes
+// it into a turn the CLI starts by itself, with no question above it.
+describe("foldTurns with turns the agent was woken into", () => {
+  const tool = (name: string) =>
+    block("tool", name, { tool: { callId: `c-${name}`, name: "Bash", title: name, status: "completed" } });
+  const work = (reply: string, durationMs: number) => [
+    tool(`${reply} 1`),
+    block("assistant", `${reply}: looking`),
+    tool(`${reply} 2`),
+    block("assistant", reply, { usage: { durationMs } }),
+  ];
+  const conversation = () => [
+    block("user", "plan it", { at: 1_000 }),
+    ...work("sent two agents", 10_000),
+    block("system", 'Agent "Backend" finished'),
+    ...work("the backend says", 20_000),
+    block("system", 'Agent "UI" finished'),
+    ...work("the UI says", 30_000),
+  ];
+  const folds = (rows: Row[]) => rows.filter((row): row is Extract<Row, { kind: "fold" }> => row.kind === "fold");
+  const said = (rows: Row[]) =>
+    rows.flatMap((row) => (row.kind === "message" ? [`${row.block.role}: ${row.block.text}`] : []));
+
+  it("leaves every reply out of the folds, each under what woke it", () => {
+    const rows = foldTurns(groupRows(conversation()), false);
+    expect(kinds(rows)).toEqual([
+      "date", "message", "fold", "message", "footer",
+      "message", "fold", "message", "footer",
+      "message", "fold", "message", "footer",
+    ]);
+    expect(said(rows)).toEqual([
+      "user: plan it",
+      "assistant: sent two agents",
+      'system: Agent "Backend" finished',
+      "assistant: the backend says",
+      'system: Agent "UI" finished',
+      "assistant: the UI says",
+    ]);
+  });
+
+  it("says how long each turn worked, from its own footer", () => {
+    const rows = foldTurns(groupRows(conversation()), false);
+    expect(folds(rows).map((fold) => fold.durationMs)).toEqual([10_000, 20_000, 30_000]);
+  });
+
+  it("keeps the replies in sight between wakes and while the next one runs", () => {
+    const quiet = foldTurns(groupRows(conversation()), true);
+    expect(folds(quiet)).toHaveLength(3);
+    const running = foldTurns(
+      groupRows([...conversation(), block("system", "Command finished"), tool("npm test")]),
+      true,
+    );
+    expect(folds(running)).toHaveLength(3);
+    expect(said(running)).toContain("assistant: the backend says");
+    expect(kinds(running).slice(-2)).toEqual(["message", "activity"]);
+  });
+
+  it("does not fold a reply into the turn before when nothing says what woke it", () => {
+    const blocks = conversation().filter((b) => b.role !== "system");
+    const rows = foldTurns(groupRows(blocks), false);
+    expect(folds(rows).map((fold) => fold.durationMs)).toEqual([10_000, 20_000, 30_000]);
+    expect(said(rows)).toEqual([
+      "user: plan it",
+      "assistant: sent two agents",
+      "assistant: the backend says",
+      "assistant: the UI says",
+    ]);
+  });
+
+  it("still starts a turn at a bot's letter", () => {
+    const letter = block("user", "report: done", { fromBot: { id: "b1", name: "Scout" } });
+    const rows = foldTurns(groupRows([...work("first", 1_000), letter, ...work("second", 2_000)]), false);
+    expect(said(rows)).toEqual(["assistant: first", "user: report: done", "assistant: second"]);
+    expect(folds(rows)).toHaveLength(2);
+  });
+
+  it("keeps a turn that ended on a tool call apart from the next one's work", () => {
+    const rows = groupRows([tool("a"), { ...tool("b"), usage: COST }, tool("c"), block("assistant", "done")]);
+    expect(kinds(rows)).toEqual(["activity", "footer", "activity", "message"]);
   });
 });

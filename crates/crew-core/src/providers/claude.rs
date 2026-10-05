@@ -930,6 +930,45 @@ mod tests {
         })
     }
 
+    /// Background work that finishes and wakes Claude leaves a note before
+    /// what it says next, one for everything that finished together, as the
+    /// history decoder writes it.
+    #[test]
+    fn a_wake_is_marked_before_the_reply() {
+        let host = TurnHost::test_new();
+        let cap = host.test_capture();
+        host.test_install_claude("s");
+        let notified = |task: &str, summary: &str| {
+            json!({ "type": "system", "subtype": "task_notification", "task_id": task, "status": "completed",
+                    "output_file": "/tmp/out", "summary": summary, "session_id": "x" })
+        };
+        let said = json!({
+            "type": "assistant",
+            "message": { "role": "assistant", "content": [{ "type": "text", "text": "Both finished." }] },
+            "parent_tool_use_id": null,
+            "session_id": "x"
+        });
+        for line in [notified("a", "Agent \"Backend\" finished"), notified("b", "Agent \"UI\" finished"), said.clone(), said] {
+            host.handle_claude_line("s", &line.to_string());
+        }
+        let events = cap.take();
+        let notes: Vec<(usize, &String)> = events
+            .iter()
+            .enumerate()
+            .filter_map(|(at, event)| match event {
+                HarnessEvent::SessionNote { message } => Some((at, message)),
+                _ => None,
+            })
+            .collect();
+        let first_said = events
+            .iter()
+            .position(|event| matches!(event, HarnessEvent::MessageDelta { .. } | HarnessEvent::MessageCompleted { .. }))
+            .expect("the reply");
+        assert_eq!(notes.len(), 1);
+        assert_eq!(notes[0].1, "Agent \"Backend\" finished · Agent \"UI\" finished");
+        assert!(notes[0].0 < first_said);
+    }
+
     #[test]
     fn a_bash_call_carries_its_command() {
         assert_eq!(

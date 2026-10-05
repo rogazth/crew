@@ -53,7 +53,11 @@ export function groupRows(blocks: Block[]): Row[] {
   for (const block of blocks) {
     if (ACTIVITY_ROLES.has(block.role)) {
       activity.push(block);
-      if (block.usage) activityFooter = footerFor(block, block.usage);
+      // The turn ended here: whatever comes next is another turn's work.
+      if (block.usage) {
+        activityFooter = footerFor(block, block.usage);
+        flush();
+      }
       continue;
     }
     if (block.role === "assistant" && !block.text && block.streaming) continue;
@@ -102,6 +106,12 @@ function isReply(row: Row): boolean {
   return row.kind === "message" && row.block.role === "assistant";
 }
 
+/** What opens a turn and stays above its fold: the question, or the note
+ *  that says what woke the agent when nobody asked (a report, a routine). */
+function isOpening(row: Row): boolean {
+  return row.kind === "message" && (row.block.role === "user" || row.block.role === "system");
+}
+
 /** Every block a row holds, a fold's included: what a search hit is looked for in. */
 export function rowBlocks(row: Row): Block[] {
   if (row.kind === "message") return [row.block];
@@ -117,41 +127,50 @@ export function rowBlocks(row: Row): Block[] {
  * under the question. A turn still running folds nothing — that is the work
  * the reader is watching — and neither does a turn with no answer, or one
  * whose work is already a single line.
+ *
+ * A turn ends at its footer, not at the next question: an agent woken by a
+ * report it was waiting on answers in a turn of its own, with no question
+ * above it, and that answer is as much an answer as any other.
  */
 export function foldTurns(rows: Row[], working: boolean): Row[] {
   const out: Row[] = [];
-  let at = 0;
-  while (at < rows.length) {
-    if (!isUser(rows[at]!)) {
-      out.push(rows[at]!);
-      at += 1;
+  let turn: Row[] = [];
+  const close = (live: boolean) => {
+    out.push(...(live ? turn : foldTurn(turn)));
+    turn = [];
+  };
+  for (const row of rows) {
+    if (row.kind === "date" || isUser(row)) close(false);
+    if (row.kind === "date") {
+      out.push(row);
       continue;
     }
-    let end = at + 1;
-    while (end < rows.length && !isUser(rows[end]!) && rows[end]!.kind !== "date") end += 1;
-    const turn = rows.slice(at, end);
-    const live = working && end === rows.length;
-    out.push(...(live ? turn : foldTurn(turn)));
-    at = end;
+    turn.push(row);
+    if (row.kind === "footer") close(false);
   }
+  close(working);
   return out;
 }
 
 function foldTurn(turn: Row[]): Row[] {
+  let opening = 0;
+  while (opening < turn.length && isOpening(turn[opening]!)) opening += 1;
   let answer = -1;
-  for (let index = turn.length - 1; index > 0; index -= 1) {
+  for (let index = turn.length - 1; index >= opening; index -= 1) {
     if (isReply(turn[index]!)) {
       answer = index;
       break;
     }
   }
-  const work = answer > 0 ? turn.slice(1, answer) : [];
+  const work = answer >= 0 ? turn.slice(opening, answer) : [];
   if (work.length < 2 || !work.some((row) => row.kind === "activity")) return turn;
-  const question = turn[0]!;
   const reply = turn[answer]!;
   const blocks = work.flatMap(rowBlocks);
-  const footer = turn.find((row): row is Extract<Row, { kind: "footer" }> => row.kind === "footer");
-  const started = question.kind === "message" ? question.block.at : undefined;
+  // Its own footer, which closes it: never an earlier turn's.
+  const last = turn.at(-1);
+  const footer = last?.kind === "footer" ? last : undefined;
+  const first = turn[0];
+  const started = opening > 0 && first?.kind === "message" ? first.block.at : undefined;
   const ended = reply.kind === "message" ? reply.block.at : undefined;
   const durationMs =
     footer?.usage.durationMs ?? (started !== undefined && ended !== undefined ? ended - started : undefined);
@@ -163,7 +182,7 @@ function foldTurn(turn: Row[]): Row[] {
     failed: blocks.some((block) => block.tool?.status === "failed"),
   };
   const rest = turn.slice(answer).map((row) => (row.kind === "footer" ? { ...row, folded: true } : row));
-  return [question, fold, ...rest];
+  return [...turn.slice(0, opening), fold, ...rest];
 }
 
 function rowId(row: Row): string {

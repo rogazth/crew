@@ -41,6 +41,12 @@ pub trait Decoder {
     /// Whether a line counts toward "the last n messages". Called on raw
     /// bytes while reading backwards, so it should be cheap.
     fn is_message(&self, line: &[u8]) -> bool;
+    /// What the decoder still holds once its lines run out, for a page that
+    /// ends where the next one was already read: nothing will follow to
+    /// bring it out.
+    fn finish(&mut self) -> Vec<Decoded> {
+        Vec::new()
+    }
 }
 
 /// What one `LineReader::read` found.
@@ -444,6 +450,7 @@ impl<D: Decoder + Default> History<D> {
                 messages: 0,
             };
             page.ingest(lines);
+            page.finish();
             self.start = from;
             self.messages += page.messages;
             // The page ends where the held range begins, so a call it started
@@ -509,6 +516,14 @@ impl<D: Decoder> Page<D> {
             }
         }
         turn_ended
+    }
+
+    fn finish(&mut self) {
+        for decoded in self.decoder.finish() {
+            if let Decoded::Event { event, at_ms } = decoded {
+                self.blocks = apply_stamped(std::mem::take(&mut self.blocks), event, at_ms);
+            }
+        }
     }
 }
 

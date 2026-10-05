@@ -61,6 +61,23 @@ pub fn record(
     report: &str,
     request: Option<&Value>,
 ) -> Result<(), String> {
+    record_reporting(store, session_id, cursor, kind, outcome, report, request, None)
+}
+
+/// [`record`], and the letter that reports it to a bot parent, in one
+/// transaction: a daemon that dies between the two must not leave an event
+/// nobody is told about, nor a report of an event that was never written.
+#[allow(clippy::too_many_arguments)]
+pub fn record_reporting(
+    store: &Store,
+    session_id: &str,
+    cursor: i64,
+    kind: &str,
+    outcome: &str,
+    report: &str,
+    request: Option<&Value>,
+    letter: Option<&crate::mailbox::Letter>,
+) -> Result<(), String> {
     store.with(|conn| {
         let tx = conn.unchecked_transaction()?;
         tx.execute(
@@ -80,6 +97,9 @@ pub fn record(
             "UPDATE sessions SET cursor = MAX(cursor, ?2) WHERE id = ?1",
             params![session_id, cursor],
         )?;
+        if let Some(letter) = letter {
+            crate::mailbox::insert(&tx, letter)?;
+        }
         tx.commit()
     })
 }
@@ -264,6 +284,38 @@ mod tests {
         assert!(cut.len() <= REPORT_LIMIT);
         assert!(long.starts_with(&cut));
         assert_eq!(clip_report("short"), ("short".to_string(), false));
+    }
+
+    /// The event and the report that tells a bot parent of it are one write:
+    /// a report that cannot be written takes the event with it, so there is
+    /// never one without the other.
+    #[test]
+    fn an_event_and_its_report_are_written_together_or_not_at_all() {
+        let dir = std::env::temp_dir().join(format!("crew-events-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let store = Store::open(dir.join("crew.sqlite3")).expect("store");
+        let ws = crate::workspace::create(&store, "w".into(), dir.to_string_lossy().into()).expect("ws");
+        let parent = crate::session::create(
+            &store, ws.id.clone(), "bot".into(), "Planner".into(), "claude".into(), "m".into(), "".into(), "full".into(),
+        )
+        .expect("parent");
+        let child = crate::session::create_child(
+            &store, ws.id, "codex: fix".into(), "codex".into(), "m".into(), "full".into(), None, Some(parent.id.clone()),
+        )
+        .expect("child");
+        let from = crew_protocol::BotRef { id: child.id.clone(), name: child.name.clone(), kind: Some("session".into()) };
+
+        let good = crate::mailbox::Letter::new(&parent.id, &from, "done", crate::mailbox::REPORT, Some(2));
+        record_reporting(&store, &child.id, 2, "turn", "completed", "done", None, Some(&good)).expect("both");
+        assert_eq!(after(&store, &child.id, 0).expect("events").len(), 1);
+        assert_eq!(crate::mailbox::waiting(&store, &parent.id).expect("box"), vec![good]);
+
+        // To a box that does not exist: the foreign key refuses the letter.
+        let lost = crate::mailbox::Letter::new("nobody", &from, "done again", crate::mailbox::REPORT, Some(5));
+        assert!(record_reporting(&store, &child.id, 5, "turn", "completed", "done again", None, Some(&lost)).is_err());
+        assert_eq!(after(&store, &child.id, 2).expect("events"), vec![], "the event outlived its report");
+        let cursor = crate::session::get(&store, child.id.clone()).expect("get").expect("child").cursor;
+        assert_eq!(cursor, 2);
     }
 
     #[test]
