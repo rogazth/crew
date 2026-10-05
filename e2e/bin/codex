@@ -22,6 +22,12 @@
 //
 // Every launch appends its argv, cwd and pid as one JSON line to
 // $HOME/fake-codex.log. Ctrl+C twice exits.
+//
+// `codex app-server`, which Crew runs for its bots and child sessions, gets
+// the JSON-RPC Crew speaks to 0.160's: initialize, thread/start and
+// thread/resume, turn/start, turn/steer, turn/interrupt. A turn answers
+// "Done." (`ask` first asks to run `touch asked.txt`, and runs it if allowed);
+// each request is appended to $HOME/fake-codex-rpc.log as {method, params}.
 "use strict";
 const { spawnSync } = process.getBuiltinModule("node:child_process");
 const { randomUUID } = process.getBuiltinModule("node:crypto");
@@ -36,6 +42,99 @@ fs.appendFileSync(
   path.join(HOME, "fake-codex.log"),
   `${JSON.stringify({ argv, cwd: CWD, pid: process.pid, at: Date.now() })}\n`,
 );
+
+const APP_SERVER = argv[0] === "app-server";
+if (APP_SERVER) appServer();
+
+function appServer() {
+  const readline = process.getBuiltinModule("node:readline");
+  const send = (message) => process.stdout.write(`${JSON.stringify(message)}\n`);
+  const rpcLog = path.join(HOME, "fake-codex-rpc.log");
+  let threadId = null;
+  let turn = null;
+  let nextRequest = 0;
+  const waiting = new Map();
+  const item = (phase, value) => send({ method: `item/${phase}`, params: { threadId, turnId: turn?.id, item: value } });
+  const finish = (current, status, reply) => {
+    if (turn !== current) return;
+    if (reply) {
+      const id = `msg_${randomUUID()}`;
+      item("started", { type: "agentMessage", id, text: "", phase: "final_answer" });
+      send({ method: "item/agentMessage/delta", params: { threadId, turnId: current.id, itemId: id, delta: reply } });
+      item("completed", { type: "agentMessage", id, text: reply, phase: "final_answer" });
+    }
+    turn = null;
+    send({ method: "turn/completed", params: { threadId, turn: { id: current.id, status, error: null } } });
+  };
+  const run = (current, text) => {
+    item("started", { type: "userMessage", id: randomUUID(), clientId: null, content: [{ type: "text", text, text_elements: [] }] });
+    if (text.trim().split("\n").at(-1) !== "ask") {
+      current.timer = setTimeout(() => finish(current, "completed", "Done."), 500);
+      return;
+    }
+    const callId = `exec-${randomUUID()}`;
+    const command = { type: "commandExecution", id: callId, command: "/bin/zsh -lc 'touch asked.txt'", cwd: CWD, status: "inProgress", aggregatedOutput: null, exitCode: null };
+    item("started", command);
+    const requestId = nextRequest++;
+    waiting.set(requestId, (result) => {
+      const allowed = result?.decision === "accept" || result?.decision === "acceptForSession";
+      if (allowed) fs.writeFileSync(path.join(CWD, "asked.txt"), "");
+      item("completed", { ...command, status: allowed ? "completed" : "declined", exitCode: allowed ? 0 : null });
+      current.timer = setTimeout(() => finish(current, "completed", "Done."), 300);
+    });
+    send({ id: requestId, method: "item/commandExecution/requestApproval", params: { threadId, turnId: current.id, itemId: callId, startedAtMs: Date.now(), command: command.command, cwd: CWD, reason: null } });
+  };
+  readline.createInterface({ input: process.stdin }).on("line", (line) => {
+    let message;
+    try {
+      message = JSON.parse(line);
+    } catch {
+      return;
+    }
+    const { id, method, params = {} } = message;
+    if (method === undefined) {
+      waiting.get(id)?.(message.result);
+      waiting.delete(id);
+      return;
+    }
+    fs.appendFileSync(rpcLog, `${JSON.stringify({ method, params })}\n`);
+    if (id === undefined) return;
+    const text = (input) => (input ?? []).map((part) => part.text ?? "").join("\n");
+    switch (method) {
+      case "initialize":
+        return send({ id, result: { userAgent: "fake-codex/0.160.0" } });
+      case "thread/start":
+      case "thread/resume":
+        threadId = params.threadId ?? randomUUID();
+        return send({ id, result: { thread: { id: threadId }, model: params.model ?? "gpt-fake" } });
+      case "turn/start": {
+        if (turn) return send({ id, result: { turn: { id: turn.id, status: "inProgress" } } });
+        const current = { id: randomUUID() };
+        turn = current;
+        send({ id, result: { turn: { id: current.id, status: "inProgress" } } });
+        send({ method: "turn/started", params: { threadId, turn: { id: current.id, status: "inProgress" } } });
+        return run(current, text(params.input));
+      }
+      case "turn/steer":
+        if (!turn || params.expectedTurnId !== turn.id) {
+          return send({ id, error: { code: -32600, message: "no active turn to steer" } });
+        }
+        item("started", { type: "userMessage", id: randomUUID(), clientId: null, content: [{ type: "text", text: text(params.input), text_elements: [] }] });
+        return send({ id, result: { turnId: turn.id } });
+      case "turn/interrupt": {
+        send({ id, result: {} });
+        const current = turn;
+        if (current) {
+          clearTimeout(current.timer);
+          finish(current, "interrupted", null);
+        }
+        return;
+      }
+      default:
+        return send({ id, error: { code: -32601, message: `unknown ${method}` } });
+    }
+  });
+}
 
 const overrides = [];
 for (let i = 0; i < argv.length; i += 1) if (argv[i] === "-c" && argv[i + 1] !== undefined) overrides.push(argv[++i]);
@@ -296,26 +395,30 @@ function feed(data) {
   }
 }
 
-if (process.stdin.isTTY) process.stdin.setRawMode(true);
-process.stdin.setEncoding("utf8");
-for (const signal of ["SIGHUP", "SIGTERM"]) process.on(signal, () => process.exit(0));
+if (!APP_SERVER) tui();
 
-function start() {
-  process.stdin.on("data", feed);
-  out("\x1b[?2004h");
-  out(">_ Fake Codex (v0.154.0)\r\n");
-  prompt();
-}
+function tui() {
+  if (process.stdin.isTTY) process.stdin.setRawMode(true);
+  process.stdin.setEncoding("utf8");
+  for (const signal of ["SIGHUP", "SIGTERM"]) process.on(signal, () => process.exit(0));
 
-if (trusted) start();
-else {
-  out(`> You are in ${CWD}\r\n  Do you trust the contents of this directory?\r\n› 1. Yes, continue\r\n  2. No, quit\r\n  Press enter to continue`);
-  const answer = (data) => {
-    if (data === "2") process.exit(0);
-    if (data !== "1" && data !== "\r") return;
-    process.stdin.removeListener("data", answer);
-    out("\x1b[2J\x1b[H");
-    start();
-  };
-  process.stdin.on("data", answer);
+  function start() {
+    process.stdin.on("data", feed);
+    out("\x1b[?2004h");
+    out(">_ Fake Codex (v0.154.0)\r\n");
+    prompt();
+  }
+
+  if (trusted) start();
+  else {
+    out(`> You are in ${CWD}\r\n  Do you trust the contents of this directory?\r\n› 1. Yes, continue\r\n  2. No, quit\r\n  Press enter to continue`);
+    const answer = (data) => {
+      if (data === "2") process.exit(0);
+      if (data !== "1" && data !== "\r") return;
+      process.stdin.removeListener("data", answer);
+      out("\x1b[2J\x1b[H");
+      start();
+    };
+    process.stdin.on("data", answer);
+  }
 }

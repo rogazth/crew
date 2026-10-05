@@ -24,13 +24,7 @@ use crate::providers::claude::{
     try_parse_json_record, turn_failed as claude_turn_failed, turn_usage as claude_turn_usage, ClaudeControlRequest,
     ClaudeSpawn,
 };
-use crate::providers::codex::{
-    agent_message_text, build_codex_prompt, build_codex_spawn_args, completed_tool_status, item_error_message,
-    item_from_event, is_tool_item, parse_json_line, stream_error_message, thread_id_from_event,
-    tool_call_id, tool_detail as codex_tool_detail, tool_label as codex_tool_label,
-    tool_name as codex_tool_name, turn_usage as codex_turn_usage,
-    CodexSpawn,
-};
+use crate::providers::parse_json_line;
 use crate::providers::cursor::{
     assistant_delta_text, build_cursor_prompt, build_cursor_spawn_args, parse_tool_call,
     session_id_from_event, tool_status as cursor_tool_status, turn_failed as cursor_turn_failed,
@@ -48,6 +42,11 @@ use crate::session;
 use crate::working_set;
 use crate::store::Store;
 use crate::transcript::TranscriptHub;
+
+mod codex;
+use codex::CodexLive;
+#[cfg(test)]
+pub(crate) use codex::fake_codex;
 
 const INIT_TIMEOUT: Duration = Duration::from_secs(15);
 /// How long a provider may stay silent before its first line.
@@ -281,7 +280,6 @@ struct StreamLive {
     cancelled: bool,
     active: bool,
     turn_tx: Option<oneshot::Sender<TurnOutcome>>,
-    emitted_assistant: String,
     seen_tools: HashSet<String>,
     stderr: Vec<String>,
     saw_text: bool,
@@ -298,7 +296,7 @@ struct StreamLive {
 
 enum Live {
     Claude(Box<ClaudeLive>),
-    Codex(StreamLive),
+    Codex(Box<CodexLive>),
     Cursor(StreamLive),
     Opencode(StreamLive),
 }
@@ -464,7 +462,8 @@ impl TurnHost {
             let mut running = self.running.lock().unwrap_or_else(|e| e.into_inner());
             let live = self.lock().get(&params.session_id).is_some_and(|live| match live {
                 Live::Claude(row) => row.active,
-                Live::Codex(row) | Live::Cursor(row) | Live::Opencode(row) => row.active,
+                Live::Codex(row) => row.active,
+                Live::Cursor(row) | Live::Opencode(row) => row.active,
             });
             if live || !running.insert(params.session_id.clone()) {
                 return Err("Turn already running".into());
@@ -551,6 +550,9 @@ impl TurnHost {
     }
 
     pub fn respond(&self, session_id: &str, request_id: u64, decision: ApprovalDecision) -> Result<(), String> {
+        if self.codex_respond(session_id, request_id, decision.clone()).is_some() {
+            return Ok(());
+        }
         let mut map = self.lock();
         if let Some(Live::Claude(live)) = map.get_mut(session_id) {
             if let Some(pending) = live.approvals.remove(&request_id) {
@@ -566,6 +568,9 @@ impl TurnHost {
     }
 
     pub fn answer(&self, session_id: &str, request_id: u64, answers: Option<Answers>) -> Result<(), String> {
+        if self.codex_answer(session_id, request_id, answers.clone()).is_some() {
+            return Ok(());
+        }
         let mut map = self.lock();
         if let Some(Live::Claude(live)) = map.get_mut(session_id) {
             if let Some(pending) = live.questions.remove(&request_id) {
@@ -585,7 +590,8 @@ impl TurnHost {
             if let Some(live) = map.get_mut(session_id) {
                 let stderr = match live {
                     Live::Claude(row) => &mut row.stderr,
-                    Live::Codex(row) | Live::Cursor(row) | Live::Opencode(row) => &mut row.stderr,
+                    Live::Codex(row) => &mut row.stderr,
+                    Live::Cursor(row) | Live::Opencode(row) => &mut row.stderr,
                 };
                 for line in lines {
                     stderr.push(line);
@@ -629,7 +635,21 @@ impl TurnHost {
                     self.signal(session_id, TurnOutcome::Failed(exit_message(provider, code, &stderr)));
                 }
             }
-            Live::Codex(row) | Live::Cursor(row) | Live::Opencode(row) => {
+            Live::Codex(row) => {
+                // Whatever waited on an answer gets none.
+                row.release();
+                if row.cancelled || row.settled {
+                    return;
+                }
+                let mid = row.active;
+                let stderr = row.stderr.clone();
+                if mid {
+                    drop(map);
+                    self.transcripts.apply(session_id, HarnessEvent::SessionEnded { code });
+                    self.signal(session_id, TurnOutcome::Failed(exit_message(provider, code, &stderr)));
+                }
+            }
+            Live::Cursor(row) | Live::Opencode(row) => {
                 if row.cancelled || row.settled {
                     return;
                 }
@@ -654,7 +674,14 @@ impl TurnHost {
                         let _ = tx.send(outcome);
                     }
                 }
-                Live::Codex(row) | Live::Cursor(row) | Live::Opencode(row) => {
+                Live::Codex(row) => {
+                    row.active = false;
+                    row.settled = true;
+                    if let Some(tx) = row.turn_tx.take() {
+                        let _ = tx.send(outcome);
+                    }
+                }
+                Live::Cursor(row) | Live::Opencode(row) => {
                     row.active = false;
                     row.settled = true;
                     if let Some(tx) = row.turn_tx.take() {
@@ -667,6 +694,11 @@ impl TurnHost {
 
     fn cancel(&self, session_id: &str, kill: bool) {
         self.mark_stop(session_id);
+        // Codex is asked to stop its turn, and its end ends this one; the
+        // process goes with it. Without a turn to interrupt, it settles here.
+        if self.codex_interrupt(session_id) {
+            return;
+        }
         let interrupt = {
             let mut map = self.lock();
             if let Some(Live::Claude(row)) = map.get_mut(session_id) {
@@ -694,7 +726,16 @@ impl TurnHost {
                             let _ = tx.send(TurnOutcome::Stopped);
                         }
                     }
-                    Live::Codex(row) | Live::Cursor(row) | Live::Opencode(row) => {
+                    Live::Codex(row) => {
+                        row.cancelled = true;
+                        row.active = false;
+                        row.settled = true;
+                        row.release();
+                        if let Some(tx) = row.turn_tx.take() {
+                            let _ = tx.send(TurnOutcome::Stopped);
+                        }
+                    }
+                    Live::Cursor(row) | Live::Opencode(row) => {
                         row.cancelled = true;
                         row.active = false;
                         row.settled = true;
@@ -1240,6 +1281,9 @@ impl TurnHost {
     /// message in the transcript. Refused when no Claude turn is live to take
     /// it, so the caller can queue it instead.
     pub fn steer(&self, session_id: &str, text: &str, from: crew_protocol::BotRef) -> Result<(), String> {
+        if matches!(self.lock().get(session_id), Some(Live::Codex(_))) {
+            return self.codex_steer(session_id, text, from);
+        }
         let sent = child_envelope(&from, text);
         let message = {
             let mut map = self.lock();
@@ -1404,76 +1448,6 @@ impl TurnHost {
         Ok(())
     }
 
-    fn run_codex(
-        &self,
-        session: crate::session::Session,
-        params: TurnStart,
-        history: Option<String>,
-    ) -> TurnOutcome {
-        let session_id = session.id.clone();
-        self.agents.kill(&session_id);
-        let (turn_rx, _) = match self.install_stream(&session_id, params.cwd.clone(), Live::Codex) {
-            Ok(pair) => pair,
-            Err(error) => return TurnOutcome::Failed(error),
-        };
-        // A stop that came before the CLI was there to take it.
-        if self.stop_requested(&session_id) {
-            self.detach(&session_id);
-            return TurnOutcome::Stopped;
-        }
-        let path = match self.resolve_bin("codex") {
-            Ok(path) => path,
-            Err(error) => return TurnOutcome::Failed(error),
-        };
-        let mcp = self.mcp();
-        let hint = mcp.as_ref().map(|_| mcp_tools_hint(&self.hidden_tools()));
-        // Minted once and used twice: the agent's own shell gets it, and so
-        // does the MCP server codex starts for it. A second mint would retire
-        // the first.
-        let env = self.agent_env(&session_id);
-        let resume = child_resume(&session);
-        let prompt = if session.kind == "child" {
-            let hint = mcp.as_ref().map(|_| child_tools_hint(&|tool| format!("`mcp__crew__{tool}`")));
-            self.child_prompt(&session, resume.is_some(), hint.as_deref(), &params)
-        } else {
-            build_codex_prompt(
-                &session.name,
-                &session.description,
-                history.as_deref(),
-                &params.text,
-                &path_list(&params, &HashSet::new()),
-                hint.as_deref(),
-            )
-        };
-        if let Err(error) = self.agents.spawn(
-            session_id.clone(),
-            path,
-            build_codex_spawn_args(&CodexSpawn {
-                prompt,
-                resume,
-                model: Some(session.model.clone()).filter(|m| !m.is_empty()),
-                effort: Some(session.effort.clone()).filter(|e| !e.is_empty()),
-                cwd: Some(params.cwd.clone()),
-                autonomy: self.autonomy(&session),
-                mcp,
-                mcp_env: env.clone().into_iter().collect(),
-            }),
-            params.cwd,
-            Some(env),
-        ) {
-            return TurnOutcome::Failed(error);
-        }
-        self.agents.close_stdin(&session_id);
-        self.transcripts
-            .apply(&session_id, HarnessEvent::SessionStarted {});
-        let outcome = self
-            .block_on(turn_rx)
-            .unwrap_or(TurnOutcome::Failed("Turn channel closed".into()));
-        self.agents.kill(&session_id);
-        self.detach(&session_id);
-        outcome
-    }
-
     fn run_cursor(
         &self,
         session: crate::session::Session,
@@ -1623,7 +1597,6 @@ impl TurnHost {
             cancelled: false,
             active: true,
             turn_tx: Some(tx),
-            emitted_assistant: String::new(),
             seen_tools: HashSet::new(),
             stderr: Vec::new(),
             saw_text: false,
@@ -1648,7 +1621,8 @@ impl TurnHost {
             let silent = {
                 let map = host.lock();
                 match map.get(&id) {
-                    Some(Live::Codex(live)) | Some(Live::Cursor(live)) | Some(Live::Opencode(live)) => {
+                    Some(Live::Codex(live)) => live.active && !live.saw_output && !live.cancelled,
+                    Some(Live::Cursor(live)) | Some(Live::Opencode(live)) => {
                         live.active && !live.saw_output && !live.cancelled
                     }
                     _ => false,
@@ -1669,11 +1643,10 @@ impl TurnHost {
     fn handle_line(&self, session_id: &str, line: &str) {
         {
             let mut map = self.lock();
-            if let Some(
-                Live::Codex(live) | Live::Cursor(live) | Live::Opencode(live),
-            ) = map.get_mut(session_id)
-            {
-                live.saw_output = true;
+            match map.get_mut(session_id) {
+                Some(Live::Codex(live)) => live.saw_output = true,
+                Some(Live::Cursor(live) | Live::Opencode(live)) => live.saw_output = true,
+                _ => {}
             }
         }
         let kind = {
@@ -2057,157 +2030,6 @@ impl TurnHost {
             ))
             .unwrap_or_default(),
         );
-    }
-
-    pub(crate) fn handle_codex_line(&self, session_id: &str, line: &str) {
-        let Some(rec) = parse_json_line(line) else {
-            return;
-        };
-        if let Some(thread_id) = thread_id_from_event(&rec) {
-            self.transcripts.apply(
-                session_id,
-                HarnessEvent::SessionProviderBound {
-                    provider_session_id: thread_id,
-                },
-            );
-        }
-        let type_name = string_field(Some(&rec), "type");
-        if type_name.as_deref() == Some("error") {
-            if let Some(fatal) = stream_error_message(&rec) {
-                self.signal(session_id, TurnOutcome::Failed(fatal));
-            }
-            return;
-        }
-        if type_name.as_deref() == Some("turn.completed") {
-            self.transcripts
-                .apply(session_id, HarnessEvent::MessageCompleted {});
-            self.transcripts.apply(
-                session_id,
-                HarnessEvent::TurnCompleted {
-                    usage: codex_turn_usage(&rec),
-                },
-            );
-            self.signal(session_id, TurnOutcome::Completed);
-            return;
-        }
-        if type_name.as_deref() == Some("turn.failed") {
-            let message = stream_error_message(&rec).unwrap_or_else(|| "Codex turn failed.".into());
-            self.transcripts
-                .apply(session_id, HarnessEvent::MessageCompleted {});
-            self.transcripts
-                .apply(session_id, HarnessEvent::TurnCompleted { usage: None });
-            self.signal(session_id, TurnOutcome::Failed(message));
-            return;
-        }
-        let Some(item) = item_from_event(&rec) else {
-            return;
-        };
-        let cancelled = {
-            let map = self.lock();
-            matches!(map.get(session_id), Some(Live::Codex(row)) if row.cancelled)
-        };
-        if cancelled {
-            return;
-        }
-        if let Some(error) = item_error_message(&item) {
-            self.transcripts
-                .apply(session_id, HarnessEvent::SessionNote { message: error });
-            return;
-        }
-        if let Some(text) = agent_message_text(&item) {
-            self.codex_text(session_id, &text, type_name.as_deref() == Some("item.completed"));
-            return;
-        }
-        if !is_tool_item(&item) {
-            return;
-        }
-        let Some(call_id) = tool_call_id(&item) else {
-            return;
-        };
-        let title = codex_tool_label(&item);
-        let first = {
-            let mut map = self.lock();
-            let Some(Live::Codex(live)) = map.get_mut(session_id) else {
-                return;
-            };
-            live.seen_tools.insert(call_id.clone())
-        };
-        if first {
-            self.transcripts.apply(
-                session_id,
-                HarnessEvent::ToolStarted {
-                    call_id: call_id.clone(),
-                    name: codex_tool_name(&item),
-                    title: title.clone(),
-                    detail: codex_tool_detail(&item),
-                },
-            );
-        } else {
-            self.transcripts.apply(
-                session_id,
-                HarnessEvent::ToolUpdated {
-                    call_id: call_id.clone(),
-                    title: Some(title),
-                    status: None,
-                    detail: codex_tool_detail(&item),
-                },
-            );
-        }
-        if type_name.as_deref() == Some("item.completed") {
-            self.transcripts.apply(
-                session_id,
-                HarnessEvent::ToolUpdated {
-                    call_id,
-                    title: None,
-                    status: Some(completed_tool_status(&item)),
-                    detail: None,
-                },
-            );
-        }
-    }
-
-    fn codex_text(&self, session_id: &str, text: &str, completed: bool) {
-        let extra = {
-            let mut map = self.lock();
-            let Some(Live::Codex(live)) = map.get_mut(session_id) else {
-                return;
-            };
-            if !live.emitted_assistant.is_empty()
-                && text != live.emitted_assistant
-                && !text.starts_with(&live.emitted_assistant)
-            {
-                self.transcripts
-                    .apply(session_id, HarnessEvent::MessageCompleted {});
-                live.emitted_assistant.clear();
-            }
-            if text.starts_with(&live.emitted_assistant) {
-                let extra = text[live.emitted_assistant.len()..].to_string();
-                if !extra.is_empty() {
-                    live.emitted_assistant = text.to_string();
-                    Some(extra)
-                } else {
-                    None
-                }
-            } else if !text.is_empty() {
-                live.emitted_assistant = text.to_string();
-                Some(text.to_string())
-            } else {
-                None
-            }
-        };
-        if let Some(extra) = extra {
-            self.transcripts.apply(
-                session_id,
-                HarnessEvent::MessageDelta { text: extra },
-            );
-        }
-        if completed {
-            self.transcripts
-                .apply(session_id, HarnessEvent::MessageCompleted {});
-            if let Some(Live::Codex(live)) = self.lock().get_mut(session_id) {
-                live.emitted_assistant.clear();
-            }
-        }
     }
 
     pub(crate) fn handle_cursor_line(&self, session_id: &str, line: &str) {
@@ -2694,7 +2516,7 @@ impl TurnHost {
     }
 
     pub(crate) fn test_install_codex(&self, id: &str) {
-        let _ = self.install_stream(id, String::new(), Live::Codex);
+        self.lock().insert(id.to_string(), Live::Codex(Box::new(CodexLive::new(None))));
     }
 
     pub(crate) fn test_install_cursor(&self, id: &str) {

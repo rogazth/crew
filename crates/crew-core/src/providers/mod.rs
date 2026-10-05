@@ -141,14 +141,16 @@ fn today() -> String {
 }
 
 /// The bare name of a Crew tool, whatever the provider prefixed it with:
-/// Claude spells it `mcp__crew__x`, opencode `crew_x`, codex `crew.x`.
+/// Claude and Codex spell it `mcp__crew__x`, opencode `crew_x`. Codex's items
+/// name the server and the tool apart; its rows put them back together in the
+/// spelling the model saw.
 ///
 /// Getting one wrong is not a crash, which is what makes it worth a test: the
 /// call still runs and the row still appears, but with no detail — a message to
 /// another bot shows as a blob of result JSON instead of who it went to and
 /// what it said, in the chat and in the sender's own tail.
 pub fn crew_tool(name: &str) -> Option<&str> {
-    ["mcp__crew__", "crew_", "crew."]
+    ["mcp__crew__", "crew_"]
         .iter()
         .find_map(|prefix| name.strip_prefix(prefix))
         .filter(|verb| !verb.is_empty())
@@ -381,12 +383,12 @@ mod tests {
         assert_eq!(unwrap_shell("zshrc -lc x"), "zshrc -lc x");
     }
 
-    /// Measured, not guessed: codex reports `crew.message_agent`, and the row
-    /// it produced carried a dump of the tool's result where the chat wanted
-    /// "wrote to Cuddles: the branch is green".
+    /// Measured, not guessed: a misspelled Crew tool still runs, and its row
+    /// carried a dump of the tool's result where the chat wanted "wrote to
+    /// Cuddles: the branch is green".
     #[test]
     fn a_crew_tool_is_recognised_however_the_provider_spells_it() {
-        for spelling in ["mcp__crew__message_agent", "crew_message_agent", "crew.message_agent"] {
+        for spelling in ["mcp__crew__message_agent", "crew_message_agent"] {
             assert_eq!(crew_tool(spelling), Some("message_agent"), "{spelling}");
         }
         for other in ["message_agent", "crew", "crew_", "spawn_agent", "mcp__solo__spawn_agent"] {
@@ -400,7 +402,7 @@ mod tests {
     fn a_call_through_the_gateway_reads_as_the_tool_it_ran() {
         let input = serde_json::json!({ "name": "message_agent", "arguments": { "to": "abc", "text": "green" } });
         let input = input.as_object().unwrap();
-        for spelling in ["mcp__crew__call_tool", "crew_call_tool", "crew.call_tool"] {
+        for spelling in ["mcp__crew__call_tool", "crew_call_tool"] {
             let (verb, arguments) = crew_call(spelling, input).expect(spelling);
             assert_eq!(verb, "message_agent", "{spelling}");
             assert_eq!(arguments["to"], "abc");
@@ -470,14 +472,6 @@ mod tests {
 
     fn turn_prompts(history: Option<&str>) -> Vec<String> {
         vec![
-            codex::build_codex_prompt(
-                "Planner",
-                "You keep the roadmap.",
-                history,
-                "y ahora?",
-                &[],
-                Some("You have: `mcp__crew__message_agent`."),
-            ),
             opencode::build_opencode_prompt(
                 "Planner",
                 "You keep the roadmap.",
@@ -571,17 +565,20 @@ mod tests {
         assert!(pair(&claude(Autonomy::Ask), "--permission-mode", "default"));
         assert!(pair(&claude(Autonomy::Ask), "--effort", "xhigh"));
         assert!(!claude(Autonomy::Full).iter().any(|a| a == "--permission-mode"));
-        let codex = codex::build_codex_spawn_args(&codex::CodexSpawn {
-            prompt: "hi".into(),
-            resume: None,
-            model: None,
-            effort: Some("high".into()),
-            cwd: None,
+        let (_, codex) = codex::thread_request(&codex_thread(None, Some("high")));
+        assert_eq!(codex["config"]["model_reasoning_effort"], "high", "{codex}");
+    }
+
+    fn codex_thread(resume: Option<&str>, effort: Option<&str>) -> codex::CodexThread {
+        codex::CodexThread {
+            cwd: "/work".into(),
+            resume: resume.map(str::to_string),
+            model: Some("gpt".into()),
+            effort: effort.map(str::to_string),
             autonomy: Autonomy::Ask,
             mcp: None,
             mcp_env: Vec::new(),
-        });
-        assert!(pair(&codex, "-c", "model_reasoning_effort=\"high\""), "{codex:?}");
+        }
     }
 
     /// The whole point: a bot's memory is the tail Crew hands it, so nothing
@@ -598,16 +595,6 @@ mod tests {
                 system_prompt: Some("persona".into()),
                 autonomy: Autonomy::Ask,
                 mcp_config: None,
-            }),
-            codex::build_codex_spawn_args(&codex::CodexSpawn {
-                prompt: "hi".into(),
-                resume: None,
-                model: None,
-                effort: None,
-                cwd: Some("/tmp".into()),
-                autonomy: Autonomy::Ask,
-                mcp: None,
-                mcp_env: Vec::new(),
             }),
             cursor::build_cursor_spawn_args(&cursor::CursorSpawn {
                 prompt: "hi".into(),
@@ -629,6 +616,9 @@ mod tests {
                 );
             }
         }
+        let (method, params) = codex::thread_request(&codex_thread(None, None));
+        assert_eq!(method, "thread/start", "{params}");
+        assert!(params.get("threadId").is_none(), "{params}");
     }
 
     /// A child session is the opposite case: it is its provider's own
@@ -649,21 +639,10 @@ mod tests {
         assert!(!claude.contains(&"--session-id".to_string()), "a resume that also names a new session: {claude:?}");
         assert!(claude.contains(&"--replay-user-messages".to_string()), "a steer could never be seen read: {claude:?}");
 
-        let codex = codex::build_codex_spawn_args(&codex::CodexSpawn {
-            prompt: "more".into(),
-            resume: Some("thread-1".into()),
-            model: Some("gpt".into()),
-            effort: None,
-            cwd: Some("/work".into()),
-            autonomy: Autonomy::Ask,
-            mcp: None,
-            mcp_env: Vec::new(),
-        });
-        assert_eq!(&codex[..2], ["exec", "resume"], "{codex:?}");
-        assert_eq!(&codex[codex.len() - 2..], ["thread-1", "more"], "the id and the prompt are resume's positionals: {codex:?}");
-        // `resume` takes neither: the sandbox goes as config, the folder is the process's.
-        assert!(!codex.contains(&"--sandbox".to_string()) && !codex.contains(&"-C".to_string()), "{codex:?}");
-        assert!(codex.windows(2).any(|pair| pair == ["-c", "sandbox_mode=\"workspace-write\""]), "{codex:?}");
+        let (method, codex) = codex::thread_request(&codex_thread(Some("thread-1"), None));
+        assert_eq!(method, "thread/resume", "{codex}");
+        assert_eq!(codex["threadId"], "thread-1", "{codex}");
+        assert_eq!(codex["model"], "gpt", "a resume without its model runs config.toml's: {codex}");
 
         let cursor = cursor::build_cursor_spawn_args(&cursor::CursorSpawn {
             prompt: "more".into(),

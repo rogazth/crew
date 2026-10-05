@@ -2915,9 +2915,21 @@ for line in sys.stdin:
         std::fs::write(
             &path,
             r#"#!/usr/bin/env python3
-import json, time
-time.sleep(0.05)
-print(json.dumps({"type":"turn.failed","error":{"message":"Codex exploded"}}), flush=True)
+# A `codex app-server` whose turn fails, for the paths Crew drives.
+import json, sys
+def out(m): print(json.dumps(m), flush=True)
+for line in sys.stdin:
+    m = json.loads(line)
+    rid, method = m.get("id"), m.get("method")
+    if rid is None:
+        continue
+    if method == "initialize":
+        out({"id": rid, "result": {}})
+    elif method == "thread/start":
+        out({"id": rid, "result": {"thread": {"id": "thr-1"}}})
+    elif method == "turn/start":
+        out({"id": rid, "result": {"turn": {"id": "turn-1", "status": "inProgress"}}})
+        out({"method": "turn/completed", "params": {"threadId": "thr-1", "turn": {"id": "turn-1", "status": "failed", "error": {"message": "Codex exploded"}}}})
 "#,
         )
         .expect("fake codex");

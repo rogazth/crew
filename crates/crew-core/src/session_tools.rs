@@ -35,6 +35,8 @@ pub const LIVE_CAP: usize = 4;
 /// gives a call that carries `timeout_s` that long and ten seconds more.
 pub const WAIT_MAX_S: u64 = 60;
 /// What `read_session` hands back without `max_bytes`, and at most.
+/// The CLIs that take a message into a turn that is running.
+const STEERABLE: [&str; 2] = ["claude", "codex"];
 const READ_DEFAULT: usize = 16 * 1024;
 const READ_MAX: usize = 256 * 1024;
 /// How long an idle child is kept before it exits, unless
@@ -516,16 +518,7 @@ impl SessionTools {
         let mode = text(args.get("mode")).unwrap_or_else(|| "auto".into());
         let row = self.owned(caller, &id)?;
         match mode.as_str() {
-            "auto" | "queue" => {}
-            "steer" if row.provider != "claude" => {
-                return Err(format!(
-                    "steer needs a CLI that takes a message in the middle of a turn. Claude does; {} runs each \
-                     turn as one command, so there is nothing to steer. Use mode queue: it is read the moment \
-                     this turn ends.",
-                    row.provider
-                ))
-            }
-            "steer" => {}
+            "auto" | "queue" | "steer" => {}
             other => return Err(format!("mode is auto, queue or steer, not \"{other}\"")),
         }
         match row.status.as_str() {
@@ -545,34 +538,54 @@ impl SessionTools {
             _ => {}
         }
         let cursor = self.turns.transcripts().len(&row.id) as i64;
-        // Into the turn that is running, when Claude can take it there; a turn
-        // that is not running yet, or has just ended, gets it queued instead.
-        if mode == "steer" && self.turns.is_running(&row.id) && self.turns.steer(&row.id, &body, caller.sender()).is_ok() {
-            return Ok(json!({
-                "session": row.id,
-                "steered": true,
-                "cursor": cursor,
-                "note": "It reads this at its next step and takes it into the turn it is in, so this turn's report \
-                         answers it. Should the turn end before it gets there, it becomes the next turn."
-            }));
+        // Into the turn that is running, when its CLI can take it there (Claude,
+        // Codex); a turn that is not running yet, has just ended, or runs on a
+        // CLI that cannot take it, gets it queued instead. Never refused.
+        let mut unsteered = None;
+        if mode == "steer" {
+            let tried = if !STEERABLE.contains(&row.provider.as_str()) {
+                Err(format!("{} cannot take a message in the middle of a turn", row.provider))
+            } else if !self.turns.is_running(&row.id) {
+                Err("no turn was running".to_string())
+            } else {
+                self.turns.steer(&row.id, &body, caller.sender())
+            };
+            match tried {
+                Ok(()) => {
+                    return Ok(json!({
+                        "session": row.id,
+                        "steered": true,
+                        "cursor": cursor,
+                        "note": "It reads this at its next step and takes it into the turn it is in, so this turn's report \
+                                 answers it. Should the turn end before it gets there, it becomes the next turn."
+                    }))
+                }
+                Err(why) => unsteered = Some(why),
+            }
         }
         mailbox::enqueue(&self.store, &row.id, &caller.sender(), &body)?;
         // The same drain a bot's box has: an idle session starts a turn on
         // the oldest message now; a busy one takes it when its turn ends.
         let delivered = self.turns.deliver_to(&row);
         let waiting = mailbox::waiting_count(&self.store, &row.id)?;
-        Ok(json!({
+        let note = if delivered {
+            "It is working on it now, in the same conversation: it remembers its earlier turns. wait_for_session answers with its report."
+        } else {
+            "It is busy; it reads this the moment its current turn ends. wait_for_session answers with each turn's report."
+        };
+        let mut out = json!({
             "session": row.id,
             "delivered": delivered,
             "queued": !delivered,
             "waiting": waiting,
             "cursor": cursor,
-            "note": if delivered {
-                "It is working on it now, in the same conversation: it remembers its earlier turns. wait_for_session answers with its report."
-            } else {
-                "It is busy; it reads this the moment its current turn ends. wait_for_session answers with each turn's report."
-            }
-        }))
+            "note": note,
+        });
+        if let Some(why) = unsteered {
+            out["steered"] = json!(false);
+            out["note"] = json!(format!("Not steered ({why}), so it went in as a message instead. {note}"));
+        }
+        Ok(out)
     }
 
     fn respond(&self, caller: &Caller, args: &Value) -> Result<Value, String> {
@@ -905,13 +918,13 @@ pub fn catalog() -> Vec<Tool> {
         },
         Tool {
             name: "send_to_session",
-            description: "Give a session you started more work, in the same conversation: it remembers its earlier turns. Idle (or after an error), it starts a turn now; busy, the text waits and is read the moment its turn ends (auto and queue). mode steer puts it into the running turn instead, read at the CLI's next step, so that turn's report answers it: Claude takes that; the other CLIs run each turn as one command and are refused. A session waiting for an answer takes respond_to_session, not this; an exited one takes nothing.",
+            description: "Give a session you started more work, in the same conversation: it remembers its earlier turns. Idle (or after an error), it starts a turn now; busy, the text waits and is read the moment its turn ends (auto and queue). mode steer puts it into the running turn instead, read at the CLI's next step, so that turn's report answers it: Claude and Codex take that; with no turn running, or another CLI, it goes in as a message (steered: false says so). A session waiting for an answer takes respond_to_session, not this; an exited one takes nothing.",
             schema: json!({
                 "type": "object",
                 "properties": {
                     "session": session_arg(),
                     "text": { "type": "string" },
-                    "mode": { "type": "string", "enum": ["auto", "queue", "steer"], "description": "auto (the default) and queue wait for the turn to end; steer goes into the running turn (Claude only)." }
+                    "mode": { "type": "string", "enum": ["auto", "queue", "steer"], "description": "auto (the default) and queue wait for the turn to end; steer goes into the running turn (Claude and Codex; otherwise it is queued)." }
                 },
                 "required": ["session", "text"]
             }),
@@ -1330,8 +1343,11 @@ while True:
         assert_eq!(first["sessions"][0]["report"], "report: SLEEP 2");
         let second = w.wait(&parent, &id, json!({}));
         assert_eq!(second["sessions"][0]["report"], "report: then this", "{second}");
-        let steer = w.call(&parent, "send_to_session", json!({ "session": id, "text": "x", "mode": "steer" }));
-        assert!(steer.is_err_and(|e| e.contains("Use mode queue")), "an opencode turn was steered");
+        // opencode cannot take it mid-turn: it goes in as a message, and says so.
+        let steer = w.call(&parent, "send_to_session", json!({ "session": id, "text": "x", "mode": "steer" })).expect("send");
+        assert_eq!(steer["steered"], false, "{steer}");
+        assert!(steer["note"].as_str().unwrap().contains("Not steered"), "{steer}");
+        assert_eq!(w.wait(&parent, &id, json!({}))["sessions"][0]["report"], "report: x");
     }
 
     #[test]
@@ -1341,7 +1357,14 @@ while True:
         let parent = w.session("terminal", "shell", "full");
         let started = w.call(&parent, "start_session", json!({ "provider": "claude", "prompt": "SLEEP 2" })).expect("start");
         let id = started["id"].as_str().unwrap().to_string();
-        std::thread::sleep(Duration::from_millis(700));
+        // Its CLI is up once its conversation is bound; the turn follows at once.
+        for _ in 0..400 {
+            if w.row(&id).provider_session_id.is_some() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        std::thread::sleep(Duration::from_millis(300));
         let steered = w.call(&parent, "send_to_session", json!({ "session": id, "text": "and this", "mode": "steer" })).expect("steer");
         assert_eq!(steered["steered"], true, "{steered}");
         let out = w.wait(&parent, &id, json!({}));
@@ -1357,6 +1380,184 @@ while True:
         let idle = w.call(&parent, "send_to_session", json!({ "session": id, "text": "next", "mode": "steer" })).expect("send");
         assert_eq!(idle["delivered"], true, "{idle}");
         assert_eq!(w.wait(&parent, &id, json!({}))["sessions"][0]["report"], "report: next");
+    }
+
+    impl World {
+        /// A Codex child on the fake app server, and the log of what it was sent.
+        fn codex(&self, parent: &Caller, prompt: &str, autonomy: Option<&str>) -> (String, PathBuf) {
+            let (fake, log) = crate::turns::fake_codex(&self.dir);
+            self.turns.override_binary("codex", fake);
+            let mut args = json!({ "provider": "codex", "model": "gpt-5.6-luna", "prompt": prompt });
+            if let Some(autonomy) = autonomy {
+                args["autonomy"] = json!(autonomy);
+            }
+            let started = self.call(parent, "start_session", args).expect("start");
+            (started["id"].as_str().unwrap().to_string(), log)
+        }
+    }
+
+    /// Until the turn's command row is in the transcript: the turn is running.
+    fn until_tool(w: &World, _parent: &Caller, id: &str) {
+        for _ in 0..800 {
+            let (blocks, _) = w.turns.transcripts().since(id, 0);
+            if blocks.iter().any(|block| block.role == crew_protocol::BlockRole::Tool) {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        panic!("{id} never ran its command");
+    }
+
+    /// What the fake app server was sent, request by request.
+    fn sent(log: &std::path::Path, method: &str) -> Vec<Value> {
+        std::fs::read_to_string(log)
+            .unwrap_or_default()
+            .lines()
+            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+            .filter(|line| line["method"] == method)
+            .map(|line| line["params"].clone())
+            .collect()
+    }
+
+    /// One app server per turn: the first opens a thread with Crew's server on
+    /// it and the persona as context, the next resumes that thread with the
+    /// model named again.
+    #[test]
+    fn a_codex_session_opens_a_thread_and_the_next_turn_resumes_it() {
+        let w = world();
+        let parent = w.session("terminal", "shell", "full");
+        let (id, log) = w.codex(&parent, "remember 4817", None);
+        let out = w.wait(&parent, &id, json!({}));
+        assert_eq!(out["sessions"][0]["report"], "report: remember 4817", "{out}");
+        w.settle(&id);
+        let bound = w.row(&id).provider_session_id.expect("bound");
+
+        let started = sent(&log, "thread/start");
+        assert_eq!(started.len(), 1, "{started:?}");
+        let crew = &started[0]["config"]["mcp_servers"]["crew"];
+        assert_eq!(crew["args"], json!(["--mcp"]), "{crew}");
+        assert!(crew["env"]["CREW_TOKEN"].as_str().is_some_and(|t| !t.is_empty()), "{crew}");
+        assert_eq!((crew["tool_timeout_sec"].clone(), crew["default_tools_approval_mode"].clone()), (json!(3900), json!("approve")));
+        assert_eq!(started[0]["model"], "gpt-5.6-luna");
+        assert_eq!((started[0]["approvalPolicy"].clone(), started[0]["sandbox"].clone()), (json!("never"), json!("danger-full-access")));
+        let turn = &sent(&log, "turn/start")[0];
+        let first = turn["input"][0]["text"].as_str().unwrap();
+        assert!(first.ends_with("remember 4817") && !first.contains("Your final message"), "the persona is in the message: {turn}");
+        let context = turn["additionalContext"]["crew"]["value"].as_str().unwrap_or_default();
+        assert!(context.contains("Your final message of each turn is your report"), "{context}");
+        assert!(context.contains("`mcp__crew__find_tool`"), "{context}");
+
+        let more = w.call(&parent, "send_to_session", json!({ "session": id, "text": "what number?" })).expect("send");
+        assert_eq!(more["delivered"], true, "{more}");
+        assert_eq!(w.wait(&parent, &id, json!({}))["sessions"][0]["report"], "report: what number?");
+        let resumed = sent(&log, "thread/resume");
+        assert_eq!(resumed.len(), 1, "{resumed:?}");
+        assert_eq!(resumed[0]["threadId"], json!(bound));
+        assert_eq!(resumed[0]["model"], "gpt-5.6-luna");
+        assert!(resumed[0]["config"]["mcp_servers"]["crew"].is_object(), "{}", resumed[0]);
+        let second = &sent(&log, "turn/start")[1];
+        assert!(second["input"][0]["text"].as_str().unwrap().starts_with("## From shell (terminal"), "{second}");
+        assert!(second["additionalContext"]["crew"]["value"].as_str().unwrap().contains("Your final message"), "{second}");
+        // Each turn had its own process, and it is gone.
+        let launches = std::fs::read_to_string(&log).unwrap().lines().filter(|line| line.contains("\"argv\"")).count();
+        assert_eq!(launches, 2);
+        assert!(w.turns.test_agents().running().is_empty());
+    }
+
+    #[test]
+    fn a_codex_session_takes_a_steer_and_queues_one_with_no_turn_to_take_it() {
+        let w = world();
+        let parent = w.session("terminal", "shell", "full");
+        let (id, log) = w.codex(&parent, "SLEEP 2", None);
+        until_tool(&w, &parent, &id);
+        let steered = w.call(&parent, "send_to_session", json!({ "session": id, "text": "and this", "mode": "steer" })).expect("steer");
+        assert_eq!(steered["steered"], true, "{steered}");
+        let out = w.wait(&parent, &id, json!({}));
+        assert_eq!(out["sessions"][0]["report"], "report: SLEEP 2 + and this", "{out}");
+        let steer = &sent(&log, "turn/steer")[0];
+        assert!(steer["expectedTurnId"].as_str().is_some_and(|turn| !turn.is_empty()), "{steer}");
+        // One turn took both, and the steer shows where it was read.
+        let read = w.call(&parent, "read_session", json!({ "session": id })).expect("read");
+        let text = read["text"].as_str().unwrap();
+        let at = text.find("] and this").expect("the steer is not in the transcript");
+        assert!(at < text.find("report: SLEEP 2 + and this").unwrap(), "{text}");
+        assert_eq!(text.matches("Turn ended").count(), 1, "{text}");
+        // Nothing running: it is queued, says so, and starts a turn.
+        w.settle(&id);
+        let idle = w.call(&parent, "send_to_session", json!({ "session": id, "text": "next", "mode": "steer" })).expect("send");
+        assert_eq!((idle["steered"].clone(), idle["delivered"].clone()), (json!(false), json!(true)), "{idle}");
+        assert!(idle["note"].as_str().unwrap().contains("no turn was running"), "{idle}");
+        assert_eq!(w.wait(&parent, &id, json!({}))["sessions"][0]["report"], "report: next");
+    }
+
+    /// An ask child's command waits on the card; the answer goes back on the
+    /// request Codex made, in its own words.
+    #[test]
+    fn a_codex_approval_is_a_card_and_its_answer_goes_back_to_codex() {
+        let w = world();
+        let parent = w.session("terminal", "shell", "full");
+        let (id, log) = w.codex(&parent, "ASK", Some("ask"));
+        let asked = w.wait(&parent, &id, json!({}));
+        assert_eq!(asked["sessions"][0]["event"], "needs-input", "{asked}");
+        let request = &asked["sessions"][0]["request"];
+        assert_eq!((request["kind"].clone(), request["tool"].clone()), (json!("approval"), json!("bash")), "{request}");
+        assert_eq!(request["title"], "touch asked.txt");
+        assert_eq!(w.row(&id).status, "needs-input");
+        w.call(&parent, "respond_to_session", json!({ "session": id, "request_id": request["request_id"], "decision": "always" }))
+            .expect("respond");
+        let done = w.wait(&parent, &id, json!({}));
+        assert_eq!(done["sessions"][0]["report"], "report: ASK + decision: acceptForSession", "{done}");
+        let started = &sent(&log, "thread/start")[0];
+        assert_eq!((started["approvalPolicy"].clone(), started["sandbox"].clone()), (json!("on-request"), json!("workspace-write")));
+    }
+
+    #[test]
+    fn a_codex_question_is_answered_by_its_text_and_goes_back_by_id() {
+        let w = world();
+        let parent = w.session("terminal", "shell", "full");
+        let (id, _) = w.codex(&parent, "QUESTION", None);
+        let asked = w.wait(&parent, &id, json!({}));
+        let request = &asked["sessions"][0]["request"];
+        assert_eq!(request["kind"], "question", "{asked}");
+        assert_eq!(request["questions"][0]["question"], "Which color?");
+        w.call(&parent, "respond_to_session", json!({ "session": id, "request_id": request["request_id"], "answers": { "Which color?": "Blue" } }))
+            .expect("answer");
+        let done = w.wait(&parent, &id, json!({}));
+        assert_eq!(done["sessions"][0]["report"], r#"report: QUESTION + answers: {"color": {"answers": ["Blue"]}}"#, "{done}");
+    }
+
+    /// Stopped: the turn is interrupted, and ends when Codex says so; one
+    /// that does not say so in time is killed under it.
+    #[test]
+    fn a_stopped_codex_turn_is_interrupted_then_killed_if_it_hangs_on() {
+        let w = world();
+        let parent = w.session("terminal", "shell", "full");
+        let (id, log) = w.codex(&parent, "SLEEP 30", None);
+        until_tool(&w, &parent, &id);
+        let at = Instant::now();
+        let stopped = w.call(&parent, "stop_session", json!({ "session": id })).expect("stop");
+        assert_eq!(stopped["status"], "exited", "{stopped}");
+        assert!(at.elapsed() < Duration::from_secs(2), "the interrupt was not taken: {:?}", at.elapsed());
+        assert_eq!(sent(&log, "turn/interrupt").len(), 1);
+
+        let (stubborn, _) = w.codex(&parent, "STUBBORN SLEEP 30", None);
+        until_tool(&w, &parent, &stubborn);
+        let at = Instant::now();
+        let stopped = w.call(&parent, "stop_session", json!({ "session": stubborn })).expect("stop");
+        assert_eq!(stopped["status"], "exited", "{stopped}");
+        let took = at.elapsed();
+        assert!(took >= Duration::from_secs(2) && took < Duration::from_secs(5), "{took:?}");
+        std::thread::sleep(Duration::from_millis(300));
+        assert!(w.turns.test_agents().running().is_empty(), "the hung app server was left running");
+    }
+
+    #[test]
+    fn a_failed_codex_turn_reports_why() {
+        let w = world();
+        let parent = w.session("terminal", "shell", "full");
+        let (id, _) = w.codex(&parent, "FAIL", None);
+        let out = w.wait(&parent, &id, json!({}));
+        assert_eq!((out["sessions"][0]["event"].clone(), out["sessions"][0]["outcome"].clone()), (json!("error"), json!("boom")), "{out}");
     }
 
     /// Claude carries on by itself when a command it backgrounded ends, with

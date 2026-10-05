@@ -442,7 +442,7 @@ fn bridge_message(command: &str) -> Option<ToolDetail> {
     let mut input = Map::new();
     input.insert("to".into(), Value::String(to.clone()));
     input.insert("text".into(), Value::String(words.join(" ")));
-    super::crew_tool_detail("crew.message_agent", &input)
+    super::crew_tool_detail("mcp__crew__message_agent", &input)
 }
 
 /// A command line split the way a POSIX shell splits words: single quotes

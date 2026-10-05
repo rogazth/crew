@@ -738,6 +738,21 @@ supported. The prompt still goes in the first user message (T3 and monocode
 do the same). To check first: stdio MCP over ACP with `cursor-agent`,
 `session/steer`, and session resume (`session/load`).
 
+*Spike (2026-10-05, `cursor-agent` 2026.10.01):* stdio MCP in `session/new`
+works; `session/load` resumes (history replays as updates before the
+response); `session/request_permission` carries Crew's calls
+(`providerIdentifier: "crew"`, answered `allow-once`; never `allow-always`,
+which writes the user's global `~/.cursor/cli-config.json`); `--force acp`
+is full autonomy. No steer (`session/steer` is -32601; a second prompt
+cancels the first), so messages to Cursor always queue. No usage over ACP
+(Crew shows none for any provider). `cursor/ask_question` exists but no
+model used it in the spike: to be tried again while implementing. ACP
+sessions live in `~/.cursor/acp-sessions/`, apart from `-p` chats, so an
+existing Cursor child cannot be resumed: *decided*, the migration keeps
+those sessions and their history in Crew, clears their provider session id,
+and their next turn starts a new conversation with a note saying so.
+Terminals the user runs are not affected.
+
 ### 7e.7 Codex moves to app-server
 
 T3 runs `codex app-server`; zeron and opencodex too. Against `codex exec` it

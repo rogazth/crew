@@ -30,7 +30,7 @@ const MODELS = {
 const BINARIES = { claude: "claude", codex: "codex", opencode: "opencode", cursor: "cursor-agent" };
 const ALL = ["claude", "codex", "opencode", "cursor"];
 const PROVIDERS = (process.env.PROVIDERS ?? ALL.join(",")).split(",").filter(Boolean);
-const SCENARIOS = (process.env.SCENARIOS ?? "a,b,c,d,e,f,g,h,i,j,k,s").split(",").filter(Boolean);
+const SCENARIOS = (process.env.SCENARIOS ?? "a,b,c,d,e,f,g,h,i,j,k,m,s").split(",").filter(Boolean);
 const KEEP = process.env.KEEP === "1";
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -296,6 +296,24 @@ async function cwdOf(session) {
 /** The process group of the CLI crewd runs for a session working in `cwd`. */
 function cliIn(cwd) {
   const crewd = daemon.pid;
+  if (!existsSync("/proc")) {
+    // macOS: crewd's children, and the folder each one runs in, from lsof.
+    let pids = [];
+    try {
+      pids = execFileSync("pgrep", ["-P", String(crewd)]).toString().split("\n").filter(Boolean);
+    } catch {
+      return null;
+    }
+    for (const pid of pids) {
+      try {
+        const where = execFileSync("lsof", ["-a", "-p", pid, "-d", "cwd", "-Fn"]).toString().split("\n").find((line) => line.startsWith("n"));
+        if (where?.slice(1) === cwd) return Number(pid);
+      } catch {
+        // gone
+      }
+    }
+    return null;
+  }
   for (const pid of execFileSync("ls", ["/proc"]).toString().split("\n").filter((name) => /^\d+$/.test(name))) {
     try {
       const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
@@ -438,17 +456,17 @@ const scenarios = {
     return `queued, then remembered ${code} across turns`;
   },
 
-  // Phase 3: a message steered into a running turn (Claude), refused with a
-  // pointer to queue where a turn is one command.
+  // A message steered into a running turn (Claude over stream-json, Codex
+  // with turn/steer); queued, and saying so, where a turn is one command.
   async s(provider) {
     const shell = await terminal(`s-${provider}`);
     const id = await start(shell.token, provider, "Run the shell command `sleep 20` in the foreground and wait for it to finish, then reply with the word ALPHA.");
     await untilTool(shell.token, id);
     const steer = await tool(shell.token, "send_to_session", { session: id, text: "When you reply, add the word BRAVO right after ALPHA.", mode: "steer" });
-    if (provider !== "claude") {
-      assert(!steer.ok && /mode queue/.test(steer.text), `steer was not refused: ${steer.text}`);
+    if (provider !== "claude" && provider !== "codex") {
+      assert(steer.ok && steer.value.steered === false && steer.value.queued === true, `steer was not queued: ${steer.text}`);
       await waitEvent(shell.token, id);
-      return "n/a: it runs each turn as one command, so steer is refused with mode queue offered";
+      return "n/a: it runs each turn as one command, so the steer is queued and says so";
     }
     assert(steer.ok && steer.value.steered === true, `not steered: ${steer.text}`);
     const out = await waitEvent(shell.token, id);
@@ -459,11 +477,39 @@ const scenarios = {
     return `one turn: ${report.slice(0, 60)}`;
   },
 
-  // The child asks for approval; the parent answers.
+  // A child calls one of Crew's tools through the MCP server Crew attached,
+  // and its next turn remembers the first.
+  async m(provider) {
+    const shell = await terminal(`m-${provider}`);
+    const secret = word("KOALA");
+    const id = await start(
+      shell.token,
+      provider,
+      `Remember the code word ${secret}. Call Crew's find_tool (in the crew MCP server) with the query "list bots", then reply with the word FOUND followed by the names of the tools it returned, and nothing else.`,
+    );
+    const first = await waitEvent(shell.token, id);
+    assert(/FOUND/.test(first.sessions[0].report), `turn 1 reported ${first.sessions[0].report}`);
+    const page = await rpc("transcript_tail", { sessionId: id });
+    const titles = page.blocks.filter((block) => block.tool).map((block) => block.tool.title);
+    assert(titles.some((title) => /^Crew find tool/.test(title)), `no Crew tool call in the transcript: ${JSON.stringify(titles)}`);
+    await untilStatus(id, ["idle"]);
+    await must(shell.token, "send_to_session", { session: id, text: "What code word did I give you at the start? Reply with the code word only." });
+    const second = await waitEvent(shell.token, id, 600, first.cursors[id]);
+    assert(second.sessions[0].report.includes(secret), `the resumed turn reported ${second.sessions[0].report}`);
+    return `called find_tool; remembered ${secret} on resume`;
+  },
+
+  // The child asks for approval; the parent answers. Codex works in its
+  // workspace without asking, so its command reaches outside it.
   async f(provider) {
-    if (provider !== "claude") return "n/a: headless, it has no channel to ask Crew for approval";
-    const shell = await terminal("f-full");
-    const id = await start(shell.token, provider, "Use your Bash tool to run exactly this command: touch approved.txt — then reply DONE.", { autonomy: "ask" });
+    if (provider !== "claude" && provider !== "codex") return "n/a: headless, it has no channel to ask Crew for approval";
+    const target = (name) => (provider === "codex" ? join(dataDir, name) : join(repo, name));
+    const job = (name) =>
+      provider === "codex"
+        ? `Run exactly this shell command: touch ${target(name)} — it is outside your workspace, so ask for escalated permissions to run it. Then reply DONE.`
+        : `Use your Bash tool to run exactly this command: touch ${name} — then reply DONE.`;
+    const shell = await terminal(`f-full-${provider}`);
+    const id = await start(shell.token, provider, job("approved.txt"), { autonomy: "ask" });
     const asked = await waitEvent(shell.token, id);
     assert(asked.sessions[0].event === "needs-input", `it never asked: ${JSON.stringify(asked)}`);
     const request = asked.sessions[0].request.request_id;
@@ -472,24 +518,24 @@ const scenarios = {
     await must(shell.token, "respond_to_session", { session: id, request_id: request, decision: "allow" });
     const done = await waitEvent(shell.token, id);
     assert(done.sessions[0].event === "turn", `after allowing: ${JSON.stringify(done)}`);
-    assert(existsSync(join(repo, "approved.txt")), "the allowed command did not run");
+    assert(existsSync(target("approved.txt")), "the allowed command did not run");
     // An ask parent cannot allow, only deny.
-    const careful = await terminal("f-ask");
+    const careful = await terminal(`f-ask-${provider}`);
     await setAutonomy(careful, "ask");
-    const other = await start(careful.token, provider, "Use your Bash tool to run exactly this command: touch denied.txt — then reply DONE.");
+    const other = await start(careful.token, provider, job("denied.txt"));
     const again = await waitEvent(careful.token, other);
     assert(again.sessions[0].event === "needs-input", `it never asked: ${JSON.stringify(again)}`);
     const refused = await tool(careful.token, "respond_to_session", { session: other, request_id: again.sessions[0].request.request_id, decision: "allow" });
     assert(!refused.ok && /cannot allow/.test(refused.text), `an ask parent allowed: ${refused.text}`);
     await must(careful.token, "respond_to_session", { session: other, request_id: again.sessions[0].request.request_id, decision: "deny" });
-    const settled = await waitEvent(careful.token, other);
-    assert(["turn", "needs-input"].includes(settled.sessions[0].event), JSON.stringify(settled));
-    if (settled.sessions[0].event === "needs-input") {
+    let settled = await waitEvent(careful.token, other);
+    while (settled.sessions[0].event === "needs-input") {
       await must(careful.token, "respond_to_session", { session: other, request_id: settled.sessions[0].request.request_id, decision: "deny" });
-      await waitEvent(careful.token, other);
+      settled = await waitEvent(careful.token, other);
     }
-    assert(!existsSync(join(repo, "denied.txt")), "a denied command ran");
-    rmSync(join(repo, "approved.txt"), { force: true });
+    assert(settled.sessions[0].event === "turn", JSON.stringify(settled));
+    assert(!existsSync(target("denied.txt")), "a denied command ran");
+    rmSync(target("approved.txt"), { force: true });
     return "allowed by a full parent; an ask parent was refused allow and denied";
   },
 
