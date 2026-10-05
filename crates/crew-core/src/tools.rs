@@ -15,6 +15,7 @@ const PROVIDERS: &[(&str, &[&str])] = &[
         "claude",
         &[
             "claude-fable-5-1",
+            "claude-opus-5-5",
             "claude-opus-5",
             "claude-sonnet-5",
             "claude-fable-5",
@@ -34,6 +35,7 @@ const PROVIDERS: &[(&str, &[&str])] = &[
             "cursor-grok-4.6-high",
             "gpt-5.3-codex",
             "claude-fable-5-1-thinking-high",
+            "claude-opus-5-5-high",
             "claude-opus-5-thinking-high",
             "claude-sonnet-5-thinking-high",
             "gpt-5.6-sol-medium",
@@ -51,6 +53,7 @@ const PROVIDERS: &[(&str, &[&str])] = &[
         "codex",
         &[
             "gpt-6-astra",
+            "gpt-6-luna",
             "gpt-5.6-sol",
             "gpt-5.6-terra",
             "gpt-5.6-luna",
@@ -68,6 +71,31 @@ const PROVIDERS: &[(&str, &[&str])] = &[
         ],
     ),
 ];
+
+/// The model a session runs when none was picked. Crew always names one, so a
+/// session's chips say what its CLI runs rather than "whatever it is set to".
+/// Mirrors `defaultModel` in `src/lib/providers.ts`.
+pub fn default_model(provider: &str) -> &'static str {
+    match provider {
+        "claude" => "claude-opus-5-5",
+        "cursor" => "auto",
+        _ => PROVIDERS
+            .iter()
+            .find(|(name, _)| *name == provider)
+            .and_then(|(_, models)| models.first().copied())
+            .unwrap_or(""),
+    }
+}
+
+/// The effort a session thinks at when none was picked; empty for a CLI that
+/// takes none. Mirrors `defaultEffort` in `src/lib/providers.ts`.
+pub fn default_effort(provider: &str) -> &'static str {
+    match provider {
+        "claude" => "high",
+        "codex" => "medium",
+        _ => "",
+    }
+}
 
 /// One tool, as `tools/list` and `find_tool` describe it.
 ///
@@ -1022,7 +1050,7 @@ fn create_agent(
         if provider == me.provider {
             me.model.clone()
         } else {
-            models.first().copied().unwrap_or_default().to_string()
+            default_model(&provider).to_string()
         }
     });
     // Inherited, never asked for. An agent that has to stop at every command

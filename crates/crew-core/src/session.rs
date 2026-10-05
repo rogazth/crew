@@ -64,13 +64,16 @@ pub const SESSION_COLUMN_COUNT: usize = 18;
 pub const SESSIONS: &str = "sessions s LEFT JOIN agents a ON a.id = s.agent_id";
 
 pub fn row_to_session(row: &rusqlite::Row, at: usize) -> rusqlite::Result<Session> {
+    let provider: String = row.get(at + 4)?;
+    let model = or_default_model(&provider, row.get(at + 5)?);
+    let effort = or_default_effort(&provider, row.get(at + 17)?);
     Ok(Session {
         id: row.get(at)?,
         workspace_id: row.get(at + 1)?,
         kind: row.get(at + 2)?,
         name: row.get(at + 3)?,
-        provider: row.get(at + 4)?,
-        model: row.get(at + 5)?,
+        provider,
+        model,
         provider_session_id: row.get(at + 6)?,
         description: row.get(at + 7)?,
         notifications: row.get::<_, i64>(at + 8)? != 0,
@@ -82,8 +85,26 @@ pub fn row_to_session(row: &rusqlite::Row, at: usize) -> rusqlite::Result<Sessio
         agent_id: row.get(at + 14)?,
         parent_id: row.get(at + 15)?,
         cursor: row.get(at + 16)?,
-        effort: row.get(at + 17)?,
+        effort,
     })
+}
+
+/// A row from before Crew always named a model, or one written without any,
+/// runs and shows its provider's default rather than "the CLI's own".
+fn or_default_model(provider: &str, model: String) -> String {
+    if model.is_empty() {
+        crate::tools::default_model(provider).to_string()
+    } else {
+        model
+    }
+}
+
+fn or_default_effort(provider: &str, effort: String) -> String {
+    if effort.is_empty() {
+        crate::tools::default_effort(provider).to_string()
+    } else {
+        effort
+    }
 }
 
 pub fn list(store: &Store, workspace_id: String) -> Result<Vec<Session>, String> {
@@ -226,9 +247,9 @@ fn insert(
         status: if kind == "child" { "starting".into() } else { "idle".into() },
         kind,
         name,
+        model: or_default_model(&provider, model),
+        effort: or_default_effort(&provider, String::new()),
         provider,
-        model,
-        effort: String::new(),
         provider_session_id: None,
         description,
         notifications: true,
@@ -922,6 +943,19 @@ mod tests {
         assert_eq!(adopt(&store, &s.id, "Generated"), None);
         assert_eq!(name_of(&store, &s.id), "Typed by hand");
         assert_eq!(adopt(&store, &s.id, "After /clear").as_deref(), Some("After /clear"));
+    }
+
+    #[test]
+    fn a_session_without_a_model_runs_its_providers_default() {
+        let (store, workspace) = world();
+        let s = terminal(&store, &workspace, "claude 1", "claude");
+        // A row from before Crew always named them: no model, no effort.
+        set_options(&store, s.id.clone(), String::new(), String::new(), "ask".into()).expect("options");
+        let read = get(&store, s.id).expect("get").expect("row");
+        assert_eq!((read.model.as_str(), read.effort.as_str()), ("claude-opus-5-5", "high"));
+        let new = create(&store, workspace, "terminal".into(), "codex 1".into(), "codex".into(), String::new(), String::new(), "ask".into())
+            .expect("codex");
+        assert_eq!((new.model.as_str(), new.effort.as_str()), ("gpt-6-astra", "medium"));
     }
 
     #[test]

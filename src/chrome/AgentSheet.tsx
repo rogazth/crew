@@ -8,7 +8,7 @@ import { useAgentAvatar } from "../hooks/useAgentAvatar";
 import { useAgentFaces } from "../hooks/useAgentFaces";
 import { useDefaultAgent } from "../hooks/useDefaultAgent";
 import { AGENT_AVATARS, dealSeeds, type AgentAvatarId, type AgentFace } from "../lib/agentAvatar";
-import { ACCESSES, DEFAULT_MODEL, DEFAULT_PROVIDER, accessesOf, type ProviderId } from "../lib/providers";
+import { ACCESSES, DEFAULT_PROVIDER, accessesOf, defaultModelOf, type ProviderId } from "../lib/providers";
 import type { Autonomy, Session, Worktree } from "../lib/types";
 import { branchError, worktreeLabel } from "../lib/worktrees";
 
@@ -97,7 +97,7 @@ export function AgentSheet({ session, worktrees, initialWorktree, existingNames,
       ? {
           name: session.name,
           provider: session.provider,
-          model: session.model || DEFAULT_MODEL,
+          model: session.model || defaultModelOf(session.provider),
           description: session.description,
           notifications: session.notifications,
           autonomy: session.autonomy,
@@ -107,7 +107,7 @@ export function AgentSheet({ session, worktrees, initialWorktree, existingNames,
       : {
           name: "",
           provider: effective.provider ?? DEFAULT_PROVIDER,
-          model: effective.model ?? DEFAULT_MODEL,
+          model: effective.model || defaultModelOf(effective.provider ?? DEFAULT_PROVIDER),
           description: "",
           notifications: true,
           autonomy: "ask",

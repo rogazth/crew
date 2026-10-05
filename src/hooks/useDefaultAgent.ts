@@ -2,9 +2,8 @@ import { useCallback, useEffect, useSyncExternalStore } from "react";
 import * as api from "../lib/api";
 import {
   DEFAULT_ACCESS,
-  DEFAULT_EFFORT,
-  DEFAULT_MODEL,
   DEFAULT_PROVIDER,
+  fitChoice,
   parseAgentChoice,
   pickProvider,
   type AgentChoice,
@@ -13,7 +12,7 @@ import { useInstalledProviders } from "./useInstalledProviders";
 
 const KEY = "providers:default";
 
-let preferred: AgentChoice = { provider: DEFAULT_PROVIDER, model: DEFAULT_MODEL, effort: DEFAULT_EFFORT, access: DEFAULT_ACCESS };
+let preferred: AgentChoice = fitChoice({ provider: DEFAULT_PROVIDER, model: "", effort: "", access: DEFAULT_ACCESS });
 let requested = false;
 const listeners = new Set<() => void>();
 

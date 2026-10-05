@@ -4,7 +4,6 @@ import { PANEL, ROW } from "./kit";
 import { ModelPicker } from "./ModelPicker";
 import {
   ACCESSES,
-  DEFAULT_EFFORT,
   EFFORT_LABELS,
   accessesOf,
   effortsOf,
@@ -40,7 +39,7 @@ export function ModelControls({ value, onChange, lockProvider = false }: Props) 
         onChange={(provider: ProviderId, model) => onChange(fitChoice({ ...value, provider, model }))}
       />
       {efforts.length > 0 && (
-        <EffortPicker value={value.effort} efforts={efforts} onChange={(effort) => onChange({ ...value, effort })} />
+        <EffortPicker value={value.effort} efforts={efforts} onChange={(effort) => onChange(fitChoice({ ...value, effort }))} />
       )}
     </>
   );
@@ -53,12 +52,8 @@ export function EffortPicker({
 }: {
   value: Effort | "";
   efforts: Effort[];
-  onChange: (effort: Effort | "") => void;
+  onChange: (effort: Effort) => void;
 }) {
-  const options: { id: Effort | ""; label: string }[] = [
-    { id: DEFAULT_EFFORT, label: "Default" },
-    ...efforts.map((id) => ({ id, label: EFFORT_LABELS[id] })),
-  ];
   return (
     <Menu.Root modal={false}>
       <Menu.Trigger aria-label="Effort" title="How hard the model thinks" className={CHIP}>
@@ -70,11 +65,10 @@ export function EffortPicker({
         <Menu.Positioner side="top" align="start" sideOffset={4} className="z-50">
           <Menu.Popup className={PANEL}>
             <div className="px-2 pt-1 pb-1.5 text-[11px] text-text-muted">Effort</div>
-            <Menu.RadioGroup value={value} onValueChange={(next) => onChange(next as Effort | "")}>
-              {options.map((option) => (
-                <Menu.RadioItem key={option.id || "default"} value={option.id} closeOnClick className={ROW}>
-                  <span className="min-w-0 flex-1 truncate">{option.label}</span>
-                  {option.id === DEFAULT_EFFORT && <span className="text-[11px] text-text-muted">The CLI's own</span>}
+            <Menu.RadioGroup value={value} onValueChange={(next) => onChange(next as Effort)}>
+              {efforts.map((id) => (
+                <Menu.RadioItem key={id} value={id} closeOnClick className={ROW}>
+                  <span className="min-w-0 flex-1 truncate">{EFFORT_LABELS[id]}</span>
                   <Menu.RadioItemIndicator>
                     <CheckIcon className="size-4 shrink-0" />
                   </Menu.RadioItemIndicator>

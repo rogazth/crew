@@ -1,7 +1,7 @@
 import { useCallback } from "react";
 import type { Launch } from "../chrome/TabLauncher";
 import { setFirstPrompt } from "../lib/firstPrompt";
-import { DEFAULT_MODEL, fitChoice, type AgentChoice, type ProviderId } from "../lib/providers";
+import { fitChoice, type AgentChoice, type ProviderId } from "../lib/providers";
 import type { Session, StubKind } from "../lib/types";
 import { nextSessionName } from "../lib/workspaces";
 import { useDefaultAgent } from "./useDefaultAgent";
@@ -36,7 +36,7 @@ export function useLaunch({ sessions, worktree, create, openSession, openStub, o
       const choice =
         typeof pick === "object"
           ? pick
-          : fitChoice({ ...defaultAgent, provider: pick, model: pick === defaultAgent.provider ? defaultAgent.model : DEFAULT_MODEL });
+          : fitChoice({ ...defaultAgent, provider: pick, model: pick === defaultAgent.provider ? defaultAgent.model : "" });
       const session = await create("terminal", {
         name: nextSessionName(sessions, choice.provider),
         provider: choice.provider,

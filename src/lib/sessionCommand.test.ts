@@ -3,7 +3,7 @@ import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { PROVIDERS, parseAgentChoice, pickProvider } from "./providers";
+import { PROVIDERS, fitChoice, parseAgentChoice, pickProvider } from "./providers";
 import { sessionCommand } from "./sessionCommand";
 import type { Session } from "./types";
 
@@ -194,7 +194,7 @@ describe("pickProvider", () => {
   it("falls back to the first installed provider on its default model", () => {
     expect(pickProvider({ provider: "codex", model: "gpt-5.5", effort: "high", access: "edits" }, only("opencode", "cursor"))).toEqual({
       provider: "cursor",
-      model: "",
+      model: "auto",
       effort: "",
       access: "ask",
     });
@@ -205,12 +205,23 @@ describe("parseAgentChoice", () => {
   it("rejects what is not a known provider", () => {
     expect(parseAgentChoice(null)).toBeNull();
     expect(parseAgentChoice('{"provider":"gemini"}')).toBeNull();
-    expect(parseAgentChoice('{"provider":"codex"}')).toEqual({ provider: "codex", model: "", effort: "", access: "full" });
+    expect(parseAgentChoice('{"provider":"codex"}')).toEqual({ provider: "codex", model: "gpt-6-astra", effort: "medium", access: "full" });
     expect(parseAgentChoice('{"provider":"codex","effort":"max","access":"edits"}')).toEqual({
       provider: "codex",
-      model: "",
-      effort: "",
+      model: "gpt-6-astra",
+      effort: "medium",
       access: "ask",
     });
+  });
+
+  it("resolves a stored Default to the provider's model and effort", () => {
+    expect(parseAgentChoice('{"provider":"claude","model":"","effort":"","access":"full"}')).toEqual({
+      provider: "claude",
+      model: "claude-opus-5-5",
+      effort: "high",
+      access: "full",
+    });
+    // Opus 4.5 stops at high, so a max carried to it lands on the default.
+    expect(fitChoice({ provider: "claude", model: "claude-opus-4-5", effort: "max", access: "ask" }).effort).toBe("high");
   });
 });

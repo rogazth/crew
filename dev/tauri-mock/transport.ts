@@ -3,6 +3,8 @@
  * (`CREW_MOCK=1 npm run dev`) where DevTools and screenshots work. Only the
  * shapes matter; nothing here persists.
  */
+import { defaultEffortOf, defaultModelOf } from "../../src/lib/providers";
+
 type Row = Record<string, unknown>;
 type Listener = (payload: unknown) => void;
 
@@ -220,8 +222,9 @@ function session(
     kind,
     name,
     provider,
-    model,
-    effort: "",
+    // The daemon never hands back a session without a model or an effort.
+    model: model || defaultModelOf(provider),
+    effort: defaultEffortOf(provider, model || defaultModelOf(provider)),
     providerSessionId: null,
     description: "",
     notifications: true,
@@ -258,14 +261,14 @@ const commands: Record<string, (args: Row) => unknown> = {
   session_list: ({ workspaceId }) => sessions.filter((s) => s.workspaceId === workspaceId),
   session_create: (args) => {
     const row = session(`s${Date.now()}`, args.workspaceId as string, args.kind as string, args.name as string, args.provider as string, args.model as string, "idle", (args.worktree as string | null | undefined) || null);
-    Object.assign(row, { effort: (args.effort as string | undefined) ?? "", autonomy: (args.autonomy as string | undefined) ?? "ask" });
+    Object.assign(row, { effort: (args.effort as string | undefined) || row.effort, autonomy: (args.autonomy as string | undefined) ?? "ask" });
     sessions.push(row);
     return row;
   },
   session_set_options: ({ id, model, effort, autonomy }) => {
     const row = sessions.find((s) => s.id === id);
     if (!row) return;
-    Object.assign(row, { model, effort, autonomy });
+    Object.assign(row, { model: model || row.model, effort: effort || row.effort, autonomy });
     emit("session-updated", { session: row });
   },
   session_get: ({ id }) => sessions.find((s) => s.id === id) ?? null,

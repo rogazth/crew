@@ -26,7 +26,6 @@ import { BROWSER_CLICK } from "../lib/external";
 import { cliHost } from "../lib/host";
 import {
   ACCESSES,
-  DEFAULT_EFFORT,
   EFFORT_LABELS,
   PROVIDERS,
   accessesOf,
@@ -322,7 +321,7 @@ function Providers() {
       <SettingsSection title="New sessions">
         <SettingsRow
           label="Default agent"
-          description={`What ${commandKeys("new-session")} and Home open. Default runs the model the CLI is configured with.`}
+          description={`What ${commandKeys("new-session")} and Home open.`}
         >
           <div className="w-72">
             <ModelPicker
@@ -333,16 +332,13 @@ function Providers() {
           </div>
         </SettingsRow>
         {effortsOf(preferred.provider, preferred.model).length > 0 && (
-          <SettingsRow label="Effort" description="How hard the model thinks. Default leaves it to the CLI.">
+          <SettingsRow label="Effort" description="How hard the model thinks.">
             <Select
               label="Effort"
               className="w-40"
-              value={preferred.effort || "default"}
-              onChange={(effort) => update({ ...preferred, effort: effort === "default" ? DEFAULT_EFFORT : (effort as Effort) })}
-              options={[
-                { value: "default", label: "Default" },
-                ...effortsOf(preferred.provider, preferred.model).map((effort) => ({ value: effort, label: EFFORT_LABELS[effort] })),
-              ]}
+              value={preferred.effort}
+              onChange={(effort) => update(fitChoice({ ...preferred, effort: effort as Effort }))}
+              options={effortsOf(preferred.provider, preferred.model).map((effort) => ({ value: effort, label: EFFORT_LABELS[effort] }))}
             />
           </SettingsRow>
         )}

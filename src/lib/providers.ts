@@ -47,6 +47,13 @@ export type ProviderDef = {
    */
   chat: boolean;
   models: Model[];
+  /**
+   * What a session runs when nothing was picked. Crew always names a model and
+   * an effort, so the chips say what the CLI runs. Mirrors `default_model` and
+   * `default_effort` in `crates/crew-core/src/tools.rs`.
+   */
+  defaultModel: string;
+  defaultEffort?: Effort;
 };
 
 export const PROVIDERS: ProviderDef[] = [
@@ -67,6 +74,8 @@ export const PROVIDERS: ProviderDef[] = [
     effortArgs: (effort) => ["--effort", effort],
     promptArgs: (text) => ["--", text],
     chat: true,
+    defaultModel: "claude-opus-5-5",
+    defaultEffort: "high",
     models: [
       { id: "claude-fable-5-1", label: "Fable 5.1", note: "Toughest" },
       { id: "claude-opus-5-5", label: "Opus 5.5", note: "Most capable" },
@@ -94,6 +103,7 @@ export const PROVIDERS: ProviderDef[] = [
     effortArgs: () => [],
     promptArgs: (text) => ["--", text],
     chat: false,
+    defaultModel: "auto",
     models: [
       { id: "auto", label: "Auto", note: "Default" },
       { id: "composer-2.5", label: "Composer 2.5" },
@@ -126,6 +136,8 @@ export const PROVIDERS: ProviderDef[] = [
     effortArgs: (effort) => ["-c", `model_reasoning_effort="${effort}"`],
     promptArgs: (text) => ["--", text],
     chat: true,
+    defaultModel: "gpt-6-astra",
+    defaultEffort: "medium",
     models: [
       { id: "gpt-6-astra", label: "GPT-6 Astra", note: "Most capable" },
       { id: "gpt-6-luna", label: "GPT-6 Luna" },
@@ -149,6 +161,7 @@ export const PROVIDERS: ProviderDef[] = [
     // Its one positional is the project folder.
     promptArgs: (text) => [`--prompt=${text}`],
     chat: true,
+    defaultModel: "opencode/ling-3.0-flash-fin-free",
     models: [
       { id: "opencode/ling-3.0-flash-fin-free", label: "Ling 3.0 Flash", note: "Free" },
       { id: "opencode/nemotron-3.5-lightning-free", label: "Nemotron 3.5 Lightning", note: "Free" },
@@ -160,16 +173,9 @@ export const PROVIDERS: ProviderDef[] = [
 ];
 
 export const DEFAULT_PROVIDER: ProviderId = "claude";
-/** No `--model`: the CLI runs whatever the user configured it to. */
-export const DEFAULT_MODEL = "";
-
-const CLI_DEFAULT: Model = { id: DEFAULT_MODEL, label: "Default", note: "The CLI's own setting" };
-
 /** What a new session starts with: who runs it, on what, how hard and how freely. */
 export type AgentChoice = { provider: ProviderId; model: string; effort: Effort | ""; access: Access };
 
-/** No `--effort`: the CLI thinks as hard as the user configured it to. */
-export const DEFAULT_EFFORT = "";
 /** A fresh install runs without asking; the composer says so, and one click asks. */
 export const DEFAULT_ACCESS: Access = "full";
 
@@ -192,8 +198,20 @@ export const providerOf = (id: string): ProviderDef | undefined =>
   PROVIDERS.find((p) => p.id === id);
 
 export function modelsOf(providerId: string): Model[] {
-  const provider = providerOf(providerId);
-  return provider ? [CLI_DEFAULT, ...provider.models] : [];
+  return providerOf(providerId)?.models ?? [];
+}
+
+/** The model a session of this provider runs when none was picked. */
+export function defaultModelOf(providerId: string): string {
+  return providerOf(providerId)?.defaultModel ?? "";
+}
+
+/** The effort a model thinks at when none was picked: its provider's, else the most it takes. */
+export function defaultEffortOf(providerId: string, modelId: string): Effort | "" {
+  const efforts = effortsOf(providerId, modelId);
+  const preferred = providerOf(providerId)?.defaultEffort;
+  if (preferred && efforts.includes(preferred)) return preferred;
+  return efforts.at(-1) ?? "";
 }
 
 export function modelLabel(providerId: string, modelId: string): string {
@@ -216,21 +234,23 @@ export function accessesOf(providerId: string): Access[] {
 export const accessLabel = (access: string): string => ACCESSES.find((a) => a.id === access)?.label ?? access;
 
 /**
- * A choice carried to another provider or model keeps what still fits: an
- * effort it does not take goes back to the CLI's own, an access it has no
- * mode for asks.
+ * A choice carried to another provider or model keeps what still fits: no
+ * model takes the provider's default, an effort it does not take goes to the
+ * model's default, an access it has no mode for asks.
  */
 export function fitChoice(choice: AgentChoice): AgentChoice {
-  const effort = choice.effort && effortsOf(choice.provider, choice.model).includes(choice.effort) ? choice.effort : DEFAULT_EFFORT;
+  const model = choice.model || defaultModelOf(choice.provider);
+  const effort =
+    choice.effort && effortsOf(choice.provider, model).includes(choice.effort) ? choice.effort : defaultEffortOf(choice.provider, model);
   const access = accessesOf(choice.provider).includes(choice.access) ? choice.access : "ask";
-  return { ...choice, effort, access };
+  return { ...choice, model, effort, access };
 }
 
 /** The preferred provider when its CLI is installed, else the first one that is. */
 export function pickProvider(preferred: AgentChoice, installed: ProviderDef[]): AgentChoice {
   if (installed.some((p) => p.id === preferred.provider)) return preferred;
   const fallback = PROVIDERS.find((p) => installed.includes(p));
-  return fallback ? fitChoice({ ...preferred, provider: fallback.id, model: DEFAULT_MODEL }) : preferred;
+  return fallback ? fitChoice({ ...preferred, provider: fallback.id, model: "" }) : preferred;
 }
 
 /** "Claude Opus 5" — the top line of a sidebar row. */
@@ -247,8 +267,8 @@ export function parseAgentChoice(raw: string | null): AgentChoice | null {
     if (typeof provider !== "string" || !providerOf(provider)) return null;
     return fitChoice({
       provider: provider as ProviderId,
-      model: typeof model === "string" ? model : DEFAULT_MODEL,
-      effort: typeof effort === "string" && effort in EFFORT_LABELS ? (effort as Effort) : DEFAULT_EFFORT,
+      model: typeof model === "string" ? model : "",
+      effort: typeof effort === "string" && effort in EFFORT_LABELS ? (effort as Effort) : "",
       access: ACCESSES.some((a) => a.id === access) ? (access as Access) : DEFAULT_ACCESS,
     });
   } catch {
