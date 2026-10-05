@@ -27,6 +27,12 @@ describe("delivered", () => {
     const history = [user("t", "one\ntwo", 10_000)];
     expect(delivered([sent("s", "one\n two", 10_000)], history).has("s")).toBe(true);
   });
+
+  it("matches a plugin's command typed without its plugin", () => {
+    const history = [user("t", "/ns:deep look at this", 11_000)];
+    expect(delivered([sent("s", "/deep look at this", 10_000)], history).has("s")).toBe(true);
+    expect(delivered([sent("s", "/ns:deep look at this", 10_000)], history).has("s")).toBe(true);
+  });
 });
 
 describe("queuedBlock", () => {

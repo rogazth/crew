@@ -7,13 +7,18 @@ export type Queued = { id: string; text: string; files: AttachedFile[]; at: numb
 /** How far a CLI's clock and ours may disagree when a queued message is matched to its turn. */
 const CLOCK_SLACK_MS = 5000;
 
-const squash = (text: string) => text.replace(/\s+/g, " ").trim();
+/** The text as compared: spaces folded, and a plugin's command (`/plugin:name`) by the name it was typed as. */
+const squash = (text: string) =>
+  text
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/^\/[^\s/:]+:/, "/");
 
 /**
  * The queued messages whose user turn is in the history yet. The CLI may
- * dress the text (Claude turns a pasted image path into `[Image #1]`), so a
- * turn written after the send that ends with the text is the match; each turn
- * answers for one send.
+ * dress the text (Claude turns a pasted image path into `[Image #1]`, and
+ * writes a plugin's `/name` as `/plugin:name`), so a turn written after the
+ * send that ends with the text is the match; each turn answers for one send.
  */
 export function delivered(queued: readonly Queued[], blocks: readonly Block[]): Set<string> {
   const done = new Set<string>();
