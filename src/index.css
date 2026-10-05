@@ -823,7 +823,10 @@ body:has(button[data-sidebar="resize-handle"]:active) * {
 .crew-md [data-streamdown="table-wrapper"] > div {
   width: fit-content;
   max-width: 100%;
+  /* streamdown also scrolls it vertically and may cap its height inline; a table grows instead. */
+  max-height: none !important;
   overflow-x: auto;
+  overflow-y: hidden;
   overscroll-behavior-x: contain;
   border: 1px solid var(--color-border);
   border-radius: 12px;
