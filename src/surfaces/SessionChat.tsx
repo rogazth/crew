@@ -59,8 +59,10 @@ export function SessionChat({ session, ptyId, cwd, active, blocked, busy, onShow
   const field = useRef<HTMLTextAreaElement>(null);
   const root = useRef<HTMLDivElement>(null);
 
-  // The daemon reads the CLI's file only while the chat is on screen.
-  useEffect(() => (active ? holdHistory(id, cwd) : undefined), [active, cwd, id]);
+  // The daemon reads the CLI's file while the chat's tab is open, shown or
+  // not: letting go of it empties the transcript, and the reader's place, and
+  // the pages they loaded above it, with it.
+  useEffect(() => holdHistory(id, cwd), [cwd, id]);
   const history = useSyncExternalStore(
     useCallback((listener: () => void) => subscribeHistory(id, listener), [id]),
     () => readHistory(id),

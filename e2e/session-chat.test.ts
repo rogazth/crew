@@ -5,11 +5,22 @@
 // writes Claude's), types what is sent into the terminal, and answers what
 // the CLI asks with the keys it expects, as its hooks report it.
 import assert from "node:assert/strict";
-import { readFile, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { appendFile, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { after, before, test } from "node:test";
 import type { Session } from "../src/lib/types.ts";
-import { installFakeCodex, launchCrew, MOD, newTerminal, pressChord, typeInTerminal, waitFor, type Crew } from "./harness.ts";
+import {
+  installFakeCodex,
+  launchCrew,
+  MOD,
+  newTerminal,
+  pressChord,
+  sessionTab,
+  typeInTerminal,
+  waitFor,
+  type Crew,
+} from "./harness.ts";
 
 let crew: Crew;
 
@@ -336,6 +347,86 @@ test("Claude's trust prompt is answered from the chat's card", async () => {
   await chat.getByRole("button", { name: "Trust" }).waitFor({ state: "detached" });
   await sendFromChat(session, "trusted now");
   await chat.getByText("Done.").waitFor();
+});
+
+/** Replies numbered `from` up to `to`, written into the CLI's conversation as though it had answered them. */
+async function replies(cwd: string, id: string, from: number, to: number): Promise<void> {
+  const file = path.join(crew.home, ".claude/projects", cwd.replace(/[^a-zA-Z0-9]/g, "-"), `${id}.jsonl`);
+  const filler = "A line long enough to wrap, so that each reply stands several rows tall in the chat. ".repeat(3);
+  let lines = "";
+  for (let n = from; n < to; n += 1) {
+    const text = [`Reply ${n}`, filler, filler, filler].join("\n\n");
+    const message = { id: randomUUID(), role: "assistant", content: [{ type: "text", text }] };
+    const entry = { type: "assistant", message, uuid: randomUUID(), sessionId: id, cwd, timestamp: new Date().toISOString() };
+    lines += `${JSON.stringify(entry)}\n`;
+  }
+  await appendFile(file, lines);
+}
+
+/** How far below the top of `session`'s transcript the reply opening with `text` sits, or null while it is not drawn. */
+function offsetOf(session: Session, text: string): Promise<number | null> {
+  return crew.window.evaluate(
+    ({ id, text }) => {
+      const scroller = document.querySelector(`[data-session-chat="${id}"] [data-selectable="blocks"]`);
+      const row = [...(scroller?.querySelectorAll("[data-block]") ?? [])].find((el) =>
+        [...el.querySelectorAll("p")].some((p) => p.textContent === text),
+      );
+      if (!scroller || !row || scroller.clientHeight === 0) return null;
+      return Math.round(row.getBoundingClientRect().top - scroller.getBoundingClientRect().top);
+    },
+    { id: session.id, text },
+  );
+}
+
+/** Whether `session`'s transcript, shown or not, has the reply opening with `text`. */
+function holds(session: Session, text: string): Promise<boolean> {
+  return crew.window.evaluate(
+    ({ id, text }) =>
+      [...document.querySelectorAll(`[data-session-chat="${id}"] p`)].some((p) => p.textContent === text),
+    { id: session.id, text },
+  );
+}
+
+test("a chat tab keeps the reader's place behind another tab, and as replies arrive below it", async () => {
+  const [workspace] = crew.workspaces;
+  assert.ok(workspace);
+  await crew.request("state_set", { key: "sessions:view", value: "chat" });
+  await crew.reload();
+  const session = await newTerminal(crew, workspace.id);
+  const chat = chatOf(session);
+  await chat.waitFor();
+  await sendFromChat(session, "a long conversation");
+  await chat.getByText("Done.").waitFor();
+  await replies(workspace.path, session.id, 0, 30);
+  await waitFor(() => holds(session, "Reply 29"), { message: "the replies reach the chat" });
+
+  // Reading Reply 10, far above the bottom.
+  await crew.window.evaluate((id) => {
+    const scroller = document.querySelector(`[data-session-chat="${id}"] [data-selectable="blocks"]`);
+    const row = [...(scroller?.querySelectorAll("[data-block]") ?? [])].find((el) =>
+      [...el.querySelectorAll("p")].some((p) => p.textContent === "Reply 10"),
+    );
+    row?.scrollIntoView({ block: "start" });
+  }, session.id);
+  await waitFor(async () => (await offsetOf(session, "Reply 10")) === 0, { message: "Reply 10 is at the top" });
+
+  // Replies landing below, on screen, leave it where it is.
+  await replies(workspace.path, session.id, 30, 35);
+  await waitFor(() => holds(session, "Reply 34"), { message: "more replies reach the chat" });
+  assert.ok(Math.abs((await offsetOf(session, "Reply 10")) ?? Infinity) <= 1, "replies below moved the reader");
+
+  // Another tab on screen, and more replies while this one is behind it.
+  const other = await newTerminal(crew, workspace.id);
+  await chatOf(other).waitFor();
+  await replies(workspace.path, session.id, 35, 45);
+  await waitFor(() => holds(session, "Reply 44"), { message: "the hidden chat keeps reading" });
+
+  await sessionTab(crew, session).click();
+  await waitFor(async () => (await offsetOf(session, "Reply 10")) !== null, { message: "the chat is back on screen" });
+  assert.ok(
+    Math.abs((await offsetOf(session, "Reply 10")) ?? Infinity) <= 1,
+    `back on its tab, Reply 10 sits ${await offsetOf(session, "Reply 10")}px below the top`,
+  );
 });
 
 /** Types a line into the terminal on screen without submitting it. */

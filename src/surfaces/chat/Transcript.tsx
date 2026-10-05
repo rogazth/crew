@@ -16,6 +16,8 @@ const ANCHOR_MS = 600;
 const PREFETCH_PX = 600;
 /** How many frames to wait for a folded phase to mount the row it holds. */
 const FOCUS_FRAMES = 20;
+/** The step, down from the scroller's top edge, at which the row there is looked for. */
+const PROBE_PX = 8;
 type Props = {
   blocks: Block[];
   working: boolean;
@@ -45,6 +47,21 @@ function waiting(blocks: Block[]): boolean {
   return blocks.some(awaitsUser);
 }
 
+/** Where the reader is: the first row on screen, and how far below the top edge it sits. */
+type Reading = { row: Element; id: string; offset: number };
+
+/** The row at the top of the scroller, probed down from its edge past the gaps between rows. */
+function rowAtTop(el: HTMLElement): Reading | null {
+  const box = el.getBoundingClientRect();
+  const x = box.left + box.width / 2;
+  for (let y = box.top + 1; y < box.bottom; y += PROBE_PX) {
+    const row = document.elementFromPoint(x, y)?.closest("[data-block]");
+    const id = row?.getAttribute("data-block");
+    if (row && id && el.contains(row)) return { row, id, offset: row.getBoundingClientRect().top - box.top };
+  }
+  return null;
+}
+
 /** Stick-to-bottom scroller, with a 16px threshold. */
 export function Transcript({
   blocks,
@@ -61,8 +78,10 @@ export function Transcript({
   const content = useRef<HTMLDivElement>(null);
   const sentinel = useRef<HTMLDivElement>(null);
   const pinned = useRef(true);
-  /** Where the reader is, measured from the bottom: everything that arrives
-   *  arrives above them, so this is the number that must not change. */
+  /** The row the reader is on, which stays put whatever lands above or below it. */
+  const reading = useRef<Reading | null>(null);
+  /** Where the reader is, measured from the bottom: what holds them when the
+   *  row they were on is gone. */
   const fromBottom = useRef(0);
   /** A row the reader just opened or closed: it stays where it was on screen while the panel moves. */
   const anchor = useRef<{ el: Element; top: number; until: number } | null>(null);
@@ -70,10 +89,12 @@ export function Transcript({
 
   const onScroll = () => {
     const el = scroller.current;
-    if (!el) return;
+    // Hidden, everything measures 0: that would read as pinned to the bottom.
+    if (!el || el.clientHeight === 0) return;
     pinned.current =
       el.scrollHeight - el.scrollTop - el.clientHeight <= NEAR_BOTTOM_PX;
     fromBottom.current = el.scrollHeight - el.scrollTop;
+    reading.current = pinned.current ? null : rowAtTop(el);
   };
 
   const place = useCallback(() => {
@@ -95,8 +116,19 @@ export function Transcript({
       el.scrollTop = el.scrollHeight;
       return;
     }
-    // Reading something further up: history loading above, or a resync
-    // trimming it, must leave that line where it was.
+    // Reading something further up: messages arriving below, history loading
+    // above, or a resync trimming it, must leave that row where it was. Behind
+    // another tab nothing could hold it, so this is also what brings it back.
+    const mark = reading.current;
+    const row = mark && (mark.row.isConnected ? mark.row : el.querySelector(`[data-block="${CSS.escape(mark.id)}"]`));
+    if (mark && row) {
+      mark.row = row;
+      const moved = row.getBoundingClientRect().top - el.getBoundingClientRect().top - mark.offset;
+      // Not written when still: a write stops the wheel's momentum.
+      if (Math.abs(moved) >= 1) el.scrollTop += moved;
+      fromBottom.current = el.scrollHeight - el.scrollTop;
+      return;
+    }
     el.scrollTop = el.scrollHeight - fromBottom.current;
   }, []);
 
@@ -124,14 +156,12 @@ export function Transcript({
 
   // Shiki answering, an image resolving, a webfont landing: each one grows the
   // transcript after the paint that placed the reader. The observer runs
-  // before that paint, so re-pinning here is a number changing, not a jump.
+  // before that paint, so re-placing here is a number changing, not a jump.
   useEffect(() => {
     const el = scroller.current;
     const body = content.current;
     if (!el || !body) return;
-    const observer = new ResizeObserver(() => {
-      if (pinned.current || anchor.current) place();
-    });
+    const observer = new ResizeObserver(place);
     observer.observe(body);
     observer.observe(el);
     return () => observer.disconnect();
