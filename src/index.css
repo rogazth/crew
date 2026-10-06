@@ -1097,48 +1097,31 @@ svg.lucide {
   box-shadow: inset 0 0 0 1px var(--color-border-strong), 0 1px 2px oklch(0% 0 0 / 0.03);
 }
 
-/* Rich tabs. The ring sits outside the 14px face, so a status never moves the title. */
-.crew-tab-face {
-  position: relative;
-  display: grid;
-  place-items: center;
+/* A turn running: three dots in ink, rising in turn. Nothing else in the chrome moves. */
+.crew-typing {
+  display: flex;
+  align-items: center;
+  gap: 2px;
 }
-.crew-tab-face::before {
-  content: "";
-  position: absolute;
-  inset: -3px;
+.crew-typing > span {
+  width: 3px;
+  height: 3px;
   border-radius: 999px;
-  pointer-events: none;
+  background: var(--color-text-muted);
+  animation: crew-typing 1.2s ease-in-out infinite;
 }
-.crew-tab-face[data-ring="spin"]::before {
-  background: conic-gradient(from 0deg, transparent 0 55%, var(--color-warning) 100%);
-  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 1.5px), #000 calc(100% - 1.25px));
-  mask: radial-gradient(farthest-side, transparent calc(100% - 1.5px), #000 calc(100% - 1.25px));
-  animation: crew-spin 0.9s linear infinite;
+.crew-typing > span:nth-child(2) {
+  animation-delay: 0.15s;
 }
-.crew-tab-face[data-ring="warning"]::before {
-  box-shadow: inset 0 0 0 1.5px var(--color-warning);
-  animation: status-pulse 1.6s ease-in-out infinite;
+.crew-typing > span:nth-child(3) {
+  animation-delay: 0.3s;
 }
-.crew-tab-face[data-badge]::after {
-  content: "";
-  position: absolute;
-  top: -2px;
-  right: -3px;
-  width: 7px;
-  height: 7px;
-  border-radius: 999px;
-  background: var(--color-info);
-  box-shadow: 0 0 0 1.5px var(--color-sidebar);
-}
-.crew-tab-face[data-badge="danger"]::after {
-  background: var(--color-danger);
-}
-@keyframes crew-spin {
-  to { transform: rotate(360deg); }
+@keyframes crew-typing {
+  0%, 60%, 100% { opacity: 0.3; transform: none; }
+  30% { opacity: 1; transform: translateY(-1.5px); }
 }
 @media (prefers-reduced-motion: reduce) {
-  .crew-tab-face::before { animation: none; }
+  .crew-typing > span { animation: none; opacity: 0.6; }
 }
 
 /* The agent's work between two messages, as a timeline: one rail down the left,
@@ -1179,10 +1162,6 @@ svg.lucide {
   border-radius: 999px;
   background: var(--color-success);
   animation: status-pulse 1.6s ease-in-out infinite;
-}
-/* A tab whose turn ended with commands still running in the background. */
-.crew-tab-face[data-ring="background"]::before {
-  border: 1.5px dashed var(--color-warning);
 }
 @media (prefers-reduced-motion: reduce) {
   .crew-bg-dot {

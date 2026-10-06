@@ -12,11 +12,12 @@ import { DriverFace } from "./DriverFace";
 import { FileTypeIcon } from "./FileTypeIcon";
 import { ProviderIcon } from "./ProviderIcon";
 import { SortableList } from "./SortableList";
+import { StatusDot } from "./StatusDot";
 import { StubIcon } from "./StubIcon";
 import { TabLauncher, type Launch } from "./TabLauncher";
 import { useLease } from "../hooks/useBrowserLeases";
 import { TabPeek, type PeekAnchor } from "./TabPeek";
-import { toneOf, withBackground, type TabTone } from "../lib/tabStyle";
+import { toneOf } from "../lib/tabStyle";
 import { useBrowserPage } from "../hooks/useBrowserPage";
 import { useCommand } from "../hooks/useCommand";
 import { useFileDrop } from "../hooks/useFileDrop";
@@ -431,9 +432,10 @@ const TabPill = memo(function TabPill({
     accept: "tab",
   });
   const status = tabStatus(tab, sessions);
-  // A turn that ended with commands still running: a dashed ring and their count.
+  // A turn that ended with commands still running: their count beside the title.
   const background = useTabBackground(tab.kind === "session" ? sessions.find((s) => s.id === tab.sessionId) : undefined);
-  const tone = withBackground(toneOf(status), background);
+  const tone = toneOf(status);
+  const signal = status !== null && status !== "idle" && status !== "exited";
   return (
     <Tabs.Tab
       ref={ref}
@@ -469,7 +471,7 @@ const TabPill = memo(function TabPill({
         <BrowserTabFace tab={tab} sessions={sessions} />
       ) : (
         <>
-          <TabIcon tab={tab} sessions={sessions} tone={tone} />
+          <TabIcon tab={tab} sessions={sessions} />
           <span className={`min-w-0 flex-1 truncate ${tone.bold ? "font-semibold text-text" : ""}`}>
             {tabTitle(tab, sessions)}
           </span>
@@ -477,8 +479,15 @@ const TabPill = memo(function TabPill({
         </>
       )}
       {branch && <BranchTag hue={branch.hue} label={branch.label} className="max-w-[110px]" />}
-      {/* The close button's fixed slot: status lives on the face, so the slot never resizes the tab. */}
+      {/* One fixed slot holds the status and the close button, so neither resizes the
+          tab: the status shows until a hover or a focus asks for the button. */}
       <span className="relative flex size-5 shrink-0 items-center justify-center">
+        {signal && (
+          <StatusDot
+            status={status}
+            className="transition-opacity duration-150 group-hover:opacity-0 group-has-[button:focus-visible]:opacity-0"
+          />
+        )}
         <button
           type="button"
           onClick={(event) => {
@@ -486,8 +495,8 @@ const TabPill = memo(function TabPill({
             onClose(tab.id);
           }}
           aria-label="Close tab"
-          className={`absolute right-0 flex size-5 items-center justify-center rounded-full text-text-muted transition-colors hover:bg-selected hover:text-text focus-visible:opacity-100 ${
-            active ? "opacity-100" : "opacity-0 group-hover:opacity-100"
+          className={`absolute right-0 flex size-5 items-center justify-center rounded-full text-text-muted transition-[color,background-color,opacity] hover:bg-selected hover:text-text focus-visible:opacity-100 ${
+            active && !signal ? "opacity-100" : "opacity-0 group-hover:opacity-100"
           }`}
         >
           <XIcon className="size-3" />
@@ -527,7 +536,8 @@ const PinnedPill = memo(function PinnedPill({
     type: "pin",
     accept: "pin",
   });
-  const tone = toneOf(tabStatus(tab, sessions));
+  const status = tabStatus(tab, sessions);
+  const tone = toneOf(status);
   const title = tabTitle(tab, sessions);
   return (
     <Tabs.Tab
@@ -561,7 +571,13 @@ const PinnedPill = memo(function PinnedPill({
       {tab.kind === "browser" ? (
         <BrowserTabFace tab={tab} sessions={sessions} bare />
       ) : (
-        <TabIcon tab={tab} sessions={sessions} tone={tone} />
+        <TabIcon tab={tab} sessions={sessions} />
+      )}
+      {/* No title, no slot: the status rides the pill's corner. */}
+      {status && (
+        <span className="pointer-events-none absolute -top-1 -right-1 flex rounded-full bg-sidebar empty:hidden">
+          <StatusDot status={status} className="size-3" />
+        </span>
       )}
       {branch && (
         <span
@@ -611,7 +627,8 @@ const GroupChip = memo(function GroupChip({
     type: "tab",
     accept: "tab",
   });
-  const tone = toneOf(groupStatus(item.tabs, sessions));
+  const status = groupStatus(item.tabs, sessions);
+  const tone = toneOf(status);
   const hue = branch?.hue ?? 0;
   const label = branch?.label ?? "Worktree";
   const count = item.tabs.length;
@@ -630,15 +647,10 @@ const GroupChip = memo(function GroupChip({
         tone.tint ? "bg-warning/15 ring-1 ring-warning/40" : ""
       } ${isDragging ? "cursor-grabbing" : ""}`}
     >
-      <span
-        className="crew-tab-face size-2 shrink-0"
-        data-ring={tone.ring ?? undefined}
-        data-badge={tone.badge ?? undefined}
-      >
-        <BranchDot hue={hue} />
-      </span>
+      <BranchDot hue={hue} />
       <span className="min-w-0 truncate">{label}</span>
       <span className="shrink-0 text-text-muted tabular-nums">{count}</span>
+      {status && <StatusDot status={status} className="size-3" />}
     </button>
   );
 });
@@ -680,7 +692,7 @@ function ScrollControl({
 function BackgroundCount({ count }: { count: number }) {
   if (count === 0) return null;
   return (
-    <span aria-label={`${count} background ${count === 1 ? "command" : "commands"} running`} className="shrink-0 text-[11px] text-warning tabular-nums">
+    <span aria-label={`${count} background ${count === 1 ? "command" : "commands"} running`} className="shrink-0 text-[11px] text-text-muted tabular-nums">
       {count}
     </span>
   );
@@ -693,7 +705,7 @@ const tabStatus = (tab: Tab, sessions: Session[]) =>
 
 /** Identity only — the status light lives in the tab's trailing slot. Every branch
     fills the same 14px box, so a tab keeps its layout when its kind changes. */
-function TabIcon({ tab, sessions, tone }: { tab: Tab; sessions: Session[]; tone: TabTone | null }) {
+function TabIcon({ tab, sessions }: { tab: Tab; sessions: Session[] }) {
   const icon = () => {
     if (tab.kind === "stub") return <StubIcon stub={tab.stub} className="size-3.5 text-icon" />;
     if (tab.kind === "file") return <FileTypeIcon name={tab.relative} className="size-3.5" />;
@@ -709,13 +721,7 @@ function TabIcon({ tab, sessions, tone }: { tab: Tab; sessions: Session[]; tone:
     );
   };
   return (
-    <span
-      className="crew-tab-face size-3.5 shrink-0"
-      data-ring={tone?.ring ?? undefined}
-      data-badge={tone?.badge ?? undefined}
-    >
-      {icon()}
-    </span>
+    <span className="grid size-3.5 shrink-0 place-items-center">{icon()}</span>
   );
 }
 
