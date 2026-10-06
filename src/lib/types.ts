@@ -17,7 +17,7 @@ export type Workspace = {
 export type SessionKind = "bot" | "terminal" | "child";
 
 /** Written by whatever runs the session: the terminal, or the daemon's turns. A child adds starting and exited. */
-export type SessionStatus = "starting" | "idle" | "working" | "needs-input" | "done" | "error" | "exited";
+export type SessionStatus = "starting" | "idle" | "working" | "background" | "needs-input" | "done" | "error" | "exited";
 
 /**
  * What it may do without asking: "ask" routes every tool through Allow/Deny,

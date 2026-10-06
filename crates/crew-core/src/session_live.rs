@@ -24,6 +24,9 @@ struct Entry {
     working: bool,
     background: bool,
     background_tasks: Vec<BackgroundCommand>,
+    /// What the last Stop named, kept through the next turn so a task named
+    /// again keeps the time it was first seen.
+    seen: Vec<BackgroundCommand>,
     ask: Option<SessionAsk>,
     provider_session_id: Option<String>,
     transcript_path: Option<String>,
@@ -43,8 +46,7 @@ impl LiveBoard {
             "SessionStart" => {
                 entry.started = true;
                 entry.working = false;
-                entry.background = false;
-                entry.background_tasks.clear();
+                entry.forget_background();
                 entry.ask = None;
                 if let Some(id) = hook.get("session_id").and_then(Value::as_str) {
                     entry.provider_session_id = Some(id.to_string());
@@ -53,8 +55,13 @@ impl LiveBoard {
                     entry.transcript_path = Some(path.to_string());
                 }
             }
+            // The Stop that ends this turn says afresh what is left running. Esc
+            // ends it with no Stop at all, and must not leave the last turn's
+            // work standing for good: a woken turn's work has ended already.
             "UserPromptSubmit" => {
                 entry.working = true;
+                entry.background = false;
+                entry.background_tasks.clear();
                 entry.ask = None;
             }
             "PermissionRequest" => {
@@ -71,17 +78,20 @@ impl LiveBoard {
                 entry.ask = None;
             }
             "Stop" | "StopFailure" => {
+                // Interrupted, the turn is over whatever it left running: that
+                // work wakes nobody the user is waiting on.
+                let interrupted = hook.get("is_interrupt").and_then(Value::as_bool) == Some(true);
                 entry.working = false;
-                entry.background = runs_in_background(hook);
-                entry.background_tasks = left_running(hook, &entry.background_tasks, now);
+                entry.background = !interrupted && runs_in_background(hook);
+                entry.background_tasks = left_running(hook, &entry.seen, now);
+                entry.seen = entry.background_tasks.clone();
                 entry.ask = None;
             }
             // A `/clear` ends one conversation before the next starts; quitting ends the last.
             "SessionEnd" => {
                 entry.started = false;
                 entry.working = false;
-                entry.background = false;
-                entry.background_tasks.clear();
+                entry.forget_background();
                 entry.ask = None;
             }
             _ => return None,
@@ -116,8 +126,7 @@ impl LiveBoard {
         let before = entry.snapshot(crew_id);
         entry.started = false;
         entry.working = false;
-        entry.background = false;
-        entry.background_tasks.clear();
+        entry.forget_background();
         entry.ask = None;
         entry.changed(crew_id, before, now)
     }
@@ -137,6 +146,12 @@ impl LiveBoard {
 }
 
 impl Entry {
+    fn forget_background(&mut self) {
+        self.background = false;
+        self.background_tasks.clear();
+        self.seen.clear();
+    }
+
     fn snapshot(&self, crew_id: &str) -> SessionLive {
         SessionLive {
             session_id: crew_id.to_string(),
@@ -282,6 +297,31 @@ mod tests {
         assert!(board.exited("crew-1", 8).is_some_and(|gone| !gone.background));
         board.hook("crew-1", PROMPT, 9);
         assert!(!board.hook("crew-1", STOP, 10).unwrap().background);
+    }
+
+    #[test]
+    fn a_turn_stopped_with_esc_leaves_nothing_in_the_background() {
+        let mut board = LiveBoard::default();
+        board.hook("crew-1", START, 1);
+        board.hook("crew-1", PROMPT, 2);
+        board.hook("crew-1", STOP_BACKGROUND, 3);
+        // The shell reports back, and Esc stops the turn it woke: no Stop runs.
+        board.hook("crew-1", NOTIFIED, 4);
+        let stopped = board.turn_ended("crew-1", 5).unwrap();
+        assert!(!stopped.working && !stopped.background);
+        assert!(stopped.background_tasks.is_empty());
+    }
+
+    #[test]
+    fn an_interrupted_stop_waits_on_nothing() {
+        const INTERRUPTED: &str = r#"{"session_id":"ac29cbcc","hook_event_name":"Stop","is_interrupt":true,"background_tasks":[{"id":"bf9zorro8","type":"shell","status":"running","command":"sleep 15"}]}"#;
+        let mut board = LiveBoard::default();
+        board.hook("crew-1", START, 1);
+        board.hook("crew-1", PROMPT, 2);
+        let stopped = board.hook("crew-1", INTERRUPTED, 3).unwrap();
+        assert!(!stopped.working && !stopped.background);
+        // The shell does run on, and the tray says so.
+        assert_eq!(stopped.background_tasks.len(), 1);
     }
 
     // Claude Code 2.1.287: publishing an Artifact leaves a watch on it running

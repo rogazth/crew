@@ -832,7 +832,7 @@ function Badge({ status }: { status: SessionStatus }) {
       aria-label={statusLabel(status)}
       className={`absolute -right-1 -bottom-1 grid size-4 place-items-center rounded-full bg-sidebar ${status === "working" ? "opacity-0 motion-reduce:opacity-100" : ""}`}
     >
-      {status === "working" || status === "starting" ? (
+      {status === "working" || status === "starting" || status === "background" ? (
         <StatusDot status={status} className="size-3" />
       ) : (
         <span className={`size-2.5 rounded-full ${BADGE[status]}`} />

@@ -27,7 +27,7 @@ pub struct Session {
     /// deems routine, "full" lets it run unattended. Crew's own tools treat
     /// anything short of "full" as "ask".
     pub autonomy: String,
-    /// "idle" | "working" | "needs-input" | "error". Set by the runtime, never by the UI.
+    /// "idle" | "working" | "background" | "needs-input" | "error". Set by the runtime, never by the UI.
     pub status: String,
     /// Absolute path of the git worktree it runs in; `None` is the workspace
     /// folder, the main checkout.
@@ -597,7 +597,7 @@ pub fn claimed_provider_sessions(store: &Store, except: &str) -> Result<Vec<Stri
 
 /// The runtime owns this; the UI only renders whatever the last writer left.
 pub fn set_status(store: &Store, id: String, status: String) -> Result<(), String> {
-    const KNOWN: [&str; 7] = ["starting", "idle", "working", "needs-input", "done", "error", "exited"];
+    const KNOWN: [&str; 8] = ["starting", "idle", "working", "background", "needs-input", "done", "error", "exited"];
     if !KNOWN.contains(&status.as_str()) {
         return Err(format!("Unknown session status: {status}"));
     }
@@ -1132,7 +1132,7 @@ mod tests {
     fn only_the_statuses_the_runtime_writes_are_accepted() {
         let (store, workspace) = world();
         let made = bot(&store, &workspace, "Planner", "ask").expect("bot");
-        for status in ["idle", "working", "needs-input", "done", "error"] {
+        for status in ["idle", "working", "background", "needs-input", "done", "error"] {
             set_status(&store, made.id.clone(), status.into()).expect(status);
         }
         assert!(set_status(&store, made.id.clone(), "busy".into()).is_err());

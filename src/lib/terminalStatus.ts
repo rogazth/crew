@@ -93,8 +93,8 @@ type Options = {
  * What a terminal session's indicator says, from what its process does.
  *
  * - `working` while the CLI is busy, looked at or not, as a chat Crew drives does.
- *   That includes a turn that ended on work it left running in the
- *   background: the CLI takes it up again when that work reports back.
+ * - `background` once a turn ends on work it left running in the background:
+ *   the CLI takes it up again when that work reports back.
  * - `done` once it finishes while you are elsewhere; `idle` when you watched.
  * - `error` once its process failed while you were elsewhere. Like `done`, it
  *   is news: looking at the tab, or marking it read, makes it `idle`.
@@ -135,14 +135,15 @@ export class TerminalActivity {
     this.#report = report;
     this.#onBusy = onBusy;
     this.#clock = clock;
-    if (running && initial === "working") {
-      this.#busy = true;
+    if (running && (initial === "working" || initial === "background")) {
+      if (initial === "working") this.#busy = true;
+      else this.#background = true;
       this.#onBusy(true);
       return;
     }
     // Nothing runs before the process spawns: a stored `working` is left over
     // from a window that closed mid-turn, and a watched tab has been read.
-    if (initial === "working" || watched) this.#push("idle");
+    if (initial === "working" || initial === "background" || watched) this.#push("idle");
   }
 
   get status(): SessionStatus {
@@ -157,7 +158,7 @@ export class TerminalActivity {
     if (watched === this.#watched) return;
     this.#watched = watched;
     this.settle();
-    if (watched) this.#push(this.#busy ? "working" : "idle");
+    if (watched) this.#push(this.#busy ? "working" : this.#background ? "background" : "idle");
   }
 
   /** The user typed, pasted, clicked or focused: what comes back is an echo. */
@@ -205,8 +206,6 @@ export class TerminalActivity {
     const busy = titleBusy(title);
     if (busy === null) return;
     if (!busy && this.#clock.now() - this.#hookedAt < HOOK_GRACE) return;
-    // Claude rests its title between turns while its background work runs.
-    if (!busy && this.#background) return;
     this.#titled = true;
     this.#starting = false;
     this.#stopQuiet();
@@ -227,7 +226,6 @@ export class TerminalActivity {
     this.#titled = true;
     this.#hooks = true;
     this.#background = !working && background;
-    if (this.#background) working = true;
     if (working && !this.#busy) this.#hookedAt = this.#clock.now();
     this.#starting = false;
     this.#stopQuiet();
@@ -274,16 +272,23 @@ export class TerminalActivity {
   #setBusy(busy: boolean): void {
     const was = this.#busy;
     this.#busy = busy;
-    this.#onBusy(busy);
-    if (busy === was) return;
+    // Work left in the background still runs in the process: closing it asks first.
+    this.#onBusy(busy || this.#background);
     if (busy) {
+      if (busy === was) return;
       // A bell already claimed the slot and the redraw that follows is not new
       // work; a title that spins again is: the question was answered.
       if (this.#status !== "needs-input" || this.#titled) this.#push("working");
       return;
     }
+    if (this.#background) {
+      this.#push("background");
+      return;
+    }
+    // What was left in the background ended without waking the CLI.
+    if (!was && this.#status !== "background") return;
     if (this.#watched) this.#push("idle");
-    else if (this.#status === "working") this.#push("done");
+    else if (this.#status === "working" || this.#status === "background") this.#push("done");
   }
 
   #armQuiet(run: () => void, ms = QUIET_AFTER): void {

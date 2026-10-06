@@ -301,8 +301,8 @@ describe("TerminalActivity with hooks", () => {
   });
 
   // Claude ends a turn on a build it left running and is woken when the build
-  // ends: the session is still at work, with nothing new to read.
-  it("keeps working through a turn that ended on work left in the background", () => {
+  // ends: the turn is over, the session is not, and there is nothing new to read.
+  it("runs in the background through a turn that ended on work left there", () => {
     const { activity, reported } = track();
     activity.hooked(true, false);
     vi.advanceTimersByTime(HOOK_GRACE);
@@ -311,17 +311,54 @@ describe("TerminalActivity with hooks", () => {
     vi.advanceTimersByTime(HOOK_LAG / 4);
     activity.hooked(false, false, true);
     vi.advanceTimersByTime(HOOK_LAG * 2);
-    expect(activity.status).toBe("working");
-    // And again while it waits on the build.
-    activity.title("◐ Run the build");
+    expect(activity.status).toBe("background");
+    expect(activity.busy).toBe(false);
+    // Resting again while it waits on the build says nothing new.
     activity.title("✳ Run the build");
     vi.advanceTimersByTime(HOOK_LAG * 2);
-    expect(activity.status).toBe("working");
+    expect(activity.status).toBe("background");
     // The build reports back; the turn it starts ends with nothing left running.
     activity.hooked(true, false);
     activity.title("◐ Run the build");
     activity.hooked(false, false);
-    expect(reported).toEqual(["working", "done"]);
+    expect(reported).toEqual(["working", "background", "working", "done"]);
+  });
+
+  it("asks before closing a terminal whose work runs in the background", () => {
+    const busy: boolean[] = [];
+    const activity = new TerminalActivity("idle", false, { report: () => {}, onBusy: (b) => busy.push(b) });
+    activity.hooked(true, false);
+    activity.hooked(false, false, true);
+    expect(busy.at(-1)).toBe(true);
+    activity.hooked(false, false);
+    expect(busy.at(-1)).toBe(false);
+  });
+
+  // Esc stops the turn the build woke: no Stop runs, the history ends it.
+  it("ends a woken turn stopped with Esc, with nothing left in the background", () => {
+    const { activity, reported } = track();
+    activity.hooked(true, false);
+    activity.hooked(false, false, true);
+    activity.hooked(true, false);
+    vi.advanceTimersByTime(HOOK_GRACE);
+    activity.hooked(false, false);
+    expect(reported).toEqual(["working", "background", "working", "done"]);
+  });
+
+  it("reads a turn left in the background while you watch as such, and idle once it ends", () => {
+    const { activity, reported } = track("idle", true);
+    activity.hooked(true, false);
+    activity.hooked(false, false, true);
+    expect(activity.status).toBe("background");
+    activity.hooked(false, false);
+    expect(reported).toEqual(["working", "background", "idle"]);
+  });
+
+  it("finds a terminal left in the background where it was", () => {
+    const gone = new TerminalActivity("background", false, { report: () => {}, running: false });
+    expect(gone.status).toBe("idle");
+    const up = new TerminalActivity("background", false, { report: () => {}, running: true });
+    expect(up.status).toBe("background");
   });
 
   it("stops reading output as work once a hook has spoken", () => {

@@ -23,6 +23,8 @@ export function toneOf(status: SessionStatus | null): TabTone {
   switch (status) {
     case "working":
       return { ...QUIET, ring: "spin" };
+    case "background":
+      return { ...QUIET, ring: "background" };
     case "needs-input":
       return { ...QUIET, ring: "warning", tint: true, bold: true };
     case "error":

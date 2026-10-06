@@ -1,11 +1,12 @@
 import type { SessionStatus } from "./types";
 
 /** Loudest first: a status group only earns the top slot while it needs a human. */
-export const STATUS_ORDER: SessionStatus[] = ["needs-input", "error", "working", "starting", "done", "idle", "exited"];
+export const STATUS_ORDER: SessionStatus[] = ["needs-input", "error", "working", "starting", "background", "done", "idle", "exited"];
 
 const LABEL: Record<SessionStatus, string> = {
   idle: "Idle",
   working: "Working",
+  background: "Running in background",
   "needs-input": "Needs input",
   done: "Unread",
   error: "Error",

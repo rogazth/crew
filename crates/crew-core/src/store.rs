@@ -677,7 +677,7 @@ pub fn set_order(conn: &Connection, table: &str, ids: &[String]) -> rusqlite::Re
 fn settle_open_turns(conn: &Connection) -> rusqlite::Result<()> {
     let mut stmt = conn.prepare(
         "SELECT id, kind FROM sessions
-         WHERE status IN ('working', 'needs-input') OR (kind = 'child' AND status = 'starting')",
+         WHERE status IN ('working', 'background', 'needs-input') OR (kind = 'child' AND status = 'starting')",
     )?;
     let rows = stmt
         .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?
