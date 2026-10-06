@@ -69,6 +69,12 @@ export function buildActivity(blocks: Block[]): ActivityItem[] {
       items.push({ kind: "question", block });
       continue;
     }
+    // A subagent is a run of its own, nested: nothing folds in with it.
+    if (detailOf(block)?.kind === "agent") {
+      phase = null;
+      items.push({ kind: "phase", phase: { id: block.id, kind: "other", blocks: [block] } });
+      continue;
+    }
     const kind = phaseKind(block);
     if (phase && phase.kind === kind) {
       phase.blocks.push(block);

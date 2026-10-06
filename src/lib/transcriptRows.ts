@@ -7,6 +7,7 @@
  * decisions live here where they can be checked.
  */
 import { type Block, type TurnUsage } from "./blocks";
+import { isLetter, isRefused, letterIdOf } from "./letters";
 
 /** A gap this long between messages gets a date line, like a chat app. */
 const DATE_BREAK_MS = 30 * 60_000;
@@ -21,13 +22,21 @@ export type Row =
   | { kind: "footer"; id: string; usage: TurnUsage; at?: number; text?: string; folded?: boolean }
   | { kind: "date"; id: string; at: number }
   /** A settled turn's work before its answer, behind one line. */
-  | { kind: "fold"; id: string; rows: Row[]; durationMs?: number; failed: boolean };
+  | { kind: "fold"; id: string; rows: Row[]; durationMs?: number; failed: boolean }
+  /** A letter sent or received: who wrote to whom, the words a click away in the pair's thread. */
+  | { kind: "letter"; block: Block }
+  /** A send Crew refused, with its reason. */
+  | { kind: "refused"; block: Block }
+  /** What waits for the next turn, under one label: messages typed, letters in the box. */
+  | { kind: "queued"; id: string; blocks: Block[] };
 
 export type Speaker = "user" | "agent" | "meta";
 
 export function speaker(row: Row): Speaker {
   if (row.kind === "activity" || row.kind === "footer" || row.kind === "fold") return "agent";
-  if (row.kind === "date") return "meta";
+  // A checkpoint is a mark in the run, whichever way the letter went.
+  if (row.kind === "date" || row.kind === "letter" || row.kind === "refused") return "meta";
+  if (row.kind === "queued") return "user";
   // A letter from a bot is a row in the run, not a side of the
   // conversation: it gets a note's room, not a change of speaker's.
   if (row.block.role === "user") return row.block.fromBot ? "meta" : "user";
@@ -35,10 +44,26 @@ export function speaker(row: Row): Speaker {
   return "agent";
 }
 
+/**
+ * A message typed into a CLI its history does not show yet, or a letter
+ * still in the box: it waits for a turn rather than being part of one.
+ */
+export function isQueued(block: Block): boolean {
+  return block.role === "user" && block.streaming === true;
+}
+
 export function groupRows(blocks: Block[]): Row[] {
   const rows: Row[] = [];
   let activity: Block[] = [];
   let lastAt: number | undefined;
+  /** A letter's checkpoint once: the call's row and the note it left share an id. */
+  const letters = new Set<string>();
+  let queued: Block[] = [];
+  const flushQueued = () => {
+    if (queued.length === 0) return;
+    rows.push({ kind: "queued", id: `queued-${queued[0]!.id}`, blocks: queued });
+    queued = [];
+  };
   /** A turn that ended on a tool call: its cost belongs under the group, not in it. */
   let activityFooter: Row | null = null;
   const flush = () => {
@@ -51,6 +76,30 @@ export function groupRows(blocks: Block[]): Row[] {
     }
   };
   for (const block of blocks) {
+    if (isQueued(block)) {
+      flush();
+      queued.push(block);
+      continue;
+    }
+    flushQueued();
+    const letter = isLetter(block) ? letterIdOf(block) : undefined;
+    if (letter !== undefined && letters.has(letter)) continue;
+    // A letter stands out of the group around it, so a fold can leave it on the rail.
+    if (letter !== undefined || isRefused(block)) {
+      if (letter !== undefined) letters.add(letter);
+      if (block.hidden) continue;
+      flush();
+      if (block.role === "user" && block.at !== undefined) {
+        if (lastAt === undefined || block.at - lastAt > DATE_BREAK_MS) {
+          rows.push({ kind: "date", id: `date-${block.id}`, at: block.at });
+        }
+      }
+      rows.push({ kind: letter !== undefined ? "letter" : "refused", block });
+      // A turn that ended on the send: its cost goes under it.
+      if (block.usage && !block.streaming) rows.push(footerFor(block, block.usage));
+      if (block.at !== undefined && block.role !== "tool") lastAt = block.at;
+      continue;
+    }
     if (ACTIVITY_ROLES.has(block.role)) {
       activity.push(block);
       // The turn ended here: whatever comes next is another turn's work.
@@ -73,7 +122,15 @@ export function groupRows(blocks: Block[]): Row[] {
     if (block.at !== undefined) lastAt = block.at;
   }
   flush();
+  flushQueued();
   return rows;
+}
+
+/** The queue at the foot, apart: it goes under the working line, not into a turn. */
+export function splitQueued(rows: Row[]): { rows: Row[]; queued: Block[] } {
+  const last = rows.at(-1);
+  if (last?.kind !== "queued") return { rows, queued: [] };
+  return { rows: rows.slice(0, -1), queued: last.blocks };
 }
 
 function footerFor(block: Block, usage: TurnUsage): Row {
@@ -99,7 +156,7 @@ export function gapBefore(prev: Row | undefined, current: Row): string {
 
 
 function isUser(row: Row): boolean {
-  return row.kind === "message" && row.block.role === "user";
+  return (row.kind === "message" || row.kind === "letter") && row.block.role === "user";
 }
 
 function isReply(row: Row): boolean {
@@ -109,13 +166,18 @@ function isReply(row: Row): boolean {
 /** What opens a turn and stays above its fold: the question, or the note
  *  that says what woke the agent when nobody asked (a report, a routine). */
 function isOpening(row: Row): boolean {
-  return row.kind === "message" && (row.block.role === "user" || row.block.role === "system");
+  return (row.kind === "message" || row.kind === "letter") && (row.block.role === "user" || row.block.role === "system");
+}
+
+/** What stays on the rail when a turn folds: who wrote to whom, and what was refused. */
+function staysOut(row: Row): boolean {
+  return row.kind === "letter" || row.kind === "refused";
 }
 
 /** Every block a row holds, a fold's included: what a search hit is looked for in. */
 export function rowBlocks(row: Row): Block[] {
-  if (row.kind === "message") return [row.block];
-  if (row.kind === "activity") return row.blocks;
+  if (row.kind === "message" || row.kind === "letter" || row.kind === "refused") return [row.block];
+  if (row.kind === "activity" || row.kind === "queued") return row.blocks;
   if (row.kind === "fold") return row.rows.flatMap(rowBlocks);
   return [];
 }
@@ -131,6 +193,10 @@ export function rowBlocks(row: Row): Block[] {
  * A turn ends at its footer, not at the next question: an agent woken by a
  * report it was waiting on answers in a turn of its own, with no question
  * above it, and that answer is as much an answer as any other.
+ *
+ * Letters sent or received on the way stay out of the fold, under it, in the
+ * order they came: a checkpoint is where the conversation with someone else
+ * happened, and a folded turn must not hide that it did.
  */
 export function foldTurns(rows: Row[], working: boolean): Row[] {
   const out: Row[] = [];
@@ -162,7 +228,9 @@ function foldTurn(turn: Row[]): Row[] {
       break;
     }
   }
-  const work = answer >= 0 ? turn.slice(opening, answer) : [];
+  const span = answer >= 0 ? turn.slice(opening, answer) : [];
+  const work = span.filter((row) => !staysOut(row));
+  const out = span.filter(staysOut);
   if (work.length < 2 || !work.some((row) => row.kind === "activity")) return turn;
   const reply = turn[answer]!;
   const blocks = work.flatMap(rowBlocks);
@@ -170,7 +238,7 @@ function foldTurn(turn: Row[]): Row[] {
   const last = turn.at(-1);
   const footer = last?.kind === "footer" ? last : undefined;
   const first = turn[0];
-  const started = opening > 0 && first?.kind === "message" ? first.block.at : undefined;
+  const started = opening > 0 && (first?.kind === "message" || first?.kind === "letter") ? first.block.at : undefined;
   const ended = reply.kind === "message" ? reply.block.at : undefined;
   const durationMs =
     footer?.usage.durationMs ?? (started !== undefined && ended !== undefined ? ended - started : undefined);
@@ -182,9 +250,9 @@ function foldTurn(turn: Row[]): Row[] {
     failed: blocks.some((block) => block.tool?.status === "failed"),
   };
   const rest = turn.slice(answer).map((row) => (row.kind === "footer" ? { ...row, folded: true } : row));
-  return [...turn.slice(0, opening), fold, ...rest];
+  return [...turn.slice(0, opening), fold, ...out, ...rest];
 }
 
 function rowId(row: Row): string {
-  return row.kind === "message" ? row.block.id : row.id;
+  return row.kind === "message" || row.kind === "letter" || row.kind === "refused" ? row.block.id : row.id;
 }

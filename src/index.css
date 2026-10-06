@@ -1032,6 +1032,41 @@ body:has(button[data-sidebar="resize-handle"]:active) * {
   color: var(--color-text);
 }
 
+/* A letter in a pair's thread: grey, built for a long report, its markdown
+   the chat's a notch smaller so a report fits the column. The chat owner's
+   sit on the right, like the user's own messages. */
+.crew-thread-bubble {
+  max-width: 100%;
+  width: fit-content;
+  padding: 12px 16px;
+  border-radius: 20px;
+  background: var(--color-fill);
+  overflow-wrap: anywhere;
+}
+.crew-thread-bubble .crew-md {
+  font-size: 14px;
+  line-height: 22px;
+}
+.crew-thread-bubble .crew-code {
+  background: var(--color-canvas);
+}
+
+/* A thread opens over the transcript with a fade only: nothing moves while it
+   is placed at its letter, so it opens there instead of travelling to it. */
+@keyframes crew-thread-in {
+  from {
+    opacity: 0;
+  }
+}
+.crew-thread {
+  animation: crew-thread-in 200ms cubic-bezier(0.2, 0, 0, 1);
+}
+@media (prefers-reduced-motion: reduce) {
+  .crew-thread {
+    animation: none;
+  }
+}
+
 /* The line a search hit sent you to. It fades, because the point is to find it,
    not to keep it marked. */
 @keyframes crew-found {

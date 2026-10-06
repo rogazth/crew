@@ -34,7 +34,7 @@ export function TurnChats({ panes, sessions }: Props) {
     if (!session) return null;
     return (
       <div key={pane.id} hidden={!visible} className="absolute inset-0">
-        <TurnChat session={session} cwd={cwd} active={visible} />
+        <TurnChat session={session} sessions={sessions} cwd={cwd} active={visible} />
       </div>
     );
   });

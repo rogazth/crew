@@ -1,28 +1,38 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { showLetter, useChatLetters, usePending } from "../hooks/useLetters";
 import { useThread } from "../hooks/useThread";
 import { answer, respond, send, stop } from "../lib/turnRuntime";
 import { pickFiles, setSessionOptions, writeTempFile } from "../lib/api";
 import { attachedFrom } from "../lib/attachments";
+import { queuedLetters } from "../lib/letters";
 import { mentionedFiles } from "../lib/mentions";
-import { useChatActions } from "./chat/context";
+import { LetterContext, useChatActions } from "./chat/context";
 import { useFileDrop } from "../hooks/useFileDrop";
 import type { Answers, ApprovalDecision, AttachedFile } from "../lib/blocks";
 import type { Session } from "../lib/types";
+import { ChatBar } from "./chat/ChatBar";
 import { DefaultChatSurface } from "./chat/DefaultChatSurface";
+import { Thread } from "./chat/Thread";
 
 type Props = {
   session: Session;
+  /** Every session, for its children, and for whoever its letters name. */
+  sessions: readonly Session[];
   cwd: string;
   active: boolean;
 };
 
-export function TurnChat({ session, cwd, active }: Props) {
-  const { blocks, ready, working, more, loadingEarlier, loadEarlier, focusId } = useThread(session.id);
+export function TurnChat({ session, sessions, cwd, active }: Props) {
+  const { blocks: held, ready, working, more, loadingEarlier, loadEarlier, focusId } = useThread(session.id);
   const [draft, setDraft] = useState("");
   const [files, setFiles] = useState<AttachedFile[]>([]);
   const field = useRef<HTMLTextAreaElement>(null);
   const pane = useRef<HTMLDivElement>(null);
-  const { files: projectFiles } = useChatActions();
+  const { files: projectFiles, openSession } = useChatActions();
+  const letters = useChatLetters(session, sessions, held);
+  // What waits in its box for the next turn, under the turn that is running.
+  const pending = usePending(session.id, true);
+  const blocks = useMemo(() => [...held, ...queuedLetters(pending, held)], [held, pending]);
 
   // Opening the tab means "talk to this session"; the caret should already be there.
   useEffect(() => {
@@ -79,33 +89,63 @@ export function TurnChat({ session, cwd, active }: Props) {
 
   return (
     <div ref={pane} className="relative flex h-full flex-col bg-canvas">
-      <DefaultChatSurface
-        session={session}
-        blocks={blocks}
-        working={working}
-        ready={ready}
-        active={active}
-        more={more}
-        loadingEarlier={loadingEarlier}
-        onLoadEarlier={loadEarlier}
-        focusId={focusId}
-        draft={draft}
-        files={files}
-        over={over}
-        field={field}
-        onDraft={setDraft}
-        onSend={submit}
-        onStop={() => void stop(session)}
-        onAttach={() => void attach()}
-        onPasteFiles={pasteFiles}
-        onRemoveFile={(path) => setFiles((prev) => prev.filter((file) => file.path !== path))}
-        onApprove={approve}
-        onAnswer={reply}
-        // Each turn starts its CLI from the row: the next one runs what the chips say.
-        onOptions={(next) =>
-          void setSessionOptions(session.id, { model: next.model, effort: next.effort, autonomy: next.access }).catch(() => {})
-        }
-      />
+      <LetterContext value={letters.scope}>
+        <DefaultChatSurface
+          session={session}
+          blocks={blocks}
+          working={working}
+          ready={ready}
+          active={active}
+          more={more}
+          loadingEarlier={loadingEarlier}
+          onLoadEarlier={loadEarlier}
+          focusId={focusId}
+          draft={draft}
+          files={files}
+          over={over}
+          field={field}
+          onDraft={setDraft}
+          onSend={submit}
+          onStop={() => void stop(session)}
+          onAttach={() => void attach()}
+          onPasteFiles={pasteFiles}
+          onRemoveFile={(path) => setFiles((prev) => prev.filter((file) => file.path !== path))}
+          onApprove={approve}
+          onAnswer={reply}
+          // Each turn starts its CLI from the row: the next one runs what the chips say.
+          onOptions={(next) =>
+            void setSessionOptions(session.id, { model: next.model, effort: next.effort, autonomy: next.access }).catch(() => {})
+          }
+          bar={
+            <ChatBar
+              session={session}
+              sessions={sessions}
+              kids={letters.kids}
+              pairs={letters.pairs}
+              onOpenSession={openSession}
+              onOpenThread={letters.openThread}
+            />
+          }
+          overlay={
+            letters.thread && (
+              <Thread
+                key={`${letters.thread.a.id}|${letters.thread.b.id}|${letters.thread.focus ?? ""}`}
+                thread={letters.thread}
+                owner={letters.owner}
+                sessionId={session.id}
+                sessions={sessions}
+                active={active}
+                inChat={letters.inChat}
+                onClose={letters.closeThread}
+                onShowInChat={(letterId) => {
+                  letters.closeThread();
+                  showLetter(pane.current, letterId);
+                }}
+              />
+            )
+          }
+        />
+      </LetterContext>
     </div>
   );
 }

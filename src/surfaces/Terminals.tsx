@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { homeDir } from '../lib/host';
 import { useCommands } from '../hooks/useCommand';
 import { useSessionView } from '../hooks/useSessionView';
@@ -25,6 +25,9 @@ import { isTerminalTab, relativeTo, sessionPtyId } from '../lib/tabs';
 import { activeTerminal } from '../lib/terminalFocus';
 import { clamp, DEFAULT_TERMINAL_PREFS, LIMITS } from '../lib/terminalPrefs';
 import { BackToChat, SessionChat } from './SessionChat';
+import { SessionsStrip } from './chat/ChatBar';
+import { useChatActions } from './chat/context';
+import { childrenOf } from '../lib/letters';
 import type { MountedPane } from './WorkspacePanes';
 import type { ProjectFile, Session, SessionStatus } from '../lib/types';
 
@@ -109,6 +112,7 @@ export function Terminals({ panes, sessions, onStatus, onOpenFile }: Props) {
         <SessionTerminal
           ptyId={sessionPtyId(session.workspaceId, session.id)}
           session={session}
+          sessions={sessions}
           cwd={here}
           active={visible}
           chat={surface === 'chat'}
@@ -179,6 +183,8 @@ type SessionProps = {
   /** Its session's, not its pane's: the tab can close and open again in another strip. */
   ptyId: string;
   session: Session;
+  /** Every session: its children, and whoever its letters name. */
+  sessions: Session[];
   cwd: string;
   active: boolean;
   /** Crew's chat is drawn over the terminal. */
@@ -194,6 +200,7 @@ type SessionProps = {
 function SessionTerminal({
   ptyId,
   session,
+  sessions,
   cwd,
   active,
   chat,
@@ -289,6 +296,8 @@ function SessionTerminal({
   }, [learns, startedAt, session.id, cwd]);
 
   useLiveHooks(session, onLive);
+  const { openSession } = useChatActions();
+  const kids = useMemo(() => childrenOf(sessions).get(session.id) ?? [], [session.id, sessions]);
 
   return (
     <>
@@ -320,6 +329,7 @@ function SessionTerminal({
       {chat && (
         <SessionChat
           session={session}
+          sessions={sessions}
           ptyId={ptyId}
           cwd={cwd}
           active={active}
@@ -329,7 +339,17 @@ function SessionTerminal({
           onRestart={restart}
         />
       )}
-      {revealed && <BackToChat onClick={() => onShowTerminal(false)} />}
+      {!chat && (kids.length > 0 || revealed) && (
+        // Over the terminal its children are still one click away, beside the way back to the chat.
+        <div className="absolute top-2 right-3 z-10 flex max-w-[70%] items-center gap-1.5">
+          {kids.length > 0 && (
+            <div className="flex min-w-0 rounded-chrome bg-surface p-0.5 opacity-80 shadow-float transition-opacity hover:opacity-100">
+              <SessionsStrip kids={kids} onOpen={openSession} label={false} />
+            </div>
+          )}
+          {revealed && <BackToChat onClick={() => onShowTerminal(false)} />}
+        </div>
+      )}
     </>
   );
 }

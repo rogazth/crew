@@ -31,60 +31,66 @@ export function DefaultChatSurface({
   loading = false,
   onOptions,
   optionsPending = false,
+  bar,
+  overlay,
 }: ChatSurfaceProps) {
   return (
     <>
-      {over && (
-        <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-canvas/70">
-          <span className="crew-ink rounded-full px-3 py-1 text-[12px] font-medium">
-            Drop files to attach
-          </span>
-        </div>
-      )}
-      {blocks.length === 0 ? (
-        <div className="flex min-h-0 flex-[5] flex-col items-center justify-end">
-          {!loading && (
-            <Intro
-              session={session}
-              onPick={(text) => {
-                onDraft(text);
-                field.current?.focus();
-              }}
-            />
-          )}
-        </div>
-      ) : (
-        <Transcript
-          blocks={blocks}
+      {bar}
+      <div className="relative flex min-h-0 flex-1 flex-col">
+        {over && (
+          <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-canvas/70">
+            <span className="crew-ink rounded-full px-3 py-1 text-[12px] font-medium">
+              Drop files to attach
+            </span>
+          </div>
+        )}
+        {blocks.length === 0 ? (
+          <div className="flex min-h-0 flex-[5] flex-col items-center justify-end">
+            {!loading && (
+              <Intro
+                session={session}
+                onPick={(text) => {
+                  onDraft(text);
+                  field.current?.focus();
+                }}
+              />
+            )}
+          </div>
+        ) : (
+          <Transcript
+            blocks={blocks}
+            working={working}
+            active={active}
+            more={more}
+            loadingEarlier={loadingEarlier}
+            onLoadEarlier={onLoadEarlier}
+            focusId={focusId}
+            onApprove={onApprove}
+            onAnswer={onAnswer}
+          />
+        )}
+        <Composer
+          centered={blocks.length === 0}
+          ref={field}
+          session={session}
+          draft={draft}
+          files={files}
           working={working}
-          active={active}
-          more={more}
-          loadingEarlier={loadingEarlier}
-          onLoadEarlier={onLoadEarlier}
-          focusId={focusId}
-          onApprove={onApprove}
-          onAnswer={onAnswer}
+          ready={ready}
+          waiting={blocks.some(awaitsUser)}
+          onDraft={onDraft}
+          onAttach={onAttach}
+          onPasteFiles={onPasteFiles}
+          onRemoveFile={onRemoveFile}
+          onSend={onSend}
+          onStop={onStop}
+          {...(onOptions ? { onOptions } : {})}
+          optionsPending={optionsPending}
         />
-      )}
-      <Composer
-        centered={blocks.length === 0}
-        ref={field}
-        session={session}
-        draft={draft}
-        files={files}
-        working={working}
-        ready={ready}
-        waiting={blocks.some(awaitsUser)}
-        onDraft={onDraft}
-        onAttach={onAttach}
-        onPasteFiles={onPasteFiles}
-        onRemoveFile={onRemoveFile}
-        onSend={onSend}
-        onStop={onStop}
-        {...(onOptions ? { onOptions } : {})}
-        optionsPending={optionsPending}
-      />
-      {blocks.length === 0 && <div className="min-h-0 flex-[6]" />}
+        {blocks.length === 0 && <div className="min-h-0 flex-[6]" />}
+        {overlay}
+      </div>
     </>
   );
 }

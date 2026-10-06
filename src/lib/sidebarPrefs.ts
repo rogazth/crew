@@ -1,4 +1,5 @@
 import type { Session, SessionKind } from "./types";
+import { isOwnedChild } from "./letters";
 import { filterSessions } from "./workspaces";
 
 export type Ordering = "manual" | "updated" | "name";
@@ -110,37 +111,22 @@ function kept(sessions: Session[], prefs: SidebarPrefs): Session[] {
 
 /**
  * Filter, search and order in one pass, then split by kind. A search ranks by match, not by ordering.
- * A child goes under whoever started it (see `childrenOf`), so it is in neither list unless that
- * one is not listed: then it stands among the sessions, as one the user started would. A search
- * lists every match flat.
+ * A child its starter owns lives in that one's chat, not here: it is left out unless its starter is
+ * gone, when it stands among the sessions as one the user started would. A handoff is the user's
+ * and is listed like any of theirs. A search lists every match, children too.
  */
 export function arrangeSessions(sessions: Session[], prefs: SidebarPrefs, query: string): Arranged {
   const listed = kept(sessions, prefs);
   const searching = query.trim().length > 0;
   const ordered = searching ? filterSessions(listed, query) : sort(listed, prefs.ordering);
-  const nested = searching ? new Set<string>() : new Set([...childrenOf(sessions, prefs, query).values()].flat().map((s) => s.id));
+  const present = new Set(sessions.map((session) => session.id));
+  const housed = (session: Session) => !searching && isOwnedChild(session) && present.has(session.parentId!);
   return {
     bots: ordered.filter((session) => session.kind === "bot"),
     terminals: ordered.filter(
-      (session) => session.kind === "terminal" || (session.kind === "child" && !nested.has(session.id)),
+      (session) => session.kind === "terminal" || (session.kind === "child" && !housed(session)),
     ),
   };
-}
-
-/**
- * The sessions each listed session started, oldest first, by the starter's id: a bot's
- * or a terminal's children nest under it. Empty while searching, which lists flat.
- */
-export function childrenOf(sessions: Session[], prefs: SidebarPrefs, query: string): Map<string, Session[]> {
-  const out = new Map<string, Session[]>();
-  if (query.trim()) return out;
-  const listed = kept(sessions, prefs);
-  const present = new Set(listed.map((session) => session.id));
-  for (const session of [...listed].sort((a, b) => a.createdAt - b.createdAt)) {
-    if (session.kind !== "child" || !session.parentId || !present.has(session.parentId)) continue;
-    out.set(session.parentId, [...(out.get(session.parentId) ?? []), session]);
-  }
-  return out;
 }
 
 /** A section's rows as listed, and how many were left out. */

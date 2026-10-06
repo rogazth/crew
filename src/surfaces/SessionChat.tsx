@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import { MessageSquareTextIcon, ShieldQuestionIcon, SquareTerminalIcon, TriangleAlertIcon } from "lucide-react";
 import { Button } from "../chrome/kit";
 import { useFileDrop } from "../hooks/useFileDrop";
+import { showLetter, useChatLetters } from "../hooks/useLetters";
 import * as api from "../lib/api";
 import { attachedFrom } from "../lib/attachments";
 import type { Answers, ApprovalDecision, AttachedFile, Block } from "../lib/blocks";
@@ -24,11 +25,15 @@ import { applyFor, readLaunched, setLaunched, subscribeLaunched } from "../lib/s
 import { quotePath } from "../lib/terminalPaths";
 import { reportsLive, startsAtLaunch } from "../lib/sessionView";
 import type { Session } from "../lib/types";
-import { AlwaysAllow } from "./chat/context";
+import { ChatBar } from "./chat/ChatBar";
+import { AlwaysAllow, LetterContext, useChatActions } from "./chat/context";
 import { DefaultChatSurface } from "./chat/DefaultChatSurface";
+import { Thread } from "./chat/Thread";
 
 type Props = {
   session: Session;
+  /** Every session, for its children, and for whoever its letters name. */
+  sessions: readonly Session[];
   /** The terminal the CLI runs in, which the chat types into. */
   ptyId: string;
   cwd: string;
@@ -52,7 +57,7 @@ const pending = new Map<string, Queued[]>();
  * the terminal is the only thing talking to the provider: the chat reads its
  * history, types into it, and answers what it asks with the keys it expects.
  */
-export function SessionChat({ session, ptyId, cwd, active, blocked, busy, onShowTerminal, onRestart }: Props) {
+export function SessionChat({ session, sessions, ptyId, cwd, active, blocked, busy, onShowTerminal, onRestart }: Props) {
   const id = session.id;
   const [draft, setDraft] = useState(() => drafts.get(id) ?? "");
   const [files, setFiles] = useState<AttachedFile[]>([]);
@@ -105,6 +110,8 @@ export function SessionChat({ session, ptyId, cwd, active, blocked, busy, onShow
   );
 
   useFocusWhenShown(root, field, active);
+  const { openSession } = useChatActions();
+  const letters = useChatLetters(session, sessions, history.blocks);
 
   const addPaths = useCallback((paths: string[]) => {
     if (paths.length === 0) return;
@@ -213,14 +220,22 @@ export function SessionChat({ session, ptyId, cwd, active, blocked, busy, onShow
 
   return (
     <div ref={root} className="absolute inset-0 z-10 flex flex-col bg-canvas" data-session-chat={id}>
-      <div className="flex h-10 shrink-0 items-center justify-end px-3">
-        {/* A blocking screen offers the terminal itself, front and centre. */}
-        {!blocked && (
-          <Button variant="ghost" icon={SquareTerminalIcon} className="h-7 px-2.5 text-text-muted" onClick={onShowTerminal}>
-            Show terminal
-          </Button>
-        )}
-      </div>
+      <ChatBar
+        session={session}
+        sessions={sessions}
+        kids={letters.kids}
+        pairs={letters.pairs}
+        onOpenSession={openSession}
+        onOpenThread={letters.openThread}
+        // A blocking screen offers the terminal itself, front and centre.
+        trailing={
+          blocked ? null : (
+            <Button variant="ghost" icon={SquareTerminalIcon} className="h-7 px-2.5 text-text-muted" onClick={onShowTerminal}>
+              Show terminal
+            </Button>
+          )
+        }
+      />
       {stopped ? (
         <Stopped
           reason={stopped}
@@ -230,36 +245,56 @@ export function SessionChat({ session, ptyId, cwd, active, blocked, busy, onShow
         />
       ) : (
         <AlwaysAllow value={ask?.always ?? true}>
-          <DefaultChatSurface
-            session={session}
-            blocks={blocks}
-            working={working}
-            ready={ready}
-            active={active}
-            more={history.more}
-            loadingEarlier={history.loadingEarlier}
-            onLoadEarlier={() => void loadEarlierHistory(id)}
-            focusId={null}
-            draft={draft}
-            files={files}
-            over={over}
-            field={field}
-            onDraft={editDraft}
-            onSend={submit}
-            onStop={stop}
-            onAttach={() => void api.pickFiles().then(addPaths)}
-            onPasteFiles={(pasted) =>
-              void Promise.all(pasted.map((file) => api.writeTempFile(file).catch(() => null))).then((paths) =>
-                addPaths(paths.filter((path): path is string => path !== null)),
-              )
-            }
-            onRemoveFile={(path) => setFiles((prev) => prev.filter((file) => file.path !== path))}
-            onApprove={approve}
-            onAnswer={reply}
-            loading={history.loading}
-            onOptions={changeOptions}
-            optionsPending={apply.kind === "relaunch"}
-          />
+          <LetterContext value={letters.scope}>
+            <DefaultChatSurface
+              session={session}
+              blocks={blocks}
+              working={working}
+              ready={ready}
+              active={active}
+              more={history.more}
+              loadingEarlier={history.loadingEarlier}
+              onLoadEarlier={() => void loadEarlierHistory(id)}
+              focusId={null}
+              draft={draft}
+              files={files}
+              over={over}
+              field={field}
+              onDraft={editDraft}
+              onSend={submit}
+              onStop={stop}
+              onAttach={() => void api.pickFiles().then(addPaths)}
+              onPasteFiles={(pasted) =>
+                void Promise.all(pasted.map((file) => api.writeTempFile(file).catch(() => null))).then((paths) =>
+                  addPaths(paths.filter((path): path is string => path !== null)),
+                )
+              }
+              onRemoveFile={(path) => setFiles((prev) => prev.filter((file) => file.path !== path))}
+              onApprove={approve}
+              onAnswer={reply}
+              loading={history.loading}
+              onOptions={changeOptions}
+              optionsPending={apply.kind === "relaunch"}
+              overlay={
+                letters.thread && (
+                  <Thread
+                    key={`${letters.thread.a.id}|${letters.thread.b.id}|${letters.thread.focus ?? ""}`}
+                    thread={letters.thread}
+                    owner={letters.owner}
+                    sessionId={id}
+                    sessions={sessions}
+                    active={active}
+                    inChat={letters.inChat}
+                    onClose={letters.closeThread}
+                    onShowInChat={(letterId) => {
+                      letters.closeThread();
+                      showLetter(root.current, letterId);
+                    }}
+                  />
+                )
+              }
+            />
+          </LetterContext>
         </AlwaysAllow>
       )}
     </div>
@@ -435,7 +470,7 @@ export function BackToChat({ onClick }: { onClick: () => void }) {
     <Button
       variant="secondary"
       icon={MessageSquareTextIcon}
-      className="absolute top-2 right-3 z-10 h-7 px-2.5 opacity-80 shadow-float hover:opacity-100"
+      className="h-7 shrink-0 px-2.5 opacity-80 shadow-float hover:opacity-100"
       onClick={onClick}
     >
       Back to chat

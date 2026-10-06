@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Block, TurnUsage } from "./blocks";
-import { foldTurns, gapBefore, groupRows, speaker, type Row } from "./transcriptRows";
+import { foldTurns, gapBefore, groupRows, speaker, splitQueued, type Row } from "./transcriptRows";
 
 const COST: TurnUsage = { costUsd: 0.02 };
 
@@ -275,5 +275,89 @@ describe("foldTurns with turns the agent was woken into", () => {
   it("keeps a turn that ended on a tool call apart from the next one's work", () => {
     const rows = groupRows([tool("a"), { ...tool("b"), usage: COST }, tool("c"), block("assistant", "done")]);
     expect(kinds(rows)).toEqual(["activity", "footer", "activity", "message"]);
+  });
+});
+
+describe("letters in the transcript", () => {
+  const letterCall = (letterId: string, extra: Partial<Block> = {}) =>
+    block("tool", "send_message", {
+      tool: {
+        callId: `c-${letterId}`,
+        name: "send_message",
+        title: "send_message",
+        status: "completed",
+        detail: { kind: "message", to: "auth", text: "go", letterId, toId: "auth", toName: "Auth refactor" },
+      },
+      ...extra,
+    });
+  const refused = () =>
+    block("tool", "send_message", {
+      tool: {
+        callId: "c-no",
+        name: "send_message",
+        title: "send_message",
+        status: "failed",
+        detail: { kind: "message", to: "lead", text: "hi me", error: "You cannot message yourself." },
+      },
+    });
+
+  it("takes a sent letter out of the group around it, and a refused send too", () => {
+    const rows = groupRows([block("tool", "npm test"), letterCall("L1"), refused(), block("tool", "npm run lint")]);
+    expect(kinds(rows)).toEqual(["activity", "letter", "refused", "activity"]);
+  });
+
+  it("marks a letter once: the start's note shares the call's id", () => {
+    const rows = groupRows([
+      letterCall("L1"),
+      block("system", "Started session Auth refactor (auth)", { letterId: "L1" }),
+      block("system", "You wrote to Auth refactor", { letterId: "L2" }),
+    ]);
+    expect(kinds(rows)).toEqual(["letter", "letter"]);
+    expect((rows[1] as { block: Block }).block.letterId).toBe("L2");
+  });
+
+  it("draws a received letter as a checkpoint that opens its turn", () => {
+    const report = block("user", "## Report", { letterId: "L3", fromBot: { id: "auth", name: "Auth refactor", kind: "session" } });
+    const rows = groupRows([report, block("assistant", "noted")]);
+    expect(kinds(rows)).toEqual(["letter", "message"]);
+    expect(speaker(rows[0]!)).toBe("meta");
+  });
+
+  it("leaves checkpoints out of the fold, under it, where a folded turn cannot hide them", () => {
+    const rows = foldTurns(
+      groupRows([
+        block("user", "split the work", { at: 1_000 }),
+        block("tool", "read plan"),
+        letterCall("L1"),
+        block("tool", "npm test"),
+        refused(),
+        block("assistant", "both started", { at: 9_000, usage: { durationMs: 8_000 } }),
+      ]),
+      false,
+    );
+    expect(kinds(rows)).toEqual(["date", "message", "fold", "letter", "refused", "message", "footer"]);
+    expect(kinds((rows[2] as Extract<Row, { kind: "fold" }>).rows)).toEqual(["activity", "activity"]);
+  });
+
+  it("does not fold a turn whose work was only letters", () => {
+    const rows = foldTurns(
+      groupRows([block("user", "tell them"), block("tool", "read"), letterCall("L1"), block("assistant", "told")]),
+      false,
+    );
+    expect(kinds(rows)).toEqual(["message", "activity", "letter", "message"]);
+  });
+
+  it("groups what waits for the next turn and sets it apart at the foot", () => {
+    const rows = groupRows([
+      block("user", "go"),
+      block("assistant", "on it"),
+      block("user", "and this", { streaming: true }),
+      block("user", "report", { streaming: true, letterId: "L9", fromBot: { id: "auth", name: "Auth refactor" } }),
+    ]);
+    expect(kinds(rows)).toEqual(["message", "message", "queued"]);
+    const { rows: rest, queued } = splitQueued(rows);
+    expect(kinds(rest)).toEqual(["message", "message"]);
+    expect(queued.map((b) => b.text)).toEqual(["and this", "report"]);
+    expect(splitQueued(rest).queued).toEqual([]);
   });
 });

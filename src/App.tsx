@@ -22,6 +22,7 @@ import { useExplorer } from "./hooks/useExplorer";
 import { useLaunch } from "./hooks/useLaunch";
 import { useNavigation } from "./hooks/useNavigation";
 import { useNotificationTarget } from "./hooks/useNotificationTarget";
+import { useMarkSeen } from "./hooks/useMarkSeen";
 import { useDockBadge } from "./hooks/useDockBadge";
 import { Toaster } from "./chrome/Toaster";
 import { useProjectFiles } from "./hooks/useProjectFiles";
@@ -263,6 +264,7 @@ export function App() {
   });
 
   useDockBadge(all);
+  useMarkSeen(all, isWorkspace && tabs.active?.kind === "session" ? tabs.active.sessionId : null);
 
   const { newSession, launch } = useLaunch({
     sessions,

@@ -20,6 +20,7 @@ import type {
   RemoteEnv,
   SearchFiles,
   ThreadLetter,
+  ThreadMessagesRequest,
   ThreadPage,
   ThreadPair,
 } from "./protocol";
@@ -139,8 +140,9 @@ export const threadPairs = (sessionId: string): Promise<ThreadPair[]> =>
 /**
  * One pair's letters, both ways, oldest first. `""` or `"user"` is the user.
  * `before` is a letter id: the page ends just before it; `more` says older ones exist.
+ * `sessionId` is the chat asking, which routes the call to its daemon.
  */
-export const threadMessages = (params: { a: string; b: string; before?: string; limit?: number }): Promise<ThreadPage> =>
+export const threadMessages = (params: ThreadMessagesRequest): Promise<ThreadPage> =>
   client.request("thread_messages", params);
 
 /**

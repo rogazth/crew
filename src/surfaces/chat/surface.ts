@@ -1,4 +1,4 @@
-import type { RefObject } from "react";
+import type { ReactNode, RefObject } from "react";
 import type { Answers, ApprovalDecision, AttachedFile, Block } from "../../lib/blocks";
 import type { AgentChoice } from "../../lib/providers";
 import type { Session } from "../../lib/types";
@@ -35,4 +35,8 @@ export type ChatSurfaceProps = {
   onOptions?: (next: AgentChoice) => void;
   /** A chip changed that only a relaunch reaches; the next message does it. */
   optionsPending?: boolean;
+  /** Over the chat: its sessions, whose it is, its conversations. */
+  bar?: ReactNode;
+  /** Drawn over the transcript and the composer: a pair's thread. */
+  overlay?: ReactNode;
 };

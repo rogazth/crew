@@ -59,8 +59,38 @@ const sessions: Row[] = [
   session("s4", "w1", "terminal", "claude 2", "claude", "claude-sonnet-5", "done", SOCKET_REPLAY),
   session("s5", "w2", "terminal", "claude", "claude", "", "idle"),
   session("s6", "w3", "bot", "Bookkeeper", "cursor", "cursor-grok-4.6", "idle"),
+  // Orchestration: Lead and the sessions it started, one it handed to the user.
+  session("s7", "w1", "bot", "Lead", "claude", "claude-opus-5", "idle"),
+  child("c1", "Auth refactor", "claude", "working", null, 0, `${MOCK_WORKTREES}/crew/feat-auth-refactor`),
+  child("c2", "Billing tests", "codex", "idle", "report", 0),
+  child("c3", "Docs pass", "claude", "idle", "report", 0),
+  child("c4", "Lint sweep", "codex", "idle", "report", 0),
+  child("c5", "Fix flaky e2e", "claude", "idle", "failed", 0),
+  child("c6", "Schema check", "codex", "needs-input", "approval", 0),
+  {
+    ...session("h1", "w1", "terminal", "Payments migration", "claude", "claude-sonnet-5", "idle"),
+    handedOffBy: "s7",
+    handedOffByName: "Lead",
+    cursor: 3,
+    userSeen: 0,
+    updatedAt: now - 6e4,
+  },
 ];
+
+/** A session Lead started and owns; `event` is its last one, unseen by the user. */
+function child(id: string, name: string, provider: string, status: string, event: string | null, seen: number, worktree: string | null = null): Row {
+  return {
+    ...session(id, "w1", "child", name, provider, "", status, worktree),
+    parentId: "s7",
+    parentName: "Lead",
+    cursor: 4,
+    userSeen: seen,
+    ...(event ? { lastEvent: { kind: event, at: now - 2e5, cursor: 4 } } : {}),
+  };
+}
 const state = new Map<string, string>([["active_workspace_id", "w1"]]);
+// `?view=chat` draws terminal sessions as Crew's chat, the setting's other side.
+if (typeof location !== "undefined" && new URLSearchParams(location.search).get("view") === "chat") state.set("sessions:view", "chat");
 
 /**
  * The linked worktrees of each main checkout; the main one is derived on each
@@ -246,12 +276,37 @@ function party(id: string): Row {
   return { id, name: (row?.name as string | undefined) ?? id, ...(kind ? { kind } : {}) };
 }
 
+const AUTH_JOB = [
+  "Refactor the session token refresh out of `auth/middleware.ts` into `auth/session.ts`.",
+  "",
+  "- Keep the public `refresh()` signature.",
+  "- Add tests for the expired-token path.",
+  "- Commit on your branch when the suite is green; do not push.",
+].join("\n");
+const BILLING_REPORT = [
+  "## Billing tests",
+  "",
+  "Added 14 tests in `billing/invoice.test.ts`: proration (6), refunds (5), zero-amount (3).",
+  "",
+  "| Suite | Before | After |",
+  "| --- | --- | --- |",
+  "| invoice | 22 | 36 |",
+  "",
+  "One real bug: a refund on a prorated invoice rounds the wrong way. Left it failing and marked `it.fails`; not fixed, as asked.",
+].join("\n");
+
 /** The mailbox: Planner and Reviewer writing each other, one letter still waiting for Planner. */
 const letters: Row[] = [
   ["l1", "s1", "s2", "message", "Review the avatar branch when you can: the upload path changed.", now - 5.4e5, "delivered"],
   ["l2", "s2", "s1", "message", "Done. Two notes on the resize step; the rest reads fine.", now - 4.8e5, "delivered"],
   ["l3", "user", "s2", "message", "Look at the cache headers too.", now - 4.2e5, "delivered"],
   ["l4", "s2", "s1", "message", "Cache headers are missing on /avatars. Want me to open a fix?", now - 6e4, "pending"],
+  ["o1", "s7", "c1", "message", AUTH_JOB, now - 40 * 60e3, "delivered"],
+  ["o2", "s7", "c2", "message", "Write the missing tests for `billing/invoice.ts`: proration, refunds and the zero-amount case. Do not commit.", now - 40 * 60e3 + 2e4, "delivered"],
+  ["o3", "c2", "s7", "report", BILLING_REPORT, now - 25 * 60e3, "delivered"],
+  ["o4", "user", "c1", "message", "Keep the old cookie name for one release so existing sessions survive the deploy.", now - 15 * 60e3, "delivered"],
+  ["o5", "s7", "h1", "message", "Carry on the payments migration in its own worktree. The plan:\n\n1. Add `payments.v2` behind the flag.\n2. Backfill from `ledger_entries`.\n3. Flip reads, then writes.", now - 10 * 60e3, "delivered"],
+  ["o6", "c1", "s7", "report", "Token refresh moved into `auth/session.ts`; the old cookie name stays for one release. Tests pass.", now - 2 * 60e3, "pending"],
 ].map(([id, from, to, kind, text, at, state]) => ({ id, from: party(from as string), to: party(to as string), kind, text, at, state }));
 
 const letterKey = (row: Row) => ((row.from as Row).kind === "user" ? "user" : ((row.from as Row).id as string));
@@ -261,18 +316,25 @@ function threadPairs(sessionId: string): Row[] {
   for (const letter of letters) {
     const from = letterKey(letter);
     const to = (letter.to as Row).id as string;
-    if (from !== sessionId && to !== sessionId) continue;
+    const mine = sessions.find((s) => s.id === to)?.parentId === sessionId && from === "user";
+    if (from !== sessionId && to !== sessionId && !mine) continue;
     const key = [from, to].sort().join("|");
     const entry = pairs.get(key);
     pairs.set(key, { last: !entry || (letter.at as number) >= (entry.last.at as number) ? letter : entry.last, count: (entry?.count ?? 0) + 1 });
   }
   return [...pairs.values()]
     .sort((a, b) => (b.last.at as number) - (a.last.at as number))
-    .map(({ last, count }) => ({
-      peer: ((last.to as Row).id as string) === sessionId ? last.from : last.to,
-      last: { ...last, text: String(last.text).slice(0, 280) },
-      count,
-    }));
+    .map(({ last, count }) => {
+      const to = (last.to as Row).id as string;
+      const from = letterKey(last);
+      const involved = to === sessionId || from === sessionId;
+      return {
+        peer: involved ? (to === sessionId ? last.from : last.to) : last.from,
+        ...(involved ? {} : { with: last.to }),
+        last: { ...last, text: String(last.text).slice(0, 280) },
+        count,
+      };
+    });
 }
 
 function threadMessages({ a, b, before, limit }: Row): Row {
@@ -338,6 +400,9 @@ const commands: Record<string, (args: Row) => unknown> = {
     emit("session-updated", { session: row });
     return row;
   },
+  // A terminal's conversation as its CLI wrote it: only the handoff has one.
+  session_history_window: ({ id }) => ({ blocks: ORCHESTRATION[`history:${id as string}`] ?? [], start: 0, more: false, state: "ready" }),
+  session_history_close: () => null,
   thread_pairs: ({ sessionId }) => threadPairs(sessionId as string),
   thread_messages: (args) => threadMessages(args),
   mailbox_pending: ({ sessionId }) =>
@@ -719,6 +784,81 @@ function search(args: Row): Row[] {
   return hits.slice(0, (args.limit as number | undefined) ?? 50);
 }
 
+/** A tool row the way Crew's own tools land in a transcript. */
+function crewCall(id: string, title: string, detail: Row, status = "completed", at = now - 40 * 60e3): Row {
+  return { id, role: "tool", text: title, at, tool: { callId: `call-${id}`, name: `mcp__crew__${title.split(" ")[0]}`, title, status, detail } };
+}
+
+const START = 40 * 60e3;
+/** Lead's chat and its children's: every piece of the orchestration UI, once. */
+const ORCHESTRATION: Record<string, Row[]> = {
+  s7: [
+    { id: "o-u1", role: "user", at: now - START - 6e4, text: "Split the auth refactor and the billing tests between two sessions, and keep me posted." },
+    { id: "o-r1", role: "reasoning", text: "Two independent jobs: auth in its own worktree, billing tests in place." },
+    { id: "o-t1", role: "tool", text: "Read docs/plan.md", tool: { callId: "o-c1", name: "Read", title: "Read docs/plan.md", status: "completed", detail: { kind: "file", path: "/Users/me/Developer/experiments/crew/docs/plan.md" } } },
+    {
+      id: "o-t2",
+      role: "tool",
+      text: "Task Map the token flow",
+      tool: {
+        callId: "o-c2",
+        name: "Task",
+        title: "Map the token flow",
+        status: "completed",
+        detail: {
+          kind: "agent",
+          description: "Map the session token flow",
+          agentType: "Explore",
+          prompt: "Find every place the session token is read, refreshed or written. List file:line and what each does.",
+          output: "- `auth/middleware.ts:41` reads the cookie\n- `auth/middleware.ts:88` refreshes it inline\n- `api/client.ts:12` retries on 401",
+        },
+      },
+    },
+    crewCall("o-t3", "start_session Auth refactor", { kind: "message", to: "Auth refactor", text: AUTH_JOB, letterId: "o1", toId: "c1", toName: "Auth refactor", what: "start", delivery: "started" }),
+    { id: "o-s1", role: "system", text: "Started session Auth refactor (c1)", letterId: "o1", at: now - START },
+    crewCall("o-t4", "start_session Billing tests", { kind: "message", to: "Billing tests", text: "Write the missing tests", letterId: "o2", toId: "c2", toName: "Billing tests", what: "start", delivery: "started" }),
+    { id: "o-s2", role: "system", text: "Started session Billing tests (c2)", letterId: "o2", at: now - START + 2e4 },
+    crewCall("o-t5", "send_message Lead", { kind: "message", to: "Lead", text: "Note to self: check billing first.", error: "You cannot send a message to yourself." }, "failed"),
+    { id: "o-t7", role: "tool", text: "git worktree list", tool: { callId: "o-c7", name: "Bash", title: "git worktree list", status: "completed", detail: { kind: "command", command: "git worktree list", exitCode: 0 } } },
+    {
+      id: "o-a1",
+      role: "assistant",
+      at: now - START + 4.8e4,
+      text: "Both are running: **Auth refactor** in `feat/auth-refactor`, **Billing tests** in place. Their reports wake me when they finish.",
+      usage: { inputTokens: 21000, outputTokens: 420, costUsd: 0.05, durationMs: 48000 },
+    },
+    { id: "o-u2", role: "user", at: now - 25 * 60e3, text: BILLING_REPORT, letterId: "o3", fromBot: { id: "c2", name: "Billing tests", kind: "session" } },
+    {
+      id: "o-a2",
+      role: "assistant",
+      at: now - 25 * 60e3 + 9e3,
+      text: "Billing tests reported: 14 new tests and one real rounding bug in prorated refunds, left failing on purpose. Want a session on the fix?",
+      usage: { inputTokens: 9000, outputTokens: 120, costUsd: 0.01, durationMs: 9000 },
+    },
+    { id: "o-s3", role: "system", text: "You wrote to Auth refactor", letterId: "o4", at: now - 15 * 60e3 },
+    { id: "o-u3", role: "user", at: now - 10 * 60e3 - 3e4, text: "Hand the payments migration to a new session in its own worktree; I'll drive it." },
+    crewCall("o-t6", "start_session Payments migration", { kind: "message", to: "Payments migration", text: "Carry on the payments migration", letterId: "o5", toId: "h1", toName: "Payments migration", what: "handoff", delivery: "started" }, "completed", now - 10 * 60e3),
+    { id: "o-s4", role: "system", text: "Handed Payments migration (h1) to the user", letterId: "o5", at: now - 10 * 60e3 },
+    {
+      id: "o-a3",
+      role: "assistant",
+      at: now - 10 * 60e3 + 4e3,
+      text: "Handed off: **Payments migration** is yours now, in its own worktree, with the plan as its first message.",
+      usage: { inputTokens: 6000, outputTokens: 60, costUsd: 0.006, durationMs: 4000 },
+    },
+  ],
+  "history:h1": [
+    { id: "h1-u1", role: "user", at: now - 10 * 60e3, text: "Carry on the payments migration in its own worktree.", letterId: "o5", fromBot: { id: "s7", name: "Lead" } },
+    { id: "h1-a1", role: "assistant", at: now - 9 * 60e3, text: "Starting with step 1: `payments.v2` behind the flag." },
+  ],
+  c1: [
+    { id: "c1-u1", role: "user", at: now - START, text: AUTH_JOB, letterId: "o1", fromBot: { id: "s7", name: "Lead" } },
+    { id: "c1-t1", role: "tool", text: "Read auth/middleware.ts", tool: { callId: "c1-c1", name: "Read", title: "Read auth/middleware.ts", status: "completed", detail: { kind: "file", path: "/Users/me/Developer/experiments/crew/auth/middleware.ts" } } },
+    { id: "c1-u2", role: "user", at: now - 15 * 60e3, text: "Keep the old cookie name for one release so existing sessions survive the deploy.", letterId: "o4" },
+    { id: "c1-t2", role: "tool", text: "Edit auth/session.ts", tool: { callId: "c1-c2", name: "Edit", title: "Edit auth/session.ts", status: "pending", detail: { kind: "edit", path: "auth/session.ts", added: 42, removed: 3 } } },
+  ],
+};
+
 type MockTurn = { sessionId: string; stage: "idle" | "question" | "approval" };
 type TranscriptRow = { blocks: Row[]; seq: number; working: boolean; status: string };
 const turns = new Map<string, MockTurn>();
@@ -747,9 +887,12 @@ function thread(id: string): TranscriptRow {
   let row = transcripts.get(id);
   if (!row) {
     row = {
-      blocks: id === "s1" ? [...backfill(), ...(SEED_BLOCKS as Row[]).map((block) => ({ ...block }))] : [],
+      blocks:
+        id === "s1"
+          ? [...backfill(), ...(SEED_BLOCKS as Row[]).map((block) => ({ ...block }))]
+          : (ORCHESTRATION[id] ?? []).map((block) => ({ ...block })),
       seq: 0,
-      working: id === "s1",
+      working: id === "s1" || id === "c1",
       status: id === "s1" ? "needs-input" : "idle",
     };
     transcripts.set(id, row);

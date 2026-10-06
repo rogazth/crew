@@ -15,6 +15,16 @@ function phase(items: ActivityItem[], index = 0): Phase {
 type ActivityItem = ReturnType<typeof buildActivity>[number];
 
 describe("buildActivity", () => {
+  it("keeps a subagent on a line of its own, nothing folded in with it", () => {
+    const agent: Block = {
+      ...tool("Task", "Explore auth"),
+      tool: { callId: "t", name: "Task", title: "Explore auth", status: "completed", detail: { kind: "agent", description: "Explore auth" } },
+    };
+    const items = buildActivity([tool("mcp__x__a", "a"), agent, tool("mcp__x__b", "b")]);
+    expect(items.map((item) => (item.kind === "phase" ? item.phase.blocks.length : 0))).toEqual([1, 1, 1]);
+    expect(phase(items, 1).blocks[0]).toBe(agent);
+  });
+
   it("folds same-kind calls and splits on a change of kind", () => {
     const items = buildActivity([
       tool("Read", "Read a.ts"),

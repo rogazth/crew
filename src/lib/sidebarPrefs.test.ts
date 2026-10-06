@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { arrangeSessions, childrenOf, DEFAULT_PREFS, parsePrefs, trimSection } from "./sidebarPrefs";
+import { arrangeSessions, DEFAULT_PREFS, parsePrefs, trimSection } from "./sidebarPrefs";
 import type { Session } from "./types";
 
 const session = (
@@ -45,9 +45,9 @@ describe("arrangeSessions", () => {
   });
 });
 
-describe("childrenOf", () => {
-  const child = (id: string, parentId: string | undefined, createdAt: number) =>
-    ({ ...session(id, "child", createdAt, "codex"), parentId, createdAt }) as Session;
+describe("children in the sidebar", () => {
+  const child = (id: string, parentId: string | undefined, createdAt: number, extra: Partial<Session> = {}) =>
+    ({ ...session(id, "child", createdAt, "codex"), parentId, createdAt, ...extra }) as Session;
   const list = [
     session("planner", "bot", 1),
     session("shell", "terminal", 2),
@@ -56,22 +56,21 @@ describe("childrenOf", () => {
     child("mine", "planner", 5),
     child("loose", undefined, 7),
     child("orphan", "gone", 8),
+    { ...session("handed", "terminal", 9), handedOffBy: "planner", handedOffByName: "planner" } as Session,
   ];
 
-  it("nests a session under whoever started it, oldest first", () => {
-    const nested = childrenOf(list, DEFAULT_PREFS, "");
-    expect(nested.get("shell")?.map((s) => s.id)).toEqual(["c1", "c2"]);
-    expect(nested.get("planner")?.map((s) => s.id)).toEqual(["mine"]);
-  });
-
-  it("lists the nested ones under their parent only, and the rest among the sessions", () => {
+  it("leaves out a child its starter owns: it lives in that one's chat", () => {
     const { bots, terminals } = arrangeSessions(list, DEFAULT_PREFS, "");
     expect(bots.map((s) => s.id)).toEqual(["planner"]);
-    expect(terminals.map((s) => s.id).sort()).toEqual(["loose", "orphan", "shell"]);
+    expect(terminals.map((s) => s.id).sort()).toEqual(["handed", "loose", "orphan", "shell"]);
   });
 
-  it("lists every match flat while searching", () => {
-    expect(childrenOf(list, DEFAULT_PREFS, "c").size).toBe(0);
+  it("keeps a child whose starter is hidden by the view out too", () => {
+    const prefs = { ...DEFAULT_PREFS, hiddenKinds: ["bot" as const] };
+    expect(arrangeSessions(list, prefs, "").terminals.map((s) => s.id)).not.toContain("mine");
+  });
+
+  it("lists every match flat while searching, children too", () => {
     const { terminals } = arrangeSessions(list, DEFAULT_PREFS, "c1");
     expect(terminals.map((s) => s.id)).toEqual(["c1"]);
   });

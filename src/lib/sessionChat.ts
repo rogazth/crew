@@ -1,5 +1,6 @@
 import type { AttachedFile, Block } from "./blocks";
 import type { SessionAsk } from "./protocol";
+import { isQueued } from "./transcriptRows";
 
 /** A message the chat typed into the CLI, shown until the CLI's history has it. */
 export type Queued = { id: string; text: string; files: AttachedFile[]; at: number };
@@ -40,8 +41,6 @@ export function delivered(queued: readonly Queued[], blocks: readonly Block[]): 
 }
 
 /** A queued bubble in a list of blocks: a user message not in the history yet (`queuedBlock`). */
-const isQueued = (block: Block) => block.role === "user" && block.streaming === true;
-
 /** Where a turn ended: the block its footer hangs on. */
 const endsTurn = (block: Block) => block.usage !== undefined && block.streaming !== true;
 

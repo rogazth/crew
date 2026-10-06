@@ -16,11 +16,12 @@ import {
 } from "../../lib/activity";
 import { useNow } from "../../hooks/useNow";
 import { duration } from "../../lib/time";
-import { answerSummary, isOpen, type Answers, type ApprovalDecision, type Block } from "../../lib/blocks";
-import { glyphKind, hasBody, toolLine, type ToolGlyphKind } from "../../lib/toolDetail";
+import { answerSummary, isOpen, type Answers, type ApprovalDecision, type Block, type ToolStatus } from "../../lib/blocks";
+import { detailOf, glyphKind, hasBody, toolLine, type ToolDetail, type ToolGlyphKind } from "../../lib/toolDetail";
 import { ApprovalCard } from "./ApprovalCard";
 import { QuestionCard } from "./QuestionCard";
 import { ToolBody } from "./ToolBody";
+import { Pre, Prose } from "./ToolParts";
 
 type Props = {
   blocks: Block[];
@@ -231,6 +232,9 @@ function PhaseRow({
   const open = waiting || (pinned ?? (holds || live));
   const single = phase.blocks.length === 1 && !waiting;
 
+  const only = phase.blocks.length === 1 ? phase.blocks[0]! : null;
+  if (only && detailOf(only)?.kind === "agent" && only.role === "tool") return <SubagentRow block={only} marked={marked} />;
+
   if (single) {
     const block = phase.blocks[0]!;
     return (
@@ -402,6 +406,72 @@ function ToolRow({
         </div>
       </Collapsible.Panel>
     </Collapsible.Root>
+  );
+}
+
+/**
+ * The harness's own subagent, nested under its line: what it was asked and
+ * what it brought back. Its steps as it works come later; while it runs, the
+ * line says so.
+ */
+function SubagentRow({ block, marked }: { block: Block; marked: string | null }) {
+  const [open, setOpen] = useState(false);
+  const detail = detailOf(block);
+  if (detail?.kind !== "agent") return null;
+  const status = block.tool?.status;
+  return (
+    <Collapsible.Root open={open} onOpenChange={setOpen}>
+      <Collapsible.Trigger data-block={block.id} className={`${ROW} w-full text-left${lit(block.id, marked)}`}>
+        <SubagentLine detail={detail} status={status} open={open} />
+      </Collapsible.Trigger>
+      <Collapsible.Panel className="crew-phase-panel">
+        <div className="mt-1 ml-[9px] flex flex-col gap-1 border-l-[1.5px] border-border-strong py-0.5 pl-4">
+          {detail.prompt ? <Pre head="asked" text={detail.prompt} wrap /> : null}
+          {detail.output ? (
+            <Prose text={detail.output} />
+          ) : (
+            <p className="py-0.5 text-[12.5px] text-text-muted">{status === "pending" ? "Working…" : "Nothing came back."}</p>
+          )}
+        </div>
+      </Collapsible.Panel>
+    </Collapsible.Root>
+  );
+}
+
+const SUBAGENT_TONE: Partial<Record<ToolStatus, string>> = { pending: "crew-shimmer", failed: "text-danger" };
+
+/** A subagent's one line: spinner while it runs, its mark (a cross when it failed), what it was for. */
+function SubagentLine({
+  detail,
+  status,
+  open,
+}: {
+  detail: Extract<ToolDetail, { kind: "agent" }>;
+  status: ToolStatus | undefined;
+  open: boolean;
+}) {
+  const failed = status === "failed";
+  return (
+    <>
+      <span className="crew-node relative">
+        {status === "pending" ? (
+          <LoaderCircleIcon className="size-3.5 animate-spin text-warning" />
+        ) : (
+          <>
+            {createElement(failed ? XIcon : BotIcon, {
+              className: `size-3.5 transition-opacity group-hover:opacity-0${failed ? " text-danger" : ""}`,
+            })}
+            <ChevronRightIcon
+              className={`absolute size-3 opacity-0 transition-[opacity,transform] duration-150 group-hover:opacity-100 ${open ? "rotate-90" : ""}`}
+            />
+          </>
+        )}
+      </span>
+      <span className={`min-w-0 truncate ${SUBAGENT_TONE[status ?? "completed"] ?? "text-text-muted transition-colors group-hover:text-text"}`}>
+        {detail.description || "Subagent"}
+      </span>
+      <span className="shrink-0 text-[11px] text-placeholder">subagent{detail.agentType ? ` · ${detail.agentType}` : ""}</span>
+    </>
   );
 }
 

@@ -1,5 +1,5 @@
-import { ChevronDownIcon, ChevronRightIcon, ChevronUpIcon, CornerDownRightIcon, FolderIcon, GitBranchIcon, PlusIcon, RotateCwIcon, SearchIcon, ServerIcon, XIcon, type LucideIcon as Icon } from "lucide-react";
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
+import { ChevronDownIcon, ChevronRightIcon, ChevronUpIcon, FolderIcon, GitBranchIcon, PlusIcon, RotateCwIcon, SearchIcon, ServerIcon, XIcon, type LucideIcon as Icon } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
 import { ActionMenu } from "./ActionMenu";
 import { BotAvatar } from "./BotAvatar";
 import {
@@ -38,13 +38,13 @@ import {
 import {
   arrangeSessions,
   canReorder,
-  childrenOf,
   shows,
   trimSection,
   type Arranged,
   type SidebarPrefs,
   type Trimmed,
 } from "../lib/sidebarPrefs";
+import { childrenOf, failedUnseen, unseen } from "../lib/letters";
 import { STATUS_ORDER, statusLabel } from "../lib/status";
 import { elapsed } from "../lib/time";
 import type { Session, SessionStatus, Workspace, Worktree } from "../lib/types";
@@ -198,15 +198,12 @@ export function SessionSidebar(props: SessionSidebarProps) {
     [filtering, placed, prefs?.scope, props.activeWorktree, props.worktrees],
   );
 
-  // The sessions each listed one started, shown under it.
-  const nested = useMemo(
-    () => (prefs ? childrenOf(props.sessions, prefs, query) : new Map<string, Session[]>()),
-    [prefs, props.sessions, query],
-  );
-  const withChildren = useCallback(
-    (sessions: Session[]) => sessions.flatMap((session) => [session, ...(nested.get(session.id) ?? [])]),
-    [nested],
-  );
+  // A bot's children live in its chat; one that failed unseen puts a dot on its face.
+  const failing = useMemo(() => {
+    const out = new Set<string>();
+    for (const [parent, children] of childrenOf(props.sessions)) if (children.some(failedUnseen)) out.add(parent);
+    return out;
+  }, [props.sessions]);
 
   // A row ages out of the recency without anything else changing.
   const now = useNow(60_000, prefs !== null && prefs.recency !== "any");
@@ -227,9 +224,9 @@ export function SessionSidebar(props: SessionSidebarProps) {
   const visible = useCallback(
     (path: string) => {
       const mine = listed.get(path);
-      return withChildren([...(mine?.bots.shown ?? []), ...(mine?.terminals.shown ?? [])]);
+      return [...(mine?.bots.shown ?? []), ...(mine?.terminals.shown ?? [])];
     },
-    [listed, withChildren],
+    [listed],
   );
 
   const order = useMemo(
@@ -333,7 +330,7 @@ export function SessionSidebar(props: SessionSidebarProps) {
   });
 
   // A session's row, or the field renaming it.
-  const sessionRow = (session: Session, nested = false) =>
+  const sessionRow = (session: Session) =>
     session.id === renaming ? (
       <RenameRow
         key={session.id}
@@ -346,7 +343,7 @@ export function SessionSidebar(props: SessionSidebarProps) {
         onCancel={() => setRenaming(null)}
       />
     ) : (
-      <Row key={session.id} {...card(session)} nested={nested} onRename={() => setRenaming(session.id)} />
+      <Row key={session.id} {...card(session)} onRename={() => setRenaming(session.id)} />
     );
 
   const draggable = prefs !== null && canReorder(prefs, filtering) && renaming === null;
@@ -439,37 +436,20 @@ export function SessionSidebar(props: SessionSidebarProps) {
                         <SortableList ids={bots.map((s) => s.id)} disabled={!draggable || mine.bots.hidden > 0} onReorder={props.onReorder}>
                           {bots.map((session, at) => (
                             <SortableItem key={session.id} id={session.id} index={at} group={`bots:${tree.path}`} disabled={!draggable || mine.bots.hidden > 0}>
-                              <Tile {...card(session)} onEdit={() => props.onEdit(session)} />
+                              <Tile {...card(session)} failed={failing.has(session.id)} onEdit={() => props.onEdit(session)} />
                             </SortableItem>
                           ))}
                         </SortableList>
                       </div>
                     )}
-                    {bots.flatMap((bot) => {
-                      const started = nested.get(bot.id);
-                      if (!started) return [];
-                      return [
-                        <div key={bot.id} className="flex flex-col gap-0.5 pt-0.5" aria-label={`Sessions ${bot.name} started`}>
-                          <div className="flex h-6 items-center gap-1.5 px-2 text-[11px] text-text-muted">
-                            <BotAvatar seed={bot.id} bare className="size-4" />
-                            <span className="truncate">{bot.name}</span>
-                          </div>
-                          {started.map((child) => sessionRow(child, true))}
-                        </div>,
-                      ];
-                    })}
                     {more("bots")}
                     {terminals.length > 0 && (
                       <div className="flex flex-col gap-0.5 pt-0.5">
                         <SortableList ids={terminals.map((s) => s.id)} disabled={!draggable || mine.terminals.hidden > 0} onReorder={props.onReorder}>
                           {terminals.map((session, at) => (
-                            <Fragment key={session.id}>
-                              <SortableItem id={session.id} index={at} group={`terminals:${tree.path}`} disabled={!draggable || mine.terminals.hidden > 0}>
-                                {sessionRow(session)}
-                              </SortableItem>
-                              {/* Beside the item, not in it: a drag moves the session and leaves what it started listed under it. */}
-                              {(nested.get(session.id) ?? []).map((child) => sessionRow(child, true))}
-                            </Fragment>
+                            <SortableItem key={session.id} id={session.id} index={at} group={`terminals:${tree.path}`} disabled={!draggable || mine.terminals.hidden > 0}>
+                              {sessionRow(session)}
+                            </SortableItem>
                           ))}
                         </SortableList>
                       </div>
@@ -793,8 +773,12 @@ function cardKeys(on: { rename?: (() => void) | undefined; menu: (point: MenuPoi
   };
 }
 
-/** A bot is its face and its name; what runs it is the tab's business, not the list's. */
-function Tile({ session, prefs, active, selected, onSelect, onMenu, onClearSelection, onRemove, onEdit }: CardProps & { onEdit: () => void }) {
+/**
+ * A bot is its face and its name; what runs it is the tab's business, not the
+ * list's. Its children live in its chat, so the one thing of theirs here is a
+ * failure nobody has looked at: a red dot on the face's other corner.
+ */
+function Tile({ session, prefs, active, selected, failed, onSelect, onMenu, onClearSelection, onRemove, onEdit }: CardProps & { failed: boolean; onEdit: () => void }) {
   return (
     <button
       type="button"
@@ -813,6 +797,14 @@ function Tile({ session, prefs, active, selected, onSelect, onMenu, onClearSelec
       <span className="relative">
         <BotAvatar seed={session.id} bare animated={session.status === "working"} className="size-10" />
         {shows(prefs, "status") && <Badge status={session.status} />}
+        {failed && (
+          <span
+            role="img"
+            aria-label="A session it started failed"
+            title="A session it started failed"
+            className="absolute -top-0.5 -right-0.5 size-2.5 rounded-full bg-danger ring-2 ring-sidebar"
+          />
+        )}
       </span>
       {shows(prefs, "names") && (
         <span className={`w-full truncate text-center text-[12px] ${active ? "font-medium" : ""}`}>{session.name}</span>
@@ -851,7 +843,8 @@ function Badge({ status }: { status: SessionStatus }) {
 
 /**
  * A session row: the provider it runs, its name, how long ago, its status. A
- * nested one is a session another started, listed under it.
+ * handoff is the user's like any other; it says who handed it over, and an
+ * event the user has not opened yet is its unread dot.
  */
 function Row({
   session,
@@ -863,8 +856,9 @@ function Row({
   onClearSelection,
   onRemove,
   onRename,
-  nested = false,
-}: CardProps & { onRename: () => void; nested?: boolean }) {
+}: CardProps & { onRename: () => void }) {
+  const handed = session.handedOffBy ? `Handed off by ${session.handedOffByName ?? "a session"} · yours` : null;
+  const fresh = handed !== null && unseen(session) && !active;
   return (
     <button
       type="button"
@@ -875,18 +869,21 @@ function Row({
       onClick={onSelect}
       onContextMenu={(event) => onMenu(menuFromEvent(event))}
       onKeyDown={cardKeys({ rename: onRename, menu: onMenu, clear: onClearSelection, remove: onRemove })}
-      title={`${session.name} — ${providerLine(session.provider, session.model)}${session.worktree ? `\n${session.worktree}` : ""}`}
+      title={`${session.name} — ${providerLine(session.provider, session.model)}${handed ? `\n${handed}` : ""}${session.worktree ? `\n${session.worktree}` : ""}`}
       aria-current={active ? "page" : undefined}
-      data-child={nested || undefined}
-      className={`flex h-8 w-full items-center gap-2.5 rounded-chrome text-left transition-colors duration-150 ease-out ${nested ? "pr-2 pl-3" : "px-2"} ${SURFACE(active, selected)} ${FOCUS}`}
+      aria-description={handed ?? undefined}
+      className={`flex h-8 w-full items-center gap-2.5 rounded-chrome px-2 text-left transition-colors duration-150 ease-out ${SURFACE(active, selected)} ${FOCUS}`}
     >
-      {nested && <CornerDownRightIcon aria-hidden className="-mr-1 size-3.5 shrink-0 text-icon" />}
       <ProviderIcon provider={session.provider} className="size-4" />
-      <span className={`min-w-0 flex-1 truncate ${active ? "font-medium" : ""}`}>{session.name}</span>
+      <span className={`min-w-0 flex-1 truncate ${active || fresh ? "font-medium" : ""}`}>{session.name}</span>
       {shows(prefs, "updated") && (
         <span className="shrink-0 text-[12px] text-text-muted tabular-nums">{elapsed(session.updatedAt)}</span>
       )}
-      {shows(prefs, "status") && <StatusDot status={session.status} />}
+      {fresh ? (
+        <StatusDot status="done" />
+      ) : (
+        shows(prefs, "status") && <StatusDot status={session.status} />
+      )}
     </button>
   );
 }

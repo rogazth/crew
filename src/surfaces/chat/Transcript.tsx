@@ -6,8 +6,9 @@ import {
   type Block,
 } from "../../lib/blocks";
 import { turnStart } from "../../lib/sessionChat";
-import { foldTurns, groupRows, speaker } from "../../lib/transcriptRows";
+import { foldTurns, groupRows, speaker, splitQueued } from "../../lib/transcriptRows";
 import { WorkingLine } from "./Activity";
+import { QueuedGroup } from "./Letters";
 import { Rows } from "./Rows";
 
 const NEAR_BOTTOM_PX = 16;
@@ -78,7 +79,11 @@ export function Transcript({
   const fromBottom = useRef(0);
   /** A row the reader just opened or closed: it stays where it was on screen while the panel moves. */
   const anchor = useRef<{ el: Element; top: number; until: number } | null>(null);
-  const rows = useMemo(() => foldTurns(groupRows(blocks), working), [blocks, working]);
+  // The queue at the foot waits under the working line, outside any turn.
+  const { rows, queued } = useMemo(() => {
+    const split = splitQueued(groupRows(blocks));
+    return { rows: foldTurns(split.rows, working), queued: split.queued };
+  }, [blocks, working]);
 
   const onScroll = () => {
     const el = scroller.current;
@@ -232,6 +237,11 @@ export function Transcript({
         {working && (
           <div className={rows.length > 0 ? (speaker(rows.at(-1)!) === "agent" ? "mt-2.5" : "mt-7") : ""}>
             <WorkingLine since={turnStart(blocks)} waiting={waiting(blocks)} />
+          </div>
+        )}
+        {queued.length > 0 && (
+          <div className={rows.length > 0 || working ? "mt-7" : ""}>
+            <QueuedGroup blocks={queued} />
           </div>
         )}
       </div>

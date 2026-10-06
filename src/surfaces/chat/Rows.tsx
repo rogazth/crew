@@ -5,6 +5,7 @@ import type { Answers, ApprovalDecision } from "../../lib/blocks";
 import { duration, dayLabel } from "../../lib/time";
 import { gapBefore, rowBlocks, type Row } from "../../lib/transcriptRows";
 import { ActivityGroup } from "./Activity";
+import { CheckpointRow, QueuedGroup, RefusedRow } from "./Letters";
 import { AssistantMessage, DateBreak, Note, TurnFooter, UserMessage } from "./Message";
 
 type Props = {
@@ -57,6 +58,24 @@ export function Rows({ rows, working, focusId, onApprove, onAnswer }: Props) {
         return (
           <div key={row.id} className={className}>
             <DateBreak label={dayLabel(row.at)} />
+          </div>
+        );
+      case "letter":
+        return (
+          <div key={row.block.id} data-block={row.block.id} className={className}>
+            <CheckpointRow block={row.block} />
+          </div>
+        );
+      case "refused":
+        return (
+          <div key={row.block.id} data-block={row.block.id} className={className}>
+            <RefusedRow block={row.block} />
+          </div>
+        );
+      case "queued":
+        return (
+          <div key={row.id} className={className}>
+            <QueuedGroup blocks={row.blocks} />
           </div>
         );
       case "message": {
