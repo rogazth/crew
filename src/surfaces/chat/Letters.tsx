@@ -94,7 +94,9 @@ export const QueuedGroup = memo(function QueuedGroup({ blocks }: { blocks: Block
             <span className="min-w-0 truncate text-text-muted">{block.text.split("\n").find((line) => line.trim() !== "") ?? ""}</span>
           </div>
         ) : (
-          <div key={block.id} className="flex flex-col items-end gap-1.5">
+          // Stretched to the row, as a sent bubble's is: shrunk to its content,
+          // the bubble's 78% would be of its own width and wrap short.
+          <div key={block.id} className="flex flex-col items-end gap-1.5 self-stretch">
             {block.text ? (
               <div className="crew-md-row is-user">
                 <div className="crew-bubble">

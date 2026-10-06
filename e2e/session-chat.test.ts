@@ -204,6 +204,25 @@ test("a message sent from the chat lands in the CLI, and its reply comes back", 
   });
 });
 
+test("a queued message wraps as it will once sent", async () => {
+  const [workspace] = crew.workspaces;
+  assert.ok(workspace);
+  await crew.request("state_set", { key: "sessions:view", value: "chat" });
+  await crew.reload();
+  const session = await newTerminal(crew, workspace.id);
+  const chat = chatOf(session);
+  await chat.waitFor();
+
+  const text = "El host es: ssh -p 33461 talanton.cp7203.webempresa.eu\n\nConfiguralo en el ssh/config";
+  const bubble = chat.locator(".crew-bubble", { hasText: "talanton.cp7203" });
+  await sendFromChat(session, text);
+  await chat.getByText("Queued").waitFor();
+  const queued = await bubble.evaluate((el) => el.getBoundingClientRect().width);
+  await waitFor(async () => (await chat.getByText("Queued").count()) === 0, { message: "the bubble is the CLI's turn now" });
+  const sent = await bubble.evaluate((el) => el.getBoundingClientRect().width);
+  assert.equal(queued, sent);
+});
+
 test("the CLI's permission prompt is answered from its card: Allow runs it, Deny stops the turn", async () => {
   const [workspace] = crew.workspaces;
   assert.ok(workspace);
