@@ -44,6 +44,11 @@ describe("applyUpdated", () => {
     });
   });
 
+  it("takes the provider a new session switched to", () => {
+    const held = row("a", { provider: "claude", name: "claude" });
+    expect(applyUpdated(held, row("a", { provider: "codex", name: "codex" }))).toMatchObject({ provider: "codex", name: "codex" });
+  });
+
   it("takes how far a child got and what the user read of it", () => {
     const lastEvent = { kind: "failed" as const, at: 5, cursor: 7 };
     const updated = applyUpdated(row("a", { cursor: 3, userSeen: 3 }), row("a", { cursor: 7, userSeen: 3, lastEvent }));

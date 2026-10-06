@@ -33,6 +33,8 @@ export type ChatSurfaceProps = {
   loading?: boolean;
   /** The composer's model, effort and access chips changed. Absent: no chips. */
   onOptions?: (next: AgentChoice) => void;
+  /** The model chip offers other providers: a session nobody has talked to yet. */
+  switchProvider?: boolean;
   /** A chip changed that only a relaunch reaches; the next message does it. */
   optionsPending?: boolean;
   /** Over the chat: its sessions, whose it is, its conversations. */

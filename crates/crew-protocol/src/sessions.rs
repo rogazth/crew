@@ -67,6 +67,31 @@ pub struct SessionLiveAnswered {
     pub ask_id: u64,
 }
 
+/// The session's CLI is another one now: what was heard from the last one is
+/// gone, and anything older than `at` was about that one.
+#[derive(Serialize, Deserialize, Clone, Debug, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
+pub struct SessionLiveReset {
+    pub session_id: String,
+    #[ts(type = "number")]
+    pub at: i64,
+}
+
+/// A session nobody has talked to yet moves to another provider's CLI.
+#[derive(Serialize, Deserialize, Clone, Debug, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
+pub struct SessionSwitchProvider {
+    pub id: String,
+    /// Where the session runs: Claude files its history under it.
+    pub cwd: String,
+    pub provider: String,
+    pub model: String,
+    pub effort: String,
+    pub autonomy: String,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]

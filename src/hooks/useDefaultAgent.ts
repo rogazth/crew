@@ -29,9 +29,9 @@ function subscribe(listener: () => void) {
 }
 
 /**
- * What ⌘N, Home's composer and a new agent start with: one choice, so the last
- * one picked anywhere is the next one used. `preferred` is what the user picked;
- * `effective` swaps in an installed provider when that CLI is missing.
+ * What ⌘N, Home's composer and a new agent start with: one choice, set in
+ * Settings; a pick in a composer is for that session only. `preferred` is what
+ * the user set; `effective` swaps in an installed provider when that CLI is missing.
  */
 export function useDefaultAgent(refresh?: unknown) {
   const installed = useInstalledProviders(refresh);

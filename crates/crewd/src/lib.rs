@@ -1493,6 +1493,30 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
             }
             Ok(Value::Null)
         }
+        // A session nobody has talked to yet moves to another CLI: the old
+        // one ends here, and the window starts the new one.
+        "session_switch_provider" => {
+            let p: proto::SessionSwitchProvider = parse(params)?;
+            let store = hosts.store.clone();
+            let sessions = hosts.sessions.clone();
+            let host = hosts.pty.clone();
+            let id = p.id.clone();
+            let row = block(move || {
+                if sessions.has_conversation(&store, &p.id, &p.cwd)? {
+                    return Err("This session already has a conversation; start a new session for another provider".into());
+                }
+                host.kill_session(&p.id);
+                session::switch_provider(&store, p.id.clone(), p.provider, p.model, p.effort, p.autonomy)?;
+                session::get(&store, p.id)
+            })
+            .await?;
+            let store = hosts.store.clone();
+            hosts.sessions.switched(&store, &hosts.hub, &id);
+            if let Some(row) = row {
+                hosts.hub.emit("session-updated", SessionUpdated { session: proto_session(&row) });
+            }
+            Ok(Value::Null)
+        }
         "session_update" => {
             let p: SessionUpdate = parse(params)?;
             let store = hosts.store.clone();

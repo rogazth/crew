@@ -21,11 +21,13 @@ const SUGGESTIONS = ["Explain a concept", "Draft an email", "Write a shell one-l
  * Home with no tab open: a composer in the middle of the page. What is sent
  * starts a session in home's folder with that message, in the model, effort
  * and access the chips say; the tab it opens is the session's, chat or
- * terminal as Settings say. The chips are the default every new session
- * starts with, so a pick here is the next ⌘N's too.
+ * terminal as Settings say. The chips open on the default Settings keep; a
+ * pick here is for this message only and leaves that default as it is.
  */
 export function HomeStart({ firstRun, onAsk, onOpenFolder, onNewBot, onOpenBrowser }: Props) {
-  const { effective, update } = useDefaultAgent();
+  const { effective } = useDefaultAgent();
+  const [picked, setPicked] = useState<AgentChoice | null>(null);
+  const choice = picked ?? effective;
   const [draft, setDraft] = useState("");
   const field = useRef<HTMLTextAreaElement>(null);
 
@@ -35,7 +37,7 @@ export function HomeStart({ firstRun, onAsk, onOpenFolder, onNewBot, onOpenBrows
     const text = draft.trim();
     if (!text) return;
     setDraft("");
-    onAsk(text, effective);
+    onAsk(text, choice);
   };
 
   return (
@@ -77,10 +79,10 @@ export function HomeStart({ firstRun, onAsk, onOpenFolder, onNewBot, onOpenBrows
           />
           <div className="mt-1.5 flex h-8 items-center justify-between gap-2">
             <div className="flex min-w-0 items-center gap-1.5">
-              <ModelControls value={effective} onChange={update} />
+              <ModelControls value={choice} onChange={setPicked} />
             </div>
             <div className="flex shrink-0 items-center gap-1.5">
-              <AccessPicker provider={effective.provider} value={effective.access} onChange={(access) => update({ ...effective, access })} />
+              <AccessPicker provider={choice.provider} value={choice.access} onChange={(access) => setPicked({ ...choice, access })} />
               <button
                 type="submit"
                 aria-label="Send"

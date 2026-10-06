@@ -32,6 +32,7 @@ export function applyUpdated(held: Session, row: Session): Session {
   return {
     ...held,
     name: row.name,
+    provider: row.provider,
     model: row.model,
     effort: row.effort,
     autonomy: row.autonomy,

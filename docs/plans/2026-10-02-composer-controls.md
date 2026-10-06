@@ -32,8 +32,9 @@ What they agree on, and Crew takes:
    copy, rewritten in Crew's voice). Per session; new ones take the default.
 3. **Effort options come from the provider/model**, with the CLI's own default
    first, and a value the new model does not offer falls back to Default.
-4. **Provider is locked once a session has started** (t3code, zeron). Agents are
-   the exception: Crew already lets them switch.
+4. **Provider is locked once a session has a conversation** (t3code, zeron).
+   Agents are the exception: Crew already lets them switch. A session in the
+   chat that nobody has talked to yet can still switch (§6).
 5. **A change mid-session applies on the next message**, never interrupts a turn.
 
 ## 2. The model
@@ -77,9 +78,8 @@ provider has none. Labels: Default, Low, Medium, High, Extra high, Max.
 ### Defaults
 
 `providers:default` (`useDefaultAgent`) grows from `{provider, model}` to
-`{provider, model, effort, access}`. What Home's chips show is that default,
-and picking there updates it: the last choice is what the next session gets,
-from Home or ⌘N, and Settings shows the same value. Settings › Sessions keeps
+`{provider, model, effort, access}`. Home's chips open on that default, and a
+pick there is for that message's session only; the default is set in Settings. Settings › Sessions keeps
 *Bypass permissions*; the default access sits beside the default model.
 
 ## 3. The UI
@@ -156,7 +156,15 @@ of what was measured against the real CLIs on 2026-10-02:
 
 - Mid-session apply: hybrid (§4).
 - One default: Home's chips, ⌘N and Settings › New sessions share
-  `providers:default`; a pick in Home is the next ⌘N's.
+  `providers:default`. A pick in Home no longer changes it (2026-10-06).
+- Switching provider in the chat (2026-10-06): offered while the session has no
+  conversation (no blocks in its history, nothing queued, no turn running).
+  `session_switch_provider` checks the CLI's own history, ends the running
+  CLI, clears `provider_session_id`, renames a placeholder name (`claude 2` →
+  `codex`), forgets the live state and repoints the history reader; the
+  window starts the new provider's CLI from the row. Hooks from the old CLI
+  that arrive after (its SessionEnd) are ignored until the new one starts.
+  Only the chat offers it; the terminal view keeps its CLI.
 - A fresh install's access is **Full access**. A stored default from before
   this change that has no access reads as Full too; Settings' global *Bypass
   permissions* still forces Full on every session.

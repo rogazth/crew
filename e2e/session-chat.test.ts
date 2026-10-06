@@ -495,3 +495,61 @@ test("a Codex session in the chat: trusted from the command line, its rollout re
   await chat.getByRole("button", { name: /^Deny/ }).click();
   await chat.getByText("Interrupted").waitFor();
 });
+
+test("a new session in the chat moves to another provider before anyone talks to it, and stays on it after", async () => {
+  const [workspace] = crew.workspaces;
+  assert.ok(workspace);
+  await installFakeCodex(crew);
+  await crew.request("state_set", { key: "sessions:view", value: "chat" });
+  await crew.request("state_set", {
+    key: "providers:default",
+    value: JSON.stringify({ provider: "claude", model: "", effort: "", access: "ask" }),
+  });
+  await crew.reload();
+  const codexLaunches = async () =>
+    (await readFile(path.join(crew.home, "fake-codex.log"), "utf8").catch(() => "")).trim().split("\n").filter(Boolean).length;
+  const before = await codexLaunches();
+  const session = await newTerminal(crew, workspace.id);
+  const chat = chatOf(session);
+  await chat.waitFor();
+  const claude = (await crew.claudeLaunches()).at(-1);
+  assert.ok(claude);
+
+  await chat.locator('button[title^="Claude"]').click();
+  const providers = crew.window.locator('[role="tablist"][aria-orientation="vertical"]');
+  await providers.getByRole("tab", { name: /Codex/ }).click();
+  await crew.window.getByRole("tabpanel").getByRole("button").first().click();
+
+  const moved = await waitFor(
+    async () => {
+      const row = await crew.request<Session>("session_get", { id: session.id });
+      return row.provider === "codex" ? row : undefined;
+    },
+    { message: "the row runs Codex" },
+  );
+  assert.match(moved.name, /^codex( \d+)?$/, "a placeholder name follows the provider");
+  assert.equal(moved.providerSessionId ?? null, null);
+  await waitFor(async () => (await codexLaunches()) > before, { message: "Codex starts in the session's terminal" });
+  await waitFor(() => !alive(claude.pid), { message: "the Claude it ran is gone" });
+  assert.equal(await crew.request("state_get", { key: "providers:default" }).then((raw) => JSON.parse(String(raw)).provider), "claude");
+
+  await sendFromChat(session, "hello codex");
+  await chat.getByText("Done.").waitFor();
+
+  // It has a conversation now: the chip offers only its own provider's models.
+  await chat.locator('button[title^="Codex"]').click();
+  await crew.window.getByRole("tabpanel").waitFor();
+  assert.equal(await providers.getByRole("tab").count(), 1);
+  await crew.window.keyboard.press("Escape");
+  await assert.rejects(
+    crew.request("session_switch_provider", {
+      id: session.id,
+      cwd: workspace.path,
+      provider: "claude",
+      model: "",
+      effort: "",
+      autonomy: "ask",
+    }),
+    /already has a conversation/,
+  );
+});

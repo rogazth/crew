@@ -14,7 +14,7 @@ import { announceSession, askNews } from '../lib/notifications';
 import { blockingScreen, type BlockingScreen } from '../lib/blockingScreen';
 import { clearFirstPrompt, peekFirstPrompt, setFirstPrompt } from '../lib/firstPrompt';
 import { BYPASS_KEY } from '../lib/permissions';
-import { providerOf } from '../lib/providers';
+import { providerOf, type AgentChoice } from '../lib/providers';
 import { reportsLive, sessionSurface } from '../lib/sessionView';
 import { readLive, subscribeLive } from '../lib/sessionLive';
 import { onSessionLost, useRunningSessions } from '../lib/runningSessions';
@@ -249,8 +249,9 @@ function SessionTerminal({
       cancelled = true;
     };
     // The session row changes on rename; the process is already running by then.
+    // Its provider changes only once the daemon ended the CLI it ran.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session.id, cwd, launch]);
+  }, [session.id, session.provider, cwd, launch]);
 
   // As a window opening finds it: the CLI resumes its conversation in a new pane.
   const relaunch = useCallback(() => {
@@ -272,6 +273,30 @@ function SessionTerminal({
       setLaunch((n) => n + 1);
     },
     [onExit, session.id],
+  );
+
+  // The chat picked another provider before anyone talked to this one: the
+  // pane lets go, the daemon ends the CLI and changes the row, and the row's
+  // new provider starts the next. Refused, the old one starts again.
+  const switchProvider = useCallback(
+    async (choice: AgentChoice) => {
+      onExit(null);
+      setCommand(null);
+      setBlocked(null);
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+      try {
+        await api.switchSessionProvider(session.id, cwd, {
+          provider: choice.provider,
+          model: choice.model,
+          effort: choice.effort,
+          autonomy: choice.access,
+        });
+      } catch (error) {
+        setLaunch((n) => n + 1);
+        throw error;
+      }
+    },
+    [cwd, onExit, session.id],
   );
 
   // Claude's moves to a new conversation reach the window from the daemon,
@@ -337,6 +362,7 @@ function SessionTerminal({
           busy={session.status === 'working' || session.status === 'needs-input'}
           onShowTerminal={() => onShowTerminal(true)}
           onRestart={restart}
+          onSwitchProvider={switchProvider}
         />
       )}
       {!chat && (kids.length > 0 || revealed) && (

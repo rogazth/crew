@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::Path;
 
 use rusqlite::{params, OptionalExtension};
@@ -472,6 +473,56 @@ pub fn set_options(store: &Store, id: String, model: String, effort: String, aut
         tx.commit()
     })?;
     Ok(())
+}
+
+/// A terminal session nobody has talked to yet runs another provider's CLI:
+/// the old one's conversation id goes with it, and a name that only said which
+/// CLI it ran says the new one. Whether it has a conversation is the caller's
+/// to check, since only the CLI's own history can say.
+pub fn switch_provider(
+    store: &Store,
+    id: String,
+    provider: String,
+    model: String,
+    effort: String,
+    autonomy: String,
+) -> Result<(), String> {
+    let row = get(store, id.clone())?.ok_or("Session not found")?;
+    if row.kind != "terminal" {
+        return Err("Only a session's provider can be switched".into());
+    }
+    if !crate::tools::provider_names().contains(&provider.as_str()) {
+        return Err(format!("Unknown provider {provider}"));
+    }
+    let name = if row.provider != provider && is_placeholder_name(&row.name, &row.provider) {
+        let taken: HashSet<String> = list(store, row.workspace_id.clone())?
+            .into_iter()
+            .filter(|s| s.kind == "terminal" && s.id != id)
+            .map(|s| s.name)
+            .collect();
+        next_placeholder_name(&taken, &provider)
+    } else {
+        row.name
+    };
+    let autonomy = autonomy_or_default(autonomy);
+    store.with(|conn| {
+        conn.execute(
+            "UPDATE sessions
+             SET provider = ?2, model = ?3, effort = ?4, autonomy = ?5, name = ?6,
+                 provider_session_id = NULL, provider_title = NULL, updated_at = ?7
+             WHERE id = ?1",
+            params![id, provider, model, effort, autonomy, name, now_millis()],
+        )
+    })?;
+    Ok(())
+}
+
+/// The first of `provider`, `provider 2`, `provider 3`… no session has: what a new one is called.
+fn next_placeholder_name(taken: &HashSet<String>, provider: &str) -> String {
+    if !taken.contains(provider) {
+        return provider.to_string();
+    }
+    (2..).map(|n| format!("{provider} {n}")).find(|name| !taken.contains(name)).unwrap_or_default()
 }
 
 pub fn rename(store: &Store, id: String, name: String) -> Result<(), String> {
@@ -1050,6 +1101,25 @@ mod tests {
         let new = create(&store, workspace, "terminal".into(), "codex 1".into(), "codex".into(), String::new(), String::new(), "ask".into())
             .expect("codex");
         assert_eq!((new.model.as_str(), new.effort.as_str()), ("gpt-6-astra", "medium"));
+    }
+
+    #[test]
+    fn switching_a_new_sessions_provider_renames_it_and_forgets_the_old_cli() {
+        let (store, workspace) = world();
+        terminal(&store, &workspace, "codex", "codex");
+        let s = terminal(&store, &workspace, "claude 2", "claude");
+        set_provider_session(&store, s.id.clone(), "claude-1".into()).expect("bind");
+        switch_provider(&store, s.id.clone(), "codex".into(), String::new(), String::new(), "full".into()).expect("switch");
+        let read = get(&store, s.id.clone()).expect("get").expect("row");
+        assert_eq!((read.provider.as_str(), read.name.as_str(), read.autonomy.as_str()), ("codex", "codex 2", "full"));
+        assert_eq!(read.provider_session_id, None);
+        // A name typed by hand stays whatever runs under it.
+        rename(&store, s.id.clone(), "Mine".into()).expect("rename");
+        switch_provider(&store, s.id.clone(), "cursor".into(), String::new(), String::new(), "ask".into()).expect("switch");
+        assert_eq!(name_of(&store, &s.id), "Mine");
+        assert!(switch_provider(&store, s.id.clone(), "grok".into(), String::new(), String::new(), "ask".into()).is_err());
+        let b = bot(&store, &workspace, "b", "ask").expect("bot");
+        assert!(switch_provider(&store, b.id, "codex".into(), String::new(), String::new(), "ask".into()).is_err());
     }
 
     #[test]

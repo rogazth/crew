@@ -90,6 +90,13 @@ export const createSession = (
 export const setSessionOptions = (id: string, input: { model: string; effort: string; autonomy: Autonomy }): Promise<void> =>
   client.request("session_set_options", { id, ...input });
 
+/** A session nobody has talked to yet moves to another provider's CLI; the daemon ends the one running. */
+export const switchSessionProvider = (
+  id: string,
+  cwd: string,
+  input: { provider: string; model: string; effort: string; autonomy: Autonomy },
+): Promise<void> => client.request("session_switch_provider", { id, cwd, ...input });
+
 export const updateSession = (
   id: string,
   input: {

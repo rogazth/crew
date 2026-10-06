@@ -887,6 +887,12 @@ providerSessionId?: string, updatedAt: number, };
 export type SessionLiveAnswered = { id: string, askId: number, };
 
 /**
+ * The session's CLI is another one now: what was heard from the last one is
+ * gone, and anything older than `at` was about that one.
+ */
+export type SessionLiveReset = { sessionId: string, at: number, };
+
+/**
  * The user has read a session up to `cursor`; absent, up to its last event.
  */
 export type SessionMarkSeen = { id: string, cursor?: number, };
@@ -897,6 +903,15 @@ export type SessionMarkSeen = { id: string, cursor?: number, };
 export type SessionOptions = { id: string, model: string, effort: string, autonomy: string, };
 
 export type SessionStatusEvent = { sessionId: string, status: string, providerSessionId?: string, updatedAt: number, };
+
+/**
+ * A session nobody has talked to yet moves to another provider's CLI.
+ */
+export type SessionSwitchProvider = { id: string, 
+/**
+ * Where the session runs: Claude files its history under it.
+ */
+cwd: string, provider: string, model: string, effort: string, autonomy: string, };
 
 export type SessionUpdate = { id: string, name: string, provider: string, model: string, description: string, notifications: boolean, autonomy: string, };
 

@@ -31,6 +31,7 @@ export function DefaultChatSurface({
   loading = false,
   onOptions,
   optionsPending = false,
+  switchProvider = false,
   bar,
   overlay,
   tray,
@@ -89,6 +90,7 @@ export function DefaultChatSurface({
           onStop={onStop}
           {...(onOptions ? { onOptions } : {})}
           optionsPending={optionsPending}
+          switchProvider={switchProvider}
         />
         {blocks.length === 0 && <div className="min-h-0 flex-[6]" />}
         {overlay}

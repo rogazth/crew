@@ -47,6 +47,8 @@ type Props = {
   onShowTerminal: () => void;
   /** Ends the CLI and starts it again on its conversation, with the row's options and `message` to start on. */
   onRestart: (message: string) => Promise<void>;
+  /** Ends the CLI and starts `choice`'s in its place: only before anyone has talked to it. */
+  onSwitchProvider: (choice: AgentChoice) => Promise<void>;
 };
 
 /** What each session's chat had in its composer; the chat comes and goes with the setting and the tab. */
@@ -59,7 +61,18 @@ const pending = new Map<string, Queued[]>();
  * the terminal is the only thing talking to the provider: the chat reads its
  * history, types into it, and answers what it asks with the keys it expects.
  */
-export function SessionChat({ session, sessions, ptyId, cwd, active, blocked, busy, onShowTerminal, onRestart }: Props) {
+export function SessionChat({
+  session,
+  sessions,
+  ptyId,
+  cwd,
+  active,
+  blocked,
+  busy,
+  onShowTerminal,
+  onRestart,
+  onSwitchProvider,
+}: Props) {
   const id = session.id;
   const [draft, setDraft] = useState(() => drafts.get(id) ?? "");
   const [files, setFiles] = useState<AttachedFile[]>([]);
@@ -88,8 +101,9 @@ export function SessionChat({ session, sessions, ptyId, cwd, active, blocked, bu
   // was stopped with Esc in the terminal, which no hook reports.
   const working = hooked ? (live?.working ?? false) && busy : busy;
   const gone = useGone(hooked && live !== null && !live.started);
+  const [switching, setSwitching] = useState(false);
   // Keys typed before the CLI reads them are lost, or answer its trust prompt.
-  const ready = !blocked && (!hooked || !startsAtLaunch(session.provider) || live?.started === true);
+  const ready = !switching && !blocked && (!hooked || !startsAtLaunch(session.provider) || live?.started === true);
   const ask = live?.ask ?? null;
   // What the last turn left running, as its Stop hook said: read-only, since
   // only the CLI in the terminal can stop it.
@@ -153,11 +167,23 @@ export function SessionChat({ session, sessions, ptyId, cwd, active, blocked, bu
     [id, session.autonomy, type],
   );
 
+  // Nobody has talked to it yet, here or in its terminal: it can still be another provider's CLI.
+  const fresh =
+    !history.loading && history.state !== "error" && history.blocks.length === 0 && waiting.length === 0 && !working && !ask;
+
   const changeOptions = useCallback(
     (next: AgentChoice) => {
+      if (next.provider !== session.provider) {
+        if (!fresh || switching) return;
+        setSwitching(true);
+        void onSwitchProvider(next)
+          .catch(() => {})
+          .finally(() => setSwitching(false));
+        return;
+      }
       void api.setSessionOptions(id, { model: next.model, effort: next.effort, autonomy: next.access }).catch(() => {});
     },
-    [id],
+    [fresh, id, onSwitchProvider, session.provider, switching],
   );
 
   // A mode change reaches an idle CLI at once; mid-turn or on a prompt, keys would answer something else.
@@ -280,6 +306,7 @@ export function SessionChat({ session, sessions, ptyId, cwd, active, blocked, bu
               loading={history.loading}
               onOptions={changeOptions}
               optionsPending={apply.kind === "relaunch"}
+              switchProvider={fresh && !switching}
               tray={leftRunning.length > 0 && <BackgroundTray sessionId={id} commands={leftRunning} live={false} readOnly />}
               overlay={
                 letters.thread && (

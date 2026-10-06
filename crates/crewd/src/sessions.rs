@@ -22,7 +22,7 @@ use crew_core::session_history::{History, SessionHistory};
 use crew_core::session_live::{hook_owner, LiveBoard};
 use crew_core::store::{self as app_state, Store};
 use crew_core::{claude_title, session};
-use crew_protocol::{HistoryState, SessionHistoryAppended, SessionHistoryWindow, SessionLive};
+use crew_protocol::{HistoryState, SessionHistoryAppended, SessionHistoryWindow, SessionLive, SessionLiveReset};
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 
 use crate::Hub;
@@ -119,6 +119,40 @@ impl SessionWatch {
         let changed = self.lock().board.answered(id, ask_id, app_state::now_millis());
         if let Some(live) = changed {
             hub.emit("session-live", live);
+        }
+    }
+
+    /// Whether `id`'s CLI has a conversation in it yet, as its own history says.
+    pub(crate) fn has_conversation(&self, store: &Store, id: &str, cwd: &str) -> Result<bool, String> {
+        let inner = self.lock();
+        let Some(history) = open_history(&inner.board, store, id, cwd)? else { return Ok(false) };
+        Ok(!history.blocks().is_empty() || history.has_earlier())
+    }
+
+    /// `id` runs another provider's CLI now: what its hooks said, and the
+    /// history a chat reads, start over for the new one.
+    pub(crate) fn switched(&self, store: &Store, hub: &Hub, id: &str) {
+        let mut inner = self.lock();
+        inner.board.switched(id);
+        let old = inner.readers.get_mut(id).and_then(|reader| reader.history.take());
+        if let Some(old) = old {
+            inner.unwatch_folder(old.path());
+        }
+        let reading = inner.readers.contains_key(id);
+        drop(inner);
+        hub.emit("session-live-reset", SessionLiveReset { session_id: id.to_string(), at: app_state::now_millis() });
+        if reading {
+            hub.emit(
+                "session-history-appended",
+                SessionHistoryAppended {
+                    session_id: id.to_string(),
+                    from: 0,
+                    blocks: Vec::new(),
+                    reset: true,
+                    state: HistoryState::Pending,
+                },
+            );
+            self.repoint(id, store, hub);
         }
     }
 

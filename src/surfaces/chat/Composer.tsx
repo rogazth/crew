@@ -42,6 +42,8 @@ type Props = {
   onOptions?: (next: AgentChoice) => void;
   /** A change the next message carries to the CLI by relaunching it. */
   optionsPending?: boolean;
+  /** Other providers are offered, not only the session's own. */
+  switchProvider?: boolean;
 };
 
 /** What the session's row says it runs, as the chips show it. */
@@ -72,6 +74,7 @@ export function Composer({
   onStop,
   onOptions,
   optionsPending = false,
+  switchProvider = false,
 }: Props) {
   const field = useRef<HTMLTextAreaElement>(null);
   const overlay = useRef<HTMLDivElement>(null);
@@ -226,7 +229,7 @@ export function Composer({
             >
               <PaperclipIcon className="size-4" />
             </button>
-            {onOptions && <ModelControls lockProvider value={choiceOf(session)} onChange={onOptions} />}
+            {onOptions && <ModelControls lockProvider={!switchProvider} value={choiceOf(session)} onChange={onOptions} />}
           </div>
           <div className="flex shrink-0 items-center gap-1.5">
             {onOptions && (

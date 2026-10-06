@@ -2,7 +2,7 @@
 //! them on its own schedule and each one drops its stdin in the bind folder;
 //! crewd reads them in order and keeps one [`SessionLive`] per Crew session.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crew_protocol::{BackgroundCommand, BackgroundKind, BackgroundState, SessionAsk, SessionLive};
 use serde_json::{Map, Value};
@@ -16,6 +16,9 @@ pub const HOOK_EXT: &str = "hook";
 pub struct LiveBoard {
     sessions: HashMap<String, Entry>,
     next_ask: u64,
+    /// Sessions whose CLI was switched for another: until the new one starts,
+    /// what comes in is the old one going away.
+    switched: HashSet<String>,
 }
 
 #[derive(Default)]
@@ -39,6 +42,11 @@ impl LiveBoard {
         let value: Value = serde_json::from_str(record).ok()?;
         let hook = value.as_object()?;
         let event = hook.get("hook_event_name")?.as_str()?;
+        if event == "SessionStart" {
+            self.switched.remove(crew_id);
+        } else if self.switched.contains(crew_id) {
+            return None;
+        }
         let next_ask = &mut self.next_ask;
         let entry = self.sessions.entry(crew_id.to_string()).or_default();
         let before = entry.snapshot(crew_id);
@@ -142,6 +150,13 @@ impl LiveBoard {
 
     pub fn forget(&mut self, crew_id: &str) {
         self.sessions.remove(crew_id);
+    }
+
+    /// The session runs another CLI now: nothing is known of it until it
+    /// starts, and the old one's last hooks (its SessionEnd) are not about it.
+    pub fn switched(&mut self, crew_id: &str) {
+        self.sessions.remove(crew_id);
+        self.switched.insert(crew_id.to_string());
     }
 }
 
@@ -272,6 +287,20 @@ mod tests {
         let stopped = board.hook("crew-1", STOP, 3).unwrap();
         assert!(!stopped.working);
         assert_eq!(stopped.updated_at, 3);
+    }
+
+    #[test]
+    fn a_switched_session_hears_nothing_of_its_old_cli() {
+        let mut board = LiveBoard::default();
+        board.hook("crew-1", START, 1);
+        board.switched("crew-1");
+        assert!(board.get("crew-1").is_none());
+        let end = r#"{"session_id":"ac29cbcc","hook_event_name":"SessionEnd"}"#;
+        assert!(board.hook("crew-1", end, 2).is_none());
+        assert!(board.exited("crew-1", 3).is_none());
+        assert!(board.get("crew-1").is_none());
+        assert!(board.hook("crew-1", START, 4).unwrap().started);
+        assert!(board.hook("crew-1", PROMPT, 5).unwrap().working);
     }
 
     // Claude Code 2.1.286: a turn that ends on a shell it left running, and the
