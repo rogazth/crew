@@ -472,8 +472,9 @@ const TabPill = memo(function TabPill({
       ) : (
         <>
           <TabIcon tab={tab} sessions={sessions} />
-          <span className={`min-w-0 flex-1 truncate ${tone.bold ? "font-semibold text-text" : ""}`}>
-            {tabTitle(tab, sessions)}
+          {/* Laid over its own bold copy, so turning bold for news never resizes the tab. */}
+          <span data-text={tabTitle(tab, sessions)} className="crew-steady-title flex-1">
+            <span className={tone.bold ? "font-semibold text-text" : undefined}>{tabTitle(tab, sessions)}</span>
           </span>
           <BackgroundCount count={background} />
         </>

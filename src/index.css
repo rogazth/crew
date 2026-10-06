@@ -1097,6 +1097,26 @@ svg.lucide {
   box-shadow: inset 0 0 0 1px var(--color-border-strong), 0 1px 2px oklch(0% 0 0 / 0.03);
 }
 
+/* A title as wide as it is in bold, whatever weight it wears: an invisible bold
+   copy shares its grid cell, so a weight change never moves what is beside it. */
+.crew-steady-title {
+  display: grid;
+  min-width: 0;
+}
+.crew-steady-title > *,
+.crew-steady-title::after {
+  grid-area: 1 / 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.crew-steady-title::after {
+  content: attr(data-text);
+  font-weight: 600;
+  visibility: hidden;
+}
+
 /* A turn running: three dots in ink, rising in turn. Nothing else in the chrome moves. */
 .crew-typing {
   display: flex;
