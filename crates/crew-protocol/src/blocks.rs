@@ -250,6 +250,26 @@ pub enum ToolDetail {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         output: Option<String>,
+        /// It runs in the background: the call returned at once, and the
+        /// subagent goes on after the turn that started it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        background: Option<bool>,
+        /// Where it is, once the CLI said; absent, the call's own status
+        /// stands for it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        state: Option<SubagentState>,
+        /// What it is on now, in the CLI's words ("Reading a.txt").
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        activity: Option<String>,
+        /// Its own work, as blocks of the same shapes as the transcript's:
+        /// its calls and what it wrote between them. Filled by
+        /// `subagent.event`, never by the call's own updates.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        steps: Option<Vec<Block>>,
     },
     /// A tool from an MCP server. `input` is the arguments as JSON.
     Mcp {
@@ -267,6 +287,22 @@ pub enum ToolDetail {
     /// Anything else: the result text, clipped.
     Output { text: String },
 }
+
+/// Where a subagent is. A background one outlives the call that started it,
+/// so the call's status cannot say.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
+pub enum SubagentState {
+    Running,
+    Done,
+    Failed,
+    Stopped,
+}
+
+/// How much of each field a subagent's step keeps: a long run has many,
+/// and they all live in the one row of the call that started it.
+pub const STEP_TEXT_LIMIT: usize = 4 * 1024;
 
 /// One replacement in a file: `before` became `after`.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, TS)]
@@ -298,8 +334,12 @@ pub const EDIT_TEXT_LIMIT: usize = 16 * 1024;
 
 /// Hunks that fit, or none: the row still shows the path and the counts.
 pub fn edit_hunks(hunks: Vec<EditHunk>) -> Option<Vec<EditHunk>> {
+    fits(&hunks, EDIT_TEXT_LIMIT).then_some(hunks)
+}
+
+fn fits(hunks: &[EditHunk], limit: usize) -> bool {
     let size: usize = hunks.iter().map(|hunk| hunk.before.len() + hunk.after.len()).sum();
-    (!hunks.is_empty() && size <= EDIT_TEXT_LIMIT).then_some(hunks)
+    !hunks.is_empty() && size <= limit
 }
 
 /// Transcripts are persisted, indexed and shipped over the websocket on every
@@ -322,71 +362,92 @@ pub fn clip(text: &str, limit: usize) -> String {
     format!("{}\n… {dropped} more bytes", &text[..end])
 }
 
+/// A subagent's step as it is kept: its text and its call's detail to
+/// `STEP_TEXT_LIMIT`.
+pub fn clipped_step(mut step: Block) -> Block {
+    step.text = clip(&step.text, STEP_TEXT_LIMIT);
+    if let Some(tool) = step.tool.as_mut() {
+        tool.detail = tool.detail.take().map(|detail| detail.clipped_to(STEP_TEXT_LIMIT));
+    }
+    step
+}
+
 impl ToolDetail {
     /// Every detail that carries provider output goes through here before it is
     /// stored.
     pub fn clipped(self) -> Self {
+        self.clipped_to(TOOL_TEXT_LIMIT)
+    }
+
+    /// `clipped`, to a limit of its own: a subagent's steps keep less.
+    pub fn clipped_to(self, limit: usize) -> Self {
         match self {
             ToolDetail::Command { command, exit_code, output } => ToolDetail::Command {
-                command: clip(&command, TOOL_TEXT_LIMIT),
+                command: clip(&command, limit),
                 exit_code,
-                output: output.map(|text| clip(&text, TOOL_TEXT_LIMIT)),
+                output: output.map(|text| clip(&text, limit)),
             },
             ToolDetail::File { path, line_start, line_end, preview } => ToolDetail::File {
                 path,
                 line_start,
                 line_end,
-                preview: preview.map(|text| clip(&text, TOOL_TEXT_LIMIT)),
+                preview: preview.map(|text| clip(&text, limit)),
             },
             ToolDetail::Edit { path, added, removed, hunks } => ToolDetail::Edit {
                 path,
                 added,
                 removed,
-                hunks: hunks.and_then(edit_hunks),
+                hunks: hunks.filter(|hunks| fits(hunks, limit.min(EDIT_TEXT_LIMIT))),
             },
             ToolDetail::Search { query, matches, output } => ToolDetail::Search {
                 query,
                 matches,
-                output: output.map(|text| clip(&text, TOOL_TEXT_LIMIT)),
+                output: output.map(|text| clip(&text, limit)),
             },
             ToolDetail::Fetch { url, title, output } => ToolDetail::Fetch {
                 url,
                 title,
-                output: output.map(|text| clip(&text, TOOL_TEXT_LIMIT)),
+                output: output.map(|text| clip(&text, limit)),
             },
             ToolDetail::Message { to, text, letter_id, to_id, to_name, what, delivery, error } => ToolDetail::Message {
                 to,
-                text: clip(&text, TOOL_TEXT_LIMIT),
+                text: clip(&text, limit),
                 letter_id,
                 to_id,
                 to_name,
                 what,
                 delivery,
-                error: error.map(|text| clip(&text, TOOL_TEXT_LIMIT)),
+                error: error.map(|text| clip(&text, limit)),
             },
             ToolDetail::Todo { items } => ToolDetail::Todo {
                 items: items
                     .into_iter()
-                    .map(|item| TodoItem { text: clip(&item.text, 512), status: item.status })
+                    .map(|item| TodoItem { text: clip(&item.text, 512.min(limit)), status: item.status })
                     .collect(),
             },
-            ToolDetail::Agent { description, agent_type, prompt, output } => ToolDetail::Agent {
-                description,
-                agent_type,
-                prompt: prompt.map(|text| clip(&text, TOOL_TEXT_LIMIT)),
-                output: output.map(|text| clip(&text, TOOL_TEXT_LIMIT)),
-            },
+            ToolDetail::Agent { description, agent_type, prompt, output, background, state, activity, steps } => {
+                ToolDetail::Agent {
+                    description,
+                    agent_type,
+                    prompt: prompt.map(|text| clip(&text, limit)),
+                    output: output.map(|text| clip(&text, limit)),
+                    background,
+                    state,
+                    activity,
+                    steps: steps.map(|steps| steps.into_iter().map(clipped_step).collect()),
+                }
+            }
             ToolDetail::Mcp { server, tool, input, output } => ToolDetail::Mcp {
                 server,
                 tool,
-                input: input.map(|text| clip(&text, TOOL_TEXT_LIMIT)),
-                output: output.map(|text| clip(&text, TOOL_TEXT_LIMIT)),
+                input: input.map(|text| clip(&text, limit)),
+                output: output.map(|text| clip(&text, limit)),
             },
             ToolDetail::Plan { text } => ToolDetail::Plan {
-                text: clip(&text, TOOL_TEXT_LIMIT),
+                text: clip(&text, limit),
             },
             ToolDetail::Output { text } => ToolDetail::Output {
-                text: clip(&text, TOOL_TEXT_LIMIT),
+                text: clip(&text, limit),
             },
         }
     }
@@ -593,6 +654,37 @@ pub enum HarnessEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         detail: Option<ToolDetail>,
+    },
+    /// Something a subagent did, nested under the call that started it: its
+    /// own text and calls, applied to that call's `steps` as the transcript
+    /// applies the agent's. Never a block of the transcript itself, so a
+    /// subagent's words never read as the agent's reply.
+    #[serde(rename = "subagent.event")]
+    #[ts(rename = "subagent.event")]
+    SubagentEvent {
+        #[serde(rename = "callId")]
+        call_id: String,
+        event: Box<HarnessEvent>,
+    },
+    /// Where a subagent is, and what it is on, as the CLI reports it.
+    #[serde(rename = "subagent.updated")]
+    #[ts(rename = "subagent.updated")]
+    SubagentUpdated {
+        #[serde(rename = "callId")]
+        call_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        state: Option<SubagentState>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        activity: Option<String>,
+        /// Its report, when it came this way rather than as the call's result.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        output: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        background: Option<bool>,
     },
     #[serde(rename = "approval.requested")]
     #[ts(rename = "approval.requested")]

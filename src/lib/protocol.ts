@@ -251,7 +251,11 @@ export type FolderEntry = { name: string, path: string, dir: boolean,
  */
 ignored: boolean, };
 
-export type HarnessEvent = { "type": "session.started", } | { "type": "session.ended", code?: number | null, } | { "type": "session.error", message: string, } | { "type": "session.note", message: string, } | { "type": "user.message", text: string, hidden?: boolean, files?: Array<AttachedFile>, fromBot?: BotRef, letterId?: string, } | { "type": "system.message", text: string, letterId?: string, } | { "type": "session.providerBound", providerSessionId: string, } | { "type": "message.delta", text: string, } | { "type": "message.completed", } | { "type": "reasoning.delta", text: string, } | { "type": "turn.completed", usage?: TurnUsage, } | { "type": "tool.started", callId: string, name: string, title: string, detail?: ToolDetail, } | { "type": "tool.updated", callId: string, title?: string, status?: ToolStatus, detail?: ToolDetail, } | { "type": "approval.requested", requestId: number, name: string, title: string, input?: Record<string, unknown>, } | { "type": "approval.resolved", requestId: number, decision: ApprovalResolution, } | { "type": "question.requested", requestId: number, questions: Array<Question>, } | { "type": "question.resolved", requestId: number, answers: { [key in string]: string } | null, };
+export type HarnessEvent = { "type": "session.started", } | { "type": "session.ended", code?: number | null, } | { "type": "session.error", message: string, } | { "type": "session.note", message: string, } | { "type": "user.message", text: string, hidden?: boolean, files?: Array<AttachedFile>, fromBot?: BotRef, letterId?: string, } | { "type": "system.message", text: string, letterId?: string, } | { "type": "session.providerBound", providerSessionId: string, } | { "type": "message.delta", text: string, } | { "type": "message.completed", } | { "type": "reasoning.delta", text: string, } | { "type": "turn.completed", usage?: TurnUsage, } | { "type": "tool.started", callId: string, name: string, title: string, detail?: ToolDetail, } | { "type": "tool.updated", callId: string, title?: string, status?: ToolStatus, detail?: ToolDetail, } | { "type": "subagent.event", callId: string, event: HarnessEvent, } | { "type": "subagent.updated", callId: string, state?: SubagentState, activity?: string, 
+/**
+ * Its report, when it came this way rather than as the call's result.
+ */
+output?: string, background?: boolean, } | { "type": "approval.requested", requestId: number, name: string, title: string, input?: Record<string, unknown>, } | { "type": "approval.resolved", requestId: number, decision: ApprovalResolution, } | { "type": "question.requested", requestId: number, questions: Array<Question>, } | { "type": "question.resolved", requestId: number, answers: { [key in string]: string } | null, };
 
 /**
  * The daemon's first message after a good `auth`, sent as the `hello` event.
@@ -907,6 +911,12 @@ export type SessionsDeleted = { ids: Array<string>, };
  */
 export type SessionsRetention = { days: number, };
 
+/**
+ * Where a subagent is. A background one outlives the call that started it,
+ * so the call's status cannot say.
+ */
+export type SubagentState = "running" | "done" | "failed" | "stopped";
+
 export type TempFile = { extension: string, base64Contents: string, };
 
 /**
@@ -1035,7 +1045,27 @@ error?: string, } | { "kind": "todo", items: Array<TodoItem>, } | { "kind": "age
 /**
  * What it reported back.
  */
-output?: string, } | { "kind": "mcp", server: string, tool: string, input?: string, output?: string, } | { "kind": "plan", text: string, } | { "kind": "output", text: string, };
+output?: string, 
+/**
+ * It runs in the background: the call returned at once, and the
+ * subagent goes on after the turn that started it.
+ */
+background?: boolean, 
+/**
+ * Where it is, once the CLI said; absent, the call's own status
+ * stands for it.
+ */
+state?: SubagentState, 
+/**
+ * What it is on now, in the CLI's words ("Reading a.txt").
+ */
+activity?: string, 
+/**
+ * Its own work, as blocks of the same shapes as the transcript's:
+ * its calls and what it wrote between them. Filled by
+ * `subagent.event`, never by the call's own updates.
+ */
+steps?: Array<Block>, } | { "kind": "mcp", server: string, tool: string, input?: string, output?: string, } | { "kind": "plan", text: string, } | { "kind": "output", text: string, };
 
 export type ToolStatus = "pending" | "completed" | "failed" | "interrupted";
 

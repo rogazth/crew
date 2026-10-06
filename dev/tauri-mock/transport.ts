@@ -797,6 +797,11 @@ function crewCall(id: string, title: string, detail: Row, status = "completed", 
   return { id, role: "tool", text: title, at, tool: { callId: `call-${id}`, name: `mcp__crew__${title.split(" ")[0]}`, title, status, detail } };
 }
 
+/** One of a subagent's own calls, as its row nests it. */
+function step(id: string, name: string, title: string, detail: Row, status = "completed"): Row {
+  return { id, role: "tool", text: title, tool: { callId: `call-${id}`, name, title, status, detail } };
+}
+
 const START = 40 * 60e3;
 /** Lead's chat and its children's: every piece of the orchestration UI, once. */
 const ORCHESTRATION: Record<string, Row[]> = {
@@ -819,6 +824,14 @@ const ORCHESTRATION: Record<string, Row[]> = {
           agentType: "Explore",
           prompt: "Find every place the session token is read, refreshed or written. List file:line and what each does.",
           output: "- `auth/middleware.ts:41` reads the cookie\n- `auth/middleware.ts:88` refreshes it inline\n- `api/client.ts:12` retries on 401",
+          state: "done",
+          steps: [
+            step("o-s1", "Grep", "Grep session_token", { kind: "search", query: "session_token", matches: 9, output: "auth/middleware.ts\napi/client.ts\nauth/session.ts" }),
+            step("o-s2", "Read", "Read auth/middleware.ts", { kind: "file", path: "/Users/me/Developer/experiments/crew/auth/middleware.ts", lineStart: 30, lineEnd: 95 }),
+            { id: "o-s3", role: "assistant", text: "The middleware reads and refreshes it; the client only retries. Checking the session module." },
+            step("o-s4", "Read", "Read auth/session.ts", { kind: "file", path: "/Users/me/Developer/experiments/crew/auth/session.ts" }),
+            step("o-s5", "Read", "Read api/client.ts", { kind: "file", path: "/Users/me/Developer/experiments/crew/api/client.ts", lineStart: 1, lineEnd: 40 }),
+          ],
         },
       },
     },
@@ -865,6 +878,32 @@ const ORCHESTRATION: Record<string, Row[]> = {
     { id: "c1-u2", role: "user", at: now - 15 * 60e3, text: "Keep the old cookie name for one release so existing sessions survive the deploy.", letterId: "o4" },
     { id: "c1-t3", role: "tool", text: "npm run dev", at: now - 12 * 60e3, tool: { callId: "c1-c3", name: "Bash", title: "npm run dev", status: "completed", detail: { kind: "command", command: "npm run dev" } } },
     { id: "c1-t4", role: "tool", text: "npm test -- --watch auth", tool: { callId: "c1-c4", name: "Bash", title: "npm test -- --watch auth", status: "completed", detail: { kind: "command", command: "npm test -- --watch auth" } } },
+    {
+      id: "c1-t5",
+      role: "tool",
+      text: "Find every caller of refreshToken",
+      tool: {
+        callId: "c1-c5",
+        name: "Agent",
+        title: "Find every caller of refreshToken",
+        status: "completed",
+        detail: {
+          kind: "agent",
+          description: "Find every caller of refreshToken",
+          agentType: "Explore",
+          prompt: "List every caller of refreshToken with file:line, and say which ones run on the request path.",
+          background: true,
+          state: "running",
+          activity: "Reading api/retry.ts",
+          steps: [
+            step("c1-s1", "Grep", "Grep refreshToken\\(", { kind: "search", query: "refreshToken\\(", matches: 6 }),
+            step("c1-s2", "Read", "Read auth/middleware.ts", { kind: "file", path: "/Users/me/Developer/experiments/crew/auth/middleware.ts", lineStart: 80, lineEnd: 120 }),
+            { id: "c1-s3", role: "assistant", text: "Two callers on the request path so far; the retry wrapper is next." },
+            step("c1-s4", "Read", "Read api/retry.ts", { kind: "file", path: "/Users/me/Developer/experiments/crew/api/retry.ts" }, "pending"),
+          ],
+        },
+      },
+    },
     { id: "c1-t2", role: "tool", text: "Edit auth/session.ts", tool: { callId: "c1-c2", name: "Edit", title: "Edit auth/session.ts", status: "pending", detail: { kind: "edit", path: "auth/session.ts", added: 42, removed: 3 } } },
   ],
 };

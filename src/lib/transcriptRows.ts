@@ -8,6 +8,7 @@
  */
 import { type Block, type TurnUsage } from "./blocks";
 import { isLetter, isRefused, letterIdOf } from "./letters";
+import { isBackgroundSubagent } from "./subagent";
 
 /** A gap this long between messages gets a date line, like a chat app. */
 const DATE_BREAK_MS = 30 * 60_000;
@@ -30,12 +31,14 @@ export type Row =
   /** What waits for the next turn, under one label: messages typed, letters in the box. */
   | { kind: "queued"; id: string; blocks: Block[] }
   /** The call that sent a command to the background: a marker that opens its output. */
-  | { kind: "background"; block: Block };
+  | { kind: "background"; block: Block }
+  /** A subagent sent to the background: its own nested block, on the rail, still working after the turn. */
+  | { kind: "subagent"; block: Block };
 
 export type Speaker = "user" | "agent" | "meta";
 
 export function speaker(row: Row): Speaker {
-  if (row.kind === "activity" || row.kind === "footer" || row.kind === "fold") return "agent";
+  if (row.kind === "activity" || row.kind === "footer" || row.kind === "fold" || row.kind === "subagent") return "agent";
   // A checkpoint is a mark in the run, whichever way the letter went.
   if (row.kind === "date" || row.kind === "letter" || row.kind === "refused" || row.kind === "background") return "meta";
   if (row.kind === "queued") return "user";
@@ -105,6 +108,11 @@ export function groupRows(blocks: Block[], background?: ReadonlySet<string>): Ro
       // A turn that ended on the send: its cost goes under it.
       if (block.usage && !block.streaming) rows.push(footerFor(block, block.usage));
       if (block.at !== undefined && block.role !== "tool") lastAt = block.at;
+      continue;
+    }
+    if (isBackgroundSubagent(block, background)) {
+      flush();
+      rows.push({ kind: "subagent", block });
       continue;
     }
     if (block.role === "tool" && block.tool && background?.has(block.tool.callId)) {
@@ -183,12 +191,20 @@ function isOpening(row: Row): boolean {
 
 /** What stays on the rail when a turn folds: who wrote to whom, what was refused, what went to the background. */
 function staysOut(row: Row): boolean {
-  return row.kind === "letter" || row.kind === "refused" || row.kind === "background";
+  return row.kind === "letter" || row.kind === "refused" || row.kind === "background" || row.kind === "subagent";
 }
 
 /** Every block a row holds, a fold's included: what a search hit is looked for in. */
 export function rowBlocks(row: Row): Block[] {
-  if (row.kind === "message" || row.kind === "letter" || row.kind === "refused" || row.kind === "background") return [row.block];
+  if (
+    row.kind === "message" ||
+    row.kind === "letter" ||
+    row.kind === "refused" ||
+    row.kind === "background" ||
+    row.kind === "subagent"
+  ) {
+    return [row.block];
+  }
   if (row.kind === "activity" || row.kind === "queued") return row.blocks;
   if (row.kind === "fold") return row.rows.flatMap(rowBlocks);
   return [];
@@ -266,7 +282,11 @@ function foldTurn(turn: Row[]): Row[] {
 }
 
 function rowId(row: Row): string {
-  return row.kind === "message" || row.kind === "letter" || row.kind === "refused" || row.kind === "background"
+  return row.kind === "message" ||
+    row.kind === "letter" ||
+    row.kind === "refused" ||
+    row.kind === "background" ||
+    row.kind === "subagent"
     ? row.block.id
     : row.id;
 }

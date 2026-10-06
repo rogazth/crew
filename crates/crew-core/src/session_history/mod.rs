@@ -47,6 +47,12 @@ pub trait Decoder {
     fn finish(&mut self) -> Vec<Decoded> {
         Vec::new()
     }
+    /// Brings in what lives in other files and nests under the blocks of
+    /// `file` (Claude's subagents, under the calls that started them).
+    /// Returns the index of the first block it changed.
+    fn nest(&mut self, _file: &Path, _blocks: &mut [Block]) -> Option<usize> {
+        None
+    }
 }
 
 /// What one `LineReader::read` found.
@@ -340,7 +346,9 @@ impl<D: Decoder + Default> History<D> {
             // Replaced again between the two looks; this read is from the top.
             self.start = 0;
         }
-        Ok(self.ingest(read.lines))
+        let turn_ended = self.ingest(read.lines);
+        self.nest();
+        Ok(turn_ended)
     }
 
     pub fn path(&self) -> &Path {
@@ -373,29 +381,42 @@ impl<D: Decoder + Default> History<D> {
         if read.reset {
             self.forget();
             let turn_ended = self.ingest(read.lines);
+            self.nest();
             return Ok(Some(self.rebuilt(turn_ended)));
         }
-        if read.lines.is_empty() {
-            return Ok(None);
+        let mut turn_ended = false;
+        let mut first = None;
+        if !read.lines.is_empty() {
+            // A tool's result rewrites the row it started, which can be far
+            // above the end; comparing is what finds where the change begins.
+            let before = self.blocks.clone();
+            turn_ended = self.ingest(read.lines);
+            let at = before
+                .iter()
+                .zip(&self.blocks)
+                .position(|(old, new)| old != new)
+                .unwrap_or(before.len().min(self.blocks.len()));
+            if at < before.len() || at < self.blocks.len() {
+                first = Some(at);
+            }
         }
-        // A tool's result rewrites the row it started, which can be far above
-        // the end; comparing is what finds where the change begins.
-        let before = self.blocks.clone();
-        let turn_ended = self.ingest(read.lines);
-        let first = before
-            .iter()
-            .zip(&self.blocks)
-            .position(|(old, new)| old != new)
-            .unwrap_or(before.len().min(self.blocks.len()));
-        if first == before.len() && first == self.blocks.len() && !turn_ended {
-            return Ok(None);
+        // A subagent works on in its own file while this one sits still.
+        if let Some(at) = self.nest() {
+            first = Some(first.map_or(at, |first: usize| first.min(at)));
         }
+        let Some(first) = first.or(turn_ended.then_some(self.blocks.len())) else {
+            return Ok(None);
+        };
         Ok(Some(Change {
             from: self.base + first as i64,
             blocks: self.blocks[first..].to_vec(),
             turn_ended,
             reset: false,
         }))
+    }
+
+    fn nest(&mut self) -> Option<usize> {
+        self.decoder.nest(&self.path, &mut self.blocks)
     }
 
     /// Everything read so far belonged to a file that is gone. The global
@@ -465,6 +486,7 @@ impl<D: Decoder + Default> History<D> {
             let mut blocks = earlier;
             blocks.append(&mut self.blocks);
             self.blocks = blocks;
+            self.nest();
             return Ok(added);
         }
         Ok(0)
@@ -529,7 +551,7 @@ impl<D: Decoder> Page<D> {
 
 /// `apply_event`, with the blocks it created or restamped dated by the record
 /// rather than by when the file happened to be read.
-fn apply_stamped(blocks: Vec<Block>, event: HarnessEvent, at_ms: Option<i64>) -> Vec<Block> {
+pub(super) fn apply_stamped(blocks: Vec<Block>, event: HarnessEvent, at_ms: Option<i64>) -> Vec<Block> {
     let before = blocks.len();
     let last = blocks.last().map(|block| (block.id.clone(), block.at));
     let mut next = apply_event(blocks, event);
@@ -954,5 +976,93 @@ mod tests {
         let range = read_range(&path, starts[3], starts[5]).expect("range");
         assert_eq!(range.len(), 2);
         assert_eq!(range[0], lines[3]);
+    }
+
+    /// A real background subagent, from the history Claude Code 2.1.290 wrote:
+    /// the session's file, and the subagent's own under
+    /// `<session>/subagents/`, with its `.meta.json` naming the call.
+    const MAIN: &str = include_str!("../../tests/fixtures/claude/subagents/66aeaec1-d553-4224-9f19-16651aa482fe.jsonl");
+    const AGENT: &str = include_str!(
+        "../../tests/fixtures/claude/subagents/66aeaec1-d553-4224-9f19-16651aa482fe/subagents/agent-a0814da7f5fa0f53e.jsonl"
+    );
+    const META: &str = include_str!(
+        "../../tests/fixtures/claude/subagents/66aeaec1-d553-4224-9f19-16651aa482fe/subagents/agent-a0814da7f5fa0f53e.meta.json"
+    );
+
+    fn agent_of(blocks: &[Block]) -> (usize, ToolStatus, crew_protocol::ToolDetail) {
+        let at = blocks.iter().position(|block| block.tool.as_ref().is_some_and(|tool| tool.name == "Agent")).expect("the call");
+        let tool = blocks[at].tool.clone().unwrap();
+        (at, tool.status, tool.detail.expect("detail"))
+    }
+
+    fn said(blocks: &[Block], role: BlockRole) -> Vec<String> {
+        blocks.iter().filter(|block| block.role == role).map(|block| block.text.clone()).collect()
+    }
+
+    /// A subagent's own file nests under its call as it grows, while the
+    /// session's file sits still; its report, when it comes, ends it. None of
+    /// its words is ever a row of the session's own.
+    #[test]
+    fn a_subagents_file_nests_under_its_call_as_it_grows() {
+        use crew_protocol::{SubagentState, ToolDetail};
+        let dir = Dir::new();
+        let path = dir.file();
+        let folder = dir.0.join("session").join("subagents");
+        std::fs::create_dir_all(&folder).unwrap();
+        let main: Vec<String> = MAIN.lines().map(str::to_string).collect();
+        let agent: Vec<String> = AGENT.lines().map(str::to_string).collect();
+        let woke = main.iter().position(|line| line.contains("<task-notification>")).expect("the report");
+        write(&path, &main[..woke]);
+        // Its prompt, its first words, and its first read.
+        write(&folder.join("agent-a0814da7f5fa0f53e.jsonl"), &agent[..4]);
+        std::fs::write(folder.join("agent-a0814da7f5fa0f53e.meta.json"), META).unwrap();
+
+        let mut history = History::open(&path, ClaudeDecoder::default(), 50).expect("open");
+        let (at, status, detail) = agent_of(history.blocks());
+        let ToolDetail::Agent { steps, background, output, state, .. } = detail else { panic!("not a subagent") };
+        assert_eq!(status, ToolStatus::Completed, "a background call returns at once");
+        assert_eq!((background, output, state), (Some(true), None, None));
+        let steps = steps.expect("steps");
+        assert_eq!(said(&steps, BlockRole::Assistant), vec!["I'll read both files for you.".to_string()]);
+        assert_eq!(steps.iter().filter(|step| step.role == BlockRole::Tool).count(), 1);
+        assert!(said(&steps, BlockRole::User).is_empty(), "its prompt is the row's own");
+
+        // The subagent goes on; the session's file does not move.
+        let mut file = std::fs::OpenOptions::new().append(true).open(folder.join("agent-a0814da7f5fa0f53e.jsonl")).unwrap();
+        for line in &agent[4..] {
+            writeln!(file, "{line}").unwrap();
+        }
+        drop(file);
+        let change = history.poll().expect("poll").expect("a change");
+        assert_eq!(change.from, at as i64);
+        let (_, _, detail) = agent_of(history.blocks());
+        let ToolDetail::Agent { steps, .. } = detail else { panic!() };
+        let steps = steps.unwrap();
+        let reads: Vec<ToolStatus> = steps.iter().filter_map(|step| step.tool.as_ref().map(|tool| tool.status.clone())).collect();
+        assert_eq!(reads, vec![ToolStatus::Completed, ToolStatus::Completed]);
+        assert_eq!(said(&steps, BlockRole::Assistant).len(), 2);
+        assert_eq!(history.poll().expect("poll"), None, "nothing new, nothing sent");
+
+        // Its report wakes the session.
+        let mut file = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
+        for line in &main[woke..] {
+            writeln!(file, "{line}").unwrap();
+        }
+        drop(file);
+        history.poll().expect("poll").expect("a change");
+        let (_, _, detail) = agent_of(history.blocks());
+        let ToolDetail::Agent { state, output, .. } = detail else { panic!() };
+        assert_eq!(state, Some(SubagentState::Done));
+        assert!(output.is_some_and(|report| report.contains("beta")));
+        let blocks = history.blocks();
+        assert_eq!(
+            said(blocks, BlockRole::Assistant),
+            vec![
+                "Launching an Explore agent to read both files.".to_string(),
+                "Agent running in the background.".to_string(),
+                "The files contain \"alpha\" and \"beta\" respectively.".to_string(),
+            ]
+        );
+        assert_eq!(said(blocks, BlockRole::System), vec!["Agent \"Read a.txt and b.txt\" finished".to_string()]);
     }
 }

@@ -262,6 +262,10 @@ fn tool_detail(
             agent_type: string_field(Some(input), "subagent_type"),
             prompt: text_field(Some(input), "prompt"),
             output: text_field(state, "output").map(|report| subagent_report(&report)),
+            background: None,
+            state: None,
+            activity: None,
+            steps: None,
         }),
         _ => Some(ToolDetail::Output {
             text: text_field(state, "output")?,

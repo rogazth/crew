@@ -7,17 +7,19 @@
 //! bookkeeping (slash commands, hook output, caveats) written as user messages.
 
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
+use std::time::SystemTime;
 
-use crew_protocol::{HarnessEvent, ToolStatus, TurnUsage};
+use crew_protocol::{Block, HarnessEvent, SubagentState, ToolDetail, ToolStatus, TurnUsage};
 use serde::Deserialize;
 use serde_json::{Map, Value};
 
-use super::{Decoded, Decoder};
-use crate::blocks::is_question_tool;
+use super::{apply_stamped, Decoded, Decoder, LineReader};
+use crate::blocks::{is_question_tool, step_event};
 use crate::providers::claude::{
-    assistant_text_blocks, assistant_tool_uses, is_compact_boundary, parse_questions, tool_detail, tool_label,
-    tool_result_detail, tool_results_from_user_message,
+    assistant_text_blocks, assistant_tool_uses, is_compact_boundary, is_subagent_tool, parse_questions, tool_detail,
+    tool_label, tool_result_detail, tool_results_from_user_message,
 };
 use crate::providers::{as_record, string_field};
 
@@ -36,6 +38,30 @@ pub struct ClaudeDecoder {
     /// reports that land together are one wake, so the line waits for
     /// whatever the CLI writes next.
     woken: Option<Wake>,
+    /// What a subagent's report says of it, for its call's row. Not held
+    /// with the wake: the row is above, and the line waits for what's next.
+    reported: Vec<Decoded>,
+    /// Reads a subagent's own file, whose records are all sidechain ones.
+    sidechain: bool,
+    /// Subagents' own files, read into their calls' rows.
+    nested: Nested,
+}
+
+/// Claude Code writes each subagent's work to a file of its own,
+/// `<session>/subagents/agent-<id>.jsonl`, beside a `.meta.json` naming the
+/// call that started it.
+#[derive(Default)]
+struct Nested {
+    /// Each subagent's file, by the call that started it.
+    files: HashMap<String, PathBuf>,
+    /// The folder as of the last look, so it is listed again only when it changed.
+    listed: Option<SystemTime>,
+    readers: HashMap<String, NestedReader>,
+}
+
+struct NestedReader {
+    reader: LineReader,
+    decoder: Box<ClaudeDecoder>,
 }
 
 /// The reports that started a turn the CLI began by itself.
@@ -74,7 +100,7 @@ impl Decoder for ClaudeDecoder {
         };
         let at_ms = rec.get("timestamp").and_then(Value::as_str).and_then(parse_timestamp);
         let mut out = Out { at_ms, items: Vec::new() };
-        if flag(&rec, "isSidechain") {
+        if flag(&rec, "isSidechain") && !self.sidechain {
             return Vec::new();
         }
         let hidden = ["isMeta", "isSynthetic", "isCompactSummary", "isVisibleInTranscriptOnly"]
@@ -96,7 +122,41 @@ impl Decoder for ClaudeDecoder {
                 out.items.insert(0, wake.marker());
             }
         }
+        out.items.append(&mut self.reported);
         out.items
+    }
+
+    fn nest(&mut self, file: &Path, blocks: &mut [Block]) -> Option<usize> {
+        let mut first = None;
+        for (index, block) in blocks.iter_mut().enumerate() {
+            let Some(tool) = block.tool.as_mut() else { continue };
+            if !is_subagent_tool(&tool.name) {
+                continue;
+            }
+            let Some(ToolDetail::Agent { steps, .. }) = tool.detail.as_mut() else { continue };
+            let Some(reader) = self.nested.reader(file, &tool.call_id) else { continue };
+            let Ok(read) = reader.reader.read() else { continue };
+            if read.reset {
+                // Rewritten: what it held is read again from the top.
+                reader.decoder = Box::new(ClaudeDecoder { sidechain: true, ..ClaudeDecoder::default() });
+                *steps = None;
+            }
+            if read.lines.is_empty() && !read.reset {
+                continue;
+            }
+            let mut held = steps.take().unwrap_or_default();
+            for line in read.lines {
+                for decoded in reader.decoder.decode(&line) {
+                    let Decoded::Event { event, at_ms } = decoded else { continue };
+                    if let Some(event) = step_event(event) {
+                        held = apply_stamped(held, event, at_ms);
+                    }
+                }
+            }
+            *steps = (!held.is_empty()).then_some(held);
+            first.get_or_insert(index);
+        }
+        first
     }
 
     fn finish(&mut self) -> Vec<Decoded> {
@@ -243,6 +303,28 @@ impl ClaudeDecoder {
     }
 
     fn woke(&mut self, text: &str, at_ms: Option<i64>) {
+        for notification in text.split("<task-notification>").skip(1) {
+            let Some(call) = tag(notification, "tool-use-id").map(str::trim) else { continue };
+            if !self.tools.get(call).is_some_and(|(name, _)| is_subagent_tool(name)) {
+                continue;
+            }
+            let state = match tag(notification, "status").map(str::trim) {
+                Some("completed") => Some(SubagentState::Done),
+                Some("failed") => Some(SubagentState::Failed),
+                Some("killed" | "stopped") => Some(SubagentState::Stopped),
+                _ => None,
+            };
+            self.reported.push(Decoded::Event {
+                event: HarnessEvent::SubagentUpdated {
+                    call_id: call.to_string(),
+                    state,
+                    activity: None,
+                    output: result(notification).map(str::to_string),
+                    background: None,
+                },
+                at_ms,
+            });
+        }
         let wake = self.woken.get_or_insert(Wake { summaries: Vec::new(), at_ms });
         for notification in text.split("<task-notification>").skip(1) {
             let Some(summary) = tag(notification, "summary").map(str::trim).filter(|s| !s.is_empty()) else {
@@ -398,6 +480,55 @@ fn tag<'a>(text: &'a str, name: &str) -> Option<&'a str> {
     let start = text.find(&open)? + open.len();
     let end = text[start..].find(&close)? + start;
     Some(&text[start..end])
+}
+
+/// A notification's `<result>`, the subagent's report: to the last closing
+/// tag, since the report itself may quote one.
+fn result(notification: &str) -> Option<&str> {
+    let start = notification.find("<result>")? + "<result>".len();
+    let end = notification.rfind("</result>").filter(|end| *end >= start)?;
+    Some(notification[start..end].trim()).filter(|text| !text.is_empty())
+}
+
+impl Nested {
+    /// The reader of the subagent call `call` started, once its file is there.
+    fn reader(&mut self, file: &Path, call: &str) -> Option<&mut NestedReader> {
+        if !self.readers.contains_key(call) {
+            if !self.files.contains_key(call) {
+                self.list(file);
+            }
+            let path = self.files.get(call)?.clone();
+            self.readers.insert(
+                call.to_string(),
+                NestedReader {
+                    reader: LineReader::new(path),
+                    decoder: Box::new(ClaudeDecoder { sidechain: true, ..ClaudeDecoder::default() }),
+                },
+            );
+        }
+        self.readers.get_mut(call)
+    }
+
+    /// Learns the files in `<session>/subagents/` from their `.meta.json`,
+    /// when the folder changed since the last look.
+    fn list(&mut self, file: &Path) {
+        let dir = file.with_extension("").join("subagents");
+        let Ok(modified) = std::fs::metadata(&dir).and_then(|meta| meta.modified()) else { return };
+        if self.listed == Some(modified) {
+            return;
+        }
+        self.listed = Some(modified);
+        let Ok(entries) = std::fs::read_dir(&dir) else { return };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Some(name) = path.file_name().and_then(|name| name.to_str()) else { continue };
+            let Some(stem) = name.strip_suffix(".meta.json") else { continue };
+            let Ok(meta) = std::fs::read_to_string(&path) else { continue };
+            let Ok(meta) = serde_json::from_str::<Map<String, Value>>(&meta) else { continue };
+            let Some(call) = meta.get("toolUseId").and_then(Value::as_str) else { continue };
+            self.files.entry(call.to_string()).or_insert_with(|| dir.join(format!("{stem}.jsonl")));
+        }
+    }
 }
 
 /// A user record's words: the string, or its text parts. Images are left out:

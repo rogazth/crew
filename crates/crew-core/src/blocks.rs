@@ -1,8 +1,8 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crew_protocol::{
-    ApprovalDecision, ApprovalResolution, Block, BlockApproval, BlockQuestion, BlockRole, BlockTool,
-    HarnessEvent, ToolDetail, ToolStatus,
+    clip, ApprovalDecision, ApprovalResolution, Block, BlockApproval, BlockQuestion, BlockRole, BlockTool,
+    HarnessEvent, SubagentState, ToolDetail, ToolStatus, STEP_TEXT_LIMIT,
 };
 
 pub fn new_block(role: BlockRole, text: impl Into<String>) -> Block {
@@ -82,6 +82,18 @@ pub fn settle_turn(blocks: Vec<Block>, tools: ToolStatus) -> Vec<Block> {
             if let Some(tool) = block.tool.as_mut() {
                 if tool.status == ToolStatus::Pending {
                     tool.status = tools.clone();
+                }
+                // A turn that ends leaves a background subagent running; a
+                // process that dies takes it along.
+                if tools == ToolStatus::Interrupted {
+                    if let Some(ToolDetail::Agent { state, steps, .. }) = tool.detail.as_mut() {
+                        if matches!(state, None | Some(SubagentState::Running)) {
+                            if state.is_some() {
+                                *state = Some(SubagentState::Stopped);
+                            }
+                            *steps = steps.take().map(|steps| settle_turn(steps, ToolStatus::Interrupted));
+                        }
+                    }
                 }
             }
             if let Some(approval) = block.approval.as_mut() {
@@ -176,11 +188,57 @@ pub fn apply_event(blocks: Vec<Block>, event: HarnessEvent) -> Vec<Block> {
                 // An update that carries no detail is a status change, not an
                 // erasure: the command a row already showed stays on it.
                 if let Some(detail) = detail.clone() {
-                    tool.detail = Some(detail.clipped());
+                    tool.detail = Some(merged(tool.detail.take(), detail.clipped()));
                 }
                 block
             })
             .collect(),
+        HarnessEvent::SubagentEvent { call_id, event } => {
+            let Some(event) = step_event(*event) else {
+                return blocks;
+            };
+            let mut next = blocks;
+            if let Some(ToolDetail::Agent { state, steps, .. }) = subagent_of(&mut next, &call_id) {
+                *steps = Some(apply_event(steps.take().unwrap_or_default(), event));
+                if state.is_none() {
+                    *state = Some(SubagentState::Running);
+                }
+            }
+            next
+        }
+        HarnessEvent::SubagentUpdated {
+            call_id,
+            state: new_state,
+            activity: new_activity,
+            output: new_output,
+            background: new_background,
+        } => {
+            let mut next = blocks;
+            if let Some(ToolDetail::Agent { state, activity, output, background, steps, .. }) = subagent_of(&mut next, &call_id) {
+                if new_background.is_some() {
+                    *background = new_background;
+                }
+                if let Some(text) = new_output.filter(|text| !text.trim().is_empty()) {
+                    *output = Some(clip(&text, crew_protocol::TOOL_TEXT_LIMIT));
+                }
+                if new_activity.is_some() {
+                    *activity = new_activity;
+                }
+                if let Some(new_state) = new_state {
+                    let ended = match new_state {
+                        SubagentState::Running => None,
+                        SubagentState::Done => Some(ToolStatus::Completed),
+                        SubagentState::Failed | SubagentState::Stopped => Some(ToolStatus::Interrupted),
+                    };
+                    if let Some(tools) = ended {
+                        *steps = steps.take().map(|steps| settle_turn(steps, tools));
+                        *activity = None;
+                    }
+                    *state = Some(new_state);
+                }
+            }
+            next
+        }
         HarnessEvent::ApprovalRequested {
             request_id,
             name,
@@ -334,6 +392,61 @@ pub fn apply_event(blocks: Vec<Block>, event: HarnessEvent) -> Vec<Block> {
 
 pub fn is_question_tool(name: &str) -> bool {
     name.eq_ignore_ascii_case("askuserquestion")
+}
+
+/// A call's new detail, keeping what only its subagent's own events fill
+/// in: the call's updates know its input and its result, not its steps.
+fn merged(old: Option<ToolDetail>, new: ToolDetail) -> ToolDetail {
+    match (old, new) {
+        (
+            Some(ToolDetail::Agent { output: old_output, background: old_background, state: old_state, activity: old_activity, steps: old_steps, .. }),
+            ToolDetail::Agent { description, agent_type, prompt, output, background, state, activity, steps },
+        ) => ToolDetail::Agent {
+            description,
+            agent_type,
+            prompt,
+            output: output.or(old_output),
+            background: background.or(old_background),
+            state: state.or(old_state),
+            activity: activity.or(old_activity),
+            steps: steps.or(old_steps),
+        },
+        (_, new) => new,
+    }
+}
+
+/// The detail of the subagent call `call_id`, the newest one by that id.
+fn subagent_of<'a>(blocks: &'a mut [Block], call_id: &str) -> Option<&'a mut ToolDetail> {
+    let block = blocks.iter_mut().rev().find(|block| {
+        block.tool.as_ref().is_some_and(|tool| {
+            tool.call_id == call_id && matches!(tool.detail, Some(ToolDetail::Agent { .. }))
+        })
+    })?;
+    block.tool.as_mut()?.detail.as_mut()
+}
+
+/// What of a subagent's own events goes in its steps, kept to the steps'
+/// limit: its words and its calls. The rest (a turn's end, a question) is the
+/// CLI's business with the agent, not a step.
+pub fn step_event(event: HarnessEvent) -> Option<HarnessEvent> {
+    Some(match event {
+        HarnessEvent::MessageDelta { text } => HarnessEvent::MessageDelta { text: clip(&text, STEP_TEXT_LIMIT) },
+        HarnessEvent::ReasoningDelta { text } => HarnessEvent::ReasoningDelta { text: clip(&text, STEP_TEXT_LIMIT) },
+        HarnessEvent::MessageCompleted {} => HarnessEvent::MessageCompleted {},
+        HarnessEvent::ToolStarted { call_id, name, title, detail } => HarnessEvent::ToolStarted {
+            call_id,
+            name,
+            title,
+            detail: detail.map(|detail| detail.clipped_to(STEP_TEXT_LIMIT)),
+        },
+        HarnessEvent::ToolUpdated { call_id, title, status, detail } => HarnessEvent::ToolUpdated {
+            call_id,
+            title,
+            status,
+            detail: detail.map(|detail| detail.clipped_to(STEP_TEXT_LIMIT)),
+        },
+        _ => return None,
+    })
 }
 
 fn append_streaming(blocks: Vec<Block>, role: BlockRole, text: String) -> Vec<Block> {

@@ -1,24 +1,70 @@
 {
-  "start": [{ "id": "user-1", "role": "user", "text": "hi", "at": 1 }],
+  "start": [
+    {
+      "id": "user-1",
+      "role": "user",
+      "text": "hi",
+      "at": 1
+    }
+  ],
   "events": [
-    { "type": "session.started" },
-    { "type": "session.providerBound", "providerSessionId": "sess-1" },
-    { "type": "reasoning.delta", "text": "Let me " },
-    { "type": "reasoning.delta", "text": "think." },
-    { "type": "message.delta", "text": "Done." },
-    { "type": "message.delta", "text": " Really." },
-    { "type": "message.completed" },
+    {
+      "type": "session.started"
+    },
+    {
+      "type": "session.providerBound",
+      "providerSessionId": "sess-1"
+    },
+    {
+      "type": "reasoning.delta",
+      "text": "Let me "
+    },
+    {
+      "type": "reasoning.delta",
+      "text": "think."
+    },
+    {
+      "type": "message.delta",
+      "text": "Done."
+    },
+    {
+      "type": "message.delta",
+      "text": " Really."
+    },
+    {
+      "type": "message.completed"
+    },
     {
       "type": "approval.requested",
       "requestId": 1,
       "name": "Bash",
       "title": "npm run lint",
-      "input": { "command": "npm run lint" }
+      "input": {
+        "command": "npm run lint"
+      }
     },
-    { "type": "approval.resolved", "requestId": 1, "decision": "always" },
-    { "type": "tool.started", "callId": "t1", "name": "Bash", "title": "npm run lint" },
-    { "type": "tool.updated", "callId": "t1", "status": "completed" },
-    { "type": "tool.started", "callId": "t2", "name": "AskUserQuestion", "title": "AskUserQuestion" },
+    {
+      "type": "approval.resolved",
+      "requestId": 1,
+      "decision": "always"
+    },
+    {
+      "type": "tool.started",
+      "callId": "t1",
+      "name": "Bash",
+      "title": "npm run lint"
+    },
+    {
+      "type": "tool.updated",
+      "callId": "t1",
+      "status": "completed"
+    },
+    {
+      "type": "tool.started",
+      "callId": "t2",
+      "name": "AskUserQuestion",
+      "title": "AskUserQuestion"
+    },
     {
       "type": "question.requested",
       "requestId": 2,
@@ -27,13 +73,180 @@
           "question": "Pick a color",
           "header": "Color",
           "multiSelect": false,
-          "options": [{ "label": "Red" }, { "label": "Blue" }]
+          "options": [
+            {
+              "label": "Red"
+            },
+            {
+              "label": "Blue"
+            }
+          ]
         }
       ]
     },
-    { "type": "question.resolved", "requestId": 2, "answers": { "Pick a color": "Red" } },
-    { "type": "turn.completed", "usage": { "costUsd": 0.01, "inputTokens": 10, "outputTokens": 4 } },
-    { "type": "session.note", "message": "note" },
-    { "type": "session.ended", "code": 0 }
+    {
+      "type": "question.resolved",
+      "requestId": 2,
+      "answers": {
+        "Pick a color": "Red"
+      }
+    },
+    {
+      "type": "tool.started",
+      "callId": "a1",
+      "name": "Agent",
+      "title": "Find the parser",
+      "detail": {
+        "kind": "agent",
+        "description": "Find the parser",
+        "agentType": "Explore",
+        "prompt": "Look around"
+      }
+    },
+    {
+      "type": "subagent.updated",
+      "callId": "a1",
+      "state": "running"
+    },
+    {
+      "type": "subagent.event",
+      "callId": "a1",
+      "event": {
+        "type": "tool.started",
+        "callId": "s1",
+        "name": "Read",
+        "title": "Read a.ts",
+        "detail": {
+          "kind": "file",
+          "path": "/w/a.ts"
+        }
+      }
+    },
+    {
+      "type": "subagent.updated",
+      "callId": "a1",
+      "activity": "Reading a.ts"
+    },
+    {
+      "type": "message.delta",
+      "text": "Meanwhile."
+    },
+    {
+      "type": "subagent.event",
+      "callId": "a1",
+      "event": {
+        "type": "tool.updated",
+        "callId": "s1",
+        "status": "completed",
+        "detail": {
+          "kind": "file",
+          "path": "/w/a.ts",
+          "preview": "alpha"
+        }
+      }
+    },
+    {
+      "type": "subagent.event",
+      "callId": "a1",
+      "event": {
+        "type": "message.delta",
+        "text": "Found it."
+      }
+    },
+    {
+      "type": "subagent.event",
+      "callId": "a1",
+      "event": {
+        "type": "message.completed"
+      }
+    },
+    {
+      "type": "subagent.event",
+      "callId": "a1",
+      "event": {
+        "type": "user.message",
+        "text": "never a step"
+      }
+    },
+    {
+      "type": "subagent.event",
+      "callId": "nobody",
+      "event": {
+        "type": "message.delta",
+        "text": "lost"
+      }
+    },
+    {
+      "type": "tool.updated",
+      "callId": "a1",
+      "status": "completed",
+      "detail": {
+        "kind": "agent",
+        "description": "Find the parser",
+        "agentType": "Explore",
+        "prompt": "Look around",
+        "output": "In a.ts"
+      }
+    },
+    {
+      "type": "subagent.updated",
+      "callId": "a1",
+      "state": "done"
+    },
+    {
+      "type": "tool.started",
+      "callId": "a2",
+      "name": "Agent",
+      "title": "Watch",
+      "detail": {
+        "kind": "agent",
+        "description": "Watch",
+        "agentType": "Explore",
+        "prompt": "Look around",
+        "background": true
+      }
+    },
+    {
+      "type": "tool.updated",
+      "callId": "a2",
+      "status": "completed",
+      "detail": {
+        "kind": "agent",
+        "description": "Watch",
+        "agentType": "Explore",
+        "prompt": "Look around",
+        "background": true
+      }
+    },
+    {
+      "type": "subagent.event",
+      "callId": "a2",
+      "event": {
+        "type": "tool.started",
+        "callId": "s2",
+        "name": "Bash",
+        "title": "sleep 9",
+        "detail": {
+          "kind": "command",
+          "command": "sleep 9"
+        }
+      }
+    },
+    {
+      "type": "turn.completed",
+      "usage": {
+        "costUsd": 0.01,
+        "inputTokens": 10,
+        "outputTokens": 4
+      }
+    },
+    {
+      "type": "session.note",
+      "message": "note"
+    },
+    {
+      "type": "session.ended",
+      "code": 0
+    }
   ]
 }

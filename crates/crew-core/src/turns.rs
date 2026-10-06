@@ -23,7 +23,7 @@ use crate::providers::claude::{
     to_question_result, tool_detail as claude_tool_detail, tool_label as claude_tool_label,
     tool_result_detail as claude_tool_result_detail, tool_results_from_user_message, tool_start_from_event,
     try_parse_json_record, turn_failed as claude_turn_failed, turn_usage as claude_turn_usage, ClaudeControlRequest,
-    ClaudeSpawn,
+    ClaudeSpawn, Subagents,
 };
 use crate::providers::parse_json_line;
 use crate::providers::opencode::{
@@ -210,6 +210,8 @@ struct ClaudeLive {
     next_control: u64,
     tools_by_index: HashMap<i64, InFlightTool>,
     tools_by_id: HashMap<String, InFlightTool>,
+    /// The subagents it started: their frames go to their calls' rows.
+    subagents: Subagents,
     cancelled: bool,
     mute: bool,
     active: bool,
@@ -1615,6 +1617,7 @@ impl TurnHost {
             next_control: 1,
             tools_by_index: HashMap::new(),
             tools_by_id: HashMap::new(),
+            subagents: Subagents::default(),
             cancelled: false,
             mute: false,
             active: false,
@@ -1955,6 +1958,26 @@ impl TurnHost {
                 }
                 return;
             }
+            // A subagent's own frame: a step on its call's row, and nothing
+            // the agent itself said or did.
+            if let Some(steps) = live.subagents.frame(&rec) {
+                drop(map);
+                if let Some(id) = bind {
+                    self.transcripts.apply(session_id, HarnessEvent::SessionProviderBound { provider_session_id: id });
+                }
+                for event in steps {
+                    self.transcripts.apply(session_id, event);
+                }
+                return;
+            }
+            let tools = &live.tools_by_id;
+            if let Some(update) = live
+                .subagents
+                .task(&rec, |id| tools.get(id).map(|tool| (tool.name.clone(), tool.input.clone())))
+            {
+                events.push(update);
+            }
+            let notice = live.subagents.notice(&rec);
             if type_name.as_deref() == Some("system")
                 && matches!(
                     subtype.as_deref(),
@@ -1977,7 +2000,8 @@ impl TurnHost {
                         if let Some(task) = string_field(Some(&rec), "task_id") {
                             live.background.remove(&task);
                         }
-                        if let Some(summary) = string_field(Some(&rec), "summary").filter(|s| !s.trim().is_empty()) {
+                        let summary = notice.or_else(|| string_field(Some(&rec), "summary"));
+                        if let Some(summary) = summary.filter(|s| !s.trim().is_empty()) {
                             let summary = summary.trim().to_string();
                             if !live.woken_by.contains(&summary) {
                                 live.woken_by.push(summary);
@@ -2675,6 +2699,7 @@ impl TurnHost {
                 next_control: 1,
                 tools_by_index: HashMap::new(),
                 tools_by_id: HashMap::new(),
+                subagents: Subagents::default(),
                 cancelled: false,
                 mute: false,
                 active: true,

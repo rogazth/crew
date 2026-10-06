@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 
-use crew_protocol::{ApprovalDecision, EditHunk, Question, QuestionOption, ToolDetail, TurnUsage};
+use crew_protocol::{
+    ApprovalDecision, EditHunk, HarnessEvent, Question, QuestionOption, SubagentState, ToolDetail, ToolStatus, TurnUsage,
+};
 use serde_json::{json, Map, Value};
 
 use super::runtime::{Autonomy, InlineImage};
@@ -807,6 +809,10 @@ pub fn tool_detail(name: &str, input: &Map<String, Value>) -> Option<ToolDetail>
             agent_type: string_field(Some(input), "subagent_type"),
             prompt: raw(input, "prompt").map(str::to_string),
             output: None,
+            background: (input.get("run_in_background") == Some(&Value::Bool(true))).then_some(true),
+            state: None,
+            activity: None,
+            steps: None,
         }),
         "exitplanmode" => Some(ToolDetail::Plan {
             text: raw(input, "plan")?.to_string(),
@@ -843,12 +849,21 @@ pub fn tool_result_detail(name: &str, input: &Map<String, Value>, content: &str,
             output: text(),
         }),
         Some(ToolDetail::Fetch { url, title, .. }) => Some(ToolDetail::Fetch { url, title, output: text() }),
-        Some(ToolDetail::Agent { description, agent_type, prompt, .. }) => Some(ToolDetail::Agent {
-            description,
-            agent_type,
-            prompt,
-            output: text().map(|report| subagent_report(&report)),
-        }),
+        // A background subagent's call returns at once, saying only that it
+        // started: its report comes later, with the notice that it finished.
+        Some(ToolDetail::Agent { description, agent_type, prompt, background, .. }) => {
+            let launched = content.trim_start().starts_with(ASYNC_LAUNCH);
+            Some(ToolDetail::Agent {
+                description,
+                agent_type,
+                prompt,
+                output: if launched { None } else { text().map(|report| subagent_report(&report)) },
+                background: if launched { Some(true) } else { background },
+                state: None,
+                activity: None,
+                steps: None,
+            })
+        }
         Some(ToolDetail::Mcp { server, tool, input, .. }) => Some(ToolDetail::Mcp {
             server,
             tool,
@@ -861,6 +876,9 @@ pub fn tool_result_detail(name: &str, input: &Map<String, Value>, content: &str,
         None => text().map(|text| ToolDetail::Output { text }),
     }
 }
+
+/// How Claude Code's answer to a background subagent's call starts.
+const ASYNC_LAUNCH: &str = "Async agent launched";
 
 /// Read answers `cat -n` style, `     1\t# title`, and the row already says
 /// which lines it read. The numbers go when every line carries one; a file
@@ -933,6 +951,171 @@ fn pretty_tool(name: &str) -> String {
         return "Search".into();
     }
     name.to_string()
+}
+
+/// The subagents a Claude agent started, followed through stream-json: each
+/// one's own frames carry `parent_tool_use_id`, the call that started it,
+/// and its `task_*` lines say where it is. Both go to that call's row as
+/// steps and state, never into the agent's own transcript.
+#[derive(Default)]
+pub struct Subagents {
+    /// Subagent calls, by call id, with what they were started for.
+    calls: HashMap<String, String>,
+    /// Task ids, to the call that started the task: `task_updated` names only
+    /// the task.
+    tasks: HashMap<String, String>,
+    /// Calls the subagents made and that have not answered yet: a result
+    /// names only the call. Kept apart from the agent's own, which a new turn
+    /// clears while a background subagent carries on.
+    tools: HashMap<String, (String, Map<String, Value>)>,
+}
+
+pub fn is_subagent_tool(name: &str) -> bool {
+    matches!(name.to_ascii_lowercase().as_str(), "task" | "agent")
+}
+
+fn subagent_state(status: &str) -> Option<SubagentState> {
+    match status {
+        "running" => Some(SubagentState::Running),
+        "completed" => Some(SubagentState::Done),
+        "failed" => Some(SubagentState::Failed),
+        "killed" | "stopped" => Some(SubagentState::Stopped),
+        _ => None,
+    }
+}
+
+impl Subagents {
+    /// The events for a frame a subagent sent, nested under its call; None
+    /// when the frame is the agent's own. A subagent's frames come whole (no
+    /// partial stream events), so a frame is a step.
+    pub fn frame(&mut self, rec: &Map<String, Value>) -> Option<Vec<HarnessEvent>> {
+        let parent = rec.get("parent_tool_use_id").and_then(Value::as_str).filter(|id| !id.is_empty())?;
+        let mut steps = Vec::new();
+        match string_field(Some(rec), "type").as_deref() {
+            Some("assistant") => {
+                let text = assistant_text_blocks(rec);
+                if !text.trim().is_empty() {
+                    steps.push(HarnessEvent::MessageDelta { text });
+                    steps.push(HarnessEvent::MessageCompleted {});
+                }
+                for call in assistant_tool_uses(rec) {
+                    if self.tools.contains_key(&call.id) {
+                        continue;
+                    }
+                    steps.push(HarnessEvent::ToolStarted {
+                        call_id: call.id.clone(),
+                        name: call.name.clone(),
+                        title: tool_label(&call.name, &call.input),
+                        detail: tool_detail(&call.name, &call.input),
+                    });
+                    self.tools.insert(call.id, (call.name, call.input));
+                }
+            }
+            // Its prompt comes back as a user message too, already on the row
+            // as what it was asked; only results are steps.
+            Some("user") => {
+                for result in tool_results_from_user_message(rec) {
+                    let detail = self
+                        .tools
+                        .remove(&result.tool_use_id)
+                        .and_then(|(name, input)| tool_result_detail(&name, &input, &result.content, result.is_error));
+                    steps.push(HarnessEvent::ToolUpdated {
+                        call_id: result.tool_use_id,
+                        title: None,
+                        status: Some(if result.is_error { ToolStatus::Failed } else { ToolStatus::Completed }),
+                        detail,
+                    });
+                }
+            }
+            _ => {}
+        }
+        Some(
+            steps
+                .into_iter()
+                .map(|event| HarnessEvent::SubagentEvent { call_id: parent.to_string(), event: Box::new(event) })
+                .collect(),
+        )
+    }
+
+    /// A `task_*` system line about a subagent, as the state of its call.
+    /// `call` finds one of the agent's calls by id, for the task that starts.
+    pub fn task(
+        &mut self,
+        rec: &Map<String, Value>,
+        call: impl Fn(&str) -> Option<(String, Map<String, Value>)>,
+    ) -> Option<HarnessEvent> {
+        if string_field(Some(rec), "type").as_deref() != Some("system") {
+            return None;
+        }
+        let task = string_field(Some(rec), "task_id");
+        let named = string_field(Some(rec), "tool_use_id");
+        let subtype = string_field(Some(rec), "subtype")?;
+        if subtype == "task_started" {
+            let id = named.clone()?;
+            let (name, input) = call(&id)?;
+            if !is_subagent_tool(&name) && string_field(Some(rec), "task_type").as_deref() != Some("local_agent") {
+                return None;
+            }
+            let description = string_field(Some(rec), "description")
+                .or_else(|| string_field(Some(&input), "description"))
+                .unwrap_or_else(|| "Subagent".into());
+            self.calls.insert(id.clone(), description);
+            if let Some(task) = task {
+                self.tasks.insert(task, id.clone());
+            }
+            return Some(HarnessEvent::SubagentUpdated {
+                call_id: id,
+                state: Some(SubagentState::Running),
+                activity: None,
+                output: None,
+                background: (rec.get("is_backgrounded") == Some(&Value::Bool(true))).then_some(true),
+            });
+        }
+        let id = named
+            .filter(|id| self.calls.contains_key(id))
+            .or_else(|| task.as_ref().and_then(|task| self.tasks.get(task).cloned()))?;
+        let update = |state, activity, output, background| HarnessEvent::SubagentUpdated {
+            call_id: id.clone(),
+            state,
+            activity,
+            output,
+            background,
+        };
+        match subtype.as_str() {
+            "task_progress" => {
+                Some(update(None, string_field(Some(rec), "description").filter(|text| !text.is_empty()), None, None))
+            }
+            "task_updated" => {
+                let patch = rec.get("patch").and_then(as_record);
+                let state = string_field(patch, "status").as_deref().and_then(subagent_state);
+                let background = (patch.and_then(|patch| patch.get("is_backgrounded")) == Some(&Value::Bool(true))).then_some(true);
+                (state.is_some() || background.is_some()).then(|| update(state, None, None, background))
+            }
+            "task_notification" => {
+                let state = string_field(Some(rec), "status").as_deref().and_then(subagent_state);
+                Some(update(state, None, string_field(Some(rec), "summary"), None))
+            }
+            _ => None,
+        }
+    }
+
+    /// The note for a subagent that reported back, as the CLI writes it in
+    /// its own file. Its `summary` here is the whole report, which belongs on
+    /// the subagent's row, not in the line that says what woke the agent.
+    pub fn notice(&self, rec: &Map<String, Value>) -> Option<String> {
+        if string_field(Some(rec), "subtype").as_deref() != Some("task_notification") {
+            return None;
+        }
+        let id = string_field(Some(rec), "tool_use_id")
+            .or_else(|| string_field(Some(rec), "task_id").and_then(|task| self.tasks.get(&task).cloned()))?;
+        let description = self.calls.get(&id)?;
+        let how = match string_field(Some(rec), "status").as_deref() {
+            Some("failed") => "failed",
+            Some("killed" | "stopped") => "was stopped",
+            _ => "finished",
+        };
+        Some(format!("Agent \"{description}\" {how}"))
+    }
 }
 
 #[cfg(test)]
@@ -1018,6 +1201,134 @@ mod tests {
         let at = child.iter().position(|arg| arg == "--permission-prompt-tool").expect("a prompt tool");
         assert_eq!(child[at + 1], "stdio");
         assert!(!spawn(false).contains(&"--permission-prompt-tool".to_string()));
+    }
+
+    const FOREGROUND: &str = include_str!("../../tests/fixtures/protocols/claude-subagent.jsonl");
+    const BACKGROUND: &str = include_str!("../../tests/fixtures/protocols/claude-subagent-background.jsonl");
+
+    /// Feeds a capture's lines to a live Claude session and folds what came
+    /// out into blocks, as the transcript does.
+    fn replay(host: &TurnHost, cap: &crate::turns::Applied, lines: &[&str], blocks: Vec<crew_protocol::Block>) -> Vec<crew_protocol::Block> {
+        for line in lines {
+            host.handle_claude_line("s", line);
+        }
+        cap.take().into_iter().fold(blocks, crate::blocks::apply_event)
+    }
+
+    /// The one subagent call in `blocks`, and its detail.
+    fn subagent(blocks: &[crew_protocol::Block]) -> (crew_protocol::BlockTool, Vec<crew_protocol::Block>, Option<SubagentState>, Option<String>, Option<bool>) {
+        let calls: Vec<_> = blocks.iter().filter_map(|block| block.tool.clone()).collect();
+        assert_eq!(calls.len(), 1, "only the Agent call is the agent's own: {calls:?}");
+        let call = calls[0].clone();
+        let Some(ToolDetail::Agent { steps, state, output, background, .. }) = call.detail.clone() else {
+            panic!("not a subagent: {call:?}");
+        };
+        (call, steps.unwrap_or_default(), state, output, background)
+    }
+
+    fn said(blocks: &[crew_protocol::Block], role: crew_protocol::BlockRole) -> Vec<String> {
+        blocks.iter().filter(|block| block.role == role).map(|block| block.text.clone()).collect()
+    }
+
+    fn step_paths(steps: &[crew_protocol::Block]) -> Vec<(String, ToolStatus)> {
+        steps
+            .iter()
+            .filter_map(|step| {
+                let tool = step.tool.as_ref()?;
+                let Some(ToolDetail::File { path, .. }) = &tool.detail else { return None };
+                Some((path.rsplit('/').next().unwrap_or_default().to_string(), tool.status.clone()))
+            })
+            .collect()
+    }
+
+    /// A foreground subagent's own calls arrive with `parent_tool_use_id`:
+    /// they are steps of the Agent call's row, never the agent's own rows,
+    /// and its prompt, echoed as a user message, is no message at all.
+    #[test]
+    fn a_subagents_frames_are_steps_of_its_call() {
+        let host = TurnHost::test_new();
+        let cap = host.test_capture();
+        host.test_install_claude("s");
+        let lines: Vec<&str> = FOREGROUND.lines().collect();
+        let blocks = replay(&host, &cap, &lines, Vec::new());
+        let (call, steps, state, output, background) = subagent(&blocks);
+        assert_eq!(call.status, ToolStatus::Completed);
+        assert_eq!(state, Some(SubagentState::Done));
+        assert_eq!(background, None);
+        assert_eq!(
+            step_paths(&steps),
+            vec![("a.txt".into(), ToolStatus::Completed), ("b.txt".into(), ToolStatus::Completed)]
+        );
+        assert!(output.is_some_and(|report| report.contains("alpha") && !report.contains("[Subagent hand-back]")));
+        assert!(said(&blocks, crew_protocol::BlockRole::User).is_empty(), "{blocks:?}");
+        assert_eq!(
+            said(&blocks, crew_protocol::BlockRole::Assistant),
+            vec![
+                "I'll launch an Explore agent to read both files.".to_string(),
+                "The files contain \"alpha\" (a.txt) and \"beta\" (b.txt).".to_string(),
+            ]
+        );
+    }
+
+    /// While it runs the CLI says what it is on; that is the row's one line.
+    #[test]
+    fn a_subagents_progress_is_its_current_step() {
+        let host = TurnHost::test_new();
+        let cap = host.test_capture();
+        host.test_install_claude("s");
+        for line in FOREGROUND.lines() {
+            host.handle_claude_line("s", line);
+        }
+        let activities: Vec<String> = cap
+            .take()
+            .into_iter()
+            .filter_map(|event| match event {
+                HarnessEvent::SubagentUpdated { activity, .. } => activity,
+                _ => None,
+            })
+            .collect();
+        assert_eq!(activities, vec!["Reading a.txt".to_string(), "Reading b.txt".to_string()]);
+    }
+
+    /// A background subagent's call returns at once and the turn ends; the
+    /// subagent keeps working, and its steps keep landing on its row after
+    /// the turn is over. Its words between steps, sent while the agent was
+    /// writing its own reply, stay in the subagent's row: the agent's reply
+    /// streams on undisturbed. Its report is the row's output, and the line
+    /// for what woke the agent names it instead of quoting it.
+    #[test]
+    fn a_background_subagent_works_on_after_its_turn() {
+        let host = TurnHost::test_new();
+        let cap = host.test_capture();
+        host.test_install_claude("s");
+        let lines: Vec<&str> = BACKGROUND.lines().collect();
+        let end = lines.iter().position(|line| line.starts_with(r#"{"type":"result""#)).expect("first result") + 1;
+        let blocks = replay(&host, &cap, &lines[..end], Vec::new());
+        let (call, steps, state, output, background) = subagent(&blocks);
+        assert_eq!(call.status, ToolStatus::Completed, "the call returned at once");
+        assert_eq!(state, Some(SubagentState::Running));
+        assert_eq!(background, Some(true));
+        assert_eq!(output, None, "the launch notice is not a report");
+        assert_eq!(said(&steps, crew_protocol::BlockRole::Assistant), vec!["I'll read both files for you.".to_string()]);
+        assert_eq!(
+            said(&blocks, crew_protocol::BlockRole::Assistant),
+            vec!["Launching an Explore agent to read both files.".to_string(), "Agent running in the background.".to_string()]
+        );
+
+        let blocks = replay(&host, &cap, &lines[end..], blocks);
+        let (_, steps, state, output, _) = subagent(&blocks);
+        assert_eq!(state, Some(SubagentState::Done));
+        assert_eq!(
+            step_paths(&steps),
+            vec![("a.txt".into(), ToolStatus::Completed), ("b.txt".into(), ToolStatus::Completed)]
+        );
+        assert_eq!(said(&steps, crew_protocol::BlockRole::Assistant).len(), 2);
+        assert!(output.is_some_and(|report| report.contains("beta")));
+        let notes = said(&blocks, crew_protocol::BlockRole::System);
+        assert_eq!(notes, vec!["Agent \"Read a.txt and b.txt\" finished".to_string()]);
+        let replies = said(&blocks, crew_protocol::BlockRole::Assistant);
+        assert_eq!(replies.last().map(String::as_str), Some("The files contain \"alpha\" and \"beta\" respectively."));
+        assert!(!replies.iter().any(|reply| reply.contains("I've read both files")), "{replies:?}");
     }
 
     fn tool_details(lines: &[Value]) -> Vec<Option<ToolDetail>> {
@@ -1349,6 +1660,10 @@ mod tests {
                 agent_type: Some("Explore".into()),
                 prompt: Some("Where is it?".into()),
                 output: Some("In src/parse.rs".into()),
+                background: None,
+                state: None,
+                activity: None,
+                steps: None,
             })
         );
         assert_eq!(tool_label("Task", input.as_object().unwrap()), "Find the parser");

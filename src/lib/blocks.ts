@@ -6,6 +6,8 @@ import type {
   BlockRole,
   HarnessEvent,
   Question,
+  SubagentState,
+  ToolDetail,
   ToolStatus,
   TurnUsage,
 } from "./protocol";
@@ -18,6 +20,7 @@ export type {
   BlockRole,
   HarnessEvent,
   Question,
+  SubagentState,
   ToolStatus,
   TurnUsage,
 };
@@ -73,6 +76,20 @@ export function settleStreaming(blocks: Block[]): Block[] {
  */
 export function settleTurn(blocks: Block[], tools: "completed" | "interrupted"): Block[] {
   return settleStreaming(blocks).map((block) => {
+    // A turn that ends leaves a background subagent running; a process that
+    // dies takes it along.
+    if (tools === "interrupted" && block.tool) {
+      const detail = block.tool.detail;
+      if (detail?.kind === "agent" && (detail.state === undefined || detail.state === "running")) {
+        const stopped: ToolDetail = {
+          ...detail,
+          ...(detail.state ? { state: "stopped" as const } : {}),
+          ...(detail.steps ? { steps: settleTurn(detail.steps, "interrupted") } : {}),
+        };
+        const status = block.tool.status === "pending" ? tools : block.tool.status;
+        block = { ...block, tool: { ...block.tool, status, detail: stopped } };
+      }
+    }
     if (block.tool?.status === "pending") return { ...block, tool: { ...block.tool, status: tools } };
     if (block.approval && !block.approval.decided) {
       return { ...block, approval: { ...block.approval, decided: "deny" } };
@@ -147,9 +164,33 @@ export function applyEvent(blocks: Block[], event: HarnessEvent): Block[] {
             status: event.status ?? block.tool.status,
             // An update with no detail is a status change, not an erasure: the
             // command a row already showed stays on it.
-            ...(event.detail ? { detail: event.detail } : {}),
+            ...(event.detail ? { detail: merged(block.tool.detail, event.detail) } : {}),
           },
         };
+      });
+    case "subagent.event": {
+      const step = stepEvent(event.event);
+      if (!step) return blocks;
+      return withSubagent(blocks, event.callId, (detail) => ({
+        ...detail,
+        state: detail.state ?? "running",
+        steps: applyEvent(detail.steps ?? [], step),
+      }));
+    }
+    case "subagent.updated":
+      return withSubagent(blocks, event.callId, (detail) => {
+        const next: AgentDetail = { ...detail };
+        if (event.background !== undefined) next.background = event.background;
+        if (event.output?.trim()) next.output = event.output;
+        if (event.activity !== undefined) next.activity = event.activity;
+        if (event.state) {
+          next.state = event.state;
+          if (event.state !== "running") {
+            delete next.activity;
+            if (next.steps) next.steps = settleTurn(next.steps, event.state === "done" ? "completed" : "interrupted");
+          }
+        }
+        return next;
       });
     case "approval.requested":
       return [
@@ -230,6 +271,46 @@ export function applyEvent(blocks: Block[], event: HarnessEvent): Block[] {
       return [...blocks, { ...newBlock("system", event.text), ...(event.letterId ? { letterId: event.letterId } : {}) }];
     default:
       return blocks;
+  }
+}
+
+type AgentDetail = Extract<ToolDetail, { kind: "agent" }>;
+
+/**
+ * A call's new detail, keeping what only its subagent's own events fill in:
+ * the call's updates know its input and its result, not its steps.
+ */
+function merged(old: ToolDetail | undefined, next: ToolDetail): ToolDetail {
+  if (old?.kind !== "agent" || next.kind !== "agent") return next;
+  const kept: Partial<AgentDetail> = {};
+  if (next.output === undefined && old.output !== undefined) kept.output = old.output;
+  if (next.background === undefined && old.background !== undefined) kept.background = old.background;
+  if (next.state === undefined && old.state !== undefined) kept.state = old.state;
+  if (next.activity === undefined && old.activity !== undefined) kept.activity = old.activity;
+  if (next.steps === undefined && old.steps !== undefined) kept.steps = old.steps;
+  return { ...next, ...kept };
+}
+
+/** The newest subagent call `callId`, changed by `change`; the rest as they were. */
+function withSubagent(blocks: Block[], callId: string, change: (detail: AgentDetail) => AgentDetail): Block[] {
+  const at = lastIndex(blocks, (block) => block.tool?.callId === callId && block.tool.detail?.kind === "agent");
+  if (at < 0) return blocks;
+  const block = blocks[at]!;
+  const tool = block.tool!;
+  return replaceAt(blocks, at, { ...block, tool: { ...tool, detail: change(tool.detail as AgentDetail) } });
+}
+
+/** What of a subagent's own events is a step: its words and its calls. */
+function stepEvent(event: HarnessEvent): HarnessEvent | null {
+  switch (event.type) {
+    case "message.delta":
+    case "message.completed":
+    case "reasoning.delta":
+    case "tool.started":
+    case "tool.updated":
+      return event;
+    default:
+      return null;
   }
 }
 
