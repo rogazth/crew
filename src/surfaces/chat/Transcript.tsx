@@ -10,6 +10,7 @@ import { foldTurns, groupRows, speaker, splitQueued } from "../../lib/transcript
 import { WorkingLine } from "./Activity";
 import { QueuedGroup } from "./Letters";
 import { Rows } from "./Rows";
+import { useBackgroundScope } from "./context";
 
 const NEAR_BOTTOM_PX = 16;
 /** How long a clicked row holds its place: the panel's 200ms, and room for what renders late in it. */
@@ -80,10 +81,11 @@ export function Transcript({
   /** A row the reader just opened or closed: it stays where it was on screen while the panel moves. */
   const anchor = useRef<{ el: Element; top: number; until: number } | null>(null);
   // The queue at the foot waits under the working line, outside any turn.
+  const { calls } = useBackgroundScope();
   const { rows, queued } = useMemo(() => {
-    const split = splitQueued(groupRows(blocks));
+    const split = splitQueued(groupRows(blocks, calls.size > 0 ? new Set(calls.keys()) : undefined));
     return { rows: foldTurns(split.rows, working), queued: split.queued };
-  }, [blocks, working]);
+  }, [blocks, calls, working]);
 
   const onScroll = () => {
     const el = scroller.current;

@@ -361,3 +361,35 @@ describe("letters in the transcript", () => {
     expect(splitQueued(rest).queued).toEqual([]);
   });
 });
+
+describe("background markers in the transcript", () => {
+  const bash = (callId: string) =>
+    block("tool", "sleep 120", {
+      tool: { callId, name: "Bash", title: "sleep 120", status: "completed" },
+    });
+
+  it("draws the call that sent a command to the background as a marker of its own", () => {
+    const rows = groupRows([block("tool", "npm test"), bash("toolu_bg"), bash("toolu_fg")], new Set(["toolu_bg"]));
+    expect(kinds(rows)).toEqual(["activity", "background", "activity"]);
+    expect(speaker(rows[1]!)).toBe("meta");
+    // Without a list, it is the tool row it always was.
+    expect(kinds(groupRows([block("tool", "npm test"), bash("toolu_bg")]))).toEqual(["activity"]);
+  });
+
+  it("keeps the marker out of a folded turn", () => {
+    const rows = foldTurns(
+      groupRows(
+        [
+          block("user", "start the server", { at: 1_000 }),
+          block("tool", "read config"),
+          bash("toolu_bg"),
+          block("tool", "curl localhost"),
+          block("assistant", "it runs", { at: 9_000, usage: { durationMs: 8_000 } }),
+        ],
+        new Set(["toolu_bg"]),
+      ),
+      false,
+    );
+    expect(kinds(rows)).toEqual(["date", "message", "fold", "background", "message", "footer"]);
+  });
+});

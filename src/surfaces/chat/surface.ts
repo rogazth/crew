@@ -37,6 +37,8 @@ export type ChatSurfaceProps = {
   optionsPending?: boolean;
   /** Over the chat: its sessions, whose it is, its conversations. */
   bar?: ReactNode;
-  /** Drawn over the transcript and the composer: a pair's thread. */
+  /** Drawn over the transcript and the composer: a pair's thread, a command's output. */
   overlay?: ReactNode;
+  /** Above the composer: what the turn left running in the background. */
+  tray?: ReactNode;
 };

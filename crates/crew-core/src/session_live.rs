@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 
-use crew_protocol::{SessionAsk, SessionLive};
+use crew_protocol::{BackgroundCommand, BackgroundKind, BackgroundState, SessionAsk, SessionLive};
 use serde_json::{Map, Value};
 
 use crate::providers::claude::parse_questions;
@@ -23,6 +23,7 @@ struct Entry {
     started: bool,
     working: bool,
     background: bool,
+    background_tasks: Vec<BackgroundCommand>,
     ask: Option<SessionAsk>,
     provider_session_id: Option<String>,
     transcript_path: Option<String>,
@@ -43,6 +44,7 @@ impl LiveBoard {
                 entry.started = true;
                 entry.working = false;
                 entry.background = false;
+                entry.background_tasks.clear();
                 entry.ask = None;
                 if let Some(id) = hook.get("session_id").and_then(Value::as_str) {
                     entry.provider_session_id = Some(id.to_string());
@@ -71,6 +73,7 @@ impl LiveBoard {
             "Stop" | "StopFailure" => {
                 entry.working = false;
                 entry.background = runs_in_background(hook);
+                entry.background_tasks = left_running(hook, &entry.background_tasks, now);
                 entry.ask = None;
             }
             // A `/clear` ends one conversation before the next starts; quitting ends the last.
@@ -78,6 +81,7 @@ impl LiveBoard {
                 entry.started = false;
                 entry.working = false;
                 entry.background = false;
+                entry.background_tasks.clear();
                 entry.ask = None;
             }
             _ => return None,
@@ -113,6 +117,7 @@ impl LiveBoard {
         entry.started = false;
         entry.working = false;
         entry.background = false;
+        entry.background_tasks.clear();
         entry.ask = None;
         entry.changed(crew_id, before, now)
     }
@@ -138,6 +143,7 @@ impl Entry {
             started: self.started,
             working: self.working,
             background: self.background,
+            background_tasks: self.background_tasks.clone(),
             ask: self.ask.clone(),
             provider_session_id: self.provider_session_id.clone(),
             updated_at: self.updated_at,
@@ -171,6 +177,47 @@ fn runs_in_background(hook: &Map<String, Value>) -> bool {
                 && task.get("type").and_then(Value::as_str).is_some_and(|kind| WAKES.contains(&kind))
         })
     })
+}
+
+/// What a Stop hook says is still running, as the chat's tray lists it. A
+/// task it named before keeps the time it was first seen: the hook gives none.
+fn left_running(hook: &Map<String, Value>, known: &[BackgroundCommand], now: i64) -> Vec<BackgroundCommand> {
+    let Some(tasks) = hook.get("background_tasks").and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    tasks
+        .iter()
+        .filter(|task| task.get("status").and_then(Value::as_str) == Some("running"))
+        .filter_map(|task| {
+            let id = task.get("id").and_then(Value::as_str)?.to_string();
+            let kind = match task.get("type").and_then(Value::as_str)? {
+                "shell" => BackgroundKind::Shell,
+                "monitor" => BackgroundKind::Monitor,
+                "subagent" | "workflow" | "cloud session" => BackgroundKind::Subagent,
+                _ => return None,
+            };
+            let description = task.get("description").and_then(Value::as_str).filter(|s| !s.is_empty());
+            let command = task
+                .get("command")
+                .and_then(Value::as_str)
+                .filter(|s| !s.is_empty())
+                .or(description)
+                .unwrap_or("Background task")
+                .to_string();
+            let started_at = known.iter().find(|row| row.id == id).map(|row| row.started_at).unwrap_or(now);
+            Some(BackgroundCommand {
+                description: description.filter(|text| *text != command).map(str::to_string),
+                id,
+                command,
+                kind,
+                started_at,
+                state: BackgroundState::Running,
+                exit_code: None,
+                ended_at: None,
+                tool_call_id: None,
+            })
+        })
+        .collect()
 }
 
 fn has_suggestions(hook: &Map<String, Value>) -> bool {
@@ -248,6 +295,28 @@ mod tests {
         board.hook("crew-1", PROMPT, 2);
         let stopped = board.hook("crew-1", STOP_WATCHING, 3).unwrap();
         assert!(!stopped.working && !stopped.background);
+        // The tray still lists it, read-only.
+        assert_eq!(stopped.background_tasks.len(), 1);
+        assert_eq!(stopped.background_tasks[0].kind, BackgroundKind::Monitor);
+        assert_eq!(stopped.background_tasks[0].command, "Watch artifact DGGobvZrmHFW4uSogiU5nx");
+    }
+
+    #[test]
+    fn the_stop_hook_lists_what_is_left_running_until_it_ends() {
+        let mut board = LiveBoard::default();
+        board.hook("crew-1", START, 1);
+        board.hook("crew-1", PROMPT, 2);
+        let left = board.hook("crew-1", STOP_BACKGROUND, 3).unwrap();
+        let task = &left.background_tasks[0];
+        assert_eq!((task.id.as_str(), task.command.as_str()), ("bf9zorro8", "sleep 15; echo finished"));
+        assert_eq!(task.description.as_deref(), Some("Sleep 15 seconds then print finished"));
+        assert_eq!((task.kind, task.state, task.started_at), (BackgroundKind::Shell, BackgroundState::Running, 3));
+        // Named again at a later Stop, it keeps the time it was first seen.
+        board.hook("crew-1", PROMPT, 4);
+        assert_eq!(board.hook("crew-1", STOP_BACKGROUND, 5).unwrap().background_tasks[0].started_at, 3);
+        assert!(board.hook("crew-1", STOP_CLEAR, 6).unwrap().background_tasks.is_empty());
+        board.hook("crew-1", STOP_BACKGROUND, 7);
+        assert!(board.exited("crew-1", 8).unwrap().background_tasks.is_empty());
     }
 
     #[test]

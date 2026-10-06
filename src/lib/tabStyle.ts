@@ -6,8 +6,9 @@ import type { SessionStatus } from "./types";
  * working, colour for waiting on you, a dot on the face for news.
  */
 export type TabTone = {
-  /** The ring around the face: spinning while it works, steady amber while it waits. */
-  ring: "spin" | "warning" | null;
+  /** The ring around the face: spinning while it works, steady amber while it waits,
+   *  dashed once the turn is over with commands still running in the background. */
+  ring: "spin" | "warning" | "background" | null;
   /** The pill itself takes a tint: only for what is waiting on you. */
   tint: boolean;
   /** The title in bold, like an unread thread. */
@@ -31,4 +32,9 @@ export function toneOf(status: SessionStatus | null): TabTone {
     default:
       return QUIET;
   }
+}
+
+/** A turn over with `count` commands still running in the background: the ring goes dashed. */
+export function withBackground(tone: TabTone, count: number): TabTone {
+  return count > 0 ? { ...tone, ring: "background" } : tone;
 }

@@ -5,6 +5,7 @@ import { useFileDrop } from "../hooks/useFileDrop";
 import { showLetter, useChatLetters } from "../hooks/useLetters";
 import * as api from "../lib/api";
 import { attachedFrom } from "../lib/attachments";
+import { terminalTray } from "../lib/background";
 import type { Answers, ApprovalDecision, AttachedFile, Block } from "../lib/blocks";
 import type { BlockingScreen } from "../lib/blockingScreen";
 import {
@@ -25,6 +26,7 @@ import { applyFor, readLaunched, setLaunched, subscribeLaunched } from "../lib/s
 import { quotePath } from "../lib/terminalPaths";
 import { reportsLive, startsAtLaunch } from "../lib/sessionView";
 import type { Session } from "../lib/types";
+import { BackgroundTray } from "./chat/Background";
 import { ChatBar } from "./chat/ChatBar";
 import { AlwaysAllow, LetterContext, useChatActions } from "./chat/context";
 import { DefaultChatSurface } from "./chat/DefaultChatSurface";
@@ -89,6 +91,9 @@ export function SessionChat({ session, sessions, ptyId, cwd, active, blocked, bu
   // Keys typed before the CLI reads them are lost, or answer its trust prompt.
   const ready = !blocked && (!hooked || !startsAtLaunch(session.provider) || live?.started === true);
   const ask = live?.ask ?? null;
+  // What the last turn left running, as its Stop hook said: read-only, since
+  // only the CLI in the terminal can stop it.
+  const leftRunning = useMemo(() => (hooked ? terminalTray(live) : []), [hooked, live]);
 
   const queue = useMemo(() => ptyQueue(ptyId, (data) => api.writePty(ptyId, data)), [ptyId]);
   const type = useCallback((keys: Keystroke[]) => queue.send(keys).done, [queue]);
@@ -275,6 +280,7 @@ export function SessionChat({ session, sessions, ptyId, cwd, active, blocked, bu
               loading={history.loading}
               onOptions={changeOptions}
               optionsPending={apply.kind === "relaunch"}
+              tray={leftRunning.length > 0 && <BackgroundTray sessionId={id} commands={leftRunning} live={false} readOnly />}
               overlay={
                 letters.thread && (
                   <Thread

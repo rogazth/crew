@@ -24,6 +24,10 @@ pub struct SessionLive {
     /// a crewd that predates it.
     #[serde(default)]
     pub background: bool,
+    /// What the last turn left running, as its Stop hook named it: read-only,
+    /// since only the CLI in the terminal can stop it.
+    #[serde(default)]
+    pub background_tasks: Vec<crate::BackgroundCommand>,
     /// Something the CLI stopped to ask; answered by keys in its terminal.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]

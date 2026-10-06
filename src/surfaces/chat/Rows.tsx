@@ -5,6 +5,7 @@ import type { Answers, ApprovalDecision } from "../../lib/blocks";
 import { duration, dayLabel } from "../../lib/time";
 import { gapBefore, rowBlocks, type Row } from "../../lib/transcriptRows";
 import { ActivityGroup } from "./Activity";
+import { BackgroundMarker } from "./Background";
 import { CheckpointRow, QueuedGroup, RefusedRow } from "./Letters";
 import { AssistantMessage, DateBreak, Note, TurnFooter, UserMessage } from "./Message";
 
@@ -70,6 +71,12 @@ export function Rows({ rows, working, focusId, onApprove, onAnswer }: Props) {
         return (
           <div key={row.block.id} data-block={row.block.id} className={className}>
             <RefusedRow block={row.block} />
+          </div>
+        );
+      case "background":
+        return (
+          <div key={row.block.id} data-block={row.block.id} className={className}>
+            <BackgroundMarker block={row.block} />
           </div>
         );
       case "queued":

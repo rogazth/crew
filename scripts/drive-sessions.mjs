@@ -544,6 +544,47 @@ const scenarios = {
     return `queued, then remembered ${code} across turns`;
   },
 
+  // A command left running in the background: the tray lists it while the
+  // child's turn waits on it, its output is read from the CLI, and Stop ends
+  // it (Claude's stop_task, Codex's backgroundTerminals/terminate).
+  async t(provider) {
+    if (provider !== "claude" && provider !== "codex") return "n/a: Claude and Codex children only";
+    const shell = await terminal(`t-${provider}`);
+    const job =
+      provider === "claude"
+        ? "Use the Bash tool with run_in_background: true to run exactly `echo tick; sleep 120; echo tock`. Do not wait for it and do not check on it: reply with the word STARTED right away."
+        : "Run exactly `echo tick; sleep 120; echo tock` as one command and let it keep running: do not wait for it to finish. Then wait 30 seconds with `sleep 30` and reply with the word STARTED.";
+    const id = await start(shell.token, provider, job);
+    const until = Date.now() + 240_000;
+    let listed;
+    while (Date.now() < until) {
+      listed = await rpc("background_list", { sessionId: id });
+      if (listed.commands.some((c) => c.state === "running")) break;
+      await sleep(1000);
+    }
+    const running = listed?.commands.find((c) => c.state === "running");
+    assert(running, `nothing listed as running: ${JSON.stringify(listed)}`);
+    assert(running.kind === "shell" && /sleep 120/.test(running.command), `listed ${JSON.stringify(running)}`);
+    assert(listed.live, "the list says its CLI is gone");
+    assert(events.some((e) => e.event === "background-changed" && e.payload.sessionId === id), "no background-changed event");
+    // Claude reads a running command's output; Codex's app server streams
+    // none for these, and hands it over when the command ends.
+    let output = { output: "" };
+    for (let i = 0; provider === "claude" && i < 10 && !/tick/.test(output.output); i++) {
+      output = await rpc("background_output", { sessionId: id, id: running.id });
+      await sleep(1000);
+    }
+    if (provider === "claude") assert(/tick/.test(output.output), `output: ${JSON.stringify(output)}`);
+    await rpc("background_stop", { sessionId: id, id: running.id });
+    const stopped = (await rpc("background_list", { sessionId: id })).commands.find((c) => c.id === running.id);
+    assert(stopped.state === "stopped", `after Stop it is ${stopped.state}`);
+    await waitEvent(shell.token, id, 300);
+    const after = await rpc("background_list", { sessionId: id });
+    assert(!after.live && after.commands.every((c) => c.state !== "running"), `after the turn: ${JSON.stringify(after)}`);
+    if (provider === "codex") output = await rpc("background_output", { sessionId: id, id: running.id });
+    return `listed ${running.command}, read "${output.output.trim().split("\n")[0]}", stopped`;
+  },
+
   // A message steered into a running turn (Claude over stream-json, Codex
   // with turn/steer); queued, and saying so, where the CLI cannot take one
   // mid-turn (opencode, Cursor's ACP).

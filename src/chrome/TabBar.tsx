@@ -16,11 +16,12 @@ import { StubIcon } from "./StubIcon";
 import { TabLauncher, type Launch } from "./TabLauncher";
 import { useLease } from "../hooks/useBrowserLeases";
 import { TabPeek, type PeekAnchor } from "./TabPeek";
-import { toneOf, type TabTone } from "../lib/tabStyle";
+import { toneOf, withBackground, type TabTone } from "../lib/tabStyle";
 import { useBrowserPage } from "../hooks/useBrowserPage";
 import { useCommand } from "../hooks/useCommand";
 import { useFileDrop } from "../hooks/useFileDrop";
 import { useTabOverflow } from "../hooks/useTabOverflow";
+import { useTabBackground } from "../hooks/useBackground";
 import { commandKeys } from "../lib/commands";
 import {
   CLOSE_OTHERS,
@@ -430,7 +431,9 @@ const TabPill = memo(function TabPill({
     accept: "tab",
   });
   const status = tabStatus(tab, sessions);
-  const tone = toneOf(status);
+  // A turn that ended with commands still running: a dashed ring and their count.
+  const background = useTabBackground(tab.kind === "session" ? sessions.find((s) => s.id === tab.sessionId) : undefined);
+  const tone = withBackground(toneOf(status), background);
   return (
     <Tabs.Tab
       ref={ref}
@@ -470,6 +473,7 @@ const TabPill = memo(function TabPill({
           <span className={`min-w-0 flex-1 truncate ${tone.bold ? "font-semibold text-text" : ""}`}>
             {tabTitle(tab, sessions)}
           </span>
+          <BackgroundCount count={background} />
         </>
       )}
       {branch && <BranchTag hue={branch.hue} label={branch.label} className="max-w-[110px]" />}
@@ -669,6 +673,16 @@ function ScrollControl({
         <Caret className="size-3.5" />
       </span>
     </button>
+  );
+}
+
+/** How many commands a finished turn left running, beside the title. */
+function BackgroundCount({ count }: { count: number }) {
+  if (count === 0) return null;
+  return (
+    <span aria-label={`${count} background ${count === 1 ? "command" : "commands"} running`} className="shrink-0 text-[11px] text-warning tabular-nums">
+      {count}
+    </span>
   );
 }
 

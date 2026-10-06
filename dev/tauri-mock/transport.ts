@@ -403,6 +403,14 @@ const commands: Record<string, (args: Row) => unknown> = {
   // A terminal's conversation as its CLI wrote it: only the handoff has one.
   session_history_window: ({ id }) => ({ blocks: ORCHESTRATION[`history:${id as string}`] ?? [], start: 0, more: false, state: "ready" }),
   session_history_close: () => null,
+  background_list: ({ sessionId }) => backgroundList(sessionId as string),
+  background_output: ({ sessionId, id }) => backgroundOutput(sessionId as string, id as string),
+  background_stop: ({ sessionId, id }) => backgroundStop(sessionId as string, id as string),
+  // A terminal's hooks: "claude 2" ended its turn with a dev server still up.
+  session_live_get: ({ id }) =>
+    id === "s4"
+      ? { sessionId: "s4", started: true, working: false, background: true, backgroundTasks: TERMINAL_TASKS, updatedAt: now }
+      : null,
   thread_pairs: ({ sessionId }) => threadPairs(sessionId as string),
   thread_messages: (args) => threadMessages(args),
   mailbox_pending: ({ sessionId }) =>
@@ -855,9 +863,63 @@ const ORCHESTRATION: Record<string, Row[]> = {
     { id: "c1-u1", role: "user", at: now - START, text: AUTH_JOB, letterId: "o1", fromBot: { id: "s7", name: "Lead" } },
     { id: "c1-t1", role: "tool", text: "Read auth/middleware.ts", tool: { callId: "c1-c1", name: "Read", title: "Read auth/middleware.ts", status: "completed", detail: { kind: "file", path: "/Users/me/Developer/experiments/crew/auth/middleware.ts" } } },
     { id: "c1-u2", role: "user", at: now - 15 * 60e3, text: "Keep the old cookie name for one release so existing sessions survive the deploy.", letterId: "o4" },
+    { id: "c1-t3", role: "tool", text: "npm run dev", at: now - 12 * 60e3, tool: { callId: "c1-c3", name: "Bash", title: "npm run dev", status: "completed", detail: { kind: "command", command: "npm run dev" } } },
+    { id: "c1-t4", role: "tool", text: "npm test -- --watch auth", tool: { callId: "c1-c4", name: "Bash", title: "npm test -- --watch auth", status: "completed", detail: { kind: "command", command: "npm test -- --watch auth" } } },
     { id: "c1-t2", role: "tool", text: "Edit auth/session.ts", tool: { callId: "c1-c2", name: "Edit", title: "Edit auth/session.ts", status: "pending", detail: { kind: "edit", path: "auth/session.ts", added: 42, removed: 3 } } },
   ],
 };
+
+/**
+ * What each session's turn left running in the background. Auth refactor has
+ * answered and waits on its dev server and its tests (its tab counts them);
+ * a build it ran finished.
+ */
+const background = new Map<string, Row>([
+  [
+    "c1",
+    {
+      sessionId: "c1",
+      live: true,
+      waiting: true,
+      commands: [
+        { id: "bg-dev", command: "npm run dev", description: "Start the dev server", kind: "shell", startedAt: now - 12 * 60e3, state: "running", toolCallId: "c1-c3" },
+        { id: "bg-test", command: "npm test -- --watch auth", kind: "shell", startedAt: now - 11 * 60e3, state: "running", toolCallId: "c1-c4" },
+        { id: "bg-build", command: "pnpm build", kind: "shell", startedAt: now - 9 * 60e3, state: "completed", exitCode: 0, endedAt: now - 8 * 60e3 },
+        { id: "bg-agent", command: "Map the token flow", kind: "subagent", startedAt: now - 7 * 60e3, state: "failed", endedAt: now - 6 * 60e3 },
+      ],
+    },
+  ],
+]);
+const TERMINAL_TASKS = [{ id: "t-dev", command: "npm run dev -- --port 5174", description: "Start Vite", kind: "shell", startedAt: now - 3 * 60e3, state: "running" }];
+const outputs = new Map<string, string>([
+  ["bg-dev", "\x1b[32m  VITE v7.1.0\x1b[0m  ready in 412 ms\n\n  ➜  Local:   http://localhost:5173/\n  ➜  Network: use --host to expose\n"],
+  ["bg-test", " RUN  v3.2.7 /Users/me/Developer/experiments/crew\n\n ✓ auth/session.test.ts (12 tests) 31ms\n ✓ auth/middleware.test.ts (8 tests) 22ms\n\n Test Files  2 passed (2)\n      Tests  20 passed (20)\n\n Waiting for file changes...\n"],
+  ["bg-build", "> crew@0.2.7 build\n> tsc --noEmit && vite build\n\n✓ 1843 modules transformed.\n✓ built in 6.21s\n"],
+]);
+
+function backgroundList(sessionId: string): Row {
+  return background.get(sessionId) ?? { sessionId, commands: [], live: false, waiting: false };
+}
+
+function backgroundOutput(sessionId: string, id: string): Row {
+  const list = background.get(sessionId);
+  const running = ((list?.commands as Row[] | undefined) ?? []).find((row) => row.id === id)?.state === "running";
+  // A running one writes a line a second.
+  if (running && id === "bg-dev") outputs.set(id, `${outputs.get(id) ?? ""}${new Date().toLocaleTimeString()} [vite] page reload src/App.tsx\n`);
+  return { output: outputs.get(id) ?? "", truncated: false };
+}
+
+function backgroundStop(sessionId: string, id: string): null {
+  const list = background.get(sessionId);
+  if (!list) throw new Error("No such background command.");
+  const commands = (list.commands as Row[]).map((row) =>
+    row.id === id && row.state === "running" ? { ...row, state: "stopped", endedAt: Date.now() } : row,
+  );
+  const next = { ...list, commands, waiting: commands.some((row) => row.state === "running") };
+  background.set(sessionId, next);
+  emit("background-changed", next);
+  return null;
+}
 
 type MockTurn = { sessionId: string; stage: "idle" | "question" | "approval" };
 type TranscriptRow = { blocks: Row[]; seq: number; working: boolean; status: string };

@@ -217,6 +217,33 @@ pub fn build_control_response(request_id: &str, response: Value) -> Value {
     })
 }
 
+/// Asks for the end of a background shell or Monitor task's output: Claude
+/// answers `{output, total_bytes, truncated}`, the last 8 KiB.
+pub fn get_task_output_request(task_id: &str) -> Value {
+    json!({ "subtype": "get_task_output", "task_id": task_id })
+}
+
+/// Stops one background task; Claude acknowledges with an empty success, and
+/// the task's `task_notification` says it stopped.
+pub fn stop_task_request(task_id: &str) -> Value {
+    json!({ "subtype": "stop_task", "task_id": task_id })
+}
+
+/// The answer to a control request Crew sent: its id, and the success
+/// payload (`{}` when it only acknowledges) or the error Claude gave.
+pub fn parse_control_response(rec: &Map<String, Value>) -> Option<(String, Result<Value, String>)> {
+    if string_field(Some(rec), "type").as_deref() != Some("control_response") {
+        return None;
+    }
+    let response = rec.get("response").and_then(as_record)?;
+    let id = string_field(Some(response), "request_id")?;
+    let result = match string_field(Some(response), "subtype").as_deref() {
+        Some("error") => Err(string_field(Some(response), "error").unwrap_or_else(|| "Claude refused it.".into())),
+        _ => Ok(response.get("response").cloned().unwrap_or_else(|| json!({}))),
+    };
+    Some((id, result))
+}
+
 pub fn to_permission_result(decision: ApprovalDecision, input: &Map<String, Value>, tool_name: &str) -> Value {
     match decision {
         ApprovalDecision::Deny => json!({
@@ -914,6 +941,29 @@ mod tests {
     use crate::turns::TurnHost;
     use crew_protocol::{HarnessEvent, TodoItem, TodoStatus, ToolDetail};
     use serde_json::json;
+
+    // Shapes as Claude Code 2.1.290 declares them for its control channel.
+    #[test]
+    fn background_task_requests_and_their_answers() {
+        let read = build_control_request("ctrl-4", get_task_output_request("b1x"));
+        assert_eq!(
+            read,
+            json!({ "type": "control_request", "request_id": "ctrl-4", "request": { "subtype": "get_task_output", "task_id": "b1x" } })
+        );
+        let stop = build_control_request("ctrl-5", stop_task_request("b1x"));
+        assert_eq!(stop["request"], json!({ "subtype": "stop_task", "task_id": "b1x" }));
+        let ok = json!({ "type": "control_response", "response": { "subtype": "success", "request_id": "ctrl-4",
+            "response": { "output": "tick\n", "total_bytes": 5, "truncated": false } } });
+        let (id, result) = parse_control_response(ok.as_object().unwrap()).unwrap();
+        assert_eq!(id, "ctrl-4");
+        assert_eq!(result.unwrap()["output"], "tick\n");
+        let acked = json!({ "type": "control_response", "response": { "subtype": "success", "request_id": "ctrl-5" } });
+        assert_eq!(parse_control_response(acked.as_object().unwrap()).unwrap().1.unwrap(), json!({}));
+        let refused = json!({ "type": "control_response", "response": { "subtype": "error", "request_id": "ctrl-6",
+            "error": "get_task_output: no shell or Monitor task with that task_id in this session" } });
+        assert!(parse_control_response(refused.as_object().unwrap()).unwrap().1.unwrap_err().contains("no shell"));
+        assert!(parse_control_response(json!({ "type": "system" }).as_object().unwrap()).is_none());
+    }
 
     /// The command Claude asked to run in capture 2 of
     /// `crates/crew-core/tests/fixtures/protocols/claude-permissions.jsonl`.

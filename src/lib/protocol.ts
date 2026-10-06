@@ -12,6 +12,66 @@ export type AttachedFileKind = "image" | "file";
 
 export type Auth = { auth: string, };
 
+/**
+ * One command left running in the background, running or ended.
+ */
+export type BackgroundCommand = { 
+/**
+ * The CLI's own id for it: Claude's task id, Codex's item id, the hook's id.
+ */
+id: string, 
+/**
+ * What runs: the shell command, or a subagent's description.
+ */
+command: string, 
+/**
+ * What the model said it is for, when that is not the command itself.
+ */
+description?: string, kind: BackgroundKind, startedAt: number, state: BackgroundState, exitCode?: number, endedAt?: number, 
+/**
+ * The tool call that started it: where the transcript marks it.
+ */
+toolCallId?: string, };
+
+export type BackgroundKind = "shell" | "monitor" | "subagent";
+
+/**
+ * A session's background commands. Pushed as `background-changed` whenever
+ * it changes, and answered by `background_list`.
+ */
+export type BackgroundList = { sessionId: string, commands: Array<BackgroundCommand>, 
+/**
+ * The CLI that runs them is up: their output can be read and they can be
+ * stopped. Once it is gone they stay, ended, until the next turn.
+ */
+live: boolean, 
+/**
+ * The turn has answered, and only its background commands keep it open:
+ * the CLI takes it up again when they finish.
+ */
+waiting: boolean, };
+
+/**
+ * The end of a background command's output.
+ */
+export type BackgroundOutput = { 
+/**
+ * Plain text, escape sequences included; empty when it wrote nothing yet.
+ */
+output: string, 
+/**
+ * Only the end of a longer output.
+ */
+truncated: boolean, };
+
+/**
+ * One background command of a session, for `background_output` and
+ * `background_stop`.
+ */
+export type BackgroundRequest = { sessionId: string, id: string, };
+
+export type BackgroundState = "running" | "completed" | "failed" | "stopped";
+
 export type Block = { id: string, role: BlockRole, text: string, at?: number, hidden?: boolean, streaming?: boolean, files?: Array<AttachedFile>, tool?: BlockTool, approval?: BlockApproval, question?: BlockQuestion, usage?: TurnUsage, 
 /**
  * Set when another bot wrote this line instead of the user.
@@ -798,6 +858,11 @@ working: boolean,
  * a crewd that predates it.
  */
 background: boolean, 
+/**
+ * What the last turn left running, as its Stop hook named it: read-only,
+ * since only the CLI in the terminal can stop it.
+ */
+backgroundTasks: Array<BackgroundCommand>, 
 /**
  * Something the CLI stopped to ask; answered by keys in its terminal.
  */

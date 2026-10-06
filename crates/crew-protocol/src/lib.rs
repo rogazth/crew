@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use ts_rs::TS;
 
+mod background;
 mod blocks;
 mod files;
 mod letters;
@@ -9,6 +10,7 @@ mod messages;
 mod processes;
 mod sessions;
 mod turns;
+pub use background::*;
 pub use blocks::*;
 pub use files::*;
 pub use letters::*;

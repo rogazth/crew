@@ -3,6 +3,7 @@ import { focusEnv, envOf, RAIL_ORDER } from "./client/registry";
 import { open } from "./host";
 import type { RoutineRow, ScheduledRoutine } from "./routines";
 import type {
+  BackgroundOutput,
   BrowserLeases,
   CookieRead,
   CookieSource,
@@ -152,6 +153,17 @@ export const threadMessages = (params: ThreadMessagesRequest): Promise<ThreadPag
  */
 export const mailboxPending = (sessionId: string): Promise<ThreadLetter[]> =>
   client.request("mailbox_pending", { sessionId });
+
+/**
+ * The end of a background command's output: asked of the CLI while its turn
+ * runs, the last read once it is gone.
+ */
+export const backgroundOutput = (sessionId: string, id: string): Promise<BackgroundOutput> =>
+  client.request("background_output", { sessionId, id });
+
+/** Stops one background command of a turn Crew drives. */
+export const backgroundStop = (sessionId: string, id: string): Promise<void> =>
+  client.request("background_stop", { sessionId, id });
 
 export const turnStart = (params: {
   sessionId: string;

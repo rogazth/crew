@@ -33,6 +33,7 @@ export function DefaultChatSurface({
   optionsPending = false,
   bar,
   overlay,
+  tray,
 }: ChatSurfaceProps) {
   return (
     <>
@@ -70,6 +71,7 @@ export function DefaultChatSurface({
             onAnswer={onAnswer}
           />
         )}
+        {tray}
         <Composer
           centered={blocks.length === 0}
           ref={field}

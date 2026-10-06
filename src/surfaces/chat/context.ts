@@ -1,5 +1,6 @@
 import { createContext, useContext } from "react";
 import type { Party, ThreadRef } from "../../lib/letters";
+import type { BackgroundCommand } from "../../lib/protocol";
 import type { ProjectFile, Session } from "../../lib/types";
 
 /** What a chat surface can ask of the shell without a prop for every level. */
@@ -43,4 +44,20 @@ export const LetterContext = createContext<LetterScope>({ owner: null, sessions:
 
 export function useLetterScope(): LetterScope {
   return useContext(LetterContext);
+}
+
+/**
+ * The background commands a chat's transcript marks, by the tool call that
+ * started each, and the way into one's output. Empty: no markers, the calls
+ * draw as the tool rows they are.
+ */
+export type BackgroundScope = {
+  calls: ReadonlyMap<string, BackgroundCommand>;
+  open: (id: string) => void;
+};
+
+export const BackgroundContext = createContext<BackgroundScope>({ calls: new Map(), open: () => undefined });
+
+export function useBackgroundScope(): BackgroundScope {
+  return useContext(BackgroundContext);
 }

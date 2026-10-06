@@ -16,8 +16,9 @@ use crate::agent::AgentHost;
 use crate::bridge::Bridge;
 use crate::providers::claude::{
     assistant_text_blocks, assistant_tool_uses, build_claude_spawn_args, build_claude_user_message,
-    build_control_request, build_control_response, input_json_delta_from_event, is_compact_boundary,
-    is_message_start, is_subagent_message, parse_control_cancel_id, parse_control_request, parse_questions,
+    build_control_request, build_control_response, get_task_output_request, input_json_delta_from_event,
+    is_compact_boundary, is_message_start, is_subagent_message, parse_control_cancel_id, parse_control_request,
+    parse_control_response, parse_questions, stop_task_request,
     session_id_from_message, stream_text_delta, to_permission_result,
     to_question_result, tool_detail as claude_tool_detail, tool_label as claude_tool_label,
     tool_result_detail as claude_tool_result_detail, tool_results_from_user_message, tool_start_from_event,
@@ -52,6 +53,8 @@ const INIT_TIMEOUT: Duration = Duration::from_secs(15);
 /// How long a provider may stay silent before its first line.
 const FIRST_OUTPUT_TIMEOUT: Duration = Duration::from_secs(120);
 const INTERRUPT_GRACE: Duration = Duration::from_millis(1500);
+/// How long Claude may take to answer a control request of Crew's own.
+const CONTROL_TIMEOUT: Duration = Duration::from_secs(5);
 /// How long a child's Claude turn may wait, after a `result`, for the
 /// background commands it left running: Claude picks the conversation up by
 /// itself when they finish, with another `result`. Past this, the turn ends on
@@ -201,6 +204,8 @@ struct ClaudeLive {
     held_results: u64,
     approvals: HashMap<u64, PendingApproval>,
     questions: HashMap<u64, PendingQuestion>,
+    /// Control requests Crew sent and waits on, by request id.
+    calls: HashMap<String, Sender<Result<Value, String>>>,
     next_ui: u64,
     next_control: u64,
     tools_by_index: HashMap<i64, InFlightTool>,
@@ -265,6 +270,8 @@ pub struct TurnHost {
     /// a check on it alone let a message that arrived in between start a
     /// second turn on the same session.
     running: Arc<Mutex<HashSet<String>>>,
+    /// What each session's turn left running in the background.
+    background: crate::background::BackgroundHost,
 }
 
 impl TurnHost {
@@ -283,7 +290,14 @@ impl TurnHost {
             signal: crate::session_events::Signal::default(),
             exiting: Arc::new(Mutex::new(HashMap::new())),
             running: Arc::new(Mutex::new(HashSet::new())),
+            background: crate::background::BackgroundHost::default(),
         }
+    }
+
+    /// Every session's background commands: crewd lists them, and hears
+    /// when they change.
+    pub fn background(&self) -> &crate::background::BackgroundHost {
+        &self.background
     }
 
     /// What a waiter on a child session sleeps on.
@@ -549,6 +563,110 @@ impl TurnHost {
         Ok(())
     }
 
+    /// What a session's turn left running in the background.
+    pub fn background_list(&self, session_id: &str) -> crew_protocol::BackgroundList {
+        self.background.list(session_id)
+    }
+
+    /// The end of a background command's output: asked of the CLI while it
+    /// is up, and otherwise the last that was read of it.
+    pub fn background_output(&self, session_id: &str, id: &str) -> Result<crew_protocol::BackgroundOutput, String> {
+        let known = self
+            .background
+            .read(session_id, |board| (board.command(id).cloned(), board.is_live(), board.output(id)));
+        let Some((Some(row), live, kept)) = known else {
+            return Err("No such background command.".into());
+        };
+        let claude = matches!(self.lock().get(session_id), Some(Live::Claude(_)));
+        // Claude reads a shell's or a Monitor's output; a subagent's is its
+        // report, which lands in the transcript.
+        if live && claude && row.kind != crew_protocol::BackgroundKind::Subagent {
+            match self.claude_control(session_id, get_task_output_request(id)) {
+                Ok(response) => {
+                    let output = crate::background::claude_output(&response);
+                    let keep = output.clone();
+                    self.background.touch(session_id, |board| {
+                        board.keep_output(id, keep);
+                        false
+                    });
+                    return Ok(output);
+                }
+                Err(error) if kept.is_none() => return Err(error),
+                Err(_) => {}
+            }
+        }
+        Ok(kept.unwrap_or(crew_protocol::BackgroundOutput { output: String::new(), truncated: false }))
+    }
+
+    /// Stop one background command: Claude's `stop_task`, Codex's
+    /// `thread/backgroundTerminals/terminate`. Only while its CLI is up.
+    pub fn background_stop(&self, session_id: &str, id: &str) -> Result<(), String> {
+        let known = self.background.read(session_id, |board| {
+            (board.command(id).map(|row| row.state), board.is_live(), board.process_id(id))
+        });
+        let Some((Some(state), live, process)) = known else {
+            return Err("No such background command.".into());
+        };
+        if state != crew_protocol::BackgroundState::Running {
+            return Ok(());
+        }
+        if !live {
+            return Err("Its session's CLI is gone, and it went with it.".into());
+        }
+        let kind = match self.lock().get(session_id) {
+            Some(Live::Claude(_)) => "claude",
+            Some(Live::Codex(_)) => "codex",
+            _ => "",
+        };
+        match kind {
+            "claude" => {
+                self.claude_control(session_id, stop_task_request(id))?;
+            }
+            "codex" => {
+                let process = process.ok_or_else(|| "Codex named no process for it.".to_string())?;
+                self.codex_terminate(session_id, &process)?;
+            }
+            _ => return Err("Its session's CLI is gone, and it went with it.".into()),
+        }
+        let now = crate::store::now_millis();
+        self.background.touch(session_id, |board| board.settle(id, crew_protocol::BackgroundState::Stopped, None, now));
+        Ok(())
+    }
+
+    /// Send Claude a control request and wait for its answer.
+    fn claude_control(&self, session_id: &str, request: Value) -> Result<Value, String> {
+        let (tx, rx) = mpsc::channel();
+        let id = {
+            let mut map = self.lock();
+            let Some(Live::Claude(live)) = map.get_mut(session_id) else {
+                return Err("Claude Code is not running.".into());
+            };
+            let id = format!("ctrl-{}", live.next_control);
+            live.next_control += 1;
+            live.calls.insert(id.clone(), tx);
+            id
+        };
+        let forget = || {
+            if let Some(Live::Claude(live)) = self.lock().get_mut(session_id) {
+                live.calls.remove(&id);
+            }
+        };
+        if let Err(error) =
+            self.agents.write(session_id, &serde_json::to_string(&build_control_request(&id, request)).unwrap_or_default())
+        {
+            forget();
+            return Err(error);
+        }
+        match rx.recv_timeout(CONTROL_TIMEOUT) {
+            Ok(result) => result,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                forget();
+                Err("Claude Code did not answer in time.".into())
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => Err("Claude Code is not running.".into()),
+        }
+    }
+
     /// Decide an approval a session is waiting on. The one place an
     /// approval is decided, from the window's card and from a parent's
     /// `send_message` alike: the first decision wins, and the other is told it
@@ -706,6 +824,7 @@ impl TurnHost {
                 let mid = row.active;
                 let cancelled = row.cancelled;
                 let stderr = row.stderr.clone();
+                row.calls.clear();
                 if let Some(tx) = row.init_tx.take() {
                     let _ = tx.send(false);
                 }
@@ -803,20 +922,49 @@ impl TurnHost {
         if self.codex_interrupt(session_id) || self.cursor_interrupt(session_id) {
             return;
         }
-        let interrupt = {
+        // What Claude left running in the background is stopped first, then
+        // the turn: a task stopped after the interrupt would finish later and
+        // wake Claude again (monocode's order).
+        let running = self
+            .background
+            .read(session_id, |board| if board.is_live() { board.running() } else { Vec::new() })
+            .unwrap_or_default();
+        let (interrupt, stops) = {
             let mut map = self.lock();
             if let Some(Live::Claude(row)) = map.get_mut(session_id) {
                 if row.active {
-                    let id = format!("ctrl-{}", row.next_control);
-                    row.next_control += 1;
-                    Some(id)
+                    // Deaf from here: what Claude says to the interrupt is
+                    // not the turn's outcome. The turn ends below, once the
+                    // requests are written, before its CLI is let go.
+                    row.cancelled = true;
+                    row.mute = true;
+                    let mut next = || {
+                        let id = format!("ctrl-{}", row.next_control);
+                        row.next_control += 1;
+                        id
+                    };
+                    let stops: Vec<(String, String)> = running.iter().map(|task| (next(), task.clone())).collect();
+                    (Some(next()), stops)
                 } else {
-                    None
+                    (None, Vec::new())
                 }
             } else {
-                None
+                (None, Vec::new())
             }
         };
+        for (id, task) in &stops {
+            let _ = self.agents.write(
+                session_id,
+                &serde_json::to_string(&build_control_request(id, stop_task_request(task))).unwrap_or_default(),
+            );
+        }
+        if let Some(id) = &interrupt {
+            let _ = self.agents.write(
+                session_id,
+                &serde_json::to_string(&build_control_request(id, json!({ "subtype": "interrupt" })))
+                    .unwrap_or_default(),
+            );
+        }
         {
             let mut map = self.lock();
             if let Some(live) = map.get_mut(session_id) {
@@ -859,12 +1007,7 @@ impl TurnHost {
                 }
             }
         }
-        if let Some(id) = interrupt {
-            let _ = self.agents.write(
-                session_id,
-                &serde_json::to_string(&build_control_request(&id, json!({ "subtype": "interrupt" })))
-                    .unwrap_or_default(),
-            );
+        if interrupt.is_some() {
             if kill {
                 let host = self.clone();
                 let session_id = session_id.to_string();
@@ -928,6 +1071,10 @@ impl TurnHost {
                 "{other} agents are not wired up yet. Pick Claude for now."
             )),
         };
+        // The CLI is gone, and what it left running in the background went
+        // with it: the tray keeps the rows, ended, until the next turn.
+        let now = crate::store::now_millis();
+        self.background.touch(&session_id, |board| board.end(now));
         // The letters it carried are delivered now that it has ended, however
         // it ended. A daemon that dies first leaves them claimed, and the next
         // start hands them over again.
@@ -1463,6 +1610,7 @@ impl TurnHost {
             held_results: 0,
             approvals: HashMap::new(),
             questions: HashMap::new(),
+            calls: HashMap::new(),
             next_ui: 1,
             next_control: 1,
             tools_by_index: HashMap::new(),
@@ -1477,6 +1625,7 @@ impl TurnHost {
             stderr: Vec::new(),
         };
         self.lock().insert(session_id.clone(), Live::Claude(Box::new(live)));
+        self.background.touch(&session_id, crate::background::Board::begin);
         if self.stop_requested(&session_id) {
             self.agents.kill(&session_id);
             return Err("cancelled".into());
@@ -1755,6 +1904,18 @@ impl TurnHost {
             }
             return;
         }
+        // The answer to a request Crew is waiting on; the first one, to
+        // `initialize`, nobody waits on and it reads as the CLI being up.
+        if let Some((id, result)) = parse_control_response(&rec) {
+            let waiter = match self.lock().get_mut(session_id) {
+                Some(Live::Claude(live)) => live.calls.remove(&id),
+                _ => None,
+            };
+            if let Some(waiter) = waiter {
+                let _ = waiter.send(result);
+                return;
+            }
+        }
         if let Some(control) = parse_control_request(&rec) {
             self.handle_claude_control(session_id, control);
             return;
@@ -1763,6 +1924,9 @@ impl TurnHost {
         let mut events = Vec::new();
         let mut bind: Option<String> = None;
         let mut hold: Option<u64> = None;
+        // A task line for the tray, with the call that started its task.
+        let mut task: Option<(Value, Option<(String, String, Map<String, Value>)>)> = None;
+        let mut spoke = false;
         {
             let mut map = self.lock();
             let Some(Live::Claude(live)) = map.get_mut(session_id) else {
@@ -1790,6 +1954,17 @@ impl TurnHost {
                     }
                 }
                 return;
+            }
+            if type_name.as_deref() == Some("system")
+                && matches!(
+                    subtype.as_deref(),
+                    Some("task_started" | "task_updated" | "task_notification" | "background_tasks_changed")
+                )
+            {
+                let call = string_field(Some(&rec), "tool_use_id").and_then(|id| {
+                    live.tools_by_id.get(&id).map(|tool| (id, tool.name.clone(), tool.input.clone()))
+                });
+                task = Some((Value::Object(rec.clone()), call));
             }
             if type_name.as_deref() == Some("system") {
                 match subtype.as_deref() {
@@ -1828,9 +2003,11 @@ impl TurnHost {
                 });
             } else if type_name.as_deref() == Some("stream_event") {
                 woken(live, &mut events);
+                spoke = true;
                 claude_stream(live, &rec, &mut events);
             } else if type_name.as_deref() == Some("assistant") {
                 woken(live, &mut events);
+                spoke = true;
                 claude_assistant(live, &rec, &mut events);
             } else if type_name.as_deref() == Some("user") {
                 // A steer Claude has just taken in: it goes in the transcript
@@ -1891,6 +2068,23 @@ impl TurnHost {
                     }
                 }
             }
+        }
+        if let Some((rec, call)) = task {
+            let now = crate::store::now_millis();
+            self.background.touch(session_id, |board| {
+                board.claude(
+                    &rec,
+                    |id| call.as_ref().filter(|(call, _, _)| call == id).map(|(_, name, input)| (name.clone(), input.clone())),
+                    now,
+                )
+            });
+        }
+        // Held on its background commands, the turn is waiting; the model
+        // speaking again is the end of that.
+        if hold.is_some() {
+            self.background.touch(session_id, |board| board.set_waiting(true));
+        } else if spoke {
+            self.background.touch(session_id, |board| board.set_waiting(false));
         }
         if let Some(id) = bind {
             self.transcripts.apply(
@@ -2476,6 +2670,7 @@ impl TurnHost {
                 held_results: 0,
                 approvals: HashMap::new(),
                 questions: HashMap::new(),
+                calls: HashMap::new(),
                 next_ui: 1,
                 next_control: 1,
                 tools_by_index: HashMap::new(),

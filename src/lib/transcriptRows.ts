@@ -28,14 +28,16 @@ export type Row =
   /** A send Crew refused, with its reason. */
   | { kind: "refused"; block: Block }
   /** What waits for the next turn, under one label: messages typed, letters in the box. */
-  | { kind: "queued"; id: string; blocks: Block[] };
+  | { kind: "queued"; id: string; blocks: Block[] }
+  /** The call that sent a command to the background: a marker that opens its output. */
+  | { kind: "background"; block: Block };
 
 export type Speaker = "user" | "agent" | "meta";
 
 export function speaker(row: Row): Speaker {
   if (row.kind === "activity" || row.kind === "footer" || row.kind === "fold") return "agent";
   // A checkpoint is a mark in the run, whichever way the letter went.
-  if (row.kind === "date" || row.kind === "letter" || row.kind === "refused") return "meta";
+  if (row.kind === "date" || row.kind === "letter" || row.kind === "refused" || row.kind === "background") return "meta";
   if (row.kind === "queued") return "user";
   // A letter from a bot is a row in the run, not a side of the
   // conversation: it gets a note's room, not a change of speaker's.
@@ -52,7 +54,12 @@ export function isQueued(block: Block): boolean {
   return block.role === "user" && block.streaming === true;
 }
 
-export function groupRows(blocks: Block[]): Row[] {
+/**
+ * `background` names the tool calls that left a command running in the
+ * background: each is drawn as a marker of its own, out of the group around
+ * it, so a folded turn still shows where it started.
+ */
+export function groupRows(blocks: Block[], background?: ReadonlySet<string>): Row[] {
   const rows: Row[] = [];
   let activity: Block[] = [];
   let lastAt: number | undefined;
@@ -98,6 +105,11 @@ export function groupRows(blocks: Block[]): Row[] {
       // A turn that ended on the send: its cost goes under it.
       if (block.usage && !block.streaming) rows.push(footerFor(block, block.usage));
       if (block.at !== undefined && block.role !== "tool") lastAt = block.at;
+      continue;
+    }
+    if (block.role === "tool" && block.tool && background?.has(block.tool.callId)) {
+      flush();
+      rows.push({ kind: "background", block });
       continue;
     }
     if (ACTIVITY_ROLES.has(block.role)) {
@@ -169,14 +181,14 @@ function isOpening(row: Row): boolean {
   return (row.kind === "message" || row.kind === "letter") && (row.block.role === "user" || row.block.role === "system");
 }
 
-/** What stays on the rail when a turn folds: who wrote to whom, and what was refused. */
+/** What stays on the rail when a turn folds: who wrote to whom, what was refused, what went to the background. */
 function staysOut(row: Row): boolean {
-  return row.kind === "letter" || row.kind === "refused";
+  return row.kind === "letter" || row.kind === "refused" || row.kind === "background";
 }
 
 /** Every block a row holds, a fold's included: what a search hit is looked for in. */
 export function rowBlocks(row: Row): Block[] {
-  if (row.kind === "message" || row.kind === "letter" || row.kind === "refused") return [row.block];
+  if (row.kind === "message" || row.kind === "letter" || row.kind === "refused" || row.kind === "background") return [row.block];
   if (row.kind === "activity" || row.kind === "queued") return row.blocks;
   if (row.kind === "fold") return row.rows.flatMap(rowBlocks);
   return [];
@@ -254,5 +266,7 @@ function foldTurn(turn: Row[]): Row[] {
 }
 
 function rowId(row: Row): string {
-  return row.kind === "message" || row.kind === "letter" || row.kind === "refused" ? row.block.id : row.id;
+  return row.kind === "message" || row.kind === "letter" || row.kind === "refused" || row.kind === "background"
+    ? row.block.id
+    : row.id;
 }

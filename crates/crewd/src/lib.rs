@@ -570,6 +570,9 @@ pub fn serve_on(config: Config, listen: Listen) -> Result<Handle, String> {
         transcripts.clone(),
         config.bridge.clone(),
     );
+    // What a turn left running in the background reaches every window.
+    let tray = hub.clone();
+    turns.background().set_listener(Arc::new(move |list| tray.emit("background-changed", list)));
     let leases = Leases::new();
     let browser = BrowserTools::new(config.store.clone(), BrowserRelay::new(), leases.clone());
     let to_client = hub.clone();
@@ -1849,6 +1852,21 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
                 }
             }
             json(started?)
+        }
+        "background_list" => {
+            let SessionId { session_id } = parse(params)?;
+            json(hosts.turns.background_list(&session_id))
+        }
+        "background_output" => {
+            let proto::BackgroundRequest { session_id, id } = parse(params)?;
+            let turns = hosts.turns.clone();
+            json(block(move || turns.background_output(&session_id, &id)).await?)
+        }
+        "background_stop" => {
+            let proto::BackgroundRequest { session_id, id } = parse(params)?;
+            let turns = hosts.turns.clone();
+            block(move || turns.background_stop(&session_id, &id)).await?;
+            Ok(Value::Null)
         }
         "turn_stop" => {
             let SessionId { session_id } = parse(params)?;

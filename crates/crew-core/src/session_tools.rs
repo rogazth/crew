@@ -1536,8 +1536,12 @@ print(json.dumps({{"type": "step_finish", "sessionID": sid, "part": {{"id": "sf"
         std::fs::write(
             &path,
             r#"#!/usr/bin/env python3
-import json, sys, threading, time, re, uuid, queue
+import json, os, signal, sys, threading, time, re, uuid, queue
+# A moment to read what was written just before the end, as a CLI would.
+signal.signal(signal.SIGTERM, lambda *_: (time.sleep(0.2), os._exit(0)))
 args = sys.argv[1:]
+CONTROL = os.path.join(os.path.dirname(os.path.abspath(sys.argv[0])), "claude-control.log")
+stopped = threading.Event()
 sid = args[args.index("--resume") + 1] if "--resume" in args else args[args.index("--session-id") + 1]
 replay = "--replay-user-messages" in args
 inbox = queue.Queue()
@@ -1552,7 +1556,12 @@ def reader():
         except Exception:
             continue
         if rec.get("type") == "control_request":
-            out({"type": "control_response", "response": {"subtype": "success", "request_id": rec["request_id"], "response": {}}})
+            req = rec.get("request") or {}
+            with open(CONTROL, "a") as f: f.write("%s %s\n" % (req.get("subtype"), req.get("task_id", "")))
+            answer = {"output": "tick\n", "total_bytes": 5, "truncated": False} if req.get("subtype") == "get_task_output" else {}
+            out({"type": "control_response", "response": {"subtype": "success", "request_id": rec["request_id"], "response": answer}})
+            if req.get("subtype") == "stop_task":
+                stopped.set()
         elif rec.get("type") == "user":
             inbox.put(rec)
 threading.Thread(target=reader, daemon=True).start()
@@ -1563,12 +1572,19 @@ while True:
         out({"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": heard[0]}]}, "session_id": sid})
     b = re.search(r"BACKGROUND (\d+(?:\.\d+)?)", heard[0])
     if b:
-        out({"type": "system", "subtype": "task_started", "task_id": "bg1", "is_backgrounded": True, "session_id": sid})
+        out({"type": "assistant", "message": {"id": "mb", "role": "assistant", "content": [{"type": "tool_use", "id": "toolu_bg", "name": "Bash", "input": {"command": "sleep %s" % b.group(1), "description": "Wait in the background", "run_in_background": True}}]}, "session_id": sid})
+        out({"type": "system", "subtype": "task_started", "task_id": "bg1", "tool_use_id": "toolu_bg", "description": "Wait in the background", "task_type": "local_bash", "is_backgrounded": True, "session_id": sid})
+        out({"type": "system", "subtype": "background_tasks_changed", "tasks": [{"task_id": "bg1", "task_type": "local_bash", "description": "Wait in the background"}], "session_id": sid})
         out({"type": "assistant", "message": {"id": "m0", "role": "assistant", "content": [{"type": "text", "text": "started it in the background"}]}, "session_id": sid})
         out({"type": "result", "subtype": "success", "is_error": False, "result": "started", "session_id": sid, "total_cost_usd": 0, "usage": {}})
-        time.sleep(float(b.group(1)))
-        out({"type": "system", "subtype": "task_notification", "task_id": "bg1", "status": "completed", "session_id": sid})
-        heard.append("the background command finished")
+        stopped.wait(float(b.group(1)))
+        out({"type": "system", "subtype": "background_tasks_changed", "tasks": [], "session_id": sid})
+        if stopped.is_set():
+            out({"type": "system", "subtype": "task_notification", "task_id": "bg1", "status": "stopped", "summary": "Background command stopped", "session_id": sid})
+            heard.append("the background command was stopped")
+        else:
+            out({"type": "system", "subtype": "task_notification", "task_id": "bg1", "status": "completed", "summary": "Background command completed (exit code 0)", "session_id": sid})
+            heard.append("the background command finished")
     m = re.search(r"SLEEP (\d+(?:\.\d+)?)", heard[0])
     if m:
         time.sleep(float(m.group(1)))
@@ -2280,6 +2296,100 @@ while True:
         assert_eq!(out["sessions"][0]["report"], "report: BACKGROUND 1.5 + the background command finished", "{out}");
         let read = w.call(&parent, "read_session", json!({ "session": id })).expect("read");
         assert_eq!(read["text"].as_str().unwrap().matches("Turn ended").count(), 1, "{read}");
+    }
+
+    /// Until the session's tray lists `count` commands, and that list.
+    fn until_background(w: &World, id: &str, check: impl Fn(&crew_protocol::BackgroundList) -> bool) -> crew_protocol::BackgroundList {
+        for _ in 0..400 {
+            let list = w.turns.background_list(id);
+            if check(&list) {
+                return list;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        panic!("the tray never got there: {:?}", w.turns.background_list(id));
+    }
+
+    /// A child's command in the background: listed while it runs, its
+    /// output read from Claude, stopped from the tray, and kept, ended, once
+    /// the turn is over.
+    #[test]
+    fn a_claude_childs_background_command_is_listed_read_and_stopped() {
+        use crew_protocol::{BackgroundKind, BackgroundState};
+        let w = world();
+        w.turns.override_binary("claude", fake_claude(&w.dir));
+        let parent = w.session("terminal", "shell", "full");
+        let started = w.call(&parent, "start_session", json!({ "provider": "claude", "prompt": "BACKGROUND 30" })).expect("start");
+        let id = started["id"].as_str().unwrap().to_string();
+        let list = until_background(&w, &id, |list| list.waiting);
+        assert!(list.live);
+        let row = &list.commands[0];
+        assert_eq!((row.id.as_str(), row.command.as_str()), ("bg1", "sleep 30"));
+        assert_eq!((row.kind, row.state), (BackgroundKind::Shell, BackgroundState::Running));
+        assert_eq!(row.tool_call_id.as_deref(), Some("toolu_bg"));
+        assert_eq!(w.turns.background_output(&id, "bg1").expect("output").output, "tick\n");
+        w.turns.background_stop(&id, "bg1").expect("stop");
+        assert_eq!(w.turns.background_list(&id).commands[0].state, BackgroundState::Stopped);
+        let out = w.wait(&parent, &id, json!({}));
+        assert_eq!(out["sessions"][0]["report"], "report: BACKGROUND 30 + the background command was stopped", "{out}");
+        // The CLI is gone: the row stays, ended, and its output is the last read.
+        let after = until_background(&w, &id, |list| !list.live);
+        assert_eq!(after.commands[0].state, BackgroundState::Stopped);
+        assert!(!after.waiting);
+        assert_eq!(w.turns.background_output(&id, "bg1").expect("kept").output, "tick\n");
+        assert!(w.turns.background_stop(&id, "bg1").is_ok(), "an ended command needs no stop");
+        let control = std::fs::read_to_string(w.dir.join("claude-control.log")).unwrap();
+        assert!(control.contains("get_task_output bg1\nstop_task bg1\n"), "{control}");
+        // The next turn starts with an empty tray.
+        w.call(&parent, "send_message", json!({ "to": id, "text": "again" })).expect("send");
+        until_background(&w, &id, |list| list.commands.is_empty());
+        w.wait(&parent, &id, json!({}));
+    }
+
+    /// Stopping a turn stops what it left in the background first, then
+    /// interrupts it, so a task stopped late cannot wake Claude again.
+    #[test]
+    fn stopping_a_claude_turn_stops_its_background_commands_before_the_interrupt() {
+        let w = world();
+        w.turns.override_binary("claude", fake_claude(&w.dir));
+        let parent = w.session("terminal", "shell", "full");
+        let started = w.call(&parent, "start_session", json!({ "provider": "claude", "prompt": "BACKGROUND 30" })).expect("start");
+        let id = started["id"].as_str().unwrap().to_string();
+        until_background(&w, &id, |list| list.waiting);
+        w.turns.stop(&id).expect("stop");
+        let log = w.dir.join("claude-control.log");
+        for _ in 0..200 {
+            if std::fs::read_to_string(&log).unwrap_or_default().contains("interrupt") {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        let control = std::fs::read_to_string(&log).unwrap();
+        assert!(control.ends_with("stop_task bg1\ninterrupt \n"), "{control}");
+        let list = until_background(&w, &id, |list| !list.live);
+        assert_eq!(list.commands[0].state, crew_protocol::BackgroundState::Stopped);
+    }
+
+    /// A Codex command that outlives its call is a background terminal: the
+    /// tray lists it from `thread/backgroundTerminals/list`, its output from
+    /// the deltas, and Stop terminates it.
+    #[test]
+    fn a_codex_background_terminal_is_listed_read_and_terminated() {
+        use crew_protocol::BackgroundState;
+        let w = world();
+        let parent = w.session("terminal", "shell", "full");
+        let (id, log) = w.codex(&parent, "BGTERM 30", None);
+        let list = until_background(&w, &id, |list| !list.commands.is_empty());
+        let row = &list.commands[0];
+        assert_eq!((row.id.as_str(), row.command.as_str(), row.state), ("exec-bg", "sleep 30", BackgroundState::Running));
+        assert_eq!(w.turns.background_output(&id, "exec-bg").expect("output").output, "tick\n");
+        w.turns.background_stop(&id, "exec-bg").expect("stop");
+        let out = w.wait(&parent, &id, json!({}));
+        assert_eq!(out["sessions"][0]["report"], "report: BGTERM 30 + terminal terminated", "{out}");
+        let after = until_background(&w, &id, |list| !list.live);
+        assert_eq!((after.commands[0].state, after.commands[0].exit_code), (BackgroundState::Stopped, Some(143)));
+        let sent = std::fs::read_to_string(log).unwrap();
+        assert!(sent.contains(r#""method": "thread/backgroundTerminals/terminate", "params": {"processId": "4242", "threadId""#), "{sent}");
     }
 
     /// A turn's CLI is installed on the turn's own thread. A message that

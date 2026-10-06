@@ -42,6 +42,9 @@ const STEER_TIMEOUT: Duration = Duration::from_secs(15);
 /// its process is killed under it.
 pub(super) const INTERRUPT_GRACE: Duration = Duration::from_secs(3);
 
+/// How often the background terminals are listed while a command runs.
+const TERMINAL_POLL: Duration = Duration::from_secs(2);
+
 /// A request the app server is waiting on Crew for, by the id the UI knows.
 pub(super) struct Pending<T> {
     rpc_id: Value,
@@ -130,6 +133,7 @@ impl TurnHost {
         let (tx, turn_rx) = oneshot::channel();
         self.lock()
             .insert(session_id.clone(), Live::Codex(Box::new(CodexLive::new(Some(tx)))));
+        self.background.touch(&session_id, crate::background::Board::begin);
         self.watch_for_silence(&session_id);
         // A stop that came before the CLI was there to take it.
         if self.stop_requested(&session_id) {
@@ -182,9 +186,12 @@ impl TurnHost {
             return TurnOutcome::Failed(error);
         }
         let outcome = match self.codex_open(&session_id, &thread, &text, &instructions) {
-            Ok(()) => self
-                .block_on(turn_rx)
-                .unwrap_or(TurnOutcome::Failed("Turn channel closed".into())),
+            Ok(()) => {
+                self.watch_terminals(&session_id);
+                self
+                    .block_on(turn_rx)
+                    .unwrap_or(TurnOutcome::Failed("Turn channel closed".into()))
+            }
             Err(_) if self.stop_requested(&session_id) => TurnOutcome::Stopped,
             Err(error) => TurnOutcome::Failed(error),
         };
@@ -248,6 +255,58 @@ impl TurnHost {
             }
         }
         Ok(())
+    }
+
+    /// While the turn runs, list the thread's background terminals whenever a
+    /// command is running: a command that outlives its call is one, and the
+    /// tray lists it. Nothing is asked while no command runs.
+    fn watch_terminals(&self, session_id: &str) {
+        let host = self.clone();
+        let session_id = session_id.to_string();
+        thread::spawn(move || loop {
+            thread::sleep(TERMINAL_POLL);
+            let thread_id = match host.lock().get(&session_id) {
+                Some(Live::Codex(live)) if !live.settled && !live.cancelled => live.thread_id.clone(),
+                _ => return,
+            };
+            let Some(thread_id) = thread_id else {
+                continue;
+            };
+            if !host.background.read(&session_id, |board| board.codex_running()).unwrap_or(false) {
+                continue;
+            }
+            let Ok(listed) = host.codex_call(
+                &session_id,
+                "thread/backgroundTerminals/list",
+                json!({ "threadId": thread_id }),
+                STEER_TIMEOUT,
+            ) else {
+                continue;
+            };
+            let terminals = listed.get("data").and_then(Value::as_array).cloned().unwrap_or_default();
+            let now = crate::store::now_millis();
+            host.background.touch(&session_id, |board| board.codex_listed(&terminals, now));
+        });
+    }
+
+    /// Stop one background terminal of the running thread.
+    pub(super) fn codex_terminate(&self, session_id: &str, process_id: &str) -> Result<(), String> {
+        let thread_id = match self.lock().get(session_id) {
+            Some(Live::Codex(live)) => live.thread_id.clone(),
+            _ => None,
+        }
+        .ok_or_else(|| "Codex is not running.".to_string())?;
+        let answer = self.codex_call(
+            session_id,
+            "thread/backgroundTerminals/terminate",
+            json!({ "threadId": thread_id, "processId": process_id }),
+            STEER_TIMEOUT,
+        )?;
+        if answer.get("terminated").and_then(Value::as_bool) == Some(true) {
+            Ok(())
+        } else {
+            Err("Codex says it is not running.".into())
+        }
     }
 
     /// An error from the handshake, with what Codex said on stderr.
@@ -602,6 +661,8 @@ impl TurnHost {
     fn codex_notification(&self, session_id: &str, method: &str, params: &Value) {
         let mut events = Vec::new();
         let mut outcome = None;
+        // A command item for the tray, read out of the lock.
+        let mut command: Option<(Map<String, Value>, bool)> = None;
         {
             let mut map = self.lock();
             let Some(Live::Codex(live)) = map.get_mut(session_id) else {
@@ -675,6 +736,20 @@ impl TurnHost {
                         return;
                     };
                     codex_item(live, item, method == "item/completed", &mut events);
+                    // Every item: one starting says the model went on from a
+                    // command still running, which puts that one in the background.
+                    command = Some((item.clone(), method == "item/completed"));
+                }
+                "item/commandExecution/outputDelta" => {
+                    if let (Some(item), Some(delta)) = (
+                        params.get("itemId").and_then(Value::as_str),
+                        params.get("delta").and_then(Value::as_str),
+                    ) {
+                        self.background.touch(session_id, |board| {
+                            board.codex_output(item, delta);
+                            false
+                        });
+                    }
                 }
                 "turn/plan/updated" => {
                     let Some(detail) = plan_detail(params) else {
@@ -709,6 +784,10 @@ impl TurnHost {
                 }
                 _ => {}
             }
+        }
+        if let Some((item, completed)) = command {
+            let now = crate::store::now_millis();
+            self.background.touch(session_id, |board| board.codex_item(&item, completed, now));
         }
         for event in events {
             // A steer the turn has read: its letter is delivered.
@@ -836,6 +915,7 @@ def log(m):
 log({"argv": sys.argv[1:], "env": {k: os.environ.get(k) for k in ["CREW_SOCKET", "CREW_TOKEN"]}})
 state = {"thread": None, "turn": None, "next": 0}
 answers = {}
+terminals = {}
 def ask(method, params):
     with lock:
         rid = state["next"]; state["next"] += 1
@@ -865,6 +945,20 @@ def run(turn, text):
         while time.time() < end and not (turn["interrupted"].is_set() and not turn["stubborn"]):
             time.sleep(0.02)
         item("completed", dict(cmd, status="completed", exitCode=0, aggregatedOutput=""))
+    t = re.search(r"BGTERM ([0-9.]+)", text)
+    if t:
+        cid = "exec-bg"
+        cmd = {"type": "commandExecution", "id": cid, "command": "/bin/zsh -lc 'sleep %s'" % t.group(1), "cwd": os.getcwd(), "processId": "4242", "source": "unifiedExecStartup", "status": "inProgress", "aggregatedOutput": None, "exitCode": None}
+        item("started", cmd)
+        out({"method": "item/commandExecution/outputDelta", "params": {"threadId": state["thread"], "turnId": tid, "itemId": cid, "delta": "tick\n"}})
+        item("started", {"type": "reasoning", "id": "rs-bg", "summary": [], "content": []})
+        ended = threading.Event()
+        terminals[cid] = {"itemId": cid, "processId": "4242", "command": cmd["command"], "cwd": os.getcwd(), "osPid": 1, "cpuPercent": None, "rssKb": None, "ended": ended}
+        ended.wait(float(t.group(1)))
+        terminals.pop(cid, None)
+        stopped = ended.is_set()
+        item("completed", dict(cmd, status="failed" if stopped else "completed", exitCode=143 if stopped else 0, aggregatedOutput="tick\n"))
+        heard.append("terminal %s" % ("terminated" if stopped else "finished"))
     if "ASK" in text:
         cid = "exec-" + uuid.uuid4().hex[:8]
         cmd = {"type": "commandExecution", "id": cid, "command": "/bin/zsh -lc 'touch asked.txt'", "cwd": os.getcwd(), "status": "inProgress", "aggregatedOutput": None, "exitCode": None}
@@ -944,6 +1038,12 @@ for line in sys.stdin:
             out({"id": rid, "result": {"turnId": turn["id"]}})
         else:
             out({"id": rid, "error": {"code": -32600, "message": "no active turn to steer"}})
+    elif method == "thread/backgroundTerminals/list":
+        out({"id": rid, "result": {"data": [{k: v for k, v in row.items() if k != "ended"} for row in list(terminals.values())], "nextCursor": None}})
+    elif method == "thread/backgroundTerminals/terminate":
+        hit = [row for row in list(terminals.values()) if row["processId"] == params.get("processId")]
+        for row in hit: row["ended"].set()
+        out({"id": rid, "result": {"terminated": bool(hit)}})
     elif method == "turn/interrupt":
         turn = state["turn"]
         if turn: turn["interrupted"].set()
