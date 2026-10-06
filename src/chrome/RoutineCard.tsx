@@ -30,6 +30,10 @@ export function RoutineCard({ entry, workspace, onOpen }: Props) {
   const description = summarize(routine.prompt);
   const failed = routine.runs[0]?.status === "error";
   const recent = routine.runs.slice(0, 6).reverse();
+  const schedule = parseSchedule(routine.schedule);
+  // A once routine runs on schedule a single time, and the daemon then
+  // switches it off: done, not paused.
+  const done = !routine.enabled && schedule.kind === "once" && routine.runs.some((run) => run.trigger === "schedule");
 
   return (
     <button
@@ -56,7 +60,7 @@ export function RoutineCard({ entry, workspace, onOpen }: Props) {
 
       <span className="flex w-40 shrink-0 items-center gap-1.5 text-[12px] text-text-muted">
         <ClockIcon className="size-3.5 shrink-0 text-icon" />
-        <span className="truncate">{describeSchedule(parseSchedule(routine.schedule))}</span>
+        <span className="truncate">{describeSchedule(schedule)}</span>
       </span>
 
       <span className="flex w-16 shrink-0 items-center justify-end gap-1" aria-label="Recent runs">
@@ -73,7 +77,7 @@ export function RoutineCard({ entry, workspace, onOpen }: Props) {
         {routine.enabled ? (
           <span className="text-text">{routine.nextRunAt ? until(routine.nextRunAt) : "—"}</span>
         ) : (
-          <span className="rounded-full px-2 py-0.5 text-text-muted ring-1 ring-hairline">Paused</span>
+          <span className="rounded-full px-2 py-0.5 text-text-muted ring-1 ring-hairline">{done ? "Done" : "Paused"}</span>
         )}
       </span>
     </button>

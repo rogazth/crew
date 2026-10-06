@@ -134,7 +134,7 @@ async fn a_failed_tool_and_a_departed_host_both_answer_the_caller() {
     send(&mut host, 1, "browser_host_register", json!({})).await;
     response(&mut host, 1).await;
 
-    send(&mut window, 2, "browser_tool", json!({ "workspaceId": "w1", "tool": "browser_click", "args": { "tab": "browser:b", "uid": "9_9" } })).await;
+    send(&mut window, 2, "browser_tool", json!({ "workspaceId": "w1", "tool": "browser_act", "args": { "tab": "browser:b", "action": "click", "uid": "9_9" } })).await;
     let call = event(&mut host, "browser-call").await;
     send(&mut host, 2, "browser_result", json!({ "callId": call["callId"], "ok": false, "error": "Take a new snapshot" })).await;
     assert_eq!(response(&mut window, 2).await["error"], "Take a new snapshot");

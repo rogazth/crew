@@ -16,7 +16,7 @@ use crate::caller::Caller;
 use crate::process::{ProcessHost, ProcessPatch, RunRequest, WAIT_MAX_S};
 use crate::session;
 use crate::store::{now_millis, Store};
-use crate::tools::{Audience, Tool, ToolFamily, ToolOutput};
+use crate::tools::{cli, Audience, CliVerb, Tool, ToolFamily, ToolOutput};
 
 pub struct ProcessTools {
     host: ProcessHost,
@@ -45,144 +45,112 @@ fn run_env_arg() -> Value {
 }
 
 /// The same rule wherever an agent may be deciding how to run something.
-const KEEPS_RUNNING: &str = "For anything that keeps running (dev servers, watchers, workers) use start_process instead of backgrounding it in your shell: the user sees it and can stop it, and it does not die with your session. Builds, tests and other commands that finish run in your shell as usual.";
+const KEEPS_RUNNING: &str = "For anything that keeps running (dev servers, watchers, workers) use control_process with action start instead of backgrounding it in your shell: the user sees it and can stop it, and it does not die with your session. Builds, tests and other commands that finish run in your shell as usual.";
+
+/// What `control_process` does, by its `action`.
+const ACTIONS: [&str; 5] = ["start", "stop", "restart", "pause", "resume"];
 
 fn spec_properties() -> Value {
     json!({
-        "name": { "type": "string", "description": "Unique in this workspace, e.g. \"web\" or \"api\"." },
-        "command": { "type": "string", "description": "Run by the user's shell, so pipes, && and globs work as typed, e.g. \"npm run dev\"." },
+        "name": { "type": "string", "description": "Unique in this workspace, e.g. \"web\" or \"api\". With process, renames it." },
+        "command": { "type": "string", "description": "Run by the user's shell, so pipes, && and globs work as typed, e.g. \"npm run dev\". Required to create one." },
         "cwd": { "type": "string", "description": "Relative to the worktree it runs in, e.g. \"server\". Empty is its root." },
         "env": { "type": "object", "additionalProperties": { "type": "string" }, "description": "Extra environment variables, e.g. {\"PORT\": \"3000\"}: a start can override the ones named here for its run." },
         "auto_restart": { "type": "boolean", "description": "Restart it when it exits on its own, backing off from 1 s to 30 s; five crashes in two minutes leave it crashed." }
     })
 }
 
-fn one(name: &'static str, description: &'static str, keywords: &'static [&'static str]) -> Tool {
-    Tool {
-        name,
-        description,
-        schema: json!({
-            "type": "object",
-            "properties": { "process": process_arg(), "worktree": worktree_arg() },
-            "required": ["process"]
-        }),
-        keywords,
-        audience: Audience::EVERYONE,
-    }
+/// `crew processes <action> <process>`, one per action of `control_process`.
+fn control_verbs() -> Vec<CliVerb> {
+    vec![
+        cli("processes", "start").sets("action", "start").about("Start a process in your worktree (or the one you name).").pos(&["process"]).flags(&["worktree", "env"]).eg("crew processes start web\n  crew processes start web --worktree ../app-feat --env PORT=3001"),
+        cli("processes", "stop").sets("action", "stop").about("Stop a process's run: SIGTERM to its group, SIGKILL after 5 s.").pos(&["process"]).flags(&["worktree"]).eg("crew processes stop web"),
+        cli("processes", "restart").sets("action", "restart").about("Stop a process's run and start it again.").pos(&["process"]).flags(&["worktree", "env"]).eg("crew processes restart web"),
+        cli("processes", "pause").sets("action", "pause").about("Freeze a running process (SIGSTOP).").pos(&["process"]).flags(&["worktree"]).eg("crew processes pause worker"),
+        cli("processes", "resume").sets("action", "resume").about("Continue a paused process (SIGCONT).").pos(&["process"]).flags(&["worktree"]).eg("crew processes resume worker"),
+    ]
 }
 
 /// The process tools. They need no host to be described, so the CLI builds
 /// its commands from the same list the daemon runs.
 pub fn catalog() -> Vec<Tool> {
-    let mut update = spec_properties();
-    update["process"] = process_arg();
+    let mut save = spec_properties();
+    save["process"] = json!({ "type": "string", "description": "An existing process's id or name, to change it (and rename it with name). Omit to create one, or to change the one called name." });
     vec![
         Tool {
             name: "list_processes",
             description: "List this workspace's processes: the dev servers, watchers and workers the user defined once for the workspace, each run in a terminal of its own with its output logged. A process runs in a worktree, at most once in each: runs lists where it is running or last ran, with its state (starting, running, paused, exited, crashed, stopped), pid, uptime, last exit code, automatic restarts, who started it and its own env; here marks the run in your worktree. log_cursor is where that run's log ends right now: pass it as since to read_logs or wait_for_log to see only what comes after. A process not yet approved by the user cannot start.",
             schema: json!({ "type": "object", "properties": {} }),
-            keywords: &["dev", "server", "servers", "running", "status", "commands", "processes", "services", "watchers", "worktree"],
             audience: Audience::EVERYONE,
+            cli: vec![cli("processes", "list").alias(&["ls"]).eg("crew processes list\n  crew processes list --json | jq '.[].name'")],
         },
         Tool {
-            name: "start_process",
+            name: "control_process",
             description: concat!(
-                "Start a process in your worktree (or the one you name). It returns as soon as the process is running; to know it is up, follow with wait_for_log for its ready line (without since it reads this run from its first line, so nothing printed in between is missed). Already running there, it is left alone. Two worktrees running the same server clash on its port: pass env, e.g. {\"PORT\": \"3001\"}. A process an agent created that the user has not approved yet cannot start: the error says so, and only the user can approve it, in Crew. ",
-                "For anything that keeps running (dev servers, watchers, workers) use start_process instead of backgrounding it in your shell: the user sees it and can stop it, and it does not die with your session. Builds, tests and other commands that finish run in your shell as usual."
+                "Start, stop, restart, pause or resume a process's run in your worktree (or the one you name). ",
+                "start returns once it is running (already running there, it is left alone); follow with wait_for_log for its ready line, which without since reads the run from its first line. Two worktrees running the same server clash on its port: pass env, e.g. {\"PORT\": \"3001\"}. A process not yet approved by the user cannot start: only the user can approve it, in Crew. ",
+                "stop sends SIGTERM to its process group, SIGKILL after 5 s, and returns once it has exited. restart stops and starts it, keeping the last run's env unless you pass env. pause freezes it (SIGSTOP), keeping its memory and ports; resume continues it. ",
+                "For anything that keeps running (dev servers, watchers, workers) use this instead of backgrounding it in your shell: the user sees it and can stop it, and it does not die with your session. Builds, tests and other commands that finish run in your shell as usual."
             ),
             schema: json!({
                 "type": "object",
-                "properties": { "process": process_arg(), "worktree": worktree_arg(), "env": run_env_arg() },
-                "required": ["process"]
+                "properties": {
+                    "process": process_arg(),
+                    "action": { "type": "string", "enum": ACTIONS },
+                    "worktree": worktree_arg(),
+                    "env": run_env_arg()
+                },
+                "required": ["process", "action"]
             }),
-            keywords: &["run", "launch", "boot", "dev", "server", "serve", "up", "background", "port"],
             audience: Audience::EVERYONE,
+            cli: control_verbs(),
         },
-        one(
-            "stop_process",
-            "Stop a process's run in your worktree (or the one you name): SIGTERM to its whole process group, SIGKILL if it is still up after the grace (5 s). Returns once it has exited; an automatic restart does not bring it back.",
-            &["kill", "halt", "terminate", "shutdown", "down", "server"],
-        ),
         Tool {
-            name: "restart_process",
-            description: "Stop a process's run and start it again: after changing its definition, or when it hangs. Without env it keeps the env the last run had. Follow with wait_for_log without since to watch the new run boot.",
+            name: "save_process",
+            description: "Define a process for this workspace, or change one: a shell command Crew keeps running in a terminal of its own, with its output logged, in whichever worktree it is started. Without process, name picks it: an existing one is changed, otherwise one is created (command required). Only the fields you pass change, for every worktree; a running process picks a change up on its next restart. Saving does not start it: control_process does. If your autonomy is ask, a new process waits for the user's approval in Crew before it can start, and a change waits as a proposal while the accepted definition keeps running; tell the user it is waiting for them. Check list_processes first: the one you need may be there already.",
+            schema: json!({ "type": "object", "properties": save }),
+            audience: Audience::EVERYONE,
+            cli: vec![
+                cli("processes", "add").about("Define a process for this workspace (or change the one of that name).").eg("crew processes add web npm run dev\n  crew processes add api --cwd server --env PORT=4000 --auto-restart -- cargo run"),
+                cli("processes", "edit").about("Change a process's definition: only what you pass.").eg("crew processes edit web --command 'npm run dev -- --port 3001'\n  crew processes edit web --auto-restart true"),
+            ],
+        },
+        Tool {
+            name: "delete_process",
+            description: "Delete a process from the workspace: stop it in every worktree it runs in, and remove its definition and all its logs. With autonomy ask you can only delete the processes you created.",
             schema: json!({
                 "type": "object",
-                "properties": { "process": process_arg(), "worktree": worktree_arg(), "env": run_env_arg() },
+                "properties": { "process": process_arg(), "worktree": worktree_arg() },
                 "required": ["process"]
             }),
-            keywords: &["reload", "reboot", "bounce", "server", "dev"],
             audience: Audience::EVERYONE,
+            cli: vec![cli("processes", "rm").pos(&["process"]).eg("crew processes rm web")],
         },
-        one(
-            "pause_process",
-            "Freeze a running process (SIGSTOP to its group): it keeps its memory and its ports but runs nothing until resume_process.",
-            &["suspend", "freeze", "sigstop"],
-        ),
-        one(
-            "resume_process",
-            "Continue a paused process (SIGCONT to its group).",
-            &["continue", "unpause", "unfreeze", "sigcont"],
-        ),
-        Tool {
-            name: "create_process",
-            description: concat!(
-                "Define a new process for this workspace: a shell command Crew keeps running in a terminal of its own, with its output logged, in whichever worktree it is started. Check list_processes first: the one you need may be there already. It is not started: call start_process. If your autonomy is ask, it is created pending-approval: the user has to accept it in Crew first, and start_process fails until then, so tell the user it is waiting for them. ",
-                "For anything that keeps running (dev servers, watchers, workers) use start_process instead of backgrounding it in your shell: the user sees it and can stop it, and it does not die with your session. Builds, tests and other commands that finish run in your shell as usual."
-            ),
-            schema: json!({ "type": "object", "properties": spec_properties(), "required": ["name", "command"] }),
-            keywords: &["new", "add", "define", "dev", "server", "command", "watcher", "service"],
-            audience: Audience::EVERYONE,
-        },
-        Tool {
-            name: "update_process",
-            description: "Change a process's definition, for every worktree; only the fields you pass change. If your autonomy is ask, the change waits for the user's approval as a proposal, and what runs meanwhile is the definition already accepted. A running process picks up a change on its next start: restart_process. For a different port in one worktree, pass env to start_process instead.",
-            schema: json!({ "type": "object", "properties": update, "required": ["process"] }),
-            keywords: &["edit", "change", "rename", "configure", "env", "command"],
-            audience: Audience::EVERYONE,
-        },
-        one(
-            "delete_process",
-            "Delete a process from the workspace: stop it in every worktree it runs in, and remove its definition and all its logs. With autonomy ask you can only delete the processes you created.",
-            &["remove", "forget", "drop"],
-        ),
         Tool {
             name: "read_logs",
-            description: "Read a process's output in your worktree (or the one you name) as plain text, colours and escapes stripped. Without since: its last tail lines (200 by default). With since: what was written from that cursor on, up to max_bytes (16 KB by default, 256 KB at most); a cursor short of log_cursor means there is more, so call again. Either way the answer's cursor is where this read ended: pass it back as since and you get only what is new. That is how you watch a process: poll read_logs with the last cursor, or block on wait_for_log. skipped above zero means log rotation dropped that many bytes after since.",
+            description: "Read a process's output in your worktree (or the one you name) as plain text, colours and escapes stripped. Without since: its last tail lines (200 by default). With since: what was written from that cursor on, up to max_bytes (16 KB by default, 256 KB at most); a cursor short of log_cursor means there is more, so call again. Either way the answer's cursor is where this read ended: pass it back as since and you get only what is new. skipped above zero means log rotation dropped that many bytes after since. With pattern (a regex) it searches the whole log still on disk instead: the latest max_matches matching lines (20 by default), oldest first, each with context lines either side (up to 10); total counts every match. Crew's own [crew] lines are never matched.",
             schema: json!({
                 "type": "object",
                 "properties": {
                     "process": process_arg(),
                     "worktree": worktree_arg(),
-                    "tail": { "type": "integer", "minimum": 1, "maximum": 5000, "description": "Lines from the end, when since is not given." },
-                    "since": { "type": "integer", "minimum": 0, "description": "A cursor from an earlier call, or a run's log_cursor from list_processes." },
-                    "max_bytes": { "type": "integer", "minimum": 1, "maximum": 262144 }
+                    "tail": { "type": "integer", "minimum": 1, "maximum": 5000, "description": "Lines from the end, when since is not given. Not with pattern." },
+                    "since": { "type": "integer", "minimum": 0, "description": "A cursor from an earlier call, or a run's log_cursor from list_processes. Not with pattern." },
+                    "max_bytes": { "type": "integer", "minimum": 1, "maximum": 262144, "description": "Not with pattern." },
+                    "pattern": { "type": "string", "description": "A regex to search for instead of reading, e.g. \"(?i)error|warn\"." },
+                    "context": { "type": "integer", "minimum": 0, "maximum": 10, "description": "With pattern: lines either side of each match." },
+                    "max_matches": { "type": "integer", "minimum": 1, "maximum": 200, "description": "With pattern: how many of the latest matches." }
                 },
                 "required": ["process"]
             }),
-            keywords: &["log", "output", "tail", "watch", "stdout", "stderr", "console", "print", "poll"],
             audience: Audience::EVERYONE,
-        },
-        Tool {
-            name: "grep_logs",
-            description: "Search the whole log still on disk of a process's run in your worktree (or the one you name) for a regex: the latest max_matches matching lines (20 by default), oldest first, each with context lines either side (up to 10). total counts every match, shown or not. Crew's own [crew] lines are never matched.",
-            schema: json!({
-                "type": "object",
-                "properties": {
-                    "process": process_arg(),
-                    "worktree": worktree_arg(),
-                    "pattern": { "type": "string", "description": "A regex, e.g. \"(?i)error|warn\"." },
-                    "context": { "type": "integer", "minimum": 0, "maximum": 10 },
-                    "max_matches": { "type": "integer", "minimum": 1, "maximum": 200 }
-                },
-                "required": ["process", "pattern"]
-            }),
-            keywords: &["log", "search", "find", "error", "errors", "grep", "regex", "stack", "trace"],
-            audience: Audience::EVERYONE,
+            cli: vec![cli("processes", "logs").eg(
+                "crew processes logs web                 the last lines\n  crew processes logs web -n 500\n  crew processes logs web -f              follow, like tail -f\n  crew processes logs web --grep 'error|panic' -C 2\n  crew processes logs web -f --grep ready print each matching line as it arrives",
+            )],
         },
         Tool {
             name: "wait_for_log",
-            description: "Block until a line of a process's log, in your worktree or the one you name, matches a regex, the process stops or exits, or timeout_s passes (at most 60). Without since it searches the current run from its first line, so start_process or restart_process followed by this sees the whole boot, even a line printed before the call. With since, only what comes after that cursor. Answers with result matched (the line, and the cursor after it), ended (the state and exit code: nothing more is coming) or timed-out. To wait longer than a minute, call again with since set to the cursor it returned.",
+            description: "Block until a line of a process's log, in your worktree or the one you name, matches a regex, the process stops or exits, or timeout_s passes (at most 60). Without since it searches the current run from its first line, so a start or restart followed by this sees the whole boot, even a line printed before the call. With since, only what comes after that cursor. Answers with result matched (the line, and the cursor after it), ended (the state and exit code: nothing more is coming) or timed-out. To wait longer than a minute, call again with since set to the cursor it returned.",
             schema: json!({
                 "type": "object",
                 "properties": {
@@ -194,8 +162,8 @@ pub fn catalog() -> Vec<Tool> {
                 },
                 "required": ["process", "pattern", "timeout_s"]
             }),
-            keywords: &["log", "watch", "ready", "listening", "until", "block", "boot", "started", "compiled"],
             audience: Audience::EVERYONE,
+            cli: vec![cli("processes", "wait").pos(&["process", "pattern"]).eg("crew processes wait web 'ready|listening' --timeout-s 30")],
         },
         Tool {
             name: "send_input",
@@ -209,8 +177,8 @@ pub fn catalog() -> Vec<Tool> {
                 },
                 "required": ["process", "text"]
             }),
-            keywords: &["type", "keys", "keyboard", "stdin", "input", "press", "answer", "prompt"],
             audience: Audience::EVERYONE,
+            cli: vec![cli("processes", "input").rest(&["process", "text"]).eg("crew processes input web r\n  printf 'y\\r' | crew processes input setup -")],
         },
     ]
 }
@@ -237,49 +205,39 @@ impl ToolFamily for ProcessTools {
         let here = |process: &Process| self.row(process, worktree);
         let out = match name {
             "list_processes" => Value::Array(host.list(workspace)?.iter().map(here).collect()),
-            "start_process" | "restart_process" => {
+            "control_process" => {
                 let target = process(args)?;
+                let action = string(args, "action")?.ok_or_else(|| {
+                    format!("action is required: one of {}", ACTIONS.join(", "))
+                })?;
                 let env = env(args)?;
-                if let Some(env) = &env {
-                    self.may_set_env(caller, workspace, &target, env)?;
+                match action.as_str() {
+                    "start" | "restart" => {
+                        if let Some(env) = &env {
+                            self.may_set_env(caller, workspace, &target, env)?;
+                        }
+                        let request = RunRequest {
+                            worktree: worktree.map(str::to_string),
+                            env,
+                            started_by: caller.session_id().map(str::to_string),
+                        };
+                        let started = if action == "start" {
+                            host.start(workspace, &target, request)?
+                        } else {
+                            host.restart(workspace, &target, request)?
+                        };
+                        here(&started)
+                    }
+                    "stop" | "pause" | "resume" if env.is_some() => {
+                        return Err(format!("env is for start and restart, not {action}"));
+                    }
+                    "stop" => here(&host.stop(workspace, &target, worktree)?),
+                    "pause" => here(&host.pause(workspace, &target, worktree)?),
+                    "resume" => here(&host.resume(workspace, &target, worktree)?),
+                    other => return Err(format!("action is one of {}, not {other}", ACTIONS.join(", "))),
                 }
-                let request = RunRequest {
-                    worktree: worktree.map(str::to_string),
-                    env,
-                    started_by: caller.session_id().map(str::to_string),
-                };
-                let started = if name == "start_process" {
-                    host.start(workspace, &target, request)?
-                } else {
-                    host.restart(workspace, &target, request)?
-                };
-                here(&started)
             }
-            "stop_process" => here(&host.stop(workspace, &process(args)?, worktree)?),
-            "pause_process" => here(&host.pause(workspace, &process(args)?, worktree)?),
-            "resume_process" => here(&host.resume(workspace, &process(args)?, worktree)?),
-            "create_process" => {
-                let spec = ProcessSpec {
-                    name: string(args, "name")?.ok_or("name is required")?,
-                    command: string(args, "command")?.ok_or("command is required")?,
-                    cwd: string(args, "cwd")?.unwrap_or_default(),
-                    env: env(args)?.unwrap_or_default(),
-                    auto_restart: flag(args, "auto_restart")?.unwrap_or(false),
-                };
-                let by = caller.session_id().map(str::to_string);
-                here(&host.create(workspace, spec, by, !caller.full_autonomy())?)
-            }
-            "update_process" => {
-                let patch = ProcessPatch {
-                    name: string(args, "name")?,
-                    command: string(args, "command")?,
-                    cwd: string(args, "cwd")?,
-                    env: env(args)?,
-                    auto_restart: flag(args, "auto_restart")?,
-                };
-                let by = caller.session_id().map(str::to_string);
-                here(&host.update(workspace, &process(args)?, patch, by, !caller.full_autonomy())?)
-            }
+            "save_process" => self.save(caller, workspace, args).map(|saved| here(&saved))?,
             "delete_process" => {
                 let target = process(args)?;
                 // Deleting throws away a definition and its logs with no
@@ -295,38 +253,47 @@ impl ToolFamily for ProcessTools {
                 host.delete(workspace, &target)?;
                 json!(format!("Deleted \"{target}\"."))
             }
-            "read_logs" => {
-                let chunk = host.read_logs(
-                    workspace,
-                    &process(args)?,
-                    worktree,
-                    number(args, "tail")?.map(clamp_u32),
-                    number(args, "since")?,
-                    number(args, "max_bytes")?.map(clamp_u32),
-                )?;
-                json!({ "text": chunk.text, "cursor": chunk.cursor, "start": chunk.start, "skipped": chunk.skipped })
-            }
-            "grep_logs" => {
-                let pattern = string(args, "pattern")?.ok_or("pattern is required")?;
-                let grep = host.grep_logs(
-                    workspace,
-                    &process(args)?,
-                    worktree,
-                    &pattern,
-                    number(args, "context")?.map(clamp_u32),
-                    number(args, "max_matches")?.map(clamp_u32),
-                )?;
-                json!({
-                    "matches": grep.matches.iter().map(|m| json!({
-                        "offset": m.offset,
-                        "line": m.line,
-                        "before": m.before,
-                        "after": m.after
-                    })).collect::<Vec<_>>(),
-                    "total": grep.total,
-                    "cursor": grep.cursor
-                })
-            }
+            "read_logs" => match string(args, "pattern")? {
+                None => {
+                    if let Some(key) = ["context", "max_matches"].into_iter().find(|key| args.get(*key).is_some_and(|v| !v.is_null())) {
+                        return Err(format!("{key} goes with pattern: it shapes a search, not a read"));
+                    }
+                    let chunk = host.read_logs(
+                        workspace,
+                        &process(args)?,
+                        worktree,
+                        number(args, "tail")?.map(clamp_u32),
+                        number(args, "since")?,
+                        number(args, "max_bytes")?.map(clamp_u32),
+                    )?;
+                    json!({ "text": chunk.text, "cursor": chunk.cursor, "start": chunk.start, "skipped": chunk.skipped })
+                }
+                Some(pattern) => {
+                    if let Some(key) = ["tail", "since", "max_bytes"].into_iter().find(|key| args.get(*key).is_some_and(|v| !v.is_null())) {
+                        return Err(format!(
+                            "{key} is for reading, and pattern searches the whole log: drop one (max_matches and context shape a search)"
+                        ));
+                    }
+                    let grep = host.grep_logs(
+                        workspace,
+                        &process(args)?,
+                        worktree,
+                        &pattern,
+                        number(args, "context")?.map(clamp_u32),
+                        number(args, "max_matches")?.map(clamp_u32),
+                    )?;
+                    json!({
+                        "matches": grep.matches.iter().map(|m| json!({
+                            "offset": m.offset,
+                            "line": m.line,
+                            "before": m.before,
+                            "after": m.after
+                        })).collect::<Vec<_>>(),
+                        "total": grep.total,
+                        "cursor": grep.cursor
+                    })
+                }
+            },
             "wait_for_log" => {
                 let pattern = string(args, "pattern")?.ok_or("pattern is required")?;
                 let timeout = wait_seconds(args)?;
@@ -355,6 +322,49 @@ impl ToolFamily for ProcessTools {
 }
 
 impl ProcessTools {
+    /// `save_process`: change the process `process` names, or the one called
+    /// `name`; with neither found, create it. Under ask, a creation waits for
+    /// approval and a change is a proposal, as the host decides with `ask`.
+    fn save(&self, caller: &Caller, workspace: &str, args: &Value) -> Result<Process, String> {
+        let host = &self.host;
+        let named = string(args, "process")?.map(|name| name.trim().to_string()).filter(|name| !name.is_empty());
+        let name = string(args, "name")?.map(|name| name.trim().to_string()).filter(|name| !name.is_empty());
+        let by = caller.session_id().map(str::to_string);
+        let ask = !caller.full_autonomy();
+        let existing = match (&named, &name) {
+            (Some(key), _) => Some(host.get(workspace, key).map_err(|error| {
+                format!("{error} To create a process, leave out process and pass name and command.")
+            })?),
+            (None, Some(key)) => host.get(workspace, key).ok(),
+            (None, None) => return Err("name is required to create a process, or process to change one".into()),
+        };
+        match existing {
+            Some(found) => {
+                let patch = ProcessPatch {
+                    // Keyed by name, the name is not a change.
+                    name: if named.is_some() { name } else { None },
+                    command: string(args, "command")?,
+                    cwd: string(args, "cwd")?,
+                    env: env(args)?,
+                    auto_restart: flag(args, "auto_restart")?,
+                };
+                host.update(workspace, &found.id, patch, by, ask)
+            }
+            None => {
+                let spec = ProcessSpec {
+                    name: name.unwrap_or_default(),
+                    command: string(args, "command")?
+                        .filter(|command| !command.trim().is_empty())
+                        .ok_or("command is required to create a process; to change one, name it with process")?,
+                    cwd: string(args, "cwd")?.unwrap_or_default(),
+                    env: env(args)?.unwrap_or_default(),
+                    auto_restart: flag(args, "auto_restart")?.unwrap_or(false),
+                };
+                host.create(workspace, spec, by, ask)
+            }
+        }
+    }
+
     /// A process as the model reads it: what it runs, where it runs and how
     /// each run stands, and anything the user still has to say about it.
     /// `mine` is the caller's worktree, for marking its run.
@@ -437,7 +447,7 @@ impl ProcessTools {
             return Ok(());
         }
         Err(format!(
-            "With autonomy ask you can only set the env names \"{process}\" already has ({}); {} is not one. Ask the user to add it to the process, or propose it with update_process.",
+            "With autonomy ask you can only set the env names \"{process}\" already has ({}); {} is not one. Ask the user to add it to the process, or propose it with save_process.",
             if declared.is_empty() { "none".to_string() } else { declared.keys().cloned().collect::<Vec<_>>().join(", ") },
             unknown.join(", ")
         ))
@@ -661,16 +671,10 @@ mod tests {
             names,
             vec![
                 "list_processes",
-                "start_process",
-                "stop_process",
-                "restart_process",
-                "pause_process",
-                "resume_process",
-                "create_process",
-                "update_process",
+                "control_process",
+                "save_process",
                 "delete_process",
                 "read_logs",
-                "grep_logs",
                 "wait_for_log",
                 "send_input",
             ]
@@ -693,7 +697,7 @@ mod tests {
         let trusted = f.session(&f.workspace, "bot", "Trusted", "full");
 
         let asked = f
-            .call(&careful, "create_process", json!({ "name": "dev", "command": "echo hi; sleep 30", "env": { "PORT": 5173 } }))
+            .call(&careful, "save_process", json!({ "name": "dev", "command": "echo hi; sleep 30", "env": { "PORT": 5173 } }))
             .unwrap();
         assert_eq!(asked["runs"], json!([]));
         assert_eq!(asked["env"]["PORT"], "5173");
@@ -701,35 +705,35 @@ mod tests {
         assert_eq!(asked["created_by"], label.as_str());
         assert!(asked["pending_approval"].as_str().unwrap().contains(&label), "{asked}");
 
-        let refused = f.call(&careful, "start_process", json!({ "process": "dev" })).unwrap_err();
+        let refused = f.call(&careful, "control_process", json!({ "action": "start", "process": "dev" })).unwrap_err();
         assert!(refused.contains("waiting for the user to approve it in Crew"), "{refused}");
         // Nobody else gets past it either.
-        assert!(f.call(&trusted, "start_process", json!({ "process": asked["id"] })).is_err());
+        assert!(f.call(&trusted, "control_process", json!({ "action": "start", "process": asked["id"] })).is_err());
 
         let listed = f.call(&trusted, "list_processes", json!({})).unwrap();
         assert_eq!(listed[0]["name"], "dev");
         assert!(listed[0]["pending_approval"].is_string(), "{listed}");
 
         // Full autonomy, like the user, writes something that runs.
-        let direct = f.call(&trusted, "create_process", json!({ "name": "api", "command": "sleep 30" })).unwrap();
+        let direct = f.call(&trusted, "save_process", json!({ "name": "api", "command": "sleep 30" })).unwrap();
         assert_eq!(direct["runs"], json!([]));
         assert!(direct.get("pending_approval").is_none(), "{direct}");
-        let started = f.call(&trusted, "start_process", json!({ "process": "api" })).unwrap();
+        let started = f.call(&trusted, "control_process", json!({ "action": "start", "process": "api" })).unwrap();
         let run = &started["runs"][0];
         assert_eq!((run["state"].clone(), run["here"].clone()), (json!("running"), json!(true)), "{started}");
         assert_eq!(run["worktree"], "main checkout");
         assert_eq!(run["started_by"], trusted.label().as_str());
         assert!(run["pid"].is_u64() && run["uptime_s"].is_u64(), "{started}");
         // An ask agent may stop and start what already exists…
-        let stopped = f.call(&careful, "stop_process", json!({ "process": "api" })).unwrap();
+        let stopped = f.call(&careful, "control_process", json!({ "action": "stop", "process": "api" })).unwrap();
         assert_eq!(stopped["runs"][0]["state"], "stopped");
         // …but its change to it is only a proposal.
-        let proposed = f.call(&careful, "update_process", json!({ "process": "api", "command": "sleep 60" })).unwrap();
+        let proposed = f.call(&careful, "save_process", json!({ "process": "api", "command": "sleep 60" })).unwrap();
         assert_eq!(proposed["command"], "sleep 30");
         assert_eq!(proposed["proposed"]["command"], "sleep 60");
         assert!(proposed["pending_approval"].as_str().unwrap().contains(&label), "{proposed}");
 
-        let by_user = f.call(&f.user(), "create_process", json!({ "name": "worker", "command": "sleep 30" })).unwrap();
+        let by_user = f.call(&f.user(), "save_process", json!({ "name": "worker", "command": "sleep 30" })).unwrap();
         assert_eq!(by_user["created_by"], "the user");
         assert_eq!(by_user["runs"], json!([]));
 
@@ -746,9 +750,9 @@ mod tests {
         let user = f.user();
         let careful = f.session(&f.workspace, "bot", "Careful", "ask");
         let trusted = f.session(&f.workspace, "terminal", "Trusted", "full");
-        f.call(&user, "create_process", json!({ "name": "repl", "command": "echo one; read x; echo two-$x; sleep 30" }))
+        f.call(&user, "save_process", json!({ "name": "repl", "command": "echo one; read x; echo two-$x; sleep 30" }))
             .unwrap();
-        f.call(&user, "start_process", json!({ "process": "repl" })).unwrap();
+        f.call(&user, "control_process", json!({ "action": "start", "process": "repl" })).unwrap();
         let first = f.call(&user, "wait_for_log", json!({ "process": "repl", "pattern": "^one$", "timeout_s": 5 })).unwrap();
         assert_eq!(first["result"], "matched", "{first}");
 
@@ -776,6 +780,61 @@ mod tests {
         assert_eq!((nothing["text"].as_str(), nothing["cursor"].as_u64()), (Some(""), Some(next)));
     }
 
+    /// One tool defines and changes: name picks the process, process names
+    /// one to change (or rename), and only a missing one is created.
+    #[test]
+    fn save_process_creates_what_is_not_there_and_changes_what_is() {
+        let f = fixture("save");
+        let user = f.user();
+        let made = f.call(&user, "save_process", json!({ "name": "web", "command": "sleep 30" })).unwrap();
+        let changed = f.call(&user, "save_process", json!({ "name": "web", "auto_restart": true })).unwrap();
+        assert_eq!((changed["id"].clone(), changed["command"].clone()), (made["id"].clone(), json!("sleep 30")));
+        assert_eq!(changed["auto_restart"], true);
+        let renamed = f.call(&user, "save_process", json!({ "process": "web", "name": "site" })).unwrap();
+        assert_eq!((renamed["id"].clone(), renamed["name"].clone()), (made["id"].clone(), json!("site")));
+        assert_eq!(f.call(&user, "list_processes", json!({})).unwrap().as_array().unwrap().len(), 1);
+
+        let refused = f.call(&user, "save_process", json!({ "name": "api" })).unwrap_err();
+        assert!(refused.contains("command is required to create a process"), "{refused}");
+        let refused = f.call(&user, "save_process", json!({ "process": "nope", "command": "x" })).unwrap_err();
+        assert!(refused.contains("No process") && refused.contains("leave out process"), "{refused}");
+        let refused = f.call(&user, "save_process", json!({ "command": "x" })).unwrap_err();
+        assert!(refused.contains("name is required"), "{refused}");
+    }
+
+    #[test]
+    fn control_process_says_what_each_action_takes() {
+        let f = fixture("control");
+        let user = f.user();
+        f.call(&user, "save_process", json!({ "name": "web", "command": "echo up; echo ERROR 1; sleep 30" })).unwrap();
+        let refused = f.call(&user, "control_process", json!({ "process": "web" })).unwrap_err();
+        assert!(refused.contains("control_process takes: process, action"), "{refused}");
+        let refused = f.call(&user, "control_process", json!({ "process": "web", "action": "boot" })).unwrap_err();
+        assert!(refused.contains("one of start, stop, restart, pause, resume, not boot"), "{refused}");
+        let refused = f.call(&user, "control_process", json!({ "process": "web", "action": "stop", "env": { "A": "1" } })).unwrap_err();
+        assert!(refused.contains("env is for start and restart"), "{refused}");
+
+        for (action, state) in [("start", "running"), ("pause", "paused"), ("resume", "running"), ("restart", "running")] {
+            let out = f.call(&user, "control_process", json!({ "process": "web", "action": action })).unwrap();
+            assert_eq!(out["runs"][0]["state"], state, "{action}: {out}");
+        }
+        let line = f.call(&user, "wait_for_log", json!({ "process": "web", "pattern": "ERROR", "timeout_s": 5 })).unwrap();
+        assert_eq!(line["result"], "matched", "{line}");
+
+        // read_logs with a pattern searches, as grep_logs did.
+        let found = f.call(&user, "read_logs", json!({ "process": "web", "pattern": "ERROR \\d", "context": 1 })).unwrap();
+        assert_eq!(found["total"], 1, "{found}");
+        assert_eq!(found["matches"][0]["line"], "ERROR 1", "{found}");
+        assert_eq!(found["matches"][0]["before"], json!(["up"]), "{found}");
+        let refused = f.call(&user, "read_logs", json!({ "process": "web", "pattern": "x", "since": 0 })).unwrap_err();
+        assert!(refused.contains("since is for reading"), "{refused}");
+        let refused = f.call(&user, "read_logs", json!({ "process": "web", "max_matches": 3 })).unwrap_err();
+        assert!(refused.contains("max_matches goes with pattern"), "{refused}");
+
+        let stopped = f.call(&user, "control_process", json!({ "process": "web", "action": "stop" })).unwrap();
+        assert_eq!(stopped["runs"][0]["state"], "stopped");
+    }
+
     #[test]
     fn wait_for_log_holds_timeout_s_to_between_one_second_and_a_minute() {
         assert_eq!(wait_seconds(&json!({ "timeout_s": 3600 })), Ok(WAIT_MAX_S));
@@ -788,8 +847,8 @@ mod tests {
 
         let f = fixture("timeout");
         let user = f.user();
-        f.call(&user, "create_process", json!({ "name": "quiet", "command": "sleep 30" })).unwrap();
-        f.call(&user, "start_process", json!({ "process": "quiet" })).unwrap();
+        f.call(&user, "save_process", json!({ "name": "quiet", "command": "sleep 30" })).unwrap();
+        f.call(&user, "control_process", json!({ "action": "start", "process": "quiet" })).unwrap();
         let asked = Instant::now();
         let out = f.call(&user, "wait_for_log", json!({ "process": "quiet", "pattern": "never", "timeout_s": 0 })).unwrap();
         let took = asked.elapsed();
@@ -818,7 +877,7 @@ mod tests {
         let f = fixture("worktree");
         let tree = worktree(&f.dir, "feat");
         let user = f.user();
-        f.call(&user, "create_process", json!({ "name": "web", "command": "echo port=$PORT in $(pwd); sleep 30", "env": { "PORT": "3000" } }))
+        f.call(&user, "save_process", json!({ "name": "web", "command": "echo port=$PORT in $(pwd); sleep 30", "env": { "PORT": "3000" } }))
             .unwrap();
         let session = session::create_in_worktree(
             &f.store,
@@ -836,10 +895,10 @@ mod tests {
 
         // Its worktree unless told otherwise, and only the names the command has.
         let refused = f
-            .call(&careful, "start_process", json!({ "process": "web", "env": { "NODE_OPTIONS": "--require x" } }))
+            .call(&careful, "control_process", json!({ "action": "start", "process": "web", "env": { "NODE_OPTIONS": "--require x" } }))
             .unwrap_err();
         assert!(refused.contains("autonomy ask") && refused.contains("NODE_OPTIONS"), "{refused}");
-        let started = f.call(&careful, "start_process", json!({ "process": "web", "env": { "PORT": "3001" } })).unwrap();
+        let started = f.call(&careful, "control_process", json!({ "action": "start", "process": "web", "env": { "PORT": "3001" } })).unwrap();
         let run = &started["runs"][0];
         assert_eq!((run["worktree"].as_str(), run["here"].as_bool()), (Some(tree.as_str()), Some(true)), "{started}");
         assert_eq!((run["env"]["PORT"].as_str(), run["started_by"].as_str()), (Some("3001"), Some(careful.label().as_str())));
@@ -848,7 +907,7 @@ mod tests {
         assert!(line["line"].as_str().unwrap().ends_with("-feat"), "runs in the worktree: {line}");
 
         // The user's run in the main checkout is another run, listed first.
-        f.call(&user, "start_process", json!({ "process": "web" })).unwrap();
+        f.call(&user, "control_process", json!({ "action": "start", "process": "web" })).unwrap();
         let listed = f.call(&careful, "list_processes", json!({})).unwrap();
         let runs = listed[0]["runs"].as_array().unwrap();
         assert_eq!(runs.len(), 2, "{listed}");
@@ -857,19 +916,19 @@ mod tests {
         let main = f.call(&user, "read_logs", json!({ "process": "web" })).unwrap();
         assert!(!main["text"].as_str().unwrap().contains("3001"), "each run its own log: {main}");
 
-        let nowhere = f.call(&user, "start_process", json!({ "process": "web", "worktree": "/nope" })).unwrap_err();
+        let nowhere = f.call(&user, "control_process", json!({ "action": "start", "process": "web", "worktree": "/nope" })).unwrap_err();
         assert!(nowhere.contains("not a worktree"), "{nowhere}");
 
         // The user stops the agent's run by naming its worktree; theirs keeps going.
-        let stopped = f.call(&user, "stop_process", json!({ "process": "web", "worktree": tree })).unwrap();
+        let stopped = f.call(&user, "control_process", json!({ "action": "stop", "process": "web", "worktree": tree })).unwrap();
         let states: Vec<&str> = stopped["runs"].as_array().unwrap().iter().map(|run| run["state"].as_str().unwrap()).collect();
         assert_eq!(states, ["running", "stopped"]);
 
         // What `initialize` says to the agent: the rule, and what is there.
         let said = crate::tools::instructions(&f.toolbox, &careful);
-        assert!(said.contains("use start_process instead of backgrounding it in your shell"), "{said}");
+        assert!(said.contains("use control_process with action start instead of backgrounding it in your shell"), "{said}");
         assert!(said.contains("Processes defined in this workspace: web (echo port=$PORT"), "{said}");
-        f.call(&careful, "start_process", json!({ "process": "web" })).unwrap();
+        f.call(&careful, "control_process", json!({ "action": "start", "process": "web" })).unwrap();
         let said = crate::tools::instructions(&f.toolbox, &careful);
         assert!(said.contains("sleep 30, running here)"), "{said}");
 
@@ -888,12 +947,12 @@ mod tests {
         let elsewhere = crate::workspace::create(&f.store, "e".into(), elsewhere_dir.to_string_lossy().into())
             .unwrap()
             .id;
-        let mine = f.call(&f.user(), "create_process", json!({ "name": "web", "command": "sleep 30" })).unwrap();
+        let mine = f.call(&f.user(), "save_process", json!({ "name": "web", "command": "sleep 30" })).unwrap();
 
         let stranger = f.session(&elsewhere, "terminal", "Shell", "full");
         assert_eq!(f.call(&stranger, "list_processes", json!({})).unwrap(), json!([]));
         for target in [mine["id"].clone(), json!("web")] {
-            let refused = f.call(&stranger, "start_process", json!({ "process": target })).unwrap_err();
+            let refused = f.call(&stranger, "control_process", json!({ "action": "start", "process": target })).unwrap_err();
             assert!(refused.contains("No process"), "{refused}");
         }
 

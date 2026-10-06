@@ -421,8 +421,6 @@ export function createAgentTools(driver: Driver) {
     checkDeadline(call);
     if (INPUT_TOOLS.has(tool)) checkLock(page);
     switch (tool) {
-      case "claim_tab":
-        return text(`${tab} is yours: "${page.title()}" at ${page.url()}.`);
       case "browser_navigate":
         return navigate(page, args);
       case "browser_snapshot":

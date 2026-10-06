@@ -439,7 +439,9 @@ Restated by the user, from the desired behaviour rather than the bugs:
      worktree"). The prompt says: only when the user asks for a separate
      session or to continue somewhere else.
    - No lock/release. Revisit §4.2: T3 lets anyone send to a top-level
-     thread; only someone else's child stays off-limits.
+     thread; only someone else's child stays off-limits. *P1 decided
+     (2026-10-05):* anyone may write to a top-level Crew-driven session (a
+     handoff). Still refused: someone else's child, oneself, a terminal.
    - Handoff pitfall: a new worktree does not carry uncommitted files (a plan
      written on master and not committed is not there). The handoff prompt
      must carry the plan. *Decided: no file copy for now; the prompt
@@ -789,6 +791,10 @@ Also check how Codex names Crew's tools: `turns.rs` ~113 says
 
 ### 7e.8 Smaller decisions
 
+- **`alwaysLoad`** *(decided 2026-10-05)*: Crew's MCP server is marked
+  `alwaysLoad: true` in the `--mcp-config` of bots and children, so Claude
+  Code never defers Crew's tools behind its own tool search. Terminals are
+  left to the user.
 - **Prompt blocks vary by caller kind only.** The browser and process
   families are always registered (`crewd/src/lib.rs` ~586) and the server
   does not announce `listChanged`, so "when attached" cannot change mid
@@ -980,8 +986,7 @@ Open:
 
 The design is reviewed against the code and the references (§7e); nothing
 is implemented. Still open: the prompt points (session S1–S5 in §6, bot
-B1–B2 in §7.2), P1 (anyone may write to a top-level session; relaxes §4.2),
-and the three UI points above. None of them blocks phases 1–4.
+B1–B2 in §7.2) and the three UI points above. P1 is decided (§7b.1). None of them blocks phases 1–4.
 
 Implementation order:
 
@@ -1023,7 +1028,7 @@ Implementation order:
 | §5 | Inventory, 28 tools | agreed |
 | §6 | Session prompt | draft v2, open S1–S5 |
 | §7 | Bot prompt | draft v1, open B1–B2 |
-| §7b | Workflow round 2 | agreed; P1 (relax §4.2) open |
+| §7b | Workflow round 2 | agreed; P1 decided: anyone may write to a top-level session |
 | §7c | Pasted messages stay "Queued" | fixed on master (`da9f755`), needs release |
 | §7c-2 | "Working for" counts from a stale queued bubble | cause found, to fix |
 | §7c-3 | Replies to a wake fold out of sight | reproduced, cause found, to fix (phase 2) |

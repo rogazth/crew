@@ -593,9 +593,10 @@ pub fn tool_label(name: &str, input: &Map<String, Value>) -> String {
                 .chars()
                 .all(|c| c.is_ascii_alphanumeric() || c == '_')
         {
-            let verb = format!("Crew {}", verb_raw.replace('_', " "));
+            let verb = format!("Crew {}", super::crew_words(verb_raw, input));
             let subject = string_field(Some(input), "to")
                 .or_else(|| string_field(Some(input), "name"))
+                .or_else(|| string_field(Some(input), "process"))
                 .or_else(|| string_field(Some(input), "routine_id"))
                 .or_else(|| string_field(Some(input), "bot_id"))
                 // Older transcripts named the owner of a routine this way.

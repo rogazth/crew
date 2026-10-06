@@ -1,5 +1,5 @@
 /**
- * What `browser_press` and `browser_type` send to a page.
+ * What `browser_act` press and type (the window's `browser_press` and `browser_type`) send to a page.
  *
  * Not CDP key events: a guest only takes keyboard input while its <webview>
  * holds the window's focus, and giving it focus would take the keyboard from
@@ -107,7 +107,7 @@ function keyDef(name: string): KeyDef | null {
 
 /**
  * "Enter", "Meta+A", "Control+Shift+K", "Shift+Tab": modifiers first, the
- * key last, joined by "+". A "+" key is typed with browser_type.
+ * key last, joined by "+". A "+" key is typed with browser_act type.
  */
 export function parseChord(chord: string, isMac: boolean): Stroke {
   const parts = chord.split("+").map((part) => part.trim());

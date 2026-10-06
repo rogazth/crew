@@ -2,13 +2,20 @@ use serde_json::Value;
 
 use crate::cron::{is_valid_cron, next_cron, parse_cron};
 
-const SCHEDULE_HELP: &str = "schedule is {\"kind\":\"interval\",\"minutes\":N}, {\"kind\":\"daily\",\"hour\":0-23,\"minute\":0-59,\"days\":[0-6]} (days empty = every day, 0 = Sunday) or {\"kind\":\"cron\",\"expression\":\"m h dom mon dow\"}";
+const SCHEDULE_HELP: &str = "schedule is {\"kind\":\"interval\",\"minutes\":N}, {\"kind\":\"daily\",\"hour\":0-23,\"minute\":0-59,\"days\":[0-6]} (days empty = every day, 0 = Sunday), {\"kind\":\"cron\",\"expression\":\"m h dom mon dow\"} or {\"kind\":\"once\",\"at\":\"2026-10-05T15:30\"} (ISO-8601, local unless it has Z or an offset, or epoch milliseconds)";
+
+const AT_HELP: &str = "at must be an ISO-8601 time like \"2026-10-05T15:30\" (local time unless it ends in Z or an offset like +02:00) or epoch milliseconds";
+
+/// Epoch milliseconds before this are taken for a mistake (seconds, most likely).
+const AT_FLOOR_MS: i64 = 1_000_000_000_000;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Schedule {
     Interval { minutes: u32 },
     Daily { hour: u32, minute: u32, days: Vec<u32> },
     Cron { expression: String },
+    /// One time, in epoch milliseconds. It fires once and is then switched off.
+    Once { at: i64 },
 }
 
 impl Schedule {
@@ -24,6 +31,7 @@ impl Schedule {
             Schedule::Cron { expression } => {
                 serde_json::json!({ "kind": "cron", "expression": expression }).to_string()
             }
+            Schedule::Once { at } => format!(r#"{{"kind":"once","at":{at}}}"#),
         }
     }
 }
@@ -103,8 +111,86 @@ pub fn validate_schedule(input: &Value) -> Result<Schedule, String> {
                 expression: expression.to_string(),
             })
         }
+        Some("once") => {
+            let at = match obj.get("at") {
+                Some(Value::String(text)) => parse_time(text.trim()),
+                Some(Value::Number(n)) => n.as_i64().or_else(|| n.as_f64().map(|f| f as i64)),
+                _ => None,
+            }
+            .filter(|at| *at >= AT_FLOOR_MS)
+            .ok_or_else(|| format!("{AT_HELP}. {SCHEDULE_HELP}"))?;
+            Ok(Schedule::Once { at })
+        }
         _ => Err(SCHEDULE_HELP.into()),
     }
+}
+
+/// An ISO-8601 date and time, `YYYY-MM-DDTHH:MM[:SS[.fff]]` with a `T` or a
+/// space, then `Z`, `±HH:MM`, `±HHMM` or nothing. Nothing is the user's local
+/// time, like every other time a routine is given in.
+pub fn parse_time(text: &str) -> Option<i64> {
+    let (date, time) = text.split_once(['T', 't', ' '])?;
+    let mut ymd = date.splitn(3, '-');
+    let year: i32 = ymd.next()?.parse().ok()?;
+    let month: i32 = ymd.next()?.parse().ok()?;
+    let day: i32 = ymd.next()?.parse().ok()?;
+    // The zone, if any, is whatever follows the clock.
+    let zone_at = time.find(['Z', 'z', '+', '-']).unwrap_or(time.len());
+    let (clock, zone) = time.split_at(zone_at);
+    let mut hms = clock.splitn(3, ':');
+    let hour: i32 = hms.next()?.parse().ok()?;
+    let minute: i32 = hms.next()?.parse().ok()?;
+    let (second, millis) = match hms.next() {
+        None => (0, 0),
+        Some(sec) => {
+            let (whole, frac) = sec.split_once('.').unwrap_or((sec, ""));
+            let frac: String = frac.chars().chain("000".chars()).take(3).collect();
+            (whole.parse::<i32>().ok()?, frac.parse::<i64>().ok()?)
+        }
+    };
+    if !(1..=12).contains(&month) || !(1..=31).contains(&day) || !(0..=23).contains(&hour) || !(0..=59).contains(&minute) || !(0..=60).contains(&second) {
+        return None;
+    }
+    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+    tm.tm_year = year - 1900;
+    tm.tm_mon = month - 1;
+    tm.tm_mday = day;
+    tm.tm_hour = hour;
+    tm.tm_min = minute;
+    tm.tm_sec = second;
+    let secs = if zone.is_empty() {
+        tm.tm_isdst = -1;
+        unsafe { libc::mktime(&mut tm) as i64 }
+    } else {
+        let offset = if zone.eq_ignore_ascii_case("z") {
+            0
+        } else {
+            let sign = if zone.starts_with('-') { -1 } else { 1 };
+            let digits: String = zone[1..].chars().filter(|c| *c != ':').collect();
+            if digits.len() != 4 && digits.len() != 2 {
+                return None;
+            }
+            let hours: i64 = digits[..2].parse().ok()?;
+            let minutes: i64 = if digits.len() == 4 { digits[2..].parse().ok()? } else { 0 };
+            sign * (hours * 3600 + minutes * 60)
+        };
+        (unsafe { libc::timegm(&mut tm) as i64 }) - offset
+    };
+    Some(secs * 1000 + millis)
+}
+
+/// A time as the user reads it: `Oct 5, 2026, 3:30 PM`, local.
+pub fn local_time(ms: i64) -> String {
+    let tm = local_tm(ms);
+    let months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    let month = months.get(tm.tm_mon as usize).copied().unwrap_or("");
+    let mut hour = tm.tm_hour;
+    let suffix = if hour >= 12 { "PM" } else { "AM" };
+    hour %= 12;
+    if hour == 0 {
+        hour = 12;
+    }
+    format!("{month} {}, {}, {hour}:{:02} {suffix}", tm.tm_mday, tm.tm_year + 1900, tm.tm_min)
 }
 
 pub fn parse_schedule(raw: &str) -> Option<Schedule> {
@@ -114,6 +200,8 @@ pub fn parse_schedule(raw: &str) -> Option<Schedule> {
 pub fn next_run(schedule: &Schedule, from_ms: i64) -> Option<i64> {
     match schedule {
         Schedule::Interval { minutes } => Some(from_ms + i64::from(*minutes) * 60_000),
+        // Once is once: a time already gone has no next run.
+        Schedule::Once { at } => (*at > from_ms).then_some(*at),
         Schedule::Cron { expression } => next_cron(&parse_cron(expression)?, from_ms),
         Schedule::Daily { hour, minute, days } => {
             let mut at = set_clock(from_ms, *hour, *minute);
@@ -134,6 +222,7 @@ pub fn next_run(schedule: &Schedule, from_ms: i64) -> Option<i64> {
 pub fn describe_schedule(schedule: &Schedule) -> String {
     match schedule {
         Schedule::Cron { expression } => format!("Cron {expression}"),
+        Schedule::Once { at } => format!("Once · {}", local_time(*at)),
         Schedule::Interval { minutes } if minutes % 60 == 0 => {
             let hours = minutes / 60;
             if hours == 1 {
@@ -316,6 +405,28 @@ mod tests {
         let default = Schedule::Daily { hour: 9, minute: 0, days: vec![] };
         assert_eq!(parse_schedule("{oh no"), None);
         assert_eq!(parse_schedule(&default.to_json()), Some(default));
+    }
+
+    /// `at` comes as ISO-8601, local unless zoned, or as epoch milliseconds,
+    /// and is stored as milliseconds either way.
+    #[test]
+    fn a_once_schedule_takes_a_time_however_it_is_written() {
+        let local = at(2026, 10, 5, 15, 30);
+        let once = |at: Value| validate_schedule(&json!({ "kind": "once", "at": at }));
+        assert_eq!(once(json!("2026-10-05T15:30")), Ok(Schedule::Once { at: local }));
+        assert_eq!(once(json!("2026-10-05 15:30:00")), Ok(Schedule::Once { at: local }));
+        assert_eq!(once(json!(local)), Ok(Schedule::Once { at: local }));
+        assert_eq!(once(json!("2026-10-05T13:30:00Z")), Ok(Schedule::Once { at: 1_791_207_000_000 }));
+        assert_eq!(once(json!("2026-10-05T15:30:00.250+02:00")), Ok(Schedule::Once { at: 1_791_207_000_250 }));
+        assert_eq!(once(json!("2026-10-05T10:00-0330")), Ok(Schedule::Once { at: 1_791_207_000_000 }));
+        for bad in [json!("tomorrow"), json!("2026-10-05"), json!("2026-13-05T10:00"), json!(1_791_207_000), json!(null)] {
+            assert!(once(bad.clone()).unwrap_err().contains("at must be"), "{bad}");
+        }
+        let stored = Schedule::Once { at: local };
+        assert_eq!(parse_schedule(&stored.to_json()), Some(stored.clone()));
+        assert_eq!(next_run(&stored, local - 1), Some(local));
+        assert_eq!(next_run(&stored, local), None, "once is once");
+        assert!(describe_schedule(&stored).starts_with("Once · Oct 5, 2026, 3:30 PM"), "{}", describe_schedule(&stored));
     }
 
     #[test]

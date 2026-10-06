@@ -18,7 +18,7 @@ use crate::browser_leases::{Holder, Leases};
 use crate::browser_relay::{BrowserRelay, NO_HOST};
 use crate::caller::Caller;
 use crate::store::{now_millis, Store};
-use crate::tools::{Audience, Tool, ToolFamily, ToolOutput};
+use crate::tools::{cli, Audience, Tool, ToolFamily, ToolOutput};
 
 /// Mounting a cold tab can take 15 s before the tool even starts.
 const CALL_TIMEOUT: Duration = Duration::from_secs(35);
@@ -64,6 +64,30 @@ fn with_tab(mut properties: Value, required: &[&str]) -> Value {
     json!({ "type": "object", "properties": properties, "required": required })
 }
 
+/// What `browser_act` does, by its `action`, and the window's name for each:
+/// the window still takes one call per action.
+const ACTS: [(&str, &str); 5] = [
+    ("click", "browser_click"),
+    ("hover", "browser_hover"),
+    ("fill", "browser_fill"),
+    ("type", "browser_type"),
+    ("press", "browser_press"),
+];
+
+/// What `browser_activity` reads, by its `kind`, and the window's name for each.
+const ACTIVITY: [(&str, &str); 2] = [("console", "browser_console"), ("network", "browser_network")];
+
+/// The arguments each action of `browser_act` needs.
+fn act_needs(action: &str) -> &'static [&'static str] {
+    match action {
+        "click" | "hover" => &["uid"],
+        "fill" => &["uid", "value"],
+        "type" => &["text"],
+        "press" => &["key"],
+        _ => &[],
+    }
+}
+
 /// Every browser tool, for bots, terminals, children and the user alike.
 pub fn catalog() -> Vec<Tool> {
     [
@@ -71,8 +95,8 @@ pub fn catalog() -> Vec<Tool> {
             name: "list_tabs",
             description: "List the browser tabs in this workspace: id, title, URL, and who is using each one.",
             schema: json!({ "type": "object", "properties": {} }),
-            keywords: &["browser", "tabs", "pages", "web"],
             audience: Audience::EVERYONE,
+            cli: vec![cli("tabs", "list").alias(&["ls"]).eg("crew tabs list")],
         },
         Tool {
             name: "open_tab",
@@ -82,22 +106,15 @@ pub fn catalog() -> Vec<Tool> {
                 "properties": { "url": { "type": "string", "description": "http(s) URL." } },
                 "required": ["url"]
             }),
-            keywords: &["browser", "open", "new", "page", "web", "url", "visit"],
             audience: Audience::EVERYONE,
-        },
-        Tool {
-            name: "claim_tab",
-            description: "Take a browser tab so nobody else drives it while you do. Any browser tool takes it too; this is for holding it ahead of time.",
-            schema: with_tab(json!({}), &["tab"]),
-            keywords: &["browser", "lease", "lock", "take"],
-            audience: Audience::EVERYONE,
+            cli: vec![cli("tabs", "open").pos(&["url"]).eg("crew tabs open http://localhost:5173")],
         },
         Tool {
             name: "release_tab",
-            description: "Let go of a browser tab you hold, so another agent can use it. Tabs you stop using free themselves after two minutes.",
+            description: "Let go of a browser tab you hold, so someone else can drive it. Every browser tool takes the tab it acts on; tabs you stop using free themselves after two minutes.",
             schema: with_tab(json!({}), &[]),
-            keywords: &["browser", "lease", "free", "unlock"],
             audience: Audience::EVERYONE,
+            cli: vec![cli("tabs", "release").eg("crew tabs release --tab 12")],
         },
         Tool {
             name: "browser_navigate",
@@ -109,60 +126,44 @@ pub fn catalog() -> Vec<Tool> {
                 }),
                 &[],
             ),
-            keywords: &["browser", "go", "url", "load", "back", "forward", "reload", "visit"],
             audience: Audience::EVERYONE,
+            cli: vec![cli("tabs", "navigate").pos(&["url"]).alias(&["go"]).eg("crew tabs navigate http://localhost:5173/login\n  crew tabs navigate --action back")],
         },
         Tool {
             name: "browser_snapshot",
-            description: "Read the page as an accessibility tree: roles, names and values, with a uid on each element you can act on. Take one before clicking or filling; uids last until the next snapshot of the tab.",
+            description: "Read the page as an accessibility tree: roles, names and values, with a uid on each element you can act on. Take one before browser_act; uids last until the next snapshot of the tab.",
             schema: with_tab(json!({}), &[]),
-            keywords: &["browser", "page", "read", "dom", "elements", "accessibility", "see"],
             audience: Audience::EVERYONE,
+            cli: vec![cli("tabs", "snapshot").eg("crew tabs snapshot --tab 12")],
         },
         Tool {
-            name: "browser_click",
-            description: "Click an element from the last snapshot.",
-            schema: with_tab(json!({ "uid": { "type": "string" } }), &["uid"]),
-            keywords: &["browser", "press", "button", "link", "tap"],
-            audience: Audience::EVERYONE,
-        },
-        Tool {
-            name: "browser_hover",
-            description: "Move the mouse over an element from the last snapshot.",
-            schema: with_tab(json!({ "uid": { "type": "string" } }), &["uid"]),
-            keywords: &["browser", "mouse", "tooltip", "menu"],
-            audience: Audience::EVERYONE,
-        },
-        Tool {
-            name: "browser_fill",
-            description: "Replace the value of a text field, text area or select from the last snapshot.",
+            name: "browser_act",
+            description: "Act on the page like a person: click or hover an element (uid from the last snapshot), fill a text field, text area or select with value (replacing what is there), type text key by key into whatever has focus, or press a key or chord (key: Enter, Tab, Escape, ArrowDown, Backspace, Meta+A, Control+Shift+K).",
             schema: with_tab(
-                json!({ "uid": { "type": "string" }, "value": { "type": "string" } }),
-                &["uid", "value"],
+                json!({
+                    "action": { "type": "string", "enum": ACTS.map(|(action, _)| action) },
+                    "uid": { "type": "string", "description": "click, hover, fill: the element, from the last snapshot." },
+                    "value": { "type": "string", "description": "fill: the new value." },
+                    "text": { "type": "string", "description": "type: what to type." },
+                    "key": { "type": "string", "description": "press: a key or chord." }
+                }),
+                &["action"],
             ),
-            keywords: &["browser", "input", "form", "field", "enter", "select", "write"],
             audience: Audience::EVERYONE,
-        },
-        Tool {
-            name: "browser_type",
-            description: "Type text into whatever has focus in the page, key by key.",
-            schema: with_tab(json!({ "text": { "type": "string" } }), &["text"]),
-            keywords: &["browser", "keyboard", "input", "write"],
-            audience: Audience::EVERYONE,
-        },
-        Tool {
-            name: "browser_press",
-            description: "Press a key or a chord: Enter, Tab, Escape, ArrowDown, Backspace, Meta+A, Control+Shift+K.",
-            schema: with_tab(json!({ "key": { "type": "string" } }), &["key"]),
-            keywords: &["browser", "keyboard", "key", "shortcut", "enter", "escape"],
-            audience: Audience::EVERYONE,
+            cli: vec![
+                cli("tabs", "click").sets("action", "click").about("Click an element from the last snapshot.").pos(&["uid"]).flags(&["tab"]).eg("crew tabs click 4_17"),
+                cli("tabs", "hover").sets("action", "hover").about("Move the mouse over an element from the last snapshot.").pos(&["uid"]).flags(&["tab"]).eg("crew tabs hover 4_17"),
+                cli("tabs", "fill").sets("action", "fill").about("Replace the value of a text field, text area or select from the last snapshot.").rest(&["uid", "value"]).flags(&["tab"]).eg("crew tabs fill 4_9 ada@example.com"),
+                cli("tabs", "type").sets("action", "type").about("Type text into whatever has focus in the page, key by key.").rest(&["text"]).flags(&["tab"]).eg("crew tabs type hello world"),
+                cli("tabs", "press").sets("action", "press").about("Press a key or a chord: Enter, Tab, Escape, Meta+A.").pos(&["key"]).flags(&["tab"]).eg("crew tabs press Enter\n  crew tabs press Meta+A"),
+            ],
         },
         Tool {
             name: "browser_screenshot",
             description: "A PNG of the tab: what is in view, or the whole page.",
             schema: with_tab(json!({ "full_page": { "type": "boolean" } }), &[]),
-            keywords: &["browser", "image", "picture", "capture", "see", "look"],
             audience: Audience::EVERYONE,
+            cli: vec![cli("tabs", "screenshot").eg("crew tabs screenshot --full-page")],
         },
         Tool {
             name: "browser_wait_for",
@@ -174,29 +175,28 @@ pub fn catalog() -> Vec<Tool> {
                 }),
                 &["text"],
             ),
-            keywords: &["browser", "wait", "until", "appear", "load"],
             audience: Audience::EVERYONE,
+            cli: vec![cli("tabs", "wait").rest(&["text"]).eg("crew tabs wait Signed in --timeout-s 20")],
         },
         Tool {
-            name: "browser_console",
-            description: "The tab's console messages and uncaught errors since you started driving it.",
-            schema: with_tab(json!({}), &[]),
-            keywords: &["browser", "log", "errors", "console", "debug"],
+            name: "browser_activity",
+            description: "What the tab did since you started driving it: kind console is its console messages and uncaught errors; kind network its requests, with method, status and URL.",
+            schema: with_tab(
+                json!({ "kind": { "type": "string", "enum": ACTIVITY.map(|(kind, _)| kind) } }),
+                &["kind"],
+            ),
             audience: Audience::EVERYONE,
-        },
-        Tool {
-            name: "browser_network",
-            description: "The tab's network requests since you started driving it: method, status and URL.",
-            schema: with_tab(json!({}), &[]),
-            keywords: &["browser", "requests", "http", "fetch", "xhr", "api", "debug"],
-            audience: Audience::EVERYONE,
+            cli: vec![
+                cli("tabs", "console").sets("kind", "console").about("The tab's console messages and uncaught errors since you started driving it.").flags(&["tab"]).eg("crew tabs console"),
+                cli("tabs", "network").sets("kind", "network").about("The tab's network requests since you started driving it: method, status and URL.").flags(&["tab"]).eg("crew tabs network --json"),
+            ],
         },
         Tool {
             name: "browser_evaluate",
             description: "Run a JavaScript expression in the page and get its value back as JSON. Promises are awaited.",
             schema: with_tab(json!({ "expression": { "type": "string" } }), &["expression"]),
-            keywords: &["browser", "javascript", "js", "script", "run", "eval"],
             audience: Audience::EVERYONE,
+            cli: vec![cli("tabs", "eval").rest(&["expression"]).eg("crew tabs eval document.title")],
         },
     ]
     .into()
@@ -259,13 +259,14 @@ impl BrowserTools {
         match tool {
             "list_tabs" => self.list_tabs(workspace_id, holder, args),
             "open_tab" => self.open_tab(workspace_id, holder, args),
-            "claim_tab" => self.claim_tab(workspace_id, holder, args),
             "release_tab" => self.release_tab(workspace_id, holder, args),
             "browser_navigate" => self.navigate(workspace_id, holder, args),
             "browser_wait_for" => self.wait_for(workspace_id, holder, args),
-            "browser_snapshot" | "browser_click" | "browser_hover" | "browser_fill" | "browser_type"
-            | "browser_press" | "browser_screenshot" | "browser_console" | "browser_network"
-            | "browser_evaluate" => self.drive(workspace_id, holder, tool, args),
+            "browser_act" => self.act(workspace_id, holder, args),
+            "browser_activity" => self.activity(workspace_id, holder, args),
+            "browser_snapshot" | "browser_screenshot" | "browser_evaluate" => {
+                self.drive(workspace_id, holder, tool, args)
+            }
             _ => Err(format!("Unknown browser tool \"{tool}\"")),
         }
     }
@@ -339,13 +340,6 @@ impl BrowserTools {
         self.leases.forget_tab(tab, now_millis());
     }
 
-    pub fn claim_tab(&self, workspace_id: &str, holder: &Holder, args: &Value) -> Result<Value, String> {
-        if arg(args, "tab").is_none() {
-            return Err("tab is required: list_tabs shows this workspace's tabs".into());
-        }
-        self.drive(workspace_id, holder, "claim_tab", args)
-    }
-
     pub fn release_tab(&self, workspace_id: &str, holder: &Holder, args: &Value) -> Result<Value, String> {
         let tab = self.tab_for(holder, args)?;
         self.page(workspace_id, &tab, now_millis())?;
@@ -380,36 +374,43 @@ impl BrowserTools {
         self.drive(workspace_id, holder, "browser_snapshot", args)
     }
 
-    pub fn click(&self, workspace_id: &str, holder: &Holder, args: &Value) -> Result<Value, String> {
-        self.drive(workspace_id, holder, "browser_click", args)
+    /// `browser_act`: the action's own arguments checked here, then the
+    /// window's call for that action.
+    pub fn act(&self, workspace_id: &str, holder: &Holder, args: &Value) -> Result<Value, String> {
+        let actions = || ACTS.map(|(action, _)| action).join(", ");
+        let action = arg(args, "action").ok_or_else(|| format!("action is required: one of {}", actions()))?;
+        let (_, call) = ACTS
+            .iter()
+            .find(|(name, _)| *name == action)
+            .ok_or_else(|| format!("action is one of {}, not {action}", actions()))?;
+        // `value` may be empty: filling a field with nothing clears it.
+        let missing: Vec<&str> = act_needs(action)
+            .iter()
+            .copied()
+            .filter(|name| match *name {
+                "value" => args.get("value").and_then(Value::as_str).is_none(),
+                _ => arg(args, name).is_none(),
+            })
+            .collect();
+        if !missing.is_empty() {
+            return Err(format!("{action} needs {}", missing.join(" and ")));
+        }
+        self.drive(workspace_id, holder, call, args)
     }
 
-    pub fn hover(&self, workspace_id: &str, holder: &Holder, args: &Value) -> Result<Value, String> {
-        self.drive(workspace_id, holder, "browser_hover", args)
-    }
-
-    pub fn fill(&self, workspace_id: &str, holder: &Holder, args: &Value) -> Result<Value, String> {
-        self.drive(workspace_id, holder, "browser_fill", args)
-    }
-
-    pub fn type_text(&self, workspace_id: &str, holder: &Holder, args: &Value) -> Result<Value, String> {
-        self.drive(workspace_id, holder, "browser_type", args)
-    }
-
-    pub fn press(&self, workspace_id: &str, holder: &Holder, args: &Value) -> Result<Value, String> {
-        self.drive(workspace_id, holder, "browser_press", args)
+    /// `browser_activity`: the console or the network, by `kind`.
+    pub fn activity(&self, workspace_id: &str, holder: &Holder, args: &Value) -> Result<Value, String> {
+        let kinds = || ACTIVITY.map(|(kind, _)| kind).join(" or ");
+        let kind = arg(args, "kind").ok_or_else(|| format!("kind is required: {}", kinds()))?;
+        let (_, call) = ACTIVITY
+            .iter()
+            .find(|(name, _)| *name == kind)
+            .ok_or_else(|| format!("kind is {}, not {kind}", kinds()))?;
+        self.drive(workspace_id, holder, call, args)
     }
 
     pub fn screenshot(&self, workspace_id: &str, holder: &Holder, args: &Value) -> Result<Value, String> {
         self.drive(workspace_id, holder, "browser_screenshot", args)
-    }
-
-    pub fn console(&self, workspace_id: &str, holder: &Holder, args: &Value) -> Result<Value, String> {
-        self.drive(workspace_id, holder, "browser_console", args)
-    }
-
-    pub fn network(&self, workspace_id: &str, holder: &Holder, args: &Value) -> Result<Value, String> {
-        self.drive(workspace_id, holder, "browser_network", args)
     }
 
     pub fn evaluate(&self, workspace_id: &str, holder: &Holder, args: &Value) -> Result<Value, String> {
@@ -620,7 +621,7 @@ mod tests {
         let ada = Holder::session("s-ada", "Ada");
         assert!(tools.snapshot("w1", &ada, &json!({})).expect_err("no tab yet").contains("list_tabs"));
         tools.snapshot("w1", &ada, &json!({ "tab": "browser:b" })).expect("b");
-        tools.click("w1", &ada, &json!({ "uid": "1_2" })).expect("defaults to b");
+        tools.act("w1", &ada, &json!({ "action": "click", "uid": "1_2" })).expect("defaults to b");
         let calls: Vec<Value> = seen.try_iter().collect();
         assert_eq!(calls[1]["tab"], "browser:b");
         assert_eq!(calls[1]["tool"], "browser_click");
@@ -768,7 +769,7 @@ mod tests {
         let me = Holder::user();
         for spec in catalog() {
             let args = json!({ "tab": "browser:a", "url": "https://example.com", "text": "x", "uid": "1_1",
-                "value": "v", "key": "Enter", "expression": "1" });
+                "value": "v", "key": "Enter", "expression": "1", "action": "click", "kind": "console" });
             let out = tools.call("w1", &me, spec.name, &args);
             assert!(out.is_ok(), "{}: {out:?}", spec.name);
         }
@@ -782,12 +783,49 @@ mod tests {
         assert_eq!(
             names,
             [
-                "list_tabs", "open_tab", "claim_tab", "release_tab", "browser_navigate", "browser_snapshot",
-                "browser_click", "browser_hover", "browser_fill", "browser_type", "browser_press",
-                "browser_screenshot", "browser_wait_for", "browser_console", "browser_network", "browser_evaluate",
+                "list_tabs", "open_tab", "release_tab", "browser_navigate", "browser_snapshot", "browser_act",
+                "browser_screenshot", "browser_wait_for", "browser_activity", "browser_evaluate",
             ]
         );
         assert!(catalog().iter().all(|tool| tool.audience == Audience::EVERYONE));
+    }
+
+    /// One tool per verb family for the model; one call per action for the
+    /// window, which is where each is carried out.
+    #[test]
+    fn act_and_activity_check_their_arguments_and_reach_the_window_by_action() {
+        let store = store();
+        strip(&store, "w1", &["browser:a"]);
+        let (tools, seen) = tools(store);
+        let me = Holder::user();
+        let tab = |more: Value| {
+            let mut args = more;
+            args["tab"] = json!("browser:a");
+            args
+        };
+        for (args, call) in [
+            (json!({ "action": "click", "uid": "1_1" }), "browser_click"),
+            (json!({ "action": "hover", "uid": "1_1" }), "browser_hover"),
+            (json!({ "action": "fill", "uid": "1_1", "value": "" }), "browser_fill"),
+            (json!({ "action": "type", "text": "hi" }), "browser_type"),
+            (json!({ "action": "press", "key": "Enter" }), "browser_press"),
+        ] {
+            tools.act("w1", &me, &tab(args)).expect(call);
+            assert_eq!(seen.recv().unwrap()["tool"], call);
+        }
+        for (kind, call) in [("console", "browser_console"), ("network", "browser_network")] {
+            tools.activity("w1", &me, &tab(json!({ "kind": kind }))).expect(call);
+            assert_eq!(seen.recv().unwrap()["tool"], call);
+        }
+        let refused = |args: Value| tools.act("w1", &me, &tab(args)).expect_err("refused");
+        assert!(refused(json!({})).contains("action is required: one of click, hover, fill, type, press"));
+        assert!(refused(json!({ "action": "drag" })).contains("not drag"));
+        assert_eq!(refused(json!({ "action": "click" })), "click needs uid");
+        assert_eq!(refused(json!({ "action": "fill" })), "fill needs uid and value");
+        assert_eq!(refused(json!({ "action": "press", "text": "Enter" })), "press needs key");
+        let refused = tools.activity("w1", &me, &tab(json!({ "kind": "storage" }))).expect_err("refused");
+        assert_eq!(refused, "kind is console or network, not storage");
+        assert!(seen.try_recv().is_err(), "nothing refused reached the window");
     }
 
     #[test]

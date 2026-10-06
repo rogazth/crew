@@ -5,7 +5,7 @@ use serde_json::{json, Value};
 use crate::caller::{Caller, CallerKind};
 use crate::mailbox;
 use crate::routine::{self, Routine};
-use crate::schedule::{describe_schedule, next_run, parse_schedule, schedule_help, validate_schedule};
+use crate::schedule::{describe_schedule, local_time, next_run, parse_schedule, schedule_help, validate_schedule, Schedule};
 use crate::session::{self, Session};
 use crate::store::{now_millis, Store};
 use crate::transcript::TranscriptHub;
@@ -105,11 +105,67 @@ pub struct Tool {
     pub name: &'static str,
     pub description: &'static str,
     pub schema: Value,
-    /// Words someone would search for that the name and description miss.
-    pub keywords: &'static [&'static str],
     /// Who may see it and call it. A tool is not listed or run for a caller
     /// it does not admit.
     pub audience: Audience,
+    /// Its `crew <group> <verb>` commands. Usually one; a tool that merges
+    /// several verbs (`control_process`'s `action`) has one per verb, each
+    /// setting the argument that tells them apart.
+    pub cli: Vec<CliVerb>,
+}
+
+/// One `crew <group> <verb>` command and the tool call it makes. Declared
+/// with the tool, so a tool added, renamed or merged takes its command with
+/// it; the CLI builds its tree from these.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CliVerb {
+    pub group: &'static str,
+    pub verb: &'static str,
+    /// An argument this verb fixes, e.g. `("action", "start")`: not a flag,
+    /// always sent.
+    pub sets: Option<(&'static str, &'static str)>,
+    /// Schema properties taken by position, in this order.
+    pub positional: &'static [&'static str],
+    /// The last positional takes every word left, joined with spaces, and
+    /// `-` reads it from stdin.
+    pub rest: bool,
+    /// The other properties it takes as flags; `None` is all of them. For a
+    /// merged tool, so `crew tabs click` does not offer `--key`.
+    pub flags: Option<&'static [&'static str]>,
+    pub aliases: &'static [&'static str],
+    pub examples: &'static str,
+    /// Its line in the group's list, when the tool's first sentence is not
+    /// it: a merged tool's describes every action.
+    pub about: &'static str,
+}
+
+/// `crew <group> <verb>`, built up with the methods below.
+pub const fn cli(group: &'static str, verb: &'static str) -> CliVerb {
+    CliVerb { group, verb, sets: None, positional: &[], rest: false, flags: None, aliases: &[], examples: "", about: "" }
+}
+
+impl CliVerb {
+    pub const fn pos(self, positional: &'static [&'static str]) -> Self {
+        Self { positional, ..self }
+    }
+    pub const fn rest(self, positional: &'static [&'static str]) -> Self {
+        Self { positional, rest: true, ..self }
+    }
+    pub const fn sets(self, name: &'static str, value: &'static str) -> Self {
+        Self { sets: Some((name, value)), ..self }
+    }
+    pub const fn flags(self, flags: &'static [&'static str]) -> Self {
+        Self { flags: Some(flags), ..self }
+    }
+    pub const fn alias(self, aliases: &'static [&'static str]) -> Self {
+        Self { aliases, ..self }
+    }
+    pub const fn eg(self, examples: &'static str) -> Self {
+        Self { examples, ..self }
+    }
+    pub const fn about(self, about: &'static str) -> Self {
+        Self { about, ..self }
+    }
 }
 
 /// Which kinds of caller a tool is for.
@@ -294,12 +350,13 @@ pub(crate) fn catalog() -> Vec<Tool> {
         "type": "object",
         "description": schedule_help(),
         "properties": {
-            "kind": { "type": "string", "enum": ["interval", "daily", "cron"] },
+            "kind": { "type": "string", "enum": ["interval", "daily", "cron", "once"] },
             "minutes": { "type": "integer", "minimum": 1 },
             "hour": { "type": "integer", "minimum": 0, "maximum": 23 },
             "minute": { "type": "integer", "minimum": 0, "maximum": 59 },
             "days": { "type": "array", "items": { "type": "integer", "minimum": 0, "maximum": 6 } },
-            "expression": { "type": "string", "description": "Five-field cron, local time." }
+            "expression": { "type": "string", "description": "Five-field cron, local time." },
+            "at": { "type": ["string", "integer"], "description": "For once: an ISO-8601 time (local unless it has Z or an offset), e.g. \"2026-10-05T15:30\", or epoch milliseconds. Must be in the future." }
         },
         "required": ["kind"]
     });
@@ -308,8 +365,8 @@ pub(crate) fn catalog() -> Vec<Tool> {
             name: "list_agents",
             description: "List the bots in this workspace, including yourself.",
             schema: json!({ "type": "object", "properties": {} }),
-            keywords: &["roster", "team", "who", "bots"],
             audience: Audience::EVERYONE,
+            cli: vec![cli("bots", "list").alias(&["ls"]).eg("crew bots list\n  crew bots list --json | jq '.[].id'")],
         },
         Tool {
             name: "create_bot",
@@ -332,8 +389,8 @@ pub(crate) fn catalog() -> Vec<Tool> {
                 },
                 "required": ["name", "description"]
             }),
-            keywords: &["new", "hire", "spawn", "bot"],
             audience: Audience::SESSIONS,
+            cli: vec![cli("bots", "create").pos(&["name"]).eg("crew bots create Reviewer --description \"Review every diff on main\"")],
         },
         Tool {
             name: "create_worktree",
@@ -347,8 +404,8 @@ pub(crate) fn catalog() -> Vec<Tool> {
                 },
                 "required": ["branch", "task"]
             }),
-            keywords: &["worktree", "branch", "handoff", "hand", "fork", "git", "isolate", "parallel"],
             audience: Audience::SESSIONS,
+            cli: vec![cli("worktrees", "new").pos(&["branch"]).eg("crew worktrees new feat/login --task \"Build the login form; the API is in server/auth.rs\"")],
         },
         Tool {
             name: "message_agent",
@@ -361,8 +418,8 @@ pub(crate) fn catalog() -> Vec<Tool> {
                 },
                 "required": ["to", "text"]
             }),
-            keywords: &["send", "tell", "ask", "dm", "reply", "message"],
             audience: Audience::EVERYONE,
+            cli: vec![cli("bots", "send").eg("crew bots send Reviewer \"look at the diff on main\"\n  crew bots send 3f2a… run the tests and fix what fails\n  git diff | crew bots send Reviewer -")],
         },
         Tool {
             name: "continue_after_turn",
@@ -374,8 +431,8 @@ pub(crate) fn catalog() -> Vec<Tool> {
                 },
                 "required": ["text"]
             }),
-            keywords: &["continue", "carry", "loop", "next", "self", "resume"],
             audience: Audience::BOTS,
+            cli: vec![cli("bots", "continue").rest(&["text"]).eg("crew bots continue \"run the e2e next and fix what fails\"")],
         },
         Tool {
             name: "update_description",
@@ -387,8 +444,8 @@ pub(crate) fn catalog() -> Vec<Tool> {
                 },
                 "required": ["text"]
             }),
-            keywords: &["persona", "instructions", "description", "myself", "rewrite"],
             audience: Audience::BOTS,
+            cli: vec![cli("bots", "set-description").rest(&["text"]).eg("crew bots set-description \"You review diffs on main.\"")],
         },
         Tool {
             name: "search_messages",
@@ -402,8 +459,8 @@ pub(crate) fn catalog() -> Vec<Tool> {
                 },
                 "required": ["query"]
             }),
-            keywords: &["find", "grep", "history", "transcript", "said"],
             audience: Audience::BOTS_AND_USER,
+            cli: vec![cli("messages", "search").rest(&["query"]).eg("crew messages search deploy key --days 7")],
         },
         Tool {
             name: "list_routines",
@@ -412,12 +469,12 @@ pub(crate) fn catalog() -> Vec<Tool> {
                 "type": "object",
                 "properties": { "bot_id": { "type": "string", "description": "Omit for yourself." } }
             }),
-            keywords: &["schedule", "cron", "standing", "orders"],
             audience: Audience::EVERYONE,
+            cli: vec![cli("routines", "list").alias(&["ls"]).eg("crew routines list --bot-id 3f2a…")],
         },
         Tool {
-            name: "upsert_routine",
-            description: "Create a routine, or update one by routine_id. Times are the user's local time.",
+            name: "save_routine",
+            description: "Create a routine, or update one by routine_id (only the fields you pass change). Times are the user's local time. A once schedule fires a single time, at at, and is then switched off: that is how you check back on something later.",
             schema: json!({
                 "type": "object",
                 "properties": {
@@ -429,8 +486,8 @@ pub(crate) fn catalog() -> Vec<Tool> {
                     "enabled": { "type": "boolean" }
                 }
             }),
-            keywords: &["schedule", "cron", "every", "daily", "remind"],
             audience: Audience::EVERYONE,
+            cli: vec![cli("routines", "set").alias(&["save"]).eg("crew routines set --bot-id 3f2a… --name standup --prompt \"Sum up yesterday\" \\\n      --schedule '{\"kind\": \"daily\", \"hour\": 9, \"minute\": 0}'\n  crew routines set --bot-id 3f2a… --name \"check back\" --prompt \"Did CI pass?\" --schedule '{\"kind\": \"once\", \"at\": \"2026-10-05T15:30\"}'")],
         },
         Tool {
             name: "delete_routine",
@@ -440,8 +497,8 @@ pub(crate) fn catalog() -> Vec<Tool> {
                 "properties": { "routine_id": { "type": "string" } },
                 "required": ["routine_id"]
             }),
-            keywords: &["schedule", "cron", "stop", "remove"],
             audience: Audience::EVERYONE,
+            cli: vec![cli("routines", "rm").pos(&["routine_id"]).eg("crew routines rm 7c1e…")],
         },
     ]
 }
@@ -638,7 +695,7 @@ fn own(host: &Host<'_>, caller: &Caller, name: &str, args: &Value) -> Result<Val
         "update_description" => update_description(store, host.transcripts, bot(caller, name)?, args),
         "search_messages" => search_messages(store, caller, args),
         "list_routines" => list_routines(store, caller, args),
-        "upsert_routine" => upsert_routine(store, host.transcripts, host.on_routines, caller, args),
+        "save_routine" => save_routine(store, host.transcripts, host.on_routines, caller, args),
         "delete_routine" => delete_routine(store, host.transcripts, host.on_routines, caller, args),
         _ => Err(format!("Unknown tool \"{name}\"")),
     }
@@ -980,7 +1037,7 @@ fn by(caller: &Caller) -> String {
     }
 }
 
-fn upsert_routine(
+fn save_routine(
     store: &Store,
     transcripts: &TranscriptHub,
     on_routines: &dyn Fn(),
@@ -1004,18 +1061,29 @@ fn upsert_routine(
     let prompt = text(args.get("prompt")).or_else(|| existing.as_ref().map(|row| row.prompt.clone()));
     let name = name.ok_or_else(|| "name is required".to_string())?;
     let prompt = prompt.ok_or_else(|| "prompt is required".to_string())?;
-    let schedule = if args.get("schedule").is_some_and(|v| !v.is_null()) {
-        validate_schedule(args.get("schedule").unwrap())?
+    let given = args.get("schedule").filter(|v| !v.is_null());
+    let schedule = if let Some(given) = given {
+        validate_schedule(given)?
     } else if let Some(existing) = &existing {
         parse_schedule(&existing.schedule).ok_or_else(|| schedule_help().to_string())?
     } else {
         return Err(format!("schedule is required. {}", schedule_help()));
     };
-    let enabled = args
-        .get("enabled")
-        .and_then(Value::as_bool)
-        .unwrap_or_else(|| existing.as_ref().map(|row| row.enabled).unwrap_or(true));
     let now = now_millis();
+    // A once routine given a new time is armed again, unless told otherwise.
+    let rearmed = given.is_some() && matches!(schedule, Schedule::Once { .. });
+    let enabled = args.get("enabled").and_then(Value::as_bool).unwrap_or_else(|| {
+        rearmed || existing.as_ref().map(|row| row.enabled).unwrap_or(true)
+    });
+    if let Schedule::Once { at } = schedule {
+        if at <= now && (enabled || given.is_some()) {
+            return Err(format!(
+                "at is in the past ({}); a once routine needs a time still to come. It is {} now.",
+                local_time(at),
+                local_time(now)
+            ));
+        }
+    }
     let next = if enabled { next_run(&schedule, now) } else { None };
     let row = routine::upsert(
         store,
@@ -1204,27 +1272,7 @@ pub(crate) fn text(value: Option<&Value>) -> Option<String> {
 }
 
 fn when(ms: i64) -> String {
-    let secs = (ms / 1000) as libc::time_t;
-    let mut tm = unsafe { std::mem::zeroed() };
-    unsafe {
-        libc::localtime_r(&secs, &mut tm);
-    }
-    let months = [
-        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
-    ];
-    let month = months.get(tm.tm_mon as usize).copied().unwrap_or("");
-    let mut hour = tm.tm_hour;
-    let suffix = if hour >= 12 { "PM" } else { "AM" };
-    hour %= 12;
-    if hour == 0 {
-        hour = 12;
-    }
-    format!(
-        "{month} {}, {}, {hour}:{:02} {suffix}",
-        tm.tm_mday,
-        tm.tm_year + 1900,
-        tm.tm_min
-    )
+    local_time(ms)
 }
 
 #[cfg(test)]
@@ -1382,7 +1430,7 @@ mod tests {
         let coder = bot(&store, &ws, "Coder");
         let names = listed(&store, &transcripts, &coder);
         assert_eq!(names, visible_names(CallerKind::Bot), "the sheet and the listing are one list");
-        for name in ["list_agents", "message_agent", "continue_after_turn", "create_bot", "upsert_routine"] {
+        for name in ["list_agents", "message_agent", "continue_after_turn", "create_bot", "save_routine"] {
             assert!(names.iter().any(|listed| listed == name), "{name}: {names:?}");
         }
         for gone in ["find_tool", "call_tool"] {
@@ -1394,7 +1442,7 @@ mod tests {
         let toolbox = Toolbox::default();
         let host = Host { store: &store, transcripts: &transcripts, on_created: &|_| {}, on_routines: &|| {}, deliver: &deliver, toolbox: &toolbox };
         let out = handle(&host, &Caller::from_session(coder), "tools/list", json!({})).expect("list");
-        let upsert = out["tools"].as_array().unwrap().iter().find(|tool| tool["name"] == "upsert_routine").expect("listed");
+        let upsert = out["tools"].as_array().unwrap().iter().find(|tool| tool["name"] == "save_routine").expect("listed");
         assert!(upsert["inputSchema"]["properties"]["schedule"].is_object(), "listed with its schema: {upsert}");
     }
 
@@ -2268,6 +2316,50 @@ mod tests {
         assert!(!is_error(&out), "{}", body(&out));
     }
 
+    /// "Check back in ten minutes" is a routine that fires once. A time
+    /// already gone is refused, said in the user's clock.
+    #[test]
+    fn save_routine_takes_a_once_schedule_in_the_future() {
+        let store = store();
+        let transcripts = TranscriptHub::new(store.clone());
+        let ws = workspace(&store);
+        let coder = bot(&store, &ws, "Coder");
+        let postman = Postman::default();
+        let at = now_millis() + 600_000;
+        let saved = call(&store, &transcripts, &postman, &coder, "save_routine", json!({
+            "name": "Check back", "prompt": "did CI pass?", "schedule": { "kind": "once", "at": at }
+        }))
+        .expect("call");
+        assert!(!is_error(&saved), "{}", body(&saved));
+        let row: Value = serde_json::from_str(&body(&saved)).expect("json");
+        assert!(row["schedule"].as_str().unwrap().starts_with("Once · "), "{row}");
+        assert_eq!(row["next_run"], json!(when(at)));
+        let stored = routine::list_for_session(&store, coder.id.clone()).expect("list");
+        assert_eq!(stored[0].next_run_at, Some(at));
+        assert_eq!(parse_schedule(&stored[0].schedule), Some(Schedule::Once { at }));
+
+        let past = call(&store, &transcripts, &postman, &coder, "save_routine", json!({
+            "name": "Too late", "prompt": "x", "schedule": { "kind": "once", "at": "2020-01-01T09:00" }
+        }))
+        .expect("call");
+        assert!(is_error(&past));
+        assert!(body(&past).contains("at is in the past (Jan 1, 2020, 9:00 AM)"), "{}", body(&past));
+
+        // Fired and switched off, it can still be renamed; given a new time, it is armed again.
+        let id = stored[0].id.clone();
+        routine::disable(&store, &id).expect("disable");
+        let renamed = call(&store, &transcripts, &postman, &coder, "save_routine", json!({ "routine_id": id, "name": "Checked" }))
+            .expect("call");
+        assert!(!is_error(&renamed), "{}", body(&renamed));
+        let again = call(&store, &transcripts, &postman, &coder, "save_routine", json!({
+            "routine_id": id, "schedule": { "kind": "once", "at": at + 60_000 }
+        }))
+        .expect("call");
+        assert!(!is_error(&again), "{}", body(&again));
+        let stored = routine::list_for_session(&store, coder.id.clone()).expect("list");
+        assert!(stored[0].enabled && stored[0].next_run_at == Some(at + 60_000), "{:?}", stored[0]);
+    }
+
     /// Stands in for a family like processes or the browser.
     struct Kettle;
 
@@ -2278,14 +2370,14 @@ mod tests {
                     name: "list_kettles",
                     description: "List the kettles.",
                     schema: json!({ "type": "object", "properties": {} }),
-                    keywords: &[],
+                    cli: vec![],
                     audience: Audience::EVERYONE,
                 },
                 Tool {
                     name: "boil_kettle",
                     description: "Boil a kettle and wait for it.",
                     schema: json!({ "type": "object", "properties": { "kettle": { "type": "string" } }, "required": ["kettle"] }),
-                    keywords: &["water", "tea"],
+                    cli: vec![],
                     audience: Audience::SESSIONS,
                 },
             ]

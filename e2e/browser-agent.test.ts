@@ -63,15 +63,15 @@ test("B1: a tab opened, read, filled, clicked and captured through the relay", a
   };
   assert.match(snapshot, /heading "Order" level=1/);
 
-  await tool("browser_fill", { uid: uid(/uid=(\S+) textbox "Email"/), value: "ada@example.com" });
-  await tool("browser_fill", { uid: uid(/uid=(\S+) combobox "Size"/), value: "L" });
-  await tool("browser_click", { uid: uid(/uid=(\S+) button "Send"/) });
+  await tool("browser_act", { action: "fill", uid: uid(/uid=(\S+) textbox "Email"/), value: "ada@example.com" });
+  await tool("browser_act", { action: "fill", uid: uid(/uid=(\S+) combobox "Size"/), value: "L" });
+  await tool("browser_act", { action: "click", uid: uid(/uid=(\S+) button "Send"/) });
   const title = text(await tool("browser_evaluate", { expression: "document.title" }));
   assert.equal(title, '"Sent ada@example.com L"');
 
   // An old uid is refused once the page has been read again.
   await tool("browser_snapshot");
-  await assert.rejects(tool("browser_click", { uid: uid(/uid=(\S+) button "Send"/) }), /Take a new snapshot/);
+  await assert.rejects(tool("browser_act", { action: "click", uid: uid(/uid=(\S+) button "Send"/) }), /Take a new snapshot/);
 
   const [shot] = await tool("browser_screenshot");
   assert.equal(shot?.type, "image");

@@ -657,13 +657,13 @@ const scenarios = {
     assert(existsSync(tree.worktree), `create_worktree made no worktree: ${JSON.stringify(tree)}`);
     const made = await row(tree.session.id);
     assert(made.kind === "terminal" && made.worktree === tree.worktree, JSON.stringify(made));
-    await must(shell.token, "create_process", { name: "k-proc", command: "echo READY-K; sleep 300" });
-    await must(shell.token, "start_process", { process: "k-proc" });
+    await must(shell.token, "save_process", { name: "k-proc", command: "echo READY-K; sleep 300" });
+    await must(shell.token, "control_process", { process: "k-proc", action: "start" });
     const ready = await must(shell.token, "wait_for_log", { process: "k-proc", pattern: "READY-K", timeout_s: 30 });
     assert(ready.result === "matched", JSON.stringify(ready));
     const logs = await must(shell.token, "read_logs", { process: "k-proc" });
     assert(/READY-K/.test(logs.text), logs.text);
-    await must(shell.token, "stop_process", { process: "k-proc" });
+    await must(shell.token, "control_process", { process: "k-proc", action: "stop" });
     return "list_agents, create_worktree, terminal MCP, processes";
   },
 };

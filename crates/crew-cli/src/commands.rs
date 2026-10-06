@@ -1,40 +1,48 @@
-//! The tool commands, `crew <group> <verb>`: one for each tool Crew has.
+//! The tool commands, `crew <group> <verb>`: one for each verb a tool
+//! declares in its own definition ([`crew_core::tools::CliVerb`]), so a tool
+//! added, renamed or merged takes its command with it.
 //!
 //! Most are built from the tool's own schema, so an argument added to a tool
 //! reaches the CLI with it and `--help` says what the tool says. A few read
 //! better written by hand (`processes logs` follows and greps, `bots send`
-//! takes a name), and those take their flags from `args`.
+//! takes a name), and those take their flags from `args`; [`shape`] names
+//! them.
 
 use std::process::ExitCode;
 
 use clap::{builder::PossibleValuesParser, value_parser, Arg, ArgAction, ArgMatches, Args, Command, FromArgMatches};
 use serde_json::{json, Map, Value};
 
-use crew_core::tools::{every_tool, Tool};
+use crew_core::tools::{every_tool, CliVerb, Tool};
 
 use crate::args::{LogsArgs, ProcAdd, ProcEdit, SendArgs};
 use crate::output;
 use crate::{bots, processes, read_stdin, CliError, Ctx};
 
+/// A group of commands. Its verbs come from the tools that name it.
 pub struct Group {
     pub name: &'static str,
     pub about: &'static str,
     pub aliases: &'static [&'static str],
-    pub verbs: &'static [Verb],
 }
 
-pub struct Verb {
-    pub name: &'static str,
-    pub tool: &'static str,
-    /// Schema properties taken by position, in this order.
-    pub positional: &'static [&'static str],
-    /// The last positional takes every word left, joined with spaces, and
-    /// `-` reads it from stdin.
-    pub rest: bool,
-    pub aliases: &'static [&'static str],
-    pub examples: &'static str,
-    pub shape: Shape,
-}
+pub const GROUPS: &[Group] = &[
+    Group { name: "bots", about: "The workspace's bots: list them, write to them, make new ones", aliases: &["bot"] },
+    Group {
+        name: "sessions",
+        about: "Provider CLIs you start on a job: start one, wait for its report, read it, give it more",
+        aliases: &["session"],
+    },
+    Group { name: "worktrees", about: "Hand work to a new session on a branch of its own", aliases: &["worktree", "wt"] },
+    Group { name: "messages", about: "A conversation in Crew: search what was said", aliases: &["message"] },
+    Group { name: "routines", about: "Standing orders that wake a bot on a schedule, or once", aliases: &["routine"] },
+    Group {
+        name: "processes",
+        about: "The workspace's dev servers, watchers and workers, and their logs",
+        aliases: &["process", "proc"],
+    },
+    Group { name: "tabs", about: "The workspace's browser tabs: open them, read them, drive them", aliases: &["tab"] },
+];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Shape {
@@ -51,136 +59,40 @@ pub enum Shape {
     ListTabs,
 }
 
-const fn verb(name: &'static str, tool: &'static str) -> Verb {
-    Verb { name, tool, positional: &[], rest: false, aliases: &[], examples: "", shape: Shape::Schema }
-}
-
-impl Verb {
-    const fn pos(self, positional: &'static [&'static str]) -> Self {
-        Self { positional, ..self }
-    }
-    const fn rest(self, positional: &'static [&'static str]) -> Self {
-        Self { positional, rest: true, ..self }
-    }
-    const fn alias(self, aliases: &'static [&'static str]) -> Self {
-        Self { aliases, ..self }
-    }
-    const fn shape(self, shape: Shape) -> Self {
-        Self { shape, ..self }
-    }
-    const fn eg(self, examples: &'static str) -> Self {
-        Self { examples, ..self }
-    }
-}
-
-pub const GROUPS: &[Group] = &[
-    Group {
-        name: "bots",
-        about: "The workspace's bots: list them, write to them, make new ones",
-        aliases: &["bot"],
-        verbs: &[
-            verb("list", "list_agents").alias(&["ls"]).shape(Shape::ListBots).eg("crew bots list\n  crew bots list --json | jq '.[].id'"),
-            verb("send", "message_agent").shape(Shape::Send).eg(
-                "crew bots send Reviewer \"look at the diff on main\"\n  crew bots send 3f2a… run the tests and fix what fails\n  git diff | crew bots send Reviewer -",
-            ),
-            verb("create", "create_bot").pos(&["name"]).eg("crew bots create Reviewer --description \"Review every diff on main\""),
-            verb("continue", "continue_after_turn").rest(&["text"]).eg("crew bots continue \"run the e2e next and fix what fails\""),
-            verb("set-description", "update_description").rest(&["text"]).eg("crew bots set-description \"You review diffs on main.\""),
-        ],
-    },
-    Group {
-        name: "sessions",
-        about: "Provider CLIs you start on a job: start one, wait for its report, read it, give it more",
-        aliases: &["session"],
-        verbs: &[
-            verb("start", "start_session").rest(&["provider", "prompt"]).eg(
-                "crew sessions start codex fix the failing login test\n  crew sessions start claude --worktree new --model claude-opus-5 -- review the diff on main",
-            ),
-            verb("list", "list_sessions").alias(&["ls"]).eg("crew sessions list\n  crew sessions list --mine=false"),
-            verb("wait", "wait_for_session").rest(&["sessions"]).eg(
-                "crew sessions wait --timeout-s 60 3f2a…\n  crew sessions wait --timeout-s 30 3f2a… 9c1d…",
-            ),
-            verb("read", "read_session").pos(&["session"]).eg("crew sessions read 3f2a…\n  crew sessions read 3f2a… --since 12 --include-tools"),
-            verb("send", "send_to_session").rest(&["session", "text"]).eg("crew sessions send 3f2a… now run the e2e and fix what fails"),
-            verb("respond", "respond_to_session").pos(&["session", "request_id"]).eg("crew sessions respond 3f2a… 1 --decision allow"),
-            verb("stop", "stop_session").pos(&["session"]).eg("crew sessions stop 3f2a…"),
-        ],
-    },
-    Group {
-        name: "worktrees",
-        about: "Hand work to a new session on a branch of its own",
-        aliases: &["worktree", "wt"],
-        verbs: &[verb("new", "create_worktree").pos(&["branch"]).eg(
-            "crew worktrees new feat/login --task \"Build the login form; the API is in server/auth.rs\"",
-        )],
-    },
-    Group {
-        name: "messages",
-        about: "A conversation in Crew: search what was said",
-        aliases: &["message"],
-        verbs: &[verb("search", "search_messages").rest(&["query"]).eg("crew messages search deploy key --days 7")],
-    },
-    Group {
-        name: "routines",
-        about: "Standing orders that wake a bot on a schedule",
-        aliases: &["routine"],
-        verbs: &[
-            verb("list", "list_routines").alias(&["ls"]).eg("crew routines list --bot-id 3f2a…"),
-            verb("set", "upsert_routine").eg(
-                "crew routines set --bot-id 3f2a… --name standup --prompt \"Sum up yesterday\" \\\n      --schedule '{\"kind\": \"daily\", \"hour\": 9, \"minute\": 0}'",
-            ),
-            verb("rm", "delete_routine").pos(&["routine_id"]).eg("crew routines rm 7c1e…"),
-        ],
-    },
-    Group {
-        name: "processes",
-        about: "The workspace's dev servers, watchers and workers, and their logs",
-        aliases: &["process", "proc"],
-        verbs: &[
-            verb("list", "list_processes").alias(&["ls"]).shape(Shape::ListProcesses).eg("crew processes list\n  crew processes list --json | jq '.[].name'"),
-            verb("start", "start_process").pos(&["process"]).shape(Shape::Process).eg("crew processes start web\n  crew processes start web --worktree ../app-feat --env PORT=3001"),
-            verb("stop", "stop_process").pos(&["process"]).shape(Shape::Process).eg("crew processes stop web"),
-            verb("restart", "restart_process").pos(&["process"]).shape(Shape::Process).eg("crew processes restart web"),
-            verb("pause", "pause_process").pos(&["process"]).shape(Shape::Process).eg("crew processes pause worker"),
-            verb("resume", "resume_process").pos(&["process"]).shape(Shape::Process).eg("crew processes resume worker"),
-            verb("logs", "read_logs").shape(Shape::Logs).eg(
-                "crew processes logs web                 the last lines\n  crew processes logs web -n 500\n  crew processes logs web -f              follow, like tail -f\n  crew processes logs web --grep 'error|panic' -C 2\n  crew processes logs web -f --grep ready print each matching line as it arrives",
-            ),
-            verb("wait", "wait_for_log").pos(&["process", "pattern"]).eg("crew processes wait web 'ready|listening' --timeout-s 30"),
-            verb("input", "send_input").rest(&["process", "text"]).eg("crew processes input web r\n  printf 'y\\r' | crew processes input setup -"),
-            verb("add", "create_process").shape(Shape::AddProcess).eg(
-                "crew processes add web npm run dev\n  crew processes add api --cwd server --env PORT=4000 --auto-restart -- cargo run",
-            ),
-            verb("edit", "update_process").shape(Shape::EditProcess).eg(
-                "crew processes edit web --command 'npm run dev -- --port 3001'\n  crew processes edit web --auto-restart true",
-            ),
-            verb("rm", "delete_process").pos(&["process"]).eg("crew processes rm web"),
-        ],
-    },
-    Group {
-        name: "tabs",
-        about: "The workspace's browser tabs: open them, read them, drive them",
-        aliases: &["tab"],
-        verbs: &[
-            verb("list", "list_tabs").alias(&["ls"]).shape(Shape::ListTabs).eg("crew tabs list"),
-            verb("open", "open_tab").pos(&["url"]).eg("crew tabs open http://localhost:5173"),
-            verb("claim", "claim_tab").pos(&["tab"]).eg("crew tabs claim 12"),
-            verb("release", "release_tab").eg("crew tabs release --tab 12"),
-            verb("navigate", "browser_navigate").pos(&["url"]).alias(&["go"]).eg("crew tabs navigate http://localhost:5173/login\n  crew tabs navigate --action back"),
-            verb("snapshot", "browser_snapshot").eg("crew tabs snapshot --tab 12"),
-            verb("click", "browser_click").pos(&["uid"]).eg("crew tabs click 4_17"),
-            verb("hover", "browser_hover").pos(&["uid"]).eg("crew tabs hover 4_17"),
-            verb("fill", "browser_fill").rest(&["uid", "value"]).eg("crew tabs fill 4_9 ada@example.com"),
-            verb("type", "browser_type").rest(&["text"]).eg("crew tabs type hello world"),
-            verb("press", "browser_press").pos(&["key"]).eg("crew tabs press Enter\n  crew tabs press Meta+A"),
-            verb("screenshot", "browser_screenshot").eg("crew tabs screenshot --full-page"),
-            verb("wait", "browser_wait_for").rest(&["text"]).eg("crew tabs wait Signed in --timeout-s 20"),
-            verb("console", "browser_console").eg("crew tabs console"),
-            verb("network", "browser_network").eg("crew tabs network --json"),
-            verb("eval", "browser_evaluate").rest(&["expression"]).eg("crew tabs eval document.title"),
-        ],
-    },
+/// The commands written by hand, by group and verb; the rest are `Schema`.
+const HAND: &[(&str, &str, Shape)] = &[
+    ("bots", "list", Shape::ListBots),
+    ("bots", "send", Shape::Send),
+    ("processes", "list", Shape::ListProcesses),
+    ("processes", "add", Shape::AddProcess),
+    ("processes", "edit", Shape::EditProcess),
+    ("processes", "logs", Shape::Logs),
+    ("tabs", "list", Shape::ListTabs),
 ];
+
+fn shape(tool: &Tool, verb: &CliVerb) -> Shape {
+    if let Some((_, _, shape)) = HAND.iter().find(|(group, name, _)| *group == verb.group && *name == verb.verb) {
+        return *shape;
+    }
+    if tool.name == "control_process" {
+        return Shape::Process;
+    }
+    Shape::Schema
+}
+
+/// Every command of a group, in the order the tools are listed.
+fn verbs_of(tools: &[Tool], group: &str) -> Vec<(usize, CliVerb)> {
+    tools
+        .iter()
+        .enumerate()
+        .flat_map(|(index, tool)| tool.cli.iter().filter(|verb| verb.group == group).map(move |verb| (index, verb.clone())))
+        .collect()
+}
+
+/// The tool behind `crew <group> <verb>`, and the verb as the tool declared it.
+fn find<'a>(tools: &'a [Tool], group: &str, verb: &str) -> Option<(&'a Tool, &'a CliVerb)> {
+    tools.iter().find_map(|tool| tool.cli.iter().find(|cli| cli.group == group && cli.verb == verb).map(|cli| (tool, cli)))
+}
 
 /// Each group as a clap command, for the root to take.
 pub fn subcommands() -> Vec<Command> {
@@ -194,36 +106,35 @@ fn build_group(group: &Group, tools: &[Tool]) -> Command {
         .visible_aliases(group.aliases.iter().copied())
         .subcommand_required(true)
         .arg_required_else_help(true);
-    for verb in group.verbs {
-        let tool = tool(tools, verb.tool);
-        command = command.subcommand(build_verb(group, verb, tool));
+    for (index, verb) in verbs_of(tools, group.name) {
+        command = command.subcommand(build_verb(&verb, &tools[index]));
     }
     command
 }
 
-fn tool<'a>(tools: &'a [Tool], name: &str) -> &'a Tool {
-    tools.iter().find(|tool| tool.name == name).unwrap_or_else(|| panic!("no tool {name}: the CLI names a tool that is gone"))
-}
-
-fn build_verb(group: &Group, verb: &Verb, tool: &Tool) -> Command {
+fn build_verb(verb: &CliVerb, tool: &Tool) -> Command {
     let description = tool.description;
-    let mut about = first_sentence(description);
+    let mut about = if verb.about.is_empty() { first_sentence(description) } else { verb.about.to_string() };
     if !tool.audience.user {
         about.push_str(" From a Crew session only.");
     }
-    let command = Command::new(verb.name);
+    let command = Command::new(verb.verb);
     // The hand-written flags come with their struct's doc as the about, which
     // is for this file's reader; the tool's words are set over it.
-    let command = match verb.shape {
+    let command = match shape(tool, verb) {
         Shape::Logs => LogsArgs::augment_args(command),
         Shape::Send => SendArgs::augment_args(command),
         Shape::AddProcess => ProcAdd::augment_args(command),
         Shape::EditProcess => ProcEdit::augment_args(command),
-        _ => schema_args(command, tool, verb, group),
+        _ => schema_args(command, tool, verb),
+    };
+    let runs = match verb.sets {
+        Some((name, value)) => format!("{} {name} {value}", tool.name),
+        None => tool.name.to_string(),
     };
     let mut command = command
-        .about(format!("{about} ({})", tool.name))
-        .long_about(format!("{description}\n\nRuns the {} tool.", tool.name))
+        .about(format!("{about} ({runs})"))
+        .long_about(format!("{description}\n\nRuns the {runs} tool."))
         .visible_aliases(verb.aliases.iter().copied());
     if !verb.examples.is_empty() {
         command = command.after_help(format!("Examples:\n  {}", verb.examples));
@@ -297,18 +208,32 @@ fn help(spec: &Value) -> String {
     help
 }
 
-fn schema_args(mut command: Command, tool: &Tool, verb: &Verb, group: &Group) -> Command {
+/// The schema properties a verb takes: its positionals and its flags, never
+/// the one it sets.
+fn taken(tool: &Tool, verb: &CliVerb) -> Vec<(String, Value)> {
+    properties(tool)
+        .into_iter()
+        .filter(|(name, _)| verb.sets.is_none_or(|(set, _)| set != name))
+        .filter(|(name, _)| {
+            verb.positional.contains(&name.as_str()) || verb.flags.is_none_or(|flags| flags.contains(&name.as_str()))
+        })
+        .collect()
+}
+
+fn schema_args(mut command: Command, tool: &Tool, verb: &CliVerb) -> Command {
     let properties = properties(tool);
     let required = required(tool);
     for (index, name) in verb.positional.iter().enumerate() {
         let spec = properties
             .get(*name)
-            .unwrap_or_else(|| panic!("crew {} {}: {} takes no {name}", group.name, verb.name, tool.name));
+            .unwrap_or_else(|| panic!("crew {} {}: {} takes no {name}", verb.group, verb.verb, tool.name));
         let last = index + 1 == verb.positional.len();
         let mut arg = Arg::new(*name)
             .value_name(name.to_uppercase())
             .help(help(spec))
-            .required(required.iter().any(|field| field == name))
+            // A merged tool's own checks say what an action needs; for the
+            // command, its positionals are what it is for.
+            .required(required.iter().any(|field| field == name) || verb.sets.is_some())
             .index(index + 1);
         if last && verb.rest {
             arg = arg.num_args(1..).trailing_var_arg(true).allow_hyphen_values(true);
@@ -318,14 +243,15 @@ fn schema_args(mut command: Command, tool: &Tool, verb: &Verb, group: &Group) ->
         command = command.arg(arg);
     }
     // Required flags first, then the rest by name.
-    let mut flags: Vec<(&String, &Value)> = properties.iter().filter(|(name, _)| !verb.positional.contains(&name.as_str())).collect();
+    let mut flags: Vec<(String, Value)> =
+        taken(tool, verb).into_iter().filter(|(name, _)| !verb.positional.contains(&name.as_str())).collect();
     flags.sort_by_key(|(name, _)| !required.contains(name));
     for (name, spec) in flags {
         let arg = Arg::new(name.clone())
             .long(name.replace('_', "-"))
-            .help(help(spec))
-            .required(required.contains(name));
-        command = command.arg(typed(arg, spec));
+            .help(help(&spec))
+            .required(required.contains(&name));
+        command = command.arg(typed(arg, &spec));
     }
     command
 }
@@ -358,9 +284,12 @@ fn typed(arg: Arg, spec: &Value) -> Arg {
 }
 
 /// The tool's arguments, read back from what clap parsed.
-fn arguments(matches: &ArgMatches, tool: &Tool, verb: &Verb) -> Result<Value, CliError> {
+fn arguments(matches: &ArgMatches, tool: &Tool, verb: &CliVerb) -> Result<Value, CliError> {
     let mut out = Map::new();
-    for (name, spec) in properties(tool) {
+    if let Some((name, value)) = verb.sets {
+        out.insert(name.to_string(), json!(value));
+    }
+    for (name, spec) in taken(tool, verb) {
         let rest = verb.rest && verb.positional.last() == Some(&name.as_str());
         if rest {
             if let Some(words) = matches.get_many::<String>(&name) {
@@ -411,13 +340,14 @@ fn arguments(matches: &ArgMatches, tool: &Tool, verb: &Verb) -> Result<Value, Cl
 
 /// `crew <group> <verb> …`, once clap has matched a group.
 pub fn run(ctx: &Ctx, group: &str, matches: &ArgMatches) -> Result<ExitCode, CliError> {
-    let group = GROUPS.iter().find(|candidate| candidate.name == group).ok_or_else(|| CliError::Usage(format!("No group {group}")))?;
     let Some((name, matches)) = matches.subcommand() else {
-        return Err(CliError::Usage(format!("crew {} needs a command: `crew {} --help`", group.name, group.name)));
+        return Err(CliError::Usage(format!("crew {group} needs a command: `crew {group} --help`")));
     };
-    let verb = group.verbs.iter().find(|verb| verb.name == name).ok_or_else(|| CliError::Usage(format!("No command {name}")))?;
+    let tools = every_tool();
+    let (tool, verb) = find(&tools, group, name).ok_or_else(|| CliError::Usage(format!("No command {group} {name}")))?;
     let parsed = |error: clap::Error| CliError::Usage(error.to_string());
-    match verb.shape {
+    let shape = shape(tool, verb);
+    match shape {
         Shape::ListBots => bots::list(ctx),
         Shape::ListTabs => bots::tabs(ctx),
         Shape::ListProcesses => processes::ps(ctx),
@@ -426,8 +356,6 @@ pub fn run(ctx: &Ctx, group: &str, matches: &ArgMatches) -> Result<ExitCode, Cli
         Shape::AddProcess => processes::add(ctx, ProcAdd::from_arg_matches(matches).map_err(parsed)?),
         Shape::EditProcess => processes::edit(ctx, ProcEdit::from_arg_matches(matches).map_err(parsed)?),
         Shape::Schema | Shape::Process => {
-            let tools = every_tool();
-            let tool = tool(&tools, verb.tool);
             let arguments = arguments(matches, tool, verb)?;
             let reply = ctx.client()?.tool(tool.name, arguments)?;
             if reply.is_error {
@@ -435,7 +363,7 @@ pub fn run(ctx: &Ctx, group: &str, matches: &ArgMatches) -> Result<ExitCode, Cli
             }
             if ctx.global.json {
                 output::say_json(&reply.value());
-            } else if verb.shape == Shape::Process {
+            } else if shape == Shape::Process {
                 ctx.show(&reply, processes::summary);
             } else {
                 for line in output::content(&reply.content, &output::image_dir(), &output::image_stem(tool.name)) {
@@ -462,21 +390,72 @@ mod tests {
         (group.to_string(), verb.to_string(), matches.clone())
     }
 
-    fn find(group: &str, verb: &str) -> (&'static Verb, Tool) {
-        let group = GROUPS.iter().find(|candidate| candidate.name == group).expect("group");
-        let verb = group.verbs.iter().find(|candidate| candidate.name == verb).expect("verb");
-        let tool = every_tool().into_iter().find(|tool| tool.name == verb.tool).expect("tool");
+    fn find(group: &str, verb: &str) -> (CliVerb, Tool) {
+        let tools = every_tool();
+        let (tool, verb) = super::find(&tools, group, verb).expect("command");
+        let verb = verb.clone();
+        let tool = every_tool().into_iter().find(|candidate| candidate.name == tool.name).expect("tool");
         (verb, tool)
     }
 
-    /// Every tool a caller can reach has a command.
+    /// Every tool has a command, declared with it, in a group there is; no
+    /// two commands share a name; every hand-written one still has its tool.
     #[test]
     fn every_tool_has_a_command() {
-        let named: Vec<&str> = GROUPS.iter().flat_map(|group| group.verbs.iter().map(|verb| verb.tool)).collect();
-        let hand = ["grep_logs", "wait_for_log"];
-        for tool in every_tool() {
-            assert!(named.contains(&tool.name) || hand.contains(&tool.name), "{} has no command", tool.name);
+        let tools = every_tool();
+        let mut seen = Vec::new();
+        for tool in &tools {
+            assert!(!tool.cli.is_empty(), "{} has no command: give it a cli verb", tool.name);
+            for verb in &tool.cli {
+                assert!(GROUPS.iter().any(|group| group.name == verb.group), "{}: no group {}", tool.name, verb.group);
+                assert!(!seen.contains(&(verb.group, verb.verb)), "crew {} {} is taken twice", verb.group, verb.verb);
+                seen.push((verb.group, verb.verb));
+                if let Some((name, value)) = verb.sets {
+                    let spec = &tool.schema["properties"][name];
+                    let allowed = spec["enum"].as_array().is_some_and(|values| values.contains(&json!(value)));
+                    assert!(allowed, "crew {} {} sets {name} {value}, which {} does not take", verb.group, verb.verb, tool.name);
+                }
+            }
         }
+        for (group, verb, _) in HAND {
+            assert!(seen.contains(&(*group, *verb)), "crew {group} {verb} is written by hand for a tool that is gone");
+        }
+        // Each action of a merged tool is a command of its own.
+        for action in ["start", "stop", "restart", "pause", "resume"] {
+            assert_eq!(find("processes", action).1.name, "control_process");
+        }
+        for action in ["click", "hover", "fill", "type", "press"] {
+            assert_eq!(find("tabs", action).1.name, "browser_act");
+        }
+        assert_eq!((find("processes", "add").1.name, find("processes", "edit").1.name), ("save_process", "save_process"));
+        assert_eq!((find("tabs", "console").1.name, find("tabs", "network").1.name), ("browser_activity", "browser_activity"));
+    }
+
+    /// A merged tool's verb sends the action it stands for, and offers only
+    /// the flags that action takes.
+    #[test]
+    fn a_verb_of_a_merged_tool_sets_its_action() {
+        let (_, _, matches) = parse(&["processes", "start", "web", "--env", "PORT=3001"]);
+        let (verb, tool) = find("processes", "start");
+        assert_eq!(
+            arguments(&matches, &tool, &verb).expect("args"),
+            json!({ "action": "start", "process": "web", "env": { "PORT": "3001" } })
+        );
+        assert!(root().try_get_matches_from(["crew", "processes", "stop", "web", "--env", "PORT=1"]).is_err(), "stop takes no env");
+        assert!(root().try_get_matches_from(["crew", "processes", "start", "web", "--action", "stop"]).is_err());
+
+        let (_, _, matches) = parse(&["tabs", "fill", "--tab", "12", "4_9", "ada@example.com"]);
+        let (verb, tool) = find("tabs", "fill");
+        assert_eq!(
+            arguments(&matches, &tool, &verb).expect("args"),
+            json!({ "action": "fill", "uid": "4_9", "value": "ada@example.com", "tab": "12" })
+        );
+        assert!(root().try_get_matches_from(["crew", "tabs", "click", "4_9", "--key", "Enter"]).is_err());
+        assert!(root().try_get_matches_from(["crew", "tabs", "click"]).is_err(), "click needs its uid");
+
+        let (_, _, matches) = parse(&["tabs", "network"]);
+        let (verb, tool) = find("tabs", "network");
+        assert_eq!(arguments(&matches, &tool, &verb).expect("args"), json!({ "kind": "network" }));
     }
 
     #[test]
@@ -489,7 +468,7 @@ mod tests {
         let (group, verb, matches) = parse(&["bots", "continue", "run", "the", "-e2e"]);
         assert_eq!((group.as_str(), verb.as_str()), ("bots", "continue"));
         let (verb, tool) = find("bots", "continue");
-        assert_eq!(arguments(&matches, &tool, verb).expect("args"), json!({ "text": "run the -e2e" }));
+        assert_eq!(arguments(&matches, &tool, &verb).expect("args"), json!({ "text": "run the -e2e" }));
     }
 
     #[test]
@@ -497,7 +476,7 @@ mod tests {
         let (_, _, matches) = parse(&["processes", "wait", "web", "ready|up", "--timeout-s", "30", "--since", "12"]);
         let (verb, tool) = find("processes", "wait");
         assert_eq!(
-            arguments(&matches, &tool, verb).expect("args"),
+            arguments(&matches, &tool, &verb).expect("args"),
             json!({ "process": "web", "pattern": "ready|up", "timeout_s": 30, "since": 12 })
         );
         assert!(root().try_get_matches_from(["crew", "processes", "wait", "web", "x", "--timeout-s", "soon"]).is_err());
@@ -505,13 +484,13 @@ mod tests {
 
         let (_, _, matches) = parse(&["tabs", "screenshot", "--full-page", "--tab", "12"]);
         let (verb, tool) = find("tabs", "screenshot");
-        assert_eq!(arguments(&matches, &tool, verb).expect("args"), json!({ "full_page": true, "tab": "12" }));
+        assert_eq!(arguments(&matches, &tool, &verb).expect("args"), json!({ "full_page": true, "tab": "12" }));
         let (_, _, matches) = parse(&["tabs", "screenshot", "--full-page=false"]);
-        assert_eq!(arguments(&matches, &tool, verb).expect("args"), json!({ "full_page": false }));
+        assert_eq!(arguments(&matches, &tool, &verb).expect("args"), json!({ "full_page": false }));
 
         let (_, _, matches) = parse(&["tabs", "navigate", "--action", "back"]);
         let (verb, tool) = find("tabs", "navigate");
-        assert_eq!(arguments(&matches, &tool, verb).expect("args"), json!({ "action": "back" }));
+        assert_eq!(arguments(&matches, &tool, &verb).expect("args"), json!({ "action": "back" }));
         assert!(root().try_get_matches_from(["crew", "tabs", "navigate", "--action", "sideways"]).is_err());
     }
 
@@ -520,11 +499,11 @@ mod tests {
         let (_, _, matches) = parse(&["routines", "set", "--name", "standup", "--schedule", r#"{"kind":"daily","hour":9}"#, "--enabled"]);
         let (verb, tool) = find("routines", "set");
         assert_eq!(
-            arguments(&matches, &tool, verb).expect("args"),
+            arguments(&matches, &tool, &verb).expect("args"),
             json!({ "name": "standup", "schedule": { "kind": "daily", "hour": 9 }, "enabled": true })
         );
         let (_, _, matches) = parse(&["routines", "set", "--schedule", "daily"]);
-        assert!(matches!(arguments(&matches, &tool, verb), Err(CliError::Usage(_))));
+        assert!(matches!(arguments(&matches, &tool, &verb), Err(CliError::Usage(_))));
     }
 
     #[test]

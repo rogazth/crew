@@ -29,6 +29,8 @@ const MIN_WAIT_MS: i64 = 1_000;
 const SETTLE_POLL: Duration = Duration::from_millis(100);
 /// …backing off to this, so a turn waiting on the user costs a read every few seconds.
 const SETTLE_MAX: Duration = Duration::from_secs(5);
+/// How long a once routine that found its bot busy waits before trying again.
+const ONCE_RETRY_MS: i64 = 60_000;
 
 /// A fire is the one thing that changes a routine without a client asking, so
 /// it is the one thing the routines screen cannot learn any other way.
@@ -189,6 +191,15 @@ impl Scheduler {
             // A session we cannot read is one we will not start a turn on.
             _ => true,
         };
+        let once = trigger == RunTrigger::Schedule && matches!(schedule, Schedule::Once { .. });
+        // A recurring routine that finds its bot busy skips a beat; a once
+        // routine has no next beat, so it waits for the bot instead, a
+        // minute at a time, without a line in the history for each try.
+        if once && busy {
+            let _ = routine::reschedule(&self.store, &row.routine.id, started + ONCE_RETRY_MS);
+            self.changed();
+            return;
+        }
         let run = RoutineRun {
             id: uuid::Uuid::new_v4().to_string(),
             started_at: started,
@@ -205,6 +216,13 @@ impl Scheduler {
             next,
             &run,
         );
+        // A once routine that ran has had its time: it is switched off rather
+        // than deleted, so its run stays in the history and Run now still
+        // works. Run now ahead of its time leaves it armed.
+        let moved = match moved {
+            Ok(()) if once => routine::disable(&self.store, &row.routine.id),
+            other => other,
+        };
         self.changed();
         // Without a written next_run_at nothing bounds a re-fire, so a history
         // we could not write is a turn we do not start.
@@ -567,6 +585,75 @@ print(json.dumps({"type":"step_finish","sessionID":sid,"part":{"id":"s1","type":
             "next_run_at stayed at {:?}",
             after.next_run_at
         );
+    }
+
+    fn once(world: &World, bot: &Session, at: i64) -> Routine {
+        routine::upsert(
+            world.store(),
+            None,
+            bot.id.clone(),
+            "Check back".into(),
+            true,
+            "did CI pass?".into(),
+            Schedule::Once { at }.to_json(),
+            Some(at),
+            None,
+        )
+        .expect("routine")
+    }
+
+    /// A once routine fires at its time, records the run like any other, and
+    /// is then switched off, history kept: it never fires again.
+    #[test]
+    fn a_once_routine_fires_once_and_is_switched_off() {
+        let world = world();
+        let coder = world.bot("Coder");
+        let routine = once(&world, &coder, now_millis() - 1_000);
+
+        world.tick();
+
+        let run = world.settled_run(&routine.id);
+        assert_eq!((run.status, run.trigger), (RunStatus::Ok, RunTrigger::Schedule));
+        let after = world.reload(&routine.id);
+        assert!(!after.enabled, "still on after its one run");
+        assert_eq!(after.next_run_at, None);
+        assert_eq!(after.last_run_at, Some(run.started_at));
+        world.tick();
+        assert_eq!(world.runs(&routine.id).len(), 1, "it fired twice");
+    }
+
+    /// A once routine has no next beat to wait for, so a busy bot does not
+    /// cost it its only run: it tries again in a minute, writing no history.
+    #[test]
+    fn a_once_routine_waits_for_a_busy_bot_instead_of_skipping() {
+        let world = world();
+        let coder = world.bot("Coder");
+        let routine = once(&world, &coder, now_millis() - 1_000);
+        session::set_status(world.store(), coder.id.clone(), "working".into()).expect("status");
+        let before = now_millis();
+
+        world.tick();
+
+        assert!(world.runs(&routine.id).is_empty(), "a retry is not a run");
+        let after = world.reload(&routine.id);
+        assert!(after.enabled);
+        assert!(after.next_run_at.is_some_and(|at| at >= before + ONCE_RETRY_MS), "{:?}", after.next_run_at);
+    }
+
+    /// Run now ahead of its time is a run, and the time still stands.
+    #[test]
+    fn running_a_once_routine_early_keeps_it_armed() {
+        let world = world();
+        let coder = world.bot("Coder");
+        let at = now_millis() + 3_600_000;
+        let routine = once(&world, &coder, at);
+
+        world.scheduler.run_now(routine.id.clone()).expect("run now");
+
+        world.settled_run(&routine.id);
+        let after = world.reload(&routine.id);
+        assert!(after.enabled);
+        assert_eq!(after.next_run_at, Some(at));
     }
 
     #[test]

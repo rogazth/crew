@@ -5,7 +5,9 @@ import type { Session } from "./types";
 export type Schedule =
   | { kind: "interval"; minutes: number }
   | { kind: "daily"; hour: number; minute: number; days: number[] }
-  | { kind: "cron"; expression: string };
+  | { kind: "cron"; expression: string }
+  /** One time, epoch ms. It fires once and the daemon then switches it off. */
+  | { kind: "once"; at: number };
 
 /** `skipped`: it came due while the bot was still working on something else. */
 export type RunStatus = "running" | "ok" | "error" | "skipped";
@@ -50,7 +52,7 @@ export type RoutineDraft = {
 
 export const MAX_RUNS = 20;
 
-export type TriggerId = "30m" | "hourly" | "3h" | "daily" | "weekly" | "cron";
+export type TriggerId = "30m" | "hourly" | "3h" | "daily" | "weekly" | "cron" | "once";
 
 export const DEFAULT_CRON = "0 9 * * 1";
 
@@ -61,6 +63,8 @@ export const TRIGGERS: Array<{ id: TriggerId; label: string; schedule: Schedule 
   { id: "daily", label: "Every day", schedule: { kind: "daily", hour: 9, minute: 0, days: [] } },
   { id: "weekly", label: "Every week", schedule: { kind: "daily", hour: 9, minute: 0, days: [1] } },
   { id: "cron", label: "Custom cron", schedule: { kind: "cron", expression: DEFAULT_CRON } },
+  // `at` is filled in by withTrigger: the next 9:00, or the clock already set.
+  { id: "once", label: "Once", schedule: { kind: "once", at: 0 } },
 ];
 
 /** Sunday first, matching Date#getDay. */
@@ -111,6 +115,7 @@ export function toDraft(routine: Routine): RoutineDraft {
 
 export function triggerOf(schedule: Schedule): TriggerId {
   if (schedule.kind === "cron") return "cron";
+  if (schedule.kind === "once") return "once";
   if (schedule.kind === "interval") {
     return schedule.minutes === 30 ? "30m" : schedule.minutes === 180 ? "3h" : "hourly";
   }
@@ -120,12 +125,35 @@ export function triggerOf(schedule: Schedule): TriggerId {
 /** Switching trigger keeps whatever the new shape can carry over. */
 export function withTrigger(schedule: Schedule, id: TriggerId): Schedule {
   const base = TRIGGERS.find((trigger) => trigger.id === id)?.schedule ?? TRIGGERS[3]!.schedule;
+  if (base.kind === "once") {
+    if (schedule.kind === "once") return schedule;
+    const clock = schedule.kind === "daily" ? schedule : { hour: 9, minute: 0 };
+    return { kind: "once", at: nextRun({ kind: "daily", hour: clock.hour, minute: clock.minute, days: [] }) ?? Date.now() };
+  }
   if (base.kind !== "daily" || schedule.kind !== "daily") return base;
   return { ...base, hour: schedule.hour, minute: schedule.minute };
 }
 
 const SCHEDULE_HELP =
-  'schedule is {"kind":"interval","minutes":N}, {"kind":"daily","hour":0-23,"minute":0-59,"days":[0-6]} (days empty = every day, 0 = Sunday) or {"kind":"cron","expression":"m h dom mon dow"}';
+  'schedule is {"kind":"interval","minutes":N}, {"kind":"daily","hour":0-23,"minute":0-59,"days":[0-6]} (days empty = every day, 0 = Sunday), {"kind":"cron","expression":"m h dom mon dow"} or {"kind":"once","at":"2026-10-05T15:30"} (ISO-8601, local unless it has Z or an offset, or epoch milliseconds)';
+
+const AT_HELP =
+  'at must be an ISO-8601 time like "2026-10-05T15:30" (local time unless it ends in Z or an offset like +02:00) or epoch milliseconds';
+
+/** Epoch milliseconds before this are taken for a mistake (seconds, most likely). */
+const AT_FLOOR_MS = 1_000_000_000_000;
+
+/** An ISO-8601 date and time, as `crates/crew-core/src/schedule.rs` reads one. */
+const ISO_TIME = /^\d{4}-\d{2}-\d{2}[Tt ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?([Zz]|[+-]\d{2}:?\d{2})?$/;
+
+/** Epoch ms for `at` as a tool or the CLI gives it, or null. */
+export function parseAt(value: unknown): number | null {
+  if (typeof value === "number") return Number.isFinite(value) && value >= AT_FLOOR_MS ? Math.trunc(value) : null;
+  if (typeof value !== "string" || !ISO_TIME.test(value.trim())) return null;
+  const iso = value.trim().replace(" ", "T").replace(/([+-]\d{2})(\d{2})$/, "$1:$2");
+  const at = Date.parse(iso);
+  return Number.isNaN(at) || at < AT_FLOOR_MS ? null : at;
+}
 
 export function validateSchedule(input: unknown): Schedule {
   const value = record(input);
@@ -153,6 +181,11 @@ export function validateSchedule(input: unknown): Schedule {
     }
     return { kind: "cron", expression };
   }
+  if (value.kind === "once") {
+    const at = parseAt(value.at);
+    if (at === null) throw new Error(`${AT_HELP}. ${SCHEDULE_HELP}`);
+    return { kind: "once", at };
+  }
   throw new Error(SCHEDULE_HELP);
 }
 
@@ -166,7 +199,7 @@ function integer(value: unknown): number | null {
 
 export function parseSchedule(raw: string): Schedule {
   try {
-    const value = JSON.parse(raw) as Partial<Schedule> & { expression?: unknown };
+    const value = JSON.parse(raw) as Partial<Schedule> & { expression?: unknown; at?: unknown };
     if (value.kind === "interval" && typeof value.minutes === "number" && value.minutes >= 1) {
       return { kind: "interval", minutes: value.minutes };
     }
@@ -181,6 +214,9 @@ export function parseSchedule(raw: string): Schedule {
     if (value.kind === "cron" && typeof value.expression === "string" && isValidCron(value.expression)) {
       return { kind: "cron", expression: value.expression };
     }
+    if (value.kind === "once" && typeof value.at === "number") {
+      return { kind: "once", at: value.at };
+    }
   } catch {
     // fall through to the default below
   }
@@ -190,6 +226,8 @@ export function parseSchedule(raw: string): Schedule {
 /** Next due time strictly after `from`, or null when a cron can never match again. */
 export function nextRun(schedule: Schedule, from = Date.now()): number | null {
   if (schedule.kind === "interval") return from + schedule.minutes * 60_000;
+  // Once is once: a time already gone has no next run.
+  if (schedule.kind === "once") return schedule.at > from ? schedule.at : null;
   if (schedule.kind === "cron") {
     const spec = parseCron(schedule.expression);
     return spec ? nextCron(spec, from) : null;
@@ -211,8 +249,18 @@ export function clockOf(schedule: Schedule): string {
   return `${String(schedule.hour).padStart(2, "0")}:${String(schedule.minute).padStart(2, "0")}`;
 }
 
+/** "Oct 5, 2026, 3:30 PM", as the daemon writes it for a model. */
+const ONCE_AT = new Intl.DateTimeFormat("en-US", {
+  month: "short",
+  day: "numeric",
+  year: "numeric",
+  hour: "numeric",
+  minute: "2-digit",
+});
+
 export function describeSchedule(schedule: Schedule): string {
   if (schedule.kind === "cron") return `Cron ${schedule.expression}`;
+  if (schedule.kind === "once") return `Once · ${ONCE_AT.format(schedule.at)}`;
   if (schedule.kind === "interval") {
     if (schedule.minutes % 60 === 0) {
       const hours = schedule.minutes / 60;

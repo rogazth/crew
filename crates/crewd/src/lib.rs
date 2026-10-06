@@ -2747,7 +2747,7 @@ mod tests {
             &serde_json::json!({
                 "token": token,
                 "method": "tools/call",
-                "params": { "name": "create_process", "arguments": { "name": "api", "command": "sleep 30" } }
+                "params": { "name": "save_process", "arguments": { "name": "api", "command": "sleep 30" } }
             }),
         );
         let text = reply["result"]["content"][0]["text"].as_str().unwrap_or("");

@@ -96,29 +96,29 @@ test("T1: every browser tool, as the user, on a tab behind the one on screen", a
 
   let snapshot = text(await tool("browser_snapshot"));
   assert.match(snapshot, /heading "Order" level=1/);
-  await tool("browser_fill", { uid: uidOf(snapshot, /uid=(\S+) textbox "Email"/), value: "ada@example.com" });
-  await tool("browser_fill", { uid: uidOf(snapshot, /uid=(\S+) combobox "Size"/), value: "L" });
-  await tool("browser_click", { uid: uidOf(snapshot, /uid=(\S+) button "Send"/) });
+  await tool("browser_act", { action: "fill", uid: uidOf(snapshot, /uid=(\S+) textbox "Email"/), value: "ada@example.com" });
+  await tool("browser_act", { action: "fill", uid: uidOf(snapshot, /uid=(\S+) combobox "Size"/), value: "L" });
+  await tool("browser_act", { action: "click", uid: uidOf(snapshot, /uid=(\S+) button "Send"/) });
   assert.equal(text(await tool("browser_evaluate", { expression: "document.title" })), '"Sent ada@example.com L"');
 
-  await tool("browser_hover", { uid: uidOf(snapshot, /uid=(\S+) button "Hover me"/) });
+  await tool("browser_act", { action: "hover", uid: uidOf(snapshot, /uid=(\S+) button "Hover me"/) });
   assert.equal(text(await tool("browser_evaluate", { expression: "document.getElementById('hover').textContent" })), '"Hovered"');
 
-  await tool("browser_click", { uid: uidOf(snapshot, /uid=(\S+) textbox "Query"/) });
-  await tool("browser_type", { text: "crew rocks" });
-  await tool("browser_press", { key: "Enter" });
+  await tool("browser_act", { action: "click", uid: uidOf(snapshot, /uid=(\S+) textbox "Query"/) });
+  await tool("browser_act", { action: "type", text: "crew rocks" });
+  await tool("browser_act", { action: "press", key: "Enter" });
   assert.equal(text(await tool("browser_evaluate", { expression: "document.title" })), '"Searched crew rocks"');
 
-  await tool("browser_click", { uid: uidOf(snapshot, /uid=(\S+) button "Log"/) });
-  await waitFor(async () => text(await tool("browser_console")).includes("crew-error-marker"), {
+  await tool("browser_act", { action: "click", uid: uidOf(snapshot, /uid=(\S+) button "Log"/) });
+  await waitFor(async () => text(await tool("browser_activity", { kind: "console" })).includes("crew-error-marker"), {
     message: "the console has the page's messages",
   });
-  const consoleText = text(await tool("browser_console"));
+  const consoleText = text(await tool("browser_activity", { kind: "console" }));
   assert.ok(consoleText.includes("crew-console-marker"), consoleText);
-  await waitFor(async () => /\/api\/ping/.test(text(await tool("browser_network"))), {
+  await waitFor(async () => /\/api\/ping/.test(text(await tool("browser_activity", { kind: "network" }))), {
     message: "the network log has the fetch",
   });
-  assert.match(text(await tool("browser_network")), /GET.*200.*\/api\/ping|\/api\/ping.*200/);
+  assert.match(text(await tool("browser_activity", { kind: "network" })), /GET.*200.*\/api\/ping|\/api\/ping.*200/);
 
   const path = async () => text(await tool("browser_evaluate", { expression: "location.pathname" }));
   await tool("browser_navigate", { url: `${base}/next` });
@@ -140,12 +140,13 @@ test("T1: every browser tool, as the user, on a tab behind the one on screen", a
   const leases = () => crew.request<BrowserLeases>("browser_leases_list");
   await tool("release_tab", { tab });
   await waitFor(async () => (await leases()).leases.length === 0, { message: "release_tab frees it" });
-  await tool("claim_tab", { tab });
+  // Any browser tool takes the tab it acts on.
+  await tool("browser_snapshot", { tab });
   assert.deepEqual((await leases()).leases.map((lease) => [lease.tab, lease.holder]), [[tab, "you"]]);
 
   // Refusals an agent reads and acts on.
   await assert.rejects(tool("open_tab", { url: "file:///etc/passwd" }), /Only http\(s\) pages/);
-  await assert.rejects(tool("browser_click", { tab, uid: "nope" }), /snapshot/i);
+  await assert.rejects(tool("browser_act", { action: "click", tab, uid: "nope" }), /snapshot/i);
 });
 
 test("T2: the crew CLI, as the user, runs a process's whole life and lists the tabs", async (t) => {

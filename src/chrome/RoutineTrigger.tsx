@@ -26,6 +26,13 @@ const PRESET_MINUTES = new Set([30, 60, 180]);
 /** Stands for an interval an agent set that no preset spells; picking it changes nothing. */
 const KEEP = "keep";
 
+/** `<input type="datetime-local">`'s value for a moment: local, to the minute. */
+function localInput(at: number): string {
+  const d = new Date(at);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
 /** When the routine fires: a cadence, plus whatever that cadence still needs. */
 export function RoutineTrigger({ schedule, onChange }: Props) {
   const trigger = triggerOf(schedule);
@@ -34,6 +41,12 @@ export function RoutineTrigger({ schedule, onChange }: Props) {
   const offPreset = schedule.kind === "interval" && !PRESET_MINUTES.has(schedule.minutes);
   const items: Option<string>[] = TRIGGERS.map((item) => ({ value: item.id, label: item.label }));
   if (offPreset) items.unshift({ value: KEEP, label: describeSchedule(schedule) });
+
+  const pickMoment = (value: string) => {
+    // A value with no zone reads as local time, which is what the field shows.
+    const at = new Date(value).getTime();
+    if (schedule.kind === "once" && !Number.isNaN(at)) onChange({ kind: "once", at });
+  };
 
   const pickTime = (value: string) => {
     if (schedule.kind !== "daily") return;
@@ -68,6 +81,17 @@ export function RoutineTrigger({ schedule, onChange }: Props) {
               aria-label="Time"
               value={clockOf(schedule)}
               onChange={(event) => pickTime(event.target.value)}
+              className="tabular-nums"
+            />
+          </div>
+        )}
+        {schedule.kind === "once" && (
+          <div className="w-52">
+            <TextInput
+              type="datetime-local"
+              aria-label="When"
+              value={localInput(schedule.at)}
+              onChange={(event) => pickMoment(event.target.value)}
               className="tabular-nums"
             />
           </div>
@@ -115,10 +139,14 @@ export function RoutineTrigger({ schedule, onChange }: Props) {
           <span className="text-danger">
             Five fields: minute hour day-of-month month day-of-week
           </span>
+        ) : next === null && schedule.kind === "once" ? (
+          <span className="text-danger">This time has passed</span>
         ) : next === null ? (
           <span className="text-danger">This pattern never comes around</span>
         ) : (
-          <span>Next run {dayLabel(next)}</span>
+          <span>
+            {schedule.kind === "once" ? "Runs" : "Next run"} {dayLabel(next)}
+          </span>
         )}
       </p>
     </div>

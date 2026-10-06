@@ -192,6 +192,38 @@ describe("describeSchedule", () => {
   });
 });
 
+describe("a once schedule", () => {
+  const at = new Date(2026, 9, 5, 15, 30).getTime();
+
+  it("takes a time however a tool or the CLI writes it, as the daemon does", () => {
+    expect(validateSchedule({ kind: "once", at: "2026-10-05T15:30" })).toEqual({ kind: "once", at });
+    expect(validateSchedule({ kind: "once", at: "2026-10-05 15:30:00" })).toEqual({ kind: "once", at });
+    expect(validateSchedule({ kind: "once", at })).toEqual({ kind: "once", at });
+    expect(validateSchedule({ kind: "once", at: "2026-10-05T13:30:00Z" })).toEqual({ kind: "once", at: 1_791_207_000_000 });
+    expect(validateSchedule({ kind: "once", at: "2026-10-05T10:00-0330" })).toEqual({ kind: "once", at: 1_791_207_000_000 });
+    for (const bad of ["tomorrow", "2026-10-05", 1_791_207_000, null]) {
+      expect(() => validateSchedule({ kind: "once", at: bad })).toThrow(/at must be/);
+    }
+  });
+
+  it("reads back from the column, fires once and says when", () => {
+    expect(parseSchedule(JSON.stringify({ kind: "once", at }))).toEqual({ kind: "once", at });
+    expect(nextRun({ kind: "once", at }, at - 1)).toBe(at);
+    expect(nextRun({ kind: "once", at }, at)).toBeNull();
+    expect(describeSchedule({ kind: "once", at })).toBe("Once · Oct 5, 2026, 3:30 PM");
+    expect(triggerOf({ kind: "once", at })).toBe("once");
+  });
+
+  it("is picked in the editor at the clock already set", () => {
+    const once = withTrigger({ kind: "daily", hour: 18, minute: 45, days: [] }, "once");
+    expect(once.kind).toBe("once");
+    const when = new Date(once.kind === "once" ? once.at : 0);
+    expect([when.getHours(), when.getMinutes()]).toEqual([18, 45]);
+    expect(once.kind === "once" && once.at > Date.now()).toBe(true);
+    expect(withTrigger({ kind: "once", at }, "once")).toEqual({ kind: "once", at });
+  });
+});
+
 describe("triggerOf and withTrigger", () => {
   it("round-trips every trigger the editor offers", () => {
     const schedules: Schedule[] = [

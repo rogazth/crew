@@ -255,7 +255,8 @@ mod tests {
         for (tool, args) in [
             ("open_tab", json!({ "url": "https://example.com" })),
             ("browser_navigate", json!({ "url": "https://example.com" })),
-            ("browser_click", json!({ "uid": "1_1" })),
+            ("browser_act", json!({ "action": "click", "uid": "1_1" })),
+            ("browser_activity", json!({ "kind": "network" })),
             ("browser_wait_for", json!({ "text": "Ready", "timeout_s": 50 })),
         ] {
             let direct = json!({ "name": tool, "arguments": args });

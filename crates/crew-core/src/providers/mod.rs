@@ -201,14 +201,29 @@ pub fn crew_tool_detail(name: &str, input: &Map<String, Value>) -> Option<crew_p
 pub fn crew_label(name: &str, input: &Map<String, Value>) -> Option<String> {
     let (verb, input) = crew_call(name, input)?;
     let input: &Map<String, Value> = &input;
-    let verb = format!("Crew {}", verb.replace('_', " "));
+    let verb = format!("Crew {}", crew_words(verb, input));
     let subject = string_field(Some(input), "to")
         .or_else(|| string_field(Some(input), "name"))
+        .or_else(|| string_field(Some(input), "process"))
         .or_else(|| string_field(Some(input), "query"));
     Some(match subject {
         Some(subject) => format!("{verb} {}", clip(&subject, 40)),
         None => verb,
     })
+}
+
+/// What a Crew call reads as: its name in words, or for a tool that merges
+/// verbs, the one it ran. `control_process` with action start reads "start
+/// process", as the `start_process` of older transcripts still does.
+pub fn crew_words(verb: &str, input: &Map<String, Value>) -> String {
+    let field = |key: &str| string_field(Some(input), key);
+    let merged = match verb {
+        "control_process" => field("action").map(|action| format!("{action} process")),
+        "browser_act" => field("action").map(|action| format!("browser {action}")),
+        "browser_activity" => field("kind").map(|kind| format!("browser {kind}")),
+        _ => None,
+    };
+    merged.unwrap_or_else(|| verb.replace('_', " "))
 }
 
 /// An MCP tool's server and tool, from Claude's `mcp__server__tool` name.
@@ -433,6 +448,24 @@ mod tests {
         let empty = serde_json::Map::new();
         assert_eq!(crew_call("mcp__crew__call_tool", &empty).map(|(verb, _)| verb), Some("call_tool"));
         assert_eq!(crate::providers::claude::tool_label("mcp__crew__call_tool", input), "Crew message agent abc");
+    }
+
+    /// A merged tool reads as the verb it ran, and the old names it replaced
+    /// still read the same in the history that holds them.
+    #[test]
+    fn a_merged_tool_reads_as_the_action_it_took() {
+        let label = |name: &str, input: serde_json::Value| {
+            let input = input.as_object().unwrap().clone();
+            (crew_label(name, &input).unwrap(), crate::providers::claude::tool_label(name, &input))
+        };
+        let start = label("mcp__crew__control_process", serde_json::json!({ "process": "web", "action": "start" }));
+        assert_eq!(start, ("Crew start process web".to_string(), "Crew start process web".to_string()));
+        let old = label("mcp__crew__start_process", serde_json::json!({ "process": "web" }));
+        assert_eq!(old, start, "history keeps reading the same");
+        assert_eq!(label("crew_browser_act", serde_json::json!({ "action": "click", "uid": "1_2" })).0, "Crew browser click");
+        assert_eq!(label("crew_browser_click", serde_json::json!({ "uid": "1_2" })).0, "Crew browser click");
+        assert_eq!(label("crew_browser_activity", serde_json::json!({ "kind": "console" })).0, "Crew browser console");
+        assert_eq!(label("crew_control_process", serde_json::json!({})).0, "Crew control process");
     }
 
     /// Measured on Claude Code 2.1.286: the stream carries `arguments` as the

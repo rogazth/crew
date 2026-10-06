@@ -218,12 +218,12 @@ fn grep(ctx: &Ctx, client: &Client, args: &LogsArgs, pattern: &str) -> Result<Ex
     if let Some(context) = args.context {
         request["context"] = json!(context);
     }
-    let found = client.run("grep_logs", request)?.value();
+    let found = client.run("read_logs", request)?.value();
     if ctx.global.json {
         json_out(&found, args.follow);
     } else {
         let text = matches_text(&found, args.context.unwrap_or(0) > 0)
-            .ok_or_else(|| CliError::Failed(format!("grep_logs answered with something else: {found}")))?;
+            .ok_or_else(|| CliError::Failed(format!("read_logs answered with something else: {found}")))?;
         if !text.is_empty() {
             output::say(&text);
         }
@@ -318,15 +318,19 @@ pub fn add(ctx: &Ctx, add: ProcAdd) -> Result<ExitCode, CliError> {
     let mut arguments = json!({
         "name": name,
         "command": command.join(" "),
-        "auto_restart": auto_restart,
     });
+    // Only when asked: a process of that name already there is changed, and
+    // a flag left off is no reason to turn its restarts off.
+    if auto_restart {
+        arguments["auto_restart"] = json!(true);
+    }
     if let Some(cwd) = cwd {
         arguments["cwd"] = json!(cwd);
     }
     if !env.is_empty() {
         arguments["env"] = json!(parse_env(&env)?);
     }
-    let reply = ctx.client()?.run("create_process", arguments)?;
+    let reply = ctx.client()?.run("save_process", arguments)?;
     ctx.show(&reply, summary);
     Ok(ExitCode::SUCCESS)
 }
@@ -348,7 +352,7 @@ pub fn edit(ctx: &Ctx, edit: ProcEdit) -> Result<ExitCode, CliError> {
         return Err(CliError::Usage("Nothing to change: name at least one of --name, --command, --cwd, --env, --auto-restart.".into()));
     }
     changes.insert("process".into(), json!(process));
-    let reply = ctx.client()?.run("update_process", Value::Object(changes))?;
+    let reply = ctx.client()?.run("save_process", Value::Object(changes))?;
     ctx.show(&reply, summary);
     Ok(ExitCode::SUCCESS)
 }

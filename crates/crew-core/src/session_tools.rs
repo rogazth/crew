@@ -7,7 +7,7 @@
 //! (children). A bot's own session is reached through `message_agent`, and
 //! a terminal is the user's CLI.
 //!
-//! They are modelled on the process tools on purpose — `start_process`,
+//! They are modelled on the process tools on purpose — `control_process`,
 //! `wait_for_log`, `read_logs` — so a model that has driven a dev server knows
 //! the moves. The child's reply is the end of its turn: it needs no tool to
 //! answer, which is what lets a terminal (that cannot be written back to) be a
@@ -25,7 +25,7 @@ use crate::mailbox;
 use crate::session::{self, Session};
 use crate::session_events::{self, Event, Signal};
 use crate::store::{now_millis, Store};
-use crate::tools::{provider_models, provider_names, text, unknown_model, Audience, Tool, ToolFamily, ToolOutput, GLOSSARY};
+use crate::tools::{cli, provider_models, provider_names, text, unknown_model, Audience, Tool, ToolFamily, ToolOutput, GLOSSARY};
 use crate::turns::TurnHost;
 use crate::worktree::Worktree;
 
@@ -868,8 +868,8 @@ pub fn catalog() -> Vec<Tool> {
                 },
                 "required": ["provider", "prompt"]
             }),
-            keywords: &["session", "spawn", "delegate", "hand", "run", "codex", "claude", "cursor", "opencode", "cli", "child", "parallel", "worker", "subagent"],
             audience: Audience::PARENTS,
+            cli: vec![cli("sessions", "start").rest(&["provider", "prompt"]).eg("crew sessions start codex fix the failing login test\n  crew sessions start claude --worktree new --model claude-opus-5 -- review the diff on main")],
         },
         Tool {
             name: "list_sessions",
@@ -878,8 +878,8 @@ pub fn catalog() -> Vec<Tool> {
                 "type": "object",
                 "properties": { "mine": { "type": "boolean", "description": "Only the ones you started. Defaults to true." } }
             }),
-            keywords: &["sessions", "children", "running", "status", "workers"],
             audience: Audience::PARENTS,
+            cli: vec![cli("sessions", "list").alias(&["ls"]).eg("crew sessions list\n  crew sessions list --mine=false")],
         },
         Tool {
             name: "wait_for_session",
@@ -894,8 +894,8 @@ pub fn catalog() -> Vec<Tool> {
                 },
                 "required": ["sessions", "timeout_s"]
             }),
-            keywords: &["wait", "block", "until", "done", "finish", "report", "result", "poll"],
             audience: Audience::PARENTS,
+            cli: vec![cli("sessions", "wait").rest(&["sessions"]).eg("crew sessions wait --timeout-s 60 3f2a…\n  crew sessions wait --timeout-s 30 3f2a… 9c1d…")],
         },
         Tool {
             name: "read_session",
@@ -910,8 +910,8 @@ pub fn catalog() -> Vec<Tool> {
                 },
                 "required": ["session"]
             }),
-            keywords: &["read", "transcript", "output", "log", "what", "did", "history"],
             audience: Audience::PARENTS,
+            cli: vec![cli("sessions", "read").pos(&["session"]).eg("crew sessions read 3f2a…\n  crew sessions read 3f2a… --since 12 --include-tools")],
         },
         Tool {
             name: "send_to_session",
@@ -925,8 +925,8 @@ pub fn catalog() -> Vec<Tool> {
                 },
                 "required": ["session", "text"]
             }),
-            keywords: &["send", "tell", "continue", "more", "follow", "queue", "message"],
             audience: Audience::PARENTS,
+            cli: vec![cli("sessions", "send").rest(&["session", "text"]).eg("crew sessions send 3f2a… now run the e2e and fix what fails")],
         },
         Tool {
             name: "respond_to_session",
@@ -941,15 +941,15 @@ pub fn catalog() -> Vec<Tool> {
                 },
                 "required": ["session", "request_id"]
             }),
-            keywords: &["approve", "allow", "deny", "answer", "permission", "question", "respond"],
             audience: Audience::PARENTS,
+            cli: vec![cli("sessions", "respond").pos(&["session", "request_id"]).eg("crew sessions respond 3f2a… 1 --decision allow")],
         },
         Tool {
             name: "stop_session",
             description: "End a session you started: its CLI is killed mid-turn if it is working, and it exits for good. Its transcript stays in Crew, and read_session still reads it.",
             schema: json!({ "type": "object", "properties": { "session": session_arg() }, "required": ["session"] }),
-            keywords: &["stop", "kill", "end", "cancel", "abort", "exit"],
             audience: Audience::PARENTS,
+            cli: vec![cli("sessions", "stop").pos(&["session"]).eg("crew sessions stop 3f2a…")],
         },
     ]
 }

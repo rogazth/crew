@@ -142,6 +142,24 @@ pub fn upsert(
     })
 }
 
+/// Switch a routine off and clear its next run: a once routine that has fired.
+pub fn disable(store: &Store, id: &str) -> Result<(), String> {
+    store.with(|conn| {
+        conn.prepare_cached("UPDATE routines SET enabled = 0, next_run_at = NULL, updated_at = ?2 WHERE id = ?1")?
+            .execute(params![id, now_millis()])
+    })?;
+    Ok(())
+}
+
+/// Move a routine's next run and nothing else: a once routine whose bot was busy.
+pub fn reschedule(store: &Store, id: &str, next_run_at: i64) -> Result<(), String> {
+    store.with(|conn| {
+        conn.prepare_cached("UPDATE routines SET next_run_at = ?2, updated_at = ?3 WHERE id = ?1")?
+            .execute(params![id, next_run_at, now_millis()])
+    })?;
+    Ok(())
+}
+
 pub fn delete(store: &Store, id: String) -> Result<(), String> {
     store.with(|conn| conn.execute("DELETE FROM routines WHERE id = ?1", params![id]))?;
     Ok(())
@@ -270,6 +288,7 @@ pub fn wake_prompt(
 ) -> String {
     let when = match schedule {
         Schedule::Cron { expression } => format!("on the cron schedule {expression}"),
+        Schedule::Once { at } => format!("once, at {}", crate::schedule::local_time(*at)),
         _ => {
             let described = describe_schedule(schedule);
             match described.strip_prefix("Every") {
