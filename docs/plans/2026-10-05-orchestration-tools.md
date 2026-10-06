@@ -1059,17 +1059,25 @@ Implementation order:
 
 ## Status
 
-| # | Item | State |
+Built on `feat/orchestration-tools` (2026-10-06), phase by phase as in §8:
+
+| Phase | Item | Commit |
 |---|---|---|
-| §1 | Premise "nothing wakes a parent" | corrected: the wake exists and is broken (§7e.1) |
-| §4 | Decisions 1–10 (amended by §7b, §7e) | agreed, not built |
-| §5 | Inventory, 28 tools | agreed |
-| §6 | Session prompt | draft v2, open S1–S5 |
-| §7 | Bot prompt | draft v1, open B1–B2 |
-| §7b | Workflow round 2 | agreed; P1 decided: anyone may write to a top-level session |
-| §7c | Pasted messages stay "Queued" | fixed on master (`da9f755`), needs release |
-| §7c-2 | "Working for" counts from a stale queued bubble | cause found, to fix |
-| §7c-3 | Replies to a wake fold out of sight | reproduced, cause found, to fix (phase 2) |
-| §7d | agent → bot rename | agreed: full, no compat, part of this plan |
-| §7e | Review round 3: wake fixes, waits, queue, questions to the parent, Codex app-server, Cursor ACP, background commands | agreed |
-| UI | Prototype + decisions | agreed except 3 open points |
+| 1 | agent → bot rename, migration v25 | `4991b08` |
+| 2 | Mailbox and wake fixes (v26), wake replies visible (§7c-3) | `a3b6ae4` |
+| 3 | Codex on `codex app-server`; Cursor on `cursor-agent acp` (v27) | `8f7102e`, `7f27351` |
+| 4 | Tools listed directly, pre-approved, MCP timeouts, OpenCode instructions | `3ff3284` |
+| 5 | Verb merges, once routines, CLI from tool metadata; `send_message`, `list_peers`, `start_session` owners/wait, questions to the parent, removals (28 tools) | `da1f63f`, `7ef2900` |
+| 6 | Prompts (`prompts.rs`), approvals to the parent (§7e.4b) | `532169d` |
+| 7 | Letters, pair threads, child state on the wire (v28), §7c-2; children, checkpoints, threads in the chat | `b82cbb1`, `ae6174a` |
+| 8 | Background commands (list, output, stop); live subagent steps (Claude) | `e4e73b6`, `712c7ac` |
+| 9 | §7c needs a release; §7c-2 fixed in phase 7 | release pending |
+| 10 | Prototype removed | `87bab75` |
+
+Also fixed on the way: a bot's rewritten description not reaching the
+window (`0ca4d5d`).
+
+Known gaps: Codex subagents are not nested (they run on their own threads);
+a subagent started by a subagent is dropped; Codex background output arrives
+only when the command ends; no per-pair unread count in the Conversations
+menu; `cursor/ask_question` is wired but no Cursor model used it.
