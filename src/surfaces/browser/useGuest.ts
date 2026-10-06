@@ -245,6 +245,11 @@ export function useGuest(options: Options): RefObject<PageGuest | null> {
         build({ src, restoring: false });
         return;
       }
+      // A tab opened at an address shows it from the start, not once its page commits.
+      const shown = pages.get(pageId);
+      if (!isWebUrl(shown.url) && shown.pending === null && isWebUrl(latest.current.url)) {
+        update({ pending: latest.current.url });
+      }
       // A keystroke resolves `typed` and skips the rest of the wait. The fetch
       // still finishes; its token simply expires unused.
       // An incognito page saved no stack to restore.
@@ -278,7 +283,16 @@ export function useGuest(options: Options): RefObject<PageGuest | null> {
         },
         navigate: (next, inPage) => {
           // Chromium keeps zoom per origin, so a new page may land at another one.
-          update({ url: next, crashed: false, zoom: built?.zoom() ?? 1, ...history() });
+          // A page's own script may move it in place while another page loads; that load is still pending.
+          const asked = pages.get(pageId).pending;
+          const arrived = !inPage || (asked !== null && sameDocument(next, asked));
+          update({
+            url: next,
+            crashed: false,
+            zoom: built?.zoom() ?? 1,
+            ...history(),
+            ...(arrived ? { pending: null } : {}),
+          });
           latest.current.onNavigate(inPage);
           // A blank page shows the canvas underneath, not the guest's white.
           if (built) built.element.style.visibility = shows(next) ? "" : "hidden";
@@ -293,7 +307,8 @@ export function useGuest(options: Options): RefObject<PageGuest | null> {
           }
           if (!ephemeral) void api.browserHistoryVisit(next, "", latest.current.workspaceId).catch(() => {});
         },
-        loading: (loading) => update({ loading, ...history() }),
+        // A load that ends without committing (stopped, failed) leaves the page it was leaving.
+        loading: (loading) => update({ loading, ...history(), ...(loading ? {} : { pending: null }) }),
         title: (title) => {
           const current = pages.get(pageId).url;
           if (file) {
@@ -383,7 +398,7 @@ export function useGuest(options: Options): RefObject<PageGuest | null> {
       built?.destroy();
       if (guest.current === facade) guest.current = null;
       if (devtools || docked || playing) latest.current.onPinned(false);
-      update({ webContentsId: null, loading: false, devtools: false, hung: false });
+      update({ webContentsId: null, loading: false, devtools: false, hung: false, pending: null });
     };
     // The file's path stands for it: the object is made afresh with every render.
   }, [live, pageId, machine, incognito, filePath, generation, container, address]);

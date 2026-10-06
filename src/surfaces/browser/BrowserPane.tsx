@@ -191,7 +191,7 @@ export function BrowserPane({
       }
     },
     navigate: (next) => {
-      pages.update(pageId, { error: null });
+      pages.update(pageId, { error: null, pending: next });
       guest.current?.navigate(next);
       guest.current?.focus();
     },

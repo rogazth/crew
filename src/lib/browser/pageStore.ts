@@ -6,6 +6,11 @@ import type { LoadError } from "./loadError";
  */
 export type PageState = {
   url: string;
+  /**
+   * Where a load asked for from the app (the bar, a new tab) is going, until
+   * it commits or the load ends: the bar shows it instead of the page it leaves.
+   */
+  pending: string | null;
   title: string;
   favicon: string | null;
   loading: boolean;
@@ -23,6 +28,7 @@ export type PageState = {
 
 export const BLANK_PAGE: PageState = Object.freeze({
   url: "about:blank",
+  pending: null,
   title: "",
   favicon: null,
   loading: false,

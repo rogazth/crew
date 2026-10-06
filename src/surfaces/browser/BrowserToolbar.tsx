@@ -103,7 +103,7 @@ export function BrowserToolbar({
       <div className="mx-1 flex min-w-0 flex-1">
         <AddressBar
           ref={addressRef}
-          url={page.url}
+          url={page.pending ?? page.url}
           searchTemplate={searchTemplate}
           onNavigate={onNavigate}
           onLeave={onLeaveAddress}
