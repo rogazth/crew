@@ -1,4 +1,4 @@
-import { BellIcon, BotIcon, BrushCleaningIcon, CheckCheckIcon, CheckIcon, ClipboardIcon, CopyIcon, ExternalLinkIcon, FoldHorizontalIcon, GitBranchIcon, PencilIcon, PinIcon, PlayIcon, PinOffIcon, RotateCcwIcon, UnfoldHorizontalIcon, SettingsIcon, SquareDashedMousePointerIcon, SquareIcon, SquareTerminalIcon, Trash2Icon, XIcon, type LucideIcon as Icon } from "lucide-react";
+import { ArrowDownAZIcon, ArrowDownIcon, ArrowDownZAIcon, ArrowLeftIcon, ArrowRightIcon, ArrowUpIcon, BellIcon, BetweenHorizontalEndIcon, BetweenHorizontalStartIcon, BetweenVerticalEndIcon, BetweenVerticalStartIcon, CodeIcon, CopyPlusIcon, TextAlignCenterIcon, TextAlignEndIcon, TextAlignStartIcon, BotIcon, BrushCleaningIcon, CheckCheckIcon, CheckIcon, ClipboardIcon, CopyIcon, ExternalLinkIcon, FoldHorizontalIcon, GitBranchIcon, PencilIcon, PinIcon, PlayIcon, PinOffIcon, RotateCcwIcon, UnfoldHorizontalIcon, SettingsIcon, SquareDashedMousePointerIcon, SquareIcon, SquareTerminalIcon, Trash2Icon, XIcon, type LucideIcon as Icon } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
 import { createPortal } from "react-dom";
 import { isDeleteChord } from "../lib/hotkey";
@@ -26,6 +26,21 @@ const ICONS: Record<MenuIcon, Icon> = {
   expand: UnfoldHorizontalIcon,
   play: PlayIcon,
   stop: SquareIcon,
+  "row-above": BetweenHorizontalStartIcon,
+  "row-below": BetweenHorizontalEndIcon,
+  "column-left": BetweenVerticalStartIcon,
+  "column-right": BetweenVerticalEndIcon,
+  duplicate: CopyPlusIcon,
+  "move-up": ArrowUpIcon,
+  "move-down": ArrowDownIcon,
+  "move-left": ArrowLeftIcon,
+  "move-right": ArrowRightIcon,
+  "sort-asc": ArrowDownAZIcon,
+  "sort-desc": ArrowDownZAIcon,
+  "align-left": TextAlignStartIcon,
+  "align-center": TextAlignCenterIcon,
+  "align-right": TextAlignEndIcon,
+  code: CodeIcon,
 };
 
 type Props = {

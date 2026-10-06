@@ -1,7 +1,8 @@
 import { lazy, Suspense, type ReactNode } from "react";
-import { ListIcon } from "lucide-react";
+import { BookOpenIcon, ListIcon, PencilIcon } from "lucide-react";
 import { Button } from "../chrome/kit";
 import { useCommands } from "../hooks/useCommand";
+import { useNoteMode, type NoteMode } from "../hooks/useNoteMode";
 import { useOutlinePref } from "../hooks/useOutlinePref";
 import { useTextFile } from "../hooks/useTextFile";
 import { commandKeys } from "../lib/commands";
@@ -27,12 +28,29 @@ const MarkdownEditor = lazy(() =>
 
 const MARKDOWN = /\.(?:md|markdown)$/i;
 
+/** A note's switch between reading and editing: it names the mode it turns to. */
+function ModeButton({ mode, onToggle }: { mode: NoteMode; onToggle: () => void }) {
+  const next = mode === "read" ? "Edit" : "Read";
+  return (
+    <button
+      type="button"
+      aria-label={next}
+      title={`${next} (${commandKeys("toggle-reading")})`}
+      onClick={onToggle}
+      className="-mr-1 flex size-7 shrink-0 items-center justify-center rounded-md text-icon hover:bg-hover hover:text-text"
+    >
+      {mode === "read" ? <PencilIcon className="size-4" /> : <BookOpenIcon className="size-4" />}
+    </button>
+  );
+}
+
 export function FileEditor({ path, relative, files, onOpenPath, actions }: Props) {
   const name = relative.split("/").pop() ?? relative;
   const isMarkdown = MARKDOWN.test(name);
   const { loaded, revision, dirty, conflict, error, setContents, reload, overwrite } = useTextFile(path);
   const [outline, toggleOutline] = useOutlinePref();
-  useCommands(isMarkdown ? { "toggle-outline": toggleOutline } : {});
+  const [mode, toggleMode] = useNoteMode(path, loaded === null ? null : loaded === "");
+  useCommands(isMarkdown ? { "toggle-outline": toggleOutline, "toggle-reading": toggleMode } : {});
 
   // The daemon reads text only; anything else says so in Rust's words, which the notice translates.
   if (error) return <FileNotice path={path} relative={relative} error={error} />;
@@ -60,6 +78,7 @@ export function FileEditor({ path, relative, files, onOpenPath, actions }: Props
         <kbd className="ml-auto shrink-0 text-[11px] text-placeholder">
           {commandKeys("save-file")}
         </kbd>
+        {isMarkdown && <ModeButton mode={mode} onToggle={toggleMode} />}
         {isMarkdown && (
           <button
             type="button"
@@ -104,6 +123,7 @@ export function FileEditor({ path, relative, files, onOpenPath, actions }: Props
               files={files}
               onOpenPath={onOpenPath}
               outline={outline}
+              mode={mode}
             />
           ) : (
             <CodeEditor key={revision} path={path} name={name} loaded={loaded} onChange={setContents} />

@@ -230,6 +230,8 @@ test("C3: closing other tabs asks once for every unsaved file, and confirming dr
   await typeAtEnd(crew, "app.ts", `// app edit ${stamp}`);
   await unsaved(crew).waitFor();
   await openFile(crew, "NOTES.md", "NOTES.md", note(crew));
+  // A note opens to read; its pencil turns it to editing.
+  await page.getByRole("button", { name: "Edit", exact: true }).filter({ visible: true }).click();
   await note(crew).click();
   await page.keyboard.press(`${MOD}+End`);
   await page.keyboard.type(`note edit ${stamp}`);

@@ -47,7 +47,7 @@ const GROUPS: { title: string; entries: Entry[] }[] = [
   },
   {
     title: "Editor",
-    entries: ["save-file"],
+    entries: ["save-file", "toggle-reading", "insert-table"],
   },
   {
     title: "Browser",

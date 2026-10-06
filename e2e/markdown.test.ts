@@ -33,6 +33,12 @@ async function openFile(crew: Crew, query: string, relative: string): Promise<vo
   await editor(crew).waitFor();
 }
 
+/** A note opens to read: its header's pencil turns it to editing. */
+async function startEditing(crew: Crew): Promise<void> {
+  await crew.window.getByRole("button", { name: "Edit", exact: true }).filter({ visible: true }).click();
+  await editor(crew).and(crew.window.locator('[contenteditable="true"]')).waitFor();
+}
+
 /** The note editor on screen. */
 function editor(crew: Crew) {
   return crew.window.locator(".cm-content").filter({ visible: true });
@@ -88,6 +94,7 @@ test("M1: a note is edited, ticked, linked, pasted into and saved to disk, and n
 
   await openFile(crew, "plan", "notes/plan.md");
   await fileTab(crew, plan).waitFor();
+  await startEditing(crew);
 
   // Typing marks the note unsaved; ⌘S writes exactly what was typed.
   const typed = `Typed by the test ${stamp}`;
@@ -313,6 +320,7 @@ test("M2: the outline follows the note and keeps its setting; ⌘P finds a small
     { interval: 200, message: "the wheel brings Usage's heading to the top edge of the pane" },
   );
   await sectionIs(crew, "Usage", "scrolled to Usage, the outline marks Usage");
+  await startEditing(crew);
   await editor(crew).click();
   await page.keyboard.press(`${MOD}+End`);
   await sectionIs(crew, "Troubleshooting", "at the end of the note, the outline marks the last section");
@@ -360,4 +368,182 @@ test("M2: the outline follows the note and keeps its setting; ⌘P finds a small
     (await paletteRows(crew, "env", ".env.example")).includes(".env.example"),
     "⌘P finds a dotfile in a workspace git does not track",
   );
+});
+
+const LONG_WORD = "Supercalifragilisticexpialidocious";
+
+const TABLES = [
+  "# Tables",
+  "",
+  "| Name | Notes |",
+  "| --- | --- |",
+  `| beta | ${LONG_WORD} and a sentence long enough that it has to wrap between its words somewhere |`,
+  "| alpha | short |",
+  "",
+  `| ${Array.from({ length: 8 }, (_, i) => `c${i + 1}`).join(" | ")} |`,
+  `| ${Array.from({ length: 8 }, () => "---").join(" | ")} |`,
+  `| ${Array.from({ length: 8 }, () => "incomprehensibilities").join(" | ")} |`,
+  "",
+  "End of note.",
+  "",
+].join("\n");
+
+/** The table's lines in the saved note, each a row of trimmed cells. */
+async function savedRows(file: string, first: string): Promise<string[][]> {
+  const lines = (await readFile(file, "utf8")).split("\n");
+  const start = lines.findIndex((line) => line.startsWith("|") && line.includes(first));
+  assert.ok(start >= 0, `the note has a table with ${first}`);
+  const rows: string[][] = [];
+  for (let i = start; i < lines.length && lines[i]!.startsWith("|"); i++) {
+    if (i === start + 1) continue;
+    rows.push(lines[i]!.slice(1, -1).split(/(?<!\\)\|/).map((cell) => cell.trim()));
+  }
+  return rows;
+}
+
+test("M3: a note opens to read, its tables scroll instead of breaking words, and a table is edited as a table", async (t) => {
+  const crew = await launchCrew({ repos: [{ name: "app", files: { "README.md": "# app\n", "notes/tables.md": TABLES } }] });
+  t.after(() => crew.close());
+  const [workspace] = crew.workspaces;
+  assert.ok(workspace);
+  const page = crew.window;
+  const file = path.join(workspace.path, "notes/tables.md");
+
+  // Opened, the note reads: nothing takes typing, and both tables are drawn.
+  await openFile(crew, "tables", "notes/tables.md");
+  assert.equal(await editor(crew).getAttribute("contenteditable"), "false", "a note opens to read");
+  const tables = editor(crew).locator(".cm-md-table-wrap");
+  await waitFor(async () => (await tables.count()) === 2, { message: "both tables render" });
+  assert.equal(await editor(crew).locator(".cm-md-table-wrap[data-editable]").count(), 0, "reading, the tables take no edits");
+
+  // A cell wraps between words, never inside one; the wide table scrolls.
+  const layout = await page.evaluate((word) => {
+    const cells = [...document.querySelectorAll<HTMLElement>(".cm-md-cell")];
+    const overflowing = cells.filter((cell) => cell.scrollWidth > cell.clientWidth + 1).map((cell) => cell.textContent);
+    const holder = cells.find((cell) => cell.textContent?.includes(word))!;
+    const text = [...holder.childNodes].find((node) => node.textContent?.includes(word))!;
+    const range = document.createRange();
+    const at = text.textContent!.indexOf(word);
+    range.setStart(text, at);
+    range.setEnd(text, at + word.length);
+    const scrolls = [...document.querySelectorAll<HTMLElement>(".cm-md-table-scroll")].map(
+      (box) => box.scrollWidth > box.clientWidth,
+    );
+    return { overflowing, wordLines: range.getClientRects().length, scrolls };
+  }, LONG_WORD);
+  assert.deepEqual(layout.overflowing, [], "no cell's text runs out of its cell");
+  assert.equal(layout.wordLines, 1, "the long word stays on one line");
+  assert.deepEqual(layout.scrolls, [false, true], "only the table wider than the note scrolls");
+
+  // ⌘E turns it to editing; the tables stay tables.
+  await editor(crew).click({ position: { x: 5, y: 5 } });
+  await pressChord(crew, `${MOD}+e`);
+  await editor(crew).and(page.locator('[contenteditable="true"]')).waitFor();
+  await waitFor(async () => (await editor(crew).locator(".cm-md-table-wrap[data-editable]").count()) === 2, {
+    message: "editing, the tables take edits",
+  });
+  const first = tables.first();
+  const cell = (text: string) => first.locator("td, th").filter({ hasText: text });
+  const cellEditor = first.locator(".cm-md-cell-editing .cm-content");
+
+  // A click opens the cell; Tab goes on to the next, a typed pipe is escaped, Escape leaves.
+  await cell("alpha").click();
+  await cellEditor.waitFor();
+  await page.keyboard.press("End");
+  await page.keyboard.type("-one");
+  await page.keyboard.press("Tab");
+  await page.keyboard.type(" a|b");
+  await page.keyboard.press("Escape");
+  await cellEditor.waitFor({ state: "detached" });
+  await save(crew);
+  assert.deepEqual((await savedRows(file, "Name")).at(-1), ["alpha-one", "short a\\|b"], "the cells are saved, the pipe escaped");
+  const saved = await readFile(file, "utf8");
+  assert.ok(saved.startsWith("# Tables\n\n| Name"), "the text around the table is untouched");
+  assert.ok(saved.endsWith("End of note.\n"));
+
+  // Undo in a cell undoes the note's last edit there, and nothing before it.
+  await cell("alpha-one").click();
+  await page.keyboard.press("End");
+  await page.keyboard.type("zzz");
+  await cellEditor.filter({ hasText: "alpha-onezzz" }).waitFor();
+  await page.keyboard.press(`${MOD}+z`);
+  await cellEditor.filter({ hasText: /^alpha-one$/ }).waitFor({ timeout: 5000 });
+  await page.keyboard.press("Escape");
+
+  // Visiting a cell without typing writes nothing.
+  await save(crew);
+  const untouched = await readFile(file, "utf8");
+  await cell("beta").click();
+  await cellEditor.waitFor();
+  await page.keyboard.press("Tab");
+  await page.keyboard.press("Escape");
+  await holdsFor(300, async () => (await unsaved(crew).count()) === 0, "a visit marked the note unsaved");
+  assert.equal(await readFile(file, "utf8"), untouched);
+
+  // The column's grip sorts it.
+  await cell("Name").hover();
+  await first.locator(".cm-md-hot-col .cm-md-grip-col").click();
+  await page.getByRole("menuitem", { name: "Sort A to Z" }).click();
+  await save(crew);
+  assert.deepEqual((await savedRows(file, "Name")).map((row) => row[0]), ["Name", "alpha-one", "beta"], "sorted by name");
+
+  // A cell's menu drops its row.
+  await cell("beta").click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Delete Row" }).click();
+  await save(crew);
+  assert.ok(!(await readFile(file, "utf8")).includes(LONG_WORD), "the row is gone");
+
+  // The add button makes a row and opens its first cell.
+  await first.hover();
+  await first.locator(".cm-md-table-add-row").click();
+  await cellEditor.waitFor();
+  await page.keyboard.type("gamma");
+  await page.keyboard.press("Escape");
+  await save(crew);
+  assert.deepEqual((await savedRows(file, "Name")).at(-1), ["gamma", ""], "the new row is saved");
+
+  // A column dragged by its grip moves, alignment and all.
+  await cell("Notes").hover();
+  const grip = first.locator(".cm-md-hot-col .cm-md-grip-col");
+  const from = (await grip.boundingBox())!;
+  const to = (await cell("Name").boundingBox())!;
+  await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(to.x + 4, to.y + to.height / 2, { steps: 6 });
+  await page.mouse.up();
+  await save(crew);
+  assert.deepEqual((await savedRows(file, "Notes"))[0], ["Notes", "Name"], "the column moved first");
+
+  // The arrow keys walk from the text into the table, and out below it.
+  await editor(crew).locator(".cm-line").filter({ hasText: /^Tables$/ }).click();
+  await page.keyboard.press("End");
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("ArrowDown");
+  await first.locator("th.cm-md-editing").filter({ hasText: "Notes" }).waitFor();
+  await page.keyboard.press("Escape");
+
+  // Edit as Markdown shows its source, pipes and all.
+  await cell("gamma").click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Edit as Markdown" }).click();
+  await editor(crew).locator(".cm-line").filter({ hasText: /^\| -+ \| -+ \|$/ }).waitFor();
+
+  // A table from the command palette, at the end of the note.
+  await editor(crew).locator(".cm-line").filter({ hasText: /^End of note\.$/ }).click();
+  await pressChord(crew, `${MOD}+Shift+p`);
+  const palette = page.getByRole("dialog", { name: "Command palette" });
+  await palette.getByRole("textbox", { name: "Search" }).fill("Insert Table");
+  await page.keyboard.press("Enter");
+  await palette.waitFor({ state: "detached" });
+  await editor(crew).locator(".cm-md-cell-editing .cm-content").waitFor();
+  await page.keyboard.type("made");
+  await page.keyboard.press("Escape");
+  await save(crew);
+  assert.deepEqual((await savedRows(file, "made"))[0], ["made", "", ""], "the inserted table is saved");
+
+  // ⌘E back to reading writes nothing.
+  const before = await readFile(file, "utf8");
+  await pressChord(crew, `${MOD}+e`);
+  await editor(crew).and(page.locator('[contenteditable="false"]')).waitFor();
+  assert.equal(await unsaved(crew).count(), 0);
+  assert.equal(await readFile(file, "utf8"), before);
 });

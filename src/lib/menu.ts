@@ -22,7 +22,22 @@ export type MenuIcon =
   | "collapse"
   | "expand"
   | "play"
-  | "stop";
+  | "stop"
+  | "row-above"
+  | "row-below"
+  | "column-left"
+  | "column-right"
+  | "duplicate"
+  | "move-up"
+  | "move-down"
+  | "move-left"
+  | "move-right"
+  | "sort-asc"
+  | "sort-desc"
+  | "align-left"
+  | "align-center"
+  | "align-right"
+  | "code";
 
 export type MenuAction = {
   id: string;

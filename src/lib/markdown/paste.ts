@@ -62,6 +62,7 @@ async function insertImages(view: EditorView, files: File[], at: number, pasted:
 
 export const imageDrops = EditorView.domEventHandlers({
   paste(event, view) {
+    if (view.state.readOnly) return false;
     const files = images(event.clipboardData);
     if (!files.length) return false;
     event.preventDefault();
@@ -71,6 +72,7 @@ export const imageDrops = EditorView.domEventHandlers({
     return true;
   },
   drop(event, view) {
+    if (view.state.readOnly) return false;
     const files = images(event.dataTransfer);
     if (!files.length) return false;
     event.preventDefault();

@@ -215,3 +215,132 @@ export function moveInTable(state: EditorState, move: "next" | "prev" | "down"):
     userEvent: "input",
   };
 }
+
+/**
+ * A table as plain text cells, for the edits the rendered table makes: rows
+ * and columns added, moved, sorted or dropped. `rows` holds the body only;
+ * cells are their source text, escapes included. Every row is as wide as the
+ * widest, so an index is always a cell.
+ */
+export type Grid = { header: string[]; align: Align[]; rows: string[][] };
+
+export function gridOf(table: Table): Grid {
+  const columns = Math.max(table.header.length, ...table.rows.map((r) => r.length));
+  const fill = (row: Cell[]) => Array.from({ length: columns }, (_, i) => row[i]?.text ?? "");
+  return {
+    header: fill(table.header),
+    align: Array.from({ length: columns }, (_, i) => table.align[i] ?? null),
+    rows: table.rows.map(fill),
+  };
+}
+
+/** The grid as aligned markdown. */
+export function gridSource(grid: Grid): string {
+  const line = (cells: string[]) => `| ${cells.join(" | ")} |`;
+  const align = grid.align.map((a) => (a === "center" ? ":-:" : a === "right" ? "-:" : a === "left" ? ":-" : "-"));
+  const raw = [line(grid.header), line(align), ...grid.rows.map(line)].join("\n");
+  return formatTable(raw) ?? raw;
+}
+
+/** A new table with `columns` empty headers and `rows` empty rows. */
+export function emptyGrid(columns: number, rows: number): Grid {
+  const blank = () => Array.from({ length: columns }, () => "");
+  return { header: blank(), align: blank().map(() => null), rows: Array.from({ length: rows }, blank) };
+}
+
+function moved<T>(list: T[], from: number, to: number): T[] {
+  const copy = [...list];
+  const [item] = copy.splice(from, 1);
+  copy.splice(to, 0, item!);
+  return copy;
+}
+
+/** A body row inserted at `at` (0 is the first row under the header). */
+export function insertRow(grid: Grid, at: number): Grid {
+  const rows = [...grid.rows];
+  rows.splice(at, 0, grid.header.map(() => ""));
+  return { ...grid, rows };
+}
+
+export function deleteRow(grid: Grid, at: number): Grid {
+  return { ...grid, rows: grid.rows.filter((_, i) => i !== at) };
+}
+
+export function duplicateRow(grid: Grid, at: number): Grid {
+  const rows = [...grid.rows];
+  rows.splice(at + 1, 0, [...grid.rows[at]!]);
+  return { ...grid, rows };
+}
+
+export function moveRow(grid: Grid, from: number, to: number): Grid {
+  return { ...grid, rows: moved(grid.rows, from, to) };
+}
+
+export function insertColumn(grid: Grid, at: number): Grid {
+  const add = <T>(row: T[], value: T) => {
+    const copy = [...row];
+    copy.splice(at, 0, value);
+    return copy;
+  };
+  return { header: add(grid.header, ""), align: add(grid.align, null), rows: grid.rows.map((r) => add(r, "")) };
+}
+
+export function deleteColumn(grid: Grid, at: number): Grid {
+  const drop = <T>(row: T[]) => row.filter((_, i) => i !== at);
+  return { header: drop(grid.header), align: drop(grid.align), rows: grid.rows.map(drop) };
+}
+
+export function moveColumn(grid: Grid, from: number, to: number): Grid {
+  return {
+    header: moved(grid.header, from, to),
+    align: moved(grid.align, from, to),
+    rows: grid.rows.map((r) => moved(r, from, to)),
+  };
+}
+
+export function setAlign(grid: Grid, column: number, align: Align): Grid {
+  return { ...grid, align: grid.align.map((a, i) => (i === column ? align : a)) };
+}
+
+const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
+
+/** Body rows ordered by one column, numbers by value; empty cells always last. */
+export function sortRows(grid: Grid, column: number, direction: "asc" | "desc"): Grid {
+  const sign = direction === "asc" ? 1 : -1;
+  const rows = [...grid.rows].sort((a, b) => {
+    const x = a[column]!;
+    const y = b[column]!;
+    if (!x || !y) return (x ? 0 : 1) - (y ? 0 : 1);
+    return sign * collator.compare(x, y);
+  });
+  return { ...grid, rows };
+}
+
+/** Text as one cell: a pipe would end it and a line break would end the row. */
+export function escapeCell(text: string): string {
+  return text.replace(/\r?\n/g, " ").replace(/(\\*)\|/g, (match, slashes: string) =>
+    slashes.length % 2 ? match : `${slashes}\\|`,
+  );
+}
+
+/** Pasted spreadsheet cells: tab-separated rows, or null for plain text. */
+export function parsePastedGrid(text: string): string[][] | null {
+  const lines = text.replace(/\r\n?/g, "\n").replace(/\n$/, "").split("\n");
+  if (!lines.some((line) => line.includes("\t"))) return null;
+  return lines.map((line) => line.split("\t").map((cell) => escapeCell(cell.trim())));
+}
+
+/**
+ * Cells written over the grid from (row, column), where row 0 is the header;
+ * rows and columns are added where the paste runs past the edge.
+ */
+export function pasteGrid(grid: Grid, row: number, column: number, cells: string[][]): Grid {
+  let next = grid;
+  const width = Math.max(...cells.map((r) => r.length));
+  while (next.header.length < column + width) next = insertColumn(next, next.header.length);
+  while (next.rows.length + 1 < row + cells.length) next = insertRow(next, next.rows.length);
+  const all = [next.header, ...next.rows].map((r) => [...r]);
+  cells.forEach((values, i) => values.forEach((value, j) => (all[row + i]![column + j] = value)));
+  const [header, ...rows] = all;
+  return { ...next, header: header!, rows };
+}

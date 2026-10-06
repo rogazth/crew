@@ -85,14 +85,14 @@ function tableMove(move: "next" | "prev" | "down"): StateCommand {
 
 /**
  * ⌘B takes over the app's sidebar toggle while a note has focus, as it does in
- * every editor with bold; ⌘K stays the command palette.
+ * every editor with bold; ⌘K stays the command palette and ⌘E switches to
+ * reading. Inline code is a typed backtick around the selection.
  */
 export const formatKeymap: KeyBinding[] = [
   { key: "Mod-b", run: toggleMarker("**"), stopPropagation: true },
   { key: "Mod-i", run: toggleMarker("*"), stopPropagation: true },
   { key: "Mod-Shift-x", run: toggleMarker("~~"), stopPropagation: true },
   { key: "Mod-Shift-h", run: toggleMarker("=="), stopPropagation: true },
-  { key: "Mod-e", run: toggleMarker("`"), stopPropagation: true },
   { key: "Tab", run: tableMove("next") },
   { key: "Shift-Tab", run: tableMove("prev") },
   { key: "Enter", run: tableMove("down") },

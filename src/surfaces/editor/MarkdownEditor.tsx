@@ -8,8 +8,10 @@ import { Compartment, EditorState, Prec, type StateEffect } from "@codemirror/st
 // react-doctor-disable-next-line react-doctor/prefer-dynamic-import -- this module is itself the lazy chunk
 import { EditorView, drawSelection, keymap } from "@codemirror/view";
 import { tags } from "@lezer/highlight";
+import { ActionMenu } from "../../chrome/ActionMenu";
 import { FindBar } from "../../chrome/FindBar";
-import { useCommand } from "../../hooks/useCommand";
+import { useCommand, useCommands } from "../../hooks/useCommand";
+import type { NoteMode } from "../../hooks/useNoteMode";
 import * as api from "../../lib/api";
 import { blockPreview, refreshPreview } from "../../lib/markdown/blocks";
 import { findHighlighting, findPosition, setFindQuery, stepFind } from "../../lib/markdown/find";
@@ -20,6 +22,7 @@ import { findHeading, outlineOf, type OutlineItem } from "../../lib/markdown/out
 import { imageDrops } from "../../lib/markdown/paste";
 import { markdownPreview } from "../../lib/markdown/preview";
 import { markTags, obsidianMarkdown } from "../../lib/markdown/syntax";
+import { insertTable, tableHost, tableKeymap, type TableMenu } from "../../lib/markdown/tableEditor";
 import { makeWikiLinkCompletions, noteHost, type NoteHost } from "../../lib/markdown/wikilinks";
 import type { ProjectFile } from "../../lib/types";
 import { onReveal, pendingReveal, type Reveal } from "../../lib/reveal";
@@ -35,6 +38,8 @@ type Props = {
   /** Opens a file tab for an absolute path. */
   onOpenPath: (path: string) => void;
   outline: boolean;
+  /** Reading renders the whole note and takes no edits; editing shows the source around the caret. */
+  mode: NoteMode;
 };
 
 const MONO = "ui-monospace, SFMono-Regular, Menlo, monospace";
@@ -127,14 +132,78 @@ const THEME = EditorView.theme({
     background: CARD,
   },
 
-  // Tables
-  ".cm-md-table-wrap": { overflowX: "auto", margin: "4px 0", cursor: "text" },
+  // Tables. The note's wrapping breaks a word anywhere, which would squeeze a
+  // table into a column of letters; a cell wraps between words, and a table
+  // wider than the note scrolls.
+  ".cm-md-table-wrap": { margin: "4px 0", whiteSpace: "normal", overflowWrap: "normal", wordBreak: "normal" },
+  ".cm-md-table-wrap[data-editable]": { cursor: "text" },
+  ".cm-md-table-wrap[data-dragging]": { cursor: "grabbing", userSelect: "none" },
+  ".cm-md-table-scroll": { overflowX: "auto", overflowY: "hidden", overscrollBehaviorX: "contain" },
+  ".cm-md-table-frame": { position: "relative", width: "max-content" },
+  // Room for the add buttons, which show on hover.
+  "[data-editable] .cm-md-table-frame": { padding: "0 18px 18px 0" },
   ".cm-md-table-wrap table": { borderCollapse: "collapse", fontSize: "13.5px", lineHeight: "1.5" },
   ".cm-md-table-wrap th, .cm-md-table-wrap td": {
+    position: "relative",
     border: "1px solid var(--color-border)",
     padding: "5px 10px",
     verticalAlign: "top",
     textAlign: "left",
+  },
+  ".cm-md-cell": { width: "max-content", maxWidth: "24em", minWidth: "1em", overflowWrap: "break-word" },
+  ".cm-md-table-wrap td.cm-md-editing, .cm-md-table-wrap th.cm-md-editing": {
+    outline: "2px solid color-mix(in srgb, var(--color-link) 55%, transparent)",
+    outlineOffset: "-1px",
+  },
+  ".cm-md-grip": {
+    position: "absolute",
+    padding: "0",
+    border: "none",
+    borderRadius: "3px",
+    color: MUTED,
+    backgroundColor: "var(--color-canvas)",
+    backgroundImage: "radial-gradient(currentColor 0.9px, transparent 1.3px)",
+    backgroundSize: "4px 4px",
+    backgroundPosition: "center",
+    opacity: "0",
+    cursor: "grab",
+    zIndex: "1",
+    transition: "opacity 120ms ease-out",
+  },
+  // Inside the cell's padding: past the table's edge the scroll box would clip them.
+  ".cm-md-grip-col": { top: "0", left: "50%", width: "20px", height: "7px", transform: "translateX(-50%)" },
+  ".cm-md-grip-row": { left: "0", top: "50%", width: "8px", height: "20px", transform: "translateY(-50%)" },
+  ".cm-md-hot-col > .cm-md-grip-col, .cm-md-hot-row > .cm-md-grip-row, .cm-md-grip:hover, .cm-md-grip:focus-visible": {
+    opacity: "1",
+  },
+  ".cm-md-grip:hover": { color: "var(--color-text)" },
+  ".cm-md-table-add": {
+    position: "absolute",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: "0",
+    border: "none",
+    borderRadius: "4px",
+    background: CARD,
+    color: MUTED,
+    fontSize: "12px",
+    lineHeight: "1",
+    opacity: "0",
+    cursor: "pointer",
+    transition: "opacity 120ms ease-out",
+  },
+  ".cm-md-table-add-row": { left: "0", right: "18px", bottom: "0", height: "14px" },
+  ".cm-md-table-add-col": { top: "0", bottom: "18px", right: "0", width: "14px" },
+  ".cm-md-table-frame:hover > .cm-md-table-add": { opacity: "1" },
+  ".cm-md-table-add:hover": { color: "var(--color-text)", background: "var(--color-hover)" },
+  ".cm-md-table-drop": {
+    position: "absolute",
+    display: "none",
+    borderRadius: "1px",
+    background: "var(--color-link)",
+    pointerEvents: "none",
+    zIndex: "2",
   },
   ".cm-md-table-wrap th": { fontWeight: "600", background: CARD },
   ".cm-md-table-wrap code, .cm-md-props code": {
@@ -240,6 +309,32 @@ const THEME = EditorView.theme({
 /** Markdown's bracket pairs; quotes stay single, since prose is full of apostrophes. */
 const BRACKETS = EditorState.languageData.of(() => [{ closeBrackets: { brackets: ["(", "[", "{"] } }]);
 
+/**
+ * A table cell's editor sits inside the note's, whose theme reaches it too:
+ * these undo the page layout for a box the size of the cell's text.
+ */
+const CELL_THEME = EditorView.theme({
+  "&.cm-editor": { backgroundColor: "transparent" },
+  "&.cm-editor.cm-focused": { outline: "none" },
+  "&.cm-editor .cm-scroller": { fontFamily: "inherit", lineHeight: "inherit", overflow: "visible" },
+  "&.cm-editor .cm-content": { maxWidth: "none", margin: "0", padding: "0", minHeight: "0" },
+  "&.cm-editor .cm-line": { padding: "0" },
+});
+
+const CELL_EXTENSIONS = [
+  new LanguageSupport(obsidianMarkdown),
+  syntaxHighlighting(HIGHLIGHT),
+  Prec.high(keymap.of(formatKeymap)),
+  BRACKETS,
+  closeBrackets(),
+  wrapOnType,
+  keymap.of([...closeBracketsKeymap, ...defaultKeymap]),
+  CELL_THEME,
+];
+
+const modeExtensions = (mode: NoteMode) =>
+  mode === "read" ? [EditorView.editable.of(false), EditorState.readOnly.of(true)] : [];
+
 type Kept = { json: unknown; doc: string; scroll: StateEffect<unknown>; top: number; head: number };
 
 /**
@@ -290,10 +385,13 @@ function activeHeading(view: EditorView, items: OutlineItem[]): number | null {
   return active ?? items[0]?.from ?? null;
 }
 
-export function MarkdownEditor({ path, loaded, onChange, files, onOpenPath, outline }: Props) {
+export function MarkdownEditor({ path, loaded, onChange, files, onOpenPath, outline, mode }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const [hostCompartment] = useState(() => new Compartment());
+  const [modeCompartment] = useState(() => new Compartment());
+  const modeRef = useRef(mode);
+  const [tableMenu, setTableMenu] = useState<TableMenu | null>(null);
   const onChangeRef = useRef(onChange);
   const hostValue = useRef<NoteHost>({ path, files, open: () => undefined });
   const [items, setItems] = useState<OutlineItem[]>([]);
@@ -306,6 +404,16 @@ export function MarkdownEditor({ path, loaded, onChange, files, onOpenPath, outl
     onChangeRef.current = onChange;
     itemsRef.current = items;
   });
+
+  // Turned to editing, the caret is where it was; turned to reading, nothing has it.
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view || modeRef.current === mode) return;
+    modeRef.current = mode;
+    view.dispatch({ effects: modeCompartment.reconfigure(modeExtensions(mode)) });
+    if (mode === "edit") view.focus();
+    else view.contentDOM.blur();
+  }, [mode, modeCompartment]);
 
   // What links resolve against and how they open; swapped in place when the index changes.
   useEffect(() => {
@@ -340,7 +448,10 @@ export function MarkdownEditor({ path, loaded, onChange, files, onOpenPath, outl
       // CSS and JavaScript support for embedded tags and doubled the chunk.
       new LanguageSupport(obsidianMarkdown),
       hostCompartment.of(noteHost.of(hostValue.current)),
+      modeCompartment.of(modeExtensions(modeRef.current)),
+      tableHost.of({ menu: setTableMenu, cellExtensions: CELL_EXTENSIONS }),
       // Table keys first, so Tab and Enter in a table move between cells.
+      Prec.high(keymap.of(tableKeymap)),
       Prec.high(keymap.of(formatKeymap)),
       Prec.high(keymap.of(markdownKeymap)),
       syntaxHighlighting(HIGHLIGHT),
@@ -435,7 +546,17 @@ export function MarkdownEditor({ path, loaded, onChange, files, onOpenPath, outl
       viewRef.current = null;
       view.destroy();
     };
-  }, [path, loaded, hostCompartment]);
+  }, [path, loaded, hostCompartment, modeCompartment]);
+
+  useCommands({
+    "insert-table":
+      mode === "edit"
+        ? () => {
+            const view = viewRef.current;
+            if (view) insertTable(view);
+          }
+        : undefined,
+  });
 
   useCommand("find", () => {
     const view = viewRef.current;
@@ -500,6 +621,17 @@ export function MarkdownEditor({ path, loaded, onChange, files, onOpenPath, outl
         )}
       </div>
       {outline && <Outline items={items} active={active} onSelect={onOutlineSelect} />}
+      {tableMenu && (
+        <ActionMenu
+          point={tableMenu.point}
+          actions={tableMenu.actions}
+          onClose={() => setTableMenu(null)}
+          onPick={(id) => {
+            setTableMenu(null);
+            tableMenu.onPick(id);
+          }}
+        />
+      )}
     </div>
   );
 }

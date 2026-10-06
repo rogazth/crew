@@ -11,7 +11,7 @@ import {
 } from "@codemirror/view";
 import type { SyntaxNode } from "@lezer/common";
 import { imageSrc } from "../attachments";
-import { isFolded, refreshPreview, toggleFold } from "./blocks";
+import { isEditable, isFolded, refreshPreview, toggleFold } from "./blocks";
 import { calloutKind, defaultTitle, icon, parseCalloutHead } from "./callouts";
 import { codeTokens, onHighlighted } from "./code";
 import { noteHost, resolvePath, resolveWikiLink, splitTarget } from "./wikilinks";
@@ -471,7 +471,7 @@ export function previewDecorations(
 
 function build(view: EditorView): DecorationSet {
   const { from, to } = view.viewport;
-  return Decoration.set(previewDecorations(view.state, from, to, view.hasFocus), true);
+  return Decoration.set(previewDecorations(view.state, from, to, view.hasFocus && isEditable(view.state)), true);
 }
 
 const preview = ViewPlugin.fromClass(
@@ -489,6 +489,7 @@ const preview = ViewPlugin.fromClass(
         update.selectionSet ||
         update.viewportChanged ||
         update.focusChanged ||
+        update.transactions.some((tr) => tr.reconfigured) ||
         update.transactions.some((tr) => tr.effects.some((e) => e.is(refreshPreview) || e.is(toggleFold))) ||
         update.startState.facet(noteHost) !== update.state.facet(noteHost) ||
         syntaxTree(update.state) !== syntaxTree(update.startState)

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { ArrowLeftIcon, ArrowRightIcon, BotIcon, CodeXmlIcon, CommandIcon, FolderIcon, FolderOpenIcon, GitBranchIcon, GlobeIcon, HatGlassesIcon, HistoryIcon, KeyboardIcon, ListIcon, PanelLeftIcon, PlayIcon, PlusIcon, RotateCcwIcon, RotateCwIcon, SaveIcon, SearchIcon, ServerIcon, SettingsIcon, SquareIcon, SquareTerminalIcon, type LucideIcon as Icon } from "lucide-react";
+import { ArrowLeftIcon, ArrowRightIcon, BookOpenIcon, BotIcon, CodeXmlIcon, CommandIcon, FolderIcon, FolderOpenIcon, GitBranchIcon, GlobeIcon, HatGlassesIcon, HistoryIcon, KeyboardIcon, ListIcon, PanelLeftIcon, PlayIcon, PlusIcon, RotateCcwIcon, RotateCwIcon, SaveIcon, SearchIcon, ServerIcon, SettingsIcon, SquareIcon, SquareTerminalIcon, TableIcon, type LucideIcon as Icon } from "lucide-react";
 import { BotAvatar } from "./BotAvatar";
 import { FileTypeIcon } from "./FileTypeIcon";
 import { Footer, GroupHeader } from "./kit";
@@ -326,6 +326,8 @@ const ACTION_ICONS: Partial<Record<CommandId, Icon>> = {
   "open-browser-settings": SettingsIcon,
   "save-file": SaveIcon,
   "toggle-outline": ListIcon,
+  "toggle-reading": BookOpenIcon,
+  "insert-table": TableIcon,
   "browser-back": ArrowLeftIcon,
   "browser-forward": ArrowRightIcon,
   "browser-reload": RotateCwIcon,

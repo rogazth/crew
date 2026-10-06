@@ -8,7 +8,8 @@ import { parseProperties } from "./frontmatter";
 import { renderInline } from "./inline";
 import { followRendered } from "./links";
 import { isDark, renderMermaid, renderedMermaid } from "./mermaid";
-import { parseTable, type Cell } from "./table";
+import { parseTable } from "./table";
+import { TableWidget } from "./tableEditor";
 
 /**
  * The block half of the live preview: whatever replaces whole lines (tables,
@@ -56,9 +57,14 @@ export function isFocused(state: EditorState): boolean {
   return state.field(focused);
 }
 
+/** Whether the note takes edits; read-only, it is all rendered and nothing reveals its source. */
+export function isEditable(state: EditorState): boolean {
+  return state.facet(EditorView.editable) && !state.readOnly;
+}
+
 /** Whether the selection is on any line of [from, to]: those lines show their source. */
 export function revealed(state: EditorState, from: number, to: number): boolean {
-  if (!state.field(focused)) return false;
+  if (!state.field(focused) || !isEditable(state)) return false;
   const a = state.doc.lineAt(from).from;
   const b = state.doc.lineAt(to).to;
   return state.selection.ranges.some((r) => r.from <= b && r.to >= a);
@@ -69,55 +75,12 @@ function editOnClick(dom: HTMLElement, view: EditorView, offsetOf: (target: Elem
   dom.addEventListener("mousedown", (event) => {
     if (event.button !== 0) return;
     event.preventDefault();
-    if (followRendered(event.target, view)) return;
+    if (followRendered(event.target, view) || !isEditable(view.state)) return;
     const target = event.target instanceof Element ? event.target : dom;
     const pos = view.posAtDOM(dom) + offsetOf(target);
     view.focus();
     view.dispatch({ selection: { anchor: Math.min(pos, view.state.doc.length) }, scrollIntoView: false });
   });
-}
-
-class TableWidget extends WidgetType {
-  constructor(readonly source: string) {
-    super();
-  }
-  eq(other: TableWidget) {
-    return other.source === this.source;
-  }
-  get estimatedHeight() {
-    return (this.source.split("\n").length - 1) * 33;
-  }
-  toDOM(view: EditorView) {
-    const table = parseTable(this.source)!;
-    const wrap = document.createElement("div");
-    wrap.className = "cm-md-table-wrap";
-    const el = document.createElement("table");
-    const columns = Math.max(table.header.length, ...table.rows.map((r) => r.length));
-    const fill = (into: HTMLTableCellElement, cell: Cell | undefined, i: number) => {
-      const align = table.align[i];
-      if (align) into.style.textAlign = align;
-      if (!cell) return;
-      into.dataset.offset = String(cell.to);
-      renderInline(cell.text, into);
-    };
-    const head = el.createTHead().insertRow();
-    for (let i = 0; i < columns; i++) {
-      const th = document.createElement("th");
-      fill(th, table.header[i], i);
-      head.append(th);
-    }
-    const body = el.createTBody();
-    for (const row of table.rows) {
-      const tr = body.insertRow();
-      for (let i = 0; i < columns; i++) fill(tr.insertCell(), row[i], i);
-    }
-    wrap.append(el);
-    editOnClick(wrap, view, (target) => Number(target.closest<HTMLElement>("[data-offset]")?.dataset.offset ?? 0));
-    return wrap;
-  }
-  ignoreEvent() {
-    return true;
-  }
 }
 
 class MermaidWidget extends WidgetType {
@@ -246,7 +209,8 @@ function build(state: EditorState): DecorationSet {
         const { from, to } = lines(node.from, node.to);
         const source = doc.sliceString(from, to);
         if (!parseTable(source)) break;
-        out.push(Decoration.replace({ widget: new TableWidget(source), block: true }).range(from, to));
+        const widget = new TableWidget(source, isEditable(state));
+        out.push(Decoration.replace({ widget, block: true }).range(from, to));
         break;
       }
 
@@ -288,6 +252,7 @@ const blocks = StateField.define<DecorationSet>({
   update(value, tr) {
     const rebuild =
       tr.docChanged ||
+      tr.reconfigured ||
       tr.selection ||
       tr.effects.some((e) => e.is(setFocused) || e.is(toggleFold) || e.is(refreshPreview)) ||
       syntaxTree(tr.state) !== syntaxTree(tr.startState);

@@ -96,6 +96,9 @@ export const COMMANDS = {
   "open-browser-settings": { label: "Browser Settings" },
   "save-file": { label: "Save File", keys: "Mod+S" },
   "toggle-outline": { label: "Toggle Outline" },
+  // A note opens to read; the same chord turns it to editing and back.
+  "toggle-reading": { label: "Toggle Reading View", keys: "Mod+E" },
+  "insert-table": { label: "Insert Table" },
   // ⇧⌘/ too: where / is a shifted key (⇧7 on a Latin American board) ⌘/ cannot be typed,
   // and on a US board it is ⌘?, the Help chord.
   shortcuts: { label: "Keyboard Shortcuts", keys: { key: "/", mod: true }, also: [{ key: "/", mod: true, shift: true }] },
