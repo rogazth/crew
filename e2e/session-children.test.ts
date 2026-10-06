@@ -1,5 +1,6 @@
-// Plan 2026-10-01: a session started with start_session is listed under
-// whoever started it, and opens as Crew's chat. The terminal's CLI starts it
+// Plan 2026-10-05 (UI decision 1): a session started with start_session lives
+// in whoever started it — a chip in its parent's bar, not a sidebar row — and
+// opens as Crew's chat. The terminal's CLI starts it
 // from its own shell with `crew sessions start`, with the terminal's token, so
 // the parent is the terminal; a fake opencode in $HOME/.local/bin answers.
 import assert from "node:assert/strict";
@@ -35,7 +36,7 @@ print(json.dumps({"type": "step_finish", "sessionID": sid, "part": {"id": "s1", 
 
 const sessions = (crew: Crew, workspaceId: string) => crew.request<Session[]>("session_list", { workspaceId });
 
-test("a session a terminal started is listed under it and opens as a chat", async (t) => {
+test("a session a terminal started is a chip in its parent and opens as a chat", async (t) => {
   const crew = await launchCrew();
   t.after(() => crew.close());
   const [main] = crew.workspaces;
@@ -43,7 +44,7 @@ test("a session a terminal started is listed under it and opens as a chat", asyn
   await installFakeOpencode(crew);
 
   const shell = await newTerminal(crew, main.id);
-  await typeInTerminal(crew, `!'${CREW}' sessions start opencode --name "Lint pass" -- tidy the imports`);
+  await typeInTerminal(crew, `!'${CREW}' sessions start --provider opencode --name "Lint pass" -- tidy the imports`);
 
   const child = await waitFor(
     async () => (await sessions(crew, main.id)).find((row) => row.kind === "child"),
@@ -56,21 +57,16 @@ test("a session a terminal started is listed under it and opens as a chat", asyn
     message: "its first turn ends",
   });
 
-  // Listed under the terminal, not beside it.
-  const nested = crew.window.locator('[data-child][data-session]', { hasText: "Lint pass" });
-  await nested.waitFor({ timeout: 10_000 });
-  const order = await crew.window.evaluate(() =>
-    [...document.querySelectorAll<HTMLElement>("[data-session]")].map((row) => ({
-      text: row.textContent ?? "",
-      child: row.dataset.child === "true",
-    })),
+  // A chip in the terminal's bar, and no row of its own in the sidebar.
+  const chip = crew.window.getByRole("button", { name: /Lint pass/ }).first();
+  await chip.waitFor({ timeout: 10_000 });
+  const rows = await crew.window.evaluate(() =>
+    [...document.querySelectorAll<HTMLElement>("[data-session]")].map((row) => row.textContent ?? ""),
   );
-  const at = order.findIndex((row) => row.child && row.text.includes("Lint pass"));
-  assert.ok(at > 0, JSON.stringify(order));
-  assert.ok(!order[at - 1]?.child, `the row above is its parent's: ${JSON.stringify(order)}`);
+  assert.ok(!rows.some((text) => text.includes("Lint pass")), JSON.stringify(rows));
 
   // Its tab is the chat Crew drives it from, with its report in it.
-  await nested.click();
+  await chip.click();
   await crew.window.getByText("Done: tidy the imports").waitFor({ timeout: 10_000 });
   await crew.window.getByText("Turn ended").waitFor({ timeout: 10_000 });
   if (process.env.E2E_SHOTS) await crew.window.screenshot({ path: path.join(process.env.E2E_SHOTS, "session-children.png") });
