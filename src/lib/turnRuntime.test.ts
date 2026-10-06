@@ -23,9 +23,9 @@ vi.mock("./client", () => ({
 }));
 
 const notify = vi.fn();
-vi.mock("./host", () => ({ notify: (...args: unknown[]) => notify(...args) }));
+vi.mock("./host", () => ({ notify: (...args: unknown[]) => notify(...args), dismissNotifications: vi.fn() }));
 vi.mock("./notificationSound", () => ({ playSound: vi.fn() }));
-vi.mock("./toasts", () => ({ showToast: vi.fn() }));
+vi.mock("./toasts", () => ({ showToast: vi.fn(), toastManager: { close: vi.fn() } }));
 
 const runtime = await import("./turnRuntime");
 const notifications = await import("./notifications");

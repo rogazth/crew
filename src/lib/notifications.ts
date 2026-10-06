@@ -1,4 +1,4 @@
-import { notify } from "./host";
+import { dismissNotifications, notify } from "./host";
 import {
   isPaused,
   loadNotificationPrefs,
@@ -8,7 +8,7 @@ import {
 } from "./notificationPrefs";
 import { playSound } from "./notificationSound";
 import { BODY_LIMIT, type NotificationTarget } from "./notify";
-import { showToast } from "./toasts";
+import { showToast, toastManager } from "./toasts";
 import type { SessionAsk } from "./protocol";
 import type { Session, SessionStatus } from "./types";
 
@@ -59,6 +59,17 @@ const recent = new Map<string, number>();
 
 export function setVisibleSession(id: string | null): void {
   visible = id;
+  markSeen();
+}
+
+/**
+ * The session on screen in a focused window has been seen: its banners and
+ * toast come down instead of piling up in Notification Center.
+ */
+export function markSeen(): void {
+  if (!visible || !windowFocused()) return;
+  dismissNotifications(visible);
+  toastManager.close(`session:${visible}`);
 }
 
 /**

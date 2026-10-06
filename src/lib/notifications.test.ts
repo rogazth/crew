@@ -1,15 +1,31 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const notify = vi.fn();
-vi.mock("./host", () => ({ notify: (...args: unknown[]) => notify(...args) }));
+const dismissNotifications = vi.fn();
+vi.mock("./host", () => ({
+  notify: (...args: unknown[]) => notify(...args),
+  dismissNotifications: (...args: unknown[]) => dismissNotifications(...args),
+}));
 const playSound = vi.fn();
 vi.mock("./notificationSound", () => ({ playSound: (...args: unknown[]) => playSound(...args) }));
 vi.mock("./api", () => ({ stateGet: async () => null, stateSet: async () => {} }));
 const showToast = vi.fn();
-vi.mock("./toasts", () => ({ showToast: (...args: unknown[]) => showToast(...args) }));
+const closeToast = vi.fn();
+vi.mock("./toasts", () => ({
+  showToast: (...args: unknown[]) => showToast(...args),
+  toastManager: { close: (...args: unknown[]) => closeToast(...args) },
+}));
 
-const { announceStatus, askNews, COOLDOWN_MS, dispatchNotification, reserveCooldown, resetNotifications, setVisibleSession } =
-  await import("./notifications");
+const {
+  announceStatus,
+  askNews,
+  COOLDOWN_MS,
+  dispatchNotification,
+  markSeen,
+  reserveCooldown,
+  resetNotifications,
+  setVisibleSession,
+} = await import("./notifications");
 const { DEFAULT_NOTIFICATION_PREFS, updateNotificationPrefs } = await import("./notificationPrefs");
 
 const session = { id: "s1", workspaceId: "w1", notifications: true };
@@ -29,6 +45,8 @@ beforeEach(() => {
   playSound.mockReset();
   showToast.mockReset();
   resetNotifications();
+  dismissNotifications.mockReset();
+  closeToast.mockReset();
   prefs({});
 });
 
@@ -183,5 +201,29 @@ describe("announceStatus", () => {
     announceStatus(terminal, "error", "idle");
     await flush();
     expect(notify).toHaveBeenCalledWith(expect.objectContaining({ body: "Exited with an error" }));
+  });
+});
+
+describe("markSeen", () => {
+  it("takes down a session's banners and toast once it is on screen in a focused window", () => {
+    focused = true;
+    setVisibleSession("s1");
+    expect(dismissNotifications).toHaveBeenCalledWith("s1");
+    expect(closeToast).toHaveBeenCalledWith("session:s1");
+  });
+
+  it("waits for the window to come to the front", () => {
+    setVisibleSession("s1");
+    expect(dismissNotifications).not.toHaveBeenCalled();
+    focused = true;
+    markSeen();
+    expect(dismissNotifications).toHaveBeenCalledWith("s1");
+  });
+
+  it("leaves everything up while no session is on screen", () => {
+    focused = true;
+    setVisibleSession(null);
+    expect(dismissNotifications).not.toHaveBeenCalled();
+    expect(closeToast).not.toHaveBeenCalled();
   });
 });

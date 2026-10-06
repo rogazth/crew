@@ -21,6 +21,8 @@ const KEEP = 50;
  * handler with it, so each one is held until it is clicked, closed or replaced.
  */
 const live = new Set<Notification>();
+/** The banners still in Notification Center about each session, for when the user opens it. */
+const bySession = new Map<string, Set<Notification>>();
 /** What the last banner said: Settings warns while macOS blocks them. */
 let state: BannerState = "unknown";
 
@@ -50,6 +52,9 @@ export function registerNotifyIpc(window: () => BrowserWindow | null, reopen: ()
   ipcMain.handle(NOTIFY_CHANNELS.sound, (_event, path: string) => readSound(path));
   ipcMain.handle(NOTIFY_CHANNELS.status, () => (Notification.isSupported() ? state : "unsupported"));
   ipcMain.on(NOTIFY_CHANNELS.badge, (_event, badge: DockBadge) => setBadge(badge));
+  ipcMain.on(NOTIFY_CHANNELS.dismiss, (_event, sessionId: unknown) => {
+    if (typeof sessionId === "string") dismiss(sessionId);
+  });
   // In front, nothing is waiting unseen; the window says so too, a beat later.
   app.on("browser-window-focus", () => app.setBadgeCount(0));
   app.once("will-quit", () => app.setBadgeCount(0));
@@ -91,11 +96,8 @@ function show(banner: Banner, onClick: () => void): Promise<BannerResult> {
     // macOS plays nothing for a banner with no sound named.
     ...(!silent && process.platform === "darwin" ? { sound: "default" } : {}),
   });
-  const release = () => {
-    live.delete(note);
-    note.removeAllListeners();
-  };
-  hold(note);
+  const release = () => forget(note);
+  hold(note, banner.target?.sessionId);
   note.on("click", () => {
     release();
     onClick();
@@ -117,13 +119,37 @@ function show(banner: Banner, onClick: () => void): Promise<BannerResult> {
   });
 }
 
-function hold(note: Notification): void {
+/** Which session each held banner is about. */
+const sessionOf = new WeakMap<Notification, string>();
+
+function hold(note: Notification, sessionId: string | undefined): void {
   live.add(note);
+  if (sessionId) {
+    sessionOf.set(note, sessionId);
+    const notes = bySession.get(sessionId) ?? new Set();
+    bySession.set(sessionId, notes);
+    notes.add(note);
+  }
   if (live.size <= KEEP) return;
   const oldest = live.values().next().value;
-  if (oldest) {
-    live.delete(oldest);
-    oldest.removeAllListeners();
+  if (oldest) forget(oldest);
+}
+
+function forget(note: Notification): void {
+  live.delete(note);
+  note.removeAllListeners();
+  const sessionId = sessionOf.get(note);
+  const notes = sessionId ? bySession.get(sessionId) : undefined;
+  if (!sessionId || !notes) return;
+  notes.delete(note);
+  if (notes.size === 0) bySession.delete(sessionId);
+}
+
+/** The user is looking at the session: its banners come out of Notification Center. */
+function dismiss(sessionId: string): void {
+  for (const note of bySession.get(sessionId) ?? []) {
+    forget(note);
+    note.close();
   }
 }
 

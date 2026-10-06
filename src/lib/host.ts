@@ -52,6 +52,8 @@ export type NotificationsHost = {
   /** Crew's page in System Settings › Notifications. */
   openSettings(): Promise<void>;
   setBadge(badge: DockBadge): void;
+  /** Takes a session's banners out of Notification Center: the user has seen it. */
+  dismiss(sessionId: string): void;
 };
 
 /** Files shown as pages, and handed to Finder. Absent outside Electron. */
@@ -234,6 +236,8 @@ export async function openUrl(url: string): Promise<void> {
 
 let allowed: Promise<boolean> | null = null;
 const clicks = new Set<(target: NotificationTarget | null) => void>();
+/** A browser's banners, by the session they are about, so seeing it can close them. */
+const shown = new Map<string, Set<Notification>>();
 
 export async function notify(banner: Banner): Promise<BannerResult> {
   const host = crewHost();
@@ -253,7 +257,26 @@ export async function notify(banner: Banner): Promise<BannerResult> {
     window.focus();
     for (const cb of clicks) cb(banner.target ?? null);
   };
+  const sessionId = banner.target?.sessionId;
+  if (sessionId) {
+    const notes = shown.get(sessionId) ?? new Set();
+    shown.set(sessionId, notes);
+    notes.add(note);
+    note.onclose = () => {
+      notes.delete(note);
+      if (notes.size === 0 && shown.get(sessionId) === notes) shown.delete(sessionId);
+    };
+  }
   return "shown";
+}
+
+/** The user has seen `sessionId`: its banners no longer wait for them. */
+export function dismissNotifications(sessionId: string): void {
+  const host = crewHost();
+  if (host) return host.notifications.dismiss(sessionId);
+  const notes = shown.get(sessionId);
+  shown.delete(sessionId);
+  for (const note of notes ?? []) note.close();
 }
 
 export function beep(): void {

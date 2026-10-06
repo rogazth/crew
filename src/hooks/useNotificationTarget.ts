@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef } from "react";
 import { onNotificationClick } from "../lib/host";
-import { setVisibleSession } from "../lib/notifications";
+import { markSeen, setVisibleSession } from "../lib/notifications";
 import type { NotificationTarget } from "../lib/notify";
 import type { Session } from "../lib/types";
 
@@ -19,7 +19,8 @@ type Deps = {
  * Where a notification leads. A click on a banner, or Open on a toast, brings
  * up its session; one in another workspace waits for that workspace to show
  * and its sessions to arrive, then opens. Also tells the dispatcher which
- * session is on screen, since news of it is already in front of the user.
+ * session is on screen, since news of it is already in front of the user,
+ * and its banners can come down.
  */
 export function useNotificationTarget({
   sessions,
@@ -32,6 +33,11 @@ export function useNotificationTarget({
   const pending = useRef<NotificationTarget | null>(null);
 
   useEffect(() => setVisibleSession(visibleSessionId), [visibleSessionId]);
+  // Back in front on the session a banner was about.
+  useEffect(() => {
+    window.addEventListener("focus", markSeen);
+    return () => window.removeEventListener("focus", markSeen);
+  }, []);
 
   const settle = useCallback(() => {
     const target = pending.current;

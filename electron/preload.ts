@@ -38,6 +38,7 @@ contextBridge.exposeInMainWorld("crewHost", {
     status: () => ipcRenderer.invoke(NOTIFY_CHANNELS.status),
     openSettings: () => ipcRenderer.invoke(NOTIFY_CHANNELS.settings),
     setBadge: (badge: DockBadge) => ipcRenderer.send(NOTIFY_CHANNELS.badge, badge),
+    dismiss: (sessionId: string) => ipcRenderer.send(NOTIFY_CHANNELS.dismiss, sessionId),
   },
   pathForFile: (file: File) => webUtils.getPathForFile(file),
   files: {

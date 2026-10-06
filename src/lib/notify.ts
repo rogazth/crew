@@ -10,6 +10,7 @@ export const NOTIFY_CHANNELS = {
   status: "notify:status",
   settings: "notify:settings",
   badge: "notify:badge",
+  dismiss: "notify:dismiss",
 } as const;
 
 /** The Dock's count of sessions waiting on the user; `bounce` asks for one informational bounce. */
