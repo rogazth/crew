@@ -1043,14 +1043,14 @@ mod tests {
     fn a_crew_call_reads_as_the_tool_it_ran() {
         let got = feed(&[item(
             "started",
-            json!({ "type": "mcpToolCall", "id": "x1", "server": "crew", "tool": "call_tool", "status": "inProgress",
-                    "arguments": { "name": "message_agent", "arguments": { "to": "6e85", "text": "green" } } }),
+            json!({ "type": "mcpToolCall", "id": "x1", "server": "crew", "tool": "message_agent", "status": "inProgress",
+                    "arguments": { "to": "6e85", "text": "green" } }),
         )]);
         assert_eq!(
             got,
             vec![HarnessEvent::ToolStarted {
                 call_id: "x1".into(),
-                name: "call_tool".into(),
+                name: "message_agent".into(),
                 title: "Crew message agent 6e85".into(),
                 detail: Some(ToolDetail::Message { to: "6e85".into(), text: "green".into() }),
             }]

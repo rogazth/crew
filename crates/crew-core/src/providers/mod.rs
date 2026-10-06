@@ -156,9 +156,10 @@ pub fn crew_tool(name: &str) -> Option<&str> {
         .filter(|verb| !verb.is_empty())
 }
 
-/// The Crew tool a call runs, and its arguments. Only `find_tool` and
-/// `call_tool` are listed, so most calls are `call_tool` naming the tool; a
-/// row read as the gateway would show every message as "call tool" and a blob.
+/// The Crew tool a call runs, and its arguments. Crew's tools are listed
+/// directly now, but transcripts from before still hold `call_tool` calls
+/// naming the tool, and are read for as long as they exist: a row read as the
+/// gateway would show every message as "call tool" and a blob.
 ///
 /// A model often writes `arguments` as a JSON string rather than an object.
 /// Claude Code parses it against the schema before the call reaches the MCP
@@ -196,7 +197,7 @@ pub fn crew_tool_detail(name: &str, input: &Map<String, Value>) -> Option<crew_p
 }
 
 /// The row line for a Crew call: `Crew message agent abc`, the tool it ran
-/// (through `call_tool` or not) and whom or what it was about.
+/// (directly, or through the old `call_tool`) and whom or what it was about.
 pub fn crew_label(name: &str, input: &Map<String, Value>) -> Option<String> {
     let (verb, input) = crew_call(name, input)?;
     let input: &Map<String, Value> = &input;
@@ -411,8 +412,9 @@ mod tests {
         }
     }
 
-    /// Every Crew call goes through `call_tool` now, and the row is about the
-    /// tool it named: a message still reads as who it went to and what it said.
+    /// Transcripts from before tools were listed directly hold `call_tool`
+    /// calls, and the row is about the tool it named: a message still reads as
+    /// who it went to and what it said.
     #[test]
     fn a_call_through_the_gateway_reads_as_the_tool_it_ran() {
         let input = serde_json::json!({ "name": "message_agent", "arguments": { "to": "abc", "text": "green" } });

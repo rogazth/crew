@@ -395,10 +395,11 @@ impl SessionTools {
                 if !events.is_empty() {
                     news.push((row.clone(), events));
                 }
-                // Idle with a message waiting is a turn about to start: the
-                // drain at the end of the last one has not got to it yet.
+                // Idle with a message on its way is a turn about to start:
+                // the drain at the end of the last one has not got to it yet,
+                // or has claimed it and not started the turn.
                 let queued = matches!(row.status.as_str(), "idle" | "error")
-                    && mailbox::waiting_count(&self.store, &row.id)? > 0;
+                    && mailbox::undelivered_count(&self.store, &row.id)? > 0;
                 running |= matches!(row.status.as_str(), "starting" | "working") || self.turns.is_running(&row.id) || queued;
                 rows.push(row);
             }
@@ -868,7 +869,6 @@ pub fn catalog() -> Vec<Tool> {
                 "required": ["provider", "prompt"]
             }),
             keywords: &["session", "spawn", "delegate", "hand", "run", "codex", "claude", "cursor", "opencode", "cli", "child", "parallel", "worker", "subagent"],
-            core: false,
             audience: Audience::PARENTS,
         },
         Tool {
@@ -879,7 +879,6 @@ pub fn catalog() -> Vec<Tool> {
                 "properties": { "mine": { "type": "boolean", "description": "Only the ones you started. Defaults to true." } }
             }),
             keywords: &["sessions", "children", "running", "status", "workers"],
-            core: false,
             audience: Audience::PARENTS,
         },
         Tool {
@@ -896,7 +895,6 @@ pub fn catalog() -> Vec<Tool> {
                 "required": ["sessions", "timeout_s"]
             }),
             keywords: &["wait", "block", "until", "done", "finish", "report", "result", "poll"],
-            core: false,
             audience: Audience::PARENTS,
         },
         Tool {
@@ -913,7 +911,6 @@ pub fn catalog() -> Vec<Tool> {
                 "required": ["session"]
             }),
             keywords: &["read", "transcript", "output", "log", "what", "did", "history"],
-            core: false,
             audience: Audience::PARENTS,
         },
         Tool {
@@ -929,7 +926,6 @@ pub fn catalog() -> Vec<Tool> {
                 "required": ["session", "text"]
             }),
             keywords: &["send", "tell", "continue", "more", "follow", "queue", "message"],
-            core: false,
             audience: Audience::PARENTS,
         },
         Tool {
@@ -946,7 +942,6 @@ pub fn catalog() -> Vec<Tool> {
                 "required": ["session", "request_id"]
             }),
             keywords: &["approve", "allow", "deny", "answer", "permission", "question", "respond"],
-            core: false,
             audience: Audience::PARENTS,
         },
         Tool {
@@ -954,7 +949,6 @@ pub fn catalog() -> Vec<Tool> {
             description: "End a session you started: its CLI is killed mid-turn if it is working, and it exits for good. Its transcript stays in Crew, and read_session still reads it.",
             schema: json!({ "type": "object", "properties": { "session": session_arg() }, "required": ["session"] }),
             keywords: &["stop", "kill", "end", "cancel", "abort", "exit"],
-            core: false,
             audience: Audience::PARENTS,
         },
     ]
@@ -1023,12 +1017,14 @@ mod tests {
             &path,
             format!(
                 r#"#!/usr/bin/env python3
-import json, sys, time, re, uuid
+import json, os, sys, time, re, uuid
 prompt = sys.stdin.read()
 args = sys.argv[1:]
 sid = args[args.index("--session") + 1] if "--session" in args else "ses_" + uuid.uuid4().hex[:8]
+config = json.loads(os.environ.get("OPENCODE_CONFIG_CONTENT", "{{}}"))
+system = "".join(open(path).read() for path in config.get("instructions", []))
 with open({log:?}, "a") as f:
-    f.write(json.dumps({{"args": args, "prompt": prompt}}) + "\n")
+    f.write(json.dumps({{"args": args, "prompt": prompt, "system": system}}) + "\n")
 print(json.dumps({{"type": "step_start", "sessionID": sid, "part": {{"id": "st", "type": "step-start"}}}}), flush=True)
 m = re.search(r"SLEEP (\d+(?:\.\d+)?)", prompt)
 if m:
@@ -1271,10 +1267,15 @@ while True:
         let bound = w.row(&id).provider_session_id.expect("bound");
         let at = second.iter().position(|arg| arg == "--session").expect("the second turn did not resume");
         assert_eq!(second[at + 1], bound);
-        // The envelope is the first turn's; a resumed turn is handed the message alone.
+        // The persona is the system prompt of every turn, through the file
+        // opencode's config names; the message is the message alone.
+        for launch in &launches {
+            let system = launch["system"].as_str().unwrap();
+            assert!(system.contains("Your final message of each turn is your report"), "{system}");
+            assert!(system.contains("`crew_message_agent`") && !system.contains("`crew_start_session`"), "{system}");
+        }
         let prompt = launches[0]["prompt"].as_str().unwrap();
-        assert!(prompt.contains("Your final message of each turn is your report"), "{prompt}");
-        assert!(prompt.contains("shell (terminal"), "{prompt}");
+        assert!(prompt.starts_with("## From shell (terminal") && !prompt.contains("Your final message"), "{prompt}");
         let next = launches[1]["prompt"].as_str().unwrap();
         assert!(next.starts_with("## From shell (terminal"), "{next}");
         assert!(!next.contains("Your final message"), "{next}");
@@ -1445,7 +1446,7 @@ while True:
         assert!(first.ends_with("remember 4817") && !first.contains("Your final message"), "the persona is in the message: {turn}");
         let context = turn["additionalContext"]["crew"]["value"].as_str().unwrap_or_default();
         assert!(context.contains("Your final message of each turn is your report"), "{context}");
-        assert!(context.contains("`mcp__crew__find_tool`"), "{context}");
+        assert!(context.contains("`mcp__crew__message_agent`") && !context.contains("find_tool"), "{context}");
 
         let more = w.call(&parent, "send_to_session", json!({ "session": id, "text": "what number?" })).expect("send");
         assert_eq!(more["delivered"], true, "{more}");
@@ -1608,7 +1609,8 @@ while True:
         assert!(token["value"].as_str().is_some_and(|t| !t.is_empty()), "{crew}");
         let first = sent(&log, "session/prompt")[0]["prompt"][0]["text"].as_str().unwrap().to_string();
         assert!(first.contains("Your final message of each turn is your report"), "the persona is in the message: {first}");
-        assert!(first.contains("`find_tool` (MCP server `crew`)"), "the MCP tools, not the crew CLI: {first}");
+        assert!(first.contains("on the MCP server `crew`") && first.contains("`message_agent`"), "the MCP tools, not the crew CLI: {first}");
+        assert!(!first.contains("find_tool") && !first.contains("start_session"), "{first}");
         assert!(first.trim_end().ends_with("remember 4817"), "{first}");
 
         let more = w.call(&parent, "send_to_session", json!({ "session": id, "text": "what number?" })).expect("send");
@@ -1695,7 +1697,7 @@ while True:
             "{done}"
         );
         let (blocks, _) = w.turns.transcripts().since(&id, 0);
-        assert!(blocks.iter().any(|block| block.text == "Crew list bots"), "{blocks:?}");
+        assert!(blocks.iter().any(|block| block.text == "Crew list agents"), "{blocks:?}");
         assert!(blocks.iter().any(|block| block.text == "Plan: Hello"), "{blocks:?}");
         assert!(blocks.iter().any(|block| block.text == "Todos"), "{blocks:?}");
     }
@@ -1934,13 +1936,13 @@ while True:
         assert_eq!(child.kind(), CallerKind::Child);
         let toolbox = crate::tools::Toolbox::default();
         toolbox.register(Arc::new(catalog_only()));
-        let hidden = toolbox.hidden_names(CallerKind::Child);
+        let listed = toolbox.visible_names(CallerKind::Child);
         for name in ["start_session", "list_sessions", "wait_for_session", "read_session", "send_to_session", "respond_to_session", "stop_session", "create_bot", "create_worktree"] {
-            assert!(!hidden.contains(&name), "a child can find {name}");
+            assert!(!listed.contains(&name), "a child is listed {name}");
         }
-        assert!(hidden.contains(&"message_agent") && hidden.contains(&"list_agents"));
+        assert!(listed.contains(&"message_agent") && listed.contains(&"list_agents"));
         for parent in [CallerKind::Bot, CallerKind::Terminal, CallerKind::User] {
-            assert!(toolbox.hidden_names(parent).contains(&"start_session"), "{parent:?}");
+            assert!(toolbox.visible_names(parent).contains(&"start_session"), "{parent:?}");
         }
         w.settle(&id);
     }

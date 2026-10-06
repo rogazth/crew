@@ -159,10 +159,8 @@ const SCENARIOS = {
       const made = (await rpc("session_list", { workspaceId: workspace.id })).find(
         (s) => s.name === "Scout",
       );
-      // Through the gateway or straight at it: either way, one round.
-      const asked = coderEnd.blocks.filter((b) =>
-        ["create_bot", "call_tool"].some((name) => b.tool?.name?.includes(name)),
-      );
+      // Straight at it, in one round.
+      const asked = coderEnd.blocks.filter((b) => b.tool?.name?.includes("create_bot"));
       return [
         ["the bot was created at all", Boolean(made), made ? `${made.provider}/${made.model}` : "no Scout"],
         [

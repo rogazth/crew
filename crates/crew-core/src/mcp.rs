@@ -90,8 +90,7 @@ fn unreachable_error(error: &std::io::Error) -> String {
     format!("{NOT_RUNNING} ({error}) — open it or run `crew open`")
 }
 
-/// How long one call may take. The tool is the one named, or the one
-/// `call_tool` names in its `arguments`, which is how a hidden tool is called.
+/// How long one call may take, by the tool it names.
 ///
 /// A tool with a budget of its own (the browser's: crewd waits on Crew's
 /// window for it, mounting and loading pages) gets that budget plus the
@@ -104,13 +103,8 @@ fn call_timeout(method: &str, params: &Value) -> Duration {
     if method != "tools/call" {
         return CALL_TIMEOUT;
     }
-    let (name, arguments) = match params.get("name").and_then(Value::as_str) {
-        Some("call_tool") => {
-            let inner = params.get("arguments");
-            (inner.and_then(|args| args.get("name")).and_then(Value::as_str), inner.and_then(|args| args.get("arguments")))
-        }
-        name => (name, params.get("arguments")),
-    };
+    let name = params.get("name").and_then(Value::as_str);
+    let arguments = params.get("arguments");
     let no_args = Value::Null;
     if let Some(budget) = name.and_then(|name| crate::browser_tools::budget(name, arguments.unwrap_or(&no_args))) {
         return (budget + Duration::from_secs(WAIT_SLACK_S)).max(CALL_TIMEOUT);
@@ -249,9 +243,6 @@ mod tests {
     fn a_tool_that_waits_is_given_its_wait_and_ten_seconds_more() {
         let direct = json!({ "name": "wait_for_log", "arguments": { "timeout_s": 45 } });
         assert_eq!(call_timeout("tools/call", &direct), Duration::from_secs(55));
-        // Through the gateway, which is how a hidden tool is called.
-        let gateway = json!({ "name": "call_tool", "arguments": { "name": "wait_for_log", "arguments": { "timeout_s": 30 } } });
-        assert_eq!(call_timeout("tools/call", &gateway), Duration::from_secs(40));
     }
 
     /// crewd waits on the window for up to a mount and a page load; the
@@ -269,11 +260,9 @@ mod tests {
         ] {
             let direct = json!({ "name": tool, "arguments": args });
             assert_eq!(call_timeout("tools/call", &direct), budget(tool, args.clone()) + slack, "{tool}");
-            let gateway = json!({ "name": "call_tool", "arguments": { "name": tool, "arguments": args } });
-            assert_eq!(call_timeout("tools/call", &gateway), budget(tool, args.clone()) + slack, "{tool} via call_tool");
         }
         // More than the 60 s cap a process wait gets: crewd's budget is what counts.
-        let long = json!({ "name": "call_tool", "arguments": { "name": "browser_wait_for", "arguments": { "text": "x", "timeout_s": 50 } } });
+        let long = json!({ "name": "browser_wait_for", "arguments": { "text": "x", "timeout_s": 50 } });
         assert_eq!(call_timeout("tools/call", &long), Duration::from_secs(95));
     }
 

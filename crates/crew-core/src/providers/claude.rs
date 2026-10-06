@@ -29,11 +29,22 @@ pub struct ClaudeSpawn {
     pub mcp_config: Option<String>,
 }
 
+/// How long Claude Code lets one call to Crew's server run, in milliseconds:
+/// a wait plus its margin (plan §7e.2). Without it a call is cut at Claude's
+/// default. Read off Claude Code 2.1.289: the per-server `timeout` is in the
+/// stdio server schema as well as the remote ones, and overrides
+/// `MCP_TOOL_TIMEOUT` for that server alone.
+pub const MCP_TIMEOUT_MS: u64 = 3_900_000;
+
 /// The `--mcp-config` value that starts Crew's MCP server. Claude merges it
 /// with the user's own servers unless `--strict-mcp-config` is also passed.
 pub fn claude_mcp_config(command: &str, args: &[String]) -> String {
-    json!({ "mcpServers": { "crew": { "command": command, "args": args } } }).to_string()
+    json!({ "mcpServers": { "crew": { "command": command, "args": args, "timeout": MCP_TIMEOUT_MS } } }).to_string()
 }
+
+/// Every tool on Crew's server, as a Claude permission rule: Crew's own tools
+/// never become an approval in Crew (plan §7e.5).
+pub const CREW_TOOLS_RULE: &str = "mcp__crew__*";
 
 pub fn build_claude_spawn_args(input: &ClaudeSpawn) -> Vec<String> {
     let mut args = vec![
@@ -47,7 +58,7 @@ pub fn build_claude_spawn_args(input: &ClaudeSpawn) -> Vec<String> {
         // bot's whole configuration, and ~/.claude would inject a competing one.
         "--setting-sources=project,local".into(),
         "--settings".into(),
-        json!({ "autoMemoryEnabled": false }).to_string(),
+        json!({ "autoMemoryEnabled": false, "permissions": { "allow": [CREW_TOOLS_RULE] } }).to_string(),
     ];
     match input.autonomy {
         Autonomy::Full => args.push("--dangerously-skip-permissions".into()),
@@ -886,6 +897,28 @@ mod tests {
     /// `crates/crew-core/tests/fixtures/protocols/claude-permissions.jsonl`.
     const CURL: &str = "curl -s -o /dev/null -w '%{http_code}' https://example.com";
     const CALL: &str = "toolu_01NXryc1w4bSyP5MGzDE8Hbe";
+
+    /// Crew's tools are pre-approved for the sessions Crew drives (plan
+    /// §7e.5), and a call may run as long as a wait (§7e.2).
+    #[test]
+    fn crews_tools_are_allowed_and_may_run_long() {
+        let args = build_claude_spawn_args(&ClaudeSpawn {
+            model: None,
+            effort: None,
+            session_id: None,
+            resume: None,
+            replay_user_messages: false,
+            system_prompt: None,
+            autonomy: Autonomy::Ask,
+            mcp_config: Some(claude_mcp_config("/app/crewd", &["--mcp".into()])),
+        });
+        let at = args.iter().position(|arg| arg == "--settings").expect("settings");
+        let settings: Value = serde_json::from_str(&args[at + 1]).expect("json");
+        assert_eq!(settings["permissions"]["allow"], json!(["mcp__crew__*"]), "{settings}");
+        let at = args.iter().position(|arg| arg == "--mcp-config").expect("mcp");
+        let mcp: Value = serde_json::from_str(&args[at + 1]).expect("json");
+        assert_eq!(mcp["mcpServers"]["crew"]["timeout"], 3_900_000, "{mcp}");
+    }
 
     fn tool_details(lines: &[Value]) -> Vec<Option<ToolDetail>> {
         let host = TurnHost::test_new();

@@ -469,17 +469,13 @@ mod tests {
         (verb, tool)
     }
 
-    /// Every tool a caller can reach has a command, and the gateway, which
-    /// is how a model reaches the rest, has none: here the rest are commands.
+    /// Every tool a caller can reach has a command.
     #[test]
     fn every_tool_has_a_command() {
         let named: Vec<&str> = GROUPS.iter().flat_map(|group| group.verbs.iter().map(|verb| verb.tool)).collect();
         let hand = ["grep_logs", "wait_for_log"];
         for tool in every_tool() {
             assert!(named.contains(&tool.name) || hand.contains(&tool.name), "{} has no command", tool.name);
-        }
-        for gateway in ["find_tool", "call_tool"] {
-            assert!(!named.contains(&gateway), "{gateway} is a model's, not a person's");
         }
     }
 

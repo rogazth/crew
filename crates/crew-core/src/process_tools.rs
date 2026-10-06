@@ -67,7 +67,6 @@ fn one(name: &'static str, description: &'static str, keywords: &'static [&'stat
             "required": ["process"]
         }),
         keywords,
-        core: false,
         audience: Audience::EVERYONE,
     }
 }
@@ -83,7 +82,6 @@ pub fn catalog() -> Vec<Tool> {
             description: "List this workspace's processes: the dev servers, watchers and workers the user defined once for the workspace, each run in a terminal of its own with its output logged. A process runs in a worktree, at most once in each: runs lists where it is running or last ran, with its state (starting, running, paused, exited, crashed, stopped), pid, uptime, last exit code, automatic restarts, who started it and its own env; here marks the run in your worktree. log_cursor is where that run's log ends right now: pass it as since to read_logs or wait_for_log to see only what comes after. A process not yet approved by the user cannot start.",
             schema: json!({ "type": "object", "properties": {} }),
             keywords: &["dev", "server", "servers", "running", "status", "commands", "processes", "services", "watchers", "worktree"],
-            core: false,
             audience: Audience::EVERYONE,
         },
         Tool {
@@ -98,7 +96,6 @@ pub fn catalog() -> Vec<Tool> {
                 "required": ["process"]
             }),
             keywords: &["run", "launch", "boot", "dev", "server", "serve", "up", "background", "port"],
-            core: false,
             audience: Audience::EVERYONE,
         },
         one(
@@ -115,7 +112,6 @@ pub fn catalog() -> Vec<Tool> {
                 "required": ["process"]
             }),
             keywords: &["reload", "reboot", "bounce", "server", "dev"],
-            core: false,
             audience: Audience::EVERYONE,
         },
         one(
@@ -136,7 +132,6 @@ pub fn catalog() -> Vec<Tool> {
             ),
             schema: json!({ "type": "object", "properties": spec_properties(), "required": ["name", "command"] }),
             keywords: &["new", "add", "define", "dev", "server", "command", "watcher", "service"],
-            core: false,
             audience: Audience::EVERYONE,
         },
         Tool {
@@ -144,7 +139,6 @@ pub fn catalog() -> Vec<Tool> {
             description: "Change a process's definition, for every worktree; only the fields you pass change. If your autonomy is ask, the change waits for the user's approval as a proposal, and what runs meanwhile is the definition already accepted. A running process picks up a change on its next start: restart_process. For a different port in one worktree, pass env to start_process instead.",
             schema: json!({ "type": "object", "properties": update, "required": ["process"] }),
             keywords: &["edit", "change", "rename", "configure", "env", "command"],
-            core: false,
             audience: Audience::EVERYONE,
         },
         one(
@@ -167,7 +161,6 @@ pub fn catalog() -> Vec<Tool> {
                 "required": ["process"]
             }),
             keywords: &["log", "output", "tail", "watch", "stdout", "stderr", "console", "print", "poll"],
-            core: false,
             audience: Audience::EVERYONE,
         },
         Tool {
@@ -185,7 +178,6 @@ pub fn catalog() -> Vec<Tool> {
                 "required": ["process", "pattern"]
             }),
             keywords: &["log", "search", "find", "error", "errors", "grep", "regex", "stack", "trace"],
-            core: false,
             audience: Audience::EVERYONE,
         },
         Tool {
@@ -203,7 +195,6 @@ pub fn catalog() -> Vec<Tool> {
                 "required": ["process", "pattern", "timeout_s"]
             }),
             keywords: &["log", "watch", "ready", "listening", "until", "block", "boot", "started", "compiled"],
-            core: false,
             audience: Audience::EVERYONE,
         },
         Tool {
@@ -219,7 +210,6 @@ pub fn catalog() -> Vec<Tool> {
                 "required": ["process", "text"]
             }),
             keywords: &["type", "keys", "keyboard", "stdin", "input", "press", "answer", "prompt"],
-            core: false,
             audience: Audience::EVERYONE,
         },
     ]
@@ -663,7 +653,7 @@ mod tests {
     }
 
     #[test]
-    fn the_catalog_is_all_behind_the_gateway_for_everyone() {
+    fn the_catalog_is_listed_to_everyone() {
         let f = fixture("catalog");
         let tools = ProcessTools::new(f.host.clone(), f.store.clone()).catalog();
         let names: Vec<&str> = tools.iter().map(|tool| tool.name).collect();
@@ -685,19 +675,15 @@ mod tests {
                 "send_input",
             ]
         );
-        assert!(tools.iter().all(|tool| !tool.core), "only the gateway is listed");
         assert!(tools.iter().all(|tool| tool.audience == Audience::EVERYONE));
         // The shim stretches its read by this argument's name.
         let wait = tools.iter().find(|tool| tool.name == "wait_for_log").unwrap();
         assert!(wait.schema["required"].as_array().unwrap().contains(&json!("timeout_s")));
 
-        for kind in [CallerKind::Bot, CallerKind::Terminal, CallerKind::User] {
-            let hidden = f.toolbox.hidden_names(kind);
-            assert!(hidden.contains(&"read_logs") && hidden.contains(&"list_processes"), "{kind:?}: {hidden:?}");
+        for kind in [CallerKind::Bot, CallerKind::Terminal, CallerKind::Child, CallerKind::User] {
+            let listed = f.toolbox.visible_names(kind);
+            assert!(listed.contains(&"read_logs") && listed.contains(&"list_processes"), "{kind:?}: {listed:?}");
         }
-        let bot = f.session(&f.workspace, "bot", "Coder", "ask");
-        let found = f.call(&bot, "find_tool", json!({ "query": "tail the dev server logs" })).unwrap();
-        assert_eq!(found["matches"][0]["name"], "read_logs", "{found}");
     }
 
     #[test]

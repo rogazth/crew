@@ -21,7 +21,7 @@ use serde_json::{json, Map, Value};
 use tokio::sync::oneshot;
 
 use super::{
-    child_resume, child_tools_hint, cursor_spell, cursor_tools_hint, path_list, Live, QuestionReply, TurnHost,
+    child_resume, path_list, Harness, Live, QuestionReply, TurnHost,
     TurnOutcome, INIT_TIMEOUT,
 };
 use crate::providers::cursor::{
@@ -179,14 +179,13 @@ impl TurnHost {
         let resume = child_resume(&session);
         // No system channel: the persona and the tool sheet are the first
         // user message of a conversation, a bot's every turn.
+        let hint = mcp.as_ref().map(|_| self.crew_tools_hint(&session, Harness::Cursor));
         let texts = if child {
-            let hint = mcp.as_ref().map(|_| child_tools_hint(&cursor_spell));
             Texts {
                 fresh: self.child_prompt(&session, false, hint.as_deref(), &params),
                 resumed: self.child_prompt(&session, true, hint.as_deref(), &params),
             }
         } else {
-            let hint = mcp.as_ref().map(|_| cursor_tools_hint(&self.hidden_tools()));
             let text = build_cursor_prompt(
                 &session.name,
                 &session.description,
@@ -835,7 +834,7 @@ fn cursor_update(live: &mut CursorLive, update: &Map<String, Value>, events: &mu
 /// process can load them.
 ///
 /// What a turn does is spelled in its last line: `SLEEP <s>` runs a command that
-/// long, `ASK` asks to run one, `MCP` calls Crew's `call_tool`, `QUESTION`
+/// long, `ASK` asks to run one, `MCP` calls Crew's `list_agents`, `QUESTION`
 /// asks which color, `PLAN` writes a plan, `FAIL` fails the prompt,
 /// `STUBBORN` ignores a cancel. It answers `report: <last line>`, with ` + <what
 /// it heard>` for each request answered.
@@ -902,9 +901,9 @@ def run(rid, sid, text, turn):
     if "MCP" in text:
         cid = "tool_" + uuid.uuid4().hex[:8]
         update(sid, {"sessionUpdate": "tool_call", "toolCallId": cid, "title": "MCP: tool", "kind": "other", "status": "pending", "rawInput": {}})
-        update(sid, {"sessionUpdate": "tool_call_update", "toolCallId": cid, "title": "crew: call_tool", "rawInput": {"providerIdentifier": "crew", "toolName": "call_tool", "args": {"name": "list_bots", "arguments": {}}}})
+        update(sid, {"sessionUpdate": "tool_call_update", "toolCallId": cid, "title": "crew: list_agents", "rawInput": {"providerIdentifier": "crew", "toolName": "list_agents", "args": {}}})
         update(sid, {"sessionUpdate": "tool_call_update", "toolCallId": cid, "status": "in_progress"})
-        got = ask("session/request_permission", {"sessionId": sid, "toolCall": {"toolCallId": cid, "title": "crew-crew: call_tool", "kind": "other", "status": "pending"}, "options": [{"optionId": "allow-once", "name": "Allow once", "kind": "allow_once"}, {"optionId": "allow-always", "name": "Allow always", "kind": "allow_always"}, {"optionId": "reject-once", "name": "Reject", "kind": "reject_once"}]})
+        got = ask("session/request_permission", {"sessionId": sid, "toolCall": {"toolCallId": cid, "title": "crew-crew: list_agents", "kind": "other", "status": "pending"}, "options": [{"optionId": "allow-once", "name": "Allow once", "kind": "allow_once"}, {"optionId": "allow-always", "name": "Allow always", "kind": "allow_always"}, {"optionId": "reject-once", "name": "Reject", "kind": "reject_once"}]})
         heard.append("crew: %s" % ((got or {}).get("outcome", {}).get("optionId")))
         update(sid, {"sessionUpdate": "tool_call_update", "toolCallId": cid, "status": "completed", "rawOutput": {"success": True}})
     if "QUESTION" in text:
@@ -1062,12 +1061,12 @@ mod tests {
         running(&host, "s", None);
         host.handle_cursor_line("s", &update(json!({ "sessionUpdate": "tool_call", "toolCallId": "m", "title": "MCP: tool", "kind": "other", "status": "pending", "rawInput": {} })));
         assert_eq!(cap.take(), vec![]);
-        host.handle_cursor_line("s", &update(json!({ "sessionUpdate": "tool_call_update", "toolCallId": "m", "title": "crew: call_tool", "rawInput": {
-            "providerIdentifier": "crew", "toolName": "call_tool", "args": { "name": "message_bot", "arguments": { "to": "abc", "text": "green" } } } })));
+        host.handle_cursor_line("s", &update(json!({ "sessionUpdate": "tool_call_update", "toolCallId": "m", "title": "crew: message_agent", "rawInput": {
+            "providerIdentifier": "crew", "toolName": "message_agent", "args": { "to": "abc", "text": "green" } } })));
         host.handle_cursor_line("s", &update(json!({ "sessionUpdate": "tool_call_update", "toolCallId": "m", "status": "completed", "rawOutput": { "success": true } })));
         let events = cap.take();
         let HarnessEvent::ToolStarted { name, title, .. } = &events[0] else { panic!("{events:?}") };
-        assert_eq!((name.as_str(), title.as_str()), ("mcp__crew__call_tool", "Crew message bot abc"));
+        assert_eq!((name.as_str(), title.as_str()), ("mcp__crew__message_agent", "Crew message agent abc"));
         assert!(matches!(events.last(), Some(HarnessEvent::ToolUpdated { status: Some(ToolStatus::Completed), .. })), "{events:?}");
     }
 

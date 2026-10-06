@@ -388,6 +388,16 @@ pub fn waiting_count(store: &Store, to_session: &str) -> Result<i64, String> {
     })
 }
 
+/// Letters still on their way: waiting, or claimed by a turn that has not
+/// started or not ended yet. A turn's own letters are marked delivered before
+/// it settles, so this is never stuck on a turn that is over.
+pub fn undelivered_count(store: &Store, to_session: &str) -> Result<i64, String> {
+    store.with(|conn| {
+        conn.prepare_cached("SELECT COUNT(*) FROM mailbox WHERE to_session = ?1 AND delivered_at IS NULL AND disposed_at IS NULL")?
+            .query_row(params![to_session], |row| row.get(0))
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

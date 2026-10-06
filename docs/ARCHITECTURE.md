@@ -123,7 +123,7 @@ sequenceDiagram
   end
 ```
 
-Claude, Codex, and opencode reach Crew through an MCP server (`crewd --mcp`) whose `tools/list` is only `find_tool` and `call_tool`: every other tool is found and run through them, so no schema sits in a prompt that does not need it, and the chat reads a `call_tool` row as the tool it named. Cursor reaches the same bridge by running `crew` commands in the shell (`crew bots send <id> <text>`), found with `crew --help`.
+Claude, Codex, opencode and Cursor (over ACP) reach Crew through an MCP server (`crewd --mcp`) whose `tools/list` is every tool the caller's kind may call, each with its schema. The model sees them in its own tool list under the name its harness gives them (`mcp__crew__send_to_session` for Claude and Codex, `crew_send_to_session` for opencode, `send_to_session` on server `crew` for Cursor), and the prompt Crew hands a bot or a child names them the same way, built from the same list. For the sessions Crew drives, Crew's tools are pre-approved (Claude's `--settings` allows `mcp__crew__*`, Codex's server config approves them, opencode's inline config allows `crew_*`, Cursor's requests are answered at once) and a call may run 65 minutes. Transcripts from before still hold calls to the old `find_tool`/`call_tool` gateway; the chat reads such a `call_tool` row as the tool it named. People reach the same bridge with `crew` commands in the shell (`crew bots send <id> <text>`), found with `crew --help`.
 
 ## Who is calling
 
@@ -135,7 +135,7 @@ The bridge is a UNIX socket in the data dir. Every request carries a token, and 
 
 This is policy, not isolation. Every process Crew starts, bots and terminals included, runs as the user's UID and can read `daemon.json`, whose `userToken` speaks as the user (no process approval, `daemon/shutdown`) and whose WebSocket `token` has every power the window has. The 0600 mode keeps it from other users, not from sessions. What keeps a session to its own identity is that the tools it is handed use its own token: `crew` inside a session never falls back to `daemon.json`, and a process that goes and reads the file itself is not stopped.
 
-`tools/list`, `find_tool` and every tool answer according to the caller. The `initialize` of `crewd --mcp` carries `instructions` naming the caller's tools, so a terminal session learns them without Crew touching its prompt. A family of tools that lives in its own module implements `ToolFamily` and is registered on the `Toolbox` in `crewd::serve`.
+`tools/list` and every tool answer according to the caller. The `initialize` of `crewd --mcp` carries `instructions` saying who the caller is to Crew and what its tool families are for, so a terminal session learns that without Crew touching its prompt. A family of tools that lives in its own module implements `ToolFamily` and is registered on the `Toolbox` in `crewd::serve`.
 
 ## The `crew` command
 

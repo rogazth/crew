@@ -2622,10 +2622,12 @@ mod tests {
         let reply = list_agents_as(&socket, &token);
         let text = reply["result"]["content"][0]["text"].as_str().unwrap_or("");
         assert!(text.contains(&bot), "reply: {reply}");
-        // Seen as a terminal: no turns to continue, and nothing listed but the gateway.
+        // Seen as a terminal: every tool it may call is listed, nothing to
+        // continue turns with, and no gateway.
         let listed = unix_call(&socket, &serde_json::json!({ "token": token, "method": "tools/list" }));
         let names = listed["result"]["tools"].to_string();
-        assert!(names.contains("find_tool") && !names.contains("message_agent"), "{names}");
+        assert!(names.contains("message_agent") && names.contains("start_session") && names.contains("read_logs"), "{names}");
+        assert!(!names.contains("continue_after_turn") && !names.contains("find_tool"), "{names}");
         let catalog = unix_call(&socket, &serde_json::json!({ "token": token, "method": "tools/catalog" }));
         let names = catalog["result"]["tools"].to_string();
         assert!(names.contains("message_agent") && !names.contains("continue_after_turn"), "{names}");
@@ -2745,7 +2747,7 @@ mod tests {
             &serde_json::json!({
                 "token": token,
                 "method": "tools/call",
-                "params": { "name": "call_tool", "arguments": { "name": "create_process", "arguments": { "name": "api", "command": "sleep 30" } } }
+                "params": { "name": "create_process", "arguments": { "name": "api", "command": "sleep 30" } }
             }),
         );
         let text = reply["result"]["content"][0]["text"].as_str().unwrap_or("");

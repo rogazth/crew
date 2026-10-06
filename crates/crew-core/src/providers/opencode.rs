@@ -52,18 +52,55 @@ pub fn build_opencode_prompt(
     super::assemble(persona, history, &with_attached_paths(text.trim(), files))
 }
 
-/// opencode takes no MCP server on the command line, only through config. It
-/// reads `OPENCODE_CONFIG_CONTENT` as inline JSON, so the bridge is handed over
-/// on the environment instead of a file in the user's repo.
-pub fn opencode_config(mcp: Option<&(String, Vec<String>)>) -> Option<String> {
-    let (exe, args) = mcp?;
+/// How long opencode lets one call to Crew's server run, in milliseconds: a
+/// wait plus its margin (plan §7e.2), the same 65 minutes Codex and Claude
+/// get. opencode uses the one per-server `timeout` for connecting and
+/// listing too, which the `crewd --mcp` shim bounds itself.
+pub const MCP_TIMEOUT_MS: u64 = 3_900_000;
+
+/// The inline config with Crew's MCP server alone.
+fn crew_server(mcp: &(String, Vec<String>)) -> serde_json::Value {
+    let (exe, args) = mcp;
     let mut command = vec![exe.clone()];
     command.extend(args.iter().cloned());
+    serde_json::json!({ "type": "local", "command": command, "enabled": true, "timeout": MCP_TIMEOUT_MS })
+}
+
+/// opencode takes no MCP server on the command line, only through config. It
+/// reads `OPENCODE_CONFIG_CONTENT` as inline JSON, so the bridge is handed over
+/// on the environment instead of a file in the user's repo. This is a
+/// terminal's: the user's own permissions stand.
+pub fn opencode_config(mcp: Option<&(String, Vec<String>)>) -> Option<String> {
     serde_json::to_string(&serde_json::json!({
         "$schema": "https://opencode.ai/config.json",
-        "mcp": { "crew": { "type": "local", "command": command, "enabled": true } }
+        "mcp": { "crew": crew_server(mcp?) }
     }))
     .ok()
+}
+
+/// The config of a turn Crew drives. Crew's tools are pre-approved (plan
+/// §7e.5): `opencode run` rejects whatever would ask, and a later rule wins
+/// over the user's `"*": "ask"`. `instructions` is a file holding the persona:
+/// opencode adds the files it names to the system prompt, beside the user's
+/// own (the arrays merge), so the persona is not a message the model can
+/// scroll past. Measured on opencode 1.18.34.
+pub fn opencode_turn_config(mcp: Option<&(String, Vec<String>)>, instructions: Option<&str>) -> Option<String> {
+    let mut config = serde_json::Map::new();
+    config.insert("$schema".into(), serde_json::json!("https://opencode.ai/config.json"));
+    if let Some(mcp) = mcp {
+        config.insert("mcp".into(), serde_json::json!({ "crew": crew_server(mcp) }));
+        config.insert("permission".into(), serde_json::json!({ "crew_*": "allow" }));
+    }
+    if let Some(path) = instructions {
+        config.insert("instructions".into(), serde_json::json!([path]));
+    }
+    (config.len() > 1).then(|| serde_json::Value::Object(config).to_string())
+}
+
+/// What a turn sends on stdin once the persona rides in `instructions`: the
+/// tail of the conversation, then what is being asked now.
+pub fn build_opencode_message(history: Option<&str>, text: &str, files: &[String]) -> String {
+    super::assemble(String::new(), history, &with_attached_paths(text.trim(), files))
 }
 
 pub use super::persona_prompt;

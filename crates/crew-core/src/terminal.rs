@@ -110,7 +110,7 @@ mod tests {
         ]
     }
 
-    const CLAUDE_MCP: &str = r#"{"mcpServers":{"crew":{"args":["--mcp"],"command":"/app/crewd"}}}"#;
+    const CLAUDE_MCP: &str = r#"{"mcpServers":{"crew":{"args":["--mcp"],"command":"/app/crewd","timeout":3900000}}}"#;
 
     fn codex_mcp() -> Vec<String> {
         argv(&[

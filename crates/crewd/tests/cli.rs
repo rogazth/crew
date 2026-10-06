@@ -107,7 +107,7 @@ fn mcp_flag_does_not_print_daemon_info() {
 
 /// daemon.json is how the `crew` CLI finds a daemon it did not start: there
 /// while the daemon runs, private, and gone once it stops cleanly. Its user
-/// token is good for the MCP shim, whose handshake says which tools there are.
+/// token is good for the MCP shim, whose handshake carries Crew's instructions.
 #[test]
 fn daemon_json_lives_as_long_as_the_daemon_and_speaks_as_the_user() {
     use std::io::Write;
@@ -152,7 +152,7 @@ fn daemon_json_lives_as_long_as_the_daemon_and_speaks_as_the_user() {
     let _ = mcp.wait();
     let reply: serde_json::Value = serde_json::from_str(&reply).expect("json");
     let instructions = reply["result"]["instructions"].as_str().unwrap_or_default();
-    assert!(instructions.contains("find_tool") && instructions.contains("list_agents"), "{reply}");
+    assert!(instructions.contains("Crew is the app this runs in") && !instructions.contains("find_tool"), "{reply}");
     assert!(!instructions.contains("continue_after_turn"), "the user has no turns: {instructions}");
 
     drop(child.stdin.take());

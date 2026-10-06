@@ -26,7 +26,7 @@ use crate::providers::claude::{
 };
 use crate::providers::parse_json_line;
 use crate::providers::opencode::{
-    opencode_config, step_failure as opencode_step_failure,
+    opencode_turn_config, step_failure as opencode_step_failure, build_opencode_message,
     add_step_usage, build_opencode_prompt, build_opencode_spawn_args,
     parse_tool_call as parse_opencode_tool_call, session_id_from_event as opencode_session_id,
     stream_error_message as opencode_error_message, text_part, turn_ended, OpencodeSpawn, OpencodeText,
@@ -61,71 +61,100 @@ const BACKGROUND_GRACE: Duration = Duration::from_secs(600);
 /// row without anyone else speaking is a runaway, not a plan.
 const MAX_SELF_TURNS: u32 = 25;
 const STDERR_TAIL: usize = 12;
-/// The four a bot reaches for on most turns: named here with their
-/// arguments, so a turn that needs one does not first spend a `find_tool` on it.
-const EVERYDAY: [&str; 4] = ["list_agents", "message_agent", "continue_after_turn", "search_messages"];
+/// The four a bot reaches for on most turns, named first in its sheet with
+/// what each is for.
+const EVERYDAY: [(&str, &str); 4] = [
+    ("list_agents", "the other bots here, each with the id it is addressed by."),
+    (
+        "message_agent",
+        "write to one of them, by id. It arrives as a turn with your name and id on it, and it is \
+         read in its own time. You are not waiting here, and anything it sends back reaches you as \
+         a message of its own.",
+    ),
+    (
+        "continue_after_turn",
+        "leave yourself the next step. It arrives as a new turn the moment this one ends, with the \
+         tail of this conversation, so it is how you carry on past work that does not fit in one turn.",
+    ),
+    (
+        "search_messages",
+        "look up what was already said in this conversation. It does not reach anybody else's; what \
+         another bot knows, you ask it for.",
+    ),
+];
 
-/// The Crew tools a bot is handed, spelled the way its own harness will
-/// accept them.
+/// Claude Code may still defer an MCP server's tools behind its own tool
+/// search; their names are visible there, and one call by name loads them
+/// (plan §4.9).
+const DEFERRED_TOOLS: &str =
+    "If you do not see Crew's tools in your tool list, call one by name once before deciding they are unavailable.";
+
+/// How a provider's harness shows the model one of Crew's tools.
 ///
 /// The names matter more than they look. A bot told about `message_agent`
 /// goes looking for `message_agent`, and what it finds is whatever else it has
 /// of that shape — with Claude Code that is its own cross-session SendMessage,
 /// which writes to another machine entirely. Measured, not guessed: it happened
-/// in `scripts/drive.mjs` and the letter left the building.
-///
-/// For a provider with MCP: nothing is in `tools/list` but the gateway, so
-/// every tool is spelled as a `call_tool` of it. Never the bare name on its
-/// own, which is the one the bot cannot call.
-fn tools_hint(spell: &dyn Fn(&str) -> String, hidden: &[&str]) -> String {
-    let find = spell("find_tool");
-    let call = spell("call_tool");
-    let via = |name: &str, arguments: &str| format!("{call} with `{{\"name\": \"{name}\", \"arguments\": {arguments}}}`");
-    let rest: Vec<&str> = hidden.iter().copied().filter(|name| !EVERYDAY.contains(name)).collect();
+/// in `scripts/drive.mjs` and the letter left the building. So a sheet never
+/// names a tool bare, only as the harness lists it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Harness {
+    /// Claude and Codex namespace an MCP server's tools under its name.
+    Mcp,
+    /// opencode flattens them onto the server name instead.
+    Opencode,
+    /// Cursor finds an MCP server's tools under the server's name and calls
+    /// them with its own `CallDynamicTool`: a tool is named with its server.
+    Cursor,
+}
+
+impl Harness {
+    fn spell(self, tool: &str) -> String {
+        match self {
+            Harness::Mcp => format!("`mcp__crew__{tool}`"),
+            Harness::Opencode => format!("`crew_{tool}`"),
+            Harness::Cursor => format!("`{tool}` (MCP server `crew`)"),
+        }
+    }
+
+    /// Several at once: Cursor names the server once, after the list.
+    fn spell_all(self, tools: &[&str]) -> String {
+        match self {
+            Harness::Cursor => format!(
+                "{}, all on the MCP server `crew`",
+                tools.iter().map(|tool| format!("`{tool}`")).collect::<Vec<_>>().join(", ")
+            ),
+            _ => tools.iter().map(|tool| self.spell(tool)).collect::<Vec<_>>().join(", "),
+        }
+    }
+}
+
+/// The Crew tools a bot is handed, spelled the way its own harness lists
+/// them. `visible` is what `tools/list` answers this caller with.
+fn tools_hint(harness: Harness, visible: &[&str]) -> String {
+    let everyday: String = EVERYDAY
+        .iter()
+        .filter(|(name, _)| visible.contains(name))
+        .map(|(name, what)| format!("- {} — {what}\n", harness.spell(name)))
+        .collect();
+    let rest: Vec<&str> = visible
+        .iter()
+        .copied()
+        .filter(|name| !EVERYDAY.iter().any(|(everyday, _)| everyday == name))
+        .collect();
     format!(
-        "Crew gives you tools through its crew MCP server. Only two are in your tool list: {find} \
-         searches the rest by what you want to do and returns each with its arguments, and {call} \
-         runs one by name. The ones most turns need:\n\
-         - {} — the other bots here, each with the id it is addressed by.\n\
-         - {} — write to one of them, by id. It arrives as a turn with your name and id on \
-         it, and it is read in its own time. You are not waiting here, and anything it sends \
-         back reaches you as a message of its own.\n\
-         - {} — leave yourself the next step. It arrives as a new turn the moment this one \
-         ends, with the tail of this conversation, so it is how you carry on past work that \
-         does not fit in one turn.\n\
-         - {} — look up what was already said in this conversation. It does not reach anybody \
-         else's; what another bot knows, you ask it for.\n\
-         - And, through {find} first: {}. One of your own tools whose name sounds like one of \
-         these is not Crew's and does not reach this workspace.\n\n\
+        "Crew gives you tools through its crew MCP server, and they are in your tool list. The ones \
+         most turns need:\n\
+         {everyday}\
+         - And: {}. One of your own tools whose name sounds like one of these is not Crew's and \
+         does not reach this workspace.\n\
+         {DEFERRED_TOOLS}\n\n\
          A turn that opens with `## Message` was written by another bot, not by the user. \
          What you write in the chat is read by the user and does not reach that bot; \
-         messaging the id on that line through {call} is what does.",
-        via("list_agents", "{}"),
-        via("message_agent", "{\"to\": \"<id>\", \"text\": \"…\"}"),
-        via("continue_after_turn", "{\"text\": \"…\"}"),
-        via("search_messages", "{\"query\": \"…\"}"),
-        rest.join(", "),
+         messaging the id on that line with {} is what does.",
+        harness.spell_all(&rest),
+        harness.spell("message_agent"),
     )
-}
-
-/// Claude and Codex namespace an MCP server's tools under its name.
-fn mcp_tools_hint(hidden: &[&str]) -> String {
-    tools_hint(&|tool| format!("`mcp__crew__{tool}`"), hidden)
-}
-
-/// opencode flattens them onto the server name instead.
-fn opencode_tools_hint(hidden: &[&str]) -> String {
-    tools_hint(&|tool| format!("`crew_{tool}`"), hidden)
-}
-
-/// Cursor finds an MCP server's tools under the server's name and calls them
-/// with its own `CallDynamicTool`: a tool is named with its server.
-fn cursor_spell(tool: &str) -> String {
-    format!("`{tool}` (MCP server `crew`)")
-}
-
-fn cursor_tools_hint(hidden: &[&str]) -> String {
-    tools_hint(&cursor_spell, hidden)
 }
 
 /// The provider conversation a child carries on, once its first turn bound
@@ -148,17 +177,39 @@ fn child_envelope(from: &crew_protocol::BotRef, text: &str) -> String {
     format!("## From {who}\n\n{text}")
 }
 
-/// What a child is told about Crew's tools: where they are, and that starting
-/// sessions of its own is not among them.
-fn child_tools_hint(spell: &dyn Fn(&str) -> String) -> String {
+/// What a child is told about Crew's tools: which they are, and that
+/// starting sessions of its own is not among them.
+fn child_tools_hint(harness: Harness, visible: &[&str]) -> String {
     format!(
-        "Crew's tools reach you through its crew MCP server: {} searches them by what you want to do \
-         (run or watch the workspace's dev servers, drive a browser tab, write to one of its bots) \
-         and {} runs one. Starting sessions of your own is not among them: if the job needs more \
-         hands, say so in your report.",
-        spell("find_tool"),
-        spell("call_tool")
+        "Crew's tools reach you through its crew MCP server and are in your tool list: {}. They \
+         run or watch the workspace's dev servers, drive a browser tab, and write to one of its \
+         bots. Starting sessions of your own is not among them: if the job needs more hands, say \
+         so in your report.\n\
+         {DEFERRED_TOOLS}",
+        harness.spell_all(visible)
     )
+}
+
+/// An opencode turn's persona, on disk for as long as the turn runs:
+/// `instructions` in its config names files, never text.
+struct InstructionsFile(std::path::PathBuf);
+
+impl Drop for InstructionsFile {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+/// Written readable by the user alone, since a persona is the user's text.
+fn write_opencode_instructions(session_id: &str, persona: &str) -> Option<InstructionsFile> {
+    use std::io::Write as _;
+    use std::os::unix::fs::OpenOptionsExt as _;
+    let dir = std::env::temp_dir().join("crew-opencode");
+    std::fs::create_dir_all(&dir).ok()?;
+    let path = dir.join(format!("{session_id}.md"));
+    let mut file = std::fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(&path).ok()?;
+    file.write_all(persona.as_bytes()).ok()?;
+    Some(InstructionsFile(path))
 }
 
 type Answers = HashMap<String, String>;
@@ -336,8 +387,15 @@ impl TurnHost {
         self.toolbox.clone()
     }
 
-    fn hidden_tools(&self) -> Vec<&'static str> {
-        self.toolbox.hidden_names(crate::caller::CallerKind::Bot)
+    /// What a session is told about Crew's tools: the ones `tools/list`
+    /// answers it with, by the kind of caller it is, as its harness spells them.
+    fn crew_tools_hint(&self, session: &crate::session::Session, harness: Harness) -> String {
+        let kind = crate::caller::Caller::from_session(session.clone()).kind();
+        let visible = self.toolbox.visible_names(kind);
+        match kind {
+            crate::caller::CallerKind::Child => child_tools_hint(harness, &visible),
+            _ => tools_hint(harness, &visible),
+        }
     }
 
     pub fn set_runtime(&self, handle: tokio::runtime::Handle) {
@@ -1378,11 +1436,10 @@ impl TurnHost {
 
         let path = self.resolve_bin("claude").or_else(|_| self.resolve_bin("claude"))?;
         let mcp = self.mcp();
+        let hint = mcp.as_ref().map(|_| self.crew_tools_hint(session, Harness::Mcp));
         let persona = if session.kind == "child" {
-            let hint = mcp.as_ref().map(|_| child_tools_hint(&|tool| format!("`mcp__crew__{tool}`")));
             crate::providers::child_persona(&self.parent_label(session), hint.as_deref())
         } else {
-            let hint = mcp.as_ref().map(|_| mcp_tools_hint(&self.hidden_tools()));
             claude_persona(&session.name, &session.description, hint.as_deref())
         };
         let spawn = ClaudeSpawn {
@@ -1486,19 +1543,30 @@ impl TurnHost {
             Err(error) => return TurnOutcome::Failed(error),
         };
         let resume = child_resume(&session);
-        let prompt = if session.kind == "child" {
-            let hint = mcp.as_ref().map(|_| child_tools_hint(&|tool| format!("`crew_{tool}`")));
-            self.child_prompt(&session, resume.is_some(), hint.as_deref(), &params)
+        let child = session.kind == "child";
+        let hint = mcp.as_ref().map(|_| self.crew_tools_hint(&session, Harness::Opencode));
+        let files = path_list(&params, &HashSet::new());
+        // The persona goes in the system prompt, through a file the config
+        // names, every turn; only if that file cannot be written does it ride
+        // in the message, as it used to.
+        let persona = if child {
+            crate::providers::child_persona(&self.parent_label(&session), hint.as_deref())
         } else {
-            let hint = mcp.as_ref().map(|_| opencode_tools_hint(&self.hidden_tools()));
-            build_opencode_prompt(
+            crate::providers::persona_prompt(&session.name, &session.description, hint.as_deref())
+        };
+        let instructions = write_opencode_instructions(&session_id, &persona);
+        let prompt = match (&instructions, child) {
+            (Some(_), true) => crate::providers::with_files(params.text.trim(), &files),
+            (Some(_), false) => build_opencode_message(history.as_deref(), &params.text, &files),
+            (None, true) => self.child_prompt(&session, resume.is_some(), hint.as_deref(), &params),
+            (None, false) => build_opencode_prompt(
                 &session.name,
                 &session.description,
                 history.as_deref(),
                 &params.text,
-                &path_list(&params, &HashSet::new()),
+                &files,
                 hint.as_deref(),
-            )
+            ),
         };
         // opencode has no approval channel: without --auto it falls back to the
         // user's own permission config, which Crew cannot answer for. Saying so
@@ -1511,7 +1579,8 @@ impl TurnHost {
             );
         }
         let mut env = self.agent_env(&session_id);
-        if let Some(config) = opencode_config(mcp.as_ref()) {
+        let instructions_path = instructions.as_ref().map(|file| file.0.to_string_lossy().into_owned());
+        if let Some(config) = opencode_turn_config(mcp.as_ref(), instructions_path.as_deref()) {
             env.insert("OPENCODE_CONFIG_CONTENT".into(), config);
         }
         if let Err(error) = self.agents.spawn(
@@ -1842,6 +1911,20 @@ impl TurnHost {
                 &serde_json::to_string(&build_control_response(
                     &control.request_id,
                     to_permission_result(ApprovalDecision::Deny, &control.input, ""),
+                ))
+                .unwrap_or_default(),
+            );
+            return;
+        }
+        // Crew's own tools are pre-approved (plan §7e.5): `--settings` allows
+        // them, and should the CLI ask anyway they are allowed here, never
+        // turned into an approval card.
+        if tool_name.starts_with("mcp__crew__") {
+            let _ = self.agents.write(
+                &session_id,
+                &serde_json::to_string(&build_control_response(
+                    &control.request_id,
+                    to_permission_result(ApprovalDecision::Allow, &control.input, &tool_name),
                 ))
                 .unwrap_or_default(),
             );
@@ -2438,8 +2521,11 @@ print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type
             &path,
             format!(
                 r#"#!/usr/bin/env python3
-import json, sys
+import json, os, sys
 open({seen:?}, "w").write(sys.stdin.read())
+config = json.loads(os.environ.get("OPENCODE_CONFIG_CONTENT", "{{}}"))
+open({seen:?} + ".config", "w").write(json.dumps(config))
+open({seen:?} + ".system", "w").write("".join(open(path).read() for path in config.get("instructions", [])))
 sid = "ses_test"
 print(json.dumps({{"type":"text","sessionID":sid,"part":{{"id":"p1","type":"text","text":"ok"}}}}), flush=True)
 print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type":"step-finish","reason":"stop","tokens":{{"input":1,"output":1,"reasoning":0,"cache":{{"read":0,"write":0}}}},"cost":0}}}}), flush=True)
@@ -2639,7 +2725,15 @@ print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type
 
         turn(&world, &coder, "y ahora?");
         let second = std::fs::read_to_string(&seen).expect("the provider was never spawned");
-        assert!(second.starts_with("You are Coder."), "the persona is on every turn: {second}");
+        // The persona is in the system prompt, through the file the config
+        // names, and gone once the turn is over.
+        let system = std::fs::read_to_string(world.dir.join("prompt.txt.system")).expect("system");
+        assert!(system.starts_with("You are Coder."), "the persona is on every turn: {system}");
+        assert!(system.contains("`crew_message_agent`") && !second.contains("You are Coder."), "{second}");
+        let config: Value = serde_json::from_str(&std::fs::read_to_string(world.dir.join("prompt.txt.config")).expect("config")).expect("json");
+        assert_eq!(config["permission"]["crew_*"], "allow", "{config}");
+        assert_eq!(config["mcp"]["crew"]["timeout"], 3_900_000, "{config}");
+        assert!(!std::path::Path::new(config["instructions"][0].as_str().unwrap()).exists(), "the persona file outlived the turn");
         assert!(second.contains("· user] el parser se cae con tabs"), "{second}");
         assert!(second.contains("· you] ok"), "the reply is in the tail too: {second}");
         assert!(second.trim_end().ends_with("y ahora?"), "{second}");
@@ -2919,79 +3013,102 @@ print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type
     /// its own cross-session SendMessage, and in `scripts/drive.mjs` an agent
     /// told about "message_agent" found that one and wrote to another machine.
     #[test]
-    fn a_tool_sheet_names_the_tools_the_way_the_provider_takes_them() {
-        let mcp = mcp_tools_hint(&crate::tools::hidden_names());
-        assert!(
-            mcp.contains(r#"`mcp__crew__call_tool` with `{"name": "message_agent", "arguments": {"to": "<id>", "text": "…"}}`"#),
-            "{mcp}"
-        );
-        assert!(mcp.contains("`mcp__crew__find_tool`"), "{mcp}");
-        let opencode = opencode_tools_hint(&crate::tools::hidden_names());
-        assert!(opencode.contains(r#"`crew_call_tool` with `{"name": "message_agent""#), "{opencode}");
+    fn a_tool_sheet_names_the_tools_the_way_the_provider_lists_them() {
+        let bot = crate::tools::visible_names(crate::caller::CallerKind::Bot);
+        let mcp = tools_hint(Harness::Mcp, &bot);
+        assert!(mcp.contains("- `mcp__crew__message_agent` — write to one of them, by id."), "{mcp}");
+        assert!(mcp.contains("`mcp__crew__create_bot`"), "{mcp}");
+        let opencode = tools_hint(Harness::Opencode, &bot);
+        assert!(opencode.contains("- `crew_message_agent` — write"), "{opencode}");
         // Cursor calls an MCP tool by its server and its name, apart.
-        let cursor = cursor_tools_hint(&crate::tools::hidden_names());
-        assert!(
-            cursor.contains(r#"`call_tool` (MCP server `crew`) with `{"name": "message_agent""#),
-            "{cursor}"
-        );
+        let cursor = tools_hint(Harness::Cursor, &bot);
+        assert!(cursor.contains("- `message_agent` (MCP server `crew`) — write"), "{cursor}");
+        assert!(cursor.contains("`create_bot`, ") && cursor.contains("all on the MCP server `crew`"), "{cursor}");
 
+        for sheet in [&mcp, &opencode, &cursor] {
+            for gone in ["find_tool", "call_tool"] {
+                assert!(!sheet.contains(gone), "the sheet names the gateway: {sheet}");
+            }
+            assert!(sheet.contains(DEFERRED_TOOLS), "{sheet}");
+        }
         // The bare name never appears on its own: that is the one an agent
-        // cannot call, and the one it will go looking for elsewhere. Cursor's
-        // always comes with its server.
-        for tool in ["find_tool", "call_tool"] {
-            let named = format!("`{tool}`");
-            assert_eq!(cursor.matches(&named).count(), cursor.matches(&cursor_spell(tool)).count(), "{cursor}");
-        }
+        // cannot call, and the one it will go looking for elsewhere.
         for sheet in [&mcp, &opencode] {
-            for tool in [
-                "list_agents",
-                "message_agent",
-                "continue_after_turn",
-                "search_messages",
-                "find_tool",
-                "call_tool",
-            ] {
-                assert!(
-                    !sheet.contains(&format!("`{tool}`")),
-                    "the sheet offers a bare {tool}: {sheet}"
-                );
+            for tool in &bot {
+                assert!(!sheet.contains(&format!("`{tool}`")), "the sheet offers a bare {tool}: {sheet}");
             }
         }
     }
 
-    /// Nothing but the gateway is in `tools/list`, and the sheet names it.
+    /// The sheet names exactly what `tools/list` answers that caller with,
+    /// for its actual kind: a tool named and not listed is one it cannot
+    /// call, and one listed and not named is one it reaches past.
     #[test]
-    fn a_tool_sheet_covers_the_whole_standing_set() {
-        let standing: Vec<&str> = crate::tools::standing(crate::caller::CallerKind::Bot).iter().map(|tool| tool.name).collect();
-        assert_eq!(standing, ["find_tool", "call_tool"]);
-        for sheet in [
-            mcp_tools_hint(&crate::tools::hidden_names()),
-            opencode_tools_hint(&crate::tools::hidden_names()),
-            cursor_tools_hint(&crate::tools::hidden_names()),
-        ] {
-            for name in standing.iter() {
-                assert!(sheet.contains(name), "{name} is not on the sheet: {sheet}");
-            }
+    fn a_tool_sheet_names_what_the_callers_kind_is_listed() {
+        use crate::caller::CallerKind;
+        let bot = crate::tools::visible_names(CallerKind::Bot);
+        let sheet = tools_hint(Harness::Mcp, &bot);
+        for name in &bot {
+            assert!(sheet.contains(&format!("`mcp__crew__{name}`")), "{name} is not on the sheet: {sheet}");
         }
+
+        let child = crate::tools::visible_names(CallerKind::Child);
+        let sheet = child_tools_hint(Harness::Mcp, &child);
+        for name in &child {
+            assert!(sheet.contains(&format!("`mcp__crew__{name}`")), "{name} is not on the child's sheet: {sheet}");
+        }
+        for name in bot.iter().filter(|name| !child.contains(name)) {
+            assert!(!sheet.contains(&format!("`mcp__crew__{name}`")), "a child is told about {name}: {sheet}");
+        }
+        assert!(sheet.contains(DEFERRED_TOOLS) && !sheet.contains("find_tool"), "{sheet}");
     }
 
-    /// And the ones behind the gateway are named too, by name alone.
-    ///
-    /// Measured, not guessed: asked to create a bot, a codex agent did not
-    /// find `create_agent` (now `create_bot`) in `tools/list` — it is behind
-    /// `find_tool` — saw its own `spawn_agent`, which sounds exactly like the
-    /// job, and used that. Then it drove the app's window. "Everything else
-    /// Crew offers" gave it no reason to look.
+    /// The host builds the sheet from the session's own kind, families and all.
     #[test]
-    fn a_tool_sheet_names_what_is_behind_the_gateway() {
-        for sheet in [
-            mcp_tools_hint(&crate::tools::hidden_names()),
-            opencode_tools_hint(&crate::tools::hidden_names()),
-            cursor_tools_hint(&crate::tools::hidden_names()),
-        ] {
-            for name in crate::tools::hidden_names() {
-                assert!(sheet.contains(name), "{name} is not on the sheet: {sheet}");
-            }
+    fn the_host_builds_the_sheet_for_the_sessions_kind() {
+        let host = TurnHost::test_new();
+        let store = host.test_store();
+        let dir = std::env::temp_dir().join(format!("sheet-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let ws = crate::workspace::create(store, "sheet".into(), dir.to_string_lossy().into_owned()).expect("workspace").id;
+        let bot = crate::session::create(store, ws.clone(), "bot".into(), "B".into(), "claude".into(), "".into(), "".into(), "ask".into())
+            .expect("bot");
+        let child = crate::session::create_child(store, ws, "C".into(), "claude".into(), "".into(), "ask".into(), None, Some(bot.id.clone()))
+            .expect("child");
+        let bot = host.crew_tools_hint(&bot, Harness::Mcp);
+        assert!(bot.contains("`mcp__crew__continue_after_turn`") && bot.contains("## Message"), "{bot}");
+        let child = host.crew_tools_hint(&child, Harness::Mcp);
+        assert!(child.contains("in your report") && !child.contains("continue_after_turn"), "{child}");
+    }
+
+    /// Crew's own tools never become an approval card, even if the CLI asks.
+    #[test]
+    fn a_crew_tool_the_cli_asks_about_is_allowed_without_a_card() {
+        let host = TurnHost::test_new();
+        let cap = host.test_capture();
+        host.test_install_claude("s");
+        let ask = |id: &str, tool: &str| {
+            json!({ "type": "control_request", "request_id": id, "request": {
+                "subtype": "can_use_tool", "tool_name": tool, "input": { "command": "ls" }, "tool_use_id": id } })
+        };
+        host.handle_claude_line("s", &ask("c1", "mcp__crew__list_agents").to_string());
+        host.handle_claude_line("s", &ask("c2", "Bash").to_string());
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let mut asked = Vec::new();
+        while asked.is_empty() && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+            asked.extend(cap.take().into_iter().filter_map(|event| match event {
+                HarnessEvent::ApprovalRequested { name, .. } => Some(name),
+                _ => None,
+            }));
         }
+        // The Bash card arrives after the crew call was answered: both were
+        // read in order, and only one became a card.
+        std::thread::sleep(Duration::from_millis(100));
+        asked.extend(cap.take().into_iter().filter_map(|event| match event {
+            HarnessEvent::ApprovalRequested { name, .. } => Some(name),
+            _ => None,
+        }));
+        assert_eq!(asked, vec!["Bash".to_string()]);
     }
 }

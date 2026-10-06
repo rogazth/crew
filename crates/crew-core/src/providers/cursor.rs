@@ -728,12 +728,12 @@ mod tests {
     #[test]
     fn crews_own_calls_and_edits_under_edits_are_allowed_at_once() {
         let mut tools = HashMap::new();
-        let call = tool(json!({ "toolCallId": "m1", "title": "crew: call_tool", "rawInput": {
-            "providerIdentifier": "crew", "toolName": "call_tool", "args": { "name": "list_bots" } } }));
+        let call = tool(json!({ "toolCallId": "m1", "title": "crew: list_agents", "rawInput": {
+            "providerIdentifier": "crew", "toolName": "list_agents", "args": {} } }));
         tools.insert("m1".to_string(), call);
-        let asked = permission(json!({ "toolCallId": "m1", "title": "crew-crew: call_tool", "kind": "other" }));
+        let asked = permission(json!({ "toolCallId": "m1", "title": "crew-crew: list_agents", "kind": "other" }));
         assert_eq!(classify_request("session/request_permission", &asked, &tools, &Autonomy::Ask), CursorAsk::Allow("allow-once".into()));
-        let unseen = permission(json!({ "toolCallId": "m2", "title": "crew-crew: find_tool", "kind": "other" }));
+        let unseen = permission(json!({ "toolCallId": "m2", "title": "crew-crew: list_routines", "kind": "other" }));
         assert_eq!(classify_request("session/request_permission", &unseen, &tools, &Autonomy::Ask), CursorAsk::Allow("allow-once".into()));
 
         let other = permission(json!({ "toolCallId": "m3", "title": "spike-echo: echo", "kind": "other" }));
@@ -828,10 +828,10 @@ mod tests {
         let read = tool(json!({ "toolCallId": "r", "title": "Read b.txt", "kind": "read", "rawInput": { "path": "/w/b.txt" } }));
         assert_eq!(tool_detail(&read, json!({ "content": "x" }).as_object(), None), Some(ToolDetail::File { path: "/w/b.txt".into(), line_start: None, line_end: None, preview: Some("x".into()) }));
 
-        let message = tool(json!({ "toolCallId": "m", "title": "crew: call_tool", "kind": "other", "rawInput": {
-            "providerIdentifier": "crew", "toolName": "call_tool", "args": { "name": "message_bot", "arguments": { "to": "abc", "text": "green" } } } }));
-        assert_eq!(tool_name(&message), "mcp__crew__call_tool");
-        assert_eq!(tool_label(&message), "Crew message bot abc");
+        let message = tool(json!({ "toolCallId": "m", "title": "crew: message_agent", "kind": "other", "rawInput": {
+            "providerIdentifier": "crew", "toolName": "message_agent", "args": { "to": "abc", "text": "green" } } }));
+        assert_eq!(tool_name(&message), "mcp__crew__message_agent");
+        assert_eq!(tool_label(&message), "Crew message agent abc");
         let echo = tool(json!({ "toolCallId": "s", "title": "spike: echo", "kind": "other", "rawInput": {
             "providerIdentifier": "spike", "toolName": "echo", "args": { "text": "hi" } } }));
         assert!(matches!(tool_detail(&echo, None, None), Some(ToolDetail::Mcp { ref server, .. }) if server == "spike"));

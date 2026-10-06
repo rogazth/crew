@@ -343,7 +343,7 @@ const scenarios = {
     const out = join(dataDir, `a-${provider}.txt`);
     const job = `Create a file named greeting.txt containing exactly the word ${secret}, and commit it to git with the message 'add greeting'. Report the commit hash.`;
     const prompt = [
-      "You are testing Crew's session tools. They are in the crew MCP server: look each one up with mcp__crew__find_tool and run it with mcp__crew__call_tool. Do exactly this, nothing else:",
+      "You are testing Crew's session tools. They are in the crew MCP server, in your tool list as mcp__crew__<name> (mcp__crew__start_session, mcp__crew__wait_for_session, mcp__crew__read_session). If you do not see them, call one by name once before deciding they are unavailable. Do exactly this, nothing else:",
       `1. start_session with provider "${provider}", model "${MODELS[provider]}", worktree "new", name "a-${provider}" and prompt: ${JSON.stringify(job)}`,
       "2. wait_for_session on the id it returned, with timeout_s 60. If the result is not \"event\", call it again, until it is.",
       "3. read_session on that id.",
@@ -478,26 +478,31 @@ const scenarios = {
     return `one turn: ${report.slice(0, 60)}`;
   },
 
-  // A child calls one of Crew's tools through the MCP server Crew attached,
-  // and its next turn remembers the first.
+  // A child calls one of Crew's tools straight from its tool list, through
+  // the MCP server Crew attached, with no approval asked even under "ask"
+  // (plan §7e.5), and its next turn remembers the first.
   async m(provider) {
     const shell = await terminal(`m-${provider}`);
     const secret = word("KOALA");
     const id = await start(
       shell.token,
       provider,
-      `Remember the code word ${secret}. Call Crew's find_tool (in the crew MCP server) with the query "list bots", then reply with the word FOUND followed by the names of the tools it returned, and nothing else.`,
+      `Remember the code word ${secret}. Call Crew's list_agents tool (in the crew MCP server), then reply with the word FOUND followed by how many bots it listed, and nothing else.`,
+      { autonomy: "ask" },
     );
     const first = await waitEvent(shell.token, id);
     assert(/FOUND/.test(first.sessions[0].report), `turn 1 reported ${first.sessions[0].report}`);
     const page = await rpc("transcript_tail", { sessionId: id });
     const titles = page.blocks.filter((block) => block.tool).map((block) => block.tool.title);
-    assert(titles.some((title) => /^Crew find tool/.test(title)), `no Crew tool call in the transcript: ${JSON.stringify(titles)}`);
+    assert(titles.some((title) => /^Crew list agents/.test(title)), `no direct Crew tool call in the transcript: ${JSON.stringify(titles)}`);
+    assert(!titles.some((title) => /^Crew (call|find) tool/.test(title)), `a gateway call: ${JSON.stringify(titles)}`);
+    const cards = page.blocks.filter((block) => block.approval);
+    assert(cards.length === 0, `Crew's tool asked for approval: ${JSON.stringify(cards.map((block) => block.text))}`);
     await untilStatus(id, ["idle"]);
     await must(shell.token, "send_to_session", { session: id, text: "What code word did I give you at the start? Reply with the code word only." });
     const second = await waitEvent(shell.token, id, 600, first.cursors[id]);
     assert(second.sessions[0].report.includes(secret), `the resumed turn reported ${second.sessions[0].report}`);
-    return `called find_tool; remembered ${secret} on resume`;
+    return `called list_agents directly, no card; remembered ${secret} on resume`;
   },
 
   // The child asks for approval; the parent answers. Codex works in its
@@ -574,9 +579,7 @@ const scenarios = {
     const childToken = readFileSync(file, "utf8").trim();
     const listed = await bridge(childToken, "tools/list");
     const names = listed.result.tools.map((t) => t.name);
-    const found = await must(childToken, "find_tool", { query: "start a session with another provider cli", limit: 20 });
-    const matches = (found.matches ?? []).map((m) => m.name);
-    assert(!matches.includes("start_session"), `a child found start_session: ${matches}`);
+    assert(names.includes("list_agents") && !names.includes("start_session"), `a child is listed: ${names}`);
     const call = await tool(childToken, "start_session", { provider: "claude", prompt: "x" });
     assert(!call.ok && /Unknown tool/.test(call.text), `a child ran start_session: ${call.text}`);
     // The cap: three more make four live; a fifth is refused.

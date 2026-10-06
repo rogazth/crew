@@ -1,7 +1,6 @@
 //! The browser tools, one function each: who is calling (their workspace and
 //! a [`Holder`]) and the tool's arguments in, an array of MCP content blocks
-//! out. As a [`ToolFamily`] they sit behind `find_tool`/`call_tool` for every
-//! kind of caller.
+//! out. As a [`ToolFamily`] they are listed to every kind of caller.
 //!
 //! What is decided here: which tab a call is about, whether the caller may
 //! touch it (its own workspace only), and the lease. What a tool does to the
@@ -65,8 +64,7 @@ fn with_tab(mut properties: Value, required: &[&str]) -> Value {
     json!({ "type": "object", "properties": properties, "required": required })
 }
 
-/// Every browser tool, for agents, terminals and the user alike. None is
-/// core: a turn that never opens a page should not pay for sixteen schemas.
+/// Every browser tool, for bots, terminals, children and the user alike.
 pub fn catalog() -> Vec<Tool> {
     [
         Tool {
@@ -74,7 +72,6 @@ pub fn catalog() -> Vec<Tool> {
             description: "List the browser tabs in this workspace: id, title, URL, and who is using each one.",
             schema: json!({ "type": "object", "properties": {} }),
             keywords: &["browser", "tabs", "pages", "web"],
-            core: false,
             audience: Audience::EVERYONE,
         },
         Tool {
@@ -86,7 +83,6 @@ pub fn catalog() -> Vec<Tool> {
                 "required": ["url"]
             }),
             keywords: &["browser", "open", "new", "page", "web", "url", "visit"],
-            core: false,
             audience: Audience::EVERYONE,
         },
         Tool {
@@ -94,7 +90,6 @@ pub fn catalog() -> Vec<Tool> {
             description: "Take a browser tab so nobody else drives it while you do. Any browser tool takes it too; this is for holding it ahead of time.",
             schema: with_tab(json!({}), &["tab"]),
             keywords: &["browser", "lease", "lock", "take"],
-            core: false,
             audience: Audience::EVERYONE,
         },
         Tool {
@@ -102,7 +97,6 @@ pub fn catalog() -> Vec<Tool> {
             description: "Let go of a browser tab you hold, so another agent can use it. Tabs you stop using free themselves after two minutes.",
             schema: with_tab(json!({}), &[]),
             keywords: &["browser", "lease", "free", "unlock"],
-            core: false,
             audience: Audience::EVERYONE,
         },
         Tool {
@@ -116,7 +110,6 @@ pub fn catalog() -> Vec<Tool> {
                 &[],
             ),
             keywords: &["browser", "go", "url", "load", "back", "forward", "reload", "visit"],
-            core: false,
             audience: Audience::EVERYONE,
         },
         Tool {
@@ -124,7 +117,6 @@ pub fn catalog() -> Vec<Tool> {
             description: "Read the page as an accessibility tree: roles, names and values, with a uid on each element you can act on. Take one before clicking or filling; uids last until the next snapshot of the tab.",
             schema: with_tab(json!({}), &[]),
             keywords: &["browser", "page", "read", "dom", "elements", "accessibility", "see"],
-            core: false,
             audience: Audience::EVERYONE,
         },
         Tool {
@@ -132,7 +124,6 @@ pub fn catalog() -> Vec<Tool> {
             description: "Click an element from the last snapshot.",
             schema: with_tab(json!({ "uid": { "type": "string" } }), &["uid"]),
             keywords: &["browser", "press", "button", "link", "tap"],
-            core: false,
             audience: Audience::EVERYONE,
         },
         Tool {
@@ -140,7 +131,6 @@ pub fn catalog() -> Vec<Tool> {
             description: "Move the mouse over an element from the last snapshot.",
             schema: with_tab(json!({ "uid": { "type": "string" } }), &["uid"]),
             keywords: &["browser", "mouse", "tooltip", "menu"],
-            core: false,
             audience: Audience::EVERYONE,
         },
         Tool {
@@ -151,7 +141,6 @@ pub fn catalog() -> Vec<Tool> {
                 &["uid", "value"],
             ),
             keywords: &["browser", "input", "form", "field", "enter", "select", "write"],
-            core: false,
             audience: Audience::EVERYONE,
         },
         Tool {
@@ -159,7 +148,6 @@ pub fn catalog() -> Vec<Tool> {
             description: "Type text into whatever has focus in the page, key by key.",
             schema: with_tab(json!({ "text": { "type": "string" } }), &["text"]),
             keywords: &["browser", "keyboard", "input", "write"],
-            core: false,
             audience: Audience::EVERYONE,
         },
         Tool {
@@ -167,7 +155,6 @@ pub fn catalog() -> Vec<Tool> {
             description: "Press a key or a chord: Enter, Tab, Escape, ArrowDown, Backspace, Meta+A, Control+Shift+K.",
             schema: with_tab(json!({ "key": { "type": "string" } }), &["key"]),
             keywords: &["browser", "keyboard", "key", "shortcut", "enter", "escape"],
-            core: false,
             audience: Audience::EVERYONE,
         },
         Tool {
@@ -175,7 +162,6 @@ pub fn catalog() -> Vec<Tool> {
             description: "A PNG of the tab: what is in view, or the whole page.",
             schema: with_tab(json!({ "full_page": { "type": "boolean" } }), &[]),
             keywords: &["browser", "image", "picture", "capture", "see", "look"],
-            core: false,
             audience: Audience::EVERYONE,
         },
         Tool {
@@ -189,7 +175,6 @@ pub fn catalog() -> Vec<Tool> {
                 &["text"],
             ),
             keywords: &["browser", "wait", "until", "appear", "load"],
-            core: false,
             audience: Audience::EVERYONE,
         },
         Tool {
@@ -197,7 +182,6 @@ pub fn catalog() -> Vec<Tool> {
             description: "The tab's console messages and uncaught errors since you started driving it.",
             schema: with_tab(json!({}), &[]),
             keywords: &["browser", "log", "errors", "console", "debug"],
-            core: false,
             audience: Audience::EVERYONE,
         },
         Tool {
@@ -205,7 +189,6 @@ pub fn catalog() -> Vec<Tool> {
             description: "The tab's network requests since you started driving it: method, status and URL.",
             schema: with_tab(json!({}), &[]),
             keywords: &["browser", "requests", "http", "fetch", "xhr", "api", "debug"],
-            core: false,
             audience: Audience::EVERYONE,
         },
         Tool {
@@ -213,7 +196,6 @@ pub fn catalog() -> Vec<Tool> {
             description: "Run a JavaScript expression in the page and get its value back as JSON. Promises are awaited.",
             schema: with_tab(json!({ "expression": { "type": "string" } }), &["expression"]),
             keywords: &["browser", "javascript", "js", "script", "run", "eval"],
-            core: false,
             audience: Audience::EVERYONE,
         },
     ]
@@ -794,7 +776,7 @@ mod tests {
     }
 
     #[test]
-    fn the_family_lists_every_browser_tool_for_everyone_and_none_as_core() {
+    fn the_family_lists_every_browser_tool_for_everyone() {
         let (tools, _) = tools(store());
         let names: Vec<&str> = ToolFamily::catalog(&tools).iter().map(|tool| tool.name).collect();
         assert_eq!(
@@ -805,7 +787,7 @@ mod tests {
                 "browser_screenshot", "browser_wait_for", "browser_console", "browser_network", "browser_evaluate",
             ]
         );
-        assert!(catalog().iter().all(|tool| !tool.core && tool.audience == Audience::EVERYONE));
+        assert!(catalog().iter().all(|tool| tool.audience == Audience::EVERYONE));
     }
 
     #[test]
@@ -847,7 +829,7 @@ mod tests {
             toolbox: &toolbox,
         };
         let me = Caller::User { workspace_id: Some("w1".into()) };
-        let call = json!({ "name": "call_tool", "arguments": { "name": "browser_screenshot", "arguments": { "tab": "browser:a" } } });
+        let call = json!({ "name": "browser_screenshot", "arguments": { "tab": "browser:a" } });
         let out = crate::tools::handle(&host, &me, "tools/call", call).expect("call");
         assert_eq!(out["content"], json!([{ "type": "image", "data": "iVBORw0KGgo=", "mimeType": "image/png" }]));
         assert!(out.get("isError").is_none());

@@ -97,7 +97,7 @@ pub fn default_effort(provider: &str) -> &'static str {
     }
 }
 
-/// One tool, as `tools/list` and `find_tool` describe it.
+/// One tool, as `tools/list` describes it.
 ///
 /// Public so a family of tools that lives in its own module — processes, the
 /// browser — builds its catalog out of the same thing Crew's own tools are.
@@ -107,12 +107,8 @@ pub struct Tool {
     pub schema: Value,
     /// Words someone would search for that the name and description miss.
     pub keywords: &'static [&'static str],
-    /// Listed to every caller it admits, on every turn. Everything else is found
-    /// with `find_tool`: a roster of a hundred tools would cost more prompt than
-    /// the conversation, and most turns need none of them.
-    pub core: bool,
-    /// Who may see it and call it. A tool is not listed, found or run for a
-    /// caller it does not admit.
+    /// Who may see it and call it. A tool is not listed or run for a caller
+    /// it does not admit.
     pub audience: Audience,
 }
 
@@ -166,9 +162,9 @@ impl From<Value> for ToolOutput {
 
 /// A family of tools that lives in its own module, next to the host it drives.
 ///
-/// Its tools go through everything Crew's own do: listed when `core`, found by
-/// `find_tool`, run by `call_tool`, refused to a caller the `audience` does not
-/// admit, and answered with the tool's arguments when they are wrong. The
+/// Its tools go through everything Crew's own do: listed in `tools/list` and
+/// run to every caller the `audience` admits, refused to any other, and
+/// answered with the tool's arguments when they are wrong. The
 /// family holds whatever handles it needs; register it with
 /// [`Toolbox::register`] where `crewd` builds its `ToolDispatch`.
 pub trait ToolFamily: Send + Sync {
@@ -211,7 +207,7 @@ impl Toolbox {
         families.iter().filter_map(|family| family.instructions(caller)).collect()
     }
 
-    /// Every tool there is behind the gateway, Crew's own first.
+    /// Every tool there is, Crew's own first.
     fn entries(&self) -> Vec<Entry> {
         let mut entries: Vec<Entry> = catalog().into_iter().map(|tool| Entry { tool, family: None }).collect();
         let families = self.families.read().unwrap_or_else(|e| e.into_inner()).clone();
@@ -230,24 +226,10 @@ impl Toolbox {
         self.entries().into_iter().filter(|entry| entry.tool.audience.admits(kind)).collect()
     }
 
-    /// Exactly what `tools/list` answers with for this kind of caller.
-    fn listing(&self, kind: CallerKind) -> Vec<Tool> {
-        self.visible(kind)
-            .into_iter()
-            .map(|entry| entry.tool)
-            .filter(|tool| tool.core)
-            .chain(gateway())
-            .collect()
-    }
-
-    /// The names behind the gateway for this kind of caller, for a sheet to
-    /// list. See [`hidden_names`].
-    pub fn hidden_names(&self, kind: CallerKind) -> Vec<&'static str> {
-        self.visible(kind)
-            .into_iter()
-            .filter(|entry| !entry.tool.core)
-            .map(|entry| entry.tool.name)
-            .collect()
+    /// The names `tools/list` answers with for this kind of caller, in its
+    /// order: what a prompt's tool sheet names, so the two cannot disagree.
+    pub fn visible_names(&self, kind: CallerKind) -> Vec<&'static str> {
+        self.visible(kind).into_iter().map(|entry| entry.tool.name).collect()
     }
 }
 
@@ -327,7 +309,6 @@ pub(crate) fn catalog() -> Vec<Tool> {
             description: "List the bots in this workspace, including yourself.",
             schema: json!({ "type": "object", "properties": {} }),
             keywords: &["roster", "team", "who", "bots"],
-            core: false,
             audience: Audience::EVERYONE,
         },
         Tool {
@@ -352,7 +333,6 @@ pub(crate) fn catalog() -> Vec<Tool> {
                 "required": ["name", "description"]
             }),
             keywords: &["new", "hire", "spawn", "bot"],
-            core: false,
             audience: Audience::SESSIONS,
         },
         Tool {
@@ -368,7 +348,6 @@ pub(crate) fn catalog() -> Vec<Tool> {
                 "required": ["branch", "task"]
             }),
             keywords: &["worktree", "branch", "handoff", "hand", "fork", "git", "isolate", "parallel"],
-            core: false,
             audience: Audience::SESSIONS,
         },
         Tool {
@@ -383,7 +362,6 @@ pub(crate) fn catalog() -> Vec<Tool> {
                 "required": ["to", "text"]
             }),
             keywords: &["send", "tell", "ask", "dm", "reply", "message"],
-            core: false,
             audience: Audience::EVERYONE,
         },
         Tool {
@@ -397,7 +375,6 @@ pub(crate) fn catalog() -> Vec<Tool> {
                 "required": ["text"]
             }),
             keywords: &["continue", "carry", "loop", "next", "self", "resume"],
-            core: false,
             audience: Audience::BOTS,
         },
         Tool {
@@ -411,7 +388,6 @@ pub(crate) fn catalog() -> Vec<Tool> {
                 "required": ["text"]
             }),
             keywords: &["persona", "instructions", "description", "myself", "rewrite"],
-            core: false,
             audience: Audience::BOTS,
         },
         Tool {
@@ -427,7 +403,6 @@ pub(crate) fn catalog() -> Vec<Tool> {
                 "required": ["query"]
             }),
             keywords: &["find", "grep", "history", "transcript", "said"],
-            core: false,
             audience: Audience::BOTS_AND_USER,
         },
         Tool {
@@ -438,7 +413,6 @@ pub(crate) fn catalog() -> Vec<Tool> {
                 "properties": { "bot_id": { "type": "string", "description": "Omit for yourself." } }
             }),
             keywords: &["schedule", "cron", "standing", "orders"],
-            core: false,
             audience: Audience::EVERYONE,
         },
         Tool {
@@ -456,7 +430,6 @@ pub(crate) fn catalog() -> Vec<Tool> {
                 }
             }),
             keywords: &["schedule", "cron", "every", "daily", "remind"],
-            core: false,
             audience: Audience::EVERYONE,
         },
         Tool {
@@ -468,70 +441,16 @@ pub(crate) fn catalog() -> Vec<Tool> {
                 "required": ["routine_id"]
             }),
             keywords: &["schedule", "cron", "stop", "remove"],
-            core: false,
             audience: Audience::EVERYONE,
         },
     ]
 }
 
 
-/// The names behind the gateway, for the sheet to list.
-///
-/// Names only, never schemas — the schemas are what the gateway exists to keep
-/// out of the prompt, and `create_bot` alone now carries the whole model
-/// catalogue. But a bot that is told only that "everything else" exists has
-/// no reason to go looking: asked to create a bot, a codex one reached for
-/// its own `spawn_agent`, which sounds exactly like the job and is not Crew's.
-///
-/// Crew's own, for a bot. [`Toolbox::hidden_names`] adds the families'.
-pub fn hidden_names() -> Vec<&'static str> {
-    Toolbox::default().hidden_names(CallerKind::Bot)
-}
-
-/// Exactly what `tools/list` answers with for this kind of caller, before any
-/// family is registered, and exactly what the sheet in a bot's prompt
-/// names: the two have to agree or the bot is told about a tool it cannot
-/// call.
-#[cfg(test)]
-pub(crate) fn standing(kind: CallerKind) -> Vec<Tool> {
-    Toolbox::default().listing(kind)
-}
-
-/// The two tools that stand in for everything not listed. They are described
-/// so a model reaches for them instead of guessing a name.
-fn gateway() -> Vec<Tool> {
-    vec![
-        Tool {
-            name: "find_tool",
-            description: "Search the tools Crew gives you beyond the few always listed. Returns each match with its arguments, ready to call. Try it before deciding something is impossible here.",
-            schema: json!({
-                "type": "object",
-                "properties": {
-                    "query": { "type": "string", "description": "What you are trying to do, in your own words." },
-                    "limit": { "type": "integer", "minimum": 1, "maximum": 20 }
-                },
-                "required": ["query"]
-            }),
-            keywords: &[],
-            core: false,
-            audience: Audience::EVERYONE,
-        },
-        Tool {
-            name: "call_tool",
-            description: "Run a tool that find_tool returned.",
-            schema: json!({
-                "type": "object",
-                "properties": {
-                    "name": { "type": "string" },
-                    "arguments": { "type": "object" }
-                },
-                "required": ["name"]
-            }),
-            keywords: &[],
-            core: false,
-            audience: Audience::EVERYONE,
-        },
-    ]
+/// Crew's own tools a caller of this kind is listed, before any family is
+/// registered. [`Toolbox::visible_names`] adds the families'.
+pub fn visible_names(kind: CallerKind) -> Vec<&'static str> {
+    Toolbox::default().visible_names(kind)
 }
 
 /// A tool as this caller is told about it. One description is written for
@@ -551,70 +470,6 @@ fn describe(tool: &Tool, kind: CallerKind) -> Value {
     })
 }
 
-/// How well a tool answers what someone typed. Zero means it does not.
-///
-/// A hundred tools scored in memory is microseconds; an index would be a table
-/// to keep in step with the catalog for no gain at this size.
-const MATCH_FLOOR: u32 = 10;
-
-fn score(tool: &Tool, tokens: &[String]) -> u32 {
-    let name = tool.name.to_lowercase();
-    let description = tool.description.to_lowercase();
-    let mut total = 0;
-    for token in tokens {
-        if name == *token {
-            total += 100;
-        } else if name.split('_').any(|part| part == token) {
-            total += 50;
-        } else if name.contains(token.as_str()) {
-            total += 30;
-        }
-        if tool.keywords.iter().any(|word| word == token) {
-            total += 20;
-        }
-        if description.contains(token.as_str()) {
-            total += 5;
-        }
-    }
-    total
-}
-
-fn find_tool(toolbox: &Toolbox, caller: &Caller, args: &Value) -> Result<Value, String> {
-    let query = text(args.get("query")).ok_or_else(|| "query is required".to_string())?;
-    let limit = args.get("limit").and_then(Value::as_u64).unwrap_or(5).clamp(1, 20) as usize;
-    // Two letters carry no intent and match half the catalog by accident.
-    let tokens: Vec<String> = query
-        .split(|c: char| !c.is_alphanumeric())
-        .filter(|word| word.len() > 2)
-        .map(str::to_lowercase)
-        .collect();
-
-    let kind = caller.kind();
-    let visible = toolbox.visible(kind);
-    let mut ranked: Vec<(u32, &Tool)> = visible
-        .iter()
-        .map(|entry| (score(&entry.tool, &tokens), &entry.tool))
-        // One passing word in a description is a coincidence, not a match:
-        // "order a pizza" should not surface the routine tools.
-        .filter(|(points, _)| *points >= MATCH_FLOOR)
-        .collect();
-    ranked.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.name.cmp(b.1.name)));
-    ranked.truncate(limit);
-
-    if ranked.is_empty() {
-        return Ok(json!({
-            "matches": [],
-            "note": format!(
-                "Nothing here does that. Everything Crew offers: {}",
-                visible.iter().map(|entry| entry.tool.name).collect::<Vec<_>>().join(", ")
-            )
-        }));
-    }
-    Ok(json!({
-        "matches": ranked.iter().map(|(_, tool)| describe(tool, kind)).collect::<Vec<_>>()
-    }))
-}
-
 /// The two words models have mixed up before, said the same way wherever a
 /// model reads them: here, in `instructions()`, and in the session tools.
 pub const GLOSSARY: &str = "A bot is a persistent identity Crew keeps: a name, a mailbox and a history; message_agent reaches it. A session is one provider CLI (claude, codex, opencode, cursor) running a conversation; it belongs to a bot, to whoever started it, or to nobody (a terminal). A bot outlives its sessions; a session is one provider CLI process and can be thrown away.";
@@ -624,14 +479,6 @@ pub const GLOSSARY: &str = "A bot is a persistent identity Crew keeps: a name, a
 /// it is the only place this is said, because the prompt of a session the user
 /// runs is theirs and Crew does not touch it.
 pub fn instructions(toolbox: &Toolbox, caller: &Caller) -> String {
-    let kind = caller.kind();
-    let listed: Vec<&str> = toolbox
-        .listing(kind)
-        .into_iter()
-        .map(|tool| tool.name)
-        .filter(|name| *name != "find_tool" && *name != "call_tool")
-        .collect();
-    let hidden = toolbox.hidden_names(kind);
     let who = match caller {
         Caller::Bot(_) => String::new(),
         Caller::Terminal(session) => format!(
@@ -645,16 +492,10 @@ pub fn instructions(toolbox: &Toolbox, caller: &Caller) -> String {
         ),
         Caller::User { .. } => " You are calling as the user.".to_string(),
     };
-    let listed = if listed.is_empty() { String::new() } else { format!("Always listed: {}.\n", listed.join(", ")) };
     let notes: String = toolbox.notes(caller).into_iter().map(|note| format!("\n{note}")).collect();
     format!(
         "Crew is the app this runs in: it holds a workspace of bots, and these tools reach them.{who}\n\
-         {GLOSSARY}\n\
-         {listed}\
-         Its tools are not listed, to keep them out of the prompt: find_tool searches them by what you \
-         want to do and returns each match with its arguments, and call_tool runs one by name with \
-         those arguments. What is there: {}.{notes}",
-        if hidden.is_empty() { "nothing more".to_string() } else { hidden.join(", ") },
+         {GLOSSARY}{notes}"
     )
 }
 
@@ -676,26 +517,17 @@ pub fn handle(host: &Host<'_>, caller: &Caller, method: &str, params: Value) -> 
         "tools/list" => {
             let kind = caller.kind();
             Ok(json!({
-                "tools": host.toolbox.listing(kind).iter().map(|tool| describe(tool, kind)).collect::<Vec<_>>()
+                "tools": host.toolbox.visible(kind).iter().map(|entry| describe(&entry.tool, kind)).collect::<Vec<_>>()
             }))
         }
         "instructions" => Ok(json!({ "instructions": instructions(host.toolbox, caller) })),
-        // Everything this caller may run, listed or not, for a person reading
-        // the `crew` commands: the prompt budget the gateway saves is a model's,
-        // and a person at a shell has none to spend.
+        // Everything this caller may run, for a person reading the `crew`
+        // commands. The same as `tools/list` today; kept apart because the
+        // CLI's commands and a model's prompt need not stay the same list.
         "tools/catalog" => {
             let kind = caller.kind();
             Ok(json!({
-                "tools": host
-                    .toolbox
-                    .visible(kind)
-                    .iter()
-                    .map(|entry| {
-                        let mut tool = describe(&entry.tool, kind);
-                        tool["core"] = json!(entry.tool.core);
-                        tool
-                    })
-                    .collect::<Vec<_>>()
+                "tools": host.toolbox.visible(kind).iter().map(|entry| describe(&entry.tool, kind)).collect::<Vec<_>>()
             }))
         }
         "whoami" => whoami(host.store, caller),
@@ -750,12 +582,7 @@ fn whoami(store: &Store, caller: &Caller) -> Result<Value, String> {
 
 /// The tool's arguments, appended to whatever it said when it refused.
 fn with_arguments(toolbox: &Toolbox, name: &str, error: &str) -> String {
-    let Some(tool) = toolbox
-        .entries()
-        .into_iter()
-        .map(|entry| entry.tool)
-        .chain(gateway())
-        .find(|tool| tool.name == name)
+    let Some(tool) = toolbox.entries().into_iter().map(|entry| entry.tool).find(|tool| tool.name == name)
     else {
         return error.to_string();
     };
@@ -778,18 +605,6 @@ fn with_arguments(toolbox: &Toolbox, name: &str, error: &str) -> String {
 }
 
 fn run(host: &Host<'_>, caller: &Caller, name: &str, args: &Value) -> Result<ToolOutput, String> {
-    match name {
-        "find_tool" => return find_tool(host.toolbox, caller, args).map(Into::into),
-        "call_tool" => {
-            let inner = text(args.get("name")).ok_or_else(|| "name is required".to_string())?;
-            if inner == "call_tool" || inner == "find_tool" {
-                return Err(format!("{inner} cannot call itself. Name a tool find_tool returned."));
-            }
-            let inner_args = args.get("arguments").cloned().unwrap_or_else(|| json!({}));
-            return run(host, caller, &inner, &inner_args);
-        }
-        _ => {}
-    }
     let kind = caller.kind();
     let entry = host.toolbox.entries().into_iter().find(|entry| entry.tool.name == name);
     let Some(entry) = entry.filter(|entry| entry.tool.audience.admits(kind)) else {
@@ -1557,93 +1372,56 @@ mod tests {
             .collect()
     }
 
+    /// Every tool a bot may call is listed, schema and all: a tool it cannot
+    /// see is one it reaches for a lookalike of (plan §3, principle 2).
     #[test]
-    fn the_listing_is_the_few_tools_worth_every_prompt() {
+    fn the_listing_is_every_tool_this_caller_may_call() {
         let store = store();
         let transcripts = TranscriptHub::new(store.clone());
         let ws = workspace(&store);
         let coder = bot(&store, &ws, "Coder");
         let names = listed(&store, &transcripts, &coder);
+        assert_eq!(names, visible_names(CallerKind::Bot), "the sheet and the listing are one list");
+        for name in ["list_agents", "message_agent", "continue_after_turn", "create_bot", "upsert_routine"] {
+            assert!(names.iter().any(|listed| listed == name), "{name}: {names:?}");
+        }
+        for gone in ["find_tool", "call_tool"] {
+            assert!(!names.iter().any(|listed| listed == gone), "{gone} is back: {names:?}");
+        }
 
-        // An exact set: a tool that quietly becomes core would otherwise slip
-        // the whole hidden catalogue back into every prompt.
-        assert_eq!(names, vec!["find_tool".to_string(), "call_tool".to_string()]);
+        let postman = Postman::default();
+        let deliver = |target: &Session| postman.deliver(&store, target);
+        let toolbox = Toolbox::default();
+        let host = Host { store: &store, transcripts: &transcripts, on_created: &|_| {}, on_routines: &|| {}, deliver: &deliver, toolbox: &toolbox };
+        let out = handle(&host, &Caller::from_session(coder), "tools/list", json!({})).expect("list");
+        let upsert = out["tools"].as_array().unwrap().iter().find(|tool| tool["name"] == "upsert_routine").expect("listed");
+        assert!(upsert["inputSchema"]["properties"]["schedule"].is_object(), "listed with its schema: {upsert}");
     }
 
+    /// The gateway is gone: a conversation resumed from before still holds
+    /// `call_tool` calls, and one it makes again is refused, never run.
     #[test]
-    fn find_tool_answers_with_something_callable() {
-        let out = find_tool(&Toolbox::default(), &someone("bot"), &json!({ "query": "run something every morning" })).expect("find");
-        let names: Vec<&str> = out["matches"]
-            .as_array()
-            .expect("matches")
-            .iter()
-            .map(|row| row["name"].as_str().unwrap_or_default())
-            .collect();
-        assert!(names.contains(&"upsert_routine"), "{names:?}");
-        let first = &out["matches"][0];
-        assert!(first["inputSchema"]["properties"].is_object(), "no schema to call with");
-    }
-
-    #[test]
-    fn find_tool_ranks_the_name_over_a_passing_mention() {
-        let out = find_tool(&Toolbox::default(), &someone("bot"), &json!({ "query": "create_bot" })).expect("find");
-        assert_eq!(out["matches"][0]["name"], "create_bot");
-    }
-
-    #[test]
-    fn find_tool_says_so_when_nothing_fits() {
-        let out = find_tool(&Toolbox::default(), &someone("bot"), &json!({ "query": "order a pizza" })).expect("find");
-        assert!(out["matches"].as_array().expect("matches").is_empty());
-        assert!(out["note"].as_str().unwrap_or_default().contains("list_agents"));
-    }
-
-    #[test]
-    fn find_tool_honours_its_limit() {
-        let out = find_tool(&Toolbox::default(), &someone("bot"), &json!({ "query": "bot routine message", "limit": 2 })).expect("find");
-        assert_eq!(out["matches"].as_array().expect("matches").len(), 2);
-    }
-
-    #[test]
-    fn call_tool_runs_what_was_found() {
+    fn the_gateway_is_gone() {
         let store = store();
         let transcripts = TranscriptHub::new(store.clone());
         let ws = workspace(&store);
         let coder = bot(&store, &ws, "Coder");
         let cuddles = bot(&store, &ws, "Cuddles");
         let postman = Postman::default();
-        let out = call(
-            &store,
-            &transcripts,
-            &postman,
-            &coder,
-            "call_tool",
-            json!({ "name": "message_agent", "arguments": { "to": cuddles.id, "text": "via gateway" } }),
-        )
-        .expect("call");
-        assert!(!is_error(&out));
-        assert_eq!(postman.handed.borrow()[0].1, "via gateway");
-    }
-
-    #[test]
-    fn call_tool_refuses_to_call_itself() {
-        let store = store();
-        let transcripts = TranscriptHub::new(store.clone());
-        let ws = workspace(&store);
-        let coder = bot(&store, &ws, "Coder");
-        let postman = Postman::default();
-        // With arguments, so that a missing guard would recurse rather than
-        // fail on a missing field and look like the guard worked.
-        let out = call(
-            &store,
-            &transcripts,
-            &postman,
-            &coder,
-            "call_tool",
-            json!({ "name": "call_tool", "arguments": { "name": "list_agents" } }),
-        )
-        .expect("call");
-        assert!(is_error(&out));
-        assert!(body(&out).contains("cannot call itself"), "{}", body(&out));
+        for gateway in ["call_tool", "find_tool"] {
+            let out = call(
+                &store,
+                &transcripts,
+                &postman,
+                &coder,
+                gateway,
+                json!({ "name": "message_agent", "query": "message", "arguments": { "to": cuddles.id, "text": "via gateway" } }),
+            )
+            .expect("call");
+            assert!(is_error(&out), "{}", body(&out));
+            assert!(body(&out).starts_with(&format!("Unknown tool \"{gateway}\"")), "{}", body(&out));
+        }
+        assert!(postman.handed.borrow().is_empty(), "the gateway still delivers");
     }
 
     #[test]
@@ -2272,38 +2050,6 @@ mod tests {
         assert!(!is_error(&out), "{}", body(&out));
     }
 
-    /// `call_tool` refusing its own name is asserted by
-    /// `call_tool_refuses_to_call_itself`, but that test passes the payload
-    /// `{"name": "call_tool"}` with no inner arguments, which also errors with
-    /// "name is required" when the guard is deleted. This is the payload that
-    /// actually tells the two apart: without the guard it delivers the letter.
-    #[test]
-    fn review_call_tool_cannot_be_nested_to_reach_a_tool() {
-        let store = store();
-        let transcripts = TranscriptHub::new(store.clone());
-        let ws = workspace(&store);
-        let coder = bot(&store, &ws, "Coder");
-        let cuddles = bot(&store, &ws, "Cuddles");
-        let postman = Postman::default();
-        let out = call(
-            &store,
-            &transcripts,
-            &postman,
-            &coder,
-            "call_tool",
-            json!({
-                "name": "call_tool",
-                "arguments": {
-                    "name": "message_agent",
-                    "arguments": { "to": cuddles.id, "text": "smuggled" }
-                }
-            }),
-        )
-        .expect("call");
-        assert!(is_error(&out), "{}", body(&out));
-        assert!(postman.handed.borrow().is_empty(), "the nested call went through");
-    }
-
     /// `handle` believes the caller it is given: it is a function, and the
     /// caller is an argument. Establishing who that is belongs to the bridge,
     /// which resolves it from a token it minted for one session and ignores any
@@ -2408,10 +2154,12 @@ mod tests {
         let transcripts = TranscriptHub::new(store.clone());
         let ws = workspace(&store);
         let shell = terminal(&store, &ws, "Shell");
-        assert_eq!(
-            listed(&store, &transcripts, &shell),
-            vec!["find_tool", "call_tool"]
-        );
+        let names = listed(&store, &transcripts, &shell);
+        assert_eq!(names, visible_names(CallerKind::Terminal));
+        assert!(names.iter().any(|name| name == "message_agent") && names.iter().any(|name| name == "create_worktree"), "{names:?}");
+        for none in ["continue_after_turn", "update_description", "search_messages"] {
+            assert!(!names.iter().any(|name| name == none), "{none}: {names:?}");
+        }
     }
 
     #[test]
@@ -2419,35 +2167,26 @@ mod tests {
         let store = store();
         let transcripts = TranscriptHub::new(store.clone());
         let ws = workspace(&store);
-        assert_eq!(
-            listed_as(&store, &transcripts, &Toolbox::default(), &user(Some(&ws))),
-            vec!["find_tool", "call_tool"]
-        );
+        let names = listed_as(&store, &transcripts, &Toolbox::default(), &user(Some(&ws)));
+        assert_eq!(names, visible_names(CallerKind::User));
+        assert!(names.iter().any(|name| name == "search_messages"), "{names:?}");
+        for none in ["create_bot", "continue_after_turn", "update_description"] {
+            assert!(!names.iter().any(|name| name == none), "{none}: {names:?}");
+        }
     }
 
     #[test]
-    fn a_tool_hidden_from_a_caller_is_neither_found_nor_run() {
+    fn a_tool_hidden_from_a_caller_is_neither_listed_nor_run() {
         let store = store();
         let transcripts = TranscriptHub::new(store.clone());
         let ws = workspace(&store);
         let shell = terminal(&store, &ws, "Shell");
         let postman = Postman::default();
 
-        let found = find_tool(&Toolbox::default(), &Caller::from_session(shell.clone()), &json!({ "query": "continue after turn next" }))
-            .expect("find");
-        let names: Vec<&str> = found["matches"].as_array().expect("matches").iter().filter_map(|m| m["name"].as_str()).collect();
-        assert!(!names.contains(&"continue_after_turn"), "{names:?}");
-
-        for via in ["direct", "gateway"] {
-            let out = if via == "direct" {
-                call(&store, &transcripts, &postman, &shell, "continue_after_turn", json!({ "text": "x" }))
-            } else {
-                call(&store, &transcripts, &postman, &shell, "call_tool", json!({ "name": "continue_after_turn", "arguments": { "text": "x" } }))
-            }
-            .expect("call");
-            assert!(is_error(&out), "{via}: {}", body(&out));
-            assert!(body(&out).starts_with("Unknown tool"), "{via}: {}", body(&out));
-        }
+        assert!(!listed(&store, &transcripts, &shell).iter().any(|name| name == "continue_after_turn"));
+        let out = call(&store, &transcripts, &postman, &shell, "continue_after_turn", json!({ "text": "x" })).expect("call");
+        assert!(is_error(&out), "{}", body(&out));
+        assert!(body(&out).starts_with("Unknown tool"), "{}", body(&out));
         assert_eq!(mailbox::waiting_count(&store, &shell.id).expect("count"), 0);
     }
 
@@ -2540,7 +2279,6 @@ mod tests {
                     description: "List the kettles.",
                     schema: json!({ "type": "object", "properties": {} }),
                     keywords: &[],
-                    core: true,
                     audience: Audience::EVERYONE,
                 },
                 Tool {
@@ -2548,7 +2286,6 @@ mod tests {
                     description: "Boil a kettle and wait for it.",
                     schema: json!({ "type": "object", "properties": { "kettle": { "type": "string" } }, "required": ["kettle"] }),
                     keywords: &["water", "tea"],
-                    core: false,
                     audience: Audience::SESSIONS,
                 },
             ]
@@ -2567,7 +2304,7 @@ mod tests {
     }
 
     #[test]
-    fn a_family_is_listed_found_and_run_like_crews_own() {
+    fn a_family_is_listed_and_run_like_crews_own() {
         let store = store();
         let transcripts = TranscriptHub::new(store.clone());
         let ws = workspace(&store);
@@ -2576,16 +2313,16 @@ mod tests {
         toolbox.register(Arc::new(Kettle));
         let me = Caller::from_session(coder.clone());
 
-        assert!(listed_as(&store, &transcripts, &toolbox, &me).contains(&"list_kettles".to_string()));
-        assert!(toolbox.hidden_names(CallerKind::Bot).contains(&"boil_kettle"));
-        assert!(!toolbox.hidden_names(CallerKind::User).contains(&"boil_kettle"));
-        let found = find_tool(&toolbox, &me, &json!({ "query": "make tea" })).expect("find");
-        assert_eq!(found["matches"][0]["name"], "boil_kettle");
+        let names = listed_as(&store, &transcripts, &toolbox, &me);
+        assert!(names.contains(&"list_kettles".to_string()) && names.contains(&"boil_kettle".to_string()), "{names:?}");
+        assert!(toolbox.visible_names(CallerKind::Bot).contains(&"boil_kettle"));
+        assert!(!toolbox.visible_names(CallerKind::User).contains(&"boil_kettle"));
+        assert!(!listed_as(&store, &transcripts, &toolbox, &user(Some(&ws))).contains(&"boil_kettle".to_string()));
 
         let postman = Postman::default();
         let deliver = |target: &Session| postman.deliver(&store, target);
         let host = Host { store: &store, transcripts: &transcripts, on_created: &|_| {}, on_routines: &|| {}, deliver: &deliver, toolbox: &toolbox };
-        let out = handle(&host, &me, "tools/call", json!({ "name": "call_tool", "arguments": { "name": "boil_kettle", "arguments": { "kettle": "blue" } } }))
+        let out = handle(&host, &me, "tools/call", json!({ "name": "boil_kettle", "arguments": { "kettle": "blue" } }))
             .expect("call");
         assert_eq!(body(&out), format!("blue boiled by Coder (bot {})", coder.id));
         // Its refusals carry its arguments, like Crew's own.
@@ -2597,8 +2334,7 @@ mod tests {
         assert!(is_error(&out), "{}", body(&out));
     }
 
-    /// The catalog lists what the gateway hides, and only what this
-    /// caller may run.
+    /// The catalog lists every tool this caller may run, and only those.
     #[test]
     fn the_catalog_is_every_tool_the_caller_may_run() {
         let store = store();
@@ -2612,12 +2348,11 @@ mod tests {
         let out = handle(&host, &user(Some(&ws)), "tools/catalog", json!({})).expect("catalog");
         let tools = out["tools"].as_array().expect("tools");
         let named = |name: &str| tools.iter().find(|tool| tool["name"] == name);
-        assert_eq!(named("list_agents").expect("hidden")["core"], false);
-        assert_eq!(named("list_routines").expect("hidden")["core"], false);
+        assert!(named("list_agents").is_some() && named("list_routines").is_some());
         assert!(named("list_kettles").is_some());
         assert!(named("boil_kettle").is_none(), "not the user's");
         assert!(named("create_bot").is_none(), "not the user's");
-        assert!(named("find_tool").is_none(), "a person needs no gateway");
+        assert!(named("find_tool").is_none() && named("call_tool").is_none(), "there is no gateway");
     }
 
     #[test]
@@ -2640,13 +2375,16 @@ mod tests {
     }
 
     #[test]
-    fn the_instructions_name_what_this_caller_has() {
+    fn the_instructions_say_who_is_calling_and_no_gateway() {
         let toolbox = Toolbox::default();
         let bot = instructions(&toolbox, &someone("bot"));
-        assert!(bot.contains("continue_after_turn") && bot.contains("find_tool") && bot.contains("create_bot"), "{bot}");
+        assert!(bot.starts_with("Crew is the app this runs in") && bot.contains(GLOSSARY), "{bot}");
         let shell = instructions(&toolbox, &someone("terminal"));
-        assert!(!shell.contains("continue_after_turn"), "{shell}");
         assert!(shell.contains("cannot write back"), "{shell}");
-        assert!(shell.contains("list_routines"), "{shell}");
+        for text in [&bot, &shell] {
+            for gone in ["find_tool", "call_tool", "not listed"] {
+                assert!(!text.contains(gone), "{gone}: {text}");
+            }
+        }
     }
 }

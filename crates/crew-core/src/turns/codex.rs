@@ -19,7 +19,7 @@ use serde_json::{json, Map, Value};
 use tokio::sync::oneshot;
 
 use super::{
-    child_envelope, child_resume, child_tools_hint, mcp_tools_hint, path_list, QuestionReply, Steer, TurnHost,
+    child_envelope, child_resume, path_list, Harness, QuestionReply, Steer, TurnHost,
     TurnOutcome, INIT_TIMEOUT,
 };
 use crate::mailbox;
@@ -147,11 +147,10 @@ impl TurnHost {
         let child = session.kind == "child";
         // Every turn: Codex keeps no system prompt Crew can set, and newer
         // catalogs override developer instructions.
+        let hint = mcp.as_ref().map(|_| self.crew_tools_hint(&session, Harness::Mcp));
         let instructions = if child {
-            let hint = mcp.as_ref().map(|_| child_tools_hint(&|tool| format!("`mcp__crew__{tool}`")));
             crate::providers::child_persona(&self.parent_label(&session), hint.as_deref())
         } else {
-            let hint = mcp.as_ref().map(|_| mcp_tools_hint(&self.hidden_tools()));
             persona_prompt(&session.name, &session.description, hint.as_deref())
         };
         let files = path_list(&params, &HashSet::new());

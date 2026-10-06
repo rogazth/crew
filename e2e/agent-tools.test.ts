@@ -287,7 +287,7 @@ test("T3: a terminal session drives the browser and processes with its own token
   });
 });
 
-test("T4: crew mcp speaks MCP on stdio, lists only the gateway and finds the browser tools", async (t) => {
+test("T4: crew mcp speaks MCP on stdio and lists every tool, the browser's included", async (t) => {
   const crew = await launchCrew();
   t.after(() => crew.close());
   const [workspace] = crew.workspaces;
@@ -296,19 +296,22 @@ test("T4: crew mcp speaks MCP on stdio, lists only the gateway and finds the bro
   const requests = [
     { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "e2e", version: "1" } } },
     { jsonrpc: "2.0", method: "notifications/initialized" },
-    { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "find_tool", arguments: { query: "browser snapshot" } } },
-    { jsonrpc: "2.0", id: 3, method: "tools/list" },
+    { jsonrpc: "2.0", id: 2, method: "tools/list" },
   ];
   const child = execFile(CREW, ["mcp"], { cwd: workspace.path, env: { ...env, HOME: crew.home, CREW_DATA_DIR: crew.userData } });
   let stdout = "";
   child.stdout?.on("data", (chunk: Buffer) => (stdout += chunk.toString()));
   child.stdin?.write(requests.map((request) => JSON.stringify(request)).join("\n") + "\n");
-  await waitFor(() => stdout.split("\n").filter(Boolean).length >= 3, { timeout: 15_000, message: "three answers" });
+  await waitFor(() => stdout.split("\n").filter(Boolean).length >= 2, { timeout: 15_000, message: "two answers" });
   child.stdin?.end();
-  const [init, found, listed] = stdout.split("\n").filter(Boolean).map((line) => JSON.parse(line) as { result?: unknown });
+  const [init, listed] = stdout.split("\n").filter(Boolean).map((line) => JSON.parse(line) as { result?: unknown });
   assert.ok(JSON.stringify(init?.result).includes("instructions"), stdout);
-  assert.ok(JSON.stringify(found?.result).includes("browser_snapshot"), stdout);
-  // Nothing else is in the prompt: the rest is behind find_tool.
-  const names = (listed?.result as { tools: { name: string }[] }).tools.map((tool) => tool.name);
-  assert.deepEqual(names, ["find_tool", "call_tool"], stdout);
+  // Every tool is listed directly, with its schema; there is no gateway.
+  const tools = (listed?.result as { tools: { name: string; inputSchema?: unknown }[] }).tools;
+  const names = tools.map((tool) => tool.name);
+  for (const name of ["browser_snapshot", "list_processes", "list_agents", "start_session"]) {
+    assert.ok(names.includes(name), `${name}: ${stdout}`);
+  }
+  assert.ok(!names.includes("find_tool") && !names.includes("call_tool"), stdout);
+  assert.ok(tools.every((tool) => tool.inputSchema), stdout);
 });
