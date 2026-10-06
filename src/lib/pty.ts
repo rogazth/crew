@@ -4,13 +4,21 @@ import { markRunning, markStopped, sessionOfPty } from "./runningSessions";
 
 const encoder = new TextEncoder();
 const dataHandlers = new Map<string, (bytes: Uint8Array) => void>();
-const attachHandlers = new Map<string, (start: number) => void>();
+const attachHandlers = new Map<string, OnAttach>();
 const lostHandlers = new Map<string, () => void>();
 const streams = new Map<string, { id: number; stop: () => void }>();
 const delivered = new Map<string, number>();
 /** Bumped by every spawn and kill: a spawn that answers after a newer one, or after its kill, is stale. */
 const generations = new Map<string, number>();
 let reconnectHook: (() => void) | null = null;
+
+/**
+ * The daemon replays its ring from `start` up to `end`, then goes on live.
+ * `fresh`: the view asked from its first byte, so the replay is output from
+ * before it attached (a reopened tab, a resync), not news that came in while
+ * it was away.
+ */
+type OnAttach = (start: number, end: number, fresh: boolean) => void;
 
 function ensureReconnect() {
   if (reconnectHook) return;
@@ -35,7 +43,7 @@ function isNotRunning(error: unknown): boolean {
 async function applyAttach(id: string, from: number): Promise<void> {
   const attached = await client.request<PtyAttached>("pty_attach", { id, from });
   delivered.set(id, attached.start);
-  attachHandlers.get(id)?.(attached.start);
+  attachHandlers.get(id)?.(attached.start, attached.emitted, from === 0);
 }
 
 function attach(sessionId: string, streamId: number, onData: (bytes: Uint8Array) => void, replay = true) {
@@ -59,7 +67,7 @@ export function subscribePty(
   id: string,
   onData: (bytes: Uint8Array) => void,
   onExit: (code: number | null) => void,
-  onAttach?: (start: number) => void,
+  onAttach?: OnAttach,
   onLost?: () => void,
 ): () => void {
   ensureReconnect();

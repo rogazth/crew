@@ -180,6 +180,15 @@ export function TerminalView({
     let lastActivity = 0;
     let processed = 0;
     let ackTimer = 0;
+    // A fresh attach repaints what the process printed before this view: a
+    // reopened tab replays the last turn's spinning title, its bells. That
+    // already happened; reported again, it reads as the CLI working now.
+    /** The stream offset just past the last byte received. */
+    let received = 0;
+    /** Where the ring's repaint ends; the bytes before it are history. */
+    let replayEnd = 0;
+    /** xterm is parsing the repaint: its titles and bells are not news. */
+    let replaying = false;
     let screenTimer = 0;
     let screenDue = 0;
     // The live screen, not where the user scrolled to: what the CLI is showing now.
@@ -280,19 +289,28 @@ export function TerminalView({
     const unsubscribe = subscribePty(
       id,
       (bytes) => {
+        const history = received < replayEnd;
+        received += bytes.length;
+        const caughtUp = received >= replayEnd;
         term.write(bytes, () => {
           processed += bytes.length;
+          if (caughtUp) replaying = false;
           if (!ackTimer) ackTimer = window.setTimeout(flushAck, ACK_FLUSH_MS);
           if (latest.current.onScreen) settleScreen();
         });
+        if (history) return;
         const now = Date.now();
         if (now - lastActivity < ACTIVITY_INTERVAL) return;
         lastActivity = now;
         latest.current.onActivity?.();
       },
       exited,
-      (start) => {
+      (start, end, fresh) => {
         processed = start;
+        received = start;
+        replayEnd = fresh ? end : start;
+        // Queued behind what xterm has yet to parse, so the flag covers the repaint alone.
+        if (replayEnd > start) term.write(new Uint8Array(0), () => (replaying = true));
       },
       () => {
         if (closed) return;
@@ -309,7 +327,7 @@ export function TerminalView({
       return true;
     };
     const ring = (message?: string) => {
-      latest.current.onBell?.(message);
+      if (!replaying) latest.current.onBell?.(message);
       return true;
     };
     const osc = [
@@ -343,8 +361,12 @@ export function TerminalView({
         return false;
       }),
     ];
-    const bell = term.onBell(() => latest.current.onBell?.());
-    const title = term.onTitleChange((next) => latest.current.onTitle?.(next));
+    const bell = term.onBell(() => {
+      if (!replaying) latest.current.onBell?.();
+    });
+    const title = term.onTitleChange((next) => {
+      if (!replaying) latest.current.onTitle?.(next);
+    });
     const links = term.registerLinkProvider(
       filePathProvider(term, cwd, (path) => latest.current.onOpenPath?.(path)),
     );
