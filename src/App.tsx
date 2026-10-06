@@ -14,6 +14,7 @@ import { UpdateDialog } from "./chrome/UpdateDialog";
 import { Explorer } from "./chrome/explorer/Explorer";
 import { useBotSheet } from "./hooks/useBotSheet";
 import { useAppCommands } from "./hooks/useAppCommands";
+import { useBlankSessions } from "./hooks/useBlankSessions";
 import { useBrowserBridge } from "./hooks/useBrowserBridge";
 import { useSessionTitle } from "./hooks/useSessionTitle";
 import { useConfirmations } from "./hooks/useConfirmations";
@@ -91,6 +92,8 @@ export function App() {
     dropWorkspace: forgetSessions,
     reload: reloadSessions,
   } = useSessions(workspaceId);
+  const { blank, markBlank } = useBlankSessions(all);
+  const listed = useMemo(() => sessions.filter((session) => !blank.has(session.id)), [blank, sessions]);
   const { surfaceOf } = useSessionView();
   // Every workspace's: their terminals keep running, and renaming, out of sight.
   useSessionTitle(all, adoptName);
@@ -270,6 +273,7 @@ export function App() {
     sessions,
     worktree: work.placeIn,
     create,
+    markBlank,
     openSession: nav.openSession,
     openStub: nav.openStub,
     openTerminal: nav.openTerminal,
@@ -355,7 +359,7 @@ export function App() {
             workspace: active,
             worktrees: worktrees.list,
             activeWorktree: current?.path ?? active.path,
-            sessions,
+            sessions: listed,
             activeSessionId,
             onSelect: nav.openSession,
             onSelectWorktree: (path) => {

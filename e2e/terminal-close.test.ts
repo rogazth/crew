@@ -13,7 +13,6 @@ import {
   MOD,
   newTerminal,
   pressChord,
-  sessionRow,
   sessions,
   sessionTab,
   storedStatus,
@@ -73,20 +72,11 @@ test("T5: closing a tab deletes a terminal nothing was said in, and keeps one wi
   await closeTab(crew, blank, "button");
   await waitFor(async () => (await get(crew, blank.id)) === null, { timeout: 5000, message: "crewd deletes the blank session" });
 
-  // Nothing said in it either, but the user named it: the name is worth keeping.
+  // Nothing said in it either, but named: the name is worth keeping. A blank
+  // session has no sidebar row to rename it from, so the name comes through crewd.
   const named = await newTerminal(crew, workspace.id);
   const label = `Scratch ${Date.now().toString(36)}`;
-  // force: dnd-kit's sortable wrapper reads as a disabled button while dragging is off.
-  await sessionRow(crew, named.name).click({ button: "right", force: true });
-  await crew.window.getByRole("menu").getByRole("menuitem", { name: "Rename" }).click();
-  // The field sits in the same aria-disabled wrapper, so it is typed into as
-  // it opens: focused, its text selected.
-  await waitFor(
-    () => crew.window.evaluate(() => document.activeElement?.getAttribute("aria-label") === "Rename"),
-    { message: "the row's name opens for editing" },
-  );
-  await crew.window.keyboard.type(label);
-  await crew.window.keyboard.press("Enter");
+  await crew.request("session_rename", { id: named.id, name: label });
   await waitFor(async () => (await get(crew, named.id))?.name === label, { message: "crewd takes the name" });
   await closeTab(crew, named, "button");
   await kept(crew, named, "that the user named");

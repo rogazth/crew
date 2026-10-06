@@ -12,6 +12,8 @@ type Deps = {
   /** Where a new session runs: the worktree on screen. */
   worktree: string | null;
   create: ReturnType<typeof useSessions>["create"];
+  /** Keeps a session nothing has been said in out of the sidebar. */
+  markBlank: (id: string) => void;
   openSession: (session: Session) => void;
   openStub: (stub: StubKind, title: string) => void;
   openTerminal: (worktree: string | null) => void;
@@ -20,7 +22,7 @@ type Deps = {
 };
 
 /** New sessions and the tab launcher's picks. */
-export function useLaunch({ sessions, worktree, create, openSession, openStub, openTerminal, openBrowser, newBot }: Deps) {
+export function useLaunch({ sessions, worktree, create, markBlank, openSession, openStub, openTerminal, openBrowser, newBot }: Deps) {
   const { effective: defaultAgent } = useDefaultAgent();
 
   // Sessions open straight away; the name is derived, never prompted.
@@ -48,9 +50,10 @@ export function useLaunch({ sessions, worktree, create, openSession, openStub, o
       });
       if (!session) return;
       if (prompt) setFirstPrompt(session.id, prompt);
+      else markBlank(session.id);
       openSession(session);
     },
-    [create, defaultAgent, openSession, sessions, worktree],
+    [create, defaultAgent, markBlank, openSession, sessions, worktree],
   );
 
   const launch = useCallback(
