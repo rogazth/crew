@@ -2,6 +2,7 @@ import { FolderIcon, GitBranchIcon, PlusIcon, RefreshCwIcon, ShuffleIcon } from 
 import { useState, type KeyboardEvent, type ReactNode } from "react";
 import { BotAvatar } from "./BotAvatar";
 import { Button, Card, Field, Footer, Overlay, Select, TextArea, Toggle, type Option } from "./kit";
+import { AccessPicker } from "./ComposerControls";
 import { ModelPicker } from "./ModelPicker";
 import { BranchRefused, type useBotSheet } from "../hooks/useBotSheet";
 import { useBotAvatar } from "../hooks/useBotAvatar";
@@ -197,12 +198,11 @@ export function BotSheet({ session, worktrees, initialWorktree, existingNames, o
           </Field>
 
           <Field label="Access" hint={ACCESSES.find((a) => a.id === draft.autonomy)?.description}>
-            <Select
-              label="Access"
-              className="w-full"
+            <AccessPicker
+              trigger="field"
+              provider={draft.provider}
               value={draft.autonomy}
               onChange={(autonomy) => update({ autonomy })}
-              options={ACCESSES.filter((a) => accessesOf(draft.provider).includes(a.id)).map((a) => ({ value: a.id, label: a.label }))}
             />
           </Field>
 

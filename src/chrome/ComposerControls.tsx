@@ -17,6 +17,9 @@ import {
 
 const ACCESS_ICONS: Record<Access, Icon> = { ask: LockIcon, edits: PencilIcon, auto: SparklesIcon, full: LockOpenIcon };
 
+const FIELD =
+  "flex h-8 w-full items-center gap-2 rounded-lg bg-canvas px-2.5 text-text ring ring-border outline-none transition-[box-shadow] hover:ring-border-strong focus-visible:ring-[1.5px] focus-visible:ring-focus/50 data-popup-open:ring-[1.5px] data-popup-open:ring-focus/50";
+
 const CHIP =
   "flex h-7 min-w-0 items-center gap-1.5 rounded-full px-2.5 text-[12px] leading-4 text-text ring-1 ring-hairline outline-none transition-colors duration-100 hover:bg-hover focus-visible:ring-focus/50 data-popup-open:bg-hover";
 
@@ -91,25 +94,37 @@ export function AccessPicker({
   value,
   onChange,
   hint,
+  trigger = "chip",
 }: {
   provider: string;
   value: Access;
   onChange: (access: Access) => void;
   /** A line under the list: what ⇧Tab does here. */
   hint?: string;
+  /** "chip" is the composer's compact trigger; "field" is the sheet's full-width control. */
+  trigger?: "chip" | "field";
 }) {
+  const chip = trigger === "chip";
   const offered = accessesOf(provider);
   const current = ACCESSES.find((a) => a.id === value) ?? ACCESSES[0]!;
   const Glyph = ACCESS_ICONS[current.id];
   return (
     <Menu.Root modal={false}>
-      <Menu.Trigger aria-label="Access" title={current.description} className={CHIP}>
-        <Glyph className="size-3.5 shrink-0 text-icon" />
-        <span className="truncate">{current.label}</span>
-        <ChevronDownIcon className="size-3 shrink-0 text-icon" />
-      </Menu.Trigger>
+      {chip ? (
+        <Menu.Trigger aria-label="Access" title={current.description} className={CHIP}>
+          <Glyph className="size-3.5 shrink-0 text-icon" />
+          <span className="truncate">{current.label}</span>
+          <ChevronDownIcon className="size-3 shrink-0 text-icon" />
+        </Menu.Trigger>
+      ) : (
+        <Menu.Trigger aria-label="Access" className={FIELD}>
+          <Glyph className="size-4 shrink-0 text-icon" />
+          <span className="min-w-0 flex-1 truncate text-left">{current.label}</span>
+          <ChevronDownIcon className="size-3.5 shrink-0 text-icon" />
+        </Menu.Trigger>
+      )}
       <Menu.Portal>
-        <Menu.Positioner side="top" align="end" sideOffset={4} className="z-50">
+        <Menu.Positioner side={chip ? "top" : "bottom"} align={chip ? "end" : "start"} sideOffset={4} className="z-50">
           <Menu.Popup className={`${PANEL} w-76`}>
             <div className="px-2 pt-1 pb-1.5 text-[11px] text-text-muted">Access</div>
             <Menu.RadioGroup value={value} onValueChange={(next) => onChange(next as Access)}>
