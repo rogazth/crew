@@ -1,17 +1,15 @@
 import { Collapsible } from "@base-ui/react/collapsible";
 import { BotIcon, ChevronRightIcon, CircleStopIcon, FileTextIcon, GlobeIcon, ListChecksIcon, LoaderCircleIcon, MessageCircleMoreIcon, NotebookTextIcon, PencilIcon, PlugIcon, SearchIcon, SendIcon, SparkleIcon, TerminalIcon, WrenchIcon, XIcon, type LucideIcon as Icon } from "lucide-react";
-import { createElement, memo, useMemo, useState, type ReactNode } from "react";
+import { createElement, lazy, memo, Suspense, useMemo, useState, type ReactNode } from "react";
 import {
   FOLD_AT,
   activityDigest,
   buildActivity,
-  phaseFailed,
-  phaseLabel,
-  phaseOpen,
+  currentActivity,
   afterSummary,
+  phaseKind,
   summarize,
   type ActivityDigest,
-  type Phase,
   type PhaseKind,
 } from "../../lib/activity";
 import { useNow } from "../../hooks/useNow";
@@ -24,6 +22,9 @@ import { ApprovalCard } from "./ApprovalCard";
 import { QuestionCard } from "./QuestionCard";
 import { ToolBody } from "./ToolBody";
 import { Pre, Prose } from "./ToolParts";
+
+/** streamdown is half a megabyte: a thought loads it only once it is opened. */
+const Markdown = lazy(() => import("./Markdown").then((m) => ({ default: m.Markdown })));
 
 type Props = {
   blocks: Block[];
@@ -87,7 +88,11 @@ function sameBlocks(prev: Props, next: Props): boolean {
   return prev.blocks.every((block, index) => block === next.blocks[index]);
 }
 
-/** Tool calls fold into phases; a thought or a question is a row of its own. */
+/**
+ * Every call, thought and question is a row of its own on one rail. A long run
+ * hides behind one line that says what it was; a short one does not, and a
+ * group inside a turn's fold never does: the fold already is that line.
+ */
 export const ActivityGroup = memo(function ActivityGroup({
   blocks,
   live,
@@ -97,47 +102,66 @@ export const ActivityGroup = memo(function ActivityGroup({
   onAnswer,
   flat = false,
 }: Props) {
-  const items = useMemo(() => buildActivity(blocks), [blocks]);
+  const steps = useMemo(() => blocks.filter(shown), [blocks]);
   // Keys go to one card: the newest thing waiting on the user.
   const hot = live ? blocks.filter(isOpen).at(-1)?.id : undefined;
   // Its own rail, unless a run folds it: then the run's steps are the rail.
-  const folds = !flat && items.length >= FOLD_AT;
+  const folds = !flat && steps.length >= FOLD_AT;
   const rows = (
     <div className={`flex flex-col gap-1.5 ${folds ? "" : "crew-timeline"}`}>
-      {items.map((item, index) => {
-        if (item.kind === "question") {
-          return isOpen(item.block) ? (
-            <QuestionCard key={item.block.id} block={item.block} hot={hot === item.block.id} onAnswer={onAnswer} />
-          ) : (
-            <AnsweredRow key={item.block.id} block={item.block} />
-          );
-        }
-        if (item.kind === "reasoning") {
-          return <ReasoningRow key={item.block.id} block={item.block} marked={marked} />;
-        }
-        return (
-          <PhaseRow
-            key={item.phase.id}
-            phase={item.phase}
-            live={live && index === items.length - 1}
-            hot={hot}
-            focusId={focusId}
-            marked={marked}
-            onApprove={onApprove}
-          />
-        );
-      })}
+      {steps.map((block) => (
+        <StepRow key={block.id} block={block} hot={hot} marked={marked} onApprove={onApprove} onAnswer={onAnswer} />
+      ))}
     </div>
   );
   if (!folds) return rows;
   return (
     <div className="crew-timeline">
-    <RunShell blocks={blocks} items={items} live={live} focusId={focusId} marked={marked}>
-      {rows}
-    </RunShell>
+      <RunShell blocks={blocks} live={live} focusId={focusId} marked={marked}>
+        {rows}
+      </RunShell>
     </div>
   );
 }, sameBlocks);
+
+/** A redacted thought arrives with no words: there is nothing to show for it. */
+function shown(block: Block): boolean {
+  return block.role !== "reasoning" || block.streaming === true || block.text.trim().length > 0;
+}
+
+/** One step of the run, drawn as what it is. */
+function StepRow({
+  block,
+  hot,
+  marked,
+  onApprove,
+  onAnswer,
+}: {
+  block: Block;
+  hot: string | undefined;
+  marked: string | null;
+  onApprove: (requestId: number, decision: ApprovalDecision) => void;
+  onAnswer: (requestId: number, answers: Answers | null) => void;
+}) {
+  if (block.role === "question") {
+    return isOpen(block) ? (
+      <QuestionCard block={block} hot={hot === block.id} onAnswer={onAnswer} />
+    ) : (
+      <AnsweredRow block={block} />
+    );
+  }
+  if (block.role === "reasoning") return <ReasoningRow block={block} marked={marked} />;
+  if (agentDetail(block)) return <SubagentRow block={block} marked={marked} />;
+  return (
+    <ToolRow
+      block={block}
+      hot={hot}
+      marked={marked}
+      onApprove={onApprove}
+      icon={iconFor(block, KIND_ICON[phaseKind(block)])}
+    />
+  );
+}
 
 /**
  * Whether the reader has pinned this thing open or shut. Moving on clears the
@@ -155,21 +179,19 @@ function useFold(live: boolean): [boolean | null, (next: boolean) => void] {
 }
 
 /**
- * A long run of thinking and calls behind one line. Open while the agent is in
- * it, or while something in it needs an answer; folds when the turn moves on,
- * and a click pins it either way. Short runs never get here: three rows read
- * faster than a line you have to open.
+ * A long run of thinking and calls behind one line. Folded from the start,
+ * while the agent is still in it too: the line says what it has done and what
+ * it is on now. It opens by itself only for something waiting on an answer or
+ * a row the reader was sent to; a click pins it either way.
  */
 function RunShell({
   blocks,
-  items,
   live,
   focusId,
   marked,
   children,
 }: {
   blocks: Block[];
-  items: ReturnType<typeof buildActivity>;
   live: boolean;
   focusId: string | null;
   marked: string | null;
@@ -182,128 +204,38 @@ function RunShell({
   const sent = (id: string | null) => id !== null && blocks.some((block) => block.id === id);
   const holds = sent(focusId) || sent(marked);
   const [pinned, setPinned] = useFold(live);
-  const open = waiting || (pinned ?? (holds || live));
-  const digest = useMemo(() => activityDigest(items), [items]);
+  const open = waiting || (pinned ?? holds);
+  const digest = useMemo(() => activityDigest(buildActivity(blocks)), [blocks]);
+  const now = live ? currentActivity(blocks) : null;
 
   return (
     <Collapsible.Root open={open} onOpenChange={(next) => setPinned(next)}>
       <Collapsible.Trigger className="group flex min-h-[26px] w-full items-center gap-2 py-0.5 text-left text-[13px] leading-[18px]">
         <span className="crew-node relative">
-          {createElement(DIGEST_ICON[digest.kind], {
+          {createElement(failed ? XIcon : DIGEST_ICON[digest.kind], {
             className: `size-3.5 transition-opacity group-hover:opacity-0${failed ? " text-danger" : ""}`,
           })}
           <ChevronRightIcon
             className={`absolute size-3 opacity-0 transition-[opacity,transform] duration-150 group-hover:opacity-100 ${open ? "rotate-90" : ""}`}
           />
         </span>
-        <span className={waiting ? "crew-shimmer" : "text-text-muted transition-colors group-hover:text-text"}>
+        <span
+          className={`shrink-0 ${live ? "crew-shimmer" : "text-text-muted transition-colors group-hover:text-text"}`}
+        >
           {digest.label}
         </span>
+        {now && now !== digest.label ? (
+          <span className="min-w-0 flex-1 truncate text-[12px] text-placeholder" title={now}>
+            {now}
+          </span>
+        ) : null}
         {/* A folded run hides its rows; a failure inside it may not hide too. */}
-        {failed && !waiting ? <span className="shrink-0 text-[11px] text-danger">failed</span> : null}
+        {failed && !waiting ? <span className="ml-auto shrink-0 text-[11px] text-danger">failed</span> : null}
       </Collapsible.Trigger>
       <Collapsible.Panel className="crew-phase-panel">
         <div className="crew-phase-steps">{children}</div>
       </Collapsible.Panel>
     </Collapsible.Root>
-  );
-}
-
-/**
- * Open while the agent is in it or something in it needs an answer; folds
- * when the agent moves on. A click pins it either way.
- */
-function PhaseRow({
-  phase,
-  live,
-  hot,
-  focusId,
-  marked,
-  onApprove,
-}: {
-  phase: Phase;
-  live: boolean;
-  hot: string | undefined;
-  focusId: string | null;
-  marked: string | null;
-  onApprove: (requestId: number, decision: ApprovalDecision) => void;
-}) {
-  const waiting = phaseOpen(phase);
-  const failed = phaseFailed(phase);
-  // A row nobody can see is a row nobody can be sent to, and the mark outlives
-  // the request, so the phase stays open after the reader has been taken there.
-  const sent = (id: string | null) => id !== null && phase.blocks.some((block) => block.id === id);
-  const holds = sent(focusId) || sent(marked);
-  const [pinned, setPinned] = useFold(live);
-  const open = waiting || (pinned ?? (holds || live));
-  const single = phase.blocks.length === 1 && !waiting;
-
-  const only = phase.blocks.length === 1 ? phase.blocks[0]! : null;
-  if (only && agentDetail(only)) return <SubagentRow block={only} marked={marked} />;
-
-  if (single) {
-    const block = phase.blocks[0]!;
-    return (
-      <ToolRow
-        block={block}
-        hot={hot}
-        marked={marked}
-        onApprove={onApprove}
-        icon={iconFor(block, KIND_ICON[phase.kind])}
-      />
-    );
-  }
-
-  return (
-    <Collapsible.Root open={open} onOpenChange={(next) => setPinned(next)}>
-      <Collapsible.Trigger className="group flex min-h-[26px] w-full items-center gap-2 py-0.5 text-left text-[13px] leading-[18px]">
-        <PhaseLine phase={phase} waiting={waiting} failed={failed} open={open} />
-      </Collapsible.Trigger>
-      <Collapsible.Panel className="crew-phase-panel">
-        <div className="crew-phase-steps">
-          {phase.blocks.map((block) => (
-            <ToolRow key={block.id} block={block} hot={hot} marked={marked} onApprove={onApprove} />
-          ))}
-        </div>
-      </Collapsible.Panel>
-    </Collapsible.Root>
-  );
-}
-
-/** What a folded phase says: a glyph, its one line, and whether it went wrong. */
-function PhaseLine({
-  phase,
-  waiting,
-  failed,
-  open,
-}: {
-  phase: Phase;
-  waiting: boolean;
-  failed: boolean;
-  open: boolean;
-}) {
-  return (
-    <>
-      <span className="crew-node relative">
-        {waiting ? (
-          <LoaderCircleIcon className="size-3.5 animate-spin text-warning" />
-        ) : (
-          <>
-            {createElement(failed ? XIcon : KIND_ICON[phase.kind], {
-              className: `size-3.5 transition-opacity group-hover:opacity-0${failed ? " text-danger" : ""}`,
-            })}
-            <ChevronRightIcon
-              className={`absolute size-3 opacity-0 transition-[opacity,transform] duration-150 group-hover:opacity-100 ${open ? "rotate-90" : ""}`}
-            />
-          </>
-        )}
-      </span>
-      <span className={waiting ? "crew-shimmer" : "text-text-muted transition-colors group-hover:text-text"}>
-        {phaseLabel(phase)}
-      </span>
-      {/* A folded phase hides its rows; a failure inside it may not hide too. */}
-      {failed && !waiting ? <span className="shrink-0 text-[11px] text-danger">failed</span> : null}
-    </>
   );
 }
 
@@ -314,7 +246,7 @@ function lit(id: string, marked: string | null): string {
   return id === marked ? " crew-found" : "";
 }
 
-/** Spinner while it runs, cross when it failed, caret when it can open. */
+/** Spinner while it runs, cross when it failed; what it did otherwise, a caret on hover when it can open. */
 function ToolGlyph({
   pending,
   failed,
@@ -330,14 +262,18 @@ function ToolGlyph({
 }) {
   if (pending) return <LoaderCircleIcon className="size-3.5 animate-spin text-warning" />;
   if (failed) return <XIcon className="size-3 text-danger" />;
-  if (openable) {
-    return (
-      <ChevronRightIcon
-        className={`size-3 transition-transform duration-150 ${open ? "rotate-90" : ""}`}
-      />
-    );
-  }
-  return icon ? createElement(icon, { className: "size-3.5" }) : null;
+  const caret = (
+    <ChevronRightIcon
+      className={`size-3 transition-[opacity,transform] duration-150 ${open ? "rotate-90" : ""}${icon ? " absolute opacity-0 group-hover:opacity-100" : ""}`}
+    />
+  );
+  if (!icon) return openable ? caret : null;
+  return (
+    <>
+      {createElement(icon, { className: `size-3.5${openable ? " transition-opacity group-hover:opacity-0" : ""}` })}
+      {openable ? caret : null}
+    </>
+  );
 }
 
 function toneOf(failed: boolean, denied: boolean): string {
@@ -363,7 +299,7 @@ function ToolLine({
   const tone = toneOf(failed, block.approval?.decided === "deny");
   return (
     <>
-      <span className="crew-node">
+      <span className="crew-node relative">
         <ToolGlyph pending={isOpen(block)} failed={failed} open={open} openable={openable} icon={icon} />
       </span>
       <span className={`min-w-0 truncate transition-colors ${tone} ${line.mono ? "font-mono text-[12.5px]" : ""}`}>
@@ -538,20 +474,22 @@ function SubagentLine({ detail, view, open }: { detail: AgentDetail; view: Subag
   );
 }
 
-/** Folded to its first line. Opens while streaming; never opened by the group around it. */
+/**
+ * A thought, folded to its first line, which reads as it comes in. The rest
+ * is a click away, streaming or not: watching words arrive is not the work.
+ */
 function ReasoningRow({ block, marked }: { block: Block; marked: string | null }) {
   const streaming = block.streaming === true;
-  const [pinned, setPinned] = useState<boolean | null>(null);
-  const open = pinned ?? streaming;
+  const [open, setOpen] = useState(false);
   const summary = summarize(block.text);
   const rest = afterSummary(block.text);
   const label = (
     <span className={`min-w-0 truncate ${streaming ? "crew-shimmer" : "text-text-muted transition-colors group-hover:text-text"}`}>
-      {streaming ? "Thinking" : summary || "Thought"}
+      {summary || (streaming ? "Thinking" : "Thought")}
     </span>
   );
   // A one-line thought is all in its row; there is nothing to open.
-  if (!streaming && !rest) {
+  if (!rest) {
     return (
       <div data-block={block.id} className={`${ROW}${lit(block.id, marked)}`}>
         <span className="crew-node">
@@ -562,7 +500,7 @@ function ReasoningRow({ block, marked }: { block: Block; marked: string | null }
     );
   }
   return (
-    <Collapsible.Root open={open} onOpenChange={(next) => setPinned(next)}>
+    <Collapsible.Root open={open} onOpenChange={setOpen}>
       <Collapsible.Trigger
         data-block={block.id}
         className={`group flex min-h-[26px] w-full items-center gap-2 py-0.5 text-left text-[13px] leading-[18px]${lit(block.id, marked)}`}
@@ -576,9 +514,11 @@ function ReasoningRow({ block, marked }: { block: Block; marked: string | null }
         {label}
       </Collapsible.Trigger>
       <Collapsible.Panel className="crew-phase-panel">
-        <p className="crew-phase-steps whitespace-pre-wrap py-0.5 text-[13px] leading-[18px] text-text-muted">
-          {streaming ? block.text : rest}
-        </p>
+        <div className="crew-tool-body py-0.5 text-[13px] leading-[19px] text-text-muted">
+          <Suspense fallback={<p className="whitespace-pre-wrap">{rest}</p>}>
+            <Markdown text={rest} streaming={streaming} />
+          </Suspense>
+        </div>
       </Collapsible.Panel>
     </Collapsible.Root>
   );

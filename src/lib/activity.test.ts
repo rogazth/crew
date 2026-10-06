@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { activityDigest, afterSummary, buildActivity, phaseFailed, phaseKind, phaseLabel, summarize, type Phase } from "./activity";
+import { activityDigest, afterSummary, buildActivity, currentActivity, phaseFailed, phaseKind, phaseLabel, summarize, type Phase } from "./activity";
 import type { Block, ToolStatus } from "./blocks";
 
 function tool(name: string, title: string, status: ToolStatus = "completed"): Block {
@@ -228,6 +228,34 @@ describe("activityDigest", () => {
   it("stays in the present while a call is still open", () => {
     const items = buildActivity([tool("Bash", "npm test"), tool("Bash", "npm lint", "pending")]);
     expect(activityDigest(items).label).toBe("Running 2 commands");
+  });
+
+  it("says it is thinking while the last thought still streams", () => {
+    const items = buildActivity([
+      { id: "a", role: "reasoning", text: "one" },
+      { id: "b", role: "reasoning", text: "two", streaming: true },
+    ]);
+    expect(activityDigest(items)).toEqual({ kind: "thought", label: "Thinking" });
+  });
+});
+
+describe("currentActivity", () => {
+  it("names the call still out, the newest one", () => {
+    const blocks = [tool("Bash", "npm test", "pending"), tool("Read", "Read a.ts"), tool("Bash", "npm run lint", "pending")];
+    expect(currentActivity(blocks)).toBe("npm run lint");
+  });
+
+  it("reads the first line of the thought coming in", () => {
+    const blocks: Block[] = [
+      tool("Bash", "npm test"),
+      { id: "r", role: "reasoning", text: "**Checking the fold**\nthen more", streaming: true },
+    ];
+    expect(currentActivity(blocks)).toBe("Checking the fold");
+  });
+
+  it("is nothing once every call came back and no thought is coming in", () => {
+    const blocks: Block[] = [tool("Bash", "npm test"), { id: "r", role: "reasoning", text: "done" }];
+    expect(currentActivity(blocks)).toBeNull();
   });
 });
 

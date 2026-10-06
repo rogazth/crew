@@ -16,10 +16,12 @@ type Props = {
   focusId: string | null;
   onApprove: (requestId: number, decision: ApprovalDecision) => void;
   onAnswer: (requestId: number, answers: Answers | null) => void;
+  /** Inside a turn's fold: its groups lay their rows out instead of folding again. */
+  flat?: boolean;
 };
 
 /** The transcript's rows, in order. A fold holds rows of its own and draws them the same way. */
-export function Rows({ rows, working, focusId, onApprove, onAnswer }: Props) {
+export function Rows({ rows, working, focusId, onApprove, onAnswer, flat = false }: Props) {
   return <>{rows.map((row, index) => {
     const className = gapBefore(rows[index - 1], row);
     switch (row.kind) {
@@ -33,6 +35,7 @@ export function Rows({ rows, working, focusId, onApprove, onAnswer }: Props) {
               marked={focusId}
               onApprove={onApprove}
               onAnswer={onAnswer}
+              flat={flat}
             />
           </div>
         );
@@ -40,7 +43,7 @@ export function Rows({ rows, working, focusId, onApprove, onAnswer }: Props) {
         return (
           <div key={row.id} className={className}>
             <TurnFold row={row} focusId={focusId}>
-              <Rows rows={row.rows} working={false} focusId={focusId} onApprove={onApprove} onAnswer={onAnswer} />
+              <Rows rows={row.rows} working={false} focusId={focusId} onApprove={onApprove} onAnswer={onAnswer} flat />
             </TurnFold>
           </div>
         );

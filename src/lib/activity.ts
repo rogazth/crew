@@ -1,5 +1,5 @@
 import { isOpen, type Block } from "./blocks";
-import { detailOf, prettyTitle } from "./toolDetail";
+import { detailOf, prettyTitle, toolLine } from "./toolDetail";
 
 /** What a run of tool calls was for. Drives the phase icon and its one-line label. */
 export type PhaseKind = "edit" | "research" | "run" | "other";
@@ -176,6 +176,7 @@ export function activityDigest(items: ActivityItem[]): ActivityDigest {
     else byKind.set(item.phase.kind, [...item.phase.blocks]);
   }
   if (byKind.size === 0) {
+    if (thinking(items.at(-1))) return { kind: "thought", label: "Thinking" };
     return { kind: "thought", label: thoughts === 1 ? "Thought" : `Thought ${thoughts} times` };
   }
   // Ties keep the order the kinds first appeared in: sort is stable, and a Map
@@ -189,6 +190,25 @@ export function activityDigest(items: ActivityItem[]): ActivityDigest {
     kind: first!.kind,
     label: second ? `${first!.label}, ${decap(second.label)}` : first!.label,
   };
+}
+
+function thinking(item: ActivityItem | undefined): boolean {
+  return item?.kind === "reasoning" && item.block.streaming === true;
+}
+
+/**
+ * What the agent is on this moment, for the line a folded run shows while it
+ * works: the thought still coming in, or the newest call still out. Nothing
+ * between the two, when the line's own count already says enough.
+ */
+export function currentActivity(blocks: Block[]): string | null {
+  const last = blocks.at(-1);
+  if (last?.role === "reasoning") return last.streaming ? summarize(last.text) || null : null;
+  for (let index = blocks.length - 1; index >= 0; index -= 1) {
+    const block = blocks[index]!;
+    if (block.role === "tool" && isOpen(block)) return toolLine(block).text || null;
+  }
+  return null;
 }
 
 function decap(label: string): string {
