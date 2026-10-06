@@ -292,6 +292,7 @@ fn start(
     listen: Listen,
 ) -> Result<(PtyHost, AgentHost, ProcessHost, crewd::Handle), Failure> {
     crew_core::shell_path::prewarm();
+    crew_core::provider_session::prewarm_cursor_models();
     let pty = PtyHost::new();
     let agents = AgentHost::new();
     let store = Store::open(dir.join("crew.sqlite3")).map_err(|e| Failure::Permanent(format!("database: {e}")))?;

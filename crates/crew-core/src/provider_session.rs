@@ -1,6 +1,7 @@
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::thread;
 use std::time::{Duration, Instant, UNIX_EPOCH};
@@ -66,24 +67,54 @@ const MODELS_TIMEOUT: Duration = Duration::from_secs(20);
 const MODELS_TTL: Duration = Duration::from_secs(10 * 60);
 
 static CURSOR_MODELS: Mutex<Option<(Instant, Vec<ListedModel>)>> = Mutex::new(None);
+/// Held while the CLI is asked, so callers that find nothing yet wait for
+/// that one answer instead of asking again.
+static CURSOR_LISTING: Mutex<()> = Mutex::new(());
+static CURSOR_REFRESHING: AtomicBool = AtomicBool::new(false);
+
+/// Lists cursor's models off the caller's thread when its CLI is installed,
+/// so the first model picker opened already has them.
+pub fn prewarm_cursor_models() {
+    thread::spawn(|| {
+        if shell_path::resolve("cursor-agent").is_some() {
+            cursor_models();
+        }
+    });
+}
 
 /// Every model `cursor-agent models` lists for this account, each effort and
-/// fast variant its own id (`grok-4.7-high-fast`). Asked once per
-/// `MODELS_TTL`, about a second each time; empty when the CLI is missing or
-/// fails, and then asked again next time.
+/// fast variant its own id (`grok-4.7-high-fast`). The CLI takes about a
+/// second, so only the first call waits for it: past `MODELS_TTL` the last
+/// answer is returned while a new one is read behind it. Empty when the CLI
+/// is missing or fails, and then asked again next time.
 pub fn cursor_models() -> Vec<ListedModel> {
-    let mut cached = CURSOR_MODELS.lock().unwrap_or_else(|e| e.into_inner());
-    if let Some((at, models)) = cached.as_ref() {
-        if at.elapsed() < MODELS_TTL {
-            return models.clone();
+    if let Some((at, models)) = cached_cursor_models() {
+        if at.elapsed() >= MODELS_TTL && !CURSOR_REFRESHING.swap(true, Ordering::SeqCst) {
+            thread::spawn(|| {
+                refresh_cursor_models();
+                CURSOR_REFRESHING.store(false, Ordering::SeqCst);
+            });
         }
+        return models;
     }
+    let _listing = CURSOR_LISTING.lock().unwrap_or_else(|e| e.into_inner());
+    match cached_cursor_models() {
+        Some((_, models)) => models,
+        None => refresh_cursor_models(),
+    }
+}
+
+fn cached_cursor_models() -> Option<(Instant, Vec<ListedModel>)> {
+    CURSOR_MODELS.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
+fn refresh_cursor_models() -> Vec<ListedModel> {
     let models = list_cursor_models().unwrap_or_else(|err| {
         eprintln!("[models] {err}");
         Vec::new()
     });
     if !models.is_empty() {
-        *cached = Some((Instant::now(), models.clone()));
+        *CURSOR_MODELS.lock().unwrap_or_else(|e| e.into_inner()) = Some((Instant::now(), models.clone()));
     }
     models
 }
