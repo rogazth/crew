@@ -120,6 +120,9 @@ fn identity(_meta: &std::fs::Metadata) -> (u64, u64) {
     (0, 0)
 }
 
+/// How much of what was read last is kept to check the file against.
+const SEEN_BYTES: usize = 4 * 1024;
+
 /// Reads the complete lines appended to a file since the last read.
 pub struct LineReader {
     path: PathBuf,
@@ -127,6 +130,20 @@ pub struct LineReader {
     pos: u64,
     split: Splitter,
     identity: Option<(u64, u64)>,
+    /// The last bytes read, up to `pos`: a CLI that rewrites its file in
+    /// place (cursor-agent drops its `turn_ended` line when the next prompt
+    /// comes) is caught by these no longer being there.
+    seen: Vec<u8>,
+}
+
+/// What became of the bytes already read.
+enum Kept {
+    /// Still there: reading goes on from `pos`.
+    All,
+    /// They changed from this line start on, every line before it intact.
+    From(u64),
+    /// The file shrank, another took its name, or more than the last lines changed.
+    Nothing,
 }
 
 impl LineReader {
@@ -141,6 +158,7 @@ impl LineReader {
             pos: offset,
             split: Splitter::default(),
             identity: None,
+            seen: Vec::new(),
         }
     }
 
@@ -155,14 +173,45 @@ impl LineReader {
     }
 
     /// Whether the next read would start over: the file shrank below what was
-    /// read, or another file took its name. Asks the filesystem only.
+    /// read, another file took its name, or it was rewritten above its last line.
     pub fn stale(&self) -> io::Result<bool> {
-        let meta = match std::fs::metadata(&self.path) {
-            Ok(meta) => meta,
+        let mut file = match File::open(&self.path) {
+            Ok(file) => file,
             Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(false),
             Err(err) => return Err(err),
         };
-        Ok(meta.len() < self.pos || self.identity.is_some_and(|known| known != identity(&meta)))
+        Ok(matches!(self.kept(&mut file)?, Kept::Nothing))
+    }
+
+    /// Whether what was read is still in the file, as far as `seen` tells.
+    fn kept(&self, file: &mut File) -> io::Result<Kept> {
+        let meta = file.metadata()?;
+        if meta.len() < self.pos || self.identity.is_some_and(|known| known != identity(&meta)) {
+            return Ok(Kept::Nothing);
+        }
+        if self.seen.is_empty() {
+            return Ok(Kept::All);
+        }
+        let from = self.pos - self.seen.len() as u64;
+        let mut now = vec![0u8; self.seen.len()];
+        file.seek(SeekFrom::Start(from))?;
+        file.read_exact(&mut now)?;
+        let Some(differs) = now.iter().zip(&self.seen).position(|(a, b)| a != b) else {
+            return Ok(Kept::All);
+        };
+        // Read again from the start of the line the change is in, when that is
+        // the last line handed out or the one still being written: an earlier
+        // line read again would be handed out twice.
+        let line_start = |end: usize| match self.seen[..end].iter().rposition(|&b| b == b'\n') {
+            Some(newline) => Some(from + newline as u64 + 1),
+            None => (from == 0).then_some(0),
+        };
+        let complete = self.seen.len().saturating_sub(self.split.carry.len());
+        let last = if complete == 0 { Some(self.offset()) } else { line_start(complete - 1) };
+        match (line_start(differs), last) {
+            (Some(changed), Some(last)) if changed >= last => Ok(Kept::From(changed)),
+            _ => Ok(Kept::Nothing),
+        }
     }
 
     pub fn read(&mut self) -> io::Result<Read> {
@@ -173,15 +222,22 @@ impl LineReader {
             }
             Err(err) => return Err(err),
         };
-        let meta = file.metadata()?;
-        let id = identity(&meta);
-        let replaced = self.identity.is_some_and(|known| known != id);
-        let shrank = meta.len() < self.pos;
-        self.identity = Some(id);
-        let reset = replaced || shrank;
-        if reset {
-            self.pos = 0;
-            self.split = Splitter::default();
+        let kept = self.kept(&mut file)?;
+        self.identity = Some(identity(&file.metadata()?));
+        let reset = matches!(kept, Kept::Nothing);
+        match kept {
+            Kept::All => {}
+            Kept::From(line) => {
+                // The lines from there on are read again as they are now.
+                self.seen.truncate(self.seen.len() - (self.pos - line) as usize);
+                self.pos = line;
+                self.split = Splitter::default();
+            }
+            Kept::Nothing => {
+                self.pos = 0;
+                self.seen.clear();
+                self.split = Splitter::default();
+            }
         }
         let mut lines = Vec::new();
         file.seek(SeekFrom::Start(self.pos))?;
@@ -193,6 +249,10 @@ impl LineReader {
             }
             self.pos += n as u64;
             self.split.push(&buf[..n], &mut lines);
+            self.seen.extend_from_slice(&buf[..n]);
+            if self.seen.len() > SEEN_BYTES {
+                self.seen.drain(..self.seen.len() - SEEN_BYTES);
+            }
         }
         Ok(Read {
             lines,
@@ -785,6 +845,43 @@ mod tests {
         assert_eq!(change.from, history.base());
         assert_eq!(texts(&change.blocks), ["new one", "new two", "new three"]);
         assert_eq!(texts(history.blocks()), ["new one", "new two", "new three"]);
+    }
+
+    #[test]
+    fn a_last_line_rewritten_in_place_is_read_again_as_it_is_now() {
+        let dir = Dir::new();
+        let path = dir.file();
+        let end = r#"{"type":"turn_ended"}"#.to_string();
+        write(&path, &[user("one"), reply("two"), end]);
+        let mut reader = LineReader::new(&path);
+        assert_eq!(reader.read().expect("read").lines.len(), 3);
+
+        // As cursor-agent does: the same file, its last line gone and the next
+        // prompt in its place, longer than what was read.
+        std::fs::write(&path, format!("{}\n{}\n{}\n", user("one"), reply("two"), user("three"))).expect("rewrite");
+        assert!(!reader.stale().expect("stale"));
+        let read = reader.read().expect("read");
+        assert_eq!(read.lines, [user("three")]);
+        assert!(!read.reset);
+        assert_eq!(reader.offset(), std::fs::metadata(&path).unwrap().len());
+
+        // Appends after that are read as usual.
+        append(&path, &format!("{}\n", reply("four")));
+        assert_eq!(reader.read().expect("read").lines, [reply("four")]);
+    }
+
+    #[test]
+    fn a_file_rewritten_above_its_last_line_starts_over() {
+        let dir = Dir::new();
+        let path = dir.file();
+        write(&path, &[user("one"), reply("two"), user("three")]);
+        let mut history = open(&path, 300);
+        std::fs::write(&path, format!("{}\n{}\n{}\n{}\n", user("ONE"), reply("two"), user("three"), reply("four")))
+            .expect("rewrite");
+        assert!(history.reader.stale().expect("stale"));
+        let change = history.poll().expect("poll").expect("a change");
+        assert!(change.reset);
+        assert_eq!(texts(history.blocks()), ["ONE", "two", "three", "four"]);
     }
 
     #[test]

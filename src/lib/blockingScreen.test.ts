@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { blockingScreen } from "./blockingScreen";
+import { blockingScreen, takesInput } from "./blockingScreen";
 
 // Screens as Claude Code 2.1.283 and Codex 0.154.0 draw them at 120 columns.
 const CLAUDE_TRUST = [
@@ -95,9 +95,56 @@ describe("blockingScreen", () => {
     expect(blockingScreen("opencode", screen)?.title).toBe("opencode asks for a permission");
   });
 
+  it("knows Cursor's trust prompt, its sign-in and its approvals", () => {
+    // cursor-agent 2026.10.01 at 120 columns.
+    const trust = [
+      "  │  ⚠ Workspace Trust Required                                     │",
+      "  │  Cursor Agent can execute code and access files in this directory. │",
+      "  │  Do you trust the contents of this directory?                   │",
+      "  │  ▶ [a] Trust this workspace                                     │",
+      "  │    [q] Quit                                                     │",
+    ];
+    expect(blockingScreen("cursor", trust)?.kind).toBe("trust");
+    // Answered: the box stays above the prompt, its choice no longer pointed at.
+    const trusted = [...trust.map((line) => line.replace("▶", " ")), "  │  ⏳ Trusting workspace... │", "  → Plan, search, build anything"];
+    expect(blockingScreen("cursor", trusted)).toBeNull();
+    expect(blockingScreen("cursor", ["  Cursor Agent", "  Press any key to log in..."])?.kind).toBe("login");
+    const command = [
+      "  $ touch probe.txt Waiting for approval...",
+      " $  touch probe.txt in .",
+      " Run this command?",
+      " Shell allowlist is empty",
+      "  → Run (once) (y)",
+      "    Add Shell(touch) to allowlist? (tab)",
+      "    Run Everything (shift+tab)",
+      "    Skip & tell the agent what to do instead (esc or n)",
+    ];
+    expect(blockingScreen("cursor", command)?.title).toBe("Cursor asks to run a command");
+  });
+
+  it("says nothing over Cursor's prompt, working or not", () => {
+    const idle = ["  Cursor Agent", "  → Plan, search, build anything", "  Grok 4.7 256K Medium   Run Everything"];
+    expect(blockingScreen("cursor", idle)).toBeNull();
+    const queued = [" ⠀⠞ Working", " │ ○ Then tell me what 3+3 is. │", " │ enter steer · ↑ select/edit · esc cancel │"];
+    expect(blockingScreen("cursor", queued)).toBeNull();
+  });
+
   it("only reads the screens of the CLI it is asked about", () => {
     expect(blockingScreen("codex", CLAUDE_TRUST)).toBeNull();
     expect(blockingScreen("opencode", CODEX_TRUST)).toBeNull();
     expect(blockingScreen("opencode", ["  ┃  Ask anything… \"Fix a TODO in the codebase\""])).toBeNull();
+  });
+});
+
+describe("takesInput", () => {
+  it("waits for Cursor's prompt line, idle or working", () => {
+    expect(takesInput("cursor", ["  Cursor Agent", "  v2026.10.01-14929f9"])).toBe(false);
+    expect(takesInput("cursor", ["  │  ⏳ Trusting workspace... │"])).toBe(false);
+    expect(takesInput("cursor", ["  Cursor Agent", "  → Plan, search, build anything"])).toBe(true);
+    expect(takesInput("cursor", [" ⠀⠞ Working", "  → Add a follow-up        ctrl+c to stop"])).toBe(true);
+  });
+
+  it("does not gate a CLI whose screen it does not read", () => {
+    expect(takesInput("claude", [])).toBe(true);
   });
 });

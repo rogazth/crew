@@ -42,6 +42,8 @@ type Props = {
   active: boolean;
   /** A screen the CLI stopped on that a message cannot answer. */
   blocked: BlockingScreen | null;
+  /** The CLI's screen shows the line a message is typed on (`takesInput`). */
+  prompting: boolean;
   /** The terminal's own reading of whether the CLI is busy: its title, its output. */
   busy: boolean;
   onShowTerminal: () => void;
@@ -68,6 +70,7 @@ export function SessionChat({
   cwd,
   active,
   blocked,
+  prompting,
   busy,
   onShowTerminal,
   onRestart,
@@ -103,7 +106,8 @@ export function SessionChat({
   const gone = useGone(hooked && live !== null && !live.started);
   const [switching, setSwitching] = useState(false);
   // Keys typed before the CLI reads them are lost, or answer its trust prompt.
-  const ready = !switching && !blocked && (!hooked || !startsAtLaunch(session.provider) || live?.started === true);
+  const ready =
+    !switching && !blocked && prompting && (!hooked || !startsAtLaunch(session.provider) || live?.started === true);
   const ask = live?.ask ?? null;
   // What the last turn left running, as its Stop hook said: read-only, since
   // only the CLI in the terminal can stop it.
@@ -271,7 +275,7 @@ export function SessionChat({
         <Stopped
           reason={stopped}
           provider={session.provider}
-          onTrust={(trust) => void type(trustKeys(trust))}
+          onTrust={(trust) => void type(trustKeys(session.provider, trust))}
           onShowTerminal={onShowTerminal}
         />
       ) : (
@@ -412,8 +416,8 @@ function Stopped({
   onTrust: (trust: boolean) => void;
   onShowTerminal: () => void;
 }) {
-  if (reason.kind === "screen" && reason.screen.kind === "trust" && provider === "claude") {
-    return <TrustCard onAnswer={onTrust} onShowTerminal={onShowTerminal} />;
+  if (reason.kind === "screen" && reason.screen.kind === "trust" && (provider === "claude" || provider === "cursor")) {
+    return <TrustCard title={reason.screen.title} onAnswer={onTrust} onShowTerminal={onShowTerminal} />;
   }
   if (reason.kind === "screen") {
     return (
@@ -442,8 +446,16 @@ function Stopped({
   );
 }
 
-/** Claude's folder trust prompt, answered from the chat. */
-function TrustCard({ onAnswer, onShowTerminal }: { onAnswer: (trust: boolean) => void; onShowTerminal: () => void }) {
+/** The CLI's folder trust prompt, answered from the chat. */
+function TrustCard({
+  title,
+  onAnswer,
+  onShowTerminal,
+}: {
+  title: string;
+  onAnswer: (trust: boolean) => void;
+  onShowTerminal: () => void;
+}) {
   return (
     <div className="flex min-h-0 flex-1 items-center justify-center px-6" role="status">
       <div className="crew-card flex w-full max-w-[440px] flex-col gap-3">
@@ -452,7 +464,7 @@ function TrustCard({ onAnswer, onShowTerminal }: { onAnswer: (trust: boolean) =>
             <ShieldQuestionIcon className="size-4" />
           </span>
           <div className="flex min-w-0 flex-col">
-            <span className="font-semibold">Claude asks whether you trust this folder</span>
+            <span className="font-semibold">{title}</span>
             <span className="text-[12px] text-text-muted">It will be able to read, edit and run files here.</span>
           </div>
         </div>

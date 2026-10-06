@@ -203,9 +203,11 @@ describe("answer keys", () => {
     expect(approvalKeys("codex", "deny")[0]?.data).toBe("\x1b");
   });
 
-  it("trusts a folder by moving off the default before Enter, and exits with Esc", () => {
-    expect(trustKeys(true).map((key) => key.data)).toEqual(["\x1b[B", "\r"]);
-    expect(trustKeys(false).map((key) => key.data)).toEqual(["\x1b"]);
+  it("trusts a folder by moving off Claude's default before Enter, or with Cursor's key, and declines", () => {
+    expect(trustKeys("claude", true).map((key) => key.data)).toEqual(["\x1b[B", "\r"]);
+    expect(trustKeys("claude", false).map((key) => key.data)).toEqual(["\x1b"]);
+    expect(trustKeys("cursor", true).map((key) => key.data)).toEqual(["a"]);
+    expect(trustKeys("cursor", false).map((key) => key.data)).toEqual(["q"]);
   });
 
   it("picks one option with its digit, which also submits a lone question", () => {

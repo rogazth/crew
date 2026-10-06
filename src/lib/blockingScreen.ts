@@ -34,6 +34,14 @@ const RULES: Record<string, Rule[]> = {
     { kind: "hooks", title: "Codex wants its hooks reviewed", test: /hooks need review/ },
     { kind: "login", title: "Codex needs you to sign in", test: /Sign in with ChatGPT/ },
   ],
+  cursor: [
+    // Answered, the box stays drawn above the prompt; only the ▶ says it still waits.
+    { kind: "trust", title: "Cursor asks whether you trust this folder", test: /Workspace Trust Required.*▶ \[a\] Trust this workspace/ },
+    { kind: "login", title: "Cursor needs you to sign in", test: /Press any key to log in/ },
+    // It runs no hooks Crew hears, so an approval is only ever on its screen, and Enter would give it.
+    { kind: "dialog", title: "Cursor asks to run a command", test: /Run this command\?.*Skip & tell the agent what to do instead/ },
+    { kind: "dialog", title: "Cursor asks for an approval", test: /Skip & tell the agent what to do instead/ },
+  ],
   opencode: [
     // It runs no hooks, so its permission prompt is only ever on its screen.
     { kind: "dialog", title: "opencode asks for a permission", test: /Permission required.*Allow once.*Reject/ },
@@ -47,4 +55,14 @@ export function blockingScreen(provider: string, lines: readonly string[]): Bloc
   const text = lines.join(" ").replace(/\s+/g, " ");
   const hit = rules.find((rule) => rule.test.test(text));
   return hit ? { kind: hit.kind, title: hit.title } : null;
+}
+
+/**
+ * Whether `provider`'s CLI shows the line a message is typed on, where Crew
+ * can tell. cursor-agent takes no keys while it starts, or loads once its
+ * folder is trusted, and drops what is typed meanwhile.
+ */
+export function takesInput(provider: string, lines: readonly string[]): boolean {
+  if (provider !== "cursor") return true;
+  return lines.some((line) => /^\s*→ /.test(line));
 }

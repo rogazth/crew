@@ -19,7 +19,10 @@ const CLOCK_SLACK_MS: i64 = 2_000;
 const CODEX_DAYS: usize = 2;
 
 /// A chat cursor-agent can `--resume` before anything was said in it, so the
-/// id is known before the terminal starts.
+/// id is known before the terminal starts. The id is its first line, printed
+/// at once; the CLI then flushes its analytics for seconds more, and now and
+/// then never exits, so the id is taken as it comes and the CLI left to end
+/// on its own, or killed once the timeout is up.
 pub fn cursor_create_chat() -> Result<String, String> {
     let binary = shell_path::resolve("cursor-agent")
         .ok_or_else(|| "`cursor-agent` was not found on your PATH.".to_string())?;
@@ -31,31 +34,47 @@ pub fn cursor_create_chat() -> Result<String, String> {
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| format!("cursor-agent create-chat: {e}"))?;
-    let deadline = Instant::now() + CREATE_TIMEOUT;
-    let status = loop {
-        match child.try_wait().map_err(|e| e.to_string())? {
-            Some(status) => break status,
-            None if Instant::now() < deadline => thread::sleep(Duration::from_millis(50)),
-            None => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err("cursor-agent create-chat did not answer".into());
-            }
+    let stdout = child.stdout.take();
+    let (line_tx, line_rx) = std::sync::mpsc::channel();
+    thread::spawn(move || {
+        let mut line = String::new();
+        if let Some(stdout) = stdout {
+            let _ = BufReader::new(stdout).read_line(&mut line);
         }
-    };
-    let mut out = String::new();
-    if let Some(mut stdout) = child.stdout.take() {
-        let _ = stdout.read_to_string(&mut out);
-    }
-    let id = out.trim();
-    if !status.success() || !is_chat_id(id) {
+        let _ = line_tx.send(line);
+    });
+    let stderr = child.stderr.take();
+    let (err_tx, err_rx) = std::sync::mpsc::channel();
+    thread::spawn(move || {
         let mut err = String::new();
-        if let Some(mut stderr) = child.stderr.take() {
+        if let Some(mut stderr) = stderr {
             let _ = stderr.read_to_string(&mut err);
         }
-        return Err(format!("cursor-agent create-chat failed: {}", err.trim()));
+        let _ = err_tx.send(err);
+    });
+    let deadline = Instant::now() + CREATE_TIMEOUT;
+    let line = line_rx.recv_timeout(CREATE_TIMEOUT).unwrap_or_default();
+    // Reaped off the caller's thread: whatever it does after the id is its own business.
+    thread::spawn(move || loop {
+        match child.try_wait() {
+            Ok(Some(_)) | Err(_) => break,
+            Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(100)),
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                break;
+            }
+        }
+    });
+    let id = line.trim();
+    if is_chat_id(id) {
+        return Ok(id.to_string());
     }
-    Ok(id.to_string())
+    if line.is_empty() && Instant::now() >= deadline {
+        return Err("cursor-agent create-chat did not answer".into());
+    }
+    let err = err_rx.recv_timeout(Duration::from_secs(2)).unwrap_or_default();
+    Err(format!("cursor-agent create-chat failed: {}", err.trim()))
 }
 
 fn is_chat_id(id: &str) -> bool {

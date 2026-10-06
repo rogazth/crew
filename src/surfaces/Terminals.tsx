@@ -11,7 +11,7 @@ import { claudeSessionId, transcriptPath } from '../lib/claudeStorage';
 import { bindProviderSession } from '../lib/turnRuntime';
 import { isHanded } from '../lib/handedSessions';
 import { announceSession, askNews } from '../lib/notifications';
-import { blockingScreen, type BlockingScreen } from '../lib/blockingScreen';
+import { blockingScreen, takesInput, type BlockingScreen } from '../lib/blockingScreen';
 import { clearFirstPrompt, peekFirstPrompt, setFirstPrompt } from '../lib/firstPrompt';
 import { BYPASS_KEY } from '../lib/permissions';
 import { providerOf, type AgentChoice } from '../lib/providers';
@@ -212,10 +212,13 @@ function SessionTerminal({
   const [command, setCommand] = useState<string[] | null>(null);
   const [blocked, setBlocked] = useState<BlockingScreen | null>(null);
   const provider = session.provider;
+  // Nothing on screen yet takes no message either.
+  const [prompting, setPrompting] = useState(() => takesInput(provider, []));
   const readScreen = useCallback(
     (lines: string[]) => {
       const next = blockingScreen(provider, lines);
       setBlocked((prev) => (prev?.kind === next?.kind ? prev : next));
+      setPrompting(takesInput(provider, lines));
     },
     [provider],
   );
@@ -359,6 +362,7 @@ function SessionTerminal({
           cwd={cwd}
           active={active}
           blocked={blocked}
+          prompting={prompting}
           busy={session.status === 'working' || session.status === 'needs-input'}
           onShowTerminal={() => onShowTerminal(true)}
           onRestart={restart}

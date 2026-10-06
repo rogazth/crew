@@ -78,8 +78,12 @@ export function approvalKeys(provider: string, decision: ApprovalDecision): Keys
   return [{ data, wait: 0 }];
 }
 
-/** Claude's folder trust prompt: "No, exit" is picked; ↓ moves to "Yes, I trust this folder". */
-export function trustKeys(trust: boolean): Keystroke[] {
+/**
+ * A folder trust prompt answered. Claude's has "No, exit" picked and ↓ moves
+ * to "Yes, I trust this folder"; Cursor's takes the key beside each choice.
+ */
+export function trustKeys(provider: string, trust: boolean): Keystroke[] {
+  if (provider === "cursor") return [{ data: trust ? "a" : "q", wait: 0 }];
   return trust
     ? [
         { data: DOWN, wait: 0 },

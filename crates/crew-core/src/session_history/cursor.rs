@@ -10,7 +10,7 @@
 
 use std::sync::LazyLock;
 
-use crew_protocol::{EditHunk, HarnessEvent, ToolDetail};
+use crew_protocol::{EditHunk, HarnessEvent, ToolDetail, TurnUsage};
 use serde_json::{Map, Value};
 
 use super::claude::days_from_civil;
@@ -25,6 +25,15 @@ pub struct CursorDecoder {
     /// The time of the prompt the current turn answers: nothing else in the
     /// file is dated, and a row dated by when it was read would be wrong.
     turn_at: Option<i64>,
+    /// A prompt was read and its turn not closed yet. The CLI drops a turn's
+    /// `turn_ended` once the next prompt comes, so that prompt closes it.
+    open: bool,
+}
+
+/// The file says nothing of tokens or cost; a turn closed with this still
+/// gets its footer, which is where the chat sees a turn end.
+fn closed() -> Option<TurnUsage> {
+    Some(TurnUsage { input_tokens: None, output_tokens: None, cost_usd: None, duration_ms: None })
 }
 
 impl Decoder for CursorDecoder {
@@ -64,11 +73,13 @@ impl CursorDecoder {
         if query.is_empty() {
             return Vec::new();
         }
-        // Older CLIs write no `turn_ended`: a prompt is the only sign the
-        // calls before it are done. Settled ones are left as they are.
-        let settled = self.event(HarnessEvent::TurnCompleted { usage: None });
+        // A prompt is the only sign left that the turn before it is done:
+        // older CLIs write no `turn_ended`, and newer ones take it out again.
+        // Settled calls are left as they are.
+        let settled = self.event(HarnessEvent::TurnCompleted { usage: if self.open { closed() } else { None } });
+        self.open = true;
         if let Some(at) = tag(&text, "timestamp").and_then(parse_timestamp) {
-            self.turn_at = Some(at);
+            self.turn_at = Some(closer(at, now_ms()));
         }
         let prompt = self.event(HarnessEvent::UserMessage {
             text: query.to_string(),
@@ -123,9 +134,10 @@ impl CursorDecoder {
         let out = match rec.get("status").and_then(Value::as_str) {
             Some("aborted") => vec![self.event(HarnessEvent::SessionError { message: "Interrupted".into() }), ended],
             Some("error") => vec![self.event(HarnessEvent::SessionError { message: "Turn failed".into() }), ended],
-            _ => vec![self.event(HarnessEvent::TurnCompleted { usage: None }), ended],
+            _ => vec![self.event(HarnessEvent::TurnCompleted { usage: closed() }), ended],
         };
         self.turn_at = None;
+        self.open = false;
         out
     }
 }
@@ -246,6 +258,24 @@ fn tag<'a>(text: &'a str, name: &str) -> Option<&'a str> {
     Some(&text[start..end])
 }
 
+/// The stamp names only the minute. A prompt read within that minute was
+/// written a moment ago, so when it was read is the closer date: the chat
+/// matches what it sent to the turn by it, and a send late in a minute would
+/// otherwise look older than itself.
+fn closer(stamp: i64, now: i64) -> i64 {
+    if (stamp..stamp + 60_000).contains(&now) {
+        now
+    } else {
+        stamp
+    }
+}
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| since.as_millis() as i64)
+}
+
 /// `Monday, Aug 24, 2026, 1:05 PM (UTC-4)`, the only date the file keeps.
 static STAMP: LazyLock<regex::Regex> = LazyLock::new(|| {
     regex::Regex::new(r"^\w+, (\w{3}) (\d{1,2}), (\d{4}), (\d{1,2}):(\d{2}) ([AP]M) \(UTC(?:([+-])(\d{1,2})(?::(\d{2}))?)?\)$")
@@ -316,6 +346,49 @@ mod tests {
     }
 
     #[test]
+    fn the_next_prompt_written_over_turn_ended_is_read() {
+        let prompt = |text: &str| {
+            format!(
+                r#"{{"role":"user","message":{{"content":[{{"type":"text","text":"<timestamp>Tuesday, Oct 6, 2026, 6:55 PM (UTC-3)</timestamp>\n<user_query>\n{text}\n</user_query>"}}]}}}}"#
+            )
+        };
+        let reply = |text: &str| format!(r#"{{"role":"assistant","message":{{"content":[{{"type":"text","text":"{text}"}}]}}}}"#);
+        let ended = r#"{"type":"turn_ended","status":"success"}"#;
+        let dir = std::env::temp_dir().join(format!("crew-cursor-rewrite-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join("chat.jsonl");
+        std::fs::write(&path, format!("{}\n{}\n{ended}\n", prompt("What is 2+2?"), reply("4."))).expect("write");
+        let mut history = History::open(&path, CursorDecoder::default(), 300).expect("open");
+
+        // cursor-agent writes the file anew, the next prompt where `turn_ended` was.
+        std::fs::write(&path, format!("{}\n{}\n{}\n", prompt("What is 2+2?"), reply("4."), prompt("And 3+3?"))).expect("rewrite");
+        history.poll().expect("poll").expect("a change");
+        std::fs::write(
+            &path,
+            format!("{}\n{}\n{}\n{}\n{ended}\n", prompt("What is 2+2?"), reply("4."), prompt("And 3+3?"), reply("6.")),
+        )
+        .expect("rewrite");
+        history.poll().expect("poll").expect("a change");
+        let _ = std::fs::remove_dir_all(&dir);
+
+        // Each turn ends on a footer, the first one too, whose `turn_ended` is gone.
+        let ends: Vec<&str> =
+            history.blocks().iter().filter(|block| block.usage.is_some()).map(|block| block.text.as_str()).collect();
+        assert_eq!(ends, ["4.", "6."]);
+        let rows: Vec<(BlockRole, &str)> =
+            history.blocks().iter().map(|block| (block.role.clone(), block.text.as_str())).collect();
+        assert_eq!(
+            rows,
+            vec![
+                (BlockRole::User, "What is 2+2?"),
+                (BlockRole::Assistant, "4."),
+                (BlockRole::User, "And 3+3?"),
+                (BlockRole::Assistant, "6."),
+            ]
+        );
+    }
+
+    #[test]
     fn a_new_prompt_settles_a_turn_the_cli_never_closed() {
         let blocks = decode(concat!(
             r#"{"role":"user","message":{"content":[{"type":"text","text":"<user_query>\nList the files\n</user_query>"}]}}"#,
@@ -357,6 +430,14 @@ mod tests {
         let prompt = Some(1_787_591_100_000);
         assert_eq!(blocks[0].at, prompt);
         assert!(blocks[..7].iter().all(|block| block.at == prompt));
+    }
+
+    #[test]
+    fn a_prompt_read_within_its_minute_is_dated_when_read() {
+        let stamp = 1_787_591_100_000;
+        assert_eq!(closer(stamp, stamp + 42_500), stamp + 42_500);
+        assert_eq!(closer(stamp, stamp + 60_000), stamp);
+        assert_eq!(closer(stamp, stamp - 1), stamp);
     }
 
     #[test]
