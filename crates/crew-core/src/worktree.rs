@@ -61,6 +61,14 @@ pub fn branches(cwd: &str) -> Vec<(String, Option<String>)> {
         .collect()
 }
 
+/// The branch checked out in `cwd`; `None` outside a repository or on a
+/// detached HEAD.
+pub fn current_branch(cwd: &str) -> Option<String> {
+    git(cwd, &["rev-parse", "--abbrev-ref", "HEAD"])
+        .map(|out| out.trim().to_string())
+        .filter(|branch| !branch.is_empty() && branch != "HEAD")
+}
+
 pub fn paths(cwd: &str) -> Vec<String> {
     git(cwd, &["worktree", "list", "--porcelain"])
         .map(|out| parse(&out).into_iter().map(|tree| tree.path).collect())

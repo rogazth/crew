@@ -37,19 +37,8 @@ pub fn build_opencode_spawn_args(input: &OpencodeSpawn) -> Vec<String> {
 
 /// opencode reads the whole prompt from stdin, so the turn is one document:
 /// persona, the tail of the conversation, then what is being asked now.
-pub fn build_opencode_prompt(
-    name: &str,
-    description: &str,
-    history: Option<&str>,
-    text: &str,
-    files: &[String],
-    tools: Option<&str>,
-) -> String {
-    let persona = match tools {
-        Some(hint) => format!("{}\n\n{hint}", persona_prompt(name, description, None)),
-        None => persona_prompt(name, description, None),
-    };
-    super::assemble(persona, history, &with_attached_paths(text.trim(), files))
+pub fn build_opencode_prompt(persona: &str, history: Option<&str>, text: &str, files: &[String]) -> String {
+    super::assemble(persona.to_string(), history, &with_attached_paths(text.trim(), files))
 }
 
 /// How long opencode lets one call to Crew's server run, in milliseconds: a
@@ -103,7 +92,6 @@ pub fn build_opencode_message(history: Option<&str>, text: &str, files: &[String
     super::assemble(String::new(), history, &with_attached_paths(text.trim(), files))
 }
 
-pub use super::persona_prompt;
 
 fn with_attached_paths(text: &str, files: &[String]) -> String {
     if files.is_empty() {

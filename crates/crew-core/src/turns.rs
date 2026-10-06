@@ -18,7 +18,7 @@ use crate::providers::claude::{
     assistant_text_blocks, assistant_tool_uses, build_claude_spawn_args, build_claude_user_message,
     build_control_request, build_control_response, input_json_delta_from_event, is_compact_boundary,
     is_message_start, is_subagent_message, parse_control_cancel_id, parse_control_request, parse_questions,
-    persona_prompt as claude_persona, session_id_from_message, stream_text_delta, to_permission_result,
+    session_id_from_message, stream_text_delta, to_permission_result,
     to_question_result, tool_detail as claude_tool_detail, tool_label as claude_tool_label,
     tool_result_detail as claude_tool_result_detail, tool_results_from_user_message, tool_start_from_event,
     try_parse_json_record, turn_failed as claude_turn_failed, turn_usage as claude_turn_usage, ClaudeControlRequest,
@@ -33,6 +33,7 @@ use crate::providers::opencode::{
 };
 use crate::providers::{string_field, Autonomy};
 use crate::mailbox;
+pub(crate) use crate::prompts::Harness;
 use crate::session;
 use crate::working_set;
 use crate::store::Store;
@@ -58,106 +59,26 @@ const INTERRUPT_GRACE: Duration = Duration::from_millis(1500);
 /// it forever.
 const BACKGROUND_GRACE: Duration = Duration::from_secs(600);
 const STDERR_TAIL: usize = 12;
-/// The four a bot reaches for on most turns, named first in its sheet with
-/// what each is for.
-const EVERYDAY: [(&str, &str); 4] = [
-    (
-        "list_peers",
-        "the bots and sessions here, each with the id it is reached by, its status, and whether you \
-         can write to it.",
-    ),
-    (
-        "send_message",
-        "write to one of them, by id. It arrives as a turn with your name and id on it, and it is \
-         read in its own time. You are not waiting here, and anything it sends back reaches you as \
-         a message of its own. To a session you started that is waiting on a question, it answers it.",
-    ),
-    (
-        "start_session",
-        "hand one job to a new session (any provider, here or in a worktree of its own). Its report \
-         wakes you when its turn ends; `wait: true` waits for it in this turn instead.",
-    ),
-    (
-        "search_messages",
-        "look up what was already said in this conversation. It does not reach anybody else's; what \
-         another bot knows, you ask it for.",
-    ),
-];
-
-/// Claude Code may still defer an MCP server's tools behind its own tool
-/// search; their names are visible there, and one call by name loads them
-/// (plan §4.9).
-const DEFERRED_TOOLS: &str =
-    "If you do not see Crew's tools in your tool list, call one by name once before deciding they are unavailable.";
-
-/// How a provider's harness shows the model one of Crew's tools.
-///
-/// The names matter more than they look. A bot told about a bare tool name
-/// goes looking for that name, and what it finds is whatever else it has
-/// of that shape — with Claude Code that is its own cross-session SendMessage,
-/// which writes to another machine entirely. Measured, not guessed: it happened
-/// in `scripts/drive.mjs` and the letter left the building. So a sheet never
-/// names a tool bare, only as the harness lists it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Harness {
-    /// Claude and Codex namespace an MCP server's tools under its name.
-    Mcp,
-    /// opencode flattens them onto the server name instead.
-    Opencode,
-    /// Cursor finds an MCP server's tools under the server's name and calls
-    /// them with its own `CallDynamicTool`: a tool is named with its server.
-    Cursor,
-}
-
-impl Harness {
-    fn spell(self, tool: &str) -> String {
-        match self {
-            Harness::Mcp => format!("`mcp__crew__{tool}`"),
-            Harness::Opencode => format!("`crew_{tool}`"),
-            Harness::Cursor => format!("`{tool}` (MCP server `crew`)"),
-        }
-    }
-
-    /// Several at once: Cursor names the server once, after the list.
-    fn spell_all(self, tools: &[&str]) -> String {
-        match self {
-            Harness::Cursor => format!(
-                "{}, all on the MCP server `crew`",
-                tools.iter().map(|tool| format!("`{tool}`")).collect::<Vec<_>>().join(", ")
-            ),
-            _ => tools.iter().map(|tool| self.spell(tool)).collect::<Vec<_>>().join(", "),
+/// Whether a session running with `autonomy` would do what `request` asks
+/// without asking anyone: what a parent may decide for its child. Full does
+/// anything; edits (and auto, whose reviewer Crew cannot speak for) only
+/// file edits; ask nothing. A process runs a command, so it takes full.
+pub(crate) fn may_decide(autonomy: &Autonomy, request: &Value) -> bool {
+    match autonomy {
+        Autonomy::Full => true,
+        Autonomy::Ask => false,
+        Autonomy::Edits | Autonomy::Auto => {
+            request.get("kind").and_then(Value::as_str) == Some("approval")
+                && request
+                    .get("tool")
+                    .and_then(Value::as_str)
+                    .is_some_and(|tool| EDIT_TOOLS.contains(&tool.to_ascii_lowercase().as_str()))
         }
     }
 }
 
-/// The Crew tools a bot is handed, spelled the way its own harness lists
-/// them. `visible` is what `tools/list` answers this caller with.
-fn tools_hint(harness: Harness, visible: &[&str]) -> String {
-    let everyday: String = EVERYDAY
-        .iter()
-        .filter(|(name, _)| visible.contains(name))
-        .map(|(name, what)| format!("- {} — {what}\n", harness.spell(name)))
-        .collect();
-    let rest: Vec<&str> = visible
-        .iter()
-        .copied()
-        .filter(|name| !EVERYDAY.iter().any(|(everyday, _)| everyday == name))
-        .collect();
-    format!(
-        "Crew gives you tools through its crew MCP server, and they are in your tool list. The ones \
-         most turns need:\n\
-         {everyday}\
-         - And: {}. One of your own tools whose name sounds like one of these is not Crew's and \
-         does not reach this workspace.\n\
-         {DEFERRED_TOOLS}\n\n\
-         A turn that opens with `## Message` was written by another bot or a session, not by the \
-         user. What you write in the chat is read by the user and does not reach it; {} to the \
-         id on that line is what does. `## Report from session` and `## Question from session` \
-         come from sessions you started.",
-        harness.spell_all(&rest),
-        harness.spell("send_message"),
-    )
-}
+/// The tools an approval names when all it does is change a file.
+const EDIT_TOOLS: [&str; 6] = ["edit", "write", "multiedit", "notebookedit", "filechange", "apply_patch"];
 
 /// The provider conversation a child carries on, once its first turn bound
 /// one. A bot never resumes: its memory is the tail Crew hands it.
@@ -166,19 +87,6 @@ fn child_resume(session: &crate::session::Session) -> Option<String> {
         .then(|| session.provider_session_id.clone())
         .flatten()
         .filter(|id| !id.is_empty())
-}
-
-/// What a child is told about Crew's tools: which they are, and that
-/// starting sessions of its own is not among them.
-fn child_tools_hint(harness: Harness, visible: &[&str]) -> String {
-    format!(
-        "Crew's tools reach you through its crew MCP server and are in your tool list: {}. They \
-         run or watch the workspace's dev servers, drive a browser tab, and write to one of its \
-         bots. Starting sessions of your own is not among them: if the job needs more hands, say \
-         so in your report.\n\
-         {DEFERRED_TOOLS}",
-        harness.spell_all(visible)
-    )
 }
 
 /// An opencode turn's persona, on disk for as long as the turn runs:
@@ -397,15 +305,41 @@ impl TurnHost {
         self.toolbox.clone()
     }
 
-    /// What a session is told about Crew's tools: the ones `tools/list`
-    /// answers it with, by the kind of caller it is, as its harness spells them.
-    fn crew_tools_hint(&self, session: &crate::session::Session, harness: Harness) -> String {
+    /// What a session is told before its turn (plan §6, §7): a bot, every
+    /// turn; a child, on its first. The tools are the ones `tools/list`
+    /// answers it with, by its kind, as its harness spells them; none when
+    /// Crew's server is not there.
+    pub(crate) fn persona(&self, session: &crate::session::Session, harness: Harness, mcp: bool, cwd: &str) -> String {
         let kind = crate::caller::Caller::from_session(session.clone()).kind();
-        let visible = self.toolbox.visible_names(kind);
-        match kind {
-            crate::caller::CallerKind::Child => child_tools_hint(harness, &visible),
-            _ => tools_hint(harness, &visible),
+        let tools = if mcp { self.toolbox.visible_names(kind) } else { Vec::new() };
+        let date = crate::providers::today();
+        let branch = crate::worktree::current_branch(cwd);
+        let place = crate::prompts::Place { date: &date, cwd, branch: branch.as_deref() };
+        if session.kind != "child" {
+            return crate::prompts::bot(&crate::prompts::Bot {
+                name: &session.name,
+                id: &session.id,
+                description: &session.description,
+                place,
+                harness,
+                tools: &tools,
+            });
         }
+        let parent = session.parent_id.as_deref().and_then(|id| session::get(&self.store, id.to_string()).ok().flatten());
+        let parent = match &parent {
+            Some(row) if row.kind == "terminal" => crate::prompts::Parent::Terminal { name: &row.name, id: &row.id },
+            Some(row) => crate::prompts::Parent::Bot { name: &row.name, id: &row.id },
+            None => crate::prompts::Parent::User,
+        };
+        crate::prompts::session(&crate::prompts::Session {
+            parent,
+            place,
+            harness,
+            tools: &tools,
+            // Claude's AskUserQuestion and Codex's user-input requests reach
+            // the parent; Cursor offers none, and opencode run has no channel.
+            question_tool: matches!(session.provider.as_str(), "claude" | "codex"),
+        })
     }
 
     pub fn set_runtime(&self, handle: tokio::runtime::Handle) {
@@ -615,24 +549,81 @@ impl TurnHost {
         Ok(())
     }
 
+    /// Decide an approval a session is waiting on. The one place an
+    /// approval is decided, from the window's card and from a parent's
+    /// `send_message` alike: the first decision wins, and the other is told it
+    /// was already answered.
     pub fn respond(&self, session_id: &str, request_id: u64, decision: ApprovalDecision) -> Result<(), String> {
-        if self.codex_respond(session_id, request_id, decision.clone()).is_some()
+        let key = (session_id.to_string(), request_id);
+        let taken = self.codex_respond(session_id, request_id, decision.clone()).is_some()
             || self.cursor_respond(session_id, request_id, decision.clone()).is_some()
-        {
-            return Ok(());
+            || {
+                let mut map = self.lock();
+                match map.get_mut(session_id) {
+                    Some(Live::Claude(live)) => match live.approvals.remove(&request_id) {
+                        Some(pending) => {
+                            let _ = pending.tx.send(match decision {
+                                ApprovalDecision::Allow => ApprovalResolution::Allow,
+                                ApprovalDecision::Always => ApprovalResolution::Always,
+                                ApprovalDecision::Deny => ApprovalResolution::Deny,
+                            });
+                            true
+                        }
+                        None => false,
+                    },
+                    _ => false,
+                }
+            };
+        if !taken {
+            if self.answered.lock().unwrap_or_else(|e| e.into_inner()).contains(&key) {
+                return Err("That approval was already answered.".into());
+            }
+            return Err("No approval is waiting".into());
         }
-        let mut map = self.lock();
-        if let Some(Live::Claude(live)) = map.get_mut(session_id) {
-            if let Some(pending) = live.approvals.remove(&request_id) {
-                let _ = pending.tx.send(match decision {
-                    ApprovalDecision::Allow => ApprovalResolution::Allow,
-                    ApprovalDecision::Always => ApprovalResolution::Always,
-                    ApprovalDecision::Deny => ApprovalResolution::Deny,
-                });
-                return Ok(());
+        self.answered.lock().unwrap_or_else(|e| e.into_inner()).insert(key);
+        // Decided: an approval letter still waiting to wake the parent has
+        // nothing left to ask.
+        if let Ok(Some(row)) = session::get(&self.store, session_id.to_string()) {
+            if let Some(parent) = row.parent_id.as_deref() {
+                let _ = mailbox::dispose_approvals(&self.store, parent, session_id);
             }
         }
-        Err("No approval is waiting".into())
+        Ok(())
+    }
+
+    /// A child under ask autonomy defined a process, or proposed a change to
+    /// one: like any other approval, it wakes a bot parent that could do the
+    /// same itself. Returns whether a letter went.
+    pub fn process_proposed(&self, child: &crate::session::Session, process: &crew_protocol::Process) -> bool {
+        if child.kind != "child" || (process.approved && process.proposed.is_none()) {
+            return false;
+        }
+        let Some(parent) = self.deciding_parent(child, &json!({ "kind": "process" })) else {
+            return false;
+        };
+        let from = crew_protocol::BotRef { id: child.id.clone(), name: child.name.clone(), kind: Some("session".into()) };
+        let letter = mailbox::Letter::new(&parent.id, &from, &mailbox::process_approval_text(process), mailbox::APPROVAL, None);
+        if mailbox::put(&self.store, letter).is_err() {
+            return false;
+        }
+        self.drain_mailbox(&parent.id);
+        true
+    }
+
+    /// The bot that started `child`, when it may decide `request` for it:
+    /// only what it could do itself without asking anyone.
+    pub fn deciding_parent(&self, child: &crate::session::Session, request: &Value) -> Option<crate::session::Session> {
+        let parent = child
+            .parent_id
+            .as_deref()
+            .and_then(|id| session::get(&self.store, id.to_string()).ok().flatten())?;
+        (parent.kind == "bot" && may_decide(&self.autonomy(&parent), request)).then_some(parent)
+    }
+
+    /// The autonomy a session effectively runs with, for a tool deciding
+    /// what a caller may approve.
+    pub fn effective_autonomy(&self, session: &crate::session::Session) -> Autonomy {
+        self.autonomy(session)
     }
 
     /// Answer a question a session is waiting on. The one place a question is
@@ -1009,7 +1000,10 @@ impl TurnHost {
         // again.
         let reported: Vec<(String, i64)> = letters
             .iter()
-            .filter(|letter| (letter.is_report() || letter.kind == mailbox::QUESTION) && !letter.from.id.is_empty())
+            .filter(|letter| {
+                (letter.is_report() || letter.kind == mailbox::QUESTION || letter.kind == mailbox::APPROVAL)
+                    && !letter.from.id.is_empty()
+            })
             .filter_map(|letter| letter.event_cursor.map(|cursor| (letter.from.id.clone(), cursor)))
             .collect();
         let first = letters[0].clone();
@@ -1147,9 +1141,11 @@ impl TurnHost {
 
     /// A bot that started a session hears how each turn ended in its own
     /// box, as a `report` letter that wakes it, so it never sits in a wait to
-    /// find out; and what it asks, as a `question` letter it answers with
-    /// `send_message`. An approval is the user's alone: it wakes nobody. A
-    /// terminal or the user has no turns to hand it to: they wait, or read.
+    /// find out; what it asks, as a `question` letter it answers with
+    /// `send_message`; and an approval it could give itself, as an
+    /// `approval` letter it decides with `send_message`. The user's card
+    /// stays either way. A terminal or the user has no turns to hand it to:
+    /// they wait, or read.
     /// `None` when there is no bot parent to tell.
     fn report_letter(
         &self,
@@ -1174,11 +1170,19 @@ impl TurnHost {
         };
         if kind == "needs-input" {
             let request = request?;
-            if request.get("kind").and_then(Value::as_str) != Some("question") {
-                return None;
-            }
-            let body = mailbox::questions_text(request);
-            return Some(mailbox::Letter::new(&parent.id, &from, &body, mailbox::QUESTION, Some(cursor)));
+            return match request.get("kind").and_then(Value::as_str) {
+                Some("question") => {
+                    let body = mailbox::questions_text(request);
+                    Some(mailbox::Letter::new(&parent.id, &from, &body, mailbox::QUESTION, Some(cursor)))
+                }
+                // Only to a parent that could do it itself; otherwise the
+                // user's card is all there is.
+                Some("approval") if may_decide(&self.autonomy(&parent), request) => {
+                    let body = mailbox::approval_text(request);
+                    Some(mailbox::Letter::new(&parent.id, &from, &body, mailbox::APPROVAL, Some(cursor)))
+                }
+                _ => None,
+            };
         }
         let what = match (kind, outcome) {
             ("turn", "completed") => None,
@@ -1281,34 +1285,15 @@ impl TurnHost {
         self.running.lock().unwrap_or_else(|e| e.into_inner()).contains(session_id)
     }
 
-    /// Who started a child, the way it is told: "Planner (bot <id>)", or
-    /// the user.
-    fn parent_label(&self, session: &crate::session::Session) -> String {
-        match session.parent_id.as_deref().and_then(|id| session::get(&self.store, id.to_string()).ok().flatten()) {
-            Some(parent) => crate::caller::Caller::from_session(parent).label(),
-            None => "the user".to_string(),
-        }
-    }
-
     /// The prompt of a child's turn for a CLI that takes it as one document:
-    /// the envelope and the job on the first turn, the text alone once its
+    /// the persona and the job on the first turn, the text alone once its
     /// conversation is being carried on.
-    fn child_prompt(
-        &self,
-        session: &crate::session::Session,
-        resumed: bool,
-        tools: Option<&str>,
-        params: &TurnStart,
-    ) -> String {
+    fn child_prompt(&self, persona: &str, resumed: bool, params: &TurnStart) -> String {
         let text = crate::providers::with_files(params.text.trim(), &path_list(params, &HashSet::new()));
         if resumed {
             return text;
         }
-        crate::providers::assemble(
-            crate::providers::child_persona(&self.parent_label(session), tools),
-            None,
-            &text,
-        )
+        crate::providers::assemble(persona.to_string(), None, &text)
     }
 
     fn run_claude(
@@ -1499,12 +1484,7 @@ impl TurnHost {
 
         let path = self.resolve_bin("claude").or_else(|_| self.resolve_bin("claude"))?;
         let mcp = self.mcp();
-        let hint = mcp.as_ref().map(|_| self.crew_tools_hint(session, Harness::Mcp));
-        let persona = if session.kind == "child" {
-            crate::providers::child_persona(&self.parent_label(session), hint.as_deref())
-        } else {
-            claude_persona(&session.name, &session.description, hint.as_deref())
-        };
+        let persona = self.persona(session, Harness::Mcp, mcp.is_some(), &params.cwd);
         let spawn = ClaudeSpawn {
             model: Some(session.model.clone()).filter(|m| !m.is_empty()),
             effort: Some(session.effort.clone()).filter(|e| !e.is_empty()),
@@ -1609,29 +1589,17 @@ impl TurnHost {
         };
         let resume = child_resume(&session);
         let child = session.kind == "child";
-        let hint = mcp.as_ref().map(|_| self.crew_tools_hint(&session, Harness::Opencode));
         let files = path_list(&params, &HashSet::new());
         // The persona goes in the system prompt, through a file the config
         // names, every turn; only if that file cannot be written does it ride
         // in the message, as it used to.
-        let persona = if child {
-            crate::providers::child_persona(&self.parent_label(&session), hint.as_deref())
-        } else {
-            crate::providers::persona_prompt(&session.name, &session.description, hint.as_deref())
-        };
+        let persona = self.persona(&session, Harness::Opencode, mcp.is_some(), &params.cwd);
         let instructions = write_opencode_instructions(&session_id, &persona);
         let prompt = match (&instructions, child) {
             (Some(_), true) => crate::providers::with_files(params.text.trim(), &files),
             (Some(_), false) => build_opencode_message(history.as_deref(), &params.text, &files),
-            (None, true) => self.child_prompt(&session, resume.is_some(), hint.as_deref(), &params),
-            (None, false) => build_opencode_prompt(
-                &session.name,
-                &session.description,
-                history.as_deref(),
-                &params.text,
-                &files,
-                hint.as_deref(),
-            ),
+            (None, true) => self.child_prompt(&persona, resume.is_some(), &params),
+            (None, false) => build_opencode_prompt(&persona, history.as_deref(), &params.text, &files),
         };
         // opencode has no approval channel: without --auto it falls back to the
         // user's own permission config, which Crew cannot answer for. Saying so
@@ -2818,8 +2786,8 @@ print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type
         // The persona is in the system prompt, through the file the config
         // names, and gone once the turn is over.
         let system = std::fs::read_to_string(world.dir.join("prompt.txt.system")).expect("system");
-        assert!(system.starts_with("You are Coder."), "the persona is on every turn: {system}");
-        assert!(system.contains("`crew_search_messages`") && !second.contains("You are Coder."), "{second}");
+        assert!(system.starts_with("## Crew bot\n\nYou are Coder,"), "the persona is on every turn: {system}");
+        assert!(system.contains("`crew_search_messages`") && !second.contains("You are Coder,"), "{second}");
         let config: Value = serde_json::from_str(&std::fs::read_to_string(world.dir.join("prompt.txt.config")).expect("config")).expect("json");
         assert_eq!(config["permission"]["crew_*"], "allow", "{config}");
         assert_eq!(config["mcp"]["crew"]["timeout"], 3_900_000, "{config}");
@@ -2975,64 +2943,10 @@ print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type
         );
     }
 
-    /// Every provider spells a Crew tool differently, and an agent that cannot
-    /// spell it goes looking for something else of that shape. Claude Code has
-    /// its own cross-session SendMessage, and in `scripts/drive.mjs` an agent
-    /// told about the bare name found that one and wrote to another machine.
+    /// The host builds the persona from the session's own kind, families
+    /// and all, and from who started it.
     #[test]
-    fn a_tool_sheet_names_the_tools_the_way_the_provider_lists_them() {
-        let bot = crate::tools::all_visible_names(crate::caller::CallerKind::Bot);
-        let mcp = tools_hint(Harness::Mcp, &bot);
-        assert!(mcp.contains("- `mcp__crew__send_message` — write to one of them, by id."), "{mcp}");
-        assert!(mcp.contains("`mcp__crew__create_bot`"), "{mcp}");
-        let opencode = tools_hint(Harness::Opencode, &bot);
-        assert!(opencode.contains("- `crew_send_message` — write"), "{opencode}");
-        // Cursor calls an MCP tool by its server and its name, apart.
-        let cursor = tools_hint(Harness::Cursor, &bot);
-        assert!(cursor.contains("- `send_message` (MCP server `crew`) — write"), "{cursor}");
-        assert!(cursor.contains("`create_bot`, ") && cursor.contains("all on the MCP server `crew`"), "{cursor}");
-
-        for sheet in [&mcp, &opencode, &cursor] {
-            for gone in ["find_tool", "call_tool"] {
-                assert!(!sheet.contains(gone), "the sheet names the gateway: {sheet}");
-            }
-            assert!(sheet.contains(DEFERRED_TOOLS), "{sheet}");
-        }
-        // The bare name never appears on its own: that is the one an agent
-        // cannot call, and the one it will go looking for elsewhere.
-        for sheet in [&mcp, &opencode] {
-            for tool in &bot {
-                assert!(!sheet.contains(&format!("`{tool}`")), "the sheet offers a bare {tool}: {sheet}");
-            }
-        }
-    }
-
-    /// The sheet names exactly what `tools/list` answers that caller with,
-    /// for its actual kind: a tool named and not listed is one it cannot
-    /// call, and one listed and not named is one it reaches past.
-    #[test]
-    fn a_tool_sheet_names_what_the_callers_kind_is_listed() {
-        use crate::caller::CallerKind;
-        let bot = crate::tools::all_visible_names(CallerKind::Bot);
-        let sheet = tools_hint(Harness::Mcp, &bot);
-        for name in &bot {
-            assert!(sheet.contains(&format!("`mcp__crew__{name}`")), "{name} is not on the sheet: {sheet}");
-        }
-
-        let child = crate::tools::all_visible_names(CallerKind::Child);
-        let sheet = child_tools_hint(Harness::Mcp, &child);
-        for name in &child {
-            assert!(sheet.contains(&format!("`mcp__crew__{name}`")), "{name} is not on the child's sheet: {sheet}");
-        }
-        for name in bot.iter().filter(|name| !child.contains(name)) {
-            assert!(!sheet.contains(&format!("`mcp__crew__{name}`")), "a child is told about {name}: {sheet}");
-        }
-        assert!(sheet.contains(DEFERRED_TOOLS) && !sheet.contains("find_tool"), "{sheet}");
-    }
-
-    /// The host builds the sheet from the session's own kind, families and all.
-    #[test]
-    fn the_host_builds_the_sheet_for_the_sessions_kind() {
+    fn the_host_builds_the_persona_for_the_sessions_kind() {
         let host = TurnHost::test_new();
         host.toolbox().register(Arc::new(crate::tools::CatalogOnly(crate::session_tools::catalog)));
         let store = host.test_store();
@@ -3043,13 +2957,19 @@ print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type
             .expect("bot");
         let child = crate::session::create_child(store, ws, "C".into(), "claude".into(), "".into(), "ask".into(), None, Some(bot.id.clone()))
             .expect("child");
-        let bot = host.crew_tools_hint(&bot, Harness::Mcp);
-        assert!(bot.contains("`mcp__crew__start_session`") && bot.contains("## Message"), "{bot}");
-        let child = host.crew_tools_hint(&child, Harness::Mcp);
-        assert!(child.contains("in your report") && !child.contains("start_session"), "{child}");
+        let cwd = dir.to_string_lossy().into_owned();
+        let told = host.persona(&bot, Harness::Mcp, true, &cwd);
+        assert!(told.starts_with("## Crew bot") && told.contains("`mcp__crew__start_session`") && told.contains("## Message"), "{told}");
+        assert!(told.contains(&format!("Your id is {}.", bot.id)) && told.contains(&format!("You work in {cwd}.")), "{told}");
+        let child_told = host.persona(&child, Harness::Mcp, true, &cwd);
+        assert!(child_told.starts_with("## Crew session"), "{child_told}");
+        assert!(child_told.contains(&format!("B, a bot (id {}), started you", bot.id)) && !child_told.contains("start_session"), "{child_told}");
+        assert!(child_told.contains("your question tool reaches B"), "{child_told}");
         for gone in crate::tools::REMOVED_TOOLS {
-            assert!(!bot.contains(gone) && !child.contains(gone), "{gone}: {bot}\n{child}");
+            assert!(!told.contains(gone) && !child_told.contains(gone), "{gone}: {told}\n{child_told}");
         }
+        let bare = host.persona(&bot, Harness::Mcp, false, &cwd);
+        assert!(!bare.contains("### Crew tools"), "{bare}");
     }
 
     /// Crew's own tools never become an approval card, even if the CLI asks.

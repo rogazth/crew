@@ -22,7 +22,7 @@ pub struct ThreadLetter {
     /// for the user, and for a sender deleted since.
     pub from: BotRef,
     pub to: BotRef,
-    #[ts(type = "\"message\" | \"report\" | \"question\"")]
+    #[ts(type = "\"message\" | \"report\" | \"question\" | \"approval\"")]
     pub kind: String,
     pub text: String,
     #[ts(type = "number")]
@@ -79,6 +79,11 @@ pub struct ThreadMessagesRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub limit: Option<u32>,
+    /// The chat asking: the window routes the call to the daemon that holds
+    /// it, since `a` and `b` may both be the user. Unused by crewd.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub session_id: Option<String>,
 }
 
 /// A session's box changed: a letter arrived, was handed to a turn, went

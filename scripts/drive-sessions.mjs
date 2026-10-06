@@ -28,6 +28,8 @@ const MODELS = {
   opencode: process.env.OPENCODE_MODEL ?? "opencode/nemotron-3.5-lightning-free",
   cursor: process.env.CURSOR_MODEL ?? "auto",
 };
+// Who runs the bots of scenarios v and x.
+const BOT = process.env.BOT_PROVIDER ?? "claude";
 const BINARIES = { claude: "claude", codex: "codex", opencode: "opencode", cursor: "cursor-agent" };
 const ALL = ["claude", "codex", "opencode", "cursor"];
 const PROVIDERS = (process.env.PROVIDERS ?? ALL.join(",")).split(",").filter(Boolean);
@@ -381,6 +383,25 @@ function cliIn(cwd) {
 // Each takes a provider and throws on a failure; "n/a: why" is returned for one
 // that cannot apply to it.
 
+/**
+ * A job whose one command its CLI asks before running under ask autonomy:
+ * Claude asks for any shell command; Codex's sandbox lets a write in the
+ * workspace through, so the command writes outside it.
+ */
+function askJob(provider, file) {
+  const path = provider === "codex" ? join(homedir(), `.crew-drive-${file}`) : null;
+  const command = path ? `touch ${path}` : `touch ${file}`;
+  return {
+    prompt: `Run the shell command \`${command}\`, then reply with the word DONE.`,
+    done: (child) => {
+      const where = path ?? join(child.worktree ?? repo, file);
+      const there = existsSync(where);
+      if (path) rmSync(path, { force: true });
+      return there;
+    },
+  };
+}
+
 const scenarios = {
   // The motivating case: a real Claude Code in a terminal hands a job to a
   // session in a new worktree and waits for its report in the same call.
@@ -650,6 +671,83 @@ const scenarios = {
     assert(answered, "the bot did not answer with send_message");
     assert(tail.blocks.some((b) => b.role === "assistant" && /COLOR\W*Blue/i.test(b.text)), `the bot said: ${JSON.stringify(tail.blocks.slice(-2))}`);
     return `question woke it; answered "${answered.tool.detail.text.slice(0, 20)}"; report woke it`;
+  },
+
+  // A bot on full autonomy, an ask child that needs a command approved: the
+  // approval wakes the bot, which allows it with send_message; the child
+  // carries on and its report wakes the bot again. The user's card stays.
+  async v(provider) {
+    if (provider !== "claude" && provider !== "codex") return "n/a: Claude and Codex children only";
+    const bot = await rpc("session_create", {
+      workspaceId: workspace.id, kind: "bot", name: `Lead ${provider}`, provider: BOT, model: MODELS[BOT],
+      description: "You start sessions for the user. Creating files in this repository is fine.", autonomy: "full",
+    });
+    const file = `approved-v-${provider}.txt`;
+    const job = askJob(provider, file);
+    await rpc("turn_start", {
+      sessionId: bot.id, cwd: repo,
+      text: `Use Crew's start_session with provider "${provider}", model "${MODELS[provider]}", autonomy "ask" and this prompt: ${JSON.stringify(job.prompt)} Do not wait for it: end your turn right after starting it. When its report arrives, tell me what it reported, as RESULT: <report>.`,
+    });
+    const until = Date.now() + 10 * 60_000;
+    let tail;
+    while (Date.now() < until) {
+      await sleep(3000);
+      tail = await rpc("transcript_tail", { sessionId: bot.id, limit: 300 });
+      if (!tail.working && tail.blocks.some((b) => b.role === "assistant" && /RESULT:[\s\S]*DONE/i.test(b.text))) break;
+    }
+    const child = (await rpc("session_list", { workspaceId: workspace.id })).find((s) => s.kind === "child" && s.parentId === bot.id);
+    assert(child, "no child");
+    const letters = tail.blocks.filter((b) => b.role === "user" && b.fromBot?.id === child.id);
+    assert(letters.some((b) => /It wants to use/.test(b.text)), `the approval never woke the bot: ${JSON.stringify(letters.map((b) => b.text.slice(0, 80)))}`);
+    const decided = tail.blocks.find((b) => b.tool?.detail?.kind === "message" && b.tool.detail.toId === child.id);
+    assert(decided, `the bot did not decide with send_message: ${JSON.stringify(tail.blocks.filter((b) => b.tool).map((b) => b.tool.title))}`);
+    const childTail = await rpc("transcript_tail", { sessionId: child.id, limit: 300 });
+    const card = childTail.blocks.find((b) => b.approval);
+    assert(card && /allow/i.test(String(card.approval.decided)), `the card: ${JSON.stringify(card?.approval)}`);
+    const note = childTail.blocks.find((b) => /allowed:/.test(b.text ?? ""));
+    assert(note, "no note of who decided");
+    assert(job.done(child), "the allowed command did not run");
+    assert(tail.blocks.some((b) => b.role === "assistant" && /RESULT:[\s\S]*DONE/i.test(b.text)), `the bot said: ${JSON.stringify(tail.blocks.slice(-2).map((b) => b.text))}`);
+    return `approval woke it; ${note.text.slice(0, 60)}; report woke it`;
+  },
+
+  // A bot on ask autonomy could not run the command itself: no letter, the
+  // card stays with the user, who allows it; the report then wakes the bot.
+  async x(provider) {
+    if (provider !== BOT) return "n/a: once is enough";
+    const bot = await rpc("session_create", {
+      workspaceId: workspace.id, kind: "bot", name: "Careful lead", provider: BOT, model: MODELS[BOT],
+      description: "You start sessions for the user.", autonomy: "ask",
+    });
+    const file = "approved-x.txt";
+    const job = askJob(provider, file);
+    await rpc("turn_start", {
+      sessionId: bot.id, cwd: repo,
+      text: `Use Crew's start_session with provider "${provider}", model "${MODELS[provider]}" and this prompt: ${JSON.stringify(job.prompt)} Do not wait for it: end your turn right after starting it. When its report arrives, reply RESULT: <report>.`,
+    });
+    let child;
+    for (let i = 0; i < 200 && !child; i++) {
+      await sleep(3000);
+      child = (await rpc("session_list", { workspaceId: workspace.id })).find((s) => s.kind === "child" && s.parentId === bot.id);
+    }
+    assert(child, "no child");
+    await untilStatus(child.id, ["needs-input"], 300);
+    await sleep(15_000);
+    let tail = await rpc("transcript_tail", { sessionId: bot.id, limit: 300 });
+    assert(!tail.blocks.some((b) => b.role === "user" && b.fromBot?.id === child.id), "the bot was woken for an approval it could not give");
+    const now = await describe(await row(child.id));
+    assert(now.request?.kind === "approval", `the child waits on ${JSON.stringify(now.request)}`);
+    await rpc("turn_respond", { sessionId: child.id, requestId: now.request.request_id, decision: "allow" });
+    const until = Date.now() + 10 * 60_000;
+    while (Date.now() < until) {
+      await sleep(3000);
+      tail = await rpc("transcript_tail", { sessionId: bot.id, limit: 300 });
+      if (!tail.working && tail.blocks.some((b) => b.role === "assistant" && /RESULT:/i.test(b.text))) break;
+    }
+    assert(job.done(child), "the allowed command did not run");
+    const letters = tail.blocks.filter((b) => b.role === "user" && b.fromBot?.id === child.id);
+    assert(letters.length === 1 && !/It wants to use/.test(letters[0].text), `letters: ${JSON.stringify(letters.map((b) => b.text.slice(0, 60)))}`);
+    return "no letter; the user's card allowed it; the report woke the bot";
   },
 
   // Stopped mid-turn, the transcript stays.

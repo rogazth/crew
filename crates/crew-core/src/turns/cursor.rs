@@ -179,21 +179,14 @@ impl TurnHost {
         let resume = child_resume(&session);
         // No system channel: the persona and the tool sheet are the first
         // user message of a conversation, a bot's every turn.
-        let hint = mcp.as_ref().map(|_| self.crew_tools_hint(&session, Harness::Cursor));
+        let persona = self.persona(&session, Harness::Cursor, mcp.is_some(), &params.cwd);
         let texts = if child {
             Texts {
-                fresh: self.child_prompt(&session, false, hint.as_deref(), &params),
-                resumed: self.child_prompt(&session, true, hint.as_deref(), &params),
+                fresh: self.child_prompt(&persona, false, &params),
+                resumed: self.child_prompt(&persona, true, &params),
             }
         } else {
-            let text = build_cursor_prompt(
-                &session.name,
-                &session.description,
-                history.as_deref(),
-                &params.text,
-                &path_list(&params, &HashSet::new()),
-                hint.as_deref(),
-            );
+            let text = build_cursor_prompt(&persona, history.as_deref(), &params.text, &path_list(&params, &HashSet::new()));
             Texts { fresh: text.clone(), resumed: text }
         };
         // Minted once and used twice: the agent's own shell gets it, and so

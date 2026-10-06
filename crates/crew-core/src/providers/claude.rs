@@ -146,7 +146,6 @@ pub fn replayed_text(rec: &Map<String, Value>) -> Option<String> {
     (!text.is_empty()).then_some(text)
 }
 
-pub use super::persona_prompt;
 
 /// Claude takes its system prompt on argv and the turn on stdin, so the tail of
 /// the conversation rides in the user message, above what is being asked now.

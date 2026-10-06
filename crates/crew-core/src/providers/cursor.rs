@@ -16,7 +16,6 @@ use serde_json::{json, Map, Value};
 use super::runtime::Autonomy;
 use super::{as_record, clip, crew_label, crew_tool_detail, leaf, mcp_label, pretty_input, string_field, todo_items};
 
-pub use super::persona_prompt;
 
 /// The name Crew's MCP server goes by in `session/new`: the namespace the
 /// model finds its tools under, and the `providerIdentifier` of its calls.
@@ -65,19 +64,8 @@ pub fn with_attached_files(text: &str, files: &[String]) -> String {
 
 /// ACP has no system channel, so a bot's turn is one document: persona, the
 /// tail of the conversation, then what is being asked.
-pub fn build_cursor_prompt(
-    name: &str,
-    description: &str,
-    history: Option<&str>,
-    text: &str,
-    files: &[String],
-    tools: Option<&str>,
-) -> String {
-    super::assemble(
-        persona_prompt(name, description, tools),
-        history,
-        &with_attached_files(text.trim(), files),
-    )
+pub fn build_cursor_prompt(persona: &str, history: Option<&str>, text: &str, files: &[String]) -> String {
+    super::assemble(persona.to_string(), history, &with_attached_files(text.trim(), files))
 }
 
 /// The handshake. Crew reads and writes no files and runs no terminals for

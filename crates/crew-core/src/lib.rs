@@ -19,6 +19,7 @@ pub mod mcp;
 pub mod messages;
 pub mod process;
 pub mod process_tools;
+pub mod prompts;
 pub mod pty;
 pub mod remote;
 pub mod routine;

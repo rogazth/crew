@@ -22,11 +22,20 @@ pub struct ProcessTools {
     host: ProcessHost,
     /// For naming whoever created a process.
     store: Store,
+    /// For waking a bot parent with a process its child proposed.
+    turns: Option<crate::turns::TurnHost>,
 }
 
 impl ProcessTools {
     pub fn new(host: ProcessHost, store: Store) -> Self {
-        Self { host, store }
+        Self { host, store, turns: None }
+    }
+
+    /// With the turn host: a process a child proposes under ask autonomy
+    /// wakes its bot parent, which may decide it.
+    pub fn with_turns(mut self, turns: crate::turns::TurnHost) -> Self {
+        self.turns = Some(turns);
+        self
     }
 }
 
@@ -237,7 +246,20 @@ impl ToolFamily for ProcessTools {
                     other => return Err(format!("action is one of {}, not {other}", ACTIONS.join(", "))),
                 }
             }
-            "save_process" => self.save(caller, workspace, args).map(|saved| here(&saved))?,
+            "save_process" => {
+                let saved = self.save(caller, workspace, args)?;
+                let mut row = here(&saved);
+                let waits = !saved.approved || saved.proposed.is_some();
+                if let (Caller::Child(me), Some(turns), true, false) = (caller, &self.turns, waits, caller.full_autonomy()) {
+                    if turns.process_proposed(me, &saved) {
+                        row["pending_approval"] = json!(format!(
+                            "Waiting for approval: {} decides it, or the user in Crew.",
+                            me.parent_id.as_deref().map(|id| self.who(Some(id))).unwrap_or_else(|| "whoever started you".into())
+                        ));
+                    }
+                }
+                row
+            }
             "delete_process" => {
                 let target = process(args)?;
                 // Deleting throws away a definition and its logs with no

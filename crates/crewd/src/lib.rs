@@ -596,9 +596,12 @@ pub fn serve_on(config: Config, listen: Listen) -> Result<Handle, String> {
             // user): the window opens its tab and starts its CLI on the prompt.
             made.emit("session-created", SessionCreated { session: proto_session(created), open: created.kind == "terminal" });
         }),
-    ));
+    )
+    .with_processes(config.processes.clone()));
     toolbox.register(children.clone());
-    toolbox.register(Arc::new(ProcessTools::new(config.processes.clone(), config.store.clone())));
+    toolbox.register(Arc::new(
+        ProcessTools::new(config.processes.clone(), config.store.clone()).with_turns(turns.clone()),
+    ));
     toolbox.register(Arc::new(browser.clone()));
     config.bridge.set_handler(Arc::new(ToolDispatch {
         store: config.store.clone(),
@@ -1621,7 +1624,7 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
             json(block(move || mailbox::pairs(&store, &session_id)).await?)
         }
         "thread_messages" => {
-            let proto::ThreadMessagesRequest { a, b, before, limit } = parse(params)?;
+            let proto::ThreadMessagesRequest { a, b, before, limit, .. } = parse(params)?;
             let store = hosts.store.clone();
             json(block(move || mailbox::thread(&store, &a, &b, before.as_deref(), limit)).await?)
         }

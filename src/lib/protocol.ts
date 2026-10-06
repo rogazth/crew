@@ -857,7 +857,7 @@ id: string,
  * Kind absent: a bot; `session`, `terminal`, or `user`. The id is empty
  * for the user, and for a sender deleted since.
  */
-from: BotRef, to: BotRef, kind: "message" | "report" | "question", text: string, at: number, 
+from: BotRef, to: BotRef, kind: "message" | "report" | "question" | "approval", text: string, at: number, 
 /**
  * `pending` (waiting in the box), `claimed` (a turn carries it, or it was
  * written into a running turn and not read yet), `delivered`, or
@@ -874,7 +874,12 @@ a: string, b: string,
 /**
  * A letter id: the page ends just before it.
  */
-before?: string, limit?: number, };
+before?: string, limit?: number, 
+/**
+ * The chat asking: the window routes the call to the daemon that holds
+ * it, since `a` and `b` may both be the user. Unused by crewd.
+ */
+sessionId?: string, };
 
 /**
  * A page of one pair's thread, oldest first.

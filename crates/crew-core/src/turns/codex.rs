@@ -25,7 +25,7 @@ use super::{
 use crate::mailbox;
 use crate::providers::codex::{
     approval_response, classify_request, completed_tool_status, exec_item, initialize_params, interrupt_params,
-    is_tool_item, persona_prompt, plan_detail, questions_response, rpc_error_message, steer_params, thread_id,
+    is_tool_item, plan_detail, questions_response, rpc_error_message, steer_params, thread_id,
     thread_request, tool_call_id, tool_detail, tool_label, tool_name, turn_end, turn_id, turn_start_params,
     unsupported_error, user_message_text, with_attached_paths, ApprovalKind, CodexAsk, CodexThread, TurnEnd,
 };
@@ -147,12 +147,7 @@ impl TurnHost {
         let child = session.kind == "child";
         // Every turn: Codex keeps no system prompt Crew can set, and newer
         // catalogs override developer instructions.
-        let hint = mcp.as_ref().map(|_| self.crew_tools_hint(&session, Harness::Mcp));
-        let instructions = if child {
-            crate::providers::child_persona(&self.parent_label(&session), hint.as_deref())
-        } else {
-            persona_prompt(&session.name, &session.description, hint.as_deref())
-        };
+        let instructions = self.persona(&session, Harness::Mcp, mcp.is_some(), &params.cwd);
         let files = path_list(&params, &HashSet::new());
         let text = if child {
             crate::providers::with_files(params.text.trim(), &files)

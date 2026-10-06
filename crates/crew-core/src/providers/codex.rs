@@ -16,7 +16,6 @@ use super::runtime::Autonomy;
 use super::{as_record, clip, leaf, mcp_label, pretty_input, string_field, todo_items, unwrap_shell};
 
 pub use super::parse_json_line;
-pub use super::persona_prompt;
 
 /// How long Codex lets one call to Crew's MCP server run: 65 minutes, past
 /// the 60 a `wait` may take (plan §7e.2). Codex's own default is a minute.

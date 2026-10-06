@@ -530,13 +530,15 @@ pub(crate) const REMOVED_TOOLS: &[&str] = &[
 /// it is the only place this is said, because the prompt of a session the user
 /// runs is theirs and Crew does not touch it.
 pub fn instructions(toolbox: &Toolbox, caller: &Caller) -> String {
+    let notes: String = toolbox.notes(caller).into_iter().map(|note| format!("\n{note}")).collect();
+    // A terminal's prompt is the user's: this is all Crew tells it (plan §7.3).
+    if let Caller::Terminal(session) = caller {
+        let harness = crate::prompts::Harness::for_provider(&session.provider);
+        return format!("{}{notes}", crate::prompts::terminal(&session.name, harness));
+    }
     let who = match caller {
         Caller::Bot(_) => String::new(),
-        Caller::Terminal(session) => format!(
-            " You are the terminal session \"{}\": bots you message can act on it, but cannot write back to you, \
-             and nothing wakes you. Check a session you start with read_session, or start it with wait: true.",
-            session.name
-        ),
+        Caller::Terminal(_) => unreachable!("answered above"),
         Caller::Child(session) => format!(
             " You are the session \"{}\", started by {}: your final message of each turn is your report to it.",
             session.name,
@@ -544,7 +546,6 @@ pub fn instructions(toolbox: &Toolbox, caller: &Caller) -> String {
         ),
         Caller::User { .. } => " You are calling as the user.".to_string(),
     };
-    let notes: String = toolbox.notes(caller).into_iter().map(|note| format!("\n{note}")).collect();
     format!(
         "Crew is the app this runs in: it holds a workspace of bots, and these tools reach them.{who}\n\
          {GLOSSARY}{notes}"

@@ -26,54 +26,6 @@ pub fn string_field(rec: Option<&Map<String, Value>>, key: &str) -> Option<Strin
         .map(str::to_string)
 }
 
-/// What every provider is told before the first word of the conversation.
-///
-/// It says where the bot is and what the reply is for, and stops there. How
-/// the model writes is the model's; a house style here would reach every bot
-/// the user ever makes, and they did not ask for one.
-///
-/// Every turn gets this, because every turn is a new session. The date is part
-/// of it for the same reason: a model with no session behind it has no way to
-/// know what day it is except the one it was trained on.
-pub fn persona_prompt(name: &str, description: &str, tools: Option<&str>) -> String {
-    let who = match name.trim() {
-        "" => "the user's bot",
-        named => named,
-    };
-    let job = description.trim();
-    let rules = format!(
-        "You are chatting inside Crew, a desktop app. Today is {}. Your reply is read by the user \
-         in a chat window, next to the tools you ran: do the work first, then say what happened.",
-        today()
-    );
-    let persona = if job.is_empty() {
-        format!("You are {who}. {rules}")
-    } else {
-        format!("You are {who}. {job}\n\n{rules}")
-    };
-    match tools {
-        Some(tools) if !tools.is_empty() => format!("{persona}\n\n{tools}"),
-        _ => persona,
-    }
-}
-
-/// What a child session is told before its first turn: who started it, and
-/// that its last message is its report. It is not a bot and has no job
-/// description; the job is the prompt it was started with.
-pub fn child_persona(parent: &str, tools: Option<&str>) -> String {
-    let persona = format!(
-        "Started by {parent} through Crew, a desktop app that runs provider CLIs. Today is {}. \
-         Your final message of each turn is your report: end with what you did, what is left, \
-         and any question. {parent} reads it when your turn ends and may send you more in this \
-         same conversation; nothing else you write reaches it.",
-        today()
-    );
-    match tools {
-        Some(tools) if !tools.is_empty() => format!("{persona}\n\n{tools}"),
-        _ => persona,
-    }
-}
-
 /// A message and the files attached to it, as one text.
 pub fn with_files(text: &str, files: &[String]) -> String {
     if files.is_empty() {
@@ -119,7 +71,7 @@ pub fn assemble(system: String, history: Option<&str>, turn: &str) -> String {
 }
 
 /// The machine's own date, the way a person here would write it.
-fn today() -> String {
+pub fn today() -> String {
     const DAYS: [&str; 7] = [
         "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday",
     ];
@@ -223,7 +175,12 @@ pub fn crew_tool_detail(name: &str, input: &Map<String, Value>) -> Option<crew_p
     Some(crew_protocol::ToolDetail::Message {
         // `send_to_session` named its reader `session`.
         to: string_field(Some(&input), "to").or_else(|| string_field(Some(&input), "session"))?,
-        text: string_field(Some(&input), "text").unwrap_or_default(),
+        // A decision on an approval may come with no text: the row says it.
+        text: match (string_field(Some(&input), "text"), string_field(Some(&input), "decision")) {
+            (Some(text), _) => text,
+            (None, Some(decision)) => format!("Decision: {decision}"),
+            (None, None) => String::new(),
+        },
         letter_id: None,
         to_id: None,
         to_name: None,
@@ -576,62 +533,22 @@ mod tests {
         assert_eq!(crew_call("mcp__crew__call_tool", junk.as_object().unwrap()).map(|(verb, _)| verb), Some("list_agents"));
     }
 
+    /// The date is said in a person's words.
     #[test]
-    fn the_persona_names_the_bot_and_its_job() {
-        let prompt = persona_prompt("Planner", "You keep the roadmap.", None);
-        assert!(prompt.starts_with("You are Planner. You keep the roadmap."), "{prompt}");
-        assert!(prompt.contains("chatting inside Crew"), "{prompt}");
-    }
-
-    #[test]
-    fn a_bot_with_no_job_is_still_somebody() {
-        let prompt = persona_prompt("Planner", "   ", None);
-        assert!(prompt.starts_with("You are Planner. You are chatting"), "{prompt}");
-        let unnamed = persona_prompt("  ", "", None);
-        assert!(unnamed.starts_with("You are the user's bot."), "{unnamed}");
-    }
-
-    /// The user asked for a harness that does not tell the model how to talk.
-    /// This is a blocklist, not the property: it catches the house style that
-    /// used to be here coming back, which is the thing worth catching.
-    #[test]
-    fn the_persona_does_not_dictate_a_voice() {
-        let prompt = persona_prompt("Planner", "You keep the roadmap.", None).to_lowercase();
-        for dictated in ["short", "concise", "brief", "no headers", "no preamble", "tone"] {
-            assert!(!prompt.contains(dictated), "the persona still dictates \"{dictated}\": {prompt}");
-        }
-    }
-
-    /// A clean session per turn means the model has no conversation behind it
-    /// to date itself from.
-    #[test]
-    fn the_persona_says_what_day_it_is() {
-        let prompt = persona_prompt("Planner", "", None);
+    fn today_reads_as_a_date() {
         let today = today();
-        assert!(prompt.contains(&format!("Today is {today}.")), "{prompt}");
         assert!(today.contains(", "), "the date reads as a date: {today}");
     }
+
+    /// What a turn is handed before the tail, in these tests.
+    const PERSONA: &str = "## Crew bot\n\nYou are Planner. You have: `mcp__crew__send_message`.";
 
     const TAIL: &str = "## The conversation so far\n\n[user] hola\n[you] hola a ti";
 
     fn turn_prompts(history: Option<&str>) -> Vec<String> {
         vec![
-            opencode::build_opencode_prompt(
-                "Planner",
-                "You keep the roadmap.",
-                history,
-                "y ahora?",
-                &[],
-                Some("You have: `mcp__crew__message_agent`."),
-            ),
-            cursor::build_cursor_prompt(
-                "Planner",
-                "You keep the roadmap.",
-                history,
-                "y ahora?",
-                &[],
-                Some("You have: `mcp__crew__message_agent`."),
-            ),
+            opencode::build_opencode_prompt(PERSONA, history, "y ahora?", &[]),
+            cursor::build_cursor_prompt(PERSONA, history, "y ahora?", &[]),
         ]
     }
 
@@ -641,8 +558,7 @@ mod tests {
     #[test]
     fn every_provider_sends_the_persona_and_the_tail_on_every_turn() {
         for prompt in turn_prompts(Some(TAIL)) {
-            assert!(prompt.starts_with("You are Planner. You keep the roadmap."), "{prompt}");
-            assert!(prompt.contains("`mcp__crew__message_agent`"), "{prompt}");
+            assert!(prompt.starts_with(PERSONA), "{prompt}");
             assert!(prompt.contains("[you] hola a ti"), "{prompt}");
             assert!(prompt.trim_end().ends_with("y ahora?"), "{prompt}");
             assert!(
@@ -666,7 +582,7 @@ mod tests {
     /// argv, the tail on stdin above the turn.
     #[test]
     fn claude_splits_the_same_prompt_across_its_two_channels() {
-        let persona = persona_prompt("Planner", "You keep the roadmap.", Some("You have: x."));
+        let persona = PERSONA.to_string();
         let args = claude::build_claude_spawn_args(&claude::ClaudeSpawn {
             model: Some("claude-haiku-4-5-20251001".into()),
             effort: None,
@@ -799,21 +715,6 @@ mod tests {
             resume: Some("ses_1".into()),
         });
         assert!(opencode.windows(2).any(|pair| pair == ["--session", "ses_1"]), "{opencode:?}");
-    }
-
-    #[test]
-    fn a_childs_persona_says_who_started_it_and_what_its_report_is() {
-        let persona = child_persona("Planner (bot a1)", Some("Tools: x."));
-        assert!(persona.starts_with("Started by Planner (bot a1)"), "{persona}");
-        assert!(persona.contains("Your final message of each turn is your report: end with what you did, what is left, and any question."), "{persona}");
-        assert!(persona.ends_with("\n\nTools: x."), "{persona}");
-    }
-
-    #[test]
-    fn the_tool_sheet_goes_last_and_only_when_there_is_one() {
-        let with = persona_prompt("Planner", "", Some("You have: message_agent."));
-        assert!(with.ends_with("\n\nYou have: message_agent."), "{with}");
-        assert_eq!(persona_prompt("Planner", "", Some("")), persona_prompt("Planner", "", None));
     }
 
     /// A message row, once its call answers, names the letter it made and

@@ -10,8 +10,9 @@
 //! a reply.
 //!
 //! A child session's report reaches the bot that started it the same way, as
-//! a `report` letter, and its question as a `question` letter: that is what
-//! wakes the bot, so it never has to wait.
+//! a `report` letter, its question as a `question` letter, and an approval it
+//! waits on as an `approval` letter: that is what wakes the bot, so it never
+//! has to wait.
 //!
 //! A letter goes pending → claimed → delivered, or is disposed. Claimed means
 //! a turn is carrying it; delivered, that the turn ended. A daemon stopped
@@ -32,6 +33,10 @@ pub const REPORT: &str = "report";
 /// A child stopped on a question (its question tool) for the bot that
 /// started it, which answers with `send_message`.
 pub const QUESTION: &str = "question";
+/// A child under ask autonomy waits on an approval (a command, an edit, a
+/// process it defined) that its bot parent may decide, with `send_message`
+/// and a `decision`. Only to a parent that could do the same itself.
+pub const APPROVAL: &str = "approval";
 
 /// About how much letter text one turn is handed, in characters. A turn always
 /// takes at least one letter, however long; the rest wait for the next turn.
@@ -44,7 +49,7 @@ pub struct Letter {
     pub from: BotRef,
     pub text: String,
     pub at: i64,
-    /// [`MESSAGE`], [`REPORT`] or [`QUESTION`].
+    /// [`MESSAGE`], [`REPORT`], [`QUESTION`] or [`APPROVAL`].
     pub kind: String,
     /// For a report: the `session_events` cursor of the event it reports, so
     /// handing it over and reading the session some other way can each tell
@@ -202,6 +207,22 @@ pub fn question_envelope(from: &BotRef, body: &str) -> String {
     format!("## Question from session {}\n\n{}{answer}", who_session(from), body.trim())
 }
 
+/// The header a child's approval request is handed over under: what it
+/// wants to do and why, then how to decide it.
+pub fn approval_envelope(from: &BotRef, body: &str) -> String {
+    let decide = if from.id.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "\n\nDecide with send_message to {id}: {{\"to\": \"{id}\", \"decision\": \"allow\"}} or \"deny\". \
+             If it is the user's call, ask the user first with your question tool; the user can also decide it in \
+             Crew, and the first answer counts.",
+            id = from.id
+        )
+    };
+    format!("## Approval from session {}\n\n{}{decide}", who_session(from), body.trim())
+}
+
 fn who_session(from: &BotRef) -> String {
     if from.id.is_empty() {
         format!("{} (no longer in this workspace)", from.name)
@@ -250,12 +271,70 @@ pub fn questions_text(request: &serde_json::Value) -> String {
         .join("\n")
 }
 
+/// What a child's approval request asks, as its parent reads it: the tool,
+/// what it would do, why (when the CLI said), and its input.
+pub fn approval_text(request: &serde_json::Value) -> String {
+    use serde_json::Value;
+    let tool = request.get("tool").and_then(Value::as_str).unwrap_or("a tool");
+    let title = request.get("title").and_then(Value::as_str).unwrap_or("").trim();
+    let input = request.get("input").filter(|input| input.as_object().is_some_and(|map| !map.is_empty()));
+    let mut out = if title.is_empty() { format!("It wants to use {tool}.") } else { format!("It wants to use {tool}: {title}") };
+    let why = input.and_then(|input| {
+        ["description", "reason", "justification"]
+            .iter()
+            .find_map(|key| input.get(*key).and_then(Value::as_str).map(str::trim).filter(|why| !why.is_empty()))
+    });
+    if let Some(why) = why {
+        out.push_str(&format!("\nWhy: {why}"));
+    }
+    if let Some(input) = input {
+        let raw = input.to_string();
+        let clipped: String = raw.chars().take(2000).collect();
+        out.push_str(&format!("\nInput: {clipped}{}", if clipped.len() < raw.len() { "…" } else { "" }));
+    }
+    out
+}
+
+/// A process a child defined or wants changed under ask autonomy, as its
+/// parent reads it: what would run once it is accepted.
+pub fn process_approval_text(process: &crew_protocol::Process) -> String {
+    let describe = |spec: &crew_protocol::ProcessSpec| {
+        let mut lines = vec![format!("  command: {}", spec.command)];
+        if !spec.cwd.is_empty() {
+            lines.push(format!("  cwd: {}", spec.cwd));
+        }
+        if !spec.env.is_empty() {
+            let env: Vec<String> = spec.env.iter().map(|(key, value)| format!("{key}={value}")).collect();
+            lines.push(format!("  env: {}", env.join(" ")));
+        }
+        if spec.auto_restart {
+            lines.push("  auto_restart: true".into());
+        }
+        lines.join("\n")
+    };
+    match (&process.proposed, process.approved) {
+        (_, false) => format!(
+            "It defined the process \"{}\", which cannot start until it is accepted:\n{}",
+            process.spec.name,
+            describe(&process.spec)
+        ),
+        (Some(proposed), true) => format!(
+            "It wants to change the process \"{}\". Now:\n{}\nProposed:\n{}",
+            process.spec.name,
+            describe(&process.spec),
+            describe(proposed)
+        ),
+        (None, true) => format!("Its change to the process \"{}\" has already been decided.", process.spec.name),
+    }
+}
+
 /// A letter as the model reads it, by its kind. `parent` is the reader's
 /// parent, for a reader that is a session somebody started.
 pub fn render(letter: &Letter, parent: Option<&str>) -> String {
     match letter.kind.as_str() {
         REPORT => report_envelope(&letter.from, &letter.text),
         QUESTION => question_envelope(&letter.from, &letter.text),
+        APPROVAL => approval_envelope(&letter.from, &letter.text),
         _ => envelope(&letter.from, &letter.text, Some(letter.at), parent),
     }
 }
@@ -283,9 +362,13 @@ pub(crate) fn insert(conn: &rusqlite::Connection, letter: &Letter) -> rusqlite::
 
 /// Drop a message in a box.
 pub fn enqueue(store: &Store, to_session: &str, from: &BotRef, text: &str) -> Result<Letter, String> {
-    let letter = Letter::new(to_session, from, text, MESSAGE, None);
+    put(store, Letter::new(to_session, from, text, MESSAGE, None))
+}
+
+/// Drop a letter of any kind in its box.
+pub fn put(store: &Store, letter: Letter) -> Result<Letter, String> {
     store.with(|conn| insert(conn, &letter))?;
-    store.mailbox_changed(to_session);
+    store.mailbox_changed(&letter.to_session);
     Ok(letter)
 }
 
@@ -530,7 +613,7 @@ pub fn take_back(store: &Store, to_session: &str, from_session: &str, seen: i64)
     store.with(|conn| {
         conn.prepare_cached(&format!(
             "UPDATE mailbox SET disposed_at = ?4
-              WHERE to_session = ?1 AND from_session = ?2 AND kind IN ('report', 'question')
+              WHERE to_session = ?1 AND from_session = ?2 AND kind IN ('report', 'question', 'approval')
                 AND event_cursor IS NOT NULL AND event_cursor <= ?3 AND {PENDING}"
         ))?
         .execute(params![to_session, from_session, seen, now_millis()])
@@ -541,12 +624,22 @@ pub fn take_back(store: &Store, to_session: &str, from_session: &str, seen: i64)
 /// A child's question was answered, by its parent or by the user: a question
 /// letter still waiting to wake the parent has nothing left to ask.
 pub fn dispose_questions(store: &Store, to_session: &str, from_session: &str) -> Result<usize, String> {
+    dispose_kind(store, to_session, from_session, QUESTION)
+}
+
+/// A child's approval was decided, by its parent or by the user: an
+/// approval letter still waiting to wake the parent has nothing left to ask.
+pub fn dispose_approvals(store: &Store, to_session: &str, from_session: &str) -> Result<usize, String> {
+    dispose_kind(store, to_session, from_session, APPROVAL)
+}
+
+fn dispose_kind(store: &Store, to_session: &str, from_session: &str, kind: &str) -> Result<usize, String> {
     store.with(|conn| {
         conn.prepare_cached(&format!(
             "UPDATE mailbox SET disposed_at = ?3
-              WHERE to_session = ?1 AND from_session = ?2 AND kind = 'question' AND {PENDING}"
+              WHERE to_session = ?1 AND from_session = ?2 AND kind = ?4 AND {PENDING}"
         ))?
-        .execute(params![to_session, from_session, now_millis()])
+        .execute(params![to_session, from_session, now_millis(), kind])
     })
     .inspect(|&count| changed(store, to_session, count))
 }
@@ -848,6 +941,16 @@ mod tests {
     }
 
     /// A question lists each question with its options, and says how to answer.
+    #[test]
+    fn an_approval_says_what_it_wants_and_why_and_how_to_decide() {
+        let from = BotRef { id: "c1".into(), name: "claude: build".into(), kind: Some("session".into()) };
+        let request = serde_json::json!({ "kind": "approval", "tool": "Bash", "title": "npm test",
+            "input": { "command": "npm test", "description": "Run the unit tests" } });
+        let out = render(&Letter::new("p1", &from, &approval_text(&request), APPROVAL, Some(3)), None);
+        assert!(out.starts_with("## Approval from session claude: build (c1)\n\nIt wants to use Bash: npm test\nWhy: Run the unit tests\nInput: {"), "{out}");
+        assert!(out.contains(r#"{"to": "c1", "decision": "allow"}"#) && out.contains("first answer counts"), "{out}");
+    }
+
     #[test]
     fn a_question_is_headed_by_the_session_and_says_how_to_answer() {
         let from = BotRef { id: "c1".into(), name: "codex: fix".into(), kind: Some("session".into()) };
