@@ -12,12 +12,14 @@ import {
   rerunEnv,
   runActions,
   runIn,
+  servedUrl,
   specChanges,
   specOf,
   startableIn,
   stateLabel,
   stateTone,
   upsertProcess,
+  urlLabel,
   type Process,
   type ProcessRun,
 } from "./processes";
@@ -36,6 +38,7 @@ function run(patch: Partial<ProcessRun> = {}): ProcessRun {
     runCursor: 0,
     startedBy: null,
     env: {},
+    url: null,
     ...patch,
   };
 }
@@ -172,5 +175,19 @@ describe("start and stop all", () => {
     expect(rerunEnv(web, undefined)).toBeUndefined();
     expect(rerunEnv(web, run({ env: { PORT: "3000" } }))).toBeUndefined();
     expect(rerunEnv(web, run({ env: { PORT: "4011" } }))).toEqual({ PORT: "4011" });
+  });
+});
+
+describe("served address", () => {
+  it("offers what a run printed only while it is up", () => {
+    const url = "http://localhost:5173/";
+    expect(servedUrl(run({ url }))).toBe(url);
+    expect(servedUrl(run({ url, state: "exited" }))).toBeNull();
+    expect(servedUrl(undefined)).toBeNull();
+  });
+
+  it("reads as host and port, with a path only when there is one", () => {
+    expect(urlLabel("http://localhost:5173/")).toBe("localhost:5173");
+    expect(urlLabel("https://app.localhost:8443/admin")).toBe("app.localhost:8443/admin");
   });
 });

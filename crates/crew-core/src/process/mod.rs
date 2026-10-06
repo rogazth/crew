@@ -289,6 +289,8 @@ struct Run {
     run_cursor: u64,
     env: BTreeMap<String, String>,
     started_by: Option<String>,
+    /// The local address this run printed: what a viewer offers to open.
+    url: Option<String>,
 }
 
 impl Default for Run {
@@ -308,6 +310,7 @@ impl Default for Run {
             run_cursor: 0,
             env: BTreeMap::new(),
             started_by: None,
+            url: None,
         }
     }
 }
@@ -344,11 +347,47 @@ struct RunSink {
     key: Key,
     generation: u64,
     log: Arc<LogStore>,
+    /// Output since the last newline, read line by line until a local
+    /// address turns up; `None` once one has, and nothing more is read.
+    scan: Mutex<Option<Vec<u8>>>,
+}
+
+/// A line longer than this is no server's banner: it is dropped unread.
+const SCAN_LINE_MAX: usize = 4096;
+
+impl RunSink {
+    fn scan(&self, bytes: &[u8]) {
+        let mut scan = self.scan.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(pending) = scan.as_mut() else {
+            return;
+        };
+        pending.extend_from_slice(bytes);
+        let Some(end) = pending.iter().rposition(|&b| b == b'\n') else {
+            if pending.len() > SCAN_LINE_MAX {
+                pending.clear();
+            }
+            return;
+        };
+        let found = pending[..end].split(|&b| b == b'\n').find_map(|line| text::local_url(&text::clean(line)));
+        pending.drain(..=end);
+        if pending.len() > SCAN_LINE_MAX {
+            pending.clear();
+        }
+        let Some(url) = found else {
+            return;
+        };
+        *scan = None;
+        drop(scan);
+        if let Some(inner) = self.host.upgrade() {
+            ProcessHost { inner }.on_url(&self.key, self.generation, url);
+        }
+    }
 }
 
 impl PtySink for RunSink {
     fn output(&self, bytes: &[u8]) {
         self.log.append(bytes);
+        self.scan(bytes);
     }
 
     fn exit(&self, code: Option<i32>) {
@@ -731,6 +770,7 @@ impl ProcessHost {
         run.generation += 1;
         run.stopping = false;
         run.exit_code = None;
+        run.url = None;
         let log = self.log(key)?;
         run.run_cursor = log.total();
         let own: Vec<String> = run.env.iter().map(|(k, v)| format!("{k}={v}")).collect();
@@ -740,6 +780,7 @@ impl ProcessHost {
             key: key.clone(),
             generation: run.generation,
             log: log.clone(),
+            scan: Mutex::new(Some(Vec::new())),
         });
         let shell = std::env::var("SHELL")
             .ok()
@@ -775,6 +816,17 @@ impl ProcessHost {
         }
     }
 
+    /// A run printed where it serves: the first address it gives stands.
+    fn on_url(&self, key: &Key, generation: u64, url: String) {
+        let mut runs = self.runs();
+        let Some(run) = runs.get_mut(key).filter(|run| run.generation == generation) else {
+            return;
+        };
+        run.url = Some(url);
+        drop(runs);
+        self.emit(&key.0);
+    }
+
     fn on_exit(&self, key: &Key, generation: u64, code: Option<i32>) {
         let def = self.def_by_id(&key.0).ok().flatten();
         let mut runs = self.runs();
@@ -788,6 +840,7 @@ impl ProcessHost {
         run.pid = None;
         run.stream_id = None;
         run.exit_code = code;
+        run.url = None;
         let log = self.log(key).ok();
         if let Some(log) = &log {
             let how = code.map_or("killed by a signal".to_string(), |code| format!("exited with code {code}"));
@@ -1315,6 +1368,7 @@ impl ProcessHost {
                     run_cursor: run.run_cursor,
                     started_by: run.started_by.clone(),
                     env: run.env.clone(),
+                    url: run.url.clone(),
                 })
             })
             .collect();

@@ -569,7 +569,12 @@ startedBy: string | null,
 /**
  * Laid over the command's own for this run, e.g. a `PORT` of its own.
  */
-env: { [key in string]: string }, };
+env: { [key in string]: string }, 
+/**
+ * The local address this run printed, e.g. a dev server's
+ * `http://localhost:5173/`; `None` until it prints one, and once it ends.
+ */
+url: string | null, };
 
 /**
  * What a process runs: the part an agent may only propose.

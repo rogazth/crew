@@ -1,6 +1,10 @@
 //! Terminal output as an agent should read it. The log keeps the escapes so a
 //! terminal can repaint from it; a model only pays tokens for them.
 
+use std::sync::LazyLock;
+
+use regex::Regex;
+
 const ESC: u8 = 0x1b;
 const BEL: u8 = 0x07;
 
@@ -46,6 +50,27 @@ pub fn clean(bytes: &[u8]) -> String {
         i += 1;
     }
     String::from_utf8_lossy(&out).into_owned()
+}
+
+/// A web address: its host, port and path, for `local_url` to judge.
+static URL: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?i)\bhttps?://([a-z0-9.-]+|\[[0-9a-f:]*\])(?::\d+)?(?:[/?#][^\s"'<>`]*)?"#).expect("a valid pattern")
+});
+
+fn is_local(host: &str) -> bool {
+    let host = host.trim_end_matches('.').to_ascii_lowercase();
+    matches!(host.as_str(), "localhost" | "127.0.0.1" | "0.0.0.0" | "[::]" | "[::1]") || host.ends_with(".localhost")
+}
+
+/// The first address on this machine in a cleaned line, the way dev servers
+/// announce themselves, made one a browser can open: a server bound to every
+/// interface is reached on localhost. Addresses elsewhere are left alone: a
+/// log links to docs and issues too, and what a run serves is the one worth a
+/// button.
+pub fn local_url(line: &str) -> Option<String> {
+    let found = URL.captures_iter(line).find(|caps| is_local(&caps[1]))?;
+    let url = found[0].trim_end_matches(['.', ',', ';', ':', ')', ']', '\'', '"']);
+    Some(url.replacen("://0.0.0.0", "://localhost", 1).replacen("://[::]", "://localhost", 1))
 }
 
 /// Where the escape that began before `i` ends.
@@ -104,6 +129,17 @@ mod tests {
     #[test]
     fn osc_ended_by_st_and_backspace_over_utf8() {
         assert_eq!(clean(b"\x1b]8;;http://x\x1b\\link\x1b]8;;\x1b\\ caf\xc3\xa9\x08e"), "link cafe");
+    }
+
+    #[test]
+    fn a_local_address_is_found_and_made_openable() {
+        let vite = clean(b"  \x1b[32m\xe2\x9e\x9c\x1b[39m  \x1b[1mLocal\x1b[22m:   \x1b[36mhttp://localhost:\x1b[1m5173\x1b[22m/\x1b[39m\r\n");
+        assert_eq!(local_url(&vite).as_deref(), Some("http://localhost:5173/"));
+        assert_eq!(local_url("Listening on http://0.0.0.0:3000.").as_deref(), Some("http://localhost:3000"));
+        assert_eq!(local_url("ready at https://app.localhost:8443/admin").as_deref(), Some("https://app.localhost:8443/admin"));
+        assert_eq!(local_url("(http://127.0.0.1:8000)").as_deref(), Some("http://127.0.0.1:8000"));
+        assert_eq!(local_url("see https://vitejs.dev/config for more"), None);
+        assert_eq!(local_url("http://localhostile.com"), None);
     }
 
     #[test]

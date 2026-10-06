@@ -98,6 +98,9 @@ pub struct ProcessRun {
     pub started_by: Option<String>,
     /// Laid over the command's own for this run, e.g. a `PORT` of its own.
     pub env: BTreeMap<String, String>,
+    /// The local address this run printed, e.g. a dev server's
+    /// `http://localhost:5173/`; `None` until it prints one, and once it ends.
+    pub url: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, TS)]

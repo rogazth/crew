@@ -1,8 +1,9 @@
 import { ListIcon, PlayIcon, RotateCwIcon, SquareIcon } from "lucide-react";
 import { Button, IconButton } from "../chrome/kit";
 import { ProcessDot } from "../chrome/ProcessDot";
+import { ServedLink } from "../chrome/ServedLink";
 import type { Processes } from "../hooks/useProcesses";
-import { isLive, runIn, stateLabel } from "../lib/processes";
+import { isLive, runIn, servedUrl, stateLabel } from "../lib/processes";
 import { ProcessTerminal } from "./ProcessTerminal";
 
 type Props = {
@@ -29,6 +30,7 @@ export function ProcessTab({ processId, worktree, place, processes, onOpenComman
   const { run: act } = processes;
   const run = runIn(process, worktree);
   const live = isLive(run);
+  const url = servedUrl(run);
   const own = Object.entries(run?.env ?? {}).map(([key, value]) => `${key}=${value} `);
 
   return (
@@ -41,6 +43,7 @@ export function ProcessTab({ processId, worktree, place, processes, onOpenComman
             <span className="shrink-0 text-[12px] text-text-muted">
               {stateLabel(run)} · {place}
             </span>
+            {url && <ServedLink url={url} className="-my-0.5 self-center" />}
           </div>
           <div className="truncate font-mono text-[11px] text-text-muted" title={process.command}>
             {process.cwd ? `${process.cwd} $ ` : "$ "}

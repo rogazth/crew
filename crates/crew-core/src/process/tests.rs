@@ -83,6 +83,7 @@ impl Main for Process {
             run_cursor: 0,
             started_by: None,
             env: BTreeMap::new(),
+            url: None,
         })
     }
 }
@@ -669,4 +670,18 @@ fn a_folder_is_relative_to_the_worktree() {
     f.add("web", "true");
     let patch = ProcessPatch { cwd: Some("/etc".into()), ..ProcessPatch::default() };
     assert!(f.host.update(&f.workspace, "web", patch, None, false).unwrap_err().contains("relative"));
+}
+
+#[test]
+fn a_run_offers_the_local_address_it_prints_until_it_ends() {
+    let f = fixture("url", fast());
+    let sleep = unique_sleep();
+    let process = f.add("web", &format!("printf 'docs at https://example.com\\n  Local: http://0.0.0.0:4321/\\n'; {sleep}"));
+    f.host.start(&f.workspace, &process.id, RunRequest::default()).unwrap();
+
+    let up = f.wait(&process.id, Duration::from_secs(10), |p| p.main().url.is_some());
+    assert_eq!(up.main().url.as_deref(), Some("http://localhost:4321/"));
+
+    let stopped = f.host.stop(&f.workspace, &process.id, None).unwrap();
+    assert_eq!(stopped.main().url, None);
 }

@@ -10,6 +10,14 @@ export const isLive = (run: ProcessRun | undefined): boolean =>
 /** An agent wrote it or wants to change it, and the user has not said yes. */
 export const awaitsUser = (process: Process): boolean => !process.approved || process.proposed !== null;
 
+/** The local address a run printed, while it is up to answer there. */
+export const servedUrl = (run: ProcessRun | undefined): string | null => (run && isLive(run) ? run.url : null);
+
+/** An address as short as it reads: `localhost:5173`, its path only when it has one. */
+export function urlLabel(url: string): string {
+  return url.replace(/^https?:\/\//i, "").replace(/\/$/, "");
+}
+
 /** Its run in `worktree`; null is the main checkout. */
 export const runIn = (process: Process, worktree: string | null): ProcessRun | undefined =>
   process.runs.find((run) => run.worktree === worktree);

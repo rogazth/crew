@@ -6,6 +6,7 @@ import type { Confirm } from "../chrome/ConfirmDialog";
 import { Button, Field, Footer, IconButton, Overlay, PageFrame, Select, TextArea } from "../chrome/kit";
 import { ProcessDialog } from "../chrome/ProcessDialog";
 import { ProcessDot } from "../chrome/ProcessDot";
+import { ServedLink } from "../chrome/ServedLink";
 import { deleteConfirm, type Processes } from "../hooks/useProcesses";
 import type { MenuPoint } from "../lib/menu";
 import {
@@ -16,6 +17,8 @@ import {
   parseEnv,
   processActions,
   rerunEnv,
+  runIn,
+  servedUrl,
   startableIn,
   liveRuns,
   specChanges,
@@ -180,6 +183,12 @@ function CommandBlock({
   onOpenRun: (worktree: string | null) => void;
   onMenu: (point: MenuPoint) => void;
 }) {
+  // With nowhere else to run, Run starts it in the one checkout there is.
+  const lone = places.length > 1 ? undefined : (places[0]?.worktree ?? null);
+  const runHere = () => {
+    if (lone === undefined) return;
+    void processes.run("start", process, lone, rerunEnv(process, runIn(process, lone)));
+  };
   const openMenu = (event: MouseEvent<HTMLButtonElement>) => {
     const rect = event.currentTarget.getBoundingClientRect();
     onMenu({ x: rect.left, y: rect.bottom + 4 });
@@ -206,11 +215,18 @@ function CommandBlock({
             {formatEnv(process.env).replaceAll("\n", " ")}
           </span>
         )}
-        {process.approved && (
-          <Button icon={PlayIcon} className="text-[12px]" onClick={onRunIn}>
-            Run in…
-          </Button>
-        )}
+        {process.approved &&
+          (lone === undefined ? (
+            <Button icon={PlayIcon} className="text-[12px]" onClick={onRunIn}>
+              Run in…
+            </Button>
+          ) : (
+            !isLive(runIn(process, lone)) && (
+              <Button icon={PlayIcon} className="text-[12px]" onClick={runHere}>
+                Run
+              </Button>
+            )
+          ))}
         <IconButton icon={EllipsisIcon} label={`More for ${process.name}`} onClick={openMenu} />
       </header>
       {process.runs.length > 0 && (
@@ -249,6 +265,7 @@ function RunRow({
   onOpen: () => void;
 }) {
   const live = isLive(run);
+  const url = servedUrl(run);
   const orphan = isOrphan(run, new Set(sessions.map((session) => session.id)));
   const starter =
     run.startedBy === null ? "you" : (sessions.find((session) => session.id === run.startedBy)?.name ?? "a session since closed");
@@ -266,6 +283,7 @@ function RunRow({
         {stateLabel(run)}
         {live && run.startedAt !== null && run.state === "running" && ` · ${elapsed(run.startedAt)}`}
       </span>
+      {url && <ServedLink url={url} className="max-w-56" />}
       <span className="min-w-0 flex-1 truncate text-[12px] text-text-muted">
         {orphan ? (
           <span className="rounded-full bg-warning/15 px-1.5 text-[11px] text-warning" title={`Started by ${starter}`}>
