@@ -200,8 +200,41 @@ pub enum ToolDetail {
         #[ts(optional)]
         output: Option<String>,
     },
-    /// One of Crew's own tools: a message to another bot.
-    Message { to: String, text: String },
+    /// One of Crew's own tools that writes to somebody: `send_message`, or
+    /// `start_session` (whose prompt is the new session's first letter). What
+    /// the call answered fills in the rest, once it answers.
+    Message {
+        /// Whom the call named: an id, a name, or for `start_session` the
+        /// name it asked for.
+        to: String,
+        text: String,
+        /// The letter the call made. The receiver's block carries the same
+        /// id, and `thread_messages` lists it under it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        letter_id: Option<String>,
+        /// The session it reached, by id.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        to_id: Option<String>,
+        /// That session's name when it was reached.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        to_name: Option<String>,
+        /// `start` (a session the caller owns) or `handoff` (one handed to
+        /// the user) for `start_session`; absent for a message.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        what: Option<String>,
+        /// How it went over: `started`, `queued`, `steered` or `answered`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        delivery: Option<String>,
+        /// Why Crew refused it: no letter was made.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        error: Option<String>,
+    },
     /// The agent's checklist, whole: every call restates all of it.
     Todo { items: Vec<TodoItem> },
     /// A subagent the agent handed part of the work to.
@@ -321,9 +354,15 @@ impl ToolDetail {
                 title,
                 output: output.map(|text| clip(&text, TOOL_TEXT_LIMIT)),
             },
-            ToolDetail::Message { to, text } => ToolDetail::Message {
+            ToolDetail::Message { to, text, letter_id, to_id, to_name, what, delivery, error } => ToolDetail::Message {
                 to,
                 text: clip(&text, TOOL_TEXT_LIMIT),
+                letter_id,
+                to_id,
+                to_name,
+                what,
+                delivery,
+                error: error.map(|text| clip(&text, TOOL_TEXT_LIMIT)),
             },
             ToolDetail::Todo { items } => ToolDetail::Todo {
                 items: items
@@ -451,6 +490,13 @@ pub struct Block {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub from_bot: Option<BotRef>,
+    /// The letter this block shows, in the mailbox: on a user block a letter
+    /// handed over; on a system line a session this one started or handed
+    /// off ("Started session …"), or the user writing to its child ("You
+    /// wrote to …"). The sender's tool row carries the same id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub letter_id: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, TS)]
@@ -488,10 +534,18 @@ pub enum HarnessEvent {
         #[serde(default, rename = "fromBot", skip_serializing_if = "Option::is_none")]
         #[ts(optional, rename = "fromBot")]
         from_bot: Option<BotRef>,
+        #[serde(default, rename = "letterId", skip_serializing_if = "Option::is_none")]
+        #[ts(optional, rename = "letterId")]
+        letter_id: Option<String>,
     },
     #[serde(rename = "system.message")]
     #[ts(rename = "system.message")]
-    SystemMessage { text: String },
+    SystemMessage {
+        text: String,
+        #[serde(default, rename = "letterId", skip_serializing_if = "Option::is_none")]
+        #[ts(optional, rename = "letterId")]
+        letter_id: Option<String>,
+    },
     #[serde(rename = "session.providerBound")]
     #[ts(rename = "session.providerBound")]
     SessionProviderBound {

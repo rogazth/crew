@@ -647,7 +647,16 @@ pub fn tool_detail(item: &Map<String, Value>) -> Option<ToolDetail> {
             if let Some(named) = crew_name(item) {
                 if let Some(arguments) = item.get("arguments").and_then(as_record) {
                     if let Some(detail) = super::crew_tool_detail(&named, arguments) {
-                        return Some(detail);
+                        // Once it answered: the letter it made, or why Crew
+                        // refused it (an `isError` result, or Codex's error).
+                        let result = item.get("result").and_then(as_record);
+                        let refused = string_field(Some(item), "status").as_deref() == Some("failed")
+                            || result.and_then(|result| result.get("isError")).and_then(Value::as_bool) == Some(true);
+                        let answer = output_text(result.and_then(|result| result.get("content"))).or_else(|| {
+                            string_field(item.get("error").and_then(as_record), "message")
+                        });
+                        let done = answer.and_then(|answer| super::crew_result_detail(&named, arguments, &answer, refused));
+                        return Some(done.unwrap_or(detail));
                     }
                 }
             }
@@ -730,7 +739,13 @@ mod crew_row_tests {
             detail,
             Some(ToolDetail::Message {
                 to: "6e854800-504b".into(),
-                text: "the branch is green".into()
+                text: "the branch is green".into(),
+                letter_id: None,
+                to_id: None,
+                to_name: None,
+                what: None,
+                delivery: None,
+                error: None,
             })
         );
     }
@@ -1052,7 +1067,16 @@ mod tests {
                 call_id: "x1".into(),
                 name: "message_agent".into(),
                 title: "Crew message agent 6e85".into(),
-                detail: Some(ToolDetail::Message { to: "6e85".into(), text: "green".into() }),
+                detail: Some(ToolDetail::Message {
+                    to: "6e85".into(),
+                    text: "green".into(),
+                    letter_id: None,
+                    to_id: None,
+                    to_name: None,
+                    what: None,
+                    delivery: None,
+                    error: None,
+                }),
             }]
         );
     }

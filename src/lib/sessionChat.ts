@@ -39,6 +39,52 @@ export function delivered(queued: readonly Queued[], blocks: readonly Block[]): 
   return done;
 }
 
+/** A queued bubble in a list of blocks: a user message not in the history yet (`queuedBlock`). */
+const isQueued = (block: Block) => block.role === "user" && block.streaming === true;
+
+/** Where a turn ended: the block its footer hangs on. */
+const endsTurn = (block: Block) => block.usage !== undefined && block.streaming !== true;
+
+/**
+ * Queued messages the CLI has had their turn for: the history has a user
+ * turn written after the send, and that turn has ended. Whatever the CLI
+ * made of the message (joined it to another, wrapped it in something the
+ * match does not know), it is not still coming, so its bubble goes rather
+ * than wait forever.
+ */
+export function overdue(queued: readonly Queued[], blocks: readonly Block[]): Set<string> {
+  const out = new Set<string>();
+  for (const sent of queued) {
+    const turn = blocks.findIndex((block) => block.role === "user" && !isQueued(block) && (block.at ?? 0) > sent.at);
+    if (turn >= 0 && blocks.slice(turn + 1).some(endsTurn)) out.add(sent.id);
+  }
+  return out;
+}
+
+/**
+ * When the turn now running began. The history says so: its newest user
+ * turn by time, once that is newer than the last turn's end. Until the CLI
+ * writes the turn, the queued message sent after that end started it; with
+ * neither (the CLI took up work by itself) it began when the last one ended.
+ * Never the last bubble in the list for being last: a stale one would date
+ * the turn from whenever it was sent.
+ */
+export function turnStart(blocks: readonly Block[]): number | undefined {
+  let user: number | undefined;
+  let ended: number | undefined;
+  const sent: number[] = [];
+  for (const block of blocks) {
+    if (block.at === undefined) continue;
+    if (isQueued(block)) sent.push(block.at);
+    else if (block.role === "user") user = Math.max(user ?? block.at, block.at);
+    else if (endsTurn(block)) ended = Math.max(ended ?? block.at, block.at);
+  }
+  if (user !== undefined && (ended === undefined || user > ended)) return user;
+  const queued = sent.filter((at) => ended === undefined || at >= ended);
+  if (queued.length > 0) return Math.min(...queued);
+  return ended ?? user;
+}
+
 /** A queued message as a user bubble; `streaming` marks it as not in the history yet. */
 export function queuedBlock(sent: Queued): Block {
   return {

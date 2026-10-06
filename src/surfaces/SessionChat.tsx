@@ -16,7 +16,7 @@ import {
   trustKeys,
   type Keystroke,
 } from "../lib/ptySend";
-import { delivered, openQuestion, queuedBlock, withAsk, type Queued } from "../lib/sessionChat";
+import { delivered, openQuestion, overdue, queuedBlock, withAsk, type Queued } from "../lib/sessionChat";
 import { holdHistory, loadEarlierHistory, readHistory, subscribeHistory } from "../lib/sessionHistory";
 import { answeredAsk, liveHeard, readLive, stoppedTurn, subscribeLive } from "../lib/sessionLive";
 import { providerLine, type AgentChoice } from "../lib/providers";
@@ -278,7 +278,9 @@ function useQueued(id: string, blocks: Block[]) {
   }, [id, queued]);
   const waiting = useMemo(() => {
     const done = delivered(queued, blocks);
-    return queued.filter((sent) => !done.has(sent.id));
+    // One the CLI had its turn for and never matched is not still coming.
+    const late = overdue(queued, blocks);
+    return queued.filter((sent) => !done.has(sent.id) && !late.has(sent.id));
   }, [blocks, queued]);
   return { waiting, keepQueued: setQueued };
 }

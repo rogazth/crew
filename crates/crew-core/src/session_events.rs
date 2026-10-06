@@ -101,7 +101,12 @@ pub fn record_reporting(
             crate::mailbox::insert(&tx, letter)?;
         }
         tx.commit()
-    })
+    })?;
+    store.session_changed(session_id);
+    if let Some(letter) = letter {
+        store.mailbox_changed(&letter.to_session);
+    }
+    Ok(())
 }
 
 fn row_to_event(row: &rusqlite::Row) -> rusqlite::Result<Event> {
@@ -251,6 +256,7 @@ mod tests {
             question: None,
             usage: None,
             from_bot: None,
+            letter_id: None,
         }
     }
 
@@ -334,5 +340,55 @@ mod tests {
         let mark = signal.mark();
         signal.notify();
         assert!(signal.wait(mark, Instant::now() + Duration::from_millis(10)));
+    }
+
+    /// The row says what a chip shows without guessing: its parent's name,
+    /// its last event by kind, and how far the user has read it. Each change
+    /// is heard, so the window can redraw the row.
+    #[test]
+    fn a_row_carries_its_last_event_and_what_the_user_has_seen() {
+        let dir = std::env::temp_dir().join(format!("crew-events-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let store = Store::open(dir.join("crew.sqlite3")).expect("store");
+        let heard = Arc::new(Mutex::new(Vec::<String>::new()));
+        let log = heard.clone();
+        store.set_listener(Arc::new(move |what| {
+            if let crate::store::Changed::Session(id) = what {
+                log.lock().unwrap().push(id.to_string());
+            }
+        }));
+        let ws = crate::workspace::create(&store, "w".into(), dir.to_string_lossy().into()).expect("ws");
+        let parent = crate::session::create(
+            &store, ws.id.clone(), "bot".into(), "Planner".into(), "claude".into(), "m".into(), "".into(), "full".into(),
+        )
+        .expect("parent");
+        let child = crate::session::create_child(
+            &store, ws.id, "codex: fix".into(), "codex".into(), "m".into(), "full".into(), None, Some(parent.id.clone()),
+        )
+        .expect("child");
+        assert_eq!((child.parent_name.as_deref(), child.last_event.as_ref()), (Some("Planner"), None));
+        let kind = |cursor, kind: &str, outcome: &str, request: Option<Value>| {
+            record(&store, &child.id, cursor, kind, outcome, "", request.as_ref()).expect("event");
+            let row = crate::session::get(&store, child.id.clone()).expect("get").expect("row");
+            let last = row.last_event.expect("an event");
+            assert_eq!(last.cursor, cursor);
+            last.kind
+        };
+        assert_eq!(kind(2, "turn", "completed", None), "report");
+        assert_eq!(kind(4, "needs-input", "", Some(serde_json::json!({ "kind": "question", "questions": [] }))), "question");
+        assert_eq!(kind(6, "needs-input", "", Some(serde_json::json!({ "kind": "approval" }))), "approval");
+        assert_eq!(kind(8, "turn", "stopped", None), "stopped");
+        assert_eq!(kind(10, "error", "boom", None), "failed");
+        assert_eq!(kind(12, "exited", "idle", None), "exited");
+        assert_eq!(heard.lock().unwrap().len(), 6);
+
+        let seen = crate::session::mark_user_seen(&store, child.id.clone(), Some(4)).expect("seen").expect("row");
+        assert_eq!(seen.user_seen, 4);
+        let all = crate::session::mark_user_seen(&store, child.id.clone(), None).expect("seen").expect("row");
+        assert_eq!(all.user_seen, 12);
+        // Never back, and nothing heard when nothing moved.
+        let back = crate::session::mark_user_seen(&store, child.id.clone(), Some(1)).expect("seen").expect("row");
+        assert_eq!(back.user_seen, 12);
+        assert_eq!(heard.lock().unwrap().len(), 8);
     }
 }

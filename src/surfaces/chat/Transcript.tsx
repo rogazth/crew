@@ -5,6 +5,7 @@ import {
   type ApprovalDecision,
   type Block,
 } from "../../lib/blocks";
+import { turnStart } from "../../lib/sessionChat";
 import { foldTurns, groupRows, speaker } from "../../lib/transcriptRows";
 import { WorkingLine } from "./Activity";
 import { Rows } from "./Rows";
@@ -33,14 +34,6 @@ type Props = {
   onApprove: (requestId: number, decision: ApprovalDecision) => void;
   onAnswer: (requestId: number, answers: Answers | null) => void;
 };
-
-/** When the turn began: the message that started it, whoever sent it. */
-function turnStart(blocks: Block[]): number | undefined {
-  for (let index = blocks.length - 1; index >= 0; index -= 1) {
-    if (blocks[index]!.role === "user") return blocks[index]!.at;
-  }
-  return undefined;
-}
 
 /** A card the agent is stopped on: the time is the reader's, not the agent's. */
 function waiting(blocks: Block[]): boolean {

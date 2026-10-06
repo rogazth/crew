@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Block } from "./blocks";
 import type { SessionAsk } from "./protocol";
-import { askBlock, delivered, openQuestion, queuedBlock, withAsk, type Queued } from "./sessionChat";
+import { askBlock, delivered, openQuestion, overdue, queuedBlock, turnStart, withAsk, type Queued } from "./sessionChat";
 
 const user = (id: string, text: string, at: number): Block => ({ id, role: "user", text, at });
 const sent = (id: string, text: string, at: number): Queued => ({ id, text, files: [], at });
@@ -89,5 +89,54 @@ describe("withAsk", () => {
 
   it("leaves the blocks as they are with nothing asked", () => {
     expect(withAsk([call("pending")], null)).toHaveLength(1);
+  });
+});
+
+/** A reply that closes its turn: the block its footer hangs on. */
+const ended = (id: string, at: number): Block => ({
+  id,
+  role: "assistant",
+  text: "done",
+  at,
+  usage: { inputTokens: 1, outputTokens: 1, costUsd: 0, durationMs: 1 },
+});
+
+describe("turnStart (plan §7c-2)", () => {
+  const MIN = 60_000;
+
+  it("dates the turn from the history's newest user turn, not from a stale queued bubble", () => {
+    // A paste that never matched sits queued from 20 minutes ago; the new
+    // message is in the history and its turn is running.
+    const stale = queuedBlock(sent("old", "<pasted>", 0));
+    const blocks = [user("u1", "first", 0), ended("a1", 5 * MIN), user("u2", "short one", 20 * MIN), stale];
+    expect(turnStart(blocks)).toBe(20 * MIN);
+  });
+
+  it("takes a queued message's send time only while the history has no newer user turn", () => {
+    const blocks = [user("u1", "first", 0), ended("a1", 5 * MIN), queuedBlock(sent("q", "next", 6 * MIN))];
+    expect(turnStart(blocks)).toBe(6 * MIN);
+    // Sent while a turn ran: that turn's own start stands.
+    const busy = [user("u1", "first", 0), queuedBlock(sent("q", "next", 2 * MIN))];
+    expect(turnStart(busy)).toBe(0);
+  });
+
+  it("counts a turn the CLI started by itself from the end of the last one", () => {
+    expect(turnStart([user("u1", "go", 0), ended("a1", 5 * MIN)])).toBe(5 * MIN);
+    expect(turnStart([])).toBeUndefined();
+  });
+});
+
+describe("overdue", () => {
+  it("drops a queued message once a turn written after it has ended", () => {
+    const queued = [sent("joined", "first part", 1_000)];
+    // The CLI joined it to the next message: no match, but that turn ran and ended.
+    const running = [user("t", "first part\nsecond part", 2_000)];
+    expect(overdue(queued, running)).toEqual(new Set());
+    expect(overdue(queued, [...running, ended("a", 9_000)])).toEqual(new Set(["joined"]));
+  });
+
+  it("keeps one sent into a turn that is still the one running or just ended", () => {
+    const queued = [sent("s", "and this", 5_000)];
+    expect(overdue(queued, [user("t", "start", 1_000), ended("a", 8_000)])).toEqual(new Set());
   });
 });

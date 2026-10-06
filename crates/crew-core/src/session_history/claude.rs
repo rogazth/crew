@@ -183,7 +183,7 @@ impl ClaudeDecoder {
             let detail = self
                 .tools
                 .get(&result.tool_use_id)
-                .and_then(|(name, input)| tool_result_detail(name, input, &result.content));
+                .and_then(|(name, input)| tool_result_detail(name, input, &result.content, result.is_error));
             out.event(HarnessEvent::ToolUpdated {
                 call_id: result.tool_use_id,
                 title: None,
@@ -226,6 +226,7 @@ impl ClaudeDecoder {
                     hidden: None,
                     files: None,
                     from_bot: None,
+                    letter_id: None,
                 });
             }
             Some(Said::Note(note)) => out.note(note),
@@ -282,6 +283,7 @@ impl ClaudeDecoder {
                         hidden: None,
                         files: None,
                         from_bot: None,
+                        letter_id: None,
                     }),
                     Some(Said::Note(note)) => out.note(note),
                     _ => {}

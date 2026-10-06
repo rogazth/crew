@@ -203,7 +203,7 @@ impl TurnHost {
             _ => Vec::new(),
         };
         for steer in unread {
-            let _ = mailbox::enqueue(&self.store, &session_id, &steer.from, &steer.text);
+            steer.put_back(&self.store, &session_id);
         }
         // Background terminals end with the process; a child's thread
         // carries on from its rollout next turn.
@@ -377,7 +377,13 @@ impl TurnHost {
     /// Write a message into a Codex turn that is running, with `turn/steer`.
     /// Refused when there is none to take it — not started, over, or Codex
     /// says so — so the caller can queue it instead.
-    pub(super) fn codex_steer(&self, session_id: &str, text: &str, from: crew_protocol::BotRef) -> Result<(), String> {
+    pub(super) fn codex_steer(
+        &self,
+        session_id: &str,
+        text: &str,
+        from: crew_protocol::BotRef,
+        letter: Option<String>,
+    ) -> Result<(), String> {
         let sent = self.steer_text(session_id, &from, text);
         let (thread, turn) = {
             let mut map = self.lock();
@@ -388,7 +394,7 @@ impl TurnHost {
                 return Err("No Codex turn is running to take it.".into());
             };
             // In before the request: its echo can beat the answer.
-            live.steers.push(Steer { sent: sent.clone(), text: text.to_string(), from });
+            live.steers.push(Steer { sent: sent.clone(), text: text.to_string(), from, letter });
             target
         };
         match self.codex_call(session_id, "turn/steer", steer_params(&thread, &turn, &sent), STEER_TIMEOUT) {
@@ -710,6 +716,10 @@ impl TurnHost {
             }
         }
         for event in events {
+            // A steer the turn has read: its letter is delivered.
+            if let HarnessEvent::UserMessage { letter_id: Some(id), .. } = &event {
+                let _ = mailbox::delivered(&self.store, std::slice::from_ref(id));
+            }
             self.transcripts.apply(session_id, event);
         }
         if let Some(outcome) = outcome {
@@ -757,6 +767,7 @@ fn codex_item(live: &mut CodexLive, item: &Map<String, Value>, completed: bool, 
                     hidden: None,
                     files: None,
                     from_bot: Some(steer.from),
+                    letter_id: steer.letter,
                 });
             }
         }

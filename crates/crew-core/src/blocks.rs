@@ -19,6 +19,7 @@ pub fn new_block(role: BlockRole, text: impl Into<String>) -> Block {
         question: None,
         usage: None,
         from_bot: None,
+        letter_id: None,
     }
 }
 
@@ -305,6 +306,7 @@ pub fn apply_event(blocks: Vec<Block>, event: HarnessEvent) -> Vec<Block> {
             hidden,
             files,
             from_bot,
+            letter_id,
         } => {
             let mut block = new_block(BlockRole::User, text);
             if hidden == Some(true) {
@@ -314,13 +316,16 @@ pub fn apply_event(blocks: Vec<Block>, event: HarnessEvent) -> Vec<Block> {
                 block.files = Some(files);
             }
             block.from_bot = from_bot;
+            block.letter_id = letter_id;
             let mut next = blocks;
             next.push(block);
             next
         }
-        HarnessEvent::SystemMessage { text } => {
+        HarnessEvent::SystemMessage { text, letter_id } => {
             let mut next = blocks;
-            next.push(new_block(BlockRole::System, text));
+            let mut block = new_block(BlockRole::System, text);
+            block.letter_id = letter_id;
+            next.push(block);
             next
         }
         HarnessEvent::SessionStarted {} | HarnessEvent::SessionProviderBound { .. } => blocks,
@@ -580,9 +585,11 @@ mod tests {
                     hidden: Some(true),
                     files: None,
                     from_bot: None,
+                    letter_id: None,
                 },
                 HarnessEvent::SystemMessage {
                     text: "Stopped".into(),
+                    letter_id: None,
                 },
             ],
             vec![],
@@ -745,8 +752,9 @@ mod tests {
                 files: None,
                 hidden: None,
                 from_bot: None,
+                letter_id: None,
             },
-            HarnessEvent::SystemMessage { text: "note".into() },
+            HarnessEvent::SystemMessage { text: "note".into(), letter_id: None },
             HarnessEvent::SessionNote { message: "note".into() },
             HarnessEvent::ReasoningDelta { text: "hm".into() },
             HarnessEvent::MessageDelta { text: "ok".into() },
@@ -797,6 +805,7 @@ mod tests {
                     files: None,
                     hidden: None,
                     from_bot: None,
+                    letter_id: None,
                 },
                 HarnessEvent::MessageDelta { text: "earlier answer".into() },
                 HarnessEvent::MessageCompleted {},

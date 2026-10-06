@@ -4,12 +4,14 @@ use ts_rs::TS;
 
 mod blocks;
 mod files;
+mod letters;
 mod messages;
 mod processes;
 mod sessions;
 mod turns;
 pub use blocks::*;
 pub use files::*;
+pub use letters::*;
 pub use messages::*;
 pub use processes::*;
 pub use sessions::*;
@@ -586,6 +588,42 @@ pub struct Session {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub handed_off_by: Option<String>,
+    /// `handed_off_by`'s name now.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub handed_off_by_name: Option<String>,
+    /// `parent_id`'s name now.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub parent_name: Option<String>,
+    /// How far the user has read it, in the same positions as `cursor`:
+    /// `cursor > userSeen` is an event the user has not looked at.
+    #[serde(default)]
+    #[ts(type = "number")]
+    pub user_seen: i64,
+    /// The last thing it did that its parent hears of (a child's events);
+    /// absent before its first.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub last_event: Option<SessionLastEvent>,
+}
+
+/// A session's last event, as a chip reads it. With the status: `working`
+/// is the status; otherwise this says whether it reported, failed, asks a
+/// question, waits for the user's approval, was stopped or exited.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
+pub struct SessionLastEvent {
+    /// `report` (a turn ended), `stopped` (a turn was stopped), `question`,
+    /// `approval` (waiting for the user), `failed` or `exited`.
+    #[ts(type = "\"report\" | \"stopped\" | \"question\" | \"approval\" | \"failed\" | \"exited\"")]
+    pub kind: String,
+    #[ts(type = "number")]
+    pub at: i64,
+    /// Its position: the session's `cursor` when it is the last one.
+    #[ts(type = "number")]
+    pub cursor: i64,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, TS)]

@@ -242,6 +242,24 @@ struct Steer {
     /// What the transcript shows, and who it is from.
     text: String,
     from: crew_protocol::BotRef,
+    /// The letter it is, claimed while the turn has not read it yet.
+    letter: Option<String>,
+}
+
+impl Steer {
+    /// The turn ended before reading it: it goes back in the box, under the
+    /// id it was written with, and the end of the turn hands it over as the
+    /// next one.
+    fn put_back(self, store: &crate::store::Store, session_id: &str) {
+        match self.letter {
+            Some(id) => {
+                let _ = mailbox::release(store, &id);
+            }
+            None => {
+                let _ = mailbox::enqueue(store, session_id, &self.from, &self.text);
+            }
+        }
+    }
 }
 
 /// The note that says what woke the model, once it speaks: every summary held
@@ -464,6 +482,33 @@ impl TurnHost {
         self.begin(params, Vec::new())
     }
 
+    /// A turn the user started from the window. To a child it is a letter
+    /// like any other, so the pair "You ⇄ child" has its thread, and the
+    /// child's parent sees a line where the user wrote to it.
+    pub fn start_by_user(&self, mut params: TurnStart) -> Result<TurnStarted, String> {
+        params.letter_id = None;
+        let session = session::get(&self.store, params.session_id.clone())?
+            .ok_or_else(|| "Session not found".to_string())?;
+        if session.kind != "child" || params.hidden == Some(true) || params.from_bot.is_some() {
+            return self.start(params);
+        }
+        let letter = mailbox::record_claimed(&self.store, &session.id, &mailbox::user(), &params.text)?;
+        params.letter_id = Some(letter.id.clone());
+        match self.start(params) {
+            Ok(started) => {
+                let parent = session.parent_id.as_deref().and_then(|id| session::get(&self.store, id.to_string()).ok().flatten());
+                if let Some(parent) = parent.filter(|parent| parent.kind == "bot" || parent.kind == "child") {
+                    self.transcripts.append_system_letter(&parent.id, &format!("You wrote to {}", session.name), &letter.id);
+                }
+                Ok(started)
+            }
+            Err(error) => {
+                let _ = mailbox::dispose(&self.store, &letter.id);
+                Err(error)
+            }
+        }
+    }
+
     /// Start a turn. With `letters`, the turn carries them: each goes in the
     /// transcript as its own message, with its own sender, and the model is
     /// handed their envelopes one after the other. They count as delivered
@@ -509,8 +554,12 @@ impl TurnHost {
             // The transcript keeps each letter as it was written, under the
             // name of whoever wrote it; the envelopes are for the model.
             for letter in &letters {
-                self.transcripts
-                    .append_from_bot(&params.session_id, &letter.text, letter.from.clone());
+                self.transcripts.append_from_bot(
+                    &params.session_id,
+                    &letter.text,
+                    letter.from.clone(),
+                    Some(letter.id.clone()),
+                );
             }
             params.text = letters
                 .iter()
@@ -523,8 +572,12 @@ impl TurnHost {
                     // The transcript keeps the letter as it was written: the
                     // envelope is for the model, and the sender's name is already
                     // on the block for the reader.
-                    self.transcripts
-                        .append_from_bot(&params.session_id, &params.text, from.clone());
+                    self.transcripts.append_from_bot(
+                        &params.session_id,
+                        &params.text,
+                        from.clone(),
+                        params.letter_id.clone(),
+                    );
                     params.text = mailbox::envelope(
                         &from,
                         &params.text,
@@ -532,15 +585,25 @@ impl TurnHost {
                         session.parent_id.as_deref(),
                     );
                 }
-                None => self
-                    .transcripts
-                    .append_user(&params.session_id, &params.text, hidden, params.files.clone()),
+                None => self.transcripts.append_user(
+                    &params.session_id,
+                    &params.text,
+                    hidden,
+                    params.files.clone(),
+                    params.letter_id.clone(),
+                ),
             }
         }
         self.transcripts.set_working(&params.session_id, true);
         self.transcripts.set_status(&params.session_id, "working", session.provider_session_id.as_deref());
         let host = self.clone();
-        let carried: Vec<String> = letters.into_iter().map(|letter| letter.id).collect();
+        // A letter handed over with the turn rather than through the box (a
+        // first prompt, the user writing to a child) is delivered with it too.
+        if let Some(id) = params.letter_id.as_deref() {
+            let _ = mailbox::claim_id(&self.store, id);
+        }
+        let carried: Vec<String> =
+            letters.into_iter().map(|letter| letter.id).chain(params.letter_id.clone()).collect();
         thread::spawn(move || {
             host.run_turn(session, params, history, carried);
         });
@@ -961,6 +1024,7 @@ impl TurnHost {
                 from_bot: Some(first.from.clone()),
                 sent_at: Some(first.at),
                 nonce: None,
+                letter_id: None,
             },
             letters.clone(),
         );
@@ -1171,18 +1235,19 @@ impl TurnHost {
                 continue;
             }
             let cwd = session::cwd(&self.store, &row).unwrap_or_default();
-            let (text, from, hidden) = if row.provider_session_id.is_some() {
+            let (text, from, hidden, letter) = if row.provider_session_id.is_some() {
                 (
                     "Crew restarted while you were working, which broke off your last turn. Carry on where you \
                      left off; your final message is still your report."
                         .to_string(),
                     None,
                     Some(true),
+                    None,
                 )
             } else {
                 let (blocks, _) = self.transcripts.since(&row.id, 0);
                 match blocks.into_iter().find(|block| block.role == crew_protocol::BlockRole::User) {
-                    Some(first) => (first.text, first.from_bot, None),
+                    Some(first) => (first.text, first.from_bot, None, first.letter_id),
                     None => {
                         self.transcripts.set_status(&row.id, "error", None);
                         self.child_event(&row, "error", "Crew restarted before its first turn began", None);
@@ -1201,6 +1266,7 @@ impl TurnHost {
                 from_bot: from,
                 sent_at: None,
                 nonce: None,
+                letter_id: letter,
             });
             if let Err(error) = started {
                 self.transcripts.apply(&row.id, HarnessEvent::SessionError { message: error.clone() });
@@ -1313,7 +1379,7 @@ impl TurnHost {
             _ => Vec::new(),
         };
         for steer in unread {
-            let _ = mailbox::enqueue(&self.store, &session_id, &steer.from, &steer.text);
+            steer.put_back(&self.store, &session_id);
         }
         // The agent is disposable: the turn is over, so the CLI goes. What it
         // knew is in the transcript, and the next turn is handed the tail.
@@ -1326,7 +1392,15 @@ impl TurnHost {
     /// its next step and takes it into the turn it is in; its echo puts the
     /// message in the transcript. Refused when no Claude turn is live to take
     /// it, so the caller can queue it instead.
-    pub fn steer(&self, session_id: &str, text: &str, from: crew_protocol::BotRef) -> Result<(), String> {
+    /// `letter` is the letter it is, already claimed: read, it is delivered;
+    /// unread when the turn ends, it goes back in the box.
+    pub fn steer(
+        &self,
+        session_id: &str,
+        text: &str,
+        from: crew_protocol::BotRef,
+        letter: Option<String>,
+    ) -> Result<(), String> {
         // The kind first, out of the lock: `codex_steer` takes it again.
         let (codex, cursor) = match self.lock().get(session_id) {
             Some(Live::Codex(_)) => (true, false),
@@ -1334,7 +1408,7 @@ impl TurnHost {
             _ => (false, false),
         };
         if codex {
-            return self.codex_steer(session_id, text, from);
+            return self.codex_steer(session_id, text, from, letter);
         }
         if cursor {
             // No `session/steer`, and a second prompt cancels the first.
@@ -1349,7 +1423,7 @@ impl TurnHost {
             if !live.active || live.cancelled || !live.initialized {
                 return Err("No Claude turn is running to take it.".into());
             }
-            live.steers.push(Steer { sent: sent.clone(), text: text.to_string(), from });
+            live.steers.push(Steer { sent: sent.clone(), text: text.to_string(), from, letter });
             build_claude_user_message(&live.claude_session_id, None, &sent, &[], &[])
         };
         if let Err(error) = self.agents.write(session_id, &serde_json::to_string(&message).unwrap_or_default()) {
@@ -1796,11 +1870,15 @@ impl TurnHost {
                 if let Some(echo) = crate::providers::claude::replayed_text(&rec) {
                     if let Some(at) = live.steers.iter().position(|steer| steer.sent.trim() == echo) {
                         let steer = live.steers.remove(at);
+                        if let Some(id) = steer.letter.as_ref() {
+                            let _ = mailbox::delivered(&self.store, std::slice::from_ref(id));
+                        }
                         events.push(HarnessEvent::UserMessage {
                             text: steer.text,
                             hidden: None,
                             files: None,
                             from_bot: Some(steer.from),
+                            letter_id: steer.letter,
                         });
                     }
                 }
@@ -1808,7 +1886,7 @@ impl TurnHost {
                     // The result names only the call, so the input the row was
                     // opened with is what turns it back into a detail.
                     let detail = live.tools_by_id.get(&result.tool_use_id).and_then(|tool| {
-                        claude_tool_result_detail(&tool.name, &tool.input, &result.content)
+                        claude_tool_result_detail(&tool.name, &tool.input, &result.content, result.is_error)
                     });
                     events.push(HarnessEvent::ToolUpdated {
                         call_id: result.tool_use_id,
@@ -2637,6 +2715,7 @@ print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type
                 from_bot: None,
                 sent_at: None,
                 nonce: None,
+                letter_id: None,
             })
             .expect("start");
         settle(world, &session.id);
@@ -2674,6 +2753,7 @@ print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type
                 from_bot: None,
                 sent_at: None,
                 nonce: None,
+                letter_id: None,
             })
             .expect("start");
         // The watchdog's own timeout is two minutes; this asserts it is armed,
@@ -2881,6 +2961,7 @@ print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type
                 from_bot: None,
                 sent_at: None,
                 nonce: None,
+                letter_id: None,
             })
             .expect("start");
         std::thread::sleep(std::time::Duration::from_millis(300));

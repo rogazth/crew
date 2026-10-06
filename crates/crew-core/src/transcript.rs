@@ -178,6 +178,7 @@ impl TranscriptHub {
         text: &str,
         hidden: bool,
         files: Option<Vec<crew_protocol::AttachedFile>>,
+        letter_id: Option<String>,
     ) {
         self.apply(
             session_id,
@@ -186,12 +187,13 @@ impl TranscriptHub {
                 hidden: if hidden { Some(true) } else { None },
                 files: files.filter(|rows| !rows.is_empty()),
                 from_bot: None,
+                letter_id,
             },
         );
     }
 
-    /// A line another bot wrote into this transcript.
-    pub fn append_from_bot(&self, session_id: &str, text: &str, from: crew_protocol::BotRef) {
+    /// A line another bot wrote into this transcript: the letter `letter_id`.
+    pub fn append_from_bot(&self, session_id: &str, text: &str, from: crew_protocol::BotRef, letter_id: Option<String>) {
         self.apply(
             session_id,
             HarnessEvent::UserMessage {
@@ -199,6 +201,20 @@ impl TranscriptHub {
                 hidden: None,
                 files: None,
                 from_bot: Some(from),
+                letter_id,
+            },
+        );
+    }
+
+    /// A note about a letter: one this session sent by starting a session
+    /// (whatever its provider shows of the call), or one it is party to
+    /// without writing or reading it (the user writing to its child).
+    pub fn append_system_letter(&self, session_id: &str, text: &str, letter_id: &str) {
+        self.apply(
+            session_id,
+            HarnessEvent::SystemMessage {
+                text: text.to_string(),
+                letter_id: Some(letter_id.to_string()),
             },
         );
     }
@@ -248,6 +264,7 @@ impl TranscriptHub {
             session_id,
             HarnessEvent::SystemMessage {
                 text: text.to_string(),
+                letter_id: None,
             },
         );
     }
@@ -398,7 +415,7 @@ mod tests {
         )
         .unwrap();
         let hub = TranscriptHub::new(store.clone());
-        hub.append_user(&session.id, "hi", false, None);
+        hub.append_user(&session.id, "hi", false, None, None);
         hub.apply(
             &session.id,
             HarnessEvent::MessageDelta {

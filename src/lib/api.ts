@@ -19,6 +19,9 @@ import type {
   ProcessSpec,
   RemoteEnv,
   SearchFiles,
+  ThreadLetter,
+  ThreadPage,
+  ThreadPair,
 } from "./protocol";
 import type { Autonomy, ProjectFile, Session, SessionKind, SessionStatus, Workspace, Worktree } from "./types";
 
@@ -121,6 +124,32 @@ export const setSessionStatus = (id: string, status: SessionStatus): Promise<voi
 
 export const markSessionRead = (id: string): Promise<void> =>
   client.request("session_mark_read", { id });
+
+/**
+ * The user has read the session up to `cursor` (its last event when left
+ * out); never moves back. Answers the row; every window hears `session-updated`.
+ */
+export const markSessionSeen = (id: string, cursor?: number): Promise<Session | null> =>
+  client.request("session_mark_seen", { id, ...(cursor === undefined ? {} : { cursor }) });
+
+/** The pairs a session's Conversations menu lists, newest first. */
+export const threadPairs = (sessionId: string): Promise<ThreadPair[]> =>
+  client.request("thread_pairs", { sessionId });
+
+/**
+ * One pair's letters, both ways, oldest first. `""` or `"user"` is the user.
+ * `before` is a letter id: the page ends just before it; `more` says older ones exist.
+ */
+export const threadMessages = (params: { a: string; b: string; before?: string; limit?: number }): Promise<ThreadPage> =>
+  client.request("thread_messages", params);
+
+/**
+ * What waits in a session's box, and what a turn took and has not finished
+ * (a claimed one may already be in the transcript: match `letterId`). The
+ * window hears `mailbox-changed` when it moves.
+ */
+export const mailboxPending = (sessionId: string): Promise<ThreadLetter[]> =>
+  client.request("mailbox_pending", { sessionId });
 
 export const turnStart = (params: {
   sessionId: string;

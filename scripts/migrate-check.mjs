@@ -10,6 +10,8 @@
 // Migration 27 moves Cursor children to ACP: the `-p` chat a child was bound
 // to is dropped (and marked for the note its next turn shows), its
 // conversation in Crew stays, and a Cursor terminal keeps its chat.
+// Migration 28 indexes the mailbox by sender and by reader for the pair
+// threads: the old letters come back as one thread, both ways, in order.
 //
 //   cargo build -p crewd && node scripts/migrate-check.mjs
 import { spawn } from "node:child_process";
@@ -211,6 +213,8 @@ const call = (id, method, params) =>
 const listed = (await call(2, "session_list", { workspaceId: "w1" })).result ?? [];
 const cursorPage = await call(4, "transcript_tail", { sessionId: "c1", limit: 100 });
 const routines = (await call(3, "routine_list_for_session", { sessionId: "s1" })).result ?? [];
+const pairs = (await call(5, "thread_pairs", { sessionId: "s1" })).result ?? [];
+const thread = (await call(6, "thread_messages", { a: "s1", b: "t1" })).result ?? { letters: [] };
 
 const checks = [];
 checks.push(["the daemon opened the old database", page.ok, page.error ?? ""]);
@@ -289,7 +293,23 @@ checks.push([
   cursorRows.c1 === null && state["cursor:acp-note:c1"] === "chat-p1" && cursorRows.c2 === "chat-t1" && !("cursor:acp-note:c2" in state),
   JSON.stringify(cursorRows),
 ]);
+const mailboxIndexes = db
+  .prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name LIKE 'mailbox_%' ORDER BY name")
+  .all()
+  .map((row) => row.name);
+checks.push([
+  "the mailbox is indexed by sender and by reader for the threads",
+  ["mailbox_from_idx", "mailbox_pending_idx", "mailbox_to_idx"].every((name) => mailboxIndexes.includes(name)),
+  mailboxIndexes.join(","),
+]);
 if (process.env.CASE === "behind") {
+  const shape = thread.letters.map((letter) => `${letter.id}:${letter.from.id}>${letter.to.id}:${letter.state}`).join(" ");
+  checks.push([
+    "the old letters are one thread, both ways, oldest first",
+    shape === "l1:t1>s1:delivered l2:s1>t1:pending" &&
+      pairs.length === 1 && pairs[0].peer.id === "t1" && pairs[0].peer.name === "Refactor" && pairs[0].count === 2,
+    `${shape} · ${JSON.stringify(pairs)}`,
+  ]);
   const letters = Object.fromEntries(
     db
       .prepare("SELECT id, kind, claimed_at, delivered_at, disposed_at FROM mailbox ORDER BY id")

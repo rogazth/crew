@@ -166,6 +166,7 @@ impl Out {
             hidden: None,
             files: None,
             from_bot: None,
+            letter_id: None,
         });
     }
 

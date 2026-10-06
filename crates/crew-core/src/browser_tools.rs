@@ -585,6 +585,10 @@ mod tests {
             parent_id: None,
             cursor: 0,
             handed_off_by: None,
+            handed_off_by_name: None,
+            parent_name: None,
+            user_seen: 0,
+            last_event: None,
         })
     }
 

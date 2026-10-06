@@ -285,7 +285,69 @@ pub(crate) fn insert(conn: &rusqlite::Connection, letter: &Letter) -> rusqlite::
 pub fn enqueue(store: &Store, to_session: &str, from: &BotRef, text: &str) -> Result<Letter, String> {
     let letter = Letter::new(to_session, from, text, MESSAGE, None);
     store.with(|conn| insert(conn, &letter))?;
+    store.mailbox_changed(to_session);
     Ok(letter)
+}
+
+/// A message that goes over at once rather than through the box: a
+/// session's first prompt, a message written into a running turn, the user
+/// writing to a child. Kept like any other, already claimed, so no turn's end
+/// hands it over again; the turn that carries it marks it delivered.
+pub fn record_claimed(store: &Store, to_session: &str, from: &BotRef, text: &str) -> Result<Letter, String> {
+    let letter = Letter::new(to_session, from, text, MESSAGE, None);
+    store.with(|conn| {
+        insert(conn, &letter)?;
+        conn.prepare_cached("UPDATE mailbox SET claimed_at = ?2 WHERE id = ?1")?.execute(params![letter.id, letter.at])
+    })?;
+    store.mailbox_changed(to_session);
+    Ok(letter)
+}
+
+/// A message that was read the moment it was written: an answer to a
+/// question the reader stopped on.
+pub fn record_delivered(store: &Store, to_session: &str, from: &BotRef, text: &str) -> Result<Letter, String> {
+    let letter = Letter::new(to_session, from, text, MESSAGE, None);
+    store.with(|conn| {
+        insert(conn, &letter)?;
+        conn.prepare_cached("UPDATE mailbox SET claimed_at = ?2, delivered_at = ?2 WHERE id = ?1")?
+            .execute(params![letter.id, letter.at])
+    })?;
+    store.mailbox_changed(to_session);
+    Ok(letter)
+}
+
+/// Claim one letter by id, for a turn handed it directly: a first prompt
+/// that a restart put back in the box goes with the turn that resumes it,
+/// not with whatever turn next drains the box.
+pub fn claim_id(store: &Store, id: &str) -> Result<(), String> {
+    let to: Option<String> = store.with(|conn| {
+        conn.prepare_cached(
+            "UPDATE mailbox SET claimed_at = ?2 WHERE id = ?1 AND claimed_at IS NULL AND disposed_at IS NULL
+             RETURNING to_session",
+        )?
+        .query_row(params![id, now_millis()], |row| row.get(0))
+        .optional()
+    })?;
+    if let Some(to) = to {
+        store.mailbox_changed(&to);
+    }
+    Ok(())
+}
+
+/// Set one letter aside: the turn it was to start never did.
+pub fn dispose(store: &Store, id: &str) -> Result<(), String> {
+    let to: Option<String> = store.with(|conn| {
+        conn.prepare_cached(
+            "UPDATE mailbox SET disposed_at = ?2 WHERE id = ?1 AND delivered_at IS NULL AND disposed_at IS NULL
+             RETURNING to_session",
+        )?
+        .query_row(params![id, now_millis()], |row| row.get(0))
+        .optional()
+    })?;
+    if let Some(to) = to {
+        store.mailbox_changed(&to);
+    }
+    Ok(())
 }
 
 const SELECT: &str =
@@ -341,6 +403,11 @@ pub fn claim(store: &Store, to_session: &str) -> Result<Option<Letter>, String> 
         .query_row(params![to_session, now_millis()], row_to_letter)
         .optional()
     })
+    .inspect(|letter| {
+        if letter.is_some() {
+            store.mailbox_changed(to_session);
+        }
+    })
 }
 
 /// Claim what one turn is handed: every waiting letter, oldest first, until
@@ -372,15 +439,26 @@ pub fn claim_batch(store: &Store, to_session: &str, cap: usize) -> Result<Vec<Le
         tx.commit()?;
         Ok(batch)
     })
+    .inspect(|batch| {
+        if !batch.is_empty() {
+            store.mailbox_changed(to_session);
+        }
+    })
 }
 
 /// Put a claimed letter back, for a delivery that could not go through. It
 /// keeps its original `at`, so it stays at the head of the queue.
 pub fn release(store: &Store, id: &str) -> Result<(), String> {
-    store.with(|conn| {
-        conn.prepare_cached("UPDATE mailbox SET claimed_at = NULL WHERE id = ?1 AND delivered_at IS NULL")?
-            .execute(params![id])
+    let to: Option<String> = store.with(|conn| {
+        conn.prepare_cached(
+            "UPDATE mailbox SET claimed_at = NULL WHERE id = ?1 AND delivered_at IS NULL RETURNING to_session",
+        )?
+        .query_row(params![id], |row| row.get(0))
+        .optional()
     })?;
+    if let Some(to) = to {
+        store.mailbox_changed(&to);
+    }
     Ok(())
 }
 
@@ -389,14 +467,27 @@ pub fn delivered(store: &Store, ids: &[String]) -> Result<(), String> {
     if ids.is_empty() {
         return Ok(());
     }
-    store.with(|conn| {
+    let boxes: std::collections::BTreeSet<String> = store.with(|conn| {
         let now = now_millis();
+        let mut boxes = std::collections::BTreeSet::new();
         for id in ids {
-            conn.prepare_cached("UPDATE mailbox SET delivered_at = ?2 WHERE id = ?1 AND delivered_at IS NULL")?
-                .execute(params![id, now])?;
+            // Delivered is claimed too: a letter read in a running turn was
+            // claimed when it was written into it, but say so either way.
+            let to: Option<String> = conn
+                .prepare_cached(
+                    "UPDATE mailbox SET delivered_at = ?2, claimed_at = COALESCE(claimed_at, ?2)
+                      WHERE id = ?1 AND delivered_at IS NULL RETURNING to_session",
+                )?
+                .query_row(params![id, now], |row| row.get(0))
+                .optional()?;
+            boxes.extend(to);
         }
-        Ok(())
-    })
+        Ok(boxes)
+    })?;
+    for to in boxes {
+        store.mailbox_changed(&to);
+    }
+    Ok(())
 }
 
 /// Letters handed to a turn that never ended — the daemon stopped under it —
@@ -413,13 +504,21 @@ pub(crate) fn release_unfinished(conn: &rusqlite::Connection) -> rusqlite::Resul
 /// Set aside whatever still waits for a session that has exited: nobody is
 /// left to hand it to. Kept, marked disposed.
 pub fn drop_waiting(store: &Store, to_session: &str) -> Result<usize, String> {
-    store.with(|conn| {
-        conn.prepare_cached(
-            "UPDATE mailbox SET disposed_at = ?2
-              WHERE to_session = ?1 AND delivered_at IS NULL AND disposed_at IS NULL",
-        )?
-        .execute(params![to_session, now_millis()])
-    })
+    store
+        .with(|conn| {
+            conn.prepare_cached(
+                "UPDATE mailbox SET disposed_at = ?2
+                  WHERE to_session = ?1 AND delivered_at IS NULL AND disposed_at IS NULL",
+            )?
+            .execute(params![to_session, now_millis()])
+        })
+        .inspect(|&count| changed(store, to_session, count))
+}
+
+fn changed(store: &Store, to_session: &str, count: usize) {
+    if count > 0 {
+        store.mailbox_changed(to_session);
+    }
 }
 
 /// Take back the reports and questions a child left in its parent's box that
@@ -436,6 +535,7 @@ pub fn take_back(store: &Store, to_session: &str, from_session: &str, seen: i64)
         ))?
         .execute(params![to_session, from_session, seen, now_millis()])
     })
+    .inspect(|&count| changed(store, to_session, count))
 }
 
 /// A child's question was answered, by its parent or by the user: a question
@@ -448,6 +548,7 @@ pub fn dispose_questions(store: &Store, to_session: &str, from_session: &str) ->
         ))?
         .execute(params![to_session, from_session, now_millis()])
     })
+    .inspect(|&count| changed(store, to_session, count))
 }
 
 /// Whether `from_session` has ever written `to_session` a message: a session
@@ -480,6 +581,194 @@ pub fn undelivered_count(store: &Store, to_session: &str) -> Result<i64, String>
         conn.prepare_cached("SELECT COUNT(*) FROM mailbox WHERE to_session = ?1 AND delivered_at IS NULL AND disposed_at IS NULL")?
             .query_row(params![to_session], |row| row.get(0))
     })
+}
+
+/// Migration 28: the indexes the threads read by. A pair's thread is every
+/// letter one wrote the other, both ways, so a box is read by sender as well
+/// as by reader, whatever its letters' state.
+pub const MIGRATION_V28: &str = "
+CREATE INDEX IF NOT EXISTS mailbox_to_idx ON mailbox (to_session, at);
+CREATE INDEX IF NOT EXISTS mailbox_from_idx ON mailbox (from_session, at);
+";
+
+/// How much of a letter a pair's preview keeps, in characters.
+pub const PREVIEW_CHARS: usize = 280;
+/// A thread page's default size, and the most one page holds.
+const THREAD_LIMIT: u32 = 50;
+const THREAD_MAX: u32 = 200;
+
+/// The user, as a party to a thread.
+pub fn user() -> BotRef {
+    BotRef { id: String::new(), name: "You".into(), kind: Some("user".into()) }
+}
+
+/// Whether a party named by a request is the user.
+fn is_user(id: &str) -> bool {
+    id.is_empty() || id == "user"
+}
+
+/// A letter with both parties named as they are now and its state, for
+/// [`row_to_thread_letter`]: the sender's and the reader's current names
+/// (a bot renamed since reads under its new name), the reader's kind, where
+/// the letter is in its life.
+const THREAD_SELECT: &str = "SELECT m.id, m.to_session, m.from_session, COALESCE(fb.name, f.name, m.from_name),
+        m.text, m.at, m.from_kind, m.kind, COALESCE(tb.name, t.name), t.kind,
+        CASE WHEN m.disposed_at IS NOT NULL THEN 'disposed'
+             WHEN m.delivered_at IS NOT NULL THEN 'delivered'
+             WHEN m.claimed_at IS NOT NULL THEN 'claimed'
+             ELSE 'pending' END,
+        m.rowid
+   FROM mailbox m
+   JOIN sessions t ON t.id = m.to_session LEFT JOIN bots tb ON tb.id = t.bot_id
+   LEFT JOIN sessions f ON f.id = m.from_session LEFT JOIN bots fb ON fb.id = f.bot_id";
+
+/// A session's kind as a [`BotRef`] says it: absent for a bot.
+fn party_kind(kind: &str) -> Option<String> {
+    match kind {
+        "bot" => None,
+        "terminal" => Some("terminal".into()),
+        _ => Some("session".into()),
+    }
+}
+
+fn row_to_thread_letter(row: &rusqlite::Row) -> rusqlite::Result<(crew_protocol::ThreadLetter, i64)> {
+    let to_kind: String = row.get(9)?;
+    Ok((
+        crew_protocol::ThreadLetter {
+            id: row.get(0)?,
+            from: BotRef {
+                id: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
+                name: row.get(3)?,
+                kind: row.get(6)?,
+            },
+            to: BotRef { id: row.get(1)?, name: row.get(8)?, kind: party_kind(&to_kind) },
+            text: row.get(4)?,
+            at: row.get(5)?,
+            kind: row.get(7)?,
+            state: row.get(10)?,
+        },
+        row.get(11)?,
+    ))
+}
+
+/// What waits in a session's box and what a turn has taken but not finished,
+/// oldest first: the queue its chat shows. A claimed letter may already be in
+/// the transcript (the turn carrying it put it there); the block's
+/// `letterId` says which.
+pub fn pending(store: &Store, to_session: &str) -> Result<Vec<crew_protocol::ThreadLetter>, String> {
+    store.with(|conn| {
+        conn.prepare_cached(&format!(
+            "{THREAD_SELECT} WHERE m.to_session = ?1 AND m.delivered_at IS NULL AND m.disposed_at IS NULL
+              ORDER BY m.at ASC, m.rowid ASC"
+        ))?
+        .query_map(params![to_session], |row| row_to_thread_letter(row).map(|(letter, _)| letter))?
+        .collect()
+    })
+}
+
+/// The letters between `a` and `b`, both ways, oldest first: the page that
+/// ends just before the letter `before`, or the newest. Either party may be
+/// the user (`""` or `"user"`), who only ever writes.
+pub fn thread(
+    store: &Store,
+    a: &str,
+    b: &str,
+    before: Option<&str>,
+    limit: Option<u32>,
+) -> Result<crew_protocol::ThreadPage, String> {
+    let limit = limit.unwrap_or(THREAD_LIMIT).clamp(1, THREAD_MAX);
+    let (pair, first, second) = match (is_user(a), is_user(b)) {
+        (true, true) => return Err("A thread is between two parties; both were the user".into()),
+        (true, false) | (false, true) => (
+            "m.from_kind = 'user' AND m.from_session IS NULL AND m.to_session = ?1",
+            if is_user(a) { b } else { a },
+            "",
+        ),
+        (false, false) => (
+            "((m.from_session = ?1 AND m.to_session = ?2) OR (m.from_session = ?2 AND m.to_session = ?1))",
+            a,
+            b,
+        ),
+    };
+    store.with(|conn| {
+        // Where the page ends: the letter `before`, by its time and then the
+        // order it went in, so two letters in one millisecond are not lost
+        // between pages.
+        let end: Option<(i64, i64)> = match before {
+            Some(id) => conn
+                .prepare_cached("SELECT at, rowid FROM mailbox WHERE id = ?1")?
+                .query_row(params![id], |row| Ok((row.get(0)?, row.get(1)?)))
+                .optional()?,
+            None => None,
+        };
+        let (at, rowid) = end.unwrap_or((i64::MAX, i64::MAX));
+        let mut rows: Vec<crew_protocol::ThreadLetter> = conn
+            .prepare_cached(&format!(
+                "{THREAD_SELECT} WHERE {pair} AND (m.at < ?3 OR (m.at = ?3 AND m.rowid < ?4))
+                  ORDER BY m.at DESC, m.rowid DESC LIMIT ?5"
+            ))?
+            .query_map(params![first, second, at, rowid, limit + 1], |row| {
+                row_to_thread_letter(row).map(|(letter, _)| letter)
+            })?
+            .collect::<rusqlite::Result<_>>()?;
+        let more = rows.len() > limit as usize;
+        rows.truncate(limit as usize);
+        rows.reverse();
+        Ok(crew_protocol::ThreadPage { letters: rows, more })
+    })
+}
+
+/// The pairs a session's Conversations menu lists, newest first: each one it
+/// wrote to or was written by, and each child of its own the user wrote to.
+pub fn pairs(store: &Store, session_id: &str) -> Result<Vec<crew_protocol::ThreadPair>, String> {
+    let preview = format!("substr(m.text, 1, {PREVIEW_CHARS})");
+    let select = THREAD_SELECT.replacen("m.text", &preview, 1);
+    let letters: Vec<(crew_protocol::ThreadLetter, i64)> = store.with(|conn| {
+        conn.prepare_cached(&format!(
+            "{select} WHERE m.to_session = ?1
+             UNION ALL {select} WHERE m.from_session = ?1
+             UNION ALL {select} WHERE m.from_kind = 'user' AND m.from_session IS NULL
+                AND m.to_session IN (SELECT id FROM sessions WHERE parent_id = ?1)"
+        ))?
+        .query_map(params![session_id], row_to_thread_letter)?
+        .collect()
+    })?;
+    // One entry per pair, keyed by its two parties in order: the newest letter
+    // and how many there are.
+    let mut by_pair: std::collections::HashMap<(String, String), (crew_protocol::ThreadLetter, i64, i64)> =
+        std::collections::HashMap::new();
+    for (letter, rowid) in letters {
+        let from = if letter.from.kind.as_deref() == Some("user") { "user".to_string() } else { letter.from.id.clone() };
+        if from.is_empty() {
+            // A sender deleted since: no party left to pair with.
+            continue;
+        }
+        let to = letter.to.id.clone();
+        let key = if from <= to { (from, to) } else { (to, from) };
+        let entry = by_pair.entry(key).or_insert_with(|| (letter.clone(), rowid, 0));
+        entry.2 += 1;
+        if (letter.at, rowid) > (entry.0.at, entry.1) {
+            entry.0 = letter;
+            entry.1 = rowid;
+        }
+    }
+    let mut out: Vec<crew_protocol::ThreadPair> = by_pair
+        .into_values()
+        .map(|(last, _, count)| {
+            let (from, to) = (last.from.clone(), last.to.clone());
+            let (peer, with) = if to.id == session_id {
+                (from, None)
+            } else if from.id == session_id && from.kind.as_deref() != Some("user") {
+                (to, None)
+            } else {
+                // The user and this session's child: the pair is theirs.
+                (from, Some(to))
+            };
+            crew_protocol::ThreadPair { peer, with, last, count }
+        })
+        .collect();
+    out.sort_by(|x, y| y.last.at.cmp(&x.last.at));
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -816,5 +1105,38 @@ mod tests {
         enqueue(&store, &to, &sender(&from), "gone").expect("enqueue");
         crate::session::delete(&store, to.clone()).expect("delete");
         assert_eq!(waiting_count(&store, &to).expect("count"), 0);
+    }
+
+    /// Every change to a box is heard, for the window's queue: a letter in,
+    /// handed to a turn, back, delivered, set aside. `pending` is that queue.
+    #[test]
+    fn every_change_to_a_box_is_heard() {
+        let store = store();
+        let heard = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let log = heard.clone();
+        store.set_listener(std::sync::Arc::new(move |what| {
+            if let crate::store::Changed::Mailbox(id) = what {
+                log.lock().unwrap().push(id.to_string());
+            }
+        }));
+        let to = session(&store, "to");
+        let from = session(&store, "from");
+        let first = enqueue(&store, &to, &sender(&from), "one").expect("enqueue");
+        let second = enqueue(&store, &to, &sender(&from), "two").expect("enqueue");
+        let queue = pending(&store, &to).expect("pending");
+        assert_eq!(queue.iter().map(|l| (l.text.as_str(), l.state.as_str())).collect::<Vec<_>>(), [("one", "pending"), ("two", "pending")]);
+        assert_eq!(queue[0].from.id, from);
+        claim(&store, &to).expect("claim");
+        assert_eq!(pending(&store, &to).expect("pending")[0].state, "claimed");
+        release(&store, &first.id).expect("release");
+        claim_batch(&store, &to, BATCH_CHARS).expect("batch");
+        delivered(&store, &[first.id.clone(), second.id.clone()]).expect("delivered");
+        assert!(pending(&store, &to).expect("pending").is_empty());
+        enqueue(&store, &to, &sender(&from), "three").expect("enqueue");
+        drop_waiting(&store, &to).expect("drop");
+        // Nothing to do is nothing heard.
+        drop_waiting(&store, &to).expect("drop again");
+        assert_eq!(heard.lock().unwrap().len(), 8);
+        assert!(heard.lock().unwrap().iter().all(|id| id == &to));
     }
 }

@@ -520,6 +520,14 @@ fn proto_session(row: &crew_core::session::Session) -> proto::Session {
         parent_id: row.parent_id.clone(),
         cursor: row.cursor,
         handed_off_by: row.handed_off_by.clone(),
+        handed_off_by_name: row.handed_off_by_name.clone(),
+        parent_name: row.parent_name.clone(),
+        user_seen: row.user_seen,
+        last_event: row.last_event.as_ref().map(|event| proto::SessionLastEvent {
+            kind: event.kind.clone(),
+            at: event.at,
+            cursor: event.cursor,
+        }),
     }
 }
 
@@ -540,6 +548,20 @@ pub fn serve(config: Config) -> Result<Handle, String> {
 pub fn serve_on(config: Config, listen: Listen) -> Result<Handle, String> {
     let token = listen.token.clone();
     let hub = Arc::new(Hub::new());
+    // A box that changed, and a row whose derived fields did (a child's last
+    // event, how far the user read it), reach every window.
+    let heard = hub.clone();
+    let rows = config.store.clone();
+    config.store.set_listener(Arc::new(move |what| match what {
+        crew_core::store::Changed::Mailbox(id) => {
+            heard.emit("mailbox-changed", proto::MailboxChanged { session_id: id.to_string() })
+        }
+        crew_core::store::Changed::Session(id) => {
+            if let Ok(Some(row)) = session::get(&rows, id.to_string()) {
+                heard.emit("session-updated", SessionUpdated { session: proto_session(&row) });
+            }
+        }
+    }));
     let transcripts = crew_core::transcript::TranscriptHub::new(config.store.clone());
     transcripts.set_events(hub.clone());
     let turns = TurnHost::new(
@@ -1588,6 +1610,26 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
             let store = hosts.store.clone();
             json(block(move || session::sync_title(&store, id)).await?)
         }
+        "session_mark_seen" => {
+            let proto::SessionMarkSeen { id, cursor } = parse(params)?;
+            let store = hosts.store.clone();
+            json(block(move || session::mark_user_seen(&store, id, cursor)).await?)
+        }
+        "thread_pairs" => {
+            let SessionId { session_id } = parse(params)?;
+            let store = hosts.store.clone();
+            json(block(move || mailbox::pairs(&store, &session_id)).await?)
+        }
+        "thread_messages" => {
+            let proto::ThreadMessagesRequest { a, b, before, limit } = parse(params)?;
+            let store = hosts.store.clone();
+            json(block(move || mailbox::thread(&store, &a, &b, before.as_deref(), limit)).await?)
+        }
+        "mailbox_pending" => {
+            let SessionId { session_id } = parse(params)?;
+            let store = hosts.store.clone();
+            json(block(move || mailbox::pending(&store, &session_id)).await?)
+        }
         "session_mark_read" => {
             let Id { id } = parse(params)?;
             let store = hosts.store.clone();
@@ -1793,7 +1835,8 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
             let turns = hosts.turns.clone();
             let store = hosts.store.clone();
             let claimed = p.nonce.clone().map(|nonce| (p.session_id.clone(), nonce));
-            let started = block(move || turns.start(p)).await;
+            // The window's own: a letter id is the daemon's to give.
+            let started = block(move || turns.start_by_user(p)).await;
             if started.is_err() {
                 // The send was refused, so the id must not count as spent: the
                 // retry has to run, not be answered with the turn that never was.

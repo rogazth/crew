@@ -588,6 +588,7 @@ impl Builder {
                 hidden: None,
                 files: None,
                 from_bot: None,
+                letter_id: None,
             };
             self.apply(&message.id, message.created, vec![event]);
         }

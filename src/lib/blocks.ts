@@ -222,11 +222,12 @@ export function applyEvent(blocks: Block[], event: HarnessEvent): Block[] {
         ...(event.hidden ? { hidden: true } : {}),
         ...(event.files && event.files.length > 0 ? { files: event.files } : {}),
         ...(event.fromBot ? { fromBot: event.fromBot } : {}),
+        ...(event.letterId ? { letterId: event.letterId } : {}),
       };
       return [...blocks, block];
     }
     case "system.message":
-      return [...blocks, newBlock("system", event.text)];
+      return [...blocks, { ...newBlock("system", event.text), ...(event.letterId ? { letterId: event.letterId } : {}) }];
     default:
       return blocks;
   }

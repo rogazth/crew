@@ -1136,6 +1136,10 @@ mod tests {
             parent_id: None,
             cursor: 0,
             handed_off_by: None,
+            handed_off_by_name: None,
+            parent_name: None,
+            user_seen: 0,
+            last_event: None,
         })
     }
 
@@ -1226,7 +1230,7 @@ mod tests {
         let transcripts = TranscriptHub::new(store.clone());
         let ws = workspace(&store);
         let coder = bot(&store, &ws, "Coder");
-        transcripts.append_user(&coder.id, "the staging password is in 1password", false, None);
+        transcripts.append_user(&coder.id, "the staging password is in 1password", false, None, None);
         transcripts.flush(&coder.id);
 
         let out = call(
@@ -1254,7 +1258,7 @@ mod tests {
         let ws = workspace(&store);
         let coder = bot(&store, &ws, "Coder");
         let cuddles = bot(&store, &ws, "Cuddles");
-        transcripts.append_user(&cuddles.id, "the client is Acme", false, None);
+        transcripts.append_user(&cuddles.id, "the client is Acme", false, None, None);
         transcripts.flush(&cuddles.id);
 
         let out = call(

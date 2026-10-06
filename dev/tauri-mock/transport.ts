@@ -233,7 +233,59 @@ function session(
     worktree,
     createdAt: now - 6e5,
     updatedAt: now - 3e5,
+    cursor: 0,
+    userSeen: 0,
   };
+}
+
+/** A party to a letter, as the daemon names it: kind absent for a bot. */
+function party(id: string): Row {
+  if (id === "" || id === "user") return { id: "", name: "You", kind: "user" };
+  const row = sessions.find((s) => s.id === id);
+  const kind = row?.kind === "bot" ? undefined : row?.kind === "terminal" ? "terminal" : "session";
+  return { id, name: (row?.name as string | undefined) ?? id, ...(kind ? { kind } : {}) };
+}
+
+/** The mailbox: Planner and Reviewer writing each other, one letter still waiting for Planner. */
+const letters: Row[] = [
+  ["l1", "s1", "s2", "message", "Review the avatar branch when you can: the upload path changed.", now - 5.4e5, "delivered"],
+  ["l2", "s2", "s1", "message", "Done. Two notes on the resize step; the rest reads fine.", now - 4.8e5, "delivered"],
+  ["l3", "user", "s2", "message", "Look at the cache headers too.", now - 4.2e5, "delivered"],
+  ["l4", "s2", "s1", "message", "Cache headers are missing on /avatars. Want me to open a fix?", now - 6e4, "pending"],
+].map(([id, from, to, kind, text, at, state]) => ({ id, from: party(from as string), to: party(to as string), kind, text, at, state }));
+
+const letterKey = (row: Row) => ((row.from as Row).kind === "user" ? "user" : ((row.from as Row).id as string));
+
+function threadPairs(sessionId: string): Row[] {
+  const pairs = new Map<string, { last: Row; count: number }>();
+  for (const letter of letters) {
+    const from = letterKey(letter);
+    const to = (letter.to as Row).id as string;
+    if (from !== sessionId && to !== sessionId) continue;
+    const key = [from, to].sort().join("|");
+    const entry = pairs.get(key);
+    pairs.set(key, { last: !entry || (letter.at as number) >= (entry.last.at as number) ? letter : entry.last, count: (entry?.count ?? 0) + 1 });
+  }
+  return [...pairs.values()]
+    .sort((a, b) => (b.last.at as number) - (a.last.at as number))
+    .map(({ last, count }) => ({
+      peer: ((last.to as Row).id as string) === sessionId ? last.from : last.to,
+      last: { ...last, text: String(last.text).slice(0, 280) },
+      count,
+    }));
+}
+
+function threadMessages({ a, b, before, limit }: Row): Row {
+  const [x, y] = [a, b].map((id) => (id === "" ? "user" : (id as string)));
+  const all = letters.filter((letter) => {
+    const from = letterKey(letter);
+    const to = (letter.to as Row).id;
+    return (from === x && to === y) || (from === y && to === x);
+  });
+  const end = before ? all.findIndex((letter) => letter.id === before) : all.length;
+  const stop = end < 0 ? all.length : end;
+  const start = Math.max(0, stop - ((limit as number | undefined) ?? 50));
+  return { letters: all.slice(start, stop), more: start > 0 };
 }
 
 const commands: Record<string, (args: Row) => unknown> = {
@@ -279,6 +331,17 @@ const commands: Record<string, (args: Row) => unknown> = {
   session_is_disposable: () => false,
   session_reorder: () => undefined,
   session_set_status: ({ id, status }) => void Object.assign(sessions.find((s) => s.id === id) ?? {}, { status }),
+  session_mark_seen: ({ id, cursor }) => {
+    const row = sessions.find((s) => s.id === id);
+    if (!row) return null;
+    row.userSeen = Math.max(row.userSeen as number, (cursor as number | undefined) ?? (row.cursor as number));
+    emit("session-updated", { session: row });
+    return row;
+  },
+  thread_pairs: ({ sessionId }) => threadPairs(sessionId as string),
+  thread_messages: (args) => threadMessages(args),
+  mailbox_pending: ({ sessionId }) =>
+    letters.filter((letter) => (letter.to as Row).id === sessionId && (letter.state === "pending" || letter.state === "claimed")),
   session_mark_read: ({ id }) =>
     void sessions.filter((s) => s.id === id && s.status === "done").forEach((s) => (s.status = "idle")),
   state_get: ({ key }) => state.get(key as string) ?? null,

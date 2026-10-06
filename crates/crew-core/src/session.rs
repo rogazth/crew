@@ -50,6 +50,56 @@ pub struct Session {
     /// user): a top-level session, nobody's child.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub handed_off_by: Option<String>,
+    /// `handed_off_by`'s name now.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handed_off_by_name: Option<String>,
+    /// `parent_id`'s name now.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_name: Option<String>,
+    /// How far the user has read it, in `cursor` positions.
+    #[serde(default)]
+    pub user_seen: i64,
+    /// Its event at `cursor`: the last one it had.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_event: Option<LastEvent>,
+}
+
+/// A session's last event as a chip reads it (see [`LastEvent::kind`]).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct LastEvent {
+    /// `report`, `stopped`, `question`, `approval`, `failed` or `exited`.
+    pub kind: String,
+    pub at: i64,
+    pub cursor: i64,
+}
+
+/// What `session_events` holds at the session's cursor, as
+/// [`SESSION_COLUMNS`] reads it.
+#[derive(Deserialize)]
+struct EventRow {
+    kind: String,
+    #[serde(default)]
+    outcome: String,
+    /// The request's own kind, for a session that needs input.
+    #[serde(default)]
+    asks: Option<String>,
+    at: i64,
+}
+
+impl LastEvent {
+    fn read(raw: Option<String>, cursor: i64) -> Option<Self> {
+        let row: EventRow = serde_json::from_str(&raw?).ok()?;
+        let kind = match (row.kind.as_str(), row.outcome.as_str(), row.asks.as_deref()) {
+            ("turn", "stopped", _) => "stopped",
+            ("turn", _, _) => "report",
+            ("needs-input", _, Some("question")) => "question",
+            ("needs-input", _, _) => "approval",
+            ("error", _, _) => "failed",
+            ("exited", _, _) => "exited",
+            _ => return None,
+        };
+        Some(Self { kind: kind.into(), at: row.at, cursor })
+    }
 }
 
 /// Aliased on `s`, with the bot it runs for on `b` (see [`SESSIONS`]), so a
@@ -61,8 +111,16 @@ pub const SESSION_COLUMNS: &str = "s.id, s.workspace_id, s.kind, COALESCE(b.name
                                    s.provider_session_id, COALESCE(b.description, s.description),
                                    COALESCE(b.notifications, s.notifications),
                                    s.status, s.created_at, s.updated_at, COALESCE(b.autonomy, s.autonomy), s.worktree,
-                                   s.bot_id, s.parent_id, s.cursor, s.effort, s.handed_off_by";
-pub const SESSION_COLUMN_COUNT: usize = 19;
+                                   s.bot_id, s.parent_id, s.cursor, s.effort, s.handed_off_by,
+                                   (SELECT COALESCE(hb.name, h.name) FROM sessions h LEFT JOIN bots hb ON hb.id = h.bot_id
+                                     WHERE h.id = s.handed_off_by),
+                                   (SELECT COALESCE(pb.name, p.name) FROM sessions p LEFT JOIN bots pb ON pb.id = p.bot_id
+                                     WHERE p.id = s.parent_id),
+                                   s.user_seen,
+                                   (SELECT json_object('kind', e.kind, 'outcome', e.outcome,
+                                                       'asks', json_extract(e.request, '$.kind'), 'at', e.at)
+                                      FROM session_events e WHERE e.session_id = s.id AND e.cursor = s.cursor)";
+pub const SESSION_COLUMN_COUNT: usize = 23;
 
 /// What [`SESSION_COLUMNS`] reads from.
 pub const SESSIONS: &str = "sessions s LEFT JOIN bots b ON b.id = s.bot_id";
@@ -91,6 +149,10 @@ pub fn row_to_session(row: &rusqlite::Row, at: usize) -> rusqlite::Result<Sessio
         cursor: row.get(at + 16)?,
         effort,
         handed_off_by: row.get(at + 18)?,
+        handed_off_by_name: row.get(at + 19)?,
+        parent_name: row.get(at + 20)?,
+        user_seen: row.get(at + 21)?,
+        last_event: LastEvent::read(row.get(at + 22)?, row.get(at + 16)?),
     })
 }
 
@@ -273,6 +335,10 @@ fn insert(
         parent_id: parent,
         cursor: 0,
         handed_off_by: None,
+        handed_off_by_name: None,
+        parent_name: None,
+        user_seen: 0,
+        last_event: None,
     };
 
     store.with(|conn| {
@@ -322,7 +388,8 @@ fn insert(
         tx.commit()
     })?;
 
-    Ok(session)
+    // Read back for what the row derives from others: its parent's name.
+    Ok(get(store, session.id.clone())?.unwrap_or(session))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -549,6 +616,19 @@ pub fn mark_read(store: &Store, id: String) -> Result<(), String> {
             .execute(params![id])
     })?;
     Ok(())
+}
+
+/// The user has read the session up to `cursor`, or up to its last event.
+/// Never moves back, like the owner's `seen`. Answers the row as it is now.
+pub fn mark_user_seen(store: &Store, id: String, cursor: Option<i64>) -> Result<Option<Session>, String> {
+    let moved = store.with(|conn| {
+        conn.prepare_cached("UPDATE sessions SET user_seen = MAX(user_seen, COALESCE(?2, cursor)) WHERE id = ?1 AND user_seen < COALESCE(?2, cursor)")?
+            .execute(params![id, cursor])
+    })?;
+    if moved > 0 {
+        store.session_changed(&id);
+    }
+    get(store, id)
 }
 
 pub fn reorder(store: &Store, ids: Vec<String>) -> Result<(), String> {

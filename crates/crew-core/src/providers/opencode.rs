@@ -3,7 +3,7 @@ use serde_json::{Map, Value};
 
 use super::runtime::Autonomy;
 use super::{
-    as_record, as_record_owned, clip, crew_tool_detail, finite_number, leaf, string_field, subagent_report, todo_items,
+    as_record, as_record_owned, clip, crew_result_detail, crew_tool_detail, finite_number, leaf, string_field, subagent_report, todo_items,
 };
 
 pub use super::parse_json_line;
@@ -212,7 +212,13 @@ fn tool_detail(
     state: Option<&Map<String, Value>>,
 ) -> Option<ToolDetail> {
     if let Some(detail) = crew_tool_detail(name, input) {
-        return Some(detail);
+        // Once it answered: the letter it made, or why Crew refused it.
+        let done = match string_field(state, "status").as_deref() {
+            Some("completed") => text_field(state, "output").and_then(|out| crew_result_detail(name, input, &out, false)),
+            Some("error") => string_field(state, "error").and_then(|why| crew_result_detail(name, input, &why, true)),
+            _ => None,
+        };
+        return Some(done.unwrap_or(detail));
     }
     if string_field(state, "status").as_deref() == Some("error") {
         return Some(ToolDetail::Output {
@@ -745,7 +751,7 @@ mod tests {
             HarnessEvent::ToolStarted { detail: Some(detail), .. } => Some(detail.clone()),
             _ => None,
         });
-        let Some(ToolDetail::Message { to, text }) = detail else {
+        let Some(ToolDetail::Message { to, text, .. }) = detail else {
             panic!("expected a message detail, got {detail:?}");
         };
         assert_eq!(to, "Cuddles");

@@ -791,12 +791,12 @@ pub fn tool_detail(name: &str, input: &Map<String, Value>) -> Option<ToolDetail>
 
 /// The detail again once the call returned. `None` means the row already says
 /// everything the result could add, and keeps the detail it has.
-pub fn tool_result_detail(name: &str, input: &Map<String, Value>, content: &str) -> Option<ToolDetail> {
+pub fn tool_result_detail(name: &str, input: &Map<String, Value>, content: &str, failed: bool) -> Option<ToolDetail> {
     // The message row already shows the message. Its result is the delivery
-    // receipt, and the input that would rebuild the row is no longer in hand
-    // by then, so this kept replacing the message with its own receipt.
-    if super::crew_call(name, input).is_some_and(|(verb, _)| super::is_message_tool(verb)) {
-        return None;
+    // receipt: what it adds is the letter's id and whom it reached, or why it
+    // was refused, never the receipt in the message's place.
+    if super::crew_call(name, input).is_some_and(|(verb, _)| super::is_letter_tool(verb)) {
+        return super::crew_result_detail(name, input, content, failed);
     }
     let text = || Some(content.to_string()).filter(|body| !body.trim().is_empty());
     match tool_detail(name, input) {
@@ -1499,7 +1499,7 @@ mod tests {
                 "input": { "to": "Cuddles", "text": "the branch is green\nMR is up" }
             }] }
         })]);
-        let Some(Some(ToolDetail::Message { to, text })) = details.first() else {
+        let Some(Some(ToolDetail::Message { to, text, .. })) = details.first() else {
             panic!("expected a message detail, got {details:?}");
         };
         assert_eq!(to, "Cuddles");
@@ -1511,7 +1511,7 @@ mod tests {
         // The result arrives without the input that started it, which is when
         // the row used to lose the message and show the receipt instead.
         assert_eq!(
-            tool_result_detail("mcp__crew__message_agent", &Map::new(), "{\"delivered\": true}"),
+            tool_result_detail("mcp__crew__message_agent", &Map::new(), "{\"delivered\": true}", false),
             None
         );
     }

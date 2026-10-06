@@ -33,9 +33,21 @@ CREATE TABLE IF NOT EXISTS app_state (
 );
 "#;
 
+/// What changed, for whoever shows it: a session's box, or what a session's
+/// row derives from other tables (its last event, how far the user read it).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Changed<'a> {
+    Mailbox(&'a str),
+    Session(&'a str),
+}
+
+/// Told what changed (see [`Store::set_listener`]).
+pub type Listener = Arc<dyn Fn(Changed<'_>) + Send + Sync>;
+
 #[derive(Clone)]
 pub struct Store {
     conn: Arc<Mutex<Connection>>,
+    listener: Arc<Mutex<Option<Listener>>>,
 }
 
 impl Store {
@@ -68,12 +80,38 @@ impl Store {
         }
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
+            listener: Arc::new(Mutex::new(None)),
         })
     }
 
     pub fn with<T>(&self, f: impl FnOnce(&Connection) -> rusqlite::Result<T>) -> Result<T, String> {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
         f(&conn).map_err(|e| e.to_string())
+    }
+
+    /// Who hears what changed: the daemon, which tells the window.
+    pub fn set_listener(&self, listener: Listener) {
+        *self.listener.lock().unwrap_or_else(|e| e.into_inner()) = Some(listener);
+    }
+
+    fn changed(&self, what: Changed<'_>) {
+        let listener = self.listener.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        if let Some(listener) = listener {
+            listener(what);
+        }
+    }
+
+    /// A letter for `session_id` arrived, was handed to a turn, went back, was
+    /// delivered or set aside. Called once the write is done, never under the
+    /// connection's lock.
+    pub fn mailbox_changed(&self, session_id: &str) {
+        self.changed(Changed::Mailbox(session_id));
+    }
+
+    /// Something a session's row is read with changed: an event of its own,
+    /// or how far the user has read it. Called once the write is done.
+    pub fn session_changed(&self, session_id: &str) {
+        self.changed(Changed::Session(session_id));
     }
 }
 
@@ -428,6 +466,16 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         cursor_children_to_acp(&tx)?;
         tx.execute(
             "INSERT INTO schema_migrations (version, applied_at) VALUES (27, ?1)",
+            params![now_millis()],
+        )?;
+        tx.commit()?;
+    }
+    if current < 28 {
+        let tx = conn.unchecked_transaction()?;
+        // The threads, one per pair, read the mailbox by sender and by reader.
+        tx.execute_batch(crate::mailbox::MIGRATION_V28)?;
+        tx.execute(
+            "INSERT INTO schema_migrations (version, applied_at) VALUES (28, ?1)",
             params![now_millis()],
         )?;
         tx.commit()?;
@@ -1092,7 +1140,7 @@ mod lifecycle_tests {
             })
             .unwrap();
         assert_eq!(columns, ["handed_off_by", "user_seen"]);
-        assert_eq!(index, ["mailbox_pending_idx"]);
+        assert_eq!(index, ["mailbox_from_idx", "mailbox_pending_idx", "mailbox_to_idx"]);
         // The new reference holds: whoever handed a session over can go.
         store
             .with(|conn| conn.execute("UPDATE sessions SET handed_off_by = ?2 WHERE id = ?1", params![shell, child]))
@@ -1171,6 +1219,53 @@ mod acp_tests {
         let bound = crate::session::get(&store, ids[1].clone()).unwrap().unwrap().provider_session_id;
         assert_eq!(bound.as_deref(), Some("acp-1"));
         assert!(get(&store, format!("{CURSOR_ACP_NOTE}{}", ids[0])).unwrap().is_some());
+    }
+}
+
+#[cfg(test)]
+mod thread_index_tests {
+    use super::*;
+
+    /// A v27 database has no index on the mailbox but the pending one.
+    /// Migration 28 adds the two a thread reads by, and a thread's query
+    /// uses them rather than scanning the box.
+    #[test]
+    fn a_v27_database_comes_out_of_28_with_the_thread_indexes() {
+        let dir = std::env::temp_dir().join(format!("crew-v28-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let path = dir.join("crew.sqlite3");
+        {
+            let store = Store::open(path.clone()).expect("open");
+            store
+                .with(|conn| {
+                    conn.execute_batch(
+                        "DROP INDEX mailbox_to_idx;
+                         DROP INDEX mailbox_from_idx;
+                         DELETE FROM schema_migrations WHERE version >= 28;",
+                    )
+                })
+                .expect("downgrade");
+        }
+        let store = Store::open(path).expect("reopen");
+        let (version, index, plan): (i64, Vec<String>, Vec<String>) = store
+            .with(|conn| {
+                Ok((
+                    conn.query_row("SELECT MAX(version) FROM schema_migrations", [], |row| row.get(0))?,
+                    conn.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name LIKE 'mailbox_%' ORDER BY name")?
+                        .query_map([], |row| row.get(0))?
+                        .collect::<rusqlite::Result<_>>()?,
+                    conn.prepare(
+                        "EXPLAIN QUERY PLAN SELECT id FROM mailbox
+                          WHERE (from_session = 'a' AND to_session = 'b') OR (from_session = 'b' AND to_session = 'a')",
+                    )?
+                    .query_map([], |row| row.get(3))?
+                    .collect::<rusqlite::Result<_>>()?,
+                ))
+            })
+            .unwrap();
+        assert!(version >= 28, "{version}");
+        assert_eq!(index, ["mailbox_from_idx", "mailbox_pending_idx", "mailbox_to_idx"]);
+        assert!(plan.iter().all(|step| !step.starts_with("SCAN mailbox")), "{plan:?}");
     }
 }
 

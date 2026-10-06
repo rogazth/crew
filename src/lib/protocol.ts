@@ -16,7 +16,14 @@ export type Block = { id: string, role: BlockRole, text: string, at?: number, hi
 /**
  * Set when another bot wrote this line instead of the user.
  */
-fromBot?: BotRef, };
+fromBot?: BotRef, 
+/**
+ * The letter this block shows, in the mailbox: on a user block a letter
+ * handed over; on a system line a session this one started or handed
+ * off ("Started session …"), or the user writing to its child ("You
+ * wrote to …"). The sender's tool row carries the same id.
+ */
+letterId?: string, };
 
 export type BlockApproval = { requestId: number, name: string, input?: Record<string, unknown>, decided?: ApprovalDecision, };
 
@@ -184,7 +191,7 @@ export type FolderEntry = { name: string, path: string, dir: boolean,
  */
 ignored: boolean, };
 
-export type HarnessEvent = { "type": "session.started", } | { "type": "session.ended", code?: number | null, } | { "type": "session.error", message: string, } | { "type": "session.note", message: string, } | { "type": "user.message", text: string, hidden?: boolean, files?: Array<AttachedFile>, fromBot?: BotRef, } | { "type": "system.message", text: string, } | { "type": "session.providerBound", providerSessionId: string, } | { "type": "message.delta", text: string, } | { "type": "message.completed", } | { "type": "reasoning.delta", text: string, } | { "type": "turn.completed", usage?: TurnUsage, } | { "type": "tool.started", callId: string, name: string, title: string, detail?: ToolDetail, } | { "type": "tool.updated", callId: string, title?: string, status?: ToolStatus, detail?: ToolDetail, } | { "type": "approval.requested", requestId: number, name: string, title: string, input?: Record<string, unknown>, } | { "type": "approval.resolved", requestId: number, decision: ApprovalResolution, } | { "type": "question.requested", requestId: number, questions: Array<Question>, } | { "type": "question.resolved", requestId: number, answers: { [key in string]: string } | null, };
+export type HarnessEvent = { "type": "session.started", } | { "type": "session.ended", code?: number | null, } | { "type": "session.error", message: string, } | { "type": "session.note", message: string, } | { "type": "user.message", text: string, hidden?: boolean, files?: Array<AttachedFile>, fromBot?: BotRef, letterId?: string, } | { "type": "system.message", text: string, letterId?: string, } | { "type": "session.providerBound", providerSessionId: string, } | { "type": "message.delta", text: string, } | { "type": "message.completed", } | { "type": "reasoning.delta", text: string, } | { "type": "turn.completed", usage?: TurnUsage, } | { "type": "tool.started", callId: string, name: string, title: string, detail?: ToolDetail, } | { "type": "tool.updated", callId: string, title?: string, status?: ToolStatus, detail?: ToolDetail, } | { "type": "approval.requested", requestId: number, name: string, title: string, input?: Record<string, unknown>, } | { "type": "approval.resolved", requestId: number, decision: ApprovalResolution, } | { "type": "question.requested", requestId: number, questions: Array<Question>, } | { "type": "question.resolved", requestId: number, answers: { [key in string]: string } | null, };
 
 /**
  * The daemon's first message after a good `auth`, sent as the `hello` event.
@@ -344,6 +351,12 @@ installed: Array<string>,
  * Absent on the window's own daemon.
  */
 socksPort?: number, };
+
+/**
+ * A session's box changed: a letter arrived, was handed to a turn, went
+ * back, was delivered or set aside. Pushed as `mailbox-changed`.
+ */
+export type MailboxChanged = { sessionId: string, };
 
 /**
  * A window of a transcript. `more` says whether older blocks exist before
@@ -658,7 +671,25 @@ cursor: number,
  * The session that handed it to the user (`start_session` with owner
  * user); absent for any other.
  */
-handedOffBy?: string, };
+handedOffBy?: string, 
+/**
+ * `handed_off_by`'s name now.
+ */
+handedOffByName?: string, 
+/**
+ * `parent_id`'s name now.
+ */
+parentName?: string, 
+/**
+ * How far the user has read it, in the same positions as `cursor`:
+ * `cursor > userSeen` is an event the user has not looked at.
+ */
+userSeen: number, 
+/**
+ * The last thing it did that its parent hears of (a child's events);
+ * absent before its first.
+ */
+lastEvent?: SessionLastEvent, };
 
 /**
  * A permission prompt or a question form on the CLI's screen.
@@ -729,6 +760,22 @@ more: boolean, state: HistoryState, error?: string, };
 
 export type SessionId = { sessionId: string, };
 
+/**
+ * A session's last event, as a chip reads it. With the status: `working`
+ * is the status; otherwise this says whether it reported, failed, asks a
+ * question, waits for the user's approval, was stopped or exited.
+ */
+export type SessionLastEvent = { 
+/**
+ * `report` (a turn ended), `stopped` (a turn was stopped), `question`,
+ * `approval` (waiting for the user), `failed` or `exited`.
+ */
+kind: "report" | "stopped" | "question" | "approval" | "failed" | "exited", at: number, 
+/**
+ * Its position: the session's `cursor` when it is the last one.
+ */
+cursor: number, };
+
 export type SessionLine = { sessionId: string, line: string, };
 
 /**
@@ -766,6 +813,11 @@ providerSessionId?: string, updatedAt: number, };
 export type SessionLiveAnswered = { id: string, askId: number, };
 
 /**
+ * The user has read a session up to `cursor`; absent, up to its last event.
+ */
+export type SessionMarkSeen = { id: string, cursor?: number, };
+
+/**
  * What a session's composer changes: its model, effort and autonomy.
  */
 export type SessionOptions = { id: string, model: string, effort: string, autonomy: string, };
@@ -792,6 +844,70 @@ export type SessionsRetention = { days: number, };
 
 export type TempFile = { extension: string, base64Contents: string, };
 
+/**
+ * One letter: who wrote it to whom, and where it is in its life.
+ */
+export type ThreadLetter = { 
+/**
+ * The id a transcript block (`letterId`) and a tool row's message
+ * detail (`letterId`) carry.
+ */
+id: string, 
+/**
+ * Kind absent: a bot; `session`, `terminal`, or `user`. The id is empty
+ * for the user, and for a sender deleted since.
+ */
+from: BotRef, to: BotRef, kind: "message" | "report" | "question", text: string, at: number, 
+/**
+ * `pending` (waiting in the box), `claimed` (a turn carries it, or it was
+ * written into a running turn and not read yet), `delivered`, or
+ * `disposed` (set aside unread: answered some other way, or its reader
+ * exited).
+ */
+state: "pending" | "claimed" | "delivered" | "disposed", };
+
+export type ThreadMessagesRequest = { 
+/**
+ * Either party, by session id; `""` or `"user"` is the user.
+ */
+a: string, b: string, 
+/**
+ * A letter id: the page ends just before it.
+ */
+before?: string, limit?: number, };
+
+/**
+ * A page of one pair's thread, oldest first.
+ */
+export type ThreadPage = { letters: Array<ThreadLetter>, 
+/**
+ * Older letters exist before the first one.
+ */
+more: boolean, };
+
+/**
+ * A pair a session's Conversations menu lists.
+ */
+export type ThreadPair = { 
+/**
+ * The other party, when the session asked about is one of the two.
+ * Otherwise one of the pair: the user, writing to the session's child.
+ */
+peer: BotRef, 
+/**
+ * The second party, when the session asked about is not in the pair
+ * (the child the user wrote to); absent when it is.
+ */
+with?: BotRef, 
+/**
+ * The newest letter, its text cut to a preview.
+ */
+last: ThreadLetter, 
+/**
+ * Letters in the thread, both ways.
+ */
+count: number, };
+
 export type TodoItem = { text: string, status: TodoStatus, };
 
 export type TodoStatus = "pending" | "inProgress" | "completed";
@@ -814,7 +930,38 @@ hunks?: Array<EditHunk>, } | { "kind": "search", query: string, matches?: number
 /**
  * What came back: the files, the lines, the results.
  */
-output?: string, } | { "kind": "fetch", url: string, title?: string, output?: string, } | { "kind": "message", to: string, text: string, } | { "kind": "todo", items: Array<TodoItem>, } | { "kind": "agent", description: string, agentType?: string, prompt?: string, 
+output?: string, } | { "kind": "fetch", url: string, title?: string, output?: string, } | { "kind": "message", 
+/**
+ * Whom the call named: an id, a name, or for `start_session` the
+ * name it asked for.
+ */
+to: string, text: string, 
+/**
+ * The letter the call made. The receiver's block carries the same
+ * id, and `thread_messages` lists it under it.
+ */
+letterId?: string, 
+/**
+ * The session it reached, by id.
+ */
+toId?: string, 
+/**
+ * That session's name when it was reached.
+ */
+toName?: string, 
+/**
+ * `start` (a session the caller owns) or `handoff` (one handed to
+ * the user) for `start_session`; absent for a message.
+ */
+what?: string, 
+/**
+ * How it went over: `started`, `queued`, `steered` or `answered`.
+ */
+delivery?: string, 
+/**
+ * Why Crew refused it: no letter was made.
+ */
+error?: string, } | { "kind": "todo", items: Array<TodoItem>, } | { "kind": "agent", description: string, agentType?: string, prompt?: string, 
 /**
  * What it reported back.
  */
@@ -848,7 +995,13 @@ sentAt?: number,
  * One id per Enter, replayed unchanged by a retry. The daemon accepts it
  * once; a second arrival is answered without starting a second turn.
  */
-nonce?: string, };
+nonce?: string, 
+/**
+ * The letter this turn hands over, already in the mailbox and claimed:
+ * the transcript's block carries its id, and the turn's end marks it
+ * delivered. The daemon's own; a window's is ignored.
+ */
+letterId?: string, };
 
 export type TurnStarted = { working: boolean, };
 

@@ -189,10 +189,34 @@ pub fn is_message_tool(verb: &str) -> bool {
     matches!(verb, "send_message" | "message_agent" | "send_to_session")
 }
 
+/// The Crew tools that make a letter: the message tools, and `start_session`,
+/// whose prompt is the new session's first letter.
+pub fn is_letter_tool(verb: &str) -> bool {
+    is_message_tool(verb) || verb == "start_session"
+}
+
 /// What a Crew tool did, for the one that is worth reading in a transcript: a
-/// message to another bot is half of a conversation happening in two places.
+/// message to another bot is half of a conversation happening in two places,
+/// and so is the prompt a session was started on.
 pub fn crew_tool_detail(name: &str, input: &Map<String, Value>) -> Option<crew_protocol::ToolDetail> {
     let (verb, input) = crew_call(name, input)?;
+    if verb == "start_session" {
+        let handoff = string_field(Some(&input), "owner").as_deref() == Some("user");
+        return Some(crew_protocol::ToolDetail::Message {
+            // The name is Crew's to pick when the call leaves it out; the
+            // answer brings it (`to_name`).
+            to: string_field(Some(&input), "name")
+                .or_else(|| string_field(Some(&input), "provider"))
+                .unwrap_or_else(|| "new session".into()),
+            text: string_field(Some(&input), "prompt").unwrap_or_default(),
+            letter_id: None,
+            to_id: None,
+            to_name: None,
+            what: Some(if handoff { "handoff" } else { "start" }.into()),
+            delivery: None,
+            error: None,
+        });
+    }
     if !is_message_tool(verb) {
         return None;
     }
@@ -200,7 +224,48 @@ pub fn crew_tool_detail(name: &str, input: &Map<String, Value>) -> Option<crew_p
         // `send_to_session` named its reader `session`.
         to: string_field(Some(&input), "to").or_else(|| string_field(Some(&input), "session"))?,
         text: string_field(Some(&input), "text").unwrap_or_default(),
+        letter_id: None,
+        to_id: None,
+        to_name: None,
+        what: None,
+        delivery: None,
+        error: None,
     })
+}
+
+/// A letter tool's row once its call answered: the letter it made, the
+/// session it reached and how, or the reason Crew refused it. `None` for any
+/// other tool, and for an answer that adds nothing to the row (a receipt
+/// from a Crew that did not name its letters).
+pub fn crew_result_detail(
+    name: &str,
+    input: &Map<String, Value>,
+    result: &str,
+    failed: bool,
+) -> Option<crew_protocol::ToolDetail> {
+    let Some(crew_protocol::ToolDetail::Message { to, text, what, .. }) = crew_tool_detail(name, input) else {
+        return None;
+    };
+    let row = |letter_id, to_id, to_name, delivery, error| crew_protocol::ToolDetail::Message {
+        to: to.clone(),
+        text: text.clone(),
+        letter_id,
+        to_id,
+        to_name,
+        what: what.clone(),
+        delivery,
+        error,
+    };
+    if failed {
+        let error = result.trim();
+        return (!error.is_empty()).then(|| row(None, None, None, None, Some(error.to_string())));
+    }
+    let answer: Map<String, Value> = serde_json::from_str(result.trim()).ok()?;
+    let field = |key: &str| string_field(Some(&answer), key);
+    let letter_id = field("letter_id")?;
+    // `send_message` answers the reader's name as `to`, `start_session` as `name`.
+    let to_name = if what.is_some() { field("name") } else { field("to") };
+    Some(row(Some(letter_id), field("id"), to_name, field("delivery"), None))
 }
 
 /// The row line for a Crew call: `Crew message agent abc`, the tool it ran
@@ -447,7 +512,7 @@ mod tests {
             ("mcp__crew__send_to_session", serde_json::json!({ "session": "abc", "text": "green", "mode": "queue" })),
         ] {
             assert!(
-                matches!(detail(name, input), Some(crew_protocol::ToolDetail::Message { ref to, ref text }) if to == "abc" && text == "green"),
+                matches!(detail(name, input), Some(crew_protocol::ToolDetail::Message { ref to, ref text, .. }) if to == "abc" && text == "green"),
                 "{name}"
             );
         }
@@ -469,7 +534,7 @@ mod tests {
             assert_eq!(arguments["to"], "abc");
             assert!(matches!(
                 crew_tool_detail(spelling, input),
-                Some(crew_protocol::ToolDetail::Message { ref to, ref text }) if to == "abc" && text == "green"
+                Some(crew_protocol::ToolDetail::Message { ref to, ref text, .. }) if to == "abc" && text == "green"
             ));
         }
         let bare = serde_json::json!({ "name": "list_agents" });
@@ -505,7 +570,7 @@ mod tests {
         let input = input.as_object().unwrap();
         assert!(matches!(
             crew_tool_detail("mcp__crew__call_tool", input),
-            Some(crew_protocol::ToolDetail::Message { ref to, ref text }) if to == "abc" && text == "the branch is green"
+            Some(crew_protocol::ToolDetail::Message { ref to, ref text, .. }) if to == "abc" && text == "the branch is green"
         ));
         let junk = serde_json::json!({ "name": "list_agents", "arguments": "not json" });
         assert_eq!(crew_call("mcp__crew__call_tool", junk.as_object().unwrap()).map(|(verb, _)| verb), Some("list_agents"));
@@ -749,5 +814,40 @@ mod tests {
         let with = persona_prompt("Planner", "", Some("You have: message_agent."));
         assert!(with.ends_with("\n\nYou have: message_agent."), "{with}");
         assert_eq!(persona_prompt("Planner", "", Some("")), persona_prompt("Planner", "", None));
+    }
+
+    /// A message row, once its call answers, names the letter it made and
+    /// whom it reached; refused, it says why. `start_session` is a letter
+    /// row too: its prompt went to the session it made.
+    #[test]
+    fn a_letter_row_takes_its_id_or_its_refusal_from_the_answer() {
+        use crew_protocol::ToolDetail;
+        let input = serde_json::json!({ "to": "abc", "text": "green" });
+        let input = input.as_object().unwrap();
+        let answer = r#"{ "to": "Auth", "id": "abc-1", "letter_id": "L1", "delivery": "queued", "waiting": 1 }"#;
+        let Some(ToolDetail::Message { to, text, letter_id, to_id, to_name, what, delivery, error }) =
+            crate::providers::claude::tool_result_detail("mcp__crew__send_message", input, answer, false)
+        else {
+            panic!("not a message row");
+        };
+        assert_eq!((to.as_str(), text.as_str()), ("abc", "green"));
+        assert_eq!((letter_id.as_deref(), to_id.as_deref(), to_name.as_deref()), (Some("L1"), Some("abc-1"), Some("Auth")));
+        assert_eq!((what, delivery.as_deref(), error), (None, Some("queued"), None));
+
+        let refused = crew_result_detail("crew_send_message", input, "You can't message yourself.", true);
+        assert!(matches!(refused, Some(ToolDetail::Message { error: Some(ref why), letter_id: None, .. }) if why == "You can't message yourself."));
+
+        let start = serde_json::json!({ "provider": "codex", "prompt": "fix it", "owner": "user" });
+        let start = start.as_object().unwrap();
+        assert!(matches!(
+            crew_tool_detail("mcp__crew__start_session", start),
+            Some(ToolDetail::Message { ref to, ref what, .. }) if to == "codex" && what.as_deref() == Some("handoff")
+        ));
+        let started = crew_result_detail("mcp__crew__start_session", start, r#"{ "id": "s9", "letter_id": "L2", "name": "codex: fix it" }"#, false);
+        assert!(matches!(
+            started,
+            Some(ToolDetail::Message { ref text, letter_id: Some(ref l), to_name: Some(ref n), .. }) if text == "fix it" && l == "L2" && n == "codex: fix it"
+        ));
+        assert_eq!(crew_result_detail("mcp__crew__list_peers", start, "[]", false), None);
     }
 }

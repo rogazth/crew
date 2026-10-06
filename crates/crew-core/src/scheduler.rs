@@ -249,6 +249,7 @@ impl Scheduler {
             from_bot: None,
             sent_at: None,
             nonce: None,
+            letter_id: None,
         });
         if started_turn.is_err() {
             self.finish(&row.routine.id, &run, RunStatus::Error);

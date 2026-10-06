@@ -1,3 +1,5 @@
+import type { SessionLastEvent } from "./protocol";
+
 export type Workspace = {
   id: string;
   name: string;
@@ -50,6 +52,14 @@ export type Session = {
   cursor?: number;
   /** The session that handed it to the user (`start_session` with owner user). */
   handedOffBy?: string;
+  /** `handedOffBy`'s name now. */
+  handedOffByName?: string;
+  /** `parentId`'s name now. */
+  parentName?: string;
+  /** How far the user has read it, in `cursor` positions: `cursor > userSeen` is unread. */
+  userSeen?: number;
+  /** Its last event (a child's): with `status`, what its chip says. */
+  lastEvent?: SessionLastEvent;
 };
 
 /** A git worktree of a workspace's repo. The main checkout comes first; outside git there is only it, branchless. */

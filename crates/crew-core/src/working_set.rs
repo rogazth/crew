@@ -152,8 +152,13 @@ pub(crate) fn detail_line(detail: &ToolDetail) -> String {
             None => format!("searched: {}", clip(query, LINE_LIMIT)),
         },
         ToolDetail::Fetch { url, .. } => format!("fetched: {}", clip(url, LINE_LIMIT)),
-        ToolDetail::Message { to, text } => {
-            format!("wrote to {to}: {}", clip(text, MESSAGE_LIMIT))
+        ToolDetail::Message { to, text, to_name, what, .. } => {
+            let to = to_name.as_deref().unwrap_or(to);
+            match what.as_deref() {
+                Some("start") => format!("started {to}: {}", clip(text, MESSAGE_LIMIT)),
+                Some("handoff") => format!("handed {to} to the user: {}", clip(text, MESSAGE_LIMIT)),
+                _ => format!("wrote to {to}: {}", clip(text, MESSAGE_LIMIT)),
+            }
         }
         ToolDetail::Todo { items } => {
             let done = items.iter().filter(|item| item.status == TodoStatus::Completed).count();
@@ -321,7 +326,16 @@ mod tests {
     fn a_message_it_sent_reads_as_a_message() {
         let blocks = vec![tool(
             "message_agent",
-            ToolDetail::Message { to: "Cuddles".into(), text: "tu turno".into() },
+            ToolDetail::Message {
+                to: "Cuddles".into(),
+                text: "tu turno".into(),
+                letter_id: None,
+                to_id: None,
+                to_name: None,
+                what: None,
+                delivery: None,
+                error: None,
+            },
             ToolStatus::Completed,
         )];
         let out = render(&blocks, TAIL_BUDGET).expect("history");

@@ -43,6 +43,8 @@ struct Extra {
     usage: Option<TurnUsage>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     from_bot: Option<BotRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    letter_id: Option<String>,
 }
 
 const DEFAULT_LIMIT: u32 = 50;
@@ -139,6 +141,8 @@ struct ExtraRef<'a> {
     usage: Option<&'a TurnUsage>,
     #[serde(skip_serializing_if = "Option::is_none")]
     from_bot: Option<&'a BotRef>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    letter_id: Option<&'a String>,
 }
 
 fn extra_of(block: &Block) -> ExtraRef<'_> {
@@ -151,6 +155,7 @@ fn extra_of(block: &Block) -> ExtraRef<'_> {
         question: block.question.as_ref(),
         usage: block.usage.as_ref(),
         from_bot: block.from_bot.as_ref(),
+        letter_id: block.letter_id.as_ref(),
     }
 }
 
@@ -195,6 +200,7 @@ fn row_to_block(row: &rusqlite::Row, at: usize) -> rusqlite::Result<Block> {
         question: extra.question,
         usage: extra.usage,
         from_bot: extra.from_bot,
+        letter_id: extra.letter_id,
     })
 }
 

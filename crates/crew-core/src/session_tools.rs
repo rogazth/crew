@@ -367,19 +367,32 @@ impl SessionTools {
             return Err(format!("{} is not waiting on a question, so there is nothing for answers to answer: send text.", target.name));
         };
         let mut fell_back = None;
+        // The letter a steer that did not go through left in the box.
+        let mut released = None;
         if steer {
             let tried = if !STEERABLE.contains(&target.provider.as_str()) {
                 Err(format!("{} cannot take a message in the middle of a turn", target.provider))
             } else if !self.turns.is_running(&target.id) {
                 Err("no turn was running".to_string())
             } else {
-                self.turns.steer(&target.id, &body, caller.sender())
+                // Written into the turn, the letter is claimed by it: read, it is
+                // delivered; not taken, it goes back in the box below.
+                let letter = mailbox::record_claimed(&self.store, &target.id, &caller.sender(), &body)?;
+                match self.turns.steer(&target.id, &body, caller.sender(), Some(letter.id.clone())) {
+                    Ok(()) => Ok(letter),
+                    Err(why) => {
+                        mailbox::release(&self.store, &letter.id)?;
+                        released = Some(letter.id);
+                        Err(why)
+                    }
+                }
             };
             match tried {
-                Ok(()) => {
+                Ok(letter) => {
                     return Ok(json!({
                         "to": target.name,
                         "id": target.id,
+                        "letter_id": letter.id,
                         "delivery": "steered",
                         "note": "It reads this at its next step, in the turn it is in, so that turn's answer takes it into \
                                  account. Should the turn end first, it becomes the next turn."
@@ -388,7 +401,10 @@ impl SessionTools {
                 Err(why) => fell_back = Some(why),
             }
         }
-        mailbox::enqueue(&self.store, &target.id, &caller.sender(), &body)?;
+        let letter = match released {
+            Some(id) => id,
+            None => mailbox::enqueue(&self.store, &target.id, &caller.sender(), &body)?.id,
+        };
         // What goes over is the oldest letter, which may not be this one: a
         // queue that delivers out of order is worse than one that waits.
         let started = self.turns.deliver_to(&target);
@@ -414,6 +430,7 @@ impl SessionTools {
         Ok(json!({
             "to": target.name,
             "id": target.id,
+            "letter_id": letter,
             "delivery": if started { "started" } else { "queued" },
             "waiting": waiting,
             "note": note
@@ -456,6 +473,11 @@ impl SessionTools {
                 given.len()
             ));
         }
+        // What the thread shows of the answer: the one answer, or each in order.
+        let said = match given.as_slice() {
+            [one] => one.clone(),
+            many => many.iter().enumerate().map(|(at, answer)| format!("{}. {answer}", at + 1)).collect::<Vec<_>>().join("\n"),
+        };
         let map: HashMap<String, String> = questions.into_iter().zip(given).collect();
         self.turns.answer(&target.id, request_id, Some(map)).map_err(|error| {
             if error.contains("already answered") {
@@ -465,12 +487,13 @@ impl SessionTools {
             }
         })?;
         self.saw(caller, target, target.cursor);
+        let letter = mailbox::record_delivered(&self.store, &target.id, &caller.sender(), &said)?;
         let note = match caller {
             Caller::Bot(_) => "It carries on with your answer. Its report wakes you when its turn ends.",
             Caller::Terminal(_) => "It carries on with your answer. Check it with read_session.",
             _ => "It carries on with your answer.",
         };
-        Ok(json!({ "to": target.name, "id": target.id, "delivery": "answered", "note": note }))
+        Ok(json!({ "to": target.name, "id": target.id, "letter_id": letter.id, "delivery": "answered", "note": note }))
     }
 
     fn start(&self, caller: &Caller, args: &Value) -> Result<Value, String> {
@@ -553,10 +576,15 @@ impl SessionTools {
             caller.session_id().map(str::to_string),
         )?;
         (self.on_created)(&row);
+        // The prompt is the first letter between the two: the pair's thread
+        // starts with it.
+        let letter = mailbox::record_claimed(&self.store, &row.id, &caller.sender(), &prompt)?;
         if let Caller::Bot(me) = caller {
-            self.turns
-                .transcripts()
-                .append_system(&me.id, &format!("Started session {name} ({})", row.id));
+            self.turns.transcripts().append_system_letter(
+                &me.id,
+                &format!("Started session {name} ({})", row.id),
+                &letter.id,
+            );
         }
         let cwd = session::cwd(&self.store, &row)?;
         let from = match caller {
@@ -573,12 +601,15 @@ impl SessionTools {
             from_bot: from,
             sent_at: None,
             nonce: None,
+            letter_id: Some(letter.id.clone()),
         }) {
+            let _ = mailbox::dispose(&self.store, &letter.id);
             let _ = session::set_status(&self.store, row.id.clone(), "error".into());
             return Err(format!("The session was made ({}) but its first turn did not start: {error}", row.id));
         }
         let mut out = json!({
             "id": row.id,
+            "letter_id": letter.id,
             "name": name,
             "provider": provider,
             "model": model,
@@ -640,19 +671,22 @@ impl SessionTools {
         if let Some(me) = caller.session() {
             session::set_handed_off_by(&self.store, &row.id, &me.id)?;
         }
-        mailbox::enqueue(&self.store, &row.id, &caller.sender(), &prompt)?;
+        let letter = mailbox::enqueue(&self.store, &row.id, &caller.sender(), &prompt)?;
         let row = session::get(&self.store, row.id.clone())?.unwrap_or(row);
         (self.on_created)(&row);
         if let Caller::Bot(me) = caller {
-            self.turns
-                .transcripts()
-                .append_system(&me.id, &format!("Handed {name} ({}) to the user", row.id));
+            self.turns.transcripts().append_system_letter(
+                &me.id,
+                &format!("Handed {name} ({}) to the user", row.id),
+                &letter.id,
+            );
         }
         let branch = worktree.as_deref().and_then(|tree| {
             crate::worktree::branches(tree).into_iter().find(|(path, _)| path == tree).and_then(|(_, branch)| branch)
         });
         Ok(json!({
             "id": row.id,
+            "letter_id": letter.id,
             "name": name,
             "provider": provider,
             "model": model,
@@ -2088,6 +2122,7 @@ while True:
             from_bot: None,
             sent_at: None,
             nonce: None,
+            letter_id: None,
         });
         assert!(again.is_err_and(|e| e.contains("already running")));
         w.wait(&parent, &id, json!({}));
@@ -2409,6 +2444,7 @@ while True:
                 from_bot: None,
                 sent_at: None,
                 nonce: None,
+                letter_id: None,
             })
             .expect("busy");
         for (n, kid) in kids.iter().enumerate() {
@@ -2509,6 +2545,7 @@ while True:
                     from_bot: None,
                     sent_at: None,
                     nonce: None,
+                    letter_id: None,
                 })
                 .expect("busy");
         }
@@ -2801,5 +2838,155 @@ while True:
                 assert!(!said.contains(gone), "{gone}: {said}");
             }
         }
+    }
+
+    /// Every letter has one id from the sender's side to the reader's: the
+    /// prompt a session was started on, a message, the report back. The
+    /// reader's block and the starter's line carry it, and the pair's thread
+    /// lists them in the order they were written, both ways.
+    #[test]
+    fn a_letter_has_one_id_from_its_sender_to_its_reader_and_the_thread() {
+        let w = world();
+        let bot = w.session("bot", "Lead", "full");
+        let me = bot.session_id().unwrap().to_string();
+        let started = w
+            .call(&bot, "start_session", json!({ "provider": "opencode", "prompt": "fix the login", "name": "Auth" }))
+            .expect("start");
+        let child = started["id"].as_str().unwrap().to_string();
+        let first = started["letter_id"].as_str().expect("start_session names its letter").to_string();
+        w.settle(&child);
+        w.heard(&me, &child);
+        w.settle(&me);
+        let sent = w.call(&bot, "send_message", json!({ "to": child, "text": "and the signup" })).expect("send");
+        let second = sent["letter_id"].as_str().expect("send_message names its letter").to_string();
+        w.settle(&child);
+        w.heard(&me, &child);
+        w.settle(&me);
+
+        let read: Vec<String> = w
+            .turns
+            .transcripts()
+            .since(&child, 0)
+            .0
+            .into_iter()
+            .filter(|block| block.role == crew_protocol::BlockRole::User)
+            .filter_map(|block| block.letter_id)
+            .collect();
+        assert_eq!(read, [first.clone(), second.clone()]);
+        let lead = w.turns.transcripts().since(&me, 0).0;
+        let line = lead.iter().find(|block| block.letter_id.as_deref() == Some(first.as_str())).expect("the starter's line");
+        assert!(line.text.starts_with("Started session Auth"), "{}", line.text);
+        // The reports came back as letters too, and the bot's blocks say which.
+        let reports: Vec<&Block> = lead.iter().filter(|block| block.from_bot.as_ref().is_some_and(|f| f.id == child)).collect();
+        assert_eq!(reports.len(), 2);
+        assert!(reports.iter().all(|block| block.letter_id.is_some()));
+
+        let page = mailbox::thread(w.turns.store(), &child, &me, None, None).expect("thread");
+        let shape: Vec<(String, &str, &str)> = page
+            .letters
+            .iter()
+            .map(|letter| (letter.from.id.clone(), letter.kind.as_str(), letter.state.as_str()))
+            .collect();
+        assert_eq!(
+            shape,
+            [
+                (me.clone(), "message", "delivered"),
+                (child.clone(), "report", "delivered"),
+                (me.clone(), "message", "delivered"),
+                (child.clone(), "report", "delivered"),
+            ]
+        );
+        assert_eq!((page.letters[0].id.as_str(), page.letters[2].id.as_str()), (first.as_str(), second.as_str()));
+        assert_eq!((page.letters[0].to.name.as_str(), page.letters[0].to.kind.as_deref()), ("Auth", Some("session")));
+        assert!(!page.more);
+        let older = mailbox::thread(w.turns.store(), &me, &child, Some(&second), Some(1)).expect("page");
+        assert_eq!((older.letters.len(), older.letters[0].kind.as_str(), older.more), (1, "report", true));
+
+        let pairs = mailbox::pairs(w.turns.store(), &me).expect("pairs");
+        assert_eq!(pairs.len(), 1);
+        assert_eq!((pairs[0].peer.id.as_str(), pairs[0].with.is_none(), pairs[0].count), (child.as_str(), true, 4));
+        assert_eq!(pairs[0].last.kind, "report");
+        assert!(mailbox::pending(w.turns.store(), &me).expect("pending").is_empty());
+    }
+
+    /// The user writing to a bot's child from its chat is a letter too: the
+    /// child's block carries it, the parent's chat has a line for it, and the
+    /// parent's Conversations list the pair "You ⇄ child".
+    #[test]
+    fn the_user_writing_to_a_child_is_a_pair_its_parent_sees() {
+        let w = world();
+        let bot = w.session("bot", "Lead", "full");
+        let me = bot.session_id().unwrap().to_string();
+        let child = w.start(&bot, "x");
+        w.settle(&child);
+        w.heard(&me, &child);
+        w.settle(&me);
+        let row = w.row(&child);
+        w.turns
+            .start_by_user(TurnStart {
+                session_id: child.clone(),
+                cwd: session::cwd(w.turns.store(), &row).unwrap(),
+                text: "use the new client".into(),
+                files: None,
+                mentions: None,
+                hidden: None,
+                from_bot: None,
+                sent_at: None,
+                nonce: None,
+                letter_id: Some("forged".into()),
+            })
+            .expect("start");
+        w.settle(&child);
+        let block = w
+            .turns
+            .transcripts()
+            .since(&child, 0)
+            .0
+            .into_iter()
+            .rfind(|block| block.role == crew_protocol::BlockRole::User && block.text == "use the new client")
+            .expect("the user's block");
+        let id = block.letter_id.expect("a letter id");
+        assert_ne!(id, "forged", "the window does not pick letter ids");
+        assert!(block.from_bot.is_none(), "the user's own words, not a letter's bubble");
+        let note = w.turns.transcripts().since(&me, 0).0.into_iter().find(|b| b.letter_id.as_deref() == Some(id.as_str()));
+        assert_eq!(note.map(|b| b.text), Some(format!("You wrote to {}", row.name)));
+
+        let pairs = mailbox::pairs(w.turns.store(), &me).expect("pairs");
+        let theirs = pairs.iter().find(|pair| pair.with.is_some()).expect("You ⇄ child");
+        assert_eq!((theirs.peer.kind.as_deref(), theirs.peer.name.as_str()), (Some("user"), "You"));
+        assert_eq!(theirs.with.as_ref().map(|to| to.id.as_str()), Some(child.as_str()));
+        let page = mailbox::thread(w.turns.store(), "user", &child, None, None).expect("thread");
+        assert_eq!(page.letters.iter().map(|l| l.id.as_str()).collect::<Vec<_>>(), [id.as_str()]);
+        assert_eq!(page.letters[0].state, "delivered");
+        // From the child's side the user is a pair of its own.
+        let mine = mailbox::pairs(w.turns.store(), &child).expect("pairs");
+        assert!(mine.iter().any(|pair| pair.peer.kind.as_deref() == Some("user") && pair.with.is_none()));
+    }
+
+    /// A steer is a letter claimed by the turn it goes into: delivered once
+    /// read, with its id on the block where the model read it.
+    #[test]
+    fn a_steer_is_a_letter_delivered_where_it_was_read() {
+        let w = world();
+        w.turns.override_binary("claude", fake_claude(&w.dir));
+        let parent = w.session("terminal", "shell", "full");
+        let started = w.call(&parent, "start_session", json!({ "provider": "claude", "prompt": "SLEEP 2" })).expect("start");
+        let id = started["id"].as_str().unwrap().to_string();
+        for _ in 0..400 {
+            if w.row(&id).provider_session_id.is_some() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        std::thread::sleep(Duration::from_millis(300));
+        let steered = w.call(&parent, "send_message", json!({ "to": id, "text": "and this", "steer": true })).expect("steer");
+        assert_eq!(steered["delivery"], "steered", "{steered}");
+        let letter = steered["letter_id"].as_str().expect("a letter id").to_string();
+        w.settle(&id);
+        let block = w.turns.transcripts().since(&id, 0).0.into_iter().find(|b| b.text == "and this").expect("the steer");
+        assert_eq!(block.letter_id.as_deref(), Some(letter.as_str()));
+        let page = mailbox::thread(w.turns.store(), parent.session_id().unwrap(), &id, None, None).expect("thread");
+        let steer = page.letters.iter().find(|l| l.id == letter).expect("in the thread");
+        assert_eq!(steer.state, "delivered");
     }
 }

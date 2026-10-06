@@ -35,6 +35,12 @@ pub struct TurnStart {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub nonce: Option<String>,
+    /// The letter this turn hands over, already in the mailbox and claimed:
+    /// the transcript's block carries its id, and the turn's end marks it
+    /// delivered. The daemon's own; a window's is ignored.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub letter_id: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, TS)]
