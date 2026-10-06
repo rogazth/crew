@@ -458,6 +458,12 @@ app.on("second-instance", () => {
 app.whenReady().then(async () => {
   if (!primary) return;
   session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+    // The window's documents only. Main's own fetches go through this session
+    // too, and a remote file's preview passes on what they got.
+    if (details.resourceType !== "mainFrame" && details.resourceType !== "subFrame") {
+      callback({});
+      return;
+    }
     callback({
       responseHeaders: {
         ...details.responseHeaders,
