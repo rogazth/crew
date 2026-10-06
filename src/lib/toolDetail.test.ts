@@ -88,7 +88,7 @@ describe("toolLine", () => {
     expect(line.suffix).toBe("to Cuddles");
   });
 
-  // list_agents hands the model ids, so half the message rows arrive as a uuid.
+  // list_peers hands the model ids, so half the message rows arrive as a uuid.
   it("says the name of the bot an id belongs to", () => {
     rememberBots([{ id: "4be7e9ad-a184", name: "Cuddles" }]);
     const line = toolLine(tool({ kind: "message", to: "4be7e9ad-a184", text: "done" }));

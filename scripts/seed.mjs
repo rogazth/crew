@@ -558,9 +558,9 @@ transcript(showcase.id, [
     input: '{\n  "verbose": false\n}',
     output: '[{"uid":"1_0","role":"RootWebArea","name":"Crew"},{"uid":"1_1","role":"button","name":"New bot"}]',
   }),
-  tool("mcp__crew__list_agents", "mcp__crew__list_agents", {
+  tool("mcp__crew__list_peers", "mcp__crew__list_peers", {
     kind: "output",
-    text: '[\n  {\n    "id": "5888c0",\n    "name": "Planner"\n  }\n]',
+    text: '[\n  {\n    "id": "5888c0",\n    "name": "Planner",\n    "kind": "bot",\n    "write": true\n  }\n]',
   }),
   { role: "assistant", text: "Found it. Now the edits." },
   tool("Edit", "Edit toolDetail.ts", {

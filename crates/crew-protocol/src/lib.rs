@@ -581,6 +581,11 @@ pub struct Session {
     #[serde(default)]
     #[ts(type = "number")]
     pub cursor: i64,
+    /// The session that handed it to the user (`start_session` with owner
+    /// user); absent for any other.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub handed_off_by: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, TS)]

@@ -4,7 +4,7 @@
 
 Models have confused these before, so they are said the same way everywhere a model reads them: here, the MCP `instructions()` and every session tool's description.
 
-- **Bot** — a persistent identity Crew owns: a name, a description, an autonomy, a mailbox and a history. It lives in the `bots` table. `message_agent` reaches it. ("Agent" is not a Crew noun: in the industry's sense, a model plus its harness, it is what Crew calls a session.)
+- **Bot** — a persistent identity Crew owns: a name, a description, an autonomy, a mailbox and a history. It lives in the `bots` table. `send_message` reaches it. ("Agent" is not a Crew noun: in the industry's sense, a model plus its harness, it is what Crew calls a session.)
 - **Session** — one provider CLI (claude, codex, opencode, cursor) running a conversation. It lives in the `sessions` table and belongs to a bot (the session its turns run in, under the bot's own id), to whoever started it with `start_session` (a *child*), or to nobody (a *terminal* the user drives).
 
 A bot outlives its sessions; a session is one provider CLI process and can be thrown away.
@@ -78,7 +78,7 @@ Each provider is a module under `crates/crew-core/src/providers/`. It knows how 
 
 ## Sessions a caller starts
 
-Any bot, terminal or the user can hand a job to another provider CLI and get its answer back, without that CLI needing a tool to answer: its last message of each turn is its report. The parent starts it, waits on it and reads what it did, the same moves as a dev server's `control_process` (start), `wait_for_log` and `read_logs`.
+Any bot, terminal or the user can hand a job to another provider CLI and get its answer back, without that CLI needing a tool to answer: its last message of each turn is its report. `start_session` starts it (`owner: "me"`, the default); a bot parent is woken by the report, a terminal reads it with `read_session` or blocks on it with `wait: true`.
 
 ```mermaid
 sequenceDiagram
@@ -86,24 +86,30 @@ sequenceDiagram
   participant D as crewd
   participant C as Child CLI
 
-  P->>D: start_session { provider, prompt, worktree }
-  D-->>P: { id, cursor: 0 }
+  P->>D: start_session { prompt, provider?, worktree?, wait? }
   D->>C: first turn (a fresh provider session)
   C-->>D: stream, then exit
   D->>D: "Turn ended" block, event at its position
-  P->>D: wait_for_session { sessions }
-  D-->>P: { report, cursor }
-  P->>D: send_to_session { text }
+  alt wait: true
+    D-->>P: { status: reported, report }
+  else a bot parent
+    D->>P: a turn opening "## Report from session …"
+  end
+  P->>D: send_message { to: child, text }
   D->>C: next turn, resuming its own conversation
 ```
 
-A child is driven by the same `TurnHost` a bot is, with three differences (`crates/crew-core/src/session_tools.rs`, `turns.rs`): it resumes its provider's conversation (`claude --resume`, `codex exec resume`, `opencode run --session`, `cursor-agent --resume`) where a bot is handed the tail; its persona is the envelope — who started it, and that its final message is its report; and the end of each of its turns is an event. Every event appends a block to its transcript, so the event's position there is a cursor no other event shares: `wait_for_session` and `read_session` count in the same numbers, and a turn that began and ended between two waits is found by position, not by status. Crew keeps what the owner last saw, so a wait without a cursor starts there.
+A child is driven by the same `TurnHost` a bot is, with three differences (`crates/crew-core/src/session_tools.rs`, `turns.rs`): it resumes its provider's conversation (`claude --resume`, Codex's `thread/resume`, `opencode run --session`, Cursor's `session/load`) where a bot is handed the tail; its persona is the envelope — who started it, and that its final message is its report; and the end of each of its turns is an event. Every event appends a block to its transcript, so the event's position there is a cursor no other event shares: `read_session` counts in the same numbers, and Crew keeps what the owner last saw.
 
-The limits: a child sees no session tool (depth one); a parent has at most four live ones; a child's autonomy is the parent's or lower, and an `ask` parent cannot allow what its child asks for; only the parent, or the user, drives a child; a bot's own session is reached through `message_agent`. A bot parent also finds each report in its mailbox, taken back out if it already read it with a wait. `send_to_session` queues behind a running turn; `mode: steer` writes into it instead, which Claude takes at its next step (its `--replay-user-messages` echo says when), and the others refuse. Idle children exit after 30 minutes. A child caught mid-turn by a restart of `crewd` carries on when it comes back. The window lists a child under whoever started it, and opens it as Crew's chat.
+A bot parent finds each report in its mailbox as a `report` letter, which wakes it; reports that land while it is busy are handed over together when its turn ends. A report the parent already read (with `read_session`, or as the answer of `start_session`'s `wait`) is taken back out, so it never arrives twice. `wait` blocks 600 s by default and 3600 at most; on timeout the child carries on and its report wakes the bot later. A child that stops on a question (Claude's `AskUserQuestion`, Codex's user-input request, Cursor's `ask_question`) wakes its bot parent with a `question` letter, ends a `wait` early, and is answered by `send_message` to it (`text` for one question, `answers` for several); the user can answer the same card in the window, and whichever comes second is told it was already answered (`TurnHost::answer` is the one door). An approval is the user's alone: it wakes nobody, and `list_peers` shows the child as `waiting_for_user`.
 
-## Bots writing to each other
+`start_session` with `owner: "user"` is a handoff: a terminal session of the user's (in a new worktree if asked), nobody's child, with `handed_off_by` set and the prompt waiting in its box as its CLI's first prompt; it reports to nobody, so `wait` is refused.
 
-A bot leaves a letter. The daemon delivers it as a turn on the other bot, with the sender on it. If that bot is busy, the letter waits until the current turn ends.
+The limits: a child sees no session tool (depth one); a parent has at most four live ones; a child's autonomy is the parent's or lower; only the parent, or the user, drives a child. Idle children exit after 30 minutes. A child caught mid-turn by a restart of `crewd` carries on when it comes back. The window lists a child under whoever started it, and opens it as Crew's chat.
+
+## Writing to each other
+
+`send_message` writes to anyone the caller may write to: any bot; a session it started; a top-level session (one nobody started); never itself, someone else's child, or a terminal (which has no turns to put a message in). The letter goes in the reader's mailbox; the daemon hands it over as a turn with the sender on it (`## Message`, `From: <name> (<kind> <id>)`, and how to reply). If the reader is busy, the letter waits until the current turn ends; `steer: true` writes it into the running turn instead where the CLI takes that (Claude, whose `--replay-user-messages` echo says when; Codex's `turn/steer`), and queues it anywhere else. The answer says how it went: `delivery: started | queued | steered | answered`.
 
 ```mermaid
 sequenceDiagram
@@ -112,25 +118,26 @@ sequenceDiagram
   participant M as mailbox
   participant B as Bot B
 
-  A->>D: message_agent
+  A->>D: send_message
   D->>M: insert the letter
-  D-->>A: delivered
   alt B is idle
     D->>B: start a turn with the sender on it
+    D-->>A: delivery: started
   else B is mid-turn
+    D-->>A: delivery: queued
     B-->>D: the current turn finishes
-    D->>B: deliver the waiting letter
+    D->>B: deliver the waiting letters, together
   end
 ```
 
-Claude, Codex, opencode and Cursor (over ACP) reach Crew through an MCP server (`crewd --mcp`) whose `tools/list` is every tool the caller's kind may call, each with its schema. The model sees them in its own tool list under the name its harness gives them (`mcp__crew__send_to_session` for Claude and Codex, `crew_send_to_session` for opencode, `send_to_session` on server `crew` for Cursor), and the prompt Crew hands a bot or a child names them the same way, built from the same list. For the sessions Crew drives, Crew's tools are pre-approved (Claude's `--settings` allows `mcp__crew__*`, Codex's server config approves them, opencode's inline config allows `crew_*`, Cursor's requests are answered at once) and a call may run 65 minutes. Transcripts from before still hold calls to the old `find_tool`/`call_tool` gateway; the chat reads such a `call_tool` row as the tool it named. People reach the same bridge with `crew` commands in the shell (`crew bots send <id> <text>`), found with `crew --help`.
+Claude, Codex, opencode and Cursor (over ACP) reach Crew through an MCP server (`crewd --mcp`) whose `tools/list` is every tool the caller's kind may call, each with its schema. The model sees them in its own tool list under the name its harness gives them (`mcp__crew__send_message` for Claude and Codex, `crew_send_message` for opencode, `send_message` on server `crew` for Cursor), and the prompt Crew hands a bot or a child names them the same way, built from the same list. For the sessions Crew drives, Crew's tools are pre-approved and never deferred (Claude's `--settings` allows `mcp__crew__*` and its `--mcp-config` marks the server `alwaysLoad`, Codex's server config approves them, opencode's inline config allows `crew_*`, Cursor's requests are answered at once) and a call may run 65 minutes. Transcripts from before still hold calls to the old `find_tool`/`call_tool` gateway; the chat reads such a `call_tool` row as the tool it named. People reach the same bridge with `crew` commands in the shell (`crew send <id> <text>`, `crew peers`), found with `crew --help`.
 
 ## Who is calling
 
 The bridge is a UNIX socket in the data dir. Every request carries a token, and the token alone says who is calling (`crates/crew-core/src/caller.rs`):
 
 - **A bot.** A token per session, minted when a turn starts and retired by the next one.
-- **A terminal session.** `pty_spawn` with `session` has the daemon complete the argv the window built: the provider's MCP flag (Claude's `--mcp-config` is added to the user's own servers, not in place of them) and `CREW_SOCKET`/`CREW_TOKEN` in the environment. The token belongs to that one process and is handed back when it is reaped. A terminal has no turns, so it is not offered `continue_after_turn`, and a letter it sends tells the bot that no reply can reach it. Its terminal is keyed by the session (`<workspace>/session:<id>`), not by the tab: closing the tab sends `pty_detach`, and the CLI runs on, draining into the ring without waiting for a viewer's credit, until a tab opened again attaches to it (`pty_spawn` with `reuse`). `session_stop` ends it, and so does deleting the session, its worktree or its workspace; `sessions_running` tells a reloaded window which are still up.
+- **A terminal session.** `pty_spawn` with `session` has the daemon complete the argv the window built: the provider's MCP flag (Claude's `--mcp-config` is added to the user's own servers, not in place of them) and `CREW_SOCKET`/`CREW_TOKEN` in the environment. The token belongs to that one process and is handed back when it is reaped. A terminal has no turns, so nothing can write to it or wake it, and a letter it sends tells the bot that no reply can reach it. Its terminal is keyed by the session (`<workspace>/session:<id>`), not by the tab: closing the tab sends `pty_detach`, and the CLI runs on, draining into the ring without waiting for a viewer's credit, until a tab opened again attaches to it (`pty_spawn` with `reuse`). `session_stop` ends it, and so does deleting the session, its worktree or its workspace; `sessions_running` tells a reloaded window which are still up.
 - **The user.** `<data-dir>/daemon.json` (0600) holds the WebSocket `url` and `token`, the bridge `socket`, a `userToken` and the `version`. It is written when the daemon starts and removed when it stops cleanly. A call with the user token names its workspace with `workspace`, an id or a path inside it. This is what the `crew` CLI reads.
 
 This is policy, not isolation. Every process Crew starts, bots and terminals included, runs as the user's UID and can read `daemon.json`, whose `userToken` speaks as the user (no process approval, `daemon/shutdown`) and whose WebSocket `token` has every power the window has. The 0600 mode keeps it from other users, not from sessions. What keeps a session to its own identity is that the tools it is handed use its own token: `crew` inside a session never falls back to `daemon.json`, and a process that goes and reads the file itself is not stopped.

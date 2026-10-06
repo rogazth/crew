@@ -1,5 +1,5 @@
-//! What `crew` takes on the command line: `crew <group> <verb>`, one command
-//! per tool, named in its help, so what the CLI does and what an agent can do
+//! What `crew` takes on the command line: `crew <group> <verb>` (and `crew
+//! send`, `crew peers`), one command per tool, named in its help, so what the CLI does and what an agent can do
 //! through MCP stay the same thing. The groups are built in `commands`; here
 //! are the commands that are not tools, and the flags of the tool commands
 //! written by hand.
@@ -13,7 +13,8 @@ Examples:
   crew status                         is Crew running, and who does it take you for
   crew processes list                 the processes of the workspace you are in
   crew processes logs web -f          follow a process's output
-  crew bots send Reviewer \"look at the diff on main\"
+  crew peers                          who is here, and who you can write to
+  crew send Reviewer \"look at the diff on main\"
   crew tabs snapshot --json
   crew <group> --help                 what a group's commands do
 
@@ -121,14 +122,17 @@ pub struct LogsArgs {
     pub context: Option<u32>,
 }
 
-/// `bots send`: a bot by id or by name, and the words to send it.
+/// `send`: a bot or a session by id or by name, and the words to send it.
 #[derive(Args, Debug, Clone)]
 pub struct SendArgs {
-    /// The bot, by id or by name.
-    pub bot: String,
+    /// Who to write to: a bot or a session, by id or by name.
+    pub to: String,
     /// What to say. Several words are joined with spaces; `-` reads stdin.
     #[arg(required = true, num_args = 1.., trailing_var_arg = true, allow_hyphen_values = true)]
     pub text: Vec<String>,
+    /// Into its running turn, where its CLI can take that (Claude, Codex); queued otherwise.
+    #[arg(long)]
+    pub steer: bool,
 }
 
 /// `processes add`: the command line taken whole, after its name.
@@ -240,7 +244,7 @@ mod tests {
 
     #[test]
     fn global_flags_go_anywhere() {
-        let root = matches(&["bots", "list", "--json", "-w", "/tmp/x", "--data-dir", "/d"]);
+        let root = matches(&["sessions", "read", "x", "--json", "-w", "/tmp/x", "--data-dir", "/d"]);
         let global = Global::from_arg_matches(&root).expect("global");
         assert!(global.json);
         assert_eq!(global.workspace.as_deref(), Some("/tmp/x"));
@@ -263,11 +267,15 @@ mod tests {
     }
 
     #[test]
-    fn send_joins_the_words_after_the_bot() {
-        let send: SendArgs = verb(&["bots", "send", "Reviewer", "look", "at", "-this"]);
-        assert_eq!(send.bot, "Reviewer");
+    fn send_joins_the_words_after_who_it_is_to() {
+        let root = matches(&["send", "--steer", "Reviewer", "look", "at", "-this"]);
+        let (name, sub) = root.subcommand().expect("send");
+        assert_eq!(name, "send");
+        let send = SendArgs::from_arg_matches(sub).expect("args");
+        assert_eq!(send.to, "Reviewer");
         assert_eq!(send.text, ["look", "at", "-this"]);
-        assert!(command().try_get_matches_from(["crew", "bots", "send", "Reviewer"]).is_err(), "nothing to say");
+        assert!(send.steer);
+        assert!(command().try_get_matches_from(["crew", "send", "Reviewer"]).is_err(), "nothing to say");
     }
 
     #[test]
@@ -295,10 +303,11 @@ mod tests {
         assert!(command().try_get_matches_from(["crew", "completions", "powershell"]).is_err());
     }
 
-    /// The tool commands live in groups now; the old top-level ones are gone.
+    /// The tool commands live in groups, but for `send` and `peers`; the
+    /// other old top-level ones are gone.
     #[test]
-    fn there_is_no_call_and_no_top_level_tool_command() {
-        for old in ["call", "ps", "send", "logs", "start", "stop"] {
+    fn there_is_no_call_and_no_other_top_level_tool_command() {
+        for old in ["call", "ps", "logs", "start", "stop", "bots continue"] {
             let error = command().try_get_matches_from(["crew", old]).expect_err(old);
             assert_eq!(error.kind(), clap::error::ErrorKind::InvalidSubcommand, "{old}");
         }

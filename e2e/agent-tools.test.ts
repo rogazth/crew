@@ -310,7 +310,7 @@ test("T4: crew mcp speaks MCP on stdio and lists every tool, the browser's inclu
   // Every tool is listed directly, with its schema; there is no gateway.
   const tools = (listed?.result as { tools: { name: string; inputSchema?: unknown }[] }).tools;
   const names = tools.map((tool) => tool.name);
-  for (const name of ["browser_snapshot", "list_processes", "list_agents", "start_session"]) {
+  for (const name of ["browser_snapshot", "list_processes", "list_peers", "send_message", "start_session"]) {
     assert.ok(names.includes(name), `${name}: ${stdout}`);
   }
   assert.ok(!names.includes("find_tool") && !names.includes("call_tool"), stdout);

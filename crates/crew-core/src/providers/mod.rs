@@ -183,15 +183,22 @@ pub fn crew_call<'a>(name: &'a str, input: &'a Map<String, Value>) -> Option<(&'
     }
 }
 
+/// The Crew tools that write to somebody: `send_message`, and the two it
+/// replaced, which old transcripts keep for as long as they exist.
+pub fn is_message_tool(verb: &str) -> bool {
+    matches!(verb, "send_message" | "message_agent" | "send_to_session")
+}
+
 /// What a Crew tool did, for the one that is worth reading in a transcript: a
 /// message to another bot is half of a conversation happening in two places.
 pub fn crew_tool_detail(name: &str, input: &Map<String, Value>) -> Option<crew_protocol::ToolDetail> {
     let (verb, input) = crew_call(name, input)?;
-    if verb != "message_agent" {
+    if !is_message_tool(verb) {
         return None;
     }
     Some(crew_protocol::ToolDetail::Message {
-        to: string_field(Some(&input), "to")?,
+        // `send_to_session` named its reader `session`.
+        to: string_field(Some(&input), "to").or_else(|| string_field(Some(&input), "session"))?,
         text: string_field(Some(&input), "text").unwrap_or_default(),
     })
 }
@@ -203,6 +210,7 @@ pub fn crew_label(name: &str, input: &Map<String, Value>) -> Option<String> {
     let input: &Map<String, Value> = &input;
     let verb = format!("Crew {}", crew_words(verb, input));
     let subject = string_field(Some(input), "to")
+        .or_else(|| string_field(Some(input), "session"))
         .or_else(|| string_field(Some(input), "name"))
         .or_else(|| string_field(Some(input), "process"))
         .or_else(|| string_field(Some(input), "query"));
@@ -427,6 +435,27 @@ mod tests {
         }
     }
 
+    /// `send_message` reads as the message it sent, and so do the two it
+    /// replaced, in the transcripts that still hold them.
+    #[test]
+    fn a_message_reads_as_who_it_went_to_under_every_name_it_has_had() {
+        let detail = |name: &str, input: serde_json::Value| crew_tool_detail(name, input.as_object().unwrap());
+        for (name, input) in [
+            ("mcp__crew__send_message", serde_json::json!({ "to": "abc", "text": "green", "steer": true })),
+            ("crew_send_message", serde_json::json!({ "to": "abc", "text": "green" })),
+            ("mcp__crew__message_agent", serde_json::json!({ "to": "abc", "text": "green" })),
+            ("mcp__crew__send_to_session", serde_json::json!({ "session": "abc", "text": "green", "mode": "queue" })),
+        ] {
+            assert!(
+                matches!(detail(name, input), Some(crew_protocol::ToolDetail::Message { ref to, ref text }) if to == "abc" && text == "green"),
+                "{name}"
+            );
+        }
+        assert!(detail("mcp__crew__list_peers", serde_json::json!({})).is_none());
+        let label = crew_label("mcp__crew__send_to_session", serde_json::json!({ "session": "abc", "text": "x" }).as_object().unwrap());
+        assert_eq!(label.as_deref(), Some("Crew send to session abc"));
+    }
+
     /// Transcripts from before tools were listed directly hold `call_tool`
     /// calls, and the row is about the tool it named: a message still reads as
     /// who it went to and what it said.
@@ -579,6 +608,7 @@ mod tests {
             session_id: Some("sid".into()),
             resume: None,
             replay_user_messages: false,
+            asks_questions: false,
             system_prompt: Some(persona.clone()),
             autonomy: Autonomy::Full,
             mcp_config: None,
@@ -604,6 +634,7 @@ mod tests {
                 session_id: None,
                 resume: None,
                 replay_user_messages: false,
+                asks_questions: false,
                 system_prompt: None,
                 autonomy,
                 mcp_config: None,
@@ -642,6 +673,7 @@ mod tests {
                 session_id: Some("sid".into()),
                 resume: None,
                 replay_user_messages: false,
+                asks_questions: false,
                 system_prompt: Some("persona".into()),
                 autonomy: Autonomy::Ask,
                 mcp_config: None,
@@ -678,6 +710,7 @@ mod tests {
             session_id: Some("sid".into()),
             resume: Some("conv-1".into()),
             replay_user_messages: true,
+            asks_questions: false,
             system_prompt: None,
             autonomy: Autonomy::Ask,
             mcp_config: None,

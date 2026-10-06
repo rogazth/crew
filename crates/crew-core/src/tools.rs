@@ -3,7 +3,6 @@ use std::sync::{Arc, RwLock};
 use serde_json::{json, Value};
 
 use crate::caller::{Caller, CallerKind};
-use crate::mailbox;
 use crate::routine::{self, Routine};
 use crate::schedule::{describe_schedule, local_time, next_run, parse_schedule, schedule_help, validate_schedule, Schedule};
 use crate::session::{self, Session};
@@ -119,6 +118,7 @@ pub struct Tool {
 /// it; the CLI builds its tree from these.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CliVerb {
+    /// The group, or for a top-level command (an empty `verb`) its name.
     pub group: &'static str,
     pub verb: &'static str,
     /// An argument this verb fixes, e.g. `("action", "start")`: not a flag,
@@ -142,6 +142,12 @@ pub struct CliVerb {
 /// `crew <group> <verb>`, built up with the methods below.
 pub const fn cli(group: &'static str, verb: &'static str) -> CliVerb {
     CliVerb { group, verb, sets: None, positional: &[], rest: false, flags: None, aliases: &[], examples: "", about: "" }
+}
+
+/// `crew <name>`: a command of its own, in no group (`crew send`,
+/// `crew peers`). Its `verb` is empty.
+pub const fn top(name: &'static str) -> CliVerb {
+    cli(name, "")
 }
 
 impl CliVerb {
@@ -298,7 +304,6 @@ pub struct Host<'a> {
     pub on_created: &'a dyn Fn(&Session),
     /// A routine just written is one the daemon has to wake for.
     pub on_routines: &'a dyn Fn(),
-    pub deliver: Deliver<'a>,
     pub toolbox: &'a Toolbox,
 }
 
@@ -336,15 +341,16 @@ pub fn every_tool() -> Vec<Tool> {
         .collect()
 }
 
-/// Crew's own tools.
+/// Crew's own tools. Sessions and messaging (`list_peers`, `send_message`,
+/// `start_session`, …) are the session family's, which has the turn host
+/// they need.
 ///
-/// Who sees what: a terminal session has no turns, so nothing that leaves a
-/// note for a next turn or rewrites the persona a turn is handed, and no
-/// transcript in Crew to search. The user, from the command line, is no
-/// session: nothing that acts on "yourself", and no `create_bot`, whose
-/// provider, model and autonomy default to the caller's own. What the user may
-/// do is what the window already lets them: read the roster, write to a
-/// bot, search the chats and manage routines.
+/// Who sees what: a terminal session has no turns, so nothing that rewrites
+/// the persona a turn is handed, and no transcript in Crew to search. The
+/// user, from the command line, is no session: nothing that acts on
+/// "yourself", and no `create_bot`, whose provider, model and autonomy
+/// default to the caller's own. What the user may do is what the window
+/// already lets them: search the chats and manage routines.
 pub(crate) fn catalog() -> Vec<Tool> {
     let schedule = json!({
         "type": "object",
@@ -361,13 +367,6 @@ pub(crate) fn catalog() -> Vec<Tool> {
         "required": ["kind"]
     });
     vec![
-        Tool {
-            name: "list_agents",
-            description: "List the bots in this workspace, including yourself.",
-            schema: json!({ "type": "object", "properties": {} }),
-            audience: Audience::EVERYONE,
-            cli: vec![cli("bots", "list").alias(&["ls"]).eg("crew bots list\n  crew bots list --json | jq '.[].id'")],
-        },
         Tool {
             name: "create_bot",
             description: "Create a new bot in this workspace. It stays idle until the user messages it or a routine wakes it. Provider and model default to yours, and it runs with your autonomy: you cannot make one that is allowed more than you are.",
@@ -391,48 +390,6 @@ pub(crate) fn catalog() -> Vec<Tool> {
             }),
             audience: Audience::SESSIONS,
             cli: vec![cli("bots", "create").pos(&["name"]).eg("crew bots create Reviewer --description \"Review every diff on main\"")],
-        },
-        Tool {
-            name: "create_worktree",
-            description: "Move work onto a git branch of its own: Crew makes a worktree for the branch and opens a terminal session in it with your provider, model and autonomy, whose CLI starts with the task as its first prompt. You stay in this checkout; the work carries on there, in a tab of that worktree. Use this instead of running `git worktree add` yourself, which leaves you working here and the worktree out of Crew's sidebar. Changes nobody committed stay in this checkout.",
-            schema: json!({
-                "type": "object",
-                "properties": {
-                    "branch": { "type": "string", "description": "The branch to work on. Checked out if it exists, tracked from a remote if only a remote has it, otherwise made from the main checkout's HEAD." },
-                    "task": { "type": "string", "description": "Everything the new session needs to carry on: the goal, what was decided, what is done and what is left, the files involved. It cannot see your conversation, and message_agent does not reach it later." },
-                    "name": { "type": "string", "description": "The new session's name. Defaults to the branch." }
-                },
-                "required": ["branch", "task"]
-            }),
-            audience: Audience::SESSIONS,
-            cli: vec![cli("worktrees", "new").pos(&["branch"]).eg("crew worktrees new feat/login --task \"Build the login form; the API is in server/auth.rs\"")],
-        },
-        Tool {
-            name: "message_agent",
-            description: "Send a message to another bot in this workspace. It arrives as a turn with your name and id on it and is answered in its own time, or not at all: you are not waiting here, and anything it sends back reaches you as a message of its own. If the bot is busy the message waits in its box.",
-            schema: json!({
-                "type": "object",
-                "properties": {
-                    "to": { "type": "string", "description": "The bot's id — from list_agents, or from the line a message arrived on. Not its name: names are the user's to change." },
-                    "text": { "type": "string", "description": "What to say. Give it everything it needs; it cannot see your conversation." }
-                },
-                "required": ["to", "text"]
-            }),
-            audience: Audience::EVERYONE,
-            cli: vec![cli("bots", "send").eg("crew bots send Reviewer \"look at the diff on main\"\n  crew bots send 3f2a… run the tests and fix what fails\n  git diff | crew bots send Reviewer -")],
-        },
-        Tool {
-            name: "continue_after_turn",
-            description: "Leave yourself the next step. It arrives as a new turn the moment this one ends, with the tail of this conversation, so it is how you carry on past work that does not fit in one turn. Twenty-five of these in a row with nobody else speaking stops you.",
-            schema: json!({
-                "type": "object",
-                "properties": {
-                    "text": { "type": "string", "description": "What to pick up next, and anything you will need that this turn found out." }
-                },
-                "required": ["text"]
-            }),
-            audience: Audience::BOTS,
-            cli: vec![cli("bots", "continue").rest(&["text"]).eg("crew bots continue \"run the e2e next and fix what fails\"")],
         },
         Tool {
             name: "update_description",
@@ -515,9 +472,11 @@ pub fn visible_names(kind: CallerKind) -> Vec<&'static str> {
 /// cannot, and being promised a reply that never comes is worse than none.
 fn describe(tool: &Tool, kind: CallerKind) -> Value {
     let description = match (tool.name, kind) {
-        ("message_agent", CallerKind::Terminal) => "Send a message to a bot in this workspace. It arrives as a turn with your name on it, marked as coming from a terminal session, and is worked on in its own time. You cannot receive a reply: ask it to do what you need, not to answer you.",
-        ("message_agent", CallerKind::Child) => "Send a message to a bot in this workspace. It arrives as a turn with your name on it, marked as coming from a session, and is worked on in its own time. You cannot receive a reply through it: whoever started you reads your report when your turn ends.",
-        ("message_agent", CallerKind::User) => "Send a message to a bot in this workspace, as the user. It arrives as a turn and is answered in its own chat, in its own time.",
+        ("send_message", CallerKind::Terminal) => concat!(
+            "Write to a bot, a session you started, or a session handed to the user. It arrives as a turn with your name on it, marked as coming from a terminal session; idle, the reader starts on it now, busy, it waits for its turn to end (steer: true puts it into the running turn where the CLI can take that: Claude and Codex). ",
+            "You cannot receive a reply: ask for what you need, not for an answer. To a session you started that is waiting on a question, it answers the question: text for one, answers with one per question in order. The result says how it went: started, queued, steered or answered."
+        ),
+        ("send_message", CallerKind::User) => "Write to a bot or a session in this workspace, as the user. It arrives as a turn and is answered in its own chat, in its own time; busy, it waits for its turn to end. To a session waiting on a question, it answers it.",
         _ => tool.description,
     };
     json!({
@@ -529,7 +488,42 @@ fn describe(tool: &Tool, kind: CallerKind) -> Value {
 
 /// The two words models have mixed up before, said the same way wherever a
 /// model reads them: here, in `instructions()`, and in the session tools.
-pub const GLOSSARY: &str = "A bot is a persistent identity Crew keeps: a name, a mailbox and a history; message_agent reaches it. A session is one provider CLI (claude, codex, opencode, cursor) running a conversation; it belongs to a bot, to whoever started it, or to nobody (a terminal). A bot outlives its sessions; a session is one provider CLI process and can be thrown away.";
+pub const GLOSSARY: &str = "A bot is a persistent identity Crew keeps: a name, a mailbox and a history; send_message reaches it. A session is one provider CLI (claude, codex, opencode, cursor) running a conversation; it belongs to a bot, to whoever started it, or to nobody (a terminal). A bot outlives its sessions; a session is one provider CLI process and can be thrown away.";
+
+/// Every tool a caller of this kind is listed once every family is
+/// registered, as the daemon has them.
+#[cfg(test)]
+pub(crate) fn all_visible_names(kind: CallerKind) -> Vec<&'static str> {
+    every_tool().into_iter().filter(|tool| tool.audience.admits(kind)).map(|tool| tool.name).collect()
+}
+
+/// A family that only lists, for a test that needs a toolbox to name tools
+/// it never runs.
+#[cfg(test)]
+pub(crate) struct CatalogOnly(pub fn() -> Vec<Tool>);
+
+#[cfg(test)]
+impl ToolFamily for CatalogOnly {
+    fn catalog(&self) -> Vec<Tool> {
+        (self.0)()
+    }
+    fn run(&self, _: &Caller, _: &str, _: &Value) -> Result<ToolOutput, String> {
+        Err("not here".into())
+    }
+}
+
+/// Tool names that are gone, for tests that check nothing still names them.
+#[cfg(test)]
+pub(crate) const REMOVED_TOOLS: &[&str] = &[
+    "message_agent",
+    "send_to_session",
+    "wait_for_session",
+    "respond_to_session",
+    "create_worktree",
+    "continue_after_turn",
+    "list_agents",
+    "list_sessions",
+];
 
 /// What `initialize` tells a model about Crew's tools, before it has listed
 /// any. Every provider with MCP shows it to the model; for a terminal session
@@ -539,7 +533,8 @@ pub fn instructions(toolbox: &Toolbox, caller: &Caller) -> String {
     let who = match caller {
         Caller::Bot(_) => String::new(),
         Caller::Terminal(session) => format!(
-            " You are the terminal session \"{}\": bots you message can act on it, but cannot write back to you.",
+            " You are the terminal session \"{}\": bots you message can act on it, but cannot write back to you, \
+             and nothing wakes you. Check a session you start with read_session, or start it with wait: true.",
             session.name
         ),
         Caller::Child(session) => format!(
@@ -555,16 +550,6 @@ pub fn instructions(toolbox: &Toolbox, caller: &Caller) -> String {
          {GLOSSARY}{notes}"
     )
 }
-
-/// Drain a bot's box now: claim its oldest letter and start a turn on it.
-/// Returns whether one went over. Starting a turn belongs to whoever owns the
-/// runtime, which is why this arrives as a callback.
-///
-/// It takes the bot, not the letter, so that claiming stays in one place. A
-/// caller that claimed first and handed the letter over would hide it from the
-/// drain that runs when the target's turn ends, and a letter nobody can see is
-/// a letter nobody delivers.
-pub type Deliver<'a> = &'a dyn Fn(&Session) -> bool;
 
 /// The bridge's methods, answered for `caller`, who the bridge has already
 /// established. `handle` believes it: working out who is calling is the
@@ -687,11 +672,7 @@ fn run(host: &Host<'_>, caller: &Caller, name: &str, args: &Value) -> Result<Too
 fn own(host: &Host<'_>, caller: &Caller, name: &str, args: &Value) -> Result<Value, String> {
     let store = host.store;
     match name {
-        "list_agents" => list_bots(store, caller),
         "create_bot" => create_bot(store, host.transcripts, host.on_created, caller, args),
-        "create_worktree" => create_worktree(host, caller, args, crate::worktree::add),
-        "message_agent" => message_bot(store, host.deliver, caller, args),
-        "continue_after_turn" => continue_after_turn(store, bot(caller, name)?, args),
         "update_description" => update_description(store, host.transcripts, bot(caller, name)?, args),
         "search_messages" => search_messages(store, caller, args),
         "list_routines" => list_routines(store, caller, args),
@@ -707,121 +688,6 @@ fn bot<'a>(caller: &'a Caller, tool: &str) -> Result<&'a Session, String> {
         Caller::Bot(session) => Ok(session),
         _ => Err(format!("{tool} is for bots: it acts on the caller's own turns.")),
     }
-}
-
-fn list_bots(store: &Store, caller: &Caller) -> Result<Value, String> {
-    let sessions = session::list(store, caller.workspace_id()?.to_string())?;
-    let rows: Vec<Value> = sessions
-        .into_iter()
-        .filter(|session| session.kind == "bot")
-        .map(|session| {
-            let mut row = json!({
-                "id": session.id,
-                "name": session.name,
-                "description": session.description,
-                "provider": session.provider,
-                "model": session.model,
-                "autonomy": session.autonomy,
-                "status": session.status
-            });
-            if Some(session.id.as_str()) == caller.session_id() {
-                row["self"] = json!(true);
-            }
-            row
-        })
-        .collect();
-    Ok(Value::Array(rows))
-}
-
-/// Who a message is addressed to. An id, and only an id.
-///
-/// A name is the user's: they rename a bot in the sheet and every name that
-/// ever resolved goes stale, sometimes onto a different bot. An id outlives
-/// that. A name that arrives anyway is answered with the id it meant, so the
-/// recovery is one call and not a round of guessing.
-fn find_bot(store: &Store, caller: &Caller, who: &str) -> Result<Session, String> {
-    let who = who.trim();
-    let bots: Vec<Session> = session::list(store, caller.workspace_id()?.to_string())?
-        .into_iter()
-        .filter(|row| row.kind == "bot")
-        .collect();
-    if let Some(found) = bots.iter().find(|row| row.id == who) {
-        return Ok(found.clone());
-    }
-    Err(match bots.iter().find(|row| row.name.eq_ignore_ascii_case(who)) {
-        Some(named) => format!(
-            "Bots are addressed by id, not by name. {} is {}.",
-            named.name, named.id
-        ),
-        None => format!(
-            "No bot {who} in this workspace. list_agents has the ids: {}",
-            bots
-                .iter()
-                .map(|row| format!("{} {}", row.name, row.id))
-                .collect::<Vec<_>>()
-                .join(", ")
-        ),
-    })
-}
-
-fn message_bot(
-    store: &Store,
-    deliver: Deliver<'_>,
-    caller: &Caller,
-    args: &Value,
-) -> Result<Value, String> {
-    let who = text(args.get("to")).ok_or_else(|| "to is required".to_string())?;
-    let body = text(args.get("text")).ok_or_else(|| "text is required".to_string())?;
-    // Two intentions that used to share one argument: a name that resolved to
-    // the caller started a turn nobody had asked for, and the bot read it as
-    // a message from somebody else.
-    if let Caller::Bot(me) = caller {
-        if who.trim() == me.id || who.trim().eq_ignore_ascii_case(&me.name) {
-            return Err(
-                "That is you. To carry on after this turn ends, use continue_after_turn.".to_string(),
-            );
-        }
-    }
-    let target = find_bot(store, caller, &who)?;
-
-    // The sender's kind rides on the letter, so the envelope can tell the
-    // reader whether a reply has anywhere to go.
-    mailbox::enqueue(store, &target.id, &caller.sender(), &body)?;
-
-    // What goes over is the oldest letter, which may not be this one: a queue
-    // that delivers out of order is worse than one that waits.
-    let delivered = deliver(&target);
-    let waiting = mailbox::waiting_count(store, &target.id)?;
-    let mut note = if delivered {
-        format!("{} is reading it now.", target.name)
-    } else {
-        format!("{} is busy; it will read this when its turn ends.", target.name)
-    };
-    match caller {
-        Caller::Terminal(_) | Caller::Child(_) => note.push_str(" It knows it cannot write back to you."),
-        Caller::User { .. } => note.push_str(" Its reply will be in its chat."),
-        Caller::Bot(_) => {}
-    }
-    Ok(json!({
-        "to": target.name,
-        "id": target.id,
-        "delivered": delivered,
-        "waiting": waiting,
-        "note": note
-    }))
-}
-
-/// A note a bot leaves itself, which the end of this turn hands back as the
-/// next one. No delivery attempt: the caller is mid-turn by definition, so the
-/// letter would only bounce and go back in the box. `run_turn` drains it.
-fn continue_after_turn(store: &Store, caller: &Session, args: &Value) -> Result<Value, String> {
-    let body = text(args.get("text")).ok_or_else(|| "text is required".to_string())?;
-    let from = crew_protocol::BotRef::bot(caller.id.clone(), caller.name.clone());
-    mailbox::enqueue(store, &caller.id, &from, &body)?;
-    Ok(json!({
-        "waiting": mailbox::waiting_count(store, &caller.id)?,
-        "note": "You will read this as a new turn once this one ends, with the tail of this conversation. Stop leaving yourself notes when the work is done."
-    }))
 }
 
 /// The standing instructions a bot is handed every turn, rewritten by the
@@ -959,65 +825,6 @@ fn create_bot(
     }))
 }
 
-/// Work handed to a new terminal session on a branch of its own, rather than
-/// the caller moved there. A running CLI's folder is fixed at launch, and the
-/// transcript a later resume looks for is filed under that folder, so a
-/// session that changed worktrees would come back with its conversation lost.
-/// A new session starts where it works and nothing has to follow it.
-///
-/// A session, not a bot: it is the caller's work carried on, in a CLI the
-/// user can watch and talk to, where a bot is a worker of its own. The
-/// task waits in its box until its CLI launches, which takes it as its first
-/// prompt (see `terminal::launch`); the window opens its tab for that.
-///
-/// `make` is `worktree::add`, taken as an argument so a test can put the
-/// worktree somewhere other than the real home.
-fn create_worktree(
-    host: &Host<'_>,
-    caller: &Caller,
-    args: &Value,
-    make: impl Fn(&str, &str) -> Result<crate::worktree::Worktree, String>,
-) -> Result<Value, String> {
-    let store = host.store;
-    let me = caller
-        .session()
-        .ok_or_else(|| "create_worktree needs a session to hand the work from.".to_string())?;
-    let branch = text(args.get("branch")).ok_or_else(|| "branch is required".to_string())?;
-    let task = text(args.get("task"))
-        .ok_or_else(|| "task is required: the new session cannot see your conversation".to_string())?;
-    let name = text(args.get("name")).unwrap_or_else(|| branch.clone());
-    let tree = make(&session::cwd(store, me)?, &branch)?;
-    let session = session::create_in_worktree(
-        store,
-        me.workspace_id.clone(),
-        "terminal".into(),
-        name.clone(),
-        me.provider.clone(),
-        me.model.clone(),
-        String::new(),
-        // Inherited, as create_bot's is.
-        me.autonomy.clone(),
-        Some(tree.path.clone()),
-    )
-    .map_err(|error| format!("The worktree is at {}, but its session could not be made: {error}", tree.path))?;
-    mailbox::enqueue(store, &session.id, &caller.sender(), &task)?;
-    (host.on_created)(&session);
-    if matches!(caller, Caller::Bot(_)) {
-        host.transcripts
-            .append_system(&me.id, &format!("Handed {branch} to {name} ({})", session.id));
-    }
-    Ok(json!({
-        "worktree": tree.path,
-        "branch": branch,
-        "session": { "id": session.id, "name": name },
-        "note": format!(
-            "{name} opens in a tab of that worktree and starts on the task in {}. Leave that work to it: \
-             it is a terminal session, so message_agent does not reach it.",
-            tree.path
-        )
-    }))
-}
-
 fn list_routines(store: &Store, caller: &Caller, args: &Value) -> Result<Value, String> {
     let target = resolve_bot(store, caller, args.get("bot_id"))?;
     let rows = routine::list_for_session(store, target.id.clone())?;
@@ -1137,7 +944,7 @@ fn resolve_bot(store: &Store, caller: &Caller, bot_id: Option<&Value>) -> Result
     };
     let Some(id) = text(bot_id) else {
         return me.cloned().ok_or_else(|| {
-            "bot_id is required: routines belong to a bot. Use list_agents for ids.".to_string()
+            "bot_id is required: routines belong to a bot. Use list_peers for ids.".to_string()
         });
     };
     if let Some(me) = me.filter(|me| me.id == id) {
@@ -1146,7 +953,7 @@ fn resolve_bot(store: &Store, caller: &Caller, bot_id: Option<&Value>) -> Result
     let workspace_id = caller.workspace_id()?;
     let target = session::get(store, id.clone())?
         .filter(|session| session.kind == "bot" && session.workspace_id == workspace_id)
-        .ok_or_else(|| format!("No bot {id} in this workspace. Use list_agents for ids."))?;
+        .ok_or_else(|| format!("No bot {id} in this workspace. Use list_peers for ids."))?;
     Ok(target)
 }
 
@@ -1278,7 +1085,6 @@ fn when(ms: i64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::cell::RefCell;
 
     fn store() -> Store {
         let dir = std::env::temp_dir().join(format!("crew-tools-{}", uuid::Uuid::new_v4()));
@@ -1329,62 +1135,17 @@ mod tests {
             bot_id: None,
             parent_id: None,
             cursor: 0,
+            handed_off_by: None,
         })
     }
 
-    /// Records who was handed what, and can refuse like a busy bot would.
-    #[derive(Default)]
-    struct Postman {
-        handed: RefCell<Vec<(String, String)>>,
-        busy: bool,
+    fn call(store: &Store, transcripts: &TranscriptHub, caller: &Session, name: &str, args: Value) -> Result<Value, String> {
+        call_as(store, transcripts, &Caller::from_session(caller.clone()), name, args)
     }
 
-    impl Postman {
-        /// Stands in for the runtime: claims the oldest letter and "starts a
-        /// turn" on it, exactly where TurnHost::drain_mailbox does.
-        fn deliver(&self, store: &Store, target: &Session) -> bool {
-            if self.busy {
-                return false;
-            }
-            let Ok(Some(letter)) = mailbox::claim(store, &target.id) else {
-                return false;
-            };
-            self.handed
-                .borrow_mut()
-                .push((target.name.clone(), letter.text.clone()));
-            true
-        }
-    }
-
-    fn call(
-        store: &Store,
-        transcripts: &TranscriptHub,
-        postman: &Postman,
-        caller: &Session,
-        name: &str,
-        args: Value,
-    ) -> Result<Value, String> {
-        call_as(store, transcripts, postman, &Caller::from_session(caller.clone()), name, args)
-    }
-
-    fn call_as(
-        store: &Store,
-        transcripts: &TranscriptHub,
-        postman: &Postman,
-        caller: &Caller,
-        name: &str,
-        args: Value,
-    ) -> Result<Value, String> {
+    fn call_as(store: &Store, transcripts: &TranscriptHub, caller: &Caller, name: &str, args: Value) -> Result<Value, String> {
         let toolbox = Toolbox::default();
-        let deliver = |target: &Session| postman.deliver(store, target);
-        let host = Host {
-            store,
-            transcripts,
-            on_created: &|_| {},
-            on_routines: &|| {},
-            deliver: &deliver,
-            toolbox: &toolbox,
-        };
+        let host = Host { store, transcripts, on_created: &|_| {}, on_routines: &|| {}, toolbox: &toolbox };
         handle(&host, caller, "tools/call", json!({ "name": name, "arguments": args }))
     }
 
@@ -1401,16 +1162,7 @@ mod tests {
     }
 
     fn listed_as(store: &Store, transcripts: &TranscriptHub, toolbox: &Toolbox, caller: &Caller) -> Vec<String> {
-        let postman = Postman::default();
-        let deliver = |target: &Session| postman.deliver(store, target);
-        let host = Host {
-            store,
-            transcripts,
-            on_created: &|_| {},
-            on_routines: &|| {},
-            deliver: &deliver,
-            toolbox,
-        };
+        let host = Host { store, transcripts, on_created: &|_| {}, on_routines: &|| {}, toolbox };
         let out = handle(&host, caller, "tools/list", json!({})).expect("list");
         out["tools"]
             .as_array()
@@ -1430,17 +1182,15 @@ mod tests {
         let coder = bot(&store, &ws, "Coder");
         let names = listed(&store, &transcripts, &coder);
         assert_eq!(names, visible_names(CallerKind::Bot), "the sheet and the listing are one list");
-        for name in ["list_agents", "message_agent", "continue_after_turn", "create_bot", "save_routine"] {
+        for name in ["create_bot", "update_description", "search_messages", "save_routine"] {
             assert!(names.iter().any(|listed| listed == name), "{name}: {names:?}");
         }
-        for gone in ["find_tool", "call_tool"] {
+        for gone in ["find_tool", "call_tool"].iter().chain(REMOVED_TOOLS) {
             assert!(!names.iter().any(|listed| listed == gone), "{gone} is back: {names:?}");
         }
 
-        let postman = Postman::default();
-        let deliver = |target: &Session| postman.deliver(&store, target);
         let toolbox = Toolbox::default();
-        let host = Host { store: &store, transcripts: &transcripts, on_created: &|_| {}, on_routines: &|| {}, deliver: &deliver, toolbox: &toolbox };
+        let host = Host { store: &store, transcripts: &transcripts, on_created: &|_| {}, on_routines: &|| {}, toolbox: &toolbox };
         let out = handle(&host, &Caller::from_session(coder), "tools/list", json!({})).expect("list");
         let upsert = out["tools"].as_array().unwrap().iter().find(|tool| tool["name"] == "save_routine").expect("listed");
         assert!(upsert["inputSchema"]["properties"]["schedule"].is_object(), "listed with its schema: {upsert}");
@@ -1455,21 +1205,19 @@ mod tests {
         let ws = workspace(&store);
         let coder = bot(&store, &ws, "Coder");
         let cuddles = bot(&store, &ws, "Cuddles");
-        let postman = Postman::default();
         for gateway in ["call_tool", "find_tool"] {
             let out = call(
                 &store,
                 &transcripts,
-                &postman,
                 &coder,
                 gateway,
-                json!({ "name": "message_agent", "query": "message", "arguments": { "to": cuddles.id, "text": "via gateway" } }),
+                json!({ "name": "send_message", "query": "message", "arguments": { "to": cuddles.id, "text": "via gateway" } }),
             )
             .expect("call");
             assert!(is_error(&out), "{}", body(&out));
             assert!(body(&out).starts_with(&format!("Unknown tool \"{gateway}\"")), "{}", body(&out));
         }
-        assert!(postman.handed.borrow().is_empty(), "the gateway still delivers");
+        assert_eq!(crate::mailbox::waiting_count(&store, &cuddles.id).unwrap(), 0, "the gateway still delivers");
     }
 
     #[test]
@@ -1481,11 +1229,9 @@ mod tests {
         transcripts.append_user(&coder.id, "the staging password is in 1password", false, None);
         transcripts.flush(&coder.id);
 
-        let postman = Postman::default();
         let out = call(
             &store,
             &transcripts,
-            &postman,
             &coder,
             "search_messages",
             json!({ "query": "staging password" }),
@@ -1511,11 +1257,9 @@ mod tests {
         transcripts.append_user(&cuddles.id, "the client is Acme", false, None);
         transcripts.flush(&cuddles.id);
 
-        let postman = Postman::default();
         let out = call(
             &store,
             &transcripts,
-            &postman,
             &coder,
             "search_messages",
             json!({ "query": "Acme" }),
@@ -1523,129 +1267,6 @@ mod tests {
         .expect("call");
         assert!(!is_error(&out), "{}", body(&out));
         assert!(!body(&out).contains("Acme"), "{}", body(&out));
-    }
-
-    #[test]
-    fn a_message_reaches_an_idle_bot_right_away() {
-        let store = store();
-        let transcripts = TranscriptHub::new(store.clone());
-        let ws = workspace(&store);
-        let coder = bot(&store, &ws, "Coder");
-        let cuddles = bot(&store, &ws, "Cuddles");
-        let postman = Postman::default();
-
-        let out = call(
-            &store,
-            &transcripts,
-            &postman,
-            &coder,
-            "message_agent",
-            json!({ "to": cuddles.id, "text": "the branch is green" }),
-        )
-        .expect("call");
-        assert!(!is_error(&out));
-        assert!(body(&out).contains("\"delivered\": true"), "{}", body(&out));
-        assert_eq!(
-            postman.handed.borrow().as_slice(),
-            [("Cuddles".to_string(), "the branch is green".to_string())]
-        );
-    }
-
-    #[test]
-    fn a_message_to_a_busy_bot_waits_in_its_box() {
-        let store = store();
-        let transcripts = TranscriptHub::new(store.clone());
-        let ws = workspace(&store);
-        let coder = bot(&store, &ws, "Coder");
-        let cuddles = bot(&store, &ws, "Cuddles");
-        let postman = Postman { busy: true, ..Postman::default() };
-
-        let out = call(
-            &store,
-            &transcripts,
-            &postman,
-            &coder,
-            "message_agent",
-            json!({ "to": cuddles.id, "text": "when you get a minute" }),
-        )
-        .expect("call");
-        assert!(body(&out).contains("\"delivered\": false"), "{}", body(&out));
-        assert!(postman.handed.borrow().is_empty());
-        // Released, not lost: it is still first in line.
-        let waiting = mailbox::waiting(&store, &cuddles.id).expect("waiting");
-        assert_eq!(waiting.len(), 1);
-        assert_eq!(waiting[0].text, "when you get a minute");
-        assert_eq!(waiting[0].from.name, "Coder");
-    }
-
-    #[test]
-    fn the_oldest_letter_goes_first_even_when_a_newer_one_triggered_the_delivery() {
-        let store = store();
-        let transcripts = TranscriptHub::new(store.clone());
-        let ws = workspace(&store);
-        let coder = bot(&store, &ws, "Coder");
-        let cuddles = bot(&store, &ws, "Cuddles");
-
-        let busy = Postman { busy: true, ..Postman::default() };
-        call(&store, &transcripts, &busy, &coder, "message_agent", json!({ "to": cuddles.id, "text": "first" }))
-            .expect("first");
-        let free = Postman::default();
-        call(&store, &transcripts, &free, &coder, "message_agent", json!({ "to": cuddles.id, "text": "second" }))
-            .expect("second");
-
-        assert_eq!(free.handed.borrow()[0].1, "first");
-        assert_eq!(mailbox::waiting_count(&store, &cuddles.id).expect("count"), 1);
-    }
-
-    #[test]
-    fn a_note_to_yourself_is_how_a_bot_carries_on() {
-        let store = store();
-        let transcripts = TranscriptHub::new(store.clone());
-        let ws = workspace(&store);
-        let coder = bot(&store, &ws, "Coder");
-        let postman = Postman::default();
-        let out = call(
-            &store,
-            &transcripts,
-            &postman,
-            &coder,
-            "continue_after_turn",
-            json!({ "text": "next: run the tests" }),
-        )
-        .expect("call");
-        assert!(!is_error(&out), "{}", body(&out));
-        assert!(body(&out).contains("once this one ends"), "{}", body(&out));
-        // The caller is mid-turn by definition, so nothing is handed over now:
-        // the end of the turn drains it.
-        assert!(postman.handed.borrow().is_empty());
-        let waiting = mailbox::waiting(&store, &coder.id).expect("waiting");
-        assert_eq!(waiting.len(), 1);
-        assert_eq!(waiting[0].from.id, coder.id);
-    }
-
-    /// The bug this closes: the bot meant the one it had just created, wrote
-    /// its own name, and started a turn nobody asked for.
-    #[test]
-    fn message_agent_sends_you_to_the_other_tool_when_you_address_yourself() {
-        let store = store();
-        let transcripts = TranscriptHub::new(store.clone());
-        let ws = workspace(&store);
-        let coder = bot(&store, &ws, "Coder");
-        let postman = Postman::default();
-        for who in [coder.id.as_str(), "Coder", "  coder "] {
-            let out = call(
-                &store,
-                &transcripts,
-                &postman,
-                &coder,
-                "message_agent",
-                json!({ "to": who, "text": "next: run the tests" }),
-            )
-            .expect("call");
-            assert!(is_error(&out), "{who} was accepted: {}", body(&out));
-            assert!(body(&out).contains("continue_after_turn"), "{}", body(&out));
-        }
-        assert_eq!(mailbox::waiting_count(&store, &coder.id).expect("count"), 0);
     }
 
     /// A description written by another model is fine; one the bot cannot
@@ -1656,11 +1277,9 @@ mod tests {
         let transcripts = TranscriptHub::new(store.clone());
         let ws = workspace(&store);
         let coder = bot(&store, &ws, "Coder");
-        let postman = Postman::default();
         let out = call(
             &store,
             &transcripts,
-            &postman,
             &coder,
             "update_description",
             json!({ "text": "You keep the release notes." }),
@@ -1678,139 +1297,6 @@ mod tests {
         assert!(
             notes.iter().any(|block| block.text.contains("Description updated by itself")),
             "the chat does not say it happened"
-        );
-    }
-
-    #[test]
-    fn an_unknown_name_lists_the_bots_there_are() {
-        let store = store();
-        let transcripts = TranscriptHub::new(store.clone());
-        let ws = workspace(&store);
-        let coder = bot(&store, &ws, "Coder");
-        bot(&store, &ws, "Cuddles");
-        let postman = Postman::default();
-        let out = call(&store, &transcripts, &postman, &coder, "message_agent", json!({ "to": "Nobody", "text": "hi" }))
-            .expect("call");
-        assert!(is_error(&out));
-        assert!(body(&out).contains("Cuddles"), "{}", body(&out));
-    }
-
-    /// Names are the user's and go stale the moment they rename a bot, so
-    /// one that arrives is refused — and answered with the id it meant, which
-    /// costs a call instead of a round of guessing.
-    #[test]
-    fn a_name_is_answered_with_the_id_it_meant() {
-        let store = store();
-        let transcripts = TranscriptHub::new(store.clone());
-        let ws = workspace(&store);
-        let coder = bot(&store, &ws, "Coder");
-        let cuddles = bot(&store, &ws, "Cuddles");
-        let postman = Postman::default();
-        let out = call(&store, &transcripts, &postman, &coder, "message_agent", json!({ "to": "  cuddles ", "text": "hi" }))
-            .expect("call");
-        assert!(is_error(&out), "{}", body(&out));
-        assert!(body(&out).contains(&cuddles.id), "{}", body(&out));
-        assert!(postman.handed.borrow().is_empty());
-    }
-
-    #[test]
-    fn a_bot_in_another_workspace_is_out_of_reach() {
-        let store = store();
-        let transcripts = TranscriptHub::new(store.clone());
-        let here = workspace(&store);
-        let there = workspace(&store);
-        let coder = bot(&store, &here, "Coder");
-        let stranger = bot(&store, &there, "Stranger");
-        let postman = Postman::default();
-        // By id, so the workspace is what refuses it and not the name lookup.
-        let out = call(&store, &transcripts, &postman, &coder, "message_agent", json!({ "to": stranger.id, "text": "hi" }))
-            .expect("call");
-        assert!(is_error(&out));
-        assert!(postman.handed.borrow().is_empty());
-    }
-
-    #[test]
-    fn an_id_is_how_a_bot_is_addressed() {
-        let store = store();
-        let transcripts = TranscriptHub::new(store.clone());
-        let ws = workspace(&store);
-        let coder = bot(&store, &ws, "Coder");
-        let cuddles = bot(&store, &ws, "Cuddles");
-        let postman = Postman::default();
-        call(
-            &store,
-            &transcripts,
-            &postman,
-            &coder,
-            "message_agent",
-            json!({ "to": cuddles.id, "text": "by id" }),
-        )
-        .expect("call");
-        assert_eq!(postman.handed.borrow()[0].0, "Cuddles");
-    }
-
-    #[test]
-    fn a_message_needs_something_to_say() {
-        let store = store();
-        let transcripts = TranscriptHub::new(store.clone());
-        let ws = workspace(&store);
-        let coder = bot(&store, &ws, "Coder");
-        let cuddles = bot(&store, &ws, "Cuddles");
-        let postman = Postman::default();
-        let out = call(&store, &transcripts, &postman, &coder, "message_agent", json!({ "to": cuddles.id }))
-            .expect("call");
-        assert!(is_error(&out));
-        assert!(body(&out).contains("text is required"));
-    }
-
-    /// `message_agent` marks the oldest letter delivered *before* it knows the
-    /// target will take it, and only puts it back afterwards. `drain_mailbox`
-    /// runs on the target's own turn thread the moment that turn ends, so it
-    /// can land inside that window — and then it drains an empty box and the
-    /// bot goes idle with a letter still queued and nobody left to hand it
-    /// over. The callback below stands in for that turn ending.
-    #[test]
-    fn a_turn_ending_while_a_letter_is_in_flight_still_sees_it() {
-        let store = store();
-        let transcripts = TranscriptHub::new(store.clone());
-        let ws = workspace(&store);
-        let coder = bot(&store, &ws, "Coder");
-        let cuddles = bot(&store, &ws, "Cuddles");
-
-        let drained: RefCell<Option<String>> = RefCell::new(None);
-        let deliver = |_target: &Session| {
-            // TurnHost::drain_mailbox, on the target's thread, racing the
-            // delivery this call is about to attempt.
-            *drained.borrow_mut() = mailbox::claim(&store, &cuddles.id)
-                .expect("drain")
-                .map(|letter| letter.text);
-            false
-        };
-        let toolbox = Toolbox::default();
-        let out = handle(
-            &Host {
-                store: &store,
-                transcripts: &transcripts,
-                on_created: &|_| {},
-                on_routines: &|| {},
-                deliver: &deliver,
-                toolbox: &toolbox,
-            },
-            &Caller::from_session(coder.clone()),
-            "tools/call",
-            json!({
-                "name": "message_agent",
-                "arguments": { "to": cuddles.id, "text": "the branch is green" }
-            }),
-        )
-        .expect("call");
-        assert!(!is_error(&out), "{}", body(&out));
-
-        let left = mailbox::waiting_count(&store, &cuddles.id).expect("count");
-        assert_eq!(
-            drained.borrow().as_deref(),
-            Some("the branch is green"),
-            "the drain saw an empty box; {left} letter(s) are now queued for an idle bot that will never be woken"
         );
     }
 
@@ -1874,13 +1360,11 @@ mod tests {
             "ask".into(),
         )
         .expect("bot");
-        let postman = Postman::default();
 
         for asked in ["grok-4.6", "Grok 4.6", "grok_4_6"] {
             let out = call(
                 &store,
                 &transcripts,
-                &postman,
                 &luna,
                 "create_bot",
                 json!({ "name": "Grok", "description": "You think.", "model": asked }),
@@ -1901,12 +1385,10 @@ mod tests {
         let transcripts = TranscriptHub::new(store.clone());
         let ws = workspace(&store);
         let coder = bot(&store, &ws, "Coder");
-        let postman = Postman::default();
 
         let out = call(
             &store,
             &transcripts,
-            &postman,
             &coder,
             "create_bot",
             json!({ "name": "X", "description": "You do X.", "model": "llama-9" }),
@@ -1926,12 +1408,10 @@ mod tests {
         let ws = workspace(&store);
         let coder = bot(&store, &ws, "Coder");
         assert_eq!(coder.autonomy, "ask");
-        let postman = Postman::default();
 
         let out = call(
             &store,
             &transcripts,
-            &postman,
             &coder,
             "create_bot",
             // The old escape hatch, now not a field the schema has.
@@ -1980,7 +1460,6 @@ mod tests {
         let out = call(
             &store,
             &transcripts,
-            &Postman::default(),
             &coder,
             "create_bot",
             json!({ "name": "Helper", "description": "You help." }),
@@ -1996,100 +1475,15 @@ mod tests {
         assert_eq!(made.worktree.as_deref(), Some("/wt/feat"));
     }
 
-    /// The work leaves on a branch of its own with a new terminal session,
-    /// whose box holds the task for its CLI's first prompt; the caller stays
-    /// where it was.
-    #[test]
-    fn create_worktree_hands_the_task_to_a_new_session_in_it() {
-        let store = store();
-        let transcripts = TranscriptHub::new(store.clone());
-        let root = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
-        let repo = root.join("app");
-        std::fs::create_dir_all(&repo).expect("repo");
-        let git = |args: &[&str]| {
-            let out = std::process::Command::new("git")
-                .arg("-C")
-                .arg(&repo)
-                .args(["-c", "user.name=crew", "-c", "user.email=crew@test", "-c", "commit.gpgsign=false"])
-                .args(args)
-                .output()
-                .expect("git");
-            assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
-        };
-        git(&["init", "-q", "-b", "main"]);
-        git(&["commit", "-q", "--allow-empty", "-m", "init"]);
-        let ws = crate::workspace::create(&store, "w".into(), repo.to_string_lossy().into())
-            .expect("workspace")
-            .id;
-        let coder = bot(&store, &ws, "Coder");
-        let postman = Postman::default();
-        let deliver = |target: &Session| postman.deliver(&store, target);
-        let toolbox = Toolbox::default();
-        let created = RefCell::new(Vec::new());
-        let on_created = |session: &Session| created.borrow_mut().push(session.id.clone());
-        let host = Host {
-            store: &store,
-            transcripts: &transcripts,
-            on_created: &on_created,
-            on_routines: &|| {},
-            deliver: &deliver,
-            toolbox: &toolbox,
-        };
-        let trees = root.join("worktrees");
-        let make = |base: &str, branch: &str| crate::worktree::add_under(&trees, base, branch);
-
-        let out = create_worktree(
-            &host,
-            &Caller::from_session(coder.clone()),
-            &json!({ "branch": "feat/login", "task": "Build the login form." }),
-            make,
-        )
-        .expect("handed");
-        let path = out["worktree"].as_str().expect("path").to_string();
-        assert!(std::path::Path::new(&path).is_dir(), "no worktree at {path}");
-
-        let made = session::list(&store, ws.clone())
-            .expect("list")
-            .into_iter()
-            .find(|row| row.name == "feat/login")
-            .expect("the session");
-        assert_eq!(made.worktree.as_deref(), Some(path.as_str()));
-        assert_eq!((made.kind.as_str(), made.provider.as_str(), made.autonomy.as_str()), ("terminal", "claude", "ask"));
-        assert_eq!(out["session"]["id"], json!(made.id));
-        assert_eq!(created.borrow().as_slice(), [made.id.clone()], "the window hears of it");
-        let waiting = mailbox::waiting(&store, &made.id).expect("box");
-        assert_eq!(
-            waiting.iter().map(|letter| (letter.from.name.as_str(), letter.text.as_str())).collect::<Vec<_>>(),
-            [("Coder", "Build the login form.")],
-            "the task waits for its CLI"
-        );
-        assert!(postman.handed.borrow().is_empty(), "no bot turn is started");
-        let me = session::get(&store, coder.id.clone()).expect("get").expect("coder");
-        assert_eq!(me.worktree, None, "the caller stays in its checkout");
-
-        // The same branch again is git's refusal, said to the model.
-        let again = create_worktree(
-            &host,
-            &Caller::from_session(coder.clone()),
-            &json!({ "branch": "feat/login", "task": "again" }),
-            make,
-        );
-        assert!(again.is_err_and(|error| error.contains("already exists")));
-        let missing = create_worktree(&host, &Caller::from_session(coder), &json!({ "branch": "x" }), make);
-        assert!(missing.is_err_and(|error| error.contains("task is required")));
-    }
-
     #[test]
     fn review_an_opencode_bot_can_create_a_bot() {
         let store = store();
         let transcripts = TranscriptHub::new(store.clone());
         let ws = workspace(&store);
         let coder = bot_with_provider(&store, &ws, "Coder", "opencode");
-        let postman = Postman::default();
         let out = call(
             &store,
             &transcripts,
-            &postman,
             &coder,
             "create_bot",
             json!({ "name": "Helper", "description": "runs errands" }),
@@ -2098,40 +1492,6 @@ mod tests {
         assert!(!is_error(&out), "{}", body(&out));
     }
 
-    /// `handle` believes the caller it is given: it is a function, and the
-    /// caller is an argument. Establishing who that is belongs to the bridge,
-    /// which resolves it from a token it minted for one session and ignores any
-    /// id on the request — see
-    /// `crewd::tests::a_token_speaks_only_for_the_session_it_was_minted_for`.
-    #[test]
-    fn the_caller_is_whoever_the_bridge_says_it_is() {
-        let store = store();
-        let transcripts = TranscriptHub::new(store.clone());
-        let ws = workspace(&store);
-        let coder = bot(&store, &ws, "Coder");
-        let cuddles = bot(&store, &ws, "Cuddles");
-        let victim = bot(&store, &ws, "Victim");
-        // Busy, so the letter queues and its sender can be read back.
-        let postman = Postman { busy: true, ..Postman::default() };
-        // Handed Cuddles as the caller, the letter is from Cuddles.
-        let out = call(
-            &store,
-            &transcripts,
-            &postman,
-            &cuddles,
-            "message_agent",
-            json!({ "to": victim.id, "text": "signed, Cuddles" }),
-        )
-        .expect("call");
-        assert!(!is_error(&out), "{}", body(&out));
-        let waiting = mailbox::waiting(&store, &victim.id).expect("waiting");
-        let _ = coder;
-        assert_eq!(
-            waiting.first().map(|letter| letter.from.name.as_str()),
-            Some("Cuddles"),
-            "the caller handed in is who the letter is from"
-        );
-    }
     /// An agent that guessed one field name has usually guessed the others.
     /// Answering "to is required" alone costs a round trip per field.
     #[test]
@@ -2140,20 +1500,11 @@ mod tests {
         let transcripts = TranscriptHub::new(store.clone());
         let ws = workspace(&store);
         let coder = bot(&store, &ws, "Coder");
-        let postman = Postman::default();
 
-        let answer = call(
-            &store,
-            &transcripts,
-            &postman,
-            &coder,
-            "message_agent",
-            json!({ "bot_id": "x", "message": "hi" }),
-        )
-        .expect("handled");
+        let answer = call(&store, &transcripts, &coder, "delete_routine", json!({ "id": "x" })).expect("handled");
 
         assert!(is_error(&answer), "{}", body(&answer));
-        assert!(body(&answer).contains("message_agent takes: to, text."), "{}", body(&answer));
+        assert!(body(&answer).contains("delete_routine takes: routine_id."), "{}", body(&answer));
     }
 
     #[test]
@@ -2162,9 +1513,8 @@ mod tests {
         let transcripts = TranscriptHub::new(store.clone());
         let ws = workspace(&store);
         let coder = bot(&store, &ws, "Coder");
-        let postman = Postman::default();
 
-        let answer = call(&store, &transcripts, &postman, &coder, "no_such_tool", json!({}))
+        let answer = call(&store, &transcripts, &coder, "no_such_tool", json!({}))
             .expect("handled");
 
         assert!(body(&answer).starts_with("Unknown tool"), "{}", body(&answer));
@@ -2204,8 +1554,8 @@ mod tests {
         let shell = terminal(&store, &ws, "Shell");
         let names = listed(&store, &transcripts, &shell);
         assert_eq!(names, visible_names(CallerKind::Terminal));
-        assert!(names.iter().any(|name| name == "message_agent") && names.iter().any(|name| name == "create_worktree"), "{names:?}");
-        for none in ["continue_after_turn", "update_description", "search_messages"] {
+        assert!(names.iter().any(|name| name == "create_bot"), "{names:?}");
+        for none in ["update_description", "search_messages"] {
             assert!(!names.iter().any(|name| name == none), "{none}: {names:?}");
         }
     }
@@ -2218,7 +1568,7 @@ mod tests {
         let names = listed_as(&store, &transcripts, &Toolbox::default(), &user(Some(&ws)));
         assert_eq!(names, visible_names(CallerKind::User));
         assert!(names.iter().any(|name| name == "search_messages"), "{names:?}");
-        for none in ["create_bot", "continue_after_turn", "update_description"] {
+        for none in ["create_bot", "update_description"] {
             assert!(!names.iter().any(|name| name == none), "{none}: {names:?}");
         }
     }
@@ -2229,73 +1579,19 @@ mod tests {
         let transcripts = TranscriptHub::new(store.clone());
         let ws = workspace(&store);
         let shell = terminal(&store, &ws, "Shell");
-        let postman = Postman::default();
 
-        assert!(!listed(&store, &transcripts, &shell).iter().any(|name| name == "continue_after_turn"));
-        let out = call(&store, &transcripts, &postman, &shell, "continue_after_turn", json!({ "text": "x" })).expect("call");
+        assert!(!listed(&store, &transcripts, &shell).iter().any(|name| name == "update_description"));
+        let out = call(&store, &transcripts, &shell, "update_description", json!({ "text": "x" })).expect("call");
         assert!(is_error(&out), "{}", body(&out));
         assert!(body(&out).starts_with("Unknown tool"), "{}", body(&out));
-        assert_eq!(mailbox::waiting_count(&store, &shell.id).expect("count"), 0);
-    }
-
-    /// The letter says it came from a terminal, and that a reply has nowhere
-    /// to go: a bot that answers with message_agent is told "no bot".
-    #[test]
-    fn a_letter_from_a_terminal_says_it_cannot_be_answered() {
-        let store = store();
-        let transcripts = TranscriptHub::new(store.clone());
-        let ws = workspace(&store);
-        let shell = terminal(&store, &ws, "Shell");
-        let coder = bot(&store, &ws, "Coder");
-        let postman = Postman { busy: true, ..Postman::default() };
-        let out = call(&store, &transcripts, &postman, &shell, "message_agent", json!({ "to": coder.id, "text": "tests pass" }))
-            .expect("call");
-        assert!(!is_error(&out), "{}", body(&out));
-        assert!(body(&out).contains("cannot write back"), "{}", body(&out));
-
-        let letter = mailbox::waiting(&store, &coder.id).expect("waiting").remove(0);
-        assert_eq!(letter.from.kind.as_deref(), Some("terminal"));
-        assert_eq!(letter.from.id, shell.id);
-        let envelope = mailbox::envelope(&letter.from, &letter.text, letter.at, false);
-        assert!(envelope.contains("terminal session"), "{envelope}");
-        assert!(envelope.contains("cannot receive a reply"), "{envelope}");
-    }
-
-    /// The terminal's own copy of message_agent does not promise a reply.
-    #[test]
-    fn a_terminal_is_not_promised_a_reply() {
-        let store = store();
-        let transcripts = TranscriptHub::new(store.clone());
-        let postman = Postman::default();
-        let deliver = |target: &Session| postman.deliver(&store, target);
-        let toolbox = Toolbox::default();
-        let host = Host { store: &store, transcripts: &transcripts, on_created: &|_| {}, on_routines: &|| {}, deliver: &deliver, toolbox: &toolbox };
-        let out = handle(&host, &someone("terminal"), "tools/catalog", json!({})).expect("catalog");
-        let message = out["tools"].as_array().expect("tools").iter().find(|t| t["name"] == "message_agent").expect("message_agent");
-        assert!(message["description"].as_str().unwrap_or_default().contains("cannot receive a reply"));
-    }
-
-    #[test]
-    fn the_user_writes_as_the_user_and_is_read_in_the_chat() {
-        let store = store();
-        let transcripts = TranscriptHub::new(store.clone());
-        let ws = workspace(&store);
-        let coder = bot(&store, &ws, "Coder");
-        let postman = Postman { busy: true, ..Postman::default() };
-        let out = call_as(&store, &transcripts, &postman, &user(Some(&ws)), "message_agent", json!({ "to": coder.id, "text": "ship it" }))
-            .expect("call");
-        assert!(!is_error(&out), "{}", body(&out));
-        let letter = mailbox::waiting(&store, &coder.id).expect("waiting").remove(0);
-        assert_eq!(letter.from.kind.as_deref(), Some("user"));
-        let envelope = mailbox::envelope(&letter.from, &letter.text, letter.at, false);
-        assert!(envelope.contains("From: the user"), "{envelope}");
+        assert_eq!(session::get(&store, shell.id.clone()).unwrap().unwrap().description, "");
     }
 
     #[test]
     fn the_user_without_a_workspace_is_told_how_to_name_one() {
         let store = store();
         let transcripts = TranscriptHub::new(store.clone());
-        let out = call_as(&store, &transcripts, &Postman::default(), &user(None), "list_agents", json!({})).expect("call");
+        let out = call_as(&store, &transcripts, &user(None), "search_messages", json!({ "query": "x" })).expect("call");
         assert!(is_error(&out));
         assert!(body(&out).contains("--workspace"), "{}", body(&out));
     }
@@ -2307,11 +1603,10 @@ mod tests {
         let transcripts = TranscriptHub::new(store.clone());
         let ws = workspace(&store);
         let coder = bot(&store, &ws, "Coder");
-        let postman = Postman::default();
-        let out = call_as(&store, &transcripts, &postman, &user(Some(&ws)), "list_routines", json!({})).expect("call");
+        let out = call_as(&store, &transcripts, &user(Some(&ws)), "list_routines", json!({})).expect("call");
         assert!(is_error(&out));
         assert!(body(&out).contains("bot_id is required"), "{}", body(&out));
-        let out = call_as(&store, &transcripts, &postman, &user(Some(&ws)), "list_routines", json!({ "bot_id": coder.id }))
+        let out = call_as(&store, &transcripts, &user(Some(&ws)), "list_routines", json!({ "bot_id": coder.id }))
             .expect("call");
         assert!(!is_error(&out), "{}", body(&out));
     }
@@ -2324,9 +1619,8 @@ mod tests {
         let transcripts = TranscriptHub::new(store.clone());
         let ws = workspace(&store);
         let coder = bot(&store, &ws, "Coder");
-        let postman = Postman::default();
         let at = now_millis() + 600_000;
-        let saved = call(&store, &transcripts, &postman, &coder, "save_routine", json!({
+        let saved = call(&store, &transcripts, &coder, "save_routine", json!({
             "name": "Check back", "prompt": "did CI pass?", "schedule": { "kind": "once", "at": at }
         }))
         .expect("call");
@@ -2338,7 +1632,7 @@ mod tests {
         assert_eq!(stored[0].next_run_at, Some(at));
         assert_eq!(parse_schedule(&stored[0].schedule), Some(Schedule::Once { at }));
 
-        let past = call(&store, &transcripts, &postman, &coder, "save_routine", json!({
+        let past = call(&store, &transcripts, &coder, "save_routine", json!({
             "name": "Too late", "prompt": "x", "schedule": { "kind": "once", "at": "2020-01-01T09:00" }
         }))
         .expect("call");
@@ -2348,10 +1642,10 @@ mod tests {
         // Fired and switched off, it can still be renamed; given a new time, it is armed again.
         let id = stored[0].id.clone();
         routine::disable(&store, &id).expect("disable");
-        let renamed = call(&store, &transcripts, &postman, &coder, "save_routine", json!({ "routine_id": id, "name": "Checked" }))
+        let renamed = call(&store, &transcripts, &coder, "save_routine", json!({ "routine_id": id, "name": "Checked" }))
             .expect("call");
         assert!(!is_error(&renamed), "{}", body(&renamed));
-        let again = call(&store, &transcripts, &postman, &coder, "save_routine", json!({
+        let again = call(&store, &transcripts, &coder, "save_routine", json!({
             "routine_id": id, "schedule": { "kind": "once", "at": at + 60_000 }
         }))
         .expect("call");
@@ -2411,9 +1705,7 @@ mod tests {
         assert!(!toolbox.visible_names(CallerKind::User).contains(&"boil_kettle"));
         assert!(!listed_as(&store, &transcripts, &toolbox, &user(Some(&ws))).contains(&"boil_kettle".to_string()));
 
-        let postman = Postman::default();
-        let deliver = |target: &Session| postman.deliver(&store, target);
-        let host = Host { store: &store, transcripts: &transcripts, on_created: &|_| {}, on_routines: &|| {}, deliver: &deliver, toolbox: &toolbox };
+        let host = Host { store: &store, transcripts: &transcripts, on_created: &|_| {}, on_routines: &|| {}, toolbox: &toolbox };
         let out = handle(&host, &me, "tools/call", json!({ "name": "boil_kettle", "arguments": { "kettle": "blue" } }))
             .expect("call");
         assert_eq!(body(&out), format!("blue boiled by Coder (bot {})", coder.id));
@@ -2434,13 +1726,11 @@ mod tests {
         let ws = workspace(&store);
         let toolbox = Toolbox::default();
         toolbox.register(Arc::new(Kettle));
-        let postman = Postman::default();
-        let deliver = |target: &Session| postman.deliver(&store, target);
-        let host = Host { store: &store, transcripts: &transcripts, on_created: &|_| {}, on_routines: &|| {}, deliver: &deliver, toolbox: &toolbox };
+        let host = Host { store: &store, transcripts: &transcripts, on_created: &|_| {}, on_routines: &|| {}, toolbox: &toolbox };
         let out = handle(&host, &user(Some(&ws)), "tools/catalog", json!({})).expect("catalog");
         let tools = out["tools"].as_array().expect("tools");
         let named = |name: &str| tools.iter().find(|tool| tool["name"] == name);
-        assert!(named("list_agents").is_some() && named("list_routines").is_some());
+        assert!(named("list_routines").is_some() && named("search_messages").is_some());
         assert!(named("list_kettles").is_some());
         assert!(named("boil_kettle").is_none(), "not the user's");
         assert!(named("create_bot").is_none(), "not the user's");
@@ -2454,9 +1744,7 @@ mod tests {
         let ws = workspace(&store);
         let coder = bot(&store, &ws, "Coder");
         let toolbox = Toolbox::default();
-        let postman = Postman::default();
-        let deliver = |target: &Session| postman.deliver(&store, target);
-        let host = Host { store: &store, transcripts: &transcripts, on_created: &|_| {}, on_routines: &|| {}, deliver: &deliver, toolbox: &toolbox };
+        let host = Host { store: &store, transcripts: &transcripts, on_created: &|_| {}, on_routines: &|| {}, toolbox: &toolbox };
         let me = handle(&host, &Caller::from_session(coder.clone()), "whoami", json!({})).expect("whoami");
         assert_eq!(me["kind"], "bot");
         assert_eq!(me["sessionId"], coder.id);

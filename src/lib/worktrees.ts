@@ -21,7 +21,7 @@ export function placePath(worktree: string | null, workspace: Workspace, worktre
 
 /**
  * Worktrees this workspace's sessions run in that git's list does not have
- * yet, as one key: made by `create_worktree`, the session arrives
+ * yet, as one key: made by `start_session` (worktree new), the session arrives
  * before the window asks git again. Empty when there are none.
  */
 export function unlistedWorktrees(sessions: Session[], workspace: Workspace, worktrees: Worktree[]): string {

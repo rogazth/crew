@@ -66,10 +66,10 @@ The app ships a CLI. **Settings › General › Command line** links it into `~/
 
 ```bash
 crew status                        # is Crew running, and who does it take you for
-crew bots list                     # the bots of the workspace you are in
-crew bots send Reviewer "look at the diff on main"
-crew sessions start codex --worktree new -- fix the login test   # another CLI on a job
-crew sessions wait --timeout-s 60 <id>   # until it ends its turn: its report
+crew peers                         # the bots and sessions of the workspace you are in
+crew send Reviewer "look at the diff on main"
+crew sessions start --provider codex --worktree new -- fix the login test   # another CLI on a job
+crew sessions start --wait -- what does the billing webhook do?   # and wait for its report
 crew processes list                # and start, stop, restart, logs -f, add, edit…
 crew tabs snapshot                 # the browser: open, navigate, click, fill, screenshot…
 crew --help                        # every group; `crew <group> --help` for its commands

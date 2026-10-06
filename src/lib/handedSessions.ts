@@ -1,5 +1,5 @@
 /**
- * Sessions `create_worktree` handed work in this run. Their terminals start
+ * Sessions handed to the user in this run (`start_session` with owner user). Their terminals start
  * out of sight, so the CLI is on the task before anyone opens its tab; every
  * other tab waits to be shown, so a relaunch does not start each saved one.
  */

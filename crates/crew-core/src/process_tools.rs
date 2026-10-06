@@ -650,7 +650,6 @@ mod tests {
                 transcripts: &self.transcripts,
                 on_created: &|_| {},
                 on_routines: &|| {},
-                deliver: &|_: &Session| false,
                 toolbox: &self.toolbox,
             };
             let out = handle(&host, caller, "tools/call", json!({ "name": name, "arguments": args })).unwrap();

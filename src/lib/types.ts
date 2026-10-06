@@ -48,6 +48,8 @@ export type Session = {
   parentId?: string;
   /** How far its transcript had got at its last event. */
   cursor?: number;
+  /** The session that handed it to the user (`start_session` with owner user). */
+  handedOffBy?: string;
 };
 
 /** A git worktree of a workspace's repo. The main checkout comes first; outside git there is only it, branchless. */

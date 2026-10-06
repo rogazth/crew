@@ -653,7 +653,12 @@ parentId?: string,
 /**
  * How far its transcript had got at its last event.
  */
-cursor: number, };
+cursor: number, 
+/**
+ * The session that handed it to the user (`start_session` with owner
+ * user); absent for any other.
+ */
+handedOffBy?: string, };
 
 /**
  * A permission prompt or a question form on the CLI's screen.

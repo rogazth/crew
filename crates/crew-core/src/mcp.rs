@@ -98,7 +98,8 @@ fn unreachable_error(error: &std::io::Error) -> String {
 /// Any other tool whose arguments carry `timeout_s` is one that waits that
 /// long on purpose, so the read waits `min(timeout_s, 60) + 10` seconds. The
 /// convention is the whole mechanism there: a tool that blocks names its
-/// wait `timeout_s` and caps it at 60 itself. Never less than the default.
+/// wait `timeout_s` and caps it at 60 itself. `start_session` with `wait` is
+/// the one longer wait. Never less than the default.
 fn call_timeout(method: &str, params: &Value) -> Duration {
     if method != "tools/call" {
         return CALL_TIMEOUT;
@@ -108,6 +109,23 @@ fn call_timeout(method: &str, params: &Value) -> Duration {
     let no_args = Value::Null;
     if let Some(budget) = name.and_then(|name| crate::browser_tools::budget(name, arguments.unwrap_or(&no_args))) {
         return (budget + Duration::from_secs(WAIT_SLACK_S)).max(CALL_TIMEOUT);
+    }
+    // `start_session` with `wait` blocks for the child's turn: 600 s unless
+    // `timeout_s` says otherwise, 3600 at most (plan §7e.2).
+    if name == Some("start_session") {
+        let args = arguments.unwrap_or(&no_args);
+        if args.get("wait").and_then(Value::as_bool) != Some(true) {
+            return CALL_TIMEOUT;
+        }
+        use crate::session_tools::{WAIT_DEFAULT_S, WAIT_MAX_S};
+        let secs = args
+            .get("timeout_s")
+            .and_then(Value::as_f64)
+            .filter(|secs| secs.is_finite() && *secs > 0.0)
+            .map(|secs| secs.ceil() as u64)
+            .unwrap_or(WAIT_DEFAULT_S)
+            .min(WAIT_MAX_S);
+        return Duration::from_secs(secs + WAIT_SLACK_S).max(CALL_TIMEOUT);
     }
     let asked = arguments
         .and_then(|args| args.get("timeout_s"))
@@ -235,8 +253,19 @@ mod tests {
 
     #[test]
     fn a_call_waits_twenty_seconds_by_default() {
-        assert_eq!(call_timeout("tools/call", &json!({ "name": "list_agents", "arguments": {} })), CALL_TIMEOUT);
+        assert_eq!(call_timeout("tools/call", &json!({ "name": "list_peers", "arguments": {} })), CALL_TIMEOUT);
         assert_eq!(call_timeout("tools/list", &Value::Null), CALL_TIMEOUT);
+    }
+
+    /// A session started with `wait` holds the call for its whole turn: ten
+    /// minutes unless told otherwise, an hour at most, and the margin.
+    #[test]
+    fn a_start_that_waits_is_given_its_wait_and_ten_seconds_more() {
+        let start = |args: Value| call_timeout("tools/call", &json!({ "name": "start_session", "arguments": args }));
+        assert_eq!(start(json!({ "prompt": "x" })), CALL_TIMEOUT);
+        assert_eq!(start(json!({ "prompt": "x", "wait": true })), Duration::from_secs(610));
+        assert_eq!(start(json!({ "prompt": "x", "wait": true, "timeout_s": 120 })), Duration::from_secs(130));
+        assert_eq!(start(json!({ "prompt": "x", "wait": true, "timeout_s": 99999 })), Duration::from_secs(3610));
     }
 
     #[test]

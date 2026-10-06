@@ -834,7 +834,7 @@ fn cursor_update(live: &mut CursorLive, update: &Map<String, Value>, events: &mu
 /// process can load them.
 ///
 /// What a turn does is spelled in its last line: `SLEEP <s>` runs a command that
-/// long, `ASK` asks to run one, `MCP` calls Crew's `list_agents`, `QUESTION`
+/// long, `ASK` asks to run one, `MCP` calls Crew's `list_peers`, `QUESTION`
 /// asks which color, `PLAN` writes a plan, `FAIL` fails the prompt,
 /// `STUBBORN` ignores a cancel. It answers `report: <last line>`, with ` + <what
 /// it heard>` for each request answered.
@@ -901,9 +901,9 @@ def run(rid, sid, text, turn):
     if "MCP" in text:
         cid = "tool_" + uuid.uuid4().hex[:8]
         update(sid, {"sessionUpdate": "tool_call", "toolCallId": cid, "title": "MCP: tool", "kind": "other", "status": "pending", "rawInput": {}})
-        update(sid, {"sessionUpdate": "tool_call_update", "toolCallId": cid, "title": "crew: list_agents", "rawInput": {"providerIdentifier": "crew", "toolName": "list_agents", "args": {}}})
+        update(sid, {"sessionUpdate": "tool_call_update", "toolCallId": cid, "title": "crew: list_peers", "rawInput": {"providerIdentifier": "crew", "toolName": "list_peers", "args": {}}})
         update(sid, {"sessionUpdate": "tool_call_update", "toolCallId": cid, "status": "in_progress"})
-        got = ask("session/request_permission", {"sessionId": sid, "toolCall": {"toolCallId": cid, "title": "crew-crew: list_agents", "kind": "other", "status": "pending"}, "options": [{"optionId": "allow-once", "name": "Allow once", "kind": "allow_once"}, {"optionId": "allow-always", "name": "Allow always", "kind": "allow_always"}, {"optionId": "reject-once", "name": "Reject", "kind": "reject_once"}]})
+        got = ask("session/request_permission", {"sessionId": sid, "toolCall": {"toolCallId": cid, "title": "crew-crew: list_peers", "kind": "other", "status": "pending"}, "options": [{"optionId": "allow-once", "name": "Allow once", "kind": "allow_once"}, {"optionId": "allow-always", "name": "Allow always", "kind": "allow_always"}, {"optionId": "reject-once", "name": "Reject", "kind": "reject_once"}]})
         heard.append("crew: %s" % ((got or {}).get("outcome", {}).get("optionId")))
         update(sid, {"sessionUpdate": "tool_call_update", "toolCallId": cid, "status": "completed", "rawOutput": {"success": True}})
     if "QUESTION" in text:

@@ -51,6 +51,16 @@ pub fn list(cwd: &str) -> Vec<Worktree> {
 
 /// Where the repo's worktrees are, the main checkout first: one git call and
 /// no counting, for checking a path is one of them.
+/// Each worktree's folder and branch, without the diff counts `list` adds.
+pub fn branches(cwd: &str) -> Vec<(String, Option<String>)> {
+    git(cwd, &["worktree", "list", "--porcelain"])
+        .map(|out| parse(&out))
+        .unwrap_or_default()
+        .into_iter()
+        .map(|tree| (tree.path, tree.branch))
+        .collect()
+}
+
 pub fn paths(cwd: &str) -> Vec<String> {
     git(cwd, &["worktree", "list", "--porcelain"])
         .map(|out| parse(&out).into_iter().map(|tree| tree.path).collect())

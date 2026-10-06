@@ -57,24 +57,25 @@ const INTERRUPT_GRACE: Duration = Duration::from_millis(1500);
 /// the result it had, so a server left running in the background cannot hold
 /// it forever.
 const BACKGROUND_GRACE: Duration = Duration::from_secs(600);
-/// A self-addressed letter is how a bot keeps working. This many laps in a
-/// row without anyone else speaking is a runaway, not a plan.
-const MAX_SELF_TURNS: u32 = 25;
 const STDERR_TAIL: usize = 12;
 /// The four a bot reaches for on most turns, named first in its sheet with
 /// what each is for.
 const EVERYDAY: [(&str, &str); 4] = [
-    ("list_agents", "the other bots here, each with the id it is addressed by."),
     (
-        "message_agent",
-        "write to one of them, by id. It arrives as a turn with your name and id on it, and it is \
-         read in its own time. You are not waiting here, and anything it sends back reaches you as \
-         a message of its own.",
+        "list_peers",
+        "the bots and sessions here, each with the id it is reached by, its status, and whether you \
+         can write to it.",
     ),
     (
-        "continue_after_turn",
-        "leave yourself the next step. It arrives as a new turn the moment this one ends, with the \
-         tail of this conversation, so it is how you carry on past work that does not fit in one turn.",
+        "send_message",
+        "write to one of them, by id. It arrives as a turn with your name and id on it, and it is \
+         read in its own time. You are not waiting here, and anything it sends back reaches you as \
+         a message of its own. To a session you started that is waiting on a question, it answers it.",
+    ),
+    (
+        "start_session",
+        "hand one job to a new session (any provider, here or in a worktree of its own). Its report \
+         wakes you when its turn ends; `wait: true` waits for it in this turn instead.",
     ),
     (
         "search_messages",
@@ -91,8 +92,8 @@ const DEFERRED_TOOLS: &str =
 
 /// How a provider's harness shows the model one of Crew's tools.
 ///
-/// The names matter more than they look. A bot told about `message_agent`
-/// goes looking for `message_agent`, and what it finds is whatever else it has
+/// The names matter more than they look. A bot told about a bare tool name
+/// goes looking for that name, and what it finds is whatever else it has
 /// of that shape — with Claude Code that is its own cross-session SendMessage,
 /// which writes to another machine entirely. Measured, not guessed: it happened
 /// in `scripts/drive.mjs` and the letter left the building. So a sheet never
@@ -149,11 +150,12 @@ fn tools_hint(harness: Harness, visible: &[&str]) -> String {
          - And: {}. One of your own tools whose name sounds like one of these is not Crew's and \
          does not reach this workspace.\n\
          {DEFERRED_TOOLS}\n\n\
-         A turn that opens with `## Message` was written by another bot, not by the user. \
-         What you write in the chat is read by the user and does not reach that bot; \
-         messaging the id on that line with {} is what does.",
+         A turn that opens with `## Message` was written by another bot or a session, not by the \
+         user. What you write in the chat is read by the user and does not reach it; {} to the \
+         id on that line is what does. `## Report from session` and `## Question from session` \
+         come from sessions you started.",
         harness.spell_all(&rest),
-        harness.spell("message_agent"),
+        harness.spell("send_message"),
     )
 }
 
@@ -164,17 +166,6 @@ fn child_resume(session: &crate::session::Session) -> Option<String> {
         .then(|| session.provider_session_id.clone())
         .flatten()
         .filter(|id| !id.is_empty())
-}
-
-/// A message a child is handed from whoever started it: who it is from, then
-/// the text. The persona already said what a report is.
-fn child_envelope(from: &crew_protocol::BotRef, text: &str) -> String {
-    let who = match from.kind.as_deref() {
-        Some("user") => "the user".to_string(),
-        Some(kind) => format!("{} ({kind} {})", from.name, from.id),
-        None => format!("{} (bot {})", from.name, from.id),
-    };
-    format!("## From {who}\n\n{text}")
 }
 
 /// What a child is told about Crew's tools: which they are, and that
@@ -332,8 +323,9 @@ pub struct TurnHost {
     binaries: Arc<Mutex<HashMap<String, String>>>,
     runtime: Arc<Mutex<Option<tokio::runtime::Handle>>>,
     cancelled: Arc<Mutex<HashSet<String>>>,
-    /// Consecutive turns a bot has started by writing to itself.
-    loops: Arc<Mutex<HashMap<String, u32>>>,
+    /// Questions answered, by session and request: the second answer to one,
+    /// from the window or from `send_message`, is told it came too late.
+    answered: Arc<Mutex<HashSet<(String, u64)>>>,
     /// The tool families beside Crew's own, so the sheet in a bot's prompt
     /// names theirs too.
     toolbox: crate::tools::Toolbox,
@@ -360,7 +352,7 @@ impl TurnHost {
             binaries: Arc::new(Mutex::new(HashMap::new())),
             runtime: Arc::new(Mutex::new(None)),
             cancelled: Arc::new(Mutex::new(HashSet::new())),
-            loops: Arc::new(Mutex::new(HashMap::new())),
+            answered: Arc::new(Mutex::new(HashSet::new())),
             toolbox: crate::tools::Toolbox::default(),
             signal: crate::session_events::Signal::default(),
             exiting: Arc::new(Mutex::new(HashMap::new())),
@@ -499,14 +491,6 @@ impl TurnHost {
             }
         }
         self.clear_stop(&params.session_id);
-        // A turn nobody else asked for is you: that clears the lap budget, so
-        // the message the transcript tells you to send actually frees the loop.
-        if params.from_bot.is_none() {
-            self.loops
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .remove(&params.session_id);
-        }
         // Read before the new message is appended: the tail is what the bot
         // is reminded of, and this turn is not history yet. A child carries on
         // its provider's own conversation instead, so it is handed none.
@@ -530,13 +514,7 @@ impl TurnHost {
             }
             params.text = letters
                 .iter()
-                .map(|letter| {
-                    if child && letter.kind == mailbox::MESSAGE {
-                        child_envelope(&letter.from, &letter.text)
-                    } else {
-                        mailbox::render(letter)
-                    }
-                })
+                .map(|letter| mailbox::render(letter, session.parent_id.as_deref()))
                 .collect::<Vec<_>>()
                 .join("\n\n");
         } else {
@@ -547,16 +525,12 @@ impl TurnHost {
                     // on the block for the reader.
                     self.transcripts
                         .append_from_bot(&params.session_id, &params.text, from.clone());
-                    params.text = if child {
-                        child_envelope(&from, &params.text)
-                    } else {
-                        mailbox::envelope(
-                            &from,
-                            &params.text,
-                            params.sent_at.unwrap_or_else(crate::store::now_millis),
-                            from.id == params.session_id,
-                        )
-                    };
+                    params.text = mailbox::envelope(
+                        &from,
+                        &params.text,
+                        (!child).then(|| params.sent_at.unwrap_or_else(crate::store::now_millis)),
+                        session.parent_id.as_deref(),
+                    );
                 }
                 None => self
                     .transcripts
@@ -598,23 +572,44 @@ impl TurnHost {
         Err("No approval is waiting".into())
     }
 
+    /// Answer a question a session is waiting on. The one place a question is
+    /// answered, from the window's card and from `send_message` alike: the
+    /// first answer wins, and the other is told it was already answered.
     pub fn answer(&self, session_id: &str, request_id: u64, answers: Option<Answers>) -> Result<(), String> {
-        if self.codex_answer(session_id, request_id, answers.clone()).is_some()
+        let key = (session_id.to_string(), request_id);
+        let taken = self.codex_answer(session_id, request_id, answers.clone()).is_some()
             || self.cursor_answer(session_id, request_id, answers.clone()).is_some()
-        {
-            return Ok(());
+            || {
+                let mut map = self.lock();
+                match map.get_mut(session_id) {
+                    Some(Live::Claude(live)) => match live.questions.remove(&request_id) {
+                        Some(pending) => {
+                            let _ = pending.tx.send(match answers {
+                                Some(answers) => QuestionReply::Answers(answers),
+                                None => QuestionReply::Dismiss,
+                            });
+                            true
+                        }
+                        None => false,
+                    },
+                    _ => false,
+                }
+            };
+        if !taken {
+            if self.answered.lock().unwrap_or_else(|e| e.into_inner()).contains(&key) {
+                return Err("That question was already answered.".into());
+            }
+            return Err("No question is waiting".into());
         }
-        let mut map = self.lock();
-        if let Some(Live::Claude(live)) = map.get_mut(session_id) {
-            if let Some(pending) = live.questions.remove(&request_id) {
-                let _ = pending.tx.send(match answers {
-                    Some(answers) => QuestionReply::Answers(answers),
-                    None => QuestionReply::Dismiss,
-                });
-                return Ok(());
+        self.answered.lock().unwrap_or_else(|e| e.into_inner()).insert(key);
+        // Answered: a question letter still waiting to wake the parent has
+        // nothing left to ask.
+        if let Ok(Some(row)) = session::get(&self.store, session_id.to_string()) {
+            if let Some(parent) = row.parent_id.as_deref() {
+                let _ = mailbox::dispose_questions(&self.store, parent, session_id);
             }
         }
-        Err("No question is waiting".into())
+        Ok(())
     }
 
     pub fn on_agent_lines(&self, event: &str, session_id: &str, lines: Vec<String>) {
@@ -920,13 +915,18 @@ impl TurnHost {
     /// Hand over what is waiting for a bot that has just gone quiet: every
     /// letter in its box, oldest first, in one turn (up to
     /// [`mailbox::BATCH_CHARS`] of text; the rest waits for the next turn).
-    /// This is also how a bot loops: it writes to itself, the letter cannot
-    /// be delivered while it is working, and it arrives the moment it stops.
+    /// A session with a turn running is left alone: that turn's end drains it.
     ///
     /// The one place a turn's letters are claimed, so two callers racing cannot
     /// lose one between them: the loser finds an empty box, which is the truth.
     /// Always queued, never steered into a running turn.
     pub fn drain_mailbox(&self, session_id: &str) -> bool {
+        // Before claiming, so a letter for a busy session stays pending: a
+        // wait that reads the same report can then take it back. The turn
+        // leaves `running` before its end drains, so one of the two sees it.
+        if self.is_running(session_id) {
+            return false;
+        }
         let letters = match mailbox::claim_batch(&self.store, session_id, mailbox::BATCH_CHARS) {
             Ok(letters) if !letters.is_empty() => letters,
             _ => return false,
@@ -936,39 +936,17 @@ impl TurnHost {
                 let _ = mailbox::release(&self.store, &letter.id);
             }
         };
-        let to_self = letters.iter().all(|letter| letter.from.id == session_id);
-        let laps = {
-            let mut laps = self.loops.lock().unwrap_or_else(|error| error.into_inner());
-            if to_self {
-                let count = laps.entry(session_id.to_string()).or_insert(0);
-                *count += 1;
-                *count
-            } else {
-                laps.remove(session_id);
-                0
-            }
-        };
-        if laps > MAX_SELF_TURNS {
-            // The note stays in the box: it is what the bot told itself to do
-            // next, and the cap is a pause, not a decision to drop the work.
-            put_back(&letters);
-            self.transcripts.append_system(
-                session_id,
-                &format!("Stopped after {MAX_SELF_TURNS} turns writing to itself. Send it a message to continue."),
-            );
-            self.transcripts.flush(session_id);
-            return false;
-        }
         let cwd = crate::session::get(&self.store, session_id.to_string())
             .ok()
             .flatten()
             .and_then(|session| crate::session::cwd(&self.store, &session).ok())
             .unwrap_or_default();
-        // What each report shows of its child, to mark seen once it is handed
-        // over: a read or a wait after this does not hand it out again.
+        // What each report or question shows of its child, to mark seen once
+        // it is handed over: a read or a wait after this does not hand it out
+        // again.
         let reported: Vec<(String, i64)> = letters
             .iter()
-            .filter(|letter| letter.is_report() && !letter.from.id.is_empty())
+            .filter(|letter| (letter.is_report() || letter.kind == mailbox::QUESTION) && !letter.from.id.is_empty())
             .filter_map(|letter| letter.event_cursor.map(|cursor| (letter.from.id.clone(), cursor)))
             .collect();
         let first = letters[0].clone();
@@ -1105,8 +1083,10 @@ impl TurnHost {
 
     /// A bot that started a session hears how each turn ended in its own
     /// box, as a `report` letter that wakes it, so it never sits in a wait to
-    /// find out. A terminal or the user has no turns to hand it to: they wait,
-    /// or read. `None` when there is no bot parent to tell.
+    /// find out; and what it asks, as a `question` letter it answers with
+    /// `send_message`. An approval is the user's alone: it wakes nobody. A
+    /// terminal or the user has no turns to hand it to: they wait, or read.
+    /// `None` when there is no bot parent to tell.
     fn report_letter(
         &self,
         session: &crate::session::Session,
@@ -1123,18 +1103,25 @@ impl TurnHost {
         if parent.kind != "bot" {
             return None;
         }
+        let from = crew_protocol::BotRef {
+            id: session.id.clone(),
+            name: session.name.clone(),
+            kind: Some("session".into()),
+        };
+        if kind == "needs-input" {
+            let request = request?;
+            if request.get("kind").and_then(Value::as_str) != Some("question") {
+                return None;
+            }
+            let body = mailbox::questions_text(request);
+            return Some(mailbox::Letter::new(&parent.id, &from, &body, mailbox::QUESTION, Some(cursor)));
+        }
         let what = match (kind, outcome) {
             ("turn", "completed") => None,
             ("turn", _) => Some("Its turn was stopped. What it said last:".to_string()),
             ("error", message) => Some(format!("Its turn failed: {message}\nWhat it said last:")),
             ("exited", why) => Some(format!("It exited ({why}).")),
-            _ => {
-                let asked = request.map(|request| request.to_string()).unwrap_or_default();
-                Some(format!(
-                    "It is waiting for an answer before it can go on. respond_to_session answers it, \
-                     or the user does in Crew.\n{asked}"
-                ))
-            }
+            _ => None,
         };
         let report = report.trim();
         let body = match (what, report.is_empty()) {
@@ -1142,11 +1129,6 @@ impl TurnHost {
             (None, false) => report.to_string(),
             (Some(what), true) => what,
             (Some(what), false) => format!("{what}\n\n{report}"),
-        };
-        let from = crew_protocol::BotRef {
-            id: session.id.clone(),
-            name: session.name.clone(),
-            kind: Some("session".into()),
         };
         Some(mailbox::Letter::new(&parent.id, &from, &body, mailbox::REPORT, Some(cursor)))
     }
@@ -1358,7 +1340,7 @@ impl TurnHost {
             // No `session/steer`, and a second prompt cancels the first.
             return Err("Cursor cannot take a message in the middle of a turn".into());
         }
-        let sent = child_envelope(&from, text);
+        let sent = self.steer_text(session_id, &from, text);
         let message = {
             let mut map = self.lock();
             let Some(Live::Claude(live)) = map.get_mut(session_id) else {
@@ -1377,6 +1359,13 @@ impl TurnHost {
             return Err(error);
         }
         Ok(())
+    }
+
+    /// A message written into a running turn, under the envelope a queued one
+    /// would have.
+    pub(crate) fn steer_text(&self, session_id: &str, from: &crew_protocol::BotRef, text: &str) -> String {
+        let parent = session::get(&self.store, session_id.to_string()).ok().flatten().and_then(|row| row.parent_id);
+        mailbox::envelope(from, text, None, parent.as_deref())
     }
 
     /// How much a turn may do alone: the session's own autonomy, unless
@@ -1447,10 +1436,12 @@ impl TurnHost {
             effort: Some(session.effort.clone()).filter(|e| !e.is_empty()),
             session_id: Some(claude_session_id.clone()),
             resume,
-            replay_user_messages: session.kind == "child",
+            // A steer is matched by its echo, for a bot as for a child.
+            replay_user_messages: true,
+            asks_questions: session.kind == "child",
             system_prompt: Some(persona),
             autonomy,
-            mcp_config: mcp.map(|(command, args)| crate::providers::claude::claude_mcp_config(&command, &args)),
+            mcp_config: mcp.map(|(command, args)| crate::providers::claude::claude_mcp_config(&command, &args, true)),
         };
         if self.stop_requested(&session_id) {
             self.agents.kill(&session_id);
@@ -1920,6 +1911,25 @@ impl TurnHost {
         // them, and should the CLI ask anyway they are allowed here, never
         // turned into an approval card.
         if tool_name.starts_with("mcp__crew__") {
+            let _ = self.agents.write(
+                &session_id,
+                &serde_json::to_string(&build_control_response(
+                    &control.request_id,
+                    to_permission_result(ApprovalDecision::Allow, &control.input, &tool_name),
+                ))
+                .unwrap_or_default(),
+            );
+            return;
+        }
+        // A child under full autonomy is handed a prompt tool only so that it
+        // keeps its question tool: anything else the CLI asks about it was
+        // already allowed to do.
+        let full = questions.is_empty()
+            && session::get(&self.store, session_id.clone())
+                .ok()
+                .flatten()
+                .is_some_and(|row| self.autonomy(&row) == Autonomy::Full);
+        if full {
             let _ = self.agents.write(
                 &session_id,
                 &serde_json::to_string(&build_control_response(
@@ -2729,7 +2739,7 @@ print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type
         // names, and gone once the turn is over.
         let system = std::fs::read_to_string(world.dir.join("prompt.txt.system")).expect("system");
         assert!(system.starts_with("You are Coder."), "the persona is on every turn: {system}");
-        assert!(system.contains("`crew_message_agent`") && !second.contains("You are Coder."), "{second}");
+        assert!(system.contains("`crew_search_messages`") && !second.contains("You are Coder."), "{second}");
         let config: Value = serde_json::from_str(&std::fs::read_to_string(world.dir.join("prompt.txt.config")).expect("config")).expect("json");
         assert_eq!(config["permission"]["crew_*"], "allow", "{config}");
         assert_eq!(config["mcp"]["crew"]["timeout"], 3_900_000, "{config}");
@@ -2842,77 +2852,6 @@ print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type
     }
 
     #[test]
-    fn a_note_a_bot_left_itself_is_not_the_user_either() {
-        let world = world();
-        let seen = world.dir.join("prompt.txt");
-        world
-            .host
-            .override_binary("opencode", fake_opencode_recording(&world.dir, &seen));
-        let ws = workspace(&world);
-        let coder = bot(&world, &ws, "Coder");
-        mailbox::enqueue(
-            world.host.test_store(),
-            &coder.id,
-            &BotRef::bot(coder.id.clone(), "Coder"),
-            "next: run the tests",
-        )
-        .expect("enqueue");
-
-        world.host.deliver_to(&coder);
-        settle(&world, &coder.id);
-
-        let prompt = std::fs::read_to_string(&seen).expect("the provider was never spawned");
-        assert!(prompt.contains("From: yourself, to continue"), "{prompt}");
-        assert!(prompt.contains("\n\nnext: run the tests"), "{prompt}");
-    }
-
-    #[test]
-    fn a_bot_carries_on_by_writing_to_itself() {
-        let world = world();
-        let ws = workspace(&world);
-        let coder = bot(&world, &ws, "Coder");
-        mailbox::enqueue(
-            world.host.test_store(),
-            &coder.id,
-            &BotRef::bot(coder.id.clone(), "Coder"),
-            "next: run the tests",
-        )
-        .expect("enqueue");
-
-        turn(&world, &coder, "start");
-        settle(&world, &coder.id);
-
-        let rows = blocks(&world, &coder.id);
-        assert!(
-            rows.iter().any(|block| block.text == "next: run the tests"),
-            "the bot did not pick its own note back up"
-        );
-    }
-
-    #[test]
-    fn a_runaway_loop_stops_itself() {
-        let world = world();
-        let ws = workspace(&world);
-        let coder = bot(&world, &ws, "Coder");
-        let me = BotRef::bot(coder.id.clone(), "Coder");
-        for _ in 0..(MAX_SELF_TURNS + 2) {
-            mailbox::enqueue(world.host.test_store(), &coder.id, &me, "again").expect("enqueue");
-        }
-
-        turn(&world, &coder, "start");
-        settle(&world, &coder.id);
-
-        let rows = blocks(&world, &coder.id);
-        let laps = rows.iter().filter(|block| block.text == "again").count() as u32;
-        assert_eq!(laps, MAX_SELF_TURNS, "the loop ran {laps} times");
-        assert!(
-            rows.iter().any(|block| block.role == BlockRole::System
-                && block.text.contains("writing to itself")),
-            "the transcript does not say why it stopped"
-        );
-    }
-
-    #[test]
     fn a_stopped_turn_leaves_the_box_alone() {
         let world = world();
         let ws = workspace(&world);
@@ -2955,74 +2894,21 @@ print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type
         );
     }
 
-    /// The cap consumes the letter that trips it: it is claimed, refused, and
-    /// never released. What the bot told itself to do next is gone.
-    #[test]
-    fn the_letter_the_cap_refuses_goes_back_in_the_box() {
-        let world = world();
-        let ws = workspace(&world);
-        let coder = bot(&world, &ws, "Coder");
-        let me = BotRef::bot(coder.id.clone(), "Coder");
-        for _ in 0..(MAX_SELF_TURNS + 1) {
-            mailbox::enqueue(world.host.test_store(), &coder.id, &me, "again").expect("enqueue");
-        }
-
-        turn(&world, &coder, "start");
-        settle(&world, &coder.id);
-
-        assert_eq!(
-            mailbox::waiting_count(world.host.test_store(), &coder.id).expect("count"),
-            1,
-            "the letter that tripped the cap was swallowed instead of left waiting"
-        );
-    }
-
-    /// The transcript says "Send it a message to continue". Doing that does not
-    /// reset the lap counter, because only a letter from someone *else* clears
-    /// it, and a user turn is not a letter. The bot can never loop again.
-    #[test]
-    fn a_message_from_the_user_lets_the_bot_loop_again() {
-        let world = world();
-        let ws = workspace(&world);
-        let coder = bot(&world, &ws, "Coder");
-        let me = BotRef::bot(coder.id.clone(), "Coder");
-        for _ in 0..MAX_SELF_TURNS {
-            mailbox::enqueue(world.host.test_store(), &coder.id, &me, "again").expect("enqueue");
-        }
-        turn(&world, &coder, "start");
-        settle(&world, &coder.id);
-        assert_eq!(
-            blocks(&world, &coder.id).iter().filter(|b| b.text == "again").count() as u32,
-            MAX_SELF_TURNS,
-            "the loop did not run to the cap"
-        );
-
-        // The user does exactly what the app told them to do.
-        mailbox::enqueue(world.host.test_store(), &coder.id, &me, "one more lap").expect("enqueue");
-        turn(&world, &coder, "carry on");
-        settle(&world, &coder.id);
-
-        assert!(
-            blocks(&world, &coder.id).iter().any(|b| b.text == "one more lap"),
-            "after the user spoke the bot still cannot pick up its own note"
-        );
-    }
-
     /// Every provider spells a Crew tool differently, and an agent that cannot
     /// spell it goes looking for something else of that shape. Claude Code has
     /// its own cross-session SendMessage, and in `scripts/drive.mjs` an agent
-    /// told about "message_agent" found that one and wrote to another machine.
+    /// told about the bare name found that one and wrote to another machine.
     #[test]
     fn a_tool_sheet_names_the_tools_the_way_the_provider_lists_them() {
-        let bot = crate::tools::visible_names(crate::caller::CallerKind::Bot);
+        let bot = crate::tools::all_visible_names(crate::caller::CallerKind::Bot);
         let mcp = tools_hint(Harness::Mcp, &bot);
-        assert!(mcp.contains("- `mcp__crew__message_agent` — write to one of them, by id."), "{mcp}");
+        assert!(mcp.contains("- `mcp__crew__send_message` — write to one of them, by id."), "{mcp}");
         assert!(mcp.contains("`mcp__crew__create_bot`"), "{mcp}");
         let opencode = tools_hint(Harness::Opencode, &bot);
-        assert!(opencode.contains("- `crew_message_agent` — write"), "{opencode}");
+        assert!(opencode.contains("- `crew_send_message` — write"), "{opencode}");
         // Cursor calls an MCP tool by its server and its name, apart.
         let cursor = tools_hint(Harness::Cursor, &bot);
-        assert!(cursor.contains("- `message_agent` (MCP server `crew`) — write"), "{cursor}");
+        assert!(cursor.contains("- `send_message` (MCP server `crew`) — write"), "{cursor}");
         assert!(cursor.contains("`create_bot`, ") && cursor.contains("all on the MCP server `crew`"), "{cursor}");
 
         for sheet in [&mcp, &opencode, &cursor] {
@@ -3046,13 +2932,13 @@ print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type
     #[test]
     fn a_tool_sheet_names_what_the_callers_kind_is_listed() {
         use crate::caller::CallerKind;
-        let bot = crate::tools::visible_names(CallerKind::Bot);
+        let bot = crate::tools::all_visible_names(CallerKind::Bot);
         let sheet = tools_hint(Harness::Mcp, &bot);
         for name in &bot {
             assert!(sheet.contains(&format!("`mcp__crew__{name}`")), "{name} is not on the sheet: {sheet}");
         }
 
-        let child = crate::tools::visible_names(CallerKind::Child);
+        let child = crate::tools::all_visible_names(CallerKind::Child);
         let sheet = child_tools_hint(Harness::Mcp, &child);
         for name in &child {
             assert!(sheet.contains(&format!("`mcp__crew__{name}`")), "{name} is not on the child's sheet: {sheet}");
@@ -3067,6 +2953,7 @@ print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type
     #[test]
     fn the_host_builds_the_sheet_for_the_sessions_kind() {
         let host = TurnHost::test_new();
+        host.toolbox().register(Arc::new(crate::tools::CatalogOnly(crate::session_tools::catalog)));
         let store = host.test_store();
         let dir = std::env::temp_dir().join(format!("sheet-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&dir).expect("dir");
@@ -3076,9 +2963,12 @@ print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type
         let child = crate::session::create_child(store, ws, "C".into(), "claude".into(), "".into(), "ask".into(), None, Some(bot.id.clone()))
             .expect("child");
         let bot = host.crew_tools_hint(&bot, Harness::Mcp);
-        assert!(bot.contains("`mcp__crew__continue_after_turn`") && bot.contains("## Message"), "{bot}");
+        assert!(bot.contains("`mcp__crew__start_session`") && bot.contains("## Message"), "{bot}");
         let child = host.crew_tools_hint(&child, Harness::Mcp);
-        assert!(child.contains("in your report") && !child.contains("continue_after_turn"), "{child}");
+        assert!(child.contains("in your report") && !child.contains("start_session"), "{child}");
+        for gone in crate::tools::REMOVED_TOOLS {
+            assert!(!bot.contains(gone) && !child.contains(gone), "{gone}: {bot}\n{child}");
+        }
     }
 
     /// Crew's own tools never become an approval card, even if the CLI asks.
@@ -3091,7 +2981,7 @@ print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type
             json!({ "type": "control_request", "request_id": id, "request": {
                 "subtype": "can_use_tool", "tool_name": tool, "input": { "command": "ls" }, "tool_use_id": id } })
         };
-        host.handle_claude_line("s", &ask("c1", "mcp__crew__list_agents").to_string());
+        host.handle_claude_line("s", &ask("c1", "mcp__crew__list_peers").to_string());
         host.handle_claude_line("s", &ask("c2", "Bash").to_string());
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
         let mut asked = Vec::new();

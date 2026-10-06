@@ -144,9 +144,9 @@ export function useWorkContext(
     latest.current = { workspace, current, tabs, worktrees, everywhere, scope };
   });
 
-  // A session `create_worktree` handed work joins its worktree's strip behind
-  // whatever is on screen, and its CLI starts on the task out of sight: the
-  // window stays where it was.
+  // A session handed to the user (`start_session` with owner user) joins its
+  // worktree's strip behind whatever is on screen, and its CLI starts on the
+  // prompt out of sight: the window stays where it was.
   useEffect(() => {
     const unsubscribe = client.on("session-created", (payload) => {
       const { session, open } = payload as SessionCreated;

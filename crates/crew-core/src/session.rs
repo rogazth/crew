@@ -43,9 +43,13 @@ pub struct Session {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_id: Option<String>,
     /// How far its transcript had got at its last event, in blocks: the
-    /// cursor `wait_for_session` and `read_session` count in.
+    /// cursor `read_session` counts in.
     #[serde(default)]
     pub cursor: i64,
+    /// The session that handed it to the user (`start_session` with owner
+    /// user): a top-level session, nobody's child.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handed_off_by: Option<String>,
 }
 
 /// Aliased on `s`, with the bot it runs for on `b` (see [`SESSIONS`]), so a
@@ -57,8 +61,8 @@ pub const SESSION_COLUMNS: &str = "s.id, s.workspace_id, s.kind, COALESCE(b.name
                                    s.provider_session_id, COALESCE(b.description, s.description),
                                    COALESCE(b.notifications, s.notifications),
                                    s.status, s.created_at, s.updated_at, COALESCE(b.autonomy, s.autonomy), s.worktree,
-                                   s.bot_id, s.parent_id, s.cursor, s.effort";
-pub const SESSION_COLUMN_COUNT: usize = 18;
+                                   s.bot_id, s.parent_id, s.cursor, s.effort, s.handed_off_by";
+pub const SESSION_COLUMN_COUNT: usize = 19;
 
 /// What [`SESSION_COLUMNS`] reads from.
 pub const SESSIONS: &str = "sessions s LEFT JOIN bots b ON b.id = s.bot_id";
@@ -86,6 +90,7 @@ pub fn row_to_session(row: &rusqlite::Row, at: usize) -> rusqlite::Result<Sessio
         parent_id: row.get(at + 15)?,
         cursor: row.get(at + 16)?,
         effort,
+        handed_off_by: row.get(at + 18)?,
     })
 }
 
@@ -219,6 +224,14 @@ pub fn create_child(
     insert(store, workspace_id, "child".into(), name, provider, model, String::new(), autonomy, worktree, parent)
 }
 
+/// Mark a session as handed to the user by `by`.
+pub fn set_handed_off_by(store: &Store, id: &str, by: &str) -> Result<(), String> {
+    store.with(|conn| {
+        conn.prepare_cached("UPDATE sessions SET handed_off_by = ?2 WHERE id = ?1")?.execute(params![id, by])
+    })?;
+    Ok(())
+}
+
 /// The row, and for a bot the bot it runs for, under the same id: the
 /// identity goes to `bots`, the CLI to `sessions`.
 #[allow(clippy::too_many_arguments)]
@@ -259,6 +272,7 @@ fn insert(
         updated_at: now,
         parent_id: parent,
         cursor: 0,
+        handed_off_by: None,
     };
 
     store.with(|conn| {

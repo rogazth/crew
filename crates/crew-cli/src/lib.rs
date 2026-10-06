@@ -111,6 +111,7 @@ where
     let ctx = Ctx { global, env: Env::from_process() };
     let result = match matches.subcommand() {
         Some((group, sub)) if commands::GROUPS.iter().any(|candidate| candidate.name == group) => commands::run(&ctx, group, sub),
+        Some((name, sub)) if commands::is_top_level(name) => commands::run_top(&ctx, name, sub),
         _ => Cli::from_arg_matches(&matches)
             .map_err(|e| CliError::Usage(e.to_string()))
             .and_then(|cli| dispatch(&ctx, cli.command)),

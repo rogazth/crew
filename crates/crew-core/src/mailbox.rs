@@ -6,10 +6,12 @@
 //! letter waits, and a turn that ends drains the box.
 //!
 //! Blocking would deadlock the obvious case — two bots that message each
-//! other — so `message_agent` answers "delivered" and never waits for a reply.
+//! other — so `send_message` answers how it was delivered and never waits for
+//! a reply.
 //!
 //! A child session's report reaches the bot that started it the same way, as
-//! a `report` letter: that is what wakes the bot, so it never has to wait.
+//! a `report` letter, and its question as a `question` letter: that is what
+//! wakes the bot, so it never has to wait.
 //!
 //! A letter goes pending → claimed → delivered, or is disposed. Claimed means
 //! a turn is carrying it; delivered, that the turn ended. A daemon stopped
@@ -27,8 +29,8 @@ pub const MESSAGE: &str = "message";
 /// A child's turn ended (or failed, stopped, exited, or stopped to ask): what
 /// it said, for the bot that started it.
 pub const REPORT: &str = "report";
-/// A child asks its parent something. Not written yet: a child that stops to
-/// ask still sends a `report`.
+/// A child stopped on a question (its question tool) for the bot that
+/// started it, which answers with `send_message`.
 pub const QUESTION: &str = "question";
 
 /// About how much letter text one turn is handed, in characters. A turn always
@@ -133,65 +135,128 @@ pub(crate) fn migrate_lifecycle(conn: &rusqlite::Connection) -> rusqlite::Result
 /// A letter nobody has been handed yet.
 const PENDING: &str = "claimed_at IS NULL AND delivered_at IS NULL AND disposed_at IS NULL";
 
-/// The header a letter is handed over under.
+/// The header a message is handed over under.
 ///
 /// A letter arrives as a user turn — the same shape as something the person
-/// typed — so the header is what tells them apart. It carries facts and no
-/// instructions: who wrote it, the id they are reached at, and when they wrote
-/// it. What to do about it is the bot's to decide, with the tool sheet in
-/// the persona and the tail above.
+/// typed — so the header is what tells them apart: who wrote it, the id they
+/// are reached at, when (for a letter that waited in the box), and how to
+/// answer.
 ///
 /// The id and not the name, because the name is the user's: they rename a
 /// bot and a reply addressed to the old one reaches nobody. A sender that
 /// has been deleted since has no id left (`ON DELETE SET NULL`), and saying so
 /// is better than offering an address that is not one.
 ///
-/// The two senders that are not bots are said so, with what that means for
-/// a reply: the envelope is the only place the bot learns it, and a bot
-/// that answers a terminal with `message_agent` is told "no bot" and guesses.
-pub fn envelope(from: &BotRef, body: &str, at: i64, to_self: bool) -> String {
-    let who = if to_self {
-        "yourself, to continue".to_string()
-    } else if from.kind.as_deref() == Some("user") {
-        "the user, from the crew command line. They read your reply here, in this chat.".to_string()
-    } else if from.kind.as_deref() == Some("terminal") {
-        format!(
-            "{} (terminal session {}). It cannot receive a reply: message_agent does not reach it, \
-             and what you write here is read by the user, not by it.",
-            from.name, from.id
-        )
-    } else if from.kind.as_deref() == Some("session") {
-        format!(
-            "{} (session {}). A session is a provider CLI Crew runs, not a bot: message_agent does \
-             not reach it. If you started it, send_to_session does.",
-            from.name, from.id
-        )
+/// `parent` is the reader's parent, when the reader is a session somebody
+/// started: a message from it is answered by the report the turn ends with,
+/// not by writing back.
+pub fn envelope(from: &BotRef, body: &str, at: Option<i64>, parent: Option<&str>) -> String {
+    let kind = from.kind.as_deref().unwrap_or("bot");
+    let (who, reply) = if kind == "user" {
+        ("you (the user, from the crew command line)".to_string(), "They read your reply here.".to_string())
     } else if from.id.is_empty() {
-        format!("{} (bot, no longer in this workspace)", from.name)
+        (format!("{} ({kind}, no longer in this workspace)", from.name), String::new())
+    } else if parent == Some(from.id.as_str()) {
+        (
+            format!("{} ({kind} {})", from.name, from.id),
+            "It started you: your report at the end of this turn reaches it.".to_string(),
+        )
+    } else if kind == "terminal" {
+        (
+            format!("{} (terminal {})", from.name, from.id),
+            "A terminal cannot be written to: what you write here is read by the user, not by it.".to_string(),
+        )
     } else {
-        format!("{} (bot {})", from.name, from.id)
+        (format!("{} ({kind} {})", from.name, from.id), format!("Reply with send_message to {}.", from.id))
     };
-    format!("## Message\nFrom: {who}\nAt: {}\n\n{body}", stamp(at))
+    let mut head = format!("## Message\nFrom: {who}");
+    if let Some(at) = at {
+        head.push_str(&format!("\nAt: {}", stamp(at)));
+    }
+    if !reply.is_empty() {
+        head.push('\n');
+        head.push_str(&reply);
+    }
+    format!("{head}\n\n{body}")
 }
 
 /// The header a child's report is handed over under: whose it is, then what
 /// it said. Nothing about what to do next; above all, nothing that sends the
 /// bot to wait on the session, since this letter is what a wait would return.
 pub fn report_envelope(from: &BotRef, body: &str) -> String {
-    let who = if from.id.is_empty() {
+    format!("## Report from session {}\n\n{}", who_session(from), body.trim())
+}
+
+/// The header a child's question is handed over under: the questions, then
+/// how to answer them.
+pub fn question_envelope(from: &BotRef, body: &str) -> String {
+    let answer = if from.id.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "\n\nAnswer with send_message to {}: text answers a single question, answers gives one per question in \
+             order. If the decision is the user's, say so in your reply instead; the user can answer it in Crew.",
+            from.id
+        )
+    };
+    format!("## Question from session {}\n\n{}{answer}", who_session(from), body.trim())
+}
+
+fn who_session(from: &BotRef) -> String {
+    if from.id.is_empty() {
         format!("{} (no longer in this workspace)", from.name)
     } else {
         format!("{} ({})", from.name, from.id)
-    };
-    format!("## Report from session {who}\n\n{}", body.trim())
+    }
 }
 
-/// A letter as the model reads it, by its kind.
-pub fn render(letter: &Letter) -> String {
-    if letter.is_report() || letter.kind == QUESTION {
-        report_envelope(&letter.from, &letter.text)
-    } else {
-        envelope(&letter.from, &letter.text, letter.at, letter.from.id == letter.to_session)
+/// A child's questions as its parent reads them: each with its options.
+pub fn questions_text(request: &serde_json::Value) -> String {
+    let questions = request.get("questions").and_then(serde_json::Value::as_array).cloned().unwrap_or_default();
+    questions
+        .iter()
+        .enumerate()
+        .map(|(at, question)| {
+            let text = question.get("question").and_then(serde_json::Value::as_str).unwrap_or("");
+            let options: Vec<String> = question
+                .get("options")
+                .and_then(serde_json::Value::as_array)
+                .map(|options| {
+                    options
+                        .iter()
+                        .filter_map(|option| {
+                            let label = option.get("label").and_then(serde_json::Value::as_str)?;
+                            Some(match option.get("description").and_then(serde_json::Value::as_str) {
+                                Some(about) if !about.is_empty() => format!("{label} ({about})"),
+                                _ => label.to_string(),
+                            })
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            let multi = question.get("multiSelect").or_else(|| question.get("multi_select")).and_then(serde_json::Value::as_bool)
+                == Some(true);
+            let mut line = format!("{}. {text}", at + 1);
+            if !options.is_empty() {
+                line.push_str(&format!(
+                    "\n   Options{}: {}",
+                    if multi { " (several allowed, comma-separated)" } else { "" },
+                    options.join("; ")
+                ));
+            }
+            line
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// A letter as the model reads it, by its kind. `parent` is the reader's
+/// parent, for a reader that is a session somebody started.
+pub fn render(letter: &Letter, parent: Option<&str>) -> String {
+    match letter.kind.as_str() {
+        REPORT => report_envelope(&letter.from, &letter.text),
+        QUESTION => question_envelope(&letter.from, &letter.text),
+        _ => envelope(&letter.from, &letter.text, Some(letter.at), parent),
     }
 }
 
@@ -280,9 +345,6 @@ pub fn claim(store: &Store, to_session: &str) -> Result<Option<Letter>, String> 
 
 /// Claim what one turn is handed: every waiting letter, oldest first, until
 /// their text passes `cap` characters (the first is taken whatever its size).
-///
-/// A note a bot left itself (`continue_after_turn`) goes alone, and ends a
-/// batch: it is a turn of its own, and the lap budget counts those.
 pub fn claim_batch(store: &Store, to_session: &str, cap: usize) -> Result<Vec<Letter>, String> {
     store.with(|conn| {
         let tx = conn.unchecked_transaction()?;
@@ -295,16 +357,12 @@ pub fn claim_batch(store: &Store, to_session: &str, cap: usize) -> Result<Vec<Le
         let mut batch: Vec<Letter> = Vec::new();
         let mut spent = 0;
         for letter in pending {
-            let to_self = letter.from.id == to_session;
             let size = letter.text.chars().count();
-            if !batch.is_empty() && (to_self || spent + size > cap) {
+            if !batch.is_empty() && spent + size > cap {
                 break;
             }
             spent += size;
             batch.push(letter);
-            if to_self {
-                break;
-            }
         }
         let now = now_millis();
         for letter in &batch {
@@ -364,19 +422,45 @@ pub fn drop_waiting(store: &Store, to_session: &str) -> Result<usize, String> {
     })
 }
 
-/// Take back the reports a child left in its parent's box that the parent has
-/// since read some other way: a wait or a read showed it the session up to
-/// `seen`. Only reports, and only those at or below that cursor: a message the
-/// child wrote, or a later turn's report, still has to be handed over.
+/// Take back the reports and questions a child left in its parent's box that
+/// the parent has since read some other way: a wait or a read showed it the
+/// session up to `seen`. Only those, and only at or below that cursor: a
+/// message the child wrote, or a later turn's report, still has to be handed
+/// over.
 pub fn take_back(store: &Store, to_session: &str, from_session: &str, seen: i64) -> Result<usize, String> {
     store.with(|conn| {
         conn.prepare_cached(&format!(
             "UPDATE mailbox SET disposed_at = ?4
-              WHERE to_session = ?1 AND from_session = ?2 AND kind = 'report'
+              WHERE to_session = ?1 AND from_session = ?2 AND kind IN ('report', 'question')
                 AND event_cursor IS NOT NULL AND event_cursor <= ?3 AND {PENDING}"
         ))?
         .execute(params![to_session, from_session, seen, now_millis()])
     })
+}
+
+/// A child's question was answered, by its parent or by the user: a question
+/// letter still waiting to wake the parent has nothing left to ask.
+pub fn dispose_questions(store: &Store, to_session: &str, from_session: &str) -> Result<usize, String> {
+    store.with(|conn| {
+        conn.prepare_cached(&format!(
+            "UPDATE mailbox SET disposed_at = ?3
+              WHERE to_session = ?1 AND from_session = ?2 AND kind = 'question' AND {PENDING}"
+        ))?
+        .execute(params![to_session, from_session, now_millis()])
+    })
+}
+
+/// Whether `from_session` has ever written `to_session` a message: a session
+/// that asked a bot something may be answered by it, whoever started it.
+pub fn has_written(store: &Store, from_session: &str, to_session: &str) -> bool {
+    store
+        .with(|conn| {
+            conn.prepare_cached(
+                "SELECT EXISTS(SELECT 1 FROM mailbox WHERE from_session = ?1 AND to_session = ?2 AND kind = 'message')",
+            )?
+            .query_row(params![from_session, to_session], |row| row.get::<_, bool>(0))
+        })
+        .unwrap_or(false)
 }
 
 /// How many letters are waiting. The sidebar shows it; the tool answers with it
@@ -434,9 +518,8 @@ mod tests {
 
     #[test]
     fn the_envelope_carries_the_id_the_sender_is_reached_at() {
-        let letter = envelope(&sender("s1"), "the branch is green", 0, false);
-        assert!(letter.starts_with("## Message\nFrom: Coder (bot s1)\nAt: "), "{letter}");
-        assert!(letter.ends_with("\n\nthe branch is green"), "{letter}");
+        let letter = envelope(&sender("s1"), "the branch is green", None, None);
+        assert_eq!(letter, "## Message\nFrom: Coder (bot s1)\nReply with send_message to s1.\n\nthe branch is green");
     }
 
     /// The time it was written, not the time it was handed over: a letter that
@@ -444,7 +527,7 @@ mod tests {
     #[test]
     fn the_envelope_says_when_it_was_written() {
         let at = crate::store::now_millis() - 3_600_000;
-        let letter = envelope(&sender("s1"), "hi", at, false);
+        let letter = envelope(&sender("s1"), "hi", Some(at), None);
         assert!(letter.contains(&format!("At: {}", crate::store::stamp(at))), "{letter}");
     }
 
@@ -452,18 +535,41 @@ mod tests {
     /// empty id would be offering a reply that goes nowhere.
     #[test]
     fn a_deleted_sender_is_named_without_an_address() {
-        let letter = envelope(&BotRef::bot("", "Coder"), "hi", 0, false);
+        let letter = envelope(&BotRef::bot("", "Coder"), "hi", None, None);
         assert!(letter.contains("Coder (bot, no longer in this workspace)"), "{letter}");
+        assert!(!letter.contains("send_message"), "{letter}");
     }
 
-    /// A note a bot left itself is not the user either, and saying who wrote
-    /// it is the whole point: "Coder (bot)" in your own transcript reads like
-    /// somebody else.
+    /// Each kind of sender says what a reply can do: a terminal cannot be
+    /// written to, the user reads the chat, and a session's own parent reads
+    /// its report.
     #[test]
-    fn a_note_to_yourself_says_so() {
-        let letter = envelope(&sender("s1"), "next: run the tests", 0, true);
-        assert!(letter.contains("From: yourself, to continue"), "{letter}");
-        assert!(letter.ends_with("next: run the tests"), "{letter}");
+    fn the_envelope_says_how_to_answer_each_kind_of_sender() {
+        let terminal = BotRef { id: "t1".into(), name: "shell".into(), kind: Some("terminal".into()) };
+        let out = envelope(&terminal, "hi", None, None);
+        assert!(out.starts_with("## Message\nFrom: shell (terminal t1)\nA terminal cannot be written to"), "{out}");
+        let user = BotRef { id: String::new(), name: "You".into(), kind: Some("user".into()) };
+        assert!(envelope(&user, "hi", None, None).contains("From: you (the user"), "user");
+        let session = BotRef { id: "c1".into(), name: "codex: fix".into(), kind: Some("session".into()) };
+        assert!(envelope(&session, "hi", None, None).contains("From: codex: fix (session c1)\nReply with send_message to c1."));
+        let parent = envelope(&sender("p1"), "more", None, Some("p1"));
+        assert!(parent.contains("your report at the end of this turn reaches it") && !parent.contains("Reply with"), "{parent}");
+        let shell = envelope(&terminal, "the job", None, Some("t1"));
+        assert!(shell.contains("your report at the end of this turn reaches it") && !shell.contains("cannot be written"), "{shell}");
+    }
+
+    /// A question lists each question with its options, and says how to answer.
+    #[test]
+    fn a_question_is_headed_by_the_session_and_says_how_to_answer() {
+        let from = BotRef { id: "c1".into(), name: "codex: fix".into(), kind: Some("session".into()) };
+        let request = serde_json::json!({ "kind": "question", "questions": [
+            { "question": "Which color?", "header": "Color", "options": [{ "label": "Red", "description": "warm" }, { "label": "Blue" }] },
+            { "question": "Ship it?", "header": "Ship", "multiSelect": true, "options": [{ "label": "Yes" }] }
+        ] });
+        let out = render(&Letter::new("p1", &from, &questions_text(&request), QUESTION, Some(3)), None);
+        assert!(out.starts_with("## Question from session codex: fix (c1)\n\n1. Which color?\n   Options: Red (warm); Blue\n2. Ship it?\n   Options (several allowed"), "{out}");
+        assert!(out.ends_with("the user can answer it in Crew."), "{out}");
+        assert!(out.contains("send_message to c1"), "{out}");
     }
 
     #[test]
@@ -573,9 +679,9 @@ mod tests {
     fn a_report_is_headed_by_the_session_it_comes_from() {
         let from = BotRef { id: "c1".into(), name: "codex: fix".into(), kind: Some("session".into()) };
         let letter = Letter::new("p1", &from, "done: 3 files\n", REPORT, Some(4));
-        let out = render(&letter);
+        let out = render(&letter, None);
         assert_eq!(out, "## Report from session codex: fix (c1)\n\ndone: 3 files");
-        for advice in ["wait_for_session", "read_session", "respond_to_session", "send_to_session", "Its turn ended"] {
+        for advice in ["wait_for_session", "read_session", "send_message", "Its turn ended"] {
             assert!(!out.contains(advice), "{out}");
         }
     }
@@ -584,9 +690,9 @@ mod tests {
     #[test]
     fn a_message_from_a_session_says_how_to_reply_and_not_to_wait() {
         let from = BotRef { id: "c1".into(), name: "codex: fix".into(), kind: Some("session".into()) };
-        let out = render(&Letter::new("p1", &from, "a question about the API", MESSAGE, None));
-        assert!(out.starts_with("## Message\nFrom: codex: fix (session c1)."), "{out}");
-        assert!(out.contains("send_to_session does"), "{out}");
+        let out = render(&Letter::new("p1", &from, "a question about the API", MESSAGE, None), None);
+        assert!(out.starts_with("## Message\nFrom: codex: fix (session c1)\nAt: "), "{out}");
+        assert!(out.contains("Reply with send_message to c1."), "{out}");
         assert!(!out.contains("wait_for_session") && !out.contains("read_session"), "{out}");
     }
 
@@ -626,21 +732,6 @@ mod tests {
         let huge = claim_batch(&store, &to, BATCH_CHARS).expect("third");
         assert_eq!(huge.len(), 1);
         assert!(huge[0].text.starts_with('y'));
-    }
-
-    /// A note a bot left itself is a turn of its own: the lap budget counts them.
-    #[test]
-    fn a_note_to_yourself_is_not_batched() {
-        let store = store();
-        let to = session(&store, "to");
-        let from = session(&store, "from");
-        enqueue(&store, &to, &sender(&from), "first").expect("enqueue");
-        enqueue(&store, &to, &sender(&to), "note").expect("enqueue");
-        enqueue(&store, &to, &sender(&from), "last").expect("enqueue");
-        let texts = |batch: Vec<Letter>| batch.into_iter().map(|letter| letter.text).collect::<Vec<_>>();
-        assert_eq!(texts(claim_batch(&store, &to, BATCH_CHARS).unwrap()), ["first"]);
-        assert_eq!(texts(claim_batch(&store, &to, BATCH_CHARS).unwrap()), ["note"]);
-        assert_eq!(texts(claim_batch(&store, &to, BATCH_CHARS).unwrap()), ["last"]);
     }
 
     /// Claimed is not delivered: a turn carries the letter until it ends. A
@@ -683,10 +774,27 @@ mod tests {
         let seen = report(&store, &parent, &child, "turn one", 3);
         let later = report(&store, &parent, &child, "turn two", 7);
         let message = enqueue(&store, &parent, &child, "which branch?").expect("enqueue");
-        assert_eq!(take_back(&store, &parent, &child.id, 5).expect("take back"), 1);
+        let asked = Letter::new(&parent, &child, "1. Which color?", QUESTION, Some(4));
+        store.with(|conn| insert(conn, &asked)).expect("question");
+        assert_eq!(take_back(&store, &parent, &child.id, 5).expect("take back"), 2);
         assert_eq!(state(&store, &seen.id), (false, false, true));
+        assert_eq!(state(&store, &asked.id), (false, false, true));
         let left: Vec<String> = waiting(&store, &parent).expect("waiting").into_iter().map(|letter| letter.id).collect();
         assert_eq!(left, [later.id, message.id]);
+    }
+
+    /// An answered question no longer wakes the parent; a report still does.
+    #[test]
+    fn an_answered_question_is_set_aside() {
+        let store = store();
+        let parent = session(&store, "parent");
+        let child = child_of(&store, &parent);
+        let asked = Letter::new(&parent, &child, "1. Which color?", QUESTION, Some(4));
+        store.with(|conn| insert(conn, &asked)).expect("question");
+        let later = report(&store, &parent, &child, "done", 7);
+        assert_eq!(dispose_questions(&store, &parent, &child.id).expect("dispose"), 1);
+        let left: Vec<String> = waiting(&store, &parent).expect("waiting").into_iter().map(|letter| letter.id).collect();
+        assert_eq!(left, [later.id]);
     }
 
     #[test]

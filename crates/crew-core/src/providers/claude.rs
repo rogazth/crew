@@ -24,6 +24,11 @@ pub struct ClaudeSpawn {
     /// written mid-turn (a steer) is read at its next step, not when it
     /// arrives; the echo is how Crew knows it was read.
     pub replay_user_messages: bool,
+    /// Keep the question tool (`AskUserQuestion`) under full autonomy: a
+    /// child asks its parent (plan §7e.4). Claude Code offers it only with a
+    /// permission prompt tool to ask through, which a run that skips
+    /// permissions otherwise has none of.
+    pub asks_questions: bool,
     pub system_prompt: Option<String>,
     pub autonomy: Autonomy,
     pub mcp_config: Option<String>,
@@ -38,8 +43,18 @@ pub const MCP_TIMEOUT_MS: u64 = 3_900_000;
 
 /// The `--mcp-config` value that starts Crew's MCP server. Claude merges it
 /// with the user's own servers unless `--strict-mcp-config` is also passed.
-pub fn claude_mcp_config(command: &str, args: &[String]) -> String {
-    json!({ "mcpServers": { "crew": { "command": command, "args": args, "timeout": MCP_TIMEOUT_MS } } }).to_string()
+///
+/// `always_load` keeps Crew's tools in the prompt, never deferred behind
+/// Claude Code's own tool search (plan §7e.8): for the bots and sessions Crew
+/// drives. A terminal is the user's, and left to their settings. Read off
+/// Claude Code 2.1.289: `alwaysLoad` is a boolean beside `command` in the
+/// stdio server schema.
+pub fn claude_mcp_config(command: &str, args: &[String], always_load: bool) -> String {
+    let mut server = json!({ "command": command, "args": args, "timeout": MCP_TIMEOUT_MS });
+    if always_load {
+        server["alwaysLoad"] = json!(true);
+    }
+    json!({ "mcpServers": { "crew": server } }).to_string()
 }
 
 /// Every tool on Crew's server, as a Claude permission rule: Crew's own tools
@@ -61,7 +76,14 @@ pub fn build_claude_spawn_args(input: &ClaudeSpawn) -> Vec<String> {
         json!({ "autoMemoryEnabled": false, "permissions": { "allow": [CREW_TOOLS_RULE] } }).to_string(),
     ];
     match input.autonomy {
-        Autonomy::Full => args.push("--dangerously-skip-permissions".into()),
+        Autonomy::Full => {
+            args.push("--dangerously-skip-permissions".into());
+            // Measured on 2.1.290: with permissions skipped, a prompt tool is
+            // asked only for AskUserQuestion, and without one that tool is gone.
+            if input.asks_questions {
+                args.extend(["--permission-prompt-tool".into(), "stdio".into()]);
+            }
+        }
         ref mode => {
             let permission = match mode {
                 Autonomy::Edits => "acceptEdits",
@@ -773,7 +795,7 @@ pub fn tool_result_detail(name: &str, input: &Map<String, Value>, content: &str)
     // The message row already shows the message. Its result is the delivery
     // receipt, and the input that would rebuild the row is no longer in hand
     // by then, so this kept replacing the message with its own receipt.
-    if super::crew_call(name, input).map(|(verb, _)| verb) == Some("message_agent") {
+    if super::crew_call(name, input).is_some_and(|(verb, _)| super::is_message_tool(verb)) {
         return None;
     }
     let text = || Some(content.to_string()).filter(|body| !body.trim().is_empty());
@@ -909,9 +931,10 @@ mod tests {
             session_id: None,
             resume: None,
             replay_user_messages: false,
+            asks_questions: false,
             system_prompt: None,
             autonomy: Autonomy::Ask,
-            mcp_config: Some(claude_mcp_config("/app/crewd", &["--mcp".into()])),
+            mcp_config: Some(claude_mcp_config("/app/crewd", &["--mcp".into()], true)),
         });
         let at = args.iter().position(|arg| arg == "--settings").expect("settings");
         let settings: Value = serde_json::from_str(&args[at + 1]).expect("json");
@@ -919,6 +942,33 @@ mod tests {
         let at = args.iter().position(|arg| arg == "--mcp-config").expect("mcp");
         let mcp: Value = serde_json::from_str(&args[at + 1]).expect("json");
         assert_eq!(mcp["mcpServers"]["crew"]["timeout"], 3_900_000, "{mcp}");
+        assert_eq!(mcp["mcpServers"]["crew"]["alwaysLoad"], true, "{mcp}");
+        let terminal: Value = serde_json::from_str(&claude_mcp_config("/app/crewd", &["--mcp".into()], false)).expect("json");
+        assert!(terminal["mcpServers"]["crew"].get("alwaysLoad").is_none(), "{terminal}");
+    }
+
+    /// A child under full autonomy keeps its question tool: Claude Code
+    /// offers it only with a prompt tool to ask through.
+    #[test]
+    fn a_full_child_keeps_its_question_tool() {
+        let spawn = |asks_questions: bool| {
+            build_claude_spawn_args(&ClaudeSpawn {
+                model: None,
+                effort: None,
+                session_id: None,
+                resume: None,
+                replay_user_messages: true,
+                asks_questions,
+                system_prompt: None,
+                autonomy: Autonomy::Full,
+                mcp_config: None,
+            })
+        };
+        let child = spawn(true);
+        assert!(child.contains(&"--dangerously-skip-permissions".to_string()), "{child:?}");
+        let at = child.iter().position(|arg| arg == "--permission-prompt-tool").expect("a prompt tool");
+        assert_eq!(child[at + 1], "stdio");
+        assert!(!spawn(false).contains(&"--permission-prompt-tool".to_string()));
     }
 
     fn tool_details(lines: &[Value]) -> Vec<Option<ToolDetail>> {

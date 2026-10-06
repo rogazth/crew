@@ -10,9 +10,9 @@
 //! to the user's own servers instead of replacing them. Cursor has no MCP flag
 //! and gets the environment alone, for `crew` from its shell.
 //!
-//! A session handed work by `create_worktree` starts on it: the task goes in
-//! as the CLI's first prompt, the way each provider takes one on its command
-//! line.
+//! A session handed to the user by `start_session` (owner user) starts on
+//! its prompt: it goes in as the CLI's first prompt, the way each provider
+//! takes one on its command line.
 
 use std::path::Path;
 
@@ -66,7 +66,7 @@ pub fn launch(provider: &str, mut argv: Vec<String>, opening: Option<&str>, link
         // the prompt goes before it, where nothing swallows it. A message
         // after `--` stays last, the flag before the separator.
         ("claude", "claude") => {
-            let mcp = ["--mcp-config".to_string(), claude_mcp_config(link.exe, &mcp_args)];
+            let mcp = ["--mcp-config".to_string(), claude_mcp_config(link.exe, &mcp_args, false)];
             let at = argv.iter().position(|arg| arg == "--").unwrap_or(argv.len());
             argv.splice(at..at, opening.map(String::from).into_iter().chain(mcp));
         }

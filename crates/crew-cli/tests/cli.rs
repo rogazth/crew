@@ -123,21 +123,21 @@ fn crew_speaks_as_the_user_through_daemon_json() {
     let (workspace, bot) = daemon.seed(&folder, "Reviewer");
 
     // From a folder inside the workspace, which is the default workspace.
-    let out = crew(&daemon.dir, &folder.join("src"), &["bots", "list"]);
+    let out = crew(&daemon.dir, &folder.join("src"), &["peers"]);
     assert!(out.status.success(), "{out:?}");
     let table = stdout(&out);
     assert!(table.starts_with("NAME"), "{table}");
     assert!(table.contains("Reviewer") && table.contains(&bot), "{table}");
 
     // The tool's answer as data, under --json.
-    let out = crew(&daemon.dir, &folder, &["bots", "list", "--json"]);
+    let out = crew(&daemon.dir, &folder, &["peers", "--json"]);
     assert!(out.status.success(), "{out:?}");
     let rows: Value = serde_json::from_slice(&out.stdout).expect("json");
     assert_eq!(rows[0]["id"], bot.as_str(), "{rows}");
 
     // Named by id from anywhere.
     let elsewhere = std::env::temp_dir();
-    let out = crew(&daemon.dir, &elsewhere, &["bots", "list", "--json", "--workspace", &workspace]);
+    let out = crew(&daemon.dir, &elsewhere, &["peers", "--json", "--workspace", &workspace]);
     assert!(out.status.success(), "{out:?}");
     let rows: Value = serde_json::from_slice(&out.stdout).expect("json");
     assert_eq!(rows[0]["name"], "Reviewer");
@@ -162,7 +162,7 @@ fn crew_speaks_as_the_user_through_daemon_json() {
     assert!(String::from_utf8_lossy(&out.stderr).starts_with("crew: "), "{out:?}");
 
     // Outside any workspace, a tool that needs one says how to name one.
-    let out = crew(&daemon.dir, &elsewhere, &["bots", "list"]);
+    let out = crew(&daemon.dir, &elsewhere, &["peers"]);
     assert_eq!(out.status.code(), Some(1), "{out:?}");
     assert!(String::from_utf8_lossy(&out.stderr).contains("--workspace"), "{out:?}");
 
@@ -174,7 +174,7 @@ fn crew_says_when_crew_is_not_running() {
     let daemon = Daemon::start("gone");
     let dir = daemon.dir.clone();
     daemon.stop();
-    let out = crew(&dir, &dir, &["bots", "list"]);
+    let out = crew(&dir, &dir, &["peers"]);
     assert_eq!(out.status.code(), Some(3), "{out:?}");
     assert!(String::from_utf8_lossy(&out.stderr).contains("Crew isn't running"), "{out:?}");
     let out = crew(&dir, &dir, &["status"]);

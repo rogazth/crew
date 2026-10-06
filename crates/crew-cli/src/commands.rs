@@ -1,12 +1,12 @@
-//! The tool commands, `crew <group> <verb>`: one for each verb a tool
-//! declares in its own definition ([`crew_core::tools::CliVerb`]), so a tool
-//! added, renamed or merged takes its command with it.
+//! The tool commands, `crew <group> <verb>` and a few of their own
+//! (`crew send`, `crew peers`): one for each verb a tool declares in its own
+//! definition ([`crew_core::tools::CliVerb`]), so a tool added, renamed or
+//! merged takes its command with it.
 //!
 //! Most are built from the tool's own schema, so an argument added to a tool
 //! reaches the CLI with it and `--help` says what the tool says. A few read
-//! better written by hand (`processes logs` follows and greps, `bots send`
-//! takes a name), and those take their flags from `args`; [`shape`] names
-//! them.
+//! better written by hand (`processes logs` follows and greps, `send` takes a
+//! name), and those take their flags from `args`; [`shape`] names them.
 
 use std::process::ExitCode;
 
@@ -27,13 +27,12 @@ pub struct Group {
 }
 
 pub const GROUPS: &[Group] = &[
-    Group { name: "bots", about: "The workspace's bots: list them, write to them, make new ones", aliases: &["bot"] },
+    Group { name: "bots", about: "The workspace's bots: make new ones, rewrite your own instructions", aliases: &["bot"] },
     Group {
         name: "sessions",
-        about: "Provider CLIs you start on a job: start one, wait for its report, read it, give it more",
+        about: "Provider CLIs you start on a job, or hand to the user: start one, read it, stop it",
         aliases: &["session"],
     },
-    Group { name: "worktrees", about: "Hand work to a new session on a branch of its own", aliases: &["worktree", "wt"] },
     Group { name: "messages", about: "A conversation in Crew: search what was said", aliases: &["message"] },
     Group { name: "routines", about: "Standing orders that wake a bot on a schedule, or once", aliases: &["routine"] },
     Group {
@@ -50,7 +49,7 @@ pub enum Shape {
     Schema,
     /// Built from the schema, answered with the process in one line.
     Process,
-    ListBots,
+    ListPeers,
     Send,
     ListProcesses,
     AddProcess,
@@ -61,8 +60,8 @@ pub enum Shape {
 
 /// The commands written by hand, by group and verb; the rest are `Schema`.
 const HAND: &[(&str, &str, Shape)] = &[
-    ("bots", "list", Shape::ListBots),
-    ("bots", "send", Shape::Send),
+    ("peers", "", Shape::ListPeers),
+    ("send", "", Shape::Send),
     ("processes", "list", Shape::ListProcesses),
     ("processes", "add", Shape::AddProcess),
     ("processes", "edit", Shape::EditProcess),
@@ -85,8 +84,24 @@ fn verbs_of(tools: &[Tool], group: &str) -> Vec<(usize, CliVerb)> {
     tools
         .iter()
         .enumerate()
-        .flat_map(|(index, tool)| tool.cli.iter().filter(|verb| verb.group == group).map(move |verb| (index, verb.clone())))
+        .flat_map(|(index, tool)| {
+            tool.cli.iter().filter(|verb| verb.group == group && !verb.verb.is_empty()).map(move |verb| (index, verb.clone()))
+        })
         .collect()
+}
+
+/// The commands of their own, `crew <name>`, in no group.
+fn top_level(tools: &[Tool]) -> Vec<(usize, CliVerb)> {
+    tools
+        .iter()
+        .enumerate()
+        .flat_map(|(index, tool)| tool.cli.iter().filter(|verb| verb.verb.is_empty()).map(move |verb| (index, verb.clone())))
+        .collect()
+}
+
+/// Whether `crew <name>` is one of the commands of their own.
+pub fn is_top_level(name: &str) -> bool {
+    top_level(&every_tool()).iter().any(|(_, verb)| verb.group == name)
 }
 
 /// The tool behind `crew <group> <verb>`, and the verb as the tool declared it.
@@ -94,10 +109,20 @@ fn find<'a>(tools: &'a [Tool], group: &str, verb: &str) -> Option<(&'a Tool, &'a
     tools.iter().find_map(|tool| tool.cli.iter().find(|cli| cli.group == group && cli.verb == verb).map(|cli| (tool, cli)))
 }
 
-/// Each group as a clap command, for the root to take.
+/// The commands of their own, then each group, as clap commands for the root
+/// to take.
 pub fn subcommands() -> Vec<Command> {
     let tools = every_tool();
-    GROUPS.iter().enumerate().map(|(order, group)| build_group(group, &tools).display_order(order)).collect()
+    let top = top_level(&tools);
+    let mut commands: Vec<Command> = top
+        .iter()
+        .enumerate()
+        .map(|(order, (index, verb))| build_verb(verb, &tools[*index]).display_order(order))
+        .collect();
+    commands.extend(
+        GROUPS.iter().enumerate().map(|(order, group)| build_group(group, &tools).display_order(top.len() + order)),
+    );
+    commands
 }
 
 fn build_group(group: &Group, tools: &[Tool]) -> Command {
@@ -118,7 +143,8 @@ fn build_verb(verb: &CliVerb, tool: &Tool) -> Command {
     if !tool.audience.user {
         about.push_str(" From a Crew session only.");
     }
-    let command = Command::new(verb.verb);
+    // A command of its own is named by its group.
+    let command = Command::new(if verb.verb.is_empty() { verb.group } else { verb.verb });
     // The hand-written flags come with their struct's doc as the about, which
     // is for this file's reader; the tool's words are set over it.
     let command = match shape(tool, verb) {
@@ -338,17 +364,26 @@ fn arguments(matches: &ArgMatches, tool: &Tool, verb: &CliVerb) -> Result<Value,
     Ok(Value::Object(out))
 }
 
+/// `crew <name> …`, a command of its own.
+pub fn run_top(ctx: &Ctx, name: &str, matches: &ArgMatches) -> Result<ExitCode, CliError> {
+    run_verb(ctx, name, "", matches)
+}
+
 /// `crew <group> <verb> …`, once clap has matched a group.
 pub fn run(ctx: &Ctx, group: &str, matches: &ArgMatches) -> Result<ExitCode, CliError> {
     let Some((name, matches)) = matches.subcommand() else {
         return Err(CliError::Usage(format!("crew {group} needs a command: `crew {group} --help`")));
     };
+    run_verb(ctx, group, name, matches)
+}
+
+fn run_verb(ctx: &Ctx, group: &str, name: &str, matches: &ArgMatches) -> Result<ExitCode, CliError> {
     let tools = every_tool();
     let (tool, verb) = find(&tools, group, name).ok_or_else(|| CliError::Usage(format!("No command {group} {name}")))?;
     let parsed = |error: clap::Error| CliError::Usage(error.to_string());
     let shape = shape(tool, verb);
     match shape {
-        Shape::ListBots => bots::list(ctx),
+        Shape::ListPeers => bots::peers(ctx),
         Shape::ListTabs => bots::tabs(ctx),
         Shape::ListProcesses => processes::ps(ctx),
         Shape::Send => bots::send(ctx, &SendArgs::from_arg_matches(matches).map_err(parsed)?),
@@ -407,7 +442,17 @@ mod tests {
         for tool in &tools {
             assert!(!tool.cli.is_empty(), "{} has no command: give it a cli verb", tool.name);
             for verb in &tool.cli {
-                assert!(GROUPS.iter().any(|group| group.name == verb.group), "{}: no group {}", tool.name, verb.group);
+                assert!(
+                    verb.verb.is_empty() || GROUPS.iter().any(|group| group.name == verb.group),
+                    "{}: no group {}",
+                    tool.name,
+                    verb.group
+                );
+                assert!(
+                    !verb.verb.is_empty() || !GROUPS.iter().any(|group| group.name == verb.group),
+                    "crew {} is a group and a command of its own",
+                    verb.group
+                );
                 assert!(!seen.contains(&(verb.group, verb.verb)), "crew {} {} is taken twice", verb.group, verb.verb);
                 seen.push((verb.group, verb.verb));
                 if let Some((name, value)) = verb.sets {
@@ -429,6 +474,10 @@ mod tests {
         }
         assert_eq!((find("processes", "add").1.name, find("processes", "edit").1.name), ("save_process", "save_process"));
         assert_eq!((find("tabs", "console").1.name, find("tabs", "network").1.name), ("browser_activity", "browser_activity"));
+        assert_eq!((find("send", "").1.name, find("peers", "").1.name), ("send_message", "list_peers"));
+        for gone in ["worktrees"] {
+            assert!(!GROUPS.iter().any(|group| group.name == gone), "{gone}");
+        }
     }
 
     /// A merged tool's verb sends the action it stands for, and offers only
@@ -465,10 +514,26 @@ mod tests {
 
     #[test]
     fn a_rest_positional_joins_its_words() {
-        let (group, verb, matches) = parse(&["bots", "continue", "run", "the", "-e2e"]);
-        assert_eq!((group.as_str(), verb.as_str()), ("bots", "continue"));
-        let (verb, tool) = find("bots", "continue");
-        assert_eq!(arguments(&matches, &tool, &verb).expect("args"), json!({ "text": "run the -e2e" }));
+        let (group, verb, matches) = parse(&["sessions", "start", "--provider", "codex", "run", "the", "-e2e"]);
+        assert_eq!((group.as_str(), verb.as_str()), ("sessions", "start"));
+        let (verb, tool) = find("sessions", "start");
+        assert_eq!(arguments(&matches, &tool, &verb).expect("args"), json!({ "prompt": "run the -e2e", "provider": "codex" }));
+        let (_, _, matches) = parse(&["sessions", "start", "--wait", "--owner", "user", "--", "go"]);
+        assert_eq!(arguments(&matches, &tool, &verb).expect("args"), json!({ "prompt": "go", "wait": true, "owner": "user" }));
+    }
+
+    /// `crew send` and `crew peers` are commands of their own, beside the groups.
+    #[test]
+    fn send_and_peers_are_commands_of_their_own() {
+        let matches = root().try_get_matches_from(["crew", "peers", "--json"]).expect("peers");
+        assert_eq!(matches.subcommand_name(), Some("peers"));
+        let matches = root().try_get_matches_from(["crew", "send", "Reviewer", "hi"]).expect("send");
+        assert_eq!(matches.subcommand_name(), Some("send"));
+        assert!(is_top_level("send") && is_top_level("peers") && !is_top_level("sessions"));
+        for gone in [&["bots", "continue"][..], &["bots", "send"], &["bots", "list"], &["sessions", "wait"], &["sessions", "list"], &["worktrees", "new"]] {
+            let args = std::iter::once("crew").chain(gone.iter().copied()).chain(["x"]);
+            assert!(root().try_get_matches_from(args).is_err(), "crew {gone:?} is still there");
+        }
     }
 
     #[test]
@@ -516,9 +581,9 @@ mod tests {
 
     #[test]
     fn a_tool_only_a_session_can_run_says_so() {
-        let help = root().find_subcommand_mut("bots").expect("bots").find_subcommand_mut("continue").expect("continue").render_help().to_string();
+        let help = root().find_subcommand_mut("bots").expect("bots").find_subcommand_mut("create").expect("create").render_help().to_string();
         assert!(help.contains("From a Crew session only."), "{help}");
-        let help = root().find_subcommand_mut("bots").expect("bots").find_subcommand_mut("send").expect("send").render_help().to_string();
+        let help = root().find_subcommand_mut("send").expect("send").render_help().to_string();
         assert!(!help.contains("session only"), "{help}");
     }
 }

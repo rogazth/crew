@@ -1,6 +1,7 @@
 // Drives the session lifecycle end to end against a real crewd and the real
 // provider CLIs: a parent starts sessions, waits on them, reads them, gives
-// them more, answers them, stops them; the daemon restarts under them.
+// them more (send_message), answers their questions, stops them; the daemon
+// restarts under them.
 //
 //   cargo build -p crewd -p crew-cli && node scripts/drive-sessions.mjs
 //   PROVIDERS=codex,claude SCENARIOS=a,e node scripts/drive-sessions.mjs
@@ -30,7 +31,7 @@ const MODELS = {
 const BINARIES = { claude: "claude", codex: "codex", opencode: "opencode", cursor: "cursor-agent" };
 const ALL = ["claude", "codex", "opencode", "cursor"];
 const PROVIDERS = (process.env.PROVIDERS ?? ALL.join(",")).split(",").filter(Boolean);
-const SCENARIOS = (process.env.SCENARIOS ?? "a,b,c,d,e,f,g,h,i,j,k,m,s").split(",").filter(Boolean);
+const SCENARIOS = (process.env.SCENARIOS ?? "a,b,w,c,d,e,f,q,p,g,h,i,j,k,m,s").split(",").filter(Boolean);
 const KEEP = process.env.KEEP === "1";
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -213,17 +214,61 @@ async function setAutonomy(row, autonomy) {
   });
 }
 
-/** Waits on one session until an event comes, up to `seconds` in 60 s calls. */
-async function waitEvent(token, id, seconds = 300, since) {
+/** What the parent last saw of each session, as its cursor. */
+const lastSeen = new Map();
+
+/**
+ * Until the session has an event past `since` (or past what was last seen of
+ * it) and is not working: a turn ended, it stopped to ask, it failed or it
+ * exited. Read from the window's side (`session_get`, `transcript_tail`), so it
+ * marks nothing seen: there is no wait tool any more, a bot is woken and a
+ * terminal reads.
+ */
+async function waitEvent(_token, id, seconds = 300, since) {
+  const from = since ?? lastSeen.get(id) ?? 0;
   const until = Date.now() + seconds * 1000;
-  let cursors = since === undefined ? undefined : { [id]: since };
   while (Date.now() < until) {
-    const out = await must(token, "wait_for_session", { sessions: [id], timeout_s: 60, ...(cursors ? { cursors } : {}) });
-    if (out.result === "event") return out;
-    if (out.result === "nothing-running") return out;
-    cursors = out.cursors;
+    const now = await row(id);
+    if (now.cursor > from && !["starting", "working"].includes(now.status)) {
+      lastSeen.set(id, now.cursor);
+      return { result: "event", sessions: [await describe(now)], cursors: { [id]: now.cursor } };
+    }
+    await sleep(500);
   }
   throw new Error(`no event from ${id} in ${seconds}s`);
+}
+
+/** A session's latest event, as the old wait answered it. */
+async function describe(now) {
+  const tail = await rpc("transcript_tail", { sessionId: now.id, limit: 300 });
+  const blocks = tail.blocks;
+  let report = "";
+  for (let at = blocks.length - 1; at >= 0; at--) {
+    if (blocks[at].role === "user") break;
+    if (blocks[at].role === "assistant" && blocks[at].text.trim()) {
+      report = blocks[at].text.trim();
+      break;
+    }
+  }
+  const approval = [...blocks].reverse().find((block) => block.approval && !block.approval.decided);
+  const question = [...blocks].reverse().find((block) => block.question && !block.question.answers && !block.question.dismissed);
+  const event = { idle: "turn", done: "turn", error: "error", exited: "exited", "needs-input": "needs-input" }[now.status] ?? now.status;
+  const last = blocks[blocks.length - 1];
+  return {
+    id: now.id,
+    status: now.status,
+    event,
+    report,
+    outcome: event === "error" || event === "exited" ? (last?.text ?? "") : "",
+    request:
+      event !== "needs-input"
+        ? undefined
+        : approval
+          ? { kind: "approval", request_id: approval.approval.requestId }
+          : question
+            ? { kind: "question", request_id: question.question.requestId, questions: question.question.questions }
+            : undefined,
+  };
 }
 
 function assert(ok, message) {
@@ -240,17 +285,21 @@ async function start(token, provider, prompt, extra = {}) {
   return out.id;
 }
 
-/** Waits until every named session has had a turn end, collecting the events in the order the waits returned them. */
+/** Waits until every named session has had a turn end, collecting the events in the order they ended. */
 async function waitAll(token, ids, seconds = 600) {
   const until = Date.now() + seconds * 1000;
   const seen = [];
-  let cursors;
-  while (seen.length < ids.length && Date.now() < until) {
-    const out = await must(token, "wait_for_session", { sessions: ids, timeout_s: 60, ...(cursors ? { cursors } : {}) });
-    cursors = out.cursors;
-    if (out.result === "nothing-running" && !out.sessions.some((row) => row.status === "working")) break;
-    if (out.result !== "event") continue;
-    for (const event of out.sessions) seen.push(event);
+  const left = new Set(ids);
+  while (left.size && Date.now() < until) {
+    for (const id of [...left]) {
+      const now = await row(id);
+      if (now.cursor > (lastSeen.get(id) ?? 0) && !["starting", "working"].includes(now.status)) {
+        lastSeen.set(id, now.cursor);
+        seen.push(await describe(now));
+        left.delete(id);
+      }
+    }
+    await sleep(500);
   }
   return seen;
 }
@@ -334,7 +383,7 @@ function cliIn(cwd) {
 
 const scenarios = {
   // The motivating case: a real Claude Code in a terminal hands a job to a
-  // session in a new worktree, waits for it and reads what it did.
+  // session in a new worktree and waits for its report in the same call.
   async a(provider) {
     const shell = await rpc("session_create", {
       workspaceId: workspace.id, kind: "terminal", name: `claude-a-${provider}`, provider: "claude", model: "", description: "", autonomy: "full",
@@ -343,11 +392,10 @@ const scenarios = {
     const out = join(dataDir, `a-${provider}.txt`);
     const job = `Create a file named greeting.txt containing exactly the word ${secret}, and commit it to git with the message 'add greeting'. Report the commit hash.`;
     const prompt = [
-      "You are testing Crew's session tools. They are in the crew MCP server, in your tool list as mcp__crew__<name> (mcp__crew__start_session, mcp__crew__wait_for_session, mcp__crew__read_session). If you do not see them, call one by name once before deciding they are unavailable. Do exactly this, nothing else:",
-      `1. start_session with provider "${provider}", model "${MODELS[provider]}", worktree "new", name "a-${provider}" and prompt: ${JSON.stringify(job)}`,
-      "2. wait_for_session on the id it returned, with timeout_s 60. If the result is not \"event\", call it again, until it is.",
-      "3. read_session on that id.",
-      `4. Write the report it gave (the report field of the wait's answer) into the file ${out}, then stop.`,
+      "You are testing Crew's session tools. They are in the crew MCP server, in your tool list as mcp__crew__<name> (mcp__crew__start_session, mcp__crew__read_session). If you do not see them, call one by name once before deciding they are unavailable. Do exactly this, nothing else:",
+      `1. start_session with provider "${provider}", model "${MODELS[provider]}", worktree "new", name "a-${provider}", wait true, and prompt: ${JSON.stringify(job)}`,
+      "2. If its status is not \"reported\", call read_session on its id every 30 seconds until the transcript shows the turn ended.",
+      `3. Write the report it gave (the report field of start_session's answer, or its last message) into the file ${out}, then stop.`,
     ].join("\n");
     await rpc("pty_spawn", {
       id: shell.id, cwd: repo, cols: 120, rows: 40, session: shell.id,
@@ -366,13 +414,12 @@ const scenarios = {
     const logged = execFileSync("git", ["log", "--oneline", "-1"], { cwd: child.worktree }).toString();
     assert(/add greeting/.test(logged), `the last commit is ${logged}`);
     assert(execFileSync("git", ["status", "--porcelain"], { cwd: repo }).toString().trim() === "", "the parent's checkout was touched");
-    const listed = await must(userToken(), "list_sessions", { mine: false });
-    const mine = listed.find((s) => s.id === child.id);
-    assert(mine && !mine.unread, "the parent never read the child's last turn");
+    const listed = await must(userToken(), "list_peers", {});
+    assert(listed.some((s) => s.id === child.id && s.kind === "session"), `list_peers: ${JSON.stringify(listed)}`);
     return `report: ${readFileSync(out, "utf8").trim().slice(0, 80)}`;
   },
 
-  // A bot starts a session and gets its result.
+  // A bot starts a session and ends its turn; the report wakes it.
   async b(provider) {
     const bot = await rpc("session_create", {
       workspaceId: workspace.id, kind: "bot", name: `Boss ${provider}`, provider: "claude", model: MODELS.claude,
@@ -380,13 +427,14 @@ const scenarios = {
     });
     await rpc("turn_start", {
       sessionId: bot.id, cwd: repo,
-      text: `Use Crew's session tools: start_session with provider "${provider}", model "${MODELS[provider]}" and prompt "What is 17 times 23? Reply with the number only." Then wait for it with wait_for_session (timeout_s 60; call again until the result is an event) and tell me the number it reported, written as RESULT: <number>.`,
+      text: `Use Crew's start_session with provider "${provider}", model "${MODELS[provider]}" and prompt "What is 17 times 23? Reply with the number only." Do not wait for it: end your turn right after starting it. Its report wakes you; then tell me the number it reported, written as RESULT: <number>.`,
     });
     const until = Date.now() + 15 * 60_000;
     let text = "";
+    let tail;
     while (Date.now() < until) {
       await sleep(3000);
-      const tail = await rpc("transcript_tail", { sessionId: bot.id, limit: 200 });
+      tail = await rpc("transcript_tail", { sessionId: bot.id, limit: 200 });
       text = tail.blocks.filter((b) => b.role === "assistant").map((b) => b.text).join("\n");
       if (!tail.working && /RESULT:\s*\**391/.test(text)) break;
     }
@@ -394,10 +442,38 @@ const scenarios = {
     const sessions = await rpc("session_list", { workspaceId: workspace.id });
     const child = sessions.find((s) => s.kind === "child" && s.parentId === bot.id);
     assert(child && child.provider === provider, "no child of the bot's");
-    return "RESULT: 391";
+    const woken = tail.blocks.find((b) => b.role === "user" && b.fromBot?.id === child.id);
+    assert(woken, "the report never came in as a turn of its own");
+    return `woken by its report; RESULT: 391`;
   },
 
-  // One parent, children of every provider, the first to finish answers.
+  // A bot starts a session with wait and gets the report in the same turn;
+  // the report does not wake it a second time.
+  async w(provider) {
+    const bot = await rpc("session_create", {
+      workspaceId: workspace.id, kind: "bot", name: `Waiter ${provider}`, provider: "claude", model: MODELS.claude,
+      description: "You hand arithmetic to other CLIs and pass on what they find.", autonomy: "full",
+    });
+    await rpc("turn_start", {
+      sessionId: bot.id, cwd: repo,
+      text: `Use Crew's start_session with provider "${provider}", model "${MODELS[provider]}", wait true and prompt "What is 19 times 21? Reply with the number only." Then tell me the number it reported, written as RESULT: <number>.`,
+    });
+    const until = Date.now() + 15 * 60_000;
+    let tail;
+    while (Date.now() < until) {
+      await sleep(3000);
+      tail = await rpc("transcript_tail", { sessionId: bot.id, limit: 200 });
+      if (!tail.working && tail.blocks.some((b) => b.role === "assistant" && /RESULT:\s*\**399/.test(b.text))) break;
+    }
+    assert(tail.blocks.some((b) => b.role === "assistant" && /RESULT:\s*\**399/.test(b.text)), `the bot said: ${JSON.stringify(tail.blocks.slice(-3))}`);
+    await sleep(5000);
+    tail = await rpc("transcript_tail", { sessionId: bot.id, limit: 200 });
+    const turns = tail.blocks.filter((b) => b.role === "user");
+    assert(turns.length === 1 && !turns.some((b) => b.fromBot), `the report woke it as well: ${turns.length} turns`);
+    return "reported within the turn; not woken again";
+  },
+
+  // One parent, children of every provider, each reports.
   async c() {
     const shell = await terminal("c-parent");
     const words = { claude: "ALPHA", codex: "BRAVO", opencode: "CHARLIE", cursor: "DELTA" };
@@ -415,25 +491,16 @@ const scenarios = {
     return `order: ${order.join(" → ")}`;
   },
 
-  // A wait times out and carries on with its cursor; a turn that starts and
-  // ends between two waits is still found.
+  // A wait that runs out says the child is still running and leaves it be.
   async d(provider) {
     const shell = await terminal(`d-${provider}`);
-    const id = await start(shell.token, provider, "Run the shell command `sleep 25`, then reply with the word DONE.");
-    const early = await must(shell.token, "wait_for_session", { sessions: [id], timeout_s: 5 });
-    assert(early.result === "timed-out", `the first wait answered ${early.result}`);
-    const first = await waitEvent(shell.token, id, 600, early.cursors[id]);
+    const out = await must(shell.token, "start_session", {
+      provider, model: MODELS[provider], prompt: "Run the shell command `sleep 25`, then reply with the word DONE.", wait: true, timeout_s: 5,
+    });
+    assert(out.status === "running" && /read_session/.test(out.note), `the first wait answered ${JSON.stringify(out)}`);
+    const first = await waitEvent(shell.token, out.id, 600);
     assert(/DONE/i.test(first.sessions[0].report), `turn 1 reported ${first.sessions[0].report}`);
-    const cursor = first.cursors[id];
-    await must(shell.token, "send_to_session", { session: id, text: "Reply with the word AGAIN." });
-    await untilStatus(id, ["idle", "error"]);
-    const between = await must(shell.token, "wait_for_session", { sessions: [id], timeout_s: 5, cursors: { [id]: cursor } });
-    assert(between.result === "event" && /AGAIN/i.test(between.sessions[0].report), `the turn between waits was lost: ${JSON.stringify(between)}`);
-    await must(shell.token, "send_to_session", { session: id, text: "Reply with the word THIRD." });
-    await untilStatus(id, ["idle", "error"]);
-    const unsaid = await must(shell.token, "wait_for_session", { sessions: [id], timeout_s: 5 });
-    assert(unsaid.result === "event" && /THIRD/i.test(unsaid.sessions[0].report), `a wait without a cursor lost the turn: ${JSON.stringify(unsaid)}`);
-    return "timed-out → event; between-waits turn kept, with and without a cursor";
+    return "running after 5 s, then reported";
   },
 
   // A message queues behind a busy turn; an idle session takes a new turn in
@@ -442,15 +509,15 @@ const scenarios = {
     const shell = await terminal(`e-${provider}`);
     const code = word("NUMBAT");
     const id = await start(shell.token, provider, `Remember this code word: ${code}. Then run the shell command \`sleep 12\` and reply with the word READY.`);
-    const queued = await must(shell.token, "send_to_session", { session: id, text: "What code word did I give you at the start? Reply with the code word only." });
-    assert(queued.queued === true, `the busy session took it at once: ${JSON.stringify(queued)}`);
+    const queued = await must(shell.token, "send_message", { to: id, text: "What code word did I give you at the start? Reply with the code word only." });
+    assert(queued.delivery === "queued", `the busy session took it at once: ${JSON.stringify(queued)}`);
     const first = await waitEvent(shell.token, id);
     assert(/READY/i.test(first.sessions[0].report), `turn 1 reported ${first.sessions[0].report}`);
     const second = await waitEvent(shell.token, id, 600, first.cursors[id]);
     assert(second.sessions[0].report.includes(code), `the queued turn reported ${second.sessions[0].report}`);
     await untilStatus(id, ["idle"]);
-    const idle = await must(shell.token, "send_to_session", { session: id, text: "Say the code word once more, all in lowercase, and nothing else." });
-    assert(idle.delivered === true, `the idle session did not start a turn: ${JSON.stringify(idle)}`);
+    const idle = await must(shell.token, "send_message", { to: id, text: "Say the code word once more, all in lowercase, and nothing else." });
+    assert(idle.delivery === "started", `the idle session did not start a turn: ${JSON.stringify(idle)}`);
     const third = await waitEvent(shell.token, id);
     assert(third.sessions[0].report.includes(code.toLowerCase()), `turn 3 reported ${third.sessions[0].report}`);
     return `queued, then remembered ${code} across turns`;
@@ -463,18 +530,19 @@ const scenarios = {
     const shell = await terminal(`s-${provider}`);
     const id = await start(shell.token, provider, "Run the shell command `sleep 20` in the foreground and wait for it to finish, then reply with the word ALPHA.");
     await untilTool(shell.token, id);
-    const steer = await tool(shell.token, "send_to_session", { session: id, text: "When you reply, add the word BRAVO right after ALPHA.", mode: "steer" });
+    const steer = await tool(shell.token, "send_message", { to: id, text: "When you reply, add the word BRAVO right after ALPHA.", steer: true });
     if (provider !== "claude" && provider !== "codex") {
-      assert(steer.ok && steer.value.steered === false && steer.value.queued === true, `steer was not queued: ${steer.text}`);
+      assert(steer.ok && steer.value.delivery === "queued" && /Not steered/.test(steer.value.note), `steer was not queued: ${steer.text}`);
       await waitEvent(shell.token, id);
       return "n/a: it takes nothing mid-turn, so the steer is queued and says so";
     }
-    assert(steer.ok && steer.value.steered === true, `not steered: ${steer.text}`);
+    assert(steer.ok && steer.value.delivery === "steered", `not steered: ${steer.text}`);
     const out = await waitEvent(shell.token, id);
     const report = out.sessions[0].report;
     assert(/ALPHA/.test(report) && /BRAVO/.test(report), `the turn did not take the steer: ${report}`);
-    const after = await must(shell.token, "wait_for_session", { sessions: [id], timeout_s: 3 });
-    assert(after.result === "nothing-running", `the steer became a turn of its own: ${JSON.stringify(after)}`);
+    await sleep(3000);
+    const after = await row(id);
+    assert(after.status === "idle" && after.cursor === out.cursors[id], `the steer became a turn of its own: ${JSON.stringify(after)}`);
     return `one turn: ${report.slice(0, 60)}`;
   },
 
@@ -487,28 +555,26 @@ const scenarios = {
     const id = await start(
       shell.token,
       provider,
-      `Remember the code word ${secret}. Call Crew's list_agents tool (in the crew MCP server), then reply with the word FOUND followed by how many bots it listed, and nothing else.`,
+      `Remember the code word ${secret}. Call Crew's list_peers tool (in the crew MCP server), then reply with the word FOUND followed by how many peers it listed, and nothing else.`,
       { autonomy: "ask" },
     );
     const first = await waitEvent(shell.token, id);
     assert(/FOUND/.test(first.sessions[0].report), `turn 1 reported ${first.sessions[0].report}`);
     const page = await rpc("transcript_tail", { sessionId: id });
     const titles = page.blocks.filter((block) => block.tool).map((block) => block.tool.title);
-    assert(titles.some((title) => /^Crew list agents/.test(title)), `no direct Crew tool call in the transcript: ${JSON.stringify(titles)}`);
+    assert(titles.some((title) => /^Crew list peers/.test(title)), `no direct Crew tool call in the transcript: ${JSON.stringify(titles)}`);
     assert(!titles.some((title) => /^Crew (call|find) tool/.test(title)), `a gateway call: ${JSON.stringify(titles)}`);
     const cards = page.blocks.filter((block) => block.approval);
     assert(cards.length === 0, `Crew's tool asked for approval: ${JSON.stringify(cards.map((block) => block.text))}`);
     await untilStatus(id, ["idle"]);
-    await must(shell.token, "send_to_session", { session: id, text: "What code word did I give you at the start? Reply with the code word only." });
+    await must(shell.token, "send_message", { to: id, text: "What code word did I give you at the start? Reply with the code word only." });
     const second = await waitEvent(shell.token, id, 600, first.cursors[id]);
     assert(second.sessions[0].report.includes(secret), `the resumed turn reported ${second.sessions[0].report}`);
-    return `called list_agents directly, no card; remembered ${secret} on resume`;
+    return `called list_peers directly, no card; remembered ${secret} on resume`;
   },
 
-  // The child asks for approval; the parent answers. Codex works in its
-  // workspace without asking, so its command reaches outside it. Cursor asks
-  // only under a config that does not run everything: CURSOR_CONFIG_DIR at a
-  // copy of ~/.cursor with "approvalMode": "allowlist".
+  // The child asks for approval: the user's alone. The parent sees it as
+  // waiting_for_user, a message to it waits, and the window allows it.
   async f(provider) {
     if (provider === "opencode") return "n/a: headless, it has no channel to ask Crew for approval";
     if (provider === "cursor" && !process.env.CURSOR_CONFIG_DIR) {
@@ -524,32 +590,66 @@ const scenarios = {
     const shell = await terminal(`f-full-${provider}`);
     const id = await start(shell.token, provider, job("approved.txt"), { autonomy: "ask" });
     const asked = await waitEvent(shell.token, id);
-    assert(asked.sessions[0].event === "needs-input", `it never asked: ${JSON.stringify(asked)}`);
-    const request = asked.sessions[0].request.request_id;
-    const sent = await tool(shell.token, "send_to_session", { session: id, text: "hi" });
-    assert(!sent.ok && /respond_to_session/.test(sent.text), "a message went in over the question");
-    await must(shell.token, "respond_to_session", { session: id, request_id: request, decision: "allow" });
+    assert(asked.sessions[0].event === "needs-input" && asked.sessions[0].request?.kind === "approval", `it never asked: ${JSON.stringify(asked)}`);
+    const peers = await must(shell.token, "list_peers", {});
+    assert(peers.find((p) => p.id === id)?.status === "waiting_for_user", `list_peers: ${JSON.stringify(peers)}`);
+    const sent = await must(shell.token, "send_message", { to: id, text: "Once it is done, also say OK." });
+    assert(sent.delivery === "queued", `a message went in over the approval: ${JSON.stringify(sent)}`);
+    await rpc("turn_respond", { sessionId: id, requestId: asked.sessions[0].request.request_id, decision: "allow" });
     const done = await waitEvent(shell.token, id);
     assert(done.sessions[0].event === "turn", `after allowing: ${JSON.stringify(done)}`);
     assert(existsSync(target("approved.txt")), "the allowed command did not run");
-    // An ask parent cannot allow, only deny.
-    const careful = await terminal(`f-ask-${provider}`);
-    await setAutonomy(careful, "ask");
-    const other = await start(careful.token, provider, job("denied.txt"));
-    const again = await waitEvent(careful.token, other);
-    assert(again.sessions[0].event === "needs-input", `it never asked: ${JSON.stringify(again)}`);
-    const refused = await tool(careful.token, "respond_to_session", { session: other, request_id: again.sessions[0].request.request_id, decision: "allow" });
-    assert(!refused.ok && /cannot allow/.test(refused.text), `an ask parent allowed: ${refused.text}`);
-    await must(careful.token, "respond_to_session", { session: other, request_id: again.sessions[0].request.request_id, decision: "deny" });
-    let settled = await waitEvent(careful.token, other);
-    while (settled.sessions[0].event === "needs-input") {
-      await must(careful.token, "respond_to_session", { session: other, request_id: settled.sessions[0].request.request_id, decision: "deny" });
-      settled = await waitEvent(careful.token, other);
-    }
-    assert(settled.sessions[0].event === "turn", JSON.stringify(settled));
-    assert(!existsSync(target("denied.txt")), "a denied command ran");
     rmSync(target("approved.txt"), { force: true });
-    return "allowed by a full parent; an ask parent was refused allow and denied";
+    await waitEvent(shell.token, id);
+    return "waiting_for_user; message queued; allowed by the user";
+  },
+
+  // The child asks a question with its question tool: a wait returns it
+  // early, and the parent answers with send_message.
+  async q(provider) {
+    if (provider !== "claude" && provider !== "codex") return "n/a: its question tool is not offered headless";
+    const shell = await terminal(`q-${provider}`);
+    const ask = provider === "claude" ? "your AskUserQuestion tool" : "your request_user_input tool";
+    const out = await must(shell.token, "start_session", {
+      provider, model: MODELS[provider], wait: true, timeout_s: 300,
+      prompt: `Use ${ask} to ask me which color I prefer, with exactly the options Red and Blue. Do not guess. Then reply with the word COLOR followed by my answer.`,
+    });
+    assert(out.status === "question", `it did not stop on a question: ${JSON.stringify(out)}`);
+    const answered = await must(shell.token, "send_message", { to: out.id, text: "Blue" });
+    assert(answered.delivery === "answered", `not answered: ${JSON.stringify(answered)}`);
+    const done = await waitEvent(shell.token, out.id, 300);
+    assert(/BLUE/i.test(done.sessions[0].report), `it reported ${done.sessions[0].report}`);
+    return `question: ${out.questions?.[0]?.question?.slice(0, 50)} → ${done.sessions[0].report.slice(0, 40)}`;
+  },
+
+  // A bot's child asks a question: the question wakes the bot, which
+  // answers it with send_message; the report wakes it again.
+  async p(provider) {
+    if (provider !== "claude" && provider !== "codex") return "n/a: its question tool is not offered headless";
+    const bot = await rpc("session_create", {
+      workspaceId: workspace.id, kind: "bot", name: `Asker ${provider}`, provider: "claude", model: MODELS.claude,
+      description: "You start sessions for the user. When one of them asks which color to use, the answer is Blue.", autonomy: "full",
+    });
+    const ask = provider === "claude" ? "your AskUserQuestion tool" : "your request_user_input tool";
+    await rpc("turn_start", {
+      sessionId: bot.id, cwd: repo,
+      text: `Use Crew's start_session with provider "${provider}", model "${MODELS[provider]}" and this prompt: "Use ${ask} to ask which color to use, with exactly the options Red and Blue. Do not guess. Then reply with the word COLOR followed by the answer." Do not wait for it: end your turn. If it asks you something, answer it with send_message. When its report arrives, tell me what it reported, as RESULT: <report>.`,
+    });
+    const until = Date.now() + 10 * 60_000;
+    let tail;
+    while (Date.now() < until) {
+      await sleep(3000);
+      tail = await rpc("transcript_tail", { sessionId: bot.id, limit: 300 });
+      if (!tail.working && tail.blocks.some((b) => b.role === "assistant" && /COLOR\W*Blue/i.test(b.text))) break;
+    }
+    const child = (await rpc("session_list", { workspaceId: workspace.id })).find((s) => s.kind === "child" && s.parentId === bot.id);
+    assert(child, "no child");
+    const letters = tail.blocks.filter((b) => b.role === "user" && b.fromBot?.id === child.id);
+    assert(letters.length >= 2, `the bot was not woken by the question and the report: ${letters.length} letters`);
+    const answered = tail.blocks.find((b) => b.tool?.detail?.kind === "message" && b.tool.detail.to === child.id);
+    assert(answered, "the bot did not answer with send_message");
+    assert(tail.blocks.some((b) => b.role === "assistant" && /COLOR\W*Blue/i.test(b.text)), `the bot said: ${JSON.stringify(tail.blocks.slice(-2))}`);
+    return `question woke it; answered "${answered.tool.detail.text.slice(0, 20)}"; report woke it`;
   },
 
   // Stopped mid-turn, the transcript stays.
@@ -562,10 +662,9 @@ const scenarios = {
     const read = await must(shell.token, "read_session", { session: id, include_tools: true });
     assert(/sleep 90/.test(read.text) && /Stopped by/.test(read.text), read.text);
     assert(!/\[assistant\]\W*DONE\W*$/m.test(read.text), "the turn had finished before the stop");
-    const sent = await tool(shell.token, "send_to_session", { session: id, text: "more" });
+    const sent = await tool(shell.token, "send_message", { to: id, text: "more" });
     assert(!sent.ok && /exited/.test(sent.text), "an exited session took a message");
-    const waited = await must(shell.token, "wait_for_session", { sessions: [id], timeout_s: 5 });
-    assert(waited.sessions[0].event === "exited" || waited.result === "nothing-running", JSON.stringify(waited));
+    assert((await row(id)).status === "exited", "not exited");
     return "exited; transcript kept and readable";
   },
 
@@ -579,7 +678,7 @@ const scenarios = {
     const childToken = readFileSync(file, "utf8").trim();
     const listed = await bridge(childToken, "tools/list");
     const names = listed.result.tools.map((t) => t.name);
-    assert(names.includes("list_agents") && !names.includes("start_session"), `a child is listed: ${names}`);
+    assert(names.includes("send_message") && names.includes("list_peers") && !names.includes("start_session"), `a child is listed: ${names}`);
     const call = await tool(childToken, "start_session", { provider: "claude", prompt: "x" });
     assert(!call.ok && /Unknown tool/.test(call.text), `a child ran start_session: ${call.text}`);
     // The cap: three more make four live; a fifth is refused.
@@ -596,20 +695,18 @@ const scenarios = {
     const stranger = await terminal(`h-stranger-${provider}`);
     for (const [name, args] of [
       ["read_session", { session: id }],
-      ["send_to_session", { session: id, text: "hi" }],
+      ["send_message", { to: id, text: "hi" }],
       ["stop_session", { session: id }],
-      ["respond_to_session", { session: id, request_id: 1, decision: "deny" }],
-      ["wait_for_session", { sessions: [id], timeout_s: 1 }],
     ]) {
       const out = await tool(stranger.token, name, args);
       assert(!out.ok && /not by you/.test(out.text), `${name} as a stranger: ${out.text}`);
     }
     await waitAll(shell.token, more);
     for (const other of [id, ...more]) await must(shell.token, "stop_session", { session: other });
-    return `child tools: ${names.join(", ")}; 5th refused; full refused; stranger refused ×5`;
+    return `child tools: ${names.join(", ")}; 5th refused; full refused; stranger refused ×3`;
   },
 
-  // The CLI dies mid-turn: an error, and the wait returns it.
+  // The CLI dies mid-turn: an error.
   async i(provider) {
     const shell = await terminal(`i-${provider}`);
     const id = await start(shell.token, provider, "Run the shell command `sleep 60`, then reply with the word DONE.", { worktree: "new" });
@@ -630,33 +727,36 @@ const scenarios = {
     assert(kept.sessions[0].event === "turn", `the first session's turn failed before any restart: ${JSON.stringify(kept.sessions[0])}`);
     const busy = await start(shell.token, provider, "Run the shell command `sleep 20`, then reply with the word RESTARTED.");
     await untilTool(shell.token, busy);
-    const before = await must(shell.token, "wait_for_session", { sessions: [busy], timeout_s: 1 });
+    const before = (await row(busy)).cursor;
     await stopDaemon();
     await startDaemon();
     // The terminal's process went with the daemon; the window starts it again
     // and it gets a new token for the same session.
     const again = await reopen(shell);
-    const listed = await must(again.token, "list_sessions", {});
+    const listed = await must(again.token, "list_peers", {});
     assert(listed.some((s) => s.id === idle && s.status === "idle"), `the idle one: ${JSON.stringify(listed)}`);
     const read = await must(again.token, "read_session", { session: idle });
     assert(/KEPT/i.test(read.text), "the idle one's transcript is gone");
     assert(/KEPT/i.test(kept.sessions[0].report), "");
-    const out = await waitEvent(again.token, busy, 600, before.cursors[busy]);
+    const out = await waitEvent(again.token, busy, 600, before);
     assert(out.sessions[0].event === "turn" && /RESTARTED/i.test(out.sessions[0].report), JSON.stringify(out));
     const whole = await must(again.token, "read_session", { session: busy });
     assert(/Crew restarted mid-turn/.test(whole.text), whole.text);
     return "idle kept; mid-turn resumed and reported";
   },
 
-  // Nothing that was there before broke.
+  // A handoff, peers, processes.
   async k() {
     const shell = await terminal("k-parent");
-    const bots = await must(shell.token, "list_agents", {});
-    assert(Array.isArray(bots), "list_agents");
-    const tree = await must(shell.token, "create_worktree", { branch: word("k-branch-"), task: "Nothing to do; this is a test." });
-    assert(existsSync(tree.worktree), `create_worktree made no worktree: ${JSON.stringify(tree)}`);
-    const made = await row(tree.session.id);
-    assert(made.kind === "terminal" && made.worktree === tree.worktree, JSON.stringify(made));
+    const peers = await must(shell.token, "list_peers", {});
+    assert(Array.isArray(peers), "list_peers");
+    const branch = word("k-branch-");
+    const handed = await must(shell.token, "start_session", { owner: "user", worktree: branch, prompt: "Nothing to do; this is a test." });
+    assert(handed.owner === "user" && handed.branch === branch && existsSync(handed.worktree), `no handoff: ${JSON.stringify(handed)}`);
+    const made = await row(handed.id);
+    assert(made.kind === "terminal" && made.worktree === handed.worktree && made.handedOffBy === shell.id && !made.parentId, JSON.stringify(made));
+    const waited = await tool(shell.token, "start_session", { owner: "user", wait: true, prompt: "x" });
+    assert(!waited.ok && /nothing to wait for/.test(waited.text), waited.text);
     await must(shell.token, "save_process", { name: "k-proc", command: "echo READY-K; sleep 300" });
     await must(shell.token, "control_process", { process: "k-proc", action: "start" });
     const ready = await must(shell.token, "wait_for_log", { process: "k-proc", pattern: "READY-K", timeout_s: 30 });
@@ -664,7 +764,7 @@ const scenarios = {
     const logs = await must(shell.token, "read_logs", { process: "k-proc" });
     assert(/READY-K/.test(logs.text), logs.text);
     await must(shell.token, "control_process", { process: "k-proc", action: "stop" });
-    return "list_agents, create_worktree, terminal MCP, processes";
+    return `handed off ${made.name} on ${branch} (handedOffBy ${made.handedOffBy.slice(0, 8)}); list_peers; processes`;
   },
 };
 

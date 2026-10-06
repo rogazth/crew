@@ -453,7 +453,6 @@ struct AgentFanout {
 struct ToolDispatch {
     store: crew_core::store::Store,
     transcripts: crew_core::transcript::TranscriptHub,
-    turns: TurnHost,
     scheduler: Scheduler,
     hub: Arc<Hub>,
     /// Shared with `turns`, so what is registered here is also named on the
@@ -462,13 +461,6 @@ struct ToolDispatch {
     exit: std_mpsc::Sender<()>,
 }
 
-impl ToolDispatch {
-    /// Hand the target its next letter. A busy bot refuses, and the letter
-    /// waits in the box for the drain that runs when its turn ends.
-    fn deliver(&self, target: &crew_core::session::Session) -> bool {
-        self.turns.deliver_to(target)
-    }
-}
 
 impl ToolHost for ToolDispatch {
     fn resolve(&self, bearer: &Bearer, workspace: Option<&str>) -> Result<Caller, String> {
@@ -490,19 +482,17 @@ impl ToolHost for ToolDispatch {
                 "session-created",
                 SessionCreated {
                     session: proto_session(created),
-                    // The only terminal a tool makes is one `create_worktree`
-                    // handed work: the window opens its tab and starts its CLI.
+                    // A terminal a tool makes is a handoff: the window opens
+                    // its tab and starts its CLI.
                     open: created.kind == "terminal",
                 },
             );
         };
-        let deliver = |target: &crew_core::session::Session| self.deliver(target);
         let host = tools::Host {
             store: &self.store,
             transcripts: &self.transcripts,
             on_created: &on_created,
             on_routines: &|| self.scheduler.arm(),
-            deliver: &deliver,
             toolbox: &self.toolbox,
         };
         tools::handle(&host, caller, method, params)
@@ -529,6 +519,7 @@ fn proto_session(row: &crew_core::session::Session) -> proto::Session {
         bot_id: row.bot_id.clone(),
         parent_id: row.parent_id.clone(),
         cursor: row.cursor,
+        handed_off_by: row.handed_off_by.clone(),
     }
 }
 
@@ -579,7 +570,9 @@ pub fn serve_on(config: Config, listen: Listen) -> Result<Handle, String> {
     let children = Arc::new(SessionTools::new(
         turns.clone(),
         Arc::new(move |created: &crew_core::session::Session| {
-            made.emit("session-created", SessionCreated { session: proto_session(created), open: false });
+            // A terminal it makes is a handoff (`start_session` with owner
+            // user): the window opens its tab and starts its CLI on the prompt.
+            made.emit("session-created", SessionCreated { session: proto_session(created), open: created.kind == "terminal" });
         }),
     ));
     toolbox.register(children.clone());
@@ -588,7 +581,6 @@ pub fn serve_on(config: Config, listen: Listen) -> Result<Handle, String> {
     config.bridge.set_handler(Arc::new(ToolDispatch {
         store: config.store.clone(),
         transcripts,
-        turns: turns.clone(),
         scheduler: scheduler.clone(),
         hub: hub.clone(),
         toolbox,
@@ -1220,12 +1212,11 @@ fn terminal_launch(
     }
     let info = bridge.info()?;
     let token = bridge.mint_process(session_id);
-    // The task `create_worktree` handed it, taken by the first launch whose
-    // CLI can start on it; a shell leaves it in the box.
+    // The prompt a handoff (`start_session` with owner user) left it, taken
+    // by the first launch whose CLI can start on it; a shell leaves it in the
+    // box.
     let letter = mailbox::claim(store, session_id)?;
-    let opening = letter
-        .as_ref()
-        .map(|letter| mailbox::envelope(&letter.from, &letter.text, letter.at, false));
+    let opening = letter.as_ref().map(|letter| mailbox::render(letter, None));
     let launch = crew_core::terminal::launch(
         &row.provider,
         command,
@@ -2427,7 +2418,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn list_agents_runs_without_a_window() {
+    async fn list_peers_runs_without_a_window() {
         let dir = test_dir("tool-headless");
         let (handle, bridge) = test_serve_bridged(&dir);
         let mut ws = connect_authed(&handle).await;
@@ -2437,11 +2428,12 @@ mod tests {
         let payload = serde_json::json!({
             "token": bridge.mint(&session_id),
             "method": "tools/call",
-            "params": { "name": "list_agents", "arguments": {} }
+            "params": { "name": "list_peers", "arguments": {} }
         });
         let reply = unix_call(&info.socket_path, &payload);
         let text = reply["result"]["content"][0]["text"].as_str().unwrap_or("");
-        assert!(text.contains(&session_id), "reply: {reply}");
+        // Nobody else is here: the bot is not its own peer.
+        assert!(reply["result"]["isError"].is_null() && text == "[]", "reply: {reply}");
         handle.shutdown();
     }
 
@@ -2489,18 +2481,16 @@ mod tests {
         let forged = serde_json::json!({
             "token": bridge.mint(&mine),
             "sessionId": "somebody-else",
-            "method": "tools/call",
-            "params": { "name": "list_agents", "arguments": {} }
+            "method": "whoami",
         });
         let reply = unix_call(&info.socket_path, &forged);
-        let text = reply["result"]["content"][0]["text"].as_str().unwrap_or("");
-        assert!(text.contains(&mine), "the id on the wire was believed: {reply}");
+        assert_eq!(reply["result"]["sessionId"].as_str(), Some(mine.as_str()), "the id on the wire was believed: {reply}");
 
         // And a token nobody minted is nobody.
         let stranger = serde_json::json!({
             "token": "not-a-token-anybody-minted",
             "method": "tools/call",
-            "params": { "name": "list_agents", "arguments": {} }
+            "params": { "name": "list_peers", "arguments": {} }
         });
         let reply = unix_call(&info.socket_path, &stranger);
         assert_eq!(reply["error"].as_str(), Some("Bad token"), "reply: {reply}");
@@ -2561,13 +2551,13 @@ mod tests {
         (workspace.id, ids.remove(0), ids.remove(0))
     }
 
-    fn list_agents_as(socket: &str, token: &str) -> serde_json::Value {
+    fn list_peers_as(socket: &str, token: &str) -> serde_json::Value {
         unix_call(
             socket,
             &serde_json::json!({
                 "token": token,
                 "method": "tools/call",
-                "params": { "name": "list_agents", "arguments": {} }
+                "params": { "name": "list_peers", "arguments": {} }
             }),
         )
     }
@@ -2619,23 +2609,23 @@ mod tests {
         assert!(!token.is_empty(), "CREW_TOKEN was empty");
 
         let socket = bridge.info().expect("info").socket_path;
-        let reply = list_agents_as(&socket, &token);
+        let reply = list_peers_as(&socket, &token);
         let text = reply["result"]["content"][0]["text"].as_str().unwrap_or("");
         assert!(text.contains(&bot), "reply: {reply}");
         // Seen as a terminal: every tool it may call is listed, nothing to
         // continue turns with, and no gateway.
         let listed = unix_call(&socket, &serde_json::json!({ "token": token, "method": "tools/list" }));
         let names = listed["result"]["tools"].to_string();
-        assert!(names.contains("message_agent") && names.contains("start_session") && names.contains("read_logs"), "{names}");
-        assert!(!names.contains("continue_after_turn") && !names.contains("find_tool"), "{names}");
+        assert!(names.contains("send_message") && names.contains("start_session") && names.contains("read_logs"), "{names}");
+        assert!(!names.contains("update_description") && !names.contains("find_tool"), "{names}");
         let catalog = unix_call(&socket, &serde_json::json!({ "token": token, "method": "tools/catalog" }));
         let names = catalog["result"]["tools"].to_string();
-        assert!(names.contains("message_agent") && !names.contains("continue_after_turn"), "{names}");
+        assert!(names.contains("send_message") && !names.contains("update_description"), "{names}");
 
         std::fs::write(&done, "").expect("done");
         let deadline = std::time::Instant::now() + Duration::from_secs(10);
         loop {
-            if list_agents_as(&socket, &token)["error"].as_str() == Some("Bad token") {
+            if list_peers_as(&socket, &token)["error"].as_str() == Some("Bad token") {
                 break;
             }
             assert!(std::time::Instant::now() < deadline, "the token outlived its process");
@@ -2691,13 +2681,13 @@ mod tests {
                     "token": bridge.user_token(),
                     "workspace": named,
                     "method": "tools/call",
-                    "params": { "name": "list_agents", "arguments": {} }
+                    "params": { "name": "list_peers", "arguments": {} }
                 }),
             );
             let text = reply["result"]["content"][0]["text"].as_str().unwrap_or("");
             assert!(text.contains(&bot), "{named}: {reply}");
         }
-        let reply = list_agents_as(&socket, &bridge.user_token());
+        let reply = list_peers_as(&socket, &bridge.user_token());
         let text = reply["result"]["content"][0]["text"].as_str().unwrap_or("");
         assert!(text.contains("--workspace"), "{reply}");
         handle.shutdown();

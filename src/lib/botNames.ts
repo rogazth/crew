@@ -1,6 +1,6 @@
 /**
- * Models name a bot however they like. `list_agents` hands them ids, so a
- * `message_agent` row often carries a uuid where the reader wants a name — and
+ * Models name a bot however they like. `list_peers` hands them ids, so a
+ * `send_message` row often carries a uuid where the reader wants a name — and
  * the row is the whole point of showing the call. The session list knows both
  * sides; this is where the chat looks one up.
  */

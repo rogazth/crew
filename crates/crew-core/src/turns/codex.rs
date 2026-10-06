@@ -19,7 +19,7 @@ use serde_json::{json, Map, Value};
 use tokio::sync::oneshot;
 
 use super::{
-    child_envelope, child_resume, path_list, Harness, QuestionReply, Steer, TurnHost,
+    child_resume, path_list, Harness, QuestionReply, Steer, TurnHost,
     TurnOutcome, INIT_TIMEOUT,
 };
 use crate::mailbox;
@@ -378,7 +378,7 @@ impl TurnHost {
     /// Refused when there is none to take it — not started, over, or Codex
     /// says so — so the caller can queue it instead.
     pub(super) fn codex_steer(&self, session_id: &str, text: &str, from: crew_protocol::BotRef) -> Result<(), String> {
-        let sent = child_envelope(&from, text);
+        let sent = self.steer_text(session_id, &from, text);
         let (thread, turn) = {
             let mut map = self.lock();
             let Some(Live::Codex(live)) = map.get_mut(session_id) else {
@@ -810,7 +810,7 @@ fn codex_item(live: &mut CodexLive, item: &Map<String, Value>, completed: bool, 
 ///
 /// What a turn does is spelled in its text: `SLEEP <s>` runs a command that
 /// long (steers land after it), `ASK` asks to run one, `QUESTION` asks which
-/// color, `MCP` calls Crew's `list_agents`, `FAIL` fails the turn,
+/// color, `MCP` calls Crew's `list_peers`, `FAIL` fails the turn,
 /// `STUBBORN` ignores an interrupt. It answers `report: <last line>`, with
 /// ` + <steer>` for each steer it took.
 #[cfg(test)]
@@ -872,7 +872,7 @@ def run(turn, text):
         heard.append("answers: %s" % json.dumps((got or {}).get("answers"), sort_keys=True))
     if "MCP" in text:
         mid = "exec-" + uuid.uuid4().hex[:8]
-        call = {"type": "mcpToolCall", "id": mid, "server": "crew", "tool": "list_agents", "status": "inProgress", "arguments": {}, "result": None, "error": None}
+        call = {"type": "mcpToolCall", "id": mid, "server": "crew", "tool": "list_peers", "status": "inProgress", "arguments": {}, "result": None, "error": None}
         item("started", call)
         item("completed", dict(call, status="completed", result={"content": [{"type": "text", "text": "[]"}]}))
     while turn["inbox"]:

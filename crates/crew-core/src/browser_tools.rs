@@ -584,6 +584,7 @@ mod tests {
             bot_id: None,
             parent_id: None,
             cursor: 0,
+            handed_off_by: None,
         })
     }
 
@@ -857,13 +858,11 @@ mod tests {
         let toolbox = crate::tools::Toolbox::default();
         toolbox.register(Arc::new(family));
         let transcripts = crate::transcript::TranscriptHub::new(store.clone());
-        let deliver = |_: &crate::session::Session| false;
         let host = crate::tools::Host {
             store: &store,
             transcripts: &transcripts,
             on_created: &|_| {},
             on_routines: &|| {},
-            deliver: &deliver,
             toolbox: &toolbox,
         };
         let me = Caller::User { workspace_id: Some("w1".into()) };

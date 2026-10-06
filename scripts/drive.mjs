@@ -116,7 +116,7 @@ const SCENARIOS = {
   // One bot writes to another and the message shows up on both sides.
   message: {
     // Named, not addressed: bots are reached by id, so the way through is
-    // list_agents first. A prompt that handed over the id would skip the half
+    // list_peers first. A prompt that handed over the id would skip the half
     // of this that goes wrong in practice.
     prompt:
       "Send the bot called Cuddles exactly this text: 'the branch is green'. Then reply to me with one short sentence saying you sent it.",
@@ -134,18 +134,36 @@ const SCENARIOS = {
       ];
     },
   },
-  // The bot carries itself past the end of a turn by writing to itself.
-  loop: {
+  // The bot hands a job to a session and ends its turn; the session's report
+  // wakes it, as a turn opening "## Report from session".
+  delegate: {
     prompt:
-      "Do this in two turns, not one. Turn one: create a file called step1.txt containing the word one, then call continue_after_turn with text='turn two: create step2.txt containing the word two, then stop'. Say nothing else. You will receive that note as your next turn; carry it out then.",
-    check(coderEnd) {
-      const turns = coderEnd.blocks.filter((b) => b.role === "user");
-      const woken = turns.filter((b) => b.fromBot);
-      const wrote = coderEnd.blocks.filter((b) => b.tool?.detail?.kind === "edit");
+      "Use Crew's start_session to hand this job to a new session: 'What is 17 times 23? Reply with the number only.' Do not wait for it: end your turn right after starting it. When its report arrives, reply with RESULT: <the number it reported>.",
+    until: (end) => end.blocks.some((b) => b.role === "assistant" && /RESULT:\s*\**391/.test(b.text)),
+    async check(coderEnd) {
+      const child = (await rpc("session_list", { workspaceId: workspace.id })).find((s) => s.kind === "child" && s.parentId === coder.id);
+      const woken = coderEnd.blocks.find((b) => b.role === "user" && b.fromBot?.id === child?.id);
       return [
-        ["the bot left itself a note", woken.length >= 1, ""],
-        ["the note came back as a second turn", woken.length >= 1, `${turns.length} turns, ${woken.length} from a bot`],
-        ["both steps ran", wrote.length >= 2, wrote.map((b) => b.tool.detail.path.split("/").pop()).join(", ")],
+        ["the bot started a session of its own", Boolean(child), child ? `${child.provider}/${child.model}` : "no child"],
+        ["its report woke the bot as a turn", Boolean(woken), woken ? woken.text.slice(0, 60) : "no report turn"],
+        ["the bot passed the result on", coderEnd.blocks.some((b) => b.role === "assistant" && /RESULT:\s*\**391/.test(b.text)), ""],
+      ];
+    },
+  },
+  // The bot needs the answer in the same turn: start_session with wait hands
+  // the report back, and the same report does not wake it again.
+  wait: {
+    prompt:
+      "Use Crew's start_session with wait set to true to hand this job to a new session: 'What is 17 times 23? Reply with the number only.' Then reply with RESULT: <the number it reported>.",
+    async check(coderEnd) {
+      const child = (await rpc("session_list", { workspaceId: workspace.id })).find((s) => s.kind === "child" && s.parentId === coder.id);
+      const turns = coderEnd.blocks.filter((b) => b.role === "user");
+      const start = coderEnd.blocks.find((b) => b.tool?.name?.includes("start_session"));
+      return [
+        ["the bot started a session of its own", Boolean(child), child ? `${child.provider}/${child.model}` : "no child"],
+        ["it waited for the report in its own turn", /"reported"/.test(JSON.stringify(start?.tool ?? {})) || coderEnd.blocks.some((b) => b.role === "assistant" && /391/.test(b.text)), ""],
+        ["the report did not wake it again", turns.length === 1 && !turns.some((b) => b.fromBot), `${turns.length} turns`],
+        ["the bot passed the result on", coderEnd.blocks.some((b) => b.role === "assistant" && /RESULT:\s*\**391/.test(b.text)), ""],
       ];
     },
   },
@@ -244,6 +262,10 @@ if (scenario.start) {
   });
 }
 
+if (scenario.until) {
+  const until = Date.now() + 600_000;
+  while (Date.now() < until && !scenario.until(await rpc("transcript_tail", { sessionId: coder.id, limit: 500 }))) await sleep(2000);
+}
 const coderEnd = await settle(coder.id);
 const cuddlesEnd = await settle(cuddles.id);
 show("Coder", coderEnd);

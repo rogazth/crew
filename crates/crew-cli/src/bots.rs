@@ -1,5 +1,6 @@
-//! `crew bots list`, `crew bots send` and `crew tabs list`: the roster
-//! and the browser, as `list_agents`, `message_agent` and `list_tabs` answer them.
+//! `crew peers`, `crew send` and `crew tabs list`: who is there, writing to
+//! them, and the browser, as `list_peers`, `send_message` and `list_tabs`
+//! answer them.
 
 use std::process::ExitCode;
 
@@ -9,51 +10,56 @@ use crate::args::SendArgs;
 use crate::output::{self, Column};
 use crate::{read_stdin, CliError, Ctx};
 
-const BOT_COLUMNS: &[Column] = &[
+const PEER_COLUMNS: &[Column] = &[
     Column::new("NAME", &["name"]),
     Column::new("ID", &["id"]),
-    Column::new("PROVIDER", &["provider"]),
-    Column::new("MODEL", &["model"]),
+    Column::new("KIND", &["kind"]),
     Column::new("STATUS", &["status"]),
-    Column::with("", &["self"], you),
+    Column::new("PARENT", &["parent", "handed_off_by"]),
+    Column::new("WORKTREE", &["worktree"]),
+    Column::with("WRITE", &["write"], yes),
 ];
 
-fn you(value: &Value) -> String {
-    if value.as_bool() == Some(true) { "(you)".into() } else { String::new() }
+fn yes(value: &Value) -> String {
+    if value.as_bool() == Some(true) { "yes".into() } else { "no".into() }
 }
 
-pub fn list(ctx: &Ctx) -> Result<ExitCode, CliError> {
-    let reply = ctx.client()?.run("list_agents", json!({}))?;
+pub fn peers(ctx: &Ctx) -> Result<ExitCode, CliError> {
+    let reply = ctx.client()?.run("list_peers", json!({}))?;
     ctx.show(&reply, |value| {
-        let rows = output::rows(value, &["bots"])?;
+        let rows = output::rows(value, &["peers"])?;
         if rows.is_empty() {
-            return Some("No bots in this workspace.".into());
+            return Some("Nobody else in this workspace.".into());
         }
-        Some(output::table(rows, BOT_COLUMNS).render(output::styled()))
+        Some(output::table(rows, PEER_COLUMNS).render(output::styled()))
     });
     Ok(ExitCode::SUCCESS)
 }
 
-/// `message_agent` takes an id and only an id, because a name the user
+/// `send_message` takes an id and only an id, because a name the user
 /// changes goes stale in a bot's memory. A person typing at a shell has no
 /// such memory, so a name is looked up here, once, and the id is what is sent.
 pub fn send(ctx: &Ctx, args: &SendArgs) -> Result<ExitCode, CliError> {
-    let (bot, words) = (args.bot.as_str(), &args.text);
+    let (who, words) = (args.to.as_str(), &args.text);
     let text = if words.len() == 1 && words[0] == "-" { read_stdin()? } else { words.join(" ") };
     if text.trim().is_empty() {
         return Err(CliError::Usage("Nothing to send.".into()));
     }
     let client = ctx.client()?;
-    let roster = client.run("list_agents", json!({}))?.value();
-    let to = pick_bot(output::rows(&roster, &["bots"]).map(Vec::as_slice).unwrap_or(&[]), bot)?;
-    let reply = client.run("message_agent", json!({ "to": to, "text": text }))?;
+    let roster = client.run("list_peers", json!({}))?.value();
+    let to = pick_peer(output::rows(&roster, &["peers"]).map(Vec::as_slice).unwrap_or(&[]), who)?;
+    let mut call = json!({ "to": to, "text": text });
+    if args.steer {
+        call["steer"] = json!(true);
+    }
+    let reply = client.run("send_message", call)?;
     ctx.show(&reply, |value| value.get("note").and_then(Value::as_str).map(str::to_string));
     Ok(ExitCode::SUCCESS)
 }
 
-/// The id `who` means: an id as it is, else the one bot by that name. Two
+/// The id `who` means: an id as it is, else the one peer by that name. Two
 /// by one name is a question only the person can answer.
-fn pick_bot(rows: &[Value], who: &str) -> Result<String, CliError> {
+fn pick_peer(rows: &[Value], who: &str) -> Result<String, CliError> {
     let who = who.trim();
     let field = |row: &Value, key: &str| row.get(key).and_then(Value::as_str).unwrap_or("").to_string();
     if rows.iter().any(|row| field(row, "id") == who) {
@@ -62,12 +68,10 @@ fn pick_bot(rows: &[Value], who: &str) -> Result<String, CliError> {
     let named: Vec<&Value> = rows.iter().filter(|row| field(row, "name").eq_ignore_ascii_case(who)).collect();
     match named.as_slice() {
         [one] => Ok(field(one, "id")),
-        [] => Err(CliError::Failed(format!(
-            "No bot {who} in this workspace. `crew bots list` lists them{}",
-            if rows.is_empty() { "; there are none.".to_string() } else { ".".to_string() }
-        ))),
+        // Not one of the peers listed: send it as it is, and let the tool say why.
+        [] => Ok(who.to_string()),
         many => Err(CliError::Failed(format!(
-            "{} bots are called {who}; name one by id: {}",
+            "{} peers are called {who}; name one by id: {}",
             many.len(),
             many.iter().map(|row| field(row, "id")).collect::<Vec<_>>().join(", ")
         ))),
@@ -97,31 +101,30 @@ mod tests {
 
     fn roster() -> Vec<Value> {
         vec![
-            json!({ "id": "a1", "name": "Reviewer" }),
-            json!({ "id": "b2", "name": "Coder" }),
-            json!({ "id": "c3", "name": "coder" }),
+            json!({ "id": "a1", "name": "Reviewer", "kind": "bot" }),
+            json!({ "id": "b2", "name": "Coder", "kind": "bot" }),
+            json!({ "id": "c3", "name": "coder", "kind": "session" }),
         ]
     }
 
     #[test]
-    fn a_bot_is_named_by_id_or_by_its_one_name() {
-        assert_eq!(pick_bot(&roster(), "b2").expect("id"), "b2");
-        assert_eq!(pick_bot(&roster(), " reviewer ").expect("name"), "a1");
+    fn a_peer_is_named_by_id_or_by_its_one_name() {
+        assert_eq!(pick_peer(&roster(), "b2").expect("id"), "b2");
+        assert_eq!(pick_peer(&roster(), " reviewer ").expect("name"), "a1");
+        assert_eq!(pick_peer(&roster(), "Tester").expect("as it is"), "Tester");
     }
 
     #[test]
-    fn a_shared_name_or_a_stranger_is_refused_with_what_to_do() {
-        let CliError::Failed(twice) = pick_bot(&roster(), "Coder").unwrap_err() else { panic!() };
+    fn a_shared_name_is_refused_with_what_to_do() {
+        let CliError::Failed(twice) = pick_peer(&roster(), "Coder").unwrap_err() else { panic!() };
         assert!(twice.contains("b2") && twice.contains("c3"), "{twice}");
-        let CliError::Failed(nobody) = pick_bot(&roster(), "Tester").unwrap_err() else { panic!() };
-        assert!(nobody.contains("crew bots list"), "{nobody}");
     }
 
     #[test]
-    fn the_bots_table_marks_you() {
-        let rows = vec![json!({ "id": "a1", "name": "Me", "provider": "claude", "self": true })];
-        let table = output::table(&rows, BOT_COLUMNS);
-        assert_eq!(table.headers, ["NAME", "ID", "PROVIDER", ""]);
-        assert_eq!(table.rows[0], ["Me", "a1", "claude", "(you)"]);
+    fn the_peers_table_says_who_can_be_written_to() {
+        let rows = vec![json!({ "id": "a1", "name": "Lead", "kind": "bot", "status": "idle", "worktree": "main checkout", "write": true })];
+        let table = output::table(&rows, PEER_COLUMNS);
+        assert_eq!(table.headers, ["NAME", "ID", "KIND", "STATUS", "WORKTREE", "WRITE"]);
+        assert_eq!(table.rows[0], ["Lead", "a1", "bot", "idle", "main checkout", "yes"]);
     }
 }

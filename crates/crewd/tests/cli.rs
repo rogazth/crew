@@ -153,7 +153,9 @@ fn daemon_json_lives_as_long_as_the_daemon_and_speaks_as_the_user() {
     let reply: serde_json::Value = serde_json::from_str(&reply).expect("json");
     let instructions = reply["result"]["instructions"].as_str().unwrap_or_default();
     assert!(instructions.contains("Crew is the app this runs in") && !instructions.contains("find_tool"), "{reply}");
-    assert!(!instructions.contains("continue_after_turn"), "the user has no turns: {instructions}");
+    for gone in ["continue_after_turn", "message_agent", "wait_for_session"] {
+        assert!(!instructions.contains(gone), "{gone}: {instructions}");
+    }
 
     drop(child.stdin.take());
     wait_exit(&mut child, Duration::from_secs(5));
