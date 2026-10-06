@@ -7,6 +7,8 @@ export type RouteMaps = {
   /** Workspace and worktree directories, longest prefix wins. */
   path: ReadonlyMap<string, string>;
   routine: ReadonlyMap<string, string>;
+  /** Commands by id: a run's PTY is named after its command alone. */
+  process: ReadonlyMap<string, string>;
 };
 
 /**
@@ -92,10 +94,12 @@ export function routeEnv(
 /**
  * The environment of a terminal's PTY. Its id is the pane's, or for a
  * session's terminal, the session's: `<workspace>[@<worktree>]/session:<session>`.
+ * A command's run is `process:<process>:<run>`.
  */
-export function envForPane(id: string, maps: Pick<RouteMaps, "session" | "workspace">): string | null {
+export function envForPane(id: string, maps: Pick<RouteMaps, "session" | "workspace" | "process">): string | null {
   const direct = maps.session.get(id);
   if (direct) return direct;
+  if (id.startsWith("process:")) return maps.process.get(id.split(":")[1] ?? "") ?? null;
   const at = id.lastIndexOf("session:");
   const session = at >= 0 ? maps.session.get(id.slice(at + "session:".length)) : undefined;
   if (session) return session;

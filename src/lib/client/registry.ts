@@ -39,6 +39,7 @@ const workspaceEnv = new Map<string, string>();
 const sessionEnv = new Map<string, string>();
 const pathEnv = new Map<string, string>();
 const routineEnv = new Map<string, string>();
+const processEnv = new Map<string, string>();
 /** Each remote's workspaces as last seen, so the rail keeps them while it is offline. */
 const workspaceCache = new Map<string, Workspace[]>();
 const listeners = new Map<string, Set<Listener>>();
@@ -79,7 +80,7 @@ export function envOf(workspaceId: string): string {
 
 /** A session's machine, by its id or by the id of the pane its terminal runs in. */
 export function envOfSession(sessionId: string): string {
-  return envForPane(sessionId, { session: sessionEnv, workspace: workspaceEnv }) ?? LOCAL;
+  return envForPane(sessionId, { session: sessionEnv, workspace: workspaceEnv, process: processEnv }) ?? LOCAL;
 }
 
 export function isLocalPath(path: string): boolean {
@@ -186,7 +187,7 @@ function owner(sessionId?: string): Connection {
 }
 
 function maps(): RouteMaps {
-  return { workspace: workspaceEnv, session: sessionEnv, path: pathEnv, routine: routineEnv };
+  return { workspace: workspaceEnv, session: sessionEnv, path: pathEnv, routine: routineEnv, process: processEnv };
 }
 
 function bootRemotes(): Promise<void> {
@@ -497,6 +498,9 @@ function remember(env: string, method: string, params: Record<string, unknown>, 
   }
   if (method === "worktree_add" && isRecord(result) && typeof result.path === "string") pathEnv.set(result.path, env);
   if (method === "routine_upsert") rememberRoutine(env, result);
+  if (method.startsWith("process_")) {
+    for (const row of Array.isArray(result) ? result : [result]) if (isProcess(row)) processEnv.set(row.id, env);
+  }
 }
 
 function registerWorkspace(env: string, row: { id: string; path: string }) {
@@ -517,6 +521,7 @@ function rememberRoutine(env: string, row: unknown) {
 }
 
 function noteEvent(env: string, event: string, payload: unknown) {
+  if (event === "process-changed" && isProcess(payload)) processEnv.set(payload.id, env);
   if (event !== "session-created" && event !== "session-updated") return;
   if (!isRecord(payload) || !isSession(payload.session)) return;
   registerSession(env, payload.session);
@@ -543,4 +548,8 @@ function isWorkspace(value: unknown): value is Workspace {
 
 function isSession(value: unknown): value is { id: string; workspaceId: string } {
   return isRecord(value) && typeof value.id === "string" && typeof value.workspaceId === "string";
+}
+
+function isProcess(value: unknown): value is { id: string; runs: unknown[] } {
+  return isRecord(value) && typeof value.id === "string" && Array.isArray(value.runs);
 }

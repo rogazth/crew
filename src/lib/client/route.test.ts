@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { LOCAL, envForPath, routeEnv, type RouteMaps } from "./route";
+import { LOCAL, envForPane, envForPath, routeEnv, type RouteMaps } from "./route";
 
 function maps(partial: Partial<RouteMaps> = {}): RouteMaps {
   return {
@@ -7,6 +7,7 @@ function maps(partial: Partial<RouteMaps> = {}): RouteMaps {
     session: partial.session ?? new Map(),
     path: partial.path ?? new Map(),
     routine: partial.routine ?? new Map(),
+    process: partial.process ?? new Map(),
   };
 }
 
@@ -49,6 +50,14 @@ describe("routeEnv", () => {
     expect(routeEnv("pty_write", { id: "w@/home/agent/app-wt/session:s", data: "x" }, known)).toBe("vps");
     expect(routeEnv("pty_kill", { id: "w/session:unknown" }, known)).toBe("vps");
     expect(routeEnv("pty_kill", { id: "other/session:unknown" }, known)).toBe(LOCAL);
+  });
+
+  it("follows a command's PTY, named for the command alone, to its machine", () => {
+    const known = maps({ workspace: new Map([["w", "vps"]]), process: new Map([["p", "vps"]]) });
+    expect(routeEnv("pty_attach", { id: "process:p:main", from: 0 }, known)).toBe("vps");
+    expect(routeEnv("pty_write", { id: "process:p:wt-00000000000000ff", data: "x" }, known)).toBe("vps");
+    expect(routeEnv("pty_attach", { id: "process:unknown:main", from: 0 }, known)).toBe(LOCAL);
+    expect(envForPane("process:p:main", known)).toBe("vps");
   });
 
   it("lets the caller name the machine, as opening a folder does", () => {
