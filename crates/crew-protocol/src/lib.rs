@@ -661,6 +661,21 @@ pub struct AgentBinary {
     pub path: String,
 }
 
+/// `agent_models`: the provider whose CLI is asked for its models.
+#[derive(Serialize, Deserialize, Clone, Debug, TS)]
+#[ts(export, export_to = "../../../src/lib/protocol.ts")]
+pub struct AgentModels {
+    pub provider: String,
+}
+
+/// One model a provider's CLI lists for this account, as it spells it.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, TS)]
+#[ts(export, export_to = "../../../src/lib/protocol.ts")]
+pub struct ListedModel {
+    pub id: String,
+    pub label: String,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]

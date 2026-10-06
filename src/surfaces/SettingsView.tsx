@@ -11,6 +11,7 @@ import { useBotAvatar } from "../hooks/useBotAvatar";
 import { useBrowserPrefs } from "../hooks/useBrowserPrefs";
 import { useColorMode } from "../hooks/useColorMode";
 import { useDefaultAgent } from "../hooks/useDefaultAgent";
+import { useListedModels } from "../hooks/useListedModels";
 import { useSessionView } from "../hooks/useSessionView";
 import { changeSitePermissions, useSitePermissions } from "../hooks/useSitePermissions";
 import { useTabScope } from "../hooks/useTabScope";
@@ -316,6 +317,7 @@ function SitePermissionsSettings() {
 
 function Providers() {
   const { preferred, installed, update } = useDefaultAgent();
+  useListedModels(preferred.provider);
   return (
     <>
       <SettingsSection title="New sessions">
@@ -336,7 +338,7 @@ function Providers() {
             <Select
               label="Effort"
               className="w-40"
-              value={preferred.effort}
+              value={fitChoice(preferred).effort}
               onChange={(effort) => update(fitChoice({ ...preferred, effort: effort as Effort }))}
               options={effortsOf(preferred.provider, preferred.model).map((effort) => ({ value: effort, label: EFFORT_LABELS[effort] }))}
             />

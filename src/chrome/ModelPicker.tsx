@@ -3,6 +3,7 @@ import { Popover } from "@base-ui/react/popover";
 import { CheckIcon, ChevronDownIcon } from "lucide-react";
 import { ProviderIcon } from "./ProviderIcon";
 import { useInstalledProviders } from "../hooks/useInstalledProviders";
+import { useListedModels } from "../hooks/useListedModels";
 import {
   PROVIDERS,
   modelLabel,
@@ -28,6 +29,8 @@ export function ModelPicker({ provider, model, trigger = "field", disabled = fal
   const [tab, setTab] = useState<ProviderId>(provider as ProviderId);
   const chip = trigger === "chip";
   const installed = useInstalledProviders(open);
+  useListedModels(provider);
+  useListedModels(tab, open);
   // The session's own provider stays reachable even after its CLI is gone.
   const tabs = PROVIDERS.filter((p) => p.id === provider || (!lockProvider && installed.includes(p)));
 
@@ -91,7 +94,7 @@ export function ModelPicker({ provider, model, trigger = "field", disabled = fal
             <div role="tabpanel" className="flex min-w-0 flex-1 flex-col overflow-y-auto p-1.5">
               <span className="px-2 pt-1 pb-1.5 text-[11px] text-text-muted">{providerOf(tab)?.label} models</span>
               {modelsOf(tab).map((m) => {
-                const current = tab === provider && m.id === model;
+                const current = tab === provider && (m.id === model || Object.values(m.variants ?? {}).includes(model));
                 return (
                   <button
                     key={m.id}

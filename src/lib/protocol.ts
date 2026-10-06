@@ -2,6 +2,11 @@
 
 export type AgentBinary = { path: string, };
 
+/**
+ * `agent_models`: the provider whose CLI is asked for its models.
+ */
+export type AgentModels = { provider: string, };
+
 export type ApprovalDecision = "allow" | "always" | "deny";
 
 export type ApprovalResolution = "allow" | "always" | "deny" | "cancelled";
@@ -350,6 +355,11 @@ previewStart: number,
 ranges: Array<[number, number]>, };
 
 export type ListProjectFiles = { cwd: string, };
+
+/**
+ * One model a provider's CLI lists for this account, as it spells it.
+ */
+export type ListedModel = { id: string, label: string, };
 
 /**
  * A stretch of log. `text` is ANSI-free for agents, raw for a terminal.

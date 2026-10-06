@@ -2,6 +2,7 @@ import { Menu } from "@base-ui/react/menu";
 import { BrainIcon, CheckIcon, ChevronDownIcon, LockIcon, LockOpenIcon, PencilIcon, SparklesIcon, type LucideIcon as Icon } from "lucide-react";
 import { PANEL, ROW } from "./kit";
 import { ModelPicker } from "./ModelPicker";
+import { useListedModels } from "../hooks/useListedModels";
 import {
   ACCESSES,
   EFFORT_LABELS,
@@ -28,7 +29,10 @@ type Props = {
 
 /** The composer's model, effort and access chips, the same in Home and in a chat. */
 export function ModelControls({ value, onChange, lockProvider = false }: Props) {
+  useListedModels(value.provider);
   const efforts = effortsOf(value.provider, value.model);
+  // A cursor session's row may not say its effort; its model id does.
+  const effort = fitChoice(value).effort;
   return (
     <>
       <ModelPicker
@@ -39,7 +43,7 @@ export function ModelControls({ value, onChange, lockProvider = false }: Props) 
         onChange={(provider: ProviderId, model) => onChange(fitChoice({ ...value, provider, model }))}
       />
       {efforts.length > 0 && (
-        <EffortPicker value={value.effort} efforts={efforts} onChange={(effort) => onChange(fitChoice({ ...value, effort }))} />
+        <EffortPicker value={effort} efforts={efforts} onChange={(effort) => onChange(fitChoice({ ...value, effort }))} />
       )}
     </>
   );

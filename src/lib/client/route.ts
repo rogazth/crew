@@ -40,7 +40,7 @@ const LOCAL_METHODS = new Set([
 ]);
 
 /** Calls about "the machine in front of you": the focused workspace's. */
-const FOCUS_METHODS = new Set(["agent_installed", "write_temp_file"]);
+const FOCUS_METHODS = new Set(["agent_installed", "agent_models", "write_temp_file"]);
 
 function text(params: Record<string, unknown>, key: string): string | null {
   const value = params[key];

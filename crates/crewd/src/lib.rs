@@ -1841,6 +1841,15 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
             let Names { names } = parse(params)?;
             json(block(move || Ok::<_, String>(AgentHost::installed(names))).await?)
         }
+        "agent_models" => {
+            let proto::AgentModels { provider } = parse(params)?;
+            // Only cursor-agent lists its models; the others keep Crew's own list.
+            let models = match provider.as_str() {
+                "cursor" => block(|| Ok::<_, String>(provider_session::cursor_models())).await?,
+                _ => Vec::new(),
+            };
+            json(models)
+        }
         "turn_start" => {
             let p: TurnStart = parse(params)?;
             if let Some(nonce) = p.nonce.clone() {

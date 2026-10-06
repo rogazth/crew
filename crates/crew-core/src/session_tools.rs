@@ -673,8 +673,8 @@ impl SessionTools {
         let models = provider_models(&provider)
             .ok_or_else(|| format!("Unknown provider \"{provider}\". One of: {}", provider_names().join(", ")))?;
         let model = match text(args.get("model")) {
-            Some(model) if models.contains(&model.as_str()) => model,
-            Some(model) => return Err(unknown_model(&model, &provider, &models)),
+            Some(model) if models.contains(&model) => model,
+            Some(model) => return Err(unknown_model(&model, &provider)),
             None => match caller.session().filter(|me| me.provider == provider && !me.model.is_empty()) {
                 Some(me) => me.model.clone(),
                 None => crate::tools::default_model(&provider).to_string(),

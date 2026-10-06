@@ -1,9 +1,11 @@
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::Mutex;
 use std::thread;
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
+use crew_protocol::ListedModel;
 use rusqlite::{params, Connection, OpenFlags};
 
 use crate::shell_path;
@@ -57,6 +59,89 @@ pub fn cursor_create_chat() -> Result<String, String> {
 
 fn is_chat_id(id: &str) -> bool {
     !id.is_empty() && id.len() <= 64 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+}
+
+const MODELS_TIMEOUT: Duration = Duration::from_secs(20);
+/// Cursor adds models without a release of Crew; a new one shows up within this.
+const MODELS_TTL: Duration = Duration::from_secs(10 * 60);
+
+static CURSOR_MODELS: Mutex<Option<(Instant, Vec<ListedModel>)>> = Mutex::new(None);
+
+/// Every model `cursor-agent models` lists for this account, each effort and
+/// fast variant its own id (`grok-4.7-high-fast`). Asked once per
+/// `MODELS_TTL`, about a second each time; empty when the CLI is missing or
+/// fails, and then asked again next time.
+pub fn cursor_models() -> Vec<ListedModel> {
+    let mut cached = CURSOR_MODELS.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((at, models)) = cached.as_ref() {
+        if at.elapsed() < MODELS_TTL {
+            return models.clone();
+        }
+    }
+    let models = list_cursor_models().unwrap_or_else(|err| {
+        eprintln!("[models] {err}");
+        Vec::new()
+    });
+    if !models.is_empty() {
+        *cached = Some((Instant::now(), models.clone()));
+    }
+    models
+}
+
+fn list_cursor_models() -> Result<Vec<ListedModel>, String> {
+    let binary = shell_path::resolve("cursor-agent")
+        .ok_or_else(|| "`cursor-agent` was not found on your PATH.".to_string())?;
+    let mut child = Command::new(binary)
+        .arg("models")
+        .env("PATH", shell_path::joined())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| format!("cursor-agent models: {e}"))?;
+    // Read while it runs: the list is bigger than a pipe holds on some systems.
+    let mut stdout = child.stdout.take().ok_or("cursor-agent models: no stdout")?;
+    let reader = thread::spawn(move || {
+        let mut out = String::new();
+        let _ = stdout.read_to_string(&mut out);
+        out
+    });
+    let deadline = Instant::now() + MODELS_TIMEOUT;
+    let status = loop {
+        match child.try_wait().map_err(|e| e.to_string())? {
+            Some(status) => break status,
+            None if Instant::now() < deadline => thread::sleep(Duration::from_millis(50)),
+            None => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("cursor-agent models did not answer".into());
+            }
+        }
+    };
+    let out = reader.join().unwrap_or_default();
+    if !status.success() {
+        return Err(format!("cursor-agent models exited with {status}"));
+    }
+    Ok(parse_cursor_models(&out))
+}
+
+/// `id - Label` lines between a heading and a tip. Labels carry zero-width
+/// spaces and doubled spaces the terminal hides; they go.
+fn parse_cursor_models(out: &str) -> Vec<ListedModel> {
+    out.lines()
+        .filter_map(|line| {
+            let (id, label) = line.trim().split_once(" - ")?;
+            if id.is_empty() || id.chars().any(char::is_whitespace) {
+                return None;
+            }
+            let label = label
+                .replace('\u{200b}', "")
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ");
+            Some(ListedModel { id: id.to_string(), label })
+        })
+        .collect()
 }
 
 /// Claude starts a new session on `/clear` without a word to its terminal. The
@@ -430,6 +515,21 @@ fn opencode_sessions(db: &Path, since_ms: i64) -> Vec<Found> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cursor_models_are_read_from_the_listing_and_its_labels_cleaned() {
+        let out = "Available models\n\nauto - Auto (default)\ngrok-4.7-low-fast - Grok 4.7  Low Fast\u{200b}\u{200b}\n\
+                   claude-opus-5-5-medium - Claude Opus 5.5 1M\n\nTip: use --model <id> (or /model <id> in interactive mode) to switch.\n";
+        let ids: Vec<(String, String)> = parse_cursor_models(out).into_iter().map(|m| (m.id, m.label)).collect();
+        assert_eq!(
+            ids,
+            [
+                ("auto".to_string(), "Auto (default)".to_string()),
+                ("grok-4.7-low-fast".to_string(), "Grok 4.7 Low Fast".to_string()),
+                ("claude-opus-5-5-medium".to_string(), "Claude Opus 5.5 1M".to_string()),
+            ]
+        );
+    }
 
     fn temp_dir(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("crew-provider-session-{name}-{}", std::process::id()));

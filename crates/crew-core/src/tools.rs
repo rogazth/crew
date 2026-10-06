@@ -31,6 +31,7 @@ const PROVIDERS: &[(&str, &[&str])] = &[
         &[
             "auto",
             "composer-2.5",
+            "grok-4.7-high",
             "cursor-grok-4.6-high",
             "gpt-5.3-codex",
             "claude-fable-5-1-thinking-high",
@@ -323,11 +324,50 @@ pub(crate) fn provider_names() -> Vec<&'static str> {
 /// which is neither the provider nor the spelling — and reports back that the
 /// model does not exist here.
 pub(crate) fn model_sheet() -> String {
-    PROVIDERS
+    let sheet = PROVIDERS
         .iter()
         .map(|(provider, models)| format!("{provider}: {}", models.join(", ")))
         .collect::<Vec<_>>()
-        .join("\n")
+        .join("\n");
+    format!("{sheet}\n{CURSOR_LISTED}")
+}
+
+/// cursor-agent lists hundreds of ids for an account, one per effort and fast
+/// variant: too many for a schema, so the sheet names the pattern instead.
+const CURSOR_LISTED: &str = "cursor also takes every id `cursor-agent models` lists, its effort and speed in the id: \
+     grok-4.7-high, claude-opus-5-5-xhigh, gpt-5.6-sol-low-fast.";
+
+/// Each provider's models: Crew's own list, then what its CLI lists for this
+/// account that the list does not have yet.
+fn catalogue() -> Vec<(&'static str, Vec<String>)> {
+    PROVIDERS
+        .iter()
+        .map(|(provider, models)| (*provider, with_listed(provider, models)))
+        .collect()
+}
+
+fn with_listed(provider: &str, models: &[&str]) -> Vec<String> {
+    let mut all: Vec<String> = models.iter().map(|m| m.to_string()).collect();
+    for listed in listed_models(provider) {
+        if !all.contains(&listed) {
+            all.push(listed);
+        }
+    }
+    all
+}
+
+#[cfg(not(test))]
+fn listed_models(provider: &str) -> Vec<String> {
+    match provider {
+        "cursor" => crate::provider_session::cursor_models().into_iter().map(|m| m.id).collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// Tests run on machines with and without cursor-agent; they see Crew's list.
+#[cfg(test)]
+fn listed_models(_provider: &str) -> Vec<String> {
+    Vec::new()
 }
 
 /// Every tool Crew has, its families' included, for the CLI to build a
@@ -784,8 +824,8 @@ fn create_bot(
     })?;
     let requested = text(args.get("model"));
     if let Some(requested) = &requested {
-        if !models.contains(&requested.as_str()) {
-            return Err(unknown_model(requested, &provider, &models));
+        if !models.contains(requested) {
+            return Err(unknown_model(requested, &provider));
         }
     }
     let model = requested.unwrap_or_else(|| {
@@ -1019,7 +1059,7 @@ fn parse_runs(raw: &str) -> Vec<(String, i64)> {
 /// caller who knows it as "grok 4.6" has no way to reach it by guessing.
 /// Matching on letters and digits alone forgives the spacing, the dashes and
 /// the case, which is all the difference usually is.
-fn like(wanted: &str) -> Vec<(&'static str, &'static str)> {
+fn like(wanted: &str) -> Vec<(&'static str, String)> {
     let squash = |text: &str| {
         text.chars()
             .filter(|c| c.is_alphanumeric())
@@ -1030,9 +1070,9 @@ fn like(wanted: &str) -> Vec<(&'static str, &'static str)> {
     if wanted.is_empty() {
         return Vec::new();
     }
-    PROVIDERS
-        .iter()
-        .flat_map(|(provider, models)| models.iter().map(move |model| (*provider, *model)))
+    catalogue()
+        .into_iter()
+        .flat_map(|(provider, models)| models.into_iter().map(move |model| (provider, model)))
         .filter(|(_, model)| {
             let model = squash(model);
             model.contains(&wanted) || wanted.contains(&model)
@@ -1042,7 +1082,7 @@ fn like(wanted: &str) -> Vec<(&'static str, &'static str)> {
 
 /// A refusal that ends the guessing: where the model actually is, or the whole
 /// catalogue when it is nowhere. Paid once, on a miss.
-pub(crate) fn unknown_model(wanted: &str, provider: &str, models: &[&str]) -> String {
+pub(crate) fn unknown_model(wanted: &str, provider: &str) -> String {
     let found = like(wanted);
     if !found.is_empty() {
         let where_ = found
@@ -1055,23 +1095,25 @@ pub(crate) fn unknown_model(wanted: &str, provider: &str, models: &[&str]) -> St
              Pass provider and model together."
         );
     }
-    let catalogue = PROVIDERS
+    // Crew's own lists: cursor-agent's runs to hundreds of variants.
+    let mine = PROVIDERS
         .iter()
-        .map(|(provider, models)| format!("{provider}: {}", models.join(", ")))
-        .collect::<Vec<_>>()
-        .join("\n");
+        .find(|(name, _)| *name == provider)
+        .map(|(_, models)| models.join(", "))
+        .unwrap_or_default();
     format!(
-        "No model \"{wanted}\" anywhere, under {provider} or elsewhere. {provider} has: {}.\n\
-         Everything there is:\n{catalogue}",
-        models.join(", ")
+        "No model \"{wanted}\" anywhere, under {provider} or elsewhere. {provider} has: {mine}.\n\
+         Everything there is:\n{}",
+        model_sheet()
     )
 }
 
-pub(crate) fn provider_models(id: &str) -> Option<Vec<&'static str>> {
+/// Every id the provider takes, its CLI's own listing included.
+pub(crate) fn provider_models(id: &str) -> Option<Vec<String>> {
     PROVIDERS
         .iter()
         .find(|(name, _)| *name == id)
-        .map(|(_, models)| models.to_vec())
+        .map(|(provider, models)| with_listed(provider, models))
 }
 
 pub(crate) fn text(value: Option<&Value>) -> Option<String> {

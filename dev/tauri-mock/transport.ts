@@ -471,6 +471,7 @@ const commands: Record<string, (args: Row) => unknown> = {
   agent_resolve_claude: () => ({ path: "/mock/bin/claude" }),
   agent_resolve: ({ name }) => ({ path: `/mock/bin/${name}` }),
   agent_installed: ({ names }) => names,
+  agent_models: () => [],
   session_provider_create: () => "mock-chat",
   session_provider_discover: () => null,
   session_claude_rebind: () => null,

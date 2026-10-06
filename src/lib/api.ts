@@ -12,6 +12,7 @@ import type {
   FolderEntry,
   HistoryEntry,
   HistoryList,
+  ListedModel,
   LogChunk,
   MachineInfo,
   MessagePage,
@@ -274,6 +275,10 @@ export const syncSessionTitle = (id: string): Promise<string | null> =>
 /** The subset of `names` found on the user's PATH. */
 export const installedBinaries = (names: string[]): Promise<string[]> =>
   client.request("agent_installed", { names });
+
+/** The models the provider's CLI lists for this account; empty when it lists none. */
+export const listedModels = (provider: string): Promise<ListedModel[]> =>
+  client.request("agent_models", { provider });
 
 /** cursor-agent: a chat created and bound before the terminal starts. */
 export const createProviderSession = (id: string): Promise<string> =>
