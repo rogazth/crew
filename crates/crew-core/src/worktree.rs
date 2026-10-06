@@ -34,6 +34,12 @@ pub fn list(cwd: &str) -> Vec<Worktree> {
         porcelain = git(cwd, &["worktree", "list", "--porcelain"]);
     }
     let mut listed = porcelain.map(|out| parse(&out)).unwrap_or_default();
+    // A repo moved without git leaves each worktree pointing at where it was:
+    // git in the worktree then fails, removing it included. The main checkout
+    // still knows them, so it points them back.
+    if listed.iter().skip(1).any(|tree| detached_from_repo(&tree.path)) {
+        git(&listed[0].path, &["worktree", "repair"]);
+    }
     if listed.is_empty() {
         return vec![Worktree { path: cwd.to_string(), branch: None, main: true, add: 0, del: 0, dirty: 0 }];
     }
@@ -103,6 +109,15 @@ pub fn parse(porcelain: &str) -> Vec<Worktree> {
 /// Whether git marks any worktree `prunable`: its folder is gone.
 pub fn has_orphans(porcelain: &str) -> bool {
     porcelain.lines().any(|line| line == "prunable" || line.starts_with("prunable "))
+}
+
+/// Whether a linked worktree's `.git` file names a folder that is not there.
+/// A worktree whose own folder is gone is an orphan, not this.
+fn detached_from_repo(path: &str) -> bool {
+    std::fs::read_to_string(Path::new(path).join(".git"))
+        .ok()
+        .and_then(|file| file.strip_prefix("gitdir:").map(|dir| dir.trim().to_string()))
+        .is_some_and(|dir| !Path::new(path).join(dir).exists())
 }
 
 fn count(tree: &mut Worktree, main_head: Option<&str>) {
@@ -500,6 +515,22 @@ mod tests {
         let porcelain = run(&at(&repo), &["worktree", "list", "--porcelain"]).unwrap();
         assert!(!porcelain.contains(&gone), "git still records the orphan: {porcelain}");
         sh(&repo, &["show-ref", "--verify", "--quiet", "refs/heads/gone"]);
+    }
+
+    #[test]
+    fn a_repo_moved_without_git_is_reconnected_to_its_worktrees() {
+        let repo = repo();
+        let root = temp("crew-wt-root");
+        let tree = add_under(&root, &at(&repo), "feat").expect("add").path;
+        let moved = temp("crew-moved").join("app");
+        std::fs::rename(&repo, &moved).unwrap();
+        assert!(run(&tree, &["status"]).is_err(), "the worktree still finds the repo it was moved from");
+
+        let listed = list(&at(&moved));
+
+        assert_eq!(listed.iter().map(|t| t.path.clone()).collect::<Vec<_>>(), vec![at(&moved), tree.clone()]);
+        assert_eq!(remove(&tree, false).expect("remove"), tree);
+        assert!(!Path::new(&tree).exists());
     }
 
     #[test]
