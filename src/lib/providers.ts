@@ -41,10 +41,7 @@ export type ProviderDef = {
   effortArgs: (effort: Effort) => string[];
   /** The first message, handed to the interactive CLI as it starts. After `--`, so it is never read as a flag or a subcommand. */
   promptArgs: (text: string) => string[];
-  /**
-   * Crew reads the CLI's own history, so its sessions can open in the chat.
-   * cursor-agent keeps its CLI chats where nothing else can load them.
-   */
+  /** Crew reads the CLI's own history, so its sessions can open in the chat. */
   chat: boolean;
   models: Model[];
   /**
@@ -102,7 +99,7 @@ export const PROVIDERS: ProviderDef[] = [
     efforts: [],
     effortArgs: () => [],
     promptArgs: (text) => ["--", text],
-    chat: false,
+    chat: true,
     defaultModel: "auto",
     models: [
       { id: "auto", label: "Auto", note: "Default" },

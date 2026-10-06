@@ -16,6 +16,7 @@ use crew_core::provider_session::CLAUDE_BIND_ENV;
 use crew_core::provider_session;
 use crew_core::session_history::claude::ClaudeDecoder;
 use crew_core::session_history::codex::{rollout_path, CodexDecoder};
+use crew_core::session_history::cursor::CursorDecoder;
 use crew_core::session_history::opencode::OpencodeHistory;
 use crew_core::session_history::{History, SessionHistory};
 use crew_core::session_live::{hook_owner, LiveBoard};
@@ -406,6 +407,13 @@ fn open_history(board: &LiveBoard, store: &Store, id: &str, cwd: &str) -> Result
             });
             let Some(path) = path else { return Ok(None) };
             Ok(Some(Box::new(History::open(path, CodexDecoder::default(), OPEN_MESSAGES).map_err(io)?)))
+        }
+        // cursor-agent runs no hooks; its chat id is bound before it starts.
+        "cursor" => {
+            let Some(path) = row.provider_session_id.as_deref().and_then(provider_session::cursor_transcript) else {
+                return Ok(None);
+            };
+            Ok(Some(Box::new(History::open(path, CursorDecoder::default(), OPEN_MESSAGES).map_err(io)?)))
         }
         "opencode" => {
             let (Some(bound), Some(db)) = (row.provider_session_id, provider_session::opencode_db()) else { return Ok(None) };

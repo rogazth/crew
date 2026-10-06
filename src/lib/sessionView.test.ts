@@ -23,14 +23,13 @@ describe("sessionSurface", () => {
   });
 
   it("opens a session in the chat only when asked and its history can be read", () => {
-    for (const provider of ["claude", "codex", "opencode"]) {
+    for (const provider of ["claude", "codex", "opencode", "cursor"]) {
       expect(sessionSurface({ kind: "terminal", provider }, "chat")).toBe("chat");
       expect(sessionSurface({ kind: "terminal", provider }, "terminal")).toBe("terminal");
     }
   });
 
-  it("keeps Cursor and unknown CLIs in the terminal", () => {
-    expect(sessionSurface({ kind: "terminal", provider: "cursor" }, "chat")).toBe("terminal");
+  it("keeps unknown CLIs in the terminal", () => {
     expect(sessionSurface({ kind: "terminal", provider: "vim" }, "chat")).toBe("terminal");
   });
 });

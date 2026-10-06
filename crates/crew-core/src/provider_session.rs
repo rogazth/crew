@@ -267,6 +267,19 @@ fn codex_title(index: &Path, id: &str) -> Option<String> {
         .and_then(|entry| entry.get("thread_name")?.as_str().map(str::to_string))
 }
 
+/// Where cursor-agent writes chat `id`'s transcript, once it has written one.
+/// The folder is named from the cwd in a way that is not worth guessing (it
+/// shortens long names), so the id alone finds it.
+pub fn cursor_transcript(id: &str) -> Option<PathBuf> {
+    if !is_chat_id(id) {
+        return None;
+    }
+    sorted_dirs(&home()?.join(".cursor/projects"))
+        .into_iter()
+        .map(|project| project.join("agent-transcripts").join(id).join(format!("{id}.jsonl")))
+        .find(|path| path.is_file())
+}
+
 /// Chats sit under a folder hashed from the cwd, so the id alone finds them.
 fn cursor_title(chats: &Path, id: &str) -> Option<String> {
     if !is_chat_id(id) {
