@@ -710,6 +710,44 @@ Decision (the user's call, replacing §4.5's "disable `AskUserQuestion`"):
   refuses an escalation).
 - `respond_to_session` still goes; `send_message` absorbs its question half.
 
+### 7e.4b Round 4 (2026-10-05): approvals go to the parent too, prompts stay minimal
+
+Decided by the user, replacing the "approvals only to the user" part of
+§7e.4 and closing S1–S5, B1–B2 and the UI open points:
+
+- **Approvals go to the parent.** An ask-autonomy child's approval request
+  (a command, an edit, a process proposal from `save_process`) wakes its bot
+  parent with an `approval` letter: `## Approval from session <name> (<id>)`,
+  what it wants to run and why. The parent allows or denies it with
+  `send_message` (`decision: "allow" | "deny"`, `delivery: "answered"`). If
+  the parent thinks it is the user's call, it asks the user with its own
+  question tool. Ceiling: a parent decides only what it could do itself; a
+  parent on ask autonomy cannot, so the request goes to the user's card as
+  today. A terminal parent cannot be woken: the user gets the card. The
+  user's card stays available in every case; first answer wins.
+- **S1** *(recommended, to confirm)*: the session prompt says nothing about
+  commits, pushes or pull requests; the harness keeps its own judgement, and
+  the parent says in the job whether the child may commit (§7.1 already
+  asks for that).
+- **S2**: a session may define processes (`save_process`); under ask
+  autonomy the proposal is approved like any other request (above).
+- **S3**: no report format. The session prompt only says who started it,
+  that its final message reaches {parent}, and which Crew tools it has.
+  Principle: Crew adds context and tools, it does not change how the harness
+  behaves. The behavioural rules of the §6 draft ("only the job", "say what
+  you did not check"…) go.
+- **S4**: a session may `send_message` its parent mid-turn.
+- **S5**: `{parent}` carries name, kind and id.
+- **B1**: `update_description` is enough. *Bug to fix:* on a remote
+  workspace the bot reads its updated description but the window keeps
+  showing the old one.
+- **B2** *(recommended, to confirm)*: keep today's tail (last 60 blocks,
+  20k characters, tools as one line); the bot prompt says it sees only the
+  latest part and finds older messages with `search_messages`.
+- **U1–U3**: as recommended (red dot on the bot's row for a failed child;
+  the chat owner's bubbles on the right in threads; the background tray
+  hides when the next turn starts), to be revisited once seen.
+
 ### 7e.5 Crew's tools are pre-approved
 
 Every `mcp__crew__*` tool is pre-approved for bots and children:
