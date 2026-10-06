@@ -40,13 +40,12 @@ export function useExplorer() {
   }, []);
 
   /**
-   * ⌘⇧E and ⌘⇧F, as VS Code has them: the explorer opens on that half with the
-   * keyboard in it; asked again while the keyboard is already there, it closes.
+   * ⌘⇧E and ⌘⇧F: the explorer opens on that half with the keyboard in it;
+   * asked again while that half shows, it closes, wherever the keyboard is.
    */
   const toggle = useCallback(
     (mode: ExplorerMode, query?: string) => {
-      const inside = Boolean(document.activeElement?.closest("[data-explorer]"));
-      if (view.open && view.mode === mode && inside && mode === "files") {
+      if (view.open && view.mode === mode) {
         show({ open: false, mode });
         return;
       }

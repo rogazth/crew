@@ -129,3 +129,25 @@ test("X3: ⌘⇧F finds text in the files, .ai included and node_modules not, an
 
   await shot("explorer-search");
 });
+
+test("X4: ⌘⇧E and ⌘⇧F close their half when it shows, wherever the keyboard is", async () => {
+  const page = crew.window;
+  // Search shows from X3 with the keyboard in the editor: ⌘⇧F closes it.
+  await page.locator("[data-selectable]").click();
+  await pressChord(crew, `${MOD}+Shift+f`);
+  await explorer().waitFor({ state: "detached" });
+
+  await pressChord(crew, `${MOD}+Shift+e`);
+  await treeRow("src").waitFor();
+  await page.locator("[data-selectable]").click();
+  await pressChord(crew, `${MOD}+Shift+e`);
+  await explorer().waitFor({ state: "detached" });
+
+  // From the other half it switches rather than closes.
+  await pressChord(crew, `${MOD}+Shift+f`);
+  await explorer().getByRole("textbox", { name: "Search in files" }).waitFor();
+  await pressChord(crew, `${MOD}+Shift+e`);
+  await treeRow("src").waitFor();
+  await pressChord(crew, `${MOD}+Shift+e`);
+  await explorer().waitFor({ state: "detached" });
+});
