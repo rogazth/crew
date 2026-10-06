@@ -144,6 +144,8 @@ const fromDist = app.isPackaged || process.env.CREW_RENDERER === "dist";
 // the Dock and does not activate when the window is created. `prohibited`
 // cannot create windows. Without the variable the dev app shows as usual.
 const e2e = process.env.CREW_E2E === "1";
+// e2e plays no sound: specs finish turns and ring bells all day, in the background.
+if (e2e) app.commandLine.appendSwitch("mute-audio");
 
 // Two checkouts can run side by side: each takes its own dev port (CREW_PORT);
 // scripts/app.mjs picks a free one for a git worktree.

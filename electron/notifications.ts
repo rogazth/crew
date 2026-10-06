@@ -27,6 +27,9 @@ let state: BannerState = "unknown";
 /** The bundle macOS keys notification permission to: the release's, or Electron's own in dev. */
 const BUNDLE_ID = app.isPackaged ? "rogazth.crew" : "com.github.Electron";
 
+/** e2e keeps quiet: no beep, and banners without the OS sound. */
+const MUTED = process.env.CREW_E2E === "1";
+
 /**
  * A banner's click brings the window up on the session it is about. `window`
  * is the app's one window, if it has one; `reopen` makes it when it was closed.
@@ -41,7 +44,9 @@ export function registerNotifyIpc(window: () => BrowserWindow | null, reopen: ()
     });
     return state;
   });
-  ipcMain.on(NOTIFY_CHANNELS.beep, () => shell.beep());
+  ipcMain.on(NOTIFY_CHANNELS.beep, () => {
+    if (!MUTED) shell.beep();
+  });
   ipcMain.handle(NOTIFY_CHANNELS.sound, (_event, path: string) => readSound(path));
   ipcMain.handle(NOTIFY_CHANNELS.status, () => (Notification.isSupported() ? state : "unsupported"));
   ipcMain.on(NOTIFY_CHANNELS.badge, (_event, badge: DockBadge) => setBadge(badge));
@@ -78,7 +83,7 @@ async function readSound(path: unknown): Promise<Uint8Array | null> {
 
 function show(banner: Banner, onClick: () => void): Promise<BannerResult> {
   if (!Notification.isSupported()) return Promise.resolve("unsupported");
-  const silent = banner.silent === true;
+  const silent = MUTED || banner.silent === true;
   const note = new Notification({
     title: banner.title,
     body: banner.body.slice(0, BODY_LIMIT),
