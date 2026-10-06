@@ -710,6 +710,9 @@ fn update_description(
         caller.notifications,
         caller.autonomy.clone(),
     )?;
+    // The window's sheet and lists hold the row it loaded; this is what tells
+    // them, on whichever machine the daemon runs, that it changed.
+    store.session_changed(&caller.id);
     transcripts.append_system(&caller.id, "Description updated by itself");
     Ok(json!({
         "description": body,
@@ -1302,6 +1305,27 @@ mod tests {
             notes.iter().any(|block| block.text.contains("Description updated by itself")),
             "the chat does not say it happened"
         );
+    }
+
+    /// The window holds the row it loaded, here or on another machine; the
+    /// store's change is what the daemon turns into `session-updated`.
+    #[test]
+    fn a_bot_rewriting_what_it_is_tells_the_window() {
+        let store = store();
+        let transcripts = TranscriptHub::new(store.clone());
+        let ws = workspace(&store);
+        let coder = bot(&store, &ws, "Coder");
+        let heard = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let log = heard.clone();
+        store.set_listener(std::sync::Arc::new(move |what| {
+            if let crate::store::Changed::Session(id) = what {
+                log.lock().unwrap().push(id.to_string());
+            }
+        }));
+        let out = call(&store, &transcripts, &coder, "update_description", json!({ "text": "You keep the notes." }))
+            .expect("call");
+        assert!(!is_error(&out), "{}", body(&out));
+        assert_eq!(*heard.lock().unwrap(), vec![coder.id.clone()]);
     }
 
     // ---------------------------------------------------------------

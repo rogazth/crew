@@ -3,7 +3,7 @@ import { rememberBots } from '../lib/botNames';
 import { dispose, onSessionPatch, reconcile } from '../lib/turnRuntime';
 import { client } from '../lib/client';
 import * as api from '../lib/api';
-import { droppedOnReload, mergeReloaded } from '../lib/sessionList';
+import { applyUpdated, droppedOnReload, mergeReloaded } from '../lib/sessionList';
 import { reloadBotFaces } from './useBotFaces';
 import { useWorkspaceLink } from './useEnvLinks';
 import type { SessionCreated, SessionsDeleted, SessionUpdated } from '../lib/protocol';
@@ -121,19 +121,10 @@ export function useSessions(workspaceId: string | null) {
       });
     });
     // A Claude terminal that moved to a new conversation comes back renamed and
-    // rebound. Its status stays the window's to report, but for the unread the
-    // daemon handed to the conversation it left.
+    // rebound; a bot that rewrote its description comes back with it.
     const unsubscribeUpdated = client.on('session-updated', (payload) => {
       const row = (payload as SessionUpdated).session as unknown as Session;
-      patchSession(row.id, (session) => ({
-        ...session,
-        name: row.name,
-        model: row.model,
-        effort: row.effort,
-        autonomy: row.autonomy,
-        providerSessionId: row.providerSessionId,
-        status: session.status === 'done' ? row.status : session.status,
-      }));
+      patchSession(row.id, (session) => applyUpdated(session, row));
     });
     return () => {
       unsubscribe();

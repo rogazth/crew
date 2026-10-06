@@ -2561,6 +2561,28 @@ mod tests {
         handle.shutdown();
     }
 
+    /// The bot sheet shows the row the window loaded; a description the bot
+    /// rewrote reaches it as `session-updated`, from this daemon or a remote one.
+    #[tokio::test]
+    async fn update_description_emits_session_updated() {
+        let dir = test_dir("tool-description");
+        let (handle, bridge) = test_serve_bridged(&dir);
+        let mut ws = connect_authed(&handle).await;
+        let session_id = seed_bot(&mut ws, dir.to_str().unwrap()).await;
+        let info = bridge.info().expect("info");
+        let payload = serde_json::json!({
+            "token": bridge.mint(&session_id),
+            "method": "tools/call",
+            "params": { "name": "update_description", "arguments": { "text": "You keep the notes." } }
+        });
+        let reply = unix_call(&info.socket_path, &payload);
+        assert!(reply["result"]["isError"].as_bool() != Some(true), "reply: {reply}");
+        let event = wait_event(&mut ws, "session-updated").await;
+        let updated: proto::SessionUpdated = serde_json::from_value(event.payload).expect("updated");
+        assert_eq!((updated.session.id.as_str(), updated.session.description.as_str()), (session_id.as_str(), "You keep the notes."));
+        handle.shutdown();
+    }
+
     /// A workspace with one bot and one terminal session in it.
     async fn seed_terminal(ws: &mut Ws, cwd: &str) -> (String, String, String) {
         let workspace: proto::Workspace = serde_json::from_value(
