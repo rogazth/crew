@@ -1,5 +1,5 @@
 import { Popover } from "@base-ui/react/popover";
-import { BotIcon, GitBranchIcon, GlobeIcon, HatGlassesIcon, HistoryIcon, PlusIcon, SquareTerminalIcon } from "lucide-react";
+import { BotIcon, FolderTreeIcon, GitBranchIcon, GlobeIcon, HistoryIcon, PlusIcon, SquareTerminalIcon } from "lucide-react";
 import { Fragment, cloneElement, isValidElement, useEffect, useMemo, useRef, useState } from "react";
 import { BotAvatar } from "./BotAvatar";
 import { Footer, GroupHeader } from "./kit";
@@ -20,6 +20,7 @@ import { filterSessions } from "../lib/workspaces";
 export type Launch =
   | { kind: "stub"; stub: StubKind; title: string }
   | { kind: "browser"; url?: string; incognito?: boolean }
+  | { kind: "explorer" }
   | { kind: "new-bot" }
   | { kind: "new-session"; provider?: ProviderId }
   | { kind: "session"; session: Session };
@@ -27,7 +28,7 @@ export type Launch =
 type Action = { id: string; label: string; icon: React.ReactNode; launch: Launch; hint?: string };
 
 type Item = Action & { status?: SessionStatus; meta?: string };
-/** `tiles` lay out as the sidebar's bot grid; the rest are rows. */
+/** `tiles` are the cards at the top; the rest are rows. */
 type Group = { heading?: string; tiles?: boolean; items: Item[] };
 
 const PAGES = 5;
@@ -35,7 +36,7 @@ const PAGES = 5;
 const ICON = "size-4 shrink-0 text-icon";
 const TILE_ICON = "size-5 shrink-0 text-icon";
 
-/** What a tab can be made from nothing: the grid at the top, Terminal first so ⌘T ↵ opens one. */
+/** What a tab can be made from nothing: the cards at the top, Terminal first so ⌘T ↵ opens one. */
 const CREATE: Action[] = [
   {
     id: "terminal",
@@ -58,11 +59,11 @@ const CREATE: Action[] = [
     hint: commandKeys("new-browser-tab"),
   },
   {
-    id: "incognito",
-    label: "Incognito",
-    icon: <HatGlassesIcon className={TILE_ICON} />,
-    launch: { kind: "browser", incognito: true },
-    hint: commandKeys("new-incognito-tab"),
+    id: "explorer",
+    label: "Files",
+    icon: <FolderTreeIcon className={TILE_ICON} />,
+    launch: { kind: "explorer" },
+    hint: commandKeys("toggle-explorer"),
   },
 ];
 
@@ -174,9 +175,14 @@ function LauncherPopup({ sessions, onPick }: { sessions: Session[]; onPick: (lau
         { heading: "Jump back in", items: found },
       ];
     }
-    const actions = [...CREATE.map((a) => ({ ...a, label: `New ${a.label}`, icon: smaller(a.icon) })), ...providers].filter(
-      (action) => fuzzyMatch(query, action.label),
-    );
+    const actions = [
+      ...CREATE.map((action) => ({
+        ...action,
+        label: action.launch.kind === "explorer" ? action.label : `New ${action.label}`,
+        icon: smaller(action.icon),
+      })),
+      ...providers,
+    ].filter((action) => fuzzyMatch(query, action.label));
     const address = launcherAddress(query, actions.length > 0 || matches.length > 0);
     const open: Item | null = address && {
       id: "open-url",
@@ -224,7 +230,7 @@ function LauncherPopup({ sessions, onPick }: { sessions: Session[]; onPick: (lau
     list.current?.querySelector('[data-active="true"]')?.scrollIntoView({ block: "nearest" });
   }, [cursor]);
 
-  // The tiles sit in a row: ←→ walk them, ↓ leaves the row for the list.
+  // The cards sit in a row: ←→ walk them, ↓ leaves the row for the list.
   const tiles = groups[0]?.tiles ? groups[0].items.length : 0;
   function onKeyDown(event: React.KeyboardEvent) {
     const inTiles = cursor < tiles;
@@ -250,7 +256,7 @@ function LauncherPopup({ sessions, onPick }: { sessions: Session[]; onPick: (lau
     <Popover.Popup
       initialFocus={search}
       onKeyDown={onKeyDown}
-      className="flex w-[440px] origin-(--transform-origin) flex-col overflow-hidden rounded-float bg-surface text-text shadow-float outline-none transition-[opacity,scale] duration-100 data-starting-style:scale-[0.98] data-starting-style:opacity-0 data-ending-style:scale-[0.98] data-ending-style:opacity-0"
+      className="flex w-[440px] origin-(--transform-origin) flex-col overflow-hidden rounded-xl bg-surface text-text shadow-float outline-none transition-[opacity,scale] duration-100 data-starting-style:scale-[0.98] data-starting-style:opacity-0 data-ending-style:scale-[0.98] data-ending-style:opacity-0"
     >
       <div className="flex h-12 shrink-0 items-center gap-2.5 border-b border-hairline px-4">
         <PlusIcon className="size-4 shrink-0 text-icon" />
@@ -319,12 +325,12 @@ function LauncherPopup({ sessions, onPick }: { sessions: Session[]; onPick: (lau
   );
 }
 
-/** A tile's glyph, at a row's size once it is only a search result. */
+/** A card's glyph, at a row's size once it is only a search result. */
 function smaller(icon: React.ReactNode): React.ReactNode {
   return isValidElement<{ className?: string }>(icon) ? cloneElement(icon, { className: ICON }) : icon;
 }
 
-/** The sidebar's bot tile, as a door: glyph over label, lit under the cursor. */
+/** Glyph over label. Resting cards are a quiet fill; the one under the cursor steps up a shade. */
 function Tile({ item, active, onHover, onPick }: { item: Item; active: boolean; onHover: () => void; onPick: () => void }) {
   return (
     <button
@@ -332,8 +338,8 @@ function Tile({ item, active, onHover, onPick }: { item: Item; active: boolean; 
       data-active={active}
       onMouseEnter={onHover}
       onClick={onPick}
-      className={`flex h-[72px] flex-col items-center justify-center gap-1.5 rounded-xl ring-1 transition-colors ${
-        active ? "bg-hover ring-border" : "ring-hairline"
+      className={`flex h-[72px] flex-col items-center justify-center gap-1.5 rounded-xl outline-none transition-colors ${
+        active ? "bg-selected" : "bg-card"
       }`}
     >
       {item.icon}

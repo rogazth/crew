@@ -278,6 +278,10 @@ export function App() {
     openStub: nav.openStub,
     openTerminal: nav.openTerminal,
     openBrowser: (url, incognito) => nav.openBrowser(url, incognito),
+    openExplorer: () => {
+      closePage();
+      explorer.setMode("files");
+    },
     newBot: sheet.newBot,
   });
 
