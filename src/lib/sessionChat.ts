@@ -7,6 +7,8 @@ export type Queued = { id: string; text: string; files: AttachedFile[]; at: numb
 
 /** How far a CLI's clock and ours may disagree when a queued message is matched to its turn. */
 const CLOCK_SLACK_MS = 5000;
+/** Cursor dates a prompt as the first millisecond of its minute, and a later read of the file keeps that. */
+const MINUTE_MS = 60_000;
 
 /** The text as compared: spaces folded, and a plugin's command (`/plugin:name`) by the name it was typed as. */
 const squash = (text: string) =>
@@ -16,12 +18,21 @@ const squash = (text: string) =>
     .replace(/^\/[^\s/:]+:/, "/");
 
 /**
+ * Whether `turn` is when `sent` was written. A CLI's clock may be a few
+ * seconds ahead of ours. Cursor's stamp is the start of a minute, so a send
+ * any time in that minute is still the turn.
+ */
+const sameTime = (provider: string, turn: number, sent: number) =>
+  turn >= sent - CLOCK_SLACK_MS ||
+  (provider === "cursor" && turn % MINUTE_MS === 0 && sent > turn && sent < turn + MINUTE_MS);
+
+/**
  * The queued messages whose user turn is in the history yet. The CLI may
  * dress the text (Claude turns a pasted image path into `[Image #1]`, and
  * writes a plugin's `/name` as `/plugin:name`), so a turn written after the
  * send that ends with the text is the match; each turn answers for one send.
  */
-export function delivered(queued: readonly Queued[], blocks: readonly Block[]): Set<string> {
+export function delivered(queued: readonly Queued[], blocks: readonly Block[], provider: string): Set<string> {
   const done = new Set<string>();
   const used = new Set<string>();
   for (const sent of queued) {
@@ -30,7 +41,7 @@ export function delivered(queued: readonly Queued[], blocks: readonly Block[]): 
       (block) =>
         block.role === "user" &&
         !used.has(block.id) &&
-        (block.at ?? 0) >= sent.at - CLOCK_SLACK_MS &&
+        sameTime(provider, block.at ?? 0, sent.at) &&
         (text === "" || squash(block.text).endsWith(text)),
     );
     if (!turn) continue;
@@ -82,6 +93,30 @@ export function turnStart(blocks: readonly Block[]): number | undefined {
   const queued = sent.filter((at) => ended === undefined || at >= ended);
   if (queued.length > 0) return Math.min(...queued);
   return ended ?? user;
+}
+
+/**
+ * The queued message the running turn has already taken, when the history has
+ * not written that turn yet. Cursor records the prompt with the reply, so
+ * until then the only sign the message was received is that the agent is at
+ * work on it. A send that arrives while a turn is already in the history is
+ * still waiting.
+ */
+export function underway(blocks: readonly Block[], working: boolean): Block | undefined {
+  if (!working) return undefined;
+  let user: number | undefined;
+  let ended: number | undefined;
+  const queued: Block[] = [];
+  for (const block of blocks) {
+    if (block.at === undefined) continue;
+    if (isQueued(block) && !block.fromBot) queued.push(block);
+    else if (block.role === "user") user = Math.max(user ?? block.at, block.at);
+    else if (endsTurn(block)) ended = Math.max(ended ?? block.at, block.at);
+  }
+  if (user !== undefined && (ended === undefined || user > ended)) return undefined;
+  const waiting = queued.filter((block) => ended === undefined || (block.at ?? 0) >= ended);
+  if (waiting.length === 0) return undefined;
+  return waiting.reduce((earliest, block) => ((block.at ?? 0) < (earliest.at ?? 0) ? block : earliest));
 }
 
 /** A queued message as a user bubble; `streaming` marks it as not in the history yet. */

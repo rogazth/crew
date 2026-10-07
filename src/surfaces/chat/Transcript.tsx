@@ -5,7 +5,7 @@ import {
   type ApprovalDecision,
   type Block,
 } from "../../lib/blocks";
-import { turnStart } from "../../lib/sessionChat";
+import { turnStart, underway } from "../../lib/sessionChat";
 import { foldTurns, groupRows, speaker, splitQueued } from "../../lib/transcriptRows";
 import { WorkingLine } from "./Activity";
 import { QueuedGroup } from "./Letters";
@@ -84,7 +84,14 @@ export function Transcript({
   const { calls } = useBackgroundScope();
   const { rows, queued } = useMemo(() => {
     const split = splitQueued(groupRows(blocks, calls.size > 0 ? new Set(calls.keys()) : undefined));
-    return { rows: foldTurns(split.rows, working), queued: split.queued };
+    // The message the agent is already working on is that turn's prompt. It
+    // sits above the working line; only what is still waiting stays queued.
+    const prompt = underway(blocks, working);
+    const queued = prompt ? split.queued.filter((block) => block.id !== prompt.id) : split.queued;
+    const rows = prompt
+      ? [...split.rows, { kind: "message" as const, block: { ...prompt, streaming: false } }]
+      : split.rows;
+    return { rows: foldTurns(rows, working), queued };
   }, [blocks, calls, working]);
 
   const onScroll = () => {

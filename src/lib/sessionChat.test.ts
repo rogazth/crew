@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Block } from "./blocks";
 import type { SessionAsk } from "./protocol";
-import { askBlock, delivered, openQuestion, overdue, queuedBlock, turnStart, withAsk, type Queued } from "./sessionChat";
+import { askBlock, delivered, openQuestion, overdue, queuedBlock, turnStart, underway, withAsk, type Queued } from "./sessionChat";
 
 const user = (id: string, text: string, at: number): Block => ({ id, role: "user", text, at });
 const sent = (id: string, text: string, at: number): Queued => ({ id, text, files: [], at });
@@ -9,29 +9,50 @@ const sent = (id: string, text: string, at: number): Queued => ({ id, text, file
 describe("delivered", () => {
   it("matches a send to the user turn the CLI wrote after it", () => {
     const history = [user("old", "fix it", 1_000), user("new", "fix it", 60_000)];
-    expect(delivered([sent("s", "fix it", 59_000)], history)).toEqual(new Set(["s"]));
-    expect(delivered([sent("s", "fix it", 120_000)], history)).toEqual(new Set());
+    expect(delivered([sent("s", "fix it", 59_000)], history, "claude")).toEqual(new Set(["s"]));
+    expect(delivered([sent("s", "fix it", 120_000)], history, "claude")).toEqual(new Set());
   });
 
   it("finds the text behind what the CLI put in front of it", () => {
     const history = [user("t", "[Image #1] what is this?", 10_000)];
-    expect(delivered([sent("s", "what is this?", 10_000)], history).has("s")).toBe(true);
+    expect(delivered([sent("s", "what is this?", 10_000)], history, "claude").has("s")).toBe(true);
   });
 
   it("gives each turn to one send", () => {
     const history = [user("t", "again", 10_000)];
-    expect(delivered([sent("a", "again", 9_000), sent("b", "again", 9_500)], history)).toEqual(new Set(["a"]));
+    expect(delivered([sent("a", "again", 9_000), sent("b", "again", 9_500)], history, "claude")).toEqual(new Set(["a"]));
   });
 
   it("reads a pasted message of several lines the way the CLI stored it", () => {
     const history = [user("t", "one\ntwo", 10_000)];
-    expect(delivered([sent("s", "one\n two", 10_000)], history).has("s")).toBe(true);
+    expect(delivered([sent("s", "one\n two", 10_000)], history, "claude").has("s")).toBe(true);
   });
 
   it("matches a plugin's command typed without its plugin", () => {
     const history = [user("t", "/ns:deep look at this", 11_000)];
-    expect(delivered([sent("s", "/deep look at this", 10_000)], history).has("s")).toBe(true);
-    expect(delivered([sent("s", "/ns:deep look at this", 10_000)], history).has("s")).toBe(true);
+    expect(delivered([sent("s", "/deep look at this", 10_000)], history, "claude").has("s")).toBe(true);
+    expect(delivered([sent("s", "/ns:deep look at this", 10_000)], history, "claude").has("s")).toBe(true);
+  });
+
+  it("matches a send later in the minute only for cursor", () => {
+    // Monday, Aug 24, 2026, 1:05 PM (UTC-4): the start of that minute, as cursor writes it.
+    const minute = 1_787_591_100_000;
+    const history = [user("t", "fix it", minute)];
+    const late = [sent("s", "fix it", minute + 40_000)];
+    expect(delivered(late, history, "cursor").has("s")).toBe(true);
+    expect(delivered(late, history, "claude").has("s")).toBe(false);
+    expect(delivered(late, history, "codex").has("s")).toBe(false);
+    expect(delivered([sent("s", "fix it", minute + 60_000)], history, "cursor").has("s")).toBe(false);
+    // Read back inside the minute, cursor's stamp is the real time and the short slack applies.
+    expect(delivered(late, [user("t", "fix it", minute + 1)], "cursor").has("s")).toBe(false);
+    // Two sends in that minute take one turn each, in order.
+    const both = [user("a", "again", minute), user("b", "again", minute)];
+    expect(
+      delivered([sent("first", "again", minute + 20_000), sent("second", "again", minute + 50_000)], both, "cursor"),
+    ).toEqual(new Set(["first", "second"]));
+    expect(
+      delivered([sent("first", "again", minute + 20_000), sent("second", "again", minute + 50_000)], [user("t", "again", minute)], "cursor"),
+    ).toEqual(new Set(["first"]));
   });
 });
 
@@ -123,6 +144,29 @@ describe("turnStart (plan §7c-2)", () => {
   it("counts a turn the CLI started by itself from the end of the last one", () => {
     expect(turnStart([user("u1", "go", 0), ended("a1", 5 * MIN)])).toBe(5 * MIN);
     expect(turnStart([])).toBeUndefined();
+  });
+});
+
+describe("underway", () => {
+  it("is the message the agent is working on before the history has the turn", () => {
+    const blocks = [queuedBlock(sent("s", "the odyssey", 8_000))];
+    expect(underway(blocks, true)?.id).toBe("queued:s");
+    expect(underway(blocks, false)).toBeUndefined();
+  });
+
+  it("leaves a follow-up queued while a turn already in the history is running", () => {
+    const blocks = [user("u", "first", 1_000), queuedBlock(sent("s", "and this", 5_000))];
+    expect(underway(blocks, true)).toBeUndefined();
+  });
+
+  it("takes the earliest send and leaves a later one waiting", () => {
+    const blocks = [
+      user("u", "done", 0),
+      ended("a", 5_000),
+      queuedBlock(sent("first", "go", 8_000)),
+      queuedBlock(sent("second", "also", 9_000)),
+    ];
+    expect(underway(blocks, true)?.id).toBe("queued:first");
   });
 });
 

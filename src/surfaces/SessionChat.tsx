@@ -131,7 +131,7 @@ export function SessionChat({
     [id],
   );
 
-  const { waiting, keepQueued } = useQueued(id, history.blocks);
+  const { waiting, keepQueued } = useQueued(id, history.blocks, session.provider);
 
   const blocks = useMemo(
     () => [...withAsk(history.blocks, ask), ...waiting.map(queuedBlock)],
@@ -348,18 +348,18 @@ export function SessionChat({
  * Messages sent and not in the CLI's history yet. They outlive the chat, which
  * the setting and the tab mount and unmount, and show until their turn is in.
  */
-function useQueued(id: string, blocks: Block[]) {
+function useQueued(id: string, blocks: Block[], provider: string) {
   const [queued, setQueued] = useState<Queued[]>(() => pending.get(id) ?? []);
   useEffect(() => {
     if (queued.length > 0) pending.set(id, queued);
     else pending.delete(id);
   }, [id, queued]);
   const waiting = useMemo(() => {
-    const done = delivered(queued, blocks);
+    const done = delivered(queued, blocks, provider);
     // One the CLI had its turn for and never matched is not still coming.
     const late = overdue(queued, blocks);
     return queued.filter((sent) => !done.has(sent.id) && !late.has(sent.id));
-  }, [blocks, queued]);
+  }, [blocks, provider, queued]);
   return { waiting, keepQueued: setQueued };
 }
 
