@@ -812,15 +812,20 @@ body:has(button[data-sidebar="resize-handle"]:active) * {
   font-weight: 600;
   color: var(--crew-alert);
 }
-/* streamdown pads the table inside a second card; the box is the table's own. */
+/* A plate: the header sits on a grey ground, and the rows are a white card
+   set into it, rounded on top, clipped to the plate's radius below. */
 .crew-md [data-streamdown="table-wrapper"] {
+  --tbl-bg: light-dark(#fafafa, #242424);
+  --tbl-body: light-dark(#fff, #1a1a1a);
+  --tbl-line: light-dark(#e6e8ec, #303030);
+  --tbl-cell: light-dark(#1a1a1a, #f5f5f5);
   display: block;
   margin: 0;
   padding: 0;
   border: 0;
   background: none;
 }
-.crew-md [data-streamdown="table-wrapper"] > div {
+.crew-md [data-streamdown="table-wrapper"] > div:has(table) {
   width: fit-content;
   max-width: 100%;
   /* streamdown also scrolls it vertically and may cap its height inline; a table grows instead. */
@@ -828,35 +833,66 @@ body:has(button[data-sidebar="resize-handle"]:active) * {
   overflow-x: auto;
   overflow-y: hidden;
   overscroll-behavior-x: contain;
-  border: 1px solid var(--color-border);
+  border: 0;
   border-radius: 12px;
-  background: none;
+  background: var(--tbl-bg);
+  box-shadow:
+    0 0 0 0.5px light-dark(rgb(0 0 0 / 0.08), rgb(255 255 255 / 0.12)),
+    0 1px 2px light-dark(rgb(0 0 0 / 0.05), rgb(0 0 0 / 0.4)),
+    0 2px 4px light-dark(rgb(0 0 0 / 0.02), rgb(0 0 0 / 0.3));
 }
 .crew-md [data-streamdown="table"] {
-  border-collapse: collapse;
+  border-collapse: separate;
+  border-spacing: 0;
   font-size: inherit;
   line-height: inherit;
 }
+.crew-md [data-streamdown="table-header"],
+.crew-md [data-streamdown="table-body"],
+.crew-md [data-streamdown="table-row"] {
+  border: 0;
+  background: transparent;
+}
 .crew-md [data-streamdown="table-header-cell"],
 .crew-md [data-streamdown="table-cell"] {
-  padding: 8px 14px;
+  padding: 9px 12px;
   border: 0;
-  border-bottom: 1px solid var(--color-hairline);
-  border-right: 1px solid var(--color-hairline);
   text-align: left;
   vertical-align: top;
-}
-.crew-md [data-streamdown="table-row"] > :last-child {
-  border-right: 0;
+  color: var(--tbl-cell);
 }
 .crew-md [data-streamdown="table-header-cell"] {
-  background: var(--color-card);
-  font-size: 12.5px;
-  font-weight: 600;
-  color: var(--color-text-muted);
+  padding-top: 7px;
+  padding-bottom: 7px;
+  background: transparent;
+  font-weight: 500;
+  color: var(--color-text);
+  border-right: 0.5px solid var(--tbl-line);
 }
-.crew-md [data-streamdown="table-body"] [data-streamdown="table-row"]:last-child [data-streamdown="table-cell"] {
-  border-bottom: 0;
+/* The body's outer rule is a border on its cells. The header keeps the same
+   width with a transparent edge, so the columns stay in line. */
+.crew-md [data-streamdown="table-header-cell"]:first-child {
+  border-left: 0.5px solid transparent;
+}
+.crew-md [data-streamdown="table-header-cell"]:last-child {
+  border-right: 0.5px solid transparent;
+}
+.crew-md [data-streamdown="table-cell"] {
+  background: var(--tbl-body);
+  border-right: 0.5px solid var(--tbl-line);
+  border-bottom: 0.5px solid var(--tbl-line);
+}
+.crew-md [data-streamdown="table-body"] [data-streamdown="table-row"]:first-child [data-streamdown="table-cell"] {
+  border-top: 0.5px solid var(--tbl-line);
+}
+.crew-md [data-streamdown="table-cell"]:first-child {
+  border-left: 0.5px solid var(--tbl-line);
+}
+.crew-md [data-streamdown="table-body"] [data-streamdown="table-row"]:first-child [data-streamdown="table-cell"]:first-child {
+  border-top-left-radius: 12px;
+}
+.crew-md [data-streamdown="table-body"] [data-streamdown="table-row"]:first-child [data-streamdown="table-cell"]:last-child {
+  border-top-right-radius: 12px;
 }
 .crew-md [data-streamdown="horizontal-rule"] {
   width: 100%;

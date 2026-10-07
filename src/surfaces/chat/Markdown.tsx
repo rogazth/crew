@@ -158,9 +158,9 @@ const REHYPE = Object.entries(defaultRehypePlugins).map(([name, plugin]) => {
 });
 /** `$$…$$` only: a lone `$` is a price far more often than it is maths. */
 const PLUGINS = { math: createMathPlugin({ singleDollarTextMath: false }) };
-/** A table copies as Markdown or CSV; code and diagrams bring their own controls. */
+/** Code and diagrams bring their own controls. A table's copy control has nowhere to sit. */
 const CONTROLS: ControlsConfig = {
-  table: { copy: true, download: false, fullscreen: false },
+  table: false,
   code: false,
   mermaid: false,
   image: false,
