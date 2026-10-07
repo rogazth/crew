@@ -4,7 +4,6 @@ import {
   ChevronDownIcon,
   CircleSlashIcon,
   GitBranchIcon,
-  LoaderCircleIcon,
   MessageCircleQuestionIcon,
   MessagesSquareIcon,
   ShieldQuestionIcon,
@@ -14,6 +13,7 @@ import {
 import { useState, type ReactNode } from "react";
 import { PANEL, ROW } from "../../chrome/kit";
 import { ProviderIcon } from "../../chrome/ProviderIcon";
+import { TypingDots } from "../../chrome/StatusDot";
 import { childState, pairThread, partyOf, sessionParty, type ChildState, type Party, type ThreadRef } from "../../lib/letters";
 import type { ThreadPair } from "../../lib/protocol";
 import { summarize } from "../../lib/activity";
@@ -22,8 +22,8 @@ import type { Session } from "../../lib/types";
 import { Face } from "./Letters";
 
 const STATE: Record<ChildState, { label: string; glyph: ReactNode }> = {
-  working: { label: "Working", glyph: <LoaderCircleIcon className="size-3 animate-spin text-warning" /> },
-  starting: { label: "Starting", glyph: <LoaderCircleIcon className="size-3 animate-spin text-icon" /> },
+  working: { label: "Working", glyph: <TypingDots /> },
+  starting: { label: "Starting", glyph: <TypingDots /> },
   reported: { label: "Reported", glyph: <CheckIcon className="size-3 text-success" /> },
   question: { label: "Question", glyph: <MessageCircleQuestionIcon className="size-3 text-warning" /> },
   approval: { label: "Waiting for approval", glyph: <ShieldQuestionIcon className="size-3 text-warning" /> },

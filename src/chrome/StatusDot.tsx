@@ -27,16 +27,23 @@ export function StatusDot({ status, className = "" }: { status: SessionStatus; c
       className={`flex size-3.5 shrink-0 items-center justify-center ${className}`}
     >
       {status === "working" || status === "starting" ? (
-        <span className="crew-typing">
-          <span />
-          <span />
-          <span />
-        </span>
+        <TypingDots />
       ) : status === "background" ? (
         <span className="size-2 rounded-full border-[1.5px] border-text-muted" />
       ) : (
         <span className={`size-2 rounded-full ${DOT[status]}`} />
       )}
+    </span>
+  );
+}
+
+/** Three dots in ink, rising in turn: a turn running, or a call still open. */
+export function TypingDots({ className = "" }: { className?: string }) {
+  return (
+    <span className={`crew-typing ${className}`}>
+      <span />
+      <span />
+      <span />
     </span>
   );
 }

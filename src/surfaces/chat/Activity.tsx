@@ -1,6 +1,7 @@
 import { Collapsible } from "@base-ui/react/collapsible";
-import { BotIcon, ChevronRightIcon, CircleStopIcon, FileTextIcon, GlobeIcon, ListChecksIcon, LoaderCircleIcon, MessageCircleMoreIcon, NotebookTextIcon, PencilIcon, PlugIcon, SearchIcon, SendIcon, SparkleIcon, TerminalIcon, WrenchIcon, XIcon, type LucideIcon as Icon } from "lucide-react";
+import { BotIcon, ChevronRightIcon, CircleStopIcon, FileTextIcon, GlobeIcon, ListChecksIcon, MessageCircleMoreIcon, NotebookTextIcon, PencilIcon, PlugIcon, SearchIcon, SendIcon, SparkleIcon, TerminalIcon, WrenchIcon, XIcon, type LucideIcon as Icon } from "lucide-react";
 import { createElement, lazy, memo, Suspense, useMemo, useState, type ReactNode } from "react";
+import { TypingDots } from "../../chrome/StatusDot";
 import {
   FOLD_AT,
   activityDigest,
@@ -246,7 +247,7 @@ function lit(id: string, marked: string | null): string {
   return id === marked ? " crew-found" : "";
 }
 
-/** Spinner while it runs, cross when it failed; what it did otherwise, a caret on hover when it can open. */
+/** Dots while it runs, cross when it failed; what it did otherwise, a caret on hover when it can open. */
 function ToolGlyph({
   pending,
   failed,
@@ -260,7 +261,7 @@ function ToolGlyph({
   openable: boolean;
   icon?: Icon | undefined;
 }) {
-  if (pending) return <LoaderCircleIcon className="size-3.5 animate-spin text-warning" />;
+  if (pending) return <TypingDots />;
   if (failed) return <XIcon className="size-3 text-danger" />;
   const caret = (
     <ChevronRightIcon
@@ -434,7 +435,7 @@ function SubagentSteps({ steps, running, marked }: { steps: Block[]; running: bo
 const SUBAGENT_TONE: Partial<Record<SubagentState, string>> = { running: "crew-shimmer", failed: "text-danger" };
 
 /**
- * A subagent's one line: spinner while it runs, its mark (a cross when it
+ * A subagent's one line: dots while it runs, its mark (a cross when it
  * failed), what it was for, what it is on now, and how far it got.
  */
 function SubagentLine({ detail, view, open }: { detail: AgentDetail; view: SubagentView; open: boolean }) {
@@ -444,7 +445,7 @@ function SubagentLine({ detail, view, open }: { detail: AgentDetail; view: Subag
     <>
       <span className="crew-node relative">
         {view.state === "running" ? (
-          <LoaderCircleIcon className="size-3.5 animate-spin text-warning" />
+          <TypingDots />
         ) : (
           <>
             {createElement(failed ? XIcon : stopped ? CircleStopIcon : BotIcon, {
@@ -551,11 +552,7 @@ export function WorkingLine({ since, waiting }: { since: number | undefined; wai
   return (
     <div className="flex min-h-[26px] items-center gap-2 py-0.5 text-[13px] leading-[18px]">
       <span className="crew-node">
-        {waiting ? (
-          <MessageCircleMoreIcon className="size-3.5 text-warning" />
-        ) : (
-          <LoaderCircleIcon className="size-3.5 animate-spin text-warning" />
-        )}
+        {waiting ? <MessageCircleMoreIcon className="size-3.5 text-warning" /> : <TypingDots />}
       </span>
       <span className={`tabular-nums ${waiting ? "text-text-muted" : "crew-shimmer"}`}>{label}</span>
     </div>

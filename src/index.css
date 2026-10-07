@@ -1117,7 +1117,7 @@ svg.lucide {
   visibility: hidden;
 }
 
-/* A turn running: three dots in ink, rising in turn. Nothing else in the chrome moves. */
+/* Work in progress: three dots in ink, rising in turn. A tab, a running call. */
 .crew-typing {
   display: flex;
   align-items: center;
