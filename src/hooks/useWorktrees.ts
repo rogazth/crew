@@ -11,13 +11,15 @@ const standIn = (path: string): Worktree => ({ path, branch: null, main: true, a
 /**
  * The workspace's worktrees as git lists them, and the one on screen. Read on
  * every workspace switch and whenever the window comes back, since worktrees
- * are made and removed outside crew too. The one on screen is remembered per
- * workspace.
+ * are made and removed outside crew too. Each workspace's last answer is kept,
+ * so switching back shows it while git is asked again, which on a remote
+ * machine takes a moment. The one on screen is remembered per workspace.
  */
 export function useWorktrees(workspace: Workspace | null) {
   const path = workspace?.path ?? "";
   const workspaceId = workspace?.id ?? "";
-  const [listed, setListed] = useState<{ path: string; list: Worktree[] }>({ path, list: [] });
+  // A few rows per workspace shown, so keeping them all costs next to nothing.
+  const [listed, setListed] = useState<Record<string, Worktree[]>>({});
   const [chosen, setChosen] = useState<Record<string, string>>({});
   const [tick, setTick] = useState(0);
 
@@ -27,7 +29,7 @@ export function useWorktrees(workspace: Workspace | null) {
     const read = () =>
       void api
         .listWorktrees(path)
-        .then((list) => !cancelled && setListed({ path, list }))
+        .then((list) => !cancelled && setListed((prev) => ({ ...prev, [path]: list })))
         .catch(() => {});
     read();
     window.addEventListener("focus", read);
@@ -49,10 +51,11 @@ export function useWorktrees(workspace: Workspace | null) {
     };
   }, [workspaceId, chosen]);
 
-  const known = listed.path === path && listed.list.length > 0;
+  const answer = listed[path];
+  const known = !!answer && answer.length > 0;
   const list = useMemo(
-    () => (known ? asListed(listed.list, path) : path ? [standIn(path)] : []),
-    [known, listed, path],
+    () => (answer && answer.length > 0 ? asListed(answer, path) : path ? [standIn(path)] : []),
+    [answer, path],
   );
   // A remembered worktree that git no longer lists falls back to the main checkout.
   const active = list.find((tree) => tree.path === chosen[workspaceId]) ?? list.find((tree) => tree.main) ?? list[0] ?? null;
@@ -97,7 +100,7 @@ export function useWorktrees(workspace: Workspace | null) {
   const create = useCallback(
     async (branch: string) => {
       const tree = await api.addWorktree(path, branch);
-      setListed((prev) => (prev.path === path ? { path, list: [...prev.list, tree] } : prev));
+      setListed((prev) => (prev[path] ? { ...prev, [path]: [...prev[path], tree] } : prev));
       select(tree.path);
       refresh();
       return tree;
@@ -108,14 +111,16 @@ export function useWorktrees(workspace: Workspace | null) {
   /** Git's answer now, for a caller that cannot wait for the next focus. */
   const reread = useCallback(async () => {
     const fresh = await api.listWorktrees(path);
-    setListed({ path, list: fresh });
+    setListed((prev) => ({ ...prev, [path]: fresh }));
     return asListed(fresh, path);
   }, [path]);
 
   const remove = useCallback(
     async (tree: Worktree, force: boolean) => {
       await api.removeWorktree(tree.path, force);
-      setListed((prev) => ({ ...prev, list: prev.list.filter((entry) => entry.path !== tree.path) }));
+      setListed((prev) =>
+        prev[path] ? { ...prev, [path]: prev[path].filter((entry) => entry.path !== tree.path) } : prev,
+      );
       // Remembered on screen, it would be picked again if the same path came back.
       if (chosen[workspaceId] === tree.path) {
         setChosen((prev) => ({ ...prev, [workspaceId]: "" }));
@@ -123,7 +128,7 @@ export function useWorktrees(workspace: Workspace | null) {
       }
       refresh();
     },
-    [chosen, refresh, workspaceId],
+    [chosen, path, refresh, workspaceId],
   );
 
   return {
