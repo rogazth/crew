@@ -81,6 +81,12 @@ impl CursorDecoder {
         if let Some(at) = tag(&text, "timestamp").and_then(parse_timestamp) {
             self.turn_at = Some(closer(at, now_ms()));
         }
+        // Cursor tells the model to continue once background subagents finish,
+        // and writes that instruction in the same tag as a prompt. It still
+        // closes the turn the prompt before it was in; nobody typed it.
+        if is_subagent_follow_up(query) {
+            return vec![settled];
+        }
         let prompt = self.event(HarnessEvent::UserMessage {
             text: query.to_string(),
             hidden: None,
@@ -249,6 +255,12 @@ fn texts(content: Option<&Value>) -> String {
     }
 }
 
+/// The instruction Cursor appends when background subagents finish. Matched
+/// from its opening: the rest of the sentence is how the model should answer.
+fn is_subagent_follow_up(query: &str) -> bool {
+    query.starts_with("Perform any necessary follow-up actions in response to the subagent completion")
+}
+
 /// The inside of the first `<name>…</name>` in `text`.
 fn tag<'a>(text: &'a str, name: &str) -> Option<&'a str> {
     let open = format!("<{name}>");
@@ -409,6 +421,43 @@ mod tests {
         assert_eq!(path, "/repo/src/math.js");
         assert_eq!(hunks[0].before, "  return a - b;");
         assert_eq!(hunks[0].after, "  return a + b;");
+    }
+
+    /// The lines cursor-agent wrote when three background subagents finished.
+    /// The follow-up instruction sits in `<user_query>` and is not shown; it
+    /// is what closes the turn, and the model's reply after it stays.
+    #[test]
+    fn a_subagent_follow_up_closes_the_turn_without_a_user_message() {
+        let earlier = "<timestamp>Tuesday, Oct 6, 2026, 10:09 PM (UTC-3)</timestamp>";
+        let stamp = "<timestamp>Tuesday, Oct 6, 2026, 10:10 PM (UTC-3)</timestamp>";
+        let nudge = "Perform any necessary follow-up actions in response to the subagent completion above. If no follow-up work is needed, no further action is required. If you mention an agent or subagent in your response, link it with the `[Name](id)` Don't use generic label such as `[agent]`, `[worker]`, or `[subagent]`. Don't repeat the same confirmation every time.";
+        let user = |text: &str| {
+            serde_json::json!({
+                "role": "user",
+                "message": { "content": [{ "type": "text", "text": text }] }
+            })
+            .to_string()
+        };
+        let blocks = decode(&format!(
+            "{}\n{}\n{}\n{}\n{}\n{}\n",
+            user(&format!("{earlier}\n<user_query>\nHazlo de nuevo\n</user_query>")),
+            r#"{"role":"assistant","message":{"content":[{"type":"tool_use","name":"Shell","input":{"command":"ls"}}]}}"#,
+            user(stamp),
+            user(stamp),
+            user(&format!("{stamp}\n\n<user_query>{nudge}</user_query>")),
+            r#"{"role":"assistant","message":{"content":[{"type":"text","text":"Probe agent delta ya respondieron."}]}}"#,
+        ));
+        let rows: Vec<(BlockRole, &str)> = blocks.iter().map(|block| (block.role.clone(), block.text.as_str())).collect();
+        assert_eq!(
+            rows,
+            vec![
+                (BlockRole::User, "Hazlo de nuevo"),
+                (BlockRole::Tool, "ls"),
+                (BlockRole::Assistant, "Probe agent delta ya respondieron."),
+            ]
+        );
+        assert_eq!(blocks[1].tool.as_ref().map(|tool| tool.status.clone()), Some(ToolStatus::Completed));
+        assert!(blocks.iter().all(|block| block.text != nudge));
     }
 
     #[test]
