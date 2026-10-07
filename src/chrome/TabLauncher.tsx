@@ -109,7 +109,17 @@ export function TabLauncher({ open, onOpenChange, sessions, onLaunch }: Props) {
       </Popover.Trigger>
 
       <Popover.Portal>
-        <Popover.Positioner side="bottom" align="start" sideOffset={2} className="z-50">
+        {/* The plus is centered in the 40px strip, so the offset clears the
+            rest of the bar. The strip clips vertically; default collision
+            avoidance treats it as the boundary and parks the panel beside the
+            plus, on the tabs. Stay under the bar and only slide sideways. */}
+        <Popover.Positioner
+          side="bottom"
+          align="start"
+          sideOffset={10}
+          collisionAvoidance={{ side: "none", align: "shift", fallbackAxisSide: "none" }}
+          className="z-50"
+        >
           <LauncherPopup sessions={sessions} onPick={pick} />
         </Popover.Positioner>
       </Popover.Portal>
