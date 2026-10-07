@@ -157,11 +157,11 @@ pub fn row_to_session(row: &rusqlite::Row, at: usize) -> rusqlite::Result<Sessio
     })
 }
 
-/// A row from before Crew always named a model, or one written without any,
-/// runs and shows its provider's default rather than "the CLI's own".
+/// A row written without a model runs its provider's default. Cursor, Codex
+/// and opencode use the one their CLI has selected; Claude's is fixed.
 fn or_default_model(provider: &str, model: String) -> String {
     if model.is_empty() {
-        crate::tools::default_model(provider).to_string()
+        crate::tools::unnamed_model(provider)
     } else {
         model
     }
@@ -169,7 +169,7 @@ fn or_default_model(provider: &str, model: String) -> String {
 
 fn or_default_effort(provider: &str, effort: String) -> String {
     if effort.is_empty() {
-        crate::tools::default_effort(provider).to_string()
+        crate::tools::unnamed_effort(provider)
     } else {
         effort
     }
@@ -505,6 +505,7 @@ pub fn switch_provider(
         row.name
     };
     let autonomy = autonomy_or_default(autonomy);
+    let model = or_default_model(&provider, model);
     store.with(|conn| {
         conn.execute(
             "UPDATE sessions
@@ -1098,9 +1099,45 @@ mod tests {
         set_options(&store, s.id.clone(), String::new(), String::new(), "ask".into()).expect("options");
         let read = get(&store, s.id).expect("get").expect("row");
         assert_eq!((read.model.as_str(), read.effort.as_str()), ("claude-opus-5-5", "high"));
-        let new = create(&store, workspace, "terminal".into(), "codex 1".into(), "codex".into(), String::new(), String::new(), "ask".into())
+        let new = create(&store, workspace.clone(), "terminal".into(), "codex 1".into(), "codex".into(), String::new(), String::new(), "ask".into())
             .expect("codex");
-        assert_eq!((new.model.as_str(), new.effort.as_str()), ("gpt-6-astra", "medium"));
+        assert_eq!(new.model, crate::tools::unnamed_model("codex"));
+        assert_eq!(new.effort, crate::tools::unnamed_effort("codex"));
+        assert!(!new.model.is_empty());
+        let open = create(&store, workspace, "terminal".into(), "opencode 1".into(), "opencode".into(), String::new(), String::new(), "ask".into())
+            .expect("opencode");
+        assert_eq!(open.model, crate::tools::unnamed_model("opencode"));
+        assert!(!open.model.is_empty());
+    }
+
+    #[test]
+    fn a_cursor_session_without_a_model_uses_the_cli_selection() {
+        let (store, workspace) = world();
+        let named = create(
+            &store,
+            workspace.clone(),
+            "terminal".into(),
+            "cursor 1".into(),
+            "cursor".into(),
+            "grok-4.7-xhigh".into(),
+            String::new(),
+            "ask".into(),
+        )
+        .expect("named");
+        assert_eq!(named.model, "grok-4.7-xhigh");
+        let unnamed = create(
+            &store,
+            workspace,
+            "terminal".into(),
+            "cursor 2".into(),
+            "cursor".into(),
+            String::new(),
+            String::new(),
+            "ask".into(),
+        )
+        .expect("unnamed");
+        assert_eq!(unnamed.model, crate::tools::unnamed_model("cursor"));
+        assert_ne!(unnamed.model, "");
     }
 
     #[test]

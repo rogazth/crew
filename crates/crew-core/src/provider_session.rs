@@ -4,7 +4,7 @@ use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::thread;
-use std::time::{Duration, Instant, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crew_protocol::ListedModel;
 use rusqlite::{params, Connection, OpenFlags};
@@ -173,6 +173,410 @@ fn list_cursor_models() -> Result<Vec<ListedModel>, String> {
         return Err(format!("cursor-agent models exited with {status}"));
     }
     Ok(parse_cursor_models(&out))
+}
+
+/// How cursor spells an effort on a variant id, longest suffix first, and the
+/// token Crew compares. `extra-high` and `xhigh` are one effort.
+const EFFORT_SUFFIXES: &[(&str, &str)] = &[
+    ("extra-high", "xhigh"),
+    ("xhigh", "xhigh"),
+    ("minimal", "minimal"),
+    ("medium", "medium"),
+    ("none", "none"),
+    ("high", "high"),
+    ("low", "low"),
+    ("max", "max"),
+];
+
+struct VariantParts {
+    base: String,
+    effort: Option<&'static str>,
+    fast: bool,
+}
+
+/// `grok-4.7-xhigh-fast` is `grok-4.7` at extra high, fast. The same split
+/// `splitVariant` does in `src/lib/providers.ts`.
+fn split_variant(id: &str) -> VariantParts {
+    let (rest, fast) = match id.strip_suffix("-fast") {
+        Some(rest) => (rest, true),
+        None => (id, false),
+    };
+    for (suffix, token) in EFFORT_SUFFIXES {
+        if let Some(base) = rest.strip_suffix(&format!("-{suffix}")) {
+            return VariantParts { base: base.to_string(), effort: Some(*token), fast };
+        }
+        if let Some(head) = rest.strip_suffix(&format!("-{suffix}-thinking")) {
+            return VariantParts { base: format!("{head}-thinking"), effort: Some(*token), fast };
+        }
+    }
+    VariantParts { base: rest.to_string(), effort: None, fast }
+}
+
+fn effort_token(value: &str) -> Option<&'static str> {
+    match value {
+        "xhigh" | "extra-high" | "extra_high" => Some("xhigh"),
+        "max" => Some("max"),
+        "high" => Some("high"),
+        "medium" => Some("medium"),
+        "low" => Some("low"),
+        "minimal" => Some("minimal"),
+        "none" => Some("none"),
+        _ => None,
+    }
+}
+
+fn is_auto_model(id: &str) -> bool {
+    id.is_empty() || id == "auto" || id == "default"
+}
+
+fn param_string(value: &serde_json::Value) -> Option<String> {
+    match value {
+        serde_json::Value::String(text) => Some(text.clone()),
+        serde_json::Value::Bool(on) => Some(on.to_string()),
+        serde_json::Value::Number(number) => Some(number.to_string()),
+        _ => None,
+    }
+}
+
+fn parameters_of(value: Option<&serde_json::Value>) -> Vec<(String, String)> {
+    value
+        .and_then(|value| value.as_array())
+        .map(|rows| {
+            rows.iter()
+                .filter_map(|row| {
+                    let id = row.get("id").and_then(|id| id.as_str())?;
+                    let value = param_string(row.get("value")?)?;
+                    Some((id.to_string(), value))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// `selectedModel` is what the terminal last picked. Older files only have
+/// `model`, with the same parameters under `modelParameters`.
+fn selection_of(value: &serde_json::Value) -> Option<(String, Vec<(String, String)>)> {
+    if let Some(selected) = value.get("selectedModel").filter(|value| value.is_object()) {
+        let id = selected.get("modelId").and_then(|id| id.as_str()).unwrap_or("");
+        if !id.is_empty() {
+            return Some((id.to_string(), parameters_of(selected.get("parameters"))));
+        }
+    }
+    let id = value.get("model").and_then(|model| model.get("modelId")).and_then(|id| id.as_str())?;
+    let params = value
+        .get("modelParameters")
+        .and_then(|all| all.get(id))
+        .map(|rows| parameters_of(Some(rows)))
+        .unwrap_or_default();
+    Some((id.to_string(), params))
+}
+
+fn same_family(base: &str, model_id: &str) -> bool {
+    if base == model_id || base.strip_suffix("-thinking") == Some(model_id) {
+        return true;
+    }
+    let prefixed = format!("cursor-{model_id}");
+    base == prefixed || base.strip_suffix("-thinking") == Some(prefixed.as_str())
+}
+
+/// The listed id for this selection: same family, same fast flag, and the
+/// effort when one was saved. An effort the list does not have is left unmatched.
+fn listed_variant<'a>(model_id: &str, effort: Option<&str>, fast: bool, listed: &'a [&'a str]) -> Option<&'a str> {
+    let mut hits: Vec<&str> = listed
+        .iter()
+        .copied()
+        .filter(|id| {
+            let variant = split_variant(id);
+            if !same_family(&variant.base, model_id) || variant.fast != fast {
+                return false;
+            }
+            match effort {
+                Some(wanted) => variant.effort == Some(wanted),
+                None => true,
+            }
+        })
+        .collect();
+    if hits.is_empty() {
+        return None;
+    }
+    hits.sort_by_key(|id| {
+        let variant = split_variant(id);
+        let exact = if variant.base == model_id { 0 } else { 1 };
+        let rank = if effort.is_some() {
+            0
+        } else {
+            match variant.effort {
+                None => 0,
+                Some("medium") => 1,
+                Some(_) => 2,
+            }
+        };
+        (exact, rank, id.len())
+    });
+    hits.first().copied()
+}
+
+fn synthesize_variant(model_id: &str, effort: Option<&str>, fast: bool) -> String {
+    let mut id = match effort {
+        Some(token) => format!("{model_id}-{token}"),
+        None => model_id.to_string(),
+    };
+    if fast {
+        id.push_str("-fast");
+    }
+    id
+}
+
+/// The `--model` id for what `cli-config.json` has selected. `auto` and the
+/// CLI's own `default` are Crew's `auto`. A parameterized id (`grok-4.7`) with
+/// its effort and fast flag becomes the variant `cursor-agent models` lists
+/// (`grok-4.7-xhigh`). `listed` is those ids; without them the variant is spelled
+/// from the parameters.
+pub fn cursor_selection(config: &str, listed: &[&str]) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_str(config).ok()?;
+    let (model_id, params) = selection_of(&value)?;
+    if is_auto_model(&model_id) {
+        return Some("auto".into());
+    }
+    let effort = params.iter().find_map(|(id, value)| {
+        if id == "reasoning_effort" || id == "effort" || id == "reasoning" {
+            effort_token(value)
+        } else {
+            None
+        }
+    });
+    let fast = params.iter().any(|(id, value)| id == "fast" && value == "true");
+    if let Some(id) = listed_variant(&model_id, effort, fast, listed) {
+        return Some(id.to_string());
+    }
+    Some(synthesize_variant(&model_id, effort, fast))
+}
+
+struct ConfigCache {
+    modified: SystemTime,
+    model: String,
+}
+
+static CURSOR_CONFIG: Mutex<Option<ConfigCache>> = Mutex::new(None);
+
+fn cached_listed_ids() -> Vec<String> {
+    cached_cursor_models()
+        .map(|(_, models)| models.into_iter().map(|model| model.id).collect())
+        .unwrap_or_default()
+}
+
+/// The model cursor-agent has selected, as an id `--model` accepts. Missing
+/// or unreadable config is `auto`, which is the CLI's own stand-in.
+pub fn cursor_configured_model() -> String {
+    let Some(path) = home().map(|dir| dir.join(".cursor/cli-config.json")) else {
+        return "auto".into();
+    };
+    let Ok(modified) = std::fs::metadata(&path).and_then(|meta| meta.modified()) else {
+        return "auto".into();
+    };
+    {
+        let cache = CURSOR_CONFIG.lock().unwrap_or_else(|err| err.into_inner());
+        if let Some(hit) = cache.as_ref() {
+            if hit.modified == modified {
+                return hit.model.clone();
+            }
+        }
+    }
+    let text = std::fs::read_to_string(&path).unwrap_or_default();
+    let listed = cached_listed_ids();
+    let refs: Vec<&str> = listed.iter().map(String::as_str).collect();
+    let model = cursor_selection(&text, &refs).unwrap_or_else(|| "auto".into());
+    *CURSOR_CONFIG.lock().unwrap_or_else(|err| err.into_inner()) = Some(ConfigCache { modified, model: model.clone() });
+    model
+}
+
+/// Efforts Crew can hand Codex. Anything else (`ultra`, `persistent`) is left
+/// blank so the caller uses Codex's own default instead of a flag it would drop.
+const CODEX_EFFORTS: &[&str] = &["minimal", "low", "medium", "high", "xhigh", "max"];
+
+/// A `key = "value"` before the first `[table]`. The model picker writes those
+/// two keys at the top of `config.toml`; later tables are per-folder notes.
+fn top_level_toml_string(text: &str, key: &str) -> Option<String> {
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        if trimmed.starts_with('[') {
+            break;
+        }
+        let Some((found, rest)) = trimmed.split_once('=') else { continue };
+        if found.trim() != key {
+            continue;
+        }
+        return toml_string(rest.trim());
+    }
+    None
+}
+
+fn toml_string(raw: &str) -> Option<String> {
+    let mut chars = raw.chars();
+    let quote = chars.next()?;
+    if quote != '"' && quote != '\'' {
+        let word = raw.split_whitespace().next()?;
+        return (!word.starts_with('#')).then(|| word.to_string());
+    }
+    let mut out = String::new();
+    while let Some(ch) = chars.next() {
+        if ch == '\\' && quote == '"' {
+            out.push(chars.next()?);
+            continue;
+        }
+        if ch == quote {
+            return Some(out);
+        }
+        out.push(ch);
+    }
+    None
+}
+
+/// `model` and `model_reasoning_effort` from Codex's user config. The effort
+/// is empty when the file names none Crew can pass. `None` is no model at all.
+pub fn codex_selection(config: &str) -> Option<(String, String)> {
+    let model = top_level_toml_string(config, "model")?;
+    if model.is_empty() {
+        return None;
+    }
+    let effort = top_level_toml_string(config, "model_reasoning_effort")
+        .filter(|effort| CODEX_EFFORTS.contains(&effort.as_str()))
+        .unwrap_or_default();
+    Some((model, effort))
+}
+
+struct CodexCache {
+    modified: SystemTime,
+    model: String,
+    effort: String,
+}
+
+static CODEX_CONFIG: Mutex<Option<CodexCache>> = Mutex::new(None);
+
+fn codex_fallback() -> (String, String) {
+    (
+        crate::tools::default_model("codex").to_string(),
+        crate::tools::default_effort("codex").to_string(),
+    )
+}
+
+fn codex_configured() -> (String, String) {
+    let Some(path) = codex_home().map(|dir| dir.join("config.toml")) else {
+        return codex_fallback();
+    };
+    let Ok(modified) = std::fs::metadata(&path).and_then(|meta| meta.modified()) else {
+        return codex_fallback();
+    };
+    {
+        let cache = CODEX_CONFIG.lock().unwrap_or_else(|err| err.into_inner());
+        if let Some(hit) = cache.as_ref() {
+            if hit.modified == modified {
+                return (hit.model.clone(), hit.effort.clone());
+            }
+        }
+    }
+    let text = std::fs::read_to_string(&path).unwrap_or_default();
+    let (model, effort) = match codex_selection(&text) {
+        Some((model, effort)) => {
+            let effort = if effort.is_empty() { crate::tools::default_effort("codex").to_string() } else { effort };
+            (model, effort)
+        }
+        None => codex_fallback(),
+    };
+    *CODEX_CONFIG.lock().unwrap_or_else(|err| err.into_inner()) =
+        Some(CodexCache { modified, model: model.clone(), effort: effort.clone() });
+    (model, effort)
+}
+
+/// The model `~/.codex/config.toml` has selected. Missing config is Crew's stand-in.
+pub fn codex_configured_model() -> String {
+    codex_configured().0
+}
+
+/// `model_reasoning_effort` from the same file, or Codex's default when it names none.
+pub fn codex_configured_effort() -> String {
+    codex_configured().1
+}
+
+fn opencode_config_file() -> Option<PathBuf> {
+    let config = match std::env::var("XDG_CONFIG_HOME") {
+        Ok(dir) if !dir.is_empty() => PathBuf::from(dir),
+        _ => home()?.join(".config"),
+    };
+    Some(config.join("opencode/opencode.json"))
+}
+
+fn opencode_model_state() -> Option<PathBuf> {
+    let state = match std::env::var("XDG_STATE_HOME") {
+        Ok(dir) if !dir.is_empty() => PathBuf::from(dir),
+        _ => home()?.join(".local/state"),
+    };
+    Some(state.join("opencode/model.json"))
+}
+
+/// The model a new `opencode` starts on. Config `model` wins; otherwise the
+/// first named entry of `model.json`'s `recent` list, as `provider/model`.
+pub fn opencode_selection(config: &str, state: &str) -> Option<String> {
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(config) {
+        if let Some(model) = value.get("model").and_then(|model| model.as_str()) {
+            let model = model.trim();
+            if !model.is_empty() {
+                return Some(model.to_string());
+            }
+        }
+    }
+    let value: serde_json::Value = serde_json::from_str(state).ok()?;
+    let recent = value.get("recent")?.as_array()?;
+    for item in recent {
+        let provider = item.get("providerID").and_then(|id| id.as_str()).unwrap_or("").trim();
+        let model = item.get("modelID").and_then(|id| id.as_str()).unwrap_or("").trim();
+        if provider.is_empty() || model.is_empty() || provider.contains('/') {
+            continue;
+        }
+        return Some(format!("{provider}/{model}"));
+    }
+    None
+}
+
+struct OpencodeCache {
+    config_modified: Option<SystemTime>,
+    state_modified: Option<SystemTime>,
+    model: String,
+}
+
+static OPENCODE_CONFIG: Mutex<Option<OpencodeCache>> = Mutex::new(None);
+
+fn file_mtime(path: &Option<PathBuf>) -> Option<SystemTime> {
+    path.as_ref().and_then(|path| std::fs::metadata(path).and_then(|meta| meta.modified()).ok())
+}
+
+/// The model opencode would start on, from its config or its last-used list.
+/// Missing files are Crew's stand-in.
+pub fn opencode_configured_model() -> String {
+    let config_path = opencode_config_file();
+    let state_path = opencode_model_state();
+    if config_path.is_none() && state_path.is_none() {
+        return crate::tools::default_model("opencode").to_string();
+    }
+    let config_modified = file_mtime(&config_path);
+    let state_modified = file_mtime(&state_path);
+    {
+        let cache = OPENCODE_CONFIG.lock().unwrap_or_else(|err| err.into_inner());
+        if let Some(hit) = cache.as_ref() {
+            if hit.config_modified == config_modified && hit.state_modified == state_modified {
+                return hit.model.clone();
+            }
+        }
+    }
+    let config = config_path.as_ref().and_then(|path| std::fs::read_to_string(path).ok()).unwrap_or_default();
+    let state = state_path.as_ref().and_then(|path| std::fs::read_to_string(path).ok()).unwrap_or_default();
+    let model = opencode_selection(&config, &state).unwrap_or_else(|| crate::tools::default_model("opencode").to_string());
+    *OPENCODE_CONFIG.lock().unwrap_or_else(|err| err.into_inner()) =
+        Some(OpencodeCache { config_modified, state_modified, model: model.clone() });
+    model
 }
 
 /// `id - Label` lines between a heading and a tip. Labels carry zero-width
@@ -565,6 +969,93 @@ fn opencode_sessions(db: &Path, since_ms: i64) -> Vec<Found> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_terminal_selection_becomes_the_variant_the_cli_lists() {
+        let grok = r#"{"selectedModel":{"modelId":"grok-4.7","parameters":[
+            {"id":"context","value":"256k"},
+            {"id":"reasoning_effort","value":"xhigh"},
+            {"id":"fast","value":"false"}
+        ]}}"#;
+        let listed = [
+            "auto",
+            "grok-4.7-high",
+            "grok-4.7-xhigh",
+            "grok-4.7-xhigh-fast",
+            "cursor-grok-4.6-high",
+            "gpt-5.5-high",
+            "gpt-5.5-extra-high",
+        ];
+        assert_eq!(cursor_selection(grok, &listed).as_deref(), Some("grok-4.7-xhigh"));
+
+        let fast = r#"{"selectedModel":{"modelId":"grok-4.7","parameters":[
+            {"id":"reasoning_effort","value":"high"},
+            {"id":"fast","value":"true"}
+        ]}}"#;
+        assert_eq!(cursor_selection(fast, &listed).as_deref(), Some("grok-4.7-high-fast"));
+
+        // The parameterized id is `grok-4.6`; the listed one is prefixed.
+        let older = r#"{"model":{"modelId":"grok-4.6"},"modelParameters":{"grok-4.6":[{"id":"effort","value":"high"}]}}"#;
+        assert_eq!(cursor_selection(older, &listed).as_deref(), Some("cursor-grok-4.6-high"));
+
+        // `extra-high` and `xhigh` are the same effort; the list says which spelling it uses.
+        let sol = r#"{"selectedModel":{"modelId":"gpt-5.5","parameters":[{"id":"reasoning","value":"xhigh"}]}}"#;
+        assert_eq!(cursor_selection(sol, &listed).as_deref(), Some("gpt-5.5-extra-high"));
+    }
+
+    #[test]
+    fn auto_and_a_missing_list_still_name_a_model() {
+        let auto = r#"{"selectedModel":{"modelId":"default","parameters":[]},"model":{"displayModelId":"auto"}}"#;
+        assert_eq!(cursor_selection(auto, &[]).as_deref(), Some("auto"));
+        let grok = r#"{"selectedModel":{"modelId":"grok-4.7","parameters":[{"id":"reasoning_effort","value":"xhigh"}]}}"#;
+        assert_eq!(cursor_selection(grok, &[]).as_deref(), Some("grok-4.7-xhigh"));
+        assert!(cursor_selection("not json", &[]).is_none());
+    }
+
+    #[test]
+    fn codex_config_names_the_model_and_its_effort() {
+        let config = "\
+model = \"gpt-6-luna\"
+model_reasoning_effort = \"medium\"
+model_context_window = 1000000
+
+[projects.\"/tmp\"]
+model = \"gpt-5.5\"
+";
+        assert_eq!(codex_selection(config), Some(("gpt-6-luna".into(), "medium".into())));
+        assert_eq!(codex_selection("model = 'gpt-5.6-sol'\n"), Some(("gpt-5.6-sol".into(), String::new())));
+        // An effort Crew cannot pass is dropped; the model still stands.
+        assert_eq!(
+            codex_selection("model = \"gpt-6-luna\"\nmodel_reasoning_effort = \"ultra\"\n"),
+            Some(("gpt-6-luna".into(), String::new()))
+        );
+        assert!(codex_selection("[tui]\nmodel = \"nope\"\n").is_none());
+        assert!(codex_selection("not toml").is_none());
+    }
+
+    #[test]
+    fn opencode_prefers_the_config_model_then_the_last_used() {
+        let state = r#"{"recent":[
+            {"providerID":"opencode","modelID":"muse-spark-1.3-contributor-free"},
+            {"providerID":"openai","modelID":"gpt-5.6-sol"}
+        ]}"#;
+        assert_eq!(opencode_selection(r#"{"model":"openai/gpt-5.6-sol"}"#, state).as_deref(), Some("openai/gpt-5.6-sol"));
+        assert_eq!(
+            opencode_selection(r#"{"mcp":{}}"#, state).as_deref(),
+            Some("opencode/muse-spark-1.3-contributor-free")
+        );
+        assert_eq!(opencode_selection("not json", state).as_deref(), Some("opencode/muse-spark-1.3-contributor-free"));
+        let skip = r#"{"recent":[{"providerID":""},{"modelID":"x"},{"providerID":"opencode","modelID":"mimo-v2.5-free"}]}"#;
+        assert_eq!(opencode_selection("", skip).as_deref(), Some("opencode/mimo-v2.5-free"));
+        assert!(opencode_selection("", "{}").is_none());
+    }
+
+    #[test]
+    fn configured_cli_models_are_non_empty() {
+        assert!(!codex_configured_model().is_empty());
+        assert!(!codex_configured_effort().is_empty());
+        assert!(!opencode_configured_model().is_empty());
+    }
 
     #[test]
     fn cursor_models_are_read_from_the_listing_and_its_labels_cleaned() {

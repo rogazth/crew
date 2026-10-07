@@ -1,5 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { effortsOf, findModel, fitChoice, groupListed, modelLabel, modelsOf, PROVIDERS, searchModels, setListedModels, splitVariant } from "./providers";
+import {
+  choiceForNewSession,
+  effortsOf,
+  findModel,
+  fitChoice,
+  groupListed,
+  modelLabel,
+  modelsOf,
+  PROVIDERS,
+  searchModels,
+  setListedModels,
+  splitVariant,
+} from "./providers";
 
 /** Lines from `cursor-agent models` (2026.10.01), labels as the daemon cleans them. */
 const LISTED = [
@@ -130,5 +142,38 @@ describe("a provider whose CLI lists its models", () => {
 
   it("does not touch providers that list nothing", () => {
     expect(fitChoice({ provider: "claude", model: "claude-opus-5-5", effort: "", access: "full" }).effort).toBe("high");
+  });
+});
+
+describe("choiceForNewSession", () => {
+  const defaults = { provider: "claude" as const, model: "claude-opus-5-5", effort: "high" as const, access: "full" as const };
+
+  it("leaves a cursor session unnamed so the daemon reads the CLI's selection", () => {
+    expect(choiceForNewSession("cursor", defaults)).toMatchObject({ provider: "cursor", model: "", effort: "", access: "full" });
+  });
+
+  it("keeps a cursor model that was picked, Auto included", () => {
+    expect(choiceForNewSession({ provider: "cursor", model: "auto", effort: "", access: "full" }, defaults).model).toBe("auto");
+    expect(choiceForNewSession({ provider: "cursor", model: "grok-4.7-xhigh", effort: "", access: "full" }, defaults)).toMatchObject({
+      model: "grok-4.7-xhigh",
+      effort: "xhigh",
+    });
+  });
+
+  it("leaves codex and opencode unnamed so the daemon reads the CLI", () => {
+    expect(choiceForNewSession("codex", defaults)).toMatchObject({ provider: "codex", model: "", effort: "", access: "full" });
+    expect(choiceForNewSession("opencode", defaults)).toMatchObject({ provider: "opencode", model: "", effort: "", access: "full" });
+  });
+
+  it("keeps a codex model that was picked", () => {
+    expect(choiceForNewSession({ provider: "codex", model: "gpt-5.5", effort: "low", access: "ask" }, defaults)).toMatchObject({
+      model: "gpt-5.5",
+      effort: "low",
+      access: "ask",
+    });
+  });
+
+  it("still names claude's own default", () => {
+    expect(choiceForNewSession("claude", defaults)).toMatchObject({ provider: "claude", model: "claude-opus-5-5", effort: "high" });
   });
 });

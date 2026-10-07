@@ -677,7 +677,7 @@ impl SessionTools {
             Some(model) => return Err(unknown_model(&model, &provider)),
             None => match caller.session().filter(|me| me.provider == provider && !me.model.is_empty()) {
                 Some(me) => me.model.clone(),
-                None => crate::tools::default_model(&provider).to_string(),
+                None => crate::tools::unnamed_model(&provider),
             },
         };
         // Never more than the caller has: a parent that has to ask before a

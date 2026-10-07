@@ -1,7 +1,7 @@
 import { useCallback } from "react";
 import type { Launch } from "../chrome/TabLauncher";
 import { setFirstPrompt } from "../lib/firstPrompt";
-import { fitChoice, type AgentChoice, type ProviderId } from "../lib/providers";
+import { choiceForNewSession, type AgentChoice, type ProviderId } from "../lib/providers";
 import type { Session, StubKind } from "../lib/types";
 import { nextSessionName } from "../lib/workspaces";
 import { useDefaultAgent } from "./useDefaultAgent";
@@ -35,10 +35,7 @@ export function useLaunch({ sessions, worktree, create, markBlank, openSession, 
      * handed to the CLI as it starts.
      */
     async (pick: ProviderId | AgentChoice = defaultAgent, place: string | null = worktree, prompt?: string) => {
-      const choice =
-        typeof pick === "object"
-          ? pick
-          : fitChoice({ ...defaultAgent, provider: pick, model: pick === defaultAgent.provider ? defaultAgent.model : "" });
+      const choice = choiceForNewSession(pick, defaultAgent);
       const session = await create("terminal", {
         name: nextSessionName(sessions, choice.provider),
         provider: choice.provider,

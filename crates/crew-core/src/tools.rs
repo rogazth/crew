@@ -72,9 +72,9 @@ const PROVIDERS: &[(&str, &[&str])] = &[
     ),
 ];
 
-/// The model a session runs when none was picked. Crew always names one, so a
-/// session's chips say what its CLI runs rather than "whatever it is set to".
-/// Mirrors `defaultModel` in `src/lib/providers.ts`.
+/// The model a session runs when none was picked and the CLI's own selection
+/// cannot be read. Cursor, Codex and opencode otherwise use that selection
+/// (`unnamed_model`). Mirrors `defaultModel` in `src/lib/providers.ts`.
 pub fn default_model(provider: &str) -> &'static str {
     match provider {
         "claude" => "claude-opus-5-5",
@@ -95,6 +95,26 @@ pub fn default_effort(provider: &str) -> &'static str {
         "codex" => "medium",
         _ => "",
     }
+}
+
+/// A session's model when the caller named none. Cursor, Codex and opencode
+/// use whatever their CLI has selected; the rest use `default_model`.
+pub fn unnamed_model(provider: &str) -> String {
+    match provider {
+        "cursor" => crate::provider_session::cursor_configured_model(),
+        "codex" => crate::provider_session::codex_configured_model(),
+        "opencode" => crate::provider_session::opencode_configured_model(),
+        _ => default_model(provider).to_string(),
+    }
+}
+
+/// A session's effort when the caller named none. Codex's is the one in its
+/// config; the rest use `default_effort`.
+pub fn unnamed_effort(provider: &str) -> String {
+    if provider == "codex" {
+        return crate::provider_session::codex_configured_effort();
+    }
+    default_effort(provider).to_string()
 }
 
 /// One tool, as `tools/list` describes it.
@@ -832,7 +852,7 @@ fn create_bot(
         if provider == me.provider {
             me.model.clone()
         } else {
-            default_model(&provider).to_string()
+            unnamed_model(&provider)
         }
     });
     // Inherited, never asked for. A session that has to stop at every command

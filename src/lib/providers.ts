@@ -56,9 +56,10 @@ export type ProviderDef = {
   /** Its CLI lists the account's models (`agent_models`), which replace `models` once read. */
   listsModels?: boolean;
   /**
-   * What a session runs when nothing was picked. Crew always names a model and
-   * an effort, so the chips say what the CLI runs. Mirrors `default_model` and
-   * `default_effort` in `crates/crew-core/src/tools.rs`.
+   * What a session runs when nothing was picked and the CLI's own selection
+   * cannot be read. Mirrors `default_model` and `default_effort` in
+   * `crates/crew-core/src/tools.rs`. Cursor, Codex and opencode leave a new
+   * session that names no model blank, and the daemon reads the CLI.
    */
   defaultModel: string;
   defaultEffort?: Effort;
@@ -143,7 +144,7 @@ export const PROVIDERS: ProviderDef[] = [
     binding: "after",
     resumeArgs: (id) => ["resume", id],
     access: { ask: [], auto: ["--approve-for-me"], full: ["--dangerously-bypass-approvals-and-sandbox"] },
-    efforts: ["low", "medium", "high", "xhigh"],
+    efforts: ["minimal", "low", "medium", "high", "xhigh", "max"],
     effortArgs: (effort) => ["-c", `model_reasoning_effort="${effort}"`],
     promptArgs: (text) => ["--", text],
     chat: true,
@@ -307,6 +308,22 @@ export function pickProvider(preferred: AgentChoice, installed: ProviderDef[]): 
 export function providerLine(providerId: string, modelId: string): string {
   const label = providerOf(providerId)?.label ?? providerId;
   return modelId ? `${label} ${modelLabel(providerId, modelId)}` : label;
+}
+
+/**
+ * What a new session is created with. Cursor, Codex and opencode go out with
+ * a blank model when nobody named one: the daemon reads the CLI's selection
+ * instead of substituting Crew's stand-in. A model that was picked is kept,
+ * and so is its effort.
+ */
+export function choiceForNewSession(pick: ProviderId | AgentChoice, defaults: AgentChoice): AgentChoice {
+  const specified: AgentChoice =
+    typeof pick === "object" ? pick : { ...defaults, provider: pick, model: pick === defaults.provider ? defaults.model : "" };
+  const choice = fitChoice(specified);
+  if (specified.model === "" && (choice.provider === "cursor" || choice.provider === "codex" || choice.provider === "opencode")) {
+    return { ...choice, model: "", effort: "" };
+  }
+  return choice;
 }
 
 export function parseAgentChoice(raw: string | null): AgentChoice | null {
