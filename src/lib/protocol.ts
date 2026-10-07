@@ -359,7 +359,17 @@ export type ListProjectFiles = { cwd: string, };
 /**
  * One model a provider's CLI lists for this account, as it spells it.
  */
-export type ListedModel = { id: string, label: string, };
+export type ListedModel = { id: string, label: string, 
+/**
+ * Codex service tiers besides Standard. An empty list advertised none;
+ * absent means this listing does not speak of tiers.
+ */
+tiers?: Array<ListedTier>, };
+
+/**
+ * One service tier a model advertises, besides Standard.
+ */
+export type ListedTier = { id: string, label: string, };
 
 /**
  * A stretch of log. `text` is ANSI-free for agents, raw for a terminal.
@@ -728,7 +738,11 @@ offset?: number, sort?: SearchSort, };
 
 export type SearchSort = "relevance" | "newest";
 
-export type Session = { id: string, workspaceId: string, kind: string, name: string, provider: string, model: string, effort: string, providerSessionId: string | null, description: string, notifications: boolean, autonomy: string, status: string, 
+export type Session = { id: string, workspaceId: string, kind: string, name: string, provider: string, model: string, effort: string, 
+/**
+ * Codex's service tier (`default`, `fast`, `flex`, `ultrafast`). Empty is the CLI's own.
+ */
+serviceTier: string, providerSessionId: string | null, description: string, notifications: boolean, autonomy: string, status: string, 
 /**
  * The git worktree it runs in; `None` is the workspace folder.
  */
@@ -791,7 +805,11 @@ export type SessionCreate = { workspaceId: string, kind: string, name: string, p
 /**
  * The model's reasoning effort; empty or absent is the CLI's own setting.
  */
-effort?: string, description: string, autonomy: string, 
+effort?: string, 
+/**
+ * Codex's service tier; empty or absent is the CLI's own.
+ */
+serviceTier?: string, description: string, autonomy: string, 
 /**
  * The git worktree the session runs in; absent means the workspace folder.
  */
@@ -908,9 +926,13 @@ export type SessionLiveReset = { sessionId: string, at: number, };
 export type SessionMarkSeen = { id: string, cursor?: number, };
 
 /**
- * What a session's composer changes: its model, effort and autonomy.
+ * What a session's composer changes: its model, effort, service tier and autonomy.
  */
-export type SessionOptions = { id: string, model: string, effort: string, autonomy: string, };
+export type SessionOptions = { id: string, model: string, effort: string, 
+/**
+ * Codex's service tier; empty is the CLI's own. `default` is Standard.
+ */
+serviceTier: string, autonomy: string, };
 
 export type SessionStatusEvent = { sessionId: string, status: string, providerSessionId?: string, updatedAt: number, };
 
@@ -921,7 +943,11 @@ export type SessionSwitchProvider = { id: string,
 /**
  * Where the session runs: Claude files its history under it.
  */
-cwd: string, provider: string, model: string, effort: string, autonomy: string, };
+cwd: string, provider: string, model: string, effort: string, 
+/**
+ * Codex's service tier; empty is the CLI's own.
+ */
+serviceTier: string, autonomy: string, };
 
 export type SessionUpdate = { id: string, name: string, provider: string, model: string, description: string, notifications: boolean, autonomy: string, };
 

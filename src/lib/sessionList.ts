@@ -35,6 +35,7 @@ export function applyUpdated(held: Session, row: Session): Session {
     provider: row.provider,
     model: row.model,
     effort: row.effort,
+    serviceTier: row.serviceTier ?? "",
     autonomy: row.autonomy,
     description: row.description,
     providerSessionId: row.providerSessionId,

@@ -159,7 +159,12 @@ export function TurnChat({ session, sessions, cwd, active }: Props) {
             onAnswer={reply}
             // Each turn starts its CLI from the row: the next one runs what the chips say.
             onOptions={(next) =>
-              void setSessionOptions(session.id, { model: next.model, effort: next.effort, autonomy: next.access }).catch(() => {})
+              void setSessionOptions(session.id, {
+                model: next.model,
+                effort: next.effort,
+                serviceTier: next.serviceTier ?? "",
+                autonomy: next.access,
+              }).catch(() => {})
             }
             bar={
               <ChatBar

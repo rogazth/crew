@@ -15,6 +15,8 @@ type CreateInput = {
   model: string;
   /** Left out, the CLI's own. */
   effort?: string;
+  /** Codex's service tier. Left out, the CLI's own. */
+  serviceTier?: string;
   description: string;
   autonomy: Autonomy;
   /** The worktree it runs in; left out, the workspace folder. */

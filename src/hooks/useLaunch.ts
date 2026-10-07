@@ -54,6 +54,7 @@ export function useLaunch({
         provider: choice.provider,
         model: choice.model,
         effort: choice.effort,
+        ...(choice.serviceTier ? { serviceTier: choice.serviceTier } : {}),
         description: "",
         autonomy: choice.access,
         worktree: place,

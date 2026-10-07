@@ -35,6 +35,8 @@ export type Session = {
   model: string;
   /** How hard its model thinks; empty is the CLI's own setting. */
   effort: string;
+  /** Codex's service tier; empty is the CLI's own. Cursor's fast mode is part of the model id. */
+  serviceTier?: string;
   providerSessionId: string | null;
   /** The git worktree it runs in; null is the workspace folder itself. */
   worktree: string | null;

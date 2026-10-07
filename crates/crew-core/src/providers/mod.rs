@@ -637,6 +637,7 @@ mod tests {
             resume: resume.map(str::to_string),
             model: Some("gpt".into()),
             effort: effort.map(str::to_string),
+            service_tier: None,
             autonomy: Autonomy::Ask,
             mcp: None,
             mcp_env: Vec::new(),

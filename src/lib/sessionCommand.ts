@@ -17,15 +17,17 @@ type Options = {
   prompt?: string;
 };
 
-/** The model, effort and access a CLI starts in: what the session's row says, as flags. */
-export function optionArgs(session: Pick<Session, "provider" | "model" | "effort" | "autonomy">, bypass = false): string[] {
+/** The model, effort, service tier and access a CLI starts in: what the session's row says, as flags. */
+export function optionArgs(session: Pick<Session, "provider" | "model" | "effort" | "autonomy" | "serviceTier">, bypass = false): string[] {
   const provider = providerOf(session.provider);
   if (!provider) return [];
   const access = bypass ? "full" : session.autonomy;
   const effort = provider.efforts.find((e) => e === session.effort);
+  const tier = session.serviceTier ?? "";
   return [
     ...(session.model ? [provider.modelFlag, session.model] : []),
     ...(effort ? provider.effortArgs(effort) : []),
+    ...(tier && provider.tierArgs ? provider.tierArgs(tier) : []),
     ...(provider.access[access] ?? provider.access.ask ?? []),
   ];
 }
@@ -37,8 +39,8 @@ export function optionArgs(session: Pick<Session, "provider" | "model" | "effort
  * `--name` is deliberately absent: it lands as a `custom-title`, which outranks
  * the name Claude generates, so passing one means Claude never names anything.
  * Claude paints from its own configured theme and never asks the terminal, so
- * the theme is forced to match the app. Model, effort and access go on every
- * launch, a resume too: a relaunch is how a change to them reaches the CLI,
+ * the theme is forced to match the app. Model, effort, service tier and access
+ * go on every launch, a resume too: a relaunch is how a change to them reaches the CLI,
  * since its own `/model` and `/effort` would rewrite the user's defaults.
  */
 export function sessionCommand(session: Session, { resume, theme, bypass = false, cwd, prompt }: Options): string[] {

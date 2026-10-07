@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   choiceForNewSession,
   effortsOf,
+  fastChoice,
   findModel,
   fitChoice,
   groupListed,
@@ -9,6 +10,7 @@ import {
   modelsOf,
   PROVIDERS,
   searchModels,
+  setFast,
   setListedModels,
   splitVariant,
 } from "./providers";
@@ -20,6 +22,7 @@ const LISTED = [
   ["gpt-5.3-codex", "Codex 5.3"],
   ["gpt-5.3-codex-high", "Codex 5.3 High"],
   ["composer-2.5", "Composer 2.5"],
+  ["composer-2.5-fast", "Composer 2.5 Fast"],
   ["grok-4.7-low", "Grok 4.7 Low"],
   ["grok-4.7-low-fast", "Grok 4.7 Low Fast"],
   ["grok-4.7-medium", "Grok 4.7 Medium"],
@@ -44,11 +47,12 @@ const LISTED = [
 
 describe("splitVariant", () => {
   it("finds the effort wherever cursor puts it", () => {
-    expect(splitVariant("grok-4.7-high-fast")).toEqual({ base: "grok-4.7-fast", effort: "high" });
-    expect(splitVariant("claude-opus-5-thinking-xhigh")).toEqual({ base: "claude-opus-5-thinking", effort: "xhigh" });
-    expect(splitVariant("claude-4.6-opus-max-thinking")).toEqual({ base: "claude-4.6-opus-thinking", effort: "max" });
-    expect(splitVariant("gpt-5.5-extra-high")).toEqual({ base: "gpt-5.5", effort: "xhigh" });
-    expect(splitVariant("composer-2.5")).toEqual({ base: "composer-2.5", effort: null });
+    expect(splitVariant("grok-4.7-high-fast")).toEqual({ base: "grok-4.7", effort: "high", fast: true });
+    expect(splitVariant("claude-opus-5-thinking-xhigh")).toEqual({ base: "claude-opus-5-thinking", effort: "xhigh", fast: false });
+    expect(splitVariant("claude-4.6-opus-max-thinking")).toEqual({ base: "claude-4.6-opus-thinking", effort: "max", fast: false });
+    expect(splitVariant("gpt-5.5-extra-high")).toEqual({ base: "gpt-5.5", effort: "xhigh", fast: false });
+    expect(splitVariant("composer-2.5")).toEqual({ base: "composer-2.5", effort: null, fast: false });
+    expect(splitVariant("composer-2.5-fast")).toEqual({ base: "composer-2.5", effort: null, fast: true });
   });
 });
 
@@ -62,6 +66,7 @@ describe("groupListed", () => {
       id: "grok-4.7-medium",
       label: "Grok 4.7",
       variants: { low: "grok-4.7-low", medium: "grok-4.7-medium", high: "grok-4.7-high", xhigh: "grok-4.7-xhigh" },
+      fastVariants: { low: "grok-4.7-low-fast", high: "grok-4.7-high-fast" },
     });
     expect(byLabel("Grok 4.6")?.id).toBe("cursor-grok-4.6-high");
     expect(byLabel("Claude Opus 5.5 1M")?.id).toBe("claude-opus-5-5-medium");
@@ -71,8 +76,16 @@ describe("groupListed", () => {
     });
   });
 
-  it("keeps fast variants a model of their own", () => {
-    expect(byLabel("Grok 4.7 Fast")?.variants).toEqual({ low: "grok-4.7-low-fast", high: "grok-4.7-high-fast" });
+  it("folds fast ids into the model, one per effort that has a sibling", () => {
+    expect(byLabel("Grok 4.7 Fast")).toBeUndefined();
+    expect(fastChoice("cursor", "grok-4.7-high")).toEqual({ on: false, available: true });
+    expect(fastChoice("cursor", "grok-4.7-high-fast")).toEqual({ on: true, available: true });
+    expect(fastChoice("cursor", "grok-4.7-xhigh")).toEqual({ on: false, available: false });
+    expect(fastChoice("cursor", "composer-2.5-fast")).toEqual({ on: true, available: true });
+    expect(setFast("cursor", "grok-4.7-high", true)).toBe("grok-4.7-high-fast");
+    expect(setFast("cursor", "grok-4.7-high-fast", false)).toBe("grok-4.7-high");
+    expect(setFast("cursor", "grok-4.7-xhigh", true)).toBe("grok-4.7-xhigh");
+    expect(setFast("cursor", "composer-2.5-fast", false)).toBe("composer-2.5");
   });
 
   it("reads an id with no effort beside ones that have one as medium", () => {
@@ -92,9 +105,20 @@ describe("groupListed", () => {
     expect(byLabel("Muse Spark 1.3 1M")?.variants).toEqual({ minimal: "muse-spark-1.3-minimal", high: "muse-spark-1.3-high" });
   });
 
+  it("keeps the tiers a listing spoke of, including none", () => {
+    const models = groupListed([
+      { id: "gpt-6-luna", label: "GPT-6 Luna", tiers: [{ id: "default", label: "Standard" }, { id: "fast", label: "Fast" }, { id: "fast", label: "Fast" }] },
+      { id: "gpt-5.5", label: "GPT-5.5", tiers: [] },
+      { id: "composer-2.5", label: "Composer" },
+    ]);
+    expect(models.find((model) => model.id === "gpt-6-luna")?.tiers).toEqual([{ id: "fast", label: "Fast" }]);
+    expect(models.find((model) => model.id === "gpt-5.5")?.tiers).toEqual([]);
+    expect(models.find((model) => model.id === "composer-2.5")?.tiers).toBeUndefined();
+  });
+
   it("leaves a model with one effort, or none, as it is", () => {
     expect(byLabel("Claude Sonnet 4.6 1M Thinking")).toEqual({ id: "claude-4.6-sonnet-medium-thinking", label: "Claude Sonnet 4.6 1M Thinking" });
-    expect(byLabel("Composer 2.5")).toEqual({ id: "composer-2.5", label: "Composer 2.5" });
+    expect(byLabel("Composer 2.5")).toEqual({ id: "composer-2.5", label: "Composer 2.5", fastId: "composer-2.5-fast" });
     expect(models[0]).toEqual({ id: "auto", label: "Auto", note: "Default" });
   });
 });
@@ -138,6 +162,25 @@ describe("a provider whose CLI lists its models", () => {
 
   it("leaves a model without efforts without one", () => {
     expect(fitChoice({ provider: "cursor", model: "composer-2.5", effort: "high", access: "full" })).toMatchObject({ model: "composer-2.5", effort: "" });
+  });
+
+  it("keeps fast across an effort that has a sibling, and drops it when the new one does not", () => {
+    const base = { provider: "cursor" as const, access: "full" as const };
+    expect(fitChoice({ ...base, model: "grok-4.7-high-fast", effort: "low" })).toMatchObject({ model: "grok-4.7-low-fast", effort: "low" });
+    expect(fitChoice({ ...base, model: "grok-4.7-high-fast", effort: "xhigh" })).toMatchObject({ model: "grok-4.7-xhigh", effort: "xhigh" });
+    expect(fitChoice({ ...base, model: "composer-2.5-fast", effort: "high" })).toMatchObject({ model: "composer-2.5-fast", effort: "" });
+  });
+
+  it("keeps a service tier the catalog has not refused, and drops one it has", () => {
+    setListedModels("codex", [
+      { id: "gpt-6-luna", label: "GPT-6 Luna", tiers: [{ id: "fast", label: "Fast" }] },
+      { id: "gpt-5.5", label: "GPT-5.5", tiers: [] },
+    ]);
+    const base = { provider: "codex" as const, effort: "high" as const, access: "ask" as const };
+    expect(fitChoice({ ...base, model: "gpt-6-luna", serviceTier: "fast" }).serviceTier).toBe("fast");
+    expect(fitChoice({ ...base, model: "gpt-6-luna", serviceTier: "default" }).serviceTier).toBe("default");
+    expect(fitChoice({ ...base, model: "gpt-5.5", serviceTier: "fast" }).serviceTier).toBe("");
+    expect(fitChoice({ ...base, model: "gpt-6-astra", serviceTier: "fast" }).serviceTier).toBe("fast");
   });
 
   it("does not touch providers that list nothing", () => {

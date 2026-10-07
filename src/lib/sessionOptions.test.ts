@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { Session } from "./types";
 import { applyFor, modePresses, nextAccess, type Launched } from "./sessionOptions";
 
-const running: Launched = { model: "claude-opus-5-5", effort: "", access: "ask", bypass: false };
+const running: Launched = { model: "claude-opus-5-5", effort: "", serviceTier: "", access: "ask", bypass: false };
 const row: Pick<Session, "provider" | "model" | "effort" | "autonomy"> = { provider: "claude", model: "claude-opus-5-5", effort: "", autonomy: "ask" };
 
 describe("applyFor", () => {
@@ -11,9 +11,10 @@ describe("applyFor", () => {
     expect(applyFor(row, null)).toEqual({ kind: "none" });
   });
 
-  it("relaunches for a model or an effort, which the CLIs' own commands would save as the user's default", () => {
+  it("relaunches for a model, an effort or a service tier, which the CLIs' own commands would save as the user's default", () => {
     expect(applyFor({ ...row, model: "claude-sonnet-5" }, running)).toEqual({ kind: "relaunch" });
     expect(applyFor({ ...row, effort: "high" }, running)).toEqual({ kind: "relaunch" });
+    expect(applyFor({ ...row, serviceTier: "fast" }, running)).toEqual({ kind: "relaunch" });
   });
 
   it("walks Claude's access with ⇧Tab, and relaunches only into or out of full", () => {

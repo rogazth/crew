@@ -191,7 +191,12 @@ export function SessionChat({
           .finally(() => setSwitching(false));
         return;
       }
-      void api.setSessionOptions(id, { model: next.model, effort: next.effort, autonomy: next.access }).catch(() => {});
+      void api.setSessionOptions(id, {
+        model: next.model,
+        effort: next.effort,
+        serviceTier: next.serviceTier ?? "",
+        autonomy: next.access,
+      }).catch(() => {});
     },
     [fresh, id, onSwitchProvider, session.provider, switching],
   );

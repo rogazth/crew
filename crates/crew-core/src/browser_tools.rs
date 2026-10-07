@@ -573,6 +573,7 @@ mod tests {
             provider: "claude".into(),
             model: String::new(),
             effort: String::new(),
+            service_tier: String::new(),
             provider_session_id: None,
             description: String::new(),
             notifications: false,

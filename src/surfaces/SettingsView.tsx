@@ -31,7 +31,10 @@ import {
   PROVIDERS,
   accessesOf,
   effortsOf,
+  fastChoice,
   fitChoice,
+  setFast,
+  tiersOf,
   type Effort,
 } from "../lib/providers";
 import { settingsSection, type SettingsSectionId } from "../lib/settings";
@@ -318,6 +321,8 @@ function SitePermissionsSettings() {
 function Providers() {
   const { preferred, installed, update } = useDefaultAgent();
   useListedModels(preferred.provider);
+  const fastModel = preferred.model || fitChoice(preferred).model;
+  const fast = fastChoice(preferred.provider, fastModel);
   return (
     <>
       <SettingsSection title="New sessions">
@@ -341,6 +346,28 @@ function Providers() {
               value={fitChoice(preferred).effort}
               onChange={(effort) => update(fitChoice({ ...preferred, effort: effort as Effort }))}
               options={effortsOf(preferred.provider, preferred.model).map((effort) => ({ value: effort, label: EFFORT_LABELS[effort] }))}
+            />
+          </SettingsRow>
+        )}
+        {fast.available && (
+          <Toggle
+            label="Fast"
+            description="A faster run of this model."
+            checked={fast.on}
+            onChange={(on) => update(fitChoice({ ...preferred, model: setFast(preferred.provider, fastModel, on) }))}
+          />
+        )}
+        {tiersOf(preferred.provider, preferred.model).length > 0 && (
+          <SettingsRow label="Speed" description="How quickly Codex serves this model.">
+            <Select
+              label="Speed"
+              className="w-40"
+              value={fitChoice(preferred).serviceTier || "default"}
+              onChange={(serviceTier) => update(fitChoice({ ...preferred, serviceTier }))}
+              options={[
+                { value: "default", label: "Standard" },
+                ...tiersOf(preferred.provider, preferred.model).map((tier) => ({ value: tier.id, label: tier.label })),
+              ]}
             />
           </SettingsRow>
         )}

@@ -68,6 +68,8 @@ pub struct CodexThread {
     pub model: Option<String>,
     /// `model_reasoning_effort`; `None` is the CLI's own.
     pub effort: Option<String>,
+    /// `service_tier`; `None` is the CLI's own. `default` is Standard.
+    pub service_tier: Option<String>,
     pub autonomy: Autonomy,
     /// Crew's MCP server: the command and its arguments.
     pub mcp: Option<(String, Vec<String>)>,
@@ -111,6 +113,9 @@ pub fn thread_request(input: &CodexThread) -> (&'static str, Value) {
     let mut config = Map::new();
     if let Some(effort) = input.effort.as_deref().filter(|e| !e.is_empty()) {
         config.insert("model_reasoning_effort".into(), json!(effort));
+    }
+    if let Some(tier) = input.service_tier.as_deref().filter(|tier| !tier.is_empty()) {
+        config.insert("service_tier".into(), json!(tier));
     }
     // Without it `request_user_input` only exists in plan mode.
     config.insert("features.default_mode_request_user_input".into(), json!(true));
@@ -797,6 +802,7 @@ mod protocol_tests {
             resume: resume.map(str::to_string),
             model: Some("gpt-5.6-luna".into()),
             effort: Some("low".into()),
+            service_tier: None,
             autonomy,
             mcp: mcp.then(|| ("/bin/crewd".into(), vec!["--mcp".into()])),
             mcp_env: vec![("CREW_SOCKET".into(), "/tmp/crew.sock".into()), ("CREW_TOKEN".into(), "t-1".into())],
@@ -821,10 +827,22 @@ mod protocol_tests {
             })
         );
         assert_eq!(params["config"]["model_reasoning_effort"], "low");
+        assert!(params["config"].get("service_tier").is_none(), "{params}");
         assert_eq!(params["config"]["features.default_mode_request_user_input"], true);
         assert_eq!((params["cwd"].clone(), params["model"].clone()), (json!("/repo"), json!("gpt-5.6-luna")));
         let (_, bare) = thread_request(&thread(None, Autonomy::Ask, false));
         assert!(bare["config"].get("mcp_servers").is_none(), "{bare}");
+    }
+
+    #[test]
+    fn a_service_tier_rides_on_the_thread_config() {
+        let mut input = thread(None, Autonomy::Ask, false);
+        input.service_tier = Some("fast".into());
+        let (_, params) = thread_request(&input);
+        assert_eq!(params["config"]["service_tier"], "fast");
+        input.service_tier = Some("default".into());
+        let (_, standard) = thread_request(&input);
+        assert_eq!(standard["config"]["service_tier"], "default");
     }
 
     /// Measured: a resume without `model` runs the one in config.toml.

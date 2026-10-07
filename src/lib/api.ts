@@ -81,21 +81,25 @@ export const createSession = (
     model: string;
     /** Left out, the CLI's own. */
     effort?: string;
+    /** Codex's service tier. Left out, the CLI's own. */
+    serviceTier?: string;
     description: string;
     autonomy: Autonomy;
     worktree?: string | null;
   },
 ): Promise<Session> => client.request("session_create", { workspaceId, kind, ...input });
 
-/** The composer's chips: model, effort and access. Every window hears it as `session-updated`. */
-export const setSessionOptions = (id: string, input: { model: string; effort: string; autonomy: Autonomy }): Promise<void> =>
-  client.request("session_set_options", { id, ...input });
+/** The composer's chips: model, effort, service tier and access. Every window hears it as `session-updated`. */
+export const setSessionOptions = (
+  id: string,
+  input: { model: string; effort: string; serviceTier: string; autonomy: Autonomy },
+): Promise<void> => client.request("session_set_options", { id, ...input });
 
 /** A session nobody has talked to yet moves to another provider's CLI; the daemon ends the one running. */
 export const switchSessionProvider = (
   id: string,
   cwd: string,
-  input: { provider: string; model: string; effort: string; autonomy: Autonomy },
+  input: { provider: string; model: string; effort: string; serviceTier: string; autonomy: Autonomy },
 ): Promise<void> => client.request("session_switch_provider", { id, cwd, ...input });
 
 export const updateSession = (

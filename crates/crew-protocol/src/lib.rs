@@ -377,6 +377,10 @@ pub struct SessionCreate {
     #[serde(default)]
     #[ts(optional)]
     pub effort: Option<String>,
+    /// Codex's service tier; empty or absent is the CLI's own.
+    #[serde(default)]
+    #[ts(optional)]
+    pub service_tier: Option<String>,
     pub description: String,
     pub autonomy: String,
     /// The git worktree the session runs in; absent means the workspace folder.
@@ -397,13 +401,17 @@ pub struct SessionUpdate {
     pub autonomy: String,
 }
 
-/// What a session's composer changes: its model, effort and autonomy.
+/// What a session's composer changes: its model, effort, service tier and autonomy.
 #[derive(Serialize, Deserialize, Clone, Debug, TS)]
-#[ts(export, export_to = "../../../src/lib/protocol.ts")]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
 pub struct SessionOptions {
     pub id: String,
     pub model: String,
     pub effort: String,
+    /// Codex's service tier; empty is the CLI's own. `default` is Standard.
+    #[serde(default)]
+    pub service_tier: String,
     pub autonomy: String,
 }
 
@@ -561,6 +569,9 @@ pub struct Session {
     pub provider: String,
     pub model: String,
     pub effort: String,
+    /// Codex's service tier (`default`, `fast`, `flex`, `ultrafast`). Empty is the CLI's own.
+    #[serde(default)]
+    pub service_tier: String,
     pub provider_session_id: Option<String>,
     pub description: String,
     pub notifications: bool,
@@ -668,12 +679,26 @@ pub struct AgentModels {
     pub provider: String,
 }
 
-/// One model a provider's CLI lists for this account, as it spells it.
+/// One service tier a model advertises, besides Standard.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, TS)]
 #[ts(export, export_to = "../../../src/lib/protocol.ts")]
+pub struct ListedTier {
+    pub id: String,
+    pub label: String,
+}
+
+/// One model a provider's CLI lists for this account, as it spells it.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
 pub struct ListedModel {
     pub id: String,
     pub label: String,
+    /// Codex service tiers besides Standard. An empty list advertised none;
+    /// absent means this listing does not speak of tiers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub tiers: Option<Vec<ListedTier>>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, TS)]

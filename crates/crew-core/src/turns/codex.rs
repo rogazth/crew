@@ -171,6 +171,7 @@ impl TurnHost {
             resume: child_resume(&session),
             model: Some(session.model.clone()).filter(|m| !m.is_empty()),
             effort: Some(session.effort.clone()).filter(|e| !e.is_empty()),
+            service_tier: Some(session.service_tier.clone()).filter(|tier| !tier.is_empty()),
             autonomy: self.autonomy(&session),
             mcp,
             mcp_env: env.clone().into_iter().collect(),

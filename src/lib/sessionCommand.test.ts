@@ -79,6 +79,20 @@ describe("sessionCommand", () => {
     ]);
     // An effort or access the CLI has no flag for is left to it.
     expect(argv({ provider: "opencode", effort: "high", autonomy: "edits" })).toEqual(["opencode"]);
+    expect(argv({ provider: "cursor", model: "grok-4.7-high-fast" })).toEqual(["cursor-agent", "--model", "grok-4.7-high-fast"]);
+    expect(argv({ provider: "codex", model: "gpt-6-luna", serviceTier: "fast" })).toEqual([
+      "codex",
+      "-m",
+      "gpt-6-luna",
+      "-c",
+      'service_tier="fast"',
+    ]);
+    expect(argv({ provider: "codex", serviceTier: "default", autonomy: "auto" })).toEqual([
+      "codex",
+      "-c",
+      'service_tier="default"',
+      "--approve-for-me",
+    ]);
   });
 
   it("has Claude report every session it moves to, silently, one record each", () => {
@@ -196,6 +210,7 @@ describe("pickProvider", () => {
       provider: "cursor",
       model: "auto",
       effort: "",
+      serviceTier: "",
       access: "ask",
     });
   });
@@ -205,13 +220,21 @@ describe("parseAgentChoice", () => {
   it("rejects what is not a known provider", () => {
     expect(parseAgentChoice(null)).toBeNull();
     expect(parseAgentChoice('{"provider":"gemini"}')).toBeNull();
-    expect(parseAgentChoice('{"provider":"codex"}')).toEqual({ provider: "codex", model: "gpt-6-astra", effort: "medium", access: "full" });
-    expect(parseAgentChoice('{"provider":"codex","effort":"max","access":"edits"}')).toEqual({
+    expect(parseAgentChoice('{"provider":"codex"}')).toEqual({
       provider: "codex",
       model: "gpt-6-astra",
       effort: "medium",
+      serviceTier: "",
+      access: "full",
+    });
+    expect(parseAgentChoice('{"provider":"codex","effort":"max","access":"edits"}')).toEqual({
+      provider: "codex",
+      model: "gpt-6-astra",
+      effort: "max",
+      serviceTier: "",
       access: "ask",
     });
+    expect(parseAgentChoice('{"provider":"codex","serviceTier":"fast"}')).toMatchObject({ serviceTier: "fast" });
   });
 
   it("resolves a stored Default to the provider's model and effort", () => {
@@ -219,6 +242,7 @@ describe("parseAgentChoice", () => {
       provider: "claude",
       model: "claude-opus-5-5",
       effort: "high",
+      serviceTier: "",
       access: "full",
     });
     // Opus 4.5 stops at high, so a max carried to it lands on the default.

@@ -22,6 +22,15 @@ export type Model = {
    * runs when nothing is said.
    */
   variants?: Partial<Record<Effort, string>>;
+  /** The fast id for each effort that has one: `grok-4.7-high-fast` beside `grok-4.7-high`. */
+  fastVariants?: Partial<Record<Effort, string>>;
+  /** The fast id of a model whose effort is not part of the id: `composer-2.5-fast`. */
+  fastId?: string;
+  /**
+   * Codex service tiers besides Standard. Absent until the catalog is read;
+   * empty when the model advertises none.
+   */
+  tiers?: { id: string; label: string }[];
 };
 
 /**
@@ -48,6 +57,8 @@ export type ProviderDef = {
   /** The efforts its CLI takes, and the flags that set one. None: it has no such knob. */
   efforts: Effort[];
   effortArgs: (effort: Effort) => string[];
+  /** The flags a service tier sets. None: it has no such knob. */
+  tierArgs?: (tier: string) => string[];
   /** The first message, handed to the interactive CLI as it starts. After `--`, so it is never read as a flag or a subcommand. */
   promptArgs: (text: string) => string[];
   /** Crew reads the CLI's own history, so its sessions can open in the chat. */
@@ -146,8 +157,10 @@ export const PROVIDERS: ProviderDef[] = [
     access: { ask: [], auto: ["--approve-for-me"], full: ["--dangerously-bypass-approvals-and-sandbox"] },
     efforts: ["minimal", "low", "medium", "high", "xhigh", "max"],
     effortArgs: (effort) => ["-c", `model_reasoning_effort="${effort}"`],
+    tierArgs: (tier) => (/^[a-z0-9_-]+$/.test(tier) ? ["-c", `service_tier="${tier}"`] : []),
     promptArgs: (text) => ["--", text],
     chat: true,
+    listsModels: true,
     defaultModel: "gpt-6-astra",
     defaultEffort: "medium",
     models: [
@@ -186,7 +199,14 @@ export const PROVIDERS: ProviderDef[] = [
 
 export const DEFAULT_PROVIDER: ProviderId = "claude";
 /** What a new session starts with: who runs it, on what, how hard and how freely. */
-export type AgentChoice = { provider: ProviderId; model: string; effort: Effort | ""; access: Access };
+export type AgentChoice = {
+  provider: ProviderId;
+  model: string;
+  effort: Effort | "";
+  access: Access;
+  /** Codex's service tier. Empty is the CLI's own; `default` is Standard. */
+  serviceTier?: string;
+};
 
 /** A fresh install runs without asking; the composer says so, and one click asks. */
 export const DEFAULT_ACCESS: Access = "full";
@@ -224,7 +244,8 @@ export function searchModels(providers: readonly ProviderDef[], query: string): 
   for (const provider of providers) {
     for (const model of modelsOf(provider.id)) {
       const variants = model.variants ? Object.values(model.variants).join(" ") : "";
-      const hit = fuzzyMatch(query, `${provider.label} ${model.label} ${model.id} ${variants} ${model.note ?? ""}`);
+      const fast = [model.fastId, ...(model.fastVariants ? Object.values(model.fastVariants) : [])].filter(Boolean).join(" ");
+      const hit = fuzzyMatch(query, `${provider.label} ${model.label} ${model.id} ${variants} ${fast} ${model.note ?? ""}`);
       if (hit) scored.push({ match: { provider: provider.id, model }, score: hit.score });
     }
   }
@@ -232,13 +253,47 @@ export function searchModels(providers: readonly ProviderDef[], query: string): 
   return scored.map((entry) => entry.match);
 }
 
-/** The model an id runs, any of its effort variants included. */
+/** The model an id runs, any of its effort or fast variants included. */
 export function findModel(providerId: string, modelId: string): Model | undefined {
   const models = modelsOf(providerId);
   return (
     models.find((m) => m.id === modelId) ??
-    models.find((m) => m.variants && Object.values(m.variants).includes(modelId))
+    models.find((m) => m.fastId === modelId) ??
+    models.find((m) => m.variants && Object.values(m.variants).includes(modelId)) ??
+    models.find((m) => m.fastVariants && Object.values(m.fastVariants).includes(modelId))
   );
+}
+
+export type ModelTier = { id: string; label: string };
+
+/** Service tiers a model advertises, besides Standard. Empty until it advertises any. */
+export function tiersOf(providerId: string, modelId: string): ModelTier[] {
+  const id = modelId || defaultModelOf(providerId);
+  return findModel(providerId, id)?.tiers ?? [];
+}
+
+/** Whether this id is the fast run, and whether the current effort has one. */
+export function fastChoice(providerId: string, modelId: string): { on: boolean; available: boolean } {
+  const model = findModel(providerId, modelId);
+  if (!model) return { on: false, available: false };
+  const part = splitVariant(modelId);
+  if (part.effort) {
+    const fastId = model.fastVariants?.[part.effort];
+    return { on: fastId === modelId, available: Boolean(fastId) };
+  }
+  return { on: model.fastId === modelId, available: Boolean(model.fastId) };
+}
+
+/** The id this model runs at when Fast is on or off. An effort with no fast sibling stays put. */
+export function setFast(providerId: string, modelId: string, on: boolean): string {
+  const model = findModel(providerId, modelId);
+  if (!model) return modelId;
+  const part = splitVariant(modelId);
+  if (part.effort) {
+    if (on) return model.fastVariants?.[part.effort] ?? modelId;
+    return model.variants?.[part.effort] ?? model.id;
+  }
+  return on ? (model.fastId ?? modelId) : model.id;
 }
 
 /** The model a session of this provider runs when none was picked. */
@@ -281,20 +336,49 @@ export const accessLabel = (access: string): string => ACCESSES.find((a) => a.id
  * model's default, an access it has no mode for asks.
  */
 export function fitChoice(choice: AgentChoice): AgentChoice {
-  const model = choice.model || defaultModelOf(choice.provider);
+  const modelId = choice.model || defaultModelOf(choice.provider);
   const access = accessesOf(choice.provider).includes(choice.access) ? choice.access : "ask";
-  const variants = findModel(choice.provider, model)?.variants;
+  const found = findModel(choice.provider, modelId);
+  const variants = found?.variants;
+  let model = modelId;
+  let effort: Effort | "";
   if (variants) {
     // The effort is in the id: a picked effort picks the id, else the id says it.
-    const effort =
+    effort =
       choice.effort && variants[choice.effort]
         ? choice.effort
-        : (EFFORTS.find((e) => variants[e] === model) ?? EFFORTS.find((e) => variants[e]) ?? "");
-    return { ...choice, model: (effort && variants[effort]) || model, effort, access };
+        : (EFFORTS.find((e) => variants[e] === modelId || found?.fastVariants?.[e] === modelId) ??
+          EFFORTS.find((e) => variants[e]) ??
+          "");
+    const slow = (effort && variants[effort]) || modelId;
+    model = keepFast(found, modelId, slow);
+  } else {
+    effort =
+      choice.effort && effortsOf(choice.provider, modelId).includes(choice.effort)
+        ? choice.effort
+        : defaultEffortOf(choice.provider, modelId);
   }
-  const effort =
-    choice.effort && effortsOf(choice.provider, model).includes(choice.effort) ? choice.effort : defaultEffortOf(choice.provider, model);
-  return { ...choice, model, effort, access };
+  return { ...choice, model, effort, access, serviceTier: fitTier(found, choice.serviceTier) };
+}
+
+/** A fast id stays fast at the new effort when that effort has a fast sibling. */
+function keepFast(model: Model | undefined, previousId: string, nextId: string): string {
+  if (!model || (model.fastId !== previousId && !Object.values(model.fastVariants ?? {}).includes(previousId))) return nextId;
+  const part = splitVariant(nextId);
+  const fastId = part.effort ? model.fastVariants?.[part.effort] : model.fastId;
+  if (fastId) return fastId;
+  return nextId;
+}
+
+/**
+ * A tier stays while the catalog has not been read. Once it has, a tier the
+ * model does not advertise is dropped; Standard (`default`) always fits.
+ */
+function fitTier(model: Model | undefined, tier: string | undefined): string {
+  if (!tier) return "";
+  if (!model || model.tiers === undefined) return tier;
+  if (tier === "default" || model.tiers.some((row) => row.id === tier)) return tier;
+  return "";
 }
 
 /** The preferred provider when its CLI is installed, else the first one that is. */
@@ -321,7 +405,7 @@ export function choiceForNewSession(pick: ProviderId | AgentChoice, defaults: Ag
     typeof pick === "object" ? pick : { ...defaults, provider: pick, model: pick === defaults.provider ? defaults.model : "" };
   const choice = fitChoice(specified);
   if (specified.model === "" && (choice.provider === "cursor" || choice.provider === "codex" || choice.provider === "opencode")) {
-    return { ...choice, model: "", effort: "" };
+    return { ...choice, model: "", effort: "", serviceTier: "" };
   }
   return choice;
 }
@@ -330,13 +414,14 @@ export function parseAgentChoice(raw: string | null): AgentChoice | null {
   try {
     const value: unknown = JSON.parse(raw ?? "");
     if (typeof value !== "object" || value === null) return null;
-    const { provider, model, effort, access } = value as Record<string, unknown>;
+    const { provider, model, effort, access, serviceTier } = value as Record<string, unknown>;
     if (typeof provider !== "string" || !providerOf(provider)) return null;
     return fitChoice({
       provider: provider as ProviderId,
       model: typeof model === "string" ? model : "",
       effort: typeof effort === "string" && effort in EFFORT_LABELS ? (effort as Effort) : "",
       access: ACCESSES.some((a) => a.id === access) ? (access as Access) : DEFAULT_ACCESS,
+      serviceTier: typeof serviceTier === "string" ? serviceTier : "",
     });
   } catch {
     return null;
@@ -360,62 +445,110 @@ const EFFORT_SPELLINGS: [suffix: string, effort: Effort, word: string][] = [
 
 /**
  * The model an id is a variant of, and at what effort: `grok-4.7-high-fast`
- * is `grok-4.7-fast` at high; `claude-4.6-opus-max-thinking` is
+ * is `grok-4.7` at high, fast; `claude-4.6-opus-max-thinking` is
  * `claude-4.6-opus-thinking` at max. An id with no effort in it is its own.
+ * The same split `split_variant` does in `provider_session.rs`.
  */
-export function splitVariant(id: string): { base: string; effort: Effort | null } {
-  const fast = id.endsWith("-fast") ? "-fast" : "";
-  const rest = fast ? id.slice(0, -fast.length) : id;
+export function splitVariant(id: string): { base: string; effort: Effort | null; fast: boolean } {
+  const fast = id.endsWith("-fast");
+  const rest = fast ? id.slice(0, -"-fast".length) : id;
   for (const [suffix, effort] of EFFORT_SPELLINGS) {
-    if (rest.endsWith(`-${suffix}`)) return { base: rest.slice(0, -suffix.length - 1) + fast, effort };
+    if (rest.endsWith(`-${suffix}`)) return { base: rest.slice(0, -suffix.length - 1), effort, fast };
     if (rest.endsWith(`-${suffix}-thinking`)) {
-      return { base: rest.slice(0, -suffix.length - "--thinking".length) + "-thinking" + fast, effort };
+      return { base: rest.slice(0, -suffix.length - "--thinking".length) + "-thinking", effort, fast };
     }
   }
-  return { base: id, effort: null };
+  return { base: rest, effort: null, fast };
 }
 
 const wordIn = (label: string, word: string) => new RegExp(`(^|\\s)${word}(?=\\s|$)`).test(label);
 
+type ListedPart = { effort: Effort | null; id: string; label: string; fast: boolean; tiers?: ModelTier[] };
+
 /**
- * `cursor-agent models` folded into one model per base, its efforts as
- * `variants`, in the order the CLI lists them. The variant the CLI runs by
- * default is the one whose label leaves the effort out ("Claude Opus 5.5 1M"
- * is medium); an id with no effort in it, beside ones that have one, is medium.
+ * A provider's listing folded into one model per base, its efforts as
+ * `variants` and its `-fast` ids as `fastVariants`, in the order the CLI
+ * lists them. The variant the CLI runs by default is the one whose label
+ * leaves the effort out ("Claude Opus 5.5 1M" is medium); an id with no
+ * effort in it, beside ones that have one, is medium. A fast id with no
+ * slow sibling stays a model of its own.
  */
 export function groupListed(rows: ListedModel[]): Model[] {
-  const groups = new Map<string, { effort: Effort | null; id: string; label: string }[]>();
+  const groups = new Map<string, ListedPart[]>();
   for (const row of rows) {
-    const { base, effort } = splitVariant(row.id);
+    const { base, effort, fast } = splitVariant(row.id);
     const group = groups.get(base) ?? [];
-    group.push({ effort, id: row.id, label: row.label });
+    const part: ListedPart = { effort, id: row.id, label: row.label, fast };
+    if (row.tiers) part.tiers = row.tiers;
+    group.push(part);
     groups.set(base, group);
   }
   const models: Model[] = [];
   for (const [base, group] of groups) {
-    const efforts = group.filter((v) => v.effort);
-    const bare = group.find((v) => !v.effort);
-    if (bare && efforts.length > 0 && !efforts.some((v) => v.effort === "medium")) {
-      bare.effort = "medium";
-      efforts.push(bare);
-    } else if (bare) {
-      models.push(plain(bare.id, bare.label));
+    const slow = group.filter((row) => !row.fast);
+    const fast = group.filter((row) => row.fast);
+    const before = models.length;
+    foldEfforts(base, slow.length > 0 ? slow : fast, models);
+    const host = models.at(-1);
+    if (!host || models.length === before) continue;
+    if (slow.length > 0) attachFast(host, fast);
+    if (group.some((row) => row.tiers !== undefined)) {
+      host.tiers = dedupeTiers(group.flatMap((row) => row.tiers ?? []));
     }
-    if (efforts.length === 0) continue;
-    if (efforts.length === 1) {
-      const only = efforts[0]!;
-      models.push(plain(only.id, only.label));
-      continue;
-    }
-    const word = (effort: Effort) => EFFORT_SPELLINGS.find(([, e]) => e === effort)![2];
-    const fallback = efforts.find((v) => v.effort === "medium") ?? efforts[0]!;
-    const main = efforts.find((v) => !wordIn(v.label, word(v.effort!))) ?? fallback;
-    const label = main.label.replace(new RegExp(`\\s${word(main.effort!)}(?=\\s|$)`), "");
-    const variants: Partial<Record<Effort, string>> = {};
-    for (const v of efforts) variants[v.effort!] ??= v.id;
-    models.push({ id: main.id, label: label || base, variants });
   }
   return models;
+}
+
+/** Efforts of one family, the way a listing without a fast split already folded them. */
+function foldEfforts(base: string, group: ListedPart[], models: Model[]) {
+  const efforts = group.filter((v) => v.effort);
+  const bare = group.find((v) => !v.effort);
+  if (bare && efforts.length > 0 && !efforts.some((v) => v.effort === "medium")) {
+    bare.effort = "medium";
+    efforts.push(bare);
+  } else if (bare) {
+    models.push(plain(bare.id, bare.label));
+  }
+  if (efforts.length === 0) return;
+  if (efforts.length === 1) {
+    const only = efforts[0]!;
+    models.push(plain(only.id, only.label));
+    return;
+  }
+  const word = (effort: Effort) => EFFORT_SPELLINGS.find(([, e]) => e === effort)![2];
+  const fallback = efforts.find((v) => v.effort === "medium") ?? efforts[0]!;
+  const main = efforts.find((v) => !wordIn(v.label, word(v.effort!))) ?? fallback;
+  const label = main.label.replace(new RegExp(`\\s${word(main.effort!)}(?=\\s|$)`), "");
+  const variants: Partial<Record<Effort, string>> = {};
+  for (const v of efforts) variants[v.effort!] ??= v.id;
+  models.push({ id: main.id, label: label || base, variants });
+}
+
+/** Fast rows join the slow model: one id per effort that has a sibling, or one id when the model has no efforts. */
+function attachFast(model: Model, rows: ListedPart[]) {
+  if (rows.length === 0) return;
+  if (model.variants) {
+    const variants: Partial<Record<Effort, string>> = {};
+    for (const row of rows) {
+      if (row.effort && model.variants[row.effort]) variants[row.effort] = row.id;
+    }
+    if (Object.keys(variants).length > 0) model.fastVariants = variants;
+    return;
+  }
+  const slow = splitVariant(model.id);
+  const match = rows.find((row) => row.effort === slow.effort);
+  if (match) model.fastId = match.id;
+}
+
+function dedupeTiers(rows: ModelTier[]): ModelTier[] {
+  const seen = new Set<string>();
+  const tiers: ModelTier[] = [];
+  for (const row of rows) {
+    if (!row.id || row.id === "default" || seen.has(row.id)) continue;
+    seen.add(row.id);
+    tiers.push(row);
+  }
+  return tiers;
 }
 
 /** "Auto (default)" reads as the model plus a note, the way Crew's own list says it. */

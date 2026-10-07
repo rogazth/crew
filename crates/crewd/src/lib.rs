@@ -508,6 +508,7 @@ fn proto_session(row: &crew_core::session::Session) -> proto::Session {
         provider: row.provider.clone(),
         model: row.model.clone(),
         effort: row.effort.clone(),
+        service_tier: row.service_tier.clone(),
         provider_session_id: row.provider_session_id.clone(),
         description: row.description.clone(),
         notifications: row.notifications,
@@ -1470,9 +1471,16 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
                     p.autonomy,
                     p.worktree,
                 )?;
-                if let Some(effort) = p.effort.filter(|effort| !effort.is_empty()) {
-                    session::set_options(&store, row.id.clone(), row.model.clone(), effort.clone(), row.autonomy.clone())?;
-                    row.effort = effort;
+                let effort = p.effort.clone().unwrap_or_default();
+                let tier = p.service_tier.clone().unwrap_or_default();
+                if !effort.is_empty() || !tier.is_empty() {
+                    session::set_options(&store, row.id.clone(), row.model.clone(), effort.clone(), tier.clone(), row.autonomy.clone())?;
+                    if !effort.is_empty() {
+                        row.effort = effort;
+                    }
+                    if !tier.is_empty() {
+                        row.service_tier = tier;
+                    }
                 }
                 Ok::<_, String>(row)
             })
@@ -1483,7 +1491,7 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
             let store = hosts.store.clone();
             let id = p.id.clone();
             let row = block(move || {
-                session::set_options(&store, p.id, p.model, p.effort, p.autonomy)?;
+                session::set_options(&store, p.id, p.model, p.effort, p.service_tier, p.autonomy)?;
                 session::get(&store, id)
             })
             .await?;
@@ -1506,7 +1514,7 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
                     return Err("This session already has a conversation; start a new session for another provider".into());
                 }
                 host.kill_session(&p.id);
-                session::switch_provider(&store, p.id.clone(), p.provider, p.model, p.effort, p.autonomy)?;
+                session::switch_provider(&store, p.id.clone(), p.provider, p.model, p.effort, p.service_tier, p.autonomy)?;
                 session::get(&store, p.id)
             })
             .await?;
@@ -1843,9 +1851,10 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
         }
         "agent_models" => {
             let proto::AgentModels { provider } = parse(params)?;
-            // Only cursor-agent lists its models; the others keep Crew's own list.
+            // Cursor and Codex list their models; the others keep Crew's own list.
             let models = match provider.as_str() {
                 "cursor" => block(|| Ok::<_, String>(provider_session::cursor_models())).await?,
+                "codex" => block(|| Ok::<_, String>(provider_session::codex_models())).await?,
                 _ => Vec::new(),
             };
             json(models)

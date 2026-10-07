@@ -51,6 +51,7 @@ const choiceOf = (session: Session): AgentChoice => ({
   provider: session.provider as ProviderId,
   model: session.model,
   effort: session.effort as Effort | "",
+  serviceTier: session.serviceTier ?? "",
   access: session.autonomy as Access,
 });
 
@@ -257,7 +258,7 @@ export function Composer({
       </form>
       <p className="mt-2 text-center text-[11px] text-placeholder">
         {optionsPending ? (
-          <>The new model and effort apply with your next message, which restarts {session.name} where it left off</>
+          <>The new settings apply with your next message, which restarts {session.name} where it left off</>
         ) : (
           <>
             <kbd className="font-sans">↵</kbd> send · <kbd className="font-sans">⇧↵</kbd> new line · @ file · drop or paste to attach

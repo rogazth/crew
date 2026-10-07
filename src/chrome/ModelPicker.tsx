@@ -304,5 +304,10 @@ function isCurrent(providerId: string, modelId: string, row: ModelMatch): boolea
 }
 
 function sameModel(item: Model, modelId: string): boolean {
-  return item.id === modelId || Object.values(item.variants ?? {}).includes(modelId);
+  return (
+    item.id === modelId ||
+    item.fastId === modelId ||
+    Object.values(item.variants ?? {}).includes(modelId) ||
+    Object.values(item.fastVariants ?? {}).includes(modelId)
+  );
 }

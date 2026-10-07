@@ -248,7 +248,13 @@ function SessionTerminal({
       if (cancelled) return;
       // Taken only by the launch that runs: a cancelled one leaves it for the next.
       clearFirstPrompt(session.id);
-      setLaunched(session.id, { model: session.model, effort: session.effort, access: session.autonomy, bypass });
+      setLaunched(session.id, {
+        model: session.model,
+        effort: session.effort,
+        serviceTier: session.serviceTier ?? "",
+        access: session.autonomy,
+        bypass,
+      });
       setStartedAt(Date.now());
       setCommand(argv);
     });
@@ -296,6 +302,7 @@ function SessionTerminal({
           provider: choice.provider,
           model: choice.model,
           effort: choice.effort,
+          serviceTier: choice.serviceTier ?? "",
           autonomy: choice.access,
         });
       } catch (error) {

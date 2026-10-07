@@ -480,6 +480,19 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         )?;
         tx.commit()?;
     }
+    if current < 29 {
+        let tx = conn.unchecked_transaction()?;
+        // Codex's service tier. Empty is the CLI's own; the row stores an
+        // explicit pick, `default` included.
+        if !has_column(&tx, "sessions", "service_tier")? {
+            tx.execute_batch("ALTER TABLE sessions ADD COLUMN service_tier TEXT NOT NULL DEFAULT '';")?;
+        }
+        tx.execute(
+            "INSERT INTO schema_migrations (version, applied_at) VALUES (29, ?1)",
+            params![now_millis()],
+        )?;
+        tx.commit()?;
+    }
     Ok(())
 }
 

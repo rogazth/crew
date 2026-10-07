@@ -117,6 +117,16 @@ pub fn unnamed_effort(provider: &str) -> String {
     default_effort(provider).to_string()
 }
 
+/// A session's service tier when the caller named none. Codex's is the one in
+/// its config; everyone else has none.
+pub fn unnamed_service_tier(provider: &str) -> String {
+    if provider == "codex" {
+        crate::provider_session::codex_configured_service_tier()
+    } else {
+        String::new()
+    }
+}
+
 /// One tool, as `tools/list` describes it.
 ///
 /// Public so a family of tools that lives in its own module — processes, the
@@ -1190,6 +1200,7 @@ mod tests {
             provider: "claude".into(),
             model: String::new(),
             effort: String::new(),
+            service_tier: String::new(),
             provider_session_id: None,
             description: String::new(),
             notifications: false,

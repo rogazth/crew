@@ -89,6 +89,9 @@ pub struct SessionSwitchProvider {
     pub provider: String,
     pub model: String,
     pub effort: String,
+    /// Codex's service tier; empty is the CLI's own.
+    #[serde(default)]
+    pub service_tier: String,
     pub autonomy: String,
 }
 

@@ -6,7 +6,7 @@ use std::sync::Mutex;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use crew_protocol::ListedModel;
+use crew_protocol::{ListedModel, ListedTier};
 use rusqlite::{params, Connection, OpenFlags};
 
 use crate::shell_path;
@@ -435,9 +435,28 @@ fn toml_string(raw: &str) -> Option<String> {
     None
 }
 
-/// `model` and `model_reasoning_effort` from Codex's user config. The effort
-/// is empty when the file names none Crew can pass. `None` is no model at all.
-pub fn codex_selection(config: &str) -> Option<(String, String)> {
+/// `priority` is the wire name of fast. Anything else Crew cannot pass is dropped.
+fn normalize_service_tier(raw: &str) -> String {
+    match raw {
+        "priority" => "fast".into(),
+        "default" | "fast" | "flex" | "ultrafast" => raw.into(),
+        _ => String::new(),
+    }
+}
+
+fn service_tier_label(id: &str) -> String {
+    match id {
+        "fast" => "Fast".into(),
+        "flex" => "Flex".into(),
+        "ultrafast" => "Ultrafast".into(),
+        other => other.to_string(),
+    }
+}
+
+/// `model`, `model_reasoning_effort` and `service_tier` from Codex's user
+/// config. The effort is empty when the file names none Crew can pass, and so
+/// is the tier. `None` is no model at all.
+pub fn codex_selection(config: &str) -> Option<(String, String, String)> {
     let model = top_level_toml_string(config, "model")?;
     if model.is_empty() {
         return None;
@@ -445,13 +464,17 @@ pub fn codex_selection(config: &str) -> Option<(String, String)> {
     let effort = top_level_toml_string(config, "model_reasoning_effort")
         .filter(|effort| CODEX_EFFORTS.contains(&effort.as_str()))
         .unwrap_or_default();
-    Some((model, effort))
+    let tier = top_level_toml_string(config, "service_tier")
+        .map(|tier| normalize_service_tier(&tier))
+        .unwrap_or_default();
+    Some((model, effort, tier))
 }
 
 struct CodexCache {
     modified: SystemTime,
     model: String,
     effort: String,
+    service_tier: String,
 }
 
 static CODEX_CONFIG: Mutex<Option<CodexCache>> = Mutex::new(None);
@@ -463,32 +486,41 @@ fn codex_fallback() -> (String, String) {
     )
 }
 
-fn codex_configured() -> (String, String) {
+fn codex_configured() -> (String, String, String) {
     let Some(path) = codex_home().map(|dir| dir.join("config.toml")) else {
-        return codex_fallback();
+        let (model, effort) = codex_fallback();
+        return (model, effort, String::new());
     };
     let Ok(modified) = std::fs::metadata(&path).and_then(|meta| meta.modified()) else {
-        return codex_fallback();
+        let (model, effort) = codex_fallback();
+        return (model, effort, String::new());
     };
     {
         let cache = CODEX_CONFIG.lock().unwrap_or_else(|err| err.into_inner());
         if let Some(hit) = cache.as_ref() {
             if hit.modified == modified {
-                return (hit.model.clone(), hit.effort.clone());
+                return (hit.model.clone(), hit.effort.clone(), hit.service_tier.clone());
             }
         }
     }
     let text = std::fs::read_to_string(&path).unwrap_or_default();
-    let (model, effort) = match codex_selection(&text) {
-        Some((model, effort)) => {
+    let (model, effort, tier) = match codex_selection(&text) {
+        Some((model, effort, tier)) => {
             let effort = if effort.is_empty() { crate::tools::default_effort("codex").to_string() } else { effort };
-            (model, effort)
+            (model, effort, tier)
         }
-        None => codex_fallback(),
+        None => {
+            let (model, effort) = codex_fallback();
+            (model, effort, String::new())
+        }
     };
-    *CODEX_CONFIG.lock().unwrap_or_else(|err| err.into_inner()) =
-        Some(CodexCache { modified, model: model.clone(), effort: effort.clone() });
-    (model, effort)
+    *CODEX_CONFIG.lock().unwrap_or_else(|err| err.into_inner()) = Some(CodexCache {
+        modified,
+        model: model.clone(),
+        effort: effort.clone(),
+        service_tier: tier.clone(),
+    });
+    (model, effort, tier)
 }
 
 /// The model `~/.codex/config.toml` has selected. Missing config is Crew's stand-in.
@@ -499,6 +531,178 @@ pub fn codex_configured_model() -> String {
 /// `model_reasoning_effort` from the same file, or Codex's default when it names none.
 pub fn codex_configured_effort() -> String {
     codex_configured().1
+}
+
+/// `service_tier` from the same file. Empty when it names none Crew can pass.
+pub fn codex_configured_service_tier() -> String {
+    codex_configured().2
+}
+
+static CODEX_MODELS: Mutex<Option<(Instant, Vec<ListedModel>)>> = Mutex::new(None);
+static CODEX_LISTING: Mutex<()> = Mutex::new(());
+static CODEX_REFRESHING: AtomicBool = AtomicBool::new(false);
+
+/// Lists Codex's models off the caller's thread when its CLI is installed.
+pub fn prewarm_codex_models() {
+    thread::spawn(|| {
+        if shell_path::resolve("codex").is_some() {
+            codex_models();
+        }
+    });
+}
+
+/// Every model `codex debug models` lists for this account, hidden ones left
+/// out. Each carries the service tiers it advertises, besides Standard.
+/// Empty when the CLI is missing or fails, and then asked again next time.
+pub fn codex_models() -> Vec<ListedModel> {
+    if let Some((at, models)) = cached_codex_models() {
+        if at.elapsed() >= MODELS_TTL && !CODEX_REFRESHING.swap(true, Ordering::SeqCst) {
+            thread::spawn(|| {
+                refresh_codex_models();
+                CODEX_REFRESHING.store(false, Ordering::SeqCst);
+            });
+        }
+        return models;
+    }
+    let _listing = CODEX_LISTING.lock().unwrap_or_else(|e| e.into_inner());
+    match cached_codex_models() {
+        Some((_, models)) => models,
+        None => refresh_codex_models(),
+    }
+}
+
+fn cached_codex_models() -> Option<(Instant, Vec<ListedModel>)> {
+    CODEX_MODELS.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
+fn refresh_codex_models() -> Vec<ListedModel> {
+    let models = list_codex_models().unwrap_or_else(|err| {
+        eprintln!("[models] {err}");
+        Vec::new()
+    });
+    if !models.is_empty() {
+        *CODEX_MODELS.lock().unwrap_or_else(|e| e.into_inner()) = Some((Instant::now(), models.clone()));
+    }
+    models
+}
+
+fn list_codex_models() -> Result<Vec<ListedModel>, String> {
+    let binary = shell_path::resolve("codex").ok_or_else(|| "`codex` was not found on your PATH.".to_string())?;
+    let mut child = Command::new(binary)
+        .args(["debug", "models"])
+        .env("PATH", shell_path::joined())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| format!("codex debug models: {e}"))?;
+    let mut stdout = child.stdout.take().ok_or("codex debug models: no stdout")?;
+    let reader = thread::spawn(move || {
+        let mut out = String::new();
+        let _ = stdout.read_to_string(&mut out);
+        out
+    });
+    let deadline = Instant::now() + MODELS_TIMEOUT;
+    let status = loop {
+        match child.try_wait().map_err(|e| e.to_string())? {
+            Some(status) => break status,
+            None if Instant::now() < deadline => thread::sleep(Duration::from_millis(50)),
+            None => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("codex debug models did not answer".into());
+            }
+        }
+    };
+    let out = reader.join().unwrap_or_default();
+    if !status.success() {
+        return Err(format!("codex debug models exited with {status}"));
+    }
+    Ok(parse_codex_models(&out))
+}
+
+/// The catalog is one JSON value, sometimes after a line of chatter. Models
+/// sit under `models` or `data`, or are the value itself. `visibility` of
+/// `hide` (and `hidden`) is left out. `priority` is fast.
+fn parse_codex_models(out: &str) -> Vec<ListedModel> {
+    let start = json_start(out);
+    let value: serde_json::Value = serde_json::from_str(out[start..].trim()).unwrap_or(serde_json::Value::Null);
+    let rows = value
+        .as_array()
+        .cloned()
+        .or_else(|| value.get("models").and_then(|v| v.as_array()).cloned())
+        .or_else(|| value.get("data").and_then(|v| v.as_array()).cloned())
+        .unwrap_or_default();
+    rows.iter().filter_map(listed_codex_model).collect()
+}
+
+fn json_start(out: &str) -> usize {
+    match (out.find('{'), out.find('[')) {
+        (Some(brace), Some(bracket)) => brace.min(bracket),
+        (Some(brace), None) => brace,
+        (None, Some(bracket)) => bracket,
+        (None, None) => out.len(),
+    }
+}
+
+fn listed_codex_model(row: &serde_json::Value) -> Option<ListedModel> {
+    if row.get("hidden").and_then(|v| v.as_bool()) == Some(true) {
+        return None;
+    }
+    if row.get("visibility").and_then(|v| v.as_str()) == Some("hide") {
+        return None;
+    }
+    let id = ["slug", "model", "id"]
+        .iter()
+        .find_map(|key| row.get(*key).and_then(|v| v.as_str()).filter(|id| !id.is_empty()))?;
+    let label = ["display_name", "displayName", "name"]
+        .iter()
+        .find_map(|key| {
+            row.get(*key)
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|label| !label.is_empty())
+        })
+        .unwrap_or(id);
+    Some(ListedModel {
+        id: id.to_string(),
+        label: label.to_string(),
+        tiers: Some(codex_tiers(row)),
+    })
+}
+
+fn codex_tiers(row: &serde_json::Value) -> Vec<ListedTier> {
+    let mut tiers = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for key in ["service_tiers", "serviceTiers", "additional_speed_tiers", "additionalSpeedTiers"] {
+        let Some(list) = row.get(key).and_then(|value| value.as_array()) else { continue };
+        for item in list {
+            let (wire, name) = tier_of(item);
+            let Some(wire) = wire else { continue };
+            let id = normalize_service_tier(&wire);
+            if id.is_empty() || id == "default" || !seen.insert(id.clone()) {
+                continue;
+            }
+            let label = name.filter(|label| !label.is_empty()).unwrap_or_else(|| service_tier_label(&id));
+            tiers.push(ListedTier { id, label });
+        }
+    }
+    tiers
+}
+
+fn tier_of(item: &serde_json::Value) -> (Option<String>, Option<String>) {
+    if let Some(id) = item.as_str() {
+        return (Some(id.to_string()), None);
+    }
+    let id = ["id", "slug"]
+        .iter()
+        .find_map(|key| item.get(*key).and_then(|v| v.as_str()))
+        .map(str::to_string);
+    let name = ["name", "display_name", "displayName"]
+        .iter()
+        .find_map(|key| item.get(*key).and_then(|v| v.as_str()))
+        .map(str::to_string);
+    (id, name)
 }
 
 fn opencode_config_file() -> Option<PathBuf> {
@@ -593,7 +797,7 @@ fn parse_cursor_models(out: &str) -> Vec<ListedModel> {
                 .split_whitespace()
                 .collect::<Vec<_>>()
                 .join(" ");
-            Some(ListedModel { id: id.to_string(), label })
+            Some(ListedModel { id: id.to_string(), label, tiers: Some(Vec::new()) })
         })
         .collect()
 }
@@ -969,6 +1173,7 @@ fn opencode_sessions(db: &Path, since_ms: i64) -> Vec<Found> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crew_protocol::{ListedModel, ListedTier};
 
     #[test]
     fn a_terminal_selection_becomes_the_variant_the_cli_lists() {
@@ -1022,15 +1227,58 @@ model_context_window = 1000000
 [projects.\"/tmp\"]
 model = \"gpt-5.5\"
 ";
-        assert_eq!(codex_selection(config), Some(("gpt-6-luna".into(), "medium".into())));
-        assert_eq!(codex_selection("model = 'gpt-5.6-sol'\n"), Some(("gpt-5.6-sol".into(), String::new())));
+        assert_eq!(codex_selection(config), Some(("gpt-6-luna".into(), "medium".into(), String::new())));
+        assert_eq!(codex_selection("model = 'gpt-5.6-sol'\n"), Some(("gpt-5.6-sol".into(), String::new(), String::new())));
         // An effort Crew cannot pass is dropped; the model still stands.
         assert_eq!(
             codex_selection("model = \"gpt-6-luna\"\nmodel_reasoning_effort = \"ultra\"\n"),
-            Some(("gpt-6-luna".into(), String::new()))
+            Some(("gpt-6-luna".into(), String::new(), String::new()))
+        );
+        assert_eq!(
+            codex_selection("model = \"gpt-6-luna\"\nservice_tier = \"priority\"\n"),
+            Some(("gpt-6-luna".into(), String::new(), "fast".into()))
+        );
+        assert_eq!(
+            codex_selection("model = \"gpt-6-luna\"\nservice_tier = \"default\"\n"),
+            Some(("gpt-6-luna".into(), String::new(), "default".into()))
+        );
+        assert_eq!(
+            codex_selection("model = \"gpt-6-luna\"\nservice_tier = \"ultra\"\n"),
+            Some(("gpt-6-luna".into(), String::new(), String::new()))
         );
         assert!(codex_selection("[tui]\nmodel = \"nope\"\n").is_none());
         assert!(codex_selection("not toml").is_none());
+    }
+
+    #[test]
+    fn codex_models_keep_listed_ones_and_the_tiers_they_advertise() {
+        let out = r#"
+note
+{"models":[
+  {"slug":"gpt-6-luna","display_name":"GPT-6-Luna","visibility":"list","service_tiers":[{"id":"priority","name":"Fast"},{"id":"default","name":"Standard"}],"additional_speed_tiers":["fast","flex"]},
+  {"slug":"gpt-reserve","display_name":"GPT-Reserve","visibility":"hide","service_tiers":[{"id":"fast","name":"Fast"}]},
+  {"slug":"gpt-5.6-terra","display_name":"GPT-5.6-Terra","visibility":"list","service_tiers":[],"additional_speed_tiers":["ultrafast"]},
+  {"model":"gpt-5.5","displayName":"GPT-5.5","hidden":true,"serviceTiers":[{"id":"flex","name":"Flex"}]}
+]}"#;
+        assert_eq!(
+            parse_codex_models(out),
+            vec![
+                ListedModel {
+                    id: "gpt-6-luna".into(),
+                    label: "GPT-6-Luna".into(),
+                    tiers: Some(vec![
+                        ListedTier { id: "fast".into(), label: "Fast".into() },
+                        ListedTier { id: "flex".into(), label: "Flex".into() },
+                    ]),
+                },
+                ListedModel {
+                    id: "gpt-5.6-terra".into(),
+                    label: "GPT-5.6-Terra".into(),
+                    tiers: Some(vec![ListedTier { id: "ultrafast".into(), label: "Ultrafast".into() }]),
+                },
+            ]
+        );
+        assert!(parse_codex_models("not json").is_empty());
     }
 
     #[test]

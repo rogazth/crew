@@ -20,6 +20,9 @@ pub struct Session {
     /// The model's reasoning effort ("low" … "max"); empty is the CLI's own setting.
     #[serde(default)]
     pub effort: String,
+    /// Codex's service tier (`default`, `fast`, `flex`, `ultrafast`); empty is the CLI's own.
+    #[serde(default)]
+    pub service_tier: String,
     pub provider_session_id: Option<String>,
     pub description: String,
     pub notifications: bool,
@@ -112,7 +115,7 @@ pub const SESSION_COLUMNS: &str = "s.id, s.workspace_id, s.kind, COALESCE(b.name
                                    s.provider_session_id, COALESCE(b.description, s.description),
                                    COALESCE(b.notifications, s.notifications),
                                    s.status, s.created_at, s.updated_at, COALESCE(b.autonomy, s.autonomy), s.worktree,
-                                   s.bot_id, s.parent_id, s.cursor, s.effort, s.handed_off_by,
+                                   s.bot_id, s.parent_id, s.cursor, s.effort, s.service_tier, s.handed_off_by,
                                    (SELECT COALESCE(hb.name, h.name) FROM sessions h LEFT JOIN bots hb ON hb.id = h.bot_id
                                      WHERE h.id = s.handed_off_by),
                                    (SELECT COALESCE(pb.name, p.name) FROM sessions p LEFT JOIN bots pb ON pb.id = p.bot_id
@@ -121,7 +124,7 @@ pub const SESSION_COLUMNS: &str = "s.id, s.workspace_id, s.kind, COALESCE(b.name
                                    (SELECT json_object('kind', e.kind, 'outcome', e.outcome,
                                                        'asks', json_extract(e.request, '$.kind'), 'at', e.at)
                                       FROM session_events e WHERE e.session_id = s.id AND e.cursor = s.cursor)";
-pub const SESSION_COLUMN_COUNT: usize = 23;
+pub const SESSION_COLUMN_COUNT: usize = 24;
 
 /// What [`SESSION_COLUMNS`] reads from.
 pub const SESSIONS: &str = "sessions s LEFT JOIN bots b ON b.id = s.bot_id";
@@ -130,6 +133,7 @@ pub fn row_to_session(row: &rusqlite::Row, at: usize) -> rusqlite::Result<Sessio
     let provider: String = row.get(at + 4)?;
     let model = or_default_model(&provider, row.get(at + 5)?);
     let effort = or_default_effort(&provider, row.get(at + 17)?);
+    let service_tier = or_default_service_tier(&provider, row.get(at + 18)?);
     Ok(Session {
         id: row.get(at)?,
         workspace_id: row.get(at + 1)?,
@@ -149,11 +153,12 @@ pub fn row_to_session(row: &rusqlite::Row, at: usize) -> rusqlite::Result<Sessio
         parent_id: row.get(at + 15)?,
         cursor: row.get(at + 16)?,
         effort,
-        handed_off_by: row.get(at + 18)?,
-        handed_off_by_name: row.get(at + 19)?,
-        parent_name: row.get(at + 20)?,
-        user_seen: row.get(at + 21)?,
-        last_event: LastEvent::read(row.get(at + 22)?, row.get(at + 16)?),
+        service_tier,
+        handed_off_by: row.get(at + 19)?,
+        handed_off_by_name: row.get(at + 20)?,
+        parent_name: row.get(at + 21)?,
+        user_seen: row.get(at + 22)?,
+        last_event: LastEvent::read(row.get(at + 23)?, row.get(at + 16)?),
     })
 }
 
@@ -172,6 +177,17 @@ fn or_default_effort(provider: &str, effort: String) -> String {
         crate::tools::unnamed_effort(provider)
     } else {
         effort
+    }
+}
+
+/// A blank tier is Codex's configured one. Anything else is what the row stored.
+fn or_default_service_tier(provider: &str, tier: String) -> String {
+    if tier.is_empty() {
+        crate::tools::unnamed_service_tier(provider)
+    } else if tier == "priority" {
+        "fast".into()
+    } else {
+        tier
     }
 }
 
@@ -325,6 +341,7 @@ fn insert(
         name,
         model: or_default_model(&provider, model),
         effort: or_default_effort(&provider, String::new()),
+        service_tier: or_default_service_tier(&provider, String::new()),
         provider,
         provider_session_id: None,
         description,
@@ -455,9 +472,17 @@ fn autonomy_or_default(value: String) -> String {
     }
 }
 
-/// What the composer's chips change: the model, its effort and what it may do
-/// alone. The provider stays; the autonomy is the bot's when there is one.
-pub fn set_options(store: &Store, id: String, model: String, effort: String, autonomy: String) -> Result<(), String> {
+/// What the composer's chips change: the model, its effort, its service tier
+/// and what it may do alone. The provider stays; the autonomy is the bot's
+/// when there is one.
+pub fn set_options(
+    store: &Store,
+    id: String,
+    model: String,
+    effort: String,
+    service_tier: String,
+    autonomy: String,
+) -> Result<(), String> {
     let autonomy = autonomy_or_default(autonomy);
     store.with(|conn| {
         let tx = conn.unchecked_transaction()?;
@@ -467,8 +492,8 @@ pub fn set_options(store: &Store, id: String, model: String, effort: String, aut
             params![id, autonomy, now],
         )?;
         tx.execute(
-            "UPDATE sessions SET model = ?2, effort = ?3, autonomy = ?4, updated_at = ?5 WHERE id = ?1",
-            params![id, model, effort, autonomy, now],
+            "UPDATE sessions SET model = ?2, effort = ?3, service_tier = ?4, autonomy = ?5, updated_at = ?6 WHERE id = ?1",
+            params![id, model, effort, service_tier, autonomy, now],
         )?;
         tx.commit()
     })?;
@@ -485,6 +510,7 @@ pub fn switch_provider(
     provider: String,
     model: String,
     effort: String,
+    service_tier: String,
     autonomy: String,
 ) -> Result<(), String> {
     let row = get(store, id.clone())?.ok_or("Session not found")?;
@@ -509,10 +535,10 @@ pub fn switch_provider(
     store.with(|conn| {
         conn.execute(
             "UPDATE sessions
-             SET provider = ?2, model = ?3, effort = ?4, autonomy = ?5, name = ?6,
-                 provider_session_id = NULL, provider_title = NULL, updated_at = ?7
+             SET provider = ?2, model = ?3, effort = ?4, service_tier = ?5, autonomy = ?6, name = ?7,
+                 provider_session_id = NULL, provider_title = NULL, updated_at = ?8
              WHERE id = ?1",
-            params![id, provider, model, effort, autonomy, name, now_millis()],
+            params![id, provider, model, effort, service_tier, autonomy, name, now_millis()],
         )
     })?;
     Ok(())
@@ -1096,13 +1122,14 @@ mod tests {
         let (store, workspace) = world();
         let s = terminal(&store, &workspace, "claude 1", "claude");
         // A row from before Crew always named them: no model, no effort.
-        set_options(&store, s.id.clone(), String::new(), String::new(), "ask".into()).expect("options");
+        set_options(&store, s.id.clone(), String::new(), String::new(), String::new(), "ask".into()).expect("options");
         let read = get(&store, s.id).expect("get").expect("row");
-        assert_eq!((read.model.as_str(), read.effort.as_str()), ("claude-opus-5-5", "high"));
+        assert_eq!((read.model.as_str(), read.effort.as_str(), read.service_tier.as_str()), ("claude-opus-5-5", "high", ""));
         let new = create(&store, workspace.clone(), "terminal".into(), "codex 1".into(), "codex".into(), String::new(), String::new(), "ask".into())
             .expect("codex");
         assert_eq!(new.model, crate::tools::unnamed_model("codex"));
         assert_eq!(new.effort, crate::tools::unnamed_effort("codex"));
+        assert_eq!(new.service_tier, crate::tools::unnamed_service_tier("codex"));
         assert!(!new.model.is_empty());
         let open = create(&store, workspace, "terminal".into(), "opencode 1".into(), "opencode".into(), String::new(), String::new(), "ask".into())
             .expect("opencode");
@@ -1146,17 +1173,17 @@ mod tests {
         terminal(&store, &workspace, "codex", "codex");
         let s = terminal(&store, &workspace, "claude 2", "claude");
         set_provider_session(&store, s.id.clone(), "claude-1".into()).expect("bind");
-        switch_provider(&store, s.id.clone(), "codex".into(), String::new(), String::new(), "full".into()).expect("switch");
+        switch_provider(&store, s.id.clone(), "codex".into(), String::new(), String::new(), String::new(), "full".into()).expect("switch");
         let read = get(&store, s.id.clone()).expect("get").expect("row");
         assert_eq!((read.provider.as_str(), read.name.as_str(), read.autonomy.as_str()), ("codex", "codex 2", "full"));
         assert_eq!(read.provider_session_id, None);
         // A name typed by hand stays whatever runs under it.
         rename(&store, s.id.clone(), "Mine".into()).expect("rename");
-        switch_provider(&store, s.id.clone(), "cursor".into(), String::new(), String::new(), "ask".into()).expect("switch");
+        switch_provider(&store, s.id.clone(), "cursor".into(), String::new(), String::new(), String::new(), "ask".into()).expect("switch");
         assert_eq!(name_of(&store, &s.id), "Mine");
-        assert!(switch_provider(&store, s.id.clone(), "grok".into(), String::new(), String::new(), "ask".into()).is_err());
+        assert!(switch_provider(&store, s.id.clone(), "grok".into(), String::new(), String::new(), String::new(), "ask".into()).is_err());
         let b = bot(&store, &workspace, "b", "ask").expect("bot");
-        assert!(switch_provider(&store, b.id, "codex".into(), String::new(), String::new(), "ask".into()).is_err());
+        assert!(switch_provider(&store, b.id, "codex".into(), String::new(), String::new(), String::new(), "ask".into()).is_err());
     }
 
     #[test]

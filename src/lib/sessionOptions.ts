@@ -9,6 +9,8 @@ import type { Session } from "./types";
 export type Launched = {
   model: string;
   effort: string;
+  /** Codex's service tier; empty when the launch named none. */
+  serviceTier: string;
   access: string;
   /** Settings bypassed permissions: the CLI ignores `access`, and ⇧Tab starts from bypass. */
   bypass: boolean;
@@ -59,14 +61,19 @@ export function modePresses(from: string, to: string): number | null {
 /**
  * What a change to the row needs before the CLI runs it: nothing, ⇧Tab
  * presses (Claude's access, which lasts only the session), or a relaunch with
- * resume (model and effort: the CLIs' own `/model` and `/effort` would save
+ * resume (model, effort and service tier: the CLIs' own commands would save
  * them as the user's default for every session after).
  */
 export type Apply = { kind: "none" } | { kind: "keys"; presses: number } | { kind: "relaunch" };
 
-export function applyFor(session: Pick<Session, "provider" | "model" | "effort" | "autonomy">, running: Launched | null): Apply {
+export function applyFor(
+  session: Pick<Session, "provider" | "model" | "effort" | "autonomy" | "serviceTier">,
+  running: Launched | null,
+): Apply {
   if (!running) return { kind: "none" };
-  if (session.model !== running.model || session.effort !== running.effort) return { kind: "relaunch" };
+  if (session.model !== running.model || session.effort !== running.effort || (session.serviceTier ?? "") !== running.serviceTier) {
+    return { kind: "relaunch" };
+  }
   if (session.autonomy === running.access) return { kind: "none" };
   if (session.provider === "claude" && !running.bypass) {
     const presses = modePresses(running.access, session.autonomy);

@@ -1,5 +1,5 @@
 import { Menu } from "@base-ui/react/menu";
-import { BrainIcon, CheckIcon, ChevronDownIcon, LockIcon, LockOpenIcon, PencilIcon, SparklesIcon, type LucideIcon as Icon } from "lucide-react";
+import { BrainIcon, CheckIcon, ChevronDownIcon, GaugeIcon, LockIcon, LockOpenIcon, PencilIcon, SparklesIcon, ZapIcon, type LucideIcon as Icon } from "lucide-react";
 import { PANEL, ROW } from "./kit";
 import { ModelPicker } from "./ModelPicker";
 import { useListedModels } from "../hooks/useListedModels";
@@ -8,7 +8,11 @@ import {
   EFFORT_LABELS,
   accessesOf,
   effortsOf,
+  fastChoice,
+  findModel,
   fitChoice,
+  setFast,
+  tiersOf,
   type Access,
   type AgentChoice,
   type Effort,
@@ -30,12 +34,12 @@ type Props = {
   lockProvider?: boolean;
 };
 
-/** The composer's model, effort and access chips, the same in Home and in a chat. */
+/** The composer's model, effort, speed and access chips, the same in Home and in a chat. */
 export function ModelControls({ value, onChange, lockProvider = false }: Props) {
   useListedModels(value.provider);
+  const fitted = fitChoice(value);
   const efforts = effortsOf(value.provider, value.model);
-  // A cursor session's row may not say its effort; its model id does.
-  const effort = fitChoice(value).effort;
+  const speed = fastChoice(value.provider, value.model);
   return (
     <>
       <ModelPicker
@@ -43,13 +47,82 @@ export function ModelControls({ value, onChange, lockProvider = false }: Props) 
         provider={value.provider}
         model={value.model}
         lockProvider={lockProvider}
-        onChange={(provider: ProviderId, model) => onChange(fitChoice({ ...value, provider, model }))}
+        onChange={(provider: ProviderId, model) => {
+          const next = fitChoice({ ...value, provider, model });
+          const same = provider === value.provider && findModel(provider, model)?.id === findModel(value.provider, value.model)?.id;
+          onChange(same ? fitChoice({ ...next, model: setFast(provider, next.model, speed.on) }) : next);
+        }}
       />
       {efforts.length > 0 && (
-        <EffortPicker value={effort} efforts={efforts} onChange={(effort) => onChange(fitChoice({ ...value, effort }))} />
+        <EffortPicker value={fitted.effort} efforts={efforts} onChange={(effort) => onChange(fitChoice({ ...value, effort }))} />
       )}
+      <SpeedControl value={fitted} onChange={onChange} />
     </>
   );
+}
+
+/**
+ * Speed control: a one-click toggle when it is on/off (Cursor's `-fast`
+ * variant), a menu only when there are several tiers to pick from
+ * (Codex). Nothing when the model has neither.
+ */
+function SpeedControl({ value, onChange }: { value: AgentChoice; onChange: (next: AgentChoice) => void }) {
+  const fast = fastChoice(value.provider, value.model);
+  const tiers = tiersOf(value.provider, value.model);
+
+  if (fast.available) {
+    return (
+      <button
+        type="button"
+        aria-pressed={fast.on}
+        title={fast.on ? "Running the fast variant — click for standard" : "A faster run of this model"}
+        onClick={() => onChange(fitChoice({ ...value, model: setFast(value.provider, value.model, !fast.on) }))}
+        className={`${CHIP} shrink-0 ${fast.on ? "bg-selected text-text" : ""}`}
+      >
+        <ZapIcon className={`size-3.5 shrink-0 ${fast.on ? "fill-current" : "text-icon"}`} />
+        Fast
+      </button>
+    );
+  }
+
+  if (tiers.length > 0) {
+    const current = value.serviceTier || "default";
+    const label = current === "default" ? "Standard" : (tiers.find((tier) => tier.id === current)?.label ?? "Standard");
+    return (
+      <Menu.Root modal={false}>
+        <Menu.Trigger aria-label="Speed" title="How quickly this model is served" className={CHIP}>
+          <GaugeIcon className="size-3.5 shrink-0 text-icon" />
+          <span className="truncate">{label}</span>
+          <ChevronDownIcon className="size-3 shrink-0 text-icon" />
+        </Menu.Trigger>
+        <Menu.Portal>
+          <Menu.Positioner side="top" align="start" sideOffset={4} className="z-50">
+            <Menu.Popup className={PANEL}>
+              <div className="px-2 pt-1 pb-1.5 text-[11px] text-text-muted">Speed</div>
+              <Menu.RadioGroup value={current} onValueChange={(serviceTier) => onChange(fitChoice({ ...value, serviceTier }))}>
+                <Menu.RadioItem value="default" closeOnClick className={ROW}>
+                  <span className="min-w-0 flex-1 truncate">Standard</span>
+                  <Menu.RadioItemIndicator>
+                    <CheckIcon className="size-4 shrink-0" />
+                  </Menu.RadioItemIndicator>
+                </Menu.RadioItem>
+                {tiers.map((tier) => (
+                  <Menu.RadioItem key={tier.id} value={tier.id} closeOnClick className={ROW}>
+                    <span className="min-w-0 flex-1 truncate">{tier.label}</span>
+                    <Menu.RadioItemIndicator>
+                      <CheckIcon className="size-4 shrink-0" />
+                    </Menu.RadioItemIndicator>
+                  </Menu.RadioItem>
+                ))}
+              </Menu.RadioGroup>
+            </Menu.Popup>
+          </Menu.Positioner>
+        </Menu.Portal>
+      </Menu.Root>
+    );
+  }
+
+  return null;
 }
 
 export function EffortPicker({
