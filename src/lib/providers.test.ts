@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { effortsOf, findModel, fitChoice, groupListed, modelLabel, modelsOf, setListedModels, splitVariant } from "./providers";
+import { effortsOf, findModel, fitChoice, groupListed, modelLabel, modelsOf, PROVIDERS, searchModels, setListedModels, splitVariant } from "./providers";
 
 /** Lines from `cursor-agent models` (2026.10.01), labels as the daemon cleans them. */
 const LISTED = [
@@ -84,6 +84,24 @@ describe("groupListed", () => {
     expect(byLabel("Claude Sonnet 4.6 1M Thinking")).toEqual({ id: "claude-4.6-sonnet-medium-thinking", label: "Claude Sonnet 4.6 1M Thinking" });
     expect(byLabel("Composer 2.5")).toEqual({ id: "composer-2.5", label: "Composer 2.5" });
     expect(models[0]).toEqual({ id: "auto", label: "Auto", note: "Default" });
+  });
+});
+
+describe("searchModels", () => {
+  it("finds a model by label across providers", () => {
+    const hits = searchModels(PROVIDERS, "opus");
+    expect(hits.some((hit) => hit.provider === "claude" && hit.model.label === "Opus 5.5")).toBe(true);
+    expect(hits.some((hit) => hit.provider === "cursor")).toBe(true);
+    expect(hits.some((hit) => hit.model.label.includes("Sonnet"))).toBe(false);
+  });
+
+  it("finds a model by an id its label does not spell, variants included", () => {
+    expect(searchModels(PROVIDERS, "gpt-6-astra")[0]).toMatchObject({ provider: "codex", model: { label: "GPT-6 Astra" } });
+    expect(searchModels(PROVIDERS, "grok-4.7-xhigh")[0]).toMatchObject({ provider: "cursor", model: { label: "Grok 4.7" } });
+  });
+
+  it("matches nothing for a blank query", () => {
+    expect(searchModels(PROVIDERS, "   ")).toEqual([]);
   });
 });
 

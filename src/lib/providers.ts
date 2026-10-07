@@ -1,3 +1,4 @@
+import { fuzzyMatch } from "./fuzzy";
 import type { ListedModel } from "./protocol";
 
 /** Provider + model registry. Adding a provider is a row here, never an `if`. */
@@ -211,6 +212,23 @@ export const providerOf = (id: string): ProviderDef | undefined =>
 
 export function modelsOf(providerId: string): Model[] {
   return listed.get(providerId) ?? providerOf(providerId)?.models ?? [];
+}
+
+export type ModelMatch = { provider: ProviderId; model: Model };
+
+/** Models across these providers that match the query, best first. A blank query matches nothing. */
+export function searchModels(providers: readonly ProviderDef[], query: string): ModelMatch[] {
+  if (!query.trim()) return [];
+  const scored: { match: ModelMatch; score: number }[] = [];
+  for (const provider of providers) {
+    for (const model of modelsOf(provider.id)) {
+      const variants = model.variants ? Object.values(model.variants).join(" ") : "";
+      const hit = fuzzyMatch(query, `${provider.label} ${model.label} ${model.id} ${variants} ${model.note ?? ""}`);
+      if (hit) scored.push({ match: { provider: provider.id, model }, score: hit.score });
+    }
+  }
+  scored.sort((a, b) => b.score - a.score || a.match.model.label.localeCompare(b.match.model.label));
+  return scored.map((entry) => entry.match);
 }
 
 /** The model an id runs, any of its effort variants included. */
