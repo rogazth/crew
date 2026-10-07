@@ -19,7 +19,7 @@ use super::{apply_stamped, Decoded, Decoder, LineReader};
 use crate::blocks::{is_question_tool, step_event};
 use crate::providers::claude::{
     assistant_text_blocks, assistant_tool_uses, is_compact_boundary, is_subagent_tool, parse_questions, tool_detail,
-    tool_label, tool_result_detail, tool_results_from_user_message,
+    tool_label, tool_result_detail, tool_result_files, tool_results_from_user_message,
 };
 use crate::providers::{as_record, string_field};
 
@@ -240,12 +240,11 @@ impl ClaudeDecoder {
                 out.event(HarnessEvent::QuestionResolved { request_id, answers });
                 continue;
             }
-            let detail = self
-                .tools
-                .get(&result.tool_use_id)
-                .and_then(|(name, input)| tool_result_detail(name, input, &result.content, result.is_error));
+            let call = self.tools.get(&result.tool_use_id);
+            let detail = call.and_then(|(name, input)| tool_result_detail(name, input, &result.content, result.is_error));
+            let files = call.map(|(name, input)| tool_result_files(name, input, &result)).unwrap_or_default();
             out.event(HarnessEvent::ToolUpdated {
-                call_id: result.tool_use_id,
+                call_id: result.tool_use_id.clone(),
                 title: None,
                 status: Some(if result.is_error {
                     ToolStatus::Failed
@@ -254,6 +253,9 @@ impl ClaudeDecoder {
                 }),
                 detail,
             });
+            if !files.is_empty() {
+                out.event(HarnessEvent::ToolFiles { call_id: result.tool_use_id, files });
+            }
         }
     }
 
@@ -889,6 +891,44 @@ mod tests {
         assert_eq!(status, &Some(ToolStatus::Failed));
         assert!(matches!(detail, Some(crew_protocol::ToolDetail::Command { output: Some(out), .. }) if out == "a\nb"));
         assert!(ClaudeDecoder::default().is_message(lines[1].as_bytes()));
+    }
+
+    #[test]
+    fn a_screenshot_and_a_sent_file_show_on_their_rows() {
+        let png = crate::media::TEST_PNG;
+        let lines = [
+            record(serde_json::json!({
+                "type": "assistant",
+                "message": { "content": [
+                    { "type": "tool_use", "id": "s1", "name": "mcp__chrome-devtools__take_screenshot", "input": {} },
+                    { "type": "tool_use", "id": "f1", "name": "SendUserFile",
+                      "input": { "files": ["/tmp/shot.png", "/tmp/notes.md"], "caption": "Before and after" } },
+                ] },
+            })),
+            record(serde_json::json!({
+                "type": "user",
+                "message": { "content": [
+                    { "type": "tool_result", "tool_use_id": "s1", "content": [
+                        { "type": "text", "text": "Took a screenshot" },
+                        { "type": "image", "source": { "type": "base64", "media_type": "image/png", "data": png } },
+                    ] },
+                    { "type": "tool_result", "tool_use_id": "f1", "content": "2 files delivered to user." },
+                ] },
+            })),
+        ];
+        let blocks = decode("shots.jsonl", &(lines.join("\n") + "\n"));
+        let shot = blocks.iter().find(|block| block.tool.as_ref().is_some_and(|tool| tool.call_id == "s1")).unwrap();
+        let files = shot.files.as_ref().expect("the screenshot");
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].kind, Some(crew_protocol::AttachedFileKind::Image));
+        assert!(std::path::Path::new(&files[0].path).exists());
+
+        let sent = blocks.iter().find(|block| block.tool.as_ref().is_some_and(|tool| tool.call_id == "f1")).unwrap();
+        assert_eq!(sent.text, "Before and after");
+        let paths: Vec<&str> = sent.files.as_ref().unwrap().iter().map(|file| file.path.as_str()).collect();
+        assert_eq!(paths, ["/tmp/shot.png", "/tmp/notes.md"]);
+        // The receipt says nothing the files do not.
+        assert!(sent.tool.as_ref().unwrap().detail.is_none());
     }
 
     #[test]

@@ -7,7 +7,7 @@ import { gapBefore, rowBlocks, type Row } from "../../lib/transcriptRows";
 import { ActivityGroup, SubagentRow } from "./Activity";
 import { BackgroundMarker } from "./Background";
 import { CheckpointRow, QueuedGroup, RefusedRow } from "./Letters";
-import { AssistantMessage, DateBreak, Note, TurnFooter, UserMessage } from "./Message";
+import { AssistantMessage, DateBreak, Note, SharedFiles, TurnFooter, UserMessage } from "./Message";
 
 type Props = {
   rows: Row[];
@@ -86,6 +86,12 @@ export function Rows({ rows, working, focusId, onApprove, onAnswer, flat = false
         return (
           <div key={row.block.id} className={className}>
             <SubagentRow block={row.block} marked={focusId} />
+          </div>
+        );
+      case "shared":
+        return (
+          <div key={row.block.id} data-block={row.block.id} className={className}>
+            <SharedFiles block={row.block} />
           </div>
         );
       case "queued":

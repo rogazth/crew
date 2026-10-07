@@ -60,6 +60,36 @@
       "status": "completed"
     },
     {
+      "type": "tool.files",
+      "callId": "t1",
+      "files": [
+        {
+          "name": "a.png",
+          "path": "/tmp/crew-media/a.png",
+          "kind": "image",
+          "size": 68
+        }
+      ]
+    },
+    {
+      "type": "tool.files",
+      "callId": "t1",
+      "files": [
+        {
+          "name": "a.png",
+          "path": "/tmp/crew-media/a.png",
+          "kind": "image",
+          "size": 68
+        },
+        {
+          "name": "b.png",
+          "path": "/tmp/crew-media/b.png",
+          "kind": "image",
+          "size": 68
+        }
+      ]
+    },
+    {
       "type": "tool.started",
       "callId": "t2",
       "name": "AskUserQuestion",

@@ -448,6 +448,64 @@ test("a chat tab keeps the reader's place behind another tab, and as replies arr
   );
 });
 
+/** Records written into the CLI's conversation as though it had made them. */
+async function written(cwd: string, id: string, entries: { type: string; message: unknown }[]): Promise<void> {
+  const file = path.join(crew.home, ".claude/projects", cwd.replace(/[^a-zA-Z0-9]/g, "-"), `${id}.jsonl`);
+  const lines = entries.map((entry) =>
+    JSON.stringify({ ...entry, uuid: randomUUID(), sessionId: id, cwd, timestamp: new Date().toISOString() }),
+  );
+  await appendFile(file, `${lines.join("\n")}\n`);
+}
+
+test("a screenshot shows on its call's row, and the files the agent sent stand out on their own", async () => {
+  const [workspace] = crew.workspaces;
+  assert.ok(workspace);
+  await crew.request("state_set", { key: "sessions:view", value: "chat" });
+  await crew.reload();
+  const session = await newTerminal(crew, workspace.id);
+  const chat = chatOf(session);
+  await chat.waitFor();
+  await sendFromChat(session, "check the page");
+  await chat.getByText("Done.").waitFor();
+
+  const icon = path.resolve("build/icon.png");
+  const data = (await readFile(icon)).toString("base64");
+  const call = (id: string, name: string, input: object) => ({
+    type: "assistant",
+    message: { id: randomUUID(), role: "assistant", content: [{ type: "tool_use", id, name, input }] },
+  });
+  const result = (id: string, content: unknown) => ({
+    type: "user",
+    message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content }] },
+  });
+  await written(workspace.path, session.id, [
+    { type: "user", message: { role: "user", content: "and show me" } },
+    call("shot", "mcp__chrome-devtools__take_screenshot", {}),
+    result("shot", [
+      { type: "text", text: "Took a screenshot of the current page" },
+      { type: "image", source: { type: "base64", media_type: "image/png", data } },
+    ]),
+    call("send", "SendUserFile", { files: [icon], caption: "The icon, as it ships" }),
+    result("send", "1 file delivered to user."),
+  ]);
+
+  const shown = chat.locator("img[src^='data:image/png']");
+  await waitFor(async () => (await shown.count()) === 2, { message: "both images are drawn" });
+  await chat.getByText("The icon, as it ships").waitFor();
+  // The screenshot was saved apart from the transcript, which names it by path.
+  const [, sent] = await chat.getByRole("button", { name: /^Open / }).evaluateAll((buttons) =>
+    buttons.map((button) => button.getAttribute("title")),
+  );
+  assert.equal(sent, "icon.png");
+  if (process.env.E2E_SHOTS) await crew.window.screenshot({ path: path.join(process.env.E2E_SHOTS, "chat-images.png") });
+
+  // Opening one shows it whole.
+  await chat.getByRole("button", { name: "Open icon.png" }).click();
+  await crew.window.locator(".crew-lightbox-image").waitFor();
+  if (process.env.E2E_SHOTS) await crew.window.screenshot({ path: path.join(process.env.E2E_SHOTS, "chat-images-open.png") });
+  await crew.window.keyboard.press("Escape");
+});
+
 /** Types a line into the terminal on screen without submitting it. */
 async function typeInTerminalLine(text: string): Promise<void> {
   await waitFor(

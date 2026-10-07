@@ -25,7 +25,7 @@ use super::{
 use crate::mailbox;
 use crate::providers::codex::{
     approval_response, classify_request, completed_tool_status, exec_item, initialize_params, interrupt_params,
-    is_tool_item, plan_detail, questions_response, rpc_error_message, steer_params, thread_id,
+    is_tool_item, item_files, plan_detail, questions_response, rpc_error_message, steer_params, thread_id,
     thread_request, tool_call_id, tool_detail, tool_label, tool_name, turn_end, turn_id, turn_start_params,
     unsupported_error, user_message_text, with_attached_paths, ApprovalKind, CodexAsk, CodexThread, TurnEnd,
 };
@@ -878,11 +878,15 @@ fn codex_item(live: &mut CodexLive, item: &Map<String, Value>, completed: bool, 
             if completed {
                 live.items.remove(&call_id);
                 events.push(HarnessEvent::ToolUpdated {
-                    call_id,
+                    call_id: call_id.clone(),
                     title: None,
                     status: Some(completed_tool_status(&row)),
                     detail: None,
                 });
+                let files = item_files(&row);
+                if !files.is_empty() {
+                    events.push(HarnessEvent::ToolFiles { call_id, files });
+                }
             }
         }
     }

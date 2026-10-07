@@ -1057,6 +1057,10 @@ body:has(button[data-sidebar="resize-handle"]:active) * {
 .crew-tool-body .crew-code {
   margin: 4px 0 6px;
 }
+/* What a call brought back to look at, under its line where the words start. */
+.crew-tool-files {
+  padding: 2px 0 4px 27px;
+}
 
 /* A message from a bot: a letter in the timeline, framed rather than
    filled, so the right-hand side stays the things you typed. */

@@ -655,6 +655,17 @@ pub enum HarnessEvent {
         #[ts(optional)]
         detail: Option<ToolDetail>,
     },
+    /// What a call has to look at: the screenshots and images it brought
+    /// back, or the files it put in front of the user. Named by path, on disk:
+    /// the bytes never ride in a block. Added to the row's own, never in
+    /// their place.
+    #[serde(rename = "tool.files")]
+    #[ts(rename = "tool.files")]
+    ToolFiles {
+        #[serde(rename = "callId")]
+        call_id: String,
+        files: Vec<AttachedFile>,
+    },
     /// Something a subagent did, nested under the call that started it: its
     /// own text and calls, applied to that call's `steps` as the transcript
     /// applies the agent's. Never a block of the transcript itself, so a

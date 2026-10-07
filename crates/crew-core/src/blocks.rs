@@ -1,7 +1,7 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crew_protocol::{
-    clip, ApprovalDecision, ApprovalResolution, Block, BlockApproval, BlockQuestion, BlockRole, BlockTool,
+    clip, ApprovalDecision, ApprovalResolution, AttachedFile, Block, BlockApproval, BlockQuestion, BlockRole, BlockTool,
     HarnessEvent, SubagentState, ToolDetail, ToolStatus, STEP_TEXT_LIMIT,
 };
 
@@ -189,6 +189,15 @@ pub fn apply_event(blocks: Vec<Block>, event: HarnessEvent) -> Vec<Block> {
                 // erasure: the command a row already showed stays on it.
                 if let Some(detail) = detail.clone() {
                     tool.detail = Some(merged(tool.detail.take(), detail.clipped()));
+                }
+                block
+            })
+            .collect(),
+        HarnessEvent::ToolFiles { call_id, files } => blocks
+            .into_iter()
+            .map(|mut block| {
+                if block.tool.as_ref().is_some_and(|tool| tool.call_id == call_id) {
+                    block.files = with_files(block.files.take(), &files);
                 }
                 block
             })
@@ -392,6 +401,18 @@ pub fn apply_event(blocks: Vec<Block>, event: HarnessEvent) -> Vec<Block> {
 
 pub fn is_question_tool(name: &str) -> bool {
     name.eq_ignore_ascii_case("askuserquestion")
+}
+
+/// The row's files and the new ones, each path once: a history read twice
+/// names the same image by the same path.
+fn with_files(old: Option<Vec<AttachedFile>>, new: &[AttachedFile]) -> Option<Vec<AttachedFile>> {
+    let mut files = old.unwrap_or_default();
+    for file in new {
+        if !files.iter().any(|kept| kept.path == file.path) {
+            files.push(file.clone());
+        }
+    }
+    (!files.is_empty()).then_some(files)
 }
 
 /// A call's new detail, keeping what only its subagent's own events fill
@@ -954,6 +975,28 @@ mod tests {
         let rust = run(fixture.events, fixture.start);
         let typescript = fold_typescript(payload);
         assert_eq!(canon(&rust), canon(&typescript));
+    }
+
+    #[test]
+    fn a_calls_files_land_on_its_row_once() {
+        let file = |path: &str| crew_protocol::AttachedFile {
+            name: path.into(),
+            path: path.into(),
+            kind: Some(crew_protocol::AttachedFileKind::Image),
+            size: None,
+        };
+        let blocks = apply_event(
+            Vec::new(),
+            HarnessEvent::ToolStarted { call_id: "t1".into(), name: "x".into(), title: "x".into(), detail: None },
+        );
+        let blocks = apply_event(blocks, HarnessEvent::ToolFiles { call_id: "t1".into(), files: vec![file("/a.png")] });
+        let blocks = apply_event(
+            blocks,
+            HarnessEvent::ToolFiles { call_id: "t1".into(), files: vec![file("/a.png"), file("/b.png")] },
+        );
+        let blocks = apply_event(blocks, HarnessEvent::ToolFiles { call_id: "other".into(), files: vec![file("/c.png")] });
+        let paths: Vec<String> = blocks[0].files.as_ref().unwrap().iter().map(|file| file.path.clone()).collect();
+        assert_eq!(paths, ["/a.png", "/b.png"]);
     }
 }
 

@@ -1,6 +1,6 @@
 import { Collapsible } from "@base-ui/react/collapsible";
 import { Tooltip } from "../../chrome/kit";
-import { ChevronRightIcon, InfoIcon } from "lucide-react";
+import { ChevronRightIcon, ImagesIcon, InfoIcon } from "lucide-react";
 import { BotAvatar } from "../../chrome/BotAvatar";
 import { lazy, memo, Suspense, useState } from "react";
 import { FileTypeIcon } from "../../chrome/FileTypeIcon";
@@ -142,6 +142,23 @@ export const AssistantMessage = memo(function AssistantMessage({ block }: { bloc
     >
       <Markdown text={block.text} {...(block.streaming ? { streaming: true } : {})} />
     </Suspense>
+  );
+});
+
+/**
+ * Files the agent sent you (Claude Code's `SendUserFile`): its caption as a
+ * quiet line, then the files. A reply's room, not a step's: it is what the
+ * agent wanted you to see.
+ */
+export const SharedFiles = memo(function SharedFiles({ block }: { block: Block }) {
+  return (
+    <div className="flex flex-col items-start gap-1.5">
+      <p className="flex items-start gap-2 text-[13px] leading-[19px] text-text-muted">
+        <ImagesIcon className="mt-0.5 size-3.5 shrink-0 text-icon" />
+        <span className="whitespace-pre-wrap">{block.tool?.title ?? block.text}</span>
+      </p>
+      {block.files && block.files.length > 0 ? <AttachmentStrip files={block.files} /> : null}
+    </div>
   );
 });
 

@@ -19,13 +19,13 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use crew_protocol::{EditHunk, HarnessEvent, Question, QuestionOption, ToolDetail, ToolStatus, TurnUsage};
+use crew_protocol::{AttachedFile, EditHunk, HarnessEvent, Question, QuestionOption, ToolDetail, ToolStatus, TurnUsage};
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 
 use super::claude::parse_timestamp;
 use super::{Decoded, Decoder};
-use crate::providers::codex::{tool_detail, tool_label, tool_name};
+use crate::providers::codex::{item_files, tool_detail, tool_label, tool_name};
 use crate::providers::{as_record, leaf, string_field};
 
 /// The tool 0.158's code mode runs scripts with.
@@ -187,6 +187,12 @@ impl Out {
         self.event(HarnessEvent::MessageCompleted {});
     }
 
+    fn files(&mut self, call_id: &str, files: Vec<AttachedFile>) {
+        if !files.is_empty() {
+            self.event(HarnessEvent::ToolFiles { call_id: call_id.to_string(), files });
+        }
+    }
+
     fn updated(&mut self, call_id: &str, status: Option<ToolStatus>, detail: Option<ToolDetail>) {
         self.event(HarnessEvent::ToolUpdated {
             call_id: call_id.to_string(),
@@ -244,6 +250,15 @@ impl CodexDecoder {
                 let Some(call_id) = call_id() else { return };
                 let text = output_text(payload.get("output")).unwrap_or_default();
                 self.output(&call_id, &text, out);
+                // `view_image` is shown by its path; anything else that
+                // answered with images (a screenshot) shows those.
+                let shown = self
+                    .tools
+                    .get(&call_id)
+                    .is_some_and(|call| string_field(Some(&call.item), "type").as_deref() != Some("view_image"));
+                if shown {
+                    out.files(&call_id, crate::media::images(payload.get("output")));
+                }
             }
             Some("web_search_call") => self.web_search(payload, out),
             _ => {}
@@ -298,13 +313,15 @@ impl CodexDecoder {
             "view_image" => {
                 let path = string_field(Some(args), "path");
                 let title = path.as_deref().map_or_else(|| "View image".into(), |path| format!("View {}", leaf(path)));
+                let file = path.as_deref().and_then(crate::media::local);
                 let detail = path.map(|path| ToolDetail::File {
                     path,
                     line_start: None,
                     line_end: None,
                     preview: None,
                 });
-                self.start_other(call_id, name.into(), title, detail, out);
+                self.start_other(call_id.clone(), name.into(), title, detail, out);
+                out.files(&call_id, file.into_iter().collect());
             }
             "request_user_input" => self.question(call_id, args, out),
             _ => self.start_other(call_id, name.into(), name.into(), None, out),
@@ -658,7 +675,26 @@ impl CodexDecoder {
                 } else {
                     None
                 };
+                let files = item_files(&call.item);
                 out.updated(&id, Some(status), detail);
+                out.files(&id, files);
+            }
+            // The image a code-mode script looked at: this item is its only record.
+            Some("ImageView") => {
+                let Some(id) = string_field(Some(item), "id") else { return };
+                let file = string_field(Some(item), "path").and_then(|path| crate::media::local(&path));
+                if !self.tools.contains_key(&id) {
+                    let title = file.as_ref().map_or_else(|| "View image".into(), |file| format!("View {}", file.name));
+                    let detail = file.as_ref().map(|file| ToolDetail::File {
+                        path: file.path.clone(),
+                        line_start: None,
+                        line_end: None,
+                        preview: None,
+                    });
+                    self.start_other(id.clone(), "view_image".into(), title, detail, out);
+                }
+                out.updated(&id, Some(ToolStatus::Completed), None);
+                out.files(&id, file.into_iter().collect());
             }
             Some("Plan") => {
                 let Some(text) = string_field(Some(item), "text") else { return };
@@ -1308,6 +1344,43 @@ mod tests {
         assert!(change.turn_ended);
         assert_eq!(roles(&change.blocks), [BlockRole::System]);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_screenshot_and_an_image_looked_at_show_on_their_rows() {
+        let png = crate::media::TEST_PNG;
+        let lines = [
+            json!({ "timestamp": "2026-09-28T20:00:00Z", "type": "event_msg", "payload": { "type": "item_completed", "item": {
+                "type": "McpToolCall", "id": "m1", "server": "chrome_devtools", "tool": "take_screenshot", "arguments": {},
+                "status": "completed",
+                "result": { "content": [
+                    { "type": "text", "text": "Took a screenshot" },
+                    { "type": "image", "mimeType": "image/png", "data": png },
+                ] },
+            } } }),
+            json!({ "timestamp": "2026-09-28T20:00:01Z", "type": "event_msg", "payload": { "type": "item_completed", "item": {
+                "type": "ImageView", "id": "v1", "path": "file:///tmp/My%20Logo.png",
+            } } }),
+            json!({ "timestamp": "2026-09-28T20:00:02Z", "type": "response_item", "payload": {
+                "type": "function_call", "name": "mcp__crew__browser_screenshot", "call_id": "c1", "arguments": "{}",
+            } }),
+            json!({ "timestamp": "2026-09-28T20:00:03Z", "type": "response_item", "payload": {
+                "type": "function_call_output", "call_id": "c1",
+                "output": [{ "type": "input_image", "image_url": format!("data:image/png;base64,{png}") }],
+            } }),
+        ];
+        let body: String = lines.iter().map(|line| format!("{line}\n")).collect();
+        let blocks = open(&body, 300);
+        let files = |id: &str| {
+            let block = blocks.iter().find(|block| block.tool.as_ref().is_some_and(|tool| tool.call_id == id)).unwrap();
+            block.files.clone().unwrap_or_default()
+        };
+        let shot = files("m1");
+        assert_eq!(shot.len(), 1);
+        assert!(std::path::Path::new(&shot[0].path).exists());
+        assert_eq!(files("v1")[0].path, "/tmp/My Logo.png");
+        // The same picture, from a call outside code mode: the same file.
+        assert_eq!(files("c1")[0].path, shot[0].path);
     }
 
     #[test]

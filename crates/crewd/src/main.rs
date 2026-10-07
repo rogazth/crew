@@ -297,6 +297,7 @@ fn start(
     let pty = PtyHost::new();
     let agents = AgentHost::new();
     let store = Store::open(dir.join("crew.sqlite3")).map_err(|e| Failure::Permanent(format!("database: {e}")))?;
+    crew_core::media::set_dir(dir.join("media"));
     let processes = ProcessHost::new(store.clone(), pty.clone(), dir);
     let handle = serve_on(
         Config {

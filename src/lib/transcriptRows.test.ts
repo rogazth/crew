@@ -393,3 +393,37 @@ describe("background markers in the transcript", () => {
     expect(kinds(rows)).toEqual(["date", "message", "fold", "background", "message", "footer"]);
   });
 });
+
+describe("files the agent sent", () => {
+  const shot = { name: "shot.png", path: "/tmp/shot.png", kind: "image" as const };
+  const sent = (files = [shot]) =>
+    block("tool", "Before and after", {
+      tool: { callId: `f${next}`, name: "SendUserFile", title: "Before and after", status: "completed" },
+      ...(files.length > 0 ? { files } : {}),
+    });
+
+  it("stand out of the group around them, as the agent's", () => {
+    const rows = groupRows([block("tool", "npm run build"), sent(), block("tool", "npm test")]);
+    expect(kinds(rows)).toEqual(["activity", "shared", "activity"]);
+    expect(speaker(rows[1]!)).toBe("agent");
+  });
+
+  it("stay a step until there are files to show", () => {
+    expect(kinds(groupRows([block("tool", "npm run build"), sent([])]))).toEqual(["activity"]);
+  });
+
+  it("stay out of the fold of a settled turn", () => {
+    const rows = foldTurns(
+      groupRows([
+        block("user", "fix it"),
+        block("tool", "npm test"),
+        block("assistant", "looking"),
+        sent(),
+        block("tool", "npm run lint"),
+        block("assistant", "done", { usage: COST }),
+      ]),
+      false,
+    );
+    expect(kinds(rows)).toEqual(["message", "fold", "shared", "message", "footer"]);
+  });
+});

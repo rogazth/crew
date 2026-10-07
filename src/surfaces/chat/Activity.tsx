@@ -20,6 +20,7 @@ import { agentDetail, shownSteps, subagentSuffix, subagentView, type AgentDetail
 import { glyphKind, hasBody, toolLine, type ToolGlyphKind } from "../../lib/toolDetail";
 import { groupRows } from "../../lib/transcriptRows";
 import { ApprovalCard } from "./ApprovalCard";
+import { AttachmentStrip } from "./Attachments";
 import { QuestionCard } from "./QuestionCard";
 import { ToolBody } from "./ToolBody";
 import { Pre, Prose } from "./ToolParts";
@@ -331,14 +332,11 @@ function ToolRow({
   if (block.role === "approval" && isOpen(block)) {
     return <ApprovalCard block={block} hot={hot === block.id} onApprove={onApprove} />;
   }
-  if (!hasBody(block)) {
-    return (
-      <div className={`${ROW}${lit(block.id, marked)}`} data-block={block.id}>
-        <ToolLine block={block} open={false} openable={false} icon={icon} />
-      </div>
-    );
-  }
-  return (
+  const row = !hasBody(block) ? (
+    <div className={`${ROW}${lit(block.id, marked)}`} data-block={block.id}>
+      <ToolLine block={block} open={false} openable={false} icon={icon} />
+    </div>
+  ) : (
     <Collapsible.Root open={open} onOpenChange={setOpen}>
       <Collapsible.Trigger className={`${ROW} w-full text-left${lit(block.id, marked)}`} data-block={block.id}>
         <ToolLine block={block} open={open} openable icon={icon} />
@@ -349,6 +347,16 @@ function ToolRow({
         </div>
       </Collapsible.Panel>
     </Collapsible.Root>
+  );
+  // A screenshot is what the call was for: it shows with the row shut.
+  if (!block.files?.length) return row;
+  return (
+    <div>
+      {row}
+      <div className="crew-tool-files">
+        <AttachmentStrip files={block.files} />
+      </div>
+    </div>
   );
 }
 

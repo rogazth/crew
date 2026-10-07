@@ -21,7 +21,8 @@ use crate::providers::claude::{
     parse_control_response, parse_questions, stop_task_request,
     session_id_from_message, stream_text_delta, to_permission_result,
     to_question_result, tool_detail as claude_tool_detail, tool_label as claude_tool_label,
-    tool_result_detail as claude_tool_result_detail, tool_results_from_user_message, tool_start_from_event,
+    tool_result_detail as claude_tool_result_detail, tool_result_files as claude_tool_result_files,
+    tool_results_from_user_message, tool_start_from_event,
     try_parse_json_record, turn_failed as claude_turn_failed, turn_usage as claude_turn_usage, ClaudeControlRequest,
     ClaudeSpawn, Subagents,
 };
@@ -2054,11 +2055,15 @@ impl TurnHost {
                 for result in tool_results_from_user_message(&rec) {
                     // The result names only the call, so the input the row was
                     // opened with is what turns it back into a detail.
-                    let detail = live.tools_by_id.get(&result.tool_use_id).and_then(|tool| {
+                    let tool = live.tools_by_id.get(&result.tool_use_id);
+                    let detail = tool.and_then(|tool| {
                         claude_tool_result_detail(&tool.name, &tool.input, &result.content, result.is_error)
                     });
+                    let files = tool
+                        .map(|tool| claude_tool_result_files(&tool.name, &tool.input, &result))
+                        .unwrap_or_default();
                     events.push(HarnessEvent::ToolUpdated {
-                        call_id: result.tool_use_id,
+                        call_id: result.tool_use_id.clone(),
                         title: None,
                         status: Some(if result.is_error {
                             ToolStatus::Failed
@@ -2067,6 +2072,9 @@ impl TurnHost {
                         }),
                         detail,
                     });
+                    if !files.is_empty() {
+                        events.push(HarnessEvent::ToolFiles { call_id: result.tool_use_id, files });
+                    }
                 }
             } else if type_name.as_deref() == Some("result") {
                 let failed = if live.cancelled {

@@ -33,12 +33,22 @@ export type Row =
   /** The call that sent a command to the background: a marker that opens its output. */
   | { kind: "background"; block: Block }
   /** A subagent sent to the background: its own nested block, on the rail, still working after the turn. */
-  | { kind: "subagent"; block: Block };
+  | { kind: "subagent"; block: Block }
+  /** Files the agent sent the user (`SendUserFile`): shown like a reply, never folded away. */
+  | { kind: "shared"; block: Block };
 
 export type Speaker = "user" | "agent" | "meta";
 
 export function speaker(row: Row): Speaker {
-  if (row.kind === "activity" || row.kind === "footer" || row.kind === "fold" || row.kind === "subagent") return "agent";
+  if (
+    row.kind === "activity" ||
+    row.kind === "footer" ||
+    row.kind === "fold" ||
+    row.kind === "subagent" ||
+    row.kind === "shared"
+  ) {
+    return "agent";
+  }
   // A checkpoint is a mark in the run, whichever way the letter went.
   if (row.kind === "date" || row.kind === "letter" || row.kind === "refused" || row.kind === "background") return "meta";
   if (row.kind === "queued") return "user";
@@ -55,6 +65,14 @@ export function speaker(row: Row): Speaker {
  */
 export function isQueued(block: Block): boolean {
   return block.role === "user" && block.streaming === true;
+}
+
+/** Claude Code's tool for putting files in front of the user. */
+const SHARE_TOOL = "SendUserFile";
+
+/** A call that sent the user files, once they are known: the files are the point, not the call. */
+export function isShared(block: Block): boolean {
+  return block.role === "tool" && block.tool?.name === SHARE_TOOL && (block.files?.length ?? 0) > 0;
 }
 
 /**
@@ -108,6 +126,12 @@ export function groupRows(blocks: Block[], background?: ReadonlySet<string>): Ro
       // A turn that ended on the send: its cost goes under it.
       if (block.usage && !block.streaming) rows.push(footerFor(block, block.usage));
       if (block.at !== undefined && block.role !== "tool") lastAt = block.at;
+      continue;
+    }
+    if (isShared(block)) {
+      flush();
+      rows.push({ kind: "shared", block });
+      if (block.usage) rows.push(footerFor(block, block.usage));
       continue;
     }
     if (isBackgroundSubagent(block, background)) {
@@ -191,7 +215,13 @@ function isOpening(row: Row): boolean {
 
 /** What stays on the rail when a turn folds: who wrote to whom, what was refused, what went to the background. */
 function staysOut(row: Row): boolean {
-  return row.kind === "letter" || row.kind === "refused" || row.kind === "background" || row.kind === "subagent";
+  return (
+    row.kind === "letter" ||
+    row.kind === "refused" ||
+    row.kind === "background" ||
+    row.kind === "subagent" ||
+    row.kind === "shared"
+  );
 }
 
 /** Every block a row holds, a fold's included: what a search hit is looked for in. */
@@ -201,7 +231,8 @@ export function rowBlocks(row: Row): Block[] {
     row.kind === "letter" ||
     row.kind === "refused" ||
     row.kind === "background" ||
-    row.kind === "subagent"
+    row.kind === "subagent" ||
+    row.kind === "shared"
   ) {
     return [row.block];
   }
@@ -286,7 +317,8 @@ function rowId(row: Row): string {
     row.kind === "letter" ||
     row.kind === "refused" ||
     row.kind === "background" ||
-    row.kind === "subagent"
+    row.kind === "subagent" ||
+    row.kind === "shared"
     ? row.block.id
     : row.id;
 }

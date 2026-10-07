@@ -9,7 +9,7 @@
 
 use std::collections::HashMap;
 
-use crew_protocol::{ApprovalDecision, Question, QuestionOption, ToolDetail};
+use crew_protocol::{ApprovalDecision, AttachedFile, Question, QuestionOption, ToolDetail};
 use serde_json::{json, Map, Value};
 
 use super::runtime::Autonomy;
@@ -314,6 +314,16 @@ pub fn exec_item(item: &Map<String, Value>) -> Option<Map<String, Value>> {
             copy(&mut out, "tool", "tool");
             "collab_tool_call"
         }
+        "imageView" => {
+            copy(&mut out, "path", "path");
+            "image_view"
+        }
+        "imageGeneration" => {
+            copy(&mut out, "savedPath", "saved_path");
+            copy(&mut out, "result", "result");
+            copy(&mut out, "revisedPrompt", "revised_prompt");
+            "image_generation"
+        }
         _ => return None,
     };
     out.insert("type".into(), json!(exec_type));
@@ -544,8 +554,36 @@ pub fn with_attached_paths(text: &str, files: &[String]) -> String {
 pub fn is_tool_item(item: &Map<String, Value>) -> bool {
     matches!(
         string_field(Some(item), "type").as_deref(),
-        Some("command_execution" | "file_change" | "mcp_tool_call" | "web_search" | "collab_tool_call" | "todo_list")
+        Some(
+            "command_execution"
+                | "file_change"
+                | "mcp_tool_call"
+                | "web_search"
+                | "collab_tool_call"
+                | "todo_list"
+                | "image_view"
+                | "image_generation"
+        )
     )
+}
+
+/// The images a call has to show: what an MCP tool sent back (a
+/// screenshot), the file `view_image` looked at, the one it generated.
+pub fn item_files(item: &Map<String, Value>) -> Vec<AttachedFile> {
+    match string_field(Some(item), "type").as_deref() {
+        Some("mcp_tool_call") => {
+            crate::media::images(item.get("result").and_then(as_record).and_then(|result| result.get("content")))
+        }
+        Some("image_view") => {
+            string_field(Some(item), "path").and_then(|path| crate::media::local(&path)).into_iter().collect()
+        }
+        Some("image_generation") => string_field(Some(item), "saved_path")
+            .and_then(|path| crate::media::local(&path))
+            .or_else(|| crate::media::save("image/png", &string_field(Some(item), "result")?))
+            .into_iter()
+            .collect(),
+        _ => Vec::new(),
+    }
 }
 
 pub fn tool_call_id(item: &Map<String, Value>) -> Option<String> {
@@ -560,6 +598,8 @@ pub fn tool_name(item: &Map<String, Value>) -> String {
         Some("web_search") => "websearch".into(),
         Some("collab_tool_call") => string_field(Some(item), "tool").unwrap_or_else(|| "collab".into()),
         Some("todo_list") => "todo".into(),
+        Some("image_view") => "view_image".into(),
+        Some("image_generation") => "image_gen".into(),
         Some(other) => other.into(),
         None => "tool".into(),
     }
@@ -612,6 +652,11 @@ pub fn tool_label(item: &Map<String, Value>) -> String {
             .unwrap_or_else(|| "Search".into()),
         Some("collab_tool_call") => string_field(Some(item), "tool").unwrap_or_else(|| "Collab".into()),
         Some("todo_list") => "Todos".into(),
+        Some("image_view") => string_field(Some(item), "path")
+            .and_then(|path| crate::media::local(&path))
+            .map(|file| format!("View {}", file.name))
+            .unwrap_or_else(|| "View image".into()),
+        Some("image_generation") => "Generate image".into(),
         Some(other) => other.into(),
         None => "tool".into(),
     }
@@ -684,6 +729,15 @@ pub fn tool_detail(item: &Map<String, Value>) -> Option<ToolDetail> {
         }),
         Some("todo_list") => Some(ToolDetail::Todo {
             items: todo_items(item.get("items"))?,
+        }),
+        Some("image_view") => Some(ToolDetail::File {
+            path: crate::media::local(&string_field(Some(item), "path")?)?.path,
+            line_start: None,
+            line_end: None,
+            preview: None,
+        }),
+        Some("image_generation") => Some(ToolDetail::Output {
+            text: string_field(Some(item), "revised_prompt")?,
         }),
         _ => None,
     }
@@ -1019,6 +1073,30 @@ mod tests {
                 HarnessEvent::ToolUpdated { call_id: "c1".into(), title: None, status: Some(ToolStatus::Completed), detail: None },
             ]
         );
+    }
+
+    #[test]
+    fn a_screenshot_and_an_image_looked_at_show_on_their_rows() {
+        let png = crate::media::TEST_PNG;
+        let shot = json!({ "type": "mcpToolCall", "id": "m1", "server": "chrome_devtools", "tool": "take_screenshot",
+            "arguments": {}, "status": "completed",
+            "result": { "content": [{ "type": "text", "text": "Took a screenshot" }, { "type": "image", "mimeType": "image/png", "data": png }] } });
+        let view = json!({ "type": "imageView", "id": "v1", "path": "/tmp/logo.png" });
+        let got = feed(&[item("started", view.clone()), item("completed", view), item("completed", shot)]);
+        let files: Vec<(&str, Vec<String>)> = got
+            .iter()
+            .filter_map(|event| match event {
+                HarnessEvent::ToolFiles { call_id, files } => {
+                    Some((call_id.as_str(), files.iter().map(|file| file.path.clone()).collect()))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(files.len(), 2, "{got:?}");
+        assert_eq!(files[0], ("v1", vec!["/tmp/logo.png".to_string()]));
+        assert_eq!(files[1].0, "m1");
+        assert!(std::path::Path::new(&files[1].1[0]).exists());
+        assert!(got.iter().any(|event| matches!(event, HarnessEvent::ToolStarted { call_id, title, .. } if call_id == "v1" && title == "View logo.png")));
     }
 
     #[test]

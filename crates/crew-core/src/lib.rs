@@ -17,6 +17,7 @@ pub mod file_search;
 pub mod files;
 pub mod mailbox;
 pub mod mcp;
+pub mod media;
 pub mod messages;
 pub mod process;
 pub mod process_tools;

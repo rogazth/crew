@@ -168,6 +168,14 @@ export function applyEvent(blocks: Block[], event: HarnessEvent): Block[] {
           },
         };
       });
+    case "tool.files":
+      return blocks.map((block) => {
+        if (block.tool?.callId !== event.callId) return block;
+        // Each path once: a history read again names the same image the same way.
+        const kept = block.files ?? [];
+        const added = event.files.filter((file) => !kept.some((old) => old.path === file.path));
+        return added.length > 0 ? { ...block, files: [...kept, ...added] } : block;
+      });
     case "subagent.event": {
       const step = stepEvent(event.event);
       if (!step) return blocks;

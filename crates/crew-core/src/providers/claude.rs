@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 
 use crew_protocol::{
-    ApprovalDecision, EditHunk, HarnessEvent, Question, QuestionOption, SubagentState, ToolDetail, ToolStatus, TurnUsage,
+    ApprovalDecision, AttachedFile, EditHunk, HarnessEvent, Question, QuestionOption, SubagentState, ToolDetail, ToolStatus,
+    TurnUsage,
 };
 use serde_json::{json, Map, Value};
 
@@ -539,6 +540,9 @@ pub struct ToolResult {
     pub tool_use_id: String,
     pub is_error: bool,
     pub content: String,
+    /// The content as it came, for the images among it: saved only by
+    /// `tool_result_files`, for the rows that show them.
+    pub raw: Value,
 }
 
 pub fn tool_results_from_user_message(rec: &Map<String, Value>) -> Vec<ToolResult> {
@@ -561,9 +565,27 @@ pub fn tool_results_from_user_message(rec: &Map<String, Value>) -> Vec<ToolResul
                 tool_use_id: string_field(Some(row), "tool_use_id")?,
                 is_error: row.get("is_error") == Some(&Value::Bool(true)),
                 content: result_text(row.get("content")),
+                raw: row.get("content").cloned().unwrap_or(Value::Null),
             })
         })
         .collect()
+}
+
+/// Claude Code's tool for putting files in front of the user, on the phone
+/// or the web while remote control is on: what it sends is what the row shows.
+pub const SHARE_TOOL: &str = "SendUserFile";
+
+/// What the row shows of what came back: the files `SendUserFile` sent, or
+/// the images in the result.
+pub fn tool_result_files(name: &str, input: &Map<String, Value>, result: &ToolResult) -> Vec<AttachedFile> {
+    if name != SHARE_TOOL {
+        return crate::media::images(Some(&result.raw));
+    }
+    input
+        .get("files")
+        .and_then(Value::as_array)
+        .map(|paths| paths.iter().filter_map(Value::as_str).filter_map(crate::media::local).collect())
+        .unwrap_or_default()
 }
 
 /// A tool result is a string on simple calls and a list of content blocks once
@@ -659,6 +681,14 @@ pub fn tool_label(name: &str, input: &Map<String, Value>) -> String {
     }
     if let Some((server, tool)) = mcp_name(name) {
         return mcp_label(&server, &tool);
+    }
+    if name == SHARE_TOOL {
+        let count = input.get("files").and_then(Value::as_array).map_or(0, Vec::len);
+        return match string_field(Some(input), "caption") {
+            Some(caption) => caption,
+            None if count == 1 => "Sent a file".into(),
+            None => format!("Sent {count} files"),
+        };
     }
     match name.to_ascii_lowercase().as_str() {
         "task" | "agent" => {
@@ -829,6 +859,10 @@ pub fn tool_result_detail(name: &str, input: &Map<String, Value>, content: &str,
     // was refused, never the receipt in the message's place.
     if super::crew_call(name, input).is_some_and(|(verb, _)| super::is_letter_tool(verb)) {
         return super::crew_result_detail(name, input, content, failed);
+    }
+    // "1 file delivered to user": the files themselves are the row.
+    if name == SHARE_TOOL {
+        return None;
     }
     let text = || Some(content.to_string()).filter(|body| !body.trim().is_empty());
     match tool_detail(name, input) {
@@ -1372,6 +1406,32 @@ mod tests {
             "parent_tool_use_id": null,
             "session_id": "9cf6b7f7-b8ab-4de7-86da-b03fb297fcd7"
         })
+    }
+
+    #[test]
+    fn a_screenshot_lands_on_its_row_as_a_file() {
+        let host = TurnHost::test_new();
+        let cap = host.test_capture();
+        host.test_install_claude("s");
+        let mut result = tool_result("");
+        result["message"]["content"][0]["content"] = json!([
+            { "type": "text", "text": "Took a screenshot" },
+            { "type": "image", "source": { "type": "base64", "media_type": "image/png", "data": crate::media::TEST_PNG } },
+        ]);
+        for line in [tool_use("mcp__crew__browser_screenshot", json!({ "tab": "browser:a" })), result] {
+            host.handle_claude_line("s", &line.to_string());
+        }
+        let files: Vec<_> = cap
+            .take()
+            .into_iter()
+            .filter_map(|event| match event {
+                HarnessEvent::ToolFiles { call_id, files } if call_id == CALL => Some(files),
+                _ => None,
+            })
+            .flatten()
+            .collect();
+        assert_eq!(files.len(), 1);
+        assert!(std::path::Path::new(&files[0].path).exists());
     }
 
     /// Background work that finishes and wakes Claude leaves a note before
