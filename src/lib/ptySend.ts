@@ -30,12 +30,37 @@ export const ANSWER_STEP_MS = 1000;
 
 const paste = (text: string) => `${PASTE_START}${text}${PASTE_END}`;
 
+/** Claude takes ⌃J as a new line in its prompt, as it does ⌥Enter. */
+const NEWLINE = "\n";
+/** Claude collapses a paste over 800 characters; a piece stays well under. */
+export const PASTE_PIECE = 512;
+
+/**
+ * Claude's text as typed by the user: each line pasted in pieces, ⌃J between
+ * the lines. A paste of several lines, or over 800 characters, reaches the
+ * model wrapped in `<pasted_content>`, as text from someone else whose
+ * instructions it does not follow (Claude 2.1.292, measured).
+ */
+function claudeText(text: string): string {
+  return text
+    .replace(/\r\n?/g, "\n")
+    .split("\n")
+    .map((line) => {
+      const chars = [...line];
+      let pasted = "";
+      for (let at = 0; at < chars.length; at += PASTE_PIECE) pasted += paste(chars.slice(at, at + PASTE_PIECE).join(""));
+      return pasted;
+    })
+    .join(NEWLINE);
+}
+
 /**
  * What the chat's composer sends: the CLI's line cleared of anything typed in
  * the terminal, the attachments pasted as paths, the text, and Enter apart.
  * The text goes in as a paste even on one line: typed that fast, Claude 2.1.284
  * takes a file name in it for one to complete, and the Enter that follows
  * picks the completion instead of sending (every other message, measured).
+ * Claude's comes in pieces, so the model reads it as the user's own words.
  */
 export function messageKeys(provider: string, text: string, paths: readonly string[] = []): Keystroke[] {
   const keys: Keystroke[] = [{ data: CLEAR_LINE, wait: 0 }];
@@ -44,7 +69,7 @@ export function messageKeys(provider: string, text: string, paths: readonly stri
   if (provider === "codex" && /^\/\S*( |$)/.test(text) && !text.includes("\n")) {
     [...text].forEach((key, at) => keys.push({ data: key, wait: at === 0 ? settle : SLASH_KEY_MS }));
   } else if (text) {
-    keys.push({ data: paste(text), wait: settle });
+    keys.push({ data: provider === "claude" ? claudeText(text) : paste(text), wait: settle });
   }
   keys.push({ data: ENTER, wait: ENTER_AFTER_MS });
   return keys;

@@ -5,6 +5,7 @@ import {
   approvalKeys,
   ENTER_AFTER_MS,
   messageKeys,
+  PASTE_PIECE,
   PATH_SETTLE_MS,
   PtyQueue,
   questionKeys,
@@ -70,10 +71,23 @@ describe("messageKeys", () => {
     ]);
   });
 
-  it("pastes a message of several lines, so its newlines do not send it", () => {
-    const keys = messageKeys("claude", "one\ntwo");
+  it("pastes a message of several lines whole, so its newlines do not send it", () => {
+    const keys = messageKeys("codex", "one\ntwo");
     expect(keys[1]?.data).toBe("\x1b[200~one\ntwo\x1b[201~");
     expect(keys.at(-1)).toEqual({ data: "\r", wait: ENTER_AFTER_MS });
+  });
+
+  it("pastes Claude's lines one by one with ⌃J between, so none is taken as pasted text", () => {
+    const keys = messageKeys("claude", "one\r\n\nthree");
+    expect(keys[1]?.data).toBe("\x1b[200~one\x1b[201~\n\n\x1b[200~three\x1b[201~");
+    expect(keys.at(-1)).toEqual({ data: "\r", wait: ENTER_AFTER_MS });
+  });
+
+  it("pastes a long line to Claude in pieces short enough not to collapse", () => {
+    const line = "a".repeat(PASTE_PIECE) + "é".repeat(PASTE_PIECE) + "z";
+    expect(messageKeys("claude", line)[1]?.data).toBe(
+      ["a".repeat(PASTE_PIECE), "é".repeat(PASTE_PIECE), "z"].map((piece) => `\x1b[200~${piece}\x1b[201~`).join(""),
+    );
   });
 
   it("pastes each attachment as its path, and lets them settle before the text", () => {

@@ -457,7 +457,10 @@ fn classify(text: &str) -> Option<Said> {
     if INJECTED_PROSE.iter().any(|notice| lower.starts_with(notice)) {
         return None;
     }
-    Some(Said::Prompt(PASTED.replace_all(text, "").into_owned()))
+    // The CLI sets a paste off with a blank line before it and a break after;
+    // a message that is all paste would open on two empty lines.
+    let unwrapped = PASTED.replace_all(text, "");
+    Some(Said::Prompt(unwrapped.trim_matches('\n').to_string()))
 }
 
 /// Command output as the CLI printed it, colours dropped; nothing when the
@@ -920,7 +923,7 @@ mod tests {
                 "note: Set model to opus",
                 "user: ! ls",
                 "user: look [Image #1]",
-                "user: \n\none\ntwo\n",
+                "user: one\ntwo",
                 "user: look:\n\nTypeError",
                 "note: Interrupted",
             ]
