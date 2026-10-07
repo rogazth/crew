@@ -79,7 +79,7 @@ export function Transcript({
    *  row they were on is gone. */
   const fromBottom = useRef(0);
   /** A row the reader just opened or closed: it stays where it was on screen while the panel moves. */
-  const anchor = useRef<{ el: Element; top: number; until: number } | null>(null);
+  const anchor = useRef<{ el: Element; until: number } | null>(null);
   // The queue at the foot waits under the working line, outside any turn.
   const { calls } = useBackgroundScope();
   const { rows, queued } = useMemo(() => {
@@ -94,7 +94,7 @@ export function Transcript({
     return { rows: foldTurns(rows, working), queued };
   }, [blocks, calls, working]);
 
-  const onScroll = () => {
+  const onScroll = useCallback(() => {
     const el = scroller.current;
     // Hidden, everything measures 0: that would read as pinned to the bottom.
     if (!el || el.clientHeight === 0) return;
@@ -102,7 +102,13 @@ export function Transcript({
       el.scrollHeight - el.scrollTop - el.clientHeight <= NEAR_BOTTOM_PX;
     fromBottom.current = el.scrollHeight - el.scrollTop;
     reading.current = pinned.current ? null : rowAtTop(el);
-  };
+  }, []);
+
+  // The suppression has to leave with the hold, or the scroller stays unanchored.
+  const endHold = useCallback(() => {
+    anchor.current = null;
+    if (scroller.current) scroller.current.style.overflowAnchor = "";
+  }, []);
 
   const place = useCallback(() => {
     const el = scroller.current;
@@ -111,14 +117,13 @@ export function Transcript({
     // history the moment the tab is shown.
     if (!el || el.clientHeight === 0) return;
     const held = anchor.current;
-    if (held && performance.now() < held.until && held.el.isConnected) {
-      // What the reader clicked is the fixed point, not the bottom and not the
-      // distance to it: the panel opens (or folds) under their pointer.
-      el.scrollTop += held.el.getBoundingClientRect().top - held.top;
-      fromBottom.current = el.scrollHeight - el.scrollTop;
-      return;
+    if (held) {
+      // Held through the transition: the row stays, and scrollTop is left alone
+      // so a wheel or trackpad gesture still moves the transcript.
+      if (performance.now() < held.until && held.el.isConnected) return;
+      endHold();
+      onScroll();
     }
-    anchor.current = null;
     if (pinned.current) {
       el.scrollTop = el.scrollHeight;
       return;
@@ -137,27 +142,33 @@ export function Transcript({
       return;
     }
     el.scrollTop = el.scrollHeight - fromBottom.current;
-  }, []);
+  }, [endHold, onScroll]);
 
   // A click on anything that folds (a phase, a tool row, a letter) pins that
   // row for the length of the animation. Keyboard activation clicks too.
   const onClickCapture = (event: React.MouseEvent) => {
+    const el = scroller.current;
     const trigger = (event.target as Element).closest("[aria-expanded]");
-    if (!trigger || !scroller.current?.contains(trigger)) return;
-    anchor.current = { el: trigger, top: trigger.getBoundingClientRect().top, until: event.timeStamp + ANCHOR_MS };
-    // Re-measured each frame of the panel's transition, which a resize observer
-    // on the content also catches; this covers the frames it does not.
+    if (!el || !trigger || !el.contains(trigger)) return;
+    anchor.current = { el: trigger, until: event.timeStamp + ANCHOR_MS };
+    // The panel's height change makes the browser chase its scroll anchor every
+    // frame. Leaving that on, and undoing it by assigning scrollTop, is what
+    // drops wheel and trackpad input until the transition ends.
+    el.style.overflowAnchor = "none";
     const follow = () => {
       if (!anchor.current) return;
-      place();
-      if (anchor.current && performance.now() < anchor.current.until) requestAnimationFrame(follow);
+      if (performance.now() < anchor.current.until) requestAnimationFrame(follow);
       else {
-        anchor.current = null;
+        endHold();
         onScroll();
       }
     };
     requestAnimationFrame(follow);
   };
+
+  useEffect(() => {
+    return () => endHold();
+  }, [endHold]);
 
   useLayoutEffect(place, [place, blocks, working, active]);
 
