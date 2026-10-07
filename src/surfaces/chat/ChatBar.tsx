@@ -196,15 +196,15 @@ type Props = {
 /**
  * The bar over a chat: its sessions, or whose it is, on the left; its
  * conversations on the right. Nothing to say, no bar, unless something
- * trails it.
+ * trails it. The 8px padding is the same top as the chip over the terminal.
  */
 export function ChatBar({ session, sessions, kids, pairs, onOpenSession, onOpenThread, trailing }: Props) {
   const owned = Boolean(session.parentId || session.handedOffBy);
   if (kids.length === 0 && !owned && pairs.length === 0) {
-    return trailing ? <div className="flex h-10 shrink-0 items-center justify-end px-3">{trailing}</div> : null;
+    return trailing ? <div className="flex shrink-0 items-center justify-end px-3 py-2">{trailing}</div> : null;
   }
   return (
-    <div className="flex h-11 shrink-0 items-center gap-3 border-b border-hairline pr-2 pl-4">
+    <div className="flex shrink-0 items-center gap-3 border-b border-hairline py-2 pr-2 pl-4">
       {kids.length > 0 ? (
         <SessionsStrip kids={kids} onOpen={onOpenSession} />
       ) : owned ? (

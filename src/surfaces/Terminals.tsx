@@ -371,9 +371,11 @@ function SessionTerminal({
       )}
       {!chat && (kids.length > 0 || revealed) && (
         // Over the terminal its children are still one click away, beside the way back to the chat.
-        <div className="absolute top-2 right-3 z-10 flex max-w-[70%] items-center gap-1.5">
+        // The plate is opaque: a translucent one lets the glyphs through.
+        <div className="absolute top-2 right-3 z-10 flex max-w-[70%] items-start gap-1.5">
           {kids.length > 0 && (
-            <div className="flex min-w-0 rounded-chrome bg-surface p-0.5 opacity-80 shadow-float transition-opacity hover:opacity-100">
+            // Its padding would drop the chips below the button; the margin puts them back on one top.
+            <div className="-mt-0.5 flex min-w-0 rounded-chrome bg-surface p-0.5 shadow-float">
               <SessionsStrip kids={kids} onOpen={openSession} label={false} />
             </div>
           )}

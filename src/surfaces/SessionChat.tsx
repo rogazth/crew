@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type RefObject } from "react";
-import { MessageSquareTextIcon, ShieldQuestionIcon, SquareTerminalIcon, TriangleAlertIcon } from "lucide-react";
+import {
+  MessageSquareTextIcon,
+  ShieldQuestionIcon,
+  SquareTerminalIcon,
+  TriangleAlertIcon,
+  type LucideIcon,
+} from "lucide-react";
 import { Button } from "../chrome/kit";
 import { useFileDrop } from "../hooks/useFileDrop";
 import { showLetter, useChatLetters } from "../hooks/useLetters";
@@ -265,9 +271,9 @@ export function SessionChat({
         // A blocking screen offers the terminal itself, front and centre.
         trailing={
           blocked ? null : (
-            <Button variant="ghost" icon={SquareTerminalIcon} className="h-7 px-2.5 text-text-muted" onClick={onShowTerminal}>
+            <ViewChip icon={SquareTerminalIcon} onClick={onShowTerminal}>
               Show terminal
-            </Button>
+            </ViewChip>
           )
         }
       />
@@ -509,16 +515,25 @@ function Notice({ title, detail, onShowTerminal }: { title: string; detail: stri
   );
 }
 
+/** The chat/terminal switch, both ways. Opaque, so a terminal's glyphs never show through the label. */
+function ViewChip({ icon: Glyph, children, onClick }: { icon: LucideIcon; children: string; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="inline-flex h-7 shrink-0 items-center justify-center gap-1.5 rounded-md bg-surface px-2.5 font-medium text-text shadow-float outline-none transition-colors hover:bg-fill focus-visible:ring-2 focus-visible:ring-focus/50"
+    >
+      <Glyph className="size-4" />
+      {children}
+    </button>
+  );
+}
+
 /** Over a terminal the setting would draw as the chat: the way back to it. */
 export function BackToChat({ onClick }: { onClick: () => void }) {
   return (
-    <Button
-      variant="secondary"
-      icon={MessageSquareTextIcon}
-      className="h-7 shrink-0 px-2.5 opacity-80 shadow-float hover:opacity-100"
-      onClick={onClick}
-    >
+    <ViewChip icon={MessageSquareTextIcon} onClick={onClick}>
       Back to chat
-    </Button>
+    </ViewChip>
   );
 }
