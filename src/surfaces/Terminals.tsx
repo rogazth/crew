@@ -210,6 +210,10 @@ function SessionTerminal({
   onOpenPath,
 }: SessionProps) {
   const [command, setCommand] = useState<string[] | null>(null);
+  // Latched while the tab is up, and kept after they leave: the CLI still starts
+  // if create-chat (or the first frames) outlast the look.
+  const [opened, setOpened] = useState(false);
+  if (active && !opened) setOpened(true);
   const [blocked, setBlocked] = useState<BlockingScreen | null>(null);
   const provider = session.provider;
   // Nothing on screen yet takes no message either.
@@ -350,7 +354,8 @@ function SessionTerminal({
             onOpenPath={onOpenPath}
             onScreen={chat ? readScreen : undefined}
             // Not before git lists its worktree: until then it reads as the main checkout.
-            eager={isHanded(session.id) && cwd === session.worktree}
+            // A tab already opened starts too, hidden again while the CLI is still coming up.
+            eager={(isHanded(session.id) && cwd === session.worktree) || opened}
           />
         </Suspense>
       )}

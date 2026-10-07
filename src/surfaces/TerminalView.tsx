@@ -20,6 +20,7 @@ import { resolveTerminalKey } from "../lib/terminalKeys";
 import { activateZwjUnicode } from "../lib/terminalUnicode";
 import { quotePath, quotePaths } from "../lib/terminalPaths";
 import { fontStack, ligaturesEnabled } from "../lib/terminalPrefs";
+import { gridStep } from "../lib/terminalStart";
 import { osc777Message, oscClipboardText } from "../lib/terminalClipboard";
 import { isOscColorQuery, oscColorReply } from "../lib/terminalColors";
 import { DARK_SCHEME, palette } from "../lib/terminalTheme";
@@ -68,8 +69,9 @@ type Props = {
   /** The rows on screen, after output settles; for a view drawn over the terminal to read. */
   onScreen?: ((lines: string[]) => void) | undefined;
   /**
-   * Starts the process out of sight, at xterm's own grid, instead of when the
-   * pane is first shown: a session handed work starts on it at once.
+   * Starts the process out of sight, at xterm's own grid, before the pane is
+   * shown: a session handed work, and one the user already opened and left
+   * while its CLI was still coming up.
    */
   eager?: boolean | undefined;
 };
@@ -172,8 +174,12 @@ export function TerminalView({
 
     let closed = false;
     let spawned = false;
-    /** Only the first spawn is size-driven; a dead pane must not resize back to life. */
-    let started = false;
+    /**
+     * The first spawn is size-driven once the pane can be measured. Out of
+     * sight, a pane already revealed starts at xterm's own grid; a dead pane
+     * must not resize back to life.
+     */
+    let gate = { started: false, revealed: latest.current.eager };
     let shellFallback = false;
     let lastCols = 0;
     let lastRows = 0;
@@ -385,15 +391,18 @@ export function TerminalView({
       });
     };
 
-    const visible = () => host.clientWidth >= 8 && host.clientHeight >= 8;
+    const measurable = () => host.clientWidth >= 8 && host.clientHeight >= 8;
+    // `hidden` on an ancestor is display:none, so the box is gone. A pane still
+    // in layout can measure 0 for a frame; that one waits, it does not start early.
+    const onScreen = () => host.offsetParent !== null;
     const applySize = () => {
-      if (closed || !visible()) return;
+      if (closed || !measurable()) return;
       fit.fit();
       const { cols, rows } = term;
       // The first spawn must not ride on a size change: a pane that measures the
       // same twice would never start, and its later kill would find nothing.
-      if (!started) {
-        started = true;
+      if (!gate.started) {
+        gate = { ...gate, started: true };
         lastCols = cols;
         lastRows = rows;
         spawn(latest.current.command, latest.current.session, true);
@@ -418,6 +427,11 @@ export function TerminalView({
     // so a scrollbar wobble mid-resize does not turn into a SIGWINCH loop that
     // makes full-screen TUIs repaint and shake.
     let raf = 0;
+    const begin = () => {
+      lastCols = term.cols;
+      lastRows = term.rows;
+      spawn(latest.current.command, latest.current.session, true);
+    };
     const schedule = () => {
       if (raf) return;
       let previous = propose();
@@ -425,7 +439,16 @@ export function TerminalView({
       const tick = () => {
         raf = requestAnimationFrame(() => {
           raf = 0;
-          if (closed || !visible()) return;
+          if (closed) return;
+          const step = gridStep(gate, onScreen());
+          gate = step.gate;
+          // Hidden, and never shown: wait for a resize. Hidden after the user
+          // had it up: start now, at this grid, and fit it when they return.
+          if (step.step === "wait") return;
+          if (step.step === "start") {
+            begin();
+            return;
+          }
           const next = propose();
           frames += 1;
           const settled =
@@ -443,16 +466,14 @@ export function TerminalView({
       };
       tick();
     };
+    // No grid to measure while it is hidden. Asked to start anyway, it does,
+    // before the first frame; the look that finds it shown fits that grid.
+    const opening = gridStep(gate, onScreen());
+    gate = opening.gate;
+    if (opening.step === "start") begin();
     const observer = new ResizeObserver(schedule);
     observer.observe(host);
     schedule();
-    // Out of sight there is no grid to measure; the first look fits this one.
-    if (latest.current.eager && !visible()) {
-      started = true;
-      lastCols = term.cols;
-      lastRows = term.rows;
-      spawn(latest.current.command, latest.current.session, true);
-    }
 
     const onScheme = () => {
       colors = palette();
@@ -477,8 +498,8 @@ export function TerminalView({
       for (const handler of osc) handler.dispose();
       for (const handler of csi) handler.dispose();
       unsubscribe();
-      if (started && latest.current.detach && !shellFallback) void api.detachPty(id).catch(() => {});
-      else if (started) void api.killPty(id);
+      if (gate.started && latest.current.detach && !shellFallback) void api.detachPty(id).catch(() => {});
+      else if (gate.started) void api.killPty(id);
       term.dispose();
       ligaturesRef.current = null;
       termRef.current = null;
