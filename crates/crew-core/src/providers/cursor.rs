@@ -26,10 +26,15 @@ pub struct CursorSpawn {
     pub autonomy: Autonomy,
 }
 
-/// `cursor-agent [--model m] [--force | --auto-review] acp`. The model goes on
-/// argv rather than through `session/set_config_option`: argv takes the ids
-/// Crew's model list names (`gpt-5.6-sol-medium`), ACP only its own
-/// (`gpt-5.6-sol`). `--yolo` is not honoured in ACP mode; `--force` is.
+/// `cursor-agent [--model m] [--force | --auto-review] --disable-codebase-ref acp`.
+/// The model goes on argv rather than through `session/set_config_option`: argv
+/// takes the ids Crew's model list names (`gpt-5.6-sol-medium`), ACP only its
+/// own (`gpt-5.6-sol`). `--yolo` is not honoured in ACP mode; `--force` is.
+/// `--disable-codebase-ref` (hidden, and before `acp`) stops `session/new` from
+/// starting a per-worktree `index.js worker-server` with a TypeScript language
+/// server (350-400 MB) that outlives acp by five idle minutes and keeps it from
+/// exiting when its stdin closes. The cost is SemanticSearch and ReadLints;
+/// grep, glob, file reads and the shell remain.
 pub fn build_cursor_spawn_args(input: &CursorSpawn) -> Vec<String> {
     let mut args = Vec::new();
     if let Some(model) = input.model.as_deref().filter(|m| !m.is_empty()) {
@@ -41,6 +46,7 @@ pub fn build_cursor_spawn_args(input: &CursorSpawn) -> Vec<String> {
         Autonomy::Auto => args.push("--auto-review".into()),
         Autonomy::Ask | Autonomy::Edits => {}
     }
+    args.push("--disable-codebase-ref".into());
     args.push("acp".into());
     args
 }
@@ -652,10 +658,13 @@ mod tests {
     #[test]
     fn autonomy_and_model_go_on_argv_before_acp() {
         let args = |autonomy| build_cursor_spawn_args(&CursorSpawn { model: Some("gpt-5.6-sol-medium".into()), autonomy });
-        assert_eq!(args(Autonomy::Full), ["--model", "gpt-5.6-sol-medium", "--force", "acp"]);
-        assert_eq!(args(Autonomy::Auto), ["--model", "gpt-5.6-sol-medium", "--auto-review", "acp"]);
-        assert_eq!(args(Autonomy::Ask), ["--model", "gpt-5.6-sol-medium", "acp"]);
-        assert_eq!(build_cursor_spawn_args(&CursorSpawn { model: None, autonomy: Autonomy::Edits }), ["acp"]);
+        assert_eq!(args(Autonomy::Full), ["--model", "gpt-5.6-sol-medium", "--force", "--disable-codebase-ref", "acp"]);
+        assert_eq!(args(Autonomy::Auto), ["--model", "gpt-5.6-sol-medium", "--auto-review", "--disable-codebase-ref", "acp"]);
+        assert_eq!(args(Autonomy::Ask), ["--model", "gpt-5.6-sol-medium", "--disable-codebase-ref", "acp"]);
+        assert_eq!(
+            build_cursor_spawn_args(&CursorSpawn { model: None, autonomy: Autonomy::Edits }),
+            ["--disable-codebase-ref", "acp"]
+        );
     }
 
     #[test]

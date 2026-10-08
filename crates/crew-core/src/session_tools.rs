@@ -2101,7 +2101,7 @@ while True:
         w.settle(&id);
         let bound = w.row(&id).provider_session_id.expect("bound");
 
-        assert_eq!(launches_of(&log)[0], json!(["--model", "composer-2.5", "--force", "acp"]));
+        assert_eq!(launches_of(&log)[0], json!(["--model", "composer-2.5", "--force", "--disable-codebase-ref", "acp"]));
         assert_eq!(sent(&log, "initialize")[0]["protocolVersion"], 1);
         assert_eq!(sent(&log, "authenticate")[0]["methodId"], "cursor_login");
         let opened = sent(&log, "session/new");
@@ -2169,7 +2169,7 @@ while True:
         w.turns.respond(&id, request["request_id"].as_u64().unwrap(), ApprovalDecision::Always).expect("respond");
         let done = w.wait(&parent, &id, json!({}));
         assert_eq!(done["sessions"][0]["report"], "report: ASK + decision: allow-once", "{done}");
-        assert_eq!(launches_of(&log)[0], json!(["--model", "composer-2.5", "acp"]), "ask runs without --force");
+        assert_eq!(launches_of(&log)[0], json!(["--model", "composer-2.5", "--disable-codebase-ref", "acp"]), "ask runs without --force");
         let answered: Vec<Value> = std::fs::read_to_string(&log)
             .unwrap()
             .lines()
