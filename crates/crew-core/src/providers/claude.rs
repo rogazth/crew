@@ -35,6 +35,11 @@ pub struct ClaudeSpawn {
     pub system_prompt: Option<String>,
     pub autonomy: Autonomy,
     pub mcp_config: Option<String>,
+    /// Load the user's own settings (`~/.claude`): their skills, plugins,
+    /// commands, `CLAUDE.md` and auto memory. A session or subagent is the
+    /// user's conversation and gets them; a bot's persona is its whole
+    /// configuration, so it does not.
+    pub user_settings: bool,
 }
 
 /// How long Claude Code lets one call to Crew's server run, in milliseconds:
@@ -65,6 +70,14 @@ pub fn claude_mcp_config(command: &str, args: &[String], always_load: bool) -> S
 pub const CREW_TOOLS_RULE: &str = "mcp__crew__*";
 
 pub fn build_claude_spawn_args(input: &ClaudeSpawn) -> Vec<String> {
+    // A bot gets only the workspace's own settings: its persona and Crew's rules
+    // are its whole configuration, and ~/.claude would inject a competing one.
+    // A session or subagent is the user's conversation, so it gets theirs too.
+    let (sources, settings) = if input.user_settings {
+        ("user,project,local", json!({ "permissions": { "allow": [CREW_TOOLS_RULE] } }))
+    } else {
+        ("project,local", json!({ "autoMemoryEnabled": false, "permissions": { "allow": [CREW_TOOLS_RULE] } }))
+    };
     let mut args = vec![
         "--output-format".into(),
         "stream-json".into(),
@@ -72,11 +85,9 @@ pub fn build_claude_spawn_args(input: &ClaudeSpawn) -> Vec<String> {
         "--input-format".into(),
         "stream-json".into(),
         "--include-partial-messages".into(),
-        // Only the workspace's own settings: the persona and Crew's rules are the
-        // bot's whole configuration, and ~/.claude would inject a competing one.
-        "--setting-sources=project,local".into(),
+        format!("--setting-sources={sources}"),
         "--settings".into(),
-        json!({ "autoMemoryEnabled": false, "permissions": { "allow": [CREW_TOOLS_RULE] } }).to_string(),
+        settings.to_string(),
     ];
     match input.autonomy {
         Autonomy::Full => {
@@ -1201,6 +1212,7 @@ mod tests {
             system_prompt: None,
             autonomy: Autonomy::Ask,
             mcp_config: Some(claude_mcp_config("/app/crewd", &["--mcp".into()], true)),
+            user_settings: false,
         });
         let at = args.iter().position(|arg| arg == "--settings").expect("settings");
         let settings: Value = serde_json::from_str(&args[at + 1]).expect("json");
@@ -1211,6 +1223,36 @@ mod tests {
         assert_eq!(mcp["mcpServers"]["crew"]["alwaysLoad"], true, "{mcp}");
         let terminal: Value = serde_json::from_str(&claude_mcp_config("/app/crewd", &["--mcp".into()], false)).expect("json");
         assert!(terminal["mcpServers"]["crew"].get("alwaysLoad").is_none(), "{terminal}");
+    }
+
+    /// A bot keeps to the workspace's settings, so `~/.claude` cannot inject a
+    /// competing persona; a session gets the user's own, auto memory included.
+    /// Crew's tools are allowed either way.
+    #[test]
+    fn a_bot_keeps_to_the_workspace_and_a_session_gets_the_users_settings() {
+        let spawn = |user_settings: bool| {
+            build_claude_spawn_args(&ClaudeSpawn {
+                model: None,
+                effort: None,
+                session_id: None,
+                resume: None,
+                replay_user_messages: false,
+                asks_questions: false,
+                system_prompt: None,
+                autonomy: Autonomy::Ask,
+                mcp_config: None,
+                user_settings,
+            })
+        };
+        let bot = spawn(false);
+        assert!(bot.contains(&"--setting-sources=project,local".to_string()), "{bot:?}");
+        let at = bot.iter().position(|arg| arg == "--settings").expect("settings");
+        assert!(bot[at + 1].contains("autoMemoryEnabled"), "{}", bot[at + 1]);
+        let session = spawn(true);
+        assert!(session.contains(&"--setting-sources=user,project,local".to_string()), "{session:?}");
+        let at = session.iter().position(|arg| arg == "--settings").expect("settings");
+        assert!(!session[at + 1].contains("autoMemoryEnabled"), "{}", session[at + 1]);
+        assert!(session[at + 1].contains("mcp__crew__*"), "{}", session[at + 1]);
     }
 
     /// A child under full autonomy keeps its question tool: Claude Code
@@ -1228,6 +1270,7 @@ mod tests {
                 system_prompt: None,
                 autonomy: Autonomy::Full,
                 mcp_config: None,
+                user_settings: false,
             })
         };
         let child = spawn(true);

@@ -1649,6 +1649,7 @@ impl TurnHost {
             system_prompt: Some(persona),
             autonomy,
             mcp_config: mcp.map(|(command, args)| crate::providers::claude::claude_mcp_config(&command, &args, true)),
+            user_settings: session.kind != "bot",
         };
         if self.stop_requested(&session_id) {
             self.agents.kill(&session_id);

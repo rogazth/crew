@@ -593,6 +593,7 @@ mod tests {
             system_prompt: Some(persona.clone()),
             autonomy: Autonomy::Full,
             mcp_config: None,
+            user_settings: false,
         });
         assert!(
             args.windows(2).any(|pair| pair[0] == "--append-system-prompt" && pair[1] == persona),
@@ -619,6 +620,7 @@ mod tests {
                 system_prompt: None,
                 autonomy,
                 mcp_config: None,
+                user_settings: false,
             })
         };
         let pair = |args: &[String], flag: &str, value: &str| args.windows(2).any(|w| w[0] == flag && w[1] == value);
@@ -659,6 +661,7 @@ mod tests {
                 system_prompt: Some("persona".into()),
                 autonomy: Autonomy::Ask,
                 mcp_config: None,
+                user_settings: false,
             }),
             cursor::build_cursor_spawn_args(&cursor::CursorSpawn { model: None, autonomy: Autonomy::Ask }),
             opencode::build_opencode_spawn_args(&opencode::OpencodeSpawn {
@@ -696,6 +699,7 @@ mod tests {
             system_prompt: None,
             autonomy: Autonomy::Ask,
             mcp_config: None,
+            user_settings: false,
         });
         assert!(claude.windows(2).any(|pair| pair == ["--resume", "conv-1"]), "{claude:?}");
         assert!(!claude.contains(&"--session-id".to_string()), "a resume that also names a new session: {claude:?}");
