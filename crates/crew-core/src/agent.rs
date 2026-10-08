@@ -5,15 +5,18 @@ use std::process::{ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
 
+use crate::agent_groups::Registry;
 use crate::shell_path;
 
 const STDOUT_EVENT: &str = "agent-stdout";
 const STDERR_EVENT: &str = "agent-stderr";
 const KILL_ESCALATE: Duration = Duration::from_secs(2);
+/// How often a group is asked whether anyone is left in it.
+const GROUP_POLL: Duration = Duration::from_millis(50);
 /// How long the emitter waits for the next line before sending what it has.
 const COALESCE: Duration = Duration::from_millis(8);
 const SPAWN_CANCELLED: &str = "Agent start was cancelled";
@@ -49,6 +52,8 @@ struct Shared {
     inner: Mutex<Inner>,
     kill_all_gen: AtomicU64,
     events: Mutex<Option<Arc<dyn AgentEvents>>>,
+    /// The process groups started, on disk, for the sweep after a crash.
+    registry: Option<Arc<Registry>>,
 }
 
 #[derive(Clone)]
@@ -64,6 +69,17 @@ impl Default for AgentHost {
 
 impl AgentHost {
     pub fn new() -> Self {
+        Self::build(None)
+    }
+
+    /// Like `new`, but keeps the process groups it starts in `path`, so
+    /// `agent_groups::sweep` can kill what is left of them if `crewd` dies
+    /// without cleaning up.
+    pub fn with_registry(path: PathBuf) -> Self {
+        Self::build(Some(Arc::new(Registry::new(path))))
+    }
+
+    fn build(registry: Option<Arc<Registry>>) -> Self {
         Self {
             shared: Arc::new(Shared {
                 inner: Mutex::new(Inner {
@@ -72,6 +88,7 @@ impl AgentHost {
                 }),
                 kill_all_gen: AtomicU64::new(0),
                 events: Mutex::new(None),
+                registry,
             }),
         }
     }
@@ -156,6 +173,10 @@ impl AgentHost {
         for wait in waits {
             let _ = wait.join();
         }
+        // The reapers may not have run yet; the file should not say otherwise.
+        if let Some(registry) = &self.shared.registry {
+            registry.prune();
+        }
     }
 
     /// Resolve `claude` the way a terminal would. Finder-launched apps inherit
@@ -235,6 +256,10 @@ impl AgentHost {
                 return Err("Failed to open the agent's pipes".into());
             }
         };
+        let registry = self.shared.registry.clone();
+        if let Some(registry) = &registry {
+            registry.add(pid);
+        }
 
         let live = Arc::new(LiveChild {
             stdin: Mutex::new(Some(stdin)),
@@ -243,9 +268,11 @@ impl AgentHost {
         });
         if let Some(rejected) = self.install_spawn(session_id.clone(), epoch, kill_all, live.clone()) {
             let _ = terminate(&rejected);
+            let registry = registry.clone();
             thread::spawn(move || {
                 let _ = child.wait();
                 rejected.exited.store(true, Ordering::Release);
+                reap_group(registry, pid);
             });
             return Err(SPAWN_CANCELLED.to_string());
         }
@@ -263,6 +290,11 @@ impl AgentHost {
         thread::spawn(move || {
             let code = child.wait().ok().and_then(|status| status.code());
             live.exited.store(true, Ordering::Release);
+            // Before the pumps: a helper the leader left behind holds the pipes
+            // open, so waiting for their EOF first would wait for the very
+            // process this is meant to end. Whoever owns the slot, however it
+            // ended: the group is ours until nobody is left in it.
+            reap_group(registry, pid);
             let _ = pumps.recv();
             let _ = pumps.recv();
             // Only the child that still owns the slot may report; a replaced one
@@ -406,6 +438,55 @@ fn terminate(live: &Arc<LiveChild>) -> Option<thread::JoinHandle<()>> {
     }))
 }
 
+/// The leader is reaped, so what is left in its group is a helper it left
+/// behind (cursor-agent's worker-server, an `npm exec` child, a backgrounded
+/// shell job). SIGTERM it now and SIGKILL after `KILL_ESCALATE`. A group id is
+/// not reused while any member is alive, which is why `-pid` is still ours.
+/// Returns at once: the wait for the group to empty is on its own thread.
+fn reap_group(registry: Option<Arc<Registry>>, pid: u32) {
+    if pid <= 1 {
+        return;
+    }
+    let group = -(pid as i32);
+    if unsafe { libc::kill(group, libc::SIGTERM) } != 0 {
+        // Nobody was left: the common case, and nothing to wait for.
+        if let Some(registry) = &registry {
+            registry.remove(pid);
+        }
+        return;
+    }
+    thread::spawn(move || {
+        let mut gone = group_gone(group, KILL_ESCALATE);
+        if !gone {
+            unsafe {
+                libc::kill(group, libc::SIGKILL);
+            }
+            gone = group_gone(group, KILL_ESCALATE);
+        }
+        // A member that outlives SIGKILL (stuck in the kernel) stays on the
+        // list, for the next `crewd` to try again.
+        if gone {
+            if let Some(registry) = &registry {
+                registry.remove(pid);
+            }
+        }
+    });
+}
+
+/// Whether the group emptied within `within`.
+fn group_gone(group: i32, within: Duration) -> bool {
+    let deadline = Instant::now() + within;
+    loop {
+        if unsafe { libc::kill(group, 0) } != 0 {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        thread::sleep(GROUP_POLL);
+    }
+}
+
 fn kill_group(pid: u32) {
     if pid <= 1 {
         return;
@@ -469,5 +550,250 @@ mod tests {
             thread::sleep(Duration::from_millis(20));
         }
         panic!("the script never answered");
+    }
+
+    fn pid_alive(pid: i32) -> bool {
+        unsafe { libc::kill(pid, 0) == 0 }
+    }
+
+    /// Kills a process a test started, so a failed assertion leaves nothing behind.
+    struct KillOnDrop(i32);
+
+    impl Drop for KillOnDrop {
+        fn drop(&mut self) {
+            unsafe {
+                libc::kill(self.0, libc::SIGKILL);
+            }
+        }
+    }
+
+    fn temp_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("crew-{name}-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        dir
+    }
+
+    fn script(dir: &std::path::Path, body: &str) -> String {
+        let path = dir.join("agent.sh");
+        std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).expect("script");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        path.to_string_lossy().into_owned()
+    }
+
+    fn until(what: &str, mut done: impl FnMut() -> bool) {
+        for _ in 0..200 {
+            if done() {
+                return;
+            }
+            thread::sleep(Duration::from_millis(30));
+        }
+        panic!("{what}");
+    }
+
+    fn registered(path: &std::path::Path) -> Vec<i64> {
+        let json: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(path).unwrap_or_default()).unwrap_or_default();
+        json["groups"]
+            .as_array()
+            .map(|groups| groups.iter().filter_map(|g| g["pgid"].as_i64()).collect())
+            .unwrap_or_default()
+    }
+
+    fn spawn_script(host: &AgentHost, dir: &std::path::Path, body: &str) -> u32 {
+        host.spawn(
+            "s1".into(),
+            script(dir, body),
+            Vec::new(),
+            dir.to_string_lossy().into_owned(),
+            None,
+        )
+        .expect("spawn")
+    }
+
+    fn read_helper_pid(dir: &std::path::Path) -> i32 {
+        let mut pid = 0;
+        until("the helper never reported its pid", || {
+            pid = std::fs::read_to_string(dir.join("helper.pid"))
+                .ok()
+                .and_then(|text| text.trim().parse().ok())
+                .unwrap_or(0);
+            pid > 0
+        });
+        pid
+    }
+
+    #[test]
+    fn a_helper_the_leader_left_behind_dies_with_its_group() {
+        let dir = temp_dir("helper");
+        let host = AgentHost::new();
+        spawn_script(&host, &dir, "sleep 300 &\necho $! > helper.pid\nexit 0");
+        let helper = read_helper_pid(&dir);
+        let _guard = KillOnDrop(helper);
+
+        until("the helper outlived its leader", || !pid_alive(helper));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_helper_that_ignores_sigterm_is_killed_after_the_grace() {
+        let dir = temp_dir("stubborn");
+        let host = AgentHost::new();
+        spawn_script(
+            &host,
+            &dir,
+            "(trap '' TERM; touch ready; exec sleep 300) &\necho $! > helper.pid\n\
+             while [ ! -e ready ]; do sleep 0.05; done\nexit 0",
+        );
+        let helper = read_helper_pid(&dir);
+        let _guard = KillOnDrop(helper);
+
+        thread::sleep(Duration::from_millis(500));
+        assert!(pid_alive(helper), "the helper should have ignored SIGTERM");
+        until("SIGKILL never reached the helper", || !pid_alive(helper));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_registry_lists_a_group_while_it_runs_and_drops_it_after() {
+        let dir = temp_dir("registry");
+        let path = dir.join("agent-groups.json");
+        let host = AgentHost::with_registry(path.clone());
+        let pid = spawn_script(&host, &dir, "exec sleep 300");
+        let _guard = KillOnDrop(pid as i32);
+
+        assert_eq!(registered(&path), vec![pid as i64]);
+        host.kill("s1");
+        until("the group stayed on the list", || registered(&path).is_empty());
+        assert!(!pid_alive(-(pid as i32)));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn sleeper() -> std::process::Child {
+        use std::os::unix::process::CommandExt;
+        Command::new("sleep")
+            .arg("300")
+            .process_group(0)
+            .spawn()
+            .expect("sleep")
+    }
+
+    fn write_groups(path: &std::path::Path, boot: i64, groups: &[(u32, i64)]) {
+        let groups: Vec<_> = groups
+            .iter()
+            .map(|(pgid, started)| serde_json::json!({ "pgid": pgid, "started": started }))
+            .collect();
+        let json = serde_json::json!({ "boot": boot, "groups": groups });
+        std::fs::write(path, json.to_string()).expect("registry file");
+    }
+
+    fn started(pid: u32) -> i64 {
+        crate::agent_groups::process_start(pid).expect("start time")
+    }
+
+    #[test]
+    fn a_sweep_kills_a_group_left_by_the_same_boot() {
+        let dir = temp_dir("sweep");
+        let path = dir.join("agent-groups.json");
+        let mut child = sleeper();
+        let _guard = KillOnDrop(child.id() as i32);
+        let boot = crate::agent_groups::boot_time().expect("boot time");
+        write_groups(&path, boot, &[(child.id(), started(child.id()))]);
+
+        crate::agent_groups::sweep(&path);
+
+        until("the group survived the sweep", || {
+            matches!(child.try_wait(), Ok(Some(_)))
+        });
+        assert!(registered(&path).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_sweep_leaves_a_group_from_another_boot_alone() {
+        let dir = temp_dir("sweep-reboot");
+        let path = dir.join("agent-groups.json");
+        let mut child = sleeper();
+        let _guard = KillOnDrop(child.id() as i32);
+        let boot = crate::agent_groups::boot_time().expect("boot time");
+        write_groups(&path, boot - 1000, &[(child.id(), started(child.id()))]);
+
+        crate::agent_groups::sweep(&path);
+
+        thread::sleep(Duration::from_millis(300));
+        assert!(matches!(child.try_wait(), Ok(None)), "a pid from before the reboot was killed");
+        assert!(registered(&path).is_empty());
+        let _ = child.kill();
+        let _ = child.wait();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_sweep_leaves_a_reused_group_id_alone() {
+        let dir = temp_dir("sweep-reused");
+        let path = dir.join("agent-groups.json");
+        let mut child = sleeper();
+        let _guard = KillOnDrop(child.id() as i32);
+        let boot = crate::agent_groups::boot_time().expect("boot time");
+        // The registered leader is long gone; this process only has its number.
+        write_groups(&path, boot, &[(child.id(), started(child.id()) - 1000)]);
+
+        crate::agent_groups::sweep(&path);
+
+        thread::sleep(Duration::from_millis(300));
+        assert!(matches!(child.try_wait(), Ok(None)), "a stranger's group was killed");
+        assert!(registered(&path).is_empty());
+        let _ = child.kill();
+        let _ = child.wait();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_sweep_does_not_kill_a_live_leader_whose_start_is_unknown() {
+        let dir = temp_dir("sweep-unknown-start");
+        let path = dir.join("agent-groups.json");
+        let mut child = sleeper();
+        let _guard = KillOnDrop(child.id() as i32);
+        let boot = crate::agent_groups::boot_time().expect("boot time");
+        write_groups(&path, boot, &[(child.id(), 0)]);
+
+        crate::agent_groups::sweep(&path);
+
+        thread::sleep(Duration::from_millis(300));
+        assert!(matches!(child.try_wait(), Ok(None)), "a group of unproven ownership was killed");
+        let _ = child.kill();
+        let _ = child.wait();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_sweep_kills_the_helpers_of_a_leader_that_already_died() {
+        use std::os::unix::process::CommandExt;
+        let dir = temp_dir("sweep-orphans");
+        let path = dir.join("agent-groups.json");
+        let mut leader = Command::new(script(&dir, "sleep 300 &\necho $! > helper.pid\nexit 0"))
+            .current_dir(&dir)
+            .process_group(0)
+            .spawn()
+            .expect("leader");
+        let pgid = leader.id();
+        let helper = read_helper_pid(&dir);
+        let _guard = KillOnDrop(helper);
+        leader.wait().expect("leader exits");
+        let boot = crate::agent_groups::boot_time().expect("boot time");
+        write_groups(&path, boot, &[(pgid, 0)]);
+
+        crate::agent_groups::sweep(&path);
+
+        until("the helper survived the sweep", || !pid_alive(helper));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_sweep_without_a_file_is_not_an_error() {
+        let dir = temp_dir("sweep-none");
+        let path = dir.join("agent-groups.json");
+        crate::agent_groups::sweep(&path);
+        assert!(registered(&path).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

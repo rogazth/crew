@@ -295,7 +295,11 @@ fn start(
     crew_core::provider_session::prewarm_cursor_models();
     crew_core::provider_session::prewarm_codex_models();
     let pty = PtyHost::new();
-    let agents = AgentHost::new();
+    // Before the host: what a crashed `crewd` left running goes first, and the
+    // host then starts a fresh list.
+    let groups = dir.join("agent-groups.json");
+    crew_core::agent_groups::sweep(&groups);
+    let agents = AgentHost::with_registry(groups);
     let store = Store::open(dir.join("crew.sqlite3")).map_err(|e| Failure::Permanent(format!("database: {e}")))?;
     crew_core::media::set_dir(dir.join("media"));
     let processes = ProcessHost::new(store.clone(), pty.clone(), dir);

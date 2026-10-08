@@ -1,4 +1,5 @@
 pub mod agent;
+pub mod agent_groups;
 pub mod background;
 pub mod blocks;
 pub mod bridge;
