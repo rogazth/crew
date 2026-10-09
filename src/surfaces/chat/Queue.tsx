@@ -107,6 +107,7 @@ function QueuedRow({ message, index, working, queue }: { message: QueuedMessage;
         {editing ? (
           <input
             autoFocus
+            aria-label="Queued message"
             value={text}
             onChange={(event) => setText(event.target.value)}
             onBlur={save}
