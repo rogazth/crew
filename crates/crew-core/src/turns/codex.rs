@@ -22,7 +22,7 @@ use serde_json::{json, Map, Value};
 use tokio::sync::oneshot;
 
 use super::{
-    child_resume, path_list, Harness, Launch, QuestionReply, Steer, TurnHost,
+    carries_conversation, conversation_to_resume, path_list, Harness, Launch, QuestionReply, Steer, TurnHost,
     TurnOutcome, INIT_TIMEOUT, NEXT_EPOCH,
 };
 use crate::mailbox;
@@ -163,12 +163,12 @@ impl TurnHost {
         let since = self.codex_arm(&session, &params.cwd, tx);
         let kept = since.is_some();
         self.watch_for_silence(&session_id);
-        let child = session.kind == "child";
+        let carries = carries_conversation(&session);
         // Every turn: Codex keeps no system prompt Crew can set, and newer
         // catalogs override developer instructions.
         let instructions = self.persona(&session, Harness::Mcp, self.mcp().is_some(), &params.cwd);
         let files = path_list(&params, &HashSet::new());
-        let text = if child {
+        let text = if carries {
             crate::providers::with_files(params.text.trim(), &files)
         } else {
             crate::providers::assemble(
@@ -186,7 +186,7 @@ impl TurnHost {
             None => Map::new(),
         };
         let outcome = match self.ensure_codex(&session, &params, kept) {
-            Ok(thread) => match self.codex_turn(&session_id, &thread, &text, &instructions, overrides) {
+            Ok(thread) => match self.codex_turn(&session_id, &thread, &text, instructions.as_deref(), overrides) {
                 Ok(()) => self
                     .block_on(turn_rx)
                     .unwrap_or(TurnOutcome::Failed("Turn channel closed".into())),
@@ -284,7 +284,7 @@ impl TurnHost {
         let env = self.agent_env(session_id);
         let thread = CodexThread {
             cwd: params.cwd.clone(),
-            resume: child_resume(session),
+            resume: conversation_to_resume(session),
             model: Some(session.model.clone()).filter(|m| !m.is_empty()),
             effort: Some(session.effort.clone()).filter(|e| !e.is_empty()),
             service_tier: Some(session.service_tier.clone()).filter(|tier| !tier.is_empty()),
@@ -328,7 +328,7 @@ impl TurnHost {
         session_id: &str,
         thread_id: &str,
         text: &str,
-        instructions: &str,
+        instructions: Option<&str>,
         overrides: Map<String, Value>,
     ) -> Result<(), String> {
         self.transcripts.apply(
@@ -341,7 +341,7 @@ impl TurnHost {
         if self.stop_requested(session_id) {
             return Err("cancelled".into());
         }
-        let mut params = turn_start_params(thread_id, text, Some(instructions));
+        let mut params = turn_start_params(thread_id, text, instructions);
         if let Value::Object(params) = &mut params {
             params.extend(overrides);
         }

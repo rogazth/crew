@@ -1128,7 +1128,7 @@ pub fn claude_spoke_at(home: &Path, cwd: &str, id: &str) -> Option<i64> {
     Some(at.duration_since(UNIX_EPOCH).ok()?.as_millis() as i64)
 }
 
-fn claude_transcript(home: &Path, cwd: &str, id: &str) -> PathBuf {
+pub(crate) fn claude_transcript(home: &Path, cwd: &str, id: &str) -> PathBuf {
     home.join(".claude/projects").join(crate::claude_title::project_slug(cwd)).join(format!("{id}.jsonl"))
 }
 

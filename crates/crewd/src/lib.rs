@@ -1246,6 +1246,11 @@ fn terminal_launch(
     if row.kind != "terminal" {
         return Err(format!("{} is not a terminal session", row.name));
     }
+    // The chat view is Crew's: its CLI runs over the provider's protocol, and a
+    // second one on the same conversation in a PTY would write over it.
+    if row.view != "terminal" {
+        return Err(format!("{} is in the chat view: its CLI is not run in a terminal", row.name));
+    }
     let info = bridge.info()?;
     let token = bridge.mint_process(session_id);
     // The prompt a handoff (`start_session` with owner user) left it, taken
@@ -1524,12 +1529,15 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
             let store = hosts.store.clone();
             let sessions = hosts.sessions.clone();
             let host = hosts.pty.clone();
+            let turns = hosts.turns.clone();
             let id = p.id.clone();
             let row = block(move || {
                 if sessions.has_conversation(&store, &p.id, &p.cwd)? {
                     return Err("This session already has a conversation; start a new session for another provider".into());
                 }
                 host.kill_session(&p.id);
+                // A session in the chat view keeps a process of its own between turns.
+                turns.release(&p.id);
                 session::switch_provider(&store, p.id.clone(), p.provider, p.model, p.effort, p.service_tier, p.autonomy)?;
                 session::get(&store, p.id)
             })
@@ -2810,6 +2818,58 @@ mod tests {
             .await;
             assert!(!spawned.ok, "{session} was launched as a terminal");
         }
+        handle.shutdown();
+    }
+
+    /// A session in the chat view has its CLI run by Crew over the provider's
+    /// protocol: a second one in a PTY on the same conversation would write
+    /// over it. Only the terminal view launches.
+    #[tokio::test]
+    async fn a_session_in_the_chat_view_is_not_launched_in_a_terminal() {
+        let dir = test_dir("terminal-chat-view");
+        let (handle, _bridge) = test_serve_bridged(&dir);
+        let mut ws = connect_authed(&handle).await;
+        let cwd = dir.to_string_lossy().into_owned();
+        let (workspace, _, terminal) = seed_terminal(&mut ws, &cwd).await;
+        let chat: proto::Session = serde_json::from_value(
+            rpc(
+                &mut ws,
+                4,
+                "session_create",
+                serde_json::json!({
+                    "workspaceId": workspace,
+                    "kind": "terminal",
+                    "name": "chat",
+                    "provider": "claude",
+                    "model": "",
+                    "description": "",
+                    "autonomy": "ask",
+                    "view": "chat"
+                }),
+            )
+            .await
+            .result
+            .expect("session"),
+        )
+        .expect("session");
+        let spawn = |id: u32, session: &str| {
+            serde_json::to_value(PtySpawn {
+                id: format!("pane-{id}-{}", random_token()),
+                cwd: cwd.clone(),
+                command: vec!["/bin/sh".into()],
+                cols: 80,
+                rows: 24,
+                session: Some(session.to_string()),
+                reuse: None,
+                dark: None,
+            })
+            .unwrap()
+        };
+        let refused = rpc(&mut ws, 5, "pty_spawn", spawn(5, &chat.id)).await;
+        assert!(!refused.ok, "a chat-view session was launched in a terminal");
+        assert!(refused.error.as_deref().is_some_and(|error| error.contains("chat view")), "{:?}", refused.error);
+        let launched = rpc(&mut ws, 6, "pty_spawn", spawn(6, &terminal)).await;
+        assert!(launched.ok, "{:?}", launched.error);
         handle.shutdown();
     }
 

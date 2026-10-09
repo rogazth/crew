@@ -1,10 +1,11 @@
-//! The Cursor driver: one `cursor-agent acp` per turn of a bot or a child,
-//! spoken to in the Agent Client Protocol over its stdio. The process is
-//! spawned when the turn starts and killed when it ends, as Claude's and
-//! Codex's are: a child carries on its conversation with `session/load`, a bot
-//! starts a clean one with the tail Crew hands it. While the turn runs, Crew
-//! can stop it and answer the permissions and questions it sends, through the
-//! same events and cards as the other providers. Cursor takes nothing into a
+//! The Cursor driver: one `cursor-agent acp` per turn of a bot, a child or the
+//! user's own session, spoken to in the Agent Client Protocol over its stdio.
+//! The process is spawned when the turn starts and killed when it ends, as
+//! Claude's and Codex's are: a child or the user's session carries on its
+//! conversation with `session/load`, a bot starts a clean one with the tail
+//! Crew hands it. While the turn runs, Crew can stop it and answer the
+//! permissions and questions it sends, through the same events and cards as
+//! the other providers. Cursor takes nothing into a
 //! running turn (no `session/steer`; a second prompt cancels the first), so a
 //! message to it always waits for the turn to end.
 //!
@@ -21,7 +22,7 @@ use serde_json::{json, Map, Value};
 use tokio::sync::oneshot;
 
 use super::{
-    child_resume, path_list, Harness, Live, QuestionReply, TurnHost,
+    carries_conversation, conversation_to_resume, path_list, Harness, Live, QuestionReply, TurnHost,
     TurnOutcome, INIT_TIMEOUT,
 };
 use crate::providers::cursor::{
@@ -175,18 +176,18 @@ impl TurnHost {
             }
         };
         let mcp = self.mcp();
-        let child = session.kind == "child";
-        let resume = child_resume(&session);
+        let carries = carries_conversation(&session);
+        let resume = conversation_to_resume(&session);
         // No system channel: the persona and the tool sheet are the first
         // user message of a conversation, a bot's every turn.
         let persona = self.persona(&session, Harness::Cursor, mcp.is_some(), &params.cwd);
-        let texts = if child {
+        let texts = if carries {
             Texts {
-                fresh: self.child_prompt(&persona, false, &params),
-                resumed: self.child_prompt(&persona, true, &params),
+                fresh: self.child_prompt(persona.as_deref(), false, &params),
+                resumed: self.child_prompt(persona.as_deref(), true, &params),
             }
         } else {
-            let text = build_cursor_prompt(&persona, history.as_deref(), &params.text, &path_list(&params, &HashSet::new()));
+            let text = build_cursor_prompt(persona.as_deref().unwrap_or_default(), history.as_deref(), &params.text, &path_list(&params, &HashSet::new()));
             Texts { fresh: text.clone(), resumed: text }
         };
         // Minted once and used twice: the agent's own shell gets it, and so
@@ -207,7 +208,7 @@ impl TurnHost {
             self.detach(&session_id);
             return TurnOutcome::Failed(error);
         }
-        let migrated = child && resume.is_none() && self.acp_note_pending(&session_id);
+        let migrated = carries && resume.is_none() && self.acp_note_pending(&session_id);
         let outcome = match self.cursor_open(&session_id, &params.cwd, resume.as_deref(), &servers, &texts, migrated) {
             Ok(()) => self
                 .block_on(turn_rx)

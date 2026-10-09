@@ -768,7 +768,15 @@ fn is_disposable_in(store: &Store, id: String, dirs: &ClaudeDirs) -> Result<bool
         return Ok(false);
     };
     let claimed = claimed_provider_sessions(store, &session.id)?;
-    Ok(disposable(&session, &cwd, &claimed, dirs.home.as_deref()))
+    Ok(disposable(&session, &cwd, &claimed, dirs.home.as_deref()) && !has_transcript(store, &session.id)?)
+}
+
+/// Whether Crew keeps anything said in the session. The chat view's
+/// conversation is in Crew's transcript as well as in the provider's own
+/// store, which not every provider's can be read for (a Cursor chat made over
+/// ACP shows as empty there).
+fn has_transcript(store: &Store, id: &str) -> Result<bool, String> {
+    Ok(store.with(|conn| crate::messages::count(conn, id))? > 0)
 }
 
 /// Deletes the disposable terminals no tab holds: the ones closed before the
@@ -811,7 +819,10 @@ fn sweep_disposable_in(store: &Store, dirs: &ClaudeDirs) -> Result<usize, String
     let mut swept = 0;
     for (session, cwd) in terminals {
         let claimed = claimed_provider_sessions(store, &session.id)?;
-        if !open.contains(&session.id) && disposable(&session, &cwd, &claimed, dirs.home.as_deref()) {
+        if !open.contains(&session.id)
+            && disposable(&session, &cwd, &claimed, dirs.home.as_deref())
+            && !has_transcript(store, &session.id)?
+        {
             delete(store, session.id)?;
             swept += 1;
         }
@@ -1463,6 +1474,24 @@ mod tests {
         for kept in [named.id, spoken.id, open.id, unread.id, planner.id] {
             assert!(get(&store, kept).unwrap().is_some());
         }
+    }
+
+    /// What was said in the chat view is in Crew's transcript, which the
+    /// provider's own store does not always show (Cursor's ACP chats).
+    #[test]
+    fn a_session_with_a_transcript_of_its_own_is_never_swept() {
+        let (store, workspace) = world();
+        let silent = terminal(&store, &workspace, "codex", "codex");
+        let chat = terminal(&store, &workspace, "codex", "codex");
+        let hub = crate::transcript::TranscriptHub::new(store.clone());
+        hub.append_user(&chat.id, "hi", false, None, None);
+        hub.flush(&chat.id);
+
+        assert!(is_disposable(&store, silent.id.clone()).unwrap());
+        assert!(!is_disposable(&store, chat.id.clone()).unwrap());
+        assert_eq!(sweep_disposable(&store).unwrap(), 1);
+        assert!(get(&store, silent.id).unwrap().is_none());
+        assert!(get(&store, chat.id).unwrap().is_some());
     }
 
     fn branched(store: &Store, workspace: &str, tree: &str) -> Session {

@@ -4345,6 +4345,329 @@ while True:
         assert_eq!(steer.state, "delivered");
     }
 
+    // ---- The user's own session: a terminal in the chat view, driven by Crew ----
+
+    impl World {
+        /// A top-level session in the chat view, which Crew drives.
+        fn user_session(&self, provider: &str, model: &str, autonomy: &str) -> Session {
+            session::create(
+                self.turns.store(),
+                self.workspace.clone(),
+                "terminal".into(),
+                "mine".into(),
+                provider.into(),
+                model.into(),
+                String::new(),
+                autonomy.into(),
+                Some("chat".into()),
+            )
+            .expect("user session")
+        }
+
+        /// What the user types in the window, and the wait for the turn to end.
+        fn say(&self, row: &Session, text: &str) -> Session {
+            self.turns
+                .start_by_user(TurnStart {
+                    session_id: row.id.clone(),
+                    cwd: self.dir.to_string_lossy().into_owned(),
+                    text: text.into(),
+                    files: None,
+                    mentions: None,
+                    hidden: None,
+                    from_bot: None,
+                    sent_at: None,
+                    nonce: None,
+                    letter_id: None,
+                    mode: None,
+                })
+                .expect("start");
+            self.settle(&row.id)
+        }
+
+        /// Claude's side of a conversation `id` having been written in the
+        /// folder the sessions run in: the CLI's jsonl, under a home of this
+        /// test's own.
+        fn claude_wrote(&self, id: &str) {
+            let home = self.dir.join("home");
+            self.turns.override_claude_home(&home);
+            let folder = home.join(".claude/projects").join(crate::claude_title::project_slug(&self.dir.to_string_lossy()));
+            std::fs::create_dir_all(&folder).expect("folder");
+            std::fs::write(folder.join(format!("{id}.jsonl")), "{\"type\":\"user\",\"message\":{\"content\":\"hi\"}}\n")
+                .expect("jsonl");
+        }
+
+        fn blocks(&self, id: &str) -> Vec<Block> {
+            self.turns.transcripts().since(id, 0).0
+        }
+    }
+
+    /// The user's session is their CLI on Crew's protocol: it keeps one process
+    /// across their messages, on the conversation the terminal view used (Crew's
+    /// own id), and the status it ends on is the one a session they watch has.
+    #[test]
+    fn a_users_session_runs_its_turns_on_one_claude_process() {
+        let w = world();
+        w.turns.override_binary("claude", fake_claude(&w.dir));
+        w.turns.override_claude_home(w.dir.join("home"));
+        let mine = w.user_session("claude", "", "full");
+
+        let first = w.say(&mine, "remember 4817");
+        assert_eq!(first.status, "done");
+        assert_eq!(w.turns.test_agents().running(), vec![mine.id.clone()]);
+        assert!(w.turns.idle_since(&mine.id).is_some());
+        w.say(&mine, "what number?");
+
+        let launches = launched(&w.dir.join("claude-launch.log"));
+        assert_eq!(launches.len(), 1, "{launches:?}");
+        assert_eq!(after_flag(&launches[0], "--session-id"), Some(mine.id.clone()));
+        assert!(after_flag(&launches[0], "--resume").is_none(), "{}", launches[0]);
+        assert_eq!(w.row(&mine.id).provider_session_id, Some(mine.id.clone()));
+        let text: Vec<String> = w.blocks(&mine.id).into_iter().map(|block| block.text).collect();
+        assert!(text.contains(&"report: remember 4817".to_string()), "{text:?}");
+        assert!(text.contains(&"report: what number?".to_string()), "{text:?}");
+        assert_eq!(w.row(&mine.id).last_event, None, "nobody waits on a user's turn");
+    }
+
+    /// Nothing is added to the user's own CLI: no persona, their settings
+    /// loaded, and the question tool kept so its questions reach them.
+    #[test]
+    fn a_users_session_is_launched_without_a_persona_and_with_the_users_settings() {
+        let w = world();
+        w.turns.override_binary("claude", fake_claude(&w.dir));
+        w.turns.override_claude_home(w.dir.join("home"));
+        let mine = w.user_session("claude", "", "full");
+        w.say(&mine, "hello");
+        // The same CLI as a subagent, for comparison.
+        let parent = w.session("terminal", "shell", "full");
+        let started = w.call(&parent, "start_session", json!({ "provider": "claude", "prompt": "hello" })).expect("start");
+        w.wait(&parent, started["id"].as_str().unwrap(), json!({}));
+
+        let launches = launched(&w.dir.join("claude-launch.log"));
+        assert_eq!(launches.len(), 2, "{launches:?}");
+        let (user, subagent) = (&launches[0], &launches[1]);
+        let argv: Vec<&str> = user["argv"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
+        assert!(!argv.contains(&"--append-system-prompt"), "{argv:?}");
+        assert!(argv.contains(&"--setting-sources=user,project,local"), "{argv:?}");
+        assert_eq!(after_flag(user, "--permission-prompt-tool"), Some("stdio".to_string()), "{argv:?}");
+        assert!(subagent["argv"].to_string().contains("--append-system-prompt"), "{subagent}");
+    }
+
+    /// The terminal view is the user at the keyboard of the CLI: no turn of
+    /// Crew's runs beside it, from the window or from the box.
+    #[test]
+    fn a_session_in_the_terminal_view_is_not_driven() {
+        let w = world();
+        let at_the_keyboard = w.session("terminal", "kb", "full").session_id().map(str::to_string).unwrap();
+        let row = w.row(&at_the_keyboard);
+        assert_eq!(row.view, "terminal");
+
+        let refused = w
+            .turns
+            .start_by_user(TurnStart {
+                session_id: row.id.clone(),
+                cwd: w.dir.to_string_lossy().into_owned(),
+                text: "hello".into(),
+                files: None,
+                mentions: None,
+                hidden: None,
+                from_bot: None,
+                sent_at: None,
+                nonce: None,
+                letter_id: None,
+                mode: None,
+            })
+            .expect_err("a turn ran in the terminal view");
+        assert!(refused.contains("terminal view"), "{refused}");
+        mailbox::enqueue(w.turns.store(), &row.id, &mailbox::user(), "waiting").expect("enqueue");
+        w.turns.deliver_waiting();
+        assert!(!w.turns.is_running(&row.id));
+        assert_eq!(mailbox::waiting_count(w.turns.store(), &row.id).unwrap(), 1);
+        assert!(w.launches().is_empty());
+    }
+
+    /// Claude refuses a new session under an id it holds, so a conversation
+    /// the terminal view wrote is resumed, on the id the CLI is in now.
+    #[test]
+    fn a_users_claude_conversation_on_disk_is_resumed() {
+        let w = world();
+        w.turns.override_binary("claude", fake_claude(&w.dir));
+        let mine = w.user_session("claude", "", "ask");
+        w.claude_wrote(&mine.id);
+        w.say(&mine, "carry on");
+
+        let moved = w.user_session("claude", "", "ask");
+        session::set_provider_session(w.turns.store(), moved.id.clone(), "after-clear".into()).expect("bind");
+        w.claude_wrote("after-clear");
+        w.say(&moved, "carry on");
+
+        let launches = launched(&w.dir.join("claude-launch.log"));
+        assert_eq!(launches.len(), 2, "{launches:?}");
+        assert_eq!(after_flag(&launches[0], "--resume"), Some(mine.id.clone()));
+        assert_eq!(after_flag(&launches[1], "--resume"), Some("after-clear".to_string()));
+        for launch in &launches {
+            assert!(after_flag(launch, "--session-id").is_none(), "{launch}");
+        }
+    }
+
+    /// Released after the idle time, the process is launched again by the next
+    /// message, which resumes the conversation Claude has written by then.
+    #[test]
+    fn an_idle_users_claude_session_is_released_and_the_next_message_resumes_it() {
+        let w = world();
+        w.turns.override_binary("claude", fake_claude(&w.dir));
+        w.turns.override_claude_home(w.dir.join("home"));
+        let mine = w.user_session("claude", "", "full");
+        w.say(&mine, "remember 4817");
+        w.claude_wrote(&mine.id);
+        std::thread::sleep(Duration::from_millis(5));
+        assert_eq!(w.turns.release_idle(Duration::from_millis(1), Duration::from_secs(3600)), vec![mine.id.clone()]);
+        assert!(w.turns.test_agents().running().is_empty());
+        assert!(w.turns.idle_since(&mine.id).is_none());
+
+        w.say(&mine, "what number?");
+        let launches = launched(&w.dir.join("claude-launch.log"));
+        assert_eq!(launches.len(), 2, "{launches:?}");
+        assert_eq!(after_flag(&launches[0], "--session-id"), Some(mine.id.clone()));
+        assert_eq!(after_flag(&launches[1], "--resume"), Some(mine.id.clone()));
+    }
+
+    /// Codex resumes the thread the session already has, and told nothing
+    /// beyond what the user typed.
+    #[test]
+    fn a_users_codex_session_resumes_its_thread_with_no_instructions_of_ours() {
+        let w = world();
+        let (fake, log) = crate::turns::fake_codex(&w.dir);
+        w.turns.override_binary("codex", fake);
+        let mine = w.user_session("codex", "gpt-5.6-luna", "full");
+        session::set_provider_session(w.turns.store(), mine.id.clone(), "thread-77".into()).expect("bind");
+        w.say(&mine, "remember 4817");
+        w.say(&mine, "what number?");
+
+        let resumed = sent(&log, "thread/resume");
+        assert_eq!(resumed.len(), 1, "{resumed:?}");
+        assert_eq!(resumed[0]["threadId"], json!("thread-77"));
+        assert!(sent(&log, "thread/start").is_empty());
+        let turns = sent(&log, "turn/start");
+        assert_eq!(turns.len(), 2, "{turns:?}");
+        for (turn, text) in turns.iter().zip(["remember 4817", "what number?"]) {
+            assert_eq!(turn["threadId"], json!("thread-77"));
+            assert_eq!(turn["input"][0]["text"], json!(text), "{turn}");
+            assert!(turn.get("additionalContext").is_none(), "{turn}");
+        }
+        assert_eq!(launched(&log).len(), 1, "the second message started another app server");
+    }
+
+    /// A session with no thread yet opens one, and keeps its id to resume.
+    #[test]
+    fn a_users_codex_session_keeps_the_id_of_the_thread_it_opens() {
+        let w = world();
+        let (fake, log) = crate::turns::fake_codex(&w.dir);
+        w.turns.override_binary("codex", fake);
+        let mine = w.user_session("codex", "gpt-5.6-luna", "full");
+        let row = w.say(&mine, "hello");
+
+        assert_eq!(sent(&log, "thread/start").len(), 1);
+        assert!(sent(&log, "thread/resume").is_empty());
+        let thread = sent(&log, "turn/start")[0]["threadId"].as_str().unwrap().to_string();
+        assert_eq!(row.provider_session_id, Some(thread));
+    }
+
+    /// What the user types is the message: no "from the crew command line"
+    /// header, and no persona in the system prompt, whether it goes in as the
+    /// turn, waits in the box behind one, or is steered into a running one.
+    #[test]
+    fn what_the_user_types_to_their_own_session_reaches_the_model_as_typed() {
+        let w = world();
+        let mine = w.user_session("opencode", "opencode/nemotron-3.5-lightning-free", "full");
+        let coder = w.session("bot", "Coder", "full");
+        let coder = coder.session_id().unwrap().to_string();
+        let sender = crew_protocol::BotRef::bot(coder, "Coder");
+        mailbox::enqueue(w.turns.store(), &mine.id, &mailbox::user(), "from me").expect("user letter");
+        mailbox::enqueue(w.turns.store(), &mine.id, &sender, "from coder").expect("bot letter");
+
+        w.say(&mine, "fix the parser");
+        // The box goes over when the turn ends, a moment after its status does.
+        for _ in 0..400 {
+            if w.launches().len() == 2 {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        w.settle(&mine.id);
+        let launches = w.launches();
+        assert_eq!(launches.len(), 2, "{launches:?}");
+        assert_eq!(launches[0]["prompt"].as_str().map(str::trim_end), Some("fix the parser"));
+        assert_eq!(launches[0]["system"], json!(""));
+        // The box went over as one turn: the user's letter as typed, the bot's in its envelope.
+        let batch = launches[1]["prompt"].as_str().unwrap();
+        assert!(batch.starts_with("from me\n\n## Message\nFrom: Coder (bot "), "{batch}");
+        assert!(batch.trim_end().ends_with("from coder"), "{batch}");
+        let mine_in_transcript = w.blocks(&mine.id).into_iter().find(|block| block.text == "from me").expect("block");
+        assert_eq!((mine_in_transcript.role, mine_in_transcript.from_bot), (BlockRole::User, None));
+
+        let steer = w.turns.steer_text(&mine.id, &mailbox::user(), "and this");
+        assert_eq!(steer, "and this");
+        let wrapped = w.turns.steer_text(&mine.id, &sender, "and that");
+        assert!(wrapped.starts_with("## Message\nFrom: Coder"), "{wrapped}");
+    }
+
+    /// A subagent is not the user's: what the user writes to it is mail, from
+    /// the crew command line.
+    #[test]
+    fn what_the_user_steers_into_a_subagent_keeps_its_envelope() {
+        let w = world();
+        let parent = w.session("terminal", "shell", "full");
+        let id = w.start(&parent, "one");
+        w.wait(&parent, &id, json!({}));
+        let steer = w.turns.steer_text(&id, &mailbox::user(), "x");
+        assert!(steer.starts_with("## Message\nFrom: you (the user, from the crew command line)"), "{steer}");
+    }
+
+    /// Nobody waits on the user's turn, so it ends as a bot's does: done until
+    /// read, error with the message, and a stop leaves the box for them.
+    #[test]
+    fn a_users_turn_settles_like_a_bots() {
+        let w = world();
+        let mine = w.user_session("opencode", "opencode/nemotron-3.5-lightning-free", "full");
+        assert_eq!(w.say(&mine, "all well").status, "done");
+        assert_eq!(w.say(&mine, "CRASH").status, "error");
+
+        mailbox::enqueue(w.turns.store(), &mine.id, &mailbox::user(), "after the stop").expect("enqueue");
+        w.turns
+            .start_by_user(TurnStart {
+                session_id: mine.id.clone(),
+                cwd: w.dir.to_string_lossy().into_owned(),
+                text: "SLEEP 5".into(),
+                files: None,
+                mentions: None,
+                hidden: None,
+                from_bot: None,
+                sent_at: None,
+                nonce: None,
+                letter_id: None,
+                mode: None,
+            })
+            .expect("start");
+        std::thread::sleep(Duration::from_millis(300));
+        w.turns.stop(&mine.id).expect("stop");
+        assert_eq!(w.settle(&mine.id).status, "idle");
+        assert_eq!(mailbox::waiting_count(w.turns.store(), &mine.id).unwrap(), 1, "a stop must hold the box");
+        assert_eq!(w.row(&mine.id).last_event, None);
+    }
+
+    /// A letter a restart left waiting for an idle chat session is delivered
+    /// when the daemon comes up, as for a bot.
+    #[test]
+    fn a_letter_waiting_for_a_users_session_is_delivered_at_startup() {
+        let w = world();
+        let mine = w.user_session("opencode", "opencode/nemotron-3.5-lightning-free", "full");
+        mailbox::enqueue(w.turns.store(), &mine.id, &mailbox::user(), "left behind").expect("enqueue");
+        w.turns.deliver_waiting();
+        w.settle(&mine.id);
+        assert_eq!(mailbox::waiting_count(w.turns.store(), &mine.id).unwrap(), 0);
+        assert_eq!(w.launches()[0]["prompt"].as_str().map(str::trim_end), Some("left behind"));
+    }
+
     // ---- Live tests: the real CLIs, run on demand ----
 
     /// The real binary for a CLI, found the way the app finds it.

@@ -95,21 +95,69 @@ pub(crate) fn may_decide(autonomy: &Autonomy, request: &Value) -> bool {
 /// The tools an approval names when all it does is change a file.
 const EDIT_TOOLS: [&str; 6] = ["edit", "write", "multiedit", "notebookedit", "filechange", "apply_patch"];
 
-/// The provider conversation a child carries on, once its first turn bound
+/// Who a session's turns are for, and so how Crew drives it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Driven {
+    /// A bot: every turn is a clean provider session with the tail Crew hands
+    /// it, under a persona.
+    Bot,
+    /// A subagent: it carries on the provider's own conversation, under a
+    /// persona that says who started it.
+    Child,
+    /// A top-level session in the chat view: the user's own CLI, run by Crew
+    /// over the provider's protocol. It carries on the provider's own
+    /// conversation and is told nothing their CLI would not be.
+    User,
+}
+
+impl Driven {
+    /// Whether the provider's own store carries the conversation from turn to
+    /// turn: the next one resumes it by its provider id and is handed no tail.
+    fn carries_conversation(self) -> bool {
+        self != Driven::Bot
+    }
+}
+
+/// How Crew drives `session`, if it does. A terminal in the terminal view is
+/// the user at the keyboard of its CLI, and no turn of ours may run beside it.
+/// The one place that says which sessions are driven; the checks that mean
+/// "carries the provider's conversation" or "is the user's own" ask it.
+fn driven(session: &crate::session::Session) -> Option<Driven> {
+    match (session.kind.as_str(), session.view.as_str()) {
+        ("bot", _) => Some(Driven::Bot),
+        ("child", _) => Some(Driven::Child),
+        ("terminal", "chat") => Some(Driven::User),
+        _ => None,
+    }
+}
+
+/// Whether `letter` is the user's own message to a session that is theirs: it
+/// reaches the model as they typed it, with no envelope.
+fn is_own(drive: Driven, letter: &mailbox::Letter) -> bool {
+    drive == Driven::User && letter.from.kind.as_deref() == Some("user")
+}
+
+/// Whether `session` carries on the provider's own conversation.
+fn carries_conversation(session: &crate::session::Session) -> bool {
+    driven(session).is_some_and(Driven::carries_conversation)
+}
+
+/// The provider conversation a session carries on, once its first turn bound
 /// one. A bot never resumes: its memory is the tail Crew hands it.
-fn child_resume(session: &crate::session::Session) -> Option<String> {
-    (session.kind == "child")
+fn conversation_to_resume(session: &crate::session::Session) -> Option<String> {
+    carries_conversation(session)
         .then(|| session.provider_session_id.clone())
         .flatten()
         .filter(|id| !id.is_empty())
 }
 
 /// Whether the process a turn ran on stays up for the session's next one.
-/// Only a child's does for now: a bot starts a clean provider session every
-/// turn, with the tail Crew hands it, so a process kept for it would carry
-/// nothing it may use. This is the one place that says so.
+/// Only a session that carries the provider's conversation keeps it: a bot
+/// starts a clean provider session every turn, with the tail Crew hands it,
+/// so a process kept for it would carry nothing it may use. This is the one
+/// place that says so.
 fn keeps_process(session: &crate::session::Session) -> bool {
-    session.kind == "child"
+    carries_conversation(session)
 }
 
 /// Names one CLI process, so a timer or a watcher armed for it can tell when
@@ -374,8 +422,10 @@ struct ClaudeLive {
     applied: Launch,
     claude_session_id: String,
     /// Whether a result waits for the background commands: a child's turn
-    /// does, since its report is the last thing it says. A bot's ends on its
-    /// first.
+    /// does, since its report is the last thing it says, and so does the
+    /// user's, whose answer is what the commands made of the work (ending it
+    /// on the first result would let go of the process, and of them). A bot's
+    /// ends on its first.
     waits_for_background: bool,
     /// Results that ended nothing yet, so the grace timer can tell its own
     /// wait from a later one. Counts on for the life of the process: it is
@@ -502,6 +552,8 @@ pub struct TurnHost {
     bridge: Bridge,
     inner: Arc<Mutex<HashMap<String, Live>>>,
     binaries: Arc<Mutex<HashMap<String, String>>>,
+    /// Where Claude keeps its conversations, when not under `$HOME`.
+    claude_home: Arc<Mutex<Option<std::path::PathBuf>>>,
     runtime: Arc<Mutex<Option<tokio::runtime::Handle>>>,
     cancelled: Arc<Mutex<HashSet<String>>>,
     /// Questions answered, by session and request: the second answer to one,
@@ -538,6 +590,7 @@ impl TurnHost {
             bridge,
             inner: Arc::new(Mutex::new(HashMap::new())),
             binaries: Arc::new(Mutex::new(HashMap::new())),
+            claude_home: Arc::new(Mutex::new(None)),
             runtime: Arc::new(Mutex::new(None)),
             cancelled: Arc::new(Mutex::new(HashSet::new())),
             answered: Arc::new(Mutex::new(HashSet::new())),
@@ -579,22 +632,32 @@ impl TurnHost {
     /// What a session is told before its turn (plan §6, §7): a bot, every
     /// turn; a child, on its first. The tools are the ones `tools/list`
     /// answers it with, by its kind, as its harness spells them; none when
-    /// Crew's server is not there.
-    pub(crate) fn persona(&self, session: &crate::session::Session, harness: Harness, mcp: bool, cwd: &str) -> String {
+    /// Crew's server is not there. None for the user's own session: it runs
+    /// as their CLI, which is told nothing beyond what the CLI itself says.
+    pub(crate) fn persona(
+        &self,
+        session: &crate::session::Session,
+        harness: Harness,
+        mcp: bool,
+        cwd: &str,
+    ) -> Option<String> {
+        if driven(session) == Some(Driven::User) {
+            return None;
+        }
         let kind = crate::caller::Caller::from_session(session.clone()).kind();
         let tools = if mcp { self.toolbox.visible_names(kind) } else { Vec::new() };
         let date = crate::providers::today();
         let branch = crate::worktree::current_branch(cwd);
         let place = crate::prompts::Place { date: &date, cwd, branch: branch.as_deref() };
         if session.kind != "child" {
-            return crate::prompts::bot(&crate::prompts::Bot {
+            return Some(crate::prompts::bot(&crate::prompts::Bot {
                 name: &session.name,
                 id: &session.id,
                 description: &session.description,
                 place,
                 harness,
                 tools: &tools,
-            });
+            }));
         }
         let parent = session.parent_id.as_deref().and_then(|id| session::get(&self.store, id.to_string()).ok().flatten());
         let parent = match &parent {
@@ -602,7 +665,7 @@ impl TurnHost {
             Some(row) => crate::prompts::Parent::Bot { name: &row.name, id: &row.id },
             None => crate::prompts::Parent::User,
         };
-        crate::prompts::session(&crate::prompts::Session {
+        Some(crate::prompts::session(&crate::prompts::Session {
             parent,
             place,
             harness,
@@ -610,7 +673,7 @@ impl TurnHost {
             // Claude's AskUserQuestion and Codex's user-input requests reach
             // the parent; Cursor offers none, and opencode run has no channel.
             question_tool: matches!(session.provider.as_str(), "claude" | "codex"),
-        })
+        }))
     }
 
     pub fn set_runtime(&self, handle: tokio::runtime::Handle) {
@@ -622,6 +685,31 @@ impl TurnHost {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .insert(name.to_string(), path.into());
+    }
+
+    /// Look for Claude's conversations under `home` instead of `$HOME`.
+    pub fn override_claude_home(&self, home: impl Into<std::path::PathBuf>) {
+        *self.claude_home.lock().unwrap_or_else(|e| e.into_inner()) = Some(home.into());
+    }
+
+    /// Whether Claude already holds conversation `id` for a run in `cwd`: its
+    /// file is under the project folder it files `cwd` in, whether `cwd` is
+    /// written as given or as the path it resolves to (what the CLI sees).
+    fn claude_holds(&self, cwd: &str, id: &str) -> bool {
+        let home = self
+            .claude_home
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+            .or_else(|| std::env::var_os("HOME").filter(|home| !home.is_empty()).map(std::path::PathBuf::from));
+        let Some(home) = home else {
+            return false;
+        };
+        let resolved = std::fs::canonicalize(cwd).ok().map(|path| path.to_string_lossy().into_owned());
+        [Some(cwd.to_string()), resolved]
+            .into_iter()
+            .flatten()
+            .any(|cwd| crate::provider_session::claude_transcript(&home, &cwd, id).is_file())
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<String, Live>> {
@@ -721,11 +809,14 @@ impl TurnHost {
     fn begin(&self, mut params: TurnStart, letters: Vec<mailbox::Letter>) -> Result<TurnStarted, String> {
         let session = session::get(&self.store, params.session_id.clone())?
             .ok_or_else(|| "Session not found".to_string())?;
-        let child = session.kind == "child";
-        if session.kind != "bot" && !child {
-            return Err("Not a bot session".into());
-        }
-        if child && session.status == "exited" {
+        let Some(drive) = driven(&session) else {
+            return Err(format!(
+                "{} runs its CLI in the terminal view. Crew drives only a session in the chat view.",
+                session.name
+            ));
+        };
+        let carries = drive.carries_conversation();
+        if drive == Driven::Child && session.status == "exited" {
             return Err("This session has exited. Start another one.".into());
         }
         {
@@ -742,9 +833,9 @@ impl TurnHost {
         }
         self.clear_stop(&params.session_id);
         // Read before the new message is appended: the tail is what the bot
-        // is reminded of, and this turn is not history yet. A child carries on
-        // its provider's own conversation instead, so it is handed none.
-        let history = if child {
+        // is reminded of, and this turn is not history yet. A session that
+        // carries on its provider's own conversation is handed none.
+        let history = if carries {
             None
         } else {
             working_set::history(
@@ -757,18 +848,29 @@ impl TurnHost {
         let hidden = params.hidden.unwrap_or(false);
         if !letters.is_empty() {
             // The transcript keeps each letter as it was written, under the
-            // name of whoever wrote it; the envelopes are for the model.
+            // name of whoever wrote it; the envelopes are for the model. What
+            // the user wrote to their own session is theirs, not mail.
             for letter in &letters {
-                self.transcripts.append_from_bot(
-                    &params.session_id,
-                    &letter.text,
-                    letter.from.clone(),
-                    Some(letter.id.clone()),
-                );
+                if is_own(drive, letter) {
+                    self.transcripts.append_user(&params.session_id, &letter.text, false, None, Some(letter.id.clone()));
+                } else {
+                    self.transcripts.append_from_bot(
+                        &params.session_id,
+                        &letter.text,
+                        letter.from.clone(),
+                        Some(letter.id.clone()),
+                    );
+                }
             }
             params.text = letters
                 .iter()
-                .map(|letter| mailbox::render(letter, session.parent_id.as_deref()))
+                .map(|letter| {
+                    if is_own(drive, letter) {
+                        letter.text.clone()
+                    } else {
+                        mailbox::render(letter, session.parent_id.as_deref())
+                    }
+                })
                 .collect::<Vec<_>>()
                 .join("\n\n");
         } else {
@@ -786,7 +888,7 @@ impl TurnHost {
                     params.text = mailbox::envelope(
                         &from,
                         &params.text,
-                        (!child).then(|| params.sent_at.unwrap_or_else(crate::store::now_millis)),
+                        (!carries).then(|| params.sent_at.unwrap_or_else(crate::store::now_millis)),
                         session.parent_id.as_deref(),
                     );
                 }
@@ -1539,10 +1641,13 @@ impl TurnHost {
         // The turn is over: the next one may start, and the drain below is
         // what starts it.
         self.running.lock().unwrap_or_else(|e| e.into_inner()).remove(&session_id);
-        if row.kind == "child" {
+        if driven(&row) == Some(Driven::Child) {
             self.settle_child(&row, outcome);
             return;
         }
+        // A bot and the user's own session settle alike: nobody waits on their
+        // turn, so it leaves no event or report, only the status the user sees
+        // (`done` is a finished turn they have not read yet).
         match outcome {
             TurnOutcome::Completed => {
                 self.transcripts.set_status(&session_id, "done", None);
@@ -1563,14 +1668,14 @@ impl TurnHost {
                 self.transcripts.set_status(&session_id, "idle", None);
                 self.transcripts.flush(&session_id);
                 // A stop is the user saying enough; whatever is queued waits
-                // for them, it does not restart the bot.
+                // for them, it does not restart the session.
                 return;
             }
         }
         self.drain_mailbox(&session_id);
     }
 
-    /// Hand over what is waiting for a bot that has just gone quiet: every
+    /// Hand over what is waiting for a session that has just gone quiet: every
     /// letter in its box, oldest first, in one turn (up to
     /// [`mailbox::BATCH_CHARS`] of text; the rest waits for the next turn).
     /// A session with a turn running is left alone: that turn's end drains it.
@@ -1655,7 +1760,7 @@ impl TurnHost {
         };
         for session in sessions {
             let idle = !matches!(session.status.as_str(), "working" | "needs-input" | "starting" | "exited");
-            if !(session.kind == "bot" || session.kind == "child") || !idle {
+            if driven(&session).is_none() || !idle {
                 continue;
             }
             if mailbox::waiting_count(&self.store, &session.id).unwrap_or(0) > 0 {
@@ -1893,15 +1998,16 @@ impl TurnHost {
         self.running.lock().unwrap_or_else(|e| e.into_inner()).contains(session_id)
     }
 
-    /// The prompt of a child's turn for a CLI that takes it as one document:
-    /// the persona and the job on the first turn, the text alone once its
-    /// conversation is being carried on.
-    fn child_prompt(&self, persona: &str, resumed: bool, params: &TurnStart) -> String {
+    /// The prompt of a turn that carries on the provider's conversation, for a
+    /// CLI that takes it as one document: the persona and the job on the first
+    /// turn, the text alone once its conversation is being carried on, or
+    /// when there is no persona (the user's own session).
+    fn child_prompt(&self, persona: Option<&str>, resumed: bool, params: &TurnStart) -> String {
         let text = crate::providers::with_files(params.text.trim(), &path_list(params, &HashSet::new()));
-        if resumed {
-            return text;
+        match persona {
+            Some(persona) if !resumed => crate::providers::assemble(persona.to_string(), None, &text),
+            _ => text,
         }
-        crate::providers::assemble(persona.to_string(), None, &text)
     }
 
     fn run_claude(
@@ -2049,9 +2155,13 @@ impl TurnHost {
     }
 
     /// A message written into a running turn, under the envelope a queued one
-    /// would have.
+    /// would have; the user's own to their own session goes as they typed it.
     pub(crate) fn steer_text(&self, session_id: &str, from: &crew_protocol::BotRef, text: &str) -> String {
-        let parent = session::get(&self.store, session_id.to_string()).ok().flatten().and_then(|row| row.parent_id);
+        let row = session::get(&self.store, session_id.to_string()).ok().flatten();
+        if row.as_ref().and_then(driven) == Some(Driven::User) && from.kind.as_deref() == Some("user") {
+            return text.to_string();
+        }
+        let parent = row.and_then(|row| row.parent_id);
         mailbox::envelope(from, text, None, parent.as_deref())
     }
 
@@ -2120,11 +2230,18 @@ impl TurnHost {
         let session_id = session.id.as_str();
         self.agents.kill(session_id);
         self.detach(session_id);
-        // A child carries on its own conversation; a bot starts a clean one.
-        let claude_session_id = child_resume(session).unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        // A session that carries on its own conversation does; a bot starts a
+        // clean one. The user's session names it by Crew's id until the CLI
+        // moves on from it: the terminal view did too, so the history the CLI
+        // wrote there and the driver share one conversation.
+        let claude_session_id = match driven(session) {
+            Some(Driven::User) => conversation_to_resume(session).unwrap_or_else(|| session.id.clone()),
+            _ => conversation_to_resume(session).unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
+        };
+        let waits_for_background = carries_conversation(session);
         self.lock().insert(
             session_id.to_string(),
-            Live::Claude(Box::new(ClaudeLive::new(claude_session_id, session.kind == "child", applied))),
+            Live::Claude(Box::new(ClaudeLive::new(claude_session_id, waits_for_background, applied))),
         );
         self.background.touch(session_id, crate::background::Board::begin);
     }
@@ -2188,8 +2305,16 @@ impl TurnHost {
     ) -> Result<(), String> {
         let session_id = session.id.clone();
         let autonomy = self.autonomy(session);
-        // A child carries on its own conversation; a bot starts a clean one.
-        let resume = child_resume(session);
+        // A session that carries on its own conversation resumes it; a bot
+        // starts a clean one. Claude refuses a new session under an id it
+        // already holds, so the user's session, which names its conversation
+        // before the CLI has written it, resumes only once its file is there.
+        let resume = match driven(session) {
+            Some(Driven::User) => self
+                .claude_holds(&params.cwd, claude_session_id)
+                .then(|| claude_session_id.to_string()),
+            _ => conversation_to_resume(session),
+        };
         if self.stop_requested(&session_id) {
             self.agents.kill(&session_id);
             return Err("cancelled".into());
@@ -2205,8 +2330,8 @@ impl TurnHost {
             resume,
             // A steer is matched by its echo, for a bot as for a child.
             replay_user_messages: true,
-            asks_questions: session.kind == "child",
-            system_prompt: Some(persona),
+            asks_questions: carries_conversation(session),
+            system_prompt: persona,
             autonomy,
             mcp_config: mcp.map(|(command, args)| crate::providers::claude::claude_mcp_config(&command, &args, true)),
             user_settings: session.kind != "bot",
@@ -2306,24 +2431,26 @@ impl TurnHost {
             Ok(path) => path,
             Err(error) => return TurnOutcome::Failed(error),
         };
-        let resume = child_resume(&session);
-        let child = session.kind == "child";
+        let resume = conversation_to_resume(&session);
+        let carries = carries_conversation(&session);
         let files = path_list(&params, &HashSet::new());
         // The persona goes in the system prompt, through a file the config
         // names, every turn; only if that file cannot be written does it ride
         // in the message, as it used to.
         let persona = self.persona(&session, Harness::Opencode, mcp.is_some(), &params.cwd);
-        let instructions = write_opencode_instructions(&session_id, &persona);
-        let prompt = match (&instructions, child) {
+        let instructions = persona.as_deref().and_then(|persona| write_opencode_instructions(&session_id, persona));
+        let prompt = match (&instructions, carries) {
             (Some(_), true) => crate::providers::with_files(params.text.trim(), &files),
             (Some(_), false) => build_opencode_message(history.as_deref(), &params.text, &files),
-            (None, true) => self.child_prompt(&persona, resume.is_some(), &params),
-            (None, false) => build_opencode_prompt(&persona, history.as_deref(), &params.text, &files),
+            (None, true) => self.child_prompt(persona.as_deref(), resume.is_some(), &params),
+            (None, false) => {
+                build_opencode_prompt(persona.as_deref().unwrap_or_default(), history.as_deref(), &params.text, &files)
+            }
         };
         // opencode has no approval channel: without --auto it falls back to the
         // user's own permission config, which Crew cannot answer for. Saying so
         // once beats an "ask" that silently never asks.
-        let first = if session.kind == "child" { resume.is_none() } else { history.is_none() };
+        let first = if carries { resume.is_none() } else { history.is_none() };
         if first && self.autonomy(&session) != Autonomy::Full {
             self.transcripts.append_system(
                 &session_id,
@@ -3792,17 +3919,17 @@ print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type
         let child = crate::session::create_child(store, ws, "C".into(), "claude".into(), "".into(), "ask".into(), None, Some(bot.id.clone()))
             .expect("child");
         let cwd = dir.to_string_lossy().into_owned();
-        let told = host.persona(&bot, Harness::Mcp, true, &cwd);
+        let told = host.persona(&bot, Harness::Mcp, true, &cwd).expect("bot persona");
         assert!(told.starts_with("## Crew bot") && told.contains("`mcp__crew__start_session`") && told.contains("## Message"), "{told}");
         assert!(told.contains(&format!("Your id is {}.", bot.id)) && told.contains(&format!("You work in {cwd}.")), "{told}");
-        let child_told = host.persona(&child, Harness::Mcp, true, &cwd);
+        let child_told = host.persona(&child, Harness::Mcp, true, &cwd).expect("child persona");
         assert!(child_told.starts_with("## Crew session"), "{child_told}");
         assert!(child_told.contains(&format!("B, a bot (id {}), started you", bot.id)) && !child_told.contains("start_session"), "{child_told}");
         assert!(child_told.contains("your question tool reaches B"), "{child_told}");
         for gone in crate::tools::REMOVED_TOOLS {
             assert!(!told.contains(gone) && !child_told.contains(gone), "{gone}: {told}\n{child_told}");
         }
-        let bare = host.persona(&bot, Harness::Mcp, false, &cwd);
+        let bare = host.persona(&bot, Harness::Mcp, false, &cwd).expect("bot persona");
         assert!(!bare.contains("### Crew tools"), "{bare}");
     }
 
