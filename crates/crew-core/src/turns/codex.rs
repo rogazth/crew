@@ -1119,7 +1119,7 @@ impl TurnHost {
         let Some((used, window)) = token_reading(params) else {
             return;
         };
-        self.publish_context(session_id, |_| Some(ContextReading { used, window, auto_compact_at: None }));
+        self.publish_context(session_id, |_| Some(ContextReading { used, window, auto_compact_at: None, stale: None }));
     }
 
     /// Applies what a child's notifications came to: its entry on the board,
@@ -1989,7 +1989,7 @@ mod context_tests {
         host.codex_notification("s", "thread/tokenUsage/updated", &usage("t1", "old", 7000, 70_000));
         assert_eq!(
             host.context("s"),
-            Some(ContextReading { used: 7000, window: Some(258_400), auto_compact_at: None })
+            Some(ContextReading { used: 7000, window: Some(258_400), auto_compact_at: None, stale: None })
         );
     }
 }

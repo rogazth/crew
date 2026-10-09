@@ -26,19 +26,20 @@ function Ring({ share }: { share: number }) {
 /**
  * How full the session's context window is: a ring and its percentage, with
  * a card on hover that says the window and when the provider compacts.
- * Nothing until a reading with a window has come.
+ * Nothing until a reading with a window has come. A count from before a
+ * compaction is dimmed, since the session holds less than it says.
  */
 export function ContextMeter({ sessionId, provider }: { sessionId: string; provider: string }) {
   const reading = useContextMeter(sessionId);
   const window = reading?.window;
   if (!reading || !window) return null;
-  const { used, autoCompactAt } = reading;
+  const { used, autoCompactAt, stale } = reading;
   const share = Math.min(1, used / window);
   const percent = Math.round(share * 100);
   const label = providerOf(provider)?.label ?? provider;
   return (
     <span className="group relative flex h-6 cursor-default items-center px-1.5">
-      <span className="flex items-center gap-1 text-[11.5px] text-text-muted tabular-nums">
+      <span className={`flex items-center gap-1 text-[11.5px] text-text-muted tabular-nums ${stale ? "opacity-50" : ""}`}>
         <Ring share={share} />
         {percent}%
       </span>
@@ -54,7 +55,11 @@ export function ContextMeter({ sessionId, provider }: { sessionId: string; provi
           <span className="block h-full rounded-full bg-text-muted transition-[width] duration-500" style={{ width: `${share * 100}%` }} />
         </span>
         <span className="mt-2 block text-[11.5px] leading-4 text-text-muted">
-          {autoCompactAt ? `Compacts on its own at ${tokenCount(autoCompactAt)}.` : `${label} compacts on its own near the end.`}
+          {stale
+            ? "Counted before the last compaction; the next answer counts it again."
+            : autoCompactAt
+              ? `Compacts on its own at ${tokenCount(autoCompactAt)}.`
+              : `${label} compacts on its own near the end.`}
         </span>
       </span>
     </span>

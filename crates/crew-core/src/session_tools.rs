@@ -4047,8 +4047,8 @@ time.sleep(600)
             .take()
             .into_iter()
             .filter_map(|event| match event {
-                crew_protocol::HarnessEvent::ContextUpdated { used, window, auto_compact_at } => {
-                    Some(crew_protocol::ContextReading { used, window, auto_compact_at })
+                crew_protocol::HarnessEvent::ContextUpdated { used, window, auto_compact_at, stale } => {
+                    Some(crew_protocol::ContextReading { used, window, auto_compact_at, stale })
                 }
                 _ => None,
             })
@@ -4085,7 +4085,7 @@ time.sleep(600)
         let id = started["id"].as_str().unwrap().to_string();
         w.wait(&parent, &id, json!({}));
         w.settle(&id);
-        let full = ContextReading { used: 1115, window: Some(200_000), auto_compact_at: Some(160_000) };
+        let full = ContextReading { used: 1115, window: Some(200_000), auto_compact_at: Some(160_000), stale: None };
         until_context(&w, &id, full.clone());
         let heard = context_readings(&applied);
         // 1234 is the CLI's own count, which seeds the meter before the first
@@ -4123,8 +4123,8 @@ time.sleep(600)
         assert_eq!(
             heard,
             vec![
-                ContextReading { used: 5000, window: Some(258_400), auto_compact_at: None },
-                ContextReading { used: 6000, window: Some(258_400), auto_compact_at: None },
+                ContextReading { used: 5000, window: Some(258_400), auto_compact_at: None, stale: None },
+                ContextReading { used: 6000, window: Some(258_400), auto_compact_at: None, stale: None },
             ],
         );
         assert_eq!(w.turns.context(&id), heard.last().cloned());

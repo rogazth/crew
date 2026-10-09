@@ -573,6 +573,12 @@ pub struct ContextReading {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional, type = "number")]
     pub auto_compact_at: Option<u64>,
+    /// The conversation was compacted since `used` was counted, and the CLI
+    /// says nothing of its size until its next answer (opencode): the count is
+    /// the one from before, kept for the window, not what the session holds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub stale: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, TS)]
@@ -763,6 +769,10 @@ pub enum HarnessEvent {
         #[serde(default, rename = "autoCompactAt", skip_serializing_if = "Option::is_none")]
         #[ts(optional, type = "number", rename = "autoCompactAt")]
         auto_compact_at: Option<u64>,
+        /// See [`ContextReading::stale`].
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        stale: Option<bool>,
     },
 }
 
@@ -816,9 +826,13 @@ mod tests {
             used: 12,
             window: None,
             auto_compact_at: Some(180_000),
+            stale: None,
         };
         let wire = serde_json::to_value(&event).unwrap();
         assert_eq!(wire, serde_json::json!({ "type": "context.updated", "used": 12, "autoCompactAt": 180000 }));
         assert_eq!(serde_json::from_value::<HarnessEvent>(wire).unwrap(), event);
+        let stale = HarnessEvent::ContextUpdated { used: 12, window: Some(100), auto_compact_at: None, stale: Some(true) };
+        let wire = serde_json::to_value(&stale).unwrap();
+        assert_eq!(wire, serde_json::json!({ "type": "context.updated", "used": 12, "window": 100, "stale": true }));
     }
 }

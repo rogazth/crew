@@ -479,7 +479,7 @@ mod tests {
         let before = hub.window(&session.id, None, None);
         let seq = hub.emit_live(
             &session.id,
-            HarnessEvent::ContextUpdated { used: 10, window: Some(100), auto_compact_at: None },
+            HarnessEvent::ContextUpdated { used: 10, window: Some(100), auto_compact_at: None, stale: None },
         );
         assert_eq!(seq, before.seq + 1);
         assert_eq!(hub.window(&session.id, None, None).seq, seq);

@@ -1539,6 +1539,7 @@ impl TurnHost {
                 used: merged.used,
                 window: merged.window,
                 auto_compact_at: merged.auto_compact_at,
+                stale: merged.stale,
             },
         );
     }
@@ -1572,12 +1573,13 @@ impl TurnHost {
                         used,
                         window: Some(usage.window),
                         auto_compact_at: usage.auto_compact_at,
+                        stale: None,
                     })
                 }),
                 // Only the window: what compacts it by itself is not told.
                 (None, Some(window)) => host.publish_context(&id, |last| {
                     last.filter(|last| last.window.is_none())
-                        .map(|last| ContextReading { used: last.used, window: Some(window), auto_compact_at: None })
+                        .map(|last| ContextReading { used: last.used, window: Some(window), auto_compact_at: None, stale: None })
                 }),
                 (None, None) => {}
             }
@@ -3763,7 +3765,7 @@ impl TurnHost {
             self.transcripts.apply(session_id, event);
         }
         if let Some(used) = used {
-            self.publish_context(session_id, |_| Some(ContextReading { used, window: None, auto_compact_at: None }));
+            self.publish_context(session_id, |_| Some(ContextReading { used, window: None, auto_compact_at: None, stale: None }));
         }
         if let Some((compacted, fallback)) = ask {
             self.ask_claude_context(session_id, compacted, fallback);
@@ -4130,13 +4132,15 @@ impl TurnHost {
 }
 
 /// The reading a new one makes after the last: one without a window keeps the
-/// last window and auto-compact point.
+/// last window and auto-compact point. Whether it is stale is the new
+/// reading's own word: a count taken after a compaction is current again.
 fn merge_context(last: Option<&ContextReading>, reading: ContextReading) -> ContextReading {
     match (last, reading.window) {
         (Some(last), None) => ContextReading {
             used: reading.used,
             window: last.window,
             auto_compact_at: last.auto_compact_at,
+            stale: reading.stale,
         },
         _ => reading,
     }
@@ -4901,7 +4905,7 @@ mod context_tests {
     use super::*;
 
     fn reading(used: u64, window: Option<u64>, auto_compact_at: Option<u64>) -> ContextReading {
-        ContextReading { used, window, auto_compact_at }
+        ContextReading { used, window, auto_compact_at, stale: None }
     }
 
     #[test]

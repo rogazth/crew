@@ -31,7 +31,11 @@ function ensureBridge() {
   });
 }
 
-/** The reading a new one makes: one without a window keeps the last window and auto-compact point. */
+/**
+ * The reading a new one makes: one without a window keeps the last window and
+ * auto-compact point. Stale is the new reading's own word: a count taken after
+ * a compaction is current again.
+ */
 export function mergeReading(last: ContextReading | undefined, next: ContextReading): ContextReading {
   const window = next.window ?? last?.window;
   const autoCompactAt = next.window === undefined ? last?.autoCompactAt : next.autoCompactAt;
@@ -39,6 +43,7 @@ export function mergeReading(last: ContextReading | undefined, next: ContextRead
     used: next.used,
     ...(window === undefined ? {} : { window }),
     ...(autoCompactAt === undefined ? {} : { autoCompactAt }),
+    ...(next.stale ? { stale: true } : {}),
   };
 }
 

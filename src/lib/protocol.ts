@@ -286,7 +286,13 @@ export type CommandsReload = { sessionId: string, };
 /**
  * How full a session's context window is, as its CLI last reported it.
  */
-export type ContextReading = { used: number, window?: number, autoCompactAt?: number, };
+export type ContextReading = { used: number, window?: number, autoCompactAt?: number, 
+/**
+ * The conversation was compacted since `used` was counted, and the CLI
+ * says nothing of its size until its next answer (opencode): the count is
+ * the one from before, kept for the window, not what the session holds.
+ */
+stale?: boolean, };
 
 export type CookieRead = { cookies: Array<ImportedCookie>, 
 /**
@@ -384,7 +390,11 @@ export type HarnessEvent = { "type": "session.started", } | { "type": "session.e
 /**
  * Its report, when it came this way rather than as the call's result.
  */
-output?: string, background?: boolean, } | { "type": "approval.requested", requestId: number, name: string, title: string, input?: Record<string, unknown>, } | { "type": "approval.resolved", requestId: number, decision: ApprovalResolution, } | { "type": "question.requested", requestId: number, questions: Array<Question>, } | { "type": "question.resolved", requestId: number, answers: { [key in string]: string } | null, } | { "type": "context.updated", used: number, window?: number, autoCompactAt?: number, };
+output?: string, background?: boolean, } | { "type": "approval.requested", requestId: number, name: string, title: string, input?: Record<string, unknown>, } | { "type": "approval.resolved", requestId: number, decision: ApprovalResolution, } | { "type": "question.requested", requestId: number, questions: Array<Question>, } | { "type": "question.resolved", requestId: number, answers: { [key in string]: string } | null, } | { "type": "context.updated", used: number, window?: number, autoCompactAt?: number, 
+/**
+ * See [`ContextReading::stale`].
+ */
+stale?: boolean, };
 
 /**
  * The daemon's first message after a good `auth`, sent as the `hello` event.
@@ -554,6 +564,12 @@ agentsRunning: number,
  * The agent CLIs found on the daemon's PATH.
  */
 installed: Array<string>, 
+/**
+ * The opencode Crew runs, as it prints its version (`opencode v2.0.26`),
+ * or why it runs none: a 1.x install is not one, and the line says how
+ * to get 2.x.
+ */
+opencode?: string, 
 /**
  * The SOCKS port beside `crewd serve`, for a remote workspace's browser.
  * Absent on the window's own daemon.

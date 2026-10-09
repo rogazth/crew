@@ -38,6 +38,13 @@ describe("the reading a new one makes", () => {
     expect(mergeReading(last, { used: 40, window: 1_000_000 })).toEqual({ used: 40, window: 1_000_000 });
     expect(mergeReading(undefined, { used: 40 })).toEqual({ used: 40 });
   });
+
+  it("is stale only while the newest reading says so", async () => {
+    const { mergeReading } = await meter();
+    const compacted = mergeReading({ used: 90_000, window: 200_000 }, { used: 90_000, stale: true });
+    expect(compacted).toEqual({ used: 90_000, window: 200_000, stale: true });
+    expect(mergeReading(compacted, { used: 12_000 })).toEqual({ used: 12_000, window: 200_000 });
+  });
 });
 
 describe("a token count", () => {
