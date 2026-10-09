@@ -388,8 +388,8 @@ the terminal view.
 
 | # | Decision | Status |
 |---|---|---|
-| 1–3 | One writer, two views, fixed at creation | schema done; driver and UI todo |
-| 4–7 | Live process per session | done for Claude and Codex subagents; sessions with step 3, opencode and Cursor with step 5 |
+| 1–3 | One writer, two views, fixed at creation | done |
+| 4–7 | Live process per session | done for Claude and Codex subagents and chat sessions; opencode and Cursor with step 5 |
 | 8 | Setting sources by kind | done |
 | 9 | opencode on `serve` | todo |
 | 10–11 | `/` menu from the provider, anywhere in the message | todo |
@@ -400,7 +400,7 @@ the terminal view.
 | 18–21 | MCP: native config, status, sign-in, Cursor HTTP | todo |
 | 22 | Cursor stays on ACP | done (no change) |
 | 23–25 | `--disable-codebase-ref`, group kill on reap, startup sweep | done |
-| 26–27 | History reading and `ptySend.ts` | todo |
-| 28–29 | Context meter | Claude and Codex emit it; opencode and Cursor with step 5; UI with step 3 |
-| 30–32 | Enter never interrupts; steer or queue | todo |
+| 26–27 | History reading and `ptySend.ts` | done (chat over the PTY removed) |
+| 28–29 | Context meter | Claude and Codex emit it, shown under the composer; opencode and Cursor with step 5 |
+| 30–32 | Enter never interrupts; steer or queue | done |
 | 33–36 | Background panel: subagents and commands (34b tokens, 34c Codex threadId) | todo |
