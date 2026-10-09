@@ -77,7 +77,11 @@ export type Crew = {
   makeRepo(name: string, files?: Record<string, string>): Promise<string>;
   /** Opens `dir` as a workspace, makes it active and reloads the window onto it. */
   addWorkspace(dir: string, name?: string): Promise<Workspace>;
-  /** Every launch of the fake claude so far, oldest first. */
+  /**
+   * Every launch of the fake claude so far, oldest first. Crew's own probe of
+   * the account's fast mode (see `isFastModeProbe`) is left out: it is not
+   * a session's.
+   */
   claudeLaunches(): Promise<ClaudeLaunch[]>;
   /**
    * Quits the app the way a user does and launches it again on the same data.
@@ -89,6 +93,17 @@ export type Crew = {
 };
 
 export type ClaudeLaunch = { argv: string[]; cwd: string; pid: number; at: number };
+
+/**
+ * crewd asks the CLI for the account's fast-mode state with a launch of its
+ * own (crates/crew-core/src/provider_session.rs, `probe_claude_fast_mode`), in
+ * the home folder, when it starts and whenever the reading is a day old. The
+ * only launch that passes `--settings {"fastMode":true}` and no session.
+ */
+function isFastModeProbe(launch: ClaudeLaunch): boolean {
+  const at = launch.argv.indexOf("--settings");
+  return at >= 0 && launch.argv[at + 1] === '{"fastMode":true}' && !launch.argv.includes("--session-id") && !launch.argv.includes("--resume");
+}
 
 export async function launchCrew(opts: LaunchOptions = {}): Promise<Crew> {
   return launch(opts, opts.dir === undefined);
@@ -235,7 +250,8 @@ async function launch(opts: LaunchOptions, owns: boolean): Promise<Crew> {
       return log
         .split("\n")
         .filter(Boolean)
-        .map((line) => JSON.parse(line) as ClaudeLaunch);
+        .map((line) => JSON.parse(line) as ClaudeLaunch)
+        .filter((launch) => !isFastModeProbe(launch));
     };
 
     return {

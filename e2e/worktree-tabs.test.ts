@@ -93,14 +93,18 @@ async function setTabScope(crew: Crew, label: string, value: string): Promise<vo
 async function assertChip(crew: Crew, workspace: Workspace, session: Session): Promise<void> {
   const branch = await crew.git(session.worktree ?? workspace.path, "rev-parse", "--abbrev-ref", "HEAD");
   // The pill's title, then the chip, which carries the whole branch. It waits
-  // for git's listing, which a relaunch reads anew.
-  let texts: string[] = [];
+  // for the worktree listing, which a relaunch reads anew. The title is laid
+  // over its own bold copy (`crew-steady-title`) and does not truncate itself:
+  // the chip is the tab's one `.truncate`.
+  const tab = tabOf(crew, session);
+  let chips: string[] = [];
   const chipped = await waitFor(
-    async () => (texts = (await tabOf(crew, session).locator(".truncate").allInnerTexts()).map((text) => text.trim())).length === 2,
+    async () => (chips = (await tab.locator(".truncate").allInnerTexts()).map((text) => text.trim())).length === 1,
     { timeout: 5000 },
   ).catch(() => false);
-  assert.ok(chipped, `${session.name}'s tab has a chip: ${JSON.stringify(texts)}`);
-  assert.equal(texts[1], branch, `${session.name} runs on ${branch}`);
+  assert.ok(chipped, `${session.name}'s tab has a chip: ${JSON.stringify(chips)}`);
+  assert.equal(chips[0], branch, `${session.name} runs on ${branch}`);
+  assert.equal((await tab.locator(".crew-steady-title").first().innerText()).trim(), session.name, "the pill's title");
 }
 
 test("W4: per worktree, each strip and the worktree on screen come back after a restart", async (t) => {

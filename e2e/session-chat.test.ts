@@ -10,7 +10,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { after, before, test } from "node:test";
 import type { Session, Workspace } from "../src/lib/types.ts";
-import { launchCrew, MOD, newTerminal, pressChord, sessionTab, sessions, waitFor, type Crew } from "./harness.ts";
+import { holdsFor, launchCrew, MOD, newTerminal, pressChord, sessionTab, sessions, waitFor, type Crew } from "./harness.ts";
 
 let crew: Crew;
 
@@ -234,6 +234,229 @@ test("Esc stops a running turn in the chat, and the next message gets its answer
   // The conversation goes on from where it stopped.
   await send("after the stop");
   await said(/^Reply \d+: after the stop$/).waitFor();
+});
+
+// What the user writes while a turn runs. The fake claude takes it into the
+// turn like the real one (echoed at once, named in the turn's reply), so a
+// steer shows; a message held for the next turn goes in as one turn of its own.
+
+type Rows = ReturnType<Crew["window"]["locator"]>;
+
+/** A fresh chat of the workspace's, with a turn of `seconds` running and taken in by the CLI. */
+async function workingChat(seconds: number): Promise<{ session: Session; cwd: string }> {
+  const [workspace] = crew.workspaces;
+  assert.ok(workspace);
+  await crew.request("state_set", { key: "sessions:view", value: "chat" });
+  await crew.reload();
+  const session = await newChat(workspace.id);
+  const first = `work ${seconds}`;
+  await send(first);
+  await crew.window.getByRole("button", { name: "Stop" }).waitFor();
+  // A message sent before the CLI has the turn would start the turn, not join it.
+  await waitFor(async () => (await heard(workspace.path, session)).includes(first), { message: "the CLI took the turn in" });
+  return { session, cwd: workspace.path };
+}
+
+/** Writes `text` in the chat's message box while it works: ↵ steers, ⌘↵ waits for the next turn. */
+async function sendWhileWorking(text: string, how: "steer" | "queue"): Promise<void> {
+  const field = composer();
+  await field.fill(text);
+  // The send button is labelled for what ↵ does, which is to steer where the CLI takes a steer.
+  await waitFor(() => crew.window.getByRole("button", { name: "Add to the running turn" }).isEnabled(), {
+    message: `the composer can ${how}`,
+  });
+  await field.press(how === "steer" ? "Enter" : `${MOD}+Enter`);
+}
+
+/** A user's bubble in the transcript (not the chips above the message box). */
+function bubble(text: string) {
+  return crew.window.locator(".crew-bubble:visible", { hasText: text });
+}
+
+/** The chips above the message box. */
+function chips() {
+  return crew.window.locator("form.crew-composer:visible span.rounded-full").filter({ hasText: /this turn|next turn/ });
+}
+
+/** The chat on screen's reply paragraphs that start with `prefix` (earlier chats stay mounted, hidden). */
+function replies(prefix: RegExp) {
+  return crew.window.locator("p:visible").filter({ hasText: prefix });
+}
+
+/** The status line's "N waiting", which opens the queue's sheet. */
+function waiting(count: number) {
+  return crew.window.getByRole("button", { name: `${count} waiting`, exact: true });
+}
+
+/** The queue's sheet, opened from the status line. */
+async function openQueue(count: number) {
+  await waiting(count).click();
+  const sheet = crew.window.locator("div.absolute.shadow-float:has(div.group)");
+  await sheet.waitFor();
+  return sheet;
+}
+
+/** The sheet's rows, first to go first, by their message. */
+async function queued(sheet: Rows): Promise<string[]> {
+  return (await sheet.locator("div.group span.truncate").allInnerTexts()).map((text) => text.trim());
+}
+
+/** The row of the sheet with this message, whose buttons show on hover. */
+function row(sheet: Rows, text: string) {
+  return sheet.locator("div.group").filter({ hasText: text }).first();
+}
+
+async function idle(session: Session): Promise<void> {
+  await waitFor(async () => (await crew.request<Session>("session_get", { id: session.id })).status === "idle", {
+    message: "the session is idle again",
+  });
+}
+
+test("a message sent while a turn works is steered into it: its bubble shows at once and the turn's reply names it", async () => {
+  const { session, cwd } = await workingChat(4);
+  await sendWhileWorking("also mind the tests", "steer");
+  // In the transcript while the turn still runs: the CLI echoed it at once.
+  await bubble("also mind the tests").waitFor();
+  assert.equal(await crew.window.getByRole("button", { name: "Stop" }).count(), 1, "the turn ended before the bubble showed");
+  assert.deepEqual(await heard(cwd, session), ["work 4", "also mind the tests"]);
+  await waitFor(async () => (await chips().count()) === 0, { message: "the steer's chip is gone once it is in the transcript" });
+  assert.equal(await waiting(1).count(), 0);
+
+  // The turn that was running is the one that answers it.
+  await said("Also: also mind the tests").waitFor();
+  await said("Reply 1: work 4").waitFor();
+  await crew.window.getByRole("button", { name: "Stop" }).waitFor({ state: "detached" });
+  assert.deepEqual(await replies(/^Reply \d/).allInnerTexts(), ["Reply 1: work 4"], "the steer got a turn of its own");
+  assert.equal((await launchesOf(session)).length, 1, "the steer launched the CLI again");
+  await idle(session);
+});
+
+test("a steer the turn has not read yet waits as a chip, and the bubble takes its place once it is read", async () => {
+  const { session, cwd } = await workingChat(8);
+  // The fake reads a message that starts with "late " three seconds after it came.
+  await sendWhileWorking("late check the logs", "steer");
+  await chips().filter({ hasText: "this turn" }).filter({ hasText: "late check the logs" }).waitFor();
+  // Taken into the turn: not a message to wait for, so it cannot be dropped or reordered.
+  await waiting(1).waitFor();
+  assert.deepEqual(await heard(cwd, session), ["work 8"]);
+  await bubble("late check the logs").waitFor();
+  await waitFor(async () => (await chips().count()) === 0, { message: "the chip is gone once the turn read it" });
+  assert.deepEqual(await heard(cwd, session), ["work 8", "late check the logs"]);
+  await said("Also: late check the logs").waitFor();
+  await idle(session);
+});
+
+test("⌘↵ while a turn works queues the message: a chip and a count wait, and it goes as the next turn", async () => {
+  const { session, cwd } = await workingChat(4);
+  await sendWhileWorking("for the next turn", "queue");
+  await chips().filter({ hasText: "next turn" }).filter({ hasText: "for the next turn" }).waitFor();
+  await waiting(1).waitFor();
+  // Not in the turn running: the CLI has not heard it.
+  assert.deepEqual(await heard(cwd, session), ["work 4"]);
+
+  await said("Reply 2: for the next turn").waitFor();
+  assert.deepEqual(await heard(cwd, session), ["work 4", "for the next turn"]);
+  assert.equal(await chips().count(), 0, "the chip stayed after its message went");
+  assert.equal(await waiting(1).count(), 0);
+  assert.equal((await launchesOf(session)).length, 1);
+  await idle(session);
+});
+
+test("what waits can be moved in the sheet, and goes as one turn in the new order", async () => {
+  const { session, cwd } = await workingChat(5);
+  await sendWhileWorking("alpha note", "queue");
+  await sendWhileWorking("bravo note", "queue");
+  await waiting(2).waitFor();
+  const sheet = await openQueue(2);
+  assert.deepEqual(await queued(sheet), ["alpha note", "bravo note"]);
+
+  await row(sheet, "bravo note").getByRole("button", { name: "Move up" }).click();
+  await waitFor(async () => (await queued(sheet)).join("|") === "bravo note|alpha note", { message: "the sheet lists bravo first" });
+  await composer().click();
+  await sheet.waitFor({ state: "detached" });
+
+  // One turn for both: the reply says them in the order they went.
+  const reply = replies(/^Reply 2:/);
+  await reply.filter({ hasText: "alpha note" }).waitFor();
+  const text = (await reply.textContent()) ?? "";
+  assert.ok(text.indexOf("bravo note") >= 0 && text.indexOf("bravo note") < text.indexOf("alpha note"), `bravo goes before alpha: ${text}`);
+  const turns = await heard(cwd, session);
+  assert.equal(turns.length, 2, `the queue went as more than one turn: ${JSON.stringify(turns)}`);
+  assert.ok(turns[1]!.indexOf("bravo note") < turns[1]!.indexOf("alpha note"), turns[1]);
+  assert.equal(await chips().count(), 0);
+  await idle(session);
+});
+
+test("a queued message can be edited before it goes, and another dropped", async () => {
+  const { session, cwd } = await workingChat(5);
+  await sendWhileWorking("fix the typpo", "queue");
+  await sendWhileWorking("never mind this", "queue");
+  await waiting(2).waitFor();
+  const sheet = await openQueue(2);
+
+  await row(sheet, "fix the typpo").getByRole("button", { name: "Edit" }).click();
+  const field = sheet.getByRole("textbox", { name: "Queued message" });
+  await field.fill("fix the typo");
+  await field.press("Enter");
+  await waitFor(async () => (await queued(sheet)).includes("fix the typo"), { message: "the sheet shows the edit" });
+  await chips().filter({ hasText: "fix the typo" }).waitFor();
+
+  await row(sheet, "never mind this").getByRole("button", { name: "Delete" }).click();
+  await waitFor(async () => (await queued(sheet)).join("|") === "fix the typo", { message: "the sheet drops the message" });
+  await waiting(1).waitFor();
+  assert.equal(await chips().count(), 1);
+  await composer().click();
+
+  await said("Reply 2: fix the typo").waitFor();
+  const all = (await heard(cwd, session)).join("\n");
+  assert.ok(!all.includes("typpo") && !all.includes("never mind this"), `what was edited or dropped went anyway: ${all}`);
+  assert.equal((await heard(cwd, session)).length, 2);
+  await idle(session);
+});
+
+test("Send now stops the turn running and the next turn starts with that message", async () => {
+  const { session, cwd } = await workingChat(30);
+  await sendWhileWorking("do this first", "queue");
+  await sendWhileWorking("and this later", "queue");
+  const sheet = await openQueue(2);
+  await row(sheet, "and this later").getByRole("button", { name: "Send now" }).click();
+
+  // The turn running was interrupted, and the queue went over as one turn headed by the one sent now.
+  await waitFor(async () => (await controls()).includes("interrupt "), { message: "the CLI was told to interrupt" });
+  // (A stop ends the CLI's process and the next turn resumes it, so the count in its reply starts over.)
+  const reply = replies(/^Reply \d+:/).filter({ hasText: "do this first" });
+  await reply.waitFor();
+  const text = (await reply.textContent()) ?? "";
+  assert.ok(text.indexOf("and this later") >= 0 && text.indexOf("and this later") < text.indexOf("do this first"), text);
+  assert.equal(await replies(/^Reply \d+: work 30$/).count(), 0, "the stopped turn answered anyway");
+  const turns = await heard(cwd, session);
+  assert.equal(turns.length, 2, JSON.stringify(turns));
+  assert.ok(turns[1]!.indexOf("and this later") < turns[1]!.indexOf("do this first"), turns[1]);
+  assert.equal(await chips().count(), 0);
+  await idle(session);
+});
+
+test("Esc holds what waits: its chip stays, and the next message sends both", async () => {
+  const { session, cwd } = await workingChat(30);
+  await sendWhileWorking("held for later", "queue");
+  await chips().filter({ hasText: "held for later" }).waitFor();
+  await composer().press("Escape");
+  await crew.window.getByRole("button", { name: "Stop" }).waitFor({ state: "detached" });
+  await idle(session);
+  // Stopping leaves the queue to the user: nothing goes by itself.
+  await holdsFor(
+    1500,
+    async () => (await chips().count()) === 1 && (await waiting(1).count()) === 1 && (await heard(cwd, session)).length === 1,
+    "the held message went or its chip left",
+  );
+
+  await send("go on then");
+  await replies(/^Reply \d+: held for later/).waitFor();
+  const turns = await heard(cwd, session);
+  assert.equal(turns.length, 2, JSON.stringify(turns));
+  assert.ok(turns[1]!.indexOf("held for later") >= 0 && turns[1]!.indexOf("held for later") < turns[1]!.indexOf("go on then"), turns[1]);
+  await waitFor(async () => (await chips().count()) === 0, { message: "the chip is gone once it went" });
+  await idle(session);
 });
 
 test("a new session in the terminal view opens the terminal, and the chat is not there", async () => {

@@ -630,10 +630,16 @@ function redraw(done) {
  * - A `user` message is a turn: `system/init`, the message echoed back when
  *   `--replay-user-messages` is on, the reply streamed a word at a time as
  *   `stream_event` deltas, the `assistant` message with its usage, and the
- *   `result`. The reply is `Reply <n>: <first line>`, <n> counting the turns
+ *   `result`. The reply is `Reply <n>: <message>`, <n> counting the turns
  *   this process has served, so a second turn on the same process says 2.
- *   A message that arrives during a turn waits for it to end, then gets a
- *   turn of its own.
+ *   A message of several lines is answered whole, its lines joined by " / ".
+ *   A message that arrives during a turn is taken into it, as the real CLI
+ *   does at its next step: echoed at once (with `--replay-user-messages`),
+ *   written to the transcript, and named in the turn's reply as a paragraph
+ *   of its own, `Also: <first line>`, after what the turn was saying. One
+ *   that arrives once the reply is complete waits for a turn of its own.
+ *   A message that starts with `late ` is echoed three seconds after it came
+ *   instead of at once: the turn has not read it yet in between.
  * - `work N` is a turn that takes N seconds before it starts to answer, for
  *   a test that stops it.
  * - The context is 20k tokens a turn of the 200k window (compacting at 160k),
@@ -715,7 +721,7 @@ function serve() {
   }
 
   async function turn(text) {
-    const mine = { stopped: false, wake: () => {} };
+    const mine = { stopped: false, wake: () => {}, folded: [] };
     current = mine;
     const nap = (ms) =>
       new Promise((resolve) => {
@@ -732,21 +738,32 @@ function serve() {
     record({ type: "user", permissionMode: mode, message: { role: "user", content: text } });
 
     const [command, seconds] = text.trim().split(/\s+/);
-    const reply = `Reply ${n}: ${text.trim().split("\n")[0]}`;
+    let reply = `Reply ${n}: ${text.trim().replace(/\s*\n\s*/g, " / ")}`;
     const id = `msg_${randomUUID().slice(0, 8)}`;
     emit({ type: "stream_event", session_id: sessionId, event: { type: "message_start", message: { id, role: "assistant" } } });
     if (command === "work") {
       await nap(Math.max(0, Number(seconds) || 1) * 1000);
       if (mine.stopped) return;
     }
-    for (const word of reply.split(/(?<= )/)) {
-      emit({
-        type: "stream_event",
-        session_id: sessionId,
-        event: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: word } },
-      });
-      await nap(WORD_MS);
-      if (mine.stopped) return;
+    const speak = async (words) => {
+      for (const word of words.split(/(?<= )/)) {
+        emit({
+          type: "stream_event",
+          session_id: sessionId,
+          event: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: word } },
+        });
+        await nap(WORD_MS);
+        if (mine.stopped) return false;
+      }
+      return true;
+    };
+    if (!(await speak(reply))) return;
+    // What came in meanwhile is in the turn: named after what it was saying.
+    // A message that lands as the last word goes out is still in time.
+    for (let seen = 0; seen < mine.folded.length; seen++) {
+      const also = `\n\nAlso: ${mine.folded[seen].trim().split("\n")[0]}`;
+      reply += also;
+      if (!(await speak(also))) return;
     }
     const tokens = used();
     emit({
@@ -785,7 +802,21 @@ function serve() {
     }
     if (rec.type === "control_request") return control(rec);
     if (rec.type !== "user") return;
-    waiting.push(textOf(rec.message));
+    const text = textOf(rec.message);
+    if (current && !current.stopped) {
+      const running = current;
+      running.folded.push(text);
+      const take = () => {
+        if (running.stopped) return;
+        if (replay) emit({ type: "user", session_id: sessionId, message: { role: "user", content: [{ type: "text", text }] } });
+        record({ type: "user", permissionMode: mode, message: { role: "user", content: text } });
+      };
+      // `late ...` is read after three seconds, a steer in flight for a test to see.
+      if (text.startsWith("late ")) setTimeout(take, 3000);
+      else take();
+      return;
+    }
+    waiting.push(text);
     next();
   };
 
