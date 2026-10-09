@@ -157,6 +157,12 @@ impl AgentHost {
         self.lock().epochs.get(session_id) == Some(&epoch)
     }
 
+    /// The pid of the process a session has up, for tests that count launches.
+    #[cfg(test)]
+    pub(crate) fn pid_of(&self, session_id: &str) -> Option<u32> {
+        self.lock().children.get(session_id).map(|live| live.pid)
+    }
+
     pub fn running(&self) -> Vec<String> {
         self.lock().children.keys().cloned().collect()
     }

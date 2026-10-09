@@ -4344,4 +4344,187 @@ while True:
         let steer = page.letters.iter().find(|l| l.id == letter).expect("in the thread");
         assert_eq!(steer.state, "delivered");
     }
+
+    // ---- Live tests: the real CLIs, run on demand ----
+
+    /// The real binary for a CLI, found the way the app finds it.
+    fn real_binary(name: &str) -> String {
+        crate::shell_path::resolve(name)
+            .unwrap_or_else(|| panic!("`{name}` is not installed"))
+            .to_string_lossy()
+            .into_owned()
+    }
+
+    /// Kills the child's process when the test ends, passed or not.
+    struct Reap<'a>(&'a World, String);
+
+    impl Drop for Reap<'_> {
+        fn drop(&mut self) {
+            self.0.turns.test_agents().kill(&self.1);
+        }
+    }
+
+    impl World {
+        /// A child on the real CLI of `provider`, made as `start_session` makes
+        /// it but with a model that Crew's own list does not have to name, and
+        /// not yet sent anything.
+        fn live_child(&self, parent: &Caller, provider: &str, model: &str, effort: &str, autonomy: &str) -> String {
+            self.turns.override_binary(provider, real_binary(provider));
+            let row = session::create_child(
+                self.turns.store(),
+                self.workspace.clone(),
+                format!("live-{provider}"),
+                provider.into(),
+                model.into(),
+                autonomy.into(),
+                None,
+                parent.session_id().map(str::to_string),
+            )
+            .expect("child");
+            session::set_options(self.turns.store(), row.id.clone(), model.into(), effort.into(), row.service_tier, autonomy.into())
+                .expect("options");
+            row.id
+        }
+
+        /// One turn on the real CLI: the message, and the report that ends it.
+        fn live_say(&self, parent: &Caller, id: &str, text: &str) -> String {
+            let sent = self.call(parent, "send_message", json!({ "to": id, "text": text })).expect("send");
+            assert_eq!(sent["delivery"], "started", "{sent}");
+            let out = self.wait(parent, id, json!({ "timeout_s": 180 }));
+            assert_eq!(out["result"], "event", "{out}");
+            let event = &out["sessions"][0];
+            assert_eq!(event["outcome"], "completed", "{out}");
+            event["report"].as_str().unwrap_or_default().to_string()
+        }
+
+        fn live_pid(&self, id: &str) -> u32 {
+            self.turns.test_agents().pid_of(id).unwrap_or_else(|| panic!("{id} has no process up"))
+        }
+
+        /// Until the session's meter has a window: it comes in after the turn.
+        fn live_window(&self, id: &str) -> crew_protocol::ContextReading {
+            for _ in 0..400 {
+                if let Some(reading) = self.turns.context(id).filter(|reading| reading.window.is_some()) {
+                    return reading;
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            panic!("the meter never had a window: {:?}", self.turns.context(id));
+        }
+    }
+
+    fn says_one(report: &str) {
+        assert!(report.to_lowercase().contains("one"), "the report was: {report:?}");
+    }
+
+    /// Runs the real `claude`: two haiku turns of a few tokens each (the
+    /// persona's system prompt is the bulk). Needs `claude auth login`.
+    /// `cargo test -p crew-core --lib -- --ignored --test-threads=1 live_claude_two_turns`
+    #[test]
+    #[ignore]
+    fn live_claude_two_turns_run_on_one_process_and_the_meter_reads_a_window() {
+        let w = world();
+        let parent = w.session("terminal", "shell", "full");
+        let id = w.live_child(&parent, "claude", "claude-haiku-5-5", "low", "full");
+        let _reap = Reap(&w, id.clone());
+
+        says_one(&w.live_say(&parent, &id, "Reply with just the word one."));
+        w.settle(&id);
+        let pid = w.live_pid(&id);
+        let reading = w.live_window(&id);
+        assert!(reading.used > 0 && reading.window.is_some_and(|window| window > reading.used), "{reading:?}");
+
+        says_one(&w.live_say(&parent, &id, "Again: reply with just the word one."));
+        w.settle(&id);
+        assert_eq!(w.live_pid(&id), pid, "the second turn started another process");
+    }
+
+    /// Runs the real `claude`: three turns, haiku then sonnet, with the model
+    /// and the effort changed between them (a `set_model` and an
+    /// `apply_flag_settings` on the live process). Needs `claude auth login`.
+    /// Fails about 1 run in 5 (3 of 15 on 2026-10-09): the real CLI leaves
+    /// a control request unanswered past `CONTROL_TIMEOUT`, Crew launches the
+    /// process again on the conversation, and the same-pid assertion fails.
+    /// `cargo test -p crew-core --lib -- --ignored --test-threads=1 live_claude_model`
+    #[test]
+    #[ignore]
+    fn live_claude_model_and_effort_change_between_turns_on_the_same_process() {
+        let w = world();
+        let parent = w.session("terminal", "shell", "full");
+        let id = w.live_child(&parent, "claude", "claude-haiku-5-5", "low", "full");
+        let _reap = Reap(&w, id.clone());
+
+        says_one(&w.live_say(&parent, &id, "Reply with just the word one."));
+        let row = w.settle(&id);
+        let pid = w.live_pid(&id);
+        session::set_options(w.turns.store(), id.clone(), "claude-sonnet-4-5".into(), "medium".into(), row.service_tier, row.autonomy)
+            .expect("options");
+
+        says_one(&w.live_say(&parent, &id, "Reply with just the word one."));
+        w.settle(&id);
+        assert_eq!(w.live_pid(&id), pid, "the settings change launched another process");
+        assert_eq!(w.row(&id).model, "claude-sonnet-4-5");
+        let row = w.row(&id);
+        session::set_options(w.turns.store(), id.clone(), row.model, "low".into(), row.service_tier, row.autonomy).expect("options");
+        says_one(&w.live_say(&parent, &id, "Reply with just the word one."));
+        w.settle(&id);
+        assert_eq!(w.live_pid(&id), pid);
+    }
+
+    /// Runs the real `codex app-server`: three gpt-5.6-luna turns at low or
+    /// medium effort. Needs `codex login`.
+    /// `cargo test -p crew-core --lib -- --ignored --test-threads=1 live_codex`
+    #[test]
+    #[ignore]
+    fn live_codex_two_turns_run_on_one_app_server_and_an_effort_change_keeps_it() {
+        let w = world();
+        let parent = w.session("terminal", "shell", "full");
+        let id = w.live_child(&parent, "codex", "gpt-5.6-luna", "low", "full");
+        let _reap = Reap(&w, id.clone());
+
+        says_one(&w.live_say(&parent, &id, "Reply with just the word one."));
+        w.settle(&id);
+        let pid = w.live_pid(&id);
+        let reading = w.live_window(&id);
+        assert!(reading.used > 0, "{reading:?}");
+
+        says_one(&w.live_say(&parent, &id, "Again: reply with just the word one."));
+        w.settle(&id);
+        assert_eq!(w.live_pid(&id), pid, "the second turn started another app server");
+
+        let row = w.row(&id);
+        session::set_options(w.turns.store(), id.clone(), row.model, "medium".into(), row.service_tier, row.autonomy).expect("options");
+        says_one(&w.live_say(&parent, &id, "Once more: reply with just the word one."));
+        w.settle(&id);
+        assert_eq!(w.live_pid(&id), pid, "the effort change started another app server");
+    }
+
+    /// Runs the real `claude`: three haiku turns. Ask to Edits is a control
+    /// request on the live process; Edits to Full is a flag of the launch, so
+    /// another process takes the same conversation, and still remembers it.
+    /// Needs `claude auth login`.
+    /// `cargo test -p crew-core --lib -- --ignored --test-threads=1 live_claude_autonomy`
+    #[test]
+    #[ignore]
+    fn live_claude_autonomy_edits_in_place_and_full_relaunches_on_the_conversation() {
+        let w = world();
+        let parent = w.session("terminal", "shell", "full");
+        let id = w.live_child(&parent, "claude", "claude-haiku-5-5", "low", "ask");
+        let _reap = Reap(&w, id.clone());
+
+        w.live_say(&parent, &id, "Remember the word mango. Reply with just the word ok.");
+        let row = w.settle(&id);
+        let first = w.live_pid(&id);
+        session::set_options(w.turns.store(), id.clone(), row.model, row.effort, row.service_tier, "edits".into()).expect("options");
+
+        w.live_say(&parent, &id, "Reply with just the word ok.");
+        let row = w.settle(&id);
+        assert_eq!(w.live_pid(&id), first, "Ask to Edits launched another process");
+        session::set_options(w.turns.store(), id.clone(), row.model, row.effort, row.service_tier, "full".into()).expect("options");
+
+        let report = w.live_say(&parent, &id, "What word did I ask you to remember? Reply with just the word.");
+        w.settle(&id);
+        assert_ne!(w.live_pid(&id), first, "Edits to Full kept the process");
+        assert!(report.to_lowercase().contains("mango"), "the conversation was not resumed: {report:?}");
+    }
 }
