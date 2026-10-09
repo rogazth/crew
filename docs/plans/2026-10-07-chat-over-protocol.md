@@ -328,6 +328,13 @@ the bottom as each decision lands.
     not from the end of the call that started it: a background subagent
     outlives that call (`SubagentState`, `blocks.rs`).
 
+Settled 2026-10-09 for decisions 33–36: Esc stops the turn only; what runs in
+the background goes on and is stopped from the panel. A Claude chat with
+background work ends its turn at the answer and keeps its process, and the
+CLI's own follow-up turn is taken as a turn nobody sent. Entries outlive a
+restart of Crew, marked stopped, until "Clear finished" or the session goes.
+A Crew subagent opens over the chat, with its own composer.
+
 ## Effect on the orchestration plan
 
 - Its decisions 15–20 (PTY delivery) go. A letter to a session in the chat
