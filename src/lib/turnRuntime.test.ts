@@ -284,6 +284,67 @@ describe("notifications", () => {
   });
 });
 
+describe("crewAction", () => {
+  /** The daemon's background list for the session, with what runs in it. */
+  const listing = (commands: Array<{ command: string; description?: string; state: string }>) => ({
+    sessionId: bot.id,
+    live: true,
+    waiting: false,
+    commands: commands.map((command, n) => ({ id: `bg${n}`, kind: "shell", startedAt: 0, ...command })),
+  });
+
+  it("restarts at once when nothing runs in the background", async () => {
+    const ask = vi.fn();
+    request.mockImplementation((method: string) =>
+      Promise.resolve(method === "background_list" ? listing([{ command: "make", state: "completed" }]) : null),
+    );
+    await runtime.crewAction(bot.id, "restart", ask);
+    expect(ask).not.toHaveBeenCalled();
+    expect(request).toHaveBeenCalledWith("session_restart", { sessionId: bot.id });
+  });
+
+  it("asks first when background work runs, naming it, and restarts with force once confirmed", async () => {
+    const ask = vi.fn();
+    request.mockImplementation((method: string) =>
+      Promise.resolve(
+        method === "background_list"
+          ? listing([
+              { command: "sleep 60", description: "Wait for the build", state: "running" },
+              { command: "npm run dev", state: "running" },
+              { command: "make", state: "completed" },
+            ])
+          : null,
+      ),
+    );
+    await runtime.crewAction(bot.id, "restart", ask);
+    expect(request).not.toHaveBeenCalledWith("session_restart", expect.anything());
+    const [prompt] = ask.mock.calls[0] as [{ title: string; description: string; action: string; onConfirm: () => Promise<void> }];
+    expect(prompt.description).toContain("Wait for the build, npm run dev");
+    expect(prompt.action).toBe("Restart");
+    await prompt.onConfirm();
+    expect(request).toHaveBeenCalledWith("session_restart", { sessionId: bot.id, force: true });
+  });
+
+  it("leaves the daemon to refuse a restart when there is no dialog to ask in, and shows its words", async () => {
+    request.mockImplementation((method: string) =>
+      method === "session_restart" ? Promise.reject(new Error("Stop the turn first.")) : Promise.resolve(null),
+    );
+    await runtime.crewAction(bot.id, "restart");
+    expect(request).not.toHaveBeenCalledWith("background_list", expect.anything());
+    for (const frame of frames) frame();
+    const last = transcript.read(bot.id).blocks.at(-1);
+    expect(last?.text).toBe("Stop the turn first.");
+  });
+
+  it("reloads without asking anything", async () => {
+    const ask = vi.fn();
+    request.mockResolvedValue({ entries: [], at: 1 });
+    await runtime.crewAction(bot.id, "reload", ask);
+    expect(request).toHaveBeenCalledWith("commands_reload", { sessionId: bot.id });
+    expect(ask).not.toHaveBeenCalled();
+  });
+});
+
 describe("dispose", () => {
   it("kills a turn that is still running and forgets the session", async () => {
     status("working");

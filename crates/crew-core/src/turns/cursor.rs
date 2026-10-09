@@ -41,7 +41,7 @@ use crate::providers::{as_record, string_field, Autonomy};
 const OPEN_TIMEOUT: Duration = Duration::from_secs(90);
 /// After `session/cancel`, how long the prompt may take to say it was
 /// cancelled before its process is killed under it.
-const INTERRUPT_GRACE: Duration = Duration::from_secs(3);
+const INTERRUPT_GRACE: Duration = Duration::from_secs(if cfg!(test) { 2 } else { 3 });
 
 /// What a child whose `-p` chat could not come along is told, once, on the
 /// turn that starts its new conversation (migration 27).
@@ -868,15 +868,17 @@ fn cursor_update(live: &mut CursorLive, update: &Map<String, Value>, events: &mu
 /// <last line>`, with ` + <what it heard>` for each request answered.
 #[cfg(test)]
 pub(crate) fn fake_cursor(dir: &std::path::Path) -> (String, std::path::PathBuf) {
-    use std::os::unix::fs::PermissionsExt;
+    // The script finds its log and session store from the name it was started
+    // by: `fake-cursor-agent-<tag>` keeps `fake-cursor-<tag>.log` and
+    // `fake-cursor-<tag>-sessions` beside it.
     let tag = uuid::Uuid::new_v4().simple().to_string();
     let log = dir.join(format!("fake-cursor-{tag}.log"));
-    let store = dir.join(format!("fake-cursor-{tag}-sessions"));
-    let path = dir.join(format!("fake-cursor-agent-{tag}"));
     let script = r##"#!/usr/bin/env python3
 import json, os, re, sys, threading, time, uuid
-LOG = __LOG__
-STORE = __STORE__
+HERE = os.path.dirname(os.path.abspath(sys.argv[0]))
+TAG = os.path.basename(sys.argv[0])[len("fake-cursor-agent-"):]
+LOG = os.path.join(HERE, "fake-cursor-" + TAG + ".log")
+STORE = os.path.join(HERE, "fake-cursor-" + TAG + "-sessions")
 os.makedirs(STORE, exist_ok=True)
 lock = threading.Lock()
 def out(m):
@@ -1010,11 +1012,8 @@ for line in sys.stdin:
         threading.Thread(target=run, args=(rid, sid, text, turn), daemon=True).start()
     else:
         out({"id": rid, "error": {"code": -32601, "message": "Method not found: " + str(method)}})
-"##
-    .replace("__LOG__", &format!("{:?}", log.to_string_lossy()))
-    .replace("__STORE__", &format!("{:?}", store.to_string_lossy()));
-    std::fs::write(&path, script).expect("write fake cursor-agent");
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+"##;
+    let path = crate::fakes::install(dir, &format!("fake-cursor-agent-{tag}"), script);
     (path.to_string_lossy().into_owned(), log)
 }
 

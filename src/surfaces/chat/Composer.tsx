@@ -117,7 +117,7 @@ export function Composer({
   const field = useRef<HTMLTextAreaElement>(null);
   const overlay = useRef<HTMLDivElement>(null);
   useImperativeHandle(ref, () => field.current as HTMLTextAreaElement);
-  const { files: projectFiles } = useChatActions();
+  const { files: projectFiles, confirm } = useChatActions();
   const canSend = ready && (draft.trim().length > 0 || files.length > 0) && (!working || whileWorking !== undefined);
 
   // The caret is what decides whether an `@` is being typed; it moves without the text changing.
@@ -211,7 +211,7 @@ export function Composer({
     else if (name === "fast") {
       const next = toggledFast(choiceOf(session));
       if (next) onOptions?.(next);
-    } else if (name === "restart" || name === "reload") void crewAction(session.id, name);
+    } else if (name === "restart" || name === "reload") void crewAction(session.id, name, confirm);
   };
 
   // ⌘↵ while it works: wait for the turn instead of joining it.

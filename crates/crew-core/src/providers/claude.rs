@@ -296,6 +296,18 @@ pub fn stop_task_request(task_id: &str) -> Value {
     json!({ "subtype": "stop_task", "task_id": task_id })
 }
 
+/// Has the CLI read its plugins again; it answers the commands that are then
+/// available (`{commands, agents, plugins, mcpServers}`).
+pub fn reload_plugins_request() -> Value {
+    json!({ "subtype": "reload_plugins" })
+}
+
+/// Has the CLI read its skill folders again; it answers `{skills}`, which is
+/// how a skill is told from a command. A CLI too old to know it refuses.
+pub fn reload_skills_request() -> Value {
+    json!({ "subtype": "reload_skills" })
+}
+
 /// The answer to a control request Crew sent: its id, and the success
 /// payload (`{}` when it only acknowledges) or the error Claude gave.
 pub fn parse_control_response(rec: &Map<String, Value>) -> Option<(String, Result<Value, String>)> {
@@ -1371,6 +1383,19 @@ mod tests {
         let result = json!({ "modelUsage": { "a": { "contextWindow": 200000 }, "b": { "contextWindow": 1000000 } } });
         assert_eq!(result_context_window(result.as_object().unwrap()), Some(1_000_000));
         assert_eq!(result_context_window(json!({}).as_object().unwrap()), None);
+    }
+
+    /// The two reloads carry nothing but their name, as 2.1.295 takes them.
+    #[test]
+    fn the_reload_requests_name_only_what_to_reload() {
+        assert_eq!(
+            build_control_request("ctrl-7", reload_plugins_request())["request"],
+            json!({ "subtype": "reload_plugins" })
+        );
+        assert_eq!(
+            build_control_request("ctrl-8", reload_skills_request())["request"],
+            json!({ "subtype": "reload_skills" })
+        );
     }
 
     // Shapes as Claude Code 2.1.290 declares them for its control channel.

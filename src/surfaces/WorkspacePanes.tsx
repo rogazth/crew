@@ -113,8 +113,9 @@ export function WorkspacePanes({
       files,
       processes,
       openProcessRun: onOpenProcessRun,
+      confirm: onConfirm,
     }),
-    [cwd, onOpenFile, onOpenSession, files, processes, onOpenProcessRun],
+    [cwd, onOpenFile, onOpenSession, files, processes, onOpenProcessRun, onConfirm],
   );
   return (
     // Its own stacking context: a page an agent drives out of sight sits beneath every pane here, and nothing else.

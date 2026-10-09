@@ -398,6 +398,12 @@ pub fn skills_list_params(cwd: &str) -> Value {
     json!({ "cwds": [cwd] })
 }
 
+/// The same, past Codex's cache: a reload is asked for because files moved
+/// where nothing was watching.
+pub fn skills_reload_params(cwd: &str) -> Value {
+    json!({ "cwds": [cwd], "forceReload": true })
+}
+
 /// How a turn ended, from `turn/completed`.
 #[derive(Clone, Debug, PartialEq)]
 pub enum TurnEnd {
@@ -1452,6 +1458,12 @@ mod tests {
     #[test]
     fn skills_are_asked_for_by_folder() {
         assert_eq!(skills_list_params("/work/crew"), json!({ "cwds": ["/work/crew"] }));
+    }
+
+    /// A reload goes past Codex's cache; the ordinary read keeps it.
+    #[test]
+    fn a_reload_of_the_skills_goes_past_codexs_cache() {
+        assert_eq!(skills_reload_params("/work/crew"), json!({ "cwds": ["/work/crew"], "forceReload": true }));
     }
 
     #[test]

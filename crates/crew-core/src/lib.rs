@@ -16,6 +16,8 @@ pub mod commands;
 pub mod cron;
 pub mod provider_session;
 pub mod providers;
+#[cfg(test)]
+pub(crate) mod fakes;
 pub mod file_search;
 pub mod files;
 pub mod mailbox;

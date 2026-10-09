@@ -478,6 +478,21 @@ fn shown(parts: &[Option<&str>]) -> Option<Said> {
     (!text.is_empty()).then_some(Said::Note(text))
 }
 
+/// What a live `local_command_output` line says: the output of a command the
+/// CLI ran itself (`/context`, `/cost`), as a note. The line carries the text
+/// bare where the transcript file wraps it in `<local-command-stdout>`, so
+/// both read the same; colours are dropped, and a command that printed
+/// nothing says nothing.
+pub fn local_command_output(content: &str) -> Option<String> {
+    let trimmed = content.trim();
+    let tagged = [tag(trimmed, "local-command-stdout"), tag(trimmed, "local-command-stderr")];
+    let parts = if tagged.iter().any(Option::is_some) { tagged } else { [Some(trimmed), None] };
+    match shown(&parts) {
+        Some(Said::Note(text)) => Some(text),
+        _ => None,
+    }
+}
+
 /// The inside of the first `<name>…</name>` in `text`.
 fn tag<'a>(text: &'a str, name: &str) -> Option<&'a str> {
     let open = format!("<{name}>");
@@ -929,6 +944,20 @@ mod tests {
         assert_eq!(paths, ["/tmp/shot.png", "/tmp/notes.md"]);
         // The receipt says nothing the files do not.
         assert!(sent.tool.as_ref().unwrap().detail.is_none());
+    }
+
+    /// A live command's output reads the same bare or in the transcript's
+    /// tags: colours dropped, and nothing when it printed nothing.
+    #[test]
+    fn a_live_commands_output_is_a_note_bare_or_tagged_and_nothing_when_empty() {
+        assert_eq!(local_command_output("\u{1b}[1mContext\u{1b}[22m\n12k / 200k\n").as_deref(), Some("Context\n12k / 200k"));
+        assert_eq!(local_command_output("<local-command-stdout>Set model to opus</local-command-stdout>").as_deref(), Some("Set model to opus"));
+        assert_eq!(
+            local_command_output("<local-command-stdout>out</local-command-stdout><local-command-stderr>oops</local-command-stderr>").as_deref(),
+            Some("out\noops")
+        );
+        assert_eq!(local_command_output("<local-command-stdout></local-command-stdout>"), None);
+        assert_eq!(local_command_output("  \n"), None);
     }
 
     #[test]

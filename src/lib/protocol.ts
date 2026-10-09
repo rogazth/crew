@@ -1080,9 +1080,11 @@ serviceTier: string, autonomy: string, };
 
 /**
  * Ends a session's CLI process so the next message starts it again. The
- * conversation is kept: the next turn resumes it by its provider id.
+ * conversation is kept: the next turn resumes it by its provider id. Refused
+ * while a turn runs; and while background work runs, unless `force` says it
+ * may stop with the process.
  */
-export type SessionRestart = { sessionId: string, };
+export type SessionRestart = { sessionId: string, force?: boolean, };
 
 export type SessionStatusEvent = { sessionId: string, status: string, providerSessionId?: string, updatedAt: number, };
 

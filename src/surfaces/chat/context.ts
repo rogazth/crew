@@ -2,6 +2,7 @@ import { createContext, useContext } from "react";
 import type { Party, ThreadRef } from "../../lib/letters";
 import type { Process } from "../../lib/processes";
 import type { BackgroundCommand } from "../../lib/protocol";
+import type { Ask } from "../../lib/turnRuntime";
 import type { ProjectFile, Session } from "../../lib/types";
 
 /** What a chat surface can ask of the shell without a prop for every level. */
@@ -16,6 +17,8 @@ export type ChatActions = {
   processes: readonly Process[];
   /** A command's run in a tab of its worktree's strip. */
   openProcessRun: (process: Process, worktree: string | null) => void;
+  /** Asks the shell's dialog before something that costs the session work: a restart over running background work. */
+  confirm: Ask;
 };
 
 export const ChatContext = createContext<ChatActions>({
@@ -24,6 +27,7 @@ export const ChatContext = createContext<ChatActions>({
   files: [],
   processes: [],
   openProcessRun: () => undefined,
+  confirm: () => undefined,
 });
 
 export function useChatActions(): ChatActions {

@@ -41,3 +41,21 @@ export function stopPrompt(name: string, label: string): Prompt {
     action: "Stop",
   };
 }
+
+/** How many of a session's running entries a prompt names before it counts the rest. */
+const NAMED_RUNNING = 4;
+
+/**
+ * What restarting a session asks while work it started runs in the background:
+ * that work stops with the CLI, and the conversation is kept. `running` names
+ * each entry as the panel does.
+ */
+export function restartPrompt(running: string[]): Prompt {
+  const named = running.slice(0, NAMED_RUNNING).join(", ");
+  const more = running.length > NAMED_RUNNING ? ` and ${running.length - NAMED_RUNNING} more` : "";
+  return {
+    title: "Restart this session?",
+    description: `Running in the background: ${named}${more}. It stops with the CLI; the conversation is kept.`,
+    action: "Restart",
+  };
+}

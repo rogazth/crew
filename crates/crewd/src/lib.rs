@@ -1956,6 +1956,17 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
             let turns = hosts.turns.clone();
             json(block(move || turns.commands_list(&session_id)).await?)
         }
+        "commands_reload" => {
+            let proto::CommandsReload { session_id } = parse(params)?;
+            let turns = hosts.turns.clone();
+            json(block(move || turns.commands_reload(&session_id)).await?)
+        }
+        "session_restart" => {
+            let proto::SessionRestart { session_id, force } = parse(params)?;
+            let turns = hosts.turns.clone();
+            block(move || turns.session_restart(&session_id, force.unwrap_or(false))).await?;
+            Ok(Value::Null)
+        }
         "background_output" => {
             let proto::BackgroundRequest { session_id, id } = parse(params)?;
             let turns = hosts.turns.clone();
@@ -2985,6 +2996,49 @@ time.sleep(600)
         assert!(bot.entries.iter().all(|entry| entry.kind == "crew"), "{bot:?}");
         let unknown = rpc(&mut ws, 6, "commands_list", serde_json::json!({ "sessionId": "nobody" })).await;
         assert!(!unknown.ok);
+        handle.shutdown();
+    }
+
+    /// `commands_reload` reads the session's menu again and answers it, and
+    /// `session_restart` answers nothing, with or without `force`; both refuse
+    /// a session that does not exist.
+    #[tokio::test]
+    async fn commands_reload_answers_the_menu_and_session_restart_answers_nothing() {
+        let dir = test_dir("commands-reload");
+        let handle = test_serve(&dir);
+        handle.override_agent_binary("claude", write_fake_claude_menu(&dir).to_string_lossy().into_owned());
+        let mut ws = connect_authed(&handle).await;
+        let workspace: proto::Workspace = serde_json::from_value(
+            rpc(&mut ws, 1, "workspace_create", serde_json::json!({ "name": "w", "path": dir.to_string_lossy() }))
+                .await
+                .result
+                .expect("ws"),
+        )
+        .expect("workspace");
+        let params = serde_json::json!({
+            "workspaceId": workspace.id, "kind": "terminal", "name": "n", "provider": "claude",
+            "model": "", "description": "", "autonomy": "ask"
+        });
+        let made = rpc(&mut ws, 2, "session_create", params).await;
+        let session: proto::Session = serde_json::from_value(made.result.expect("session")).expect("session");
+
+        let reloaded = rpc(&mut ws, 3, "commands_reload", serde_json::json!({ "sessionId": session.id })).await;
+        assert!(reloaded.ok, "{:?}", reloaded.error);
+        let catalog: proto::CommandCatalog = serde_json::from_value(reloaded.result.expect("catalog")).expect("catalog");
+        let kinds: Vec<_> = catalog.entries.iter().map(|entry| (entry.name.as_str(), entry.kind.as_str())).collect();
+        assert_eq!(&kinds[kinds.len() - 2..], [("prototype", "skill"), ("compact", "command")], "{kinds:?}");
+
+        for (id, params) in [
+            (4, serde_json::json!({ "sessionId": session.id })),
+            (5, serde_json::json!({ "sessionId": session.id, "force": true })),
+        ] {
+            let restarted = rpc(&mut ws, id, "session_restart", params).await;
+            assert!(restarted.ok, "{:?}", restarted.error);
+        }
+        for (id, method) in [(6, "commands_reload"), (7, "session_restart")] {
+            let unknown = rpc(&mut ws, id, method, serde_json::json!({ "sessionId": "nobody" })).await;
+            assert!(!unknown.ok, "{method} took a session that does not exist");
+        }
         handle.shutdown();
     }
 

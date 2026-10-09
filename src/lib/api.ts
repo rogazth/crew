@@ -3,8 +3,10 @@ import { focusEnv, envOf, RAIL_ORDER } from "./client/registry";
 import { open } from "./host";
 import type { RoutineRow, ScheduledRoutine } from "./routines";
 import type {
+  BackgroundList,
   BackgroundOutput,
   BrowserLeases,
+  CommandCatalog,
   CookieRead,
   CookieSource,
   DirListing,
@@ -191,11 +193,24 @@ export const backgroundStop = (sessionId: string, id: string): Promise<void> =>
 export const backgroundClear = (sessionId: string, ids?: string[]): Promise<void> =>
   client.request("background_clear", { sessionId, ids });
 
-/** Asks the provider to read a session's commands and skills again, for files that changed on disk. */
-export const commandsReload = (sessionId: string): Promise<void> => client.request("commands_reload", { sessionId });
+/** What a session has running in the background now, fresh from the daemon. */
+export const backgroundList = (sessionId: string): Promise<BackgroundList> =>
+  client.request("background_list", { sessionId });
 
-/** Restarts a session's CLI where it left off: the next message resumes it. */
-export const sessionRestart = (sessionId: string): Promise<void> => client.request("session_restart", { sessionId });
+/**
+ * Asks the provider to read a session's commands, skills and servers again,
+ * for files that changed on disk. Answers the catalog it ends with.
+ */
+export const commandsReload = (sessionId: string): Promise<CommandCatalog> =>
+  client.request("commands_reload", { sessionId });
+
+/**
+ * Restarts a session's CLI where it left off: the next message resumes it.
+ * The daemon refuses while a turn runs, and while background work runs unless
+ * `force` says it may stop with the CLI.
+ */
+export const sessionRestart = (sessionId: string, force = false): Promise<void> =>
+  client.request("session_restart", force ? { sessionId, force } : { sessionId });
 
 export const turnStart = (params: {
   sessionId: string;

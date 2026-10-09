@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { closePrompt, settle, stopPrompt, unsavedCost } from "./confirm";
+import { closePrompt, restartPrompt, settle, stopPrompt, unsavedCost } from "./confirm";
 
 describe("settle", () => {
   it("is done when the action resolves to nothing", async () => {
@@ -55,6 +55,20 @@ describe("stopPrompt", () => {
       description: "It is still working. Stopping ends its process; the session stays in the sidebar.",
       action: "Stop",
     });
+  });
+});
+
+describe("restartPrompt", () => {
+  it("names what runs in the background and that it stops with the CLI", () => {
+    expect(restartPrompt(["npm run dev", "pytest -x"])).toEqual({
+      title: "Restart this session?",
+      description: "Running in the background: npm run dev, pytest -x. It stops with the CLI; the conversation is kept.",
+      action: "Restart",
+    });
+  });
+
+  it("counts the entries past the fourth instead of listing them", () => {
+    expect(restartPrompt(["a", "b", "c", "d", "e", "f"]).description).toContain("a, b, c, d and 2 more.");
   });
 });
 

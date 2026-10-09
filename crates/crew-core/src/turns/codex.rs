@@ -38,7 +38,7 @@ use crate::mailbox;
 use crate::session;
 use crate::providers::codex::{
     approval_response, classify_request, completed_tool_status, exec_item, initialize_params, interrupt_params,
-    is_tool_item, item_files, plan_detail, questions_response, rpc_error_message, skills_list_params, steer_params,
+    is_tool_item, item_files, plan_detail, questions_response, rpc_error_message, skills_list_params, skills_reload_params, steer_params,
     skills_input, spawned_threads, text_input, thread_id, thread_request, tool_call_id, tool_detail, tool_label,
     tool_name, turn_end, turn_id, turn_start_input, unsupported_error, user_message_text, with_attached_paths,
     ApprovalKind, CodexAsk, CodexCommand, CodexThread, TurnEnd,
@@ -54,7 +54,7 @@ const OPEN_TIMEOUT: Duration = Duration::from_secs(90);
 const STEER_TIMEOUT: Duration = Duration::from_secs(15);
 /// After `turn/interrupt`, how long the turn may take to say it ended before
 /// its process is killed under it.
-pub(super) const INTERRUPT_GRACE: Duration = Duration::from_secs(3);
+pub(super) const INTERRUPT_GRACE: Duration = Duration::from_secs(if cfg!(test) { 2 } else { 3 });
 
 /// How often the background terminals are listed while a command runs.
 const TERMINAL_POLL: Duration = Duration::from_secs(2);
@@ -457,12 +457,30 @@ impl TurnHost {
         let session_id = session_id.to_string();
         let cwd = cwd.to_string();
         thread::spawn(move || {
-            let Ok(listed) = host.codex_call(&session_id, "skills/list", skills_list_params(&cwd), CATALOG_TIMEOUT)
-            else {
-                return;
-            };
-            host.codex_catalog(&session_id, &cwd, codex_skills(&listed));
+            match host.codex_call(&session_id, "skills/list", skills_list_params(&cwd), CATALOG_TIMEOUT) {
+                Ok(listed) => host.codex_catalog(&session_id, &cwd, codex_skills(&listed)),
+                // Its commands are Crew's own and need no answer from Codex:
+                // a folder whose skills cannot be read still lists them. What
+                // an earlier read found stands, rather than being emptied.
+                Err(_) if !host.commands().holds("codex", &cwd) => host.codex_catalog(&session_id, &cwd, Vec::new()),
+                Err(_) => {}
+            }
         });
+    }
+
+    /// Reads the folder's skills past Codex's cache and has it start its MCP
+    /// servers again, for what changed on disk since its thread opened. The
+    /// answer to `skills/list` is the catalog's; the servers' answer is only
+    /// that they were asked.
+    pub(super) fn codex_reload(&self, session_id: &str) -> Result<(), String> {
+        let cwd = match self.lock().get(session_id) {
+            Some(Live::Codex(live)) if !live.cwd.is_empty() => live.cwd.clone(),
+            _ => return Err("Codex is not running.".into()),
+        };
+        let listed = self.codex_call(session_id, "skills/list", skills_reload_params(&cwd), CATALOG_TIMEOUT)?;
+        self.codex_catalog(session_id, &cwd, codex_skills(&listed));
+        self.codex_call(session_id, "config/mcpServer/reload", Value::Null, CATALOG_TIMEOUT)?;
+        Ok(())
     }
 
     /// The turn itself, on an open thread. Returns once the turn runs; its end
@@ -1537,7 +1555,8 @@ fn subagent_updated(call: &str, state: Option<SubagentState>, activity: Option<S
 /// A stand-in for `codex app-server` 0.160 that speaks the part of the
 /// protocol Crew uses: the handshake, `thread/start` and `thread/resume`,
 /// `turn/start`, `turn/steer`, `turn/interrupt`, `skills/list` (one enabled
-/// skill and one disabled), the commands Crew maps to methods
+/// skill and one disabled; a file named like the log plus `.no-skills` makes
+/// it fail), `config/mcpServer/reload`, the commands Crew maps to methods
 /// (`thread/compact/start` and `review/start`, which run as turns of their
 /// own; `thread/goal/set|get|clear` and `mcpServerStatus/list`, which answer
 /// at once), and the server's own approval and question requests. Every request it gets is appended to the log as `{method,
@@ -1557,12 +1576,12 @@ fn subagent_updated(call: &str, state: Option<SubagentState>, activity: Option<S
 /// answers `report: <last line>`, with ` + <steer>` for each steer it took.
 #[cfg(test)]
 pub(crate) fn fake_codex(dir: &std::path::Path) -> (String, std::path::PathBuf) {
-    use std::os::unix::fs::PermissionsExt;
-    let log = dir.join(format!("fake-codex-{}.log", uuid::Uuid::new_v4().simple()));
-    let path = dir.join(format!("fake-codex-{}", uuid::Uuid::new_v4().simple()));
+    // The log is the script's own path and `.log`, which it works out for itself.
+    let name = format!("fake-codex-{}", uuid::Uuid::new_v4().simple());
+    let log = dir.join(format!("{name}.log"));
     let script = r#"#!/usr/bin/env python3
 import json, os, re, sys, threading, time, uuid
-LOG = __LOG__
+LOG = os.path.abspath(sys.argv[0]) + ".log"
 lock = threading.Lock()
 def out(m):
     with lock:
@@ -1822,6 +1841,10 @@ for line in sys.stdin:
             turn = state["turn"]
             if turn: turn["interrupted"].set()
         out({"id": rid, "result": {}})
+    elif method == "config/mcpServer/reload":
+        out({"id": rid, "result": {}})
+    elif method == "skills/list" and os.path.exists(LOG + ".no-skills"):
+        out({"id": rid, "error": {"code": -32603, "message": "the skill folders cannot be read"}})
     elif method == "skills/list":
         # One enabled skill and one the user turned off, as the schema shapes them.
         cwd = (params.get("cwds") or [os.getcwd()])[0]
@@ -1830,10 +1853,8 @@ for line in sys.stdin:
         out({"id": rid, "result": {"data": [{"cwd": cwd, "errors": [], "skills": [skill, off]}]}})
     else:
         out({"id": rid, "error": {"code": -32601, "message": "unknown " + str(method)}})
-"#
-    .replace("__LOG__", &format!("{:?}", log.to_string_lossy()));
-    std::fs::write(&path, script).expect("write fake codex");
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+"#;
+    let path = crate::fakes::install(dir, &name, script);
     (path.to_string_lossy().into_owned(), log)
 }
 
@@ -1949,10 +1970,25 @@ mod catalog_tests {
         skills: Option<Vec<String>>,
         known: Vec<CommandEntry>,
     ) -> (TurnHost, String, std::path::PathBuf, String) {
+        started_prepared(kind, view, text, command, skills, known, |_| {})
+    }
+
+    /// The same, after `prepare` has had the fake's log path to set up what
+    /// the fake reads when it starts (a file beside the log).
+    fn started_prepared(
+        kind: &str,
+        view: Option<&str>,
+        text: &str,
+        command: Option<&str>,
+        skills: Option<Vec<String>>,
+        known: Vec<CommandEntry>,
+        prepare: impl FnOnce(&std::path::Path),
+    ) -> (TurnHost, String, std::path::PathBuf, String) {
         let host = TurnHost::test_new();
         host.test_agents().set_events(Arc::new(Lines(host.clone())));
         let (session, cwd) = codex_session(&host, kind, view);
         let (fake, log) = crate::turns::fake_codex(std::path::Path::new(&cwd));
+        prepare(&log);
         host.override_binary("codex", fake);
         if !known.is_empty() {
             host.commands.learn("codex", &cwd, Some(known), None, crate::store::now_millis());
@@ -2158,6 +2194,47 @@ mod catalog_tests {
         let entries = host.commands_list(&session).expect("menu").entries;
         assert!(!entries.is_empty() && entries.iter().all(|entry| entry.kind == "crew"), "{entries:?}");
         assert!(!host.commands().holds("codex", &cwd));
+    }
+
+    /// Codex's commands are Crew's own and need no answer from it: a folder
+    /// whose skills cannot be read still lists them, and no skills.
+    #[test]
+    fn a_folder_whose_skills_codex_cannot_read_still_lists_its_commands() {
+        let (host, session, log, cwd) = started_prepared("terminal", Some("chat"), "hello", None, None, Vec::new(), |log| {
+            std::fs::write(format!("{}.no-skills", log.display()), "").expect("flag");
+        });
+        wait_for(|| host.commands().holds("codex", &cwd));
+        wait_for(|| !host.is_running(&session));
+        assert_eq!(sent(&log, "skills/list").len(), 1);
+        let entries = host.commands_list(&session).expect("menu").entries;
+        for name in ["compact", "goal", "review", "mcp"] {
+            assert!(entries.iter().any(|entry| entry.name == name && entry.kind == "command"), "{name}: {entries:?}");
+        }
+        assert!(!entries.iter().any(|entry| entry.kind == "skill"), "{entries:?}");
+    }
+
+    /// A reload asks for the skills past Codex's cache and has its MCP servers
+    /// start again, then says what the catalog holds.
+    #[test]
+    fn a_reload_asks_codex_for_its_skills_past_the_cache_and_for_its_servers_again() {
+        let (host, session, log, cwd) = started("hello");
+        wait_for(|| host.commands().holds("codex", &cwd));
+        wait_for(|| !host.is_running(&session));
+        let menu = host.commands_reload(&session).expect("reload");
+        assert_eq!(sent(&log, "skills/list").last(), Some(&json!({ "cwds": [cwd], "forceReload": true })));
+        assert_eq!(sent(&log, "config/mcpServer/reload").len(), 1);
+        assert!(menu.entries.iter().any(|entry| entry.name == "review-pr" && entry.kind == "skill"), "{menu:?}");
+        assert!(said(&host, &session).contains("Reloaded skills and MCP servers: 4 commands, 1 skill."), "{}", said(&host, &session));
+    }
+
+    /// With no app server up, its thread reads the skills as it opens: a
+    /// reload has nothing to ask and says so.
+    #[test]
+    fn a_reload_with_no_codex_process_leaves_it_to_the_next_message() {
+        let host = TurnHost::test_new();
+        let (session, _) = codex_session(&host, "terminal", Some("chat"));
+        host.commands_reload(&session).expect("reload");
+        assert!(said(&host, &session).contains("Codex reads its skills and servers when its thread opens"), "{}", said(&host, &session));
     }
 }
 

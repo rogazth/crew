@@ -21,7 +21,7 @@ use crate::providers::claude::{
     build_claude_user_message, build_control_request, build_control_response, get_context_usage_request, get_task_output_request,
     input_json_delta_from_event, is_compact_boundary, is_message_start, is_subagent_message,
     parse_context_usage, permission_mode, parse_control_cancel_id, parse_control_request, parse_control_response, parse_questions,
-    result_context_window, stop_task_request,
+    reload_plugins_request, reload_skills_request, result_context_window, stop_task_request,
     session_id_from_message, stream_text_delta, to_permission_result,
     to_question_result, tool_detail as claude_tool_detail, tool_label as claude_tool_label,
     tool_result_detail as claude_tool_result_detail, tool_result_files as claude_tool_result_files,
@@ -101,7 +101,7 @@ fn control_timeout(request: &Value) -> Duration {
 /// the result it had, so a server left running in the background cannot hold
 /// it forever; the process stays up with the work, and the turn the CLI
 /// starts when it reports is the child's next.
-const BACKGROUND_GRACE: Duration = Duration::from_secs(if cfg!(test) { 4 } else { 600 });
+const BACKGROUND_GRACE: Duration = Duration::from_secs(if cfg!(test) { 2 } else { 600 });
 /// How long a session's process stays up with no turn on it before it is let
 /// go. A process holds its CLI and its MCP servers in memory; the next message
 /// resumes the conversation by its provider id, so letting go costs only the
@@ -1284,36 +1284,166 @@ impl TurnHost {
     /// persona must not see the user's skills.
     pub fn commands_list(&self, session_id: &str) -> Result<crew_protocol::CommandCatalog, String> {
         let session = session::get(&self.store, session_id.to_string())?.ok_or("No such session")?;
-        let provider = session.provider.clone();
-        let now = crate::store::now_millis();
         if session.kind == "bot" {
-            return Ok(crew_protocol::CommandCatalog { entries: crate::commands::crew_actions(offers_fast(&provider)), at: now });
+            return Ok(self.menu_of(&session, ""));
         }
         let cwd = session::cwd(&self.store, &session)?;
-        if provider == "claude" {
+        if session.provider == "claude" {
+            let now = crate::store::now_millis();
             let live = matches!(self.lock().get(session_id), Some(Live::Claude(live)) if live.menu_cwd.as_deref() == Some(cwd.as_str()));
-            let held = if live { self.commands.holds(&provider, &cwd) } else { self.commands.is_fresh(&provider, &cwd, now) };
+            let held = if live { self.commands.holds("claude", &cwd) } else { self.commands.is_fresh("claude", &cwd, now) };
             if !held {
-                self.probe_claude_commands(session_id, &cwd);
+                if let Err(error) = self.probe_claude_commands(session_id, &cwd, false) {
+                    eprintln!("[commands] {error}");
+                }
             }
         }
-        Ok(self.commands_catalog(&provider, &cwd))
+        Ok(self.menu_of(&session, &cwd))
+    }
+
+    /// The catalog as the session's window shows it now, without reading
+    /// anything: a bot's is Crew's actions alone.
+    fn menu_of(&self, session: &session::Session, cwd: &str) -> crew_protocol::CommandCatalog {
+        if session.kind == "bot" {
+            return crew_protocol::CommandCatalog {
+                entries: crate::commands::crew_actions(offers_fast(&session.provider)),
+                at: crate::store::now_millis(),
+            };
+        }
+        self.commands_catalog(&session.provider, cwd)
+    }
+
+    /// Reads a session's commands, skills and servers again, for what changed
+    /// on disk since its CLI started (`/reload`), and says what it did in the
+    /// transcript. The catalog is the one the windows now hold, which a
+    /// change also reaches as a push.
+    /// - Claude with a process: `reload_plugins`, then `reload_skills`.
+    /// - Claude with none: a CLI is started with no turn, as the first list
+    ///   does, past the age that list trusts.
+    /// - Codex with a process: `skills/list` past its cache, then
+    ///   `config/mcpServer/reload`. Without one its thread reads them as it opens.
+    /// - Cursor and opencode list nothing a running CLI could be asked to read
+    ///   again: they do when the session restarts.
+    pub fn commands_reload(&self, session_id: &str) -> Result<crew_protocol::CommandCatalog, String> {
+        let session = session::get(&self.store, session_id.to_string())?.ok_or("No such session")?;
+        let cwd = if session.kind == "bot" { String::new() } else { session::cwd(&self.store, &session)? };
+        let note = match session.provider.as_str() {
+            "claude" => self.reload_claude(&session, &cwd)?,
+            "codex" => self.reload_codex(&session, &cwd)?,
+            other => {
+                let name = if other == "cursor" { "Cursor" } else { other };
+                format!("{name} reads its commands and skills again when the session restarts. Use /restart.")
+            }
+        };
+        self.transcripts.append_system(session_id, &note);
+        Ok(self.menu_of(&session, &cwd))
+    }
+
+    fn reload_claude(&self, session: &session::Session, cwd: &str) -> Result<String, String> {
+        let up = match self.lock().get(&session.id) {
+            Some(Live::Claude(live)) => Some(live.menu_cwd.clone()),
+            _ => None,
+        };
+        let Some(menu_cwd) = up else {
+            if session.kind == "bot" {
+                return Ok("A bot reads its commands and skills afresh with each turn.".into());
+            }
+            self.probe_claude_commands(&session.id, cwd, true)?;
+            return Ok(self.reloaded("Read the commands and skills again", "claude", cwd));
+        };
+        // Plugins first: they bring commands and skills of their own, and the
+        // skill list is read after them. A CLI too old for `reload_skills`
+        // leaves the skills as they were.
+        let plugins = self.claude_control(&session.id, reload_plugins_request())?;
+        let skills = self.claude_control(&session.id, reload_skills_request()).ok();
+        let Some(menu_cwd) = menu_cwd else {
+            return Ok("Reloaded plugins and skills.".into());
+        };
+        self.learn_commands(
+            &session.id,
+            &menu_cwd,
+            plugins.get("commands").map(crate::commands::claude_entries),
+            skills.map(|answer| crate::commands::claude_skill_names(answer.get("skills").unwrap_or(&Value::Null))),
+        );
+        Ok(self.reloaded("Reloaded plugins and skills", "claude", &menu_cwd))
+    }
+
+    fn reload_codex(&self, session: &session::Session, cwd: &str) -> Result<String, String> {
+        if !matches!(self.lock().get(&session.id), Some(Live::Codex(_))) {
+            return Ok("Codex reads its skills and servers when its thread opens, with the next message.".into());
+        }
+        self.codex_reload(&session.id)?;
+        Ok(self.reloaded("Reloaded skills and MCP servers", "codex", cwd))
+    }
+
+    /// `head`, with how many commands and skills the folder's catalog holds
+    /// now, as the transcript's line for a reload.
+    fn reloaded(&self, head: &str, provider: &str, cwd: &str) -> String {
+        let catalog = self.commands_catalog(provider, cwd);
+        let count = |kind: &str, noun: &str| {
+            let n = catalog.entries.iter().filter(|entry| entry.kind == kind).count();
+            format!("{n} {noun}{}", if n == 1 { "" } else { "s" })
+        };
+        format!("{head}: {}, {}.", count("command", "command"), count("skill", "skill"))
+    }
+
+    /// Ends a session's CLI so its next message starts it again on the same
+    /// conversation (`/restart`): the new process reads the skills, plugins
+    /// and servers afresh. Only between turns, and what the board shows
+    /// running in the background goes with the process, so that needs `force`;
+    /// the refusal names it.
+    pub fn session_restart(&self, session_id: &str, force: bool) -> Result<(), String> {
+        session::get(&self.store, session_id.to_string())?.ok_or("No such session")?;
+        let running: Vec<String> = self
+            .background
+            .list(session_id)
+            .commands
+            .into_iter()
+            .filter(|command| command.state == crew_protocol::BackgroundState::Running)
+            .map(|command| command.description.filter(|text| !text.trim().is_empty()).unwrap_or(command.command))
+            .collect();
+        if !force && !running.is_empty() {
+            return Err(format!("Still running in the background: {}. Restarting stops it.", running.join(", ")));
+        }
+        // Claimed like a turn, so none starts under the release.
+        {
+            let mut turns = self.running.lock().unwrap_or_else(|e| e.into_inner());
+            let active = self.lock().get(session_id).is_some_and(|live| match live {
+                Live::Claude(row) => row.active,
+                Live::Codex(row) => row.active,
+                Live::Cursor(row) => row.active,
+                Live::Opencode(row) => row.active,
+            });
+            if active || !turns.insert(session_id.to_string()) {
+                return Err("Stop the turn first.".into());
+            }
+        }
+        let had = self.lock().contains_key(session_id);
+        if had {
+            self.release(session_id);
+        }
+        self.running.lock().unwrap_or_else(|e| e.into_inner()).remove(session_id);
+        let note = if had {
+            "Restarted. The CLI starts again with the next message."
+        } else {
+            "Nothing was running; the CLI starts with the next message."
+        };
+        self.transcripts.append_system(session_id, note);
+        Ok(())
     }
 
     /// Reads a folder's Claude menu with a CLI of its own. One at a time: a
-    /// list that arrives while another probes waits, and finds the answer.
-    fn probe_claude_commands(&self, session_id: &str, cwd: &str) {
+    /// list that arrives while another probes waits, and finds the answer
+    /// unless it is `force`d (a reload) past what is held.
+    fn probe_claude_commands(&self, session_id: &str, cwd: &str, force: bool) -> Result<(), String> {
         let _probing = self.commands.probe_lock();
-        if self.commands.is_fresh("claude", cwd, crate::store::now_millis()) {
-            return;
+        if !force && self.commands.is_fresh("claude", cwd, crate::store::now_millis()) {
+            return Ok(());
         }
-        let probed = self
-            .resolve_bin("claude")
-            .and_then(|binary| crate::provider_session::probe_claude_commands(std::path::Path::new(&binary), std::path::Path::new(cwd)));
-        match probed {
-            Ok(menu) => self.learn_commands(session_id, cwd, Some(menu.commands), Some(menu.skills)),
-            Err(error) => eprintln!("[commands] {error}"),
-        }
+        let binary = self.resolve_bin("claude")?;
+        let menu = crate::provider_session::probe_claude_commands(std::path::Path::new(&binary), std::path::Path::new(cwd))?;
+        self.learn_commands(session_id, cwd, Some(menu.commands), Some(menu.skills));
+        Ok(())
     }
 
     /// Keeps what Claude said of a folder's menu, and tells the windows of the
@@ -1325,12 +1455,14 @@ impl TurnHost {
         entries: Option<Vec<crew_protocol::CommandEntry>>,
         skills: Option<HashSet<String>>,
     ) {
-        if self.commands.learn("claude", cwd, entries, skills, crate::store::now_millis()) {
-            self.commands.notify(crew_protocol::CommandsChanged {
-                session_id: session_id.to_string(),
-                catalog: self.commands_catalog("claude", cwd),
-            });
-        }
+        self.commands.learn_for_session(
+            session_id,
+            "claude",
+            cwd,
+            entries,
+            skills,
+            crate::commands::crew_actions(offers_fast("claude")),
+        );
     }
 
     fn commands_catalog(&self, provider: &str, cwd: &str) -> crew_protocol::CommandCatalog {
@@ -3450,6 +3582,15 @@ impl TurnHost {
                     message: "Context compacted".into(),
                 });
                 ask = Some((true, None));
+            } else if type_name.as_deref() == Some("system") && subtype.as_deref() == Some("local_command_output") {
+                // What a command the CLI ran itself printed. The 2.1.295 CLI
+                // says it as a synthetic assistant message instead, which
+                // draws as any reply; this is the SDK's own line for it.
+                let output = string_field(Some(&rec), "content")
+                    .and_then(|content| crate::session_history::claude::local_command_output(&content));
+                if let Some(message) = output {
+                    events.push(HarnessEvent::SessionNote { message });
+                }
             } else if type_name.as_deref() == Some("stream_event") {
                 woken(live, &mut events);
                 spoke = true;
@@ -4242,10 +4383,10 @@ mod mailbox_tests {
     }
 
     fn fake_opencode_paused(dir: &std::path::Path, pause: f32) -> String {
-        let path = dir.join(format!("fake-opencode-{pause}"));
-        std::fs::write(
-            &path,
-            format!(
+        let path = crate::fakes::install(
+            dir,
+            &format!("fake-opencode-{pause}"),
+            &format!(
                 r#"#!/usr/bin/env python3
 import json, sys, time
 sys.stdin.read()
@@ -4255,10 +4396,7 @@ print(json.dumps({{"type":"text","sessionID":sid,"part":{{"id":"p1","type":"text
 print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type":"step-finish","reason":"stop","tokens":{{"input":1,"output":1,"reasoning":0,"cache":{{"read":0,"write":0}}}},"cost":0}}}}), flush=True)
 "#
             ),
-        )
-        .expect("write fake");
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        );
         path.to_string_lossy().into_owned()
     }
 

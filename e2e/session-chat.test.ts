@@ -312,6 +312,57 @@ test("a / in the chat lists the CLI's commands and skills with Crew's actions, a
   await idle(session);
 });
 
+test("/restart in the chat lets go of the CLI, and the next message launches it again on the same conversation", async () => {
+  const [workspace] = crew.workspaces;
+  assert.ok(workspace);
+  await crew.request("state_set", { key: "sessions:view", value: "chat" });
+  await crew.reload();
+  const session = await newChat(workspace.id);
+  await send("remember 4817");
+  await said("Reply 1: remember 4817").waitFor();
+  await idle(session);
+  const [first] = await launchesOf(session);
+  assert.ok(first && alive(first.pid), "the CLI is up between turns");
+
+  // Picked from the menu it runs and leaves nothing in the draft.
+  const field = composer(session);
+  const menu = crew.window.getByRole("listbox", { name: "Commands" });
+  await field.fill("/restart");
+  await menu.getByRole("option").filter({ has: crew.window.getByText("/restart", { exact: true }) }).waitFor();
+  await field.press("Enter");
+  await said("Restarted. The CLI starts again with the next message.").waitFor();
+  assert.equal(await field.inputValue(), "", "/restart stayed in the draft");
+  await waitFor(() => !alive(first.pid), { message: "the CLI was let go" });
+
+  await send("what number?");
+  await said("Reply 1: what number?").waitFor();
+  await idle(session);
+  const launches = await launchesOf(session);
+  assert.equal(launches.length, 2, "the next message did not launch the CLI again");
+  const resumed = launches[1]!.argv;
+  assert.equal(resumed[resumed.indexOf("--resume") + 1], session.id, resumed.join(" "));
+});
+
+test("/reload in the chat asks the CLI for its plugins and then its skills, and says what it read", async () => {
+  const [workspace] = crew.workspaces;
+  assert.ok(workspace);
+  await crew.request("state_set", { key: "sessions:view", value: "chat" });
+  await crew.reload();
+  const session = await newChat(workspace.id);
+  await send("hello");
+  await said("Reply 1: hello").waitFor();
+  await idle(session);
+  const before = (await controls()).length;
+
+  const field = composer(session);
+  await field.fill("/reload");
+  await crew.window.getByRole("listbox", { name: "Commands" }).getByRole("option").filter({ has: crew.window.getByText("/reload", { exact: true }) }).waitFor();
+  await field.press("Enter");
+  await said(/^Reloaded plugins and skills: \d+ commands?, 1 skill\.$/).waitFor();
+  assert.deepEqual((await controls()).slice(before).map((line) => line.trim()), ["reload_plugins", "reload_skills"]);
+  assert.equal((await launchesOf(session)).length, 1, "a reload launched the CLI again");
+});
+
 // What the user writes while a turn runs. The fake claude takes it into the
 // turn like the real one (echoed at once, named in the turn's reply), so a
 // steer shows; a message held for the next turn goes in as one turn of its own.

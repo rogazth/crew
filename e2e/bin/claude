@@ -652,7 +652,8 @@ function redraw(done) {
  *   `stopped`; the turn itself answers at once.
  * - `initialize` answers the `/` menu: the commands `cold-run`, `compact` and
  *   `context`, and `writing-for-agents`, which `reload_skills` names a skill
- *   (as `system/init`'s `skills` does each turn).
+ *   (as `system/init`'s `skills` does each turn). `reload_plugins` answers
+ *   the same commands.
  * - The context is 20k tokens a turn of the 200k window (compacting at 160k),
  *   in the usage of each reply and in the answer to `get_context_usage`, none
  *   before the first turn.
@@ -711,6 +712,7 @@ function serve() {
     const reply = {
       get_task_output: { output: "", total_bytes: 0, truncated: false },
       initialize: { commands: MENU },
+      reload_plugins: { commands: MENU, agents: [], plugins: [], mcpServers: [] },
       reload_skills: { skills: SKILLS.map((name) => ({ name })) },
     };
     answer(rec.request_id, reply[subtype] || {});

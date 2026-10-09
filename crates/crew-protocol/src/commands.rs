@@ -61,12 +61,17 @@ pub struct CommandsReload {
 }
 
 /// Ends a session's CLI process so the next message starts it again. The
-/// conversation is kept: the next turn resumes it by its provider id.
+/// conversation is kept: the next turn resumes it by its provider id. Refused
+/// while a turn runs; and while background work runs, unless `force` says it
+/// may stop with the process.
 #[derive(Serialize, Deserialize, Clone, Debug, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
 pub struct SessionRestart {
     pub session_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub force: Option<bool>,
 }
 
 /// Pushed as `commands-changed` when a session's catalog changes. It carries

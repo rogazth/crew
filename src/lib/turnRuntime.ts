@@ -1,6 +1,7 @@
 import * as api from "./api";
 import { client } from "./client";
 import { type Answers, type ApprovalDecision, type AttachedFile, type HarnessEvent } from "./blocks";
+import { restartPrompt, type Prompt } from "./confirm";
 import { announceSession, type NotificationSource } from "./notifications";
 import { sessionSurface } from "./sessionView";
 import * as transcript from "./transcript";
@@ -153,13 +154,29 @@ export async function pass(
   }
 }
 
+/** A prompt the shell shows, and what confirming it does. */
+export type Ask = (confirm: Prompt & { onConfirm: () => Promise<void> }) => void;
+
 /**
- * `/reload` and `/restart`: what the daemon refuses (a build that does not
- * route them yet, a session with nothing to restart) is a note in the chat.
+ * `/reload` and `/restart`: what the daemon refuses (a turn still running, a
+ * build that does not route them yet) is a note in the chat, and what it did
+ * is a note the daemon writes. A restart while the session's background work
+ * runs asks first, naming it, since that stops with the CLI; without `ask`
+ * the daemon's refusal says so instead.
  */
-export async function crewAction(id: string, action: "reload" | "restart"): Promise<void> {
+export async function crewAction(id: string, action: "reload" | "restart", ask?: Ask): Promise<void> {
   try {
-    await (action === "reload" ? api.commandsReload(id) : api.sessionRestart(id));
+    if (action === "reload") {
+      await api.commandsReload(id);
+      return;
+    }
+    const running = ask ? (await api.backgroundList(id)).commands.filter((command) => command.state === "running") : [];
+    if (ask && running.length > 0) {
+      const names = running.map((command) => command.description?.trim() || command.command);
+      ask({ ...restartPrompt(names), onConfirm: () => api.sessionRestart(id, true) });
+      return;
+    }
+    await api.sessionRestart(id);
   } catch (error) {
     transcript.apply(id, { type: "session.error", message: error instanceof Error ? error.message : String(error) });
   }

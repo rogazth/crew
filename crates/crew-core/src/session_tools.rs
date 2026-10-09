@@ -1492,7 +1492,6 @@ impl ToolFamily for SessionTools {
 mod tests {
     use super::*;
     use crate::caller::CallerKind;
-    use std::os::unix::fs::PermissionsExt;
     use std::path::{Path, PathBuf};
     use std::sync::Mutex;
 
@@ -1500,36 +1499,30 @@ mod tests {
     /// session it was told to carry on, and logs every launch. `SLEEP n` in
     /// the prompt makes it take that long; `CRASH` makes it die mid-turn.
     fn fake_opencode(dir: &Path) -> (String, PathBuf) {
-        let log = dir.join("launches.jsonl");
-        let path = dir.join("fake-opencode");
-        std::fs::write(
-            &path,
-            format!(
-                r#"#!/usr/bin/env python3
+        let path = crate::fakes::install(
+            dir,
+            "fake-opencode",
+            r#"#!/usr/bin/env python3
 import json, os, sys, time, re, uuid
 prompt = sys.stdin.read()
 args = sys.argv[1:]
 sid = args[args.index("--session") + 1] if "--session" in args else "ses_" + uuid.uuid4().hex[:8]
-config = json.loads(os.environ.get("OPENCODE_CONFIG_CONTENT", "{{}}"))
+config = json.loads(os.environ.get("OPENCODE_CONFIG_CONTENT", "{}"))
 system = "".join(open(path).read() for path in config.get("instructions", []))
-with open({log:?}, "a") as f:
-    f.write(json.dumps({{"args": args, "prompt": prompt, "system": system}}) + "\n")
-print(json.dumps({{"type": "step_start", "sessionID": sid, "part": {{"id": "st", "type": "step-start"}}}}), flush=True)
+with open(os.path.join(os.path.dirname(os.path.abspath(sys.argv[0])), "launches.jsonl"), "a") as f:
+    f.write(json.dumps({"args": args, "prompt": prompt, "system": system}) + "\n")
+print(json.dumps({"type": "step_start", "sessionID": sid, "part": {"id": "st", "type": "step-start"}}), flush=True)
 m = re.search(r"SLEEP (\d+(?:\.\d+)?)", prompt)
 if m:
     time.sleep(float(m.group(1)))
 if "CRASH" in prompt:
     sys.exit(3)
 last = prompt.strip().splitlines()[-1]
-print(json.dumps({{"type": "text", "sessionID": sid, "part": {{"id": "t" + uuid.uuid4().hex[:6], "type": "text", "text": "report: " + last}}}}), flush=True)
-print(json.dumps({{"type": "step_finish", "sessionID": sid, "part": {{"id": "sf", "type": "step-finish", "reason": "stop", "tokens": {{"input": 1, "output": 1, "reasoning": 0, "cache": {{"read": 0, "write": 0}}}}, "cost": 0}}}}), flush=True)
+print(json.dumps({"type": "text", "sessionID": sid, "part": {"id": "t" + uuid.uuid4().hex[:6], "type": "text", "text": "report: " + last}}), flush=True)
+print(json.dumps({"type": "step_finish", "sessionID": sid, "part": {"id": "sf", "type": "step-finish", "reason": "stop", "tokens": {"input": 1, "output": 1, "reasoning": 0, "cache": {"read": 0, "write": 0}}, "cost": 0}}), flush=True)
 "#,
-                log = log.to_string_lossy()
-            ),
-        )
-        .expect("write fake");
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
-        (path.to_string_lossy().into_owned(), log)
+        );
+        (path.to_string_lossy().into_owned(), dir.join("launches.jsonl"))
     }
 
     /// A Claude Code on stream-json: it answers the initialize request, echoes
@@ -1541,7 +1534,12 @@ print(json.dumps({{"type": "step_finish", "sessionID": sid, "part": {{"id": "sf"
     /// request to `claude-control.log`, and a file `refuse-<subtype>` in its
     /// directory makes the next such request answer with an error. Its
     /// `initialize` answers two commands, `system/init` names one skill, and a
-    /// message with COMMANDS in it makes it send a changed list. Every block
+    /// message with COMMANDS in it makes it send a changed list. `reload_plugins`
+    /// and `reload_skills` answer the list with `fresh` among them. A message
+    /// of `/context` or `/cost` is a command the CLI runs itself: the first
+    /// prints through `system/local_command_output`, the second as a synthetic
+    /// assistant message (what 2.1.295 does), and a result follows with no model
+    /// turn. Every block
     /// of every user message it is handed is logged, one line per message, to
     /// `claude-input.log`, though it answers the last one alone.
     ///
@@ -1558,9 +1556,9 @@ print(json.dumps({{"type": "step_finish", "sessionID": sid, "part": {{"id": "sf"
     /// only if `initialize` declared `perTaskStopAffordance`, and
     /// `cancel_queued` drops what waits unread.
     fn fake_claude(dir: &Path) -> String {
-        let path = dir.join("fake-claude");
-        std::fs::write(
-            &path,
+        let path = crate::fakes::install(
+            dir,
+            "fake-claude",
             r#"#!/usr/bin/env python3
 import collections, json, os, signal, sys, threading, time, re, uuid
 # A moment to read what was written just before the end, as a CLI would.
@@ -1644,6 +1642,11 @@ def reader():
             if req.get("subtype") == "initialize":
                 spare[0] = bool(req.get("perTaskStopAffordance"))
                 answer = {"commands": [{"name": "prototype", "description": "Build a prototype", "argumentHint": ""}, {"name": "compact", "description": "Free up context", "argumentHint": "<hint>", "builtin": True}]}
+            if req.get("subtype") == "reload_plugins":
+                # A plugin brought a command: the whole list again, with it.
+                answer = {"commands": [{"name": "prototype", "description": "Build a prototype", "argumentHint": ""}, {"name": "compact", "description": "Free up context", "argumentHint": "<hint>"}, {"name": "fresh", "description": "Added by a plugin", "argumentHint": ""}], "agents": [], "plugins": [], "mcpServers": []}
+            if req.get("subtype") == "reload_skills":
+                answer = {"skills": [{"name": "prototype"}, {"name": "fresh"}]}
             if req.get("subtype") == "interrupt":
                 answer = {"still_queued": []}
                 if req.get("cancel_queued"):
@@ -1744,6 +1747,17 @@ while True:
         result(reply)
         continue
     heard = [first]
+    # A command the CLI runs itself costs no model turn. /context prints through
+    # the SDK's own line; /cost is what 2.1.295 does, a synthetic assistant
+    # message with no usage; either way the result follows.
+    if heard[0].strip().startswith("/context"):
+        out({"type": "system", "subtype": "local_command_output", "content": "\u001b[1mContext Usage\u001b[22m\n12k / 200k tokens", "session_id": sid})
+        result("")
+        continue
+    if heard[0].strip().startswith("/cost"):
+        out({"type": "assistant", "message": {"id": "msyn", "model": "<synthetic>", "role": "assistant", "usage": {"input_tokens": 0, "output_tokens": 0}, "content": [{"type": "text", "text": "Current session: 29% used"}]}, "session_id": sid})
+        result("Current session: 29% used")
+        continue
     # COMMANDS finds a skill in a folder mid-session: the whole list again.
     if "COMMANDS" in heard[0]:
         out({"type": "system", "subtype": "commands_changed", "session_id": sid, "commands": [{"name": "prototype", "description": "Build a prototype", "argumentHint": ""}, {"name": "deploy", "description": "Ship it", "argumentHint": "<env>"}]})
@@ -1792,9 +1806,7 @@ while True:
         out({"type": "assistant", "message": {"id": mid, "role": "assistant", "usage": dict(usage, input_tokens=50000), "content": [{"type": "text", "text": reply}]}, "session_id": sid})
     result(reply, "FAIL" in heard[0])
 "#,
-        )
-        .expect("write fake");
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        );
         path.to_string_lossy().into_owned()
     }
 
@@ -2008,20 +2020,20 @@ while True:
     fn a_wait_with_nothing_new_times_out_with_a_cursor_to_carry_on_from() {
         let w = world();
         let parent = w.session("terminal", "shell", "full");
-        let id = w.start(&parent, "SLEEP 3");
+        let id = w.start(&parent, "SLEEP 2");
         let out = w.tools.wait(&parent, &json!({ "sessions": [id], "timeout_s": 1 })).expect("wait");
         assert_eq!(out["result"], "timed-out", "{out}");
         let cursors = out["cursors"].clone();
         let done = w.wait(&parent, &id, json!({ "cursors": cursors }));
         assert_eq!(done["result"], "event", "{done}");
-        assert_eq!(done["sessions"][0]["report"], "report: SLEEP 3");
+        assert_eq!(done["sessions"][0]["report"], "report: SLEEP 2");
     }
 
     #[test]
     fn the_first_of_several_to_finish_answers_the_wait() {
         let w = world();
         let parent = w.session("terminal", "shell", "full");
-        let slow = w.start(&parent, "SLEEP 4");
+        let slow = w.start(&parent, "SLEEP 2");
         let quick = w.start(&parent, "quick");
         let out = w.tools.wait(&parent, &json!({ "sessions": [slow, quick], "timeout_s": 20 })).expect("wait");
         let ended: Vec<&str> = out["sessions"].as_array().unwrap().iter().map(|s| s["id"].as_str().unwrap()).collect();
@@ -2134,15 +2146,14 @@ while True:
     }
 
     /// Until the child's turn has read its first message: its conversation is
-    /// bound and the CLI is on it.
+    /// bound and the fake CLI has logged the message, which it does as it
+    /// reads it. A moment more lets it take the turn up.
     fn until_claude_turn(w: &World, id: &str) {
-        for _ in 0..400 {
-            if w.row(id).provider_session_id.is_some() {
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(25));
-        }
-        std::thread::sleep(Duration::from_millis(300));
+        until("the fake CLI read the message", || {
+            w.row(id).provider_session_id.is_some()
+                && std::fs::read_to_string(w.dir.join("claude-input.log")).is_ok_and(|log| !log.is_empty())
+        });
+        std::thread::sleep(Duration::from_millis(50));
     }
 
     /// One Claude process for a child: its second turn is a user message on
@@ -2557,9 +2568,9 @@ while True:
     /// A Claude that answers `initialize` and `reload_skills`, and logs how it
     /// was started: what a probe launches.
     fn fake_menu_claude(dir: &Path) -> String {
-        let path = dir.join("fake-menu-claude");
-        std::fs::write(
-            &path,
+        let path = crate::fakes::install(
+            dir,
+            "fake-menu-claude",
             r#"#!/usr/bin/env python3
 import json, os, sys, time
 with open(os.path.join(os.path.dirname(os.path.abspath(sys.argv[0])), "menu-launch.log"), "a") as f:
@@ -2572,9 +2583,7 @@ answer(first, {"commands": [{"name": "prototype", "description": "Build a protot
 answer(second, {"skills": [{"name": "prototype"}]})
 time.sleep(600)
 "#,
-        )
-        .expect("write fake");
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        );
         path.to_string_lossy().into_owned()
     }
 
@@ -2625,6 +2634,195 @@ time.sleep(600)
         let menu = w.turns.commands_list(&id).expect("menu");
         assert!(menu.entries.iter().all(|entry| entry.kind == "crew"), "{menu:?}");
         assert!(!w.turns.commands().holds("claude", &w.dir.to_string_lossy()));
+    }
+
+    /// A command the CLI runs itself prints through `local_command_output`:
+    /// the output is a note in the transcript with its colours dropped, and the
+    /// result that follows ends the turn.
+    #[test]
+    fn a_command_the_cli_runs_itself_prints_as_a_note_and_ends_its_turn() {
+        let w = world();
+        let mine = users_claude(&w);
+        w.type_with(&mine, "/context", Some("context"), &[], None, None);
+        assert_eq!(w.settle(&mine.id).status, "done");
+        let note = w.blocks(&mine.id).into_iter().find(|block| block.text == "Context Usage\n12k / 200k tokens").expect("no note");
+        assert_eq!(note.role, BlockRole::System);
+        w.turns.release(&mine.id);
+    }
+
+    /// What 2.1.295 really sends for a command it runs itself (read from the
+    /// CLI): a synthetic assistant message with no usage and then a result
+    /// with no turns. It is the reply, as any other, with nothing to add.
+    #[test]
+    fn a_command_the_cli_answers_as_a_synthetic_message_shows_as_the_reply() {
+        let w = world();
+        let mine = users_claude(&w);
+        w.type_with(&mine, "/cost", Some("cost"), &[], None, None);
+        assert_eq!(w.settle(&mine.id).status, "done");
+        let reply = w.blocks(&mine.id).into_iter().find(|block| block.text == "Current session: 29% used").expect("no reply");
+        assert_eq!(reply.role, BlockRole::Assistant);
+        assert_eq!(w.blocks(&mine.id).iter().filter(|block| block.text == "Current session: 29% used").count(), 1);
+        w.turns.release(&mine.id);
+    }
+
+    /// A live Claude is asked for its plugins and then its skills, and what it
+    /// says replaces the folder's menu: the windows hear it, nothing is
+    /// launched, and the transcript says what was read.
+    #[test]
+    fn a_reload_asks_a_live_claude_for_its_plugins_then_its_skills_and_the_menu_follows() {
+        let w = world();
+        let heard = hear_commands(&w);
+        let mine = users_claude(&w);
+        w.say(&mine, "hello");
+        let skill = |name: &str| (name.to_string(), "skill".to_string());
+        let command = |name: &str| (name.to_string(), "command".to_string());
+        assert_eq!(provider_entries(&w.turns.commands_list(&mine.id).expect("menu")), [skill("prototype"), command("compact")]);
+
+        let menu = w.turns.commands_reload(&mine.id).expect("reload");
+        assert_eq!(provider_entries(&menu), [skill("prototype"), command("compact"), skill("fresh")]);
+        assert_eq!(provider_entries(&w.turns.commands_list(&mine.id).expect("menu")), provider_entries(&menu));
+        assert_eq!(w.claude_control().iter().map(|line| line.trim_end()).collect::<Vec<_>>(), ["reload_plugins", "reload_skills"]);
+        assert_eq!(provider_entries(&heard.lock().unwrap().last().expect("a push").catalog), provider_entries(&menu));
+        assert!(
+            says(&w, &mine.id, "Reloaded plugins and skills: 1 command, 2 skills."),
+            "{:?}",
+            w.blocks(&mine.id).iter().map(|block| block.text.clone()).collect::<Vec<_>>()
+        );
+        assert_eq!(launched(&w.dir.join("claude-launch.log")).len(), 1, "a reload started a CLI");
+        w.turns.release(&mine.id);
+    }
+
+    /// A CLI that refuses `reload_skills` still reloads its plugins: the skills
+    /// it named before stand, and what is new is a command until a read says
+    /// otherwise.
+    #[test]
+    fn a_claude_that_refuses_to_reload_its_skills_keeps_the_skills_it_had() {
+        let w = world();
+        let mine = users_claude(&w);
+        w.say(&mine, "hello");
+        std::fs::write(w.dir.join("refuse-reload_skills"), "").expect("refuse");
+        let menu = w.turns.commands_reload(&mine.id).expect("reload");
+        let kinds: Vec<_> = provider_entries(&menu).into_iter().map(|(name, kind)| format!("{name} {kind}")).collect();
+        assert_eq!(kinds, ["prototype skill", "compact command", "fresh command"]);
+        w.turns.release(&mine.id);
+    }
+
+    /// With no process up, a reload reads the folder with a CLI of its own
+    /// even though the last read is fresh: that is the point of asking.
+    #[test]
+    fn a_reload_with_no_claude_process_reads_the_folder_again_past_a_fresh_menu() {
+        let w = world();
+        w.turns.override_binary("claude", fake_menu_claude(&w.dir));
+        let id = session::create(w.turns.store(), w.workspace.clone(), "terminal".into(), "one".into(), "claude".into(), String::new(), String::new(), "ask".into(), None)
+            .expect("session")
+            .id;
+        w.turns.commands_list(&id).expect("menu");
+        w.turns.commands_list(&id).expect("menu");
+        assert_eq!(launched(&w.dir.join("menu-launch.log")).len(), 1, "a fresh menu was read again");
+
+        let menu = w.turns.commands_reload(&id).expect("reload");
+        assert_eq!(launched(&w.dir.join("menu-launch.log")).len(), 2);
+        assert_eq!(provider_entries(&menu).len(), 2);
+        let said = w.blocks(&id).into_iter().map(|block| block.text).collect::<Vec<_>>();
+        assert!(said.contains(&"Read the commands and skills again: 1 command, 1 skill.".to_string()), "{said:?}");
+    }
+
+    /// A bot reads its folder afresh with each turn, so a reload has nothing
+    /// to read and starts nothing; a CLI that lists nothing says it does so
+    /// when the session restarts.
+    #[test]
+    fn a_reload_of_a_bot_or_a_cli_with_no_listing_starts_nothing_and_says_when_it_reads() {
+        let w = world();
+        w.turns.override_binary("claude", w.dir.join("absent").to_string_lossy().into_owned());
+        let bot = session::create(w.turns.store(), w.workspace.clone(), "bot".into(), "helper".into(), "claude".into(), String::new(), String::new(), "ask".into(), None)
+            .expect("bot")
+            .id;
+        let menu = w.turns.commands_reload(&bot).expect("reload");
+        assert!(menu.entries.iter().all(|entry| entry.kind == "crew"), "{menu:?}");
+        assert!(w.blocks(&bot).iter().any(|block| block.text == "A bot reads its commands and skills afresh with each turn."));
+
+        for (provider, head) in [("cursor", "Cursor reads"), ("opencode", "opencode reads")] {
+            let id = session::create(w.turns.store(), w.workspace.clone(), "terminal".into(), "x".into(), provider.into(), String::new(), String::new(), "ask".into(), None)
+                .expect("session")
+                .id;
+            w.turns.commands_reload(&id).expect("reload");
+            let said = w.blocks(&id).into_iter().map(|block| block.text).collect::<Vec<_>>();
+            assert_eq!(said, [format!("{head} its commands and skills again when the session restarts. Use /restart.")]);
+        }
+        assert!(w.turns.commands_reload("nobody").is_err());
+    }
+
+    /// A restart lets go of the idle process and keeps the conversation: the
+    /// next message launches another on it with `--resume`.
+    #[test]
+    fn a_restart_lets_go_of_the_idle_process_and_the_next_message_resumes_the_conversation() {
+        let w = world();
+        let mine = users_claude(&w);
+        w.say(&mine, "remember 4817");
+        // Claude has written the conversation by the time it is resumed.
+        w.claude_wrote(&mine.id);
+        assert_eq!(w.turns.test_agents().running(), vec![mine.id.clone()]);
+
+        w.turns.session_restart(&mine.id, false).expect("restart");
+        assert!(w.turns.test_agents().running().is_empty(), "the process stayed");
+        assert!(w.turns.idle_since(&mine.id).is_none());
+        assert!(says(&w, &mine.id, "Restarted. The CLI starts again with the next message."));
+
+        w.say(&mine, "what number?");
+        assert!(says(&w, &mine.id, "report: what number?"));
+        let launches = launched(&w.dir.join("claude-launch.log"));
+        assert_eq!(launches.len(), 2, "{launches:?}");
+        assert_eq!(after_flag(&launches[0], "--session-id"), Some(mine.id.clone()));
+        assert_eq!(after_flag(&launches[1], "--resume"), Some(mine.id.clone()));
+        w.turns.release(&mine.id);
+    }
+
+    /// A session with no process has nothing to let go of, and says so.
+    #[test]
+    fn a_restart_of_a_session_with_no_process_says_there_was_nothing_to_restart() {
+        let w = world();
+        let mine = users_claude(&w);
+        w.turns.session_restart(&mine.id, false).expect("restart");
+        assert!(says(&w, &mine.id, "Nothing was running; the CLI starts with the next message."));
+        assert!(w.turns.session_restart("nobody", false).is_err());
+    }
+
+    /// A turn is stopped first: restarting under it would take its process.
+    #[test]
+    fn a_restart_is_refused_while_a_turn_runs() {
+        let w = world();
+        let mine = users_claude(&w);
+        w.type_to(&mine, "SLEEP 30", None, None);
+        until("the CLI was launched", || w.turns.test_agents().running() == vec![mine.id.clone()]);
+        assert_eq!(w.turns.session_restart(&mine.id, true), Err("Stop the turn first.".to_string()));
+        assert_eq!(w.turns.test_agents().running(), vec![mine.id.clone()], "the refusal let go of the process");
+        w.turns.stop(&mine.id).expect("stop");
+        w.settle(&mine.id);
+        w.turns.release(&mine.id);
+    }
+
+    /// Work the board shows running goes with the process, so a restart names
+    /// it and waits for `force`; forced, the entry is stopped with the CLI and
+    /// the conversation goes on in a process of its own.
+    #[test]
+    fn a_restart_over_background_work_names_it_and_needs_force() {
+        use crew_protocol::BackgroundState;
+        let w = world();
+        let mine = users_claude(&w);
+        w.type_to(&mine, "BACKGROUND 60", None, None);
+        assert_eq!(w.settle(&mine.id).status, "done");
+        assert_eq!(w.turns.background_list(&mine.id).commands[0].state, BackgroundState::Running);
+
+        let refused = w.turns.session_restart(&mine.id, false).expect_err("restarted over running work");
+        assert_eq!(refused, "Still running in the background: Wait in the background. Restarting stops it.");
+        assert_eq!(w.turns.test_agents().running(), vec![mine.id.clone()]);
+
+        w.turns.session_restart(&mine.id, true).expect("forced restart");
+        assert!(w.turns.test_agents().running().is_empty());
+        assert_eq!(w.turns.background_list(&mine.id).commands[0].state, BackgroundState::Stopped);
+        w.say(&mine, "again");
+        assert_eq!(launched(&w.dir.join("claude-launch.log")).len(), 2);
+        w.turns.release(&mine.id);
     }
 
     /// Background commands still open when the grace runs out: the turn ends
@@ -3083,10 +3281,10 @@ time.sleep(600)
         w.turns.stop(&id).expect("stop");
         w.settle(&id);
         assert_eq!(wait_ended(&w, &parent, &id)["sessions"][0]["outcome"], "stopped");
-        w.call(&parent, "send_message", json!({ "to": id, "text": "SLEEP 4" })).expect("send");
+        w.call(&parent, "send_message", json!({ "to": id, "text": "SLEEP 3" })).expect("send");
         // Past the stopped turn's grace, which is over while this one still runs.
         let out = w.wait(&parent, &id, json!({}));
-        assert_eq!(out["sessions"][0]["report"], "report: SLEEP 4", "{out}");
+        assert_eq!(out["sessions"][0]["report"], "report: SLEEP 3", "{out}");
     }
 
     /// What Codex says late of the turn before names that turn, and is not the
@@ -3229,7 +3427,7 @@ time.sleep(600)
         let at = Instant::now();
         let stopped = w.call(&parent, "stop_session", json!({ "session": id })).expect("stop");
         assert_eq!(stopped["status"], "exited", "{stopped}");
-        assert!(at.elapsed() < Duration::from_secs(2), "the interrupt was not taken: {:?}", at.elapsed());
+        assert!(at.elapsed() < Duration::from_millis(1500), "the interrupt was not taken: {:?}", at.elapsed());
         assert_eq!(sent(&log, "turn/interrupt").len(), 1);
 
         let (stubborn, _) = w.codex(&parent, "STUBBORN SLEEP 30", None);
@@ -3238,7 +3436,7 @@ time.sleep(600)
         let stopped = w.call(&parent, "stop_session", json!({ "session": stubborn })).expect("stop");
         assert_eq!(stopped["status"], "exited", "{stopped}");
         let took = at.elapsed();
-        assert!(took >= Duration::from_secs(2) && took < Duration::from_secs(5), "{took:?}");
+        assert!(took >= Duration::from_millis(1500) && took < Duration::from_secs(4), "{took:?}");
         std::thread::sleep(Duration::from_millis(300));
         assert!(w.turns.test_agents().running().is_empty(), "the hung app server was left running");
     }
@@ -3403,7 +3601,7 @@ time.sleep(600)
         let at = Instant::now();
         let stopped = w.call(&parent, "stop_session", json!({ "session": id })).expect("stop");
         assert_eq!(stopped["status"], "exited", "{stopped}");
-        assert!(at.elapsed() < Duration::from_secs(2), "the cancel was not taken: {:?}", at.elapsed());
+        assert!(at.elapsed() < Duration::from_millis(1500), "the cancel was not taken: {:?}", at.elapsed());
         assert_eq!(sent(&log, "session/cancel").len(), 1);
         let (blocks, _) = w.turns.transcripts().since(&id, 0);
         let row = blocks.iter().find_map(|block| block.tool.as_ref()).expect("the command row");
@@ -3415,7 +3613,7 @@ time.sleep(600)
         let stopped = w.call(&parent, "stop_session", json!({ "session": stubborn })).expect("stop");
         assert_eq!(stopped["status"], "exited", "{stopped}");
         let took = at.elapsed();
-        assert!(took >= Duration::from_secs(2) && took < Duration::from_secs(6), "{took:?}");
+        assert!(took >= Duration::from_millis(1500) && took < Duration::from_secs(5), "{took:?}");
         std::thread::sleep(Duration::from_millis(300));
         assert!(w.turns.test_agents().running().is_empty(), "the hung cursor-agent was left running");
     }
@@ -3478,10 +3676,10 @@ time.sleep(600)
         let w = world();
         w.turns.override_binary("claude", fake_claude(&w.dir));
         let parent = w.session("terminal", "shell", "full");
-        let started = w.call(&parent, "start_session", json!({ "provider": "claude", "prompt": "BACKGROUND 1.5" })).expect("start");
+        let started = w.call(&parent, "start_session", json!({ "provider": "claude", "prompt": "BACKGROUND 0.5" })).expect("start");
         let id = started["id"].as_str().unwrap().to_string();
         let out = w.wait(&parent, &id, json!({}));
-        assert_eq!(out["sessions"][0]["report"], "report: BACKGROUND 1.5 + the background command finished", "{out}");
+        assert_eq!(out["sessions"][0]["report"], "report: BACKGROUND 0.5 + the background command finished", "{out}");
         let read = w.call(&parent, "read_session", json!({ "session": id })).expect("read");
         assert_eq!(read["text"].as_str().unwrap().matches("Turn ended").count(), 1, "{read}");
     }
@@ -3627,11 +3825,11 @@ time.sleep(600)
         let w = world();
         w.turns.override_binary("claude", fake_claude(&w.dir));
         let parent = w.session("terminal", "shell", "full");
-        let started = w.call(&parent, "start_session", json!({ "provider": "claude", "prompt": "BACKGROUND 1.5" })).expect("start");
+        let started = w.call(&parent, "start_session", json!({ "provider": "claude", "prompt": "BACKGROUND 0.5" })).expect("start");
         let id = started["id"].as_str().unwrap().to_string();
         let log = w.dir.join("claude-launch.log");
         let out = w.wait(&parent, &id, json!({}));
-        assert_eq!(out["sessions"][0]["report"], "report: BACKGROUND 1.5 + the background command finished", "{out}");
+        assert_eq!(out["sessions"][0]["report"], "report: BACKGROUND 0.5 + the background command finished", "{out}");
         w.settle(&id);
         let one = until_background(&w, &id, |list| !list.waiting && list.commands.iter().all(|row| row.state != BackgroundState::Running));
         assert_eq!((one.commands.len(), one.commands[0].state), (1, BackgroundState::Completed));
@@ -5563,7 +5761,7 @@ time.sleep(600)
         use crew_protocol::BackgroundState;
         let w = world();
         let mine = users_claude(&w);
-        assert_eq!(w.type_to(&mine, "BACKGROUND 1.5", None, None).delivery.as_deref(), Some("started"));
+        assert_eq!(w.type_to(&mine, "BACKGROUND 0.5", None, None).delivery.as_deref(), Some("started"));
         assert_eq!(w.settle(&mine.id).status, "done");
         assert!(says(&w, &mine.id, "started it in the background"));
         let list = w.turns.background_list(&mine.id);
@@ -5573,11 +5771,11 @@ time.sleep(600)
         std::thread::sleep(Duration::from_millis(5));
         assert!(w.turns.release_idle(Duration::from_millis(1), Duration::from_secs(3600)).is_empty(), "a pinned process was let go");
 
-        let reply = "report: BACKGROUND 1.5 + the background command finished";
+        let reply = "report: BACKGROUND 0.5 + the background command finished";
         until("the CLI's own turn ended", || says(&w, &mine.id, reply) && !w.turns.is_running(&mine.id));
         assert_eq!(w.settle(&mine.id).status, "done");
         assert_eq!(w.turns.background_list(&mine.id).commands[0].state, BackgroundState::Completed);
-        assert_eq!(users_lines(&w, &mine.id), ["BACKGROUND 1.5"], "the CLI's turn was given a message");
+        assert_eq!(users_lines(&w, &mine.id), ["BACKGROUND 0.5"], "the CLI's turn was given a message");
         assert!(says(&w, &mine.id, "Background command completed (exit code 0)"), "nothing says what woke it");
         assert_eq!(launched(&w.dir.join("claude-launch.log")).len(), 1);
         assert_eq!(w.turns.test_agents().running(), vec![mine.id.clone()]);
