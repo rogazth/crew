@@ -1,37 +1,42 @@
-//! The Cursor driver: one `cursor-agent acp` per turn of a bot, a child or the
-//! user's own session, spoken to in the Agent Client Protocol over its stdio.
-//! The process is spawned when the turn starts and killed when it ends, as
-//! Claude's and Codex's are: a child or the user's session carries on its
-//! conversation with `session/load`, a bot starts a clean one with the tail
-//! Crew hands it. While the turn runs, Crew can stop it and answer the
-//! permissions and questions it sends, through the same events and cards as
-//! the other providers. Cursor takes nothing into a
-//! running turn (no `session/steer`; a second prompt cancels the first), so a
-//! message to it always waits for the turn to end.
+//! The Cursor driver: one `cursor-agent acp` for a child's or the user's own
+//! session, spoken to in the Agent Client Protocol over its stdio. The process
+//! and its ACP session stay up between turns, as Claude's and Codex's do (see
+//! `keeps_process`): a stop (`session/cancel`) leaves them, and the idle
+//! release lets them go. A bot starts a clean process and session every turn,
+//! with the tail Crew hands it. Cursor takes its model and its autonomy on
+//! argv, so a change of either (or of the folder) launches another process,
+//! which carries on the same ACP session with `session/load`. While the turn
+//! runs, Crew can stop it and answer the permissions and questions it sends,
+//! through the same events and cards as the other providers. Cursor takes
+//! nothing into a running turn (no `session/steer`; a second prompt cancels
+//! the first), so a message to it always waits for the turn to end.
 //!
 //! The protocol itself (params, updates, request shapes) is in
 //! `providers/cursor.rs`.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::Ordering;
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::thread;
 use std::time::Duration;
 
-use crew_protocol::{ApprovalDecision, ApprovalResolution, CommandEntry, HarnessEvent, ToolDetail, ToolStatus};
+use crew_protocol::{
+    ApprovalDecision, ApprovalResolution, CommandEntry, ContextReading, HarnessEvent, ToolDetail, ToolStatus,
+};
 use serde_json::{json, Map, Value};
 use tokio::sync::oneshot;
 
 use super::{
-    carries_conversation, conversation_to_resume, offers_fast, path_list, Harness, Live, QuestionReply, TurnHost,
-    TurnOutcome, INIT_TIMEOUT,
+    carries_conversation, conversation_to_resume, offers_fast, path_list, Harness, Launch, Live, QuestionReply,
+    TurnHost, TurnOutcome, INIT_TIMEOUT, NEXT_EPOCH,
 };
 use crate::command_sources::cursor_commands;
 use crate::providers::cursor::{
     authenticate_params, build_cursor_prompt, build_cursor_spawn_args, cancel_params, classify_request,
     initialize_params, mcp_servers, new_session_id, permission_answer, permission_response, plan_accepted,
     plan_detail, prompt_params, questions_cancelled, questions_response, rpc_error_message, session_request,
-    tool_detail, tool_end, tool_label, tool_name, turn_end, unsupported_error, AcpQuestion, AcpTool, CursorAsk,
-    CursorSpawn, TurnEnd,
+    read_store_context, tool_detail, tool_end, tool_label, tool_name, turn_end, unsupported_error, usage_update,
+    AcpQuestion, AcpTool, CursorAsk, CursorSpawn, TurnEnd,
 };
 use crate::providers::{as_record, string_field, Autonomy};
 
@@ -43,6 +48,9 @@ const OPEN_TIMEOUT: Duration = Duration::from_secs(90);
 /// cancelled before its process is killed under it.
 const INTERRUPT_GRACE: Duration = Duration::from_secs(if cfg!(test) { 2 } else { 3 });
 
+/// How often the context meter is read from Cursor's store while a turn runs.
+const CONTEXT_EVERY: Duration = Duration::from_secs(if cfg!(test) { 1 } else { 5 });
+
 /// What a child whose `-p` chat could not come along is told, once, on the
 /// turn that starts its new conversation (migration 27).
 pub(crate) const ACP_NOTE: &str = "Cursor now runs over ACP: this session starts a new conversation.";
@@ -53,8 +61,17 @@ struct Pending<T> {
 }
 
 pub(super) struct CursorLive {
-    /// The ACP session the turn runs in.
+    /// Names the turn that is running, so the timer armed for it can tell
+    /// when it is over.
+    turn_epoch: u64,
+    /// What the process was launched with, to tell on the next turn whether
+    /// the session still asks for it. `None` where a test installed it.
+    applied: Option<Launch>,
+    /// The ACP session the process holds. It outlives the turn.
     acp_session: Option<String>,
+    /// Cursor has said how full the context is (`usage_update`): its word is
+    /// kept over what the store holds.
+    usage_seen: bool,
     /// The folder the session was opened in, which its commands are for.
     cwd: String,
     autonomy: Autonomy,
@@ -90,7 +107,10 @@ pub(super) struct CursorLive {
 impl CursorLive {
     pub(super) fn new(turn_tx: Option<oneshot::Sender<TurnOutcome>>, autonomy: Autonomy) -> Self {
         Self {
+            turn_epoch: NEXT_EPOCH.fetch_add(1, Ordering::Relaxed),
+            applied: None,
             acp_session: None,
+            usage_seen: false,
             cwd: String::new(),
             autonomy,
             next_id: 1,
@@ -111,6 +131,32 @@ impl CursorLive {
             stderr: Vec::new(),
             saw_output: false,
         }
+    }
+
+    /// A turn starts on the process the last one left: what that turn knew of
+    /// itself goes, what belongs to the process (its session, its folder, its
+    /// request counters, the stderr tail) stays.
+    fn begin_turn(&mut self, turn_tx: oneshot::Sender<TurnOutcome>) {
+        self.turn_epoch = NEXT_EPOCH.fetch_add(1, Ordering::Relaxed);
+        self.prompt_id = None;
+        self.load_id = None;
+        self.tools.clear();
+        self.started.clear();
+        self.open.clear();
+        self.plan_row = None;
+        self.active = true;
+        self.cancelled = false;
+        self.settled = false;
+        self.turn_tx = Some(turn_tx);
+        self.saw_output = false;
+    }
+
+    /// Whether the process runs as a launch now would run it: Cursor takes
+    /// the model and the autonomy on argv, and the folder is the process's.
+    fn runs_as(&self, now: &Launch) -> bool {
+        self.applied
+            .as_ref()
+            .is_some_and(|had| had.model == now.model && had.autonomy == now.autonomy && had.cwd == now.cwd)
     }
 
     /// Everything waiting on the process, let go: it is gone, or about to be.
@@ -146,6 +192,14 @@ impl CursorLive {
     }
 }
 
+/// The process a turn runs on.
+enum Process {
+    /// The one the last turn left, with the ACP session it holds.
+    Kept(String),
+    /// One just started, and the MCP servers its session is opened with.
+    Launched(Value),
+}
+
 /// The two texts a child's turn may open with: the job alone, to carry on a
 /// conversation, or with the persona, to start one.
 struct Texts {
@@ -176,24 +230,16 @@ impl TurnHost {
         history: Option<String>,
     ) -> TurnOutcome {
         let session_id = session.id.clone();
-        self.agents.kill(&session_id);
         let (tx, turn_rx) = oneshot::channel();
         let autonomy = self.autonomy(&session);
-        self.lock()
-            .insert(session_id.clone(), Live::Cursor(Box::new(CursorLive::new(Some(tx), autonomy.clone()))));
+        let kept = self.cursor_arm(&session, &params.cwd, tx);
         self.watch_for_silence(&session_id);
         // A stop that came before the CLI was there to take it.
         if self.stop_requested(&session_id) {
-            self.detach(&session_id);
+            self.signal(&session_id, TurnOutcome::Stopped);
+            self.park(&session, kept.is_some());
             return TurnOutcome::Stopped;
         }
-        let path = match self.resolve_bin("cursor-agent") {
-            Ok(path) => path,
-            Err(error) => {
-                self.detach(&session_id);
-                return TurnOutcome::Failed(error);
-            }
-        };
         let mcp = self.mcp();
         let carries = carries_conversation(&session);
         let resume = conversation_to_resume(&session);
@@ -209,40 +255,106 @@ impl TurnHost {
             let text = build_cursor_prompt(persona.as_deref().unwrap_or_default(), history.as_deref(), &params.text, &path_list(&params, &HashSet::new()));
             Texts { fresh: text.clone(), resumed: text }
         };
+        let process = match kept {
+            // The process the last turn left has the session open.
+            Some(acp_session) => Ok(Process::Kept(acp_session)),
+            None => self.cursor_launch(&session, &params.cwd, autonomy, mcp.as_ref()).map(Process::Launched),
+        };
+        let migrated = carries && resume.is_none() && self.acp_note_pending(&session_id);
+        let outcome = match process
+            .and_then(|process| self.cursor_open(&session_id, &params.cwd, resume.as_deref(), process, &texts, migrated))
+        {
+            Ok(()) => {
+                self.cursor_context_timer(&session_id);
+                self.block_on(turn_rx).unwrap_or(TurnOutcome::Failed("Turn channel closed".into()))
+            }
+            Err(_) if self.stop_requested(&session_id) => TurnOutcome::Stopped,
+            Err(error) => TurnOutcome::Failed(error),
+        };
+        // What the turn spent, now that Cursor has written it down.
+        self.cursor_context(&session_id);
+        // The process is clean when the prompt was answered, which a
+        // `cancelled` is too: Cursor has closed the turn it was asked to stop.
+        // One that never answered (the grace ran out, or it was not asked) is
+        // left in a state nobody vouches for.
+        let closed = match self.lock().get_mut(&session_id) {
+            Some(Live::Cursor(live)) => {
+                live.release();
+                live.prompt_id.is_none() && live.acp_session.is_some()
+            }
+            _ => false,
+        };
+        let clean = closed && !matches!(outcome, TurnOutcome::Failed(_));
+        self.park(&session, clean);
+        outcome
+    }
+
+    /// Gives the turn its state on the process the last one left, when there
+    /// is one alive, idle and launched as the session asks now, and otherwise
+    /// on an entry of its own for the process [`TurnHost::cursor_launch`]
+    /// starts. Returns the ACP session the kept process holds.
+    fn cursor_arm(&self, session: &crate::session::Session, cwd: &str, tx: oneshot::Sender<TurnOutcome>) -> Option<String> {
+        let session_id = session.id.as_str();
+        let applied = self.applied(session, cwd);
+        // Asked before the lock: a process that died while idle without its
+        // exit being heard (it was killed under us) is not one to write to.
+        let alive = self.agents.running().iter().any(|id| id == session_id);
+        let tx = {
+            let mut map = self.lock();
+            match map.get_mut(session_id) {
+                // The session Crew carries on is the one the process holds:
+                // a row whose conversation was cleared or changed since asks
+                // for another.
+                Some(Live::Cursor(live))
+                    if alive
+                        && live.settled
+                        && live.prompt_id.is_none()
+                        && live.acp_session.is_some()
+                        && live.acp_session == conversation_to_resume(session)
+                        && live.runs_as(&applied) =>
+                {
+                    live.begin_turn(tx);
+                    let acp_session = live.acp_session.clone();
+                    drop(map);
+                    self.idle.lock().unwrap_or_else(|e| e.into_inner()).remove(session_id);
+                    return acp_session;
+                }
+                _ => tx,
+            }
+        };
+        // Another launch on the same ACP session: its `session/load` follows.
+        self.agents.kill(session_id);
+        let mut live = CursorLive::new(Some(tx), self.autonomy(session));
+        live.applied = Some(applied);
+        self.lock().insert(session_id.to_string(), Live::Cursor(Box::new(live)));
+        self.idle.lock().unwrap_or_else(|e| e.into_inner()).remove(session_id);
+        None
+    }
+
+    /// Starts `cursor-agent acp` for the turn. Returns the MCP servers the
+    /// session is opened with; the handshake is [`TurnHost::cursor_open`]'s.
+    fn cursor_launch(
+        &self,
+        session: &crate::session::Session,
+        cwd: &str,
+        autonomy: Autonomy,
+        mcp: Option<&(String, Vec<String>)>,
+    ) -> Result<Value, String> {
+        let session_id = session.id.as_str();
+        let path = self.resolve_bin("cursor-agent")?;
         // Minted once and used twice: the agent's own shell gets it, and so
         // does the MCP server cursor starts for it. A second mint would
-        // retire the first.
-        let env = self.agent_env(&session_id);
-        let mcp_env: Vec<(String, String)> = {
-            let mut pairs: Vec<(String, String)> = env.clone().into_iter().collect();
-            pairs.sort();
-            pairs
-        };
-        let servers = mcp_servers(mcp.as_ref(), &mcp_env);
+        // retire the first, and this process lives across turns, so nothing
+        // mints again until it is replaced.
+        let env = self.agent_env(session_id);
+        let mut mcp_env: Vec<(String, String)> = env.clone().into_iter().collect();
+        mcp_env.sort();
         let args = build_cursor_spawn_args(&CursorSpawn {
             model: Some(session.model.clone()).filter(|m| !m.is_empty()),
             autonomy,
         });
-        if let Err(error) = self.agents.spawn(session_id.clone(), path, args, params.cwd.clone(), Some(env)) {
-            self.detach(&session_id);
-            return TurnOutcome::Failed(error);
-        }
-        let migrated = carries && resume.is_none() && self.acp_note_pending(&session_id);
-        let outcome = match self.cursor_open(&session_id, &params.cwd, resume.as_deref(), &servers, &texts, migrated) {
-            Ok(()) => self
-                .block_on(turn_rx)
-                .unwrap_or(TurnOutcome::Failed("Turn channel closed".into())),
-            Err(_) if self.stop_requested(&session_id) => TurnOutcome::Stopped,
-            Err(error) => TurnOutcome::Failed(error),
-        };
-        if let Some(Live::Cursor(live)) = self.lock().get_mut(&session_id) {
-            live.release();
-        }
-        // The conversation is in cursor's own store; a child loads it next
-        // turn.
-        self.agents.kill(&session_id);
-        self.detach(&session_id);
-        outcome
+        self.agents.spawn(session_id.to_string(), path, args, cwd.to_string(), Some(env))?;
+        Ok(mcp_servers(mcp, &mcp_env))
     }
 
     fn acp_note_pending(&self, session_id: &str) -> bool {
@@ -253,16 +365,22 @@ impl TurnHost {
     }
 
     /// The handshake, the session, and the prompt. Returns once the prompt is
-    /// sent; its answer is the end of the turn.
+    /// sent; its answer is the end of the turn. A kept process has done the
+    /// first two: its session carries on, and takes the prompt as it is.
     fn cursor_open(
         &self,
         session_id: &str,
         cwd: &str,
         resume: Option<&str>,
-        servers: &Value,
+        process: Process,
         texts: &Texts,
         migrated: bool,
     ) -> Result<(), String> {
+        let servers = match process {
+            Process::Kept(acp_session) => return self.cursor_prompt(session_id, &acp_session, &texts.resumed, false, false),
+            Process::Launched(servers) => servers,
+        };
+        let servers = &servers;
         // Set before the session exists: its commands can come as soon as it does.
         if let Some(Live::Cursor(live)) = self.lock().get_mut(session_id) {
             live.cwd = cwd.to_string();
@@ -307,10 +425,15 @@ impl TurnHost {
         if let Some(Live::Cursor(live)) = self.lock().get_mut(session_id) {
             live.acp_session = Some(acp_session.clone());
         }
+        self.cursor_prompt(session_id, &acp_session, text, migrated, opened)
+    }
+
+    /// The session is open: it is bound to Crew's, and the prompt goes in.
+    fn cursor_prompt(&self, session_id: &str, acp_session: &str, text: &str, migrated: bool, opened: bool) -> Result<(), String> {
         self.transcripts.apply(
             session_id,
             HarnessEvent::SessionProviderBound {
-                provider_session_id: acp_session.clone(),
+                provider_session_id: acp_session.to_string(),
             },
         );
         self.transcripts.apply(session_id, HarnessEvent::SessionStarted {});
@@ -331,8 +454,59 @@ impl TurnHost {
             live.prompt_id = Some(id);
             id
         };
-        let line = json!({ "jsonrpc": "2.0", "id": id, "method": "session/prompt", "params": prompt_params(&acp_session, text) });
+        let line = json!({ "jsonrpc": "2.0", "id": id, "method": "session/prompt", "params": prompt_params(acp_session, text) });
         self.agents.write(session_id, &line.to_string())
+    }
+
+    /// Reads how full the session's context is from Cursor's store and tells
+    /// the meter, unless Cursor has said so itself (`usage_update`).
+    fn cursor_context(&self, session_id: &str) {
+        let acp_session = match self.lock().get(session_id) {
+            Some(Live::Cursor(live)) if !live.usage_seen => live.acp_session.clone(),
+            _ => return,
+        };
+        let Some(acp_session) = acp_session else {
+            return;
+        };
+        let dir = self
+            .cursor_acp_sessions
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+            .or_else(|| {
+                std::env::var_os("HOME")
+                    .filter(|home| !home.is_empty())
+                    .map(|home| std::path::Path::new(&home).join(".cursor").join("acp-sessions"))
+            });
+        let Some((used, window)) = dir.and_then(|dir| read_store_context(&dir, &acp_session)) else {
+            return;
+        };
+        self.publish_context(session_id, |_| Some(ContextReading { used, window, auto_compact_at: None }));
+    }
+
+    /// The meter while the turn runs: the store is read again every
+    /// [`CONTEXT_EVERY`] until the turn is over.
+    fn cursor_context_timer(&self, session_id: &str) {
+        let epoch = match self.lock().get(session_id) {
+            Some(Live::Cursor(live)) => live.turn_epoch,
+            _ => return,
+        };
+        self.cursor_context_tick(session_id, epoch);
+    }
+
+    fn cursor_context_tick(&self, session_id: &str, epoch: u64) {
+        let host = self.clone();
+        let id = session_id.to_string();
+        self.after(CONTEXT_EVERY, move || {
+            let running = matches!(
+                host.lock().get(&id),
+                Some(Live::Cursor(live)) if live.turn_epoch == epoch && live.active && !live.settled
+            );
+            if running {
+                host.cursor_context(&id);
+                host.cursor_context_tick(&id, epoch);
+            }
+        });
     }
 
     /// An error from the handshake, with what Cursor said on stderr.
@@ -404,10 +578,11 @@ impl TurnHost {
 
     /// Stop a Cursor turn: `session/cancel`, and the turn ends when the
     /// prompt answers `cancelled`, or after [`INTERRUPT_GRACE`] whatever it
-    /// says. The turn's end kills the process either way. Returns false when
+    /// says. The process stays when the prompt did answer (the turn's end
+    /// parks it, as Codex's), and goes when it did not. Returns false when
     /// there was no prompt to cancel, and the caller settles it at once.
     pub(super) fn cursor_interrupt(&self, session_id: &str) -> bool {
-        let (target, closed) = {
+        let (target, closed, epoch) = {
             let mut map = self.lock();
             let Some(Live::Cursor(live)) = map.get_mut(session_id) else {
                 return false;
@@ -424,7 +599,7 @@ impl TurnHost {
                 let _ = pending.tx.send(QuestionReply::Cancelled);
             }
             // The call in flight gets no last update from Cursor.
-            (target, live.close_open())
+            (target, live.close_open(), live.turn_epoch)
         };
         for event in closed {
             self.transcripts.apply(session_id, event);
@@ -439,7 +614,8 @@ impl TurnHost {
         let host = self.clone();
         let id = session_id.to_string();
         self.after(INTERRUPT_GRACE, move || {
-            let open = matches!(host.lock().get(&id), Some(Live::Cursor(live)) if !live.settled);
+            // Only the turn it was armed for: the process goes on to others.
+            let open = matches!(host.lock().get(&id), Some(Live::Cursor(live)) if live.turn_epoch == epoch && !live.settled);
             if open {
                 host.signal(&id, TurnOutcome::Stopped);
             }
@@ -737,6 +913,17 @@ impl TurnHost {
             self.cursor_catalog(session_id, &cwd, cursor_commands(params.get("update").unwrap_or(&Value::Null)));
             return;
         }
+        // How full the context is: Cursor's own word, when it gives it, is
+        // kept over the store's.
+        if string_field(Some(update), "sessionUpdate").as_deref() == Some("usage_update") {
+            if let Some((used, window)) = usage_update(update) {
+                if let Some(Live::Cursor(live)) = self.lock().get_mut(session_id) {
+                    live.usage_seen = true;
+                }
+                self.publish_context(session_id, |_| Some(ContextReading { used, window, auto_compact_at: None }));
+            }
+            return;
+        }
         let mut events = Vec::new();
         {
             let mut map = self.lock();
@@ -864,8 +1051,14 @@ fn cursor_update(live: &mut CursorLive, update: &Map<String, Value>, events: &mu
 /// `clear`) after its answer. What a turn does is spelled in its last line:
 /// `SLEEP <s>` runs a command that long, `ASK` asks to run one, `MCP` calls
 /// Crew's `list_peers`, `QUESTION` asks which color, `PLAN` writes a plan,
-/// `FAIL` fails the prompt, `STUBBORN` ignores a cancel. It answers `report:
+/// `FAIL` fails the prompt, `STUBBORN` ignores a cancel, `USAGE` sends a
+/// `usage_update`, `COMMANDS` announces another command. It answers `report:
 /// <last line>`, with ` + <what it heard>` for each request answered.
+///
+/// It keeps a `store.db` per session, as Cursor does, in
+/// `fake-cursor-<tag>-acp/<session>/` beside the log, of a window of 256,000:
+/// a turn that is the n-th of its session reads 2000 (n - 1) + 1000 tokens
+/// when it starts and 2000 n when it ends.
 #[cfg(test)]
 pub(crate) fn fake_cursor(dir: &std::path::Path) -> (String, std::path::PathBuf) {
     // The script finds its log and session store from the name it was started
@@ -874,11 +1067,12 @@ pub(crate) fn fake_cursor(dir: &std::path::Path) -> (String, std::path::PathBuf)
     let tag = uuid::Uuid::new_v4().simple().to_string();
     let log = dir.join(format!("fake-cursor-{tag}.log"));
     let script = r##"#!/usr/bin/env python3
-import json, os, re, sys, threading, time, uuid
+import hashlib, json, os, re, sqlite3, sys, threading, time, uuid
 HERE = os.path.dirname(os.path.abspath(sys.argv[0]))
 TAG = os.path.basename(sys.argv[0])[len("fake-cursor-agent-"):]
 LOG = os.path.join(HERE, "fake-cursor-" + TAG + ".log")
 STORE = os.path.join(HERE, "fake-cursor-" + TAG + "-sessions")
+ACP = os.path.join(HERE, "fake-cursor-" + TAG + "-acp")
 os.makedirs(STORE, exist_ok=True)
 lock = threading.Lock()
 def out(m):
@@ -901,6 +1095,24 @@ def ask(method, params):
     while not answers[rid].is_set():
         time.sleep(0.02)
     return answers[rid].result
+def varint(n):
+    out = b""
+    while True:
+        b, n = n & 0x7f, n >> 7
+        out += bytes([b | (0x80 if n else 0)])
+        if not n: return out
+def store(sid, used):
+    # What cursor keeps of a session: the meta row '0' in hex, naming a root blob whose field 5 is {1: used, 2: window}.
+    usage = b"\x08" + varint(used) + b"\x10" + varint(256000)
+    root = b"\x0a\x20" + b"\x07" * 32 + b"\x2a" + varint(len(usage)) + usage
+    d = os.path.join(ACP, sid); os.makedirs(d, exist_ok=True)
+    c = sqlite3.connect(os.path.join(d, "store.db"))
+    c.execute("create table if not exists blobs (id text primary key, data blob)")
+    c.execute("create table if not exists meta (key text primary key, value text)")
+    rid = hashlib.sha256(root).hexdigest()
+    c.execute("insert or replace into blobs values (?, ?)", (rid, root))
+    c.execute("insert or replace into meta values ('0', ?)", (json.dumps({"latestRootBlobId": rid}).encode().hex(),))
+    c.commit(); c.close()
 def saved(sid):
     p = os.path.join(STORE, sid + ".json")
     return json.load(open(p)) if os.path.exists(p) else None
@@ -910,7 +1122,14 @@ def run(rid, sid, text, turn):
     heard = [text.strip().splitlines()[-1] if text.strip() else ""]
     # What it is asked to do is the last line: the persona above it names MCP too.
     text = heard[0]
+    # The context grows by 2000 a turn: 1000 when it starts, 2000 more when it ends.
+    base = 2000 * len(saved(sid) or [])
+    store(sid, base + 1000)
     stubborn = "STUBBORN" in text
+    if "USAGE" in text:
+        update(sid, {"sessionUpdate": "usage_update", "used": 7000, "size": 100000})
+    if "COMMANDS" in text:
+        update(sid, {"sessionUpdate": "available_commands_update", "availableCommands": [{"name": "later", "description": "Came on a later turn", "input": None}]})
     m = re.search(r"SLEEP ([0-9.]+)", text)
     if m:
         cid = "tool_" + uuid.uuid4().hex[:8]
@@ -962,6 +1181,7 @@ def run(rid, sid, text, turn):
     convo = saved(sid) or []
     convo.append({"user": text, "agent": reply})
     save(sid, convo)
+    store(sid, base + 2000)
     state["turn"] = None
     out({"id": rid, "result": {"stopReason": "end_turn"}})
 for line in sys.stdin:
@@ -1283,5 +1503,310 @@ mod tests {
         let entries = host.commands_list(&session).expect("menu").entries;
         assert!(!entries.is_empty() && entries.iter().all(|entry| entry.kind == "crew"), "{entries:?}");
         assert!(!host.commands().holds("cursor", &cwd));
+    }
+
+    /// A session on the fake `cursor-agent acp` that is sent turn after turn,
+    /// with the fake's log to count its launches and the requests it got.
+    struct Kept {
+        host: TurnHost,
+        session: String,
+        cwd: String,
+        log: std::path::PathBuf,
+    }
+
+    impl Kept {
+        fn new(kind: &str, view: Option<&str>) -> Self {
+            let host = TurnHost::test_new();
+            host.test_agents().set_events(std::sync::Arc::new(Lines(host.clone())));
+            let (session, cwd) = cursor_session(&host, kind, view);
+            let (fake, log) = fake_cursor(std::path::Path::new(&cwd));
+            host.override_binary("cursor-agent", fake);
+            let name = log.file_name().unwrap().to_string_lossy().into_owned();
+            let tag = name.trim_start_matches("fake-cursor-").trim_end_matches(".log");
+            host.override_cursor_acp_sessions(log.with_file_name(format!("fake-cursor-{tag}-acp")));
+            Self { host, session, cwd, log }
+        }
+
+        fn child() -> Self {
+            Self::new("terminal", Some("chat"))
+        }
+
+        /// Sends `text` and waits for the turn to end.
+        fn say(&self, text: &str) {
+            self.send(text);
+            self.settle();
+        }
+
+        fn send(&self, text: &str) {
+            self.host
+                .start(crew_protocol::TurnStart {
+                    session_id: self.session.clone(),
+                    cwd: self.cwd.clone(),
+                    text: text.into(),
+                    files: None,
+                    mentions: None,
+                    hidden: None,
+                    from_bot: None,
+                    sent_at: None,
+                    nonce: None,
+                    letter_id: None,
+                    mode: None,
+                    command: None,
+                    skills: None,
+                })
+                .expect("start");
+        }
+
+        fn settle(&self) {
+            for _ in 0..800 {
+                if !self.host.is_running(&self.session) {
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            panic!("the turn never ended");
+        }
+
+        fn until(&self, what: &str, done: impl Fn() -> bool) {
+            for _ in 0..800 {
+                if done() {
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            panic!("never {what}");
+        }
+
+        fn log(&self) -> Vec<Value> {
+            std::fs::read_to_string(&self.log)
+                .unwrap_or_default()
+                .lines()
+                .filter_map(|line| serde_json::from_str(line).ok())
+                .collect()
+        }
+
+        /// The processes launched so far, each by its argv.
+        fn launches(&self) -> Vec<Vec<String>> {
+            self.log()
+                .iter()
+                .filter_map(|line| line.get("argv"))
+                .map(|argv| argv.as_array().unwrap().iter().map(|arg| arg.as_str().unwrap().to_string()).collect())
+                .collect()
+        }
+
+        fn count(&self, method: &str) -> usize {
+            self.log().iter().filter(|line| line["method"] == method).count()
+        }
+
+        fn row(&self) -> crate::session::Session {
+            crate::session::get(self.host.test_store(), self.session.clone()).unwrap().unwrap()
+        }
+
+        fn reading(&self) -> Option<ContextReading> {
+            self.host.context(&self.session)
+        }
+    }
+
+    impl Drop for Kept {
+        fn drop(&mut self) {
+            self.host.test_agents().kill(&self.session);
+        }
+    }
+
+    /// One process and one ACP session across turns: the handshake, the
+    /// session and the MCP servers are paid once, and the second prompt goes
+    /// to the session the first opened.
+    #[test]
+    fn two_turns_make_one_launch_and_one_acp_session() {
+        let k = Kept::child();
+        k.say("one");
+        k.say("two");
+        assert_eq!(k.launches().len(), 1, "{:?}", k.log());
+        assert_eq!((k.count("initialize"), k.count("session/new"), k.count("session/load")), (1, 1, 0));
+        let prompted: Vec<Value> = k
+            .log()
+            .iter()
+            .filter(|line| line["method"] == "session/prompt")
+            .map(|line| line["params"]["sessionId"].clone())
+            .collect();
+        assert_eq!(prompted.len(), 2);
+        assert_eq!(prompted[0], prompted[1]);
+        assert!(k.host.idle_since(&k.session).is_some(), "the process is parked for the next turn");
+        // The second turn runs: its answer is its own.
+        let blocks = k.host.transcripts().since(&k.session, 0).0;
+        assert!(blocks.iter().any(|block| block.text == "report: two"), "{blocks:?}");
+    }
+
+    /// The model is on argv: another one means another process, which carries
+    /// on the same ACP session and does not start a new one.
+    #[test]
+    fn a_model_change_relaunches_on_the_same_acp_session() {
+        let k = Kept::child();
+        k.say("one");
+        let row = k.row();
+        crate::session::set_options(
+            k.host.test_store(),
+            k.session.clone(),
+            "gpt-5.6-sol-high".into(),
+            row.effort,
+            row.service_tier,
+            row.autonomy,
+        )
+        .expect("options");
+        k.say("two");
+        let launches = k.launches();
+        assert_eq!(launches.len(), 2, "{:?}", k.log());
+        assert!(
+            launches[0].contains(&"composer-2.5".to_string()) && launches[1].contains(&"gpt-5.6-sol-high".to_string()),
+            "{launches:?}"
+        );
+        assert_eq!((k.count("session/new"), k.count("session/load")), (1, 1));
+        let loaded = k.log().into_iter().find(|line| line["method"] == "session/load").unwrap();
+        let opened = k.row().provider_session_id.unwrap();
+        assert_eq!(loaded["params"]["sessionId"], opened.as_str());
+        // A third turn on the new process stays on it.
+        k.say("three");
+        assert_eq!(k.launches().len(), 2);
+    }
+
+    /// Autonomy is a flag of the launch too.
+    #[test]
+    fn an_autonomy_change_relaunches_on_the_same_acp_session() {
+        let k = Kept::child();
+        k.say("one");
+        let row = k.row();
+        crate::session::set_options(k.host.test_store(), k.session.clone(), row.model, row.effort, row.service_tier, "ask".into())
+            .expect("options");
+        k.say("two");
+        let launches = k.launches();
+        assert_eq!(launches.len(), 2, "{:?}", k.log());
+        assert!(launches[0].contains(&"--force".to_string()) && !launches[1].contains(&"--force".to_string()), "{launches:?}");
+        assert_eq!((k.count("session/new"), k.count("session/load")), (1, 1));
+    }
+
+    /// Esc stops the turn, and the process that closed it with `cancelled` is
+    /// the next turn's.
+    #[test]
+    fn a_stop_keeps_the_process_for_the_next_turn() {
+        let k = Kept::child();
+        k.send("SLEEP 30");
+        k.until("the prompt reached cursor", || k.count("session/prompt") == 1);
+        std::thread::sleep(Duration::from_millis(200));
+        k.host.stop(&k.session).expect("stop");
+        k.settle();
+        assert_eq!(k.count("session/cancel"), 1);
+        assert!(k.host.idle_since(&k.session).is_some(), "the stop let the process go");
+        k.say("again");
+        assert_eq!(k.launches().len(), 1, "{:?}", k.log());
+        assert_eq!((k.count("session/new"), k.count("session/load"), k.count("session/prompt")), (1, 0, 2));
+        let blocks = k.host.transcripts().since(&k.session, 0).0;
+        assert!(blocks.iter().any(|block| block.text == "report: again"), "{blocks:?}");
+    }
+
+    /// A cancel that cursor never answered leaves the process in a state
+    /// nobody vouches for: it goes, and the next turn loads the session.
+    #[test]
+    fn a_stop_that_cursor_ignores_lets_the_process_go() {
+        let k = Kept::child();
+        k.say("one");
+        k.send("SLEEP 30 STUBBORN");
+        k.until("the second prompt reached cursor", || k.count("session/prompt") == 2);
+        std::thread::sleep(Duration::from_millis(200));
+        k.host.stop(&k.session).expect("stop");
+        k.settle();
+        assert!(k.host.idle_since(&k.session).is_none());
+        assert!(!k.host.test_agents().running().contains(&k.session));
+        k.say("three");
+        assert_eq!(k.launches().len(), 2, "{:?}", k.log());
+        assert_eq!((k.count("session/new"), k.count("session/load")), (1, 1));
+    }
+
+    /// A turn that failed leaves the process in a state nobody vouches for.
+    #[test]
+    fn a_failed_turn_lets_the_process_go() {
+        let k = Kept::child();
+        k.say("FAIL");
+        assert!(k.host.idle_since(&k.session).is_none());
+        k.say("two");
+        assert_eq!(k.launches().len(), 2, "{:?}", k.log());
+    }
+
+    /// After half an hour with nothing to do the process is let go, and the
+    /// next message launches another that loads the session.
+    #[test]
+    fn an_idle_process_is_released_and_the_next_turn_loads_the_session() {
+        let k = Kept::child();
+        k.say("one");
+        assert!(k.host.release_idle(Duration::from_secs(3600), Duration::from_secs(7200)).is_empty());
+        assert_eq!(k.host.release_idle(Duration::from_millis(1), Duration::from_secs(3600)), vec![k.session.clone()]);
+        assert!(!k.host.test_agents().running().contains(&k.session));
+        k.say("two");
+        assert_eq!(k.launches().len(), 2);
+        assert_eq!((k.count("session/new"), k.count("session/load")), (1, 1));
+    }
+
+    /// A process that died while idle (killed under Crew) is gone from the
+    /// session's entry, and the next turn launches another.
+    #[test]
+    fn a_process_that_died_while_idle_is_replaced_on_the_next_turn() {
+        let k = Kept::child();
+        k.say("one");
+        let pid = k.host.test_agents().pid_of(&k.session).expect("process up");
+        unsafe { libc::kill(pid as i32, libc::SIGKILL) };
+        k.until("the entry went", || k.host.lock().get(&k.session).is_none());
+        k.say("two");
+        assert_eq!(k.launches().len(), 2);
+        assert_eq!(k.count("session/load"), 1);
+    }
+
+    /// A bot's turn is on a clean process and session of its own, as before.
+    #[test]
+    fn a_bots_turns_each_launch_a_process() {
+        let k = Kept::new("bot", None);
+        k.say("one");
+        assert!(k.host.idle_since(&k.session).is_none());
+        assert!(!k.host.test_agents().running().contains(&k.session));
+        k.say("two");
+        assert_eq!(k.launches().len(), 2, "{:?}", k.log());
+        assert_eq!((k.count("session/new"), k.count("session/load")), (2, 0));
+    }
+
+    /// The menu belongs to the session: a command Cursor announces on a later
+    /// turn of the same process reaches the catalog too.
+    #[test]
+    fn a_command_announced_on_a_later_turn_reaches_the_catalog() {
+        let k = Kept::child();
+        k.say("one");
+        k.say("COMMANDS");
+        k.until("the catalog took it", || {
+            k.host.commands().catalog("cursor", &k.cwd, Vec::new(), 0).entries.iter().any(|entry| entry.name == "later")
+        });
+        assert_eq!(k.launches().len(), 1);
+    }
+
+    /// The meter reads the store after the prompt, and again while a long
+    /// turn runs.
+    #[test]
+    fn the_meter_reads_the_store_after_each_prompt_and_while_a_turn_runs() {
+        let k = Kept::child();
+        k.say("one");
+        assert_eq!(k.reading(), Some(ContextReading { used: 2000, window: Some(256_000), auto_compact_at: None }));
+        k.send("SLEEP 3");
+        // The turn started with 3000 in the store, which the timer picks up
+        // before the turn ends.
+        k.until("the timer read the store", || k.reading().is_some_and(|reading| reading.used == 3000));
+        assert!(k.host.is_running(&k.session));
+        k.settle();
+        assert_eq!(k.reading().map(|reading| reading.used), Some(4000));
+    }
+
+    /// Cursor's own word on how full the context is wins over the store.
+    #[test]
+    fn a_usage_update_is_preferred_to_the_store() {
+        let k = Kept::child();
+        k.say("USAGE");
+        assert_eq!(k.reading(), Some(ContextReading { used: 7000, window: Some(100_000), auto_compact_at: None }));
+        k.say("two");
+        assert_eq!(k.reading().map(|reading| reading.used), Some(7000));
     }
 }

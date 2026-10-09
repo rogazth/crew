@@ -632,6 +632,151 @@ pub fn questions_cancelled() -> Value {
     json!({ "outcome": { "outcome": "cancelled" } })
 }
 
+/// How full the session's context is, as ACP's `usage_update` says it: `used`
+/// tokens of a window of `size`. Cursor 2026.10.01 sends none; the store (see
+/// [`read_store_context`]) is read until it does.
+pub fn usage_update(update: &Map<String, Value>) -> Option<(u64, Option<u64>)> {
+    let used = update.get("used").and_then(Value::as_u64)?;
+    Some((used, update.get("size").and_then(Value::as_u64).filter(|size| *size > 0)))
+}
+
+/// How full a session's context is, read from the store Cursor keeps for it,
+/// `<acp_sessions>/<id>/store.db` (SQLite in WAL mode, so a reader sees what
+/// the writer has not yet folded in). Its `meta` row `'0'` is the hex of a
+/// JSON object that names `latestRootBlobId`; that blob, in `blobs`, is
+/// protobuf whose field 5 holds `{1: used tokens, 2: window}`. Measured on
+/// 2026.10.01: 18,424 of 256,000 on a fresh session. Opened read-only and for
+/// a moment at most, since Cursor is writing to it. `None` when any step is
+/// missing: the layout is Cursor's, not a contract.
+pub fn read_store_context(acp_sessions: &std::path::Path, acp_session: &str) -> Option<(u64, Option<u64>)> {
+    let db = acp_sessions.join(acp_session).join("store.db");
+    if !db.is_file() {
+        return None;
+    }
+    let conn = rusqlite::Connection::open_with_flags(db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).ok()?;
+    conn.busy_timeout(std::time::Duration::from_millis(250)).ok()?;
+    let meta: String = conn.query_row("SELECT value FROM meta WHERE key = '0'", [], |row| row.get(0)).ok()?;
+    let meta: Value = serde_json::from_slice(&unhex(&meta).unwrap_or_else(|| meta.into_bytes())).ok()?;
+    let root = meta.get("latestRootBlobId").and_then(Value::as_str)?;
+    let blob: Vec<u8> = conn.query_row("SELECT data FROM blobs WHERE id = ?1", [root], |row| row.get(0)).ok()?;
+    let Some(Wire::Bytes(usage)) = proto_field(&blob, 5) else {
+        return None;
+    };
+    let Some(Wire::Varint(used)) = proto_field(usage, 1) else {
+        return None;
+    };
+    let window = match proto_field(usage, 2) {
+        Some(Wire::Varint(window)) if window > 0 => Some(window),
+        _ => None,
+    };
+    Some((used, window))
+}
+
+fn unhex(text: &str) -> Option<Vec<u8>> {
+    let text = text.trim();
+    if text.is_empty() || text.len() % 2 == 1 {
+        return None;
+    }
+    text.as_bytes()
+        .chunks(2)
+        .map(|pair| Some((char::from(pair[0]).to_digit(16)? * 16 + char::from(pair[1]).to_digit(16)?) as u8))
+        .collect()
+}
+
+/// What a protobuf field holds, for the two wire types a reading needs.
+#[derive(Debug, PartialEq)]
+enum Wire<'a> {
+    Varint(u64),
+    Bytes(&'a [u8]),
+}
+
+/// A varint at the start of `bytes`, and how many bytes it took.
+fn read_varint(bytes: &[u8]) -> Option<(u64, usize)> {
+    let mut value = 0u64;
+    for (at, byte) in bytes.iter().enumerate().take(10) {
+        value |= u64::from(byte & 0x7f) << (7 * at);
+        if byte & 0x80 == 0 {
+            return Some((value, at + 1));
+        }
+    }
+    None
+}
+
+/// The first occurrence of `field` in a protobuf message, found by walking its
+/// fields. A fixed-width field is stepped over; a wire type this does not
+/// know (a group) ends the walk, as does a field that runs past the message.
+fn proto_field(message: &[u8], field: u64) -> Option<Wire<'_>> {
+    let mut at = 0;
+    while at < message.len() {
+        let (key, used) = read_varint(&message[at..])?;
+        at += used;
+        let found = (key >> 3) == field;
+        match key & 7 {
+            0 => {
+                let (value, used) = read_varint(&message[at..])?;
+                at += used;
+                if found {
+                    return Some(Wire::Varint(value));
+                }
+            }
+            1 | 5 => at = at.checked_add(if key & 7 == 1 { 8 } else { 4 }).filter(|end| *end <= message.len())?,
+            2 => {
+                let (len, used) = read_varint(&message[at..])?;
+                at += used;
+                let end = at.checked_add(usize::try_from(len).ok()?).filter(|end| *end <= message.len())?;
+                if found {
+                    return Some(Wire::Bytes(&message[at..end]));
+                }
+                at = end;
+            }
+            _ => return None,
+        }
+    }
+    None
+}
+
+/// A `store.db` as Cursor keeps one for ACP session `id` under `acp_sessions`:
+/// the `meta` row `'0'` in hex naming the root blob, and a root blob of a few
+/// ids (field 1), the usage `{1: used, 2: window}` (field 5) and a path
+/// (field 9), as the real ones have.
+#[cfg(test)]
+pub(crate) fn write_test_store(acp_sessions: &std::path::Path, id: &str, used: u64, window: u64) {
+    fn varint(mut value: u64) -> Vec<u8> {
+        let mut out = Vec::new();
+        loop {
+            let byte = (value & 0x7f) as u8;
+            value >>= 7;
+            if value == 0 {
+                out.push(byte);
+                return out;
+            }
+            out.push(byte | 0x80);
+        }
+    }
+    let mut usage = vec![0x08];
+    usage.extend(varint(used));
+    usage.push(0x10);
+    usage.extend(varint(window));
+    let mut root = vec![0x0a, 32];
+    root.extend([7u8; 32]);
+    root.push(0x2a);
+    root.extend(varint(usage.len() as u64));
+    root.extend(&usage);
+    root.push(0x4a);
+    root.extend(varint(8));
+    root.extend(b"file:///");
+    let dir = acp_sessions.join(id);
+    std::fs::create_dir_all(&dir).expect("session dir");
+    let conn = rusqlite::Connection::open(dir.join("store.db")).expect("store");
+    conn.execute_batch("CREATE TABLE IF NOT EXISTS blobs (id TEXT PRIMARY KEY, data BLOB); CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);")
+        .expect("schema");
+    let root_id = format!("{:064x}", used ^ window);
+    conn.execute("INSERT OR REPLACE INTO blobs (id, data) VALUES (?1, ?2)", rusqlite::params![root_id, root]).expect("blob");
+    let meta = json!({ "agentId": id, "latestRootBlobId": root_id, "name": "New Agent" }).to_string();
+    let hex: String = meta.bytes().map(|byte| format!("{byte:02x}")).collect();
+    conn.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('0', ?1)", [hex]).expect("meta");
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -842,5 +987,48 @@ mod tests {
         let Some(ToolDetail::Todo { items }) = plan_detail(update.as_object().unwrap()) else { panic!("todo") };
         assert_eq!(items.len(), 2);
         assert_eq!(items[0].status, crew_protocol::TodoStatus::Completed);
+    }
+
+    /// The window is the second number of the usage message, and the walk
+    /// steps over the fields around it, whatever their wire type.
+    #[test]
+    fn the_store_names_how_full_the_context_is() {
+        let dir = std::env::temp_dir().join(format!("crew-acp-store-{}", uuid::Uuid::new_v4()));
+        write_test_store(&dir, "abc", 18_424, 256_000);
+        assert_eq!(read_store_context(&dir, "abc"), Some((18_424, Some(256_000))));
+        // A later prompt writes another root: the meta row names the latest.
+        write_test_store(&dir, "abc", 40_000, 256_000);
+        assert_eq!(read_store_context(&dir, "abc"), Some((40_000, Some(256_000))));
+    }
+
+    #[test]
+    fn a_store_that_is_missing_or_not_as_expected_reads_as_nothing() {
+        let dir = std::env::temp_dir().join(format!("crew-acp-store-{}", uuid::Uuid::new_v4()));
+        assert_eq!(read_store_context(&dir, "none"), None);
+        std::fs::create_dir_all(dir.join("bare")).unwrap();
+        let conn = rusqlite::Connection::open(dir.join("bare").join("store.db")).unwrap();
+        conn.execute_batch("CREATE TABLE blobs (id TEXT PRIMARY KEY, data BLOB); CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);")
+            .unwrap();
+        assert_eq!(read_store_context(&dir, "bare"), None);
+    }
+
+    #[test]
+    fn the_protobuf_walk_stops_at_what_it_cannot_read() {
+        // Field 1 as 300, then a length-delimited field 2 that claims more bytes than there are.
+        assert_eq!(proto_field(&[0x08, 0xac, 0x02], 1), Some(Wire::Varint(300)));
+        assert_eq!(proto_field(&[0x08, 0xac, 0x02, 0x12, 0x09, 1], 1), Some(Wire::Varint(300)));
+        assert_eq!(proto_field(&[0x08, 0xac, 0x02, 0x12, 0x09, 1], 2), None);
+        // A fixed32 and a fixed64 are stepped over.
+        assert_eq!(proto_field(&[0x15, 1, 2, 3, 4, 0x19, 1, 2, 3, 4, 5, 6, 7, 8, 0x20, 9], 4), Some(Wire::Varint(9)));
+        // A group start is not understood.
+        assert_eq!(proto_field(&[0x0b, 0x08, 1], 1), None);
+    }
+
+    #[test]
+    fn a_usage_update_names_the_tokens_used_and_the_window() {
+        let update = json!({ "sessionUpdate": "usage_update", "used": 53000, "size": 200000 });
+        assert_eq!(usage_update(update.as_object().unwrap()), Some((53000, Some(200000))));
+        let bare = json!({ "sessionUpdate": "usage_update", "used": 5 });
+        assert_eq!(usage_update(bare.as_object().unwrap()), Some((5, None)));
     }
 }

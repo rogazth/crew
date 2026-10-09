@@ -3474,9 +3474,10 @@ time.sleep(600)
             .collect()
     }
 
-    /// One `cursor-agent acp` per turn: the first opens a session with Crew's
-    /// server on it and the persona in the message, the next loads that
-    /// session. The history the load replays is not shown twice.
+    /// The first turn opens a session with Crew's server on it and the persona
+    /// in the message; a process let go in between (the idle release) is
+    /// replaced by one that loads that session. The history the load replays
+    /// is not shown twice.
     #[test]
     fn a_cursor_session_opens_a_session_and_the_next_turn_loads_it() {
         let w = world();
@@ -3486,6 +3487,7 @@ time.sleep(600)
         assert_eq!(out["sessions"][0]["report"], "report: remember 4817", "{out}");
         w.settle(&id);
         let bound = w.row(&id).provider_session_id.expect("bound");
+        w.turns.release(&id);
 
         assert_eq!(launches_of(&log)[0], json!(["--model", "composer-2.5", "--force", "--disable-codebase-ref", "acp"]));
         assert_eq!(sent(&log, "initialize")[0]["protocolVersion"], 1);
@@ -3517,7 +3519,8 @@ time.sleep(600)
         assert_eq!(text.matches("report: remember 4817").count(), 1, "the replay was shown again: {text}");
         assert!(!text.contains("echo old"), "{text}");
         assert_eq!(launches_of(&log).len(), 2);
-        assert!(w.turns.test_agents().running().is_empty());
+        w.settle(&id);
+        assert_eq!(w.turns.test_agents().running(), vec![id.clone()], "the process stays for the next turn");
     }
 
     /// Cursor takes nothing into a running turn: a steer is queued, says so,
@@ -3535,7 +3538,7 @@ time.sleep(600)
         let next = w.wait(&parent, &id, json!({}));
         assert_eq!(next["sessions"][0]["report"], "report: and this", "{next}");
         assert_eq!(sent(&log, "session/prompt").len(), 2);
-        assert_eq!(launches_of(&log).len(), 2, "each prompt had its own process");
+        assert_eq!(launches_of(&log).len(), 1, "both prompts ran on the one process");
     }
 
     /// An ask child's command waits on the card, and Crew's "always" goes back
@@ -3654,6 +3657,7 @@ time.sleep(600)
 
         // Later turns load the new conversation, and say nothing more.
         w.settle(&id);
+        w.turns.release(&id);
         w.call(&parent, "send_message", json!({ "to": id, "text": "third" })).expect("send");
         assert_eq!(w.wait(&parent, &id, json!({}))["sessions"][0]["report"], "report: third");
         assert_eq!(sent(&log, "session/load").len(), 1);
@@ -5919,7 +5923,7 @@ time.sleep(600)
         until("the second prompt", || sent(&log, "session/prompt").len() == 2);
         w.settle(&mine.id);
         assert_eq!(sent(&log, "session/prompt")[1]["prompt"][0]["text"], json!("and this"));
-        assert_eq!(launches_of(&log).len(), 2, "each prompt had its own process");
+        assert_eq!(launches_of(&log).len(), 1, "both prompts ran on the one process");
     }
 
     /// What waits goes as one turn, in the order the user put it in: moved
@@ -6501,6 +6505,57 @@ time.sleep(600)
         says_one(&w.live_say(&parent, &id, "Once more: reply with just the word one."));
         w.settle(&id);
         assert_eq!(w.live_pid(&id), pid, "the effort change started another app server");
+    }
+
+    /// Runs the real `cursor-agent acp` on its auto model: three short turns.
+    /// The first two share one process and one ACP session; Crew's MCP server
+    /// started with the session answers on the second turn; the meter reads
+    /// the session's `store.db` after each. A model change then launches
+    /// another process that loads the session and still remembers it.
+    /// Needs `cursor-agent login`.
+    /// `cargo test -p crew-core --lib -- --ignored --test-threads=1 live_cursor`
+    #[test]
+    #[ignore]
+    fn live_cursor_two_turns_run_on_one_acp_process_and_a_model_change_loads_the_session() {
+        let w = world();
+        let parent = w.session("terminal", "shell", "full");
+        let id = w.live_child(&parent, "cursor", "auto", "", "full");
+        w.turns.override_binary("cursor-agent", real_binary("cursor-agent"));
+        let _reap = Reap(&w, id.clone());
+
+        let report = w.live_say(&parent, &id, "Remember the word mango. Reply with just the word one.");
+        // An account out of quota answers every prompt with this, and writes no store.
+        assert!(!report.contains("Upgrade your plan"), "Cursor has no quota left on this account: {report:?}");
+        says_one(&report);
+        w.settle(&id);
+        let pid = w.live_pid(&id);
+        let first = w.live_window(&id);
+        assert!(first.used > 0 && first.window.is_some_and(|window| window > first.used), "{first:?}");
+
+        let report = w.live_say(
+            &parent,
+            &id,
+            "Call the list_peers tool of the crew MCP server once, then reply with just the word two.",
+        );
+        w.settle(&id);
+        assert!(report.to_lowercase().contains("two"), "the report was: {report:?}");
+        assert_eq!(w.live_pid(&id), pid, "the second turn started another process");
+        let second = w.turns.context(&id).expect("a reading");
+        assert!(second.used > first.used, "the store did not move between prompts: {first:?} then {second:?}");
+        let blocks = w.turns.transcripts().since(&id, 0).0;
+        assert!(
+            blocks.iter().filter_map(|block| block.tool.as_ref()).any(|tool| tool.name == "mcp__crew__list_peers"),
+            "the MCP server did not answer on the second turn: {:?}",
+            blocks.iter().filter_map(|block| block.tool.as_ref().map(|tool| &tool.name)).collect::<Vec<_>>()
+        );
+
+        let row = w.row(&id);
+        session::set_options(w.turns.store(), id.clone(), "composer-2.5".into(), row.effort, row.service_tier, row.autonomy)
+            .expect("options");
+        let report = w.live_say(&parent, &id, "What word did I ask you to remember? Reply with just the word.");
+        w.settle(&id);
+        assert_ne!(w.live_pid(&id), pid, "the model change kept the process");
+        assert!(report.to_lowercase().contains("mango"), "the session was not loaded: {report:?}");
     }
 
     /// Runs the real `codex app-server`: one gpt-5.6-luna turn at low effort

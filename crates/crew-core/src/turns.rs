@@ -700,6 +700,9 @@ pub struct TurnHost {
     binaries: Arc<Mutex<HashMap<String, String>>>,
     /// Where Claude keeps its conversations, when not under `$HOME`.
     claude_home: Arc<Mutex<Option<std::path::PathBuf>>>,
+    /// Where Cursor keeps its ACP sessions' stores (`~/.cursor/acp-sessions`),
+    /// when not under `$HOME`.
+    cursor_acp_sessions: Arc<Mutex<Option<std::path::PathBuf>>>,
     runtime: Arc<Mutex<Option<tokio::runtime::Handle>>>,
     cancelled: Arc<Mutex<HashSet<String>>>,
     /// Questions answered, by session and request: the second answer to one,
@@ -756,6 +759,7 @@ impl TurnHost {
             inner: Arc::new(Mutex::new(HashMap::new())),
             binaries: Arc::new(Mutex::new(HashMap::new())),
             claude_home: Arc::new(Mutex::new(None)),
+            cursor_acp_sessions: Arc::new(Mutex::new(None)),
             runtime: Arc::new(Mutex::new(None)),
             cancelled: Arc::new(Mutex::new(HashSet::new())),
             answered: Arc::new(Mutex::new(HashSet::new())),
@@ -859,6 +863,12 @@ impl TurnHost {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .insert(name.to_string(), path.into());
+    }
+
+    /// Look for Cursor's ACP session stores in `dir` instead of
+    /// `~/.cursor/acp-sessions`.
+    pub fn override_cursor_acp_sessions(&self, dir: impl Into<std::path::PathBuf>) {
+        *self.cursor_acp_sessions.lock().unwrap_or_else(|e| e.into_inner()) = Some(dir.into());
     }
 
     /// Look for Claude's conversations under `home` instead of `$HOME`.
@@ -1889,6 +1899,14 @@ impl TurnHost {
             }
             Live::Cursor(row) => {
                 row.release();
+                // No turn is running: a process a child kept died while idle.
+                // Its entry goes, so the next message spawns one and loads the
+                // session.
+                if !row.active {
+                    drop(map);
+                    self.detach(session_id);
+                    return;
+                }
                 if row.cancelled || row.settled {
                     return;
                 }
