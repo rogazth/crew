@@ -33,6 +33,20 @@ pub struct ThreadLetter {
     /// exited).
     #[ts(type = "\"pending\" | \"claimed\" | \"delivered\" | \"disposed\"")]
     pub state: String,
+    /// `waiting` (the user's queue holds it for the next turn), or `steering`:
+    /// a running turn has taken it and has not read it yet. Kept apart from
+    /// `state`, which is the box's own lifecycle.
+    #[serde(default = "waiting")]
+    #[ts(type = "\"waiting\" | \"steering\"")]
+    pub queue: String,
+    /// The files the user attached to a letter still in the box.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub files: Option<Vec<String>>,
+}
+
+fn waiting() -> String {
+    "waiting".into()
 }
 
 /// A pair a session's Conversations menu lists.
@@ -104,4 +118,52 @@ pub struct SessionMarkSeen {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional, type = "number")]
     pub cursor: Option<i64>,
+}
+
+/// Edits a letter the user still has in the queue: its text and its files.
+/// Refused once a turn has taken the letter.
+#[derive(Serialize, Deserialize, Clone, Debug, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
+pub struct MailboxEdit {
+    pub session_id: String,
+    pub letter_id: String,
+    pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub files: Option<Vec<String>>,
+}
+
+/// The order of the user's queued letters, first to send to last. Ids the
+/// queue does not hold are ignored; waiting letters it does not name keep
+/// their place after the named ones.
+#[derive(Serialize, Deserialize, Clone, Debug, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
+pub struct MailboxReorder {
+    pub session_id: String,
+    pub letter_ids: Vec<String>,
+}
+
+/// Sets aside a letter the user still has in the queue, unread.
+#[derive(Serialize, Deserialize, Clone, Debug, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
+pub struct MailboxDispose {
+    pub session_id: String,
+    pub letter_id: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A letter from a daemon that predates the queue reads as waiting, with no files.
+    #[test]
+    fn a_letter_without_a_queue_state_is_waiting_with_no_files() {
+        let raw = r#"{"id":"l1","from":{"id":"","name":"You"},"to":{"id":"b","name":"B"},
+                      "kind":"message","text":"hi","at":1,"state":"pending"}"#;
+        let letter: ThreadLetter = serde_json::from_str(raw).expect("letter");
+        assert_eq!((letter.queue.as_str(), letter.files), ("waiting", None));
+    }
 }

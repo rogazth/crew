@@ -880,6 +880,7 @@ fn create_bot(
         description,
         autonomy.clone(),
         me.worktree.clone(),
+        None,
     )?;
     on_created(&session);
     transcripts.append_system(&session.id, &format!("Created by {}", me.name));
@@ -1186,6 +1187,7 @@ mod tests {
             "claude-opus-5".into(),
             "".into(),
             "ask".into(),
+            None,
         )
         .expect("bot")
     }
@@ -1217,6 +1219,7 @@ mod tests {
             parent_name: None,
             user_seen: 0,
             last_event: None,
+            view: crate::session::DEFAULT_VIEW.into(),
         })
     }
 
@@ -1416,6 +1419,7 @@ mod tests {
             "".into(),
             "".into(),
             "ask".into(),
+            None,
         )
         .expect("bot")
     }
@@ -1460,6 +1464,7 @@ mod tests {
             "gpt-5.6-luna".into(),
             "".into(),
             "ask".into(),
+            None,
         )
         .expect("bot");
 
@@ -1556,6 +1561,7 @@ mod tests {
             "".into(),
             "ask".into(),
             Some("/wt/feat".into()),
+            None,
         )
         .expect("coder");
 
@@ -1638,6 +1644,7 @@ mod tests {
             "".into(),
             "".into(),
             "ask".into(),
+            None,
         )
         .expect("terminal")
     }

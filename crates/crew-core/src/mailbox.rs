@@ -137,6 +137,20 @@ pub(crate) fn migrate_lifecycle(conn: &rusqlite::Connection) -> rusqlite::Result
     )
 }
 
+/// Migration 30: what the user attaches to a letter still in the box, and
+/// the order the user puts those letters in. Both are empty for every letter
+/// before it, which is the order they came in. Each step looks before it acts.
+pub(crate) fn migrate_queue(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
+    use crate::store::has_column;
+    if !has_column(conn, "mailbox", "files_json")? {
+        conn.execute_batch("ALTER TABLE mailbox ADD COLUMN files_json TEXT;")?;
+    }
+    if !has_column(conn, "mailbox", "queue_order")? {
+        conn.execute_batch("ALTER TABLE mailbox ADD COLUMN queue_order INTEGER;")?;
+    }
+    Ok(())
+}
+
 /// A letter nobody has been handed yet.
 const PENDING: &str = "claimed_at IS NULL AND delivered_at IS NULL AND disposed_at IS NULL";
 
@@ -726,6 +740,7 @@ fn party_kind(kind: &str) -> Option<String> {
 
 fn row_to_thread_letter(row: &rusqlite::Row) -> rusqlite::Result<(crew_protocol::ThreadLetter, i64)> {
     let to_kind: String = row.get(9)?;
+    let state: String = row.get(10)?;
     Ok((
         crew_protocol::ThreadLetter {
             id: row.get(0)?,
@@ -738,7 +753,9 @@ fn row_to_thread_letter(row: &rusqlite::Row) -> rusqlite::Result<(crew_protocol:
             text: row.get(4)?,
             at: row.get(5)?,
             kind: row.get(7)?,
-            state: row.get(10)?,
+            queue: if state == "claimed" { "steering" } else { "waiting" }.into(),
+            state,
+            files: None,
         },
         row.get(11)?,
     ))
@@ -889,6 +906,7 @@ mod tests {
             "m".into(),
             "".into(),
             "ask".into(),
+            None,
         )
         .expect("session")
         .id

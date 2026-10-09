@@ -459,6 +459,24 @@ socksPort?: number, };
 export type MailboxChanged = { sessionId: string, };
 
 /**
+ * Sets aside a letter the user still has in the queue, unread.
+ */
+export type MailboxDispose = { sessionId: string, letterId: string, };
+
+/**
+ * Edits a letter the user still has in the queue: its text and its files.
+ * Refused once a turn has taken the letter.
+ */
+export type MailboxEdit = { sessionId: string, letterId: string, text: string, files?: Array<string>, };
+
+/**
+ * The order of the user's queued letters, first to send to last. Ids the
+ * queue does not hold are ignored; waiting letters it does not name keep
+ * their place after the named ones.
+ */
+export type MailboxReorder = { sessionId: string, letterIds: Array<string>, };
+
+/**
  * A window of a transcript. `more` says whether older blocks exist before
  * `fromPos`, so the UI knows whether to keep a "load earlier" affordance.
  * `working`, `status` and `seq` are the live state of the session, so one
@@ -798,7 +816,13 @@ userSeen: number,
  * The last thing it did that its parent hears of (a child's events);
  * absent before its first.
  */
-lastEvent?: SessionLastEvent, };
+lastEvent?: SessionLastEvent, 
+/**
+ * Which view owns its conversation: `chat` (Crew's chat, driving its
+ * CLI turn by turn) or `terminal` (the CLI's own screen). A bot and a
+ * child are always `terminal`, where it means nothing.
+ */
+view: "chat" | "terminal", };
 
 /**
  * A permission prompt or a question form on the CLI's screen.
@@ -829,7 +853,11 @@ serviceTier?: string, description: string, autonomy: string,
 /**
  * The git worktree the session runs in; absent means the workspace folder.
  */
-worktree?: string | null, };
+worktree?: string | null, 
+/**
+ * Which view owns its conversation; absent is the terminal.
+ */
+view?: "chat" | "terminal", };
 
 export type SessionCreated = { session: Session, 
 /**
@@ -1011,7 +1039,17 @@ from: BotRef, to: BotRef, kind: "message" | "report" | "question" | "approval", 
  * `disposed` (set aside unread: answered some other way, or its reader
  * exited).
  */
-state: "pending" | "claimed" | "delivered" | "disposed", };
+state: "pending" | "claimed" | "delivered" | "disposed", 
+/**
+ * `waiting` (the user's queue holds it for the next turn), or `steering`:
+ * a running turn has taken it and has not read it yet. Kept apart from
+ * `state`, which is the box's own lifecycle.
+ */
+queue: "waiting" | "steering", 
+/**
+ * The files the user attached to a letter still in the box.
+ */
+files?: Array<string>, };
 
 export type ThreadMessagesRequest = { 
 /**
@@ -1153,6 +1191,12 @@ export type TurnAnswer = { sessionId: string, requestId: number, answers: { [key
 
 export type TurnRespond = { sessionId: string, requestId: number, decision: ApprovalDecision, };
 
+/**
+ * Sends a queued letter now: it goes to the head of the queue, a running
+ * turn is stopped, and a turn begins with it.
+ */
+export type TurnSendNow = { sessionId: string, letterId: string, };
+
 export type TurnStart = { sessionId: string, cwd: string, text: string, files?: Array<AttachedFile>, mentions?: Array<string>, hidden?: boolean, 
 /**
  * Set when this turn is another bot's message, not yours.
@@ -1173,9 +1217,25 @@ nonce?: string,
  * the transcript's block carries its id, and the turn's end marks it
  * delivered. The daemon's own; a window's is ignored.
  */
-letterId?: string, };
+letterId?: string, 
+/**
+ * What a message sent while a turn runs becomes: `steer` (into the
+ * running turn), `queue` (the turn after it), or `auto` (the daemon
+ * decides). Absent is `auto`, and a message sent to an idle session
+ * starts a turn whatever it says.
+ */
+mode?: "auto" | "steer" | "queue", };
 
-export type TurnStarted = { working: boolean, };
+export type TurnStarted = { working: boolean, 
+/**
+ * How the message was handed over: `started` (a turn of its own),
+ * `steered` (into the running turn) or `queued` (after it).
+ */
+delivery?: "started" | "steered" | "queued", 
+/**
+ * The letter the message became, when it was sent as one.
+ */
+letterId?: string, };
 
 export type TurnUsage = { inputTokens?: number, outputTokens?: number, costUsd?: number, durationMs?: number, };
 

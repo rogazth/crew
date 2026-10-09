@@ -812,7 +812,7 @@ impl TurnHost {
         thread::spawn(move || {
             host.run_turn(session, params, history, carried);
         });
-        Ok(TurnStarted { working: true })
+        Ok(TurnStarted { working: true, delivery: None, letter_id: None })
     }
 
     pub fn stop(&self, session_id: &str) -> Result<(), String> {
@@ -1623,6 +1623,7 @@ impl TurnHost {
                 sent_at: Some(first.at),
                 nonce: None,
                 letter_id: None,
+                mode: None,
             },
             letters.clone(),
         );
@@ -1877,6 +1878,7 @@ impl TurnHost {
                 sent_at: None,
                 nonce: None,
                 letter_id: letter,
+                mode: None,
             });
             if let Err(error) = started {
                 self.transcripts.apply(&row.id, HarnessEvent::SessionError { message: error.clone() });
@@ -3459,6 +3461,7 @@ print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type
             "m".into(),
             "".into(),
             "full".into(),
+            None,
         )
         .expect("bot")
     }
@@ -3511,6 +3514,7 @@ print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type
                 sent_at: None,
                 nonce: None,
                 letter_id: None,
+                mode: None,
             })
             .expect("start");
         settle(world, &session.id);
@@ -3549,6 +3553,7 @@ print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type
                 sent_at: None,
                 nonce: None,
                 letter_id: None,
+                mode: None,
             })
             .expect("start");
         // The watchdog's own timeout is two minutes; this asserts it is armed,
@@ -3663,6 +3668,7 @@ print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type
             "m".into(),
             "".into(),
             "ask".into(),
+            None,
         )
         .expect("bot");
         let ran_auto = || {
@@ -3757,6 +3763,7 @@ print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type
                 sent_at: None,
                 nonce: None,
                 letter_id: None,
+                mode: None,
             })
             .expect("start");
         std::thread::sleep(std::time::Duration::from_millis(300));
@@ -3780,7 +3787,7 @@ print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type
         let dir = std::env::temp_dir().join(format!("sheet-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&dir).expect("dir");
         let ws = crate::workspace::create(store, "sheet".into(), dir.to_string_lossy().into_owned()).expect("workspace").id;
-        let bot = crate::session::create(store, ws.clone(), "bot".into(), "B".into(), "claude".into(), "".into(), "".into(), "ask".into())
+        let bot = crate::session::create(store, ws.clone(), "bot".into(), "B".into(), "claude".into(), "".into(), "".into(), "ask".into(), None)
             .expect("bot");
         let child = crate::session::create_child(store, ws, "C".into(), "claude".into(), "".into(), "ask".into(), None, Some(bot.id.clone()))
             .expect("child");

@@ -41,12 +41,39 @@ pub struct TurnStart {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub letter_id: Option<String>,
+    /// What a message sent while a turn runs becomes: `steer` (into the
+    /// running turn), `queue` (the turn after it), or `auto` (the daemon
+    /// decides). Absent is `auto`, and a message sent to an idle session
+    /// starts a turn whatever it says.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "\"auto\" | \"steer\" | \"queue\"")]
+    pub mode: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, TS)]
-#[ts(export, export_to = "../../../src/lib/protocol.ts")]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
 pub struct TurnStarted {
     pub working: bool,
+    /// How the message was handed over: `started` (a turn of its own),
+    /// `steered` (into the running turn) or `queued` (after it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "\"started\" | \"steered\" | \"queued\"")]
+    pub delivery: Option<String>,
+    /// The letter the message became, when it was sent as one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub letter_id: Option<String>,
+}
+
+/// Sends a queued letter now: it goes to the head of the queue, a running
+/// turn is stopped, and a turn begins with it.
+#[derive(Serialize, Deserialize, Clone, Debug, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
+pub struct TurnSendNow {
+    pub session_id: String,
+    pub letter_id: String,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, TS)]
@@ -122,4 +149,22 @@ pub struct SessionsDeleted {
 #[ts(export, export_to = "../../../src/lib/protocol.ts")]
 pub struct SessionsRetention {
     pub days: u32,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// How a message was handed over goes on the wire under camel-case names,
+    /// and only when there is one to say.
+    #[test]
+    fn a_turn_started_names_its_delivery_and_letter_in_camel_case() {
+        let steered = TurnStarted { working: true, delivery: Some("steered".into()), letter_id: Some("l1".into()) };
+        assert_eq!(
+            serde_json::to_value(&steered).expect("json"),
+            serde_json::json!({ "working": true, "delivery": "steered", "letterId": "l1" })
+        );
+        let plain = TurnStarted { working: false, delivery: None, letter_id: None };
+        assert_eq!(serde_json::to_value(&plain).expect("json"), serde_json::json!({ "working": false }));
+    }
 }

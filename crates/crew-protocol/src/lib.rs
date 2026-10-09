@@ -387,6 +387,10 @@ pub struct SessionCreate {
     #[serde(default)]
     #[ts(optional = nullable)]
     pub worktree: Option<String>,
+    /// Which view owns its conversation; absent is the terminal.
+    #[serde(default)]
+    #[ts(optional, type = "\"chat\" | \"terminal\"")]
+    pub view: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, TS)]
@@ -619,6 +623,16 @@ pub struct Session {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub last_event: Option<SessionLastEvent>,
+    /// Which view owns its conversation: `chat` (Crew's chat, driving its
+    /// CLI turn by turn) or `terminal` (the CLI's own screen). A bot and a
+    /// child are always `terminal`, where it means nothing.
+    #[serde(default = "terminal_view")]
+    #[ts(type = "\"chat\" | \"terminal\"")]
+    pub view: String,
+}
+
+fn terminal_view() -> String {
+    "terminal".into()
 }
 
 /// A session's last event, as a chip reads it. With the status: `working`

@@ -207,6 +207,7 @@ mod tests {
             "".into(),
             "ask".into(),
             Some(tree.to_string_lossy().into()),
+            None,
         )
         .expect("session");
         assert_eq!(user_in(&store, Some(&tree.to_string_lossy())), Some(ws.id));
@@ -217,7 +218,7 @@ mod tests {
         let (store, dir) = store();
         let ws = crate::workspace::create(&store, "w".into(), dir.to_string_lossy().into()).expect("ws");
         let make = |kind: &str| {
-            crate::session::create(&store, ws.id.clone(), kind.into(), "S".into(), "claude".into(), "".into(), "".into(), "ask".into())
+            crate::session::create(&store, ws.id.clone(), kind.into(), "S".into(), "claude".into(), "".into(), "".into(), "ask".into(), None)
                 .expect("session")
                 .id
         };

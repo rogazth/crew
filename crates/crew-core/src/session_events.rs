@@ -303,6 +303,7 @@ mod tests {
         let ws = crate::workspace::create(&store, "w".into(), dir.to_string_lossy().into()).expect("ws");
         let parent = crate::session::create(
             &store, ws.id.clone(), "bot".into(), "Planner".into(), "claude".into(), "m".into(), "".into(), "full".into(),
+            None,
         )
         .expect("parent");
         let child = crate::session::create_child(
@@ -360,6 +361,7 @@ mod tests {
         let ws = crate::workspace::create(&store, "w".into(), dir.to_string_lossy().into()).expect("ws");
         let parent = crate::session::create(
             &store, ws.id.clone(), "bot".into(), "Planner".into(), "claude".into(), "m".into(), "".into(), "full".into(),
+            None,
         )
         .expect("parent");
         let child = crate::session::create_child(

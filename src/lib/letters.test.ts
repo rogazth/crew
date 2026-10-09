@@ -98,6 +98,7 @@ describe("queuedLetters", () => {
     text: "report",
     at: 5,
     state: "pending",
+    queue: "waiting",
   });
 
   it("drops one a turn already carries and keeps the rest as queued blocks", () => {
@@ -145,6 +146,7 @@ describe("threads", () => {
     text: id,
     at,
     state: "delivered",
+    queue: "waiting",
   });
 
   it("merges a page over what it holds, once each, oldest first", () => {

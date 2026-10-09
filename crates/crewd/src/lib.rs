@@ -529,6 +529,7 @@ fn proto_session(row: &crew_core::session::Session) -> proto::Session {
             at: event.at,
             cursor: event.cursor,
         }),
+        view: row.view.clone(),
     }
 }
 
@@ -1484,6 +1485,7 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
                     p.description,
                     p.autonomy,
                     p.worktree,
+                    p.view,
                 )?;
                 let effort = p.effort.clone().unwrap_or_default();
                 let tier = p.service_tier.clone().unwrap_or_default();
@@ -1888,7 +1890,7 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
                     // state the first one produced instead of running it twice.
                     let working = session::get(&store, session_id)?
                         .is_some_and(|row| row.status == "working" || row.status == "needs-input");
-                    Ok(Some(TurnStarted { working }))
+                    Ok(Some(TurnStarted { working, delivery: None, letter_id: None }))
                 })
                 .await?;
                 if let Some(started) = accepted {

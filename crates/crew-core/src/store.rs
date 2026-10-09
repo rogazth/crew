@@ -493,6 +493,27 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         )?;
         tx.commit()?;
     }
+    if current < 30 {
+        let tx = conn.unchecked_transaction()?;
+        // Which view owns a terminal session's conversation, fixed at creation.
+        if !has_column(&tx, "sessions", "view")? {
+            tx.execute_batch("ALTER TABLE sessions ADD COLUMN view TEXT NOT NULL DEFAULT 'terminal';")?;
+        }
+        crate::mailbox::migrate_queue(&tx)?;
+        // The chat setting was global. Its terminals that Crew can read
+        // (Claude, Codex, opencode) keep showing the chat; Cursor's CLI
+        // chat is not read by Crew, so its terminals stay terminals.
+        tx.execute_batch(
+            "UPDATE sessions SET view = 'chat'
+              WHERE kind = 'terminal' AND provider IN ('claude', 'codex', 'opencode')
+                AND EXISTS (SELECT 1 FROM app_state WHERE key = 'sessions:view' AND value = 'chat');",
+        )?;
+        tx.execute(
+            "INSERT INTO schema_migrations (version, applied_at) VALUES (30, ?1)",
+            params![now_millis()],
+        )?;
+        tx.commit()?;
+    }
     Ok(())
 }
 
@@ -762,6 +783,7 @@ mod migration_tests {
                 "m".into(),
                 "".into(),
                 "ask".into(),
+                None,
             )
             .expect("session");
             // Back to a v16 database: no column, no version row for it or anything after.
@@ -808,11 +830,13 @@ mod split_tests {
             let bot = crate::session::create(
                 &store, ws.id.clone(), "bot".into(), "Planner".into(), "claude".into(), "m".into(),
                 "You keep the roadmap.".into(), "full".into(),
+                None,
             )
             .expect("bot");
             let terminal = crate::session::create(
                 &store, ws.id.clone(), "terminal".into(), "Refactor".into(), "codex".into(), "".into(),
                 "".into(), "ask".into(),
+                None,
             )
             .expect("terminal");
             let blocks = vec![crate::blocks::new_block(crew_protocol::BlockRole::User, "what did we decide?")];
@@ -877,6 +901,7 @@ mod split_tests {
         let ws = crate::workspace::create(&store, "w".into(), dir.to_string_lossy().into()).expect("ws");
         let bot = crate::session::create(
             &store, ws.id.clone(), "bot".into(), "Planner".into(), "claude".into(), "m".into(), "".into(), "ask".into(),
+            None,
         )
         .expect("bot");
         crate::session::update(
@@ -912,6 +937,7 @@ mod split_tests {
         let ws = crate::workspace::create(&store, "w".into(), dir.to_string_lossy().into()).expect("ws");
         let parent = crate::session::create(
             &store, ws.id.clone(), "terminal".into(), "Shell".into(), "claude".into(), "".into(), "".into(), "full".into(),
+            None,
         )
         .expect("terminal");
         let child = crate::session::create_child(
@@ -945,10 +971,12 @@ mod rename_tests {
             let bot = crate::session::create(
                 &store, ws.id.clone(), "bot".into(), "Planner".into(), "claude".into(), "m".into(),
                 "You keep the roadmap.".into(), "full".into(),
+                None,
             )
             .expect("bot");
             let terminal = crate::session::create(
                 &store, ws.id.clone(), "terminal".into(), "Shell".into(), "claude".into(), "".into(), "".into(), "ask".into(),
+                None,
             )
             .expect("terminal");
             let child = crate::session::create_child(
@@ -1076,10 +1104,12 @@ mod lifecycle_tests {
             let ws = crate::workspace::create(&store, "w".into(), dir.to_string_lossy().into()).expect("ws");
             let bot = crate::session::create(
                 &store, ws.id.clone(), "bot".into(), "Planner".into(), "claude".into(), "m".into(), "".into(), "full".into(),
+                None,
             )
             .expect("bot");
             let shell = crate::session::create(
                 &store, ws.id.clone(), "terminal".into(), "Shell".into(), "claude".into(), "".into(), "".into(), "ask".into(),
+                None,
             )
             .expect("terminal");
             let child = crate::session::create_child(
@@ -1190,7 +1220,7 @@ mod acp_tests {
                 let row = if kind == "child" {
                     crate::session::create_child(&store, ws.id.clone(), format!("{provider}: x"), provider.into(), "m".into(), "full".into(), None, None)
                 } else {
-                    crate::session::create(&store, ws.id.clone(), kind.into(), "x".into(), provider.into(), "m".into(), "".into(), "full".into())
+                    crate::session::create(&store, ws.id.clone(), kind.into(), "x".into(), provider.into(), "m".into(), "".into(), "full".into(), None)
                 }
                 .expect("session");
                 if let Some(bound) = bound {
@@ -1279,6 +1309,145 @@ mod thread_index_tests {
         assert!(version >= 28, "{version}");
         assert_eq!(index, ["mailbox_from_idx", "mailbox_pending_idx", "mailbox_to_idx"]);
         assert!(plan.iter().all(|step| !step.starts_with("SCAN mailbox")), "{plan:?}");
+    }
+}
+
+#[cfg(test)]
+mod view_tests {
+    use super::*;
+
+    fn temp_dir(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("crew-{tag}-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        dir
+    }
+
+    /// Back to v29: the columns migration 30 adds are dropped, and its row too.
+    fn downgrade_to_29(store: &Store) {
+        store
+            .with(|conn| {
+                conn.execute_batch(
+                    "ALTER TABLE sessions DROP COLUMN view;
+                     ALTER TABLE mailbox DROP COLUMN files_json;
+                     ALTER TABLE mailbox DROP COLUMN queue_order;
+                     DELETE FROM schema_migrations WHERE version >= 30;",
+                )
+            })
+            .expect("downgrade");
+    }
+
+    /// A new database has the view and the queue columns, and their defaults:
+    /// a terminal session is in the terminal view, and a letter has no files
+    /// and no place in the user's order.
+    #[test]
+    fn a_fresh_database_has_the_view_and_queue_columns_with_their_defaults() {
+        let dir = temp_dir("v30-fresh");
+        let store = Store::open(dir.join("crew.sqlite3")).expect("open");
+        let ws = crate::workspace::create(&store, "w".into(), dir.to_string_lossy().into()).expect("ws");
+        let terminal = crate::session::create(
+            &store, ws.id.clone(), "terminal".into(), "Shell".into(), "claude".into(), "".into(), "".into(), "ask".into(), None,
+        )
+        .expect("terminal");
+
+        let view: String = store
+            .with(|conn| conn.query_row("SELECT view FROM sessions WHERE id = ?1", params![terminal.id], |row| row.get(0)))
+            .unwrap();
+        assert_eq!(view, "terminal");
+        let (default, not_null): (Option<String>, i64) = store
+            .with(|conn| {
+                conn.query_row("SELECT dflt_value, \"notnull\" FROM pragma_table_info('sessions') WHERE name = 'view'", [], |row| {
+                    Ok((row.get(0)?, row.get(1)?))
+                })
+            })
+            .unwrap();
+        assert_eq!((default.as_deref(), not_null), (Some("'terminal'"), 1));
+        let mailbox: Vec<(String, i64)> = store
+            .with(|conn| {
+                conn.prepare("SELECT name, \"notnull\" FROM pragma_table_info('mailbox') WHERE name IN ('files_json', 'queue_order') ORDER BY name")?
+                    .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+                    .collect()
+            })
+            .unwrap();
+        assert_eq!(mailbox, [("files_json".to_string(), 0), ("queue_order".to_string(), 0)]);
+    }
+
+    /// A v29 database whose chat setting is `chat`. Migration 30 moves the
+    /// terminals Crew reads (Claude, Codex, opencode) into the chat, and
+    /// leaves Cursor's terminal, the bot and the child as they were. Opening
+    /// again changes nothing, even after the user moved one back.
+    #[test]
+    fn a_v29_database_with_the_chat_setting_moves_its_readable_terminals_into_the_chat() {
+        let dir = temp_dir("v30-chat");
+        let path = dir.join("crew.sqlite3");
+        let ids = {
+            let store = Store::open(path.clone()).expect("open");
+            let ws = crate::workspace::create(&store, "w".into(), dir.to_string_lossy().into()).expect("ws");
+            let terminal = |provider: &str| {
+                crate::session::create(
+                    &store, ws.id.clone(), "terminal".into(), "x".into(), provider.into(), "m".into(), "".into(), "full".into(), None,
+                )
+                .expect("terminal")
+                .id
+            };
+            let ids = [
+                terminal("claude"),
+                terminal("codex"),
+                terminal("opencode"),
+                terminal("cursor"),
+                crate::session::create(
+                    &store, ws.id.clone(), "bot".into(), "Planner".into(), "claude".into(), "m".into(), "".into(), "full".into(), None,
+                )
+                .expect("bot")
+                .id,
+                crate::session::create_child(&store, ws.id.clone(), "claude: x".into(), "claude".into(), "m".into(), "full".into(), None, None)
+                    .expect("child")
+                    .id,
+            ];
+            set(&store, "sessions:view".into(), "chat".into()).expect("setting");
+            downgrade_to_29(&store);
+            ids
+        };
+
+        let store = Store::open(path.clone()).expect("reopen");
+        let version: i64 = store
+            .with(|conn| conn.query_row("SELECT MAX(version) FROM schema_migrations", [], |row| row.get(0)))
+            .unwrap();
+        assert!(version >= 30, "{version}");
+        let views: Vec<String> = ids
+            .iter()
+            .map(|id| crate::session::get(&store, id.clone()).unwrap().expect("row").view)
+            .collect();
+        assert_eq!(views, ["chat", "chat", "chat", "terminal", "terminal", "terminal"]);
+
+        // The user moves one back to its own screen: opening again keeps it.
+        store
+            .with(|conn| conn.execute("UPDATE sessions SET view = 'terminal' WHERE id = ?1", params![ids[0]]))
+            .expect("set");
+        drop(store);
+        let store = Store::open(path).expect("third open");
+        let view = crate::session::get(&store, ids[0].clone()).unwrap().expect("row").view;
+        assert_eq!(view, "terminal");
+    }
+
+    /// Without the chat setting, no terminal moves, whichever provider it runs.
+    #[test]
+    fn a_v29_database_without_the_chat_setting_keeps_every_terminal_in_the_terminal() {
+        let dir = temp_dir("v30-terminal");
+        let path = dir.join("crew.sqlite3");
+        let claude = {
+            let store = Store::open(path.clone()).expect("open");
+            let ws = crate::workspace::create(&store, "w".into(), dir.to_string_lossy().into()).expect("ws");
+            let claude = crate::session::create(
+                &store, ws.id.clone(), "terminal".into(), "x".into(), "claude".into(), "m".into(), "".into(), "full".into(), None,
+            )
+            .expect("terminal");
+            downgrade_to_29(&store);
+            claude.id
+        };
+
+        let store = Store::open(path).expect("reopen");
+        let view = crate::session::get(&store, claude).unwrap().expect("row").view;
+        assert_eq!(view, "terminal");
     }
 }
 

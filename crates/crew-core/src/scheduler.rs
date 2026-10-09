@@ -250,6 +250,7 @@ impl Scheduler {
             sent_at: None,
             nonce: None,
             letter_id: None,
+            mode: None,
         });
         if started_turn.is_err() {
             self.finish(&row.routine.id, &run, RunStatus::Error);
@@ -427,6 +428,7 @@ print(json.dumps({"type":"step_finish","sessionID":sid,"part":{"id":"s1","type":
                 "m".into(),
                 "".into(),
                 "full".into(),
+                None,
             )
             .expect("bot")
         }

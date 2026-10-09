@@ -758,6 +758,7 @@ impl SessionTools {
             sent_at: None,
             nonce: None,
             letter_id: Some(letter.id.clone()),
+            mode: None,
         }) {
             let _ = mailbox::dispose(&self.store, &letter.id);
             let _ = session::set_status(&self.store, row.id.clone(), "error".into());
@@ -819,6 +820,7 @@ impl SessionTools {
             String::new(),
             autonomy.clone(),
             worktree.clone(),
+            None,
         )
         .map_err(|error| match &worktree {
             Some(tree) => format!("The worktree is at {tree}, but its session could not be made: {error}"),
@@ -1705,6 +1707,7 @@ while True:
                 "opencode/nemotron-3.5-lightning-free".into(),
                 String::new(),
                 autonomy.into(),
+                None,
             )
             .expect("session");
             Caller::from_session(row)
@@ -2088,6 +2091,7 @@ while True:
             "sonnet".into(),
             String::new(),
             "full".into(),
+            None,
         )
         .expect("bot");
         for text in ["one", "two"] {
@@ -2103,6 +2107,7 @@ while True:
                     sent_at: None,
                     nonce: None,
                     letter_id: None,
+                    mode: None,
                 })
                 .expect("start");
             w.settle(&bot.id);
@@ -2549,6 +2554,7 @@ while True:
             "gpt-5.6-luna".into(),
             String::new(),
             "full".into(),
+            None,
         )
         .expect("bot");
         for text in ["one", "two"] {
@@ -2564,6 +2570,7 @@ while True:
                     sent_at: None,
                     nonce: None,
                     letter_id: None,
+                    mode: None,
                 })
                 .expect("start");
             w.settle(&bot.id);
@@ -3327,6 +3334,7 @@ while True:
             sent_at: None,
             nonce: None,
             letter_id: None,
+            mode: None,
         });
         assert!(again.is_err_and(|e| e.contains("already running")));
         w.wait(&parent, &id, json!({}));
@@ -3651,6 +3659,7 @@ while True:
                 sent_at: None,
                 nonce: None,
                 letter_id: None,
+                mode: None,
             })
             .expect("busy");
         for (n, kid) in kids.iter().enumerate() {
@@ -3752,6 +3761,7 @@ while True:
                     sent_at: None,
                     nonce: None,
                     letter_id: None,
+                    mode: None,
                 })
                 .expect("busy");
         }
@@ -4278,6 +4288,7 @@ while True:
                 sent_at: None,
                 nonce: None,
                 letter_id: Some("forged".into()),
+                mode: None,
             })
             .expect("start");
         w.settle(&child);

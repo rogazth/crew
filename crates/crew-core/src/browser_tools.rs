@@ -590,6 +590,7 @@ mod tests {
             parent_name: None,
             user_seen: 0,
             last_event: None,
+            view: crate::session::DEFAULT_VIEW.into(),
         })
     }
 

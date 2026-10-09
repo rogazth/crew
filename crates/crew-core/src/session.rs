@@ -66,6 +66,19 @@ pub struct Session {
     /// Its event at `cursor`: the last one it had.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_event: Option<LastEvent>,
+    /// Which view owns the conversation of a terminal session: `chat` (Crew
+    /// drives it turn by turn) or `terminal` (its CLI's own screen). Bots and
+    /// children are always `terminal`, where it means nothing.
+    #[serde(default = "default_view")]
+    pub view: String,
+}
+
+/// A session's view when none was stated: its CLI's own screen.
+pub const DEFAULT_VIEW: &str = "terminal";
+pub const VIEWS: [&str; 2] = ["chat", DEFAULT_VIEW];
+
+fn default_view() -> String {
+    DEFAULT_VIEW.into()
 }
 
 /// A session's last event as a chip reads it (see [`LastEvent::kind`]).
@@ -123,8 +136,9 @@ pub const SESSION_COLUMNS: &str = "s.id, s.workspace_id, s.kind, COALESCE(b.name
                                    s.user_seen,
                                    (SELECT json_object('kind', e.kind, 'outcome', e.outcome,
                                                        'asks', json_extract(e.request, '$.kind'), 'at', e.at)
-                                      FROM session_events e WHERE e.session_id = s.id AND e.cursor = s.cursor)";
-pub const SESSION_COLUMN_COUNT: usize = 24;
+                                      FROM session_events e WHERE e.session_id = s.id AND e.cursor = s.cursor),
+                                   s.view";
+pub const SESSION_COLUMN_COUNT: usize = 25;
 
 /// What [`SESSION_COLUMNS`] reads from.
 pub const SESSIONS: &str = "sessions s LEFT JOIN bots b ON b.id = s.bot_id";
@@ -159,6 +173,7 @@ pub fn row_to_session(row: &rusqlite::Row, at: usize) -> rusqlite::Result<Sessio
         parent_name: row.get(at + 21)?,
         user_seen: row.get(at + 22)?,
         last_event: LastEvent::read(row.get(at + 23)?, row.get(at + 16)?),
+        view: row.get(at + 24)?,
     })
 }
 
@@ -275,8 +290,9 @@ pub fn create(
     model: String,
     description: String,
     autonomy: String,
+    view: Option<String>,
 ) -> Result<Session, String> {
-    create_in_worktree(store, workspace_id, kind, name, provider, model, description, autonomy, None)
+    create_in_worktree(store, workspace_id, kind, name, provider, model, description, autonomy, None, view)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -290,11 +306,23 @@ pub fn create_in_worktree(
     description: String,
     autonomy: String,
     worktree: Option<String>,
+    view: Option<String>,
 ) -> Result<Session, String> {
     if kind != "bot" && kind != "terminal" {
         return Err(format!("Unknown session kind: {kind}"));
     }
-    insert(store, workspace_id, kind, name, provider, model, description, autonomy, worktree, None)
+    let view = view_or_default(view)?;
+    insert(store, workspace_id, kind, name, provider, model, description, autonomy, worktree, None, view)
+}
+
+/// A view a caller asked for, or the default when it asked for none. Any
+/// other word is refused rather than stored: the window reads it as a view.
+fn view_or_default(view: Option<String>) -> Result<String, String> {
+    match view.filter(|view| !view.is_empty()) {
+        None => Ok(DEFAULT_VIEW.into()),
+        Some(view) if VIEWS.contains(&view.as_str()) => Ok(view),
+        Some(view) => Err(format!("Unknown session view: {view}")),
+    }
 }
 
 /// A session started for `parent` (a session id; `None` is the user): a
@@ -311,7 +339,7 @@ pub fn create_child(
     worktree: Option<String>,
     parent: Option<String>,
 ) -> Result<Session, String> {
-    insert(store, workspace_id, "child".into(), name, provider, model, String::new(), autonomy, worktree, parent)
+    insert(store, workspace_id, "child".into(), name, provider, model, String::new(), autonomy, worktree, parent, DEFAULT_VIEW.into())
 }
 
 /// Mark a session as handed to the user by `by`.
@@ -336,6 +364,7 @@ fn insert(
     autonomy: String,
     worktree: Option<String>,
     parent: Option<String>,
+    view: String,
 ) -> Result<Session, String> {
     let name = name.trim().to_string();
     if name.is_empty() {
@@ -368,6 +397,7 @@ fn insert(
         parent_name: None,
         user_seen: 0,
         last_event: None,
+        view,
     };
 
     store.with(|conn| {
@@ -393,8 +423,8 @@ fn insert(
             "INSERT INTO sessions
                (id, workspace_id, kind, name, provider, model, description,
                 notifications, created_at, updated_at, sort_order, autonomy, worktree,
-                status, bot_id, parent_id)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+                status, bot_id, parent_id, view)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
             params![
                 session.id,
                 session.workspace_id,
@@ -411,7 +441,8 @@ fn insert(
                 session.worktree,
                 session.status,
                 session.bot_id,
-                session.parent_id
+                session.parent_id,
+                session.view
             ],
         )?;
         tx.commit()
@@ -1095,6 +1126,7 @@ mod tests {
             "m".into(),
             "".into(),
             autonomy.into(),
+            None,
         )
     }
 
@@ -1105,6 +1137,24 @@ mod tests {
 
     fn name_of(store: &Store, id: &str) -> String {
         get(store, id.into()).expect("get").expect("row").name
+    }
+
+    #[test]
+    fn a_session_is_in_the_terminal_view_unless_it_asks_for_the_chat() {
+        let (store, workspace) = world();
+        let asked = create(
+            &store, workspace.clone(), "terminal".into(), "claude 1".into(), "claude".into(), "m".into(), "".into(), "ask".into(),
+            Some("chat".into()),
+        )
+        .expect("chat");
+        let unasked = terminal(&store, &workspace, "claude 2", "claude");
+        assert_eq!((asked.view.as_str(), unasked.view.as_str()), ("chat", "terminal"));
+        assert_eq!(get(&store, asked.id.clone()).expect("get").expect("row").view, "chat");
+        let unknown = create(
+            &store, workspace, "terminal".into(), "claude 3".into(), "claude".into(), "m".into(), "".into(), "ask".into(),
+            Some("pane".into()),
+        );
+        assert!(unknown.is_err(), "{unknown:?}");
     }
 
     #[test]
@@ -1136,13 +1186,13 @@ mod tests {
         set_options(&store, s.id.clone(), String::new(), String::new(), String::new(), "ask".into()).expect("options");
         let read = get(&store, s.id).expect("get").expect("row");
         assert_eq!((read.model.as_str(), read.effort.as_str(), read.service_tier.as_str()), ("claude-opus-5-5", "high", ""));
-        let new = create(&store, workspace.clone(), "terminal".into(), "codex 1".into(), "codex".into(), String::new(), String::new(), "ask".into())
+        let new = create(&store, workspace.clone(), "terminal".into(), "codex 1".into(), "codex".into(), String::new(), String::new(), "ask".into(), None)
             .expect("codex");
         assert_eq!(new.model, crate::tools::unnamed_model("codex"));
         assert_eq!(new.effort, crate::tools::unnamed_effort("codex"));
         assert_eq!(new.service_tier, crate::tools::unnamed_service_tier("codex"));
         assert!(!new.model.is_empty());
-        let open = create(&store, workspace, "terminal".into(), "opencode 1".into(), "opencode".into(), String::new(), String::new(), "ask".into())
+        let open = create(&store, workspace, "terminal".into(), "opencode 1".into(), "opencode".into(), String::new(), String::new(), "ask".into(), None)
             .expect("opencode");
         assert_eq!(open.model, crate::tools::unnamed_model("opencode"));
         assert!(!open.model.is_empty());
@@ -1160,6 +1210,7 @@ mod tests {
             "grok-4.7-xhigh".into(),
             String::new(),
             "ask".into(),
+            None,
         )
         .expect("named");
         assert_eq!(named.model, "grok-4.7-xhigh");
@@ -1172,6 +1223,7 @@ mod tests {
             String::new(),
             String::new(),
             "ask".into(),
+            None,
         )
         .expect("unnamed");
         assert_eq!(unnamed.model, crate::tools::unnamed_model("cursor"));
@@ -1239,6 +1291,7 @@ mod tests {
             "m".into(),
             "".into(),
             "ask".into(),
+            None,
         );
         assert!(wrong_kind.is_err_and(|e| e.contains("Unknown session kind")));
     }
@@ -1312,6 +1365,7 @@ mod tests {
             "m".into(),
             "".into(),
             "ask".into(),
+            None,
         )
         .expect("terminal")
     }
@@ -1422,6 +1476,7 @@ mod tests {
             "".into(),
             "ask".into(),
             Some(tree.into()),
+            None,
         )
         .expect("bot")
     }
@@ -1483,6 +1538,7 @@ mod tests {
             "".into(),
             "ask".into(),
             Some(String::new()),
+            None,
         )
         .expect("terminal");
         assert_eq!(made.worktree, None);
@@ -1502,6 +1558,7 @@ mod tests {
                 "".into(),
                 "ask".into(),
                 worktree.map(Into::into),
+                None,
             )
             .expect("bot")
             .id

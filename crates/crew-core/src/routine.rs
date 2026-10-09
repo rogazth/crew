@@ -342,6 +342,7 @@ mod tests {
             "m".into(),
             "".into(),
             "ask".into(),
+            None,
         )
         .expect("session");
         upsert(

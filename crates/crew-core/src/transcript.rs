@@ -432,6 +432,7 @@ mod tests {
             "m".into(),
             "".into(),
             "ask".into(),
+            None,
         )
         .unwrap();
         let hub = TranscriptHub::new(store.clone());
@@ -467,6 +468,7 @@ mod tests {
             "m".into(),
             "".into(),
             "ask".into(),
+            None,
         )
         .unwrap();
         let hub = TranscriptHub::new(store.clone());
@@ -515,6 +517,7 @@ mod review_tests {
             "m".into(),
             "".into(),
             "ask".into(),
+            None,
         )
         .unwrap()
         .id
@@ -612,6 +615,7 @@ mod window_tests {
             "m".into(),
             "".into(),
             "ask".into(),
+            None,
         )
         .unwrap()
         .id
