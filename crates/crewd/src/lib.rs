@@ -1242,7 +1242,7 @@ fn terminal_launch(
     bridge: &Bridge,
     leases: &Leases,
     session_id: &str,
-    command: Vec<String>,
+    mut command: Vec<String>,
 ) -> Result<(Vec<String>, SpawnOptions), String> {
     let row = session::get(store, session_id.to_string())?
         .ok_or_else(|| format!("No session {session_id}"))?;
@@ -1253,6 +1253,11 @@ fn terminal_launch(
     // second one on the same conversation in a PTY would write over it.
     if row.view != "terminal" {
         return Err(format!("{} is in the chat view: its CLI is not run in a terminal", row.name));
+    }
+    // The PTY searches the fixed folders first, so a bare `opencode` there would
+    // be the 1.x install. Resolved before anything is minted or claimed.
+    if row.provider == "opencode" && command.first().is_some_and(|binary| binary == "opencode") {
+        command[0] = crew_core::shell_path::resolve_opencode()?.to_string_lossy().into_owned();
     }
     let info = bridge.info()?;
     let token = bridge.mint_process(session_id);

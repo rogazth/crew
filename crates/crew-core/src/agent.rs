@@ -202,19 +202,24 @@ impl AgentHost {
         if name.is_empty() || name.contains('/') {
             return Err(format!("Not a binary name: {name}"));
         }
-        shell_path::resolve(name)
-            .map(|path| AgentBinary {
-                path: path.to_string_lossy().into_owned(),
-            })
-            .ok_or_else(|| format!("`{name}` was not found on your PATH."))
+        // A 1.x opencode sits on a folder the shell's PATH has moved past, so
+        // the name alone would find the wrong one.
+        let path = if name == "opencode" {
+            shell_path::resolve_opencode()?
+        } else {
+            shell_path::resolve(name).ok_or_else(|| format!("`{name}` was not found on your PATH."))?
+        };
+        Ok(AgentBinary {
+            path: path.to_string_lossy().into_owned(),
+        })
     }
 
-    /// The names found on the search path. A filesystem probe, so it is cheap
-    /// enough to ask again and pick up a CLI installed mid-session.
+    /// The names that resolve, asked again each time so a CLI installed
+    /// mid-session shows up. opencode costs a `--version` run to answer.
     pub fn installed(names: Vec<String>) -> Vec<String> {
         names
             .into_iter()
-            .filter(|name| !name.contains('/') && shell_path::resolve(name).is_some())
+            .filter(|name| !name.contains('/') && Self::resolve(name).is_ok())
             .collect()
     }
 
