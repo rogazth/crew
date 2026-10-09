@@ -1530,7 +1530,10 @@ print(json.dumps({{"type": "step_finish", "sessionID": sid, "part": {{"id": "sf"
 
     /// A Claude Code on stream-json: it answers the initialize request, echoes
     /// each user message as it takes it in (`--replay-user-messages`), and
-    /// folds whatever arrived during a turn's `SLEEP n` into that turn.
+    /// folds whatever arrived during a turn's `SLEEP n` into that turn. Like
+    /// the real CLI it says `system/init` at the start of every turn, and it
+    /// serves as many turns as it is sent on one stdin. Each launch is logged
+    /// to `claude-launch.log` with its argv, pid and token.
     fn fake_claude(dir: &Path) -> String {
         let path = dir.join("fake-claude");
         std::fs::write(
@@ -1541,6 +1544,8 @@ import json, os, signal, sys, threading, time, re, uuid, queue
 signal.signal(signal.SIGTERM, lambda *_: (time.sleep(0.2), os._exit(0)))
 args = sys.argv[1:]
 CONTROL = os.path.join(os.path.dirname(os.path.abspath(sys.argv[0])), "claude-control.log")
+LAUNCH = os.path.join(os.path.dirname(os.path.abspath(sys.argv[0])), "claude-launch.log")
+with open(LAUNCH, "a") as f: f.write(json.dumps({"argv": args, "pid": os.getpid(), "cwd": os.getcwd(), "env": {"CREW_TOKEN": os.environ.get("CREW_TOKEN", "")}}) + "\n")
 stopped = threading.Event()
 sid = args[args.index("--resume") + 1] if "--resume" in args else args[args.index("--session-id") + 1]
 replay = "--replay-user-messages" in args
@@ -1568,6 +1573,7 @@ threading.Thread(target=reader, daemon=True).start()
 while True:
     first = inbox.get()
     heard = [text_of(first)]
+    out({"type": "system", "subtype": "init", "session_id": sid, "model": "fake", "tools": []})
     if replay:
         out({"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": heard[0]}]}, "session_id": sid})
     b = re.search(r"BACKGROUND (\d+(?:\.\d+)?)", heard[0])
@@ -1588,14 +1594,17 @@ while True:
     m = re.search(r"SLEEP (\d+(?:\.\d+)?)", heard[0])
     if m:
         time.sleep(float(m.group(1)))
-    while not inbox.empty():
+    # STUBBORN never looks up before it answers: what is sent meanwhile stays
+    # queued, and the CLI starts a turn of its own on it afterwards.
+    while "STUBBORN" not in heard[0] and not inbox.empty():
         more = text_of(inbox.get())
         if replay:
             out({"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": more}]}, "session_id": sid})
         heard.append(more)
     reply = "report: " + " + ".join(h.strip().splitlines()[-1] for h in heard)
     out({"type": "assistant", "message": {"id": "m" + uuid.uuid4().hex[:6], "role": "assistant", "content": [{"type": "text", "text": reply}]}, "session_id": sid})
-    out({"type": "result", "subtype": "success", "is_error": False, "result": reply, "session_id": sid, "total_cost_usd": 0, "usage": {}})
+    failed = "FAIL" in heard[0]
+    out({"type": "result", "subtype": "error_during_execution" if failed else "success", "is_error": failed, "result": "it broke" if failed else reply, "session_id": sid, "total_cost_usd": 0, "usage": {}})
 "#,
         )
         .expect("write fake");
@@ -1888,6 +1897,325 @@ while True:
     }
 
     impl World {
+        /// A Claude child on the fake CLI, and the log of what it was launched with.
+        fn claude(&self, parent: &Caller, prompt: &str) -> (String, PathBuf) {
+            self.turns.override_binary("claude", fake_claude(&self.dir));
+            let started = self.call(parent, "start_session", json!({ "provider": "claude", "prompt": prompt })).expect("start");
+            (started["id"].as_str().unwrap().to_string(), self.dir.join("claude-launch.log"))
+        }
+    }
+
+    /// The value a launch's argv gives a flag.
+    fn after_flag(launch: &Value, flag: &str) -> Option<String> {
+        let argv = launch["argv"].as_array()?;
+        let at = argv.iter().position(|arg| arg == flag)?;
+        argv.get(at + 1)?.as_str().map(str::to_string)
+    }
+
+    /// Until the child's turn has read its first message: its conversation is
+    /// bound and the CLI is on it.
+    fn until_claude_turn(w: &World, id: &str) {
+        for _ in 0..400 {
+            if w.row(id).provider_session_id.is_some() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        std::thread::sleep(Duration::from_millis(300));
+    }
+
+    /// One Claude process for a child: its second turn is a user message on
+    /// the stdin of the one the first left up, with no new launch and no
+    /// `--resume`, and the process is idle between them.
+    #[test]
+    fn a_claude_childs_next_turn_runs_on_the_process_it_kept() {
+        let w = world();
+        let parent = w.session("terminal", "shell", "full");
+        let (id, log) = w.claude(&parent, "remember 4817");
+        let out = w.wait(&parent, &id, json!({}));
+        assert_eq!(out["sessions"][0]["report"], "report: remember 4817", "{out}");
+        w.settle(&id);
+        assert_eq!(w.turns.test_agents().running(), vec![id.clone()]);
+        assert!(w.turns.idle_since(&id).is_some());
+
+        let more = w.call(&parent, "send_message", json!({ "to": id, "text": "what number?" })).expect("send");
+        assert_eq!(more["delivery"], "started", "{more}");
+        assert_eq!(w.wait(&parent, &id, json!({}))["sessions"][0]["report"], "report: what number?");
+        w.settle(&id);
+        let launches = launched(&log);
+        assert_eq!(launches.len(), 1, "{launches:?}");
+        assert!(after_flag(&launches[0], "--resume").is_none(), "{}", launches[0]);
+        assert_eq!(after_flag(&launches[0], "--session-id"), w.row(&id).provider_session_id);
+        assert_eq!(w.turns.test_agents().running(), vec![id.clone()]);
+        // The CLI's own `system/init` of each turn started nothing: two turns,
+        // each ended once, and no error.
+        let read = w.call(&parent, "read_session", json!({ "session": id })).expect("read");
+        let text = read["text"].as_str().unwrap();
+        assert_eq!(text.matches("Turn ended").count(), 2, "{text}");
+        assert!(text.find("report: remember 4817").unwrap() < text.find("report: what number?").unwrap(), "{text}");
+        assert_eq!(w.row(&id).status, "idle");
+    }
+
+    /// The token the CLI's MCP server was given at launch is the one the bridge
+    /// still honours on a later turn: nothing minted another for the session.
+    #[test]
+    fn a_kept_claude_process_keeps_the_token_it_was_launched_with() {
+        let w = world();
+        let parent = w.session("terminal", "shell", "full");
+        let (id, log) = w.claude(&parent, "one");
+        w.wait(&parent, &id, json!({}));
+        w.settle(&id);
+        let token = launched(&log)[0]["env"]["CREW_TOKEN"].clone();
+        assert!(token.as_str().is_some_and(|token| !token.is_empty()), "{token}");
+        w.call(&parent, "send_message", json!({ "to": id, "text": "two" })).expect("send");
+        w.wait(&parent, &id, json!({}));
+        assert_eq!(launched(&log).len(), 1);
+        let bearer = w.turns.test_bridge().whose(token.as_str().unwrap());
+        assert_eq!(bearer, Some(crate::bridge::Bearer::Session(id.clone())), "the live process lost its token");
+    }
+
+    /// A process that died while nobody was talking to it is not written to:
+    /// the next message launches another and resumes the conversation.
+    #[test]
+    fn a_claude_process_killed_while_idle_is_launched_again_and_resumes() {
+        let w = world();
+        let parent = w.session("terminal", "shell", "full");
+        let (id, log) = w.claude(&parent, "remember 4817");
+        w.wait(&parent, &id, json!({}));
+        w.settle(&id);
+        let bound = w.row(&id).provider_session_id.expect("bound");
+        w.turns.test_agents().kill(&id);
+
+        let more = w.call(&parent, "send_message", json!({ "to": id, "text": "what number?" })).expect("send");
+        assert_eq!(more["delivery"], "started", "{more}");
+        assert_eq!(w.wait(&parent, &id, json!({}))["sessions"][0]["report"], "report: what number?");
+        let launches = launched(&log);
+        assert_eq!(launches.len(), 2, "{launches:?}");
+        assert_eq!(after_flag(&launches[1], "--resume"), Some(bound));
+    }
+
+    /// The same when the exit is heard: the entry is dropped, the tray closed,
+    /// and the process no longer counts as idle.
+    #[test]
+    fn a_claude_process_that_exits_while_idle_is_forgotten() {
+        let w = world();
+        let parent = w.session("terminal", "shell", "full");
+        let (id, log) = w.claude(&parent, "one");
+        w.wait(&parent, &id, json!({}));
+        w.settle(&id);
+        assert!(w.turns.idle_since(&id).is_some());
+        assert!(w.turns.background_list(&id).live, "the tray closed with the turn");
+
+        let pid = launched(&log)[0]["pid"].as_u64().expect("pid").to_string();
+        std::process::Command::new("kill").args(["-9", pid.as_str()]).status().expect("kill");
+        for _ in 0..200 {
+            if w.turns.idle_since(&id).is_none() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        assert!(w.turns.idle_since(&id).is_none(), "the dead process is still thought idle");
+        assert!(!w.turns.background_list(&id).live, "its tray is still open");
+        // No error: nobody was talking to it.
+        assert_eq!(w.row(&id).status, "idle");
+
+        w.call(&parent, "send_message", json!({ "to": id, "text": "again" })).expect("send");
+        assert_eq!(w.wait(&parent, &id, json!({}))["sessions"][0]["report"], "report: again");
+        let launches = launched(&log);
+        assert_eq!(launches.len(), 2);
+        assert!(after_flag(&launches[1], "--resume").is_some(), "{}", launches[1]);
+    }
+
+    /// A bot starts a clean provider session every turn, so each turn gets its
+    /// own process and it is gone when the turn ends.
+    #[test]
+    fn a_claude_bot_launches_once_for_each_turn() {
+        let w = world();
+        w.turns.override_binary("claude", fake_claude(&w.dir));
+        let bot = session::create(
+            w.turns.store(),
+            w.workspace.clone(),
+            "bot".into(),
+            "robin".into(),
+            "claude".into(),
+            "sonnet".into(),
+            String::new(),
+            "full".into(),
+        )
+        .expect("bot");
+        for text in ["one", "two"] {
+            w.turns
+                .start(TurnStart {
+                    session_id: bot.id.clone(),
+                    cwd: w.dir.to_string_lossy().into_owned(),
+                    text: text.into(),
+                    files: None,
+                    mentions: None,
+                    hidden: None,
+                    from_bot: None,
+                    sent_at: None,
+                    nonce: None,
+                    letter_id: None,
+                })
+                .expect("start");
+            w.settle(&bot.id);
+            assert!(w.turns.test_agents().running().is_empty(), "the bot's process outlived its turn");
+            assert!(w.turns.idle_since(&bot.id).is_none());
+        }
+        let launches = launched(&w.dir.join("claude-launch.log"));
+        assert_eq!(launches.len(), 2, "{launches:?}");
+        assert!(launches.iter().all(|launch| after_flag(launch, "--resume").is_none()), "{launches:?}");
+    }
+
+    /// A `result` that comes while no turn runs belongs to none: it ends
+    /// nothing, shows nothing, and the next message still starts a turn.
+    #[test]
+    fn a_claude_process_that_answers_while_idle_does_not_end_the_next_turn() {
+        let w = world();
+        let parent = w.session("terminal", "shell", "full");
+        let (id, _) = w.claude(&parent, "one");
+        w.wait(&parent, &id, json!({}));
+        w.settle(&id);
+        let before = w.turns.transcripts().len(&id);
+        let late = json!({ "type": "result", "subtype": "success", "is_error": false, "result": "late", "usage": {} });
+        w.turns.on_agent_lines("agent-stdout", &id, vec![late.to_string()]);
+        assert_eq!(w.turns.transcripts().len(&id), before);
+        w.call(&parent, "send_message", json!({ "to": id, "text": "SLEEP 1" })).expect("send");
+        assert_eq!(w.wait(&parent, &id, json!({}))["sessions"][0]["report"], "report: SLEEP 1");
+    }
+
+    /// A stop leaves the process in a state nobody vouches for (its answer to
+    /// the interrupt would end the next turn): it goes with the turn, and the
+    /// next message launches another on the same conversation.
+    #[test]
+    fn a_stopped_claude_turn_releases_the_process_and_the_next_turn_resumes() {
+        let w = world();
+        let parent = w.session("terminal", "shell", "full");
+        let (id, log) = w.claude(&parent, "SLEEP 30");
+        until_claude_turn(&w, &id);
+        let bound = w.row(&id).provider_session_id.expect("bound");
+        w.turns.stop(&id).expect("stop");
+        w.settle(&id);
+        assert!(w.turns.test_agents().running().is_empty(), "the stopped turn's process was kept");
+        assert!(w.turns.idle_since(&id).is_none());
+        assert_eq!(w.wait(&parent, &id, json!({}))["sessions"][0]["outcome"], "stopped");
+
+        let more = w.call(&parent, "send_message", json!({ "to": id, "text": "again" })).expect("send");
+        assert_eq!(more["delivery"], "started", "{more}");
+        assert_eq!(w.wait(&parent, &id, json!({}))["sessions"][0]["report"], "report: again");
+        let launches = launched(&log);
+        assert_eq!(launches.len(), 2, "{launches:?}");
+        assert_eq!(after_flag(&launches[0], "--session-id"), Some(bound.clone()));
+        assert_eq!(after_flag(&launches[1], "--resume"), Some(bound));
+    }
+
+    /// The grace of a stop that kills the process after a moment is the stopped
+    /// turn's: the process launched for the message that follows it lives on.
+    #[test]
+    fn the_grace_of_a_stopped_claude_turn_does_not_kill_the_process_after_it() {
+        let w = world();
+        let parent = w.session("terminal", "shell", "full");
+        let (id, _) = w.claude(&parent, "SLEEP 30");
+        until_claude_turn(&w, &id);
+        w.turns.stop(&id).expect("stop");
+        w.settle(&id);
+        assert_eq!(w.wait(&parent, &id, json!({}))["sessions"][0]["outcome"], "stopped");
+        w.call(&parent, "send_message", json!({ "to": id, "text": "SLEEP 3" })).expect("send");
+        // Past the stopped turn's grace, which is over while this one still runs.
+        let out = w.wait(&parent, &id, json!({}));
+        assert_eq!(out["sessions"][0]["report"], "report: SLEEP 3", "{out}");
+    }
+
+    /// A failed turn does not keep its process either.
+    #[test]
+    fn a_failed_claude_turn_releases_the_process() {
+        let w = world();
+        let parent = w.session("terminal", "shell", "full");
+        let (id, log) = w.claude(&parent, "FAIL");
+        w.wait(&parent, &id, json!({}));
+        w.settle(&id);
+        assert!(w.turns.test_agents().running().is_empty());
+        assert!(w.turns.idle_since(&id).is_none());
+        w.call(&parent, "send_message", json!({ "to": id, "text": "again" })).expect("send");
+        assert_eq!(w.wait(&parent, &id, json!({}))["sessions"][0]["report"], "report: again");
+        assert_eq!(launched(&log).len(), 2);
+    }
+
+    /// A steer the turn answered without reading is queued inside the CLI,
+    /// which would start a turn of its own on it: so the process is let go,
+    /// and the steer goes back in the box and is handed over once.
+    #[test]
+    fn a_steer_a_claude_turn_never_read_releases_the_process_and_goes_back_to_the_box() {
+        let w = world();
+        let parent = w.session("terminal", "shell", "full");
+        let (id, log) = w.claude(&parent, "STUBBORN SLEEP 2");
+        until_claude_turn(&w, &id);
+        let steered = w.call(&parent, "send_message", json!({ "to": id, "text": "and this", "steer": true })).expect("steer");
+        assert_eq!(steered["delivery"], "steered", "{steered}");
+        // The box hands it over as the next turn, on a process of its own.
+        let out = w.wait(&parent, &id, json!({}));
+        assert_eq!(out["sessions"][0]["report"], "report: and this", "{out}");
+        w.settle(&id);
+        let launches = launched(&log);
+        assert_eq!(launches.len(), 2, "{launches:?}");
+        assert!(after_flag(&launches[1], "--resume").is_some(), "{}", launches[1]);
+        let read = w.call(&parent, "read_session", json!({ "session": id })).expect("read");
+        let text = read["text"].as_str().unwrap();
+        assert_eq!(text.matches("report: STUBBORN SLEEP 2").count(), 1, "{text}");
+        assert_eq!(text.matches("] and this").count(), 1, "{text}");
+    }
+
+    /// Background commands still open when the grace runs out would wake
+    /// Claude by themselves later: the turn ends on the result it had, and the
+    /// process goes with it, tray and all.
+    #[test]
+    fn a_claude_turn_that_ends_with_background_work_open_releases_the_process() {
+        let w = world();
+        let parent = w.session("terminal", "shell", "full");
+        let (id, log) = w.claude(&parent, "BACKGROUND 60");
+        let out = w.wait(&parent, &id, json!({}));
+        assert_eq!(out["sessions"][0]["report"], "started it in the background", "{out}");
+        w.settle(&id);
+        assert!(w.turns.test_agents().running().is_empty(), "a process with work open was kept");
+        assert!(w.turns.idle_since(&id).is_none());
+        assert!(!w.turns.background_list(&id).live);
+
+        w.call(&parent, "send_message", json!({ "to": id, "text": "again" })).expect("send");
+        assert_eq!(w.wait(&parent, &id, json!({}))["sessions"][0]["report"], "report: again");
+        let launches = launched(&log);
+        assert_eq!(launches.len(), 2, "{launches:?}");
+        assert!(after_flag(&launches[1], "--resume").is_some(), "{}", launches[1]);
+    }
+
+    /// Until the next turn the process runs on what it was launched with: a
+    /// session whose model changed gets another process on the same
+    /// conversation, not the old model under the new name.
+    #[test]
+    fn a_claude_session_whose_model_changed_is_launched_again_on_its_conversation() {
+        let w = world();
+        let parent = w.session("terminal", "shell", "full");
+        let (id, log) = w.claude(&parent, "one");
+        w.wait(&parent, &id, json!({}));
+        w.settle(&id);
+        let row = w.row(&id);
+        let bound = row.provider_session_id.clone().expect("bound");
+        session::set_options(w.turns.store(), id.clone(), "opus".into(), row.effort, row.service_tier, row.autonomy)
+            .expect("options");
+
+        w.call(&parent, "send_message", json!({ "to": id, "text": "two" })).expect("send");
+        assert_eq!(w.wait(&parent, &id, json!({}))["sessions"][0]["report"], "report: two");
+        w.settle(&id);
+        let launches = launched(&log);
+        assert_eq!(launches.len(), 2, "{launches:?}");
+        assert_eq!(after_flag(&launches[1], "--model"), Some("opus".to_string()));
+        assert_eq!(after_flag(&launches[1], "--resume"), Some(bound));
+        // The new process is the one kept now.
+        w.call(&parent, "send_message", json!({ "to": id, "text": "three" })).expect("send");
+        assert_eq!(w.wait(&parent, &id, json!({}))["sessions"][0]["report"], "report: three");
+        assert_eq!(launched(&log).len(), 2);
+    }
+
+    impl World {
         /// A Codex child on the fake app server, and the log of what it was sent.
         fn codex(&self, parent: &Caller, prompt: &str, autonomy: Option<&str>) -> (String, PathBuf) {
             let (fake, log) = crate::turns::fake_codex(&self.dir);
@@ -2022,6 +2350,28 @@ while True:
         assert_eq!(resumed[0]["threadId"], json!(bound));
         assert_eq!(resumed[0]["model"], "gpt-5.6-luna");
         assert!(resumed[0]["config"]["mcp_servers"]["crew"].is_object(), "{}", resumed[0]);
+    }
+
+    /// The thread's settings are the ones it was opened with: a session whose
+    /// model changed gets another app server on the same thread.
+    #[test]
+    fn a_codex_session_whose_model_changed_is_launched_again_on_its_thread() {
+        let w = world();
+        let parent = w.session("terminal", "shell", "full");
+        let (id, log) = w.codex(&parent, "one", None);
+        w.wait(&parent, &id, json!({}));
+        w.settle(&id);
+        let row = w.row(&id);
+        let bound = row.provider_session_id.clone().expect("bound");
+        session::set_options(w.turns.store(), id.clone(), "gpt-5.6-sol".into(), row.effort, row.service_tier, row.autonomy)
+            .expect("options");
+
+        w.call(&parent, "send_message", json!({ "to": id, "text": "two" })).expect("send");
+        assert_eq!(w.wait(&parent, &id, json!({}))["sessions"][0]["report"], "report: two");
+        assert_eq!(launched(&log).len(), 2);
+        let resumed = sent(&log, "thread/resume");
+        assert_eq!(resumed.len(), 1, "{resumed:?}");
+        assert_eq!((resumed[0]["threadId"].clone(), resumed[0]["model"].clone()), (json!(bound), json!("gpt-5.6-sol")));
     }
 
     /// The same when the exit is heard: the entry is dropped, the tray closed,
@@ -2548,7 +2898,7 @@ while True:
 
     /// A child's command in the background: listed while it runs, its
     /// output read from Claude, stopped from the tray, and kept, ended, once
-    /// the turn is over.
+    /// the turn is over; the next turn starts with the tray empty.
     #[test]
     fn a_claude_childs_background_command_is_listed_read_and_stopped() {
         use crew_protocol::{BackgroundKind, BackgroundState};
@@ -2568,10 +2918,12 @@ while True:
         assert_eq!(w.turns.background_list(&id).commands[0].state, BackgroundState::Stopped);
         let out = w.wait(&parent, &id, json!({}));
         assert_eq!(out["sessions"][0]["report"], "report: BACKGROUND 30 + the background command was stopped", "{out}");
-        // The CLI is gone: the row stays, ended, and its output is the last read.
-        let after = until_background(&w, &id, |list| !list.live);
+        // Nothing is left running, so the CLI is kept for the next turn: the
+        // row stays, ended, and its output is the last read.
+        w.settle(&id);
+        let after = until_background(&w, &id, |list| !list.waiting);
+        assert!(after.live);
         assert_eq!(after.commands[0].state, BackgroundState::Stopped);
-        assert!(!after.waiting);
         assert_eq!(w.turns.background_output(&id, "bg1").expect("kept").output, "tick\n");
         assert!(w.turns.background_stop(&id, "bg1").is_ok(), "an ended command needs no stop");
         let control = std::fs::read_to_string(w.dir.join("claude-control.log")).unwrap();

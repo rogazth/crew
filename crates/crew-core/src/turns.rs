@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -61,7 +62,7 @@ const CONTROL_TIMEOUT: Duration = Duration::from_secs(5);
 /// itself when they finish, with another `result`. Past this, the turn ends on
 /// the result it had, so a server left running in the background cannot hold
 /// it forever.
-const BACKGROUND_GRACE: Duration = Duration::from_secs(600);
+const BACKGROUND_GRACE: Duration = Duration::from_secs(if cfg!(test) { 4 } else { 600 });
 const STDERR_TAIL: usize = 12;
 /// Whether a session running with `autonomy` would do what `request` asks
 /// without asking anyone: what a parent may decide for its child. Full does
@@ -99,6 +100,31 @@ fn child_resume(session: &crate::session::Session) -> Option<String> {
 /// nothing it may use. This is the one place that says so.
 fn keeps_process(session: &crate::session::Session) -> bool {
     session.kind == "child"
+}
+
+/// Names one CLI process, so a timer or a watcher armed for it can tell when
+/// its own is gone and a later one has taken the session's place.
+static NEXT_EPOCH: AtomicU64 = AtomicU64::new(1);
+
+/// What a process was launched with, to tell on the next turn whether the
+/// session still asks for it. A kept process runs on these however the
+/// session's row changed since; a turn that finds them different lets the
+/// process go and launches another on the same conversation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Launch {
+    model: Option<String>,
+    effort: Option<String>,
+    service_tier: Option<String>,
+    autonomy: Autonomy,
+    cwd: String,
+}
+
+#[cfg(test)]
+impl Launch {
+    /// Settings no session has, for a process a test installs by hand.
+    fn none() -> Self {
+        Self { model: None, effort: None, service_tier: None, autonomy: Autonomy::Ask, cwd: String::new() }
+    }
 }
 
 /// An opencode turn's persona, on disk for as long as the turn runs:
@@ -193,8 +219,36 @@ fn woken(live: &mut ClaudeLive, events: &mut Vec<HarnessEvent>) {
     });
 }
 
+/// One Claude Code process and the conversation it carries. What lives as long
+/// as the process is the conversation's id, the request counters, the control
+/// calls in flight, the stderr tail and the launch settings; the rest belongs
+/// to the turn that is running and starts over in [`ClaudeLive::begin_turn`].
 struct ClaudeLive {
+    epoch: u64,
+    /// Turns begun on this process, so a timer armed in one cannot act on a
+    /// later one.
+    turn: u64,
+    /// What it was launched with.
+    applied: Launch,
     claude_session_id: String,
+    /// Whether a result waits for the background commands: a child's turn
+    /// does, since its report is the last thing it says. A bot's ends on its
+    /// first.
+    waits_for_background: bool,
+    /// Results that ended nothing yet, so the grace timer can tell its own
+    /// wait from a later one. Counts on for the life of the process: it is
+    /// never started over, so a timer of an earlier turn cannot find it equal.
+    held_results: u64,
+    /// Control requests Crew sent and waits on, by request id.
+    calls: HashMap<String, Sender<Result<Value, String>>>,
+    next_ui: u64,
+    next_control: u64,
+    /// Whether the CLI has said it is up. It says it again at the start of
+    /// every turn, which tells nothing new.
+    initialized: bool,
+    /// Only while the process is being launched: what waits for its first word.
+    init_tx: Option<oneshot::Sender<bool>>,
+    stderr: Vec<String>,
     /// Steers written and not yet echoed, oldest first.
     steers: Vec<Steer>,
     /// Background commands Claude started and has not heard the end of, by
@@ -205,18 +259,8 @@ struct ClaudeLive {
     /// model speaks again: then it goes in as one note, the marker of what
     /// woke it, as the history decoder writes it from the CLI's own file.
     woken_by: Vec<String>,
-    /// Whether a `result` waits for those: a child's turn does, since its
-    /// report is the last thing it says. A bot's ends on its first.
-    waits_for_background: bool,
-    /// Results that ended nothing yet, so the grace timer can tell its own
-    /// wait from a later one.
-    held_results: u64,
     approvals: HashMap<u64, PendingApproval>,
     questions: HashMap<u64, PendingQuestion>,
-    /// Control requests Crew sent and waits on, by request id.
-    calls: HashMap<String, Sender<Result<Value, String>>>,
-    next_ui: u64,
-    next_control: u64,
     tools_by_index: HashMap<i64, InFlightTool>,
     tools_by_id: HashMap<String, InFlightTool>,
     /// The subagents it started: their frames go to their calls' rows.
@@ -224,11 +268,59 @@ struct ClaudeLive {
     cancelled: bool,
     mute: bool,
     active: bool,
-    initialized: bool,
-    init_tx: Option<oneshot::Sender<bool>>,
     turn_tx: Option<oneshot::Sender<TurnOutcome>>,
     emitted_assistant: String,
-    stderr: Vec<String>,
+}
+
+impl ClaudeLive {
+    /// A process just launched, with no turn on it yet.
+    fn new(claude_session_id: String, waits_for_background: bool, applied: Launch) -> Self {
+        Self {
+            epoch: NEXT_EPOCH.fetch_add(1, Ordering::Relaxed),
+            turn: 0,
+            applied,
+            claude_session_id,
+            waits_for_background,
+            held_results: 0,
+            calls: HashMap::new(),
+            next_ui: 1,
+            next_control: 1,
+            initialized: false,
+            init_tx: None,
+            stderr: Vec::new(),
+            steers: Vec::new(),
+            background: HashSet::new(),
+            woken_by: Vec::new(),
+            approvals: HashMap::new(),
+            questions: HashMap::new(),
+            tools_by_index: HashMap::new(),
+            tools_by_id: HashMap::new(),
+            subagents: Subagents::default(),
+            cancelled: false,
+            mute: false,
+            active: false,
+            turn_tx: None,
+            emitted_assistant: String::new(),
+        }
+    }
+
+    /// A turn starts on the process the last one left: what that turn knew of
+    /// itself goes, what belongs to the process stays.
+    fn begin_turn(&mut self, turn_tx: oneshot::Sender<TurnOutcome>) {
+        self.turn += 1;
+        drop_pending(self);
+        self.steers.clear();
+        self.background.clear();
+        self.woken_by.clear();
+        self.tools_by_index.clear();
+        self.tools_by_id.clear();
+        self.subagents = Subagents::default();
+        self.cancelled = false;
+        self.mute = false;
+        self.active = true;
+        self.turn_tx = Some(turn_tx);
+        self.emitted_assistant.clear();
+    }
 }
 
 struct StreamLive {
@@ -874,6 +966,16 @@ impl TurnHost {
                         HarnessEvent::SessionEnded { code },
                     );
                     self.signal(session_id, TurnOutcome::Failed(exit_message(provider, code, &stderr)));
+                } else if !mid && !cancelled && row.initialized && row.steers.is_empty() {
+                    // No turn is running: a process a child kept died while
+                    // idle. Its entry goes, so the next message launches one
+                    // and resumes the conversation, and what it ran in the
+                    // background went with it. One that never came up is the
+                    // launch's to report, and a turn that ended with a steer
+                    // unread has that steer to hand back first.
+                    drop(map);
+                    self.detach(session_id);
+                    self.close_tray(session_id);
                 }
             }
             Live::Codex(row) => {
@@ -1010,11 +1112,13 @@ impl TurnHost {
                     .unwrap_or_default(),
             );
         }
+        let mut armed = None;
         {
             let mut map = self.lock();
             if let Some(live) = map.get_mut(session_id) {
                 match live {
                     Live::Claude(row) => {
+                        armed = Some(row.epoch);
                         row.cancelled = true;
                         row.mute = true;
                         row.active = false;
@@ -1057,8 +1161,17 @@ impl TurnHost {
                 let host = self.clone();
                 let session_id = session_id.to_string();
                 self.after(INTERRUPT_GRACE, move || {
-                    host.agents.kill(&session_id);
-                    host.detach(&session_id);
+                    // Only the process it was armed for: the turn's end lets
+                    // it go, and a launch for the next message in the grace
+                    // is not this stop's to kill.
+                    let replaced = matches!(
+                        host.lock().get(&session_id),
+                        Some(Live::Claude(row)) if Some(row.epoch) != armed
+                    );
+                    if !replaced {
+                        host.agents.kill(&session_id);
+                        host.detach(&session_id);
+                    }
                 });
                 return;
             }
@@ -1542,10 +1655,43 @@ impl TurnHost {
         history: Option<String>,
     ) -> TurnOutcome {
         let session_id = session.id.clone();
+        let outcome = self.claude_turn(&session, &params, history);
+        // A steer the turn ended before reading is not lost: it waits in the
+        // box, and the end of this turn hands it over as the next one.
+        let (unread, background) = match self.lock().get_mut(&session_id) {
+            Some(Live::Claude(live)) => {
+                drop_pending(live);
+                (std::mem::take(&mut live.steers), !live.background.is_empty())
+            }
+            _ => (Vec::new(), false),
+        };
+        let unread_any = !unread.is_empty();
+        for steer in unread {
+            steer.put_back(&self.store, &session_id);
+        }
+        // A child keeps the CLI for its next turn, unless this one leaves it
+        // somewhere that turn cannot start from. A steer it never read is
+        // still queued inside the CLI, which would start a turn of its own on
+        // it, and the box hands the same message over again; and background
+        // commands still open (the grace ran out) wake Claude by itself later.
+        // Those, a stop, a failure and a bot's turn let it go.
+        if unread_any || background {
+            self.release(&session_id);
+        } else {
+            self.park(&session, &outcome);
+        }
+        outcome
+    }
+
+    /// The turn itself, on a process armed and launched for it: the user
+    /// message goes in, and the outcome is what the process says of it.
+    fn claude_turn(&self, session: &crate::session::Session, params: &TurnStart, history: Option<String>) -> TurnOutcome {
+        let session_id = session.id.clone();
         if self.stop_requested(&session_id) {
             return TurnOutcome::Stopped;
         }
-        if let Err(error) = self.ensure_claude(&session, &params) {
+        let kept = self.claude_arm(session, &params.cwd);
+        if let Err(error) = self.ensure_claude(session, params, kept) {
             return if self.stop_requested(&session_id) {
                 TurnOutcome::Stopped
             } else {
@@ -1567,19 +1713,13 @@ impl TurnHost {
             if self.stop_requested(&session_id) {
                 return TurnOutcome::Stopped;
             }
-            live.cancelled = false;
-            live.mute = false;
-            live.active = true;
-            live.emitted_assistant.clear();
-            live.tools_by_index.clear();
-            live.tools_by_id.clear();
             let (tx, rx) = oneshot::channel();
-            live.turn_tx = Some(tx);
+            live.begin_turn(tx);
             (rx, live.claude_session_id.clone())
         };
         let images = crate::files::load_inline_images(params.files.as_deref().unwrap_or(&[]));
         let inline: HashSet<String> = images.iter().map(|image| image.path.clone()).collect();
-        let files = path_list(&params, &inline);
+        let files = path_list(params, &inline);
         let message = build_claude_user_message(
             &claude_session_id,
             history.as_deref(),
@@ -1593,23 +1733,8 @@ impl TurnHost {
         {
             return TurnOutcome::Failed(error);
         }
-        let outcome = self
-            .block_on(turn_rx)
-            .unwrap_or(TurnOutcome::Failed("Turn channel closed".into()));
-        // A steer the turn ended before reading is not lost: it waits in the
-        // box, and the end of this turn hands it over as the next one.
-        let unread = match self.lock().get_mut(&session_id) {
-            Some(Live::Claude(live)) => std::mem::take(&mut live.steers),
-            _ => Vec::new(),
-        };
-        for steer in unread {
-            steer.put_back(&self.store, &session_id);
-        }
-        // The agent is disposable: the turn is over, so the CLI goes. What it
-        // knew is in the transcript, and the next turn is handed the tail.
-        self.agents.kill(&session_id);
-        self.detach(&session_id);
-        outcome
+        self.block_on(turn_rx)
+            .unwrap_or(TurnOutcome::Failed("Turn channel closed".into()))
     }
 
     /// Write a message into a Claude child's running turn. Claude reads it at
@@ -1680,45 +1805,89 @@ impl TurnHost {
         }
     }
 
-    /// A turn gets its own Claude session, every time. What the bot remembers
-    /// is the tail Crew hands it, not whatever the CLI kept.
-    fn ensure_claude(&self, session: &crate::session::Session, params: &TurnStart) -> Result<(), String> {
+    /// What a process launched for this session now would be given, to
+    /// compare with what a kept one was.
+    fn applied(&self, session: &crate::session::Session, cwd: &str) -> Launch {
+        Launch {
+            model: Some(session.model.clone()).filter(|m| !m.is_empty()),
+            effort: Some(session.effort.clone()).filter(|e| !e.is_empty()),
+            service_tier: Some(session.service_tier.clone()).filter(|tier| !tier.is_empty()),
+            autonomy: self.autonomy(session),
+            cwd: cwd.to_string(),
+        }
+    }
+
+    /// Gives the turn its state on the process the last one left, when there
+    /// is one alive that still has the settings the session asks for, and
+    /// otherwise on an entry of its own for the process
+    /// [`TurnHost::ensure_claude`] launches. Returns whether the process was
+    /// kept.
+    fn claude_arm(&self, session: &crate::session::Session, cwd: &str) -> bool {
+        let session_id = session.id.as_str();
+        let applied = self.applied(session, cwd);
+        // Asked before the lock: a process that died while idle without its
+        // exit being heard (it was killed under us) is not one to write to.
+        let alive = self.agents.running().iter().any(|id| id == session_id);
+        let reusable = matches!(
+            self.lock().get(session_id),
+            Some(Live::Claude(live)) if alive && live.initialized && !live.active && !live.cancelled && live.applied == applied
+        );
+        if reusable {
+            self.idle.lock().unwrap_or_else(|e| e.into_inner()).remove(session_id);
+            // Nothing runs in the background of a process that was kept, so
+            // the tray starts empty, as it does after a launch.
+            self.background.touch(session_id, crate::background::Board::begin);
+            return true;
+        }
+        // Settings that moved on, a stop, or a process that is gone: another
+        // is launched, on the conversation the child carries on.
+        self.agents.kill(session_id);
+        self.detach(session_id);
+        // A child carries on its own conversation; a bot starts a clean one.
+        let claude_session_id = child_resume(session).unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        self.lock().insert(
+            session_id.to_string(),
+            Live::Claude(Box::new(ClaudeLive::new(claude_session_id, session.kind == "child", applied))),
+        );
+        self.background.touch(session_id, crate::background::Board::begin);
+        false
+    }
+
+    /// The process the turn runs on, up and answering: the one a child kept,
+    /// or a new one that is launched and initialized here. A bot's is a
+    /// clean Claude session every time; what it remembers is the tail Crew
+    /// hands it, not whatever the CLI kept.
+    fn ensure_claude(&self, session: &crate::session::Session, params: &TurnStart, kept: bool) -> Result<(), String> {
+        let session_id = session.id.clone();
+        let claude_session_id = match self.lock().get(&session_id) {
+            Some(Live::Claude(live)) => live.claude_session_id.clone(),
+            _ => return Err("Claude session is gone".into()),
+        };
+        if !kept {
+            self.launch_claude(session, params, &claude_session_id)?;
+        }
+        self.transcripts.apply(
+            &session_id,
+            HarnessEvent::SessionProviderBound {
+                provider_session_id: claude_session_id,
+            },
+        );
+        self.transcripts
+            .apply(&session_id, HarnessEvent::SessionStarted {});
+        Ok(())
+    }
+
+    /// Spawns the CLI and waits for it to answer `initialize`.
+    fn launch_claude(
+        &self,
+        session: &crate::session::Session,
+        params: &TurnStart,
+        claude_session_id: &str,
+    ) -> Result<(), String> {
         let session_id = session.id.clone();
         let autonomy = self.autonomy(session);
-        if self.lock().contains_key(&session_id) {
-            self.agents.kill(&session_id);
-            self.detach(&session_id);
-        }
         // A child carries on its own conversation; a bot starts a clean one.
         let resume = child_resume(session);
-        let claude_session_id = resume.clone().unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-
-        let live = ClaudeLive {
-            claude_session_id: claude_session_id.clone(),
-            steers: Vec::new(),
-            background: HashSet::new(),
-            woken_by: Vec::new(),
-            waits_for_background: session.kind == "child",
-            held_results: 0,
-            approvals: HashMap::new(),
-            questions: HashMap::new(),
-            calls: HashMap::new(),
-            next_ui: 1,
-            next_control: 1,
-            tools_by_index: HashMap::new(),
-            tools_by_id: HashMap::new(),
-            subagents: Subagents::default(),
-            cancelled: false,
-            mute: false,
-            active: false,
-            initialized: false,
-            init_tx: None,
-            turn_tx: None,
-            emitted_assistant: String::new(),
-            stderr: Vec::new(),
-        };
-        self.lock().insert(session_id.clone(), Live::Claude(Box::new(live)));
-        self.background.touch(&session_id, crate::background::Board::begin);
         if self.stop_requested(&session_id) {
             self.agents.kill(&session_id);
             return Err("cancelled".into());
@@ -1730,7 +1899,7 @@ impl TurnHost {
         let spawn = ClaudeSpawn {
             model: Some(session.model.clone()).filter(|m| !m.is_empty()),
             effort: Some(session.effort.clone()).filter(|e| !e.is_empty()),
-            session_id: Some(claude_session_id.clone()),
+            session_id: Some(claude_session_id.to_string()),
             resume,
             // A steer is matched by its echo, for a bot as for a child.
             replay_user_messages: true,
@@ -1753,6 +1922,8 @@ impl TurnHost {
             path,
             build_claude_spawn_args(&spawn),
             params.cwd.clone(),
+            // Minted once, with the process: the token is in its environment
+            // and its MCP server's, and a later mint would cut both off.
             Some(self.agent_env(&session_id)),
         )?;
         if self.stop_requested(&session_id) {
@@ -1781,7 +1952,13 @@ impl TurnHost {
             &serde_json::to_string(&build_control_request(&ctrl, json!({ "subtype": "initialize" })))
                 .unwrap_or_default(),
         )?;
-        match self.block_on(async { tokio::time::timeout(INIT_TIMEOUT, init_rx).await }) {
+        let init = self.block_on(async { tokio::time::timeout(INIT_TIMEOUT, init_rx).await });
+        // Waited for once: the CLI says it is up at the start of every turn,
+        // and that is nobody's to take.
+        if let Some(Live::Claude(live)) = self.lock().get_mut(&session_id) {
+            live.init_tx = None;
+        }
+        match init {
             Ok(Ok(true)) => {}
             Ok(Ok(false)) | Ok(Err(_)) => {
                 let stderr = self
@@ -1802,14 +1979,6 @@ impl TurnHost {
                 return Err("Claude Code did not answer in time.".into());
             }
         }
-        self.transcripts.apply(
-            &session_id,
-            HarnessEvent::SessionProviderBound {
-                provider_session_id: claude_session_id,
-            },
-        );
-        self.transcripts
-            .apply(&session_id, HarnessEvent::SessionStarted {});
         Ok(())
     }
 
@@ -2004,6 +2173,9 @@ impl TurnHost {
         }
         // The answer to a request Crew is waiting on; the first one, to
         // `initialize`, nobody waits on and it reads as the CLI being up.
+        // The CLI also says `system/init` at the start of every turn, with
+        // the user's message that follows it: once it is up, that line
+        // starts nothing and the turn's own lines go on.
         if let Some((id, result)) = parse_control_response(&rec) {
             let waiter = match self.lock().get_mut(session_id) {
                 Some(Live::Claude(live)) => live.calls.remove(&id),
@@ -2021,7 +2193,9 @@ impl TurnHost {
 
         let mut events = Vec::new();
         let mut bind: Option<String> = None;
-        let mut hold: Option<u64> = None;
+        // A result held on background work: its count, and the process and
+        // turn it was held on.
+        let mut hold: Option<(u64, u64, u64)> = None;
         // A task line for the tray, with the call that started its task.
         let mut task: Option<(Value, Option<(String, String, Map<String, Value>)>)> = None;
         let mut spoke = false;
@@ -2170,7 +2344,10 @@ impl TurnHost {
                         events.push(HarnessEvent::ToolFiles { call_id: result.tool_use_id, files });
                     }
                 }
-            } else if type_name.as_deref() == Some("result") {
+            } else if type_name.as_deref() == Some("result") && live.active {
+                // Only a turn that is running has a result: one that comes
+                // with none (a late answer from a turn already settled, on a
+                // process kept between turns) is nobody's to end.
                 let failed = if live.cancelled {
                     None
                 } else {
@@ -2183,7 +2360,7 @@ impl TurnHost {
                     // Not over: Claude carries on by itself once its
                     // background commands finish, and that is the report.
                     live.held_results += 1;
-                    hold = Some(live.held_results);
+                    hold = Some((live.held_results, live.epoch, live.turn));
                 } else {
                     live.active = false;
                     if let Some(tx) = live.turn_tx.take() {
@@ -2223,13 +2400,15 @@ impl TurnHost {
         for event in events {
             self.transcripts.apply(session_id, event);
         }
-        if let Some(held) = hold {
+        if let Some((held, epoch, turn)) = hold {
             let host = self.clone();
             let id = session_id.to_string();
             self.after(BACKGROUND_GRACE, move || {
+                // Its own turn, on its own process: a later turn that holds
+                // none is not the one this wait was for.
                 let still = matches!(
                     host.lock().get(&id),
-                    Some(Live::Claude(live)) if live.active && live.held_results == held
+                    Some(Live::Claude(live)) if live.active && live.epoch == epoch && live.turn == turn && live.held_results == held
                 );
                 if still {
                     host.signal(&id, TurnOutcome::Completed);
@@ -2791,35 +2970,17 @@ impl TurnHost {
     pub(crate) fn test_install_claude(&self, id: &str) {
         self.lock().insert(
             id.to_string(),
-            Live::Claude(Box::new(ClaudeLive {
-                claude_session_id: String::new(),
-                steers: Vec::new(),
-                background: HashSet::new(),
-                woken_by: Vec::new(),
-                waits_for_background: false,
-                held_results: 0,
-                approvals: HashMap::new(),
-                questions: HashMap::new(),
-                calls: HashMap::new(),
-                next_ui: 1,
-                next_control: 1,
-                tools_by_index: HashMap::new(),
-                tools_by_id: HashMap::new(),
-                subagents: Subagents::default(),
-                cancelled: false,
-                mute: false,
-                active: true,
-                initialized: true,
-                init_tx: None,
-                turn_tx: None,
-                emitted_assistant: String::new(),
-                stderr: Vec::new(),
+            Live::Claude(Box::new({
+                let mut live = ClaudeLive::new(String::new(), false, Launch::none());
+                live.active = true;
+                live.initialized = true;
+                live
             })),
         );
     }
 
     pub(crate) fn test_install_codex(&self, id: &str) {
-        self.lock().insert(id.to_string(), Live::Codex(Box::new(CodexLive::new(None))));
+        self.lock().insert(id.to_string(), Live::Codex(Box::new(CodexLive::new(None, Launch::none()))));
     }
 
     pub(crate) fn test_install_cursor(&self, id: &str) {

@@ -12,7 +12,7 @@
 //! `providers/codex.rs`.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::thread;
 use std::time::Duration;
@@ -22,8 +22,8 @@ use serde_json::{json, Map, Value};
 use tokio::sync::oneshot;
 
 use super::{
-    child_resume, path_list, Harness, QuestionReply, Steer, TurnHost,
-    TurnOutcome, INIT_TIMEOUT,
+    child_resume, path_list, Harness, Launch, QuestionReply, Steer, TurnHost,
+    TurnOutcome, INIT_TIMEOUT, NEXT_EPOCH,
 };
 use crate::mailbox;
 use crate::providers::codex::{
@@ -48,10 +48,6 @@ pub(super) const INTERRUPT_GRACE: Duration = Duration::from_secs(3);
 /// How often the background terminals are listed while a command runs.
 const TERMINAL_POLL: Duration = Duration::from_secs(2);
 
-/// Names one app server, so a watcher started for a process can tell when its
-/// own is gone and a later one has taken the session's place.
-static NEXT_EPOCH: AtomicU64 = AtomicU64::new(1);
-
 /// A request the app server is waiting on Crew for, by the id the UI knows.
 pub(super) struct Pending<T> {
     rpc_id: Value,
@@ -63,6 +59,8 @@ pub(super) struct Pending<T> {
 /// turn that is running and starts over in [`CodexLive::begin_turn`].
 pub(super) struct CodexLive {
     epoch: u64,
+    /// What it was launched with.
+    applied: Launch,
     thread_id: Option<String>,
     /// The turn that is running. `turn/start` on a busy thread would steer
     /// it without a word, so this is what says whether one is.
@@ -93,9 +91,10 @@ pub(super) struct CodexLive {
 }
 
 impl CodexLive {
-    pub(super) fn new(turn_tx: Option<oneshot::Sender<TurnOutcome>>) -> Self {
+    pub(super) fn new(turn_tx: Option<oneshot::Sender<TurnOutcome>>, applied: Launch) -> Self {
         Self {
             epoch: NEXT_EPOCH.fetch_add(1, Ordering::Relaxed),
+            applied,
             thread_id: None,
             turn_id: None,
             last_turn: None,
@@ -161,7 +160,7 @@ impl TurnHost {
     ) -> TurnOutcome {
         let session_id = session.id.clone();
         let (tx, turn_rx) = oneshot::channel();
-        let kept = self.codex_arm(&session_id, tx);
+        let kept = self.codex_arm(&session, &params.cwd, tx);
         self.watch_for_silence(&session_id);
         let child = session.kind == "child";
         // Every turn: Codex keeps no system prompt Crew can set, and newer
@@ -206,16 +205,25 @@ impl TurnHost {
     }
 
     /// Gives the turn its state on the process the last one left, when there
-    /// is one alive, and otherwise on an entry of its own for the process
+    /// is one alive that still has the settings the session asks for, and
+    /// otherwise on an entry of its own for the process
     /// [`TurnHost::ensure_codex`] spawns. Returns whether the process was kept.
-    fn codex_arm(&self, session_id: &str, tx: oneshot::Sender<TurnOutcome>) -> bool {
+    fn codex_arm(&self, session: &crate::session::Session, cwd: &str, tx: oneshot::Sender<TurnOutcome>) -> bool {
+        let session_id = session.id.as_str();
+        let applied = self.applied(session, cwd);
         // Asked before the lock: a process that died while idle without its
         // exit being heard (it was killed under us) is not one to write to.
         let alive = self.agents.running().iter().any(|id| id == session_id);
         let tx = {
             let mut map = self.lock();
             match map.get_mut(session_id) {
-                Some(Live::Codex(live)) if alive && live.thread_id.is_some() && live.settled && !live.cancelled => {
+                Some(Live::Codex(live))
+                    if alive
+                        && live.thread_id.is_some()
+                        && live.settled
+                        && !live.cancelled
+                        && live.applied == applied =>
+                {
                     live.begin_turn(tx);
                     drop(map);
                     self.idle.lock().unwrap_or_else(|e| e.into_inner()).remove(session_id);
@@ -226,7 +234,7 @@ impl TurnHost {
         };
         self.agents.kill(session_id);
         self.lock()
-            .insert(session_id.to_string(), Live::Codex(Box::new(CodexLive::new(Some(tx)))));
+            .insert(session_id.to_string(), Live::Codex(Box::new(CodexLive::new(Some(tx), applied))));
         self.idle.lock().unwrap_or_else(|e| e.into_inner()).remove(session_id);
         self.background.touch(session_id, crate::background::Board::begin);
         false
