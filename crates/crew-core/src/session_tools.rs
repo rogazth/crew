@@ -1535,7 +1535,9 @@ print(json.dumps({{"type": "step_finish", "sessionID": sid, "part": {{"id": "sf"
     /// folds whatever arrived during a turn's `SLEEP n` into that turn. Like
     /// the real CLI it says `system/init` at the start of every turn, and it
     /// serves as many turns as it is sent on one stdin. Each launch is logged
-    /// to `claude-launch.log` with its argv, pid and token.
+    /// to `claude-launch.log` with its argv, pid and token; each control
+    /// request to `claude-control.log`, and a file `refuse-<subtype>` in its
+    /// directory makes the next such request answer with an error.
     fn fake_claude(dir: &Path) -> String {
         let path = dir.join("fake-claude");
         std::fs::write(
@@ -1568,7 +1570,18 @@ def reader():
                 # Asked on its own schedule, so it stays out of the control log.
                 out({"type": "control_response", "response": {"subtype": "success", "request_id": rec["request_id"], "response": {"totalTokens": 1234, "maxTokens": 200000, "rawMaxTokens": 200000, "autoCompactThreshold": 160000, "isAutoCompactEnabled": True, "model": "fake"}}})
                 continue
-            with open(CONTROL, "a") as f: f.write("%s %s\n" % (req.get("subtype"), req.get("task_id", "")))
+            # A setting says what it sets, where a task control says its task.
+            detail = req.get("task_id", "")
+            if req.get("subtype") == "set_model": detail = req.get("model", "")
+            if req.get("subtype") == "set_permission_mode": detail = req.get("mode", "")
+            if req.get("subtype") == "apply_flag_settings": detail = json.dumps(req.get("settings"), sort_keys=True)
+            with open(CONTROL, "a") as f: f.write("%s %s\n" % (req.get("subtype"), detail))
+            # A file named for the subtype makes the next one of it refuse.
+            refuse = os.path.join(os.path.dirname(os.path.abspath(sys.argv[0])), "refuse-" + str(req.get("subtype")))
+            if os.path.exists(refuse):
+                os.remove(refuse)
+                out({"type": "control_response", "response": {"subtype": "error", "request_id": rec["request_id"], "error": "no"}})
+                continue
             answer = {"output": "tick\n", "total_bytes": 5, "truncated": False} if req.get("subtype") == "get_task_output" else {}
             out({"type": "control_response", "response": {"subtype": "success", "request_id": rec["request_id"], "response": answer}})
             if req.get("subtype") == "stop_task":
@@ -1913,9 +1926,29 @@ while True:
     impl World {
         /// A Claude child on the fake CLI, and the log of what it was launched with.
         fn claude(&self, parent: &Caller, prompt: &str) -> (String, PathBuf) {
+            self.claude_as(parent, prompt, None)
+        }
+
+        /// The same, under an autonomy of its own.
+        fn claude_as(&self, parent: &Caller, prompt: &str, autonomy: Option<&str>) -> (String, PathBuf) {
             self.turns.override_binary("claude", fake_claude(&self.dir));
-            let started = self.call(parent, "start_session", json!({ "provider": "claude", "prompt": prompt })).expect("start");
+            let mut args = json!({ "provider": "claude", "prompt": prompt });
+            if let Some(autonomy) = autonomy {
+                args["autonomy"] = json!(autonomy);
+            }
+            let started = self.call(parent, "start_session", args).expect("start");
             (started["id"].as_str().unwrap().to_string(), self.dir.join("claude-launch.log"))
+        }
+
+        /// What the fake CLI was asked to change, one request to a line; its
+        /// `initialize`, at every launch, is not a change.
+        fn claude_control(&self) -> Vec<String> {
+            std::fs::read_to_string(self.dir.join("claude-control.log"))
+                .unwrap_or_default()
+                .lines()
+                .filter(|line| !line.starts_with("initialize"))
+                .map(str::to_string)
+                .collect()
         }
     }
 
@@ -2166,8 +2199,12 @@ while True:
         until_claude_turn(&w, &id);
         let steered = w.call(&parent, "send_message", json!({ "to": id, "text": "and this", "steer": true })).expect("steer");
         assert_eq!(steered["delivery"], "steered", "{steered}");
-        // The box hands it over as the next turn, on a process of its own.
-        let out = w.wait(&parent, &id, json!({}));
+        // The box hands it over as the next turn, on a process of its own. A
+        // wait that comes before that turn starts is told of the first one.
+        let mut out = w.wait(&parent, &id, json!({}));
+        if out["sessions"][0]["report"] == "report: STUBBORN SLEEP 2" {
+            out = w.wait(&parent, &id, json!({}));
+        }
         assert_eq!(out["sessions"][0]["report"], "report: and this", "{out}");
         w.settle(&id);
         let launches = launched(&log);
@@ -2201,19 +2238,58 @@ while True:
         assert!(after_flag(&launches[1], "--resume").is_some(), "{}", launches[1]);
     }
 
-    /// Until the next turn the process runs on what it was launched with: a
-    /// session whose model changed gets another process on the same
-    /// conversation, not the old model under the new name.
+    /// What the CLI takes while it idles is told to it between turns, on the
+    /// process that is up: the model, the effort and the autonomy between Ask,
+    /// Edits and Auto each get their control request, and nothing is launched.
     #[test]
-    fn a_claude_session_whose_model_changed_is_launched_again_on_its_conversation() {
+    fn a_claude_session_whose_settings_changed_is_told_so_on_the_process_it_keeps() {
+        let w = world();
+        let parent = w.session("terminal", "shell", "full");
+        let (id, log) = w.claude_as(&parent, "one", Some("ask"));
+        w.wait(&parent, &id, json!({}));
+        let row = w.settle(&id);
+        session::set_options(w.turns.store(), id.clone(), "opus".into(), "medium".into(), row.service_tier, "edits".into())
+            .expect("options");
+
+        w.call(&parent, "send_message", json!({ "to": id, "text": "two" })).expect("send");
+        assert_eq!(w.wait(&parent, &id, json!({}))["sessions"][0]["report"], "report: two");
+        let row = w.settle(&id);
+        session::set_options(w.turns.store(), id.clone(), row.model, "xhigh".into(), row.service_tier, "auto".into())
+            .expect("options");
+        w.call(&parent, "send_message", json!({ "to": id, "text": "three" })).expect("send");
+        assert_eq!(w.wait(&parent, &id, json!({}))["sessions"][0]["report"], "report: three");
+
+        assert_eq!(launched(&log).len(), 1, "{:?}", launched(&log));
+        assert_eq!(
+            w.claude_control(),
+            [
+                "set_model opus",
+                r#"apply_flag_settings {"effortLevel": "medium"}"#,
+                "set_permission_mode acceptEdits",
+                r#"apply_flag_settings {"effortLevel": "xhigh"}"#,
+                "set_permission_mode auto",
+            ]
+        );
+        // Nothing changed: nothing is said.
+        w.settle(&id);
+        w.call(&parent, "send_message", json!({ "to": id, "text": "four" })).expect("send");
+        assert_eq!(w.wait(&parent, &id, json!({}))["sessions"][0]["report"], "report: four");
+        assert_eq!(w.claude_control().len(), 5);
+        assert_eq!(launched(&log).len(), 1);
+    }
+
+    /// Full is a flag of the launch: leaving it takes another process, on the
+    /// same conversation, and no request.
+    #[test]
+    fn a_claude_session_leaving_full_is_launched_again_on_its_conversation() {
         let w = world();
         let parent = w.session("terminal", "shell", "full");
         let (id, log) = w.claude(&parent, "one");
         w.wait(&parent, &id, json!({}));
-        w.settle(&id);
-        let row = w.row(&id);
+        let row = w.settle(&id);
         let bound = row.provider_session_id.clone().expect("bound");
-        session::set_options(w.turns.store(), id.clone(), "opus".into(), row.effort, row.service_tier, row.autonomy)
+        assert_eq!(row.autonomy, "full");
+        session::set_options(w.turns.store(), id.clone(), row.model, row.effort, row.service_tier, "ask".into())
             .expect("options");
 
         w.call(&parent, "send_message", json!({ "to": id, "text": "two" })).expect("send");
@@ -2221,9 +2297,38 @@ while True:
         w.settle(&id);
         let launches = launched(&log);
         assert_eq!(launches.len(), 2, "{launches:?}");
+        assert_eq!(after_flag(&launches[1], "--resume"), Some(bound));
+        assert_eq!(after_flag(&launches[1], "--permission-mode"), Some("default".to_string()));
+        assert!(w.claude_control().is_empty(), "{:?}", w.claude_control());
+        // The new process is the one kept now.
+        w.call(&parent, "send_message", json!({ "to": id, "text": "three" })).expect("send");
+        assert_eq!(w.wait(&parent, &id, json!({}))["sessions"][0]["report"], "report: three");
+        assert_eq!(launched(&log).len(), 2);
+    }
+
+    /// A CLI that refuses a setting is not left on the old one under the new
+    /// name: the process goes and another takes its place, launched with the
+    /// settings, and the turn still runs.
+    #[test]
+    fn a_claude_session_whose_process_refuses_a_setting_is_launched_again() {
+        let w = world();
+        let parent = w.session("terminal", "shell", "full");
+        let (id, log) = w.claude(&parent, "one");
+        w.wait(&parent, &id, json!({}));
+        let row = w.settle(&id);
+        let bound = row.provider_session_id.clone().expect("bound");
+        std::fs::write(w.dir.join("refuse-set_model"), "").expect("refusal");
+        session::set_options(w.turns.store(), id.clone(), "opus".into(), row.effort, row.service_tier, row.autonomy)
+            .expect("options");
+
+        w.call(&parent, "send_message", json!({ "to": id, "text": "two" })).expect("send");
+        assert_eq!(w.wait(&parent, &id, json!({}))["sessions"][0]["report"], "report: two");
+        w.settle(&id);
+        assert_eq!(w.claude_control(), ["set_model opus"]);
+        let launches = launched(&log);
+        assert_eq!(launches.len(), 2, "{launches:?}");
         assert_eq!(after_flag(&launches[1], "--model"), Some("opus".to_string()));
         assert_eq!(after_flag(&launches[1], "--resume"), Some(bound));
-        // The new process is the one kept now.
         w.call(&parent, "send_message", json!({ "to": id, "text": "three" })).expect("send");
         assert_eq!(w.wait(&parent, &id, json!({}))["sessions"][0]["report"], "report: three");
         assert_eq!(launched(&log).len(), 2);
@@ -2366,26 +2471,35 @@ while True:
         assert!(resumed[0]["config"]["mcp_servers"]["crew"].is_object(), "{}", resumed[0]);
     }
 
-    /// The thread's settings are the ones it was opened with: a session whose
-    /// model changed gets another app server on the same thread.
+    /// A session whose settings changed is still on the app server it has:
+    /// the second `turn/start` names the new model, effort, approval policy
+    /// and sandbox, and nothing is launched. The first names none of them,
+    /// since its thread was opened with them, and the second leaves out the
+    /// working directory, which did not move.
     #[test]
-    fn a_codex_session_whose_model_changed_is_launched_again_on_its_thread() {
+    fn a_codex_session_whose_settings_changed_says_so_on_its_next_turn() {
         let w = world();
         let parent = w.session("terminal", "shell", "full");
-        let (id, log) = w.codex(&parent, "one", None);
+        let (id, log) = w.codex(&parent, "one", Some("ask"));
         w.wait(&parent, &id, json!({}));
-        w.settle(&id);
-        let row = w.row(&id);
-        let bound = row.provider_session_id.clone().expect("bound");
-        session::set_options(w.turns.store(), id.clone(), "gpt-5.6-sol".into(), row.effort, row.service_tier, row.autonomy)
+        let row = w.settle(&id);
+        session::set_options(w.turns.store(), id.clone(), "gpt-5.6-sol".into(), "high".into(), row.service_tier, "full".into())
             .expect("options");
 
         w.call(&parent, "send_message", json!({ "to": id, "text": "two" })).expect("send");
         assert_eq!(w.wait(&parent, &id, json!({}))["sessions"][0]["report"], "report: two");
-        assert_eq!(launched(&log).len(), 2);
-        let resumed = sent(&log, "thread/resume");
-        assert_eq!(resumed.len(), 1, "{resumed:?}");
-        assert_eq!((resumed[0]["threadId"].clone(), resumed[0]["model"].clone()), (json!(bound), json!("gpt-5.6-sol")));
+        assert_eq!(launched(&log).len(), 1);
+        assert!(sent(&log, "thread/resume").is_empty());
+        let turns = sent(&log, "turn/start");
+        assert_eq!(turns.len(), 2, "{turns:?}");
+        for key in ["model", "effort", "approvalPolicy", "sandboxPolicy", "approvalsReviewer", "cwd"] {
+            assert!(turns[0].get(key).is_none(), "{key}: {}", turns[0]);
+        }
+        assert_eq!(turns[1]["model"], "gpt-5.6-sol");
+        assert_eq!(turns[1]["effort"], "high");
+        assert_eq!((turns[1]["approvalPolicy"].clone(), turns[1]["sandboxPolicy"].clone()), (json!("never"), json!({ "type": "dangerFullAccess" })));
+        assert_eq!(turns[1]["approvalsReviewer"], "user");
+        assert!(turns[1].get("cwd").is_none(), "{}", turns[1]);
     }
 
     /// The same when the exit is heard: the entry is dropped, the tray closed,

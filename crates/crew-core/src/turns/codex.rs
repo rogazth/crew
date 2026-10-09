@@ -160,7 +160,8 @@ impl TurnHost {
     ) -> TurnOutcome {
         let session_id = session.id.clone();
         let (tx, turn_rx) = oneshot::channel();
-        let kept = self.codex_arm(&session, &params.cwd, tx);
+        let since = self.codex_arm(&session, &params.cwd, tx);
+        let kept = since.is_some();
         self.watch_for_silence(&session_id);
         let child = session.kind == "child";
         // Every turn: Codex keeps no system prompt Crew can set, and newer
@@ -176,8 +177,16 @@ impl TurnHost {
                 &with_attached_paths(params.text.trim(), &files),
             )
         };
+        // A fresh process was given the settings on its thread; a kept one is
+        // told only what moved since, so what the user's own config says of
+        // the sandbox (its network access) is not reset by a turn that did not
+        // change it.
+        let overrides = match &since {
+            Some(since) => self.applied(&session, &params.cwd).turn_overrides_since(since),
+            None => Map::new(),
+        };
         let outcome = match self.ensure_codex(&session, &params, kept) {
-            Ok(thread) => match self.codex_turn(&session_id, &thread, &text, &instructions) {
+            Ok(thread) => match self.codex_turn(&session_id, &thread, &text, &instructions, overrides) {
                 Ok(()) => self
                     .block_on(turn_rx)
                     .unwrap_or(TurnOutcome::Failed("Turn channel closed".into())),
@@ -205,10 +214,13 @@ impl TurnHost {
     }
 
     /// Gives the turn its state on the process the last one left, when there
-    /// is one alive that still has the settings the session asks for, and
-    /// otherwise on an entry of its own for the process
-    /// [`TurnHost::ensure_codex`] spawns. Returns whether the process was kept.
-    fn codex_arm(&self, session: &crate::session::Session, cwd: &str, tx: oneshot::Sender<TurnOutcome>) -> bool {
+    /// is one alive, and otherwise on an entry of its own for the process
+    /// [`TurnHost::ensure_codex`] spawns. A kept process takes the session's
+    /// new settings on its `turn/start` (see [`Launch::turn_overrides`]); it
+    /// is let go only when a setting was cleared, which an override cannot
+    /// say. Returns what the kept process ran with, or `None` when a new one
+    /// is spawned.
+    fn codex_arm(&self, session: &crate::session::Session, cwd: &str, tx: oneshot::Sender<TurnOutcome>) -> Option<Launch> {
         let session_id = session.id.as_str();
         let applied = self.applied(session, cwd);
         // Asked before the lock: a process that died while idle without its
@@ -222,12 +234,13 @@ impl TurnHost {
                         && live.thread_id.is_some()
                         && live.settled
                         && !live.cancelled
-                        && live.applied == applied =>
+                        && !applied.clears_a_setting_of(&live.applied) =>
                 {
                     live.begin_turn(tx);
+                    let since = std::mem::replace(&mut live.applied, applied);
                     drop(map);
                     self.idle.lock().unwrap_or_else(|e| e.into_inner()).remove(session_id);
-                    return true;
+                    return Some(since);
                 }
                 _ => tx,
             }
@@ -237,7 +250,7 @@ impl TurnHost {
             .insert(session_id.to_string(), Live::Codex(Box::new(CodexLive::new(Some(tx), applied))));
         self.idle.lock().unwrap_or_else(|e| e.into_inner()).remove(session_id);
         self.background.touch(session_id, crate::background::Board::begin);
-        false
+        None
     }
 
     /// The process the turn runs on, with its thread open: the one a child
@@ -310,7 +323,14 @@ impl TurnHost {
 
     /// The turn itself, on an open thread. Returns once the turn runs; its end
     /// arrives as `turn/completed`.
-    fn codex_turn(&self, session_id: &str, thread_id: &str, text: &str, instructions: &str) -> Result<(), String> {
+    fn codex_turn(
+        &self,
+        session_id: &str,
+        thread_id: &str,
+        text: &str,
+        instructions: &str,
+        overrides: Map<String, Value>,
+    ) -> Result<(), String> {
         self.transcripts.apply(
             session_id,
             HarnessEvent::SessionProviderBound {
@@ -321,13 +341,12 @@ impl TurnHost {
         if self.stop_requested(session_id) {
             return Err("cancelled".into());
         }
+        let mut params = turn_start_params(thread_id, text, Some(instructions));
+        if let Value::Object(params) = &mut params {
+            params.extend(overrides);
+        }
         let started = self
-            .codex_call(
-                session_id,
-                "turn/start",
-                turn_start_params(thread_id, text, Some(instructions)),
-                OPEN_TIMEOUT,
-            )
+            .codex_call(session_id, "turn/start", params, OPEN_TIMEOUT)
             .map_err(|error| self.codex_failure(session_id, "Codex did not start the turn", &error))?;
         let turn = turn_id(&started).ok_or_else(|| "Codex started no turn.".to_string())?;
         let mut map = self.lock();

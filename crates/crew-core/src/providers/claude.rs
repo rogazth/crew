@@ -72,6 +72,17 @@ pub fn claude_mcp_config(command: &str, args: &[String], always_load: bool) -> S
 /// never become an approval in Crew (plan §7e.5).
 pub const CREW_TOOLS_RULE: &str = "mcp__crew__*";
 
+/// The permission mode a session's autonomy runs Claude in, as `--permission-mode`
+/// and `set_permission_mode` name it. Full is no mode: it is
+/// `--dangerously-skip-permissions`, which only a launch can set.
+pub fn permission_mode(autonomy: &Autonomy) -> &'static str {
+    match autonomy {
+        Autonomy::Edits => "acceptEdits",
+        Autonomy::Auto => "auto",
+        _ => "default",
+    }
+}
+
 pub fn build_claude_spawn_args(input: &ClaudeSpawn) -> Vec<String> {
     // A bot gets only the workspace's own settings: its persona and Crew's rules
     // are its whole configuration, and ~/.claude would inject a competing one.
@@ -105,12 +116,7 @@ pub fn build_claude_spawn_args(input: &ClaudeSpawn) -> Vec<String> {
             }
         }
         ref mode => {
-            let permission = match mode {
-                Autonomy::Edits => "acceptEdits",
-                Autonomy::Auto => "auto",
-                _ => "default",
-            };
-            args.extend(["--permission-mode".into(), permission.into()]);
+            args.extend(["--permission-mode".into(), permission_mode(mode).into()]);
             args.push("--permission-prompt-tool".into());
             args.push("stdio".into());
         }

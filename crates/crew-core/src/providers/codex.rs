@@ -102,6 +102,49 @@ pub fn access(autonomy: &Autonomy) -> (&'static str, &'static str, Option<&'stat
     }
 }
 
+/// A thread-level `sandbox` string as `turn/start` takes it: an object, not
+/// the kebab-case word `thread/start` takes. Anything else is the narrowest.
+pub fn sandbox_policy(sandbox: &str) -> Value {
+    match sandbox {
+        "danger-full-access" => json!({ "type": "dangerFullAccess" }),
+        "workspace-write" => json!({ "type": "workspaceWrite" }),
+        _ => json!({ "type": "readOnly" }),
+    }
+}
+
+/// What a session asks of its thread, as `turn/start` overrides. Each holds
+/// "for this turn and subsequent turns", so sending them on every turn keeps
+/// a kept process on the session's current settings without a restart. The
+/// reviewer always goes, as `user` when nobody else decides, so leaving Auto
+/// takes the auto reviewer off. A model, effort or tier the session has not
+/// set is left out: there is no override that takes one back.
+pub fn turn_overrides(
+    model: Option<&str>,
+    effort: Option<&str>,
+    service_tier: Option<&str>,
+    autonomy: &Autonomy,
+    cwd: &str,
+) -> Map<String, Value> {
+    let (approval, sandbox, reviewer) = access(autonomy);
+    let mut params = Map::new();
+    if let Some(model) = model.filter(|m| !m.is_empty()) {
+        params.insert("model".into(), json!(model));
+    }
+    if let Some(effort) = effort.filter(|e| !e.is_empty()) {
+        params.insert("effort".into(), json!(effort));
+    }
+    if let Some(tier) = service_tier.filter(|tier| !tier.is_empty()) {
+        params.insert("serviceTier".into(), json!(tier));
+    }
+    params.insert("approvalPolicy".into(), json!(approval));
+    params.insert("approvalsReviewer".into(), json!(reviewer.unwrap_or("user")));
+    params.insert("sandboxPolicy".into(), sandbox_policy(sandbox));
+    if !cwd.is_empty() {
+        params.insert("cwd".into(), json!(cwd));
+    }
+    params
+}
+
 /// `thread/start`, or `thread/resume` for a thread to carry on, with its params.
 ///
 /// Crew's server rides on the thread's config, beside the user's own servers
@@ -919,6 +962,35 @@ mod protocol_tests {
         assert_eq!(access(&Autonomy::Ask), ("on-request", "workspace-write", None));
         let (_, params) = thread_request(&thread(None, Autonomy::Auto, false));
         assert_eq!(params["approvalsReviewer"], "auto_review");
+    }
+
+    #[test]
+    fn a_turn_carries_the_settings_the_thread_was_opened_with_as_overrides() {
+        let set = turn_overrides(Some("gpt-5.6-sol"), Some("high"), Some("fast"), &Autonomy::Auto, "/w");
+        assert_eq!(
+            Value::Object(set),
+            json!({
+                "model": "gpt-5.6-sol",
+                "effort": "high",
+                "serviceTier": "fast",
+                "approvalPolicy": "on-request",
+                "approvalsReviewer": "auto_review",
+                "sandboxPolicy": { "type": "workspaceWrite" },
+                "cwd": "/w",
+            })
+        );
+        // What is not set is not overridden; the reviewer always goes, so
+        // leaving Auto takes the auto reviewer off.
+        let bare = turn_overrides(None, Some(""), None, &Autonomy::Full, "");
+        assert_eq!(
+            Value::Object(bare),
+            json!({
+                "approvalPolicy": "never",
+                "approvalsReviewer": "user",
+                "sandboxPolicy": { "type": "dangerFullAccess" },
+            })
+        );
+        assert_eq!(sandbox_policy("read-only"), json!({ "type": "readOnly" }));
     }
 
     #[test]

@@ -19,7 +19,7 @@ use crate::providers::claude::{
     assistant_context, assistant_text_blocks, assistant_tool_uses, build_claude_spawn_args, build_claude_user_message,
     build_control_request, build_control_response, get_context_usage_request, get_task_output_request,
     input_json_delta_from_event, is_compact_boundary, is_message_start, is_subagent_message,
-    parse_context_usage, parse_control_cancel_id, parse_control_request, parse_control_response, parse_questions,
+    parse_context_usage, permission_mode, parse_control_cancel_id, parse_control_request, parse_control_response, parse_questions,
     result_context_window, stop_task_request,
     session_id_from_message, stream_text_delta, to_permission_result,
     to_question_result, tool_detail as claude_tool_detail, tool_label as claude_tool_label,
@@ -118,8 +118,10 @@ static NEXT_EPOCH: AtomicU64 = AtomicU64::new(1);
 
 /// What a process was launched with, to tell on the next turn whether the
 /// session still asks for it. A kept process runs on these however the
-/// session's row changed since; a turn that finds them different lets the
-/// process go and launches another on the same conversation.
+/// session's row changed since; a turn that finds them different tells the
+/// process (Claude: [`claude_plan`], Codex: overrides on `turn/start`) or,
+/// where it cannot be told, lets it go and launches another on the same
+/// conversation.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Launch {
     model: Option<String>,
@@ -127,6 +129,136 @@ struct Launch {
     service_tier: Option<String>,
     autonomy: Autonomy,
     cwd: String,
+}
+
+impl Launch {
+    /// Whether these settings clear one that `old` had set: a model, effort
+    /// or tier back to the CLI's own. Neither CLI has a way to take an
+    /// override back, so a process that has it must go.
+    fn clears_a_setting_of(&self, old: &Launch) -> bool {
+        let cleared = |new: &Option<String>, old: &Option<String>| new.is_none() && old.is_some();
+        cleared(&self.model, &old.model)
+            || cleared(&self.effort, &old.effort)
+            || cleared(&self.service_tier, &old.service_tier)
+    }
+
+    /// What a kept Codex process is told on its next `turn/start`: the
+    /// settings that moved since `since`, what it ran with. Access goes as its
+    /// three fields together, or not at all.
+    fn turn_overrides_since(&self, since: &Launch) -> Map<String, Value> {
+        let mut params = crate::providers::codex::turn_overrides(
+            self.model.as_deref(),
+            self.effort.as_deref(),
+            self.service_tier.as_deref(),
+            &self.autonomy,
+            &self.cwd,
+        );
+        let same = [
+            ("model", self.model == since.model),
+            ("effort", self.effort == since.effort),
+            ("serviceTier", self.service_tier == since.service_tier),
+            ("cwd", self.cwd == since.cwd),
+            ("approvalPolicy", self.autonomy == since.autonomy),
+            ("approvalsReviewer", self.autonomy == since.autonomy),
+            ("sandboxPolicy", self.autonomy == since.autonomy),
+        ];
+        for (key, unchanged) in same {
+            if unchanged {
+                params.remove(key);
+            }
+        }
+        params
+    }
+}
+
+/// One setting of a kept Claude process that the CLI takes while it idles.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Change {
+    Model(String),
+    Effort(String),
+    /// Between Ask, Edits and Auto. Full is a launch flag.
+    Permission(Autonomy),
+    /// The service tier moved. `fast` is what the `fastMode` setting becomes,
+    /// when it has to be said: asked for only where the account may use it,
+    /// as at launch, and otherwise only to turn it off.
+    Tier { tier: Option<String>, fast: Option<bool> },
+}
+
+impl Change {
+    /// The control request that makes it so; none when only Crew's record moves.
+    fn request(&self) -> Option<Value> {
+        match self {
+            Change::Model(model) => Some(json!({ "subtype": "set_model", "model": model })),
+            Change::Effort(effort) => {
+                Some(json!({ "subtype": "apply_flag_settings", "settings": { "effortLevel": effort } }))
+            }
+            Change::Permission(autonomy) => {
+                Some(json!({ "subtype": "set_permission_mode", "mode": permission_mode(autonomy) }))
+            }
+            Change::Tier { fast, .. } => {
+                fast.map(|on| json!({ "subtype": "apply_flag_settings", "settings": { "fastMode": on } }))
+            }
+        }
+    }
+
+    /// Once the process has taken it, what it is running on.
+    fn record(self, applied: &mut Launch) {
+        match self {
+            Change::Model(model) => applied.model = Some(model),
+            Change::Effort(effort) => applied.effort = Some(effort),
+            Change::Permission(autonomy) => applied.autonomy = autonomy,
+            Change::Tier { tier, .. } => applied.service_tier = tier,
+        }
+    }
+}
+
+/// What a kept Claude process needs to run on new settings.
+#[derive(Debug, PartialEq, Eq)]
+enum Plan {
+    /// The CLI takes these as they are, one control request each.
+    Changes(Vec<Change>),
+    /// Something it cannot change while it runs: it is launched again on the
+    /// same conversation. The cwd, Full autonomy (`--dangerously-skip-permissions`
+    /// is a launch flag), and a model or effort back to the CLI's own (there
+    /// is no request that takes one back). The question tool follows the
+    /// session's kind, which never changes, so it is not compared.
+    Relaunch,
+}
+
+/// The one place that says which differences a kept Claude process takes in
+/// place. `fast_allowed` is whether the account may use fast mode.
+fn claude_plan(old: &Launch, new: &Launch, fast_allowed: bool) -> Plan {
+    if old.cwd != new.cwd {
+        return Plan::Relaunch;
+    }
+    let mut changes = Vec::new();
+    if old.model != new.model {
+        match &new.model {
+            Some(model) => changes.push(Change::Model(model.clone())),
+            None => return Plan::Relaunch,
+        }
+    }
+    if old.effort != new.effort {
+        match &new.effort {
+            Some(effort) => changes.push(Change::Effort(effort.clone())),
+            None => return Plan::Relaunch,
+        }
+    }
+    if old.autonomy != new.autonomy {
+        if old.autonomy == Autonomy::Full || new.autonomy == Autonomy::Full {
+            return Plan::Relaunch;
+        }
+        changes.push(Change::Permission(new.autonomy.clone()));
+    }
+    if old.service_tier != new.service_tier {
+        let fast = |tier: &Option<String>| tier.as_deref() == Some("fast");
+        let want = fast(&new.service_tier) && fast_allowed;
+        changes.push(Change::Tier {
+            tier: new.service_tier.clone(),
+            fast: (want || fast(&old.service_tier)).then_some(want),
+        });
+    }
+    Plan::Changes(changes)
 }
 
 #[cfg(test)]
@@ -1812,7 +1944,15 @@ impl TurnHost {
         if self.stop_requested(&session_id) {
             return TurnOutcome::Stopped;
         }
-        let kept = self.claude_arm(session, &params.cwd);
+        let (mut kept, changes) = self.claude_arm(session, &params.cwd);
+        if kept && !self.apply_claude_changes(&session_id, changes) {
+            if self.stop_requested(&session_id) {
+                return TurnOutcome::Stopped;
+            }
+            // Refused, or not answered: the same conversation on a new process.
+            self.claude_fresh(session, self.applied(session, &params.cwd));
+            kept = false;
+        }
         if let Err(error) = self.ensure_claude(session, params, kept) {
             return if self.stop_requested(&session_id) {
                 TurnOutcome::Stopped
@@ -1940,29 +2080,42 @@ impl TurnHost {
     }
 
     /// Gives the turn its state on the process the last one left, when there
-    /// is one alive that still has the settings the session asks for, and
+    /// is one alive that can run on the settings the session asks for, and
     /// otherwise on an entry of its own for the process
     /// [`TurnHost::ensure_claude`] launches. Returns whether the process was
-    /// kept.
-    fn claude_arm(&self, session: &crate::session::Session, cwd: &str) -> bool {
+    /// kept, and the changes it still has to be told of (see [`claude_plan`]):
+    /// [`TurnHost::apply_claude_changes`] sends them, which cannot be done here.
+    fn claude_arm(&self, session: &crate::session::Session, cwd: &str) -> (bool, Vec<Change>) {
         let session_id = session.id.as_str();
         let applied = self.applied(session, cwd);
         // Asked before the lock: a process that died while idle without its
         // exit being heard (it was killed under us) is not one to write to.
         let alive = self.agents.running().iter().any(|id| id == session_id);
-        let reusable = matches!(
-            self.lock().get(session_id),
-            Some(Live::Claude(live)) if alive && live.initialized && !live.active && !live.cancelled && live.applied == applied
-        );
-        if reusable {
+        let fast_allowed =
+            crate::provider_session::claude_fast_mode().availability != crew_protocol::FastModeAvailability::Hidden;
+        let plan = match self.lock().get(session_id) {
+            Some(Live::Claude(live)) if alive && live.initialized && !live.active && !live.cancelled => {
+                Some(claude_plan(&live.applied, &applied, fast_allowed))
+            }
+            _ => None,
+        };
+        if let Some(Plan::Changes(changes)) = plan {
             self.idle.lock().unwrap_or_else(|e| e.into_inner()).remove(session_id);
             // Nothing runs in the background of a process that was kept, so
             // the tray starts empty, as it does after a launch.
             self.background.touch(session_id, crate::background::Board::begin);
-            return true;
+            return (true, changes);
         }
-        // Settings that moved on, a stop, or a process that is gone: another
-        // is launched, on the conversation the child carries on.
+        // A setting only a launch sets, a stop, or a process that is gone:
+        // another is launched, on the conversation the child carries on.
+        self.claude_fresh(session, applied);
+        (false, Vec::new())
+    }
+
+    /// An entry for a process about to be launched, in place of whatever the
+    /// session had.
+    fn claude_fresh(&self, session: &crate::session::Session, applied: Launch) {
+        let session_id = session.id.as_str();
         self.agents.kill(session_id);
         self.detach(session_id);
         // A child carries on its own conversation; a bot starts a clean one.
@@ -1972,7 +2125,32 @@ impl TurnHost {
             Live::Claude(Box::new(ClaudeLive::new(claude_session_id, session.kind == "child", applied))),
         );
         self.background.touch(session_id, crate::background::Board::begin);
-        false
+    }
+
+    /// Tell a kept process its new settings, before the user message goes in.
+    /// Each is recorded as the CLI takes it, so a process that refuses one
+    /// still says what it runs on. Returns whether all were taken; on a
+    /// refusal or a silence the caller launches the process again. Called
+    /// from the turn's thread with no lock held: it waits for the answers,
+    /// which the reader thread delivers.
+    fn apply_claude_changes(&self, session_id: &str, changes: Vec<Change>) -> bool {
+        let epoch = match self.lock().get(session_id) {
+            Some(Live::Claude(live)) => live.epoch,
+            _ => return false,
+        };
+        for change in changes {
+            if let Some(request) = change.request() {
+                if let Err(error) = self.claude_control_on(session_id, Some(epoch), request) {
+                    eprintln!("[crewd] session {session_id}: Claude Code did not take a setting ({error}); it is launched again");
+                    return false;
+                }
+            }
+            match self.lock().get_mut(session_id) {
+                Some(Live::Claude(live)) if live.epoch == epoch => change.record(&mut live.applied),
+                _ => return false,
+            }
+        }
+        true
     }
 
     /// The process the turn runs on, up and answering: the one a child kept,
@@ -3770,5 +3948,168 @@ mod context_tests {
         host.record_context("s2", reading(20, None, None));
         assert_eq!(host.context("s1"), Some(reading(10, Some(200_000), None)));
         assert_eq!(host.context("s2"), Some(reading(20, None, None)));
+    }
+}
+
+#[cfg(test)]
+mod plan_tests {
+    use super::*;
+
+    fn launch() -> Launch {
+        Launch {
+            model: Some("sonnet".into()),
+            effort: Some("medium".into()),
+            service_tier: None,
+            autonomy: Autonomy::Ask,
+            cwd: "/w".into(),
+        }
+    }
+
+    /// A kept Codex process is told only what moved: nothing when nothing
+    /// did, and access as its three fields together, so a turn that kept the
+    /// autonomy never resets what the user's config says of the sandbox.
+    #[test]
+    fn a_kept_codex_process_is_told_only_what_moved() {
+        assert!(launch().turn_overrides_since(&launch()).is_empty());
+        let moved = Launch { model: Some("opus".into()), autonomy: Autonomy::Full, ..launch() };
+        let mut keys: Vec<String> = moved.turn_overrides_since(&launch()).keys().cloned().collect();
+        keys.sort();
+        assert_eq!(keys, ["approvalPolicy", "approvalsReviewer", "model", "sandboxPolicy"]);
+    }
+
+    fn plan(change: impl FnOnce(&mut Launch), fast_allowed: bool) -> Plan {
+        let mut new = launch();
+        change(&mut new);
+        claude_plan(&launch(), &new, fast_allowed)
+    }
+
+    #[test]
+    fn settings_that_did_not_move_need_nothing() {
+        assert_eq!(plan(|_| {}, true), Plan::Changes(vec![]));
+    }
+
+    #[test]
+    fn a_model_an_effort_and_a_mode_change_in_place_in_that_order() {
+        let plan = plan(
+            |new| {
+                new.model = Some("opus".into());
+                new.effort = Some("max".into());
+                new.autonomy = Autonomy::Auto;
+            },
+            true,
+        );
+        assert_eq!(
+            plan,
+            Plan::Changes(vec![
+                Change::Model("opus".into()),
+                Change::Effort("max".into()),
+                Change::Permission(Autonomy::Auto),
+            ])
+        );
+        let Plan::Changes(changes) = plan else { unreachable!() };
+        let requests: Vec<Value> = changes.iter().filter_map(Change::request).collect();
+        assert_eq!(
+            requests,
+            [
+                json!({ "subtype": "set_model", "model": "opus" }),
+                json!({ "subtype": "apply_flag_settings", "settings": { "effortLevel": "max" } }),
+                json!({ "subtype": "set_permission_mode", "mode": "auto" }),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_first_model_or_effort_is_set_in_place() {
+        let mut old = launch();
+        old.model = None;
+        old.effort = None;
+        assert_eq!(
+            claude_plan(&old, &launch(), true),
+            Plan::Changes(vec![Change::Model("sonnet".into()), Change::Effort("medium".into())])
+        );
+    }
+
+    #[test]
+    fn what_only_a_launch_sets_is_a_relaunch() {
+        assert_eq!(plan(|new| new.cwd = "/other".into(), true), Plan::Relaunch);
+        assert_eq!(plan(|new| new.model = None, true), Plan::Relaunch);
+        assert_eq!(plan(|new| new.effort = None, true), Plan::Relaunch);
+        assert_eq!(plan(|new| new.autonomy = Autonomy::Full, true), Plan::Relaunch);
+        let mut old = launch();
+        old.autonomy = Autonomy::Full;
+        assert_eq!(claude_plan(&old, &launch(), true), Plan::Relaunch);
+        // Even with the rest changing in place.
+        assert_eq!(
+            plan(
+                |new| {
+                    new.model = Some("opus".into());
+                    new.cwd = "/other".into();
+                },
+                true
+            ),
+            Plan::Relaunch
+        );
+    }
+
+    #[test]
+    fn fast_is_asked_for_only_where_the_account_may_use_it() {
+        let fast = |new: &mut Launch| new.service_tier = Some("fast".into());
+        let on = Change::Tier { tier: Some("fast".into()), fast: Some(true) };
+        assert_eq!(plan(fast, true), Plan::Changes(vec![on.clone()]));
+        assert_eq!(
+            on.request(),
+            Some(json!({ "subtype": "apply_flag_settings", "settings": { "fastMode": true } }))
+        );
+        // Hidden: a tier carried over from another provider says nothing, as at launch.
+        let hidden = Change::Tier { tier: Some("fast".into()), fast: None };
+        assert_eq!(plan(fast, false), Plan::Changes(vec![hidden.clone()]));
+        assert_eq!(hidden.request(), None);
+    }
+
+    #[test]
+    fn fast_is_turned_off_when_the_tier_leaves_it() {
+        let mut old = launch();
+        old.service_tier = Some("fast".into());
+        for allowed in [true, false] {
+            let Plan::Changes(changes) = claude_plan(&old, &launch(), allowed) else { panic!("relaunch") };
+            assert_eq!(
+                changes[0].request(),
+                Some(json!({ "subtype": "apply_flag_settings", "settings": { "fastMode": false } })),
+                "{allowed}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_change_is_recorded_as_what_the_process_runs_on() {
+        let mut applied = launch();
+        Change::Model("opus".into()).record(&mut applied);
+        Change::Effort("high".into()).record(&mut applied);
+        Change::Permission(Autonomy::Edits).record(&mut applied);
+        Change::Tier { tier: Some("fast".into()), fast: Some(true) }.record(&mut applied);
+        assert_eq!(
+            applied,
+            Launch {
+                model: Some("opus".into()),
+                effort: Some("high".into()),
+                service_tier: Some("fast".into()),
+                autonomy: Autonomy::Edits,
+                cwd: "/w".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn codex_lets_a_process_go_only_for_a_setting_taken_back() {
+        let mut new = launch();
+        new.model = Some("other".into());
+        new.autonomy = Autonomy::Full;
+        new.cwd = "/other".into();
+        assert!(!new.clears_a_setting_of(&launch()));
+        let mut cleared = launch();
+        cleared.effort = None;
+        assert!(cleared.clears_a_setting_of(&launch()));
+        // A setting that was never set is not taken back.
+        assert!(!launch().clears_a_setting_of(&cleared));
     }
 }
