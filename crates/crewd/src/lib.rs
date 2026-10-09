@@ -1296,6 +1296,14 @@ async fn delete_session(hosts: &Hosts, id: String) -> Result<(), String> {
         let running = id.clone();
         block(move || turns.stop(&running)).await?;
     }
+    // A child keeps its CLI between turns: with no turn to stop, it is still up.
+    let turns = hosts.turns.clone();
+    let kept = id.clone();
+    block(move || {
+        turns.release(&kept);
+        Ok(())
+    })
+    .await?;
     // A process that outlived that still has a token in its environment;
     // a session that no longer exists should not still be able to call.
     hosts.bridge.revoke(&id);

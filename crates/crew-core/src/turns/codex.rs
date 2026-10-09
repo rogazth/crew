@@ -1,15 +1,18 @@
-//! The Codex driver: one `codex app-server` per turn of a bot or a child,
-//! spoken to in JSON-RPC over its stdio. The process is spawned when the turn
-//! starts and killed when it ends, as Claude's is: a child carries on its
-//! thread with `thread/resume`, a bot starts a clean one with the tail Crew
-//! hands it. While the turn runs, Crew can steer it, interrupt it, and answer
-//! the approvals and questions it sends, through the same events and cards as
-//! Claude's.
+//! The Codex driver: one `codex app-server` per session, spoken to in
+//! JSON-RPC over its stdio. A child keeps it between turns, each one a
+//! `turn/start` on the thread it opened, so a second message does not restart
+//! the CLI and the MCP servers it starts with; a bot, or a turn that failed or
+//! was stopped, gets a fresh process, killed when its turn ends (a child
+//! carries on its thread with `thread/resume`, a bot starts a clean one with
+//! the tail Crew hands it). While a turn runs, Crew can steer it, interrupt it,
+//! and answer the approvals and questions it sends, through the same events
+//! and cards as Claude's.
 //!
 //! The protocol itself (params, items, request shapes) is in
 //! `providers/codex.rs`.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::thread;
 use std::time::Duration;
@@ -45,17 +48,28 @@ pub(super) const INTERRUPT_GRACE: Duration = Duration::from_secs(3);
 /// How often the background terminals are listed while a command runs.
 const TERMINAL_POLL: Duration = Duration::from_secs(2);
 
+/// Names one app server, so a watcher started for a process can tell when its
+/// own is gone and a later one has taken the session's place.
+static NEXT_EPOCH: AtomicU64 = AtomicU64::new(1);
+
 /// A request the app server is waiting on Crew for, by the id the UI knows.
 pub(super) struct Pending<T> {
     rpc_id: Value,
     tx: mpsc::Sender<T>,
 }
 
+/// One app server and its thread. What lives as long as the process is the
+/// thread, the request counters and the stderr tail; the rest belongs to the
+/// turn that is running and starts over in [`CodexLive::begin_turn`].
 pub(super) struct CodexLive {
+    epoch: u64,
     thread_id: Option<String>,
     /// The turn that is running. `turn/start` on a busy thread would steer
     /// it without a word, so this is what says whether one is.
     turn_id: Option<String>,
+    /// The turn that ended last. What Codex still says of it, once the next
+    /// one has begun, is not the next one's.
+    last_turn: Option<String>,
     next_id: u64,
     /// Requests Crew sent, waiting for their answer.
     calls: HashMap<u64, mpsc::Sender<Result<Value, String>>>,
@@ -81,8 +95,10 @@ pub(super) struct CodexLive {
 impl CodexLive {
     pub(super) fn new(turn_tx: Option<oneshot::Sender<TurnOutcome>>) -> Self {
         Self {
+            epoch: NEXT_EPOCH.fetch_add(1, Ordering::Relaxed),
             thread_id: None,
             turn_id: None,
+            last_turn: None,
             next_id: 1,
             calls: HashMap::new(),
             approvals: HashMap::new(),
@@ -99,6 +115,21 @@ impl CodexLive {
             stderr: Vec::new(),
             saw_output: false,
         }
+    }
+
+    /// A turn starts on the process the last one left: what that turn knew of
+    /// itself goes, what belongs to the process stays.
+    fn begin_turn(&mut self, turn_tx: oneshot::Sender<TurnOutcome>) {
+        self.turn_id = None;
+        self.items.clear();
+        self.seen_tools.clear();
+        self.message = None;
+        self.steers.clear();
+        self.active = true;
+        self.cancelled = false;
+        self.settled = false;
+        self.turn_tx = Some(turn_tx);
+        self.saw_output = false;
     }
 
     /// Everything waiting on the process, let go: it is gone, or about to be.
@@ -129,29 +160,13 @@ impl TurnHost {
         history: Option<String>,
     ) -> TurnOutcome {
         let session_id = session.id.clone();
-        self.agents.kill(&session_id);
         let (tx, turn_rx) = oneshot::channel();
-        self.lock()
-            .insert(session_id.clone(), Live::Codex(Box::new(CodexLive::new(Some(tx)))));
-        self.background.touch(&session_id, crate::background::Board::begin);
+        let kept = self.codex_arm(&session_id, tx);
         self.watch_for_silence(&session_id);
-        // A stop that came before the CLI was there to take it.
-        if self.stop_requested(&session_id) {
-            self.detach(&session_id);
-            return TurnOutcome::Stopped;
-        }
-        let path = match self.resolve_bin("codex") {
-            Ok(path) => path,
-            Err(error) => {
-                self.detach(&session_id);
-                return TurnOutcome::Failed(error);
-            }
-        };
-        let mcp = self.mcp();
         let child = session.kind == "child";
         // Every turn: Codex keeps no system prompt Crew can set, and newer
         // catalogs override developer instructions.
-        let instructions = self.persona(&session, Harness::Mcp, mcp.is_some(), &params.cwd);
+        let instructions = self.persona(&session, Harness::Mcp, self.mcp().is_some(), &params.cwd);
         let files = path_list(&params, &HashSet::new());
         let text = if child {
             crate::providers::with_files(params.text.trim(), &files)
@@ -162,39 +177,15 @@ impl TurnHost {
                 &with_attached_paths(params.text.trim(), &files),
             )
         };
-        // Minted once and used twice: the agent's own shell gets it, and so
-        // does the MCP server codex starts for it. A second mint would retire
-        // the first.
-        let env = self.agent_env(&session_id);
-        let thread = CodexThread {
-            cwd: params.cwd.clone(),
-            resume: child_resume(&session),
-            model: Some(session.model.clone()).filter(|m| !m.is_empty()),
-            effort: Some(session.effort.clone()).filter(|e| !e.is_empty()),
-            service_tier: Some(session.service_tier.clone()).filter(|tier| !tier.is_empty()),
-            autonomy: self.autonomy(&session),
-            mcp,
-            mcp_env: env.clone().into_iter().collect(),
-        };
-        if let Err(error) = self.agents.spawn(
-            session_id.clone(),
-            path,
-            vec!["app-server".into()],
-            params.cwd.clone(),
-            Some(env),
-        ) {
-            self.detach(&session_id);
-            return TurnOutcome::Failed(error);
-        }
-        let outcome = match self.codex_open(&session_id, &thread, &text, &instructions) {
-            Ok(()) => {
-                self.watch_terminals(&session_id);
-                self
+        let outcome = match self.ensure_codex(&session, &params, kept) {
+            Ok(thread) => match self.codex_turn(&session_id, &thread, &text, &instructions) {
+                Ok(()) => self
                     .block_on(turn_rx)
-                    .unwrap_or(TurnOutcome::Failed("Turn channel closed".into()))
-            }
-            Err(_) if self.stop_requested(&session_id) => TurnOutcome::Stopped,
-            Err(error) => TurnOutcome::Failed(error),
+                    .unwrap_or(TurnOutcome::Failed("Turn channel closed".into())),
+                Err(_) if self.stop_requested(&session_id) => TurnOutcome::Stopped,
+                Err(error) => TurnOutcome::Failed(error),
+            },
+            Err(outcome) => outcome,
         };
         // A steer the turn ended before reading is not lost: it waits in the
         // box, and the end of this turn hands it over as the next one.
@@ -208,16 +199,93 @@ impl TurnHost {
         for steer in unread {
             steer.put_back(&self.store, &session_id);
         }
-        // Background terminals end with the process; a child's thread
-        // carries on from its rollout next turn.
-        self.agents.kill(&session_id);
-        self.detach(&session_id);
+        // Background terminals end with the process: a child that keeps it
+        // keeps them too, and its next turn finds them in the tray.
+        self.park(&session, &outcome);
         outcome
     }
 
-    /// The handshake, the thread, and the turn. Returns once the turn runs;
-    /// its end arrives as `turn/completed`.
-    fn codex_open(&self, session_id: &str, thread: &CodexThread, text: &str, instructions: &str) -> Result<(), String> {
+    /// Gives the turn its state on the process the last one left, when there
+    /// is one alive, and otherwise on an entry of its own for the process
+    /// [`TurnHost::ensure_codex`] spawns. Returns whether the process was kept.
+    fn codex_arm(&self, session_id: &str, tx: oneshot::Sender<TurnOutcome>) -> bool {
+        // Asked before the lock: a process that died while idle without its
+        // exit being heard (it was killed under us) is not one to write to.
+        let alive = self.agents.running().iter().any(|id| id == session_id);
+        let tx = {
+            let mut map = self.lock();
+            match map.get_mut(session_id) {
+                Some(Live::Codex(live)) if alive && live.thread_id.is_some() && live.settled && !live.cancelled => {
+                    live.begin_turn(tx);
+                    drop(map);
+                    self.idle.lock().unwrap_or_else(|e| e.into_inner()).remove(session_id);
+                    return true;
+                }
+                _ => tx,
+            }
+        };
+        self.agents.kill(session_id);
+        self.lock()
+            .insert(session_id.to_string(), Live::Codex(Box::new(CodexLive::new(Some(tx)))));
+        self.idle.lock().unwrap_or_else(|e| e.into_inner()).remove(session_id);
+        self.background.touch(session_id, crate::background::Board::begin);
+        false
+    }
+
+    /// The process the turn runs on, with its thread open: the one a child
+    /// kept, or a new `app-server` that is initialized and given its thread
+    /// (`thread/start`, or `thread/resume` on the conversation a child
+    /// carries on). Returns the thread's id; a failure is the turn's outcome.
+    fn ensure_codex(
+        &self,
+        session: &crate::session::Session,
+        params: &crew_protocol::TurnStart,
+        kept: bool,
+    ) -> Result<String, TurnOutcome> {
+        let session_id = session.id.as_str();
+        if kept {
+            let thread = match self.lock().get(session_id) {
+                Some(Live::Codex(live)) => live.thread_id.clone(),
+                _ => None,
+            };
+            return thread.ok_or_else(|| TurnOutcome::Failed("Codex has no thread open.".into()));
+        }
+        // A stop that came before the CLI was there to take it.
+        if self.stop_requested(session_id) {
+            return Err(TurnOutcome::Stopped);
+        }
+        let path = self.resolve_bin("codex").map_err(TurnOutcome::Failed)?;
+        let mcp = self.mcp();
+        // Minted once and used twice: the agent's own shell gets it, and so
+        // does the MCP server codex starts for it. A second mint would retire
+        // the first, and this process lives across turns, so nothing mints
+        // again until it is replaced.
+        let env = self.agent_env(session_id);
+        let thread = CodexThread {
+            cwd: params.cwd.clone(),
+            resume: child_resume(session),
+            model: Some(session.model.clone()).filter(|m| !m.is_empty()),
+            effort: Some(session.effort.clone()).filter(|e| !e.is_empty()),
+            service_tier: Some(session.service_tier.clone()).filter(|tier| !tier.is_empty()),
+            autonomy: self.autonomy(session),
+            mcp,
+            mcp_env: env.clone().into_iter().collect(),
+        };
+        self.agents
+            .spawn(session_id.to_string(), path, vec!["app-server".into()], params.cwd.clone(), Some(env))
+            .map_err(TurnOutcome::Failed)?;
+        match self.codex_open(session_id, &thread) {
+            Ok(thread_id) => {
+                self.watch_terminals(session_id);
+                Ok(thread_id)
+            }
+            Err(_) if self.stop_requested(session_id) => Err(TurnOutcome::Stopped),
+            Err(error) => Err(TurnOutcome::Failed(error)),
+        }
+    }
+
+    /// The handshake and the thread. Returns the thread's id.
+    fn codex_open(&self, session_id: &str, thread: &CodexThread) -> Result<String, String> {
         self.codex_call(session_id, "initialize", initialize_params(), INIT_TIMEOUT)
             .map_err(|error| self.codex_failure(session_id, "Codex did not start", &error))?;
         self.codex_notify(session_id, "initialized", json!({}))?;
@@ -229,10 +297,16 @@ impl TurnHost {
         if let Some(Live::Codex(live)) = self.lock().get_mut(session_id) {
             live.thread_id = Some(thread_id.clone());
         }
+        Ok(thread_id)
+    }
+
+    /// The turn itself, on an open thread. Returns once the turn runs; its end
+    /// arrives as `turn/completed`.
+    fn codex_turn(&self, session_id: &str, thread_id: &str, text: &str, instructions: &str) -> Result<(), String> {
         self.transcripts.apply(
             session_id,
             HarnessEvent::SessionProviderBound {
-                provider_session_id: thread_id.clone(),
+                provider_session_id: thread_id.to_string(),
             },
         );
         self.transcripts.apply(session_id, HarnessEvent::SessionStarted {});
@@ -243,7 +317,7 @@ impl TurnHost {
             .codex_call(
                 session_id,
                 "turn/start",
-                turn_start_params(&thread_id, text, Some(instructions)),
+                turn_start_params(thread_id, text, Some(instructions)),
                 OPEN_TIMEOUT,
             )
             .map_err(|error| self.codex_failure(session_id, "Codex did not start the turn", &error))?;
@@ -258,16 +332,24 @@ impl TurnHost {
         Ok(())
     }
 
-    /// While the turn runs, list the thread's background terminals whenever a
-    /// command is running: a command that outlives its call is one, and the
-    /// tray lists it. Nothing is asked while no command runs.
+    /// While the process lives, list the thread's background terminals
+    /// whenever a command is running: a command that outlives its call is
+    /// one, and the tray lists it. A child's process outlives its turns, and
+    /// so do its terminals, so this goes on between them. Nothing is asked
+    /// while no command runs.
     fn watch_terminals(&self, session_id: &str) {
         let host = self.clone();
         let session_id = session_id.to_string();
+        let epoch = match self.lock().get(&session_id) {
+            Some(Live::Codex(live)) => live.epoch,
+            _ => return,
+        };
         thread::spawn(move || loop {
             thread::sleep(TERMINAL_POLL);
+            // Its own process only: a later one for the same session has a
+            // watcher of its own.
             let thread_id = match host.lock().get(&session_id) {
-                Some(Live::Codex(live)) if !live.settled && !live.cancelled => live.thread_id.clone(),
+                Some(Live::Codex(live)) if live.epoch == epoch && !live.cancelled => live.thread_id.clone(),
                 _ => return,
             };
             let Some(thread_id) = thread_id else {
@@ -395,7 +477,7 @@ impl TurnHost {
     /// kills the process either way. Returns false when there was no turn to
     /// interrupt, and the caller settles it at once.
     pub(super) fn codex_interrupt(&self, session_id: &str) -> bool {
-        let target = {
+        let (target, epoch) = {
             let mut map = self.lock();
             let Some(Live::Codex(live)) = map.get_mut(session_id) else {
                 return false;
@@ -410,7 +492,7 @@ impl TurnHost {
             for (_, pending) in live.questions.drain() {
                 let _ = pending.tx.send(QuestionReply::Cancelled);
             }
-            target
+            (target, live.epoch)
         };
         let Some((thread, turn)) = target else {
             return false;
@@ -421,7 +503,12 @@ impl TurnHost {
         let host = self.clone();
         let id = session_id.to_string();
         self.after(INTERRUPT_GRACE, move || {
-            let open = matches!(host.lock().get(&id), Some(Live::Codex(live)) if !live.settled);
+            // Only the turn it was armed for: the process it was armed on may
+            // be gone by now, and a later turn on the session is not its to end.
+            let open = matches!(
+                host.lock().get(&id),
+                Some(Live::Codex(live)) if live.epoch == epoch && !live.settled && live.turn_id.as_deref() == Some(turn.as_str())
+            );
             if open {
                 host.signal(&id, TurnOutcome::Stopped);
             }
@@ -669,6 +756,22 @@ impl TurnHost {
             let Some(Live::Codex(live)) = map.get_mut(session_id) else {
                 return;
             };
+            // One process drives one thread, and one turn at a time on it:
+            // what names another is not this turn's to take.
+            let thread = params.get("threadId").and_then(Value::as_str);
+            if thread.zip(live.thread_id.as_deref()).is_some_and(|(said, mine)| said != mine) {
+                return;
+            }
+            let turn = params.get("turnId").or_else(|| params.pointer("/turn/id")).and_then(Value::as_str);
+            if let Some(turn) = turn {
+                // Until the current turn's id is known, only the turn that
+                // just ended is known not to be it.
+                let stale = live.last_turn.as_deref() == Some(turn)
+                    || live.turn_id.as_deref().is_some_and(|running| running != turn);
+                if stale {
+                    return;
+                }
+            }
             match method {
                 "turn/completed" => {
                     let (turn, end) = turn_end(params);
@@ -680,7 +783,7 @@ impl TurnHost {
                     if live.settled {
                         return;
                     }
-                    live.turn_id = None;
+                    live.last_turn = live.turn_id.take().or(turn);
                     if live.cancelled {
                         outcome = Some(TurnOutcome::Stopped);
                     } else {
@@ -896,12 +999,14 @@ fn codex_item(live: &mut CodexLive, item: &Map<String, Value>, completed: bool, 
 /// protocol Crew uses: the handshake, `thread/start` and `thread/resume`,
 /// `turn/start`, `turn/steer`, `turn/interrupt`, and the server's own
 /// approval and question requests. Every request it gets is appended to the
-/// log as `{method, params}`, after a first line with its argv and env.
+/// log as `{method, params}`, after a first line with its argv, pid and env:
+/// one such line per launch.
 ///
 /// What a turn does is spelled in its text: `SLEEP <s>` runs a command that
 /// long (steers land after it), `ASK` asks to run one, `QUESTION` asks which
 /// color, `MCP` calls Crew's `list_peers`, `FAIL` fails the turn,
-/// `STUBBORN` ignores an interrupt. It answers `report: <last line>`, with
+/// `STUBBORN` ignores an interrupt, `STALE` has the turn begin with a delta
+/// and a failed end that name the turn before it. It answers `report: <last line>`, with
 /// ` + <steer>` for each steer it took.
 #[cfg(test)]
 pub(crate) fn fake_codex(dir: &std::path::Path) -> (String, std::path::PathBuf) {
@@ -917,7 +1022,7 @@ def out(m):
         sys.stdout.write(json.dumps(m) + "\n"); sys.stdout.flush()
 def log(m):
     with open(LOG, "a") as f: f.write(json.dumps(m) + "\n")
-log({"argv": sys.argv[1:], "env": {k: os.environ.get(k) for k in ["CREW_SOCKET", "CREW_TOKEN"]}})
+log({"argv": sys.argv[1:], "pid": os.getpid(), "env": {k: os.environ.get(k) for k in ["CREW_SOCKET", "CREW_TOKEN"]}})
 state = {"thread": None, "turn": None, "next": 0}
 answers = {}
 terminals = {}
@@ -1032,6 +1137,11 @@ for line in sys.stdin:
         text = text_of(params.get("input", []))
         turn = {"id": str(uuid.uuid4()), "inbox": [], "interrupted": threading.Event(), "stubborn": "STUBBORN" in text}
         state["turn"] = turn
+        if "STALE" in text and state.get("last"):
+            late = state["last"]
+            out({"method": "item/agentMessage/delta", "params": {"threadId": state["thread"], "turnId": late, "itemId": "late", "delta": "from the last turn"}})
+            out({"method": "turn/completed", "params": {"threadId": state["thread"], "turn": {"id": late, "status": "failed", "error": {"message": "from the last turn"}}}})
+        state["last"] = turn["id"]
         out({"id": rid, "result": {"turn": {"id": turn["id"], "status": "inProgress"}}})
         out({"method": "turn/started", "params": {"threadId": state["thread"], "turn": {"id": turn["id"], "status": "inProgress"}}})
         threading.Thread(target=run, args=(turn, text), daemon=True).start()

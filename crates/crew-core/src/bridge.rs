@@ -155,13 +155,15 @@ impl Bridge {
         self.shared.tokens.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    /// A fresh token for one session's turn, and the end of the turn token it
-    /// held before.
+    /// A fresh token for one session's process, and the end of the turn token
+    /// it held before.
     ///
-    /// Minted per turn, because a turn is one process: when that process dies
-    /// its token is worth having only until the next one starts. Cursor has no
-    /// MCP and reaches the bridge through `crew` in its shell, so the
-    /// token is what stops that shell from speaking as anybody else.
+    /// Minted when the process is spawned, and never again while it lives: a
+    /// process a driver keeps across turns holds the token in its environment
+    /// (and in its MCP server's), so a later mint would cut it off. When that
+    /// process dies its token is worth having only until the next one starts.
+    /// Cursor has no MCP and reaches the bridge through `crew` in its shell,
+    /// so the token is what stops that shell from speaking as anybody else.
     pub fn mint(&self, session_id: &str) -> String {
         let token = uuid::Uuid::new_v4().to_string();
         let mut tokens = self.tokens();
@@ -215,7 +217,7 @@ impl Bridge {
         self.shared.socket_path.to_string_lossy().into_owned()
     }
 
-    fn whose(&self, token: &str) -> Option<Bearer> {
+    pub(crate) fn whose(&self, token: &str) -> Option<Bearer> {
         self.tokens().get(token).map(|grant| grant.bearer.clone())
     }
 

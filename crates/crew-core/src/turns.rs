@@ -3,7 +3,7 @@ use std::future::Future;
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use tokio::sync::oneshot;
 
@@ -91,6 +91,14 @@ fn child_resume(session: &crate::session::Session) -> Option<String> {
         .then(|| session.provider_session_id.clone())
         .flatten()
         .filter(|id| !id.is_empty())
+}
+
+/// Whether the process a turn ran on stays up for the session's next one.
+/// Only a child's does for now: a bot starts a clean provider session every
+/// turn, with the tail Crew hands it, so a process kept for it would carry
+/// nothing it may use. This is the one place that says so.
+fn keeps_process(session: &crate::session::Session) -> bool {
+    session.kind == "child"
 }
 
 /// An opencode turn's persona, on disk for as long as the turn runs:
@@ -277,6 +285,9 @@ pub struct TurnHost {
     background: crate::background::BackgroundHost,
     /// The newest context reading of each session, merged as they come.
     contexts: Arc<Mutex<HashMap<String, ContextReading>>>,
+    /// Sessions whose process is up with no turn on it, since when. Apart from
+    /// the process entries so the drivers' match arms do not all change.
+    idle: Arc<Mutex<HashMap<String, Instant>>>,
 }
 
 impl TurnHost {
@@ -297,6 +308,7 @@ impl TurnHost {
             running: Arc::new(Mutex::new(HashSet::new())),
             background: crate::background::BackgroundHost::default(),
             contexts: Arc::new(Mutex::new(HashMap::new())),
+            idle: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -867,16 +879,22 @@ impl TurnHost {
             Live::Codex(row) => {
                 // Whatever waited on an answer gets none.
                 row.release();
+                // No turn is running: a process a child kept died while idle.
+                // Its entry goes, so the next message spawns one and resumes
+                // the thread, and what it ran in the background went with it.
+                if !row.active {
+                    drop(map);
+                    self.detach(session_id);
+                    self.close_tray(session_id);
+                    return;
+                }
                 if row.cancelled || row.settled {
                     return;
                 }
-                let mid = row.active;
                 let stderr = row.stderr.clone();
-                if mid {
-                    drop(map);
-                    self.transcripts.apply(session_id, HarnessEvent::SessionEnded { code });
-                    self.signal(session_id, TurnOutcome::Failed(exit_message(provider, code, &stderr)));
-                }
+                drop(map);
+                self.transcripts.apply(session_id, HarnessEvent::SessionEnded { code });
+                self.signal(session_id, TurnOutcome::Failed(exit_message(provider, code, &stderr)));
             }
             Live::Cursor(row) => {
                 row.release();
@@ -1053,6 +1071,47 @@ impl TurnHost {
 
     fn detach(&self, session_id: &str) {
         self.lock().remove(session_id);
+        self.idle.lock().unwrap_or_else(|e| e.into_inner()).remove(session_id);
+    }
+
+    /// Since when a session's process has been up with no turn on it. `None`
+    /// while a turn runs or when there is no process.
+    pub fn idle_since(&self, session_id: &str) -> Option<Instant> {
+        self.idle.lock().unwrap_or_else(|e| e.into_inner()).get(session_id).copied()
+    }
+
+    /// The end of a turn on a driver that can keep its process: it stays for
+    /// the next turn when the session keeps its process and this one went
+    /// well, and goes otherwise. A turn that failed or was stopped leaves the
+    /// process in a state nobody vouches for (an interrupt's late answer
+    /// would end the next turn), and a session that is exiting has no next
+    /// turn.
+    fn park(&self, session: &crate::session::Session, outcome: &TurnOutcome) {
+        let exiting = self.exiting.lock().unwrap_or_else(|e| e.into_inner()).contains_key(&session.id);
+        let kept = keeps_process(session)
+            && matches!(outcome, TurnOutcome::Completed)
+            && !exiting
+            && self.lock().contains_key(&session.id);
+        if kept {
+            self.idle.lock().unwrap_or_else(|e| e.into_inner()).insert(session.id.clone(), Instant::now());
+        } else {
+            self.release(&session.id);
+        }
+    }
+
+    /// Let go of a session's process: kill it, drop its entry, and close the
+    /// tray, since what it ran in the background went with it.
+    pub fn release(&self, session_id: &str) {
+        self.agents.kill(session_id);
+        self.detach(session_id);
+        self.close_tray(session_id);
+    }
+
+    /// The CLI is gone, and what it left running in the background went with
+    /// it: the tray keeps the rows, ended, until the next process.
+    fn close_tray(&self, session_id: &str) {
+        let now = crate::store::now_millis();
+        self.background.touch(session_id, |board| board.end(now));
     }
 
     fn resolve_bin(&self, name: &str) -> Result<String, String> {
@@ -1074,9 +1133,12 @@ impl TurnHost {
         };
         HashMap::from([
             ("CREW_SOCKET".into(), info.socket_path),
-            // Minted for this session, here, every turn. It is what says who is
-            // calling: the id no longer travels on the wire, so a shell that
-            // inherited this cannot speak as another agent.
+            // Minted for this session, here, once per process: a driver that
+            // keeps its process across turns calls this once, since a later
+            // mint would retire the token the live CLI's MCP server holds. It
+            // is what says who is calling: the id no longer travels on the
+            // wire, so a shell that inherited this cannot speak as another
+            // agent.
             ("CREW_TOKEN".into(), self.bridge.mint(session_id)),
         ])
     }
@@ -1098,10 +1160,11 @@ impl TurnHost {
                 "{other} agents are not wired up yet. Pick Claude for now."
             )),
         };
-        // The CLI is gone, and what it left running in the background went
-        // with it: the tray keeps the rows, ended, until the next turn.
-        let now = crate::store::now_millis();
-        self.background.touch(&session_id, |board| board.end(now));
+        // The CLI is gone, unless the session kept it for its next turn: then
+        // what it left running in the background still runs.
+        if self.idle_since(&session_id).is_none() {
+            self.close_tray(&session_id);
+        }
         // The letters it carried are delivered now that it has ended, however
         // it ended. A daemon that dies first leaves them claimed, and the next
         // start hands them over again.
@@ -1393,6 +1456,8 @@ impl TurnHost {
     /// An idle child that exits: there is no turn to end, so the block and the
     /// event are written here.
     pub fn exit_idle_child(&self, session: &crate::session::Session, why: &str, note: &str) {
+        // A child that kept its process for the next turn has no next turn.
+        self.release(&session.id);
         self.transcripts.append_system(&session.id, note);
         self.transcripts.set_status(&session.id, "exited", None);
         self.transcripts.flush(&session.id);
@@ -2707,6 +2772,10 @@ impl TurnHost {
 
     pub(crate) fn test_store(&self) -> &crate::store::Store {
         &self.store
+    }
+
+    pub(crate) fn test_bridge(&self) -> &Bridge {
+        &self.bridge
     }
 
     pub(crate) fn test_capture(&self) -> Arc<Applied> {
