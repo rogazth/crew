@@ -1979,10 +1979,10 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
             Ok(Value::Null)
         }
         "background_clear" => {
-            let proto::BackgroundClear { session_id, ids } = parse(params)?;
+            let proto::BackgroundClear { session_id, ids, hide } = parse(params)?;
             let turns = hosts.turns.clone();
             block(move || {
-                turns.background_clear(&session_id, ids.as_deref());
+                turns.background_clear(&session_id, ids.as_deref(), hide.as_deref().unwrap_or_default());
                 Ok(())
             })
             .await?;
@@ -4351,12 +4351,17 @@ for line in sys.stdin:
         let ids: Vec<_> = list.commands.iter().map(|row| row.id.as_str()).collect();
         assert_eq!(ids, ["was-running"]);
 
-        let params = serde_json::json!({ "sessionId": session });
+        // The ended children and runs the panel hides ride along, and are told too.
+        let params = serde_json::json!({ "sessionId": session, "hide": ["session:c1@5"] });
         send_json(&mut ws, &Request { id: 3, method: "background_clear".into(), params }).await;
         let heard = wait_event(&mut ws, "background-changed").await;
         assert!(wait_response(&mut ws, 3).await.ok);
         let list: proto::BackgroundList = serde_json::from_value(heard.payload).expect("list");
         assert!(list.commands.is_empty(), "{list:?}");
+        assert_eq!(list.hidden, ["session:c1@5"]);
+        let listed = rpc(&mut ws, 4, "background_list", serde_json::json!({ "sessionId": session })).await;
+        let list: proto::BackgroundList = serde_json::from_value(listed.result.expect("list")).expect("list");
+        assert_eq!(list.hidden, ["session:c1@5"], "a window that loads later hears them too");
         handle.shutdown();
     }
 

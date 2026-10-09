@@ -1636,9 +1636,10 @@ impl TurnHost {
 
     /// Clear a session's finished entries from its list: the named ones, or
     /// every one when `ids` is absent. A running entry is never cleared. The
-    /// window hears of it as any other change of the list.
-    pub fn background_clear(&self, session_id: &str, ids: Option<&[String]>) {
-        self.background.clear(session_id, ids);
+    /// keys in `hide` are the ended children and process runs the panel is to
+    /// leave off. The window hears of it as any other change of the list.
+    pub fn background_clear(&self, session_id: &str, ids: Option<&[String]>, hide: &[String]) {
+        self.background.clear(session_id, ids, hide);
     }
 
     /// Send Claude a control request and wait for its answer.

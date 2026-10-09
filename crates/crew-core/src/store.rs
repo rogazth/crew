@@ -535,6 +535,16 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         )?;
         tx.commit()?;
     }
+    if current < 33 {
+        let tx = conn.unchecked_transaction()?;
+        // The children and process runs a session's panel was cleared of.
+        tx.execute_batch(crate::background::MIGRATION_V33)?;
+        tx.execute(
+            "INSERT INTO schema_migrations (version, applied_at) VALUES (33, ?1)",
+            params![now_millis()],
+        )?;
+        tx.commit()?;
+    }
     Ok(())
 }
 

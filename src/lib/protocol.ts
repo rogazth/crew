@@ -20,9 +20,11 @@ export type Auth = { auth: string, };
 /**
  * Clears a session's ended background commands from its list. Absent `ids`
  * clears all of them; a running command is never cleared, since it would
- * vanish from the list while its process still runs.
+ * vanish from the list while its process still runs. `hide` names the ended
+ * Crew children and process runs the panel is to leave off as well: they are
+ * not commands of the list, so it only keeps their keys.
  */
-export type BackgroundClear = { sessionId: string, ids?: Array<string>, };
+export type BackgroundClear = { sessionId: string, ids?: Array<string>, hide?: Array<string>, };
 
 /**
  * One command left running in the background, running or ended.
@@ -100,7 +102,13 @@ live: boolean,
  * The turn has answered, and only its background commands keep it open:
  * the CLI takes it up again when they finish.
  */
-waiting: boolean, };
+waiting: boolean, 
+/**
+ * The keys of the ended Crew children and process runs the user cleared
+ * from the panel, oldest first. Kept with the session, so every window
+ * leaves them off after a reload.
+ */
+hidden: Array<string>, };
 
 /**
  * The end of a background command's output.

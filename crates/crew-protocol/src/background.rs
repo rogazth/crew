@@ -94,7 +94,9 @@ pub struct BackgroundCommand {
 
 /// Clears a session's ended background commands from its list. Absent `ids`
 /// clears all of them; a running command is never cleared, since it would
-/// vanish from the list while its process still runs.
+/// vanish from the list while its process still runs. `hide` names the ended
+/// Crew children and process runs the panel is to leave off as well: they are
+/// not commands of the list, so it only keeps their keys.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
@@ -103,6 +105,9 @@ pub struct BackgroundClear {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub ids: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub hide: Option<Vec<String>>,
 }
 
 /// A session's background commands. Pushed as `background-changed` whenever
@@ -119,6 +124,11 @@ pub struct BackgroundList {
     /// The turn has answered, and only its background commands keep it open:
     /// the CLI takes it up again when they finish.
     pub waiting: bool,
+    /// The keys of the ended Crew children and process runs the user cleared
+    /// from the panel, oldest first. Kept with the session, so every window
+    /// leaves them off after a reload.
+    #[serde(default)]
+    pub hidden: Vec<String>,
 }
 
 /// One background command of a session, for `background_output` and
@@ -198,10 +208,25 @@ mod tests {
         let all: BackgroundClear = serde_json::from_str(r#"{"sessionId":"s1"}"#).expect("clear");
         assert_eq!(all.ids, None);
         assert_eq!(serde_json::to_string(&all).expect("json"), r#"{"sessionId":"s1"}"#);
-        let some = BackgroundClear { session_id: "s1".into(), ids: Some(vec!["t1".into()]) };
+        let some = BackgroundClear { session_id: "s1".into(), ids: Some(vec!["t1".into()]), hide: None };
         assert_eq!(
             serde_json::to_value(&some).expect("json"),
             serde_json::json!({ "sessionId": "s1", "ids": ["t1"] })
         );
+        let hide = BackgroundClear { session_id: "s1".into(), ids: None, hide: Some(vec!["session:c1@5".into()]) };
+        assert_eq!(
+            serde_json::to_value(&hide).expect("json"),
+            serde_json::json!({ "sessionId": "s1", "hide": ["session:c1@5"] })
+        );
+    }
+
+    /// A list from a daemon that kept no cleared keys reads as having none.
+    #[test]
+    fn a_background_list_reads_without_hidden_keys() {
+        let bare: BackgroundList =
+            serde_json::from_str(r#"{"sessionId":"s1","commands":[],"live":false,"waiting":false}"#).expect("list");
+        assert!(bare.hidden.is_empty());
+        let some = BackgroundList { hidden: vec!["process:p1:@3".into()], ..bare };
+        assert_eq!(serde_json::to_value(&some).expect("json")["hidden"], serde_json::json!(["process:p1:@3"]));
     }
 }

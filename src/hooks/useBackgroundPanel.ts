@@ -9,12 +9,13 @@ import { useBackground } from "./useBackground";
  * A session's background panel: the board the daemon keeps, the children it
  * started and the processes it started, as one list. Stop goes to whoever
  * owns the work; Clear finished drops the board's own entries in the daemon
- * and hides the ended children and runs here, which belong to other lists.
+ * and has it keep the keys of the ended children and runs, which belong to
+ * other lists, so they stay off the panel after a reload and in every window.
  */
 export function useBackgroundPanel(session: Session, sessions: readonly Session[], processes: readonly Process[]) {
   const board = useBackground(session.id);
   const all = useMemo(() => panelEntries(board, sessions, processes, session.id), [board, sessions, processes, session.id]);
-  const [cleared, setCleared] = useState<ReadonlySet<string>>(() => new Set());
+  const cleared = useMemo<ReadonlySet<string>>(() => new Set(board?.hidden), [board?.hidden]);
   const entries = useMemo(() => visibleEntries(all, cleared), [all, cleared]);
   /** What went wrong stopping an entry, by entry id, for its row to say. */
   const [failed, setFailed] = useState<Record<string, string>>({});
@@ -44,10 +45,11 @@ export function useBackgroundPanel(session: Session, sessions: readonly Session[
   );
 
   const clear = useCallback(() => {
-    const keys = finishedKeys(all);
-    if (keys.length > 0) setCleared((prev) => new Set([...prev, ...keys]));
-    if (all.some((entry) => entry.source.type === "command" && entry.state !== "running")) void api.backgroundClear(session.id).catch(() => {});
-  }, [all, session.id]);
+    const keys = finishedKeys(all).filter((key) => !cleared.has(key));
+    if (keys.length > 0 || all.some((entry) => entry.source.type === "command" && entry.state !== "running")) {
+      void api.backgroundClear(session.id, undefined, keys).catch(() => {});
+    }
+  }, [all, cleared, session.id]);
 
   return { board, all, entries, failed, stop, clear };
 }

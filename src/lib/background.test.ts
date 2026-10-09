@@ -18,7 +18,7 @@ function command(id: string, extra: Partial<BackgroundCommand> = {}): Background
 }
 
 function list(commands: BackgroundCommand[], extra: Partial<BackgroundList> = {}): BackgroundList {
-  return { sessionId: "s1", commands, live: true, waiting: false, ...extra };
+  return { sessionId: "s1", commands, live: true, waiting: false, hidden: [], ...extra };
 }
 
 function live(extra: Partial<SessionLive> = {}): SessionLive {

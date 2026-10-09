@@ -22,7 +22,7 @@ function command(id: string, extra: Partial<BackgroundCommand> = {}): Background
 }
 
 function list(commands: BackgroundCommand[], extra: Partial<BackgroundList> = {}): BackgroundList {
-  return { sessionId: "s1", commands, live: true, waiting: false, ...extra };
+  return { sessionId: "s1", commands, live: true, waiting: false, hidden: [], ...extra };
 }
 
 const session = (id: string, extra: Partial<Session> = {}) =>
@@ -333,6 +333,18 @@ describe("clearing finished entries", () => {
 
     expect(visibleEntries([run], cleared)).toEqual([]);
     expect(visibleEntries([{ ...run, startedAt: 200 }], cleared)).toHaveLength(1);
+  });
+
+  it("keeps hiding what the daemon kept the keys of, and ignores keys of what is gone", () => {
+    const done = child("done", { id: "session:c1", endedAt: 500 });
+    const run = { ...entry("process", "stopped"), id: "process:dev:", startedAt: 100 };
+    // What a window hears in `hidden` after a reload: the keys as strings, plus one of a deleted child.
+    const hidden = JSON.parse(JSON.stringify([...finishedKeys([done, run]), "session:gone@7"])) as string[];
+    const cleared = new Set(hidden);
+
+    expect(visibleEntries([done, run], cleared)).toEqual([]);
+    // The process starts again: a new run, so a new key, and it shows.
+    expect(visibleEntries([done, { ...run, state: "running", startedAt: 300 }], cleared).map((one) => one.id)).toEqual(["process:dev:"]);
   });
 
   it("never hides what runs, and leaves the board's entries to the daemon", () => {

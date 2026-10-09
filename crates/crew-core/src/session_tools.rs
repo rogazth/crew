@@ -3880,14 +3880,14 @@ time.sleep(600)
         let started = w.call(&parent, "start_session", json!({ "provider": "claude", "prompt": "BACKGROUND 30" })).expect("start");
         let id = started["id"].as_str().unwrap().to_string();
         until_background(&w, &id, |list| list.waiting);
-        w.turns.background_clear(&id, None);
+        w.turns.background_clear(&id, None, &[]);
         assert_eq!(w.turns.background_list(&id).commands[0].state, BackgroundState::Running, "a running entry was cleared");
         w.turns.background_stop(&id, "bg1").expect("stop");
         w.wait(&parent, &id, json!({}));
         w.settle(&id);
-        w.turns.background_clear(&id, Some(&["other".to_string()]));
+        w.turns.background_clear(&id, Some(&["other".to_string()]), &[]);
         assert_eq!(w.turns.background_list(&id).commands.len(), 1, "an id it does not know cleared something");
-        w.turns.background_clear(&id, Some(&["bg1".to_string()]));
+        w.turns.background_clear(&id, Some(&["bg1".to_string()]), &[]);
         assert!(w.turns.background_list(&id).commands.is_empty());
         let heard = heard.lock().unwrap();
         let last = heard.iter().rev().find(|list| list.session_id == id).expect("a push");

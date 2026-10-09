@@ -189,9 +189,11 @@ export const backgroundStop = (sessionId: string, id: string): Promise<void> =>
 /**
  * Clears a session's finished background entries from its list: the named
  * ones, or every finished one when `ids` is absent. A running one stays.
+ * `hide` is the keys of the ended Crew children and process runs to leave off
+ * the panel too: the daemon keeps them with the session and tells every window.
  */
-export const backgroundClear = (sessionId: string, ids?: string[]): Promise<void> =>
-  client.request("background_clear", { sessionId, ids });
+export const backgroundClear = (sessionId: string, ids?: string[], hide?: string[]): Promise<void> =>
+  client.request("background_clear", { sessionId, ids, hide });
 
 /** What a session has running in the background now, fresh from the daemon. */
 export const backgroundList = (sessionId: string): Promise<BackgroundList> =>

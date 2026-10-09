@@ -202,6 +202,41 @@ test("Clear finished empties the panel, and the line goes with it", async () => 
   assert.ok((await sessions(crew, chat.workspaceId)).some((row) => row.parentId === chat.id));
 });
 
+test("what Clear finished hid stays hidden after a reload, and a process that starts again shows", async () => {
+  const [workspace] = crew.workspaces;
+  assert.ok(workspace);
+  const line = /finished$|process|agent|shell/;
+  // The daemon keeps the keys with the session, not the window.
+  const board = await crew.request<{ hidden: string[] }>("background_list", { sessionId: chat.id });
+  assert.equal(board.hidden.length, 2, board.hidden.join("\n"));
+
+  await crew.reload();
+  await composer().waitFor();
+  await said("Reply 1: hello").waitFor();
+  // The line would be there by now were the child and the stopped run listed.
+  await crew.window.waitForTimeout(500);
+  assert.equal(await crew.window.getByRole("button", { name: line }).count(), 0, "the cleared entries came back");
+
+  // The run starts again: another run, so another entry.
+  await run(CREW, ["processes", "start", "web"], { env: await sessionEnv() });
+  const work = crew.window.getByRole("button", { name: "1 process", exact: true });
+  await work.waitFor();
+  await work.click();
+  await sheet().waitFor();
+  const texts = await rows().allTextContents();
+  assert.equal(texts.length, 1, texts.join("\n"));
+  assert.match(texts[0]!, /web.*Process · \d+s/);
+
+  // Stopped and cleared again, it goes the same way.
+  await crew.window.keyboard.press("x");
+  await waitFor(async () => (await processes(workspace.id))[0]?.runs.find((one) => one.worktree === null)?.state === "stopped", {
+    message: "crewd stops the run",
+  });
+  await sheet().getByRole("button", { name: "Clear finished" }).click();
+  await sheet().waitFor({ state: "detached" });
+  await crew.window.getByRole("button", { name: line }).waitFor({ state: "detached" });
+});
+
 test("a subagent the chat's CLI runs shows its tokens and its step, and x stops it through the CLI", async () => {
   const controls = async () => (await readFile(path.join(crew.home, "fake-claude-control.log"), "utf8").catch(() => "")).split("\n");
   await send("agent");

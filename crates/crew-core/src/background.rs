@@ -38,6 +38,11 @@ pub const TURN_ENDED: &str = "its turn ended";
 /// became of it while Crew was not there to watch.
 pub const CREW_RESTARTED: &str = "Crew restarted";
 
+/// How many keys of cleared children and process runs a session keeps. They
+/// are only ever added to, one per run, so the oldest go first; a run that old
+/// is long off the panel.
+pub const HIDDEN_LIMIT: usize = 200;
+
 /// How much of a step's title is kept as an entry's activity: it shares a row
 /// with the entry's name and its tokens.
 const ACTIVITY_LIMIT: usize = 120;
@@ -68,15 +73,26 @@ impl BackgroundHost {
                 return host;
             }
         };
+        let mut hidden = match store.with(load_hidden) {
+            Ok(hidden) => hidden,
+            Err(error) => {
+                eprintln!("[crewd] the cleared panel entries were not read: {error}");
+                HashMap::new()
+            }
+        };
         let now = crate::store::now_millis();
         {
             let mut map = host.inner.lock().unwrap_or_else(|e| e.into_inner());
             for (session_id, rows) in saved {
-                let mut board = Board::restored(rows);
+                let mut board = Board::restored(rows, hidden.remove(&session_id).unwrap_or_default());
                 if board.end(now, CREW_RESTARTED) {
                     host.persist(&session_id, &mut board);
                 }
                 map.insert(session_id, board);
+            }
+            // A session that cleared its panel and has no entries left.
+            for (session_id, keys) in hidden {
+                map.insert(session_id, Board::restored(Vec::new(), keys));
             }
         }
         host
@@ -124,11 +140,14 @@ impl BackgroundHost {
         let Some(store) = &self.store else {
             return;
         };
-        if board.commands == board.saved {
+        if board.commands == board.saved && board.hidden == board.saved_hidden {
             return;
         }
-        match store.with(|conn| save(conn, session_id, &board.commands, &board.outputs)) {
-            Ok(()) => board.saved = board.commands.clone(),
+        match store.with(|conn| save(conn, session_id, &board.commands, &board.outputs, &board.hidden)) {
+            Ok(()) => {
+                board.saved = board.commands.clone();
+                board.saved_hidden = board.hidden.clone();
+            }
             Err(error) => eprintln!("[crewd] session {session_id}: the background entries were not written: {error}"),
         }
     }
@@ -139,9 +158,14 @@ impl BackgroundHost {
     }
 
     /// The user clears a session's finished entries: the ones named in `ids`,
-    /// or all of them when none are named.
-    pub fn clear(&self, session_id: &str, ids: Option<&[String]>) {
-        self.touch(session_id, |board| board.clear(ids));
+    /// or all of them when none are named. The keys in `hide` are the ended
+    /// children and process runs the panel is to keep off its list: they are
+    /// not entries of the board, so the board only remembers them.
+    pub fn clear(&self, session_id: &str, ids: Option<&[String]>, hide: &[String]) {
+        self.touch(session_id, |board| {
+            let cleared = board.clear(ids);
+            board.hide(hide) | cleared
+        });
     }
 
     /// Change a board for its side effects alone.
@@ -176,6 +200,12 @@ pub struct Board {
     /// The commands as last written to the table, so a change that moves
     /// nothing of them writes nothing.
     saved: Vec<BackgroundCommand>,
+    /// Keys of the ended children and process runs the user cleared from the
+    /// panel, oldest first. Not entries of the board: the panel merges those
+    /// from other lists and asks the board which of them to leave out.
+    hidden: Vec<String>,
+    /// `hidden` as last written to the table.
+    saved_hidden: Vec<String>,
     live: bool,
     waiting: bool,
     /// Claude tasks started in the foreground: one moved to the background
@@ -198,6 +228,7 @@ impl Board {
             commands: self.commands.clone(),
             live: self.live,
             waiting: self.waiting,
+            hidden: self.hidden.clone(),
         }
     }
 
@@ -220,8 +251,8 @@ impl Board {
 
     /// The entries of a board read back from the table: not live, as nothing
     /// of the process that ran them is left.
-    fn restored(rows: Saved) -> Self {
-        let mut board = Board::default();
+    fn restored(rows: Saved, hidden: Vec<String>) -> Self {
+        let mut board = Board { saved_hidden: hidden.clone(), hidden, ..Board::default() };
         for (command, output) in rows {
             if let Some(output) = output {
                 board.outputs.insert(command.id.clone(), output);
@@ -291,6 +322,22 @@ impl Board {
             self.outputs.remove(id);
         }
         self.commands.len() != before
+    }
+
+    /// The user clears ended children and process runs from the panel: their
+    /// keys are kept, past [`HIDDEN_LIMIT`] the oldest go. A key already kept
+    /// moves nothing.
+    pub fn hide(&mut self, keys: &[String]) -> bool {
+        let mut changed = false;
+        for key in keys {
+            if !self.hidden.contains(key) {
+                self.hidden.push(key.clone());
+                changed = true;
+            }
+        }
+        let over = self.hidden.len().saturating_sub(HIDDEN_LIMIT);
+        self.hidden.drain(..over);
+        changed
     }
 
     pub fn set_waiting(&mut self, waiting: bool) -> bool {
@@ -926,15 +973,35 @@ CREATE TABLE IF NOT EXISTS background_entries (
 );
 ";
 
+/// The keys of the ended children and process runs a session's panel was
+/// cleared of, as one JSON list per session. They go with the session.
+pub const MIGRATION_V33: &str = "
+CREATE TABLE IF NOT EXISTS background_hidden (
+  session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+  keys_json  TEXT NOT NULL
+);
+";
+
 /// Replace a session's saved entries with `commands`, and the output kept for
-/// each.
+/// each, and its cleared keys with `hidden`.
 pub(crate) fn save(
     conn: &Connection,
     session_id: &str,
     commands: &[BackgroundCommand],
     outputs: &HashMap<String, BackgroundOutput>,
+    hidden: &[String],
 ) -> rusqlite::Result<()> {
     let tx = conn.unchecked_transaction()?;
+    if hidden.is_empty() {
+        tx.execute("DELETE FROM background_hidden WHERE session_id = ?1", params![session_id])?;
+    } else {
+        let keys = serde_json::to_string(hidden).map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        tx.execute(
+            "INSERT INTO background_hidden (session_id, keys_json) VALUES (?1, ?2)
+             ON CONFLICT(session_id) DO UPDATE SET keys_json = excluded.keys_json",
+            params![session_id, keys],
+        )?;
+    }
     tx.execute("DELETE FROM background_entries WHERE session_id = ?1", params![session_id])?;
     for (position, command) in commands.iter().enumerate() {
         let entry = serde_json::to_string(command).map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
@@ -983,6 +1050,21 @@ pub(crate) fn load(conn: &Connection) -> rusqlite::Result<Vec<(String, Saved)>> 
         match out.last_mut() {
             Some((last, rows)) if *last == session_id => rows.push((command, output)),
             _ => out.push((session_id, vec![(command, output)])),
+        }
+    }
+    Ok(out)
+}
+
+/// Every session's cleared keys. A row that does not read is left out rather
+/// than failing the rest.
+pub(crate) fn load_hidden(conn: &Connection) -> rusqlite::Result<HashMap<String, Vec<String>>> {
+    let mut statement = conn.prepare("SELECT session_id, keys_json FROM background_hidden")?;
+    let rows = statement.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?;
+    let mut out = HashMap::new();
+    for row in rows {
+        let (session_id, keys) = row?;
+        if let Ok(keys) = serde_json::from_str::<Vec<String>>(&keys) {
+            out.insert(session_id, keys);
         }
     }
     Ok(out)
@@ -1469,9 +1551,9 @@ mod tests {
         host.set_listener(Arc::new(move |list| into.lock().unwrap().push(list)));
         host.touch("s1", |board| board.claude(&started("b1", true), bash("make"), 1));
         host.touch("s1", |board| board.claude(&notified("b1", "completed", "done (exit code 0)"), none, 2));
-        host.clear("s1", Some(&["nope".to_string()]));
-        host.clear("s1", None);
-        host.clear("s1", None);
+        host.clear("s1", Some(&["nope".to_string()]), &[]);
+        host.clear("s1", None, &[]);
+        host.clear("s1", None, &[]);
         let heard = heard.lock().unwrap();
         assert_eq!(heard.len(), 3, "the empty clears said nothing");
         assert!(heard[2].commands.is_empty());
@@ -1512,7 +1594,7 @@ mod tests {
         assert_eq!(rows[0].1, Some(BackgroundOutput { output: "boom\n".into(), truncated: true }));
         assert_eq!(rows[1].1, None);
 
-        host.clear(&id, Some(&["b1".to_string()]));
+        host.clear(&id, Some(&["b1".to_string()]), &[]);
         let saved = store.with(load).expect("load");
         assert_eq!(saved[0].1.len(), 1, "the finished one was cleared: {saved:?}");
         assert_eq!(saved[0].1[0].0.id, "b2", "the running one stays");
@@ -1558,5 +1640,36 @@ mod tests {
         assert!(store.with(load).expect("load").is_empty());
         host.forget(&id);
         assert!(host.list(&id).commands.is_empty());
+    }
+
+    /// The keys a clear hides are told to every window, kept once however
+    /// often they are sent, kept to the newest [`HIDDEN_LIMIT`], and survive a
+    /// restart of the daemon even with no entry left on the board.
+    #[test]
+    fn the_cleared_keys_of_a_session_are_told_kept_bounded_and_survive_a_restart() {
+        let (store, id) = temp_store();
+        let host = BackgroundHost::persisted(store.clone());
+        let heard = Arc::new(Mutex::new(Vec::new()));
+        let into = heard.clone();
+        host.set_listener(Arc::new(move |list| into.lock().unwrap().push(list)));
+
+        let keys = |names: &[&str]| names.iter().map(|name| name.to_string()).collect::<Vec<_>>();
+        host.clear(&id, None, &keys(&["session:c1@5", "process:p1:@3"]));
+        host.clear(&id, None, &keys(&["session:c1@5"]));
+        assert_eq!(heard.lock().unwrap().len(), 1, "a key already kept said nothing");
+        assert_eq!(heard.lock().unwrap()[0].hidden, keys(&["session:c1@5", "process:p1:@3"]));
+
+        let again = BackgroundHost::persisted(store.clone());
+        assert_eq!(again.list(&id).hidden, keys(&["session:c1@5", "process:p1:@3"]), "it outlives a daemon");
+
+        let many: Vec<String> = (0..HIDDEN_LIMIT + 5).map(|n| format!("session:c{n}@1")).collect();
+        host.clear(&id, None, &many);
+        let hidden = host.list(&id).hidden;
+        assert_eq!(hidden.len(), HIDDEN_LIMIT);
+        assert_eq!(hidden.last(), many.last(), "the newest are kept");
+        assert!(!hidden.contains(&"session:c1@5".to_string()), "the oldest went");
+
+        crate::session::delete(&store, id.clone()).expect("delete");
+        assert!(store.with(load_hidden).expect("load").is_empty(), "the session took its keys with it");
     }
 }
