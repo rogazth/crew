@@ -311,7 +311,15 @@ mod tests {
         std::fs::create_dir_all(&dir).expect("dir");
         let socket = dir.join("crew.sock");
         // What a daemon that died leaves behind: the file, and no listener.
-        drop(UnixListener::bind(&socket).expect("bind"));
+        // Bound in a process of its own: a listener bound here could be
+        // inherited by a CLI another test spawns in the instant before it is
+        // marked close-on-exec, and that child would keep answering on it.
+        let bound = std::process::Command::new("python3")
+            .args(["-c", "import socket, sys; socket.socket(socket.AF_UNIX).bind(sys.argv[1])"])
+            .arg(&socket)
+            .status()
+            .expect("python3");
+        assert!(bound.success());
         assert!(socket.exists());
         let bridge = Bridge::start(dir).expect("replaced");
         assert!(UnixStream::connect(&socket).is_ok());
