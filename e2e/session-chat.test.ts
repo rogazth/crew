@@ -299,8 +299,9 @@ test("a / in the chat lists the CLI's commands and skills with Crew's actions, a
   await field.press("Enter");
   await waitFor(async () => (await heard(workspace.path, session)).length === 1, { message: "the CLI took the message in" });
   const [told] = await heard(workspace.path, session);
-  assert.equal(told?.trim(), "tighten the intro with /writing-for-agents");
-  await said(/^Reply 1: tighten the intro with \/writing-for-agents$/).waitFor();
+  // The skill goes last, in a block of its own: Claude expands a slash only there.
+  assert.equal(told?.trim(), "tighten the intro with\n/writing-for-agents");
+  await said(/^Reply 1: tighten the intro with \/ \/writing-for-agents$/).waitFor();
   await idle(session);
 });
 
