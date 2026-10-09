@@ -23,6 +23,8 @@ export function DefaultChatSurface({
   onDraft,
   onSend,
   onStop,
+  whileWorking,
+  queue,
   onAttach,
   onPasteFiles,
   onRemoveFile,
@@ -88,6 +90,8 @@ export function DefaultChatSurface({
           onRemoveFile={onRemoveFile}
           onSend={onSend}
           onStop={onStop}
+          {...(whileWorking ? { whileWorking } : {})}
+          {...(queue ? { queue } : {})}
           {...(onOptions ? { onOptions } : {})}
           optionsPending={optionsPending}
           switchProvider={switchProvider}

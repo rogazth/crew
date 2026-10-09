@@ -2,6 +2,7 @@ import type { ReactNode, RefObject } from "react";
 import type { Answers, ApprovalDecision, AttachedFile, Block } from "../../lib/blocks";
 import type { AgentChoice } from "../../lib/providers";
 import type { Session } from "../../lib/types";
+import type { QueueScope } from "./Queue";
 
 /** The contract the chat surface renders; TurnChat owns the state behind it. */
 export type ChatSurfaceProps = {
@@ -22,13 +23,18 @@ export type ChatSurfaceProps = {
   over: boolean;
   field: RefObject<HTMLTextAreaElement | null>;
   onDraft: (draft: string) => void;
-  onSend: () => void;
+  /** `mode` is how a message written while a turn runs goes: absent when no turn runs. */
+  onSend: (mode?: "steer" | "queue") => void;
   onStop: () => void;
   onAttach: () => void;
   onPasteFiles: (files: File[]) => void;
   onRemoveFile: (path: string) => void;
   onApprove: (requestId: number, decision: ApprovalDecision) => void;
   onAnswer: (requestId: number, answers: Answers | null) => void;
+  /** What Enter does with a message while a turn runs; absent, it waits for the turn to end. */
+  whileWorking?: "steer" | "queue";
+  /** The user's messages still in the box, above the composer. */
+  queue?: QueueScope;
   /** Nothing to show yet, and no intro either: the conversation is still being read. */
   loading?: boolean;
   /** The composer's model, effort and access chips changed. Absent: no chips. */

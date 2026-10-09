@@ -18,6 +18,7 @@ import { completeMention, mentionAt, searchFiles, splitMentions } from "../../li
 import type { ProjectFile, Session } from "../../lib/types";
 import { AttachmentStrip } from "./Attachments";
 import { ContextMeter } from "./ContextMeter";
+import { QueueChips, QueueSegment, type QueueScope } from "./Queue";
 import { useChatActions } from "./context";
 import { MentionPicker } from "./MentionPicker";
 
@@ -37,7 +38,8 @@ type Props = {
   /** Files pasted from the clipboard (screenshots); they have no path yet. */
   onPasteFiles: (files: File[]) => void;
   onRemoveFile: (path: string) => void;
-  onSend: () => void;
+  /** `mode` is how a message written while a turn runs goes: absent when no turn runs. */
+  onSend: (mode?: "steer" | "queue") => void;
   onStop: () => void;
   /**
    * What a message sent while a turn runs becomes: `steer` goes into the
@@ -45,6 +47,8 @@ type Props = {
    * the turn ends.
    */
   whileWorking?: "steer" | "queue";
+  /** What the user sent while a turn ran and the transcript does not show yet. */
+  queue?: QueueScope;
   /** The chips changed; absent, the composer has none. */
   onOptions?: (next: AgentChoice) => void;
   /** A change the next message carries to the CLI by relaunching it. */
@@ -81,6 +85,7 @@ export function Composer({
   onSend,
   onStop,
   whileWorking,
+  queue,
   onOptions,
   optionsPending = false,
   switchProvider = false,
@@ -129,9 +134,12 @@ export function Composer({
     });
   };
 
+  // ⌘↵ while it works: wait for the turn instead of joining it.
+  const sendAs = (wait: boolean) => onSend(working ? (wait ? "queue" : whileWorking) : undefined);
+
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    if (canSend) onSend();
+    if (canSend) sendAs(false);
   };
 
   const onPaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
@@ -175,17 +183,18 @@ export function Composer({
     }
     if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
     event.preventDefault();
-    if (canSend) onSend();
+    if (canSend) sendAs(event.metaKey || event.ctrlKey);
   };
 
   const sendLabel = !working ? "Send" : whileWorking === "steer" ? "Add to the running turn" : "Queue for the next turn";
 
   return (
-    <div className={`mx-auto w-full max-w-[760px] shrink-0 px-6 ${centered ? "py-3" : "pb-3"}`}>
+    <div className={`relative mx-auto w-full max-w-[760px] shrink-0 px-6 ${centered ? "py-3" : "pb-3"}`}>
       <form onSubmit={submit} className="crew-composer relative">
         {mention && (
           <MentionPicker results={results} active={Math.min(active, Math.max(0, results.length - 1))} onHover={setActive} onPick={pick} />
         )}
+        {queue && queue.items.length > 0 && <QueueChips queue={queue} />}
         {files.length > 0 && (
           <div className="mb-2">
             <AttachmentStrip files={files} onRemove={onRemoveFile} />
@@ -286,6 +295,7 @@ export function Composer({
       </form>
       <div className="mt-1.5 flex min-h-6 items-center gap-2 px-1 text-[11.5px]">
         <ContextMeter sessionId={session.id} provider={session.provider} />
+        {queue && queue.items.length > 0 && <QueueSegment queue={queue} working={working} />}
         <span className="flex-1" />
         <span className="truncate text-placeholder">
           {optionsPending ? (
@@ -295,7 +305,7 @@ export function Composer({
               <kbd className="font-sans">esc</kbd> stop
               {whileWorking === "steer" && (
                 <>
-                  {" "}· <kbd className="font-sans">↵</kbd> add to the turn
+                  {" "}· <kbd className="font-sans">↵</kbd> add to the turn · <kbd className="font-sans">⌘↵</kbd> next turn
                 </>
               )}
               {whileWorking === "queue" && (

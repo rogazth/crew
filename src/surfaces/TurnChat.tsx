@@ -2,20 +2,22 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useBackground } from "../hooks/useBackground";
 import { showLetter, useChatLetters, usePending } from "../hooks/useLetters";
 import { useThread } from "../hooks/useThread";
-import { answer, respond, send, stop } from "../lib/turnRuntime";
-import { pickFiles, setSessionOptions, switchSessionProvider, writeTempFile } from "../lib/api";
+import { answer, pass, respond, send, stop } from "../lib/turnRuntime";
+import { mailboxDispose, mailboxEdit, mailboxReorder, pickFiles, setSessionOptions, switchSessionProvider, turnSendNow, writeTempFile } from "../lib/api";
 import { attachedFrom } from "../lib/attachments";
 import { markedCalls, turnTray } from "../lib/background";
 import type { ThreadRef } from "../lib/letters";
 import { queuedLetters } from "../lib/letters";
 import { clearFirstPrompt, peekFirstPrompt } from "../lib/firstPrompt";
 import { mentionedFiles } from "../lib/mentions";
+import { moved, othersPending, userQueue, whileWorkingOf } from "../lib/queue";
 import type { AgentChoice } from "../lib/providers";
 import { BackgroundContext, LetterContext, useChatActions, type BackgroundScope, type LetterScope } from "./chat/context";
 import { useFileDrop } from "../hooks/useFileDrop";
 import type { Answers, ApprovalDecision, AttachedFile } from "../lib/blocks";
 import type { Session } from "../lib/types";
 import { BackgroundOutputView, BackgroundTray } from "./chat/Background";
+import type { QueueScope } from "./chat/Queue";
 import { ChatBar } from "./chat/ChatBar";
 import { DefaultChatSurface } from "./chat/DefaultChatSurface";
 import { Thread } from "./chat/Thread";
@@ -36,9 +38,12 @@ export function TurnChat({ session, sessions, cwd, active }: Props) {
   const pane = useRef<HTMLDivElement>(null);
   const { files: projectFiles, openSession } = useChatActions();
   const letters = useChatLetters(session, sessions, held);
-  // What waits in its box for the next turn, under the turn that is running.
+  // What waits in its box for the next turn: others' letters under the turn
+  // that is running, the user's own above the composer.
   const pending = usePending(session.id, true);
-  const blocks = useMemo(() => [...held, ...queuedLetters(pending, held)], [held, pending]);
+  const blocks = useMemo(() => [...held, ...queuedLetters(othersPending(pending), held)], [held, pending]);
+  const waiting = useMemo(() => userQueue(pending, held), [held, pending]);
+  const whileWorking = whileWorkingOf(session.kind, session.provider);
   const background = useBackground(session.id);
   const commands = useMemo(() => turnTray(background), [background]);
   // One thing over the transcript at a time: a pair's thread, or a command's output.
@@ -121,15 +126,34 @@ export function TurnChat({ session, sessions, cwd, active }: Props) {
     [cwd, fresh, session.id, session.provider],
   );
 
-  const submit = useCallback(() => {
-    const text = draft.trim();
-    if ((!text && files.length === 0) || working || !ready) return;
-    const attached = files;
-    const mentions = mentionedFiles(text, projectFiles).map((file) => file.path);
-    setDraft("");
-    setFiles([]);
-    void send(session, cwd, text, attached, mentions.length > 0 ? { mentions } : {});
-  }, [cwd, draft, files, projectFiles, ready, session, working]);
+  const submit = useCallback(
+    (mode?: "steer" | "queue") => {
+      const text = draft.trim();
+      if ((!text && files.length === 0) || !ready) return;
+      // A message while it works goes into the turn or after it; a bot takes none.
+      if (working && !(mode && whileWorking)) return;
+      const attached = files;
+      const mentions = mentionedFiles(text, projectFiles).map((file) => file.path);
+      setDraft("");
+      setFiles([]);
+      // What is held after a stop goes with the next message: the daemon queues it behind them.
+      if ((working || waiting.length > 0) && whileWorking) void pass(session, cwd, text, attached, mode ?? "queue", mentions);
+      else void send(session, cwd, text, attached, mentions.length > 0 ? { mentions } : {});
+    },
+    [cwd, draft, files, projectFiles, ready, session, waiting.length, whileWorking, working],
+  );
+
+  const queue = useMemo<QueueScope>(
+    () => ({
+      items: waiting,
+      onEdit: (letterId, text) => void mailboxEdit({ sessionId: session.id, letterId, text }).catch(() => {}),
+      onDispose: (letterId) => void mailboxDispose({ sessionId: session.id, letterId }).catch(() => {}),
+      onMove: (letterId, step) =>
+        void mailboxReorder({ sessionId: session.id, letterIds: moved(waiting, letterId, step) }).catch(() => {}),
+      onSendNow: (letterId) => void turnSendNow({ sessionId: session.id, letterId }).catch(() => {}),
+    }),
+    [session.id, waiting],
+  );
 
   const approve = useCallback(
     (requestId: number, decision: ApprovalDecision) => respond(session, requestId, decision),
@@ -179,6 +203,7 @@ export function TurnChat({ session, sessions, cwd, active }: Props) {
             onDraft={setDraft}
             onSend={submit}
             onStop={() => void stop(session)}
+            {...(whileWorking ? { whileWorking, queue } : {})}
             onAttach={() => void attach()}
             onPasteFiles={pasteFiles}
             onRemoveFile={(path) => setFiles((prev) => prev.filter((file) => file.path !== path))}

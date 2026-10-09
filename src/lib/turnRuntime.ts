@@ -116,6 +116,39 @@ export async function send(
   return finished;
 }
 
+/**
+ * A message written while the session's turn runs: into that turn (`steer`)
+ * or after it (`queue`). The daemon decides what it can do: a CLI that takes
+ * no steer queues it. Its letter shows in the queue, then in the transcript
+ * when the turn reads it.
+ */
+export async function pass(
+  session: Session,
+  cwd: string,
+  text: string,
+  files: AttachedFile[],
+  mode: "steer" | "queue",
+  mentions: string[] = [],
+): Promise<boolean> {
+  const id = session.id;
+  remember(session);
+  await boot();
+  try {
+    await api.turnStart({
+      sessionId: id,
+      cwd,
+      text,
+      mode,
+      ...(files.length > 0 ? { files } : {}),
+      ...(mentions.length > 0 ? { mentions } : {}),
+    });
+    return true;
+  } catch (error) {
+    transcript.apply(id, { type: "session.error", message: error instanceof Error ? error.message : String(error) });
+    return false;
+  }
+}
+
 /** The transport's own words for "I never found out". */
 function dropped(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);

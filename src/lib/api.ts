@@ -14,6 +14,9 @@ import type {
   HistoryList,
   ListedModel,
   LogChunk,
+  MailboxDispose,
+  MailboxEdit,
+  MailboxReorder,
   MachineInfo,
   MessagePage,
   PageSnapshot,
@@ -25,6 +28,8 @@ import type {
   ThreadMessagesRequest,
   ThreadPage,
   ThreadPair,
+  TurnSendNow,
+  TurnStarted,
 } from "./protocol";
 import type { Autonomy, ProjectFile, Session, SessionKind, SessionStatus, SessionView, Workspace, Worktree } from "./types";
 
@@ -188,7 +193,20 @@ export const turnStart = (params: {
   hidden?: boolean;
   fresh?: boolean;
   nonce?: string;
-}): Promise<{ working: boolean }> => client.request("turn_start", params);
+  mode?: "auto" | "steer" | "queue";
+}): Promise<TurnStarted> => client.request("turn_start", params);
+
+/** Rewrites a message of the user's still waiting in the queue; refused once a turn took it. */
+export const mailboxEdit = (params: MailboxEdit): Promise<void> => client.request("mailbox_edit", params);
+
+/** Puts the user's waiting messages in this order, first to go first. */
+export const mailboxReorder = (params: MailboxReorder): Promise<void> => client.request("mailbox_reorder", params);
+
+/** Drops a message of the user's that still waits, unread. */
+export const mailboxDispose = (params: MailboxDispose): Promise<void> => client.request("mailbox_dispose", params);
+
+/** Stops the running turn and starts one headed by this waiting message. */
+export const turnSendNow = (params: TurnSendNow): Promise<TurnStarted> => client.request("turn_send_now", params);
 
 /** The last blocks of a transcript. `beforePos` pages towards the start. */
 export const transcriptTail = (params: {
