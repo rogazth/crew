@@ -24,7 +24,7 @@ flowchart TB
   Host -->|"connects via daemon.json (packaged) · spawns (dev)"| Daemon
   UI -->|"WebSocket"| Daemon
   Daemon --> Store
-  Daemon -->|"one process per turn"| CLI
+  Daemon -->|"a process per bot turn, kept across a child's"| CLI
   CLI -->|"crew mcp or crew commands"| Bridge
   Bridge --> Daemon
 ```
@@ -54,7 +54,7 @@ On launch the app reads `daemon.json` and asks the bridge `whoami` with the user
 
 ## A turn
 
-A turn is one run of the provider CLI. A bot's turn starts a clean provider session; the daemon hands it the tail of the conversation, streams the output back to the window, and writes the transcript when the process exits. A child's turn resumes its own provider session instead (see below).
+A turn is one run of the provider CLI. A bot's turn starts a clean provider session; the daemon hands it the tail of the conversation, streams the output back to the window, and writes the transcript when the process exits. A child's turn carries on its own provider session instead, on a process kept between its turns (see below).
 
 ```mermaid
 sequenceDiagram
@@ -88,7 +88,7 @@ sequenceDiagram
 
   P->>D: start_session { prompt, provider?, worktree?, wait? }
   D->>C: first turn (a fresh provider session)
-  C-->>D: stream, then exit
+  C-->>D: stream; the process stays up
   D->>D: "Turn ended" block, event at its position
   alt wait: true
     D-->>P: { status: reported, report }
@@ -96,16 +96,18 @@ sequenceDiagram
     D->>P: a turn opening "## Report from session …"
   end
   P->>D: send_message { to: child, text }
-  D->>C: next turn, resuming its own conversation
+  D->>C: next turn, on the same process
 ```
 
-A child is driven by the same `TurnHost` a bot is, with three differences (`crates/crew-core/src/session_tools.rs`, `turns.rs`): it resumes its provider's conversation (`claude --resume`, Codex's `thread/resume`, `opencode run --session`, Cursor's `session/load`) where a bot is handed the tail; its persona is the envelope — who started it, and that its final message is its report; and the end of each of its turns is an event. Every event appends a block to its transcript, so the event's position there is a cursor no other event shares: `read_session` counts in the same numbers, and Crew keeps what the owner last saw.
+A child is driven by the same `TurnHost` a bot is, with three differences (`crates/crew-core/src/session_tools.rs`, `turns.rs`): it resumes its provider's conversation (`claude --resume`, Codex's `thread/resume`, `opencode run --session`, Cursor's `session/load`) where a bot is handed the tail; its process stays up between its turns; its persona is the envelope — who started it, and that its final message is its report; and the end of each of its turns is an event. Every event appends a block to its transcript, so the event's position there is a cursor no other event shares: `read_session` counts in the same numbers, and Crew keeps what the owner last saw.
+
+A child's Claude or Codex process outlives its turn (`keeps_process`, `park`, `release` in `turns.rs`): the next turn is the next stream-json user message on the same stdin, or the next `turn/start` on the same app-server thread, so a second message does not restart the CLI and its MCP servers, and the bridge token is minted once per process. The process is let go, and the next message resumes the conversation by its provider id, when a turn fails or is stopped (an interrupt's late answer would end the next turn), when a Claude turn ends with a steer it never read or background work still open (either would start a turn on its own), when the child exits, and after 30 minutes with no turn (`release_idle`, beside the reaper), stretched to 4 hours while background work or a live child of its own pins it. A change of model, effort, autonomy or speed between turns is applied in place where the CLI takes it (Claude's `set_model`, `set_permission_mode` and `apply_flag_settings` control requests; Codex's overrides on `turn/start`), and otherwise relaunches on the same conversation. Live readings such as the context meter (`context.updated`) reach the windows through `TranscriptHub::emit_live` and are never written to the transcript.
 
 A bot parent finds each report in its mailbox as a `report` letter, which wakes it; reports that land while it is busy are handed over together when its turn ends. A report the parent already read (with `read_session`, or as the answer of `start_session`'s `wait`) is taken back out, so it never arrives twice. `wait` blocks 600 s by default and 3600 at most; on timeout the child carries on and its report wakes the bot later. A child that stops on a question (Claude's `AskUserQuestion`, Codex's user-input request, Cursor's `ask_question`) wakes its bot parent with a `question` letter, ends a `wait` early, and is answered by `send_message` to it (`text` for one question, `answers` for several); the user can answer the same card in the window, and whichever comes second is told it was already answered (`TurnHost::answer` is the one door). An approval is the user's alone: it wakes nobody, and `list_peers` shows the child as `waiting_for_user`.
 
 `start_session` with `owner: "user"` is a handoff: a terminal session of the user's (in a new worktree if asked), nobody's child, with `handed_off_by` set and the prompt waiting in its box as its CLI's first prompt; it reports to nobody, so `wait` is refused.
 
-The limits: a child sees no session tool (depth one); a parent has at most four live ones; a child's autonomy is the parent's or lower; only the parent, or the user, drives a child. Idle children exit after 30 minutes. A child caught mid-turn by a restart of `crewd` carries on when it comes back. The window lists a child under whoever started it, and opens it as Crew's chat.
+The limits: a child sees no session tool (depth one); a parent has at most four live ones; a child's autonomy is the parent's or lower; only the parent, or the user, drives a child. Idle children exit after 30 minutes, and their process goes with them. A child caught mid-turn by a restart of `crewd` carries on when it comes back. The window lists a child under whoever started it, and opens it as Crew's chat.
 
 ## Writing to each other
 
