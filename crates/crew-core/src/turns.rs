@@ -9,7 +9,8 @@ use std::time::{Duration, Instant};
 use tokio::sync::oneshot;
 
 use crew_protocol::{
-    ApprovalDecision, ApprovalResolution, ContextReading, HarnessEvent, ToolStatus, TurnStart, TurnStarted, TurnUsage,
+    ApprovalDecision, ApprovalResolution, AttachedFile, AttachedFileKind, ContextReading, HarnessEvent, ToolStatus,
+    TurnStart, TurnStarted, TurnUsage,
 };
 use serde_json::{json, Map, Value};
 
@@ -159,6 +160,41 @@ fn driven(session: &crate::session::Session) -> Option<Driven> {
 fn is_own(drive: Driven, letter: &mailbox::Letter) -> bool {
     drive == Driven::User && letter.from.kind.as_deref() == Some("user")
 }
+
+/// Whether `from` is the user typing to a session Crew drives for them: the
+/// transcript shows the message as theirs, not as a letter from "You".
+fn typed_by_user(drive: Driven, from: &crew_protocol::BotRef) -> bool {
+    drive != Driven::Bot && from.kind.as_deref() == Some("user")
+}
+
+/// The CLIs that take a message into a turn that is running; a message to any
+/// other waits for the turn to end.
+pub(crate) const STEERABLE: [&str; 2] = ["claude", "codex"];
+
+/// What the user asked a message sent while a turn runs to become.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SendMode {
+    /// Steer where the provider takes a steer, else queue.
+    Auto,
+    Steer,
+    Queue,
+}
+
+/// The files that go with a message the user sent: the ones attached, and the
+/// ones mentioned in the text (`@path`), which the turn is told of the same
+/// way, as paths to read.
+fn attached(params: &TurnStart) -> Vec<AttachedFile> {
+    let mut files = params.files.clone().unwrap_or_default();
+    for path in params.mentions.iter().flatten() {
+        if !files.iter().any(|file| &file.path == path) {
+            files.push(AttachedFile { kind: Some(AttachedFileKind::File), ..mailbox::file_at(path) });
+        }
+    }
+    files
+}
+
+/// What `begin` answers when the session has a turn already.
+const ALREADY_RUNNING: &str = "Turn already running";
 
 /// Whether `session` carries on the provider's own conversation.
 fn carries_conversation(session: &crate::session::Session) -> bool {
@@ -403,6 +439,11 @@ struct Steer {
     from: crew_protocol::BotRef,
     /// The letter it is, claimed while the turn has not read it yet.
     letter: Option<String>,
+    /// What was attached to it; its paths are in `sent`.
+    files: Vec<AttachedFile>,
+    /// Whether the transcript shows it as the user's own message rather than
+    /// as a letter from somebody (see [`typed_by_user`]).
+    typed: bool,
 }
 
 impl Steer {
@@ -415,8 +456,20 @@ impl Steer {
                 let _ = mailbox::release(store, &id);
             }
             None => {
-                let _ = mailbox::enqueue(store, session_id, &self.from, &self.text);
+                let _ = mailbox::enqueue_with_files(store, session_id, &self.from, &self.text, self.files);
             }
+        }
+    }
+
+    /// The message as the transcript shows it once the turn has read it.
+    fn read(self) -> HarnessEvent {
+        let typed = self.typed;
+        HarnessEvent::UserMessage {
+            text: self.text,
+            hidden: None,
+            files: Some(self.files).filter(|files| !files.is_empty()),
+            from_bot: (!typed).then_some(self.from),
+            letter_id: self.letter,
         }
     }
 }
@@ -602,6 +655,10 @@ pub struct TurnHost {
     /// Sessions whose process is up with no turn on it, since when. Apart from
     /// the process entries so the drivers' match arms do not all change.
     idle: Arc<Mutex<HashMap<String, Instant>>>,
+    /// Sessions whose running turn is being stopped to send the user's letter
+    /// at the head of the queue: the end of that stop hands the queue over
+    /// instead of holding it.
+    sending_now: Arc<Mutex<HashSet<String>>>,
 }
 
 impl TurnHost {
@@ -624,6 +681,7 @@ impl TurnHost {
             background: crate::background::BackgroundHost::default(),
             contexts: Arc::new(Mutex::new(HashMap::new())),
             idle: Arc::new(Mutex::new(HashMap::new())),
+            sending_now: Arc::new(Mutex::new(HashSet::new())),
         }
     }
 
@@ -798,31 +856,152 @@ impl TurnHost {
         self.begin(params, Vec::new())
     }
 
-    /// A turn the user started from the window. To a child it is a letter
-    /// like any other, so the pair "You ⇄ child" has its thread, and the
-    /// child's parent sees a line where the user wrote to it.
+    /// A message the user sent from the window.
+    ///
+    /// To a child or to the user's own session it is a letter from the user
+    /// (so the pair "You ⇄ child" has its thread, and a child's parent sees a
+    /// line where the user wrote to it), and what becomes of it depends on
+    /// the session (plan decisions 30–32):
+    /// - Idle, nothing held: a turn of its own, whatever `mode` says.
+    /// - A turn running, and the provider takes a message into one (Claude,
+    ///   Codex) and `mode` is not `queue`: steered into it. Its echo marks the
+    ///   letter delivered; a turn that ends before reading it gives it back to
+    ///   the queue.
+    /// - Otherwise it waits in the queue, to go with whatever else waits as
+    ///   one turn when the running one ends. `steer` where the provider cannot
+    ///   take one falls back to this.
+    /// - Idle, but with letters held (a stop leaves the queue to the user):
+    ///   this message is the user saying go on. It joins the queue, and all of
+    ///   it goes as one turn, in order.
+    ///
+    /// A bot, and a message that is hidden or another bot's, only ever start
+    /// a turn.
     pub fn start_by_user(&self, mut params: TurnStart) -> Result<TurnStarted, String> {
         params.letter_id = None;
         let session = session::get(&self.store, params.session_id.clone())?
             .ok_or_else(|| "Session not found".to_string())?;
-        if session.kind != "child" || params.hidden == Some(true) || params.from_bot.is_some() {
+        let drive = driven(&session);
+        if !matches!(drive, Some(Driven::Child | Driven::User)) || params.hidden == Some(true) || params.from_bot.is_some() {
             return self.start(params);
         }
-        let letter = mailbox::record_claimed(&self.store, &session.id, &mailbox::user(), &params.text)?;
+        if drive == Some(Driven::Child) && session.status == "exited" {
+            return Err("This session has exited. Start another one.".into());
+        }
+        let mode = match params.mode.as_deref() {
+            None | Some("auto") => SendMode::Auto,
+            Some("steer") => SendMode::Steer,
+            Some("queue") => SendMode::Queue,
+            Some(other) => return Err(format!("mode is auto, steer or queue, not \"{other}\"")),
+        };
+        if !self.is_running(&session.id) && mailbox::waiting_count(&self.store, &session.id)? == 0 {
+            match self.start_with_letter(&session, params.clone()) {
+                // A turn began between the look and the start: this message is
+                // for the one that is running.
+                Err(error) if error == ALREADY_RUNNING => {}
+                started => return started,
+            }
+        }
+        self.hand_in(&session, params, mode)
+    }
+
+    /// The turn a message starts on an idle session, with the message as the
+    /// letter it carries.
+    fn start_with_letter(&self, session: &crate::session::Session, mut params: TurnStart) -> Result<TurnStarted, String> {
+        let files = params.files.clone().unwrap_or_default();
+        let letter =
+            mailbox::record_claimed_with_files(&self.store, &session.id, &mailbox::user(), &params.text, files)?;
         params.letter_id = Some(letter.id.clone());
         match self.start(params) {
             Ok(started) => {
-                let parent = session.parent_id.as_deref().and_then(|id| session::get(&self.store, id.to_string()).ok().flatten());
-                if let Some(parent) = parent.filter(|parent| parent.kind == "bot" || parent.kind == "child") {
-                    self.transcripts.append_system_letter(&parent.id, &format!("You wrote to {}", session.name), &letter.id);
-                }
-                Ok(started)
+                self.tell_parent(session, &letter.id);
+                Ok(TurnStarted { delivery: Some("started".into()), letter_id: Some(letter.id), ..started })
             }
             Err(error) => {
                 let _ = mailbox::dispose(&self.store, &letter.id);
                 Err(error)
             }
         }
+    }
+
+    /// A message for a session that has a turn, or letters held: steered into
+    /// the turn where the provider takes that, else in the queue. Whatever the
+    /// queue holds goes over at once if nothing runs.
+    fn hand_in(&self, session: &crate::session::Session, params: TurnStart, mode: SendMode) -> Result<TurnStarted, String> {
+        let id = session.id.as_str();
+        let files = attached(&params);
+        let mut written = None;
+        if mode != SendMode::Queue && STEERABLE.contains(&session.provider.as_str()) && self.is_running(id) {
+            // Claimed by the turn it is written into: read, it is delivered;
+            // not taken, it is released and waits like any other.
+            let letter =
+                mailbox::record_claimed_with_files(&self.store, id, &mailbox::user(), &params.text, files.clone())?;
+            match self.steer_files(id, &params.text, mailbox::user(), Some(letter.id.clone()), files.clone()) {
+                Ok(()) => {
+                    self.tell_parent(session, &letter.id);
+                    return Ok(TurnStarted {
+                        working: true,
+                        delivery: Some("steered".into()),
+                        letter_id: Some(letter.id),
+                    });
+                }
+                Err(_) => {
+                    mailbox::release(&self.store, &letter.id)?;
+                    written = Some(letter);
+                }
+            }
+        }
+        let letter = match written {
+            Some(letter) => letter,
+            None => mailbox::enqueue_with_files(&self.store, id, &mailbox::user(), &params.text, files)?,
+        };
+        self.tell_parent(session, &letter.id);
+        // Behind a turn that ended meanwhile, or onto a queue a stop held.
+        let started = self.drain_mailbox(id);
+        Ok(TurnStarted {
+            working: true,
+            delivery: Some(if started { "started" } else { "queued" }.into()),
+            letter_id: Some(letter.id),
+        })
+    }
+
+    /// The line a child's parent sees where the user wrote to its child.
+    fn tell_parent(&self, session: &crate::session::Session, letter_id: &str) {
+        if session.kind != "child" {
+            return;
+        }
+        let parent = session.parent_id.as_deref().and_then(|id| session::get(&self.store, id.to_string()).ok().flatten());
+        if let Some(parent) = parent.filter(|parent| parent.kind == "bot" || parent.kind == "child") {
+            self.transcripts.append_system_letter(&parent.id, &format!("You wrote to {}", session.name), letter_id);
+        }
+    }
+
+    /// "Send now" on a letter the user has waiting: it goes to the head of the
+    /// queue, the turn that is running is stopped, and the queue goes over as
+    /// one turn headed by it. The rest of the queue goes with it, rather than
+    /// waiting for a second turn straight after: that turn would begin the
+    /// moment this one ended, with the same messages the user had queued
+    /// behind it, only later.
+    pub fn send_now(&self, session_id: &str, letter_id: &str) -> Result<TurnStarted, String> {
+        let session = session::get(&self.store, session_id.to_string())?.ok_or_else(|| "Session not found".to_string())?;
+        if !matches!(driven(&session), Some(Driven::Child | Driven::User)) {
+            return Err(format!("{} has no queue of the user's to send from.", session.name));
+        }
+        mailbox::send_first(&self.store, session_id, letter_id)?;
+        if self.is_running(session_id) {
+            self.sending_now.lock().unwrap_or_else(|e| e.into_inner()).insert(session_id.to_string());
+            self.cancel(session_id, true);
+        }
+        // The stop's own end hands the queue over; with no turn left to wait
+        // for (none was running, or it ended meanwhile) it goes now.
+        let started = !self.is_running(session_id) && {
+            self.sending_now.lock().unwrap_or_else(|e| e.into_inner()).remove(session_id);
+            self.drain_mailbox(session_id)
+        };
+        Ok(TurnStarted {
+            working: true,
+            delivery: Some(if started { "started" } else { "queued" }.into()),
+            letter_id: Some(letter_id.to_string()),
+        })
     }
 
     /// Start a turn. With `letters`, the turn carries them: each goes in the
@@ -851,7 +1030,7 @@ impl TurnHost {
                 Live::Opencode(row) => row.active,
             });
             if live || !running.insert(params.session_id.clone()) {
-                return Err("Turn already running".into());
+                return Err(ALREADY_RUNNING.into());
             }
         }
         self.clear_stop(&params.session_id);
@@ -872,10 +1051,16 @@ impl TurnHost {
         if !letters.is_empty() {
             // The transcript keeps each letter as it was written, under the
             // name of whoever wrote it; the envelopes are for the model. What
-            // the user wrote to their own session is theirs, not mail.
+            // the user typed is their message, not mail, and keeps its files.
             for letter in &letters {
-                if is_own(drive, letter) {
-                    self.transcripts.append_user(&params.session_id, &letter.text, false, None, Some(letter.id.clone()));
+                if typed_by_user(drive, &letter.from) {
+                    self.transcripts.append_user(
+                        &params.session_id,
+                        &letter.text,
+                        false,
+                        Some(letter.files.clone()),
+                        Some(letter.id.clone()),
+                    );
                 } else {
                     self.transcripts.append_from_bot(
                         &params.session_id,
@@ -1665,8 +1850,11 @@ impl TurnHost {
         // The turn is over: the next one may start, and the drain below is
         // what starts it.
         self.running.lock().unwrap_or_else(|e| e.into_inner()).remove(&session_id);
+        // Taken after the turn is out of `running`, so a Send now that comes
+        // either side of it finds it ended or finds the flag.
+        let sent_now = self.sending_now.lock().unwrap_or_else(|e| e.into_inner()).remove(&session_id);
         if driven(&row) == Some(Driven::Child) {
-            self.settle_child(&row, outcome);
+            self.settle_child(&row, outcome, sent_now);
             return;
         }
         // A bot and the user's own session settle alike: nobody waits on their
@@ -1692,16 +1880,21 @@ impl TurnHost {
                 self.transcripts.set_status(&session_id, "idle", None);
                 self.transcripts.flush(&session_id);
                 // A stop is the user saying enough; whatever is queued waits
-                // for them, it does not restart the session.
-                return;
+                // for them, it does not restart the session. Unless they
+                // stopped it to send a message now.
+                if !sent_now {
+                    return;
+                }
             }
         }
         self.drain_mailbox(&session_id);
     }
 
     /// Hand over what is waiting for a session that has just gone quiet: every
-    /// letter in its box, oldest first, in one turn (up to
-    /// [`mailbox::BATCH_CHARS`] of text; the rest waits for the next turn).
+    /// letter in its box, in the order the user put the queue in (else oldest
+    /// first), in one turn (up to [`mailbox::BATCH_CHARS`] of text; the rest
+    /// waits for the next turn). The files the user attached to them go with
+    /// the turn.
     /// A session with a turn running is left alone: that turn's end drains it.
     ///
     /// The one place a turn's letters are claimed, so two callers racing cannot
@@ -1740,12 +1933,14 @@ impl TurnHost {
             .filter_map(|letter| letter.event_cursor.map(|cursor| (letter.from.id.clone(), cursor)))
             .collect();
         let first = letters[0].clone();
+        // What the user attached to the letters goes to the turn as its files.
+        let files: Vec<AttachedFile> = letters.iter().flat_map(|letter| letter.files.clone()).collect();
         let started = self.begin(
             TurnStart {
                 session_id: session_id.to_string(),
                 cwd,
                 text: String::new(),
-                files: None,
+                files: Some(files).filter(|files| !files.is_empty()),
                 mentions: None,
                 hidden: None,
                 from_bot: Some(first.from.clone()),
@@ -1798,7 +1993,7 @@ impl TurnHost {
     /// position, the letter to a bot parent, and only then the wake-up.
     /// A message queued behind the turn goes over last, so the event it
     /// follows is already written.
-    fn settle_child(&self, session: &crate::session::Session, outcome: TurnOutcome) {
+    fn settle_child(&self, session: &crate::session::Session, outcome: TurnOutcome, sent_now: bool) {
         let id = session.id.as_str();
         let exit_by = self.exiting.lock().unwrap_or_else(|e| e.into_inner()).remove(id);
         let (kind, detail, status) = match (outcome, exit_by) {
@@ -1829,8 +2024,9 @@ impl TurnHost {
             return;
         }
         // Stopped from the window is the user saying enough: what is queued
-        // waits for them, as it does for a bot.
-        if detail != "stopped" {
+        // waits for them, as it does for a bot, unless they stopped it to send
+        // a message now.
+        if detail != "stopped" || sent_now {
             self.drain_mailbox(id);
         }
     }
@@ -2144,6 +2340,21 @@ impl TurnHost {
         from: crew_protocol::BotRef,
         letter: Option<String>,
     ) -> Result<(), String> {
+        self.steer_files(session_id, text, from, letter, Vec::new())
+    }
+
+    /// [`TurnHost::steer`] for a message with files attached. They go in as
+    /// the turn's own message would carry them: Claude takes an image as an
+    /// image and the other files as paths to read, Codex takes every one as a
+    /// path in the text.
+    pub fn steer_files(
+        &self,
+        session_id: &str,
+        text: &str,
+        from: crew_protocol::BotRef,
+        letter: Option<String>,
+        files: Vec<AttachedFile>,
+    ) -> Result<(), String> {
         // The kind first, out of the lock: `codex_steer` takes it again.
         let (codex, cursor) = match self.lock().get(session_id) {
             Some(Live::Codex(_)) => (true, false),
@@ -2151,13 +2362,28 @@ impl TurnHost {
             _ => (false, false),
         };
         if codex {
-            return self.codex_steer(session_id, text, from, letter);
+            return self.codex_steer(session_id, text, from, letter, files);
         }
         if cursor {
             // No `session/steer`, and a second prompt cancels the first.
             return Err("Cursor cannot take a message in the middle of a turn".into());
         }
-        let sent = self.steer_text(session_id, &from, text);
+        let typed = session::get(&self.store, session_id.to_string())
+            .ok()
+            .flatten()
+            .as_ref()
+            .and_then(driven)
+            .is_some_and(|drive| typed_by_user(drive, &from));
+        let steered = self.steer_text(session_id, &from, text);
+        let images = crate::files::load_inline_images(&files);
+        let inline: HashSet<String> = images.iter().map(|image| image.path.clone()).collect();
+        let paths: Vec<String> = files.iter().filter(|file| !inline.contains(&file.path)).map(|file| file.path.clone()).collect();
+        // What Claude echoes back is the text of the message it was given, so
+        // that is what the echo is known by. A message of images alone has none.
+        let sent = crate::providers::with_files(steered.trim(), &paths);
+        if sent.trim().is_empty() {
+            return Err("A message of only images has no text to know its echo by.".into());
+        }
         let message = {
             let mut map = self.lock();
             let Some(Live::Claude(live)) = map.get_mut(session_id) else {
@@ -2166,8 +2392,8 @@ impl TurnHost {
             if !live.active || live.cancelled || !live.initialized {
                 return Err("No Claude turn is running to take it.".into());
             }
-            live.steers.push(Steer { sent: sent.clone(), text: text.to_string(), from, letter });
-            build_claude_user_message(&live.claude_session_id, None, &sent, &[], &[])
+            live.steers.push(Steer { sent: sent.clone(), text: text.to_string(), from, letter, files, typed });
+            build_claude_user_message(&live.claude_session_id, None, steered.trim(), &paths, &images)
         };
         if let Err(error) = self.agents.write(session_id, &serde_json::to_string(&message).unwrap_or_default()) {
             if let Some(Live::Claude(live)) = self.lock().get_mut(session_id) {
@@ -2791,13 +3017,7 @@ impl TurnHost {
                         if let Some(id) = steer.letter.as_ref() {
                             let _ = mailbox::delivered(&self.store, std::slice::from_ref(id));
                         }
-                        events.push(HarnessEvent::UserMessage {
-                            text: steer.text,
-                            hidden: None,
-                            files: None,
-                            from_bot: Some(steer.from),
-                            letter_id: steer.letter,
-                        });
+                        events.push(steer.read());
                     }
                 }
                 for result in tool_results_from_user_message(&rec) {

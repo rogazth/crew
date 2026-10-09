@@ -1692,6 +1692,26 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
             let store = hosts.store.clone();
             json(block(move || mailbox::pending(&store, &session_id)).await?)
         }
+        // The user's queue. Each change is heard as `mailbox-changed`, the event
+        // that has the window read `mailbox_pending` again.
+        "mailbox_edit" => {
+            let proto::MailboxEdit { session_id, letter_id, text, files } = parse(params)?;
+            let store = hosts.store.clone();
+            block(move || mailbox::edit(&store, &session_id, &letter_id, &text, files)).await?;
+            Ok(Value::Null)
+        }
+        "mailbox_reorder" => {
+            let proto::MailboxReorder { session_id, letter_ids } = parse(params)?;
+            let store = hosts.store.clone();
+            block(move || mailbox::reorder(&store, &session_id, &letter_ids)).await?;
+            Ok(Value::Null)
+        }
+        "mailbox_dispose" => {
+            let proto::MailboxDispose { session_id, letter_id } = parse(params)?;
+            let store = hosts.store.clone();
+            block(move || mailbox::dispose_users(&store, &session_id, &letter_id)).await?;
+            Ok(Value::Null)
+        }
         "session_mark_read" => {
             let Id { id } = parse(params)?;
             let store = hosts.store.clone();
@@ -1944,6 +1964,11 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
             let turns = hosts.turns.clone();
             block(move || turns.stop(&session_id)).await?;
             Ok(Value::Null)
+        }
+        "turn_send_now" => {
+            let proto::TurnSendNow { session_id, letter_id } = parse(params)?;
+            let turns = hosts.turns.clone();
+            json(block(move || turns.send_now(&session_id, &letter_id)).await?)
         }
         "turn_respond" => {
             let TurnRespond { session_id, request_id, decision } = parse(params)?;
@@ -2818,6 +2843,183 @@ mod tests {
             .await;
             assert!(!spawned.ok, "{session} was launched as a terminal");
         }
+        handle.shutdown();
+    }
+
+    /// A Claude that answers each message "hello", and takes a second and a
+    /// half over one that says SLEEP.
+    fn write_fake_claude_slow(dir: &std::path::Path) -> std::path::PathBuf {
+        let path = dir.join("fake-claude-slow");
+        std::fs::write(
+            &path,
+            r#"#!/usr/bin/env python3
+import json, sys, time
+print(json.dumps({"type":"system","subtype":"init"}), flush=True)
+for line in sys.stdin:
+    try:
+        rec = json.loads(line)
+    except Exception:
+        continue
+    if rec.get("type") == "control_request":
+        print(json.dumps({"type":"control_response"}), flush=True)
+        continue
+    if rec.get("type") != "user":
+        continue
+    if "SLEEP" in rec["message"]["content"][-1]["text"]:
+        time.sleep(1.5)
+    print(json.dumps({"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"hello"}}}), flush=True)
+    print(json.dumps({"type":"result","subtype":"success","usage":{"input_tokens":1,"output_tokens":1}}), flush=True)
+"#,
+        )
+        .expect("fake claude");
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        path
+    }
+
+    /// A request whose change to the user's queue the window hears of, as
+    /// `mailbox-changed`: the event is broadcast by the handler, so either it
+    /// or the response can reach the socket first.
+    async fn request_until_queue_changes(ws: &mut Ws, id: u32, method: &str, params: Value) -> proto::Response {
+        send_json(ws, &Request { id, method: method.into(), params }).await;
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        let (mut response, mut heard) = (None, false);
+        while response.is_none() || !heard {
+            let msg = tokio::time::timeout_at(deadline, ws.next()).await.expect("rpc timeout").expect("closed").expect("ws");
+            let Message::Text(text) = msg else {
+                continue;
+            };
+            if let Ok(reply) = serde_json::from_str::<proto::Response>(text.as_ref()) {
+                if reply.id == id {
+                    // A refusal changes nothing, so nothing is heard.
+                    heard |= !reply.ok;
+                    response = Some(reply);
+                }
+            } else if serde_json::from_str::<proto::Event>(text.as_ref()).is_ok_and(|event| event.event == "mailbox-changed") {
+                heard = true;
+            }
+        }
+        response.unwrap()
+    }
+
+    /// What the window's queue shows as waiting, first to go first.
+    async fn waiting_texts(ws: &mut Ws, id: u32, session_id: &str) -> Vec<String> {
+        let pending: Vec<proto::ThreadLetter> = serde_json::from_value(
+            rpc(ws, id, "mailbox_pending", serde_json::json!({ "sessionId": session_id })).await.result.expect("pending"),
+        )
+        .expect("letters");
+        pending.into_iter().filter(|letter| letter.queue == "waiting").map(|letter| letter.text).collect()
+    }
+
+    /// The user's queue over the wire: a message sent while a turn works is
+    /// queued and answers how, the window hears each change to the queue, and
+    /// Send now stops the turn for the queue to go as the next one.
+    #[tokio::test]
+    async fn the_user_queue_is_edited_reordered_and_sent_over_the_wire() {
+        let dir = test_dir("user-queue");
+        let handle = test_serve(&dir);
+        handle.override_agent_binary("claude", write_fake_claude_slow(&dir).to_string_lossy().into_owned());
+        let mut ws = connect_authed(&handle).await;
+        let cwd = dir.to_string_lossy().into_owned();
+        let workspace: proto::Workspace = serde_json::from_value(
+            rpc(&mut ws, 1, "workspace_create", serde_json::json!({ "name": "w", "path": cwd })).await.result.expect("ws"),
+        )
+        .expect("workspace");
+        let session: proto::Session = serde_json::from_value(
+            rpc(
+                &mut ws,
+                2,
+                "session_create",
+                serde_json::json!({
+                    "workspaceId": workspace.id, "kind": "terminal", "name": "mine", "provider": "claude",
+                    "model": "", "description": "", "autonomy": "full", "view": "chat"
+                }),
+            )
+            .await
+            .result
+            .expect("session"),
+        )
+        .expect("session");
+        let send = |text: &str, mode: &str| serde_json::json!({ "sessionId": session.id, "cwd": cwd, "text": text, "mode": mode });
+
+        let first: TurnStarted =
+            serde_json::from_value(rpc(&mut ws, 3, "turn_start", send("SLEEP", "auto")).await.result.expect("started"))
+                .expect("started");
+        assert_eq!(first.delivery.as_deref(), Some("started"));
+        let mut letters = Vec::new();
+        for (id, text) in [(4, "two"), (5, "three"), (6, "four")] {
+            let queued: TurnStarted =
+                serde_json::from_value(rpc(&mut ws, id, "turn_start", send(text, "queue")).await.result.expect("queued"))
+                    .expect("queued");
+            assert_eq!(queued.delivery.as_deref(), Some("queued"), "{text}");
+            letters.push(queued.letter_id.expect("letter"));
+        }
+        assert_eq!(waiting_texts(&mut ws, 7, &session.id).await, ["two", "three", "four"]);
+
+        let reordered = request_until_queue_changes(
+            &mut ws,
+            8,
+            "mailbox_reorder",
+            serde_json::json!({ "sessionId": session.id, "letterIds": [letters[2], letters[0]] }),
+        )
+        .await;
+        assert!(reordered.ok, "{:?}", reordered.error);
+        let edited = request_until_queue_changes(
+            &mut ws,
+            9,
+            "mailbox_edit",
+            serde_json::json!({ "sessionId": session.id, "letterId": letters[0], "text": "two, edited", "files": ["/tmp/a.md"] }),
+        )
+        .await;
+        assert!(edited.ok, "{:?}", edited.error);
+        let dropped = request_until_queue_changes(
+            &mut ws,
+            10,
+            "mailbox_dispose",
+            serde_json::json!({ "sessionId": session.id, "letterId": letters[1] }),
+        )
+        .await;
+        assert!(dropped.ok, "{:?}", dropped.error);
+        assert_eq!(waiting_texts(&mut ws, 11, &session.id).await, ["four", "two, edited"]);
+        // The turn's own message is not the user's to edit.
+        let own = request_until_queue_changes(
+            &mut ws,
+            12,
+            "mailbox_edit",
+            serde_json::json!({ "sessionId": session.id, "letterId": first.letter_id, "text": "x" }),
+        )
+        .await;
+        assert!(!own.ok && own.error.as_deref().is_some_and(|error| error.contains("already took")), "{:?}", own.error);
+
+        let now: TurnStarted = serde_json::from_value(
+            request_until_queue_changes(
+                &mut ws,
+                13,
+                "turn_send_now",
+                serde_json::json!({ "sessionId": session.id, "letterId": letters[0] }),
+            )
+            .await
+            .result
+            .expect("sent"),
+        )
+        .expect("sent");
+        assert_eq!(now.letter_id.as_deref(), Some(letters[0].as_str()));
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+        let mut req = 20u32;
+        let snap = loop {
+            let snap = transcript_of(&mut ws, req, &session.id).await;
+            req += 1;
+            let users = snap.blocks.iter().filter(|block| block.role == proto::BlockRole::User).count();
+            if users == 3 && !snap.working {
+                break snap;
+            }
+            assert!(tokio::time::Instant::now() < deadline, "the queue never went over: {:?}", snap.blocks);
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        };
+        let said: Vec<&str> =
+            snap.blocks.iter().filter(|block| block.role == proto::BlockRole::User).map(|block| block.text.as_str()).collect();
+        assert_eq!(said, ["SLEEP", "two, edited", "four"], "Send now puts its letter at the head");
+        assert!(waiting_texts(&mut ws, req, &session.id).await.is_empty());
         handle.shutdown();
     }
 

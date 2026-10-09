@@ -19,7 +19,7 @@
 //! mid-turn leaves it claimed, and the next start puts it back in the box.
 //! Nothing is deleted: a letter nobody needs any more is marked disposed.
 
-use crew_protocol::BotRef;
+use crew_protocol::{AttachedFile, BotRef};
 use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
@@ -55,6 +55,9 @@ pub struct Letter {
     /// handing it over and reading the session some other way can each tell
     /// the other has already shown it.
     pub event_cursor: Option<i64>,
+    /// What the user attached to it. Empty for every letter but the user's.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub files: Vec<AttachedFile>,
 }
 
 impl Letter {
@@ -67,6 +70,7 @@ impl Letter {
             at: now_millis(),
             kind: kind.to_string(),
             event_cursor,
+            files: Vec::new(),
         }
     }
 
@@ -356,8 +360,8 @@ pub fn render(letter: &Letter, parent: Option<&str>) -> String {
 /// Write a letter, on a connection the caller may hold a transaction on.
 pub(crate) fn insert(conn: &rusqlite::Connection, letter: &Letter) -> rusqlite::Result<()> {
     conn.prepare_cached(
-        "INSERT INTO mailbox (id, to_session, from_session, from_name, text, at, from_kind, kind, event_cursor)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        "INSERT INTO mailbox (id, to_session, from_session, from_name, text, at, from_kind, kind, event_cursor, files_json)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
     )?
     .execute(params![
         letter.id,
@@ -369,14 +373,38 @@ pub(crate) fn insert(conn: &rusqlite::Connection, letter: &Letter) -> rusqlite::
         letter.at,
         letter.from.kind,
         letter.kind,
-        letter.event_cursor
+        letter.event_cursor,
+        files_json(&letter.files)
     ])?;
     Ok(())
 }
 
+/// What a letter's files are stored as: nothing for a letter with none.
+fn files_json(files: &[AttachedFile]) -> Option<String> {
+    (!files.is_empty()).then(|| serde_json::to_string(files).unwrap_or_default())
+}
+
+/// The files a stored letter holds. A column that does not read is no files.
+fn files_from(json: Option<String>) -> Vec<AttachedFile> {
+    json.and_then(|json| serde_json::from_str(&json).ok()).unwrap_or_default()
+}
+
 /// Drop a message in a box.
 pub fn enqueue(store: &Store, to_session: &str, from: &BotRef, text: &str) -> Result<Letter, String> {
-    put(store, Letter::new(to_session, from, text, MESSAGE, None))
+    enqueue_with_files(store, to_session, from, text, Vec::new())
+}
+
+/// Drop a message in a box with the files its writer attached to it.
+pub fn enqueue_with_files(
+    store: &Store,
+    to_session: &str,
+    from: &BotRef,
+    text: &str,
+    files: Vec<AttachedFile>,
+) -> Result<Letter, String> {
+    let mut letter = Letter::new(to_session, from, text, MESSAGE, None);
+    letter.files = files;
+    put(store, letter)
 }
 
 /// Drop a letter of any kind in its box.
@@ -391,7 +419,19 @@ pub fn put(store: &Store, letter: Letter) -> Result<Letter, String> {
 /// writing to a child. Kept like any other, already claimed, so no turn's end
 /// hands it over again; the turn that carries it marks it delivered.
 pub fn record_claimed(store: &Store, to_session: &str, from: &BotRef, text: &str) -> Result<Letter, String> {
-    let letter = Letter::new(to_session, from, text, MESSAGE, None);
+    record_claimed_with_files(store, to_session, from, text, Vec::new())
+}
+
+/// [`record_claimed`] for a message with files attached.
+pub fn record_claimed_with_files(
+    store: &Store,
+    to_session: &str,
+    from: &BotRef,
+    text: &str,
+    files: Vec<AttachedFile>,
+) -> Result<Letter, String> {
+    let mut letter = Letter::new(to_session, from, text, MESSAGE, None);
+    letter.files = files;
     store.with(|conn| {
         insert(conn, &letter)?;
         conn.prepare_cached("UPDATE mailbox SET claimed_at = ?2 WHERE id = ?1")?.execute(params![letter.id, letter.at])
@@ -447,10 +487,193 @@ pub fn dispose(store: &Store, id: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// A file known by its path alone: its name is the path's last part.
+pub(crate) fn file_at(path: &str) -> AttachedFile {
+    AttachedFile {
+        name: std::path::Path::new(path).file_name().map_or_else(|| path.to_string(), |name| name.to_string_lossy().into_owned()),
+        path: path.to_string(),
+        kind: None,
+        size: None,
+    }
+}
+
+/// Why `letter_id` is not a letter of the user's that `session_id` has yet to
+/// be handed, for the message that refuses an edit, a removal or a Send now.
+/// `what` finishes "can no longer be": "edited", "removed", "sent now".
+fn not_the_users_to_change(conn: &rusqlite::Connection, session_id: &str, letter_id: &str, what: &str) -> String {
+    let found: Option<(String, Option<String>, bool, bool, bool)> = conn
+        .prepare_cached(
+            "SELECT to_session, from_kind, claimed_at IS NOT NULL, delivered_at IS NOT NULL, disposed_at IS NOT NULL
+               FROM mailbox WHERE id = ?1",
+        )
+        .and_then(|mut stmt| {
+            stmt.query_row(params![letter_id], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?))
+            })
+            .optional()
+        })
+        .unwrap_or(None);
+    match found {
+        Some((to, from_kind, claimed, delivered, disposed)) if to == session_id && from_kind.as_deref() == Some("user") => {
+            if disposed {
+                "That message was already removed.".into()
+            } else if delivered {
+                format!("The session already read that message; it can no longer be {what}.")
+            } else if claimed {
+                format!("The running turn already took that message; it can no longer be {what}.")
+            } else {
+                "That message is not waiting.".into()
+            }
+        }
+        Some((to, ..)) if to == session_id => "Only a message you wrote can be changed.".into(),
+        _ => "That message is not in this session's queue.".into(),
+    }
+}
+
+/// Changes the text and the files of a letter the user wrote that its session
+/// has yet to be handed. `files` of `None` leaves the files as they are. Refused
+/// once a turn has taken the letter (a steer, or a batch), and for any letter
+/// that is not the user's.
+pub fn edit(
+    store: &Store,
+    session_id: &str,
+    letter_id: &str,
+    text: &str,
+    files: Option<Vec<String>>,
+) -> Result<(), String> {
+    store.with(|conn| {
+        let tx = conn.unchecked_transaction()?;
+        let held: Option<Option<String>> = tx
+            .prepare_cached(&format!(
+                "SELECT files_json FROM mailbox
+                  WHERE id = ?1 AND to_session = ?2 AND from_kind = 'user' AND from_session IS NULL AND {PENDING}"
+            ))?
+            .query_row(params![letter_id, session_id], |row| row.get(0))
+            .optional()?;
+        let Some(held) = held else {
+            return Ok(Err(not_the_users_to_change(&tx, session_id, letter_id, "edited")));
+        };
+        let files = match files {
+            None => held,
+            // The ones it already holds keep what was known of them (an image
+            // stays an image); a new path is known by its name.
+            Some(paths) => {
+                let held = files_from(held);
+                let files: Vec<AttachedFile> = paths
+                    .into_iter()
+                    .map(|path| {
+                        held.iter().find(|file| file.path == path).cloned().unwrap_or_else(|| file_at(&path))
+                    })
+                    .collect();
+                files_json(&files)
+            }
+        };
+        if text.trim().is_empty() && files.is_none() {
+            return Ok(Err("A message needs some text or a file.".to_string()));
+        }
+        tx.prepare_cached("UPDATE mailbox SET text = ?2, files_json = ?3 WHERE id = ?1")?
+            .execute(params![letter_id, text, files])?;
+        tx.commit()?;
+        Ok(Ok(()))
+    })?
+    .inspect(|_| store.mailbox_changed(session_id))
+}
+
+/// Sets aside a letter the user wrote that its session has yet to be handed,
+/// unread. Refused once a turn has taken it, and for any letter that is not
+/// the user's.
+pub fn dispose_users(store: &Store, session_id: &str, letter_id: &str) -> Result<(), String> {
+    store.with(|conn| {
+        let set_aside = conn
+            .prepare_cached(&format!(
+                "UPDATE mailbox SET disposed_at = ?3
+                  WHERE id = ?1 AND to_session = ?2 AND from_kind = 'user' AND from_session IS NULL AND {PENDING}"
+            ))?
+            .execute(params![letter_id, session_id, now_millis()])?;
+        Ok(if set_aside == 1 { Ok(()) } else { Err(not_the_users_to_change(conn, session_id, letter_id, "removed")) })
+    })?
+    .inspect(|_| store.mailbox_changed(session_id))
+}
+
+/// Puts the letters named first, in the order given. Ids that are not waiting
+/// in the box are ignored, and what is not named keeps its place after them.
+/// They are given a place just before the first letter the box holds, so no
+/// other letter's order changes (a steer put back keeps the place its time
+/// gives it).
+pub fn reorder(store: &Store, session_id: &str, letter_ids: &[String]) -> Result<(), String> {
+    let moved = store.with(|conn| {
+        let tx = conn.unchecked_transaction()?;
+        let moved = put_first(&tx, session_id, letter_ids)?;
+        tx.commit()?;
+        Ok(moved)
+    })?;
+    if moved > 0 {
+        store.mailbox_changed(session_id);
+    }
+    Ok(())
+}
+
+/// Moves a letter of the user's to the head of its box, for Send now: the same
+/// as [`reorder`] with that one id, but refused for a letter that is not the
+/// user's to move (taken by a turn already, or someone else's).
+pub fn send_first(store: &Store, session_id: &str, letter_id: &str) -> Result<(), String> {
+    store.with(|conn| {
+        let tx = conn.unchecked_transaction()?;
+        let waiting: bool = tx
+            .prepare_cached(&format!(
+                "SELECT EXISTS(SELECT 1 FROM mailbox
+                  WHERE id = ?1 AND to_session = ?2 AND from_kind = 'user' AND from_session IS NULL AND {PENDING})"
+            ))?
+            .query_row(params![letter_id, session_id], |row| row.get(0))?;
+        if !waiting {
+            return Ok(Err(not_the_users_to_change(&tx, session_id, letter_id, "sent now")));
+        }
+        put_first(&tx, session_id, &[letter_id.to_string()])?;
+        tx.commit()?;
+        Ok(Ok(()))
+    })??;
+    store.mailbox_changed(session_id);
+    Ok(())
+}
+
+fn put_first(conn: &rusqlite::Connection, session_id: &str, letter_ids: &[String]) -> rusqlite::Result<usize> {
+    let mut named: Vec<&String> = Vec::new();
+    for id in letter_ids {
+        let waiting: bool = conn
+            .prepare_cached(&format!("SELECT EXISTS(SELECT 1 FROM mailbox WHERE id = ?1 AND to_session = ?2 AND {PENDING})"))?
+            .query_row(params![id, session_id], |row| row.get(0))?;
+        if waiting && !named.contains(&id) {
+            named.push(id);
+        }
+    }
+    if named.is_empty() {
+        return Ok(0);
+    }
+    // Under every letter still on its way, claimed ones included: a steer the
+    // turn gives back must not end up ahead of the letter sent now.
+    let first: i64 = conn
+        .prepare_cached(
+            "SELECT MIN(COALESCE(queue_order, at)) FROM mailbox
+              WHERE to_session = ?1 AND delivered_at IS NULL AND disposed_at IS NULL",
+        )?
+        .query_row(params![session_id], |row| row.get(0))?;
+    for (at, id) in named.iter().enumerate() {
+        conn.prepare_cached("UPDATE mailbox SET queue_order = ?2 WHERE id = ?1")?
+            .execute(params![id, first - (named.len() - at) as i64])?;
+    }
+    Ok(named.len())
+}
+
 const SELECT: &str =
-    "SELECT id, to_session, from_session, from_name, text, at, from_kind, kind, event_cursor FROM mailbox";
+    "SELECT id, to_session, from_session, from_name, text, at, from_kind, kind, event_cursor, files_json FROM mailbox";
 const RETURNING: &str =
-    "RETURNING id, to_session, from_session, from_name, text, at, from_kind, kind, event_cursor";
+    "RETURNING id, to_session, from_session, from_name, text, at, from_kind, kind, event_cursor, files_json";
+
+/// The order a box hands its letters over in: the one the user put the queue
+/// in, else the one they came in. A reordered letter's `queue_order` stands in
+/// for its `at`, so the two kinds sort together; the rowid breaks a tie, since
+/// two letters can share a millisecond.
+const QUEUE: &str = "COALESCE(queue_order, at) ASC, rowid ASC";
 
 fn row_to_letter(row: &rusqlite::Row) -> rusqlite::Result<Letter> {
     Ok(Letter {
@@ -467,21 +690,22 @@ fn row_to_letter(row: &rusqlite::Row) -> rusqlite::Result<Letter> {
         at: row.get(5)?,
         kind: row.get(7)?,
         event_cursor: row.get(8)?,
+        files: files_from(row.get(9)?),
     })
 }
 
-/// Everything still waiting for one bot, oldest first.
+/// Everything still waiting for one bot, in the order it goes over.
 pub fn waiting(store: &Store, to_session: &str) -> Result<Vec<Letter>, String> {
     store.with(|conn| {
         let mut stmt = conn.prepare_cached(&format!(
-            "{SELECT} WHERE to_session = ?1 AND {PENDING} ORDER BY at ASC, rowid ASC"
+            "{SELECT} WHERE to_session = ?1 AND {PENDING} ORDER BY {QUEUE}"
         ))?;
         let rows = stmt.query_map(params![to_session], row_to_letter)?;
         rows.collect()
     })
 }
 
-/// Claim the oldest waiting letter alone, for a hand-over that takes one: a
+/// Claim the first waiting letter alone, for a hand-over that takes one: a
 /// terminal's opening prompt. Claiming in the same statement that picks it is
 /// what keeps two callers from handing the same letter over twice.
 pub fn claim(store: &Store, to_session: &str) -> Result<Option<Letter>, String> {
@@ -493,7 +717,7 @@ pub fn claim(store: &Store, to_session: &str) -> Result<Option<Letter>, String> 
                WHERE to_session = ?1 AND {PENDING}
                -- Two letters can share a millisecond; the rowid breaks the tie
                -- so the order out is the order in.
-               ORDER BY at ASC, rowid ASC LIMIT 1
+               ORDER BY {QUEUE} LIMIT 1
              )
              {RETURNING}"
         ))?
@@ -507,14 +731,14 @@ pub fn claim(store: &Store, to_session: &str) -> Result<Option<Letter>, String> 
     })
 }
 
-/// Claim what one turn is handed: every waiting letter, oldest first, until
+/// Claim what one turn is handed: every waiting letter, in queue order, until
 /// their text passes `cap` characters (the first is taken whatever its size).
 pub fn claim_batch(store: &Store, to_session: &str, cap: usize) -> Result<Vec<Letter>, String> {
     store.with(|conn| {
         let tx = conn.unchecked_transaction()?;
         let pending: Vec<Letter> = tx
             .prepare_cached(&format!(
-                "{SELECT} WHERE to_session = ?1 AND {PENDING} ORDER BY at ASC, rowid ASC"
+                "{SELECT} WHERE to_session = ?1 AND {PENDING} ORDER BY {QUEUE}"
             ))?
             .query_map(params![to_session], row_to_letter)?
             .collect::<rusqlite::Result<_>>()?;
@@ -724,7 +948,7 @@ const THREAD_SELECT: &str = "SELECT m.id, m.to_session, m.from_session, COALESCE
              WHEN m.delivered_at IS NOT NULL THEN 'delivered'
              WHEN m.claimed_at IS NOT NULL THEN 'claimed'
              ELSE 'pending' END,
-        m.rowid
+        m.rowid, m.files_json
    FROM mailbox m
    JOIN sessions t ON t.id = m.to_session LEFT JOIN bots tb ON tb.id = t.bot_id
    LEFT JOIN sessions f ON f.id = m.from_session LEFT JOIN bots fb ON fb.id = f.bot_id";
@@ -741,6 +965,7 @@ fn party_kind(kind: &str) -> Option<String> {
 fn row_to_thread_letter(row: &rusqlite::Row) -> rusqlite::Result<(crew_protocol::ThreadLetter, i64)> {
     let to_kind: String = row.get(9)?;
     let state: String = row.get(10)?;
+    let paths: Vec<String> = files_from(row.get(12)?).into_iter().map(|file| file.path).collect();
     Ok((
         crew_protocol::ThreadLetter {
             id: row.get(0)?,
@@ -755,21 +980,21 @@ fn row_to_thread_letter(row: &rusqlite::Row) -> rusqlite::Result<(crew_protocol:
             kind: row.get(7)?,
             queue: if state == "claimed" { "steering" } else { "waiting" }.into(),
             state,
-            files: None,
+            files: Some(paths).filter(|paths| !paths.is_empty()),
         },
         row.get(11)?,
     ))
 }
 
 /// What waits in a session's box and what a turn has taken but not finished,
-/// oldest first: the queue its chat shows. A claimed letter may already be in
+/// in the order it goes over: the queue its chat shows. A claimed letter may already be in
 /// the transcript (the turn carrying it put it there); the block's
 /// `letterId` says which.
 pub fn pending(store: &Store, to_session: &str) -> Result<Vec<crew_protocol::ThreadLetter>, String> {
     store.with(|conn| {
         conn.prepare_cached(&format!(
             "{THREAD_SELECT} WHERE m.to_session = ?1 AND m.delivered_at IS NULL AND m.disposed_at IS NULL
-              ORDER BY m.at ASC, m.rowid ASC"
+              ORDER BY COALESCE(m.queue_order, m.at) ASC, m.rowid ASC"
         ))?
         .query_map(params![to_session], |row| row_to_thread_letter(row).map(|(letter, _)| letter))?
         .collect()
@@ -843,11 +1068,17 @@ pub fn pairs(store: &Store, session_id: &str) -> Result<Vec<crew_protocol::Threa
         .query_map(params![session_id], row_to_thread_letter)?
         .collect()
     })?;
+    // What the user typed to their own session is the chat itself, not a
+    // conversation with "You" beside it.
+    let own = crate::session::get(store, session_id.to_string())?.is_some_and(|row| row.kind == "terminal");
     // One entry per pair, keyed by its two parties in order: the newest letter
     // and how many there are.
     let mut by_pair: std::collections::HashMap<(String, String), (crew_protocol::ThreadLetter, i64, i64)> =
         std::collections::HashMap::new();
     for (letter, rowid) in letters {
+        if own && letter.from.kind.as_deref() == Some("user") && letter.to.id == session_id {
+            continue;
+        }
         let from = if letter.from.kind.as_deref() == Some("user") { "user".to_string() } else { letter.from.id.clone() };
         if from.is_empty() {
             // A sender deleted since: no party left to pair with.
@@ -1259,5 +1490,111 @@ mod tests {
         drop_waiting(&store, &to).expect("drop again");
         assert_eq!(heard.lock().unwrap().len(), 8);
         assert!(heard.lock().unwrap().iter().all(|id| id == &to));
+    }
+
+    fn texts(letters: &[Letter]) -> Vec<&str> {
+        letters.iter().map(|letter| letter.text.as_str()).collect()
+    }
+
+    fn file(path: &str) -> AttachedFile {
+        file_at(path)
+    }
+
+    /// The letters named go first, in the order given; the rest keep their
+    /// places after them, and what comes in later comes in last.
+    #[test]
+    fn a_reorder_puts_the_named_letters_first_and_leaves_the_rest_in_place() {
+        let store = store();
+        let to = session(&store, "to");
+        let ids: Vec<String> =
+            ["a", "b", "c", "d"].iter().map(|text| enqueue(&store, &to, &user(), text).expect("enqueue").id).collect();
+        reorder(&store, &to, &[ids[2].clone(), ids[0].clone(), "nope".into(), ids[2].clone()]).expect("reorder");
+        assert_eq!(texts(&waiting(&store, &to).expect("waiting")), ["c", "a", "b", "d"]);
+        enqueue(&store, &to, &user(), "e").expect("enqueue");
+        reorder(&store, &to, &[ids[3].clone()]).expect("again");
+        assert_eq!(texts(&waiting(&store, &to).expect("waiting")), ["d", "c", "a", "b", "e"]);
+        let batch = claim_batch(&store, &to, BATCH_CHARS).expect("claim");
+        assert_eq!(texts(&batch), ["d", "c", "a", "b", "e"], "a turn is handed the queue as it was put");
+    }
+
+    /// A claimed letter is not the user's to move, and one a turn gives back
+    /// is where its time puts it among the letters nobody moved.
+    #[test]
+    fn a_letter_given_back_keeps_the_place_its_time_gives_it() {
+        let store = store();
+        let to = session(&store, "to");
+        enqueue(&store, &to, &user(), "first").expect("enqueue");
+        std::thread::sleep(std::time::Duration::from_millis(3));
+        let second = record_claimed(&store, &to, &user(), "second").expect("claimed");
+        std::thread::sleep(std::time::Duration::from_millis(3));
+        enqueue(&store, &to, &user(), "third").expect("enqueue");
+        reorder(&store, &to, std::slice::from_ref(&second.id)).expect("a claimed letter is not waiting, so it is not moved");
+        release(&store, &second.id).expect("release");
+        assert_eq!(texts(&waiting(&store, &to).expect("waiting")), ["first", "second", "third"]);
+        send_first(&store, &to, &second.id).expect("send first");
+        assert_eq!(texts(&waiting(&store, &to).expect("waiting")), ["second", "first", "third"]);
+    }
+
+    /// Files stay with their letter from the box to the turn, and the queue shows their paths.
+    #[test]
+    fn a_letter_keeps_its_files_from_the_box_to_the_turn() {
+        let store = store();
+        let to = session(&store, "to");
+        let sent = enqueue_with_files(&store, &to, &user(), "look", vec![file("/tmp/a.md"), file("/tmp/b.png")]).expect("enqueue");
+        enqueue(&store, &to, &user(), "and no more").expect("enqueue");
+        let queue = pending(&store, &to).expect("pending");
+        assert_eq!(queue[0].files, Some(vec!["/tmp/a.md".to_string(), "/tmp/b.png".to_string()]));
+        assert_eq!((queue[0].queue.as_str(), queue[1].files.clone()), ("waiting", None));
+        let batch = claim_batch(&store, &to, BATCH_CHARS).expect("claim");
+        assert_eq!(batch[0], Letter { files: vec![file("/tmp/a.md"), file("/tmp/b.png")], ..sent });
+        assert!(batch[1].files.is_empty());
+        assert_eq!(pending(&store, &to).expect("pending")[0].queue, "steering", "claimed, not read");
+    }
+
+    /// The user changes what they wrote while it waits; a turn that took it is past that.
+    #[test]
+    fn an_edit_changes_a_waiting_letter_and_is_refused_once_it_is_claimed() {
+        let store = store();
+        let to = session(&store, "to");
+        let from = session(&store, "from");
+        let mine = enqueue_with_files(&store, &to, &user(), "draft", vec![file("/tmp/a.md")]).expect("enqueue");
+        edit(&store, &to, &mine.id, "better", None).expect("edit the text alone");
+        edit(&store, &to, &mine.id, "best", Some(vec!["/tmp/a.md".into(), "/tmp/c.md".into()])).expect("edit both");
+        let queue = pending(&store, &to).expect("pending");
+        assert_eq!((queue[0].text.as_str(), queue[0].files.clone()), ("best", Some(vec!["/tmp/a.md".into(), "/tmp/c.md".into()])));
+        edit(&store, &to, &mine.id, "text only", Some(Vec::new())).expect("clear the files");
+        assert_eq!(pending(&store, &to).expect("pending")[0].files, None);
+        assert!(edit(&store, &to, &mine.id, " ", None).expect_err("empty").contains("some text or a file"));
+
+        let theirs = enqueue(&store, &to, &sender(&from), "from a bot").expect("enqueue");
+        assert!(edit(&store, &to, &theirs.id, "mine now", None).expect_err("bot's").contains("Only a message you wrote"));
+        assert!(edit(&store, &from, &mine.id, "x", None).expect_err("other box").contains("not in this session's queue"));
+
+        claim_batch(&store, &to, BATCH_CHARS).expect("claim");
+        let refused = edit(&store, &to, &mine.id, "too late", None).expect_err("claimed");
+        assert!(refused.contains("running turn already took"), "{refused}");
+        assert_eq!(texts(&claim_batch(&store, &to, BATCH_CHARS).expect("empty")), Vec::<&str>::new());
+    }
+
+    /// Dropping a letter is hearing about it too, like every change to the box.
+    #[test]
+    fn disposing_and_reordering_a_queue_are_heard() {
+        let store = store();
+        let to = session(&store, "to");
+        let ids: Vec<String> = ["a", "b"].iter().map(|text| enqueue(&store, &to, &user(), text).expect("enqueue").id).collect();
+        let heard = std::sync::Arc::new(std::sync::Mutex::new(0));
+        let count = heard.clone();
+        store.set_listener(std::sync::Arc::new(move |what| {
+            if matches!(what, crate::store::Changed::Mailbox(_)) {
+                *count.lock().unwrap() += 1;
+            }
+        }));
+        reorder(&store, &to, &[ids[1].clone()]).expect("reorder");
+        edit(&store, &to, &ids[0], "a again", None).expect("edit");
+        dispose_users(&store, &to, &ids[1]).expect("dispose");
+        // Nothing moved is nothing heard.
+        reorder(&store, &to, &["nope".into()]).expect("reorder");
+        assert_eq!(*heard.lock().unwrap(), 3);
+        assert_eq!(texts(&waiting(&store, &to).expect("waiting")), ["a again"]);
     }
 }

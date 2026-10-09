@@ -26,7 +26,7 @@ use crate::session::{self, Session};
 use crate::session_events::{self, Event, Signal};
 use crate::store::{now_millis, Store};
 use crate::tools::{cli, provider_models, provider_names, text, unknown_model, Audience, Tool, ToolFamily, ToolOutput, GLOSSARY};
-use crate::turns::TurnHost;
+use crate::turns::{TurnHost, STEERABLE};
 use crate::worktree::Worktree;
 
 /// Live sessions one parent may have: anything not exited counts.
@@ -35,8 +35,6 @@ pub const LIVE_CAP: usize = 4;
 /// MCP shim gives the call that long and a margin more (`mcp::call_timeout`).
 pub const WAIT_DEFAULT_S: u64 = 600;
 pub const WAIT_MAX_S: u64 = 3600;
-/// The CLIs that take a message into a turn that is running.
-const STEERABLE: [&str; 2] = ["claude", "codex"];
 /// What `read_session` hands back without `max_bytes`, and at most.
 const READ_DEFAULT: usize = 16 * 1024;
 const READ_MAX: usize = 256 * 1024;
@@ -4425,21 +4423,7 @@ while True:
 
         /// What the user types in the window, and the wait for the turn to end.
         fn say(&self, row: &Session, text: &str) -> Session {
-            self.turns
-                .start_by_user(TurnStart {
-                    session_id: row.id.clone(),
-                    cwd: self.dir.to_string_lossy().into_owned(),
-                    text: text.into(),
-                    files: None,
-                    mentions: None,
-                    hidden: None,
-                    from_bot: None,
-                    sent_at: None,
-                    nonce: None,
-                    letter_id: None,
-                    mode: None,
-                })
-                .expect("start");
+            self.type_to(row, text, None, None);
             self.settle(&row.id)
         }
 
@@ -4641,10 +4625,9 @@ while True:
         let coder = w.session("bot", "Coder", "full");
         let coder = coder.session_id().unwrap().to_string();
         let sender = crew_protocol::BotRef::bot(coder, "Coder");
+        w.type_to(&mine, "SLEEP 1\nfix the parser", None, None);
         mailbox::enqueue(w.turns.store(), &mine.id, &mailbox::user(), "from me").expect("user letter");
         mailbox::enqueue(w.turns.store(), &mine.id, &sender, "from coder").expect("bot letter");
-
-        w.say(&mine, "fix the parser");
         // The box goes over when the turn ends, a moment after its status does.
         for _ in 0..400 {
             if w.launches().len() == 2 {
@@ -4655,7 +4638,7 @@ while True:
         w.settle(&mine.id);
         let launches = w.launches();
         assert_eq!(launches.len(), 2, "{launches:?}");
-        assert_eq!(launches[0]["prompt"].as_str().map(str::trim_end), Some("fix the parser"));
+        assert_eq!(launches[0]["prompt"].as_str().map(str::trim_end), Some("SLEEP 1\nfix the parser"));
         assert_eq!(launches[0]["system"], json!(""));
         // The box went over as one turn: the user's letter as typed, the bot's in its envelope.
         let batch = launches[1]["prompt"].as_str().unwrap();
@@ -4691,22 +4674,8 @@ while True:
         assert_eq!(w.say(&mine, "all well").status, "done");
         assert_eq!(w.say(&mine, "CRASH").status, "error");
 
+        w.type_to(&mine, "SLEEP 5", None, None);
         mailbox::enqueue(w.turns.store(), &mine.id, &mailbox::user(), "after the stop").expect("enqueue");
-        w.turns
-            .start_by_user(TurnStart {
-                session_id: mine.id.clone(),
-                cwd: w.dir.to_string_lossy().into_owned(),
-                text: "SLEEP 5".into(),
-                files: None,
-                mentions: None,
-                hidden: None,
-                from_bot: None,
-                sent_at: None,
-                nonce: None,
-                letter_id: None,
-                mode: None,
-            })
-            .expect("start");
         std::thread::sleep(Duration::from_millis(300));
         w.turns.stop(&mine.id).expect("stop");
         assert_eq!(w.settle(&mine.id).status, "idle");
@@ -4725,6 +4694,432 @@ while True:
         w.settle(&mine.id);
         assert_eq!(mailbox::waiting_count(w.turns.store(), &mine.id).unwrap(), 0);
         assert_eq!(w.launches()[0]["prompt"].as_str().map(str::trim_end), Some("left behind"));
+    }
+
+    // ---- Sending while the session works: steered, or waiting in the queue ----
+
+    impl World {
+        /// What the user types in the window, as the daemon answers it, without
+        /// waiting for the turn.
+        fn type_to(
+            &self,
+            row: &Session,
+            text: &str,
+            mode: Option<&str>,
+            files: Option<Vec<crew_protocol::AttachedFile>>,
+        ) -> crew_protocol::TurnStarted {
+            self.turns
+                .start_by_user(TurnStart {
+                    session_id: row.id.clone(),
+                    cwd: self.dir.to_string_lossy().into_owned(),
+                    text: text.into(),
+                    files,
+                    mentions: None,
+                    hidden: None,
+                    from_bot: None,
+                    sent_at: None,
+                    nonce: None,
+                    letter_id: None,
+                    mode: mode.map(str::to_string),
+                })
+                .expect("start")
+        }
+
+        /// The letters a session's queue shows the user: those the box holds and
+        /// the transcript does not yet (a turn's own message is in both).
+        fn waiting(&self, id: &str) -> Vec<crew_protocol::ThreadLetter> {
+            let shown: Vec<String> = self.blocks(id).into_iter().filter_map(|block| block.letter_id).collect();
+            mailbox::pending(self.turns.store(), id)
+                .expect("pending")
+                .into_iter()
+                .filter(|letter| !shown.contains(&letter.id))
+                .collect()
+        }
+
+        /// The same, each letter with the lane it is in.
+        fn queue(&self, id: &str) -> Vec<(String, String)> {
+            self.waiting(id).into_iter().map(|letter| (letter.text, letter.queue)).collect()
+        }
+    }
+
+    /// Until `done` holds, which a turn that ends on its own thread makes true.
+    fn until(what: &str, done: impl Fn() -> bool) {
+        for _ in 0..400 {
+            if done() {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        panic!("never {what}");
+    }
+
+    fn file(path: &str) -> crew_protocol::AttachedFile {
+        crew_protocol::AttachedFile { name: "notes.md".into(), path: path.into(), kind: None, size: None }
+    }
+
+    /// Enter while a Claude turn works hands the message to the turn: the queue
+    /// shows it as steering until the turn reads it, and the echo that says it
+    /// did marks the letter delivered, where the user sees it in the transcript.
+    #[test]
+    fn a_message_sent_while_a_claude_users_turn_works_is_steered_and_its_echo_marks_it_delivered() {
+        let w = world();
+        w.turns.override_binary("claude", fake_claude(&w.dir));
+        w.turns.override_claude_home(w.dir.join("home"));
+        let mine = w.user_session("claude", "", "full");
+        assert_eq!(w.type_to(&mine, "SLEEP 2", None, None).delivery.as_deref(), Some("started"));
+        until_claude_turn(&w, &mine.id);
+
+        let steered = w.type_to(&mine, "and this", None, None);
+        assert_eq!((steered.working, steered.delivery.as_deref()), (true, Some("steered")));
+        let letter = steered.letter_id.expect("the letter it became");
+        assert_eq!(w.queue(&mine.id), [("and this".to_string(), "steering".to_string())]);
+
+        w.settle(&mine.id);
+        assert!(w.queue(&mine.id).is_empty(), "the echo did not mark it delivered");
+        let block = w.blocks(&mine.id).into_iter().find(|block| block.text == "and this").expect("the steer");
+        assert_eq!((block.role, block.from_bot, block.letter_id), (BlockRole::User, None, Some(letter.clone())));
+        let page = mailbox::thread(w.turns.store(), "", &mine.id, None, None).expect("thread");
+        assert_eq!(page.letters.iter().find(|l| l.id == letter).map(|l| l.state.as_str()), Some("delivered"));
+        assert!(w.blocks(&mine.id).iter().any(|block| block.text == "report: SLEEP 2 + and this"));
+        assert_eq!(launched(&w.dir.join("claude-launch.log")).len(), 1, "the steer started another process");
+    }
+
+    /// A steer the turn did not read is not lost, and a stop leaves it where the
+    /// user can see it: waiting, ahead of whatever they send next.
+    #[test]
+    fn a_steer_a_users_turn_never_read_goes_back_to_waiting() {
+        let w = world();
+        w.turns.override_binary("claude", fake_claude(&w.dir));
+        w.turns.override_claude_home(w.dir.join("home"));
+        let mine = w.user_session("claude", "", "full");
+        w.type_to(&mine, "STUBBORN SLEEP 5", None, None);
+        until_claude_turn(&w, &mine.id);
+        assert_eq!(w.type_to(&mine, "and this", None, None).delivery.as_deref(), Some("steered"));
+
+        w.turns.stop(&mine.id).expect("stop");
+        w.settle(&mine.id);
+        assert_eq!(w.queue(&mine.id), [("and this".to_string(), "waiting".to_string())]);
+        assert!(w.blocks(&mine.id).iter().all(|block| block.text != "and this"), "it was never read");
+
+        // The next send releases the queue: the unread steer goes first, in the same turn.
+        let next = w.type_to(&mine, "next", None, None);
+        assert_eq!(next.delivery.as_deref(), Some("started"));
+        until("the queue went over", || w.queue(&mine.id).is_empty() && !w.turns.is_running(&mine.id));
+        let said: Vec<String> = w.blocks(&mine.id).into_iter().filter(|block| block.role == BlockRole::User).map(|block| block.text).collect();
+        assert_eq!(said, ["STUBBORN SLEEP 5", "and this", "next"]);
+    }
+
+    /// Cursor and opencode take nothing into a turn that runs (`steer` asked
+    /// for or not): the message waits, and goes as the next turn.
+    #[test]
+    fn on_opencode_a_message_sent_while_a_turn_works_is_queued_and_goes_as_the_next_turn() {
+        let w = world();
+        let mine = w.user_session("opencode", "opencode/nemotron-3.5-lightning-free", "full");
+        w.type_to(&mine, "SLEEP 1", None, None);
+        let queued = w.type_to(&mine, "and this", None, None);
+        assert_eq!((queued.working, queued.delivery.as_deref()), (true, Some("queued")));
+        assert!(queued.letter_id.is_some());
+        let asked_to_steer = w.type_to(&mine, "and that", Some("steer"), None);
+        assert_eq!(asked_to_steer.delivery.as_deref(), Some("queued"));
+        assert_eq!(
+            w.queue(&mine.id),
+            [("and this".to_string(), "waiting".to_string()), ("and that".to_string(), "waiting".to_string())]
+        );
+
+        until("the queue went over", || w.launches().len() == 2);
+        w.settle(&mine.id);
+        let launches = w.launches();
+        assert_eq!(launches[0]["prompt"].as_str().map(str::trim_end), Some("SLEEP 1"));
+        assert_eq!(launches[1]["prompt"].as_str().map(str::trim_end), Some("and this\n\nand that"), "one turn for what waited");
+        assert!(w.queue(&mine.id).is_empty());
+    }
+
+    #[test]
+    fn on_cursor_a_message_sent_while_a_turn_works_is_queued_and_goes_as_the_next_turn() {
+        let w = world();
+        let (fake, log) = crate::turns::fake_cursor(&w.dir);
+        w.turns.override_binary("cursor-agent", fake);
+        let mine = w.user_session("cursor", "composer-2.5", "full");
+        w.type_to(&mine, "SLEEP 2", None, None);
+        until_tool(&w, &w.user(), &mine.id);
+        let queued = w.type_to(&mine, "and this", Some("steer"), None);
+        assert_eq!(queued.delivery.as_deref(), Some("queued"));
+        assert_eq!(w.queue(&mine.id), [("and this".to_string(), "waiting".to_string())]);
+
+        until("the second prompt", || sent(&log, "session/prompt").len() == 2);
+        w.settle(&mine.id);
+        assert_eq!(sent(&log, "session/prompt")[1]["prompt"][0]["text"], json!("and this"));
+        assert_eq!(launches_of(&log).len(), 2, "each prompt had its own process");
+    }
+
+    /// What waits goes as one turn, in the order the user put it in: moved
+    /// letters first, the others after them in their own order.
+    #[test]
+    fn two_queued_messages_go_as_one_turn_in_queue_order_after_a_reorder() {
+        let w = world();
+        let mine = w.user_session("opencode", "opencode/nemotron-3.5-lightning-free", "full");
+        w.type_to(&mine, "SLEEP 1", None, None);
+        let ids: Vec<String> =
+            ["one", "two", "three"].iter().map(|text| w.type_to(&mine, text, None, None).letter_id.expect("letter")).collect();
+        let events = Arc::new(Mutex::new(0));
+        let heard = events.clone();
+        w.turns.store().set_listener(Arc::new(move |what| {
+            if matches!(what, crate::store::Changed::Mailbox(_)) {
+                *heard.lock().unwrap() += 1;
+            }
+        }));
+        mailbox::reorder(w.turns.store(), &mine.id, &[ids[2].clone(), ids[0].clone(), "not-a-letter".into()]).expect("reorder");
+        assert!(*events.lock().unwrap() > 0, "the window was not told");
+        let order: Vec<String> = w.queue(&mine.id).into_iter().map(|(text, _)| text).collect();
+        assert_eq!(order, ["three", "one", "two"]);
+
+        until("the queue went over", || w.launches().len() == 2);
+        w.settle(&mine.id);
+        assert_eq!(w.launches()[1]["prompt"].as_str().map(str::trim_end), Some("three\n\none\n\ntwo"));
+        let said: Vec<String> = w.blocks(&mine.id).into_iter().filter(|block| block.role == BlockRole::User).map(|block| block.text).collect();
+        assert_eq!(said, ["SLEEP 1", "three", "one", "two"]);
+    }
+
+    /// Once a turn has taken a letter (here, a steer) it is the turn's: editing,
+    /// removing and sending it now are refused, and say why.
+    #[test]
+    fn a_letter_a_turn_has_taken_is_refused_by_edit_dispose_and_send_now() {
+        let w = world();
+        w.turns.override_binary("claude", fake_claude(&w.dir));
+        w.turns.override_claude_home(w.dir.join("home"));
+        let mine = w.user_session("claude", "", "full");
+        w.type_to(&mine, "SLEEP 2", None, None);
+        until_claude_turn(&w, &mine.id);
+        let letter = w.type_to(&mine, "and this", None, None).letter_id.expect("letter");
+
+        let store = w.turns.store();
+        let edit = mailbox::edit(store, &mine.id, &letter, "and that", None).expect_err("edited a claimed letter");
+        assert!(edit.contains("already took") && edit.contains("edited"), "{edit}");
+        let removed = mailbox::dispose_users(store, &mine.id, &letter).expect_err("removed a claimed letter");
+        assert!(removed.contains("already took") && removed.contains("removed"), "{removed}");
+        let sent_now = w.turns.send_now(&mine.id, &letter).expect_err("sent a claimed letter now");
+        assert!(sent_now.contains("already took"), "{sent_now}");
+        assert!(w.turns.is_running(&mine.id), "the refused Send now stopped the turn");
+
+        w.settle(&mine.id);
+        let read = mailbox::edit(store, &mine.id, &letter, "late", None).expect_err("edited a delivered letter");
+        assert!(read.contains("already read"), "{read}");
+    }
+
+    /// A waiting letter is the user's to change: its text and its files.
+    #[test]
+    fn an_edited_letter_goes_with_its_new_text_and_files() {
+        let w = world();
+        let mine = w.user_session("opencode", "opencode/nemotron-3.5-lightning-free", "full");
+        w.type_to(&mine, "SLEEP 1", None, None);
+        let letter = w.type_to(&mine, "first draft", None, Some(vec![file("/tmp/a.md")])).letter_id.expect("letter");
+        assert_eq!(w.waiting(&mine.id)[0].files, Some(vec!["/tmp/a.md".to_string()]));
+
+        mailbox::edit(w.turns.store(), &mine.id, &letter, "second draft", Some(vec!["/tmp/b.md".into()])).expect("edit");
+        assert_eq!(w.waiting(&mine.id)[0].files, Some(vec!["/tmp/b.md".to_string()]));
+        let nothing = mailbox::edit(w.turns.store(), &mine.id, &letter, "  ", Some(Vec::new())).expect_err("emptied");
+        assert!(nothing.contains("some text or a file"), "{nothing}");
+
+        until("the queue went over", || w.launches().len() == 2);
+        w.settle(&mine.id);
+        let prompt = w.launches()[1]["prompt"].as_str().unwrap().to_string();
+        assert!(prompt.starts_with("second draft") && prompt.contains("- /tmp/b.md") && !prompt.contains("a.md"), "{prompt}");
+    }
+
+    /// Only the user's own waiting letters can be dropped, and a dropped one is never sent.
+    #[test]
+    fn disposing_drops_a_waiting_letter_of_the_users_and_no_one_elses() {
+        let w = world();
+        let mine = w.user_session("opencode", "opencode/nemotron-3.5-lightning-free", "full");
+        let coder = w.session("bot", "Coder", "full");
+        let sender = crew_protocol::BotRef::bot(coder.session_id().unwrap().to_string(), "Coder");
+        w.type_to(&mine, "SLEEP 1", None, None);
+        let dropped = w.type_to(&mine, "drop me", None, None).letter_id.expect("letter");
+        w.type_to(&mine, "keep me", None, None);
+        let theirs = mailbox::enqueue(w.turns.store(), &mine.id, &sender, "from coder").expect("letter").id;
+
+        mailbox::dispose_users(w.turns.store(), &mine.id, &dropped).expect("dispose");
+        let not_theirs = mailbox::dispose_users(w.turns.store(), &mine.id, &theirs).expect_err("dropped a bot's letter");
+        assert!(not_theirs.contains("Only a message you wrote"), "{not_theirs}");
+        let elsewhere = mailbox::dispose_users(w.turns.store(), coder.session_id().unwrap(), &dropped)
+            .expect_err("dropped it from another box");
+        assert!(elsewhere.contains("not in this session's queue"), "{elsewhere}");
+        let again = mailbox::dispose_users(w.turns.store(), &mine.id, &dropped).expect_err("dropped twice");
+        assert!(again.contains("already removed"), "{again}");
+
+        until("the queue went over", || w.launches().len() == 2);
+        w.settle(&mine.id);
+        let prompt = w.launches()[1]["prompt"].as_str().unwrap().to_string();
+        assert!(prompt.starts_with("keep me\n\n## Message\nFrom: Coder") && !prompt.contains("drop me"), "{prompt}");
+    }
+
+    /// Send now stops the turn, puts the letter first, and the queue goes over
+    /// as the next turn with it at the head.
+    #[test]
+    fn send_now_stops_the_turn_and_the_next_turn_starts_with_that_letter() {
+        let w = world();
+        let mine = w.user_session("opencode", "opencode/nemotron-3.5-lightning-free", "full");
+        w.type_to(&mine, "SLEEP 30", None, None);
+        w.type_to(&mine, "a", None, None);
+        let b = w.type_to(&mine, "b", None, None).letter_id.expect("letter");
+        until("the first turn is up", || w.launches().len() == 1);
+
+        let answer = w.turns.send_now(&mine.id, &b).expect("send now");
+        assert_eq!(answer.letter_id.as_deref(), Some(b.as_str()));
+        until("the next turn", || w.launches().len() == 2);
+        w.settle(&mine.id);
+        assert_eq!(w.launches()[1]["prompt"].as_str().map(str::trim_end), Some("b\n\na"));
+        let text: Vec<String> = w.blocks(&mine.id).into_iter().map(|block| block.text).collect();
+        assert!(text.contains(&"Stopped".to_string()) && text.contains(&"report: a".to_string()), "{text:?}");
+        assert!(w.queue(&mine.id).is_empty());
+        assert_eq!(w.row(&mine.id).status, "done");
+    }
+
+    /// The same on Codex, whose turn is interrupted rather than killed.
+    #[test]
+    fn send_now_interrupts_a_codex_users_turn_and_the_next_turn_starts_with_that_letter() {
+        let w = world();
+        let (fake, log) = crate::turns::fake_codex(&w.dir);
+        w.turns.override_binary("codex", fake);
+        let mine = w.user_session("codex", "gpt-5.6-luna", "full");
+        w.type_to(&mine, "SLEEP 30", None, None);
+        until_tool(&w, &w.user(), &mine.id);
+        let first = w.type_to(&mine, "a", Some("queue"), None).letter_id.expect("letter");
+        let second = w.type_to(&mine, "b", Some("queue"), None).letter_id.expect("letter");
+        assert_ne!(first, second);
+
+        w.turns.send_now(&mine.id, &second).expect("send now");
+        until("the next turn", || sent(&log, "turn/start").len() == 2);
+        w.settle(&mine.id);
+        assert_eq!(sent(&log, "turn/start")[1]["input"][0]["text"], json!("b\n\na"));
+        assert!(w.queue(&mine.id).is_empty());
+    }
+
+    /// With nothing running, Send now is just the queue going over, headed by the letter.
+    #[test]
+    fn send_now_with_nothing_running_sends_the_queue_headed_by_the_letter() {
+        let w = world();
+        let mine = w.user_session("opencode", "opencode/nemotron-3.5-lightning-free", "full");
+        w.type_to(&mine, "SLEEP 30", None, None);
+        until("the first turn is up", || w.launches().len() == 1);
+        w.type_to(&mine, "a", None, None);
+        let b = w.type_to(&mine, "b", None, None).letter_id.expect("letter");
+        w.turns.stop(&mine.id).expect("stop");
+        w.settle(&mine.id);
+        assert_eq!(w.queue(&mine.id).len(), 2, "a stop must hold the queue");
+
+        let answer = w.turns.send_now(&mine.id, &b).expect("send now");
+        assert_eq!(answer.delivery.as_deref(), Some("started"));
+        until("the next turn", || w.launches().len() == 2);
+        w.settle(&mine.id);
+        assert_eq!(w.launches()[1]["prompt"].as_str().map(str::trim_end), Some("b\n\na"));
+    }
+
+    /// A stop is the user saying enough: the queue waits, and sending
+    /// something is what lets it go, together with the new message.
+    #[test]
+    fn stop_holds_the_queue_and_the_next_send_releases_it() {
+        let w = world();
+        let mine = w.user_session("opencode", "opencode/nemotron-3.5-lightning-free", "full");
+        w.type_to(&mine, "SLEEP 30", None, None);
+        w.type_to(&mine, "held", None, None);
+        until("the first turn is up", || w.launches().len() == 1);
+        w.turns.stop(&mine.id).expect("stop");
+        assert_eq!(w.settle(&mine.id).status, "idle");
+        std::thread::sleep(Duration::from_millis(300));
+        assert_eq!(w.launches().len(), 1, "the queue went over after a stop");
+        assert_eq!(w.queue(&mine.id), [("held".to_string(), "waiting".to_string())]);
+
+        let released = w.type_to(&mine, "go on", None, None);
+        assert_eq!(released.delivery.as_deref(), Some("started"));
+        until("the next turn", || w.launches().len() == 2);
+        w.settle(&mine.id);
+        assert_eq!(w.launches()[1]["prompt"].as_str().map(str::trim_end), Some("held\n\ngo on"));
+        assert!(w.queue(&mine.id).is_empty());
+    }
+
+    /// What the user attached to a message that waits reaches the turn it goes in.
+    #[test]
+    fn the_files_of_a_queued_message_reach_the_turn_it_goes_in() {
+        let w = world();
+        let mine = w.user_session("opencode", "opencode/nemotron-3.5-lightning-free", "full");
+        w.type_to(&mine, "SLEEP 1", None, None);
+        w.type_to(&mine, "look at this", None, Some(vec![file("/tmp/notes.md")]));
+        assert_eq!(w.waiting(&mine.id)[0].files, Some(vec!["/tmp/notes.md".to_string()]));
+
+        until("the queue went over", || w.launches().len() == 2);
+        w.settle(&mine.id);
+        let prompt = w.launches()[1]["prompt"].as_str().unwrap().to_string();
+        assert!(prompt.starts_with("look at this") && prompt.contains("- /tmp/notes.md"), "{prompt}");
+        let block = w.blocks(&mine.id).into_iter().find(|block| block.text == "look at this").expect("block");
+        assert_eq!(block.files.map(|files| files.into_iter().map(|file| file.path).collect::<Vec<_>>()), Some(vec!["/tmp/notes.md".to_string()]));
+    }
+
+    /// A steer carries its files as a turn's message would: Claude is handed
+    /// the paths with the text, and the echo that marks the letter delivered
+    /// is of that text.
+    #[test]
+    fn a_steer_to_a_claude_users_turn_carries_its_files() {
+        let w = world();
+        w.turns.override_binary("claude", fake_claude(&w.dir));
+        w.turns.override_claude_home(w.dir.join("home"));
+        let mine = w.user_session("claude", "", "full");
+        w.type_to(&mine, "SLEEP 2", None, None);
+        until_claude_turn(&w, &mine.id);
+        let steered = w.type_to(&mine, "and this", Some("steer"), Some(vec![file("/tmp/notes.md")]));
+        assert_eq!(steered.delivery.as_deref(), Some("steered"));
+
+        w.settle(&mine.id);
+        assert!(w.queue(&mine.id).is_empty(), "the echo of a steer with files did not match");
+        let block = w.blocks(&mine.id).into_iter().find(|block| block.text == "and this").expect("the steer");
+        assert_eq!(block.files.map(|files| files.len()), Some(1));
+        assert!(w.blocks(&mine.id).iter().any(|block| block.text == "report: SLEEP 2 + - /tmp/notes.md"));
+    }
+
+    #[test]
+    fn a_steer_to_a_codex_users_turn_carries_its_files() {
+        let w = world();
+        let (fake, log) = crate::turns::fake_codex(&w.dir);
+        w.turns.override_binary("codex", fake);
+        let mine = w.user_session("codex", "gpt-5.6-luna", "full");
+        w.type_to(&mine, "SLEEP 2", None, None);
+        until_tool(&w, &w.user(), &mine.id);
+        let steered = w.type_to(&mine, "and this", None, Some(vec![file("/tmp/notes.md")]));
+        assert_eq!(steered.delivery.as_deref(), Some("steered"));
+
+        w.settle(&mine.id);
+        let text = sent(&log, "turn/steer")[0]["input"][0]["text"].as_str().unwrap().to_string();
+        assert!(text.starts_with("and this") && text.contains("- /tmp/notes.md"), "{text}");
+        assert!(w.queue(&mine.id).is_empty(), "the echo of a steer with files did not match");
+        let block = w.blocks(&mine.id).into_iter().find(|block| block.text == "and this").expect("the steer");
+        assert_eq!((block.role, block.from_bot), (BlockRole::User, None));
+        assert_eq!(block.files.map(|files| files.len()), Some(1));
+    }
+
+    /// A subagent's user messages are letters too: waiting while it works, and
+    /// the one it takes in is shown as the user's message.
+    #[test]
+    fn a_message_sent_to_a_busy_subagent_waits_in_its_queue() {
+        let w = world();
+        let parent = w.session("terminal", "shell", "full");
+        let id = w.start(&parent, "SLEEP 1");
+        let row = w.row(&id);
+        let queued = w.type_to(&row, "and this", None, None);
+        assert_eq!(queued.delivery.as_deref(), Some("queued"));
+        assert_eq!(w.queue(&id), [("and this".to_string(), "waiting".to_string())]);
+        until("the queue went over", || w.launches().len() == 2);
+        w.settle(&id);
+        let block = w.blocks(&id).into_iter().find(|block| block.text == "and this").expect("block");
+        assert_eq!((block.role, block.from_bot), (BlockRole::User, None));
+    }
+
+    /// The user's own session has no "You" conversation beside its chat.
+    #[test]
+    fn what_the_user_typed_to_their_own_session_is_no_conversation_with_you() {
+        let w = world();
+        let mine = w.user_session("opencode", "opencode/nemotron-3.5-lightning-free", "full");
+        w.say(&mine, "hello");
+        assert!(mailbox::pairs(w.turns.store(), &mine.id).expect("pairs").is_empty());
     }
 
     // ---- Live tests: the real CLIs, run on demand ----

@@ -22,10 +22,11 @@ use serde_json::{json, Map, Value};
 use tokio::sync::oneshot;
 
 use super::{
-    carries_conversation, conversation_to_resume, path_list, Harness, Launch, QuestionReply, Steer, TurnHost,
-    TurnOutcome, INIT_TIMEOUT, NEXT_EPOCH,
+    carries_conversation, conversation_to_resume, driven, path_list, typed_by_user, Harness, Launch, QuestionReply,
+    Steer, TurnHost, TurnOutcome, INIT_TIMEOUT, NEXT_EPOCH,
 };
 use crate::mailbox;
+use crate::session;
 use crate::providers::codex::{
     approval_response, classify_request, completed_tool_status, exec_item, initialize_params, interrupt_params,
     is_tool_item, item_files, plan_detail, questions_response, rpc_error_message, steer_params, thread_id,
@@ -552,8 +553,17 @@ impl TurnHost {
         text: &str,
         from: crew_protocol::BotRef,
         letter: Option<String>,
+        files: Vec<crew_protocol::AttachedFile>,
     ) -> Result<(), String> {
-        let sent = self.steer_text(session_id, &from, text);
+        let typed = session::get(&self.store, session_id.to_string())
+            .ok()
+            .flatten()
+            .as_ref()
+            .and_then(driven)
+            .is_some_and(|drive| typed_by_user(drive, &from));
+        // Files go in the text, as a turn's do.
+        let paths: Vec<String> = files.iter().map(|file| file.path.clone()).collect();
+        let sent = crate::providers::with_files(self.steer_text(session_id, &from, text).trim(), &paths);
         let (thread, turn) = {
             let mut map = self.lock();
             let Some(Live::Codex(live)) = map.get_mut(session_id) else {
@@ -563,7 +573,7 @@ impl TurnHost {
                 return Err("No Codex turn is running to take it.".into());
             };
             // In before the request: its echo can beat the answer.
-            live.steers.push(Steer { sent: sent.clone(), text: text.to_string(), from, letter });
+            live.steers.push(Steer { sent: sent.clone(), text: text.to_string(), from, letter, files, typed });
             target
         };
         match self.codex_call(session_id, "turn/steer", steer_params(&thread, &turn, &sent), STEER_TIMEOUT) {
@@ -988,13 +998,7 @@ fn codex_item(live: &mut CodexLive, item: &Map<String, Value>, completed: bool, 
             };
             if let Some(at) = live.steers.iter().position(|steer| steer.sent.trim() == echo.trim()) {
                 let steer = live.steers.remove(at);
-                events.push(HarnessEvent::UserMessage {
-                    text: steer.text,
-                    hidden: None,
-                    files: None,
-                    from_bot: Some(steer.from),
-                    letter_id: steer.letter,
-                });
+                events.push(steer.read());
             }
         }
         "contextCompaction" if completed => {
