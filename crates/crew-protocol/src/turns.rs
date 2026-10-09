@@ -48,6 +48,17 @@ pub struct TurnStart {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional, type = "\"auto\" | \"steer\" | \"queue\"")]
     pub mode: Option<String>,
+    /// A provider command that opens the message, without its slash. The
+    /// message is that command and its arguments, so nothing else can precede
+    /// them in the turn's input.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub command: Option<String>,
+    /// The skills the message invokes, by name. The provider loads them ahead
+    /// of the text, so a skill is not only a word the model may or may not act on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub skills: Option<Vec<String>>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, TS)]
@@ -166,5 +177,26 @@ mod tests {
         );
         let plain = TurnStarted { working: false, delivery: None, letter_id: None };
         assert_eq!(serde_json::to_value(&plain).expect("json"), serde_json::json!({ "working": false }));
+    }
+
+    /// A turn from a client that predates commands reads them as absent, and
+    /// writes neither key back, so an old client's messages stay plain text.
+    #[test]
+    fn a_turn_start_without_a_command_or_skills_writes_neither() {
+        let raw = r#"{"sessionId":"s1","cwd":"/repo","text":"hi"}"#;
+        let turn: TurnStart = serde_json::from_str(raw).expect("turn");
+        assert_eq!(serde_json::to_string(&turn).expect("json"), raw);
+        assert_eq!((turn.command, turn.skills), (None, None));
+    }
+
+    /// A command and its skills go on the wire under camel-case names and
+    /// read back unchanged.
+    #[test]
+    fn a_turn_start_names_its_command_and_skills_in_camel_case() {
+        let raw = r#"{"sessionId":"s1","cwd":"/repo","text":"/review main","command":"review","skills":["lint"]}"#;
+        let turn: TurnStart = serde_json::from_str(raw).expect("turn");
+        assert_eq!(turn.command.as_deref(), Some("review"));
+        assert_eq!(turn.skills, Some(vec!["lint".to_string()]));
+        assert_eq!(serde_json::to_string(&turn).expect("json"), raw);
     }
 }

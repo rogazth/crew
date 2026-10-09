@@ -757,6 +757,8 @@ impl SessionTools {
             nonce: None,
             letter_id: Some(letter.id.clone()),
             mode: None,
+            command: None,
+            skills: None,
         }) {
             let _ = mailbox::dispose(&self.store, &letter.id);
             let _ = session::set_status(&self.store, row.id.clone(), "error".into());
@@ -2119,6 +2121,8 @@ while True:
                     nonce: None,
                     letter_id: None,
                     mode: None,
+                    command: None,
+                    skills: None,
                 })
                 .expect("start");
             w.settle(&bot.id);
@@ -2628,6 +2632,8 @@ while True:
                     nonce: None,
                     letter_id: None,
                     mode: None,
+                    command: None,
+                    skills: None,
                 })
                 .expect("start");
             w.settle(&bot.id);
@@ -3392,6 +3398,8 @@ while True:
             nonce: None,
             letter_id: None,
             mode: None,
+            command: None,
+            skills: None,
         });
         assert!(again.is_err_and(|e| e.contains("already running")));
         w.wait(&parent, &id, json!({}));
@@ -3717,6 +3725,8 @@ while True:
                 nonce: None,
                 letter_id: None,
                 mode: None,
+                command: None,
+                skills: None,
             })
             .expect("busy");
         for (n, kid) in kids.iter().enumerate() {
@@ -3819,6 +3829,8 @@ while True:
                     nonce: None,
                     letter_id: None,
                     mode: None,
+                    command: None,
+                    skills: None,
                 })
                 .expect("busy");
         }
@@ -4346,6 +4358,8 @@ while True:
                 nonce: None,
                 letter_id: Some("forged".into()),
                 mode: None,
+                command: None,
+                skills: None,
             })
             .expect("start");
         w.settle(&child);
@@ -4518,6 +4532,8 @@ while True:
                 nonce: None,
                 letter_id: None,
                 mode: None,
+                command: None,
+                skills: None,
             })
             .expect_err("a turn ran in the terminal view");
         assert!(refused.contains("terminal view"), "{refused}");
@@ -4721,6 +4737,8 @@ while True:
                     nonce: None,
                     letter_id: None,
                     mode: mode.map(str::to_string),
+                    command: None,
+                    skills: None,
                 })
                 .expect("start")
         }

@@ -245,6 +245,14 @@ fn left_running(hook: &Map<String, Value>, known: &[BackgroundCommand], now: i64
                 exit_code: None,
                 ended_at: None,
                 tool_call_id: None,
+                tokens: None,
+                window: None,
+                stoppable: None,
+                stop_note: None,
+                activity: None,
+                model: None,
+                foreground: None,
+                thread_id: None,
             })
         })
         .collect()

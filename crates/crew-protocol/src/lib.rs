@@ -4,6 +4,7 @@ use ts_rs::TS;
 
 mod background;
 mod blocks;
+mod commands;
 mod files;
 mod letters;
 mod messages;
@@ -12,6 +13,7 @@ mod sessions;
 mod turns;
 pub use background::*;
 pub use blocks::*;
+pub use commands::*;
 pub use files::*;
 pub use letters::*;
 pub use messages::*;

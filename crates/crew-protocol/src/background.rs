@@ -51,6 +51,57 @@ pub struct BackgroundCommand {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub tool_call_id: Option<String>,
+    /// Tokens it has used so far, for a subagent. Absent when the CLI does not
+    /// report them, so the panel shows nothing rather than a zero.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "number")]
+    pub tokens: Option<u64>,
+    /// The context window of its model, to show `tokens` as a share of it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "number")]
+    pub window: Option<u64>,
+    /// Whether it can be stopped on its own. Absent is unknown, which is not
+    /// the same as false: a row never offers a stop it cannot confirm.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub stoppable: Option<bool>,
+    /// Why it cannot be stopped alone, shown where the stop would be, such as
+    /// "stops with the turn".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub stop_note: Option<String>,
+    /// Its latest step, kept short: the tool it last used or the line it last
+    /// wrote. A running row shows this so it is not silent while it works.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub activity: Option<String>,
+    /// The model a subagent runs on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub model: Option<String>,
+    /// A subagent the turn is still waiting on, as opposed to one sent to the
+    /// background. A foreground one ends with the turn that started it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub foreground: Option<bool>,
+    /// The Codex child thread a subagent runs in, so a stop or a read can
+    /// address that thread rather than the parent's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub thread_id: Option<String>,
+}
+
+/// Clears a session's ended background commands from its list. Absent `ids`
+/// clears all of them; a running command is never cleared, since it would
+/// vanish from the list while its process still runs.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
+pub struct BackgroundClear {
+    pub session_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub ids: Option<Vec<String>>,
 }
 
 /// A session's background commands. Pushed as `background-changed` whenever
@@ -88,4 +139,68 @@ pub struct BackgroundOutput {
     pub output: String,
     /// Only the end of a longer output.
     pub truncated: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A command from a daemon that predates the panel reads its new fields as
+    /// unknown, and writes none of them back.
+    #[test]
+    fn a_background_command_without_the_panel_fields_reads_them_as_unknown() {
+        let raw = r#"{"id":"t1","command":"npm run dev","kind":"shell","startedAt":1,"state":"running"}"#;
+        let row: BackgroundCommand = serde_json::from_str(raw).expect("command");
+        assert_eq!(serde_json::to_string(&row).expect("json"), raw);
+        assert_eq!(
+            (row.tokens, row.window, row.stoppable, row.stop_note, row.activity),
+            (None, None, None, None, None)
+        );
+        assert_eq!((row.model, row.foreground, row.thread_id), (None, None, None));
+    }
+
+    /// A subagent with every panel field set names them in camel case and
+    /// reads back unchanged, a refused stop (`false`) included.
+    #[test]
+    fn a_background_subagent_round_trips_its_panel_fields() {
+        let row = BackgroundCommand {
+            id: "toolu_1".into(),
+            command: "Explore the parser".into(),
+            description: None,
+            kind: BackgroundKind::Subagent,
+            started_at: 1,
+            state: BackgroundState::Running,
+            exit_code: None,
+            ended_at: None,
+            tool_call_id: Some("toolu_1".into()),
+            tokens: Some(12_000),
+            window: Some(200_000),
+            stoppable: Some(false),
+            stop_note: Some("stops with the turn".into()),
+            activity: Some("Grep".into()),
+            model: Some("claude-haiku-5-5".into()),
+            foreground: Some(true),
+            thread_id: Some("th_child".into()),
+        };
+        let wire = serde_json::to_value(&row).expect("json");
+        assert_eq!(wire["tokens"], serde_json::json!(12_000));
+        assert_eq!(wire["stopNote"], serde_json::json!("stops with the turn"));
+        assert_eq!(wire["stoppable"], serde_json::json!(false));
+        assert_eq!(wire["threadId"], serde_json::json!("th_child"));
+        assert_eq!(serde_json::from_value::<BackgroundCommand>(wire).expect("command"), row);
+    }
+
+    /// Clearing without `ids` names no ids on the wire, and with them names
+    /// the ones to clear.
+    #[test]
+    fn a_background_clear_names_its_ids_only_when_given() {
+        let all: BackgroundClear = serde_json::from_str(r#"{"sessionId":"s1"}"#).expect("clear");
+        assert_eq!(all.ids, None);
+        assert_eq!(serde_json::to_string(&all).expect("json"), r#"{"sessionId":"s1"}"#);
+        let some = BackgroundClear { session_id: "s1".into(), ids: Some(vec!["t1".into()]) };
+        assert_eq!(
+            serde_json::to_value(&some).expect("json"),
+            serde_json::json!({ "sessionId": "s1", "ids": ["t1"] })
+        );
+    }
 }

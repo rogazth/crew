@@ -251,6 +251,8 @@ impl Scheduler {
             nonce: None,
             letter_id: None,
             mode: None,
+            command: None,
+            skills: None,
         });
         if started_turn.is_err() {
             self.finish(&row.routine.id, &run, RunStatus::Error);

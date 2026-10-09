@@ -1948,6 +1948,8 @@ impl TurnHost {
                 nonce: None,
                 letter_id: None,
                 mode: None,
+                command: None,
+                skills: None,
             },
             letters.clone(),
         );
@@ -2204,6 +2206,8 @@ impl TurnHost {
                 nonce: None,
                 letter_id: letter,
                 mode: None,
+                command: None,
+                skills: None,
             });
             if let Err(error) = started {
                 self.transcripts.apply(&row.id, HarnessEvent::SessionError { message: error.clone() });
@@ -3895,6 +3899,8 @@ print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type
                 nonce: None,
                 letter_id: None,
                 mode: None,
+                command: None,
+                skills: None,
             })
             .expect("start");
         settle(world, &session.id);
@@ -3934,6 +3940,8 @@ print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type
                 nonce: None,
                 letter_id: None,
                 mode: None,
+                command: None,
+                skills: None,
             })
             .expect("start");
         // The watchdog's own timeout is two minutes; this asserts it is armed,
@@ -4144,6 +4152,8 @@ print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type
                 nonce: None,
                 letter_id: None,
                 mode: None,
+                command: None,
+                skills: None,
             })
             .expect("start");
         std::thread::sleep(std::time::Duration::from_millis(300));

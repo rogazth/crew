@@ -18,6 +18,13 @@ export type AttachedFileKind = "image" | "file";
 export type Auth = { auth: string, };
 
 /**
+ * Clears a session's ended background commands from its list. Absent `ids`
+ * clears all of them; a running command is never cleared, since it would
+ * vanish from the list while its process still runs.
+ */
+export type BackgroundClear = { sessionId: string, ids?: Array<string>, };
+
+/**
  * One command left running in the background, running or ended.
  */
 export type BackgroundCommand = { 
@@ -36,7 +43,45 @@ description?: string, kind: BackgroundKind, startedAt: number, state: Background
 /**
  * The tool call that started it: where the transcript marks it.
  */
-toolCallId?: string, };
+toolCallId?: string, 
+/**
+ * Tokens it has used so far, for a subagent. Absent when the CLI does not
+ * report them, so the panel shows nothing rather than a zero.
+ */
+tokens?: number, 
+/**
+ * The context window of its model, to show `tokens` as a share of it.
+ */
+window?: number, 
+/**
+ * Whether it can be stopped on its own. Absent is unknown, which is not
+ * the same as false: a row never offers a stop it cannot confirm.
+ */
+stoppable?: boolean, 
+/**
+ * Why it cannot be stopped alone, shown where the stop would be, such as
+ * "stops with the turn".
+ */
+stopNote?: string, 
+/**
+ * Its latest step, kept short: the tool it last used or the line it last
+ * wrote. A running row shows this so it is not silent while it works.
+ */
+activity?: string, 
+/**
+ * The model a subagent runs on.
+ */
+model?: string, 
+/**
+ * A subagent the turn is still waiting on, as opposed to one sent to the
+ * background. A foreground one ends with the turn that started it.
+ */
+foreground?: boolean, 
+/**
+ * The Codex child thread a subagent runs in, so a stop or a read can
+ * address that thread rather than the parent's.
+ */
+threadId?: string, };
 
 export type BackgroundKind = "shell" | "monitor" | "subagent";
 
@@ -174,6 +219,60 @@ export type BrowserTabArg = { tab: string, };
  * A browser tool run as the user, from the window or `crew`.
  */
 export type BrowserToolRun = { workspaceId: string, tool: string, args: unknown, };
+
+/**
+ * A session's `/` menu as it stood when it was read.
+ */
+export type CommandCatalog = { entries: Array<CommandEntry>, 
+/**
+ * When it was read, in milliseconds. A menu read before the last reload
+ * may be out of date, and the time is how the reader can tell.
+ */
+at: number, };
+
+/**
+ * One entry of the `/` menu.
+ */
+export type CommandEntry = { 
+/**
+ * What the user types after the slash, without it.
+ */
+name: string, description: string, 
+/**
+ * What the command takes after its name, shown as a hint: `<file>`.
+ */
+argumentHint?: string, 
+/**
+ * Other names that run the same entry.
+ */
+aliases?: Array<string>, 
+/**
+ * `command` (a provider's own), `skill` (one the model can invoke), or
+ * `crew` (an action Crew performs itself, so no provider sees it).
+ */
+kind: "command" | "skill" | "crew", 
+/**
+ * Where a skill is defined on disk. Codex needs it to name the skill as
+ * an input item, so it is kept for every skill the catalog reads.
+ */
+path?: string, };
+
+/**
+ * Pushed as `commands-changed` when a session's catalog changes. It carries
+ * the whole catalog, so the client replaces its copy rather than merging.
+ */
+export type CommandsChanged = { sessionId: string, catalog: CommandCatalog, };
+
+/**
+ * Asks for a session's catalog. Answered from the cache, without a reload.
+ */
+export type CommandsList = { sessionId: string, };
+
+/**
+ * Asks the provider to read its commands and skills again, for files that
+ * changed on disk since the session started.
+ */
+export type CommandsReload = { sessionId: string, };
 
 /**
  * How full a session's context window is, as its CLI last reported it.
@@ -978,6 +1077,12 @@ export type SessionOptions = { id: string, model: string, effort: string,
  */
 serviceTier: string, autonomy: string, };
 
+/**
+ * Ends a session's CLI process so the next message starts it again. The
+ * conversation is kept: the next turn resumes it by its provider id.
+ */
+export type SessionRestart = { sessionId: string, };
+
 export type SessionStatusEvent = { sessionId: string, status: string, providerSessionId?: string, updatedAt: number, };
 
 /**
@@ -1224,7 +1329,18 @@ letterId?: string,
  * decides). Absent is `auto`, and a message sent to an idle session
  * starts a turn whatever it says.
  */
-mode?: "auto" | "steer" | "queue", };
+mode?: "auto" | "steer" | "queue", 
+/**
+ * A provider command that opens the message, without its slash. The
+ * message is that command and its arguments, so nothing else can precede
+ * them in the turn's input.
+ */
+command?: string, 
+/**
+ * The skills the message invokes, by name. The provider loads them ahead
+ * of the text, so a skill is not only a word the model may or may not act on.
+ */
+skills?: Array<string>, };
 
 export type TurnStarted = { working: boolean, 
 /**

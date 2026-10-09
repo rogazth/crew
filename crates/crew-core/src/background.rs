@@ -251,6 +251,14 @@ impl Board {
                     exit_code: None,
                     ended_at: None,
                     tool_call_id: tool_use_id.map(str::to_string),
+                    tokens: None,
+                    window: None,
+                    stoppable: None,
+                    stop_note: None,
+                    activity: None,
+                    model: None,
+                    foreground: None,
+                    thread_id: None,
                 };
                 if flag(rec, "is_backgrounded") {
                     self.add(row)
@@ -327,6 +335,14 @@ impl Board {
                                 exit_code: None,
                                 ended_at: None,
                                 tool_call_id: None,
+                                tokens: None,
+                                window: None,
+                                stoppable: None,
+                                stop_note: None,
+                                activity: None,
+                                model: None,
+                                foreground: None,
+                                thread_id: None,
                             }
                         }
                     };
@@ -456,6 +472,14 @@ impl Board {
                 exit_code: None,
                 ended_at: None,
                 tool_call_id: Some(id.to_string()),
+                tokens: None,
+                window: None,
+                stoppable: None,
+                stop_note: None,
+                activity: None,
+                model: None,
+                foreground: None,
+                thread_id: None,
             });
         }
         let gone: Vec<String> = self
