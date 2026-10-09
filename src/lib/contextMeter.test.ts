@@ -40,6 +40,13 @@ describe("the reading a new one makes", () => {
   });
 });
 
+describe("a token count", () => {
+  it("reads in thousands, and in millions from a million on", async () => {
+    const { tokenCount } = await meter();
+    expect([41_400, 999_499, 1_000_000, 1_250_000].map(tokenCount)).toEqual(["41k", "999k", "1M", "1.3M"]);
+  });
+});
+
 describe("the store", () => {
   it("keeps the newest reading heard for a session", async () => {
     const { subscribeContext, readContext } = await meter();

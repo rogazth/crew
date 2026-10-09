@@ -120,7 +120,6 @@ export function ModelPicker({ provider, model, trigger = "field", disabled = fal
         >
           <ProviderIcon provider={provider} className="size-3.5" />
           <span className="min-w-0 max-w-[140px] truncate">{modelLabel(provider, model)}</span>
-          <ChevronDownIcon className="size-3 shrink-0 text-icon" />
         </Popover.Trigger>
       ) : (
         <Popover.Trigger className="flex h-8 w-full items-center gap-2 rounded-lg bg-canvas px-2.5 text-text ring ring-border outline-none transition-[box-shadow] hover:ring-border-strong focus-visible:ring-[1.5px] focus-visible:ring-focus/50 data-popup-open:ring-[1.5px] data-popup-open:ring-focus/50">

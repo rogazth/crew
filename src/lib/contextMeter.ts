@@ -76,6 +76,10 @@ export function readContext(id: string): ContextReading | null {
   return readings.get(id) ?? null;
 }
 
+/** Tokens the way the meter says them: 41k, 1.2M. */
+export const tokenCount = (n: number) =>
+  n >= 1_000_000 ? `${(n / 1_000_000).toFixed(n % 1_000_000 ? 1 : 0)}M` : `${Math.round(n / 1000)}k`;
+
 /** A session's context reading, as the daemon last said; null until it has one. */
 export function useContextMeter(sessionId: string | null): ContextReading | null {
   const subscribe = useCallback(

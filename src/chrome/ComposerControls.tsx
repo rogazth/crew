@@ -35,7 +35,7 @@ type Props = {
   lockProvider?: boolean;
 };
 
-/** The composer's model, effort, speed and access chips, the same in Home and in a chat. */
+/** The composer's model, effort, speed and access chips, the same in Home and in a chat. A chip opens its menu itself: no chevron. */
 export function ModelControls({ value, onChange, lockProvider = false }: Props) {
   useListedModels(value.provider);
   const fitted = fitChoice(value);
@@ -102,7 +102,6 @@ function SpeedControl({ value, onChange }: { value: AgentChoice; onChange: (next
         <Menu.Trigger aria-label="Speed" title="How quickly this model is served" className={CHIP}>
           <GaugeIcon className="size-3.5 shrink-0 text-icon" />
           <span className="truncate">{label}</span>
-          <ChevronDownIcon className="size-3 shrink-0 text-icon" />
         </Menu.Trigger>
         <Menu.Portal>
           <Menu.Positioner side="top" align="start" sideOffset={4} className="z-50">
@@ -163,7 +162,6 @@ export function EffortPicker({
       <Menu.Trigger aria-label="Effort" title="How hard the model thinks" className={CHIP}>
         <BrainIcon className="size-3.5 shrink-0 text-icon" />
         <span className="truncate">{value ? EFFORT_LABELS[value] : "Effort"}</span>
-        <ChevronDownIcon className="size-3 shrink-0 text-icon" />
       </Menu.Trigger>
       <Menu.Portal>
         <Menu.Positioner side="top" align="start" sideOffset={4} className="z-50">
@@ -211,7 +209,6 @@ export function AccessPicker({
         <Menu.Trigger aria-label="Access" title={current.description} className={CHIP}>
           <Glyph className="size-3.5 shrink-0 text-icon" />
           <span className="truncate">{current.label}</span>
-          <ChevronDownIcon className="size-3 shrink-0 text-icon" />
         </Menu.Trigger>
       ) : (
         <Menu.Trigger aria-label="Access" className={FIELD}>

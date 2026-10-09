@@ -9,7 +9,7 @@ import {
   type KeyboardEvent,
   type Ref,
 } from "react";
-import { ArrowUpIcon, PaperclipIcon, SquareIcon } from "lucide-react";
+import { ArrowUpIcon, ListOrderedIcon, PaperclipIcon, SquareIcon } from "lucide-react";
 import { AccessPicker, ModelControls } from "../../chrome/ComposerControls";
 import type { AttachedFile } from "../../lib/blocks";
 import { accessesOf, type Access, type AgentChoice, type Effort, type ProviderId } from "../../lib/providers";
@@ -17,6 +17,7 @@ import { nextAccess } from "../../lib/sessionOptions";
 import { completeMention, mentionAt, searchFiles, splitMentions } from "../../lib/mentions";
 import type { ProjectFile, Session } from "../../lib/types";
 import { AttachmentStrip } from "./Attachments";
+import { ContextMeter } from "./ContextMeter";
 import { useChatActions } from "./context";
 import { MentionPicker } from "./MentionPicker";
 
@@ -38,6 +39,12 @@ type Props = {
   onRemoveFile: (path: string) => void;
   onSend: () => void;
   onStop: () => void;
+  /**
+   * What a message sent while a turn runs becomes: `steer` goes into the
+   * running turn, `queue` waits for it to end. Absent, nothing is sent until
+   * the turn ends.
+   */
+  whileWorking?: "steer" | "queue";
   /** The chips changed; absent, the composer has none. */
   onOptions?: (next: AgentChoice) => void;
   /** A change the next message carries to the CLI by relaunching it. */
@@ -73,6 +80,7 @@ export function Composer({
   onRemoveFile,
   onSend,
   onStop,
+  whileWorking,
   onOptions,
   optionsPending = false,
   switchProvider = false,
@@ -81,7 +89,7 @@ export function Composer({
   const overlay = useRef<HTMLDivElement>(null);
   useImperativeHandle(ref, () => field.current as HTMLTextAreaElement);
   const { files: projectFiles } = useChatActions();
-  const canSend = ready && (draft.trim().length > 0 || files.length > 0) && !working;
+  const canSend = ready && (draft.trim().length > 0 || files.length > 0) && (!working || whileWorking !== undefined);
 
   // The caret is what decides whether an `@` is being typed; it moves without the text changing.
   const [cursor, setCursor] = useState(0);
@@ -123,8 +131,7 @@ export function Composer({
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    if (working) onStop();
-    else if (canSend) onSend();
+    if (canSend) onSend();
   };
 
   const onPaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
@@ -160,11 +167,18 @@ export function Composer({
       if (next) onOptions({ ...choiceOf(session), access: next });
       return;
     }
+    // Stopping is its own act: Esc or the Stop button, never Enter.
+    if (event.key === "Escape" && working) {
+      event.preventDefault();
+      onStop();
+      return;
+    }
     if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
     event.preventDefault();
-    if (working) onStop();
-    else if (canSend) onSend();
+    if (canSend) onSend();
   };
+
+  const sendLabel = !working ? "Send" : whileWorking === "steer" ? "Add to the running turn" : "Queue for the next turn";
 
   return (
     <div className={`mx-auto w-full max-w-[760px] shrink-0 px-6 ${centered ? "py-3" : "pb-3"}`}>
@@ -198,7 +212,11 @@ export function Composer({
               waiting
                 ? `${session.name} is waiting on you — answer above`
                 : working
-                  ? `${session.name} is working — ↵ stops it`
+                  ? whileWorking === "steer"
+                    ? `${session.name} is working — ↵ adds this to the running turn`
+                    : whileWorking === "queue"
+                      ? `${session.name} is working — ↵ queues this for the next turn`
+                      : `${session.name} is working — esc stops it`
                   : `Ask ${session.name} anything — @ to mention a file`
             }
             spellCheck={false}
@@ -241,35 +259,63 @@ export function Composer({
                 hint="⇧Tab in the message box cycles them."
               />
             )}
+            {working && (
+              <button
+                type="button"
+                onClick={onStop}
+                title="Stop the turn (esc)"
+                className="flex h-[30px] shrink-0 items-center gap-1.5 rounded-full px-2.5 text-[12px] text-text-muted ring-1 ring-hairline transition-colors duration-100 hover:bg-hover hover:text-text focus-visible:ring-[1.5px] focus-visible:ring-focus/50 focus-visible:outline-none"
+              >
+                <SquareIcon className="size-2.5 fill-current" />
+                Stop
+              </button>
+            )}
             <button
               type="submit"
-              disabled={!working && !canSend}
-              aria-label={working ? "Stop" : "Send"}
+              disabled={!canSend}
+              aria-label={sendLabel}
+              title={sendLabel}
               className={`flex size-[30px] shrink-0 items-center justify-center rounded-full transition-colors duration-100 focus-visible:ring-[1.5px] focus-visible:ring-focus/50 focus-visible:outline-none ${
-                working || canSend
-                  ? "crew-ink hover:bg-accent-hover"
-                  : "bg-card text-text-muted"
+                canSend ? "crew-ink hover:bg-accent-hover" : "bg-card text-text-muted"
               }`}
             >
-              {working ? <SquareIcon className="size-2.5 fill-current" /> : <ArrowUpIcon className="size-4" />}
+              {working && whileWorking === "queue" ? <ListOrderedIcon className="size-4" /> : <ArrowUpIcon className="size-4" />}
             </button>
           </div>
         </div>
       </form>
-      <p className="mt-2 text-center text-[11px] text-placeholder">
-        {optionsPending ? (
-          <>The new settings apply with your next message, which restarts {session.name} where it left off</>
-        ) : (
-          <>
-            <kbd className="font-sans">↵</kbd> send · <kbd className="font-sans">⇧↵</kbd> new line · @ file · drop or paste to attach
-            {onOptions && (
-              <>
-                {" "}· <kbd className="font-sans">⇧⇥</kbd> access
-              </>
-            )}
-          </>
-        )}
-      </p>
+      <div className="mt-1.5 flex min-h-6 items-center gap-2 px-1 text-[11.5px]">
+        <ContextMeter sessionId={session.id} provider={session.provider} />
+        <span className="flex-1" />
+        <span className="truncate text-placeholder">
+          {optionsPending ? (
+            <>The new settings apply with your next message, which restarts {session.name} where it left off</>
+          ) : working ? (
+            <>
+              <kbd className="font-sans">esc</kbd> stop
+              {whileWorking === "steer" && (
+                <>
+                  {" "}· <kbd className="font-sans">↵</kbd> add to the turn
+                </>
+              )}
+              {whileWorking === "queue" && (
+                <>
+                  {" "}· <kbd className="font-sans">↵</kbd> queue
+                </>
+              )}
+            </>
+          ) : (
+            <>
+              <kbd className="font-sans">↵</kbd> send · <kbd className="font-sans">⇧↵</kbd> new line · @ file
+              {onOptions && (
+                <>
+                  {" "}· <kbd className="font-sans">⇧⇥</kbd> access
+                </>
+              )}
+            </>
+          )}
+        </span>
+      </div>
     </div>
   );
 }
