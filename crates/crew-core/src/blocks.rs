@@ -396,6 +396,7 @@ pub fn apply_event(blocks: Vec<Block>, event: HarnessEvent) -> Vec<Block> {
             next
         }
         HarnessEvent::SessionStarted {} | HarnessEvent::SessionProviderBound { .. } => blocks,
+        HarnessEvent::ContextUpdated { .. } => blocks,
     }
 }
 

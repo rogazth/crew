@@ -175,6 +175,11 @@ export type BrowserTabArg = { tab: string, };
  */
 export type BrowserToolRun = { workspaceId: string, tool: string, args: unknown, };
 
+/**
+ * How full a session's context window is, as its CLI last reported it.
+ */
+export type ContextReading = { used: number, window?: number, autoCompactAt?: number, };
+
 export type CookieRead = { cookies: Array<ImportedCookie>, 
 /**
  * Rows left out: expired, undecryptable, or partitioned.
@@ -260,7 +265,7 @@ export type HarnessEvent = { "type": "session.started", } | { "type": "session.e
 /**
  * Its report, when it came this way rather than as the call's result.
  */
-output?: string, background?: boolean, } | { "type": "approval.requested", requestId: number, name: string, title: string, input?: Record<string, unknown>, } | { "type": "approval.resolved", requestId: number, decision: ApprovalResolution, } | { "type": "question.requested", requestId: number, questions: Array<Question>, } | { "type": "question.resolved", requestId: number, answers: { [key in string]: string } | null, };
+output?: string, background?: boolean, } | { "type": "approval.requested", requestId: number, name: string, title: string, input?: Record<string, unknown>, } | { "type": "approval.resolved", requestId: number, decision: ApprovalResolution, } | { "type": "question.requested", requestId: number, questions: Array<Question>, } | { "type": "question.resolved", requestId: number, answers: { [key in string]: string } | null, } | { "type": "context.updated", used: number, window?: number, autoCompactAt?: number, };
 
 /**
  * The daemon's first message after a good `auth`, sent as the `hello` event.

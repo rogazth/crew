@@ -560,6 +560,21 @@ pub struct Block {
     pub letter_id: Option<String>,
 }
 
+/// How full a session's context window is, as its CLI last reported it.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
+pub struct ContextReading {
+    #[ts(type = "number")]
+    pub used: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "number")]
+    pub window: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "number")]
+    pub auto_compact_at: Option<u64>,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, TS)]
 #[serde(tag = "type")]
 #[ts(export, export_to = "../../../src/lib/protocol.ts", tag = "type")]
@@ -733,6 +748,22 @@ pub enum HarnessEvent {
         request_id: u64,
         answers: Option<HashMap<String, String>>,
     },
+    /// How full the agent's context window is, live. Kept apart from a turn's
+    /// usage, which is billing: the newest reading replaces the last, and a
+    /// reading without a window keeps the last window. `used` counts input,
+    /// cache and output.
+    #[serde(rename = "context.updated")]
+    #[ts(rename = "context.updated")]
+    ContextUpdated {
+        #[ts(type = "number")]
+        used: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional, type = "number")]
+        window: Option<u64>,
+        #[serde(default, rename = "autoCompactAt", skip_serializing_if = "Option::is_none")]
+        #[ts(optional, type = "number", rename = "autoCompactAt")]
+        auto_compact_at: Option<u64>,
+    },
 }
 
 #[cfg(test)]
@@ -777,5 +808,17 @@ mod tests {
             output: None,
         };
         assert_eq!(detail.summary(), "git status");
+    }
+
+    #[test]
+    fn a_context_update_leaves_out_the_window_it_does_not_have() {
+        let event = HarnessEvent::ContextUpdated {
+            used: 12,
+            window: None,
+            auto_compact_at: Some(180_000),
+        };
+        let wire = serde_json::to_value(&event).unwrap();
+        assert_eq!(wire, serde_json::json!({ "type": "context.updated", "used": 12, "autoCompactAt": 180000 }));
+        assert_eq!(serde_json::from_value::<HarnessEvent>(wire).unwrap(), event);
     }
 }

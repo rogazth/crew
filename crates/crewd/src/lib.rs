@@ -1910,6 +1910,10 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
             block(move || turns.background_stop(&session_id, &id)).await?;
             Ok(Value::Null)
         }
+        "session_context" => {
+            let SessionId { session_id } = parse(params)?;
+            json(hosts.turns.context(&session_id))
+        }
         "turn_stop" => {
             let SessionId { session_id } = parse(params)?;
             let turns = hosts.turns.clone();

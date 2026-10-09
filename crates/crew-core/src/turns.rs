@@ -8,7 +8,7 @@ use std::time::Duration;
 use tokio::sync::oneshot;
 
 use crew_protocol::{
-    ApprovalDecision, ApprovalResolution, HarnessEvent, ToolStatus, TurnStart, TurnStarted, TurnUsage,
+    ApprovalDecision, ApprovalResolution, ContextReading, HarnessEvent, ToolStatus, TurnStart, TurnStarted, TurnUsage,
 };
 use serde_json::{json, Map, Value};
 
@@ -275,6 +275,8 @@ pub struct TurnHost {
     running: Arc<Mutex<HashSet<String>>>,
     /// What each session's turn left running in the background.
     background: crate::background::BackgroundHost,
+    /// The newest context reading of each session, merged as they come.
+    contexts: Arc<Mutex<HashMap<String, ContextReading>>>,
 }
 
 impl TurnHost {
@@ -294,6 +296,7 @@ impl TurnHost {
             exiting: Arc::new(Mutex::new(HashMap::new())),
             running: Arc::new(Mutex::new(HashSet::new())),
             background: crate::background::BackgroundHost::default(),
+            contexts: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -569,6 +572,27 @@ impl TurnHost {
     /// What a session's turn left running in the background.
     pub fn background_list(&self, session_id: &str) -> crew_protocol::BackgroundList {
         self.background.list(session_id)
+    }
+
+    /// The session's newest context reading, if one came.
+    pub fn context(&self, session_id: &str) -> Option<ContextReading> {
+        self.contexts.lock().unwrap_or_else(|e| e.into_inner()).get(session_id).cloned()
+    }
+
+    /// Keeps a reading as the session's newest and returns the merged one: a
+    /// reading without a window keeps the last window and auto-compact point.
+    pub fn record_context(&self, session_id: &str, reading: ContextReading) -> ContextReading {
+        let mut contexts = self.contexts.lock().unwrap_or_else(|e| e.into_inner());
+        let merged = match (contexts.get(session_id), reading.window) {
+            (Some(last), None) => ContextReading {
+                used: reading.used,
+                window: last.window,
+                auto_compact_at: last.auto_compact_at,
+            },
+            _ => reading,
+        };
+        contexts.insert(session_id.to_string(), merged.clone());
+        merged
     }
 
     /// The end of a background command's output: asked of the CLI while it
@@ -3230,5 +3254,45 @@ print(json.dumps({{"type":"step_finish","sessionID":sid,"part":{{"id":"s1","type
             _ => None,
         }));
         assert_eq!(asked, vec!["Bash".to_string()]);
+    }
+}
+
+#[cfg(test)]
+mod context_tests {
+    use super::*;
+
+    fn reading(used: u64, window: Option<u64>, auto_compact_at: Option<u64>) -> ContextReading {
+        ContextReading { used, window, auto_compact_at }
+    }
+
+    #[test]
+    fn a_session_without_a_reading_has_no_context() {
+        assert_eq!(TurnHost::test_new().context("s1"), None);
+    }
+
+    #[test]
+    fn a_reading_without_a_window_keeps_the_last_window_and_compact_point() {
+        let host = TurnHost::test_new();
+        host.record_context("s1", reading(10, Some(200_000), Some(180_000)));
+        let merged = host.record_context("s1", reading(40, None, None));
+        assert_eq!(merged, reading(40, Some(200_000), Some(180_000)));
+        assert_eq!(host.context("s1"), Some(merged));
+    }
+
+    #[test]
+    fn a_reading_with_a_window_replaces_the_last_one() {
+        let host = TurnHost::test_new();
+        host.record_context("s1", reading(10, Some(200_000), Some(180_000)));
+        let merged = host.record_context("s1", reading(40, Some(1_000_000), None));
+        assert_eq!(merged, reading(40, Some(1_000_000), None));
+    }
+
+    #[test]
+    fn each_session_keeps_its_own_reading() {
+        let host = TurnHost::test_new();
+        host.record_context("s1", reading(10, Some(200_000), None));
+        host.record_context("s2", reading(20, None, None));
+        assert_eq!(host.context("s1"), Some(reading(10, Some(200_000), None)));
+        assert_eq!(host.context("s2"), Some(reading(20, None, None)));
     }
 }
