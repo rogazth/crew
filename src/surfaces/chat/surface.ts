@@ -2,6 +2,7 @@ import type { ReactNode, RefObject } from "react";
 import type { Answers, ApprovalDecision, AttachedFile, Block } from "../../lib/blocks";
 import type { AgentChoice } from "../../lib/providers";
 import type { Session } from "../../lib/types";
+import type { PanelScope } from "./Panel";
 import type { QueueScope } from "./Queue";
 
 /** The contract the chat surface renders; TurnChat owns the state behind it. */
@@ -35,6 +36,8 @@ export type ChatSurfaceProps = {
   whileWorking?: "steer" | "queue";
   /** The user's messages still in the box, above the composer. */
   queue?: QueueScope;
+  /** The session's background work, in the composer's status line. */
+  work?: PanelScope;
   /** Nothing to show yet, and no intro either: the conversation is still being read. */
   loading?: boolean;
   /** The composer's model, effort and access chips changed. Absent: no chips. */
@@ -45,8 +48,6 @@ export type ChatSurfaceProps = {
   optionsPending?: boolean;
   /** Over the chat: its sessions, whose it is, its conversations. */
   bar?: ReactNode;
-  /** Drawn over the transcript and the composer: a pair's thread, a command's output. */
+  /** Drawn over the transcript and the composer: a pair's thread, a background entry. */
   overlay?: ReactNode;
-  /** Above the composer: what the turn left running in the background. */
-  tray?: ReactNode;
 };

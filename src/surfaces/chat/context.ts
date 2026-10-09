@@ -1,5 +1,6 @@
 import { createContext, useContext } from "react";
 import type { Party, ThreadRef } from "../../lib/letters";
+import type { Process } from "../../lib/processes";
 import type { BackgroundCommand } from "../../lib/protocol";
 import type { ProjectFile, Session } from "../../lib/types";
 
@@ -11,12 +12,18 @@ export type ChatActions = {
   openSession: (sessionId: string) => void;
   /** The workspace index, for `@` mentions. */
   files: ProjectFile[];
+  /** The workspace's commands, whose runs a session started are in its background panel. */
+  processes: readonly Process[];
+  /** A command's run in a tab of its worktree's strip. */
+  openProcessRun: (process: Process, worktree: string | null) => void;
 };
 
 export const ChatContext = createContext<ChatActions>({
   openPath: () => undefined,
   openSession: () => undefined,
   files: [],
+  processes: [],
+  openProcessRun: () => undefined,
 });
 
 export function useChatActions(): ChatActions {
@@ -48,8 +55,8 @@ export function useLetterScope(): LetterScope {
 
 /**
  * The background commands a chat's transcript marks, by the tool call that
- * started each, and the way into one's output. Empty: no markers, the calls
- * draw as the tool rows they are.
+ * started each, and the way into one's page in the background panel. Empty:
+ * no markers, the calls draw as the tool rows they are.
  */
 export type BackgroundScope = {
   calls: ReadonlyMap<string, BackgroundCommand>;

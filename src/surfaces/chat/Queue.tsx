@@ -48,10 +48,20 @@ export function QueueChips({ queue }: { queue: QueueScope }) {
 /**
  * The status line's "N waiting", and the sheet it opens over the composer.
  * A click outside the sheet closes it; Esc is left to the composer, which
- * stops the turn with it.
+ * stops the turn with it. The composer owns whether it is open: only one
+ * sheet is open at a time.
  */
-export function QueueSegment({ queue, working }: { queue: QueueScope; working: boolean }) {
-  const [open, setOpen] = useState(false);
+export function QueueSegment({
+  queue,
+  working,
+  open,
+  onOpenChange,
+}: {
+  queue: QueueScope;
+  working: boolean;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
   const sheet = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
   const shown = open && queue.items.length > 0;
@@ -61,18 +71,18 @@ export function QueueSegment({ queue, working }: { queue: QueueScope; working: b
     const down = (event: MouseEvent) => {
       const target = event.target as Node;
       if (sheet.current?.contains(target) || trigger.current?.contains(target)) return;
-      setOpen(false);
+      onOpenChange(false);
     };
     document.addEventListener("mousedown", down);
     return () => document.removeEventListener("mousedown", down);
-  }, [shown]);
+  }, [shown, onOpenChange]);
 
   return (
     <>
       <button
         ref={trigger}
         type="button"
-        onClick={() => setOpen((was) => !was)}
+        onClick={() => onOpenChange(!open)}
         className="flex h-6 items-center gap-1.5 rounded-md px-1.5 text-text-muted transition-colors hover:bg-hover hover:text-text"
       >
         {queue.items.filter((message) => !message.steering).length} waiting

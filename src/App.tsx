@@ -55,6 +55,10 @@ import { WorkspacePanes } from "./surfaces/WorkspacePanes";
 import { HomeStart } from "./surfaces/HomeStart";
 import { HomeActions, TourFoot } from "./chrome/HomePanel";
 import { useTour } from "./hooks/useTour";
+import type { Process } from "./lib/processes";
+
+/** Until the workspace's commands have loaded: one list, so the chats do not redraw. */
+const NO_PROCESSES: Process[] = [];
 
 /**
  * Pages take over the main area; only settings swaps the sidebar too. They stack over
@@ -523,6 +527,8 @@ export function App() {
                 nav.openBrowser(url);
                 if (history?.kind === "stub" && history.stub === "history") tabs.close(history.id);
               }}
+              processes={processes.processes ?? NO_PROCESSES}
+              onOpenProcessRun={nav.openProcessRun}
             />
             {explorer.open && treePath && explorerWidth.width !== null && (
               <Explorer

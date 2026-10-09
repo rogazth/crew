@@ -6,7 +6,7 @@ import type { Session } from "./types";
 
 /**
  * What each session's turn left running in the background (plan §7e.10): the
- * tray above the composer, the marker where a command started, the count on
+ * panel under the composer, the marker where a command started, the count on
  * the tab. The daemon pushes `background-changed`; this keeps the latest per
  * session, read the first time a view asks.
  */
@@ -66,14 +66,6 @@ export function readBackground(id: string): BackgroundList | null {
 // ——— What the views derive ————————————————————————————————————————————————
 
 export const isRunning = (command: BackgroundCommand) => command.state === "running";
-
-/** The tray's folded line: "2 running · 1 finished", or "nothing running". */
-export function traySummary(commands: readonly BackgroundCommand[]): string {
-  const running = commands.filter(isRunning).length;
-  const finished = commands.length - running;
-  const head = running > 0 ? `${running} running` : "nothing running";
-  return finished > 0 ? `${head} · ${finished} finished` : head;
-}
 
 /**
  * What the tray of a turn Crew drives lists: every entry of the session,

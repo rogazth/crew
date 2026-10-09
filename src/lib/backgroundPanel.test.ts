@@ -1,5 +1,19 @@
 import { describe, expect, it } from "vitest";
-import { panelEntries, panelSummary, stoppableOf, type PanelEntry, type PanelKind, type PanelState } from "./backgroundPanel";
+import {
+  clearedKey,
+  entryDetail,
+  finishedKeys,
+  panelEntries,
+  panelSummary,
+  stepCursor,
+  stoppableOf,
+  tokensLabel,
+  tokensTitle,
+  visibleEntries,
+  type PanelEntry,
+  type PanelKind,
+  type PanelState,
+} from "./backgroundPanel";
 import type { BackgroundCommand, BackgroundList, Process, ProcessRun } from "./protocol";
 import type { Session } from "./types";
 
@@ -262,5 +276,70 @@ describe("stoppability", () => {
     const stoppable = Object.fromEntries(panelEntries(null, [], processes, "s1").map((e) => [e.title, e.stoppable]));
 
     expect(stoppable).toEqual({ "Process up": true, "Process down": false });
+  });
+});
+
+describe("what a row says", () => {
+  const ended = (patch: Partial<PanelEntry>): PanelEntry => ({ ...entry("shell", "done"), startedAt: 1000, ...patch });
+
+  it("says the kind and how long it has run", () => {
+    expect(entryDetail(ended({ state: "running", kind: "agent" }), 1000 + 192_000)).toBe("Subagent · 3m 12s");
+    expect(entryDetail(ended({ state: "running", kind: "crew" }), 1000 + 9_000)).toBe("Crew subagent · 9s");
+  });
+
+  it("says how it ended and after how long, with the reason when there is one", () => {
+    expect(entryDetail(ended({ endedAt: 1000 + 61_000 }), 0)).toBe("Shell · done after 1m 1s");
+    expect(entryDetail(ended({ state: "failed", endedAt: 1000 + 4_000 }), 0)).toBe("Shell · failed after 4s");
+    expect(entryDetail(ended({ state: "stopped", kind: "crew", endedAt: 1000 + 4_000, stopNote: "its CLI exited" }), 0)).toBe(
+      "Crew subagent · stopped after 4s · its CLI exited",
+    );
+  });
+
+  it("names only the state of an ended entry whose source never says when", () => {
+    expect(entryDetail(ended({ kind: "process", state: "stopped" }), 5_000_000)).toBe("Process · stopped");
+  });
+
+  it("says tokens only when the source counts some", () => {
+    expect(tokensLabel(ended({ tokens: 41_200 }))).toBe("41k tokens");
+    expect(tokensLabel(ended({ tokens: 0 }))).toBeNull();
+    expect(tokensLabel(ended({}))).toBeNull();
+    expect(tokensTitle(ended({ tokens: 41_200, window: 200_000 }))).toBe("41k of its 200k context");
+    expect(tokensTitle(ended({ tokens: 41_200 }))).toBe("Tokens used");
+  });
+
+  it("moves the selection one row and stops at the ends", () => {
+    expect(stepCursor(0, -1, 3)).toBe(0);
+    expect(stepCursor(0, 1, 3)).toBe(1);
+    expect(stepCursor(2, 1, 3)).toBe(2);
+    expect(stepCursor(0, 1, 0)).toBe(0);
+  });
+});
+
+describe("clearing finished entries", () => {
+  const board = (state: PanelState): PanelEntry => ({ ...entry("shell", state), id: `command:${state}`, source: { type: "command", id: state } });
+  const child = (state: PanelState, patch: Partial<PanelEntry> = {}): PanelEntry => ({ ...entry("crew", state), id: `session:${state}`, ...patch });
+
+  it("hides an ended child or process the user cleared, and shows it again if it ends again", () => {
+    const done = child("done", { endedAt: 500 });
+    const cleared = new Set(finishedKeys([done]));
+
+    expect(visibleEntries([done], cleared)).toEqual([]);
+    expect(visibleEntries([{ ...done, endedAt: 900 }], cleared)).toHaveLength(1);
+  });
+
+  it("keys a run with no end by when it started, so a new run is a new entry", () => {
+    const run = { ...entry("process", "stopped"), id: "process:dev:", startedAt: 100 };
+    const cleared = new Set(finishedKeys([run]));
+
+    expect(visibleEntries([run], cleared)).toEqual([]);
+    expect(visibleEntries([{ ...run, startedAt: 200 }], cleared)).toHaveLength(1);
+  });
+
+  it("never hides what runs, and leaves the board's entries to the daemon", () => {
+    const running = child("running");
+    const cleared = new Set([clearedKey(running), clearedKey(board("done"))]);
+
+    expect(visibleEntries([running, board("done")], cleared)).toHaveLength(2);
+    expect(finishedKeys([running, board("done"), board("failed")])).toEqual([]);
   });
 });

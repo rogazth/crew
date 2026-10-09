@@ -25,6 +25,7 @@ export function DefaultChatSurface({
   onStop,
   whileWorking,
   queue,
+  work,
   onAttach,
   onPasteFiles,
   onRemoveFile,
@@ -36,7 +37,6 @@ export function DefaultChatSurface({
   switchProvider = false,
   bar,
   overlay,
-  tray,
 }: ChatSurfaceProps) {
   return (
     <>
@@ -74,7 +74,6 @@ export function DefaultChatSurface({
             onAnswer={onAnswer}
           />
         )}
-        {tray}
         <Composer
           centered={blocks.length === 0}
           ref={field}
@@ -92,6 +91,7 @@ export function DefaultChatSurface({
           onStop={onStop}
           {...(whileWorking ? { whileWorking } : {})}
           {...(queue ? { queue } : {})}
+          {...(work ? { work } : {})}
           {...(onOptions ? { onOptions } : {})}
           optionsPending={optionsPending}
           switchProvider={switchProvider}

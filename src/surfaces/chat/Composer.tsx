@@ -1,4 +1,5 @@
 import {
+  useCallback,
   useEffect,
   useImperativeHandle,
   useLayoutEffect,
@@ -33,6 +34,7 @@ import type { ProjectFile, Session } from "../../lib/types";
 import { crewAction } from "../../lib/turnRuntime";
 import { AttachmentStrip } from "./Attachments";
 import { ContextMeter } from "./ContextMeter";
+import { WorkSegment, type PanelScope } from "./Panel";
 import { QueueChips, QueueSegment, type QueueScope } from "./Queue";
 import { useChatActions } from "./context";
 import { MentionPicker } from "./MentionPicker";
@@ -65,6 +67,8 @@ type Props = {
   whileWorking?: "steer" | "queue";
   /** What the user sent while a turn ran and the transcript does not show yet. */
   queue?: QueueScope;
+  /** What the session left running in the background: an agent, a shell, a process. Absent: no segment. */
+  work?: PanelScope;
   /** The chips changed; absent, the composer has none. */
   onOptions?: (next: AgentChoice) => void;
   /** A change the next message carries to the CLI by relaunching it. */
@@ -105,6 +109,7 @@ export function Composer({
   onStop,
   whileWorking,
   queue,
+  work,
   onOptions,
   optionsPending = false,
   switchProvider = false,
@@ -139,6 +144,12 @@ export function Composer({
   useEffect(() => {
     if (typingSlash) void refreshCommands(session.id);
   }, [typingSlash, session.id]);
+
+  // One sheet over the composer at a time: the queue's or the background work's.
+  const [sheet, setSheet] = useState<"queue" | "work" | null>(null);
+  const openQueue = useCallback((open: boolean) => setSheet(open ? "queue" : null), []);
+  const openWork = useCallback((open: boolean) => setSheet(open ? "work" : null), []);
+  const focusField = useCallback(() => field.current?.focus(), []);
 
   const model = useRef<Opener>(null);
   const effort = useRef<Opener>(null);
@@ -257,8 +268,8 @@ export function Composer({
       if (next) onOptions({ ...choiceOf(session), access: next });
       return;
     }
-    // Stopping is its own act: Esc or the Stop button, never Enter.
-    if (event.key === "Escape" && working) {
+    // Stopping is its own act: Esc or the Stop button, never Enter. Esc closes the work sheet first.
+    if (event.key === "Escape" && working && sheet !== "work") {
       event.preventDefault();
       onStop();
       return;
@@ -391,7 +402,10 @@ export function Composer({
       <div className="mt-1.5 flex min-h-6 items-center gap-2 px-1 text-[11.5px]">
         <ContextMeter sessionId={session.id} provider={session.provider} />
         {/* A steer is already the turn's: only what waits is counted, and opens the sheet. */}
-        {queue && queue.items.some((message) => !message.steering) && <QueueSegment queue={queue} working={working} />}
+        {queue && queue.items.some((message) => !message.steering) && (
+          <QueueSegment queue={queue} working={working} open={sheet === "queue"} onOpenChange={openQueue} />
+        )}
+        {work && <WorkSegment work={work} open={sheet === "work"} onOpenChange={openWork} onEscape={focusField} />}
         <span className="flex-1" />
         <span className="truncate text-placeholder">
           {optionsPending ? (

@@ -6,8 +6,10 @@
  * holds, and gets the entries back in the order the panel shows them.
  */
 import { isRunning } from "./background";
+import { tokenCount } from "./contextMeter";
 import { childState, isOwnedChild, type ChildState } from "./letters";
 import type { BackgroundCommand, BackgroundKind, BackgroundList, BackgroundState, Process, ProcessRun } from "./protocol";
+import { duration } from "./time";
 import type { Session } from "./types";
 
 /** What an entry is: a subagent, a Crew subagent, a shell, or a Crew process. */
@@ -77,9 +79,12 @@ export function stoppableOf(command: BackgroundCommand, live: boolean): boolean 
   return isRunning(command) && (command.stoppable ?? live);
 }
 
+/** The panel's id for a board command, from the command's own. */
+export const commandEntryId = (commandId: string): string => `command:${commandId}`;
+
 function fromCommand(command: BackgroundCommand, live: boolean): PanelEntry {
   return {
-    id: `command:${command.id}`,
+    id: commandEntryId(command.id),
     kind: BOARD_KIND[command.kind],
     title: command.command,
     detail: command.description ?? "",
@@ -187,4 +192,54 @@ export function panelSummary(entries: readonly PanelEntry[]): PanelSummary {
 
   const text = work.length > 0 ? work.join(" · ") : finished > 0 ? `${finished} finished` : "";
   return { running: { agents, shells, processes }, finished, text };
+}
+
+/** What each kind is called in a row's second line and an opened entry's header. */
+export const KIND_LABEL: Record<PanelKind, string> = { agent: "Subagent", crew: "Crew subagent", shell: "Shell", process: "Process" };
+
+/**
+ * A row's second line: the kind, then how long it has run, or how it ended and
+ * after how long. A source that never says when it ended (a process) names its
+ * state alone; a note on why it ended is kept at the end.
+ */
+export function entryDetail(entry: PanelEntry, now: number): string {
+  const kind = KIND_LABEL[entry.kind];
+  if (entry.state === "running") return `${kind} · ${duration(now - entry.startedAt)}`;
+  const ended = entry.endedAt === undefined ? entry.state : `${entry.state} after ${duration(entry.endedAt - entry.startedAt)}`;
+  return `${kind} · ${ended}${entry.stopNote ? ` · ${entry.stopNote}` : ""}`;
+}
+
+/** "41k tokens" for an entry whose source counts them; null when it does not, or none were used. */
+export function tokensLabel(entry: PanelEntry): string | null {
+  return entry.tokens !== undefined && entry.tokens > 0 ? `${tokenCount(entry.tokens)} tokens` : null;
+}
+
+/** What hovering the tokens says: out of how many, when the source knows its window. */
+export function tokensTitle(entry: PanelEntry): string {
+  return entry.tokens !== undefined && entry.window ? `${tokenCount(entry.tokens)} of its ${tokenCount(entry.window)} context` : "Tokens used";
+}
+
+/** The row after `step` rows down (up is negative), stopping at the ends. */
+export function stepCursor(at: number, step: -1 | 1, count: number): number {
+  return Math.max(0, Math.min(count - 1, at + step));
+}
+
+/**
+ * The key of an ended entry that the daemon does not keep (a child, a process
+ * run): the user clears it from the panel, and it comes back only if it ends
+ * again or runs again, which changes this key.
+ */
+export const clearedKey = (entry: PanelEntry): string => `${entry.id}@${entry.endedAt ?? entry.startedAt}`;
+
+/** The board's own entries are dropped by the daemon when cleared; the others are only hidden here. */
+const onBoard = (entry: PanelEntry) => entry.source.type === "command";
+
+/** The entries the panel shows: everything running, and what the user has not cleared. */
+export function visibleEntries(entries: readonly PanelEntry[], cleared: ReadonlySet<string>): PanelEntry[] {
+  return entries.filter((entry) => entry.state === "running" || onBoard(entry) || !cleared.has(clearedKey(entry)));
+}
+
+/** The keys Clear finished adds: every ended entry the daemon does not clear itself. */
+export function finishedKeys(entries: readonly PanelEntry[]): string[] {
+  return entries.filter((entry) => entry.state !== "running" && !onBoard(entry)).map(clearedKey);
 }

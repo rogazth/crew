@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useBackground } from "../hooks/useBackground";
+import { useBackgroundPanel } from "../hooks/useBackgroundPanel";
 import { useCommands } from "../hooks/useCommands";
 import { showLetter, useChatLetters, usePending } from "../hooks/useLetters";
+import { useMarkSeen } from "../hooks/useMarkSeen";
 import { useThread } from "../hooks/useThread";
 import { answer, pass, respond, send, stop } from "../lib/turnRuntime";
 import { mailboxDispose, mailboxEdit, mailboxReorder, pickFiles, setSessionOptions, switchSessionProvider, turnSendNow, writeTempFile } from "../lib/api";
 import { attachedFrom } from "../lib/attachments";
 import { markedCalls, turnTray } from "../lib/background";
+import { commandEntryId, type PanelEntry } from "../lib/backgroundPanel";
 import type { ThreadRef } from "../lib/letters";
 import { queuedLetters } from "../lib/letters";
 import { clearFirstPrompt, peekFirstPrompt } from "../lib/firstPrompt";
@@ -18,10 +20,12 @@ import { BackgroundContext, LetterContext, useChatActions, type BackgroundScope,
 import { useFileDrop } from "../hooks/useFileDrop";
 import type { Answers, ApprovalDecision, AttachedFile } from "../lib/blocks";
 import type { Session } from "../lib/types";
-import { BackgroundOutputView, BackgroundTray } from "./chat/Background";
+import { BackgroundOutputView } from "./chat/Background";
+import type { PanelScope } from "./chat/Panel";
 import type { QueueScope } from "./chat/Queue";
 import { ChatBar } from "./chat/ChatBar";
 import { DefaultChatSurface } from "./chat/DefaultChatSurface";
+import { EntryView } from "./chat/EntryView";
 import { Thread } from "./chat/Thread";
 
 type Props = {
@@ -38,7 +42,7 @@ export function TurnChat({ session, sessions, cwd, active }: Props) {
   const [files, setFiles] = useState<AttachedFile[]>([]);
   const field = useRef<HTMLTextAreaElement>(null);
   const pane = useRef<HTMLDivElement>(null);
-  const { files: projectFiles, openSession } = useChatActions();
+  const { files: projectFiles, openSession, processes, openProcessRun } = useChatActions();
   const letters = useChatLetters(session, sessions, held);
   // What waits in its box for the next turn: others' letters under the turn
   // that is running, the user's own above the composer.
@@ -46,17 +50,31 @@ export function TurnChat({ session, sessions, cwd, active }: Props) {
   const blocks = useMemo(() => [...held, ...queuedLetters(othersPending(pending), held)], [held, pending]);
   const waiting = useMemo(() => userQueue(pending, held), [held, pending]);
   const whileWorking = whileWorkingOf(session.kind, session.provider);
-  const background = useBackground(session.id);
+  const panel = useBackgroundPanel(session, sessions, processes);
   const menu = useCommands(session.id);
-  const commands = useMemo(() => turnTray(background), [background]);
-  // One thing over the transcript at a time: a pair's thread, or a command's output.
+  const commands = useMemo(() => turnTray(panel.board), [panel.board]);
+  // One thing over the transcript at a time: a pair's thread, or an entry of the background panel.
   const [output, setOutput] = useState<{ sessionId: string; id: string } | null>(null);
-  const shown = output?.sessionId === session.id ? commands.find((command) => command.id === output.id) : undefined;
+  const shown = output?.sessionId === session.id ? panel.all.find((entry) => entry.id === output.id) : undefined;
   const { closeThread, openThread: openLetters } = letters;
-  const openOutput = useCallback(
-    (id: string) => {
+  const openEntry = useCallback(
+    (entry: PanelEntry) => {
+      const { source } = entry;
+      // A process has a tab of its own: the panel leaves the chat to it.
+      if (source.type === "process") {
+        const process = processes.find((row) => row.id === source.id);
+        if (process) openProcessRun(process, source.worktree);
+        return;
+      }
       closeThread();
-      setOutput({ sessionId: session.id, id });
+      setOutput({ sessionId: session.id, id: entry.id });
+    },
+    [closeThread, openProcessRun, processes, session.id],
+  );
+  const openOutput = useCallback(
+    (commandId: string) => {
+      closeThread();
+      setOutput({ sessionId: session.id, id: commandEntryId(commandId) });
     },
     [closeThread, session.id],
   );
@@ -148,6 +166,11 @@ export function TurnChat({ session, sessions, cwd, active }: Props) {
     [cwd, draft, files, menu, projectFiles, ready, session, waiting.length, whileWorking, working],
   );
 
+  const work = useMemo<PanelScope>(
+    () => ({ entries: panel.entries, failed: panel.failed, onOpen: openEntry, onStop: panel.stop, onClear: panel.clear }),
+    [openEntry, panel.clear, panel.entries, panel.failed, panel.stop],
+  );
+
   const queue = useMemo<QueueScope>(
     () => ({
       items: waiting,
@@ -185,7 +208,38 @@ export function TurnChat({ session, sessions, cwd, active }: Props) {
       }}
     />
   );
-  const live = background?.live ?? false;
+  const live = panel.board?.live ?? false;
+
+  // What the opened entry is made of: a board command, a Crew subagent's session.
+  const openedCommand = shown?.source.type === "command" ? commands.find((command) => command.id === shown.source.id) : undefined;
+  const openedChild = shown?.source.type === "session" ? sessions.find((row) => row.id === shown.source.id) : undefined;
+  useMarkSeen(sessions, openedChild?.id ?? null);
+  // A Claude subagent's steps live in the call that started it.
+  const openedCall = openedCommand?.toolCallId ? (held.find((block) => block.tool?.callId === openedCommand.toolCallId) ?? null) : null;
+  const entryView =
+    shown &&
+    !letters.thread &&
+    (openedCommand && shown.kind === "shell" ? (
+      <BackgroundOutputView
+        key={shown.id}
+        sessionId={session.id}
+        command={openedCommand}
+        live={live}
+        active={active}
+        onClose={() => setOutput(null)}
+      />
+    ) : (
+      <EntryView
+        key={shown.id}
+        entry={shown}
+        block={openedCall}
+        error={panel.failed[shown.id]}
+        active={active}
+        onStop={() => panel.stop(shown)}
+        onClose={() => setOutput(null)}
+        {...(openedChild ? { chat: <TurnChat session={openedChild} sessions={sessions} cwd={cwd} active={active} /> } : {})}
+      />
+    ));
 
   return (
     <div ref={pane} className="relative flex h-full flex-col bg-canvas">
@@ -208,6 +262,7 @@ export function TurnChat({ session, sessions, cwd, active }: Props) {
             onDraft={setDraft}
             onSend={submit}
             onStop={() => void stop(session)}
+            work={work}
             {...(whileWorking ? { whileWorking, queue } : {})}
             onAttach={() => void attach()}
             onPasteFiles={pasteFiles}
@@ -226,25 +281,7 @@ export function TurnChat({ session, sessions, cwd, active }: Props) {
                 onOpenThread={openThread}
               />
             }
-            tray={
-              commands.length > 0 && (
-                <BackgroundTray sessionId={session.id} commands={commands} live={live} onOpen={openOutput} />
-              )
-            }
-            overlay={
-              shown && !letters.thread ? (
-                <BackgroundOutputView
-                  key={shown.id}
-                  sessionId={session.id}
-                  command={shown}
-                  live={live}
-                  active={active}
-                  onClose={() => setOutput(null)}
-                />
-              ) : (
-                thread
-              )
-            }
+            overlay={entryView || thread}
           />
         </BackgroundContext>
       </LetterContext>

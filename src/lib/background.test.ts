@@ -7,7 +7,6 @@ import {
   tabCount,
   terminalCount,
   terminalTray,
-  traySummary,
   turnTray,
 } from "./background";
 import type { BackgroundCommand, BackgroundList, SessionLive } from "./protocol";
@@ -27,12 +26,6 @@ function live(extra: Partial<SessionLive> = {}): SessionLive {
 }
 
 describe("the tray", () => {
-  it("says what runs and what finished on its folded line", () => {
-    expect(traySummary([command("a"), command("b")])).toBe("2 running");
-    expect(traySummary([command("a"), command("b", { state: "completed", exitCode: 0 })])).toBe("1 running · 1 finished");
-    expect(traySummary([command("a", { state: "stopped" })])).toBe("nothing running · 1 finished");
-  });
-
   it("lists a driven turn's commands, the daemon having cleared the last turn's", () => {
     expect(turnTray(null)).toEqual([]);
     expect(turnTray(list([command("a")]))).toHaveLength(1);

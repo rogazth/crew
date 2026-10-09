@@ -1,0 +1,203 @@
+// The background panel of a chat session: what the session started and left
+// behind, as one line under the composer and a sheet over it. The chat's CLI is
+// the fake claude, which starts no background work of its own, so the session
+// acts through `crew` with the token it was launched with, the way an agent
+// does: it starts a Crew subagent (a fake opencode, which reports at once) and
+// a command of the workspace. The user opens the sheet, opens an entry, stops
+// one, and clears what ended.
+import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
+import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
+import path from "node:path";
+import { after, before, test } from "node:test";
+import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
+import type { Process } from "../src/lib/protocol.ts";
+import type { Session } from "../src/lib/types.ts";
+import { MOD, launchCrew, pressChord, sessions, waitFor, type Crew } from "./harness.ts";
+
+const run = promisify(execFile);
+const CREW = path.join(fileURLToPath(new URL("..", import.meta.url)), "target/debug/crew");
+
+let crew: Crew;
+let chat: Session;
+let cwd: string;
+
+before(async () => {
+  crew = await launchCrew();
+  const [workspace] = crew.workspaces;
+  assert.ok(workspace);
+  cwd = workspace.path;
+  await crew.request("state_set", {
+    key: "providers:default",
+    value: JSON.stringify({ provider: "claude", model: "", effort: "", access: "ask" }),
+  });
+  await crew.request("state_set", { key: "sessions:view", value: "chat" });
+  await crew.reload();
+  await installFakeOpencode();
+  await crew.request("process_create", { workspaceId: workspace.id, name: "web", command: "echo up; sleep 300" });
+
+  const known = new Set((await sessions(crew, workspace.id)).map((row) => row.id));
+  await pressChord(crew, `${MOD}+n`);
+  chat = await waitFor(async () => (await sessions(crew, workspace.id)).find((row) => row.kind === "terminal" && !known.has(row.id)), {
+    message: "the new chat reaches crewd",
+  });
+  await composer().waitFor();
+  await send("hello");
+  await said("Reply 1: hello").waitFor();
+  await waitFor(async () => (await crew.request<Session>("session_get", { id: chat.id })).status === "idle", { message: "the turn is over" });
+});
+
+after(async () => {
+  await crew?.close();
+});
+
+/** An opencode that answers each turn with the last line it was handed, so a child reports at once. */
+async function installFakeOpencode(): Promise<void> {
+  const bin = path.join(crew.home, ".local/bin");
+  await mkdir(bin, { recursive: true });
+  const file = path.join(bin, "opencode");
+  await writeFile(
+    file,
+    `#!/usr/bin/env python3
+import json, sys, uuid
+prompt = sys.stdin.read()
+args = sys.argv[1:]
+sid = args[args.index("--session") + 1] if "--session" in args else "ses_" + uuid.uuid4().hex[:8]
+last = prompt.strip().splitlines()[-1]
+print(json.dumps({"type": "text", "sessionID": sid, "part": {"id": "t1", "type": "text", "text": "Done: " + last}}), flush=True)
+print(json.dumps({"type": "step_finish", "sessionID": sid, "part": {"id": "s1", "type": "step-finish", "reason": "stop", "tokens": {"input": 1, "output": 1, "reasoning": 0, "cache": {"read": 0, "write": 0}}, "cost": 0}}), flush=True)
+`,
+  );
+  await chmod(file, 0o755);
+}
+
+const composer = () => crew.window.locator("textarea:not(.xterm-helper-textarea):visible").first();
+const said = (text: string | RegExp) => crew.window.getByText(text, typeof text === "string" ? { exact: true } : {});
+const sheet = () => crew.window.locator("[data-work-sheet]");
+const rows = () => sheet().getByRole("option");
+
+async function send(text: string): Promise<void> {
+  const field = composer();
+  await field.fill(text);
+  await waitFor(() => crew.window.getByRole("button", { name: "Send" }).isEnabled(), { message: "the composer can send" });
+  await field.press("Enter");
+}
+
+/** What the chat's CLI was launched with: the socket and token it speaks to crewd as the session. */
+async function sessionEnv(): Promise<NodeJS.ProcessEnv> {
+  const launch = (await crew.claudeLaunches()).find((one) => one.argv.includes(chat.id));
+  assert.ok(launch, "the chat's CLI started");
+  const text =
+    process.platform === "linux"
+      ? (await readFile(`/proc/${launch.pid}/environ`, "utf8")).split("\0").join("\n")
+      : (await run("ps", ["eww", "-o", "command=", "-p", String(launch.pid)])).stdout;
+  // The socket sits in a folder named "Crew Dev": a value runs up to the next `NAME=`.
+  const pick = (name: string) => new RegExp(`(?:^|\\s)${name}=(.+?)(?=\\s[A-Za-z_][A-Za-z0-9_]*=|$)`).exec(text)?.[1];
+  const [socket, token] = [pick("CREW_SOCKET"), pick("CREW_TOKEN")];
+  assert.ok(socket && token, "the CLI's environment names crewd");
+  const { CREW_DATA_DIR: _dir, ...rest } = process.env;
+  return { ...rest, HOME: crew.home, CREW_SOCKET: socket, CREW_TOKEN: token };
+}
+
+const processes = (workspaceId: string) => crew.request<Process[]>("process_list", { workspaceId });
+
+test("what the session started is one line under the composer, and its sheet lists running work before what ended", async () => {
+  const env = await sessionEnv();
+  await run(CREW, ["sessions", "start", "--provider", "opencode", "--name", "Lint pass", "--", "tidy the imports"], { env });
+  const child = await waitFor(async () => (await sessions(crew, chat.workspaceId)).find((row) => row.parentId === chat.id), {
+    timeout: 20_000,
+    message: "the child reaches crewd",
+  });
+  await waitFor(async () => (await crew.request<Session>("session_get", { id: child.id })).lastEvent?.kind === "report", {
+    timeout: 20_000,
+    message: "the child reports",
+  });
+  await run(CREW, ["processes", "start", "web"], { env });
+
+  // A child that reported counts as finished; the command is still up.
+  const work = crew.window.getByRole("button", { name: "1 process", exact: true });
+  await work.waitFor();
+  await work.click();
+  await sheet().waitFor();
+  const texts = await rows().allTextContents();
+  assert.equal(texts.length, 2, texts.join("\n"));
+  assert.match(texts[0]!, /web.*Process · \d+s/, "running work comes first");
+  assert.match(texts[1]!, /Lint pass.*Crew subagent · done after/, "then what ended");
+  assert.equal(await sheet().getByRole("button", { name: "Clear finished" }).count(), 1);
+  await rows().nth(0).waitFor();
+  assert.equal(await rows().nth(0).getAttribute("aria-selected"), "true");
+  await work.click();
+  await sheet().waitFor({ state: "detached" });
+});
+
+test("Esc closes the sheet and does not also stop the turn", async () => {
+  await send("work 20");
+  const stop = crew.window.getByRole("button", { name: "Stop" });
+  await stop.waitFor();
+  const interrupts = async () => (await readFile(path.join(crew.home, "fake-claude-control.log"), "utf8").catch(() => "")).split("\n").filter((line) => line.startsWith("interrupt")).length;
+  const before = await interrupts();
+
+  await crew.window.getByRole("button", { name: "1 process", exact: true }).click();
+  await sheet().waitFor();
+  await crew.window.keyboard.press("Escape");
+  await sheet().waitFor({ state: "detached" });
+  assert.equal(await stop.isVisible(), true, "the turn was stopped by the Esc that closed the sheet");
+  assert.equal(await interrupts(), before, "the CLI was told to interrupt");
+
+  // With the sheet closed, Esc is the turn's again.
+  await composer().press("Escape");
+  await stop.waitFor({ state: "detached" });
+  await waitFor(async () => (await interrupts()) > before, { message: "the CLI was told to interrupt" });
+});
+
+test("↵ opens a Crew subagent over the chat with its own composer, and Esc goes back", async () => {
+  const { 0: child } = (await sessions(crew, chat.workspaceId)).filter((row) => row.parentId === chat.id);
+  assert.ok(child);
+  await crew.window.getByRole("button", { name: "1 process", exact: true }).click();
+  await sheet().waitFor();
+  await crew.window.keyboard.press("ArrowDown");
+  await waitFor(async () => (await rows().nth(1).getAttribute("aria-selected")) === "true", { message: "↓ selects the second row" });
+  await crew.window.keyboard.press("Enter");
+  await sheet().waitFor({ state: "detached" });
+
+  const page = crew.window.locator("[data-entry-view]");
+  await page.waitFor();
+  await page.getByText("Lint pass", { exact: true }).first().waitFor();
+  await page.getByText("Done: tidy the imports").waitFor();
+  await page.locator(`textarea[placeholder*="Ask Lint pass anything"]`).waitFor();
+
+  await crew.window.keyboard.press("Escape");
+  await page.waitFor({ state: "detached" });
+  await composer().waitFor();
+});
+
+test("x stops a command, and opening a command opens its tab", async () => {
+  const [workspace] = crew.workspaces;
+  assert.ok(workspace);
+  await crew.window.getByRole("button", { name: "1 process", exact: true }).click();
+  await sheet().waitFor();
+  // The first row is the running command; x stops it.
+  await crew.window.keyboard.press("x");
+  await waitFor(async () => (await processes(workspace.id))[0]?.runs.find((one) => one.worktree === null)?.state === "stopped", {
+    message: "crewd stops the run",
+  });
+  const finished = crew.window.getByRole("button", { name: "2 finished", exact: true });
+  await rows().filter({ hasText: "Process · stopped" }).waitFor();
+
+  // Enter on it leaves the chat for the command's own tab and closes the sheet.
+  await crew.window.keyboard.press("Enter");
+  await sheet().waitFor({ state: "detached" });
+  await crew.window.locator('[data-tab-strip] [role="tab"]').filter({ hasText: "web" }).waitFor();
+  await crew.window.locator('[data-tab-strip] [role="tab"]').filter({ hasText: chat.name }).click();
+  await finished.waitFor();
+});
+
+test("Clear finished empties the panel, and the line goes with it", async () => {
+  await crew.window.getByRole("button", { name: "2 finished", exact: true }).click();
+  await sheet().getByRole("button", { name: "Clear finished" }).click();
+  await sheet().waitFor({ state: "detached" });
+  await crew.window.getByRole("button", { name: /finished$|process|agent|shell/ }).waitFor({ state: "detached" });
+  // The child is still a session of the workspace: only the panel forgot it.
+  assert.ok((await sessions(crew, chat.workspaceId)).some((row) => row.parentId === chat.id));
+});

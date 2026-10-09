@@ -8,7 +8,7 @@ import type { Session } from "../lib/types";
  * and a failed child's dot on its bot, go once it is opened. The daemon moves
  * the mark and every window hears `session-updated`; one call per position.
  */
-export function useMarkSeen(sessions: Session[], visibleId: string | null) {
+export function useMarkSeen(sessions: readonly Session[], visibleId: string | null) {
   const session = visibleId ? sessions.find((row) => row.id === visibleId) : undefined;
   const pending = session && unseen(session) ? `${session.id}:${session.cursor ?? 0}` : null;
   const sent = useRef<string | null>(null);

@@ -6,6 +6,7 @@ import { ChatContext, type ChatActions } from './chat/context';
 import { Surface, type ProcessTabOf } from './Surface';
 import { Terminals } from './Terminals';
 import type { Confirm } from '../chrome/ConfirmDialog';
+import type { Process } from '../lib/processes';
 import type { BrowserTabPatch, Pane } from '../lib/tabs';
 import type { ProjectFile, Session, SessionStatus, Tab, Workspace } from '../lib/types';
 import { parseContext } from '../lib/worktrees';
@@ -42,6 +43,9 @@ type Props = {
   onConfirm: (confirm: Confirm) => void;
   renderProcess: (tab: ProcessTabOf) => ReactNode;
   renderCommands: () => ReactNode;
+  /** The workspace's commands: a chat lists the runs its session started. */
+  processes: readonly Process[];
+  onOpenProcessRun: (process: Process, worktree: string | null) => void;
 };
 
 /** Active surface plus the mounted turn chat, terminal and page overlays, of every workspace. */
@@ -67,6 +71,8 @@ export function WorkspacePanes({
   onConfirm,
   renderProcess,
   renderCommands,
+  processes,
+  onOpenProcessRun,
 }: Props) {
   // Keyed on where each session runs, not on the sessions: a status change
   // must not hand every mounted pane a fresh object.
@@ -105,8 +111,10 @@ export function WorkspacePanes({
       },
       openSession: onOpenSession,
       files,
+      processes,
+      openProcessRun: onOpenProcessRun,
     }),
-    [cwd, onOpenFile, onOpenSession, files],
+    [cwd, onOpenFile, onOpenSession, files, processes, onOpenProcessRun],
   );
   return (
     // Its own stacking context: a page an agent drives out of sight sits beneath every pane here, and nothing else.

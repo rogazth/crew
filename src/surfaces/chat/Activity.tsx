@@ -370,9 +370,7 @@ export const SubagentRow = memo(function SubagentRow({ block, marked }: { block:
   const [open, setOpen] = useState(false);
   const detail = agentDetail(block);
   const view = subagentView(block);
-  const steps = useMemo(() => (detail ? shownSteps(detail) : []), [detail]);
   if (!detail || !view) return null;
-  const running = view.state === "running";
   return (
     <Collapsible.Root open={open} onOpenChange={setOpen}>
       <Collapsible.Trigger data-block={block.id} className={`${ROW} w-full text-left${lit(block.id, marked)}`}>
@@ -380,18 +378,27 @@ export const SubagentRow = memo(function SubagentRow({ block, marked }: { block:
       </Collapsible.Trigger>
       <Collapsible.Panel className="crew-phase-panel">
         <div className="mt-1 ml-[9px] flex flex-col gap-1 border-l-[1.5px] border-border-strong py-0.5 pl-4">
-          {detail.prompt ? <Pre head="asked" text={detail.prompt} wrap /> : null}
-          {steps.length > 0 ? <SubagentSteps steps={steps} running={running} marked={marked} /> : null}
-          {detail.output ? (
-            <Prose text={detail.output} />
-          ) : (
-            <p className="py-0.5 text-[12.5px] text-text-muted">{STATE_NOTE[view.state]}</p>
-          )}
+          <SubagentBody detail={detail} state={view.state} marked={marked} />
         </div>
       </Collapsible.Panel>
     </Collapsible.Root>
   );
 });
+
+/**
+ * What a subagent did, as its row opens it and as its page in the background
+ * panel shows it: what it was asked, its steps, and what it brought back.
+ */
+export function SubagentBody({ detail, state, marked }: { detail: AgentDetail; state: SubagentState; marked: string | null }) {
+  const steps = useMemo(() => shownSteps(detail), [detail]);
+  return (
+    <>
+      {detail.prompt ? <Pre head="asked" text={detail.prompt} wrap /> : null}
+      {steps.length > 0 ? <SubagentSteps steps={steps} running={state === "running"} marked={marked} /> : null}
+      {detail.output ? <Prose text={detail.output} /> : <p className="py-0.5 text-[12.5px] text-text-muted">{STATE_NOTE[state]}</p>}
+    </>
+  );
+}
 
 const STATE_NOTE: Record<SubagentState, string> = {
   running: "Working…",

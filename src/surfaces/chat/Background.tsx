@@ -1,10 +1,9 @@
-import { Collapsible } from "@base-ui/react/collapsible";
-import { BotIcon, ChevronDownIcon, EyeIcon, SquareIcon, TerminalIcon } from "lucide-react";
-import { memo, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
+import { BotIcon, EyeIcon, SquareIcon, TerminalIcon } from "lucide-react";
+import { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Kbd } from "../../chrome/Kbd";
 import { useNow } from "../../hooks/useBackground";
 import * as api from "../../lib/api";
-import { isRunning, plainText, stateLabel, traySummary } from "../../lib/background";
+import { isRunning, plainText, stateLabel } from "../../lib/background";
 import type { Block } from "../../lib/blocks";
 import type { BackgroundCommand, BackgroundKind, BackgroundOutput } from "../../lib/protocol";
 import { clock } from "../../lib/time";
@@ -28,9 +27,6 @@ function KindIcon({ kind, className }: { kind: BackgroundKind; className: string
   return <TerminalIcon className={className} />;
 }
 
-/** A subagent's output is its report, which lands in the transcript; the rest can be read. */
-const readable = (command: BackgroundCommand) => command.kind !== "subagent";
-
 /** Stops one command; what went wrong, if anything, for the row to say. */
 function useStop(sessionId: string) {
   const [failed, setFailed] = useState<Record<string, string>>({});
@@ -43,113 +39,6 @@ function useStop(sessionId: string) {
   return { failed, stop };
 }
 
-type TrayProps = {
-  sessionId: string;
-  commands: readonly BackgroundCommand[];
-  /** The CLI that runs them is up: they can be stopped. */
-  live: boolean;
-  /** A terminal's: listed from its hooks, nothing to read or stop from here. */
-  readOnly?: boolean;
-  onOpen?: (id: string) => void;
-};
-
-/**
- * What the chat left running, above the composer: it stays put however far
- * the transcript scrolls. Folded by default to one line; a row opens its
- * output, and Stop is the one action.
- */
-export function BackgroundTray({ sessionId, commands, live, readOnly = false, onOpen }: TrayProps) {
-  const [open, setOpen] = useState(false);
-  const running = commands.some(isRunning);
-  const now = useNow(1000, open && running);
-  const { failed, stop } = useStop(sessionId);
-  return (
-    <div className="mx-auto w-full max-w-[760px] shrink-0 px-6 pb-2" data-background-tray>
-      <Collapsible.Root open={open} onOpenChange={setOpen} className="rounded-2xl bg-card">
-        <Collapsible.Trigger className="group flex h-9 w-full items-center gap-2 rounded-2xl px-3.5 text-left text-[12.5px] outline-none focus-visible:ring-2 focus-visible:ring-focus/50">
-          <TerminalIcon className="size-3.5 text-icon" />
-          <span className="text-text">Background</span>
-          <span className="text-text-muted">· {traySummary(commands)}</span>
-          <span className="flex-1" />
-          <ChevronDownIcon className={`size-3.5 text-icon transition-transform duration-150 ${open ? "rotate-180" : ""}`} />
-        </Collapsible.Trigger>
-        <Collapsible.Panel className="crew-phase-panel">
-          <div className="flex max-h-[40vh] flex-col overflow-y-auto px-1.5 pb-1.5">
-            {commands.map((command) => (
-              <TrayRow
-                key={command.id}
-                command={command}
-                now={now}
-                error={failed[command.id]}
-                {...(onOpen && !readOnly && readable(command) ? { onOpen: () => onOpen(command.id) } : {})}
-                {...(!readOnly && live && isRunning(command) ? { onStop: () => stop(command.id) } : {})}
-              />
-            ))}
-          </div>
-        </Collapsible.Panel>
-      </Collapsible.Root>
-    </div>
-  );
-}
-
-function TrayRow({
-  command,
-  now,
-  error,
-  onOpen,
-  onStop,
-}: {
-  command: BackgroundCommand;
-  now: number;
-  error: string | undefined;
-  onOpen?: () => void;
-  onStop?: () => void;
-}) {
-  const press = (event: KeyboardEvent) => {
-    if (!onOpen || (event.key !== "Enter" && event.key !== " ")) return;
-    event.preventDefault();
-    onOpen();
-  };
-  return (
-    <div
-      {...(onOpen ? { role: "button", tabIndex: 0, onClick: onOpen, onKeyDown: press, title: "Open its output" } : {})}
-      className={`flex h-8 items-center gap-2.5 rounded-lg px-2 outline-none transition-colors ${
-        onOpen ? "cursor-default hover:bg-hover focus-visible:bg-hover" : ""
-      }`}
-    >
-      <span className="grid size-3.5 shrink-0 place-items-center">
-        <CommandDot command={command} />
-      </span>
-      <KindIcon kind={command.kind} className="size-3.5 shrink-0 text-icon" />
-      <span
-        title={command.description ?? command.command}
-        className={`min-w-0 truncate font-mono text-[12px] ${isRunning(command) ? "text-text" : "text-text-muted"}`}
-      >
-        {command.command}
-      </span>
-      <span className="shrink-0 text-[11.5px] text-text-muted tabular-nums">{stateLabel(command, now)}</span>
-      <span className="flex-1" />
-      {error && (
-        <span title={error} className="min-w-0 truncate text-[11.5px] text-danger">
-          {error}
-        </span>
-      )}
-      {onStop && (
-        <button
-          type="button"
-          onClick={(event) => {
-            event.stopPropagation();
-            onStop();
-          }}
-          className="flex h-6 shrink-0 items-center rounded-md px-2 text-[12px] text-text-muted transition-colors hover:bg-selected hover:text-text"
-        >
-          Stop
-        </button>
-      )}
-    </div>
-  );
-}
-
 /**
  * Where a command went to the background, in the transcript: one quiet line
  * that opens its output. It stays out of a folded turn, like a checkpoint.
@@ -158,22 +47,20 @@ export const BackgroundMarker = memo(function BackgroundMarker({ block }: { bloc
   const { calls, open } = useBackgroundScope();
   const command = block.tool ? calls.get(block.tool.callId) : undefined;
   if (!command) return null;
-  const canOpen = readable(command);
   return (
     <button
       type="button"
-      disabled={!canOpen}
       onClick={() => open(command.id)}
-      title={canOpen ? "Open its output" : (command.description ?? command.command)}
-      className="group flex min-h-[26px] w-full items-center gap-2 py-0.5 text-left text-[13px] leading-[18px] disabled:cursor-default"
+      title="Open its output"
+      className="group flex min-h-[26px] w-full items-center gap-2 py-0.5 text-left text-[13px] leading-[18px]"
     >
       <span className="crew-node">
         <KindIcon kind={command.kind} className="size-3.5" />
       </span>
-      <span className="shrink-0 text-text-muted transition-colors group-enabled:group-hover:text-text">
+      <span className="shrink-0 text-text-muted transition-colors group-hover:text-text">
         {command.kind === "subagent" ? "Sent a subagent to the background" : "Sent to the background"}
       </span>
-      <span className="flex h-5 min-w-0 items-center gap-1.5 rounded-md bg-card px-1.5 font-mono text-[11.5px] text-text-muted transition-colors group-enabled:group-hover:text-text">
+      <span className="flex h-5 min-w-0 items-center gap-1.5 rounded-md bg-card px-1.5 font-mono text-[11.5px] text-text-muted transition-colors group-hover:text-text">
         <CommandDot command={command} />
         <span className="truncate">{command.command}</span>
       </span>
@@ -194,8 +81,8 @@ type OutputProps = {
 
 /**
  * One command's output over the transcript, in the reading column: the end
- * of what it wrote, read again every second while it runs. Esc or Close goes
- * back to where the reader was.
+ * of what it wrote, read again every second while it runs. Esc or Back to the
+ * chat returns to where the reader was.
  */
 export function BackgroundOutputView({ sessionId, command, live, active, onClose }: OutputProps) {
   const [output, setOutput] = useState<BackgroundOutput | null>(null);
@@ -296,7 +183,7 @@ export function BackgroundOutputView({ sessionId, command, live, active, onClose
           onClick={onClose}
           className="pointer-events-auto flex h-9 items-center gap-2 rounded-full bg-surface pr-2.5 pl-4 text-[13px] shadow-float transition-colors hover:bg-hover"
         >
-          Close
+          Back to the chat
           <Kbd keys="esc" />
         </button>
       </div>
