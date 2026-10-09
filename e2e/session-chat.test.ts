@@ -236,6 +236,74 @@ test("Esc stops a running turn in the chat, and the next message gets its answer
   await said(/^Reply \d+: after the stop$/).waitFor();
 });
 
+test("a / in the chat lists the CLI's commands and skills with Crew's actions, and a picked skill goes with the message", async () => {
+  const [workspace] = crew.workspaces;
+  assert.ok(workspace);
+  await crew.request("state_set", { key: "sessions:view", value: "chat" });
+  await crew.reload();
+  const session = await newChat(workspace.id);
+  const field = composer();
+  const menu = crew.window.getByRole("listbox", { name: "Commands" });
+  const entry = (name: string) => menu.getByRole("option").filter({ has: crew.window.getByText(`/${name}`, { exact: true }) });
+
+  // The fake answers `initialize` with its commands and `reload_skills` with the skill among them.
+  await field.fill("/");
+  await menu.waitFor();
+  for (const name of ["model", "effort", "access", "writing-for-agents", "cold-run", "compact", "context"]) {
+    await entry(name).waitFor();
+  }
+  assert.match((await entry("writing-for-agents").textContent()) ?? "", /Write documents for agents\s*skill/);
+  assert.match((await entry("cold-run").textContent()) ?? "", /<folder>/);
+
+  // Crew's own actions open the chips' menus and leave nothing in the draft.
+  for (const [name, opened] of [
+    ["effort", crew.window.getByRole("menuitemradio", { name: "Low", exact: true })],
+    ["access", crew.window.getByRole("menuitemradio", { name: "Accept edits" })],
+    ["model", crew.window.getByPlaceholder("Search models")],
+  ] as const) {
+    await field.fill(`/${name}`);
+    await field.press("Enter");
+    await opened.waitFor();
+    assert.equal(await field.inputValue(), "", `/${name} stayed in the draft`);
+    await crew.window.keyboard.press("Escape");
+    await opened.waitFor({ state: "detached" });
+  }
+
+  // Typing narrows it; a skill is picked with the keyboard and stays in the draft.
+  await field.fill("/writ");
+  await entry("writing-for-agents").waitFor();
+  assert.equal(await entry("cold-run").count(), 0);
+  await field.press("Enter");
+  await menu.waitFor({ state: "detached" });
+  assert.equal(await field.inputValue(), "/writing-for-agents ");
+  // ...painted over the text like a mention.
+  await crew.window.locator(".crew-composer-overlay:visible mark", { hasText: "/writing-for-agents" }).waitFor();
+
+  // One Backspace takes the space, the next the whole token.
+  await field.press("Backspace");
+  assert.equal(await field.inputValue(), "/writing-for-agents");
+  await field.press("Backspace");
+  assert.equal(await field.inputValue(), "");
+  // The caret is put back on the next frame; text typed before it would be overtaken.
+  await crew.window.evaluate(() => new Promise((done) => requestAnimationFrame(done)));
+
+  // A skill goes anywhere in a message; a provider's command only opens one.
+  await field.fill("tighten the intro with /");
+  await menu.waitFor();
+  await entry("writing-for-agents").waitFor();
+  assert.equal(await entry("compact").count(), 0, "a command was offered mid-message");
+  await field.fill("tighten the intro with /writ");
+  await entry("writing-for-agents").waitFor();
+  await field.press("Tab");
+  await waitFor(() => crew.window.getByRole("button", { name: "Send" }).isEnabled(), { message: "the composer can send" });
+  await field.press("Enter");
+  await waitFor(async () => (await heard(workspace.path, session)).length === 1, { message: "the CLI took the message in" });
+  const [told] = await heard(workspace.path, session);
+  assert.equal(told?.trim(), "tighten the intro with /writing-for-agents");
+  await said(/^Reply 1: tighten the intro with \/writing-for-agents$/).waitFor();
+  await idle(session);
+});
+
 // What the user writes while a turn runs. The fake claude takes it into the
 // turn like the real one (echoed at once, named in the turn's reply), so a
 // steer shows; a message held for the next turn goes in as one turn of its own.

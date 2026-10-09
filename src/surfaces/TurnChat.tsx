@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useBackground } from "../hooks/useBackground";
+import { useCommands } from "../hooks/useCommands";
 import { showLetter, useChatLetters, usePending } from "../hooks/useLetters";
 import { useThread } from "../hooks/useThread";
 import { answer, pass, respond, send, stop } from "../lib/turnRuntime";
@@ -10,6 +11,7 @@ import type { ThreadRef } from "../lib/letters";
 import { queuedLetters } from "../lib/letters";
 import { clearFirstPrompt, peekFirstPrompt } from "../lib/firstPrompt";
 import { mentionedFiles } from "../lib/mentions";
+import { dispatchOf } from "../lib/slashCommands";
 import { moved, othersPending, userQueue, whileWorkingOf } from "../lib/queue";
 import type { AgentChoice } from "../lib/providers";
 import { BackgroundContext, LetterContext, useChatActions, type BackgroundScope, type LetterScope } from "./chat/context";
@@ -45,6 +47,7 @@ export function TurnChat({ session, sessions, cwd, active }: Props) {
   const waiting = useMemo(() => userQueue(pending, held), [held, pending]);
   const whileWorking = whileWorkingOf(session.kind, session.provider);
   const background = useBackground(session.id);
+  const menu = useCommands(session.id);
   const commands = useMemo(() => turnTray(background), [background]);
   // One thing over the transcript at a time: a pair's thread, or a command's output.
   const [output, setOutput] = useState<{ sessionId: string; id: string } | null>(null);
@@ -134,13 +137,15 @@ export function TurnChat({ session, sessions, cwd, active }: Props) {
       if (working && !(mode && whileWorking)) return;
       const attached = files;
       const mentions = mentionedFiles(text, projectFiles).map((file) => file.path);
+      const { command, skills } = dispatchOf(text, menu?.entries ?? []);
+      const asked = { mentions, ...(command ? { command } : {}), skills };
       setDraft("");
       setFiles([]);
       // What is held after a stop goes with the next message: the daemon queues it behind them.
-      if ((working || waiting.length > 0) && whileWorking) void pass(session, cwd, text, attached, mode ?? "queue", mentions);
-      else void send(session, cwd, text, attached, mentions.length > 0 ? { mentions } : {});
+      if ((working || waiting.length > 0) && whileWorking) void pass(session, cwd, text, attached, mode ?? "queue", asked);
+      else void send(session, cwd, text, attached, asked);
     },
-    [cwd, draft, files, projectFiles, ready, session, waiting.length, whileWorking, working],
+    [cwd, draft, files, menu, projectFiles, ready, session, waiting.length, whileWorking, working],
   );
 
   const queue = useMemo<QueueScope>(

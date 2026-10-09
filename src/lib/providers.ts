@@ -290,6 +290,19 @@ export function setFast(providerId: string, modelId: string, on: boolean): strin
   return on ? (model.fastId ?? modelId) : model.id;
 }
 
+/**
+ * What `/fast` does to the chips: the same switch the Fast chip makes, or
+ * nothing (null) for a model with no fast run to switch to.
+ */
+export function toggledFast(value: AgentChoice): AgentChoice | null {
+  const fitted = fitChoice(value);
+  if (fitted.provider === "claude") return fitChoice({ ...fitted, serviceTier: fitted.serviceTier === "fast" ? "" : "fast" });
+  const fast = fastChoice(fitted.provider, fitted.model);
+  if (fast.available) return fitChoice({ ...fitted, model: setFast(fitted.provider, fitted.model, !fast.on) });
+  if (!tiersOf(fitted.provider, fitted.model).some((tier) => tier.id === "fast")) return null;
+  return fitChoice({ ...fitted, serviceTier: fitted.serviceTier === "fast" ? "" : "fast" });
+}
+
 /** The model a session of this provider runs when none was picked. */
 export function defaultModelOf(providerId: string): string {
   return providerOf(providerId)?.defaultModel ?? "";

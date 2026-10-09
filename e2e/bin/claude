@@ -642,6 +642,9 @@ function redraw(done) {
  *   instead of at once: the turn has not read it yet in between.
  * - `work N` is a turn that takes N seconds before it starts to answer, for
  *   a test that stops it.
+ * - `initialize` answers the `/` menu: the commands `cold-run`, `compact` and
+ *   `context`, and `writing-for-agents`, which `reload_skills` names a skill
+ *   (as `system/init`'s `skills` does each turn).
  * - The context is 20k tokens a turn of the 200k window (compacting at 160k),
  *   in the usage of each reply and in the answer to `get_context_usage`, none
  *   before the first turn.
@@ -653,6 +656,13 @@ function serve() {
   const STEP = 20_000;
   const WORD_MS = 150;
   const replay = argv.includes("--replay-user-messages");
+  const SKILLS = ["writing-for-agents"];
+  const MENU = [
+    { name: "cold-run", description: "Run the cold start check", argumentHint: "<folder>" },
+    { name: "writing-for-agents", description: "Write documents for agents", argumentHint: "" },
+    { name: "compact", description: "Free up context", argumentHint: "<hint>" },
+    { name: "context", description: "Show what fills the context", argumentHint: "" },
+  ];
   const emit = (entry) => process.stdout.write(`${JSON.stringify(entry)}\n`);
   const answer = (id, response) => emit({ type: "control_response", response: { subtype: "success", request_id: id, response } });
   const waiting = [];
@@ -688,7 +698,12 @@ function serve() {
     if (subtype === "set_model") model = request.model || null;
     if (subtype === "set_permission_mode" && request.mode) mode = request.mode;
     fs.appendFileSync(path.join(HOME, "fake-claude-control.log"), `${subtype} ${detail}\n`);
-    answer(rec.request_id, subtype === "get_task_output" ? { output: "", total_bytes: 0, truncated: false } : {});
+    const reply = {
+      get_task_output: { output: "", total_bytes: 0, truncated: false },
+      initialize: { commands: MENU },
+      reload_skills: { skills: SKILLS.map((name) => ({ name })) },
+    };
+    answer(rec.request_id, reply[subtype] || {});
     if (subtype === "interrupt") stop();
   }
 
@@ -733,7 +748,7 @@ function serve() {
       });
     const n = ++turns;
     turnStarted = Date.now();
-    emit({ type: "system", subtype: "init", session_id: sessionId, model: model || "fake", cwd: CWD, tools: [] });
+    emit({ type: "system", subtype: "init", session_id: sessionId, model: model || "fake", cwd: CWD, tools: [], skills: SKILLS });
     if (replay) emit({ type: "user", session_id: sessionId, message: { role: "user", content: [{ type: "text", text }] } });
     record({ type: "user", permissionMode: mode, message: { role: "user", content: text } });
 

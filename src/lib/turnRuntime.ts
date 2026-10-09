@@ -78,7 +78,7 @@ export async function send(
   cwd: string,
   text: string,
   files: AttachedFile[] = [],
-  options: { fresh?: boolean; hidden?: boolean; mentions?: string[] } = {},
+  options: { fresh?: boolean; hidden?: boolean; mentions?: string[]; command?: string; skills?: string[] } = {},
 ): Promise<boolean> {
   const id = session.id;
   remember(session);
@@ -92,6 +92,8 @@ export async function send(
     text,
     ...(files.length > 0 ? { files } : {}),
     ...(options.mentions && options.mentions.length > 0 ? { mentions: options.mentions } : {}),
+    ...(options.command ? { command: options.command } : {}),
+    ...(options.skills && options.skills.length > 0 ? { skills: options.skills } : {}),
     ...(options.hidden ? { hidden: true } : {}),
     ...(options.fresh ? { fresh: true } : {}),
     // Survives a reconnect mid-send: the daemon accepts this id once, so a
@@ -128,7 +130,7 @@ export async function pass(
   text: string,
   files: AttachedFile[],
   mode: "steer" | "queue",
-  mentions: string[] = [],
+  options: { mentions?: string[]; command?: string; skills?: string[] } = {},
 ): Promise<boolean> {
   const id = session.id;
   remember(session);
@@ -140,12 +142,26 @@ export async function pass(
       text,
       mode,
       ...(files.length > 0 ? { files } : {}),
-      ...(mentions.length > 0 ? { mentions } : {}),
+      ...(options.mentions && options.mentions.length > 0 ? { mentions: options.mentions } : {}),
+      ...(options.command ? { command: options.command } : {}),
+      ...(options.skills && options.skills.length > 0 ? { skills: options.skills } : {}),
     });
     return true;
   } catch (error) {
     transcript.apply(id, { type: "session.error", message: error instanceof Error ? error.message : String(error) });
     return false;
+  }
+}
+
+/**
+ * `/reload` and `/restart`: what the daemon refuses (a build that does not
+ * route them yet, a session with nothing to restart) is a note in the chat.
+ */
+export async function crewAction(id: string, action: "reload" | "restart"): Promise<void> {
+  try {
+    await (action === "reload" ? api.commandsReload(id) : api.sessionRestart(id));
+  } catch (error) {
+    transcript.apply(id, { type: "session.error", message: error instanceof Error ? error.message : String(error) });
   }
 }
 

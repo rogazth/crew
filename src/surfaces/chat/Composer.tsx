@@ -1,4 +1,5 @@
 import {
+  useEffect,
   useImperativeHandle,
   useLayoutEffect,
   useMemo,
@@ -11,16 +12,31 @@ import {
 } from "react";
 import { ArrowUpIcon, ListOrderedIcon, PaperclipIcon, SquareIcon } from "lucide-react";
 import { AccessPicker, ModelControls } from "../../chrome/ComposerControls";
+import type { Opener } from "../../chrome/ModelPicker";
+import { useCommands } from "../../hooks/useCommands";
 import type { AttachedFile } from "../../lib/blocks";
-import { accessesOf, type Access, type AgentChoice, type Effort, type ProviderId } from "../../lib/providers";
+import { accessesOf, toggledFast, type Access, type AgentChoice, type Effort, type ProviderId } from "../../lib/providers";
 import { nextAccess } from "../../lib/sessionOptions";
 import { completeMention, mentionAt, searchFiles, splitMentions } from "../../lib/mentions";
+import type { CommandEntry } from "../../lib/protocol";
+import {
+  completeSlash,
+  opensMessage,
+  refreshCommands,
+  removeSlash,
+  searchCommands,
+  slashAt,
+  splitTokens,
+  tokenBefore,
+} from "../../lib/slashCommands";
 import type { ProjectFile, Session } from "../../lib/types";
+import { crewAction } from "../../lib/turnRuntime";
 import { AttachmentStrip } from "./Attachments";
 import { ContextMeter } from "./ContextMeter";
 import { QueueChips, QueueSegment, type QueueScope } from "./Queue";
 import { useChatActions } from "./context";
 import { MentionPicker } from "./MentionPicker";
+import { SlashPicker } from "./SlashPicker";
 
 type Props = {
   ref?: Ref<HTMLTextAreaElement>;
@@ -68,6 +84,9 @@ const choiceOf = (session: Session): AgentChoice => ({
 
 const MAX_FIELD_PX = 160;
 
+/** The menu before the daemon has answered: nothing to list or to paint. */
+const NO_ENTRIES: CommandEntry[] = [];
+
 /** A control well in the chrome's dialect: hairline, radius 16, plus and model left, send right. */
 export function Composer({
   ref,
@@ -106,6 +125,25 @@ export function Composer({
   );
   const known = useMemo(() => new Set(projectFiles.map((file) => file.relative)), [projectFiles]);
 
+  // The same for a `/`: a provider's commands only open a message, so the menu depends on where the slash is.
+  const entries = useCommands(session.id)?.entries ?? NO_ENTRIES;
+  const slash = mention ? null : slashAt(draft, cursor);
+  const slashStarts = slash ? opensMessage(draft, slash.start) : false;
+  const slashResults = useMemo(
+    () => (slash ? searchCommands(entries, slash.query, slashStarts) : []),
+    [slash?.query, slashStarts, entries], // eslint-disable-line react-hooks/exhaustive-deps
+  );
+  const choices = mention ? results.length : slashResults.length;
+  // The daemon answers from its cache and reads again once that is stale: a menu opened late is current.
+  const typingSlash = slash !== null;
+  useEffect(() => {
+    if (typingSlash) void refreshCommands(session.id);
+  }, [typingSlash, session.id]);
+
+  const model = useRef<Opener>(null);
+  const effort = useRef<Opener>(null);
+  const access = useRef<Opener>(null);
+
   // Grows with the draft up to the cap; the browser's own sizing is one line.
   useLayoutEffect(() => {
     const el = field.current;
@@ -120,6 +158,18 @@ export function Composer({
     if (el) setCursor(el.selectionStart);
   };
 
+  // The draft has just changed: the caret goes where the change left it once the field has the new text.
+  const place = (at: number, then?: () => void) => {
+    requestAnimationFrame(() => {
+      const el = field.current;
+      if (!el) return;
+      el.focus();
+      el.setSelectionRange(at, at);
+      setCursor(at);
+      then?.();
+    });
+  };
+
   const pick = (file: ProjectFile) => {
     const el = field.current;
     if (!el) return;
@@ -127,11 +177,30 @@ export function Composer({
     if (!next) return;
     onDraft(next.text);
     setActive(0);
-    requestAnimationFrame(() => {
-      el.focus();
-      el.setSelectionRange(next.cursor, next.cursor);
-      setCursor(next.cursor);
-    });
+    place(next.cursor);
+  };
+
+  // A command or skill stays in the draft as `/name `; a Crew action runs and leaves nothing.
+  const pickSlash = (entry: CommandEntry) => {
+    const el = field.current;
+    if (!el) return;
+    const acts = entry.kind === "crew";
+    const next = acts ? removeSlash(draft, el.selectionStart) : completeSlash(draft, el.selectionStart, entry);
+    if (!next) return;
+    onDraft(next.text);
+    setActive(0);
+    // A menu it opens takes the focus, so it opens after the field has had it.
+    place(next.cursor, acts ? () => runAction(entry.name) : undefined);
+  };
+
+  const runAction = (name: string) => {
+    if (name === "model") model.current?.open();
+    else if (name === "effort") effort.current?.open();
+    else if (name === "access") access.current?.open();
+    else if (name === "fast") {
+      const next = toggledFast(choiceOf(session));
+      if (next) onOptions?.(next);
+    } else if (name === "restart" || name === "reload") void crewAction(session.id, name);
   };
 
   // ⌘↵ while it works: wait for the turn instead of joining it.
@@ -150,16 +219,29 @@ export function Composer({
   };
 
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (mention && results.length > 0) {
+    // A command or skill is one word to the eye, so one Backspace takes all of it.
+    const el = field.current;
+    if (event.key === "Backspace" && el && el.selectionStart === el.selectionEnd && !event.nativeEvent.isComposing) {
+      const token = tokenBefore(draft, el.selectionStart, entries);
+      if (token) {
+        event.preventDefault();
+        onDraft(draft.slice(0, token.start) + draft.slice(token.end));
+        place(token.start);
+        return;
+      }
+    }
+    if (choices > 0) {
       if (event.key === "ArrowDown" || event.key === "ArrowUp") {
         event.preventDefault();
         const step = event.key === "ArrowDown" ? 1 : -1;
-        setActive((index) => (index + step + results.length) % results.length);
+        setActive((index) => (index + step + choices) % choices);
         return;
       }
       if (event.key === "Enter" || event.key === "Tab") {
         event.preventDefault();
-        pick(results[Math.min(active, results.length - 1)]!);
+        const at = Math.min(active, choices - 1);
+        if (mention) pick(results[at]!);
+        else pickSlash(slashResults[at]!);
         return;
       }
       if (event.key === "Escape") {
@@ -194,6 +276,9 @@ export function Composer({
         {mention && (
           <MentionPicker results={results} active={Math.min(active, Math.max(0, results.length - 1))} onHover={setActive} onPick={pick} />
         )}
+        {slashResults.length > 0 && (
+          <SlashPicker results={slashResults} active={Math.min(active, slashResults.length - 1)} onHover={setActive} onPick={pickSlash} />
+        )}
         {queue && queue.items.length > 0 && <QueueChips queue={queue} />}
         {files.length > 0 && (
           <div className="mb-2">
@@ -202,15 +287,17 @@ export function Composer({
         )}
         <div className="relative">
           <div ref={overlay} aria-hidden className="crew-composer-field crew-composer-overlay">
-            {splitMentions(draft, known).map((segment, index) =>
-              segment.kind === "mention" ? (
-                <mark key={index} className="crew-mention-run">
-                  {segment.text}
-                </mark>
-              ) : (
-                <span key={index}>{segment.text}</span>
-              ),
-            )}
+            {splitTokens(draft, entries)
+              .flatMap<{ kind: string; text: string }>((part) => (part.kind === "token" ? [part] : splitMentions(part.text, known)))
+              .map((segment, index) =>
+                segment.kind === "text" ? (
+                  <span key={index}>{segment.text}</span>
+                ) : (
+                  <mark key={index} className="crew-mention-run">
+                    {segment.text}
+                  </mark>
+                ),
+              )}
             {"​"}
           </div>
           <textarea
@@ -226,7 +313,7 @@ export function Composer({
                     : whileWorking === "queue"
                       ? `${session.name} is working — ↵ queues this for the next turn`
                       : `${session.name} is working — esc stops it`
-                  : `Ask ${session.name} anything — @ to mention a file`
+                  : `Ask ${session.name} anything — @ to mention a file, / for commands`
             }
             spellCheck={false}
             onChange={(event) => {
@@ -257,11 +344,19 @@ export function Composer({
             >
               <PaperclipIcon className="size-4" />
             </button>
-            {onOptions && <ModelControls lockProvider={!switchProvider} value={choiceOf(session)} onChange={onOptions} />}
+            {onOptions && (
+              <ModelControls
+                lockProvider={!switchProvider}
+                value={choiceOf(session)}
+                onChange={onOptions}
+                openers={{ model, effort }}
+              />
+            )}
           </div>
           <div className="flex shrink-0 items-center gap-1.5">
             {onOptions && (
               <AccessPicker
+                ref={access}
                 provider={session.provider}
                 value={session.autonomy as Access}
                 onChange={(access) => onOptions({ ...choiceOf(session), access })}
@@ -317,7 +412,7 @@ export function Composer({
             </>
           ) : (
             <>
-              <kbd className="font-sans">↵</kbd> send · <kbd className="font-sans">⇧↵</kbd> new line · @ file
+              <kbd className="font-sans">↵</kbd> send · <kbd className="font-sans">⇧↵</kbd> new line · @ file · / command
               {onOptions && (
                 <>
                   {" "}· <kbd className="font-sans">⇧⇥</kbd> access

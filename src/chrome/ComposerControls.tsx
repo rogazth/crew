@@ -1,7 +1,8 @@
+import { useImperativeHandle, useState, type Ref } from "react";
 import { Menu } from "@base-ui/react/menu";
 import { BrainIcon, CheckIcon, ChevronDownIcon, GaugeIcon, LockIcon, LockOpenIcon, PencilIcon, SparklesIcon, ZapIcon, type LucideIcon as Icon } from "lucide-react";
 import { PANEL, ROW } from "./kit";
-import { ModelPicker } from "./ModelPicker";
+import { ModelPicker, type Opener } from "./ModelPicker";
 import { useListedModels } from "../hooks/useListedModels";
 import { claudeFastShown, claudeFastTitle, useClaudeFastMode } from "../lib/fastMode";
 import {
@@ -33,10 +34,12 @@ type Props = {
   onChange: (next: AgentChoice) => void;
   /** A running session keeps its CLI: only its models are offered. */
   lockProvider?: boolean;
+  /** Where the chips' menus can be opened from, for the composer's `/model` and `/effort`. */
+  openers?: { model?: Ref<Opener>; effort?: Ref<Opener> };
 };
 
 /** The composer's model, effort, speed and access chips, the same in Home and in a chat. A chip opens its menu itself: no chevron. */
-export function ModelControls({ value, onChange, lockProvider = false }: Props) {
+export function ModelControls({ value, onChange, lockProvider = false, openers }: Props) {
   useListedModels(value.provider);
   const fitted = fitChoice(value);
   const efforts = effortsOf(value.provider, value.model);
@@ -44,6 +47,7 @@ export function ModelControls({ value, onChange, lockProvider = false }: Props) 
   return (
     <>
       <ModelPicker
+        {...(openers?.model ? { ref: openers.model } : {})}
         trigger="chip"
         provider={value.provider}
         model={value.model}
@@ -55,7 +59,12 @@ export function ModelControls({ value, onChange, lockProvider = false }: Props) 
         }}
       />
       {efforts.length > 0 && (
-        <EffortPicker value={fitted.effort} efforts={efforts} onChange={(effort) => onChange(fitChoice({ ...value, effort }))} />
+        <EffortPicker
+          {...(openers?.effort ? { ref: openers.effort } : {})}
+          value={fitted.effort}
+          efforts={efforts}
+          onChange={(effort) => onChange(fitChoice({ ...value, effort }))}
+        />
       )}
       <SpeedControl value={fitted} onChange={onChange} />
     </>
@@ -149,16 +158,20 @@ function FastToggle({ on, title, onClick }: { on: boolean; title: string; onClic
 }
 
 export function EffortPicker({
+  ref,
   value,
   efforts,
   onChange,
 }: {
+  ref?: Ref<Opener>;
   value: Effort | "";
   efforts: Effort[];
   onChange: (effort: Effort) => void;
 }) {
+  const [open, setOpen] = useState(false);
+  useImperativeHandle(ref, () => ({ open: () => setOpen(true) }));
   return (
-    <Menu.Root modal={false}>
+    <Menu.Root modal={false} open={open} onOpenChange={setOpen}>
       <Menu.Trigger aria-label="Effort" title="How hard the model thinks" className={CHIP}>
         <BrainIcon className="size-3.5 shrink-0 text-icon" />
         <span className="truncate">{value ? EFFORT_LABELS[value] : "Effort"}</span>
@@ -185,12 +198,14 @@ export function EffortPicker({
 }
 
 export function AccessPicker({
+  ref,
   provider,
   value,
   onChange,
   hint,
   trigger = "chip",
 }: {
+  ref?: Ref<Opener>;
   provider: string;
   value: Access;
   onChange: (access: Access) => void;
@@ -199,12 +214,14 @@ export function AccessPicker({
   /** "chip" is the composer's compact trigger; "field" is the sheet's full-width control. */
   trigger?: "chip" | "field";
 }) {
+  const [open, setOpen] = useState(false);
+  useImperativeHandle(ref, () => ({ open: () => setOpen(true) }));
   const chip = trigger === "chip";
   const offered = accessesOf(provider);
   const current = ACCESSES.find((a) => a.id === value) ?? ACCESSES[0]!;
   const Glyph = ACCESS_ICONS[current.id];
   return (
-    <Menu.Root modal={false}>
+    <Menu.Root modal={false} open={open} onOpenChange={setOpen}>
       {chip ? (
         <Menu.Trigger aria-label="Access" title={current.description} className={CHIP}>
           <Glyph className="size-3.5 shrink-0 text-icon" />

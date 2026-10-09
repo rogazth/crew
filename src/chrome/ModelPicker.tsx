@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useImperativeHandle, useRef, useState, type KeyboardEvent, type Ref } from "react";
 import { Popover } from "@base-ui/react/popover";
 import { CheckIcon, ChevronDownIcon, SearchIcon, XIcon } from "lucide-react";
 import { ProviderIcon } from "./ProviderIcon";
@@ -15,7 +15,11 @@ import {
   type ProviderId,
 } from "../lib/providers";
 
+/** Lets the composer open a chip's menu, as the `/` menu's actions do. */
+export type Opener = { open: () => void };
+
 type Props = {
+  ref?: Ref<Opener>;
   provider: string;
   model: string;
   /** "field" is the sheet's full-width control; "chip" is the composer's compact trigger. */
@@ -29,7 +33,7 @@ type Props = {
 type KeyDown = KeyboardEvent<HTMLDivElement> & { preventBaseUIHandler?: () => void };
 
 /** Providers beside their models: hover a provider, click a model. A query searches every provider at once. */
-export function ModelPicker({ provider, model, trigger = "field", disabled = false, lockProvider = false, onChange }: Props) {
+export function ModelPicker({ ref, provider, model, trigger = "field", disabled = false, lockProvider = false, onChange }: Props) {
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState<ProviderId>(provider as ProviderId);
   const [query, setQuery] = useState("");
@@ -65,6 +69,8 @@ export function ModelPicker({ provider, model, trigger = "field", disabled = fal
     }
     setOpen(next);
   }
+
+  useImperativeHandle(ref, () => ({ open: () => openChange(true) }));
 
   function pick(row: ModelMatch) {
     onChange(row.provider, row.model.id);

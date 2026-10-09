@@ -191,12 +191,20 @@ export const backgroundStop = (sessionId: string, id: string): Promise<void> =>
 export const backgroundClear = (sessionId: string, ids?: string[]): Promise<void> =>
   client.request("background_clear", { sessionId, ids });
 
+/** Asks the provider to read a session's commands and skills again, for files that changed on disk. */
+export const commandsReload = (sessionId: string): Promise<void> => client.request("commands_reload", { sessionId });
+
+/** Restarts a session's CLI where it left off: the next message resumes it. */
+export const sessionRestart = (sessionId: string): Promise<void> => client.request("session_restart", { sessionId });
+
 export const turnStart = (params: {
   sessionId: string;
   cwd: string;
   text: string;
   files?: unknown;
   mentions?: string[];
+  command?: string;
+  skills?: string[];
   hidden?: boolean;
   fresh?: boolean;
   nonce?: string;
