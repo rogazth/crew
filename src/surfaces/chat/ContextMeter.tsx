@@ -42,7 +42,7 @@ export function ContextMeter({ sessionId, provider }: { sessionId: string; provi
         <Ring share={share} />
         {percent}%
       </span>
-      <span className="invisible absolute bottom-full left-0 z-30 mb-2 w-64 translate-y-1 rounded-xl bg-surface p-3 opacity-0 shadow-float ring-1 ring-border transition-all duration-150 group-hover:visible group-hover:translate-y-0 group-hover:opacity-100">
+      <span className="invisible absolute bottom-full left-0 z-30 mb-2 w-64 translate-y-1 rounded-xl bg-surface p-3 opacity-0 shadow-float ring-1 ring-border transition-[opacity,translate,visibility] duration-150 group-hover:visible group-hover:translate-y-0 group-hover:opacity-100">
         <span className="flex items-baseline justify-between">
           <span className="text-[12px] text-text-muted">Context window</span>
           <span className="text-[12px] text-text-muted tabular-nums">{percent}%</span>
