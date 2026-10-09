@@ -111,11 +111,24 @@ impl LocalClient {
         self.request_json("DELETE", path, None)
     }
 
+    /// `GET path` for one folder. opencode answers a request that names no
+    /// folder for the folder it was started in, and ignores `?directory=`; the
+    /// folder goes in `x-opencode-directory`, URI-encoded as its own clients
+    /// send it, so a path with spaces or accents arrives whole.
+    pub fn get_json_in(&self, path: &str, directory: &str) -> Result<Reply, HttpError> {
+        self.request_in("GET", path, None, Some(directory))
+    }
+
+    /// `POST path` for one folder, as [`LocalClient::get_json_in`] names it.
+    pub fn post_json_in(&self, path: &str, body: Option<&Value>, directory: &str) -> Result<Reply, HttpError> {
+        self.request_in("POST", path, body, Some(directory))
+    }
+
     /// Opens `GET path` as a `text/event-stream`. This is also the reconnect: after
     /// `Err(Dropped)`, call it again with the resume point in the query, such as
     /// `session.log?after=<seq>&follow=true`. The client never picks that path.
     pub fn open_events(&self, path: &str) -> Result<EventStream, HttpError> {
-        let mut reader = self.start("GET", path, "text/event-stream", None)?;
+        let mut reader = self.start("GET", path, "text/event-stream", None, None)?;
         let head = read_head(&mut reader)?;
         if head.status == 401 {
             return Err(HttpError::Refused);
@@ -127,10 +140,15 @@ impl LocalClient {
     }
 
     fn request_json(&self, method: &str, path: &str, body: Option<&Value>) -> Result<Reply, HttpError> {
+        self.request_in(method, path, body, None)
+    }
+
+    fn request_in(&self, method: &str, path: &str, body: Option<&Value>, directory: Option<&str>) -> Result<Reply, HttpError> {
         let payload = body
             .map(|value| serde_json::to_vec(value).map_err(|error| HttpError::Protocol(error.to_string())))
             .transpose()?;
-        let mut reader = self.start(method, path, "application/json", payload.as_deref())?;
+        let directory = directory.map(encode_uri_component);
+        let mut reader = self.start(method, path, "application/json", payload.as_deref(), directory.as_deref())?;
         let head = read_head(&mut reader)?;
         if head.status == 401 {
             return Err(HttpError::Refused);
@@ -148,7 +166,14 @@ impl LocalClient {
 
     /// Connects and writes the request. The returned reader is positioned at the
     /// start of the reply.
-    fn start(&self, method: &str, path: &str, accept: &str, body: Option<&[u8]>) -> Result<BufReader<TcpStream>, HttpError> {
+    fn start(
+        &self,
+        method: &str,
+        path: &str,
+        accept: &str,
+        body: Option<&[u8]>,
+        directory: Option<&str>,
+    ) -> Result<BufReader<TcpStream>, HttpError> {
         if !path.starts_with('/') || path.bytes().any(|byte| byte <= b' ' || byte == 0x7f) {
             let message = format!("request path {path:?} is not a plain origin-form path");
             return Err(HttpError::Io(io::Error::new(io::ErrorKind::InvalidInput, message)));
@@ -165,6 +190,9 @@ impl LocalClient {
             "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nAuthorization: {}\r\nAccept: {accept}\r\nConnection: close\r\n",
             self.port, self.authorization
         );
+        if let Some(directory) = directory {
+            head.push_str(&format!("x-opencode-directory: {directory}\r\n"));
+        }
         if let Some(body) = body {
             head.push_str(&format!("Content-Type: application/json\r\nContent-Length: {}\r\n", body.len()));
         }
@@ -242,6 +270,22 @@ impl EventStream {
             }
         }
     }
+}
+
+/// `encodeURIComponent`, which is how opencode's own clients put a folder in
+/// its header and how its server reads it back: everything but the unreserved
+/// characters is percent-encoded, so no byte of the path can end the header.
+fn encode_uri_component(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for byte in text.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'!' | b'~' | b'*' | b'\'' | b'(' | b')' => {
+                out.push(byte as char)
+            }
+            _ => out.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    out
 }
 
 /// Turns the io errors a socket raises into the cases callers act on.
@@ -619,6 +663,21 @@ mod tests {
         let started = Instant::now();
         assert!(matches!(events.next(), Some(Err(HttpError::TimedOut))));
         assert!(started.elapsed() < Duration::from_millis(1000));
+    }
+
+    /// The folder travels URI-encoded, so a path with a space, an accent or a
+    /// line break cannot break the header it rides in.
+    #[test]
+    fn a_folder_goes_in_its_header_encoded_as_opencodes_clients_send_it() {
+        let (port, requests) = serve(2, |_, _, stream| reply(stream, 200, "{\"data\":[]}"));
+        let client = client(port, Duration::from_secs(5));
+        client.get_json_in("/api/command", "/Users/me/Mis Documentos/café").unwrap();
+        client.post_json_in("/api/location/reload", None, "/tmp/a\r\nX-Injected: 1").unwrap();
+        let first = requests.recv().unwrap();
+        assert!(first.head.contains("x-opencode-directory: %2FUsers%2Fme%2FMis%20Documentos%2Fcaf%C3%A9\r\n"), "{}", first.head);
+        let second = requests.recv().unwrap();
+        assert!(second.head.contains("x-opencode-directory: %2Ftmp%2Fa%0D%0AX-Injected%3A%201\r\n"), "{}", second.head);
+        assert!(!second.head.contains("\r\nX-Injected"), "{}", second.head);
     }
 
     #[test]
