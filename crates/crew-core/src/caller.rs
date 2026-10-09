@@ -13,6 +13,11 @@
 //!   sessions of its own;
 //! - the user, from the `crew` command line, is no session at all and names
 //!   its workspace on each call.
+//!
+//! opencode's one shared server is the odd one: its token is per server run,
+//! not per session, so a call comes with the opencode session id and the
+//! bridge looks up which Crew session Crew bound it to. The caller is that
+//! session's, as its own token would have given.
 
 use crew_protocol::BotRef;
 
@@ -55,6 +60,11 @@ impl Caller {
                     None => None,
                 },
             }),
+            // It names no session by itself; the bridge turns it into the
+            // session an opencode session id is bound to before asking.
+            Bearer::OpencodeHost(_) => {
+                Err("The opencode host token speaks for no session by itself: a call has to name a session Crew bound.".to_string())
+            }
         }
     }
 
@@ -229,6 +239,8 @@ mod tests {
         // A session's workspace is its own, whatever the call named.
         assert_eq!(shell.workspace_id(), Ok(ws.id.as_str()));
         assert!(Caller::resolve(&store, &Bearer::Session("gone".into()), None).is_err());
+        let host = Caller::resolve(&store, &Bearer::OpencodeHost("run".into()), None).unwrap_err();
+        assert!(host.contains("speaks for no session by itself"), "{host}");
         assert!(Caller::User { workspace_id: None }.full_autonomy());
     }
 }

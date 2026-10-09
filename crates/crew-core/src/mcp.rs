@@ -17,6 +17,10 @@ const CALL_TIMEOUT: Duration = Duration::from_secs(20);
 /// travel back. The wait is capped, so a model cannot hang its own turn.
 const WAIT_CAP_S: u64 = 60;
 const WAIT_SLACK_S: u64 = 10;
+/// Where opencode 2.x puts the id of the session making a tool call, in the
+/// `_meta` of every `tools/call`. Its MCP server is one per folder, so this is
+/// the only thing that says which session is calling.
+const OPENCODE_SESSION_META: &str = "ai.opencode/sessionID";
 /// The newest revision this shim knows; a client that asks for an older one gets its own back.
 const PROTOCOL_VERSION: &str = "2025-06-18";
 
@@ -56,6 +60,13 @@ impl Link {
 
     /// One connection per call: a line out, a line back.
     pub fn call(&self, method: &str, params: Value) -> Result<Value, String> {
+        self.call_from(method, params, None)
+    }
+
+    /// The same, naming the opencode session a call came from. Sent for the
+    /// daemon to check, and believed there only with the opencode host token
+    /// and for a session Crew bound.
+    pub fn call_from(&self, method: &str, params: Value, opencode_session: Option<&str>) -> Result<Value, String> {
         let mut stream = UnixStream::connect(&self.socket).map_err(|e| unreachable_error(&e))?;
         let _ = stream.set_read_timeout(Some(call_timeout(method, &params)));
         let mut request = json!({
@@ -65,6 +76,9 @@ impl Link {
         });
         if let Some(workspace) = &self.workspace {
             request["workspace"] = json!(workspace);
+        }
+        if let Some(session) = opencode_session {
+            request["opencodeSession"] = json!(session);
         }
         let mut line = request.to_string();
         line.push('\n');
@@ -209,9 +223,16 @@ fn handle(link: &Link, method: &str, params: Value) -> Result<Value, (i64, Strin
         "ping" => Ok(json!({})),
         "tools/list" => link.call(method, params).map_err(|e| (-32603, e)),
         // A failed call is an answer the model should read, not a protocol error.
-        "tools/call" => Ok(link.call(method, params).unwrap_or_else(|e| {
-            json!({ "content": [{ "type": "text", "text": e }], "isError": true })
-        })),
+        "tools/call" => {
+            let opencode_session = params
+                .get("_meta")
+                .and_then(|meta| meta.get(OPENCODE_SESSION_META))
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            Ok(link.call_from(method, params, opencode_session.as_deref()).unwrap_or_else(|e| {
+                json!({ "content": [{ "type": "text", "text": e }], "isError": true })
+            }))
+        }
         _ => Err((-32601, format!("Method not found: {method}"))),
     }
 }
@@ -222,6 +243,13 @@ mod tests {
 
     /// What one call puts on the wire, as a bridge that answers once sees it.
     fn sent(link_for: impl FnOnce(String) -> Link) -> Value {
+        sent_by(link_for, |link| {
+            link.call("tools/list", Value::Null).expect("call");
+        })
+    }
+
+    /// The same for whatever `act` does with the link.
+    fn sent_by(link_for: impl FnOnce(String) -> Link, act: impl FnOnce(&Link)) -> Value {
         let path = std::env::temp_dir().join(format!("cm-{}.sock", &uuid::Uuid::new_v4().to_string()[..8]));
         let listener = std::os::unix::net::UnixListener::bind(&path).expect("bind");
         let link = link_for(path.to_string_lossy().into_owned());
@@ -232,7 +260,7 @@ mod tests {
             (&stream).write_all(b"{\"result\":{}}\n").expect("reply");
             line
         });
-        link.call("tools/list", Value::Null).expect("call");
+        act(&link);
         let _ = std::fs::remove_file(&path);
         serde_json::from_str(&seen.join().expect("join")).expect("json")
     }
@@ -243,6 +271,36 @@ mod tests {
         assert_eq!((user["token"].as_str(), user["workspace"].as_str()), (Some("u"), Some("/code/crew")));
         let session = sent(|socket| Link::new(socket, "s", None));
         assert!(session.get("workspace").is_none(), "{session}");
+    }
+
+    /// opencode's one server cannot tell its sessions apart by what it was
+    /// started with; it says which is calling in the `_meta` of each call, and
+    /// the daemon decides whether to believe it.
+    #[test]
+    fn a_call_passes_on_the_opencode_session_it_came_from() {
+        let call = |params: Value| {
+            sent_by(
+                |socket| Link::new(socket, "host", None),
+                |link| {
+                    handle(link, "tools/call", params).expect("handled");
+                },
+            )
+        };
+        let from = call(json!({ "name": "list_peers", "arguments": {}, "_meta": { "ai.opencode/sessionID": "ses_42" } }));
+        assert_eq!(from["opencodeSession"], "ses_42");
+        assert_eq!(from["token"], "host");
+        let bare = call(json!({ "name": "list_peers", "arguments": {} }));
+        assert!(bare.get("opencodeSession").is_none(), "{bare}");
+        // Only a string is an id, and only a tool call carries one.
+        let odd = call(json!({ "name": "list_peers", "_meta": { "ai.opencode/sessionID": 7 } }));
+        assert!(odd.get("opencodeSession").is_none(), "{odd}");
+        let listed = sent_by(
+            |socket| Link::new(socket, "host", None),
+            |link| {
+                handle(link, "tools/list", json!({ "_meta": { "ai.opencode/sessionID": "ses_42" } })).expect("handled");
+            },
+        );
+        assert!(listed.get("opencodeSession").is_none(), "{listed}");
     }
 
     #[test]

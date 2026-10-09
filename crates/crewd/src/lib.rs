@@ -477,6 +477,18 @@ impl ToolHost for ToolDispatch {
             let _ = self.exit.send(());
             return Ok(Value::Null);
         }
+        self.with_host(|host| tools::handle(host, caller, method, params))
+    }
+
+    /// A call through opencode's shared server: the bridge has already said
+    /// which session it is, or that it is the host token alone.
+    fn handle_opencode(&self, caller: Option<&Caller>, method: &str, params: Value) -> Result<Value, String> {
+        self.with_host(|host| tools::handle_opencode(host, caller, method, params))
+    }
+}
+
+impl ToolDispatch {
+    fn with_host<R>(&self, run: impl FnOnce(&tools::Host<'_>) -> R) -> R {
         let on_created = |created: &crew_core::session::Session| {
             self.hub.emit(
                 "session-created",
@@ -495,7 +507,7 @@ impl ToolHost for ToolDispatch {
             on_routines: &|| self.scheduler.arm(),
             toolbox: &self.toolbox,
         };
-        tools::handle(&host, caller, method, params)
+        run(&host)
     }
 }
 

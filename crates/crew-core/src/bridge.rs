@@ -19,6 +19,12 @@ use crate::caller::Caller;
 /// `workspace` is read for the user's token alone, which belongs to no
 /// workspace: an id, or a path inside one. A session's workspace is its own
 /// and one named on the wire is ignored, like the session id was.
+///
+/// `opencode_session` is the one id that is believed, and only from the
+/// opencode host token, for a session Crew bound on that token's server run:
+/// opencode's one server cannot hand each session its own token, so it says
+/// which session is calling, and the bridge checks that against what Crew
+/// bound. Sent with any other token it is ignored; the token is the identity.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Request {
@@ -28,6 +34,8 @@ struct Request {
     params: Value,
     #[serde(default)]
     workspace: Option<String>,
+    #[serde(default)]
+    opencode_session: Option<String>,
 }
 
 #[derive(serde::Serialize, Clone)]
@@ -43,12 +51,20 @@ pub struct BridgeInfo {
 pub enum Bearer {
     Session(String),
     User,
+    /// One run of opencode's shared server, by its run id. It speaks for no
+    /// session: the bridge answers it the list of tools and the calls of
+    /// sessions Crew bound to that run, and never resolves it to a caller.
+    OpencodeHost(String),
 }
 
 pub trait ToolHost: Send + Sync {
     /// The caller behind a bearer, with the workspace a user's call named.
     fn resolve(&self, bearer: &Bearer, workspace: Option<&str>) -> Result<Caller, String>;
     fn handle(&self, caller: &Caller, method: &str, params: Value) -> Result<Value, String>;
+    /// A call that came through opencode's shared server. `caller` is `None`
+    /// for the host token alone, which is only ever sent a method that needs
+    /// no one in particular (the tool list).
+    fn handle_opencode(&self, caller: Option<&Caller>, method: &str, params: Value) -> Result<Value, String>;
 }
 
 /// A token's lifetime is its process's, and the two kinds of process end
@@ -64,6 +80,11 @@ enum Lease {
     Process,
     /// The user's, for as long as the daemon runs.
     User,
+    /// One opencode server run's, until [`OpencodeHost::end_run`].
+    Host,
+    /// One opencode session's, for its shell: until
+    /// [`OpencodeHost::unbind`] or the end of the run.
+    Bound,
 }
 
 struct Grant {
@@ -75,7 +96,22 @@ struct Shared {
     handler: Mutex<Option<Arc<dyn ToolHost>>>,
     socket_path: PathBuf,
     tokens: Mutex<HashMap<String, Grant>>,
+    /// Always taken before `tokens`, wherever both are.
+    runs: Mutex<HashMap<String, Run>>,
     user_token: String,
+}
+
+/// One run of `opencode serve` and the sessions Crew bound on it.
+struct Run {
+    host_token: String,
+    /// By opencode session id.
+    bound: HashMap<String, Binding>,
+}
+
+struct Binding {
+    session_id: String,
+    /// The `CREW_TOKEN` of that session's shell.
+    token: String,
 }
 
 /// Relays `crew mcp` and the `crew` commands into the daemon tool host.
@@ -134,6 +170,7 @@ impl Bridge {
                 handler: Mutex::new(None),
                 socket_path,
                 tokens: Mutex::new(tokens),
+                runs: Mutex::new(HashMap::new()),
                 user_token,
             }),
         };
@@ -188,18 +225,34 @@ impl Bridge {
     }
 
     /// Hand one token back, for a process that has exited. The user's token
-    /// is not handed back this way; it goes with the daemon.
+    /// is not handed back this way; it goes with the daemon. Nor are the
+    /// opencode tokens, which go with their server run or their binding.
     pub fn revoke_token(&self, token: &str) {
         let mut tokens = self.tokens();
-        if tokens.get(token).is_some_and(|grant| grant.lease != Lease::User) {
+        if tokens.get(token).is_some_and(|grant| matches!(grant.lease, Lease::Turn | Lease::Process)) {
             tokens.remove(token);
         }
     }
 
-    /// Hand back every token a session holds, for a session that is gone.
+    /// Hand back every token a session holds, and every opencode binding it
+    /// has, for a session that is gone.
     pub fn revoke(&self, session_id: &str) {
+        let mut runs = self.runs();
+        for run in runs.values_mut() {
+            run.bound.retain(|_, binding| binding.session_id != session_id);
+        }
         let bearer = Bearer::Session(session_id.to_string());
         self.tokens().retain(|_, grant| grant.bearer != bearer);
+    }
+
+    fn runs(&self) -> std::sync::MutexGuard<'_, HashMap<String, Run>> {
+        self.shared.runs.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// The way opencode's shared server gets its identities: see
+    /// [`OpencodeHost`].
+    pub fn opencode(&self) -> OpencodeHost {
+        OpencodeHost { bridge: self.clone() }
     }
 
     /// The token that speaks as the user. It goes into `daemon.json` (0600)
@@ -234,6 +287,104 @@ impl Bridge {
     }
 }
 
+/// One `opencode serve` run's standing with the bridge.
+///
+/// opencode 2.x runs one server for the whole daemon, with an MCP server
+/// configured per folder and not per session, so a session cannot be handed
+/// its own `CREW_TOKEN` through the process it runs in. The server gets a host
+/// token instead, which by itself may list tools and nothing else, and opencode
+/// names the calling session on every tool call. The bridge believes that name
+/// only for an id Crew bound on that run, and then answers as the Crew session
+/// it was bound to. The driver is the only one that binds, when it creates or
+/// takes up an opencode session; nothing opencode says can add a binding.
+///
+/// Each binding also has a token of its own, for the `crew` commands in that
+/// session's shell (set through opencode's `PUT /session/:id/environment`): the
+/// host token must not be in that environment, or the shell could name any
+/// bound session. Give the host token to the MCP server alone.
+#[derive(Clone)]
+pub struct OpencodeHost {
+    bridge: Bridge,
+}
+
+/// What a started run hands the driver.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OpencodeRun {
+    pub run_id: String,
+    /// For the server's MCP server (`CREW_TOKEN` there); it grants no tool call
+    /// by itself.
+    pub host_token: String,
+}
+
+impl OpencodeHost {
+    /// A new server run, with the token its MCP server will call with.
+    pub fn start_run(&self) -> OpencodeRun {
+        let run_id = uuid::Uuid::new_v4().to_string();
+        let host_token = uuid::Uuid::new_v4().to_string();
+        let mut runs = self.bridge.runs();
+        self.bridge
+            .tokens()
+            .insert(host_token.clone(), Grant { bearer: Bearer::OpencodeHost(run_id.clone()), lease: Lease::Host });
+        runs.insert(run_id.clone(), Run { host_token: host_token.clone(), bound: HashMap::new() });
+        OpencodeRun { run_id, host_token }
+    }
+
+    /// Say that an opencode session on this run is a Crew session, and get the
+    /// token for that session's shell. Binding the same pair again replaces
+    /// the token; an opencode id already bound to another Crew session is
+    /// refused, since a second claim on it is a mistake or an attack and
+    /// neither should win quietly.
+    pub fn bind(&self, run_id: &str, opencode_id: &str, session_id: &str) -> Result<String, String> {
+        if opencode_id.is_empty() || session_id.is_empty() {
+            return Err("An opencode session and a Crew session are both needed to bind one to the other".into());
+        }
+        let mut runs = self.bridge.runs();
+        let run = runs.get_mut(run_id).ok_or("That opencode server run has ended")?;
+        if run.bound.get(opencode_id).is_some_and(|bound| bound.session_id != session_id) {
+            return Err(format!("opencode session {opencode_id} is already bound to another Crew session"));
+        }
+        let token = uuid::Uuid::new_v4().to_string();
+        let mut tokens = self.bridge.tokens();
+        if let Some(old) = run.bound.remove(opencode_id) {
+            tokens.remove(&old.token);
+        }
+        tokens.insert(
+            token.clone(),
+            Grant { bearer: Bearer::Session(session_id.to_string()), lease: Lease::Bound },
+        );
+        run.bound.insert(opencode_id.to_string(), Binding { session_id: session_id.to_string(), token: token.clone() });
+        Ok(token)
+    }
+
+    /// End a binding and its shell token: the opencode session is gone, or no
+    /// longer Crew's to speak for.
+    pub fn unbind(&self, run_id: &str, opencode_id: &str) {
+        let mut runs = self.bridge.runs();
+        if let Some(old) = runs.get_mut(run_id).and_then(|run| run.bound.remove(opencode_id)) {
+            self.bridge.tokens().remove(&old.token);
+        }
+    }
+
+    /// The server stopped: its host token, every binding and every shell token
+    /// go with it, so nothing a dead server's process still holds works.
+    pub fn end_run(&self, run_id: &str) {
+        let mut runs = self.bridge.runs();
+        if let Some(run) = runs.remove(run_id) {
+            let mut tokens = self.bridge.tokens();
+            tokens.remove(&run.host_token);
+            for binding in run.bound.values() {
+                tokens.remove(&binding.token);
+            }
+        }
+    }
+
+    /// The Crew session an opencode session was bound to on this run, if it
+    /// was: an id never bound, or bound on another run, is nobody.
+    pub fn session_for(&self, run_id: &str, opencode_id: &str) -> Option<String> {
+        self.bridge.runs().get(run_id)?.bound.get(opencode_id).map(|bound| bound.session_id.clone())
+    }
+}
+
 fn serve(bridge: Bridge, stream: UnixStream) {
     let mut line = String::new();
     let mut reader = BufReader::new(match stream.try_clone() {
@@ -259,18 +410,46 @@ fn serve(bridge: Bridge, stream: UnixStream) {
     let Some(handler) = handler else {
         return reply(stream, json!({ "error": "Tool handler is not set" }));
     };
-    let workspace = match bearer {
-        Bearer::User => request.workspace.as_deref(),
-        Bearer::Session(_) => None,
-    };
-    let body = match handler
-        .resolve(&bearer, workspace)
-        .and_then(|caller| handler.handle(&caller, &request.method, request.params))
-    {
+    let body = match answer(&bridge, handler.as_ref(), bearer, request) {
         Ok(result) => json!({ "result": result }),
         Err(error) => json!({ "error": error }),
     };
     reply(stream, body);
+}
+
+fn answer(bridge: &Bridge, handler: &dyn ToolHost, bearer: Bearer, request: Request) -> Result<Value, String> {
+    if let Bearer::OpencodeHost(run) = &bearer {
+        return answer_opencode(bridge, handler, run, request);
+    }
+    let workspace = match bearer {
+        Bearer::User => request.workspace.as_deref(),
+        Bearer::Session(_) | Bearer::OpencodeHost(_) => None,
+    };
+    let caller = handler.resolve(&bearer, workspace)?;
+    handler.handle(&caller, &request.method, request.params)
+}
+
+/// What the host token of one opencode server run may do: list the tools, and
+/// make a call that names a session Crew bound on this run, as that session.
+/// Everything else, a method that acts for someone, is refused, so a host
+/// token that leaks is worth no more than the list.
+fn answer_opencode(bridge: &Bridge, handler: &dyn ToolHost, run: &str, request: Request) -> Result<Value, String> {
+    match request.method.as_str() {
+        "tools/list" | "instructions" => handler.handle_opencode(None, &request.method, request.params),
+        "tools/call" => {
+            let id = request.opencode_session.as_deref().filter(|id| !id.is_empty()).ok_or(
+                "This call does not say which opencode session it is from, so Crew cannot tell whose it is. Calls through opencode's shared server are only answered for a session Crew started.",
+            )?;
+            let session = bridge.opencode().session_for(run, id).ok_or_else(|| {
+                format!("opencode session {id} is not one Crew started on this server run, so Crew will not act for it.")
+            })?;
+            let caller = handler.resolve(&Bearer::Session(session), None)?;
+            handler.handle_opencode(Some(&caller), &request.method, request.params)
+        }
+        other => Err(format!(
+            "The opencode host token can list tools and make calls for a session Crew bound; {other} is not one of those."
+        )),
+    }
 }
 
 fn reply(mut stream: UnixStream, body: Value) {
@@ -381,5 +560,381 @@ mod tests {
         bridge.revoke_token(&user);
         bridge.revoke("anyone");
         assert_eq!(bridge.whose(&user), Some(Bearer::User));
+    }
+
+    #[test]
+    fn a_run_has_a_host_token_that_is_not_a_session() {
+        let bridge = bridge();
+        let host = bridge.opencode();
+        let run = host.start_run();
+        assert_eq!(bridge.whose(&run.host_token), Some(Bearer::OpencodeHost(run.run_id.clone())));
+        // Two runs are two identities: a restarted server is not the old one.
+        let next = host.start_run();
+        assert_ne!(next.run_id, run.run_id);
+        assert_ne!(next.host_token, run.host_token);
+        // Nothing but the end of the run hands it back.
+        bridge.revoke_token(&run.host_token);
+        bridge.revoke("anyone");
+        assert_eq!(bridge.whose(&run.host_token), Some(Bearer::OpencodeHost(run.run_id)));
+    }
+
+    #[test]
+    fn a_binding_has_a_shell_token_that_is_retired_with_it() {
+        let bridge = bridge();
+        let host = bridge.opencode();
+        let run = host.start_run();
+        let token = host.bind(&run.run_id, "ses_1", "crew-a").expect("bind");
+        assert_eq!(bridge.whose(&token), session("crew-a"));
+        assert_eq!(host.session_for(&run.run_id, "ses_1"), Some("crew-a".into()));
+        // A turn's token for the same session neither replaces it nor is replaced by it.
+        let turn = bridge.mint("crew-a");
+        assert_eq!(bridge.whose(&token), session("crew-a"));
+        bridge.revoke_token(&token);
+        assert_eq!(bridge.whose(&token), session("crew-a"), "only the binding hands it back");
+        host.unbind(&run.run_id, "ses_1");
+        assert_eq!(bridge.whose(&token), None);
+        assert_eq!(host.session_for(&run.run_id, "ses_1"), None);
+        assert_eq!(bridge.whose(&turn), session("crew-a"));
+        // The host token outlives one binding.
+        assert!(bridge.whose(&run.host_token).is_some());
+    }
+
+    #[test]
+    fn ending_a_run_retires_its_host_token_its_bindings_and_their_tokens() {
+        let bridge = bridge();
+        let host = bridge.opencode();
+        let run = host.start_run();
+        let other = host.start_run();
+        let one = host.bind(&run.run_id, "ses_1", "a").expect("bind");
+        let two = host.bind(&run.run_id, "ses_2", "b").expect("bind");
+        let kept = host.bind(&other.run_id, "ses_1", "a").expect("bind");
+        host.end_run(&run.run_id);
+        for token in [&run.host_token, &one, &two] {
+            assert_eq!(bridge.whose(token), None);
+        }
+        assert_eq!(host.session_for(&run.run_id, "ses_1"), None);
+        assert!(host.bind(&run.run_id, "ses_3", "a").is_err(), "a run that has ended takes no bindings");
+        // The other run is untouched, and so is the same opencode id on it.
+        assert_eq!(bridge.whose(&kept), session("a"));
+        assert_eq!(host.session_for(&other.run_id, "ses_1"), Some("a".into()));
+    }
+
+    #[test]
+    fn an_opencode_session_cannot_be_claimed_by_a_second_crew_session() {
+        let bridge = bridge();
+        let host = bridge.opencode();
+        let run = host.start_run();
+        let first = host.bind(&run.run_id, "ses_1", "a").expect("bind");
+        let error = host.bind(&run.run_id, "ses_1", "b").unwrap_err();
+        assert!(error.contains("already bound to another Crew session"), "{error}");
+        assert_eq!(host.session_for(&run.run_id, "ses_1"), Some("a".into()));
+        assert_eq!(bridge.whose(&first), session("a"));
+        // The same pair again is a new shell token for it, and the old one stops.
+        let second = host.bind(&run.run_id, "ses_1", "a").expect("rebind");
+        assert_ne!(first, second);
+        assert_eq!(bridge.whose(&first), None);
+        assert_eq!(bridge.whose(&second), session("a"));
+        assert!(host.bind(&run.run_id, "", "a").is_err() && host.bind(&run.run_id, "ses_2", "").is_err());
+    }
+
+    #[test]
+    fn a_deleted_session_loses_its_opencode_bindings_too() {
+        let bridge = bridge();
+        let host = bridge.opencode();
+        let run = host.start_run();
+        let token = host.bind(&run.run_id, "ses_1", "gone").expect("bind");
+        host.bind(&run.run_id, "ses_2", "kept").expect("bind");
+        bridge.revoke("gone");
+        assert_eq!(bridge.whose(&token), None);
+        assert_eq!(host.session_for(&run.run_id, "ses_1"), None);
+        assert_eq!(host.session_for(&run.run_id, "ses_2"), Some("kept".into()));
+    }
+
+    // -- Through the socket, with the daemon's own tool dispatch ----------
+
+    /// Answers like the daemon: the store says who a bearer is, and the real
+    /// dispatch runs the tools it is handed.
+    struct Daemon {
+        store: crate::store::Store,
+        transcripts: crate::transcript::TranscriptHub,
+        toolbox: crate::tools::Toolbox,
+    }
+
+    impl Daemon {
+        fn with_host<R>(&self, run: impl FnOnce(&crate::tools::Host<'_>) -> R) -> R {
+            run(&crate::tools::Host {
+                store: &self.store,
+                transcripts: &self.transcripts,
+                on_created: &|_| {},
+                on_routines: &|| {},
+                toolbox: &self.toolbox,
+            })
+        }
+    }
+
+    impl ToolHost for Daemon {
+        fn resolve(&self, bearer: &Bearer, workspace: Option<&str>) -> Result<Caller, String> {
+            Caller::resolve(&self.store, bearer, workspace)
+        }
+
+        fn handle(&self, caller: &Caller, method: &str, params: Value) -> Result<Value, String> {
+            self.with_host(|host| crate::tools::handle(host, caller, method, params))
+        }
+
+        fn handle_opencode(&self, caller: Option<&Caller>, method: &str, params: Value) -> Result<Value, String> {
+            self.with_host(|host| crate::tools::handle_opencode(host, caller, method, params))
+        }
+    }
+
+    /// A tool every kind may call, that says who it took the caller for.
+    struct WhoAmI;
+
+    impl crate::tools::ToolFamily for WhoAmI {
+        fn catalog(&self) -> Vec<crate::tools::Tool> {
+            vec![crate::tools::Tool {
+                name: "who_am_i",
+                description: "Say who is calling.",
+                schema: json!({ "type": "object", "properties": {} }),
+                cli: vec![],
+                audience: crate::tools::Audience::EVERYONE,
+            }]
+        }
+
+        fn run(&self, caller: &Caller, _: &str, _: &Value) -> Result<crate::tools::ToolOutput, String> {
+            Ok(json!(caller.label()).into())
+        }
+    }
+
+    struct Rig {
+        bridge: Bridge,
+        workspace: String,
+        store: crate::store::Store,
+    }
+
+    fn rig() -> Rig {
+        let dir = std::env::temp_dir().join(format!("crew-bridge-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let store = crate::store::Store::open(dir.join("crew.sqlite3")).expect("store");
+        let workspace = crate::workspace::create(&store, "w".into(), dir.to_string_lossy().into()).expect("ws").id;
+        let toolbox = crate::tools::Toolbox::default();
+        toolbox.register(Arc::new(crate::tools::CatalogOnly(crate::session_tools::catalog)));
+        toolbox.register(Arc::new(WhoAmI));
+        let bridge = bridge();
+        bridge.set_handler(Arc::new(Daemon {
+            transcripts: crate::transcript::TranscriptHub::new(store.clone()),
+            store: store.clone(),
+            toolbox,
+        }));
+        Rig { bridge, workspace, store }
+    }
+
+    impl Rig {
+        fn bot(&self, name: &str) -> String {
+            self.session("bot", name)
+        }
+
+        fn child(&self, name: &str) -> String {
+            crate::session::create_child(
+                &self.store,
+                self.workspace.clone(),
+                name.into(),
+                "opencode".into(),
+                "".into(),
+                "ask".into(),
+                None,
+                None,
+            )
+            .expect("child")
+            .id
+        }
+
+        fn session(&self, kind: &str, name: &str) -> String {
+            crate::session::create(
+                &self.store,
+                self.workspace.clone(),
+                kind.into(),
+                name.into(),
+                "opencode".into(),
+                "".into(),
+                "".into(),
+                "ask".into(),
+                None,
+            )
+            .expect("session")
+            .id
+        }
+
+        /// One request, as `crewd --mcp` sends it.
+        fn ask(&self, token: &str, method: &str, params: Value, opencode_session: Option<&str>) -> Value {
+            let mut request = json!({ "token": token, "method": method, "params": params });
+            if let Some(id) = opencode_session {
+                request["opencodeSession"] = json!(id);
+            }
+            let mut stream = UnixStream::connect(self.bridge.socket_path()).expect("connect");
+            stream.write_all(format!("{request}\n").as_bytes()).expect("write");
+            let mut line = String::new();
+            BufReader::new(stream).read_line(&mut line).expect("read");
+            serde_json::from_str(&line).expect("json")
+        }
+
+        fn call(&self, token: &str, tool: &str, opencode_session: Option<&str>) -> Value {
+            self.ask(token, "tools/call", json!({ "name": tool, "arguments": {} }), opencode_session)
+        }
+    }
+
+    fn said(reply: &Value) -> String {
+        reply["error"]
+            .as_str()
+            .or_else(|| reply["result"]["content"][0]["text"].as_str())
+            .unwrap_or_default()
+            .to_string()
+    }
+
+    #[test]
+    fn the_host_token_alone_cannot_call_any_tool() {
+        let rig = rig();
+        let run = rig.bridge.opencode().start_run();
+        let bot = rig.bot("Coder");
+        rig.bridge.opencode().bind(&run.run_id, "ses_1", &bot).expect("bind");
+
+        let anonymous = rig.call(&run.host_token, "who_am_i", None);
+        assert!(said(&anonymous).contains("does not say which opencode session"), "{anonymous}");
+        let empty = rig.call(&run.host_token, "who_am_i", Some(""));
+        assert!(said(&empty).contains("does not say which opencode session"), "{empty}");
+        // Nor can it act for anyone in any other way.
+        for method in ["whoami", "tools/catalog", "daemon/shutdown"] {
+            let reply = rig.ask(&run.host_token, method, json!({}), Some("ses_1"));
+            assert!(said(&reply).contains("can list tools and make calls"), "{method}: {reply}");
+        }
+    }
+
+    #[test]
+    fn the_host_token_lists_what_any_kind_may_call() {
+        let rig = rig();
+        let run = rig.bridge.opencode().start_run();
+        let reply = rig.ask(&run.host_token, "tools/list", json!({}), None);
+        let listed: Vec<&str> = reply["result"]["tools"]
+            .as_array()
+            .expect("tools")
+            .iter()
+            .filter_map(|tool| tool["name"].as_str())
+            .collect();
+        // A parent's tool and a bot's own are both in it.
+        for name in ["start_session", "update_description", "who_am_i", "send_message"] {
+            assert!(listed.contains(&name), "{name} missing from {listed:?}");
+        }
+        let told = rig.ask(&run.host_token, "instructions", Value::Null, None);
+        assert!(told["result"]["instructions"].as_str().is_some_and(|text| text.contains("refused saying so")), "{told}");
+    }
+
+    #[test]
+    fn an_unknown_or_foreign_session_id_is_refused() {
+        let rig = rig();
+        let host = rig.bridge.opencode();
+        let ours = host.start_run();
+        let theirs = host.start_run();
+        let bot = rig.bot("Coder");
+        host.bind(&ours.run_id, "ses_ours", &bot).expect("bind");
+        host.bind(&theirs.run_id, "ses_theirs", &bot).expect("bind");
+
+        let unknown = rig.call(&ours.host_token, "who_am_i", Some("ses_made_up"));
+        assert!(said(&unknown).contains("not one Crew started on this server run"), "{unknown}");
+        // Bound, but on another server run: not this token's to name.
+        let foreign = rig.call(&ours.host_token, "who_am_i", Some("ses_theirs"));
+        assert!(said(&foreign).contains("not one Crew started on this server run"), "{foreign}");
+        // A Crew session id is not an opencode session id.
+        let crew_id = rig.call(&ours.host_token, "who_am_i", Some(&bot));
+        assert!(said(&crew_id).contains("not one Crew started"), "{crew_id}");
+        let fine = rig.call(&ours.host_token, "who_am_i", Some("ses_ours"));
+        assert!(fine.get("error").is_none(), "{fine}");
+    }
+
+    #[test]
+    fn a_bound_id_acts_as_that_session_and_is_held_to_its_kind() {
+        let rig = rig();
+        let host = rig.bridge.opencode();
+        let run = host.start_run();
+        let bot = rig.bot("Coder");
+        let kid = rig.child("Kid");
+        host.bind(&run.run_id, "ses_bot", &bot).expect("bind");
+        host.bind(&run.run_id, "ses_kid", &kid).expect("bind");
+
+        let who = |id: &str| said(&rig.call(&run.host_token, "who_am_i", Some(id)));
+        assert_eq!(who("ses_bot"), format!("Coder (bot {bot})"));
+        assert_eq!(who("ses_kid"), format!("Kid (session {kid})"));
+
+        // A bot may start a session (the stand-in family says "not here"); a
+        // child may not, and is told so before the tool is asked.
+        let bot_start = said(&rig.call(&run.host_token, "start_session", Some("ses_bot")));
+        assert!(bot_start.starts_with("not here"), "{bot_start}");
+        let kid_start = said(&rig.call(&run.host_token, "start_session", Some("ses_kid")));
+        assert_eq!(kid_start, "This session cannot use start_session: it is not offered to a child session.");
+    }
+
+    #[test]
+    fn a_session_deleted_after_binding_is_not_acted_for() {
+        let rig = rig();
+        let host = rig.bridge.opencode();
+        let run = host.start_run();
+        host.bind(&run.run_id, "ses_1", "no-such-session").expect("bind");
+        let reply = rig.call(&run.host_token, "who_am_i", Some("ses_1"));
+        assert!(said(&reply).contains("no longer exists"), "{reply}");
+    }
+
+    #[test]
+    fn ending_the_run_cuts_off_the_host_token_and_the_shell_tokens() {
+        let rig = rig();
+        let host = rig.bridge.opencode();
+        let run = host.start_run();
+        let bot = rig.bot("Coder");
+        let shell = host.bind(&run.run_id, "ses_1", &bot).expect("bind");
+        assert!(rig.call(&run.host_token, "who_am_i", Some("ses_1")).get("error").is_none());
+        host.end_run(&run.run_id);
+        for token in [&run.host_token, &shell] {
+            assert_eq!(rig.ask(token, "whoami", json!({}), None)["error"], "Bad token");
+        }
+    }
+
+    #[test]
+    fn the_shell_token_speaks_as_its_session_on_the_cli_path_until_unbound() {
+        let rig = rig();
+        let host = rig.bridge.opencode();
+        let run = host.start_run();
+        let kid = rig.child("Kid");
+        let shell = host.bind(&run.run_id, "ses_1", &kid).expect("bind");
+
+        let whoami = rig.ask(&shell, "whoami", json!({}), None);
+        assert_eq!(whoami["result"]["kind"], "child");
+        assert_eq!(whoami["result"]["sessionId"], kid.as_str());
+        // The same limits as its own token: no starting sessions.
+        let refused = said(&rig.call(&shell, "start_session", None));
+        assert!(refused.starts_with("Unknown tool \"start_session\""), "{refused}");
+
+        host.unbind(&run.run_id, "ses_1");
+        assert_eq!(rig.ask(&shell, "whoami", json!({}), None)["error"], "Bad token");
+    }
+
+    /// The id rides on every call, but only the host token is believed about it.
+    #[test]
+    fn an_opencode_session_id_sent_with_a_session_token_is_ignored() {
+        let rig = rig();
+        let host = rig.bridge.opencode();
+        let run = host.start_run();
+        let mine = rig.child("Mine");
+        let theirs = rig.bot("Theirs");
+        host.bind(&run.run_id, "ses_theirs", &theirs).expect("bind");
+        let token = rig.bridge.mint(&mine);
+
+        let who = said(&rig.call(&token, "who_am_i", Some("ses_theirs")));
+        assert_eq!(who, format!("Mine (session {mine})"));
+    }
+
+    #[test]
+    fn the_user_token_is_still_the_user_whatever_session_it_names() {
+        let rig = rig();
+        let run = rig.bridge.opencode().start_run();
+        rig.bridge.opencode().bind(&run.run_id, "ses_1", &rig.bot("Coder")).expect("bind");
+        let who = said(&rig.call(&rig.bridge.user_token(), "who_am_i", Some("ses_1")));
+        assert_eq!(who, "the user");
     }
 }

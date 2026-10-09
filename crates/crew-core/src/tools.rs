@@ -319,6 +319,20 @@ impl Toolbox {
         self.entries().into_iter().filter(|entry| entry.tool.audience.admits(kind)).collect()
     }
 
+    /// Every tool some kind of caller may call, each with the first kind that
+    /// may (bot, terminal, child, user): what opencode's one shared server
+    /// lists to all of its sessions at once.
+    fn visible_to_any(&self) -> Vec<(Entry, CallerKind)> {
+        const KINDS: [CallerKind; 4] = [CallerKind::Bot, CallerKind::Terminal, CallerKind::Child, CallerKind::User];
+        self.entries()
+            .into_iter()
+            .filter_map(|entry| {
+                let kind = KINDS.into_iter().find(|kind| entry.tool.audience.admits(*kind))?;
+                Some((entry, kind))
+            })
+            .collect()
+    }
+
     /// The names `tools/list` answers with for this kind of caller, in its
     /// order: what a prompt's tool sheet names, so the two cannot disagree.
     pub fn visible_names(&self, kind: CallerKind) -> Vec<&'static str> {
@@ -670,16 +684,68 @@ pub fn handle(host: &Host<'_>, caller: &Caller, method: &str, params: Value) -> 
     }
 }
 
-/// Who the bridge took this caller for and which workspace that put it in,
-/// for `crew status`: a CLI that guessed the wrong identity or folder should
-/// be able to see so before it acts.
-fn whoami(store: &Store, caller: &Caller) -> Result<Value, String> {
-    let kind = match caller.kind() {
+/// The bridge's methods for a call that came through opencode's shared
+/// server, whose MCP server is one per folder and so cannot tell its sessions
+/// apart by what it was started with.
+///
+/// `caller` is `None` for the host token alone, which the bridge lets ask for
+/// the list and nothing else; it is the session an opencode session id was
+/// bound to for a `tools/call`.
+///
+/// Every session in a folder is listed the same tools, so the list is the
+/// union of what each kind of caller may call. The call is where it is held
+/// to its own: a tool outside its kind is refused saying so, not hidden.
+pub fn handle_opencode(host: &Host<'_>, caller: Option<&Caller>, method: &str, params: Value) -> Result<Value, String> {
+    match (method, caller) {
+        ("tools/list", _) => Ok(json!({
+            "tools": host
+                .toolbox
+                .visible_to_any()
+                .iter()
+                .map(|(entry, kind)| describe(&entry.tool, *kind))
+                .collect::<Vec<_>>()
+        })),
+        // Asked once for the whole folder, so it cannot name one session's
+        // tools or notes the way `instructions` does for a caller.
+        ("instructions", _) => Ok(json!({
+            "instructions": format!(
+                "Crew is the app this runs in: it holds a workspace of bots, and these tools reach them. \
+                 Every session in this folder is listed the same tools, so some are not for every session: a call a session may not make is refused saying so.\n{GLOSSARY}"
+            )
+        })),
+        ("tools/call", Some(caller)) => {
+            let name = params.get("name").and_then(Value::as_str).unwrap_or("");
+            let kind = caller.kind();
+            let known = host.toolbox.entries().into_iter().find(|entry| entry.tool.name == name);
+            if known.is_some_and(|entry| !entry.tool.audience.admits(kind)) {
+                return Ok(json!({
+                    "content": [{ "type": "text", "text": format!(
+                        "This session cannot use {name}: it is not offered to a {} session.",
+                        kind_name(kind)
+                    ) }],
+                    "isError": true
+                }));
+            }
+            handle(host, caller, method, params)
+        }
+        _ => Err(format!("{method} is not available through opencode's shared server")),
+    }
+}
+
+fn kind_name(kind: CallerKind) -> &'static str {
+    match kind {
         CallerKind::Bot => "bot",
         CallerKind::Terminal => "terminal",
         CallerKind::Child => "child",
         CallerKind::User => "user",
-    };
+    }
+}
+
+/// Who the bridge took this caller for and which workspace that put it in,
+/// for `crew status`: a CLI that guessed the wrong identity or folder should
+/// be able to see so before it acts.
+fn whoami(store: &Store, caller: &Caller) -> Result<Value, String> {
+    let kind = kind_name(caller.kind());
     let workspace = match caller.workspace_id() {
         Ok(id) => crate::workspace::get(store, id.to_string())?
             .map(|found| json!({ "id": found.id, "name": found.name, "path": found.path })),
@@ -1825,6 +1891,78 @@ mod tests {
         let out = handle(&host, &user(Some(&ws)), "tools/call", json!({ "name": "boil_kettle", "arguments": { "kettle": "blue" } }))
             .expect("call");
         assert!(is_error(&out), "{}", body(&out));
+    }
+
+    fn child(store: &Store, workspace_id: &str) -> Session {
+        session::create_child(store, workspace_id.to_string(), "Kid".into(), "claude".into(), "".into(), "ask".into(), None, None)
+            .expect("child")
+    }
+
+    /// The tools of the sessions family, listed and refused the way the
+    /// daemon has them, without the turn host that would run them.
+    fn session_family() -> Toolbox {
+        let toolbox = Toolbox::default();
+        toolbox.register(Arc::new(CatalogOnly(crate::session_tools::catalog)));
+        toolbox.register(Arc::new(Kettle));
+        toolbox
+    }
+
+    /// Every session in an opencode folder is shown one list, so it has to
+    /// hold what any kind of caller may call, and nothing else.
+    #[test]
+    fn opencodes_shared_list_is_the_union_of_what_each_kind_may_call() {
+        let store = store();
+        let transcripts = TranscriptHub::new(store.clone());
+        let toolbox = session_family();
+        let host = Host { store: &store, transcripts: &transcripts, on_created: &|_| {}, on_routines: &|| {}, toolbox: &toolbox };
+        let out = handle_opencode(&host, None, "tools/list", json!({})).expect("list");
+        let listed: Vec<&str> = out["tools"].as_array().expect("tools").iter().filter_map(|t| t["name"].as_str()).collect();
+
+        let mut union: Vec<&str> = Vec::new();
+        for kind in [CallerKind::Bot, CallerKind::Terminal, CallerKind::Child, CallerKind::User] {
+            for name in toolbox.visible_names(kind) {
+                if !union.contains(&name) {
+                    union.push(name);
+                }
+            }
+        }
+        let mut sorted_listed = listed.clone();
+        sorted_listed.sort_unstable();
+        union.sort_unstable();
+        assert_eq!(sorted_listed, union);
+        // What only a bot may call, and what only a parent may, are both there.
+        assert!(listed.contains(&"update_description") && listed.contains(&"start_session"), "{listed:?}");
+        let again: std::collections::HashSet<&&str> = listed.iter().collect();
+        assert_eq!(again.len(), listed.len(), "a tool listed twice");
+    }
+
+    #[test]
+    fn a_tool_outside_the_calling_sessions_kind_is_refused_saying_so() {
+        let store = store();
+        let transcripts = TranscriptHub::new(store.clone());
+        let ws = workspace(&store);
+        let toolbox = session_family();
+        let host = Host { store: &store, transcripts: &transcripts, on_created: &|_| {}, on_routines: &|| {}, toolbox: &toolbox };
+        let call = |caller: &Caller, name: &str| {
+            handle_opencode(&host, Some(caller), "tools/call", json!({ "name": name, "arguments": {} })).expect("call")
+        };
+
+        let kid = Caller::from_session(child(&store, &ws));
+        let refused = call(&kid, "start_session");
+        assert!(is_error(&refused), "{}", body(&refused));
+        assert_eq!(body(&refused), "This session cannot use start_session: it is not offered to a child session.");
+
+        // A bot passes the check and gets what the tool itself says.
+        let me = Caller::from_session(bot(&store, &ws, "Coder"));
+        assert!(!body(&call(&me, "start_session")).contains("cannot use"), "{}", body(&call(&me, "start_session")));
+        // A terminal has no turns, so the bot-only tools are not its.
+        let shell = Caller::from_session(terminal(&store, &ws, "Shell"));
+        assert!(body(&call(&shell, "update_description")).starts_with("This session cannot use update_description"));
+        // A name nobody has is unknown, not "not yours".
+        assert!(body(&call(&kid, "make_tea")).starts_with("Unknown tool \"make_tea\""), "{}", body(&call(&kid, "make_tea")));
+        // And the host token alone has no calls, whatever it names.
+        let alone = handle_opencode(&host, None, "tools/call", json!({ "name": "list_peers" }));
+        assert!(alone.is_err());
     }
 
     /// The catalog lists every tool this caller may run, and only those.
