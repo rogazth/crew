@@ -336,8 +336,8 @@ test("a steer the turn has not read yet waits as a chip, and the bubble takes it
   // The fake reads a message that starts with "late " three seconds after it came.
   await sendWhileWorking("late check the logs", "steer");
   await chips().filter({ hasText: "this turn" }).filter({ hasText: "late check the logs" }).waitFor();
-  // Taken into the turn: not a message to wait for, so it cannot be dropped or reordered.
-  await waiting(1).waitFor();
+  // Taken into the turn: not a message that waits, so the status line counts none.
+  assert.equal(await waiting(1).count(), 0);
   assert.deepEqual(await heard(cwd, session), ["work 8"]);
   await bubble("late check the logs").waitFor();
   await waitFor(async () => (await chips().count()) === 0, { message: "the chip is gone once the turn read it" });

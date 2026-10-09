@@ -75,7 +75,7 @@ export function QueueSegment({ queue, working }: { queue: QueueScope; working: b
         onClick={() => setOpen((was) => !was)}
         className="flex h-6 items-center gap-1.5 rounded-md px-1.5 text-text-muted transition-colors hover:bg-hover hover:text-text"
       >
-        {queue.items.length} waiting
+        {queue.items.filter((message) => !message.steering).length} waiting
       </button>
       {shown && (
         <div

@@ -295,7 +295,8 @@ export function Composer({
       </form>
       <div className="mt-1.5 flex min-h-6 items-center gap-2 px-1 text-[11.5px]">
         <ContextMeter sessionId={session.id} provider={session.provider} />
-        {queue && queue.items.length > 0 && <QueueSegment queue={queue} working={working} />}
+        {/* A steer is already the turn's: only what waits is counted, and opens the sheet. */}
+        {queue && queue.items.some((message) => !message.steering) && <QueueSegment queue={queue} working={working} />}
         <span className="flex-1" />
         <span className="truncate text-placeholder">
           {optionsPending ? (
