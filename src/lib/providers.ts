@@ -61,8 +61,6 @@ export type ProviderDef = {
   tierArgs?: (tier: string) => string[];
   /** The first message, handed to the interactive CLI as it starts. After `--`, so it is never read as a flag or a subcommand. */
   promptArgs: (text: string) => string[];
-  /** Crew reads the CLI's own history, so its sessions can open in the chat. */
-  chat: boolean;
   models: Model[];
   /** Its CLI lists the account's models (`agent_models`), which replace `models` once read. */
   listsModels?: boolean;
@@ -93,7 +91,6 @@ export const PROVIDERS: ProviderDef[] = [
     efforts: ["low", "medium", "high", "xhigh", "max"],
     effortArgs: (effort) => ["--effort", effort],
     promptArgs: (text) => ["--", text],
-    chat: true,
     defaultModel: "claude-opus-5-5",
     defaultEffort: "high",
     models: [
@@ -123,7 +120,6 @@ export const PROVIDERS: ProviderDef[] = [
     efforts: [],
     effortArgs: () => [],
     promptArgs: (text) => ["--", text],
-    chat: true,
     listsModels: true,
     defaultModel: "auto",
     models: [
@@ -159,7 +155,6 @@ export const PROVIDERS: ProviderDef[] = [
     effortArgs: (effort) => ["-c", `model_reasoning_effort="${effort}"`],
     tierArgs: (tier) => (/^[a-z0-9_-]+$/.test(tier) ? ["-c", `service_tier="${tier}"`] : []),
     promptArgs: (text) => ["--", text],
-    chat: true,
     listsModels: true,
     defaultModel: "gpt-6-astra",
     defaultEffort: "medium",
@@ -185,7 +180,6 @@ export const PROVIDERS: ProviderDef[] = [
     effortArgs: () => [],
     // Its one positional is the project folder.
     promptArgs: (text) => [`--prompt=${text}`],
-    chat: true,
     defaultModel: "opencode/ling-3.0-flash-fin-free",
     models: [
       { id: "opencode/ling-3.0-flash-fin-free", label: "Ling 3.0 Flash", note: "Free" },

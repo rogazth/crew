@@ -1,5 +1,6 @@
 import { client } from "./client";
 import type { BackgroundCommand, BackgroundList, SessionLive } from "./protocol";
+import { sessionSurface } from "./sessionView";
 import { elapsed } from "./time";
 import type { Session } from "./types";
 
@@ -108,13 +109,13 @@ export function terminalCount(live: SessionLive | null): number {
   return terminalTray(live).filter(isRunning).length;
 }
 
-/** The count on a session's tab, from whichever list its kind keeps. */
+/** The count on a session's tab, from whichever list its view keeps. */
 export function tabBackgroundCount(
-  session: Pick<Session, "kind" | "status">,
+  session: Pick<Session, "kind" | "view" | "status">,
   list: BackgroundList | null,
   live: SessionLive | null,
 ): number {
-  if (session.kind === "terminal") return terminalCount(live);
+  if (sessionSurface(session) === "terminal") return terminalCount(live);
   return tabCount(list, session.status === "working" || session.status === "needs-input" || session.status === "starting");
 }
 

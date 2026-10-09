@@ -11,25 +11,22 @@ describe("parseSessionView", () => {
 });
 
 describe("sessionSurface", () => {
-  it("keeps a bot in its chat whatever the setting says", () => {
-    expect(sessionSurface({ kind: "bot", provider: "claude" }, "terminal")).toBe("turns");
-    expect(sessionSurface({ kind: "bot", provider: "cursor" }, "chat")).toBe("turns");
+  it("keeps a bot in its chat whatever its row says", () => {
+    expect(sessionSurface({ kind: "bot" })).toBe("turns");
+    expect(sessionSurface({ kind: "bot", view: "terminal" })).toBe("turns");
   });
 
   it("shows a child in Crew's chat, which is what drives it", () => {
-    for (const provider of ["claude", "codex", "opencode", "cursor"]) {
-      expect(sessionSurface({ kind: "child", provider }, "terminal")).toBe("turns");
-    }
+    expect(sessionSurface({ kind: "child" })).toBe("turns");
+    expect(sessionSurface({ kind: "child", view: "terminal" })).toBe("turns");
   });
 
-  it("opens a session in the chat only when asked and its history can be read", () => {
-    for (const provider of ["claude", "codex", "opencode", "cursor"]) {
-      expect(sessionSurface({ kind: "terminal", provider }, "chat")).toBe("chat");
-      expect(sessionSurface({ kind: "terminal", provider }, "terminal")).toBe("terminal");
-    }
+  it("opens a terminal session where its row says", () => {
+    expect(sessionSurface({ kind: "terminal", view: "chat" })).toBe("turns");
+    expect(sessionSurface({ kind: "terminal", view: "terminal" })).toBe("terminal");
   });
 
-  it("keeps unknown CLIs in the terminal", () => {
-    expect(sessionSurface({ kind: "terminal", provider: "vim" }, "chat")).toBe("terminal");
+  it("reads a terminal session without a view as its terminal", () => {
+    expect(sessionSurface({ kind: "terminal" })).toBe("terminal");
   });
 });

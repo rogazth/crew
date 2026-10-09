@@ -62,13 +62,6 @@ type Props = {
   onResize?: (() => void) | undefined;
   onOpenPath?: ((path: string) => void) | undefined;
   /**
-   * Crew's chat is drawn over this terminal: it keeps running and sized, but
-   * the keys and the terminal commands go to the chat.
-   */
-  covered?: boolean | undefined;
-  /** The rows on screen, after output settles; for a view drawn over the terminal to read. */
-  onScreen?: ((lines: string[]) => void) | undefined;
-  /**
    * Starts the process out of sight, at xterm's own grid, before the pane is
    * shown: a session handed work, and one the user already opened and left
    * while its CLI was still coming up.
@@ -78,10 +71,6 @@ type Props = {
 
 const ACTIVITY_INTERVAL = 400;
 const ACK_FLUSH_MS = 4;
-/** How long output must pause before the screen is read again for `onScreen`. */
-const SCREEN_SETTLE_MS = 250;
-/** A CLI that never pauses (a spinner turning) is still read this often. */
-const SCREEN_CEILING_MS = 1000;
 /** Frames the proposed grid may keep changing before it is applied anyway. */
 const MAX_STABILITY_FRAMES = 8;
 
@@ -103,25 +92,22 @@ export function TerminalView({
   onInput,
   onResize,
   onOpenPath,
-  covered = false,
-  onScreen,
   eager = false,
 }: Props) {
   const paneRef = useRef<HTMLDivElement>(null);
   const hostRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<() => void>(() => {});
-  const settleScreenRef = useRef<() => void>(() => {});
   const ligaturesRef = useRef<LigaturesAddon | null>(null);
   const { prefs } = useTerminalPrefs();
   const [menu, setMenu] = useState<{ point: MenuPoint; hasSelection: boolean } | null>(null);
   const search = useTerminalSearch(termRef, isDark);
   const attachSearch = search.attach;
 
-  const latest = useRef({ onExit, onLost, onBell, onActivity, onTitle, onInput, onResize, onOpenPath, onScreen, command, session, shellOnExit, detach, eager });
+  const latest = useRef({ onExit, onLost, onBell, onActivity, onTitle, onInput, onResize, onOpenPath, command, session, shellOnExit, detach, eager });
   useEffect(() => {
     // Only `command` at spawn: a later argv must not respawn the running process.
-    latest.current = { onExit, onLost, onBell, onActivity, onTitle, onInput, onResize, onOpenPath, onScreen, command, session, shellOnExit, detach, eager };
+    latest.current = { onExit, onLost, onBell, onActivity, onTitle, onInput, onResize, onOpenPath, command, session, shellOnExit, detach, eager };
   });
 
   const dropPaths = useCallback((paths: string[]) => {
@@ -195,28 +181,6 @@ export function TerminalView({
     let replayEnd = 0;
     /** xterm is parsing the repaint: its titles and bells are not news. */
     let replaying = false;
-    let screenTimer = 0;
-    let screenDue = 0;
-    // The live screen, not where the user scrolled to: what the CLI is showing now.
-    const readScreen = () => {
-      screenTimer = 0;
-      screenDue = 0;
-      const report = latest.current.onScreen;
-      if (!report || closed) return;
-      const buffer = term.buffer.active;
-      const lines: string[] = [];
-      for (let row = 0; row < term.rows; row += 1) {
-        lines.push(buffer.getLine(buffer.baseY + row)?.translateToString(true) ?? "");
-      }
-      report(lines);
-    };
-    const settleScreen = () => {
-      const now = Date.now();
-      if (!screenDue) screenDue = now + SCREEN_CEILING_MS;
-      if (screenTimer) clearTimeout(screenTimer);
-      screenTimer = window.setTimeout(readScreen, Math.min(SCREEN_SETTLE_MS, screenDue - now));
-    };
-    settleScreenRef.current = settleScreen;
     // xterm keeps the kitty flags private, so they are mirrored off the output stream.
     let kittyFlags = 0;
 
@@ -302,7 +266,6 @@ export function TerminalView({
           processed += bytes.length;
           if (caughtUp) replaying = false;
           if (!ackTimer) ackTimer = window.setTimeout(flushAck, ACK_FLUSH_MS);
-          if (latest.current.onScreen) settleScreen();
         });
         if (history) return;
         const now = Date.now();
@@ -485,7 +448,6 @@ export function TerminalView({
       closed = true;
       if (raf) cancelAnimationFrame(raf);
       if (ackTimer) clearTimeout(ackTimer);
-      if (screenTimer) clearTimeout(screenTimer);
       observer.disconnect();
       DARK_SCHEME.removeEventListener("change", onScheme);
       host.removeEventListener("copy", onCopy);
@@ -504,15 +466,8 @@ export function TerminalView({
       ligaturesRef.current = null;
       termRef.current = null;
       fitRef.current = () => {};
-      settleScreenRef.current = () => {};
     };
   }, [attachSearch, cwd, id]);
-
-  // A reader that arrives over a screen already drawn gets it without waiting for output.
-  const reads = onScreen !== undefined;
-  useEffect(() => {
-    if (reads) settleScreenRef.current();
-  }, [reads]);
 
   // Runs after the mount effect, so the first spawn already measures the real font.
   useEffect(() => {
@@ -553,7 +508,6 @@ export function TerminalView({
   useEffect(() => {
     if (!active) return;
     fitRef.current();
-    if (covered) return;
     termRef.current?.focus();
     // A page such as Settings hides the whole workspace; when it goes, the keys come back here.
     const host = hostRef.current;
@@ -571,7 +525,7 @@ export function TerminalView({
       observer.disconnect();
       release();
     };
-  }, [active, covered, startFind]);
+  }, [active, startFind]);
 
   return (
     <div

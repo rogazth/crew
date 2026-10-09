@@ -1,16 +1,16 @@
-import { providerOf } from "./providers";
-import type { Session } from "./types";
+import type { Session, SessionView } from "./types";
 
-/** Where a session's conversation is shown: its CLI's own screen, or Crew's chat drawn over it. */
-export const SESSION_VIEWS = [
+export type { SessionView };
+
+/** Where a new session opens: its CLI's own screen, or Crew's chat, which drives the CLI. */
+export const SESSION_VIEWS: readonly { id: SessionView; label: string }[] = [
   { id: "terminal", label: "Terminal" },
   { id: "chat", label: "Chat" },
-] as const;
-
-export type SessionView = (typeof SESSION_VIEWS)[number]["id"];
+];
 
 export const DEFAULT_SESSION_VIEW: SessionView = "terminal";
 
+/** The default for sessions created from now on; a session keeps the view it was created with. */
 export const SESSION_VIEW_KEY = "sessions:view";
 
 export function parseSessionView(raw: string | null | undefined): SessionView {
@@ -18,28 +18,19 @@ export function parseSessionView(raw: string | null | undefined): SessionView {
 }
 
 /** What fills a session's tab. */
-export type SessionSurface = "turns" | "chat" | "terminal";
+export type SessionSurface = "turns" | "terminal";
 
 /**
  * Which view a session uses. A bot is always its chat, and so is a child:
- * Crew drives both turn by turn, so there is no terminal to show. A session
- * shows the chat when the setting asks for it and Crew can read its CLI's
- * history; anything else is its terminal.
+ * Crew drives both turn by turn, so there is no terminal to show. A terminal
+ * session has the view its row says, fixed when it was created: the chat
+ * (Crew drives its CLI like a child's) or the CLI's own screen.
  */
-export function sessionSurface(session: Pick<Session, "kind" | "provider">, view: SessionView): SessionSurface {
-  if (session.kind === "bot" || session.kind === "child") return "turns";
-  return view === "chat" && providerOf(session.provider)?.chat ? "chat" : "terminal";
+export function sessionSurface(session: Pick<Session, "kind" | "view">): SessionSurface {
+  return session.kind === "terminal" && session.view !== "chat" ? "terminal" : "turns";
 }
 
 /** CLIs whose hooks Crew passes on each launch, so the daemon hears what they do. */
 export function reportsLive(provider: string): boolean {
   return provider === "claude" || provider === "codex";
-}
-
-/**
- * Whether the CLI's SessionStart hook says it is up and reading keys. Claude
- * runs it as it starts; Codex only once the first message is sent.
- */
-export function startsAtLaunch(provider: string): boolean {
-  return provider === "claude";
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Block, TurnUsage } from "./blocks";
-import { foldTurns, gapBefore, groupRows, speaker, splitQueued, type Row } from "./transcriptRows";
+import { foldTurns, gapBefore, groupRows, speaker, splitQueued, turnStart, underway, type Row } from "./transcriptRows";
 
 const COST: TurnUsage = { costUsd: 0.02 };
 
@@ -425,5 +425,53 @@ describe("files the agent sent", () => {
       false,
     );
     expect(kinds(rows)).toEqual(["message", "fold", "shared", "message", "footer"]);
+  });
+});
+
+const MIN = 60_000;
+const at = (role: Block["role"], text: string, time: number, extra: Partial<Block> = {}): Block => ({
+  id: `${role}:${time}`,
+  role,
+  text,
+  at: time,
+  ...extra,
+});
+/** A message sent and not in the transcript yet. */
+const waiting = (text: string, time: number): Block => at("user", text, time, { id: `queued:${time}`, streaming: true });
+/** A reply that closes its turn: the block its footer hangs on. */
+const ended = (time: number): Block => at("assistant", "done", time, { usage: COST });
+
+describe("turnStart", () => {
+  it("dates the turn from the transcript's newest user turn, not from a stale queued bubble", () => {
+    const blocks = [at("user", "first", 0), ended(5 * MIN), at("user", "short one", 20 * MIN), waiting("<pasted>", 0)];
+    expect(turnStart(blocks)).toBe(20 * MIN);
+  });
+
+  it("takes a queued message's send time only while the transcript has no newer user turn", () => {
+    expect(turnStart([at("user", "first", 0), ended(5 * MIN), waiting("next", 6 * MIN)])).toBe(6 * MIN);
+    // Sent while a turn ran: that turn's own start stands.
+    expect(turnStart([at("user", "first", 0), waiting("next", 2 * MIN)])).toBe(0);
+  });
+
+  it("counts a turn the agent started by itself from the end of the last one", () => {
+    expect(turnStart([at("user", "go", 0), ended(5 * MIN)])).toBe(5 * MIN);
+    expect(turnStart([])).toBeUndefined();
+  });
+});
+
+describe("underway", () => {
+  it("is the message the agent is working on before the transcript has the turn", () => {
+    const blocks = [waiting("the odyssey", 8_000)];
+    expect(underway(blocks, true)?.id).toBe("queued:8000");
+    expect(underway(blocks, false)).toBeUndefined();
+  });
+
+  it("leaves a follow-up queued while a turn already in the transcript is running", () => {
+    expect(underway([at("user", "first", 1_000), waiting("and this", 5_000)], true)).toBeUndefined();
+  });
+
+  it("takes the earliest send and leaves a later one waiting", () => {
+    const blocks = [at("user", "done", 0), ended(5_000), waiting("go", 8_000), waiting("also", 9_000)];
+    expect(underway(blocks, true)?.id).toBe("queued:8000");
   });
 });

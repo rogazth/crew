@@ -5,8 +5,7 @@ import {
   type ApprovalDecision,
   type Block,
 } from "../../lib/blocks";
-import { turnStart, underway } from "../../lib/sessionChat";
-import { foldTurns, groupRows, speaker, splitQueued } from "../../lib/transcriptRows";
+import { foldTurns, groupRows, speaker, splitQueued, turnStart, underway } from "../../lib/transcriptRows";
 import { WorkingLine } from "./Activity";
 import { QueuedGroup } from "./Letters";
 import { Rows } from "./Rows";

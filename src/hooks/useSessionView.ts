@@ -1,31 +1,16 @@
 import { useCallback, useEffect, useSyncExternalStore } from "react";
 import * as api from "../lib/api";
-import {
-  DEFAULT_SESSION_VIEW,
-  parseSessionView,
-  sessionSurface,
-  SESSION_VIEW_KEY,
-  type SessionSurface,
-  type SessionView,
-} from "../lib/sessionView";
-import type { Session } from "../lib/types";
-
-type State = {
-  view: SessionView;
-  /** Sessions whose tab shows its terminal for now, whatever the setting says. Never saved. */
-  shown: ReadonlySet<string>;
-};
+import { DEFAULT_SESSION_VIEW, parseSessionView, SESSION_VIEW_KEY, type SessionView } from "../lib/sessionView";
 
 /**
- * One value for the whole window, outside React's tree: App picks its zoom by
- * it and every session tab draws by it, and a change in Settings reaches all
- * of them at once.
+ * One value for the whole window, outside React's tree: Settings changes it
+ * and whatever creates a session reads it, without either holding the other.
  */
-let state: State = { view: DEFAULT_SESSION_VIEW, shown: new Set() };
+let state: SessionView = DEFAULT_SESSION_VIEW;
 let loaded = false;
 const listeners = new Set<() => void>();
 
-function set(next: State) {
+function set(next: SessionView) {
   state = next;
   for (const listener of listeners) listener();
 }
@@ -42,36 +27,21 @@ function load() {
   loaded = true;
   api
     .stateGet(SESSION_VIEW_KEY)
-    .then((raw) => set({ ...state, view: parseSessionView(raw) }))
+    .then((raw) => set(parseSessionView(raw)))
     .catch(() => {
       loaded = false;
     });
 }
 
-/** Sessions open in their terminal or in Crew's chat; "Show terminal" flips one tab. */
+/** The view new sessions open in. A session keeps the one it was created with, so a change reaches none already open. */
 export function useSessionView() {
   useEffect(load, []);
-  const { view, shown } = useSyncExternalStore(subscribe, () => state);
+  const view = useSyncExternalStore(subscribe, () => state);
 
-  // A new setting is a fresh start: no tab stays turned the other way.
   const update = useCallback((next: SessionView) => {
-    set({ view: next, shown: new Set() });
+    set(next);
     void api.stateSet(SESSION_VIEW_KEY, next).catch(() => {});
   }, []);
 
-  const showTerminal = useCallback((sessionId: string, show: boolean) => {
-    if (state.shown.has(sessionId) === show) return;
-    const next = new Set(state.shown);
-    if (show) next.add(sessionId);
-    else next.delete(sessionId);
-    set({ ...state, shown: next });
-  }, []);
-
-  const surfaceOf = useCallback(
-    (session: Pick<Session, "id" | "kind" | "provider">): SessionSurface =>
-      sessionSurface(session, shown.has(session.id) ? "terminal" : view),
-    [shown, view],
-  );
-
-  return { view, update, surfaceOf, showTerminal };
+  return { view, update };
 }

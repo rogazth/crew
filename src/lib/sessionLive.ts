@@ -12,8 +12,6 @@ type Listener = () => void;
 const lives = new Map<string, SessionLive>();
 /** When each session's CLI was switched for another: anything heard of it before then was the old one's. */
 const switched = new Map<string, number>();
-/** Sessions on a machine whose crewd predates the hooks being followed. */
-const unheard = new Set<string>();
 const listeners = new Map<string, Set<Listener>>();
 let hooked = false;
 
@@ -50,21 +48,9 @@ async function fetchLive(id: string): Promise<void> {
   try {
     const live = await client.request<SessionLive | null>("session_live_get", { id });
     if (live) offer(live);
-  } catch (error) {
-    if (!isUnknownMethod(error)) return;
-    unheard.add(id);
-    for (const listener of listeners.get(id) ?? []) listener();
+  } catch {
+    // A crewd that predates the hooks being followed has nothing to say.
   }
-}
-
-/** What an older crewd answers a call it does not have. */
-export function isUnknownMethod(error: unknown): boolean {
-  return (error instanceof Error ? error.message : String(error)).startsWith("Unknown method");
-}
-
-/** False when the session's machine runs a crewd that does not follow hooks: it reads as a CLI without them. */
-export function liveHeard(id: string): boolean {
-  return !unheard.has(id);
 }
 
 export function subscribeLive(id: string, listener: Listener): () => void {
@@ -84,14 +70,4 @@ export function subscribeLive(id: string, listener: Listener): () => void {
 
 export function readLive(id: string): SessionLive | null {
   return lives.get(id) ?? null;
-}
-
-/** The chat answered an ask with keys: it leaves the screen before any hook says so. */
-export function answeredAsk(id: string, askId: number): void {
-  void client.request("session_live_answered", { id, askId }).catch(() => {});
-}
-
-/** The chat stopped the turn with Esc; Claude says so neither in a hook nor, always, in its history. */
-export function stoppedTurn(id: string): void {
-  void client.request("session_live_stopped", { id }).catch(() => {});
 }

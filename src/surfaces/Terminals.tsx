@@ -1,7 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { homeDir } from '../lib/host';
 import { useCommands } from '../hooks/useCommand';
-import { useSessionView } from '../hooks/useSessionView';
 import { useSessionActivity } from '../hooks/useSessionActivity';
 import { nudgeTitle } from '../hooks/useSessionTitle';
 import { useTerminalPrefs } from '../hooks/useTerminalPrefs';
@@ -11,20 +10,17 @@ import { claudeSessionId, transcriptPath } from '../lib/claudeStorage';
 import { bindProviderSession } from '../lib/turnRuntime';
 import { isHanded } from '../lib/handedSessions';
 import { announceSession, askNews } from '../lib/notifications';
-import { blockingScreen, takesInput, type BlockingScreen } from '../lib/blockingScreen';
-import { clearFirstPrompt, peekFirstPrompt, setFirstPrompt } from '../lib/firstPrompt';
+import { clearFirstPrompt, peekFirstPrompt } from '../lib/firstPrompt';
 import { BYPASS_KEY } from '../lib/permissions';
-import { providerOf, type AgentChoice } from '../lib/providers';
+import { providerOf } from '../lib/providers';
 import { reportsLive, sessionSurface } from '../lib/sessionView';
 import { readLive, subscribeLive } from '../lib/sessionLive';
 import { onSessionLost, useRunningSessions } from '../lib/runningSessions';
 import { sessionCommand } from '../lib/sessionCommand';
-import { setLaunched } from '../lib/sessionOptions';
 import { titleName } from '../lib/terminalStatus';
 import { isTerminalTab, relativeTo, sessionPtyId } from '../lib/tabs';
 import { activeTerminal } from '../lib/terminalFocus';
 import { clamp, DEFAULT_TERMINAL_PREFS, LIMITS } from '../lib/terminalPrefs';
-import { BackToChat, SessionChat } from './SessionChat';
 import { SessionsStrip } from './chat/ChatBar';
 import { useChatActions } from './chat/context';
 import { childrenOf } from '../lib/letters';
@@ -47,15 +43,15 @@ type Props = {
  * Unmounting a shell's terminal kills it. A session's lets go of its CLI,
  * which runs on in crewd: its tab reopens onto the same process, and only
  * Stop, or removing the session, ends it. While its tab is closed a row still
- * tells what it does, from its hooks and its exit.
+ * tells what it does, from its hooks and its exit. A session in the chat view
+ * has no terminal at all: Crew drives its CLI, and its tab is a `TurnChat`.
  */
 export function Terminals({ panes, sessions, onStatus, onOpenFile }: Props) {
   const focused = panes.find((pane) => pane.visible) ?? null;
   const running = useRunningSessions();
   const shown = new Set(panes.flatMap((pane) => (pane.tab.kind === 'session' ? [pane.tab.sessionId] : [])));
-  const detached = sessions.filter((s) => s.kind === 'terminal' && running.has(s.id) && !shown.has(s.id));
+  const detached = sessions.filter((s) => sessionSurface(s) === 'terminal' && running.has(s.id) && !shown.has(s.id));
   const { prefs, update } = useTerminalPrefs();
-  const { view, surfaceOf, showTerminal } = useSessionView();
   const zoom = (delta: number) =>
     update({
       ...prefs,
@@ -67,7 +63,7 @@ export function Terminals({ panes, sessions, onStatus, onOpenFile }: Props) {
 
   // Bound to the terminal filling the active tab, so ⌘F reaches the pane you see.
   useCommands(
-    isTerminalTab(focused?.tab ?? null, sessions, surfaceOf)
+    isTerminalTab(focused?.tab ?? null, sessions)
       ? {
           find: () => activeTerminal()?.find(),
           'zoom-in': () => zoom(1),
@@ -104,9 +100,8 @@ export function Terminals({ panes, sessions, onStatus, onOpenFile }: Props) {
     }
     if (tab.kind !== 'session') return null;
     const session = sessions.find((s) => s.id === tab.sessionId);
-    if (!session || session.kind !== 'terminal') return null;
+    if (!session || sessionSurface(session) !== 'terminal') return null;
     const here = sessionCwd(session.id) ?? cwd;
-    const surface = surfaceOf(session);
     return (
       <Pane key={pane.id} active={visible}>
         <SessionTerminal
@@ -115,10 +110,6 @@ export function Terminals({ panes, sessions, onStatus, onOpenFile }: Props) {
           sessions={sessions}
           cwd={here}
           active={visible}
-          chat={surface === 'chat'}
-          // The setting draws this one as the chat; "Show terminal" put its terminal in front for now.
-          revealed={surface === 'terminal' && sessionSurface(session, view) === 'chat'}
-          onShowTerminal={(show) => showTerminal(session.id, show)}
           onStatus={onStatus}
           onOpenPath={(path) => openPath(here, path)}
         />
@@ -144,14 +135,14 @@ const DARK_SCHEME = window.matchMedia('(prefers-color-scheme: dark)');
 /** codex and opencode write their session only once the first message is sent. */
 const DISCOVER_MS = 3000;
 
-/** argv for the session's CLI, and whether Settings bypassed its permissions. */
-async function launchCommand(session: Session, cwd: string): Promise<{ argv: string[]; bypass: boolean }> {
+/** argv for the session's CLI. */
+async function launchCommand(session: Session, cwd: string): Promise<string[]> {
   // Read at every launch, so a change in Settings reaches the next session started.
   const bypass = await api
     .stateGet(BYPASS_KEY)
     .then((raw) => raw?.trim() === 'on')
     .catch(() => false);
-  return { argv: await sessionArgv(session, cwd, bypass), bypass };
+  return sessionArgv(session, cwd, bypass);
 }
 
 async function sessionArgv(session: Session, cwd: string, bypass: boolean): Promise<string[]> {
@@ -187,11 +178,6 @@ type SessionProps = {
   sessions: Session[];
   cwd: string;
   active: boolean;
-  /** Crew's chat is drawn over the terminal. */
-  chat: boolean;
-  /** The terminal is in front of a chat the setting asks for. */
-  revealed: boolean;
-  onShowTerminal: (show: boolean) => void;
   onStatus: (id: string, status: SessionStatus) => void;
   onOpenPath: (path: string) => void;
 };
@@ -203,9 +189,6 @@ function SessionTerminal({
   sessions,
   cwd,
   active,
-  chat,
-  revealed,
-  onShowTerminal,
   onStatus,
   onOpenPath,
 }: SessionProps) {
@@ -214,18 +197,6 @@ function SessionTerminal({
   // if create-chat (or the first frames) outlast the look.
   const [opened, setOpened] = useState(false);
   if (active && !opened) setOpened(true);
-  const [blocked, setBlocked] = useState<BlockingScreen | null>(null);
-  const provider = session.provider;
-  // Nothing on screen yet takes no message either.
-  const [prompting, setPrompting] = useState(() => takesInput(provider, []));
-  const readScreen = useCallback(
-    (lines: string[]) => {
-      const next = blockingScreen(provider, lines);
-      setBlocked((prev) => (prev?.kind === next?.kind ? prev : next));
-      setPrompting(takesInput(provider, lines));
-    },
-    [provider],
-  );
   const [startedAt, setStartedAt] = useState(0);
   /** Bumped when the CLI has to be started again: its daemon restarted without it. */
   const [launch, setLaunch] = useState(0);
@@ -244,17 +215,10 @@ function SessionTerminal({
 
   useEffect(() => {
     let cancelled = false;
-    launchCommand(session, cwd).then(({ argv, bypass }) => {
+    launchCommand(session, cwd).then((argv) => {
       if (cancelled) return;
       // Taken only by the launch that runs: a cancelled one leaves it for the next.
       clearFirstPrompt(session.id);
-      setLaunched(session.id, {
-        model: session.model,
-        effort: session.effort,
-        serviceTier: session.serviceTier ?? "",
-        access: session.autonomy,
-        bypass,
-      });
       setStartedAt(Date.now());
       setCommand(argv);
     });
@@ -272,46 +236,6 @@ function SessionTerminal({
     setCommand(null);
     setLaunch((n) => n + 1);
   }, [onExit]);
-
-  // The chat changed the model or effort: the CLI ends and starts again on
-  // its conversation with the new flags, `message` as what it starts on.
-  const restart = useCallback(
-    async (message: string) => {
-      setFirstPrompt(session.id, message);
-      onExit(null);
-      // The pane lets go of the process before it is ended, so its exit opens no shell.
-      setCommand(null);
-      await new Promise((resolve) => requestAnimationFrame(resolve));
-      await api.stopSession(session.id).catch(() => {});
-      setLaunch((n) => n + 1);
-    },
-    [onExit, session.id],
-  );
-
-  // The chat picked another provider before anyone talked to this one: the
-  // pane lets go, the daemon ends the CLI and changes the row, and the row's
-  // new provider starts the next. Refused, the old one starts again.
-  const switchProvider = useCallback(
-    async (choice: AgentChoice) => {
-      onExit(null);
-      setCommand(null);
-      setBlocked(null);
-      await new Promise((resolve) => requestAnimationFrame(resolve));
-      try {
-        await api.switchSessionProvider(session.id, cwd, {
-          provider: choice.provider,
-          model: choice.model,
-          effort: choice.effort,
-          serviceTier: choice.serviceTier ?? "",
-          autonomy: choice.access,
-        });
-      } catch (error) {
-        setLaunch((n) => n + 1);
-        throw error;
-      }
-    },
-    [cwd, onExit, session.id],
-  );
 
   // Claude's moves to a new conversation reach the window from the daemon,
   // which follows its SessionStart hook; the others name theirs once, later.
@@ -348,7 +272,6 @@ function SessionTerminal({
             command={command}
             session={session.id}
             active={active}
-            covered={chat}
             shellOnExit
             detach
             onExit={onExit}
@@ -359,39 +282,20 @@ function SessionTerminal({
             onInput={onInput}
             onResize={onResize}
             onOpenPath={onOpenPath}
-            onScreen={chat ? readScreen : undefined}
             // Not before git lists its worktree: until then it reads as the main checkout.
             // A tab already opened starts too, hidden again while the CLI is still coming up.
             eager={(isHanded(session.id) && cwd === session.worktree) || opened}
           />
         </Suspense>
       )}
-      {chat && (
-        <SessionChat
-          session={session}
-          sessions={sessions}
-          ptyId={ptyId}
-          cwd={cwd}
-          active={active}
-          blocked={blocked}
-          prompting={prompting}
-          busy={session.status === 'working' || session.status === 'needs-input'}
-          onShowTerminal={() => onShowTerminal(true)}
-          onRestart={restart}
-          onSwitchProvider={switchProvider}
-        />
-      )}
-      {!chat && (kids.length > 0 || revealed) && (
-        // Over the terminal its children are still one click away, beside the way back to the chat.
+      {kids.length > 0 && (
+        // Over the terminal its children are still one click away.
         // The plate is opaque: a translucent one lets the glyphs through.
         <div className="absolute top-2 right-3 z-10 flex max-w-[70%] items-start gap-1.5">
-          {kids.length > 0 && (
-            // Its padding would drop the chips below the button; the margin puts them back on one top.
-            <div className="-mt-0.5 flex min-w-0 rounded-chrome bg-surface p-0.5 shadow-float">
-              <SessionsStrip kids={kids} onOpen={openSession} label={false} />
-            </div>
-          )}
-          {revealed && <BackToChat onClick={() => onShowTerminal(false)} />}
+          {/* Its padding would drop the chips below the button; the margin puts them back on one top. */}
+          <div className="-mt-0.5 flex min-w-0 rounded-chrome bg-surface p-0.5 shadow-float">
+            <SessionsStrip kids={kids} onOpen={openSession} label={false} />
+          </div>
         </div>
       )}
     </>

@@ -64,7 +64,7 @@ export function sessionCommand(session: Session, { resume, theme, bypass = false
   return [...argv, ...options, ...first];
 }
 
-/** What the chat follows a session's CLI by: its turns, and what it stops to ask. */
+/** What Crew follows a terminal session's CLI by: its turns, and what it stops to ask. */
 const LIVE_HOOKS = [
   "UserPromptSubmit",
   "PermissionRequest",

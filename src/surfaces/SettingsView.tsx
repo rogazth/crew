@@ -186,11 +186,11 @@ function Appearance() {
       )}
       <SettingsSection title="Sessions">
         <SettingsRow
-          label="Sessions open in"
-          description="Chat shows a session's conversation in Crew's chat while its CLI keeps running underneath. Cursor sessions always open in the terminal."
+          label="New sessions open in"
+          description="Chat has Crew drive the session's CLI and show the conversation in its own chat; Terminal runs the CLI on its own screen. It applies to new sessions: each keeps the view it was created with."
         >
           <Select
-            label="Sessions open in"
+            label="New sessions open in"
             className="w-40"
             value={sessions.view}
             onChange={sessions.update}

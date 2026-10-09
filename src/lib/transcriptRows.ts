@@ -322,3 +322,52 @@ function rowId(row: Row): string {
     ? row.block.id
     : row.id;
 }
+
+/** Where a turn ended: the block its footer hangs on. */
+const endsTurn = (block: Block) => block.usage !== undefined && block.streaming !== true;
+
+/**
+ * When the turn now running began. The transcript says so: its newest user
+ * turn by time, once that is newer than the last turn's end. Until the turn
+ * is written, the queued message sent after that end started it; with
+ * neither (the agent took up work by itself) it began when the last one
+ * ended. Never the last bubble in the list for being last: a stale one would
+ * date the turn from whenever it was sent.
+ */
+export function turnStart(blocks: readonly Block[]): number | undefined {
+  let user: number | undefined;
+  let ended: number | undefined;
+  const sent: number[] = [];
+  for (const block of blocks) {
+    if (block.at === undefined) continue;
+    if (isQueued(block)) sent.push(block.at);
+    else if (block.role === "user") user = Math.max(user ?? block.at, block.at);
+    else if (endsTurn(block)) ended = Math.max(ended ?? block.at, block.at);
+  }
+  if (user !== undefined && (ended === undefined || user > ended)) return user;
+  const queued = sent.filter((at) => ended === undefined || at >= ended);
+  if (queued.length > 0) return Math.min(...queued);
+  return ended ?? user;
+}
+
+/**
+ * The queued message the running turn has already taken, when the transcript
+ * has not written that turn yet. A send that arrives while a turn is already
+ * in the transcript is still waiting.
+ */
+export function underway(blocks: readonly Block[], working: boolean): Block | undefined {
+  if (!working) return undefined;
+  let user: number | undefined;
+  let ended: number | undefined;
+  const queued: Block[] = [];
+  for (const block of blocks) {
+    if (block.at === undefined) continue;
+    if (isQueued(block) && !block.fromBot) queued.push(block);
+    else if (block.role === "user") user = Math.max(user ?? block.at, block.at);
+    else if (endsTurn(block)) ended = Math.max(ended ?? block.at, block.at);
+  }
+  if (user !== undefined && (ended === undefined || user > ended)) return undefined;
+  const waiting = queued.filter((block) => ended === undefined || (block.at ?? 0) >= ended);
+  if (waiting.length === 0) return undefined;
+  return waiting.reduce((earliest, block) => ((block.at ?? 0) < (earliest.at ?? 0) ? block : earliest));
+}

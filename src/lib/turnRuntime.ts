@@ -2,6 +2,7 @@ import * as api from "./api";
 import { client } from "./client";
 import { type Answers, type ApprovalDecision, type AttachedFile, type HarnessEvent } from "./blocks";
 import { announceSession, type NotificationSource } from "./notifications";
+import { sessionSurface } from "./sessionView";
 import * as transcript from "./transcript";
 import type { Session, SessionStatus } from "./types";
 import type { SessionStatusEvent, TranscriptApply, TurnStart } from "./protocol";
@@ -209,7 +210,7 @@ function onStatus(event: SessionStatusEvent) {
  */
 async function resync(id: string) {
   const row = await api.getSession(id).catch(() => null);
-  if (!row || (row.kind !== "bot" && row.kind !== "child") || row.status === statuses.get(id)) return;
+  if (!row || sessionSurface(row) !== "turns" || row.status === statuses.get(id)) return;
   onStatus({ sessionId: id, status: row.status, updatedAt: row.updatedAt });
 }
 

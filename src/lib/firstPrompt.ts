@@ -1,6 +1,7 @@
 /**
  * A first message written before its session existed, as home's composer
- * does: the session's first launch hands it to the CLI, and it is gone after,
+ * does: the session's first launch hands it to the CLI in the terminal view,
+ * and the chat sends it as the first turn in the chat view. It is gone after,
  * so a relaunch resumes the conversation instead of asking again.
  */
 const prompts = new Map<string, string>();

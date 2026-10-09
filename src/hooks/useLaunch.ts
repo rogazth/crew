@@ -5,6 +5,7 @@ import { choiceForNewSession, type AgentChoice, type ProviderId } from "../lib/p
 import type { Session, StubKind } from "../lib/types";
 import { nextSessionName } from "../lib/workspaces";
 import { useDefaultAgent } from "./useDefaultAgent";
+import { useSessionView } from "./useSessionView";
 import type { useSessions } from "./useSessions";
 
 type Deps = {
@@ -37,6 +38,7 @@ export function useLaunch({
   newBot,
 }: Deps) {
   const { effective: defaultAgent } = useDefaultAgent();
+  const { view } = useSessionView();
 
   // Sessions open straight away; the name is derived, never prompted.
   const newSession = useCallback(
@@ -44,8 +46,9 @@ export function useLaunch({
      * `pick` is a whole choice, as Home's composer makes one, or a provider,
      * which takes the default's model when it is the default's and its effort
      * and access where they fit. `place` puts it in a worktree other than the
-     * one on screen; null is the main checkout. `prompt` is its first message,
-     * handed to the CLI as it starts.
+     * one on screen; null is the main checkout. `prompt` is its first message:
+     * the CLI starts on it in the terminal view, and it is the first turn in
+     * the chat view. The setting's view is the one it is created with, for good.
      */
     async (pick: ProviderId | AgentChoice = defaultAgent, place: string | null = worktree, prompt?: string) => {
       const choice = choiceForNewSession(pick, defaultAgent);
@@ -58,13 +61,14 @@ export function useLaunch({
         description: "",
         autonomy: choice.access,
         worktree: place,
+        view,
       });
       if (!session) return;
       if (prompt) setFirstPrompt(session.id, prompt);
       else markBlank(session.id);
       openSession(session);
     },
-    [create, defaultAgent, markBlank, openSession, sessions, worktree],
+    [create, defaultAgent, markBlank, openSession, sessions, view, worktree],
   );
 
   const launch = useCallback(

@@ -85,6 +85,7 @@ describe("the tab's count", () => {
     const tasks = live({ backgroundTasks: [command("a"), command("b")] });
     expect(tabBackgroundCount({ kind: "terminal", status: "idle" }, null, tasks)).toBe(2);
     expect(tabBackgroundCount({ kind: "child", status: "working" }, list([command("a")], { waiting: true }), null)).toBe(1);
+    expect(tabBackgroundCount({ kind: "terminal", view: "chat", status: "idle" }, list([command("a")]), tasks)).toBe(1);
     expect(tabBackgroundCount({ kind: "bot", status: "working" }, list([command("a")]), null)).toBe(0);
     expect(tabBackgroundCount({ kind: "bot", status: "done" }, list([command("a")]), tasks)).toBe(1);
   });

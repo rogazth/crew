@@ -26,7 +26,6 @@ import {
   withRecent,
 } from "./tabs";
 import type { Session, Tab } from "./types";
-import { sessionSurface } from "./sessionView";
 
 const sessionTab = (id: string): Tab => ({ id: sessionTabId(id), kind: "session", sessionId: id });
 
@@ -345,24 +344,23 @@ describe("parseTabs", () => {
 });
 
 describe("what a tab is", () => {
-  const sessions = [bot("a", "Planner"), terminal("t")];
-  const terminals = (session: Session) => sessionSurface(session, "terminal");
+  const sessions = [bot("a", "Planner"), terminal("t"), { ...terminal("c"), view: "chat" } as Session];
 
   it("knows a bot tab from a terminal one", () => {
     expect(isTurnTab(sessionTab("a"), sessions)).toBe(true);
     expect(isTurnTab(sessionTab("t"), sessions)).toBe(false);
-    expect(isTerminalTab(sessionTab("t"), sessions, terminals)).toBe(true);
+    expect(isTerminalTab(sessionTab("t"), sessions)).toBe(true);
   });
 
-  it("does not count a session drawn as the chat as a terminal", () => {
-    const chats = (session: Session) => sessionSurface(session, "chat");
-    expect(isTerminalTab(sessionTab("t"), sessions, chats)).toBe(false);
-    expect(isTerminalTab(sessionTab("a"), sessions, terminals)).toBe(false);
+  it("counts a terminal session in the chat view as a chat, not a terminal", () => {
+    expect(isTurnTab(sessionTab("c"), sessions)).toBe(true);
+    expect(isTerminalTab(sessionTab("c"), sessions)).toBe(false);
+    expect(isTerminalTab(sessionTab("a"), sessions)).toBe(false);
   });
 
   it("counts the terminal stub as a terminal", () => {
     const stub: Tab = { id: "stub:terminal", kind: "stub", stub: "terminal", title: "Terminal" };
-    expect(isTerminalTab(stub, sessions, terminals)).toBe(true);
+    expect(isTerminalTab(stub, sessions)).toBe(true);
     expect(isTurnTab(stub, sessions)).toBe(false);
   });
 

@@ -29,7 +29,6 @@ import { Toaster } from "./chrome/Toaster";
 import { useProjectFiles } from "./hooks/useProjectFiles";
 import { useSelectAllScope } from "./hooks/useSelectAllScope";
 import { useSessions } from "./hooks/useSessions";
-import { useSessionView } from "./hooks/useSessionView";
 import { useSidebarWidth } from "./hooks/useSidebarWidth";
 import { BotAvatarProvider } from "./hooks/useBotAvatar";
 import { BrowserPrefsProvider } from "./hooks/useBrowserPrefs";
@@ -94,7 +93,6 @@ export function App() {
   } = useSessions(workspaceId);
   const { blank, markBlank } = useBlankSessions(all);
   const listed = useMemo(() => sessions.filter((session) => !blank.has(session.id)), [blank, sessions]);
-  const { surfaceOf } = useSessionView();
   // Every workspace's: their terminals keep running, and renaming, out of sight.
   useSessionTitle(all, adoptName);
   const work = useWorkContext(active, sessions, { workspaces: workspaces.workspaces, sessions: all });
@@ -316,7 +314,7 @@ export function App() {
     openCommands,
     startAllCommands: startableIn(processes.processes ?? [], here.worktree).length > 0 ? () => void processes.startAll(here.worktree) : null,
     stopAllCommands: commandCounts.live > 0 ? () => void processes.stopAll() : null,
-    zoom: tabs.active?.kind === "browser" || isTerminalTab(tabs.active, sessions, surfaceOf) ? null : (delta) => void zoomApp(delta),
+    zoom: tabs.active?.kind === "browser" || isTerminalTab(tabs.active, sessions) ? null : (delta) => void zoomApp(delta),
   });
 
   if (workspaces.loading || sidebar.width === null) return <div className="h-full" />;

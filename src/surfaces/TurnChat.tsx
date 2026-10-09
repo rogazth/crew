@@ -3,12 +3,14 @@ import { useBackground } from "../hooks/useBackground";
 import { showLetter, useChatLetters, usePending } from "../hooks/useLetters";
 import { useThread } from "../hooks/useThread";
 import { answer, respond, send, stop } from "../lib/turnRuntime";
-import { pickFiles, setSessionOptions, writeTempFile } from "../lib/api";
+import { pickFiles, setSessionOptions, switchSessionProvider, writeTempFile } from "../lib/api";
 import { attachedFrom } from "../lib/attachments";
 import { markedCalls, turnTray } from "../lib/background";
 import type { ThreadRef } from "../lib/letters";
 import { queuedLetters } from "../lib/letters";
+import { clearFirstPrompt, peekFirstPrompt } from "../lib/firstPrompt";
 import { mentionedFiles } from "../lib/mentions";
+import type { AgentChoice } from "../lib/providers";
 import { BackgroundContext, LetterContext, useChatActions, type BackgroundScope, type LetterScope } from "./chat/context";
 import { useFileDrop } from "../hooks/useFileDrop";
 import type { Answers, ApprovalDecision, AttachedFile } from "../lib/blocks";
@@ -65,6 +67,14 @@ export function TurnChat({ session, sessions, cwd, active }: Props) {
     if (active) field.current?.focus();
   }, [active]);
 
+  // What home's composer wrote before the session existed is its first turn.
+  useEffect(() => {
+    const prompt = peekFirstPrompt(session.id);
+    if (!prompt) return;
+    clearFirstPrompt(session.id);
+    void send(session, cwd, prompt);
+  }, [cwd, session]);
+
   const addPaths = useCallback((paths: string[]) => {
     if (paths.length === 0) return;
     setFiles((prev) => {
@@ -93,6 +103,23 @@ export function TurnChat({ session, sessions, cwd, active }: Props) {
   );
 
   const over = useFileDrop(pane, addPaths);
+
+  // Nobody has talked to a session of the user's yet: it can still be another provider's CLI.
+  const fresh = session.kind === "terminal" && ready && held.length === 0 && pending.length === 0 && !working;
+  // Each turn starts its CLI from the row: the next one runs what the chips say.
+  const changeOptions = useCallback(
+    (next: AgentChoice) => {
+      const options = {
+        model: next.model,
+        effort: next.effort,
+        serviceTier: next.serviceTier ?? "",
+        autonomy: next.access,
+      };
+      if (next.provider === session.provider) void setSessionOptions(session.id, options).catch(() => {});
+      else if (fresh) void switchSessionProvider(session.id, cwd, { provider: next.provider, ...options }).catch(() => {});
+    },
+    [cwd, fresh, session.id, session.provider],
+  );
 
   const submit = useCallback(() => {
     const text = draft.trim();
@@ -157,15 +184,8 @@ export function TurnChat({ session, sessions, cwd, active }: Props) {
             onRemoveFile={(path) => setFiles((prev) => prev.filter((file) => file.path !== path))}
             onApprove={approve}
             onAnswer={reply}
-            // Each turn starts its CLI from the row: the next one runs what the chips say.
-            onOptions={(next) =>
-              void setSessionOptions(session.id, {
-                model: next.model,
-                effort: next.effort,
-                serviceTier: next.serviceTier ?? "",
-                autonomy: next.access,
-              }).catch(() => {})
-            }
+            onOptions={changeOptions}
+            switchProvider={fresh}
             bar={
               <ChatBar
                 session={session}

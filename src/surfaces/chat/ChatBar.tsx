@@ -189,20 +189,15 @@ type Props = {
   pairs: ThreadPair[];
   onOpenSession: (id: string) => void;
   onOpenThread: (thread: ThreadRef) => void;
-  /** Kept at the bar's end, there or not: the terminal's own button. */
-  trailing?: ReactNode;
 };
 
 /**
  * The bar over a chat: its sessions, or whose it is, on the left; its
- * conversations on the right. Nothing to say, no bar, unless something
- * trails it. The 8px padding is the same top as the chip over the terminal.
+ * conversations on the right. Nothing to say, no bar.
  */
-export function ChatBar({ session, sessions, kids, pairs, onOpenSession, onOpenThread, trailing }: Props) {
+export function ChatBar({ session, sessions, kids, pairs, onOpenSession, onOpenThread }: Props) {
   const owned = Boolean(session.parentId || session.handedOffBy);
-  if (kids.length === 0 && !owned && pairs.length === 0) {
-    return trailing ? <div className="flex shrink-0 items-center justify-end px-3 py-2">{trailing}</div> : null;
-  }
+  if (kids.length === 0 && !owned && pairs.length === 0) return null;
   return (
     <div className="flex shrink-0 items-center gap-3 border-b border-hairline py-2 pr-2 pl-4">
       {kids.length > 0 ? (
@@ -213,7 +208,6 @@ export function ChatBar({ session, sessions, kids, pairs, onOpenSession, onOpenT
         <span className="flex-1" />
       )}
       <Conversations pairs={pairs} owner={sessionParty(session)} sessions={sessions} onOpen={onOpenThread} />
-      {trailing}
     </div>
   );
 }

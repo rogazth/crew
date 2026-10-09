@@ -26,7 +26,7 @@ import type {
   ThreadPage,
   ThreadPair,
 } from "./protocol";
-import type { Autonomy, ProjectFile, Session, SessionKind, SessionStatus, Workspace, Worktree } from "./types";
+import type { Autonomy, ProjectFile, Session, SessionKind, SessionStatus, SessionView, Workspace, Worktree } from "./types";
 
 /** Native picker. No filters: any document the agent can read. */
 export async function pickFiles(): Promise<string[]> {
@@ -86,6 +86,8 @@ export const createSession = (
     description: string;
     autonomy: Autonomy;
     worktree?: string | null;
+    /** Where a terminal session's conversation lives, for good. Left out, the terminal. */
+    view?: SessionView;
   },
 ): Promise<Session> => client.request("session_create", { workspaceId, kind, ...input });
 

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import { readBackground, subscribeBackground, tabBackgroundCount } from "../lib/background";
 import type { BackgroundList } from "../lib/protocol";
 import { readLive, subscribeLive } from "../lib/sessionLive";
+import { sessionSurface } from "../lib/sessionView";
 import type { Session } from "../lib/types";
 
 /** A session's background commands, as the daemon last said; null until it has. */
@@ -29,8 +30,8 @@ export function useNow(ms: number, enabled: boolean): number {
  * background: a turn Crew drives from its list, a terminal from its hooks.
  */
 export function useTabBackground(session: Session | undefined): number {
-  const driven = session && session.kind !== "terminal" ? session.id : null;
-  const terminal = session?.kind === "terminal" ? session.id : null;
+  const driven = session && sessionSurface(session) === "turns" ? session.id : null;
+  const terminal = session && sessionSurface(session) === "terminal" ? session.id : null;
   const list = useBackground(driven);
   const subscribe = useCallback(
     (listener: () => void) => (terminal ? subscribeLive(terminal, listener) : () => {}),
