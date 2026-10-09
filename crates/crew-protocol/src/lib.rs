@@ -701,6 +701,29 @@ pub struct ListedModel {
     pub tiers: Option<Vec<ListedTier>>,
 }
 
+/// Whether this account can use Claude's fast mode, as Crew shows it. `reason`
+/// is the CLI's own reason when it hid the mode.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]
+pub struct FastMode {
+    pub availability: FastModeAvailability,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub reason: Option<String>,
+}
+
+/// `hidden` leaves the toggle out; `cooldown` keeps it, after a rate limit.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, TS)]
+#[serde(rename_all = "lowercase")]
+#[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "lowercase")]
+pub enum FastModeAvailability {
+    Available,
+    Cooldown,
+    Hidden,
+    Unknown,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export, export_to = "../../../src/lib/protocol.ts", rename_all = "camelCase")]

@@ -574,6 +574,9 @@ pub fn serve_on(config: Config, listen: Listen) -> Result<Handle, String> {
     // What a turn left running in the background reaches every window.
     let tray = hub.clone();
     turns.background().set_listener(Arc::new(move |list| tray.emit("background-changed", list)));
+    // Claude's fast mode is the account's, so every window hears a change.
+    let fast_mode = hub.clone();
+    provider_session::set_claude_fast_mode_listener(move |mode| fast_mode.emit("fast-mode-changed", mode));
     let leases = Leases::new();
     let browser = BrowserTools::new(config.store.clone(), BrowserRelay::new(), leases.clone());
     let to_client = hub.clone();
@@ -1867,6 +1870,7 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
             };
             json(models)
         }
+        "agent_fast_mode" => json(block(|| Ok::<_, String>(provider_session::claude_fast_mode())).await?),
         "turn_start" => {
             let p: TurnStart = parse(params)?;
             if let Some(nonce) = p.nonce.clone() {

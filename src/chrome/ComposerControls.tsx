@@ -3,6 +3,7 @@ import { BrainIcon, CheckIcon, ChevronDownIcon, GaugeIcon, LockIcon, LockOpenIco
 import { PANEL, ROW } from "./kit";
 import { ModelPicker } from "./ModelPicker";
 import { useListedModels } from "../hooks/useListedModels";
+import { claudeFastShown, claudeFastTitle, useClaudeFastMode } from "../lib/fastMode";
 import {
   ACCESSES,
   EFFORT_LABELS,
@@ -63,25 +64,33 @@ export function ModelControls({ value, onChange, lockProvider = false }: Props) 
 
 /**
  * Speed control: a one-click toggle when it is on/off (Cursor's `-fast`
- * variant), a menu only when there are several tiers to pick from
- * (Codex). Nothing when the model has neither.
+ * variant, Claude's fast mode), a menu only when there are several tiers to
+ * pick from (Codex). Nothing when the model has neither.
  */
 function SpeedControl({ value, onChange }: { value: AgentChoice; onChange: (next: AgentChoice) => void }) {
+  const claude = useClaudeFastMode();
   const fast = fastChoice(value.provider, value.model);
   const tiers = tiersOf(value.provider, value.model);
 
+  if (value.provider === "claude") {
+    if (!claudeFastShown(claude)) return null;
+    const on = value.serviceTier === "fast";
+    return (
+      <FastToggle
+        on={on}
+        title={claudeFastTitle(claude, on)}
+        onClick={() => onChange(fitChoice({ ...value, serviceTier: on ? "" : "fast" }))}
+      />
+    );
+  }
+
   if (fast.available) {
     return (
-      <button
-        type="button"
-        aria-pressed={fast.on}
+      <FastToggle
+        on={fast.on}
         title={fast.on ? "Running the fast variant — click for standard" : "A faster run of this model"}
         onClick={() => onChange(fitChoice({ ...value, model: setFast(value.provider, value.model, !fast.on) }))}
-        className={`${CHIP} shrink-0 ${fast.on ? "bg-selected text-text" : ""}`}
-      >
-        <ZapIcon className={`size-3.5 shrink-0 ${fast.on ? "fill-current" : "text-icon"}`} />
-        Fast
-      </button>
+      />
     );
   }
 
@@ -123,6 +132,21 @@ function SpeedControl({ value, onChange }: { value: AgentChoice; onChange: (next
   }
 
   return null;
+}
+
+function FastToggle({ on, title, onClick }: { on: boolean; title: string; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      aria-pressed={on}
+      title={title}
+      onClick={onClick}
+      className={`${CHIP} shrink-0 ${on ? "bg-selected text-text" : ""}`}
+    >
+      <ZapIcon className={`size-3.5 shrink-0 ${on ? "fill-current" : "text-icon"}`} />
+      Fast
+    </button>
+  );
 }
 
 export function EffortPicker({

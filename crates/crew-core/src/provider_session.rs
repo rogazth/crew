@@ -1,14 +1,16 @@
-use std::io::{BufRead, BufReader, Read};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Mutex;
+use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use crew_protocol::{ListedModel, ListedTier};
+use crew_protocol::{FastMode, FastModeAvailability, ListedModel, ListedTier};
 use rusqlite::{params, Connection, OpenFlags};
+use serde_json::{json, Value};
 
+use crate::providers::claude::{build_control_request, parse_control_response};
 use crate::shell_path;
 
 const CREATE_TIMEOUT: Duration = Duration::from_secs(15);
@@ -705,6 +707,164 @@ fn tier_of(item: &serde_json::Value) -> (Option<String>, Option<String>) {
     (id, name)
 }
 
+static CLAUDE_FAST_MODE: Mutex<Option<(Instant, FastMode)>> = Mutex::new(None);
+static CLAUDE_FAST_MODE_REFRESHING: AtomicBool = AtomicBool::new(false);
+static CLAUDE_FAST_MODE_LISTENER: Mutex<Option<Arc<dyn Fn(&FastMode) + Send + Sync>>> = Mutex::new(None);
+/// An account's fast mode changes rarely; a reading is taken again after a day.
+const FAST_MODE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
+/// Reasons that say the account cannot use fast mode at all.
+const HIDING_REASONS: [&str; 6] =
+    ["free", "preference", "extra_usage_disabled", "not_first_party", "disabled_by_env", "model_not_allowed"];
+
+/// Asks Claude's CLI for the fast-mode state off the caller's thread when it is
+/// installed, so the Fast toggle has its answer by the first composer.
+pub fn prewarm_claude_fast_mode() {
+    refresh_claude_fast_mode_in_background();
+}
+
+/// The account's fast mode as last read. Asks again in the background once the
+/// reading is a day old, or when there is none yet; until then, Unknown.
+pub fn claude_fast_mode() -> FastMode {
+    let cached = CLAUDE_FAST_MODE.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    match cached {
+        Some((at, mode)) => {
+            if at.elapsed() >= FAST_MODE_TTL {
+                refresh_claude_fast_mode_in_background();
+            }
+            mode
+        }
+        None => {
+            refresh_claude_fast_mode_in_background();
+            FastMode { availability: FastModeAvailability::Unknown, reason: None }
+        }
+    }
+}
+
+/// Feeds a reading Claude gave on a turn into the same cache. `state` and
+/// `reason` are its `fast_mode_state` and `fast_mode_disabled_reason`.
+pub fn note_claude_fast_mode(state: Option<&str>, reason: Option<&str>) {
+    let (changed, mode) = {
+        let mut cache = CLAUDE_FAST_MODE.lock().unwrap_or_else(|e| e.into_inner());
+        let previous = cache.as_ref().map(|(_, mode)| mode.clone());
+        let mode = fast_mode_from(state, reason, previous.as_ref());
+        *cache = Some((Instant::now(), mode.clone()));
+        (previous.as_ref() != Some(&mode), mode)
+    };
+    if changed {
+        let listener = CLAUDE_FAST_MODE_LISTENER.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        if let Some(listener) = listener {
+            listener(&mode);
+        }
+    }
+}
+
+/// Told each reading that changes the fast mode, so every window can be pushed it.
+pub fn set_claude_fast_mode_listener(listener: impl Fn(&FastMode) + Send + Sync + 'static) {
+    *CLAUDE_FAST_MODE_LISTENER.lock().unwrap_or_else(|e| e.into_inner()) = Some(Arc::new(listener));
+}
+
+/// One probe at a time: a caller that finds one running leaves it to answer.
+fn refresh_claude_fast_mode_in_background() {
+    if CLAUDE_FAST_MODE_REFRESHING.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    thread::spawn(|| {
+        refresh_claude_fast_mode();
+        CLAUDE_FAST_MODE_REFRESHING.store(false, Ordering::SeqCst);
+    });
+}
+
+fn refresh_claude_fast_mode() {
+    let Some(binary) = shell_path::resolve("claude") else { return };
+    match probe_claude_fast_mode(&binary) {
+        Ok((state, reason)) => note_claude_fast_mode(state.as_deref(), reason.as_deref()),
+        Err(err) => eprintln!("[fast mode] {err}"),
+    }
+}
+
+/// Asks the CLI for the account's fast-mode state over its control channel: an
+/// initialize request, which starts no turn and costs nothing. The CLI only
+/// reports the state when fast mode is opted into, hence the setting. It is
+/// stopped once it has answered.
+fn probe_claude_fast_mode(binary: &Path) -> Result<(Option<String>, Option<String>), String> {
+    let mut child = Command::new(binary)
+        .args([
+            "--output-format",
+            "stream-json",
+            "--verbose",
+            "--input-format",
+            "stream-json",
+            "--setting-sources=project,local",
+            "--strict-mcp-config",
+            "--settings",
+            r#"{"fastMode":true}"#,
+        ])
+        .env("PATH", shell_path::joined())
+        .current_dir(home().unwrap_or_else(std::env::temp_dir))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| format!("claude fast mode: {e}"))?;
+    let mut stdin = child.stdin.take().ok_or("claude fast mode: no stdin")?;
+    let stdout = child.stdout.take().ok_or("claude fast mode: no stdout")?;
+    let (sender, lines) = mpsc::channel();
+    thread::spawn(move || {
+        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+            if sender.send(line).is_err() {
+                break;
+            }
+        }
+    });
+    let outcome = initialize_for_fast_mode(&mut stdin, &lines);
+    let _ = child.kill();
+    let _ = child.wait();
+    outcome
+}
+
+fn initialize_for_fast_mode(
+    stdin: &mut ChildStdin,
+    lines: &mpsc::Receiver<String>,
+) -> Result<(Option<String>, Option<String>), String> {
+    let request = build_control_request("1", json!({ "subtype": "initialize" }));
+    writeln!(stdin, "{request}").and_then(|_| stdin.flush()).map_err(|e| format!("claude fast mode: {e}"))?;
+    let deadline = Instant::now() + MODELS_TIMEOUT;
+    loop {
+        let line = lines
+            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            .map_err(|e| match e {
+                mpsc::RecvTimeoutError::Timeout => "claude fast mode did not answer".to_string(),
+                mpsc::RecvTimeoutError::Disconnected => "claude fast mode exited before answering".to_string(),
+            })?;
+        let Ok(Value::Object(record)) = serde_json::from_str::<Value>(&line) else { continue };
+        let Some((id, answer)) = parse_control_response(&record) else { continue };
+        if id != "1" {
+            continue;
+        }
+        let response = answer?;
+        let text = |key: &str| response.get(key).and_then(Value::as_str).map(str::to_string);
+        return Ok((text("fast_mode_state"), text("fast_mode_disabled_reason")));
+    }
+}
+
+/// What Crew shows for a reading. A reason that rules the account out hides the
+/// toggle; a cooldown after a rate limit shows it; any other reason (pending, a
+/// network error, one Crew does not know) keeps the last reading, so an answer
+/// that says nothing yet never flips the toggle. No reason means available, and
+/// a reply with neither field keeps the last reading as well.
+fn fast_mode_from(state: Option<&str>, reason: Option<&str>, last: Option<&FastMode>) -> FastMode {
+    let keep = last.cloned().unwrap_or(FastMode { availability: FastModeAvailability::Unknown, reason: None });
+    match (state, reason) {
+        (_, Some(reason)) if HIDING_REASONS.contains(&reason) => {
+            FastMode { availability: FastModeAvailability::Hidden, reason: Some(reason.to_string()) }
+        }
+        (Some("cooldown"), _) => FastMode { availability: FastModeAvailability::Cooldown, reason: None },
+        (_, Some(_)) => keep,
+        (Some(_), None) => FastMode { availability: FastModeAvailability::Available, reason: None },
+        (None, None) => keep,
+    }
+}
+
 fn opencode_config_file() -> Option<PathBuf> {
     let config = match std::env::var("XDG_CONFIG_HOME") {
         Ok(dir) if !dir.is_empty() => PathBuf::from(dir),
@@ -1318,6 +1478,58 @@ note
                 ("claude-opus-5-5-medium".to_string(), "Claude Opus 5.5 1M".to_string()),
             ]
         );
+    }
+
+    /// The CLI's reasons, as Crew shows them: the ones that rule the account
+    /// out hide the toggle, a cooldown is shown, and the rest keep the last.
+    #[test]
+    fn a_claude_fast_mode_reading_becomes_what_crew_shows() {
+        let available = FastMode { availability: FastModeAvailability::Available, reason: None };
+        let cooldown = FastMode { availability: FastModeAvailability::Cooldown, reason: None };
+        let unknown = FastMode { availability: FastModeAvailability::Unknown, reason: None };
+        let hidden = |reason: &str| FastMode { availability: FastModeAvailability::Hidden, reason: Some(reason.into()) };
+        let rule_out = [
+            "free",
+            "preference",
+            "extra_usage_disabled",
+            "not_first_party",
+            "disabled_by_env",
+            "model_not_allowed",
+        ];
+        for reason in rule_out {
+            assert_eq!(fast_mode_from(Some("off"), Some(reason), Some(&available)), hidden(reason), "{reason}");
+        }
+        assert_eq!(fast_mode_from(Some("off"), None, None), available);
+        assert_eq!(fast_mode_from(Some("on"), None, Some(&hidden("free"))), available);
+        assert_eq!(fast_mode_from(Some("cooldown"), None, Some(&available)), cooldown);
+        assert_eq!(fast_mode_from(Some("cooldown"), None, None), cooldown);
+        for reason in ["network_error", "pending", "unknown", "sdk_opt_in_required"] {
+            assert_eq!(fast_mode_from(Some("off"), Some(reason), Some(&cooldown)), cooldown, "{reason}");
+            assert_eq!(fast_mode_from(None, Some(reason), None), unknown, "{reason}");
+        }
+        assert_eq!(fast_mode_from(None, None, Some(&hidden("free"))), hidden("free"));
+        assert_eq!(fast_mode_from(None, None, None), unknown);
+    }
+
+    /// The state comes off the initialize answer, and the CLI is stopped after it.
+    #[test]
+    fn the_claude_probe_reads_the_fast_mode_its_initialize_answers() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = temp_dir("claude-fast-mode");
+        let path = dir.join("fake-claude");
+        std::fs::write(
+            &path,
+            r#"#!/usr/bin/env python3
+import json, sys, time
+request = json.loads(sys.stdin.readline())
+print(json.dumps({"type": "system", "subtype": "init"}), flush=True)
+print(json.dumps({"type": "control_response", "response": {"subtype": "success", "request_id": request["request_id"], "response": {"fast_mode_state": "off", "fast_mode_disabled_reason": "extra_usage_disabled"}}}), flush=True)
+time.sleep(600)
+"#,
+        )
+        .expect("write fake");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        assert_eq!(probe_claude_fast_mode(&path), Ok((Some("off".into()), Some("extra_usage_disabled".into()))));
     }
 
     fn temp_dir(name: &str) -> PathBuf {

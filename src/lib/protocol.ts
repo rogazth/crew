@@ -234,6 +234,17 @@ export type EditHunk = { before: string, after: string, };
 
 export type Event = { event: string, payload: unknown, };
 
+/**
+ * Whether this account can use Claude's fast mode, as Crew shows it. `reason`
+ * is the CLI's own reason when it hid the mode.
+ */
+export type FastMode = { availability: FastModeAvailability, reason?: string, };
+
+/**
+ * `hidden` leaves the toggle out; `cooldown` keeps it, after a rate limit.
+ */
+export type FastModeAvailability = "available" | "cooldown" | "hidden" | "unknown";
+
 export type FileBytes = { mime: string, data: string, };
 
 export type FileMatches = { path: string, relative: string, lines: Array<LineMatch>, };

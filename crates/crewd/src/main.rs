@@ -294,6 +294,7 @@ fn start(
     crew_core::shell_path::prewarm();
     crew_core::provider_session::prewarm_cursor_models();
     crew_core::provider_session::prewarm_codex_models();
+    crew_core::provider_session::prewarm_claude_fast_mode();
     let pty = PtyHost::new();
     // Before the host: what a crashed `crewd` left running goes first, and the
     // host then starts a fresh list.

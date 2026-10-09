@@ -40,6 +40,9 @@ pub struct ClaudeSpawn {
     /// user's conversation and gets them; a bot's persona is its whole
     /// configuration, so it does not.
     pub user_settings: bool,
+    /// Run on fast mode. Headless Claude takes it only as the `fastMode` setting,
+    /// which the account must also be able to use.
+    pub fast: bool,
 }
 
 /// How long Claude Code lets one call to Crew's server run, in milliseconds:
@@ -73,11 +76,14 @@ pub fn build_claude_spawn_args(input: &ClaudeSpawn) -> Vec<String> {
     // A bot gets only the workspace's own settings: its persona and Crew's rules
     // are its whole configuration, and ~/.claude would inject a competing one.
     // A session or subagent is the user's conversation, so it gets theirs too.
-    let (sources, settings) = if input.user_settings {
+    let (sources, mut settings) = if input.user_settings {
         ("user,project,local", json!({ "permissions": { "allow": [CREW_TOOLS_RULE] } }))
     } else {
         ("project,local", json!({ "autoMemoryEnabled": false, "permissions": { "allow": [CREW_TOOLS_RULE] } }))
     };
+    if input.fast {
+        settings["fastMode"] = json!(true);
+    }
     let mut args = vec![
         "--output-format".into(),
         "stream-json".into(),
@@ -1213,6 +1219,7 @@ mod tests {
             autonomy: Autonomy::Ask,
             mcp_config: Some(claude_mcp_config("/app/crewd", &["--mcp".into()], true)),
             user_settings: false,
+            fast: false,
         });
         let at = args.iter().position(|arg| arg == "--settings").expect("settings");
         let settings: Value = serde_json::from_str(&args[at + 1]).expect("json");
@@ -1242,6 +1249,7 @@ mod tests {
                 autonomy: Autonomy::Ask,
                 mcp_config: None,
                 user_settings,
+                fast: false,
             })
         };
         let bot = spawn(false);
@@ -1253,6 +1261,32 @@ mod tests {
         let at = session.iter().position(|arg| arg == "--settings").expect("settings");
         assert!(!session[at + 1].contains("autoMemoryEnabled"), "{}", session[at + 1]);
         assert!(session[at + 1].contains("mcp__crew__*"), "{}", session[at + 1]);
+    }
+
+    /// Fast mode is asked for in the settings Claude reads, and only by a
+    /// session that runs on it.
+    #[test]
+    fn a_fast_session_asks_for_fast_mode_in_its_settings() {
+        let settings = |fast: bool| {
+            let args = build_claude_spawn_args(&ClaudeSpawn {
+                model: None,
+                effort: None,
+                session_id: None,
+                resume: None,
+                replay_user_messages: false,
+                asks_questions: false,
+                system_prompt: None,
+                autonomy: Autonomy::Ask,
+                mcp_config: None,
+                user_settings: true,
+                fast,
+            });
+            let at = args.iter().position(|arg| arg == "--settings").expect("settings");
+            let parsed: Value = serde_json::from_str(&args[at + 1]).expect("json");
+            parsed
+        };
+        assert_eq!(settings(true)["fastMode"], true);
+        assert!(settings(false).get("fastMode").is_none(), "{}", settings(false));
     }
 
     /// A child under full autonomy keeps its question tool: Claude Code
@@ -1271,6 +1305,7 @@ mod tests {
                 autonomy: Autonomy::Full,
                 mcp_config: None,
                 user_settings: false,
+                fast: false,
             })
         };
         let child = spawn(true);

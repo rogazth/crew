@@ -1739,6 +1739,10 @@ impl TurnHost {
             autonomy,
             mcp_config: mcp.map(|(command, args)| crate::providers::claude::claude_mcp_config(&command, &args, true)),
             user_settings: session.kind != "bot",
+            // A tier carried over from another provider must not ask an
+            // account that cannot use fast mode for it.
+            fast: session.service_tier == "fast"
+                && crate::provider_session::claude_fast_mode().availability != crew_protocol::FastModeAvailability::Hidden,
         };
         if self.stop_requested(&session_id) {
             self.agents.kill(&session_id);
