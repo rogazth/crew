@@ -2619,8 +2619,11 @@ impl TurnHost {
                 }
             } else if type_name.as_deref() == Some("user") {
                 // A steer Claude has just taken in: it goes in the transcript
-                // here, where the model read it.
-                if let Some(echo) = crate::providers::claude::replayed_text(&rec) {
+                // here, where the model read it. Only while the turn runs: an
+                // echo after its result is the CLI starting a turn of its own
+                // on a steer the turn never read, which stays unread, so the
+                // process is let go and the box hands the steer over once.
+                if let Some(echo) = crate::providers::claude::replayed_text(&rec).filter(|_| live.active) {
                     if let Some(at) = live.steers.iter().position(|steer| steer.sent.trim() == echo) {
                         let steer = live.steers.remove(at);
                         if let Some(id) = steer.letter.as_ref() {
