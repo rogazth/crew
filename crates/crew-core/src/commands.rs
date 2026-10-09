@@ -101,6 +101,25 @@ impl CommandsHost {
         Reported { at: before.at, ..slot.clone() } != before
     }
 
+    /// `learn` for a session's own process, and when that changed what its
+    /// windows see, a push to the session's windows. `actions` are Crew's own
+    /// for the provider, as `catalog` merges them in.
+    pub fn learn_for_session(
+        &self,
+        session_id: &str,
+        provider: &str,
+        cwd: &str,
+        entries: Option<Vec<CommandEntry>>,
+        skills: Option<HashSet<String>>,
+        actions: Vec<CommandEntry>,
+    ) {
+        let now = crate::store::now_millis();
+        if self.learn(provider, cwd, entries, skills, now) {
+            let catalog = self.catalog(provider, cwd, actions, now);
+            self.notify(CommandsChanged { session_id: session_id.to_string(), catalog });
+        }
+    }
+
     /// The catalog as a window shows it: the provider's entries, each a
     /// command or a skill, after Crew's `actions`. An entry that shares a name
     /// with an action is dropped, so `/model` is one thing: Crew changes the

@@ -22,10 +22,10 @@ use serde_json::{json, Map, Value};
 use tokio::sync::oneshot;
 
 use super::{
-    carries_conversation, conversation_to_resume, driven, path_list, typed_by_user, Harness, Launch, QuestionReply,
-    Steer, TurnHost, TurnOutcome, INIT_TIMEOUT, NEXT_EPOCH,
+    carries_conversation, conversation_to_resume, driven, offers_fast, path_list, typed_by_user, Harness, Launch,
+    QuestionReply, Steer, TurnHost, TurnOutcome, INIT_TIMEOUT, NEXT_EPOCH,
 };
-use crate::command_sources::codex_skills;
+use crate::command_sources::{codex_commands, codex_skills};
 use crate::mailbox;
 use crate::session;
 use crate::providers::codex::{
@@ -53,11 +53,6 @@ const TERMINAL_POLL: Duration = Duration::from_secs(2);
 /// How long `skills/list` may take. It scans the skill folders on disk, and
 /// nothing waits on its answer, so this only bounds the thread that asks.
 const CATALOG_TIMEOUT: Duration = Duration::from_secs(30);
-
-/// What the catalog hook was given, so a test can see it was called.
-#[cfg(test)]
-pub(crate) static CODEX_CATALOG_CALLS: std::sync::Mutex<Vec<(String, String, Vec<CommandEntry>)>> =
-    std::sync::Mutex::new(Vec::new());
 
 /// A request the app server is waiting on Crew for, by the id the UI knows.
 pub(super) struct Pending<T> {
@@ -166,13 +161,21 @@ impl CodexLive {
 }
 
 impl TurnHost {
-    /// Filled in by the catalog (commands.rs).
-    fn codex_catalog(&self, _session_id: &str, _cwd: &str, _entries: Vec<CommandEntry>) {
-        #[cfg(test)]
-        CODEX_CATALOG_CALLS
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .push((_session_id.to_string(), _cwd.to_string(), _entries));
+    /// Keeps a folder's skills, with Codex's own commands, in the catalog, as
+    /// the Claude path keeps its menu. A bot's process keeps nothing: its
+    /// persona must not see the user's skills.
+    fn codex_catalog(&self, session_id: &str, cwd: &str, entries: Vec<CommandEntry>) {
+        let bot = session::get(&self.store, session_id.to_string())
+            .ok()
+            .flatten()
+            .is_some_and(|session| session.kind == "bot");
+        if bot {
+            return;
+        }
+        let skills = entries.iter().map(|entry| entry.name.clone()).collect();
+        let menu = entries.into_iter().chain(codex_commands()).collect();
+        let actions = crate::commands::crew_actions(offers_fast("codex"));
+        self.commands().learn_for_session(session_id, "codex", cwd, Some(menu), Some(skills), actions);
     }
 
     pub(super) fn run_codex(
@@ -1372,16 +1375,6 @@ mod catalog_tests {
             .collect()
     }
 
-    fn catalog_calls(session: &str) -> Vec<(String, Vec<CommandEntry>)> {
-        CODEX_CATALOG_CALLS
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .iter()
-            .filter(|(id, _, _)| id == session)
-            .map(|(_, cwd, entries)| (cwd.clone(), entries.clone()))
-            .collect()
-    }
-
     fn wait_for(mut done: impl FnMut() -> bool) {
         for _ in 0..400 {
             if done() {
@@ -1392,32 +1385,38 @@ mod catalog_tests {
         panic!("the wait ran out");
     }
 
-    /// A Codex session on the fake app server, started with `text`. Returns
-    /// the host, the session's id, the fake's log and the folder.
-    fn started(text: &str) -> (TurnHost, String, std::path::PathBuf, String) {
-        let host = TurnHost::test_new();
-        host.test_agents().set_events(Arc::new(Lines(host.clone())));
+    /// A Codex session of `kind` in a new folder, not started. Returns its id
+    /// and the folder.
+    fn codex_session(host: &TurnHost, kind: &str, view: Option<&str>) -> (String, String) {
         let dir = std::env::temp_dir().join(format!("crew-codex-catalog-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).expect("dir");
-        let (fake, log) = crate::turns::fake_codex(&dir);
-        host.override_binary("codex", fake);
         let workspace = crate::workspace::create(host.test_store(), "w".into(), dir.to_string_lossy().into())
             .expect("workspace")
             .id;
         let session = crate::session::create(
             host.test_store(),
             workspace,
-            "terminal".into(),
+            kind.into(),
             "shell".into(),
             "codex".into(),
             "gpt-5.6-luna".into(),
             String::new(),
             "full".into(),
-            Some("chat".into()),
+            view.map(str::to_string),
         )
         .expect("session")
         .id;
-        let cwd = dir.to_string_lossy().into_owned();
+        (session, dir.to_string_lossy().into_owned())
+    }
+
+    /// A Codex session of `kind` on the fake app server, started with `text`.
+    /// Returns the host, the session's id, the fake's log and the folder.
+    fn started_as(kind: &str, view: Option<&str>, text: &str) -> (TurnHost, String, std::path::PathBuf, String) {
+        let host = TurnHost::test_new();
+        host.test_agents().set_events(Arc::new(Lines(host.clone())));
+        let (session, cwd) = codex_session(&host, kind, view);
+        let (fake, log) = crate::turns::fake_codex(std::path::Path::new(&cwd));
+        host.override_binary("codex", fake);
         host.start(TurnStart {
             session_id: session.clone(),
             cwd: cwd.clone(),
@@ -1437,19 +1436,25 @@ mod catalog_tests {
         (host, session, log, cwd)
     }
 
-    /// Opening the thread asks for the folder's skills and hands the enabled
-    /// ones to the catalog, with the folder they were read for.
+    fn started(text: &str) -> (TurnHost, String, std::path::PathBuf, String) {
+        started_as("terminal", Some("chat"), text)
+    }
+
+    /// Opening the thread asks for the folder's skills, and the menu then
+    /// lists them as skills with the commands Codex has, after Crew's actions.
     #[test]
-    fn a_codex_thread_hands_its_skills_to_the_catalog_when_it_opens() {
+    fn a_codex_thread_hands_its_skills_and_commands_to_the_catalog_when_it_opens() {
         let (host, session, log, cwd) = started("hello");
-        wait_for(|| !catalog_calls(&session).is_empty());
-        let (folder, entries) = catalog_calls(&session).remove(0);
-        assert_eq!(folder, cwd);
-        assert_eq!(entries.len(), 1, "{entries:?}");
-        assert_eq!(entries[0].name, "review-pr");
-        assert_eq!(entries[0].kind, "skill");
-        assert_eq!(entries[0].description, "Review a pull request");
-        assert_eq!(entries[0].path.as_deref(), Some(format!("{cwd}/.agents/skills/review-pr/SKILL.md").as_str()));
+        wait_for(|| host.commands().holds("codex", &cwd));
+        let entries = host.commands_list(&session).expect("menu").entries;
+        let get = |name: &str| entries.iter().find(|entry| entry.name == name).expect(name).clone();
+        let skill = get("review-pr");
+        assert_eq!(skill.kind, "skill");
+        assert_eq!(skill.description, "Review a pull request");
+        assert_eq!(skill.path.as_deref(), Some(format!("{cwd}/.agents/skills/review-pr/SKILL.md").as_str()));
+        assert_eq!(get("compact").kind, "command");
+        assert_eq!(get("model").kind, "crew");
+        assert!(!entries.iter().any(|entry| entry.name == "old-notes"), "a skill the user turned off");
         assert_eq!(sent(&log, "skills/list"), vec![json!({ "cwds": [cwd] })]);
         wait_for(|| !host.is_running(&session));
     }
@@ -1458,11 +1463,38 @@ mod catalog_tests {
     /// turn runs, which the turn's own end-of-turn checks do not stop.
     #[test]
     fn a_skills_change_reads_the_skills_again_while_a_turn_runs() {
-        let (host, session, log, _) = started("SLEEP 1");
-        wait_for(|| !catalog_calls(&session).is_empty());
+        let (host, session, log, cwd) = started("SLEEP 1");
+        wait_for(|| host.commands().holds("codex", &cwd));
         host.handle_codex_line(&session, r#"{"method":"skills/changed","params":{}}"#);
-        wait_for(|| catalog_calls(&session).len() == 2);
-        assert_eq!(sent(&log, "skills/list").len(), 2);
+        wait_for(|| sent(&log, "skills/list").len() == 2);
+        std::thread::sleep(Duration::from_millis(100));
+        let entries = host.commands_list(&session).expect("menu").entries;
+        assert!(entries.iter().any(|entry| entry.name == "review-pr" && entry.kind == "skill"));
         wait_for(|| !host.is_running(&session));
+    }
+
+    /// A bot's Codex process keeps nothing: its menu is Crew's actions alone,
+    /// whatever skills its folder has.
+    #[test]
+    fn a_bots_codex_process_keeps_nothing_in_the_catalog() {
+        let (host, session, log, cwd) = started_as("bot", None, "hello");
+        wait_for(|| sent(&log, "skills/list").len() == 1);
+        wait_for(|| !host.is_running(&session));
+        // The answer is read on the thread that asked, after the turn may have ended.
+        std::thread::sleep(Duration::from_millis(100));
+        assert!(!host.commands().holds("codex", &cwd));
+        let entries = host.commands_list(&session).expect("menu").entries;
+        assert!(entries.iter().all(|entry| entry.kind == "crew"), "{entries:?}");
+    }
+
+    /// With no catalog for its folder, a Codex session's menu is Crew's
+    /// actions alone: nothing is asked for, as Codex has no probe yet.
+    #[test]
+    fn a_codex_session_with_no_catalog_lists_crew_actions_alone() {
+        let host = TurnHost::test_new();
+        let (session, cwd) = codex_session(&host, "terminal", Some("chat"));
+        let entries = host.commands_list(&session).expect("menu").entries;
+        assert!(!entries.is_empty() && entries.iter().all(|entry| entry.kind == "crew"), "{entries:?}");
+        assert!(!host.commands().holds("codex", &cwd));
     }
 }

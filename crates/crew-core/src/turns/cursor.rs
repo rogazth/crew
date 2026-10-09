@@ -22,7 +22,7 @@ use serde_json::{json, Map, Value};
 use tokio::sync::oneshot;
 
 use super::{
-    carries_conversation, conversation_to_resume, path_list, Harness, Live, QuestionReply, TurnHost,
+    carries_conversation, conversation_to_resume, offers_fast, path_list, Harness, Live, QuestionReply, TurnHost,
     TurnOutcome, INIT_TIMEOUT,
 };
 use crate::command_sources::cursor_commands;
@@ -42,11 +42,6 @@ const OPEN_TIMEOUT: Duration = Duration::from_secs(90);
 /// After `session/cancel`, how long the prompt may take to say it was
 /// cancelled before its process is killed under it.
 const INTERRUPT_GRACE: Duration = Duration::from_secs(3);
-
-/// What the catalog hook was given, so a test can see it was called.
-#[cfg(test)]
-pub(crate) static CURSOR_CATALOG_CALLS: std::sync::Mutex<Vec<(String, String, Vec<CommandEntry>)>> =
-    std::sync::Mutex::new(Vec::new());
 
 /// What a child whose `-p` chat could not come along is told, once, on the
 /// turn that starts its new conversation (migration 27).
@@ -159,13 +154,19 @@ struct Texts {
 }
 
 impl TurnHost {
-    /// Filled in by the catalog (commands.rs).
-    fn cursor_catalog(&self, _session_id: &str, _cwd: &str, _entries: Vec<CommandEntry>) {
-        #[cfg(test)]
-        CURSOR_CATALOG_CALLS
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .push((_session_id.to_string(), _cwd.to_string(), _entries));
+    /// Keeps a folder's Cursor commands in the catalog, as the Claude path
+    /// keeps its menu. A bot's process keeps nothing: its persona must not see
+    /// the user's commands.
+    fn cursor_catalog(&self, session_id: &str, cwd: &str, entries: Vec<CommandEntry>) {
+        let bot = crate::session::get(&self.store, session_id.to_string())
+            .ok()
+            .flatten()
+            .is_some_and(|session| session.kind == "bot");
+        if bot {
+            return;
+        }
+        let actions = crate::commands::crew_actions(offers_fast("cursor"));
+        self.commands().learn_for_session(session_id, "cursor", cwd, Some(entries), None, actions);
     }
 
     pub(super) fn run_cursor(
@@ -1138,16 +1139,6 @@ mod tests {
         assert!(matches!(host.lock().get("s"), Some(Live::Cursor(live)) if live.settled));
     }
 
-    fn catalog_calls(session: &str) -> Vec<(String, Vec<CommandEntry>)> {
-        CURSOR_CATALOG_CALLS
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .iter()
-            .filter(|(id, _, _)| id == session)
-            .map(|(_, cwd, entries)| (cwd.clone(), entries.clone()))
-            .collect()
-    }
-
     /// Cursor's commands come during a load's replay, which is muted for the
     /// turn; the menu takes them anyway, with the folder the session opened in.
     #[test]
@@ -1163,48 +1154,53 @@ mod tests {
         });
         host.handle_cursor_line("commands-load", &update(listed));
         assert_eq!(
-            catalog_calls("commands-load"),
-            vec![(
-                "/work/crew".to_string(),
-                vec![CommandEntry {
-                    name: "create_plan".into(),
-                    description: "Create a plan".into(),
-                    argument_hint: Some("the goal".into()),
-                    aliases: None,
-                    kind: "command".into(),
-                    path: None,
-                }],
-            )]
+            host.commands().catalog("cursor", "/work/crew", Vec::new(), 0).entries,
+            vec![CommandEntry {
+                name: "create_plan".into(),
+                description: "Create a plan".into(),
+                argument_hint: Some("the goal".into()),
+                aliases: None,
+                kind: "command".into(),
+                path: None,
+            }]
         );
     }
 
-    /// A session on the fake `cursor-agent acp`, started with `text`.
-    fn started(text: &str) -> (TurnHost, String) {
-        let host = TurnHost::test_new();
-        host.test_agents().set_events(std::sync::Arc::new(Lines(host.clone())));
+    /// A Cursor session of `kind` in a new folder, not started. Returns its id
+    /// and the folder.
+    fn cursor_session(host: &TurnHost, kind: &str, view: Option<&str>) -> (String, String) {
         let dir = std::env::temp_dir().join(format!("crew-cursor-catalog-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).expect("dir");
-        let (fake, _log) = crate::turns::fake_cursor(&dir);
-        host.override_binary("cursor-agent", fake);
         let workspace = crate::workspace::create(host.test_store(), "w".into(), dir.to_string_lossy().into())
             .expect("workspace")
             .id;
         let session = crate::session::create(
             host.test_store(),
             workspace,
-            "terminal".into(),
+            kind.into(),
             "shell".into(),
             "cursor".into(),
             "composer-2.5".into(),
             String::new(),
             "full".into(),
-            Some("chat".into()),
+            view.map(str::to_string),
         )
         .expect("session")
         .id;
+        (session, dir.to_string_lossy().into_owned())
+    }
+
+    /// A session of `kind` on the fake `cursor-agent acp`, started with `text`.
+    /// Returns the host, the session's id and the folder.
+    fn started_as(kind: &str, view: Option<&str>, text: &str) -> (TurnHost, String, String) {
+        let host = TurnHost::test_new();
+        host.test_agents().set_events(std::sync::Arc::new(Lines(host.clone())));
+        let (session, cwd) = cursor_session(&host, kind, view);
+        let (fake, _log) = crate::turns::fake_cursor(std::path::Path::new(&cwd));
+        host.override_binary("cursor-agent", fake);
         host.start(crew_protocol::TurnStart {
             session_id: session.clone(),
-            cwd: dir.to_string_lossy().into_owned(),
+            cwd: cwd.clone(),
             text: text.into(),
             files: None,
             mentions: None,
@@ -1218,7 +1214,11 @@ mod tests {
             skills: None,
         })
         .expect("start");
-        (host, session)
+        (host, session, cwd)
+    }
+
+    fn started(text: &str) -> (TurnHost, String, String) {
+        started_as("terminal", Some("chat"), text)
     }
 
     struct Lines(TurnHost);
@@ -1236,26 +1236,53 @@ mod tests {
     /// fake's announcement reaches the catalog with the folder it opened in.
     #[test]
     fn a_new_cursor_session_hands_its_announced_commands_to_the_catalog() {
-        let (host, session) = started("hello");
-        let mut calls = Vec::new();
+        let (host, session, cwd) = started("hello");
         for _ in 0..400 {
-            calls = catalog_calls(&session);
-            if !calls.is_empty() {
+            if host.commands().holds("cursor", &cwd) {
                 break;
             }
             std::thread::sleep(Duration::from_millis(25));
         }
-        assert_eq!(calls.len(), 1, "{calls:?}");
-        let (folder, entries) = &calls[0];
-        assert!(!folder.is_empty());
-        let names: Vec<(&str, Option<&str>)> =
-            entries.iter().map(|e| (e.name.as_str(), e.argument_hint.as_deref())).collect();
-        assert_eq!(names, [("create_plan", Some("the goal")), ("clear", None)]);
+        let entries = host.commands_list(&session).expect("menu").entries;
+        let commands: Vec<(&str, &str, Option<&str>)> = entries
+            .iter()
+            .filter(|entry| entry.kind == "command")
+            .map(|entry| (entry.name.as_str(), entry.kind.as_str(), entry.argument_hint.as_deref()))
+            .collect();
+        assert_eq!(commands, [("create_plan", "command", Some("the goal")), ("clear", "command", None)]);
+        assert!(entries.iter().any(|entry| entry.name == "model" && entry.kind == "crew"));
         for _ in 0..400 {
             if !host.is_running(&session) {
                 break;
             }
             std::thread::sleep(Duration::from_millis(25));
         }
+    }
+
+    /// A bot's Cursor process keeps nothing: its menu is Crew's actions alone,
+    /// whatever commands Cursor announced.
+    #[test]
+    fn a_bots_cursor_process_keeps_nothing_in_the_catalog() {
+        let (host, session, cwd) = started_as("bot", None, "hello");
+        for _ in 0..400 {
+            if !host.is_running(&session) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        assert!(!host.commands().holds("cursor", &cwd));
+        let entries = host.commands_list(&session).expect("menu").entries;
+        assert!(entries.iter().all(|entry| entry.kind == "crew"), "{entries:?}");
+    }
+
+    /// With no catalog for its folder, a Cursor session's menu is Crew's
+    /// actions alone: nothing is asked for, as Cursor has no probe yet.
+    #[test]
+    fn a_cursor_session_with_no_catalog_lists_crew_actions_alone() {
+        let host = TurnHost::test_new();
+        let (session, cwd) = cursor_session(&host, "terminal", Some("chat"));
+        let entries = host.commands_list(&session).expect("menu").entries;
+        assert!(!entries.is_empty() && entries.iter().all(|entry| entry.kind == "crew"), "{entries:?}");
+        assert!(!host.commands().holds("cursor", &cwd));
     }
 }
