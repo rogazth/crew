@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
 use crew_protocol::{
-    ApprovalDecision, AttachedFile, EditHunk, HarnessEvent, Question, QuestionOption, SubagentState, ToolDetail, ToolStatus,
-    TurnUsage,
+    ApprovalDecision, AttachedFile, EditHunk, HarnessEvent, McpServer, McpSignIn, McpState, Question, QuestionOption, SubagentState,
+    ToolDetail, ToolStatus, TurnUsage,
 };
 use serde_json::{json, Map, Value};
 
@@ -744,6 +744,58 @@ pub fn get_context_usage_request() -> Value {
     json!({ "subtype": "get_context_usage" })
 }
 
+/// Asks the CLI how each MCP server stands; it answers `{mcpServers: [...]}`
+/// (see [`mcp_servers`]).
+pub fn mcp_status_request() -> Value {
+    json!({ "subtype": "mcp_status" })
+}
+
+/// Has the CLI connect one server again. It refuses one that waits for a
+/// login ("Server status: needs-auth").
+pub fn mcp_reconnect_request(server: &str) -> Value {
+    json!({ "subtype": "mcp_reconnect", "serverName": server })
+}
+
+/// The login the CLI runs for a server: it opens the browser, waits for the
+/// redirect and keeps the token itself. It may prompt, so Crew's window runs
+/// it in a terminal tab of its own, in the session's folder.
+pub fn mcp_login_command(server: &str) -> Vec<String> {
+    vec!["claude".into(), "mcp".into(), "login".into(), server.into()]
+}
+
+fn mcp_state(status: &str) -> McpState {
+    match status {
+        "connected" => McpState::Connected,
+        "pending" => McpState::Pending,
+        "failed" => McpState::Failed,
+        "needs-auth" => McpState::NeedsAuth,
+        "disabled" => McpState::Disabled,
+        _ => McpState::Unknown,
+    }
+}
+
+/// The servers of `system/init`'s `mcp_servers` or of an `mcp_status` answer's
+/// `mcpServers`: both list `{name, status}`, and the answer adds an `error` to
+/// a failed one. The rest of the answer (each server's config, which can hold
+/// its headers and keys, and its tools) is never kept.
+pub fn mcp_servers(list: &Value) -> Vec<McpServer> {
+    list.as_array()
+        .map(Vec::as_slice)
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|row| {
+            let row = as_record(row)?;
+            let name = string_field(Some(row), "name")?;
+            let state = mcp_state(&string_field(Some(row), "status").unwrap_or_default());
+            let error = string_field(Some(row), "error")
+                .filter(|_| state == McpState::Failed)
+                .map(|error| crate::mcp_status::clip(&error));
+            let sign_in = (state == McpState::NeedsAuth).then(|| McpSignIn::Terminal { command: mcp_login_command(&name) });
+            Some(McpServer { name, state, error, sign_in })
+        })
+        .collect()
+}
+
 pub fn turn_failed(rec: &Map<String, Value>) -> Option<String> {
     let subtype = string_field(Some(rec), "subtype");
     let failed = rec.get("is_error") == Some(&Value::Bool(true))
@@ -1383,6 +1435,40 @@ mod tests {
         let result = json!({ "modelUsage": { "a": { "contextWindow": 200000 }, "b": { "contextWindow": 1000000 } } });
         assert_eq!(result_context_window(result.as_object().unwrap()), Some(1_000_000));
         assert_eq!(result_context_window(json!({}).as_object().unwrap()), None);
+    }
+
+    // Shapes as Claude Code 2.1.296 answers `mcp_status` and lists in `system/init`.
+    #[test]
+    fn mcp_servers_are_read_from_init_and_from_mcp_status_without_their_config() {
+        let answer = json!([
+            { "name": "docs", "status": "connected", "scope": "user", "tools": [{ "name": "q" }],
+              "config": { "type": "http", "url": "https://x", "headers": { "KEY": "secret" } } },
+            { "name": "sentry", "status": "needs-auth", "scope": "project", "config": { "type": "http" } },
+            { "name": "broken", "status": "failed", "error": "ENOENT: no such file\nat spawn", "config": {} },
+            { "name": "claude.ai Figma", "status": "pending" },
+            { "name": "odd", "status": "sleeping" },
+            { "status": "connected" }
+        ]);
+        let servers = mcp_servers(&answer);
+        let states: Vec<_> = servers.iter().map(|server| (server.name.as_str(), server.state)).collect();
+        assert_eq!(
+            states,
+            [
+                ("docs", McpState::Connected),
+                ("sentry", McpState::NeedsAuth),
+                ("broken", McpState::Failed),
+                ("claude.ai Figma", McpState::Pending),
+                ("odd", McpState::Unknown),
+            ]
+        );
+        assert_eq!(servers[2].error.as_deref(), Some("ENOENT: no such file"));
+        assert_eq!(servers[1].sign_in, Some(McpSignIn::Terminal { command: mcp_login_command("sentry") }));
+        assert!(servers[0].sign_in.is_none() && servers[0].error.is_none());
+        assert!(!serde_json::to_string(&servers).unwrap().contains("secret"));
+        assert!(mcp_servers(&json!(null)).is_empty());
+        assert_eq!(mcp_status_request(), json!({ "subtype": "mcp_status" }));
+        assert_eq!(mcp_reconnect_request("a b"), json!({ "subtype": "mcp_reconnect", "serverName": "a b" }));
+        assert_eq!(mcp_login_command("claude.ai Figma"), ["claude", "mcp", "login", "claude.ai Figma"]);
     }
 
     /// The two reloads carry nothing but their name, as 2.1.295 takes them.

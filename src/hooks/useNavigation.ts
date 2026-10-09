@@ -1,7 +1,7 @@
 import { useCallback } from "react";
 import * as api from "../lib/api";
 import { fileView } from "../lib/browser/files";
-import { fileTabId, newBrowserTab, newFileBrowserTab, newTerminalTab, processTabId, sessionTabId, stubTabId } from "../lib/tabs";
+import { fileTabId, newBrowserTab, newFileBrowserTab, newSignInTab, newTerminalTab, processTabId, sessionTabId, stubTabId } from "../lib/tabs";
 import { discardEdits, fileName, unsavedTabs } from "../lib/unsavedEdits";
 import type { Process } from "../lib/processes";
 import type { ProjectFile, Session, StubKind } from "../lib/types";
@@ -95,6 +95,23 @@ export function useNavigation({ tabs, sessions, confirms, removeSession, closePa
     [closePage, tabs],
   );
 
+  /**
+   * An MCP server's login for a session, run in a terminal tab of the session's worktree; its end has the
+   * session connect the server. Every call is a new shell.
+   */
+  const openSignIn = useCallback(
+    (sessionId: string, server: string, command: string[]) => {
+      const session = sessions.find((row) => row.id === sessionId);
+      if (!session) return;
+      closePage();
+      const tab = newSignInTab(session.worktree, { sessionId, server, command });
+      const elsewhere = route(session);
+      if (elsewhere?.context) tabs.openIn(elsewhere.context, tab);
+      else tabs.open(tab);
+    },
+    [closePage, route, sessions, tabs],
+  );
+
   /** A command's run, in a tab of its worktree's strip; the same run again comes back to its tab. */
   const openProcessRun = useCallback(
     (process: Process, worktree: string | null) => {
@@ -170,6 +187,7 @@ export function useNavigation({ tabs, sessions, confirms, removeSession, closePa
     openFileInBrowser,
     openStub,
     openTerminal,
+    openSignIn,
     openBrowser,
     openProcessRun,
     closeTab,

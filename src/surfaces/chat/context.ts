@@ -17,6 +17,8 @@ export type ChatActions = {
   processes: readonly Process[];
   /** A command's run in a tab of its worktree's strip. */
   openProcessRun: (process: Process, worktree: string | null) => void;
+  /** Runs an MCP server's login for a session in a terminal tab; its end has the session connect the server. */
+  openSignIn: (sessionId: string, server: string, command: string[]) => void;
   /** Asks the shell's dialog before something that costs the session work: a restart over running background work. */
   confirm: Ask;
 };
@@ -27,6 +29,7 @@ export const ChatContext = createContext<ChatActions>({
   files: [],
   processes: [],
   openProcessRun: () => undefined,
+  openSignIn: () => undefined,
   confirm: () => undefined,
 });
 

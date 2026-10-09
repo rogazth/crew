@@ -578,6 +578,9 @@ pub fn serve_on(config: Config, listen: Listen) -> Result<Handle, String> {
     // A session's `/` menu changing reaches every window.
     let menu = hub.clone();
     turns.commands().set_listener(Arc::new(move |change| menu.emit("commands-changed", change)));
+    // So does a change in which of its MCP servers work.
+    let servers = hub.clone();
+    turns.mcp_status().set_listener(Arc::new(move |change| servers.emit("mcp-changed", change)));
     // Claude's fast mode is the account's, so every window hears a change.
     let fast_mode = hub.clone();
     provider_session::set_claude_fast_mode_listener(move |mode| fast_mode.emit("fast-mode-changed", mode));
@@ -1332,6 +1335,7 @@ async fn delete_session(hosts: &Hosts, id: String) -> Result<(), String> {
     block(move || session::delete(&store, id)).await?;
     // Its background entries went with its row; the board in memory goes too.
     hosts.turns.background().forget(&gone);
+    hosts.turns.mcp_status().forget(&gone);
     Ok(())
 }
 
@@ -1955,6 +1959,21 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
         "background_list" => {
             let SessionId { session_id } = parse(params)?;
             json(hosts.turns.background_list(&session_id))
+        }
+        "mcp_list" => {
+            let SessionId { session_id } = parse(params)?;
+            let turns = hosts.turns.clone();
+            json(block(move || turns.mcp_list(&session_id)).await?)
+        }
+        "mcp_login" => {
+            let proto::McpServerRequest { session_id, name } = parse(params)?;
+            let turns = hosts.turns.clone();
+            json(block(move || turns.mcp_login(&session_id, &name)).await?)
+        }
+        "mcp_reconnect" => {
+            let proto::McpServerRequest { session_id, name } = parse(params)?;
+            let turns = hosts.turns.clone();
+            json(block(move || turns.mcp_reconnect(&session_id, &name)).await?)
         }
         "commands_list" => {
             let proto::CommandsList { session_id } = parse(params)?;
@@ -3042,6 +3061,73 @@ time.sleep(600)
         }
         for (id, method) in [(6, "commands_reload"), (7, "session_restart")] {
             let unknown = rpc(&mut ws, id, method, serde_json::json!({ "sessionId": "nobody" })).await;
+            assert!(!unknown.ok, "{method} took a session that does not exist");
+        }
+        handle.shutdown();
+    }
+
+    /// `mcp_list` answers a session's servers as its provider last said them,
+    /// and the window hears a change as `mcp-changed`; `mcp_login` answers
+    /// what the user does to sign in, `mcp_reconnect` asks the running CLI,
+    /// and Cursor, which says nothing of its servers, is not reported. All
+    /// three refuse a session that does not exist.
+    #[tokio::test]
+    async fn mcp_list_login_and_reconnect_answer_a_sessions_servers() {
+        let dir = test_dir("mcp-status");
+        let handle = test_serve(&dir);
+        let mut ws = connect_authed(&handle).await;
+        let workspace: proto::Workspace = serde_json::from_value(
+            rpc(&mut ws, 1, "workspace_create", serde_json::json!({ "name": "w", "path": dir.to_string_lossy() }))
+                .await
+                .result
+                .expect("ws"),
+        )
+        .expect("workspace");
+        let mut sessions = Vec::new();
+        for (id, provider) in [(2, "claude"), (3, "cursor")] {
+            let params = serde_json::json!({
+                "workspaceId": workspace.id, "kind": "terminal", "name": provider, "provider": provider,
+                "model": "", "description": "", "autonomy": "ask"
+            });
+            let made = rpc(&mut ws, id, "session_create", params).await;
+            let session: proto::Session = serde_json::from_value(made.result.expect("session")).expect("session");
+            sessions.push(session.id);
+        }
+
+        let before = rpc(&mut ws, 4, "mcp_list", serde_json::json!({ "sessionId": sessions[0] })).await;
+        let before: proto::McpStatus = serde_json::from_value(before.result.expect("status")).expect("status");
+        assert_eq!(before, proto::McpStatus { servers: Vec::new(), reported: false });
+
+        let servers = vec![
+            proto::McpServer { name: "docs".into(), state: proto::McpState::Connected, error: None, sign_in: None },
+            proto::McpServer { name: "sentry".into(), state: proto::McpState::NeedsAuth, error: None, sign_in: None },
+        ];
+        handle.turns.mcp_status().learn(&sessions[0], servers.clone());
+        let heard = wait_event(&mut ws, "mcp-changed").await;
+        let pushed: proto::McpChanged = serde_json::from_value(heard.payload).expect("push");
+        assert_eq!(pushed.session_id, sessions[0]);
+        assert_eq!(pushed.status, proto::McpStatus { servers: servers.clone(), reported: true });
+        let listed = rpc(&mut ws, 5, "mcp_list", serde_json::json!({ "sessionId": sessions[0] })).await;
+        let listed: proto::McpStatus = serde_json::from_value(listed.result.expect("status")).expect("status");
+        assert_eq!(listed, pushed.status);
+
+        let named = |session: &str, name: &str| serde_json::json!({ "sessionId": session, "name": name });
+        let login = rpc(&mut ws, 6, "mcp_login", named(&sessions[0], "sentry")).await;
+        assert!(login.ok, "{:?}", login.error);
+        assert_eq!(
+            login.result.expect("sign-in"),
+            serde_json::json!({ "kind": "terminal", "command": ["claude", "mcp", "login", "sentry"] })
+        );
+        let unlisted = rpc(&mut ws, 7, "mcp_login", named(&sessions[0], "nothing")).await;
+        assert!(!unlisted.ok);
+        let down = rpc(&mut ws, 8, "mcp_reconnect", named(&sessions[0], "sentry")).await;
+        assert!(!down.ok, "no CLI is running, so there is nothing to reconnect");
+
+        let cursor = rpc(&mut ws, 9, "mcp_list", serde_json::json!({ "sessionId": sessions[1] })).await;
+        let cursor: proto::McpStatus = serde_json::from_value(cursor.result.expect("status")).expect("status");
+        assert_eq!(cursor, proto::McpStatus { servers: Vec::new(), reported: false });
+        for (id, method) in [(10, "mcp_list"), (11, "mcp_login"), (12, "mcp_reconnect")] {
+            let unknown = rpc(&mut ws, id, method, named("nobody", "x")).await;
             assert!(!unknown.ok, "{method} took a session that does not exist");
         }
         handle.shutdown();

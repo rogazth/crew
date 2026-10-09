@@ -9,7 +9,7 @@
 
 use std::collections::HashMap;
 
-use crew_protocol::{ApprovalDecision, AttachedFile, Question, QuestionOption, ToolDetail};
+use crew_protocol::{ApprovalDecision, AttachedFile, McpServer, McpState, Question, QuestionOption, ToolDetail};
 use serde_json::{json, Map, Value};
 
 use super::runtime::Autonomy;
@@ -402,6 +402,71 @@ pub fn skills_list_params(cwd: &str) -> Value {
 /// where nothing was watching.
 pub fn skills_reload_params(cwd: &str) -> Value {
     json!({ "cwds": [cwd], "forceReload": true })
+}
+
+/// `mcpServerStatus/list` for a thread's own connections, without the schema
+/// of every tool: the state and the login are all the chat shows.
+pub fn mcp_list_params(thread_id: &str) -> Value {
+    json!({ "threadId": thread_id, "detail": "toolsAndAuthOnly" })
+}
+
+/// The servers of a `mcpServerStatus/list` answer. The runtime state of the
+/// thread's connection says how a server stands; with none (a server the
+/// thread has not started), a server Codex has no login for is the one that
+/// needs it.
+pub fn mcp_servers(answer: &Value) -> Vec<McpServer> {
+    answer
+        .get("data")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|row| {
+            let row = as_record(row)?;
+            let name = string_field(Some(row), "name")?;
+            let tools_error = string_field(Some(row), "toolsError").filter(|error| !error.trim().is_empty());
+            let state = match string_field(Some(row), "runtimeStatus").as_deref() {
+                Some("connected") => McpState::Connected,
+                Some("notStarted" | "starting") => McpState::Pending,
+                Some("authenticationRequired") => McpState::NeedsAuth,
+                Some("failed" | "cancelled") => McpState::Failed,
+                Some("disabled") => McpState::Disabled,
+                _ if string_field(Some(row), "authStatus").as_deref() == Some("notLoggedIn") => McpState::NeedsAuth,
+                _ => McpState::Unknown,
+            };
+            let error = tools_error.filter(|_| matches!(state, McpState::Failed | McpState::Unknown));
+            Some(McpServer { name, state, error: error.map(|error| crate::mcp_status::clip(&error)), sign_in: None })
+        })
+        .collect()
+}
+
+/// A server's startup, as `mcpServer/startupStatus/updated` says it: which
+/// server, how it stands, and why it failed. A failure that says the login
+/// ran out is a server that needs one.
+pub fn mcp_startup(params: &Value) -> Option<(String, McpState, Option<String>)> {
+    let name = params.get("name").and_then(Value::as_str)?.to_string();
+    let error = params.get("error").and_then(Value::as_str).filter(|error| !error.trim().is_empty());
+    let state = match params.get("status").and_then(Value::as_str)? {
+        "starting" => McpState::Pending,
+        "ready" => McpState::Connected,
+        "failed" if params.get("failureReason").and_then(Value::as_str) == Some("reauthenticationRequired") => McpState::NeedsAuth,
+        "failed" | "cancelled" => McpState::Failed,
+        _ => McpState::Unknown,
+    };
+    let error = error.filter(|_| state == McpState::Failed).map(str::to_string);
+    Some((name, state, error))
+}
+
+/// `mcpServer/oauth/login`: Codex starts the redirect listener and answers the
+/// page to send the user to. It tells the end of the login in
+/// `mcpServer/oauthLogin/completed`.
+pub fn mcp_login_params(name: &str, thread_id: Option<&str>) -> Value {
+    json!({ "name": name, "threadId": thread_id })
+}
+
+/// The page a login asks the browser to open.
+pub fn mcp_login_url(answer: &Value) -> Option<String> {
+    answer.get("authorizationUrl").and_then(Value::as_str).filter(|url| !url.is_empty()).map(str::to_string)
 }
 
 /// How a turn ended, from `turn/completed`.
@@ -1464,6 +1529,60 @@ mod tests {
     #[test]
     fn a_reload_of_the_skills_goes_past_codexs_cache() {
         assert_eq!(skills_reload_params("/work/crew"), json!({ "cwds": ["/work/crew"], "forceReload": true }));
+    }
+
+    // Shapes as the app server's schema gives `mcpServerStatus/list`.
+    #[test]
+    fn mcp_servers_are_read_from_the_runtime_state_then_the_login() {
+        let answer = json!({ "data": [
+            { "name": "docs", "runtimeStatus": "connected", "authStatus": "bearerToken", "tools": { "q": {} } },
+            { "name": "sentry", "runtimeStatus": "authenticationRequired", "authStatus": "notLoggedIn" },
+            { "name": "fresh", "runtimeStatus": "notStarted", "authStatus": "oAuth" },
+            { "name": "late", "runtimeStatus": null, "authStatus": "notLoggedIn" },
+            { "name": "broken", "runtimeStatus": "failed", "authStatus": "unknown", "toolsError": "spawn failed\nmore" },
+            { "name": "off", "runtimeStatus": "disabled", "authStatus": "unsupported", "toolsError": "ignored" },
+            { "name": "who", "runtimeStatus": null, "authStatus": "unknown" }
+        ], "nextCursor": null });
+        let servers = mcp_servers(&answer);
+        let states: Vec<_> = servers.iter().map(|server| (server.name.as_str(), server.state)).collect();
+        assert_eq!(
+            states,
+            [
+                ("docs", McpState::Connected),
+                ("sentry", McpState::NeedsAuth),
+                ("fresh", McpState::Pending),
+                ("late", McpState::NeedsAuth),
+                ("broken", McpState::Failed),
+                ("off", McpState::Disabled),
+                ("who", McpState::Unknown),
+            ]
+        );
+        assert_eq!(servers[4].error.as_deref(), Some("spawn failed"));
+        assert!(servers[5].error.is_none(), "{:?}", servers[5]);
+        assert!(servers.iter().all(|server| server.sign_in.is_none()), "Codex mints the URL when asked");
+        assert!(mcp_servers(&json!({})).is_empty());
+        assert_eq!(mcp_list_params("t1"), json!({ "threadId": "t1", "detail": "toolsAndAuthOnly" }));
+    }
+
+    #[test]
+    fn a_startup_notice_names_the_server_and_how_it_stands() {
+        let notice = |status: &str, reason: Value, error: Value| {
+            mcp_startup(&json!({ "name": "s", "status": status, "failureReason": reason, "error": error, "threadId": "t" }))
+        };
+        let named = |state, error: Option<&str>| Some(("s".to_string(), state, error.map(str::to_string)));
+        assert_eq!(notice("starting", Value::Null, Value::Null), named(McpState::Pending, None));
+        assert_eq!(notice("ready", Value::Null, Value::Null), named(McpState::Connected, None));
+        assert_eq!(notice("failed", Value::Null, json!("boom")), named(McpState::Failed, Some("boom")));
+        assert_eq!(notice("failed", json!("reauthenticationRequired"), json!("expired")), named(McpState::NeedsAuth, None));
+        assert_eq!(notice("cancelled", Value::Null, Value::Null), named(McpState::Failed, None));
+        assert_eq!(mcp_startup(&json!({ "status": "ready" })), None);
+    }
+
+    #[test]
+    fn a_login_asks_for_the_server_and_answers_the_page() {
+        assert_eq!(mcp_login_params("sentry", Some("t1")), json!({ "name": "sentry", "threadId": "t1" }));
+        assert_eq!(mcp_login_url(&json!({ "authorizationUrl": "https://auth.example/x" })).as_deref(), Some("https://auth.example/x"));
+        assert_eq!(mcp_login_url(&json!({ "authorizationUrl": "" })), None);
     }
 
     #[test]

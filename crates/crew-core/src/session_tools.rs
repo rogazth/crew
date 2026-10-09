@@ -1568,6 +1568,7 @@ HERE = os.path.dirname(os.path.abspath(sys.argv[0]))
 CONTROL = os.path.join(HERE, "claude-control.log")
 LAUNCH = os.path.join(HERE, "claude-launch.log")
 INPUT = os.path.join(HERE, "claude-input.log")
+MCP = os.path.join(HERE, "claude-mcp.log")
 with open(LAUNCH, "a") as f: f.write(json.dumps({"argv": args, "pid": os.getpid(), "cwd": os.getcwd(), "env": {"CREW_TOKEN": os.environ.get("CREW_TOKEN", "")}}) + "\n")
 sid = args[args.index("--resume") + 1] if "--resume" in args else args[args.index("--session-id") + 1]
 replay = "--replay-user-messages" in args
@@ -1607,6 +1608,21 @@ def reader():
             continue
         if rec.get("type") == "control_request":
             req = rec.get("request") or {}
+            if req.get("subtype") == "mcp_status":
+                # Asked on its own schedule too, and logged apart. `sentry` waits
+                # for a login until a file `mcp-signed-in` is there; `late` is
+                # still connecting for its first two asks.
+                with open(MCP, "a") as f: f.write("mcp_status\n")
+                signed = os.path.exists(os.path.join(HERE, "mcp-signed-in"))
+                late = "connected" if len(open(MCP).read().splitlines()) >= 3 else "pending"
+                servers = [
+                    {"name": "docs", "status": "connected", "scope": "user", "config": {"type": "http", "url": "https://docs.example/mcp", "headers": {"KEY": "secret-key"}}, "tools": [{"name": "query"}]},
+                    {"name": "sentry", "status": "connected" if signed else "needs-auth", "scope": "project", "config": {"type": "http", "url": "https://mcp.sentry.example/mcp"}},
+                    {"name": "broken", "status": "failed", "error": "ENOENT: no such file or directory, posix_spawn '/nonexistent/bin'", "scope": "project", "config": {"command": "/nonexistent/bin"}},
+                    {"name": "late", "status": late, "scope": "user", "config": {}},
+                ]
+                out({"type": "control_response", "response": {"subtype": "success", "request_id": rec["request_id"], "response": {"mcpServers": servers}}})
+                continue
             if req.get("subtype") == "get_context_usage":
                 # Asked on its own schedule, so it stays out of the control log.
                 out({"type": "control_response", "response": {"subtype": "success", "request_id": rec["request_id"], "response": {"totalTokens": 1234, "maxTokens": 200000, "rawMaxTokens": 200000, "autoCompactThreshold": 160000, "isAutoCompactEnabled": True, "model": "fake"}}})
@@ -1618,6 +1634,7 @@ def reader():
             if req.get("subtype") == "apply_flag_settings": detail = json.dumps(req.get("settings"), sort_keys=True)
             if req.get("subtype") == "initialize": detail = " ".join(flag for flag in ("perTaskStopAffordance", "forwardSubagentText") if req.get(flag))
             if req.get("subtype") == "interrupt": detail = "cancel_queued" if req.get("cancel_queued") else ""
+            if req.get("subtype") == "mcp_reconnect": detail = req.get("serverName", "")
             with open(CONTROL, "a") as f: f.write("%s %s\n" % (req.get("subtype"), detail))
             # A file `delay-<subtype>` holding seconds makes the next one of it
             # answer that late, as the CLI does a set_model it checks with the server.
@@ -1639,6 +1656,9 @@ def reader():
                 out({"type": "control_response", "response": {"subtype": "error", "request_id": rec["request_id"], "error": "no"}})
                 continue
             answer = {"output": "tick\n", "total_bytes": 5, "truncated": False} if req.get("subtype") == "get_task_output" else {}
+            if req.get("subtype") == "mcp_reconnect" and req.get("serverName") == "sentry" and not os.path.exists(os.path.join(HERE, "mcp-signed-in")):
+                out({"type": "control_response", "response": {"subtype": "error", "request_id": rec["request_id"], "error": "Server status: needs-auth"}})
+                continue
             if req.get("subtype") == "initialize":
                 spare[0] = bool(req.get("perTaskStopAffordance"))
                 answer = {"commands": [{"name": "prototype", "description": "Build a prototype", "argumentHint": ""}, {"name": "compact", "description": "Free up context", "argumentHint": "<hint>", "builtin": True}]}
@@ -1739,7 +1759,7 @@ while True:
     kind, first = take()
     running[0] = True
     interrupted.clear()
-    out({"type": "system", "subtype": "init", "session_id": sid, "model": "fake", "tools": [], "skills": ["prototype"]})
+    out({"type": "system", "subtype": "init", "session_id": sid, "model": "fake", "tools": [], "skills": ["prototype"], "mcp_servers": [{"name": "docs", "status": "connected", "source": "user"}, {"name": "sentry", "status": "needs-auth", "source": "project"}, {"name": "broken", "status": "failed", "source": "project"}, {"name": "late", "status": "connected", "source": "user"}]})
     if kind == "wake":
         # A turn of its own, on the notification of what it left running.
         reply = "report: %s + the background command finished" % first.strip().splitlines()[-1]
@@ -2690,6 +2710,104 @@ time.sleep(600)
         );
         assert_eq!(launched(&w.dir.join("claude-launch.log")).len(), 1, "a reload started a CLI");
         w.turns.release(&mine.id);
+    }
+
+    /// What the fake Claude was asked about its servers, one line per ask.
+    fn mcp_asks(w: &World) -> usize {
+        std::fs::read_to_string(w.dir.join("claude-mcp.log")).map(|log| log.lines().count()).unwrap_or(0)
+    }
+
+    fn hear_mcp(w: &World) -> Arc<Mutex<Vec<crew_protocol::McpChanged>>> {
+        let heard = Arc::new(Mutex::new(Vec::new()));
+        let sink = heard.clone();
+        w.turns.mcp_status().set_listener(Arc::new(move |change| sink.lock().unwrap().push(change)));
+        heard
+    }
+
+    fn mcp_named(w: &World, id: &str, name: &str) -> Option<crew_protocol::McpServer> {
+        w.turns.mcp_list(id).expect("list").servers.into_iter().find(|server| server.name == name)
+    }
+
+    /// A Claude names its servers in `system/init` and is asked how they
+    /// stand once it is up: one that waits for a login says so, and how to
+    /// sign in; one still connecting is asked about until it has settled. The
+    /// windows hear it, without the config the CLI answers with.
+    #[test]
+    fn a_claude_session_lists_its_servers_and_reads_them_again_while_one_connects() {
+        use crew_protocol::McpState::{Connected, Failed, NeedsAuth};
+        let w = world();
+        let heard = hear_mcp(&w);
+        let mine = users_claude(&w);
+        assert_eq!(w.turns.mcp_list(&mine.id).expect("list"), crew_protocol::McpStatus { servers: Vec::new(), reported: false });
+        w.say(&mine, "hello");
+        until("the servers settle", || mcp_asks(&w) == 3);
+        until("the last answer is kept", || mcp_named(&w, &mine.id, "late").is_some_and(|server| server.state == Connected));
+        let list = w.turns.mcp_list(&mine.id).expect("list");
+        assert!(list.reported);
+        let states: Vec<_> = list.servers.iter().map(|server| (server.name.as_str(), server.state)).collect();
+        assert_eq!(states, [("docs", Connected), ("sentry", NeedsAuth), ("broken", Failed), ("late", Connected)]);
+        assert_eq!(
+            list.servers[1].sign_in,
+            Some(crew_protocol::McpSignIn::Terminal { command: vec!["claude".into(), "mcp".into(), "login".into(), "sentry".into()] })
+        );
+        assert_eq!(list.servers[2].error.as_deref(), Some("ENOENT: no such file or directory, posix_spawn '/nonexistent/bin'"));
+        let pushed = serde_json::to_string(&*heard.lock().unwrap()).expect("json");
+        assert!(pushed.contains("needs_auth") && !pushed.contains("secret-key") && !pushed.contains("https://docs.example"), "{pushed}");
+        assert_eq!(mcp_asks(&w), 3, "asked until nothing was left connecting");
+        w.turns.release(&mine.id);
+    }
+
+    /// The login is the CLI's own command in a terminal; the reconnect that
+    /// follows is refused until the login is done, and then the server is up.
+    #[test]
+    fn a_claude_server_that_needs_a_login_signs_in_in_a_terminal_and_reconnects_after() {
+        let w = world();
+        let mine = users_claude(&w);
+        w.say(&mine, "hello");
+        until("the list", || mcp_named(&w, &mine.id, "sentry").is_some());
+        assert_eq!(
+            w.turns.mcp_login(&mine.id, "sentry").expect("login"),
+            crew_protocol::McpSignIn::Terminal { command: vec!["claude".into(), "mcp".into(), "login".into(), "sentry".into()] }
+        );
+        assert!(w.turns.mcp_login(&mine.id, "nothing").is_err());
+
+        let refused = w.turns.mcp_reconnect(&mine.id, "sentry").expect_err("refused");
+        assert_eq!(refused, "Server status: needs-auth");
+        assert_eq!(mcp_named(&w, &mine.id, "sentry").expect("sentry").state, crew_protocol::McpState::NeedsAuth);
+
+        std::fs::write(w.dir.join("mcp-signed-in"), "").expect("signed in");
+        let after = w.turns.mcp_reconnect(&mine.id, "sentry").expect("reconnect");
+        let sentry = after.servers.iter().find(|server| server.name == "sentry").expect("sentry");
+        assert_eq!((sentry.state, sentry.sign_in.clone()), (crew_protocol::McpState::Connected, None));
+        let asked = w.claude_control();
+        assert_eq!(asked.iter().filter(|line| line.trim_end() == "mcp_reconnect sentry").count(), 2, "{asked:?}");
+        w.turns.release(&mine.id);
+    }
+
+    /// A reload connects the plugins' servers, so the servers are read again.
+    #[test]
+    fn a_reload_reads_a_claudes_servers_again() {
+        let w = world();
+        let mine = users_claude(&w);
+        w.say(&mine, "hello");
+        until("settled", || mcp_asks(&w) == 3);
+        w.turns.commands_reload(&mine.id).expect("reload");
+        until("asked again", || mcp_asks(&w) >= 4);
+        w.turns.release(&mine.id);
+    }
+
+    /// Cursor says nothing of its servers, so none are reported, and there is
+    /// nothing to sign in to or reconnect; a session that is not there is an error.
+    #[test]
+    fn cursor_does_not_report_its_servers() {
+        let w = world();
+        let id = session::create(w.turns.store(), w.workspace.clone(), "terminal".into(), "x".into(), "cursor".into(), String::new(), String::new(), "ask".into(), None)
+            .expect("session")
+            .id;
+        assert_eq!(w.turns.mcp_list(&id).expect("list"), crew_protocol::McpStatus { servers: Vec::new(), reported: false });
+        assert!(w.turns.mcp_login(&id, "x").expect_err("login").contains("does not report"));
+        assert!(w.turns.mcp_reconnect(&id, "x").expect_err("reconnect").contains("does not report"));
+        assert!(w.turns.mcp_list("nobody").is_err());
     }
 
     /// A CLI that refuses `reload_skills` still reloads its plugins: the skills

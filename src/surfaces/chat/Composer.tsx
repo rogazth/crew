@@ -34,6 +34,7 @@ import type { ProjectFile, Session } from "../../lib/types";
 import { crewAction } from "../../lib/turnRuntime";
 import { AttachmentStrip } from "./Attachments";
 import { ContextMeter } from "./ContextMeter";
+import { McpSegment } from "./Mcp";
 import { WorkSegment, type PanelScope } from "./Panel";
 import { QueueChips, QueueSegment, type QueueScope } from "./Queue";
 import { useChatActions } from "./context";
@@ -145,10 +146,11 @@ export function Composer({
     if (typingSlash) void refreshCommands(session.id);
   }, [typingSlash, session.id]);
 
-  // One sheet over the composer at a time: the queue's or the background work's.
-  const [sheet, setSheet] = useState<"queue" | "work" | null>(null);
+  // One sheet over the composer at a time: the queue's, the background work's or the MCP servers'.
+  const [sheet, setSheet] = useState<"queue" | "work" | "mcp" | null>(null);
   const openQueue = useCallback((open: boolean) => setSheet(open ? "queue" : null), []);
   const openWork = useCallback((open: boolean) => setSheet(open ? "work" : null), []);
+  const openMcp = useCallback((open: boolean) => setSheet(open ? "mcp" : null), []);
   const focusField = useCallback(() => field.current?.focus(), []);
 
   const model = useRef<Opener>(null);
@@ -401,6 +403,7 @@ export function Composer({
       </form>
       <div className="mt-1.5 flex min-h-6 items-center gap-2 px-1 text-[11.5px]">
         <ContextMeter sessionId={session.id} provider={session.provider} />
+        <McpSegment session={session} open={sheet === "mcp"} onOpenChange={openMcp} />
         {/* A steer is already the turn's: only what waits is counted, and opens the sheet. */}
         {queue && queue.items.some((message) => !message.steering) && (
           <QueueSegment queue={queue} working={working} open={sheet === "queue"} onOpenChange={openQueue} />

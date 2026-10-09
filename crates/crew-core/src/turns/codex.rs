@@ -24,7 +24,7 @@ use std::thread;
 use std::time::Duration;
 
 use crew_protocol::{
-    ApprovalDecision, ApprovalResolution, BackgroundState, CommandEntry, ContextReading, HarnessEvent, SubagentState,
+    ApprovalDecision, ApprovalResolution, BackgroundState, CommandEntry, ContextReading, HarnessEvent, McpState, SubagentState,
 };
 use serde_json::{json, Map, Value};
 use tokio::sync::oneshot;
@@ -37,6 +37,7 @@ use crate::command_sources::{codex_commands, codex_skills};
 use crate::mailbox;
 use crate::session;
 use crate::providers::codex::{
+    mcp_list_params, mcp_login_params, mcp_login_url, mcp_servers, mcp_startup,
     approval_response, classify_request, completed_tool_status, exec_item, initialize_params, interrupt_params,
     is_tool_item, item_files, plan_detail, questions_response, rpc_error_message, skills_list_params, skills_reload_params, steer_params,
     skills_input, spawned_threads, text_input, thread_id, thread_request, tool_call_id, tool_detail, tool_label,
@@ -62,6 +63,10 @@ const TERMINAL_POLL: Duration = Duration::from_secs(2);
 /// How long `skills/list` may take. It scans the skill folders on disk, and
 /// nothing waits on its answer, so this only bounds the thread that asks.
 const CATALOG_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// How long `mcpServer/oauth/login` may take to answer with the page to open:
+/// it starts the redirect listener first.
+const LOGIN_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// How a turn begins on an open thread.
 enum Start {
@@ -445,6 +450,7 @@ impl TurnHost {
             live.cwd = thread.cwd.clone();
         }
         self.codex_read_skills(session_id, &thread.cwd);
+        self.codex_read_mcp(session_id);
         Ok(thread_id)
     }
 
@@ -481,6 +487,81 @@ impl TurnHost {
         self.codex_catalog(session_id, &cwd, codex_skills(&listed));
         self.codex_call(session_id, "config/mcpServer/reload", Value::Null, CATALOG_TIMEOUT)?;
         Ok(())
+    }
+
+    /// Reads the thread's MCP servers on a thread of its own and keeps them.
+    /// Called when the thread opens and on each startup notice that settles a
+    /// server; a burst of those is a few reads, not one each.
+    fn codex_read_mcp(&self, session_id: &str) {
+        if !self.mcp_status.claim(session_id, true) {
+            return;
+        }
+        let host = self.clone();
+        let session_id = session_id.to_string();
+        thread::spawn(move || loop {
+            let thread_id = match host.lock().get(&session_id) {
+                Some(Live::Codex(live)) => live.thread_id.clone(),
+                _ => None,
+            };
+            if let Some(thread_id) = thread_id {
+                if let Ok(answer) = host.codex_call(&session_id, "mcpServerStatus/list", mcp_list_params(&thread_id), CATALOG_TIMEOUT) {
+                    host.mcp_status.learn(&session_id, mcp_servers(&answer));
+                }
+            }
+            if !host.mcp_status.release(&session_id) {
+                break;
+            }
+        });
+    }
+
+    /// Has Codex start a server's login, and answers the page the user signs
+    /// in on. Codex waits for the redirect itself and keeps the token; it says
+    /// when that is over in `mcpServer/oauthLogin/completed`.
+    pub(super) fn codex_mcp_login(&self, session_id: &str, name: &str) -> Result<String, String> {
+        let thread_id = match self.lock().get(session_id) {
+            Some(Live::Codex(live)) => live.thread_id.clone(),
+            _ => None,
+        }
+        .ok_or("Codex is not running. Send a message first, then sign in.")?;
+        let started = self.codex_call(session_id, "mcpServer/oauth/login", mcp_login_params(name, Some(&thread_id)), LOGIN_TIMEOUT)?;
+        mcp_login_url(&started).ok_or_else(|| "Codex gave no page to sign in on.".to_string())
+    }
+
+    /// Has Codex start its MCP servers again, and reads how they stand.
+    pub(super) fn codex_mcp_reconnect(&self, session_id: &str) -> Result<(), String> {
+        self.codex_call(session_id, "config/mcpServer/reload", Value::Null, CATALOG_TIMEOUT)?;
+        self.codex_read_mcp(session_id);
+        Ok(())
+    }
+
+    /// The server's startup, or its login, as a notification says it. Both are
+    /// the process's, not a turn's. A login that went through has Codex start
+    /// the servers again, to connect with the token; that is asked from a
+    /// thread of its own, since this runs where the answers are read.
+    fn codex_mcp_notice(&self, session_id: &str, method: &str, params: &Value) {
+        if method == "mcpServer/startupStatus/updated" {
+            let Some((name, state, error)) = mcp_startup(params) else {
+                return;
+            };
+            self.mcp_status.set_state(session_id, &name, state, error);
+            if state != McpState::Pending {
+                self.codex_read_mcp(session_id);
+            }
+            return;
+        }
+        let Some(name) = params.get("name").and_then(Value::as_str) else {
+            return;
+        };
+        if params.get("success").and_then(Value::as_bool) != Some(true) {
+            let error = params.get("error").and_then(Value::as_str).unwrap_or("The sign-in did not finish.");
+            self.mcp_status.set_state(session_id, name, McpState::NeedsAuth, Some(error.to_string()));
+            return;
+        }
+        let host = self.clone();
+        let session_id = session_id.to_string();
+        thread::spawn(move || {
+            let _ = host.codex_mcp_reconnect(&session_id);
+        });
     }
 
     /// The turn itself, on an open thread. Returns once the turn runs; its end
@@ -1080,6 +1161,10 @@ impl TurnHost {
             }
             return;
         }
+        if matches!(method, "mcpServer/startupStatus/updated" | "mcpServer/oauthLogin/completed") {
+            self.codex_mcp_notice(session_id, method, params);
+            return;
+        }
         let mut events = Vec::new();
         let mut outcome = None;
         // A command item for the tray, read out of the lock.
@@ -1589,7 +1674,7 @@ def out(m):
 def log(m):
     with open(LOG, "a") as f: f.write(json.dumps(m) + "\n")
 log({"argv": sys.argv[1:], "pid": os.getpid(), "env": {k: os.environ.get(k) for k in ["CREW_SOCKET", "CREW_TOKEN"]}})
-state = {"thread": None, "turn": None, "next": 0, "goal": None}
+state = {"thread": None, "turn": None, "next": 0, "goal": None, "signed": False}
 answers = {}
 terminals = {}
 def ask(method, params):
@@ -1777,6 +1862,8 @@ for line in sys.stdin:
     elif method in ("thread/start", "thread/resume"):
         state["thread"] = params.get("threadId") or str(uuid.uuid4())
         out({"id": rid, "result": {"thread": {"id": state["thread"]}, "model": params.get("model")}})
+        # `sentry` is a remote server whose login has run out.
+        out({"method": "mcpServer/startupStatus/updated", "params": {"name": "sentry", "status": "failed", "error": "token expired", "failureReason": "reauthenticationRequired", "threadId": state["thread"]}})
     elif method == "turn/start":
         with lock:
             busy = state["turn"]
@@ -1819,7 +1906,16 @@ for line in sys.stdin:
         state["goal"] = None
         out({"id": rid, "result": {"cleared": had}})
     elif method == "mcpServerStatus/list":
-        out({"id": rid, "result": {"data": [{"name": "crew", "runtimeStatus": "connected", "authStatus": "unsupported", "tools": {"list_peers": {"name": "list_peers"}}, "resources": [], "resourceTemplates": []}], "nextCursor": None}})
+        sentry = {"name": "sentry", "runtimeStatus": "connected" if state["signed"] else "authenticationRequired", "authStatus": "oAuth" if state["signed"] else "notLoggedIn", "tools": {}, "resources": [], "resourceTemplates": []}
+        out({"id": rid, "result": {"data": [{"name": "crew", "runtimeStatus": "connected", "authStatus": "unsupported", "tools": {"list_peers": {"name": "list_peers"}}, "resources": [], "resourceTemplates": []}, sentry], "nextCursor": None}})
+    elif method == "mcpServer/oauth/login":
+        out({"id": rid, "result": {"authorizationUrl": "https://auth.example/oauth?server=" + params.get("name", "")}})
+        # The user finished in the browser a moment later.
+        def finished(name):
+            time.sleep(0.05)
+            state["signed"] = True
+            out({"method": "mcpServer/oauthLogin/completed", "params": {"name": name, "success": True}})
+        threading.Thread(target=finished, args=(params.get("name"),), daemon=True).start()
     elif method == "turn/steer":
         with lock:
             turn = state["turn"]
@@ -1843,6 +1939,9 @@ for line in sys.stdin:
         out({"id": rid, "result": {}})
     elif method == "config/mcpServer/reload":
         out({"id": rid, "result": {}})
+        if state["signed"]:
+            out({"method": "mcpServer/startupStatus/updated", "params": {"name": "sentry", "status": "starting"}})
+            out({"method": "mcpServer/startupStatus/updated", "params": {"name": "sentry", "status": "ready"}})
     elif method == "skills/list" and os.path.exists(LOG + ".no-skills"):
         out({"id": rid, "error": {"code": -32603, "message": "the skill folders cannot be read"}})
     elif method == "skills/list":
@@ -2144,9 +2243,60 @@ mod catalog_tests {
     fn mcp_lists_the_servers_as_a_note_not_a_turn() {
         let (host, session, log, _) = started_with("/mcp", Some("mcp"), None, Vec::new());
         wait_for(|| !host.is_running(&session));
-        assert_eq!(sent(&log, "mcpServerStatus/list").len(), 1);
+        // The thread's own read when it opened may add another.
+        assert!(!sent(&log, "mcpServerStatus/list").is_empty());
         assert!(sent(&log, "turn/start").is_empty());
         assert!(said(&host, &session).contains("- crew: connected, 1 tool"), "{}", said(&host, &session));
+    }
+
+    fn mcp_state_of(host: &TurnHost, session: &str, name: &str) -> Option<crew_protocol::McpState> {
+        host.mcp_list(session).expect("list").servers.into_iter().find(|server| server.name == name).map(|server| server.state)
+    }
+
+    /// The thread's servers are read when it opens and moved by the startup
+    /// notices: one whose login ran out needs one, the rest are connected.
+    #[test]
+    fn the_servers_of_a_thread_are_read_when_it_opens_and_a_login_that_ran_out_is_told() {
+        use crew_protocol::McpState::{Connected, NeedsAuth};
+        let (host, session, log, _) = started("hello");
+        wait_for(|| mcp_state_of(&host, &session, "sentry") == Some(NeedsAuth) && mcp_state_of(&host, &session, "crew") == Some(Connected));
+        wait_for(|| !host.is_running(&session));
+        let asked = sent(&log, "mcpServerStatus/list");
+        assert_eq!(asked[0]["detail"], "toolsAndAuthOnly");
+        assert!(asked[0]["threadId"].as_str().is_some_and(|id| !id.is_empty()), "{asked:?}");
+        assert!(host.mcp_list(&session).expect("list").reported);
+    }
+
+    /// A login asks Codex for the page and hands it to the window as a URL;
+    /// when Codex says it went through, the servers start again, and the
+    /// server is connected.
+    #[test]
+    fn a_login_gives_the_page_and_the_servers_start_again_when_it_goes_through() {
+        use crew_protocol::McpState::{Connected, NeedsAuth};
+        let (host, session, log, _) = started("hello");
+        wait_for(|| mcp_state_of(&host, &session, "sentry") == Some(NeedsAuth));
+        wait_for(|| !host.is_running(&session));
+        assert!(host.mcp_login(&session, "nothing").is_err());
+        let sign_in = host.mcp_login(&session, "sentry").expect("login");
+        assert_eq!(sign_in, crew_protocol::McpSignIn::Url { url: "https://auth.example/oauth?server=sentry".into() });
+        let login = sent(&log, "mcpServer/oauth/login");
+        assert_eq!(login.len(), 1);
+        assert_eq!(login[0]["name"], "sentry");
+        wait_for(|| sent(&log, "config/mcpServer/reload").len() == 1);
+        wait_for(|| mcp_state_of(&host, &session, "sentry") == Some(Connected));
+    }
+
+    /// A login that did not go through leaves the server asking for one, with why.
+    #[test]
+    fn a_login_that_failed_leaves_the_server_needing_one_and_says_why() {
+        use crew_protocol::McpState::NeedsAuth;
+        let (host, session, log, _) = started("hello");
+        wait_for(|| mcp_state_of(&host, &session, "sentry") == Some(NeedsAuth));
+        // The reads the thread's opening asked for are over, or they would replace the error.
+        wait_for(|| !host.is_running(&session) && !sent(&log, "mcpServerStatus/list").is_empty());
+        host.codex_mcp_notice(&session, "mcpServer/oauthLogin/completed", &json!({ "name": "sentry", "success": false, "error": "the browser closed" }));
+        let sentry = host.mcp_list(&session).expect("list").servers.into_iter().find(|server| server.name == "sentry").expect("sentry");
+        assert_eq!((sentry.state, sentry.error.as_deref()), (NeedsAuth, Some("the browser closed")));
     }
 
     /// A command Crew has no method for is a turn like any other.

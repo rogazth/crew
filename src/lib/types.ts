@@ -117,8 +117,18 @@ export type Tab = (
        */
       file?: { path: string; relative: string };
     }
-  /** A terminal keeps the worktree it was opened in; null or absent is the main checkout. */
-  | { id: string; kind: "stub"; stub: StubKind; title: string; worktree?: string | null }
+  /**
+   * A terminal keeps the worktree it was opened in; null or absent is the main checkout.
+   * `signIn` makes it run an MCP server's login in place of the shell, and have the session connect the server when it ends.
+   */
+  | {
+      id: string;
+      kind: "stub";
+      stub: StubKind;
+      title: string;
+      worktree?: string | null;
+      signIn?: { sessionId: string; server: string; command: string[] };
+    }
   /** One run of a workspace command: its output, in the worktree it runs in (null, the main checkout). */
   | { id: string; kind: "process"; processId: string; title: string; worktree: string | null }
 ) & { pinned?: true };

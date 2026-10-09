@@ -529,6 +529,7 @@ export function App() {
               }}
               processes={processes.processes ?? NO_PROCESSES}
               onOpenProcessRun={nav.openProcessRun}
+              onOpenSignIn={nav.openSignIn}
             />
             {explorer.open && treePath && explorerWidth.width !== null && (
               <Explorer

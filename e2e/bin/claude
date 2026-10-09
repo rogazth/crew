@@ -630,6 +630,11 @@ function redraw(done) {
  *   (which change what the next turn says), and the rest. Each but
  *   `get_context_usage`, which Crew asks on its own schedule, is appended to
  *   $HOME/fake-claude-control.log as `<subtype> <detail>`, one a line.
+ * - The MCP servers it reports, in `system/init` and as the answer to
+ *   `mcp_status` (which, like `get_context_usage`, stays out of the control
+ *   log), are the ones in $HOME/fake-claude-mcp.json, a list of
+ *   `{name, status, error?}` as the real CLI names them (`connected`,
+ *   `needs-auth`, `failed`, `pending`); none while the file is not there.
  * - A `user` message is a turn: `system/init`, the message echoed back when
  *   `--replay-user-messages` is on, the reply streamed a word at a time as
  *   `stream_event` deltas, the `assistant` message with its usage, and the
@@ -686,6 +691,13 @@ function serve() {
     return content.filter((part) => part && part.type === "text").map((part) => part.text).join("\n");
   };
   const used = () => STEP * Math.min(turns, 9);
+  const servers = () => {
+    try {
+      return JSON.parse(fs.readFileSync(path.join(HOME, "fake-claude-mcp.json"), "utf8"));
+    } catch {
+      return [];
+    }
+  };
 
   function control(rec) {
     const request = rec.request || {};
@@ -700,6 +712,7 @@ function serve() {
         model: model || "fake",
       });
     }
+    if (subtype === "mcp_status") return answer(rec.request_id, { mcpServers: servers() });
     let detail = request.task_id || "";
     if (subtype === "set_model") detail = request.model || "";
     if (subtype === "set_permission_mode") detail = request.mode || "";
@@ -825,7 +838,7 @@ function serve() {
       });
     const n = ++turns;
     turnStarted = Date.now();
-    emit({ type: "system", subtype: "init", session_id: sessionId, model: model || "fake", cwd: CWD, tools: [], skills: SKILLS });
+    emit({ type: "system", subtype: "init", session_id: sessionId, model: model || "fake", cwd: CWD, tools: [], skills: SKILLS, mcp_servers: servers() });
     if (replay) emit({ type: "user", session_id: sessionId, message: { role: "user", content: [{ type: "text", text }] } });
     record({ type: "user", permissionMode: mode, message: { role: "user", content: text } });
 

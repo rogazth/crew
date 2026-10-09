@@ -10,6 +10,7 @@ import { claudeSessionId, transcriptPath } from '../lib/claudeStorage';
 import { bindProviderSession } from '../lib/turnRuntime';
 import { isHanded } from '../lib/handedSessions';
 import { announceSession, askNews } from '../lib/notifications';
+import { reconnectAfterSignIn } from '../lib/mcp';
 import { clearFirstPrompt, peekFirstPrompt } from '../lib/firstPrompt';
 import { BYPASS_KEY } from '../lib/permissions';
 import { providerOf } from '../lib/providers';
@@ -86,13 +87,17 @@ export function Terminals({ panes, sessions, onStatus, onOpenFile }: Props) {
   const mounted = panes.map((pane) => {
     const { tab, cwd, visible } = pane;
     if (tab.kind === 'stub' && tab.stub === 'terminal') {
+      const { signIn } = tab;
       return (
         <Pane key={pane.id} active={visible}>
           <TerminalView
             id={pane.id}
             cwd={cwd}
-            command={[]}
+            command={signIn?.command ?? []}
             active={visible}
+            // A login leaves the shell behind to read what it said, and its end has the session connect the server.
+            shellOnExit={signIn !== undefined}
+            onExit={signIn && (() => void reconnectAfterSignIn(pane.id, signIn.sessionId, signIn.server))}
             onOpenPath={(path) => openPath(cwd, path)}
           />
         </Pane>

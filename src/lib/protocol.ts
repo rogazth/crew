@@ -585,6 +585,45 @@ export type MailboxEdit = { sessionId: string, letterId: string, text: string, f
 export type MailboxReorder = { sessionId: string, letterIds: Array<string>, };
 
 /**
+ * A session's MCP servers, pushed as `mcp-changed` whenever they change and
+ * answered by `mcp_list`.
+ */
+export type McpChanged = { sessionId: string, status: McpStatus, };
+
+/**
+ * One MCP server of a session.
+ */
+export type McpServer = { name: string, state: McpState, 
+/**
+ * Why it failed, in the provider's words.
+ */
+error?: string, 
+/**
+ * How to sign in, when the provider's way is known before the user asks
+ * (Claude's login is a command; Codex's URL is minted by `mcp_login`).
+ */
+signIn?: McpSignIn, };
+
+/**
+ * Names one server of a session: `mcp_login` and `mcp_reconnect`.
+ */
+export type McpServerRequest = { sessionId: string, name: string, };
+
+/**
+ * What the user does to sign in to a server. The tokens stay where the
+ * provider keeps them: Crew only opens the way in.
+ */
+export type McpSignIn = { "kind": "url", url: string, } | { "kind": "terminal", command: Array<string>, };
+
+export type McpState = "connected" | "pending" | "failed" | "needs_auth" | "disabled" | "unknown";
+
+/**
+ * A session's MCP servers. `reported` is false when its provider does not
+ * say (Cursor), which is not the same as having none.
+ */
+export type McpStatus = { servers: Array<McpServer>, reported: boolean, };
+
+/**
  * A window of a transcript. `more` says whether older blocks exist before
  * `fromPos`, so the UI knows whether to keep a "load earlier" affordance.
  * `working`, `status` and `seq` are the live state of the session, so one

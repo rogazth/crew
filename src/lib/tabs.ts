@@ -34,11 +34,11 @@ export const isIncognitoTab = (tab: Tab) => tab.kind === "browser" && tab.incogn
 
 /**
  * What a strip writes to disk: everything but its incognito tabs, which end
- * with the app like a private window does.
+ * with the app like a private window does, and its sign-in terminals.
  */
 export function persistedTabs(state: TabState): Omit<TabState, "closed"> {
   const { activeId, recent, collapsed } = state;
-  const tabs = state.tabs.filter((tab) => !isIncognitoTab(tab));
+  const tabs = state.tabs.filter((tab) => !isIncognitoTab(tab) && !isSignInTab(tab));
   const kept = new Set(tabs.map((tab) => tab.id));
   return {
     tabs,
@@ -52,6 +52,14 @@ export function persistedTabs(state: TabState): Omit<TabState, "closed"> {
 export function newTerminalTab(worktree: string | null): Tab {
   return { id: `stub:terminal:${crypto.randomUUID()}`, kind: "stub", stub: "terminal", title: "Terminal", worktree };
 }
+
+/** A terminal that runs an MCP server's login for a session, in the worktree it was asked from. */
+export function newSignInTab(worktree: string | null, signIn: { sessionId: string; server: string; command: string[] }): Tab {
+  return { id: `stub:terminal:${crypto.randomUUID()}`, kind: "stub", stub: "terminal", title: `Sign in to ${signIn.server}`, worktree, signIn };
+}
+
+/** A login ends with the session that asked for it, not with the app: it is never written to disk. */
+export const isSignInTab = (tab: Tab) => tab.kind === "stub" && tab.signIn !== undefined;
 
 /**
  * `recent` is the order tabs were last on screen in, newest first, so a

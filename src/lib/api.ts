@@ -20,6 +20,8 @@ import type {
   MailboxEdit,
   MailboxReorder,
   MachineInfo,
+  McpSignIn,
+  McpStatus,
   MessagePage,
   PageSnapshot,
   Process,
@@ -198,6 +200,17 @@ export const backgroundClear = (sessionId: string, ids?: string[], hide?: string
 /** What a session has running in the background now, fresh from the daemon. */
 export const backgroundList = (sessionId: string): Promise<BackgroundList> =>
   client.request("background_list", { sessionId });
+
+/**
+ * What the user does to sign in to one of a session's MCP servers: a page for
+ * the browser, or a command for a terminal tab. The provider keeps the token.
+ */
+export const mcpLogin = (sessionId: string, name: string): Promise<McpSignIn> =>
+  client.request("mcp_login", { sessionId, name });
+
+/** Has the session's provider connect one MCP server again. Answers the servers as they stand after. */
+export const mcpReconnect = (sessionId: string, name: string): Promise<McpStatus> =>
+  client.request("mcp_reconnect", { sessionId, name });
 
 /**
  * Asks the provider to read a session's commands, skills and servers again,

@@ -6,7 +6,7 @@
 // terminal; Terminal runs the CLI on its own screen. Flipping the setting
 // never moves a session that exists.
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { after, before, test } from "node:test";
 import type { Session, Workspace } from "../src/lib/types.ts";
@@ -361,6 +361,51 @@ test("/reload in the chat asks the CLI for its plugins and then its skills, and 
   await said(/^Reloaded plugins and skills: \d+ commands?, 1 skill\.$/).waitFor();
   assert.deepEqual((await controls()).slice(before).map((line) => line.trim()), ["reload_plugins", "reload_skills"]);
   assert.equal((await launchesOf(session)).length, 1, "a reload launched the CLI again");
+});
+
+test("a server that needs a sign-in or failed shows a chip, and its sheet lists the servers and opens the sign-in in a terminal", async () => {
+  const [workspace] = crew.workspaces;
+  assert.ok(workspace);
+  const servers = path.join(crew.home, "fake-claude-mcp.json");
+  await writeFile(
+    servers,
+    JSON.stringify([
+      { name: "docs", status: "connected" },
+      { name: "sentry", status: "needs-auth" },
+      { name: "broken", status: "failed", error: "ENOENT: no such file or directory" },
+    ]),
+  );
+  try {
+    await crew.request("state_set", { key: "sessions:view", value: "chat" });
+    await crew.reload();
+    const session = await newChat(workspace.id);
+    const chip = crew.window.getByRole("button", { name: "1 needs sign-in · 1 failed" });
+    // The CLI is not up before the first message: nothing to say yet.
+    assert.equal(await chip.count(), 0);
+    await send("which servers");
+    await said("Reply 1: which servers").waitFor();
+    await chip.waitFor();
+
+    await chip.click();
+    const sheet = crew.window.locator("[data-mcp-sheet]:visible");
+    const row = (name: string) => sheet.locator(`[data-server="${name}"]`);
+    await row("sentry").getByText("Needs sign-in", { exact: true }).waitFor();
+    await row("broken").getByText("Failed: ENOENT: no such file or directory", { exact: true }).waitFor();
+    await row("docs").getByText("Connected", { exact: true }).waitFor();
+    assert.equal(await row("docs").getByRole("button").count(), 0, "a server that works offers nothing");
+    await row("broken").getByRole("button", { name: "Reconnect" }).waitFor();
+
+    // Claude's login is its own command, in a terminal tab of Crew's.
+    await row("sentry").getByRole("button", { name: "Sign in" }).click();
+    await crew.window.locator('[data-tab-strip] [role="tab"]').filter({ hasText: "Sign in to sentry" }).waitFor();
+    await waitFor(async () => (await crew.claudeLaunches()).some((launch) => launch.argv.join(" ") === "mcp login sentry"), {
+      message: "the login runs as `claude mcp login sentry`",
+    });
+    assert.equal(await sheet.count(), 0, "the sheet stayed over the chat");
+    await idle(session);
+  } finally {
+    await rm(servers, { force: true });
+  }
 });
 
 // What the user writes while a turn runs. The fake claude takes it into the

@@ -46,6 +46,7 @@ use crate::transcript::TranscriptHub;
 
 mod codex;
 mod cursor;
+mod mcp;
 use codex::CodexLive;
 use cursor::CursorLive;
 #[cfg(test)]
@@ -62,6 +63,12 @@ const INTERRUPT_GRACE: Duration = Duration::from_millis(1500);
 const CONTROL_TIMEOUT: Duration = Duration::from_secs(5);
 #[cfg(test)]
 const CONTROL_TIMEOUT: Duration = Duration::from_secs(2);
+/// An `mcp_reconnect` is not answered until the server has been dialed again,
+/// which for one over the network takes a few seconds.
+#[cfg(not(test))]
+const MCP_RECONNECT_TIMEOUT: Duration = Duration::from_secs(20);
+#[cfg(test)]
+const MCP_RECONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// A `set_model` is not answered until the CLI has checked the model with the
 /// server, which it gives up on after 5 s of its own (measured on 2.1.295:
 /// answers at 0.9 to 2 s, and in about 1 run in 8 at 5.0 to 5.6 s, for a full
@@ -92,6 +99,7 @@ fn offers_fast(provider: &str) -> bool {
 fn control_timeout(request: &Value) -> Duration {
     match request.get("subtype").and_then(Value::as_str) {
         Some("set_model") => SET_MODEL_TIMEOUT,
+        Some("mcp_reconnect") => MCP_RECONNECT_TIMEOUT,
         _ => CONTROL_TIMEOUT,
     }
 }
@@ -726,6 +734,8 @@ pub struct TurnHost {
     background: crate::background::BackgroundHost,
     /// The `/` menu each provider offers in each folder.
     commands: crate::commands::CommandsHost,
+    /// The MCP servers of each session, and how they stand.
+    mcp_status: crate::mcp_status::McpHost,
     /// The newest context reading of each session, merged as they come.
     contexts: Arc<Mutex<HashMap<String, ContextReading>>>,
     /// Sessions whose process is up with no turn on it, since when. Apart from
@@ -769,6 +779,7 @@ impl TurnHost {
             running: Arc::new(Mutex::new(HashSet::new())),
             background,
             commands: crate::commands::CommandsHost::default(),
+            mcp_status: crate::mcp_status::McpHost::default(),
             contexts: Arc::new(Mutex::new(HashMap::new())),
             idle: Arc::new(Mutex::new(HashMap::new())),
             sending_now: Arc::new(Mutex::new(HashSet::new())),
@@ -1366,6 +1377,8 @@ impl TurnHost {
         // leaves the skills as they were.
         let plugins = self.claude_control(&session.id, reload_plugins_request())?;
         let skills = self.claude_control(&session.id, reload_skills_request()).ok();
+        // Plugins bring servers of their own, and the CLI connects them now.
+        self.ask_claude_mcp(&session.id, true);
         let Some(menu_cwd) = menu_cwd else {
             return Ok("Reloaded plugins and skills.".into());
         };
@@ -3184,7 +3197,10 @@ impl TurnHost {
         }
         match init {
             // Up: how large its window is, for a meter before the first answer.
-            Ok(Ok(true)) => self.ask_claude_context(&session_id, false, None),
+            Ok(Ok(true)) => {
+                self.ask_claude_context(&session_id, false, None);
+                self.ask_claude_mcp(&session_id, true);
+            }
             Ok(Ok(false)) | Ok(Err(_)) => {
                 let stderr = self
                     .lock()
@@ -3489,6 +3505,7 @@ impl TurnHost {
                     live.init_id = None;
                 }
                 let skills = (subtype.as_deref() == Some("init")).then(|| rec.get("skills")).flatten();
+                let servers = (subtype.as_deref() == Some("init")).then(|| rec.get("mcp_servers").cloned()).flatten();
                 let menu = live.menu_cwd.clone().map(|cwd| {
                     (
                         cwd,
@@ -3515,6 +3532,9 @@ impl TurnHost {
                 if let Some((cwd, entries, skills)) = menu.filter(|(_, entries, skills)| entries.is_some() || skills.is_some())
                 {
                     self.learn_commands(session_id, &cwd, entries, skills);
+                }
+                if let Some(servers) = servers {
+                    self.mcp_init(session_id, &servers);
                 }
                 if let Some(epoch) = adopt {
                     self.adopt_claude_turn(session_id, epoch);

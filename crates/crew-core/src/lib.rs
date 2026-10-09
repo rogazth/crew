@@ -23,6 +23,7 @@ pub mod files;
 pub mod http_local;
 pub mod mailbox;
 pub mod mcp;
+pub mod mcp_status;
 pub mod media;
 pub mod messages;
 pub mod process;

@@ -4,14 +4,17 @@ import {
   activateTab,
   closeSessionTab,
   closeTab,
+  isSignInTab,
   isTurnTab,
   isTerminalTab,
   lastUsed,
   newFileBrowserTab,
+  newSignInTab,
   openTab,
   parseTabs,
   patchBrowserTab,
   panesOf,
+  persistedTabs,
   pinTab,
   relativeTo,
   reopenTab,
@@ -372,6 +375,25 @@ describe("what a tab is", () => {
 
   it("says Untitled for a session that is gone", () => {
     expect(tabTitle(sessionTab("ghost"), sessions)).toBe("Untitled");
+  });
+});
+
+describe("a sign-in terminal", () => {
+  const signIn = { sessionId: "s1", server: "sentry", command: ["claude", "mcp", "login", "sentry"] };
+
+  it("is a terminal in the worktree it was asked from, titled after its server", () => {
+    const tab = newSignInTab("/w/feature", signIn);
+    expect(tab).toMatchObject({ kind: "stub", stub: "terminal", title: "Sign in to sentry", worktree: "/w/feature", signIn });
+    expect(isTerminalTab(tab, [])).toBe(true);
+    expect(newSignInTab(null, signIn).id).not.toBe(tab.id);
+  });
+
+  it("is never written to disk, while the tabs around it are", () => {
+    const login = newSignInTab(null, signIn);
+    const state = openTab(opened("a"), login);
+    expect(isSignInTab(login)).toBe(true);
+    expect(persistedTabs(state).tabs.map((tab) => tab.id)).toEqual([sessionTabId("a")]);
+    expect(persistedTabs(state).activeId).toBeNull();
   });
 });
 

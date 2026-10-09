@@ -89,9 +89,12 @@ pub fn authenticate_params() -> Value {
     json!({ "methodId": "cursor_login" })
 }
 
-/// Crew's MCP server over stdio, with what it needs to reach the bridge. ACP
-/// agents drop injected HTTP servers (T3 Code), and stdio is what the spike
-/// proved.
+/// Crew's MCP server over stdio, with what it needs to reach the bridge. Cursor
+/// takes injected HTTP and SSE servers too (its `initialize` answers
+/// `mcpCapabilities` `http` and `sse` as true); Crew's own stays stdio
+/// (plan decision 19), and the user's servers stay in Cursor's config. Cursor
+/// does not report how any of them stand, so a session's `mcp_list` says it
+/// does not.
 pub fn mcp_servers(mcp: Option<&(String, Vec<String>)>, env: &[(String, String)]) -> Value {
     let Some((command, args)) = mcp else {
         return json!([]);
