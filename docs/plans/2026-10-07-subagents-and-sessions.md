@@ -80,8 +80,8 @@ tool description.
 ### Independent sessions
 
 6. **An independent session is a top-level chat session**, driven through its
-   provider's protocol, with its own tab; the user may switch it to the
-   terminal. It is not reaped (its process is released when idle and resumed
+   provider's protocol, with its own tab (always a chat: the view is fixed
+   at creation, chat-over-protocol decision 2). It is not reaped (its process is released when idle and resumed
    on the next message) and does not count against anyone's cap.
 7. **`launched_by` replaces `handed_off_by`.** It records which session
    started it, for `list_peers` and for the first message's envelope. It
@@ -132,8 +132,8 @@ tool description.
     This is what wakes an orchestrator: its subagents' reports, questions and
     approvals arrive this way.
 16. **A session in the terminal view takes no letters.** They wait in its
-    mailbox and are delivered when it returns to the chat. The terminal view
-    is the user at the keyboard.
+    mailbox, where the user sees them. The terminal view is the user at the
+    keyboard, and it never becomes a chat (chat-over-protocol decision 2).
 17. **Letters that arrive close together go as one turn.** Reports from
     several subagents become one turn, not one interruption each. A letter
     waits 2 s for the next, and no letter waits more than 10 s from the first.

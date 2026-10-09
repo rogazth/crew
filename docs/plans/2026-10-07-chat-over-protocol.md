@@ -27,20 +27,17 @@ the bottom as each decision lands.
 ### One writer, two views
 
 1. **The chat view is driven by Crew through the provider's protocol; the
-   terminal view runs the real CLI.** Only one of them owns the conversation
-   at a time.
-2. **Switching views is a handoff.** To the terminal: the driver's process
-   stops and the CLI launches with the conversation's resume id. Back to the
-   chat: the CLI exits, and the driver resumes the same id and reads what the
-   CLI wrote. A switch while a turn runs waits for the turn to end, or stops
-   it if the user asks.
-3. **Per provider.** Claude, Codex and opencode keep one session store for
-   headless and interactive, so they switch both ways (verified 2026-10-07:
-   `~/.claude/projects/…jsonl` for both entrypoints; app-server `thread/list`
-   returns CLI threads; an ACP-made opencode session appears in
-   `opencode session list`). Cursor does not (ACP chats in
-   `~/.cursor/acp-sessions/`, CLI chats in `~/.cursor/chats/`): a Cursor
-   session is either a chat (ACP) or a terminal, chosen when it starts.
+   terminal view runs the real CLI.** A session is one or the other.
+2. **The view is fixed when the session is created** (decided 2026-10-09):
+   the "New sessions open in" setting picks it, and nothing switches it
+   later. A handoff would kill the background commands the driver's process
+   holds and needs a catch-up per provider; the toggle goes instead.
+   Migration 30 moves existing Claude, Codex and opencode terminals to the
+   chat when the old global setting was the chat.
+3. **Per provider.** Claude, Codex and opencode could switch both ways (one
+   session store for headless and interactive, verified 2026-10-07); Cursor
+   could not. With decision 2 that no longer matters: every provider is
+   either a chat or a terminal from the start, as Cursor already was.
 
 ### Process lifetime
 
@@ -227,9 +224,9 @@ the bottom as each decision lands.
 
 ### What stays
 
-26. **Reading the provider's own history stays**, for the terminal view and
-    for catching up after a handoff. In the chat, the driver's events are the
-    live source, so replies stream word by word.
+26. **Reading the provider's own history stays** for the terminal view. In
+    the chat, the driver's events are the live source, so replies stream
+    word by word.
 27. **`src/lib/ptySend.ts` stays for the terminal view only.**
 
 ### Context meter
@@ -277,7 +274,10 @@ the bottom as each decision lands.
     composer: edit, delete, reorder, or "send now", which interrupts and
     sends (t3code, zeron). A steer the turn ended before reading goes back
     to the queue, as `turns.rs` does today. One key flips a message between
-    steer and queue (t3code: ⌘Enter).
+    steer and queue (t3code: ⌘Enter). Crew does not reshape what the
+    provider does with a steer; what waits goes as one turn when the
+    running one ends (decided 2026-10-09, as Claude Code and decision 17 of
+    the orchestration plan).
 
 ### Background work: subagents and commands
 
@@ -332,14 +332,12 @@ the bottom as each decision lands.
 
 - Its decisions 15–20 (PTY delivery) go. A letter to a session in the chat
   view is a steer or a queued turn through `turns.rs`, as for a subagent
-  today. A letter to a session in the terminal view waits in its mailbox, and
-  is delivered when it returns to the chat: the terminal view is the user at
-  the keyboard.
+  today. A letter to a session in the terminal view waits in its mailbox:
+  the terminal view is the user at the keyboard.
 - A letter steers into a running turn only where steering does not interrupt
   a tool; otherwise it is the next turn (t3code's rule).
 - Its decision 14 (resume on message) is a turn on the resume id.
-- Its decision 6: an independent session is a chat session, which the user
-  may switch to the terminal.
+- Its decision 6: an independent session is a chat session, and stays one.
 
 ## Out of scope
 
@@ -375,7 +373,8 @@ the terminal view.
    Small and on their own.
 2. Decisions 4–7: the live process for Claude and Codex; subagents use it.
    Decision 16 with it, before the fast toggle drives a chat.
-3. Decisions 1–3 and 26–27: the chat view on the driver, and the handoff.
+3. Decisions 1–3 and 26–27: the chat view on the driver, its view fixed at
+   creation.
 4. Decisions 10–15: the `/` menu, autocomplete anywhere, dispatch per
    provider.
 5. Decision 9 (opencode 2.x), Cursor as chat-only, and decision 17.
@@ -389,7 +388,7 @@ the terminal view.
 
 | # | Decision | Status |
 |---|---|---|
-| 1–3 | One writer, two views, handoff | todo |
+| 1–3 | One writer, two views, fixed at creation | schema done; driver and UI todo |
 | 4–7 | Live process per session | done for Claude and Codex subagents; sessions with step 3, opencode and Cursor with step 5 |
 | 8 | Setting sources by kind | done |
 | 9 | opencode on `serve` | todo |
