@@ -1578,10 +1578,23 @@ def reader():
             if req.get("subtype") == "set_permission_mode": detail = req.get("mode", "")
             if req.get("subtype") == "apply_flag_settings": detail = json.dumps(req.get("settings"), sort_keys=True)
             with open(CONTROL, "a") as f: f.write("%s %s\n" % (req.get("subtype"), detail))
-            # A file named for the subtype makes the next one of it refuse.
+            # A file `delay-<subtype>` holding seconds makes the next one of it
+            # answer that late, as the CLI does a set_model it checks with the server.
+            late = os.path.join(os.path.dirname(os.path.abspath(sys.argv[0])), "delay-" + str(req.get("subtype")))
+            if os.path.exists(late):
+                seconds = float(open(late).read() or "0")
+                os.remove(late)
+                threading.Timer(seconds, out, [{"type": "control_response", "response": {"subtype": "success", "request_id": rec["request_id"], "response": {}}}]).start()
+                continue
+            # A file named for the subtype makes the next one of it refuse; if it
+            # holds a number, that many of them.
             refuse = os.path.join(os.path.dirname(os.path.abspath(sys.argv[0])), "refuse-" + str(req.get("subtype")))
             if os.path.exists(refuse):
-                os.remove(refuse)
+                left = int(open(refuse).read().strip() or "1") - 1
+                if left > 0:
+                    open(refuse, "w").write(str(left))
+                else:
+                    os.remove(refuse)
                 out({"type": "control_response", "response": {"subtype": "error", "request_id": rec["request_id"], "error": "no"}})
                 continue
             answer = {"output": "tick\n", "total_bytes": 5, "truncated": False} if req.get("subtype") == "get_task_output" else {}
@@ -2311,9 +2324,33 @@ while True:
         assert_eq!(launched(&log).len(), 2);
     }
 
+    /// The real CLI checks a full model id with the server before it answers
+    /// `set_model`, up to a deadline of 5 s of its own, so that answer can
+    /// come later than any other control request's. Waiting for it is not a
+    /// reason to launch the process again.
+    #[test]
+    fn a_claude_session_whose_process_is_slow_to_take_a_model_keeps_it() {
+        let w = world();
+        let parent = w.session("terminal", "shell", "full");
+        let (id, log) = w.claude(&parent, "one");
+        w.wait(&parent, &id, json!({}));
+        let row = w.settle(&id);
+        // Past the wait for any other request, within the one for a model.
+        std::fs::write(w.dir.join("delay-set_model"), "3").expect("delay");
+        session::set_options(w.turns.store(), id.clone(), "opus".into(), row.effort, row.service_tier, row.autonomy)
+            .expect("options");
+
+        w.call(&parent, "send_message", json!({ "to": id, "text": "two" })).expect("send");
+        assert_eq!(w.wait(&parent, &id, json!({}))["sessions"][0]["report"], "report: two");
+        w.settle(&id);
+        assert_eq!(w.claude_control(), ["set_model opus"]);
+        assert_eq!(launched(&log).len(), 1, "the slow answer launched another process: {:?}", launched(&log));
+    }
+
     /// A CLI that refuses a setting is not left on the old one under the new
     /// name: the process goes and another takes its place, launched with the
-    /// settings, and the turn still runs.
+    /// settings, and the turn still runs. A model is asked for twice before
+    /// that (see the next test).
     #[test]
     fn a_claude_session_whose_process_refuses_a_setting_is_launched_again() {
         let w = world();
@@ -2322,14 +2359,14 @@ while True:
         w.wait(&parent, &id, json!({}));
         let row = w.settle(&id);
         let bound = row.provider_session_id.clone().expect("bound");
-        std::fs::write(w.dir.join("refuse-set_model"), "").expect("refusal");
+        std::fs::write(w.dir.join("refuse-set_model"), "2").expect("refusal");
         session::set_options(w.turns.store(), id.clone(), "opus".into(), row.effort, row.service_tier, row.autonomy)
             .expect("options");
 
         w.call(&parent, "send_message", json!({ "to": id, "text": "two" })).expect("send");
         assert_eq!(w.wait(&parent, &id, json!({}))["sessions"][0]["report"], "report: two");
         w.settle(&id);
-        assert_eq!(w.claude_control(), ["set_model opus"]);
+        assert_eq!(w.claude_control(), ["set_model opus", "set_model opus"]);
         let launches = launched(&log);
         assert_eq!(launches.len(), 2, "{launches:?}");
         assert_eq!(after_flag(&launches[1], "--model"), Some("opus".to_string()));
@@ -2337,6 +2374,28 @@ while True:
         w.call(&parent, "send_message", json!({ "to": id, "text": "three" })).expect("send");
         assert_eq!(w.wait(&parent, &id, json!({}))["sessions"][0]["report"], "report: three");
         assert_eq!(launched(&log).len(), 2);
+    }
+
+    /// The real CLI refuses a `set_model` once in a while only because its
+    /// check of the model with the server did not finish in its 5 s ("Couldn't
+    /// confirm model ... with the API. Try again."). Asked again, it takes it:
+    /// the process stays.
+    #[test]
+    fn a_claude_session_whose_process_refuses_a_model_once_is_asked_again() {
+        let w = world();
+        let parent = w.session("terminal", "shell", "full");
+        let (id, log) = w.claude(&parent, "one");
+        w.wait(&parent, &id, json!({}));
+        let row = w.settle(&id);
+        std::fs::write(w.dir.join("refuse-set_model"), "").expect("refusal");
+        session::set_options(w.turns.store(), id.clone(), "opus".into(), row.effort, row.service_tier, row.autonomy)
+            .expect("options");
+
+        w.call(&parent, "send_message", json!({ "to": id, "text": "two" })).expect("send");
+        assert_eq!(w.wait(&parent, &id, json!({}))["sessions"][0]["report"], "report: two");
+        w.settle(&id);
+        assert_eq!(w.claude_control(), ["set_model opus", "set_model opus"]);
+        assert_eq!(launched(&log).len(), 1, "{:?}", launched(&log));
     }
 
     impl World {
@@ -4765,9 +4824,15 @@ while True:
     /// Runs the real `claude`: three turns, haiku then sonnet, with the model
     /// and the effort changed between them (a `set_model` and an
     /// `apply_flag_settings` on the live process). Needs `claude auth login`.
-    /// Fails about 1 run in 5 (3 of 15 on 2026-10-09): the real CLI leaves
-    /// a control request unanswered past `CONTROL_TIMEOUT`, Crew launches the
-    /// process again on the conversation, and the same-pid assertion fails.
+    /// It once failed about 1 run in 5, and not because a request went
+    /// unanswered: the CLI checks a full model id (`claude-sonnet-4-5`) with
+    /// the server before it answers `set_model`, for up to a deadline of 5 s
+    /// of its own, so the answer came at 5.0 to 5.6 s in some runs, just past
+    /// the 5 s that Crew waited. And when that check does not finish in time
+    /// the CLI refuses with "Couldn't confirm model ... Try again" (1 run in
+    /// 15). A `set_model` is now waited for longer (`SET_MODEL_TIMEOUT`) and
+    /// asked a second time after a refusal; a launch again here means
+    /// something else broke.
     /// `cargo test -p crew-core --lib -- --ignored --test-threads=1 live_claude_model`
     #[test]
     #[ignore]

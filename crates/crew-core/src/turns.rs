@@ -57,7 +57,30 @@ const INIT_TIMEOUT: Duration = Duration::from_secs(15);
 const FIRST_OUTPUT_TIMEOUT: Duration = Duration::from_secs(120);
 const INTERRUPT_GRACE: Duration = Duration::from_millis(1500);
 /// How long Claude may take to answer a control request of Crew's own.
+#[cfg(not(test))]
 const CONTROL_TIMEOUT: Duration = Duration::from_secs(5);
+#[cfg(test)]
+const CONTROL_TIMEOUT: Duration = Duration::from_secs(2);
+/// A `set_model` is not answered until the CLI has checked the model with the
+/// server, which it gives up on after 5 s of its own (measured on 2.1.295:
+/// answers at 0.9 to 2 s, and in about 1 run in 8 at 5.0 to 5.6 s, for a full
+/// model id the CLI does not already know). The wait has to outlast that
+/// deadline, or the process is launched again for nothing.
+#[cfg(not(test))]
+const SET_MODEL_TIMEOUT: Duration = Duration::from_secs(20);
+#[cfg(test)]
+const SET_MODEL_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// What a control request that waited out its timeout fails with.
+const NO_ANSWER: &str = "Claude Code did not answer in time.";
+
+/// How long the answer to this control request is waited for.
+fn control_timeout(request: &Value) -> Duration {
+    match request.get("subtype").and_then(Value::as_str) {
+        Some("set_model") => SET_MODEL_TIMEOUT,
+        _ => CONTROL_TIMEOUT,
+    }
+}
 /// How long a child's Claude turn may wait, after a `result`, for the
 /// background commands it left running: Claude picks the conversation up by
 /// itself when they finish, with another `result`. Past this, the turn ends on
@@ -1083,6 +1106,7 @@ impl TurnHost {
     /// ask that outlived its process must not reach the next one, whose
     /// control ids start over and whose `initialize` would take its answer.
     fn claude_control_on(&self, session_id: &str, epoch: Option<u64>, request: Value) -> Result<Value, String> {
+        let timeout = control_timeout(&request);
         let (tx, rx) = mpsc::channel();
         let id = {
             let mut map = self.lock();
@@ -1108,11 +1132,11 @@ impl TurnHost {
             forget();
             return Err(error);
         }
-        match rx.recv_timeout(CONTROL_TIMEOUT) {
+        match rx.recv_timeout(timeout) {
             Ok(result) => result,
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 forget();
-                Err("Claude Code did not answer in time.".into())
+                Err(NO_ANSWER.into())
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => Err("Claude Code is not running.".into()),
         }
@@ -2259,7 +2283,16 @@ impl TurnHost {
         };
         for change in changes {
             if let Some(request) = change.request() {
-                if let Err(error) = self.claude_control_on(session_id, Some(epoch), request) {
+                let mut taken = self.claude_control_on(session_id, Some(epoch), request.clone());
+                // The CLI checks a model with the server within 5 s, and
+                // refuses ("Couldn't confirm model ... Try again") when that
+                // check did not finish: once more, as it says, before the
+                // process is given up on. Not after a silence, which already
+                // waited out the longest of waits.
+                if matches!(&taken, Err(error) if matches!(change, Change::Model(_)) && error != NO_ANSWER) {
+                    taken = self.claude_control_on(session_id, Some(epoch), request);
+                }
+                if let Err(error) = taken {
                     eprintln!("[crewd] session {session_id}: Claude Code did not take a setting ({error}); it is launched again");
                     return false;
                 }
@@ -2404,7 +2437,7 @@ impl TurnHost {
                 });
             }
             Err(_) => {
-                return Err("Claude Code did not answer in time.".into());
+                return Err(NO_ANSWER.into());
             }
         }
         Ok(())
