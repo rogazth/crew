@@ -1077,6 +1077,20 @@ def run(turn, text):
         stopped = ended.is_set()
         item("completed", dict(cmd, status="failed" if stopped else "completed", exitCode=143 if stopped else 0, aggregatedOutput="tick\n"))
         heard.append("terminal %s" % ("terminated" if stopped else "finished"))
+    # BGKEEP n: the turn ends while its terminal runs on for n seconds.
+    k = re.search(r"BGKEEP ([0-9.]+)", text)
+    if k:
+        cid = "exec-keep"
+        cmd = {"type": "commandExecution", "id": cid, "command": "/bin/zsh -lc 'sleep %s'" % k.group(1), "cwd": os.getcwd(), "processId": "4343", "source": "unifiedExecStartup", "status": "inProgress", "aggregatedOutput": None, "exitCode": None}
+        item("started", cmd)
+        out({"method": "item/commandExecution/outputDelta", "params": {"threadId": state["thread"], "turnId": tid, "itemId": cid, "delta": "tick\n"}})
+        item("started", {"type": "reasoning", "id": "rs-keep", "summary": [], "content": []})
+        ended = threading.Event()
+        terminals[cid] = {"itemId": cid, "processId": "4343", "command": cmd["command"], "cwd": os.getcwd(), "osPid": 1, "cpuPercent": None, "rssKb": None, "ended": ended}
+        def finish():
+            ended.wait(float(k.group(1)))
+            terminals.pop(cid, None)
+        threading.Thread(target=finish, daemon=True).start()
     if "ASK" in text:
         cid = "exec-" + uuid.uuid4().hex[:8]
         cmd = {"type": "commandExecution", "id": cid, "command": "/bin/zsh -lc 'touch asked.txt'", "cwd": os.getcwd(), "status": "inProgress", "aggregatedOutput": None, "exitCode": None}

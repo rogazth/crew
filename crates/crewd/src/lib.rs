@@ -26,7 +26,7 @@ use crew_core::session;
 use crew_core::store::{self as app_state, Store};
 use crew_core::tools::{self, Toolbox};
 use crew_core::transcript::TranscriptEvents;
-use crew_core::turns::TurnHost;
+use crew_core::turns::{TurnHost, PIN_CAP, RELEASE_AFTER};
 use crew_core::workspace;
 use crew_core::worktree;
 use crew_protocol::{
@@ -751,8 +751,9 @@ async fn run(
         }
     });
     // A session nobody has given work for a while exits and frees its
-    // parent's slot. Nothing runs between turns, so nothing is killed.
+    // parent's slot, and an idle process is let go long before that.
     let children = hosts.children.clone();
+    let turns = hosts.turns.clone();
     tokio::spawn(async move {
         let mut every = tokio::time::interval(REAP_EVERY);
         loop {
@@ -761,6 +762,8 @@ async fn run(
             if let Ok(Err(error)) = tokio::task::spawn_blocking(move || children.reap(SessionTools::idle_limit())).await {
                 eprintln!("[crewd] reaping idle sessions: {error}");
             }
+            let turns = turns.clone();
+            let _ = tokio::task::spawn_blocking(move || turns.release_idle(RELEASE_AFTER, PIN_CAP)).await;
         }
     });
     // The first tick is now: what aged out while the app was closed goes before anyone looks.

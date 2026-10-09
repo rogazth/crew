@@ -106,14 +106,16 @@ impl SessionTools {
     }
 
     /// Children idle (or failed) for longer than `limit` exit: they hold a slot
-    /// under their parent's cap and nothing else, since there is no process to
-    /// keep between turns. Returns the ids that went.
+    /// under their parent's cap, and their process, which goes with them. A
+    /// child that background work or a child of its own still pins is not idle.
+    /// Returns the ids that went.
     pub fn reap(&self, limit: Duration) -> Result<Vec<String>, String> {
         let before = now_millis() - limit.as_millis() as i64;
         let idle: Vec<Session> = session::list_all(&self.store)?
             .into_iter()
             .filter(|row| row.kind == "child" && matches!(row.status.as_str(), "idle" | "error"))
             .filter(|row| row.updated_at < before && !self.turns.is_running(&row.id))
+            .filter(|row| !self.turns.is_pinned(&row.id))
             .collect();
         let minutes = (limit.as_secs_f64() / 60.0).round().max(1.0) as u64;
         let mut gone = Vec::new();
@@ -2984,6 +2986,112 @@ while True:
         assert!(!w.turns.background_list(&id).live);
         let sent = std::fs::read_to_string(log).unwrap();
         assert!(sent.contains(r#""method": "thread/backgroundTerminals/terminate", "params": {"processId": "4242", "threadId""#), "{sent}");
+    }
+
+    /// A child whose turn ended with nothing pinning it is let go once it has
+    /// been idle long enough: its process is killed, and the next message
+    /// launches another that resumes the conversation.
+    #[test]
+    fn an_idle_claude_child_is_released_and_the_next_message_resumes_it() {
+        let w = world();
+        let parent = w.session("terminal", "shell", "full");
+        let (id, log) = w.claude(&parent, "remember 4817");
+        w.wait(&parent, &id, json!({}));
+        w.settle(&id);
+        let bound = w.row(&id).provider_session_id.expect("bound");
+        std::thread::sleep(Duration::from_millis(5));
+        assert_eq!(w.turns.release_idle(Duration::from_millis(1), Duration::from_secs(3600)), vec![id.clone()]);
+        assert!(w.turns.test_agents().running().is_empty());
+        assert!(w.turns.idle_since(&id).is_none());
+
+        let more = w.call(&parent, "send_message", json!({ "to": id, "text": "what number?" })).expect("send");
+        assert_eq!(more["delivery"], "started", "{more}");
+        assert_eq!(w.wait(&parent, &id, json!({}))["sessions"][0]["report"], "report: what number?");
+        let launches = launched(&log);
+        assert_eq!(launches.len(), 2, "{launches:?}");
+        assert_eq!(after_flag(&launches[1], "--resume"), Some(bound));
+    }
+
+    /// The Codex counterpart: the released app server is launched again, and
+    /// the next message resumes the thread it had.
+    #[test]
+    fn an_idle_codex_child_is_released_and_the_next_message_resumes_its_thread() {
+        let w = world();
+        let parent = w.session("terminal", "shell", "full");
+        let (id, log) = w.codex(&parent, "remember 4817", None);
+        w.wait(&parent, &id, json!({}));
+        w.settle(&id);
+        let bound = w.row(&id).provider_session_id.expect("bound");
+        std::thread::sleep(Duration::from_millis(5));
+        assert_eq!(w.turns.release_idle(Duration::from_millis(1), Duration::from_secs(3600)), vec![id.clone()]);
+        assert!(w.turns.test_agents().running().is_empty());
+
+        let more = w.call(&parent, "send_message", json!({ "to": id, "text": "what number?" })).expect("send");
+        assert_eq!(more["delivery"], "started", "{more}");
+        assert_eq!(w.wait(&parent, &id, json!({}))["sessions"][0]["report"], "report: what number?");
+        assert_eq!(launched(&log).len(), 2);
+        let resumed = sent(&log, "thread/resume");
+        assert_eq!(resumed.len(), 1, "{resumed:?}");
+        assert_eq!(resumed[0]["threadId"], json!(bound));
+    }
+
+    /// A background terminal still running pins its child's process: the idle
+    /// release leaves it up, and only the pin cap lets it go.
+    #[test]
+    fn a_child_with_a_background_terminal_running_is_released_only_past_the_pin_cap() {
+        use crew_protocol::BackgroundState;
+        let w = world();
+        let parent = w.session("terminal", "shell", "full");
+        let (id, _) = w.codex(&parent, "BGKEEP 30", None);
+        w.wait(&parent, &id, json!({}));
+        w.settle(&id);
+        let list = until_background(&w, &id, |list| !list.commands.is_empty());
+        assert_eq!(list.commands[0].state, BackgroundState::Running);
+        std::thread::sleep(Duration::from_millis(5));
+
+        assert!(w.turns.release_idle(Duration::from_millis(1), Duration::from_secs(3600)).is_empty());
+        assert_eq!(w.turns.test_agents().running(), vec![id.clone()]);
+        assert_eq!(w.turns.release_idle(Duration::from_millis(1), Duration::from_millis(1)), vec![id.clone()]);
+        assert!(w.turns.test_agents().running().is_empty());
+        assert!(!w.turns.background_list(&id).live, "its tray is still open");
+    }
+
+    /// The reaper frees a slot by exiting an idle child, but a child that a
+    /// background terminal still pins is not idle.
+    #[test]
+    fn the_reaper_leaves_a_child_whose_background_terminal_still_runs() {
+        let w = world();
+        let parent = w.session("terminal", "shell", "full");
+        let (id, _) = w.codex(&parent, "BGKEEP 30", None);
+        w.wait(&parent, &id, json!({}));
+        w.settle(&id);
+        until_background(&w, &id, |list| !list.commands.is_empty());
+        std::thread::sleep(Duration::from_millis(5));
+        assert!(w.tools.reap(Duration::from_millis(1)).unwrap().is_empty(), "a pinned child was reaped");
+        assert_eq!(w.row(&id).status, "idle");
+        assert_eq!(w.turns.test_agents().running(), vec![id.clone()]);
+        w.turns.release(&id);
+    }
+
+    /// Stopping an idle child closes its tray with its process, whether the
+    /// stop comes from the window or from `stop_session`.
+    #[test]
+    fn stopping_an_idle_child_closes_its_tray() {
+        let w = world();
+        let parent = w.session("terminal", "shell", "full");
+        let (kept, _) = w.claude(&parent, "one");
+        w.wait(&parent, &kept, json!({}));
+        w.settle(&kept);
+        assert!(w.turns.background_list(&kept).live, "the kept process's tray is closed");
+        w.turns.stop(&kept).expect("stop");
+        assert!(w.turns.test_agents().running().is_empty());
+        assert!(!w.turns.background_list(&kept).live, "its tray is still open");
+
+        let (exited, _) = w.claude(&parent, "two");
+        w.wait(&parent, &exited, json!({}));
+        w.settle(&exited);
+        w.call(&parent, "stop_session", json!({ "session": exited })).expect("stop");
+        assert!(!w.turns.background_list(&exited).live, "its tray is still open");
     }
 
     /// A turn's CLI is installed on the turn's own thread. A message that

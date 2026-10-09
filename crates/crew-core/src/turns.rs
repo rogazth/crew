@@ -63,6 +63,15 @@ const CONTROL_TIMEOUT: Duration = Duration::from_secs(5);
 /// the result it had, so a server left running in the background cannot hold
 /// it forever.
 const BACKGROUND_GRACE: Duration = Duration::from_secs(if cfg!(test) { 4 } else { 600 });
+/// How long a session's process stays up with no turn on it before it is let
+/// go. A process holds its CLI and its MCP servers in memory; the next message
+/// resumes the conversation by its provider id, so letting go costs only the
+/// warm start.
+pub const RELEASE_AFTER: Duration = Duration::from_secs(30 * 60);
+/// How long a process that background work pins stays up past
+/// [`RELEASE_AFTER`]. t3code keeps such a process up to four hours, then lets
+/// it go whatever still runs in it.
+pub const PIN_CAP: Duration = Duration::from_secs(4 * 60 * 60);
 const STDERR_TAIL: usize = 12;
 /// Whether a session running with `autonomy` would do what `request` asks
 /// without asking anyone: what a parent may decide for its child. Full does
@@ -1169,16 +1178,15 @@ impl TurnHost {
                         Some(Live::Claude(row)) if Some(row.epoch) != armed
                     );
                     if !replaced {
-                        host.agents.kill(&session_id);
-                        host.detach(&session_id);
+                        host.release(&session_id);
                     }
                 });
                 return;
             }
         }
+        // The process goes with the stop, and so does the tray it kept open.
         if kill {
-            self.agents.kill(session_id);
-            self.detach(session_id);
+            self.release(session_id);
         }
     }
 
@@ -1218,6 +1226,43 @@ impl TurnHost {
         self.agents.kill(session_id);
         self.detach(session_id);
         self.close_tray(session_id);
+    }
+
+    /// Whether a session's process stays up past [`RELEASE_AFTER`]: its
+    /// background board has commands running, or a child it started has not
+    /// exited. A store that cannot say counts as pinned, so nothing is let go
+    /// on a guess; [`PIN_CAP`] still ends it.
+    pub fn is_pinned(&self, session_id: &str) -> bool {
+        let running = self
+            .background
+            .read(session_id, |board| !board.running().is_empty())
+            .unwrap_or(false);
+        running || session::has_live_children(&self.store, session_id).unwrap_or(true)
+    }
+
+    /// Lets go of the processes that have been idle too long: past `limit`
+    /// when nothing pins them, and past `pin_cap` whatever pins them. Returns
+    /// the ids released.
+    pub fn release_idle(&self, limit: Duration, pin_cap: Duration) -> Vec<String> {
+        let idle: Vec<(String, Instant)> = self
+            .idle
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .map(|(id, since)| (id.clone(), *since))
+            .collect();
+        let mut released = Vec::new();
+        for (id, since) in idle {
+            let age = since.elapsed();
+            let due = age >= pin_cap || (age >= limit && !self.is_pinned(&id));
+            // A turn claimed since the snapshot is not idle any more.
+            if !due || self.is_running(&id) || self.idle_since(&id) != Some(since) {
+                continue;
+            }
+            self.release(&id);
+            released.push(id);
+        }
+        released
     }
 
     /// The CLI is gone, and what it left running in the background went with

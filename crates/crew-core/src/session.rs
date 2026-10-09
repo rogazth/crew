@@ -234,6 +234,17 @@ pub fn get(store: &Store, id: String) -> Result<Option<Session>, String> {
     })
 }
 
+/// Whether a session started a child that has not exited: the child may still
+/// report to it, so the session's process stays up for it.
+pub fn has_live_children(store: &Store, parent: &str) -> Result<bool, String> {
+    store.with(|conn| {
+        conn.prepare_cached(
+            "SELECT EXISTS (SELECT 1 FROM sessions WHERE parent_id = ?1 AND status != 'exited')",
+        )?
+        .query_row(params![parent], |row| row.get(0))
+    })
+}
+
 /// The folder a session works in: its worktree while that folder exists, or
 /// else its workspace's. A worktree removed outside Crew keeps its path on the
 /// row: made again, it is the session's again.
