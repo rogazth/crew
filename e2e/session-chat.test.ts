@@ -1,31 +1,27 @@
-// Sessions in Crew's chat. Settings › Appearance › "Sessions open in" draws a
-// session's conversation as the chat over its terminal, whose CLI keeps
-// running underneath: flipping the setting, or "Show terminal" on one tab,
-// never restarts it. The chat reads the CLI's own history (the fake claude
-// writes Claude's), types what is sent into the terminal, and answers what
-// the CLI asks with the keys it expects, as its hooks report it.
+// Sessions in Crew's chat. Settings › Appearance › "Sessions open in" is the
+// view a new session is created with, for good: Chat has Crew drive the
+// session's CLI over the provider's protocol (the fake claude speaks
+// stream-json when launched with `--input-format stream-json`), one process
+// for every turn, and draws the conversation in its own transcript with no
+// terminal; Terminal runs the CLI on its own screen. Flipping the setting
+// never moves a session that exists.
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
-import { appendFile, readFile, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { after, before, test } from "node:test";
-import type { Session } from "../src/lib/types.ts";
-import {
-  installFakeCodex,
-  launchCrew,
-  MOD,
-  newTerminal,
-  pressChord,
-  sessionTab,
-  typeInTerminal,
-  waitFor,
-  type Crew,
-} from "./harness.ts";
+import type { Session, Workspace } from "../src/lib/types.ts";
+import { launchCrew, MOD, newTerminal, pressChord, sessionTab, sessions, waitFor, type Crew } from "./harness.ts";
 
 let crew: Crew;
 
 before(async () => {
   crew = await launchCrew();
+  // Only the fake claude is installed, but the default must not depend on it.
+  await crew.request("state_set", {
+    key: "providers:default",
+    value: JSON.stringify({ provider: "claude", model: "", effort: "", access: "ask" }),
+  });
+  await crew.reload();
 });
 
 after(async () => {
@@ -45,59 +41,66 @@ async function openSessionsIn(view: "Terminal" | "Chat"): Promise<void> {
   await pressChord(crew, `${MOD}+,`);
 }
 
-function chatOf(session: Session) {
-  return crew.window.locator(`[data-session-chat="${session.id}"]`);
-}
-
-/** Where the keys go: "composer" (the chat's), "terminal" (an xterm's), or what else has focus. */
-function focusedIn(session: Session): Promise<string> {
-  return crew.window.evaluate((id) => {
-    const focused = document.activeElement;
-    if (!(focused instanceof HTMLElement)) return "nothing";
-    if (focused.closest(`[data-session-chat="${id}"]`) && focused.tagName === "TEXTAREA") return "composer";
-    if (focused.closest(".xterm")) return "terminal";
-    const label = focused.getAttribute("aria-label") ?? focused.textContent?.trim().slice(0, 40) ?? "";
-    return `${focused.tagName.toLowerCase()} "${label}"`;
-  }, session.id);
-}
-
-/** Waits for the keys to go to `where`; on a timeout, says where they went instead. */
-async function keysGoTo(session: Session, where: "composer" | "terminal"): Promise<void> {
-  await waitFor(
-    async () => {
-      const now = await focusedIn(session);
-      if (now !== where) throw new Error(`the keys go to ${now}`);
-      return true;
-    },
-    { message: `the ${where} takes the keys` },
+/** ⌘N with sessions opening in the chat: the session crewd made, once its chat is on screen. */
+async function newChat(workspaceId: string): Promise<Session> {
+  const known = new Set((await sessions(crew, workspaceId)).map((row) => row.id));
+  await pressChord(crew, `${MOD}+n`);
+  const session = await waitFor(
+    async () => (await sessions(crew, workspaceId)).find((row) => row.kind === "terminal" && !known.has(row.id)),
+    { message: "the new session reaches crewd" },
   );
+  await composer(session).waitFor();
+  return session;
 }
 
-/** The records the fake claude wrote for its conversation `id`, run from `cwd`. */
-async function records(cwd: string, id: string): Promise<Record<string, unknown>[]> {
-  const file = path.join(crew.home, ".claude/projects", cwd.replace(/[^a-zA-Z0-9]/g, "-"), `${id}.jsonl`);
+/**
+ * The message box of the chat on screen, or of `session`'s, which is the one
+ * once its tab is. A terminal's own input is an xterm's. Tabs that are not on
+ * screen stay mounted, hidden.
+ */
+function composer(session?: Session) {
+  const named = session ? `[placeholder*="Ask ${session.name} anything"]` : "";
+  return crew.window.locator(`textarea:not(.xterm-helper-textarea)${named}:visible`);
+}
+
+/** The terminals on screen. */
+function terminals() {
+  return crew.window.locator(".xterm:visible");
+}
+
+/** A line of the chat on screen, by the whole of its text. */
+function said(text: string | RegExp) {
+  return crew.window.getByText(text, typeof text === "string" ? { exact: true } : {});
+}
+
+/** Types `text` in the chat on screen and sends it. */
+async function send(text: string): Promise<void> {
+  const field = composer();
+  await field.fill(text);
+  await waitFor(() => crew.window.getByRole("button", { name: "Send" }).isEnabled(), { message: "the composer can send" });
+  await field.press("Enter");
+}
+
+/** Every launch of the fake claude for `session`, oldest first. */
+async function launchesOf(session: Session) {
+  return (await crew.claudeLaunches()).filter((launch) => launch.argv.includes(session.id));
+}
+
+/** The control requests the fake claude took over the protocol, as `<subtype> <detail>`. */
+async function controls(): Promise<string[]> {
+  const log = await readFile(path.join(crew.home, "fake-claude-control.log"), "utf8").catch(() => "");
+  return log.split("\n").filter(Boolean);
+}
+
+/** What the fake claude has taken in as a user's message in `session`'s conversation, from the transcript it keeps. */
+async function heard(cwd: string, session: Session): Promise<string[]> {
+  const file = path.join(crew.home, ".claude/projects", cwd.replace(/[^a-zA-Z0-9]/g, "-"), `${session.id}.jsonl`);
   const text = await readFile(file, "utf8").catch(() => "");
   return text
     .split("\n")
     .filter(Boolean)
-    .map((line) => JSON.parse(line) as Record<string, unknown>);
-}
-
-/** What the user typed, as the CLI recorded it. */
-async function prompts(cwd: string, id: string): Promise<string[]> {
-  return (await records(cwd, id)).flatMap((record) => {
-    const message = record.message as { content?: unknown } | undefined;
-    return record.type === "user" && typeof message?.content === "string" ? [message.content] : [];
-  });
-}
-
-/** Types `text` in the chat's composer and sends it, once the CLI reads keys. */
-async function sendFromChat(session: Session, text: string): Promise<void> {
-  const chat = chatOf(session);
-  const send = chat.getByRole("button", { name: "Send" });
-  await chat.getByRole("textbox").fill(text);
-  await waitFor(() => send.isEnabled(), { message: "the composer can send" });
-  await chat.getByRole("textbox").press("Enter");
+    .map((line) => JSON.parse(line) as { type?: string; message?: { content?: unknown } })
+    .flatMap((record) => (record.type === "user" && typeof record.message?.content === "string" ? [record.message.content] : []));
 }
 
 function alive(pid: number): boolean {
@@ -109,524 +112,201 @@ function alive(pid: number): boolean {
   }
 }
 
-test("the chat is drawn over the running CLI, and flipping views never restarts it", async () => {
+/** The context meter under the composer: its ring's percentage and its card's text. */
+function meter() {
+  return crew.window.locator("span.group:visible").filter({ hasText: "Context window" });
+}
+
+test("a new Claude session in the chat view opens the chat with no terminal, and its reply streams in", async () => {
   const [workspace] = crew.workspaces;
   assert.ok(workspace);
-  const session = await newTerminal(crew, workspace.id);
-  await typeInTerminal(crew, "hello there");
-  const launches = await crew.claudeLaunches();
-  const cli = launches.at(-1);
-  assert.ok(cli);
-
   await openSessionsIn("Chat");
-  await chatOf(session).waitFor();
-  await keysGoTo(session, "composer");
-  // The conversation had in the terminal is the chat's.
-  await chatOf(session).getByText("hello there").waitFor();
-  await chatOf(session).getByText("Done.").waitFor();
-  // Typed in the chat, kept in the chat: nothing reaches the CLI's own line.
-  await crew.window.keyboard.type("a draft");
+  const session = await newChat(workspace.id);
+  assert.equal(session.view, "chat");
+  assert.equal(await crew.window.locator(".xterm").count(), 0, "a terminal is mounted");
+  // Crew starts the CLI for the first turn, not before: nothing runs on open.
+  assert.equal((await launchesOf(session)).length, 0, "the CLI started before anyone spoke");
 
-  // "Show terminal" turns this tab only; the setting stays.
-  await chatOf(session).getByRole("button", { name: "Show terminal" }).click();
-  await chatOf(session).waitFor({ state: "detached" });
-  await keysGoTo(session, "terminal");
-  assert.equal(await crew.request("state_get", { key: "sessions:view" }), "chat");
-  await crew.window.getByRole("button", { name: "Back to chat" }).click();
-  await chatOf(session).waitFor();
-  assert.equal(await chatOf(session).getByRole("textbox").inputValue(), "a draft", "the draft waited in the chat");
-
-  await openSessionsIn("Terminal");
-  await chatOf(session).waitFor({ state: "detached" });
-  await keysGoTo(session, "terminal");
-
-  await openSessionsIn("Chat");
-  await chatOf(session).waitFor();
-  assert.equal((await crew.claudeLaunches()).length, launches.length, "no view change launched the CLI again");
-  assert.ok(alive(cli.pid), "the CLI that started first is still the one running");
-});
-
-test("a CLI stopped on its trust prompt is named in the chat and answered in the terminal", async () => {
-  const [workspace] = crew.workspaces;
-  assert.ok(workspace);
-  // The fake Claude opens on its trust prompt in a folder marked untrusted.
-  await writeFile(path.join(workspace.path, ".untrusted"), "");
-  const known = new Set((await crew.request<Session[]>("session_list", { workspaceId: workspace.id })).map((s) => s.id));
-  await pressChord(crew, `${MOD}+n`);
-  const session = await waitFor(
-    async () =>
-      (await crew.request<Session[]>("session_list", { workspaceId: workspace.id })).find(
-        (row) => row.kind === "terminal" && !known.has(row.id),
-      ),
-    { message: "the new session reaches crewd" },
+  await send("stream one two three four five");
+  await said("stream one two three four five").waitFor();
+  // The reply comes a word at a time: part of it is drawn while the turn runs.
+  const partial = await waitFor(
+    async () => {
+      const text = await crew.window.getByText(/^Reply 1: stream/).first().textContent({ timeout: 500 });
+      return text && !text.includes("five") ? text : null;
+    },
+    { message: "part of the reply is drawn while the turn runs", interval: 25 },
   );
-  const chat = chatOf(session);
-  await chat.getByText("Claude asks whether you trust this folder").waitFor();
+  assert.match(partial, /^Reply 1: stream/);
+  await crew.window.getByRole("button", { name: "Stop" }).waitFor();
+  await said("Reply 1: stream one two three four five").waitFor();
+  await crew.window.getByRole("button", { name: "Stop" }).waitFor({ state: "detached" });
 
-  await chat.getByRole("button", { name: "Show terminal" }).click();
-  await keysGoTo(session, "terminal");
-  await crew.window.keyboard.press("ArrowDown");
-  await crew.window.keyboard.press("Enter");
-  await crew.window.getByRole("button", { name: "Back to chat" }).click();
-  await chat.waitFor();
-  await waitFor(async () => (await chat.getByText("Claude asks whether you trust this folder").count()) === 0, {
-    message: "the notice goes once the CLI is past its prompt",
+  const [launch, ...more] = await launchesOf(session);
+  assert.ok(launch);
+  assert.equal(more.length, 0);
+  assert.ok(launch.argv.join(" ").includes("--input-format stream-json"), launch.argv.join(" "));
+  assert.equal(launch.argv.includes("--"), false, "the message goes in over stdin, not on the command line");
+  await waitFor(async () => (await crew.request<Session>("session_get", { id: session.id })).status !== "working", {
+    message: "the turn is over",
   });
 });
 
-test("a message sent from the chat lands in the CLI, and its reply comes back", async () => {
+test("a second message runs on the same process, and the context meter follows the turns", async () => {
   const [workspace] = crew.workspaces;
   assert.ok(workspace);
   await crew.request("state_set", { key: "sessions:view", value: "chat" });
   await crew.reload();
-  const session = await newTerminal(crew, workspace.id);
-  const chat = chatOf(session);
-  await chat.waitFor();
+  const session = await newChat(workspace.id);
+  // No reading before the CLI has had a turn.
+  assert.equal(await meter().count(), 0);
 
-  await sendFromChat(session, "draft a plan");
-  await chat.getByText("Queued").waitFor();
-  await chat.getByText("Done.").waitFor();
-  await waitFor(async () => (await chat.getByText("Queued").count()) === 0, { message: "the bubble is the CLI's turn now" });
-  assert.deepEqual(await prompts(workspace.path, session.id), ["draft a plan"]);
-
-  // Several lines go in as one message, not one per line.
-  await sendFromChat(session, "first line\nsecond line");
-  await waitFor(async () => (await prompts(workspace.path, session.id)).length === 2, { message: "the second message lands" });
-  assert.equal((await prompts(workspace.path, session.id))[1], "first line\nsecond line");
-
-  // Whatever was left typed on the CLI's own line does not go with it.
-  await chat.getByRole("button", { name: "Show terminal" }).click();
-  await typeInTerminalLine("stray words");
-  await crew.window.getByRole("button", { name: "Back to chat" }).click();
-  await sendFromChat(session, "clean line");
-  await waitFor(async () => (await prompts(workspace.path, session.id)).at(-1) === "clean line", {
-    message: "the CLI's line was cleared before the message",
+  await send("first question");
+  await said("Reply 1: first question").waitFor();
+  // The meter appears under the composer: 20k of the fake's 200k window.
+  await waitFor(async () => /10%/.test((await meter().first().textContent({ timeout: 500 })) ?? ""), {
+    message: "the meter reads 10% after the first turn",
   });
+  assert.match((await meter().first().textContent()) ?? "", /20k\s*of 200k/);
+
+  await send("second question");
+  // Turn 2 of one process: a new process would say 1 again.
+  await said("Reply 2: second question").waitFor();
+  await waitFor(async () => /20%/.test((await meter().first().textContent({ timeout: 500 })) ?? ""), {
+    message: "the meter reads 20% after the second turn",
+  });
+
+  const launches = await launchesOf(session);
+  assert.equal(launches.length, 1, "each message started the CLI again");
+  assert.ok(alive(launches[0]!.pid), "the CLI that started first is still the one running");
 });
 
-test("a queued message wraps as it will once sent", async () => {
+test("the access and effort chips reach the running CLI as control requests, with no restart", async () => {
   const [workspace] = crew.workspaces;
   assert.ok(workspace);
   await crew.request("state_set", { key: "sessions:view", value: "chat" });
   await crew.reload();
-  const session = await newTerminal(crew, workspace.id);
-  const chat = chatOf(session);
-  await chat.waitFor();
+  const session = await newChat(workspace.id);
+  await send("asking first");
+  await said("Reply 1: asking first").waitFor();
+  const before = await controls();
+  assert.equal(before.some((line) => line.startsWith("set_permission_mode")), false);
 
-  const text = "El host es: ssh -p 33461 talanton.cp7203.webempresa.eu\n\nConfiguralo en el ssh/config";
-  const bubble = chat.locator(".crew-bubble", { hasText: "talanton.cp7203" });
-  await sendFromChat(session, text);
-  await chat.getByText("Queued").waitFor();
-  const queued = await bubble.evaluate((el) => el.getBoundingClientRect().width);
-  await waitFor(async () => (await chat.getByText("Queued").count()) === 0, { message: "the bubble is the CLI's turn now" });
-  const sent = await bubble.evaluate((el) => el.getBoundingClientRect().width);
-  assert.equal(queued, sent);
-});
-
-test("the CLI's permission prompt is answered from its card: Allow runs it, Deny stops the turn", async () => {
-  const [workspace] = crew.workspaces;
-  assert.ok(workspace);
-  const session = await newTerminal(crew, workspace.id);
-  const chat = chatOf(session);
-  await chat.waitFor();
-
-  await sendFromChat(session, "ask");
-  const card = chat.getByText("Wants to run a command");
-  await card.waitFor();
-  await chat.getByRole("button", { name: /^Allow/ }).click();
-  await card.waitFor({ state: "detached" });
-  await waitFor(
-    async () => (await records(workspace.path, session.id)).some((record) => JSON.stringify(record).includes('"is_error":false')),
-    { message: "the CLI ran the tool" },
-  );
-  await chat.getByText("Done.").waitFor();
-
-  await sendFromChat(session, "ask");
-  await card.waitFor();
-  await chat.getByRole("button", { name: /^Deny/ }).click();
-  await chat.getByText("Interrupted").waitFor();
-  await waitFor(async () => (await chat.getByRole("button", { name: "Send" }).count()) === 1, {
-    message: "the turn is over: the composer sends again instead of stopping",
-  });
-});
-
-test("a question from the CLI is answered from its card, in the CLI's own form", async () => {
-  const [workspace] = crew.workspaces;
-  assert.ok(workspace);
-  const session = await newTerminal(crew, workspace.id);
-  const chat = chatOf(session);
-  await chat.waitFor();
-
-  await sendFromChat(session, "question");
-  await chat.getByText("Tea or coffee?").first().waitFor();
-  await chat.getByRole("radio", { name: /Coffee/ }).or(chat.getByText("Coffee", { exact: true })).first().click();
-  await chat.getByRole("button", { name: "Send answer" }).click();
-  await chat.getByText("You picked Coffee.").waitFor();
-  const answered = (await records(workspace.path, session.id)).find((record) => record.toolUseResult !== undefined);
-  assert.deepEqual((answered?.toolUseResult as { answers?: unknown } | undefined)?.answers, { "Tea or coffee?": "Coffee" });
-});
-
-test("the composer's chips reach the CLI: access with ⇧Tab as it runs, effort by resuming it with the next message", async () => {
-  const [workspace] = crew.workspaces;
-  assert.ok(workspace);
-  await crew.request("state_set", { key: "sessions:view", value: "chat" });
-  await crew.request("state_set", {
-    key: "providers:default",
-    value: JSON.stringify({ provider: "claude", model: "", effort: "", access: "ask" }),
-  });
-  await crew.reload();
-  const session = await newTerminal(crew, workspace.id);
-  const chat = chatOf(session);
-  await chat.waitFor();
-  const modes = async () =>
-    (await records(workspace.path, session.id)).flatMap((record) => (record.type === "user" ? [record.permissionMode] : []));
-
-  await sendFromChat(session, "asking first");
-  await chat.getByText("Done.").waitFor();
-  assert.deepEqual(await modes(), ["default"]);
-  const launched = (await crew.claudeLaunches()).length;
-
-  // ⇧Tab in the composer moves the chip and Claude's own mode, with no restart.
-  await chat.getByRole("textbox").press("Shift+Tab");
-  await chat.getByRole("button", { name: "Access" }).getByText("Accept edits").waitFor();
+  // ⇧Tab in the composer moves the chip, and the next turn tells the CLI.
+  const chat = composer();
+  await chat.press("Shift+Tab");
+  await crew.window.getByRole("button", { name: "Access" }).getByText("Accept edits").waitFor();
   await waitFor(async () => (await crew.request<Session>("session_get", { id: session.id })).autonomy === "edits", {
     message: "the row keeps the access",
   });
-  await sendFromChat(session, "editing now");
-  await waitFor(async () => (await modes()).length === 2, { message: "the second message lands" });
-  assert.deepEqual(await modes(), ["default", "acceptEdits"]);
-  assert.equal((await crew.claudeLaunches()).length, launched, "⇧Tab restarted the CLI");
-
-  // An effort waits for the next message, which starts the CLI again on its conversation.
-  await chat.getByRole("button", { name: "Effort" }).click();
-  await crew.window.getByRole("menuitemradio", { name: "High", exact: true }).click();
-  await chat.getByText(/apply with your next message/).waitFor();
-  await sendFromChat(session, "thinking harder");
-  const relaunch = await waitFor(async () => (await crew.claudeLaunches())[launched], { message: "the CLI starts again" });
-  assert.ok(relaunch.argv.join(" ").includes("--effort high"), relaunch.argv.join(" "));
-  assert.ok(relaunch.argv.join(" ").includes("--permission-mode acceptEdits"), relaunch.argv.join(" "));
-  assert.deepEqual(relaunch.argv.slice(relaunch.argv.indexOf("--resume"), relaunch.argv.indexOf("--resume") + 2), ["--resume", session.id]);
-  assert.deepEqual(relaunch.argv.slice(-2), ["--", "thinking harder"]);
-  await waitFor(async () => (await prompts(workspace.path, session.id)).at(-1) === "thinking harder", {
-    message: "the message is the resumed CLI's first turn",
-  });
-  await waitFor(async () => (await chat.getByText(/apply with your next message/).count()) === 0, {
-    message: "nothing is pending once it runs",
-  });
+  await crew.window.getByRole("button", { name: "Effort" }).click();
+  await crew.window.getByRole("menuitemradio", { name: "Low", exact: true }).click();
+  await send("editing now");
+  await said("Reply 2: editing now").waitFor();
+  const told = await controls();
+  assert.ok(told.includes("set_permission_mode acceptEdits"), told.join("\n"));
+  assert.ok(told.includes('apply_flag_settings {"effortLevel":"low"}'), told.join("\n"));
+  assert.equal((await launchesOf(session)).length, 1, "the new settings restarted the CLI");
 });
 
-test("Stop from the chat stops the CLI's turn", async () => {
+test("Esc stops a running turn in the chat, and the next message gets its answer", async () => {
   const [workspace] = crew.workspaces;
   assert.ok(workspace);
-  const session = await newTerminal(crew, workspace.id);
-  const chat = chatOf(session);
-  await chat.waitFor();
+  await crew.request("state_set", { key: "sessions:view", value: "chat" });
+  await crew.reload();
+  const session = await newChat(workspace.id);
 
-  await sendFromChat(session, "work 20");
-  const stop = chat.getByRole("button", { name: "Stop" });
+  await send("work 30");
+  const stop = crew.window.getByRole("button", { name: "Stop" });
   await stop.waitFor();
-  await stop.click();
-  await chat.getByText("Interrupted").waitFor();
-  await chat.getByRole("button", { name: "Send" }).waitFor();
-});
-
-test("a /clear sent from the chat moves the chat to the CLI's new conversation", async () => {
-  const [workspace] = crew.workspaces;
-  assert.ok(workspace);
-  const session = await newTerminal(crew, workspace.id);
-  const chat = chatOf(session);
-  await chat.waitFor();
-
-  await sendFromChat(session, "before the clear");
-  await chat.getByText("Done.").waitFor();
-  await sendFromChat(session, "/clear");
-  await waitFor(async () => (await chat.getByText("before the clear").count()) === 0, {
-    message: "the chat leaves the conversation the CLI left",
+  // Esc before the CLI has the message would cancel the launch instead of interrupting a turn.
+  await waitFor(async () => (await heard(workspace.path, session)).includes("work 30"), {
+    message: "the CLI took the message in",
   });
-  await sendFromChat(session, "after the clear");
-  await chat.getByText("Done.").waitFor();
-  assert.equal(await chat.getByText("before the clear").count(), 0);
+  await composer().press("Escape");
+  await stop.waitFor({ state: "detached" });
+  await waitFor(async () => (await controls()).includes("interrupt "), { message: "the CLI was told to interrupt" });
+  await waitFor(async () => (await crew.request<Session>("session_get", { id: session.id })).status === "idle", {
+    message: "the session is idle again",
+  });
+  assert.equal(await said(/^Reply \d+: work 30$/).count(), 0, "the stopped turn answered anyway");
+
+  // The conversation goes on from where it stopped.
+  await send("after the stop");
+  await said(/^Reply \d+: after the stop$/).waitFor();
 });
 
-test("Claude's trust prompt is answered from the chat's card", async () => {
+test("a new session in the terminal view opens the terminal, and the chat is not there", async () => {
   const [workspace] = crew.workspaces;
   assert.ok(workspace);
-  await writeFile(path.join(workspace.path, ".untrusted"), "");
-  const known = new Set((await crew.request<Session[]>("session_list", { workspaceId: workspace.id })).map((s) => s.id));
-  await pressChord(crew, `${MOD}+n`);
-  const session = await waitFor(
-    async () =>
-      (await crew.request<Session[]>("session_list", { workspaceId: workspace.id })).find(
-        (row) => row.kind === "terminal" && !known.has(row.id),
-      ),
-    { message: "the new session reaches crewd" },
-  );
-  const chat = chatOf(session);
-  await chat.getByRole("button", { name: "Trust" }).click();
-  await chat.getByRole("button", { name: "Trust" }).waitFor({ state: "detached" });
-  await sendFromChat(session, "trusted now");
-  await chat.getByText("Done.").waitFor();
+  await openSessionsIn("Terminal");
+  const session = await newTerminal(crew, workspace.id);
+  assert.equal(session.view, "terminal");
+  await terminals().first().waitFor();
+  assert.equal(await composer().count(), 0, "the chat's composer is on screen");
+  assert.equal(await crew.window.getByRole("button", { name: "Stop" }).count(), 0);
+  // The CLI is the PTY's: the fake claude's terminal UI, not the protocol.
+  const launch = (await launchesOf(session)).at(-1);
+  assert.ok(launch);
+  assert.equal(launch.argv.includes("--input-format"), false, launch.argv.join(" "));
 });
 
-/** Replies numbered `from` up to `to`, written into the CLI's conversation as though it had answered them. */
-async function replies(cwd: string, id: string, from: number, to: number): Promise<void> {
-  const file = path.join(crew.home, ".claude/projects", cwd.replace(/[^a-zA-Z0-9]/g, "-"), `${id}.jsonl`);
-  const filler = "A line long enough to wrap, so that each reply stands several rows tall in the chat. ".repeat(3);
-  let lines = "";
-  for (let n = from; n < to; n += 1) {
-    const text = [`Reply ${n}`, filler, filler, filler].join("\n\n");
-    const message = { id: randomUUID(), role: "assistant", content: [{ type: "text", text }] };
-    const entry = { type: "assistant", message, uuid: randomUUID(), sessionId: id, cwd, timestamp: new Date().toISOString() };
-    lines += `${JSON.stringify(entry)}\n`;
-  }
-  await appendFile(file, lines);
-}
-
-/** How far below the top of `session`'s transcript the reply opening with `text` sits, or null while it is not drawn. */
-function offsetOf(session: Session, text: string): Promise<number | null> {
-  return crew.window.evaluate(
-    ({ id, text }) => {
-      const scroller = document.querySelector(`[data-session-chat="${id}"] [data-selectable="blocks"]`);
-      const row = [...(scroller?.querySelectorAll("[data-block]") ?? [])].find((el) =>
-        [...el.querySelectorAll("p")].some((p) => p.textContent === text),
-      );
-      if (!scroller || !row || scroller.clientHeight === 0) return null;
-      return Math.round(row.getBoundingClientRect().top - scroller.getBoundingClientRect().top);
-    },
-    { id: session.id, text },
-  );
-}
-
-/** Whether `session`'s transcript, shown or not, has the reply opening with `text`. */
-function holds(session: Session, text: string): Promise<boolean> {
-  return crew.window.evaluate(
-    ({ id, text }) =>
-      [...document.querySelectorAll(`[data-session-chat="${id}"] p`)].some((p) => p.textContent === text),
-    { id: session.id, text },
-  );
-}
-
-test("a chat tab keeps the reader's place behind another tab, and as replies arrive below it", async () => {
+test("a session keeps the view it was created with when the setting changes", async () => {
   const [workspace] = crew.workspaces;
   assert.ok(workspace);
+  await openSessionsIn("Chat");
+  const chat = await newChat(workspace.id);
+  await send("which view am I");
+  await said("Reply 1: which view am I").waitFor();
+  const started = (await launchesOf(chat))[0];
+  assert.ok(started);
+
+  await openSessionsIn("Terminal");
+  const terminal = await newTerminal(crew, workspace.id);
+  await terminals().first().waitFor();
+  assert.equal(terminal.view, "terminal");
+
+  await openSessionsIn("Chat");
+  // Back on the terminal's tab: it is still the CLI's screen.
+  await sessionTab(crew, terminal).click();
+  await terminals().first().waitFor();
+  assert.equal(await composer().count(), 0, "the terminal session grew a chat");
+  // And on the chat's: still the conversation, on the process it started with.
+  await sessionTab(crew, chat).click();
+  await said("Reply 1: which view am I").waitFor();
+  assert.equal(await terminals().count(), 0, "the chat session grew a terminal");
+
+  // The rows say so after a reload too, and no flip launched anything again.
+  await crew.reload();
+  assert.equal((await crew.request<Session>("session_get", { id: chat.id })).view, "chat");
+  assert.equal((await crew.request<Session>("session_get", { id: terminal.id })).view, "terminal");
+  await sessionTab(crew, chat).click();
+  await said("Reply 1: which view am I").waitFor();
+  assert.equal((await launchesOf(chat)).length, 1);
+  assert.ok(alive(started.pid), "the chat's CLI is still the one that started first");
+});
+
+test("the first prompt from home is the chat session's first turn", async () => {
   await crew.request("state_set", { key: "sessions:view", value: "chat" });
   await crew.reload();
-  const session = await newTerminal(crew, workspace.id);
-  const chat = chatOf(session);
-  await chat.waitFor();
-  await sendFromChat(session, "a long conversation");
-  await chat.getByText("Done.").waitFor();
-  await replies(workspace.path, session.id, 0, 30);
-  await waitFor(() => holds(session, "Reply 29"), { message: "the replies reach the chat" });
-
-  // Reading Reply 10, far above the bottom.
-  await crew.window.evaluate((id) => {
-    const scroller = document.querySelector(`[data-session-chat="${id}"] [data-selectable="blocks"]`);
-    const row = [...(scroller?.querySelectorAll("[data-block]") ?? [])].find((el) =>
-      [...el.querySelectorAll("p")].some((p) => p.textContent === "Reply 10"),
-    );
-    row?.scrollIntoView({ block: "start" });
-  }, session.id);
-  await waitFor(async () => (await offsetOf(session, "Reply 10")) === 0, { message: "Reply 10 is at the top" });
-
-  // Replies landing below, on screen, leave it where it is.
-  await replies(workspace.path, session.id, 30, 35);
-  await waitFor(() => holds(session, "Reply 34"), { message: "more replies reach the chat" });
-  assert.ok(Math.abs((await offsetOf(session, "Reply 10")) ?? Infinity) <= 1, "replies below moved the reader");
-
-  // Another tab on screen, and more replies while this one is behind it.
-  const other = await newTerminal(crew, workspace.id);
-  await chatOf(other).waitFor();
-  await replies(workspace.path, session.id, 35, 45);
-  await waitFor(() => holds(session, "Reply 44"), { message: "the hidden chat keeps reading" });
-
-  await sessionTab(crew, session).click();
-  await waitFor(async () => (await offsetOf(session, "Reply 10")) !== null, { message: "the chat is back on screen" });
-  assert.ok(
-    Math.abs((await offsetOf(session, "Reply 10")) ?? Infinity) <= 1,
-    `back on its tab, Reply 10 sits ${await offsetOf(session, "Reply 10")}px below the top`,
-  );
-});
-
-/** Records written into the CLI's conversation as though it had made them. */
-async function written(cwd: string, id: string, entries: { type: string; message: unknown }[]): Promise<void> {
-  const file = path.join(crew.home, ".claude/projects", cwd.replace(/[^a-zA-Z0-9]/g, "-"), `${id}.jsonl`);
-  const lines = entries.map((entry) =>
-    JSON.stringify({ ...entry, uuid: randomUUID(), sessionId: id, cwd, timestamp: new Date().toISOString() }),
-  );
-  await appendFile(file, `${lines.join("\n")}\n`);
-}
-
-test("a screenshot shows on its call's row, and the files the agent sent stand out on their own", async () => {
-  const [workspace] = crew.workspaces;
-  assert.ok(workspace);
-  await crew.request("state_set", { key: "sessions:view", value: "chat" });
-  await crew.reload();
-  const session = await newTerminal(crew, workspace.id);
-  const chat = chatOf(session);
-  await chat.waitFor();
-  await sendFromChat(session, "check the page");
-  await chat.getByText("Done.").waitFor();
-
-  const icon = path.resolve("build/icon.png");
-  const data = (await readFile(icon)).toString("base64");
-  const call = (id: string, name: string, input: object) => ({
-    type: "assistant",
-    message: { id: randomUUID(), role: "assistant", content: [{ type: "tool_use", id, name, input }] },
+  await crew.window.keyboard.press(`${MOD}+Shift+H`);
+  const home = await waitFor(async () => (await crew.request<Workspace[]>("workspace_list")).find((row) => row.home), {
+    message: "home exists",
   });
-  const result = (id: string, content: unknown) => ({
-    type: "user",
-    message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content }] },
+  const field = crew.window.getByRole("textbox", { name: "Ask anything" });
+  await field.fill("say hi from home");
+  await field.press("Enter");
+
+  const session = await waitFor(async () => (await sessions(crew, home.id)).find((row) => row.kind === "terminal"), {
+    message: "home's session reaches crewd",
   });
-  await written(workspace.path, session.id, [
-    { type: "user", message: { role: "user", content: "and show me" } },
-    call("shot", "mcp__chrome-devtools__take_screenshot", {}),
-    result("shot", [
-      { type: "text", text: "Took a screenshot of the current page" },
-      { type: "image", source: { type: "base64", media_type: "image/png", data } },
-    ]),
-    call("send", "SendUserFile", { files: [icon], caption: "The icon, as it ships" }),
-    result("send", "1 file delivered to user."),
-  ]);
-
-  const shown = chat.locator("img[src^='data:image/png']");
-  await waitFor(async () => (await shown.count()) === 2, { message: "both images are drawn" });
-  await chat.getByText("The icon, as it ships").waitFor();
-  // The screenshot was saved apart from the transcript, which names it by path.
-  const [, sent] = await chat.getByRole("button", { name: /^Open / }).evaluateAll((buttons) =>
-    buttons.map((button) => button.getAttribute("title")),
-  );
-  assert.equal(sent, "icon.png");
-  if (process.env.E2E_SHOTS) await crew.window.screenshot({ path: path.join(process.env.E2E_SHOTS, "chat-images.png") });
-
-  // Opening one shows it whole.
-  await chat.getByRole("button", { name: "Open icon.png" }).click();
-  await crew.window.locator(".crew-lightbox-image").waitFor();
-  if (process.env.E2E_SHOTS) await crew.window.screenshot({ path: path.join(process.env.E2E_SHOTS, "chat-images-open.png") });
-  await crew.window.keyboard.press("Escape");
-});
-
-/** Types a line into the terminal on screen without submitting it. */
-async function typeInTerminalLine(text: string): Promise<void> {
-  await waitFor(
-    () =>
-      crew.window.evaluate(() => {
-        const shown = [...document.querySelectorAll<HTMLTextAreaElement>(".xterm-helper-textarea")].find(
-          (area) => area.closest("[hidden]") === null && area.getClientRects().length > 0,
-        );
-        shown?.focus();
-        return shown !== undefined && document.activeElement === shown;
-      }),
-    { message: "a terminal on screen takes the keys" },
-  );
-  await crew.window.keyboard.type(text);
-}
-
-/** ⌘T › "Codex session", with the fake Codex installed: the session crewd made. */
-async function newCodexSession(): Promise<Session> {
-  const [workspace] = crew.workspaces;
-  assert.ok(workspace);
-  await installFakeCodex(crew);
-  const known = new Set((await crew.request<Session[]>("session_list", { workspaceId: workspace.id })).map((s) => s.id));
-  await pressChord(crew, `${MOD}+t`);
-  await crew.window.getByRole("button", { name: /^Codex session/ }).click();
-  return waitFor(
-    async () =>
-      (await crew.request<Session[]>("session_list", { workspaceId: workspace.id })).find(
-        (row) => row.provider === "codex" && !known.has(row.id),
-      ),
-    { message: "the Codex session reaches crewd" },
-  );
-}
-
-test("a Codex session in the chat: trusted from the command line, its rollout read, its prompt answered", async () => {
-  const [workspace] = crew.workspaces;
-  assert.ok(workspace);
-  await crew.request("state_set", { key: "sessions:view", value: "chat" });
-  await crew.reload();
-  const session = await newCodexSession();
-  const chat = chatOf(session);
-  await chat.waitFor();
-
-  // No trust prompt stands in the way: the folder was trusted on the command line.
-  await sendFromChat(session, "hello codex");
-  await chat.getByText("Done.").waitFor();
-  await waitFor(async () => (await chat.getByText("Queued").count()) === 0, { message: "the bubble is Codex's turn" });
-  const launch = (await readFile(path.join(crew.home, "fake-codex.log"), "utf8")).trim().split("\n").at(-1);
-  assert.ok(launch?.includes("trust_level"), "Codex was told to trust the folder");
-  assert.ok(launch?.includes("hooks.state"), "Crew's hooks came trusted");
-
-  // The permission Codex asks for reaches the chat through its hook, and y answers it.
-  await sendFromChat(session, "ask");
-  await chat.getByText("Wants to run a command").waitFor();
-  assert.equal(await chat.getByRole("button", { name: /^Always allow/ }).count(), 0, "Codex offers no rule to keep");
-  await chat.getByRole("button", { name: /^Allow/ }).click();
-  await waitFor(async () => (await readFile(path.join(workspace.path, "asked.txt"), "utf8").then(() => true, () => false)), {
-    message: "Codex ran the command",
-  });
-  await waitFor(async () => (await chat.getByText("Done.").count()) === 2, { message: "the turn after the approval ends" });
-
-  // Esc stops a turn; the rollout's turn_aborted ends it in the chat.
-  await sendFromChat(session, "ask");
-  await chat.getByText("Wants to run a command").waitFor();
-  await chat.getByRole("button", { name: /^Deny/ }).click();
-  await chat.getByText("Interrupted").waitFor();
-});
-
-test("a new session in the chat moves to another provider before anyone talks to it, and stays on it after", async () => {
-  const [workspace] = crew.workspaces;
-  assert.ok(workspace);
-  await installFakeCodex(crew);
-  await crew.request("state_set", { key: "sessions:view", value: "chat" });
-  await crew.request("state_set", {
-    key: "providers:default",
-    value: JSON.stringify({ provider: "claude", model: "", effort: "", access: "ask" }),
-  });
-  await crew.reload();
-  const codexLaunches = async () =>
-    (await readFile(path.join(crew.home, "fake-codex.log"), "utf8").catch(() => "")).trim().split("\n").filter(Boolean).length;
-  const before = await codexLaunches();
-  const session = await newTerminal(crew, workspace.id);
-  const chat = chatOf(session);
-  await chat.waitFor();
-  const claude = (await crew.claudeLaunches()).at(-1);
-  assert.ok(claude);
-
-  await chat.locator('button[title^="Claude"]').click();
-  const providers = crew.window.locator('[role="tablist"][aria-orientation="vertical"]');
-  await providers.getByRole("tab", { name: /Codex/ }).click();
-  await crew.window.getByRole("tabpanel").getByRole("button").first().click();
-
-  const moved = await waitFor(
-    async () => {
-      const row = await crew.request<Session>("session_get", { id: session.id });
-      return row.provider === "codex" ? row : undefined;
-    },
-    { message: "the row runs Codex" },
-  );
-  assert.match(moved.name, /^codex( \d+)?$/, "a placeholder name follows the provider");
-  assert.equal(moved.providerSessionId ?? null, null);
-  await waitFor(async () => (await codexLaunches()) > before, { message: "Codex starts in the session's terminal" });
-  await waitFor(() => !alive(claude.pid), { message: "the Claude it ran is gone" });
-  assert.equal(await crew.request("state_get", { key: "providers:default" }).then((raw) => JSON.parse(String(raw)).provider), "claude");
-
-  await sendFromChat(session, "hello codex");
-  await chat.getByText("Done.").waitFor();
-
-  // It has a conversation now: the chip offers only its own provider's models.
-  await chat.locator('button[title^="Codex"]').click();
-  await crew.window.getByRole("tabpanel").waitFor();
-  assert.equal(await providers.getByRole("tab").count(), 1);
-  await crew.window.keyboard.press("Escape");
-  await assert.rejects(
-    crew.request("session_switch_provider", {
-      id: session.id,
-      cwd: workspace.path,
-      provider: "claude",
-      model: "",
-      effort: "",
-      autonomy: "ask",
-    }),
-    /already has a conversation/,
-  );
+  assert.equal(session.view, "chat");
+  await said("say hi from home").waitFor();
+  await said("Reply 1: say hi from home").waitFor();
+  assert.equal(await terminals().count(), 0, "a terminal is on screen");
+  const [launch] = await launchesOf(session);
+  assert.ok(launch);
+  assert.equal(launch.cwd, home.path);
+  assert.ok(launch.argv.join(" ").includes("--input-format stream-json"), launch.argv.join(" "));
+  assert.equal(launch.argv.includes("--"), false, "the prompt is a turn over stdin, not the command line's");
 });

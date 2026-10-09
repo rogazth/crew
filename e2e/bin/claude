@@ -19,6 +19,12 @@
 // with the tool_result, `[Request interrupted by user]` after an Esc, and a
 // `system` `turn_duration` record closing each turn.
 //
+// Launched with `--input-format stream-json` (how Crew runs a session in the
+// chat view, over the provider's protocol instead of a PTY) it speaks that
+// protocol on stdin/stdout and draws nothing: see `serve` below. One process
+// serves every turn, as the real CLI's does; each launch is in the log all the
+// same, so a test can tell one process from two.
+//
 // It reads the terminal raw, like a TUI. A line is submitted with Enter;
 // bracketed paste is accepted and a newline inside a paste does not submit.
 //
@@ -90,12 +96,13 @@ try {
   settings = {};
 }
 const resumeId = flag("--resume");
-const model = flag("--model");
+let model = flag("--model");
 // ⇧Tab walks the modes as Claude Code 2.1.288 does without bypass on offer;
 // each user record carries the one it was sent in, as the real transcript's do.
 const MODES = ["default", "acceptEdits", "plan", "auto"];
 let mode = argv.includes("--dangerously-skip-permissions") ? "bypassPermissions" : flag("--permission-mode") || "default";
 let sessionId = resumeId || flag("--session-id") || randomUUID();
+const STREAM = flag("--input-format") === "stream-json";
 
 // Claude files a project's sessions under its cwd with every UTF-16 unit that
 // is not ASCII alphanumeric replaced by a dash; a JS regex works on those units.
@@ -105,12 +112,14 @@ const transcript = () => path.join(projectDir, `${sessionId}.jsonl`);
 const out = (text) => process.stdout.write(text);
 
 // The real CLI refuses these two, and Crew's launcher has to pick right.
+// Over the protocol it says so on stderr, which is where Crew reads it.
+const refuse = (text) => (STREAM ? process.stderr : process.stdout).write(`${text}\r\n`);
 if (resumeId && !fs.existsSync(transcript())) {
-  out(`No conversation found with session ID: ${resumeId}\r\n`);
+  refuse(`No conversation found with session ID: ${resumeId}`);
   process.exit(1);
 }
 if (!resumeId && flag("--session-id") && fs.existsSync(transcript())) {
-  out(`Error: Session ID ${sessionId} is already in use.\r\n`);
+  refuse(`Error: Session ID ${sessionId} is already in use.`);
   process.exit(1);
 }
 
@@ -513,18 +522,22 @@ function feed(data) {
   }
 }
 
-// Raw before the SessionStart hook runs, so a test that waits for the hook's
-// record (in $CREW_CLAUDE_BIND_DIR, `claudeStarts` in the harness) knows keys
-// typed from then on land.
-if (process.stdin.isTTY) process.stdin.setRawMode(true);
-process.stdin.setEncoding("utf8");
-process.stdin.on("data", feed);
-process.stdin.on("end", () => process.exit(0));
 for (const signal of ["SIGHUP", "SIGTERM"]) process.on(signal, () => process.exit(0));
 
-const untrusted = path.join(CWD, ".untrusted");
-if (fs.existsSync(untrusted)) askTrust();
-else start();
+if (STREAM) {
+  serve();
+} else {
+  // Raw before the SessionStart hook runs, so a test that waits for the hook's
+  // record (in $CREW_CLAUDE_BIND_DIR, `claudeStarts` in the harness) knows keys
+  // typed from then on land.
+  if (process.stdin.isTTY) process.stdin.setRawMode(true);
+  process.stdin.setEncoding("utf8");
+  process.stdin.on("data", feed);
+  process.stdin.on("end", () => process.exit(0));
+  const untrusted = path.join(CWD, ".untrusted");
+  if (fs.existsSync(untrusted)) askTrust();
+  else start();
+}
 
 function start() {
   runHooks("SessionStart", { source: resumeId ? "resume" : "startup" });
@@ -601,4 +614,189 @@ function redraw(done) {
     clearInterval(painter);
     done();
   }, 120);
+}
+
+/**
+ * The stream-json protocol Crew drives a session in the chat view over, as
+ * Claude Code 2.1.295 speaks it with `-p --input-format stream-json
+ * --output-format stream-json`: a JSON object a line each way.
+ *
+ * - `control_request`s are answered with a success `control_response`:
+ *   `initialize` (the first one is how Crew knows the CLI is up), `interrupt`
+ *   (which also ends the turn running), `set_model` and `set_permission_mode`
+ *   (which change what the next turn says), and the rest. Each but
+ *   `get_context_usage`, which Crew asks on its own schedule, is appended to
+ *   $HOME/fake-claude-control.log as `<subtype> <detail>`, one a line.
+ * - A `user` message is a turn: `system/init`, the message echoed back when
+ *   `--replay-user-messages` is on, the reply streamed a word at a time as
+ *   `stream_event` deltas, the `assistant` message with its usage, and the
+ *   `result`. The reply is `Reply <n>: <first line>`, <n> counting the turns
+ *   this process has served, so a second turn on the same process says 2.
+ *   A message that arrives during a turn waits for it to end, then gets a
+ *   turn of its own.
+ * - `work N` is a turn that takes N seconds before it starts to answer, for
+ *   a test that stops it.
+ * - The context is 20k tokens a turn of the 200k window (compacting at 160k),
+ *   in the usage of each reply and in the answer to `get_context_usage`, none
+ *   before the first turn.
+ * - The conversation is written to the CLI's own transcript as the PTY
+ *   fake's is, so a relaunch can resume it.
+ */
+function serve() {
+  const WINDOW = 200_000;
+  const STEP = 20_000;
+  const WORD_MS = 150;
+  const replay = argv.includes("--replay-user-messages");
+  const emit = (entry) => process.stdout.write(`${JSON.stringify(entry)}\n`);
+  const answer = (id, response) => emit({ type: "control_response", response: { subtype: "success", request_id: id, response } });
+  const waiting = [];
+  let current = null;
+  let turns = 0;
+  let buffer = "";
+
+  const textOf = (message) => {
+    const content = message && message.content;
+    if (typeof content === "string") return content;
+    if (!Array.isArray(content)) return "";
+    return content.filter((part) => part && part.type === "text").map((part) => part.text).join("\n");
+  };
+  const used = () => STEP * Math.min(turns, 9);
+
+  function control(rec) {
+    const request = rec.request || {};
+    const subtype = request.subtype;
+    if (subtype === "get_context_usage") {
+      return answer(rec.request_id, {
+        totalTokens: used(),
+        maxTokens: WINDOW,
+        rawMaxTokens: WINDOW,
+        autoCompactThreshold: 160_000,
+        isAutoCompactEnabled: true,
+        model: model || "fake",
+      });
+    }
+    let detail = request.task_id || "";
+    if (subtype === "set_model") detail = request.model || "";
+    if (subtype === "set_permission_mode") detail = request.mode || "";
+    if (subtype === "apply_flag_settings") detail = JSON.stringify(request.settings);
+    if (subtype === "set_model") model = request.model || null;
+    if (subtype === "set_permission_mode" && request.mode) mode = request.mode;
+    fs.appendFileSync(path.join(HOME, "fake-claude-control.log"), `${subtype} ${detail}\n`);
+    answer(rec.request_id, subtype === "get_task_output" ? { output: "", total_bytes: 0, truncated: false } : {});
+    if (subtype === "interrupt") stop();
+  }
+
+  /** The `interrupt` request: the turn running ends where it is, as an error result. */
+  function stop() {
+    if (!current) return;
+    current.stopped = true;
+    current.wake();
+    current = null;
+    interrupted(false);
+    turnEnd();
+    emit({
+      type: "result",
+      subtype: "error_during_execution",
+      is_error: true,
+      result: "[Request interrupted by user]",
+      session_id: sessionId,
+      total_cost_usd: 0,
+      usage: {},
+    });
+    next();
+  }
+
+  function next() {
+    if (current || waiting.length === 0) return;
+    void turn(waiting.shift()).catch((error) => {
+      process.stderr.write(`${error && error.stack ? error.stack : error}\n`);
+      process.exit(1);
+    });
+  }
+
+  async function turn(text) {
+    const mine = { stopped: false, wake: () => {} };
+    current = mine;
+    const nap = (ms) =>
+      new Promise((resolve) => {
+        const timer = setTimeout(resolve, ms);
+        mine.wake = () => {
+          clearTimeout(timer);
+          resolve();
+        };
+      });
+    const n = ++turns;
+    turnStarted = Date.now();
+    emit({ type: "system", subtype: "init", session_id: sessionId, model: model || "fake", cwd: CWD, tools: [] });
+    if (replay) emit({ type: "user", session_id: sessionId, message: { role: "user", content: [{ type: "text", text }] } });
+    record({ type: "user", permissionMode: mode, message: { role: "user", content: text } });
+
+    const [command, seconds] = text.trim().split(/\s+/);
+    const reply = `Reply ${n}: ${text.trim().split("\n")[0]}`;
+    const id = `msg_${randomUUID().slice(0, 8)}`;
+    emit({ type: "stream_event", session_id: sessionId, event: { type: "message_start", message: { id, role: "assistant" } } });
+    if (command === "work") {
+      await nap(Math.max(0, Number(seconds) || 1) * 1000);
+      if (mine.stopped) return;
+    }
+    for (const word of reply.split(/(?<= )/)) {
+      emit({
+        type: "stream_event",
+        session_id: sessionId,
+        event: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: word } },
+      });
+      await nap(WORD_MS);
+      if (mine.stopped) return;
+    }
+    const tokens = used();
+    emit({
+      type: "assistant",
+      session_id: sessionId,
+      message: {
+        id,
+        role: "assistant",
+        usage: { input_tokens: tokens - 100, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 100 },
+        content: [{ type: "text", text: reply }],
+      },
+    });
+    say(reply);
+    turnEnd();
+    current = null;
+    emit({
+      type: "result",
+      subtype: "success",
+      is_error: false,
+      result: reply,
+      session_id: sessionId,
+      total_cost_usd: 0,
+      duration_ms: Date.now() - turnStarted,
+      usage: { input_tokens: tokens - 100, output_tokens: 100 },
+      modelUsage: { [model || "fake"]: { contextWindow: WINDOW } },
+    });
+    next();
+  }
+
+  const handle = (line) => {
+    let rec;
+    try {
+      rec = JSON.parse(line);
+    } catch {
+      return;
+    }
+    if (rec.type === "control_request") return control(rec);
+    if (rec.type !== "user") return;
+    waiting.push(textOf(rec.message));
+    next();
+  };
+
+  process.stdin.setEncoding("utf8");
+  process.stdin.on("data", (chunk) => {
+    buffer += chunk;
+    for (let at = buffer.indexOf("\n"); at >= 0; at = buffer.indexOf("\n")) {
+      const line = buffer.slice(0, at);
+      buffer = buffer.slice(at + 1);
+      if (line.trim()) handle(line);
+    }
+  });
+  process.stdin.on("end", () => process.exit(0));
 }
