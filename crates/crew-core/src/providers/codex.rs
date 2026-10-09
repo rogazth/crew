@@ -243,6 +243,12 @@ pub fn interrupt_params(thread_id: &str, turn_id: &str) -> Value {
     json!({ "threadId": thread_id, "turnId": turn_id })
 }
 
+/// `skills/list` for one folder. The default cache is kept: Codex sends
+/// `skills/changed` when a skill file moves, and that is the reason to ask again.
+pub fn skills_list_params(cwd: &str) -> Value {
+    json!({ "cwds": [cwd] })
+}
+
 /// How a turn ended, from `turn/completed`.
 #[derive(Clone, Debug, PartialEq)]
 pub enum TurnEnd {
@@ -1118,6 +1124,12 @@ mod tests {
 
     fn item(phase: &str, item: Value) -> Value {
         note(&format!("item/{phase}"), json!({ "threadId": "t", "turnId": "u", "item": item }))
+    }
+
+    /// The skills are asked for by folder, in the shape the schema gives.
+    #[test]
+    fn skills_are_asked_for_by_folder() {
+        assert_eq!(skills_list_params("/work/crew"), json!({ "cwds": ["/work/crew"] }));
     }
 
     #[test]

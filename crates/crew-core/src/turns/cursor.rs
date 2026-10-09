@@ -17,7 +17,7 @@ use std::sync::mpsc::{self, RecvTimeoutError};
 use std::thread;
 use std::time::Duration;
 
-use crew_protocol::{ApprovalDecision, ApprovalResolution, HarnessEvent, ToolDetail, ToolStatus};
+use crew_protocol::{ApprovalDecision, ApprovalResolution, CommandEntry, HarnessEvent, ToolDetail, ToolStatus};
 use serde_json::{json, Map, Value};
 use tokio::sync::oneshot;
 
@@ -25,6 +25,7 @@ use super::{
     carries_conversation, conversation_to_resume, path_list, Harness, Live, QuestionReply, TurnHost,
     TurnOutcome, INIT_TIMEOUT,
 };
+use crate::command_sources::cursor_commands;
 use crate::providers::cursor::{
     authenticate_params, build_cursor_prompt, build_cursor_spawn_args, cancel_params, classify_request,
     initialize_params, mcp_servers, new_session_id, permission_answer, permission_response, plan_accepted,
@@ -42,6 +43,11 @@ const OPEN_TIMEOUT: Duration = Duration::from_secs(90);
 /// cancelled before its process is killed under it.
 const INTERRUPT_GRACE: Duration = Duration::from_secs(3);
 
+/// What the catalog hook was given, so a test can see it was called.
+#[cfg(test)]
+pub(crate) static CURSOR_CATALOG_CALLS: std::sync::Mutex<Vec<(String, String, Vec<CommandEntry>)>> =
+    std::sync::Mutex::new(Vec::new());
+
 /// What a child whose `-p` chat could not come along is told, once, on the
 /// turn that starts its new conversation (migration 27).
 pub(crate) const ACP_NOTE: &str = "Cursor now runs over ACP: this session starts a new conversation.";
@@ -54,6 +60,8 @@ struct Pending<T> {
 pub(super) struct CursorLive {
     /// The ACP session the turn runs in.
     acp_session: Option<String>,
+    /// The folder the session was opened in, which its commands are for.
+    cwd: String,
     autonomy: Autonomy,
     next_id: u64,
     /// Requests Crew sent, waiting for their answer.
@@ -88,6 +96,7 @@ impl CursorLive {
     pub(super) fn new(turn_tx: Option<oneshot::Sender<TurnOutcome>>, autonomy: Autonomy) -> Self {
         Self {
             acp_session: None,
+            cwd: String::new(),
             autonomy,
             next_id: 1,
             calls: HashMap::new(),
@@ -150,6 +159,15 @@ struct Texts {
 }
 
 impl TurnHost {
+    /// Filled in by the catalog (commands.rs).
+    fn cursor_catalog(&self, _session_id: &str, _cwd: &str, _entries: Vec<CommandEntry>) {
+        #[cfg(test)]
+        CURSOR_CATALOG_CALLS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push((_session_id.to_string(), _cwd.to_string(), _entries));
+    }
+
     pub(super) fn run_cursor(
         &self,
         session: crate::session::Session,
@@ -244,6 +262,10 @@ impl TurnHost {
         texts: &Texts,
         migrated: bool,
     ) -> Result<(), String> {
+        // Set before the session exists: its commands can come as soon as it does.
+        if let Some(Live::Cursor(live)) = self.lock().get_mut(session_id) {
+            live.cwd = cwd.to_string();
+        }
         self.cursor_call(session_id, "initialize", initialize_params(), INIT_TIMEOUT, false)
             .map_err(|error| self.cursor_failure(session_id, "Cursor Agent did not start", &error))?;
         self.cursor_call(session_id, "authenticate", authenticate_params(), OPEN_TIMEOUT, false)
@@ -704,6 +726,16 @@ impl TurnHost {
         let Some(update) = params.get("update").and_then(as_record) else {
             return;
         };
+        // The menu belongs to the session, not the turn: a load's replay and a
+        // turn already over may both bring it, and it is kept either way.
+        if string_field(Some(update), "sessionUpdate").as_deref() == Some("available_commands_update") {
+            let cwd = match self.lock().get(session_id) {
+                Some(Live::Cursor(live)) => live.cwd.clone(),
+                _ => return,
+            };
+            self.cursor_catalog(session_id, &cwd, cursor_commands(params.get("update").unwrap_or(&Value::Null)));
+            return;
+        }
         let mut events = Vec::new();
         {
             let mut map = self.lock();
@@ -827,11 +859,12 @@ fn cursor_update(live: &mut CursorLive, update: &Map<String, Value>, events: &mu
 /// with its argv and env. Conversations persist beside the log, so a later
 /// process can load them.
 ///
-/// What a turn does is spelled in its last line: `SLEEP <s>` runs a command that
-/// long, `ASK` asks to run one, `MCP` calls Crew's `list_peers`, `QUESTION`
-/// asks which color, `PLAN` writes a plan, `FAIL` fails the prompt,
-/// `STUBBORN` ignores a cancel. It answers `report: <last line>`, with ` + <what
-/// it heard>` for each request answered.
+/// A new session sends its `available_commands_update` (`create_plan`,
+/// `clear`) after its answer. What a turn does is spelled in its last line:
+/// `SLEEP <s>` runs a command that long, `ASK` asks to run one, `MCP` calls
+/// Crew's `list_peers`, `QUESTION` asks which color, `PLAN` writes a plan,
+/// `FAIL` fails the prompt, `STUBBORN` ignores a cancel. It answers `report:
+/// <last line>`, with ` + <what it heard>` for each request answered.
 #[cfg(test)]
 pub(crate) fn fake_cursor(dir: &std::path::Path) -> (String, std::path::PathBuf) {
     use std::os::unix::fs::PermissionsExt;
@@ -953,6 +986,7 @@ for line in sys.stdin:
         sid = str(uuid.uuid4())
         save(sid, [])
         out({"id": rid, "result": {"sessionId": sid, "modes": {"currentModeId": "agent", "availableModes": []}}})
+        update(sid, {"sessionUpdate": "available_commands_update", "availableCommands": [{"name": "create_plan", "description": "Create a plan", "input": {"hint": "the goal"}}, {"name": "clear", "description": "Start over", "input": None}]})
     elif method == "session/load":
         sid = params.get("sessionId")
         convo = saved(sid)
@@ -1102,5 +1136,126 @@ mod tests {
             ]
         );
         assert!(matches!(host.lock().get("s"), Some(Live::Cursor(live)) if live.settled));
+    }
+
+    fn catalog_calls(session: &str) -> Vec<(String, Vec<CommandEntry>)> {
+        CURSOR_CATALOG_CALLS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .filter(|(id, _, _)| id == session)
+            .map(|(_, cwd, entries)| (cwd.clone(), entries.clone()))
+            .collect()
+    }
+
+    /// Cursor's commands come during a load's replay, which is muted for the
+    /// turn; the menu takes them anyway, with the folder the session opened in.
+    #[test]
+    fn a_commands_update_during_a_load_still_reaches_the_catalog() {
+        let (host, _cap) = host("commands-load");
+        running(&host, "commands-load", Some(3));
+        if let Some(Live::Cursor(live)) = host.lock().get_mut("commands-load") {
+            live.cwd = "/work/crew".into();
+        }
+        let listed = json!({
+            "sessionUpdate": "available_commands_update",
+            "availableCommands": [{ "name": "create_plan", "description": "Create a plan", "input": { "hint": "the goal" } }]
+        });
+        host.handle_cursor_line("commands-load", &update(listed));
+        assert_eq!(
+            catalog_calls("commands-load"),
+            vec![(
+                "/work/crew".to_string(),
+                vec![CommandEntry {
+                    name: "create_plan".into(),
+                    description: "Create a plan".into(),
+                    argument_hint: Some("the goal".into()),
+                    aliases: None,
+                    kind: "command".into(),
+                    path: None,
+                }],
+            )]
+        );
+    }
+
+    /// A session on the fake `cursor-agent acp`, started with `text`.
+    fn started(text: &str) -> (TurnHost, String) {
+        let host = TurnHost::test_new();
+        host.test_agents().set_events(std::sync::Arc::new(Lines(host.clone())));
+        let dir = std::env::temp_dir().join(format!("crew-cursor-catalog-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let (fake, _log) = crate::turns::fake_cursor(&dir);
+        host.override_binary("cursor-agent", fake);
+        let workspace = crate::workspace::create(host.test_store(), "w".into(), dir.to_string_lossy().into())
+            .expect("workspace")
+            .id;
+        let session = crate::session::create(
+            host.test_store(),
+            workspace,
+            "terminal".into(),
+            "shell".into(),
+            "cursor".into(),
+            "composer-2.5".into(),
+            String::new(),
+            "full".into(),
+            Some("chat".into()),
+        )
+        .expect("session")
+        .id;
+        host.start(crew_protocol::TurnStart {
+            session_id: session.clone(),
+            cwd: dir.to_string_lossy().into_owned(),
+            text: text.into(),
+            files: None,
+            mentions: None,
+            hidden: None,
+            from_bot: None,
+            sent_at: None,
+            nonce: None,
+            letter_id: None,
+            mode: None,
+            command: None,
+            skills: None,
+        })
+        .expect("start");
+        (host, session)
+    }
+
+    struct Lines(TurnHost);
+
+    impl crate::agent::AgentEvents for Lines {
+        fn lines(&self, event: &str, session_id: &str, lines: Vec<String>) {
+            self.0.on_agent_lines(event, session_id, lines);
+        }
+        fn exit(&self, session_id: &str, code: Option<i32>, _pid: u32) {
+            self.0.on_agent_exit(session_id, code);
+        }
+    }
+
+    /// A new Cursor session announces its commands once it opens, and the
+    /// fake's announcement reaches the catalog with the folder it opened in.
+    #[test]
+    fn a_new_cursor_session_hands_its_announced_commands_to_the_catalog() {
+        let (host, session) = started("hello");
+        let mut calls = Vec::new();
+        for _ in 0..400 {
+            calls = catalog_calls(&session);
+            if !calls.is_empty() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        assert_eq!(calls.len(), 1, "{calls:?}");
+        let (folder, entries) = &calls[0];
+        assert!(!folder.is_empty());
+        let names: Vec<(&str, Option<&str>)> =
+            entries.iter().map(|e| (e.name.as_str(), e.argument_hint.as_deref())).collect();
+        assert_eq!(names, [("create_plan", Some("the goal")), ("clear", None)]);
+        for _ in 0..400 {
+            if !host.is_running(&session) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
     }
 }

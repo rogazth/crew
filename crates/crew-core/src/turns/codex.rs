@@ -17,7 +17,7 @@ use std::sync::mpsc::{self, RecvTimeoutError};
 use std::thread;
 use std::time::Duration;
 
-use crew_protocol::{ApprovalDecision, ApprovalResolution, ContextReading, HarnessEvent};
+use crew_protocol::{ApprovalDecision, ApprovalResolution, CommandEntry, ContextReading, HarnessEvent};
 use serde_json::{json, Map, Value};
 use tokio::sync::oneshot;
 
@@ -25,12 +25,13 @@ use super::{
     carries_conversation, conversation_to_resume, driven, path_list, typed_by_user, Harness, Launch, QuestionReply,
     Steer, TurnHost, TurnOutcome, INIT_TIMEOUT, NEXT_EPOCH,
 };
+use crate::command_sources::codex_skills;
 use crate::mailbox;
 use crate::session;
 use crate::providers::codex::{
     approval_response, classify_request, completed_tool_status, exec_item, initialize_params, interrupt_params,
-    is_tool_item, item_files, plan_detail, questions_response, rpc_error_message, steer_params, thread_id,
-    thread_request, tool_call_id, tool_detail, tool_label, tool_name, turn_end, turn_id, turn_start_params,
+    is_tool_item, item_files, plan_detail, questions_response, rpc_error_message, skills_list_params, steer_params,
+    thread_id, thread_request, tool_call_id, tool_detail, tool_label, tool_name, turn_end, turn_id, turn_start_params,
     unsupported_error, user_message_text, with_attached_paths, ApprovalKind, CodexAsk, CodexThread, TurnEnd,
 };
 use crate::providers::string_field;
@@ -49,6 +50,15 @@ pub(super) const INTERRUPT_GRACE: Duration = Duration::from_secs(3);
 /// How often the background terminals are listed while a command runs.
 const TERMINAL_POLL: Duration = Duration::from_secs(2);
 
+/// How long `skills/list` may take. It scans the skill folders on disk, and
+/// nothing waits on its answer, so this only bounds the thread that asks.
+const CATALOG_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// What the catalog hook was given, so a test can see it was called.
+#[cfg(test)]
+pub(crate) static CODEX_CATALOG_CALLS: std::sync::Mutex<Vec<(String, String, Vec<CommandEntry>)>> =
+    std::sync::Mutex::new(Vec::new());
+
 /// A request the app server is waiting on Crew for, by the id the UI knows.
 pub(super) struct Pending<T> {
     rpc_id: Value,
@@ -63,6 +73,8 @@ pub(super) struct CodexLive {
     /// What it was launched with.
     applied: Launch,
     thread_id: Option<String>,
+    /// The folder the thread was opened in. Its skills are read for it.
+    cwd: String,
     /// The turn that is running. `turn/start` on a busy thread would steer
     /// it without a word, so this is what says whether one is.
     turn_id: Option<String>,
@@ -97,6 +109,7 @@ impl CodexLive {
             epoch: NEXT_EPOCH.fetch_add(1, Ordering::Relaxed),
             applied,
             thread_id: None,
+            cwd: String::new(),
             turn_id: None,
             last_turn: None,
             next_id: 1,
@@ -153,6 +166,15 @@ impl CodexLive {
 }
 
 impl TurnHost {
+    /// Filled in by the catalog (commands.rs).
+    fn codex_catalog(&self, _session_id: &str, _cwd: &str, _entries: Vec<CommandEntry>) {
+        #[cfg(test)]
+        CODEX_CATALOG_CALLS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push((_session_id.to_string(), _cwd.to_string(), _entries));
+    }
+
     pub(super) fn run_codex(
         &self,
         session: crate::session::Session,
@@ -318,8 +340,27 @@ impl TurnHost {
         let thread_id = thread_id(&opened).ok_or_else(|| "Codex opened no thread.".to_string())?;
         if let Some(Live::Codex(live)) = self.lock().get_mut(session_id) {
             live.thread_id = Some(thread_id.clone());
+            live.cwd = thread.cwd.clone();
         }
+        self.codex_read_skills(session_id, &thread.cwd);
         Ok(thread_id)
+    }
+
+    /// Asks the app server for the skills of `cwd` and hands them to the
+    /// catalog. It runs on a thread of its own: the turn that is starting does
+    /// not wait for it, and an answer that comes after the process is gone is
+    /// dropped by the call itself.
+    fn codex_read_skills(&self, session_id: &str, cwd: &str) {
+        let host = self.clone();
+        let session_id = session_id.to_string();
+        let cwd = cwd.to_string();
+        thread::spawn(move || {
+            let Ok(listed) = host.codex_call(&session_id, "skills/list", skills_list_params(&cwd), CATALOG_TIMEOUT)
+            else {
+                return;
+            };
+            host.codex_catalog(&session_id, &cwd, codex_skills(&listed));
+        });
     }
 
     /// The turn itself, on an open thread. Returns once the turn runs; its end
@@ -798,6 +839,19 @@ impl TurnHost {
     }
 
     fn codex_notification(&self, session_id: &str, method: &str, params: &Value) {
+        // The skills are the process's, not the turn's: Codex says they moved
+        // whatever the turn is doing, so they are read again here, before the
+        // turn's own checks can drop it.
+        if method == "skills/changed" {
+            let cwd = match self.lock().get(session_id) {
+                Some(Live::Codex(live)) => live.cwd.clone(),
+                _ => return,
+            };
+            if !cwd.is_empty() {
+                self.codex_read_skills(session_id, &cwd);
+            }
+            return;
+        }
         let mut events = Vec::new();
         let mut outcome = None;
         // A command item for the tray, read out of the lock.
@@ -1049,10 +1103,11 @@ fn codex_item(live: &mut CodexLive, item: &Map<String, Value>, completed: bool, 
 
 /// A stand-in for `codex app-server` 0.160 that speaks the part of the
 /// protocol Crew uses: the handshake, `thread/start` and `thread/resume`,
-/// `turn/start`, `turn/steer`, `turn/interrupt`, and the server's own
-/// approval and question requests. Every request it gets is appended to the
-/// log as `{method, params}`, after a first line with its argv, pid and env:
-/// one such line per launch.
+/// `turn/start`, `turn/steer`, `turn/interrupt`, `skills/list` (one enabled
+/// skill and one disabled), and the server's own approval and question
+/// requests. Every request it gets is appended to the log as `{method,
+/// params}`, after a first line with its argv, pid and env: one such line per
+/// launch.
 ///
 /// What a turn does is spelled in its text: `SLEEP <s>` runs a command that
 /// long (steers land after it), `ASK` asks to run one, `QUESTION` asks which
@@ -1236,6 +1291,12 @@ for line in sys.stdin:
         turn = state["turn"]
         if turn: turn["interrupted"].set()
         out({"id": rid, "result": {}})
+    elif method == "skills/list":
+        # One enabled skill and one the user turned off, as the schema shapes them.
+        cwd = (params.get("cwds") or [os.getcwd()])[0]
+        skill = {"name": "review-pr", "description": "Reviews a pull request in depth.", "shortDescription": None, "enabled": True, "interface": {"shortDescription": "Review a pull request"}, "path": cwd + "/.agents/skills/review-pr/SKILL.md", "scope": "repo", "pluginId": None, "dependencies": None}
+        off = dict(skill, name="old-notes", enabled=False, path=cwd + "/.agents/skills/old-notes/SKILL.md")
+        out({"id": rid, "result": {"data": [{"cwd": cwd, "errors": [], "skills": [skill, off]}]}})
     else:
         out({"id": rid, "error": {"code": -32601, "message": "unknown " + str(method)}})
 "#
@@ -1279,5 +1340,129 @@ mod context_tests {
             host.context("s"),
             Some(ContextReading { used: 7000, window: Some(258_400), auto_compact_at: None })
         );
+    }
+}
+
+#[cfg(test)]
+mod catalog_tests {
+    use super::*;
+    use crate::agent::AgentEvents;
+    use crew_protocol::TurnStart;
+    use std::sync::Arc;
+
+    /// Hands the fake's lines to the driver, as the agent's reader does.
+    struct Lines(TurnHost);
+
+    impl AgentEvents for Lines {
+        fn lines(&self, event: &str, session_id: &str, lines: Vec<String>) {
+            self.0.on_agent_lines(event, session_id, lines);
+        }
+        fn exit(&self, session_id: &str, code: Option<i32>, _pid: u32) {
+            self.0.on_agent_exit(session_id, code);
+        }
+    }
+
+    fn sent(log: &std::path::Path, method: &str) -> Vec<Value> {
+        std::fs::read_to_string(log)
+            .unwrap_or_default()
+            .lines()
+            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+            .filter(|line| line["method"] == method)
+            .map(|line| line["params"].clone())
+            .collect()
+    }
+
+    fn catalog_calls(session: &str) -> Vec<(String, Vec<CommandEntry>)> {
+        CODEX_CATALOG_CALLS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .filter(|(id, _, _)| id == session)
+            .map(|(_, cwd, entries)| (cwd.clone(), entries.clone()))
+            .collect()
+    }
+
+    fn wait_for(mut done: impl FnMut() -> bool) {
+        for _ in 0..400 {
+            if done() {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        panic!("the wait ran out");
+    }
+
+    /// A Codex session on the fake app server, started with `text`. Returns
+    /// the host, the session's id, the fake's log and the folder.
+    fn started(text: &str) -> (TurnHost, String, std::path::PathBuf, String) {
+        let host = TurnHost::test_new();
+        host.test_agents().set_events(Arc::new(Lines(host.clone())));
+        let dir = std::env::temp_dir().join(format!("crew-codex-catalog-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let (fake, log) = crate::turns::fake_codex(&dir);
+        host.override_binary("codex", fake);
+        let workspace = crate::workspace::create(host.test_store(), "w".into(), dir.to_string_lossy().into())
+            .expect("workspace")
+            .id;
+        let session = crate::session::create(
+            host.test_store(),
+            workspace,
+            "terminal".into(),
+            "shell".into(),
+            "codex".into(),
+            "gpt-5.6-luna".into(),
+            String::new(),
+            "full".into(),
+            Some("chat".into()),
+        )
+        .expect("session")
+        .id;
+        let cwd = dir.to_string_lossy().into_owned();
+        host.start(TurnStart {
+            session_id: session.clone(),
+            cwd: cwd.clone(),
+            text: text.into(),
+            files: None,
+            mentions: None,
+            hidden: None,
+            from_bot: None,
+            sent_at: None,
+            nonce: None,
+            letter_id: None,
+            mode: None,
+            command: None,
+            skills: None,
+        })
+        .expect("start");
+        (host, session, log, cwd)
+    }
+
+    /// Opening the thread asks for the folder's skills and hands the enabled
+    /// ones to the catalog, with the folder they were read for.
+    #[test]
+    fn a_codex_thread_hands_its_skills_to_the_catalog_when_it_opens() {
+        let (host, session, log, cwd) = started("hello");
+        wait_for(|| !catalog_calls(&session).is_empty());
+        let (folder, entries) = catalog_calls(&session).remove(0);
+        assert_eq!(folder, cwd);
+        assert_eq!(entries.len(), 1, "{entries:?}");
+        assert_eq!(entries[0].name, "review-pr");
+        assert_eq!(entries[0].kind, "skill");
+        assert_eq!(entries[0].description, "Review a pull request");
+        assert_eq!(entries[0].path.as_deref(), Some(format!("{cwd}/.agents/skills/review-pr/SKILL.md").as_str()));
+        assert_eq!(sent(&log, "skills/list"), vec![json!({ "cwds": [cwd] })]);
+        wait_for(|| !host.is_running(&session));
+    }
+
+    /// Codex says a skill file moved: the skills are read again while the
+    /// turn runs, which the turn's own end-of-turn checks do not stop.
+    #[test]
+    fn a_skills_change_reads_the_skills_again_while_a_turn_runs() {
+        let (host, session, log, _) = started("SLEEP 1");
+        wait_for(|| !catalog_calls(&session).is_empty());
+        host.handle_codex_line(&session, r#"{"method":"skills/changed","params":{}}"#);
+        wait_for(|| catalog_calls(&session).len() == 2);
+        assert_eq!(sent(&log, "skills/list").len(), 2);
+        wait_for(|| !host.is_running(&session));
     }
 }
