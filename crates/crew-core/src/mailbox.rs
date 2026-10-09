@@ -42,6 +42,41 @@ pub const APPROVAL: &str = "approval";
 /// takes at least one letter, however long; the rest wait for the next turn.
 pub const BATCH_CHARS: usize = 20_000;
 
+/// What a letter asks of the provider beyond its text: the command it opens
+/// with and the skills it invokes, as the composer picked them. Only the
+/// user's own messages have any.
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct Dispatch {
+    /// A provider command that opens the text, without its slash.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub skills: Vec<String>,
+}
+
+impl Dispatch {
+    /// What a message asks for, or nothing when it asks for nothing: a
+    /// letter without a command or skills has no dispatch at all.
+    pub fn of(command: Option<&str>, skills: Option<&[String]>) -> Option<Self> {
+        let dispatch = Self {
+            command: command.map(str::trim).filter(|name| !name.is_empty()).map(str::to_string),
+            skills: skills.unwrap_or_default().to_vec(),
+        };
+        (dispatch != Self::default()).then_some(dispatch)
+    }
+
+    /// What of it the text still says. An edit can take the command out of a
+    /// letter or leave a skill's name behind, and a command that no longer
+    /// opens the text would be sent as a word in the middle of it.
+    fn kept_by(self, text: &str) -> Option<Self> {
+        let text = text.trim();
+        let command = self.command.filter(|name| crate::providers::invokes_at(text, 0, name));
+        let skills: Vec<String> =
+            self.skills.into_iter().filter(|name| !crate::providers::invocations(text, name).is_empty()).collect();
+        Self::of(command.as_deref(), Some(&skills))
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Letter {
     pub id: String,
@@ -58,6 +93,10 @@ pub struct Letter {
     /// What the user attached to it. Empty for every letter but the user's.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub files: Vec<AttachedFile>,
+    /// The command and skills the user picked for it. A letter with a command
+    /// is a turn of its own (see [`claim_batch`]) and is never steered.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dispatch: Option<Dispatch>,
 }
 
 impl Letter {
@@ -71,6 +110,7 @@ impl Letter {
             kind: kind.to_string(),
             event_cursor,
             files: Vec::new(),
+            dispatch: None,
         }
     }
 
@@ -151,6 +191,17 @@ pub(crate) fn migrate_queue(conn: &rusqlite::Connection) -> rusqlite::Result<()>
     }
     if !has_column(conn, "mailbox", "queue_order")? {
         conn.execute_batch("ALTER TABLE mailbox ADD COLUMN queue_order INTEGER;")?;
+    }
+    Ok(())
+}
+
+/// Migration 32: what the user picked for a letter besides its text, a command
+/// and skills (see [`Dispatch`]), as JSON. Empty for every letter before it.
+/// The step looks before it acts.
+pub(crate) fn migrate_dispatch(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
+    use crate::store::has_column;
+    if !has_column(conn, "mailbox", "dispatch_json")? {
+        conn.execute_batch("ALTER TABLE mailbox ADD COLUMN dispatch_json TEXT;")?;
     }
     Ok(())
 }
@@ -360,8 +411,8 @@ pub fn render(letter: &Letter, parent: Option<&str>) -> String {
 /// Write a letter, on a connection the caller may hold a transaction on.
 pub(crate) fn insert(conn: &rusqlite::Connection, letter: &Letter) -> rusqlite::Result<()> {
     conn.prepare_cached(
-        "INSERT INTO mailbox (id, to_session, from_session, from_name, text, at, from_kind, kind, event_cursor, files_json)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        "INSERT INTO mailbox (id, to_session, from_session, from_name, text, at, from_kind, kind, event_cursor, files_json, dispatch_json)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
     )?
     .execute(params![
         letter.id,
@@ -374,7 +425,8 @@ pub(crate) fn insert(conn: &rusqlite::Connection, letter: &Letter) -> rusqlite::
         letter.from.kind,
         letter.kind,
         letter.event_cursor,
-        files_json(&letter.files)
+        files_json(&letter.files),
+        dispatch_json(letter.dispatch.as_ref())
     ])?;
     Ok(())
 }
@@ -384,6 +436,16 @@ fn files_json(files: &[AttachedFile]) -> Option<String> {
     (!files.is_empty()).then(|| serde_json::to_string(files).unwrap_or_default())
 }
 
+/// What a letter's dispatch is stored as: nothing for a letter with none.
+fn dispatch_json(dispatch: Option<&Dispatch>) -> Option<String> {
+    dispatch.and_then(|dispatch| serde_json::to_string(dispatch).ok())
+}
+
+/// The dispatch a stored letter holds. A column that does not read is none.
+fn dispatch_from(json: Option<String>) -> Option<Dispatch> {
+    json.and_then(|json| serde_json::from_str(&json).ok())
+}
+
 /// The files a stored letter holds. A column that does not read is no files.
 fn files_from(json: Option<String>) -> Vec<AttachedFile> {
     json.and_then(|json| serde_json::from_str(&json).ok()).unwrap_or_default()
@@ -391,19 +453,22 @@ fn files_from(json: Option<String>) -> Vec<AttachedFile> {
 
 /// Drop a message in a box.
 pub fn enqueue(store: &Store, to_session: &str, from: &BotRef, text: &str) -> Result<Letter, String> {
-    enqueue_with_files(store, to_session, from, text, Vec::new())
+    enqueue_with_files(store, to_session, from, text, Vec::new(), None)
 }
 
-/// Drop a message in a box with the files its writer attached to it.
+/// Drop a message in a box with the files its writer attached to it and the
+/// command and skills they picked.
 pub fn enqueue_with_files(
     store: &Store,
     to_session: &str,
     from: &BotRef,
     text: &str,
     files: Vec<AttachedFile>,
+    dispatch: Option<Dispatch>,
 ) -> Result<Letter, String> {
     let mut letter = Letter::new(to_session, from, text, MESSAGE, None);
     letter.files = files;
+    letter.dispatch = dispatch;
     put(store, letter)
 }
 
@@ -419,19 +484,22 @@ pub fn put(store: &Store, letter: Letter) -> Result<Letter, String> {
 /// writing to a child. Kept like any other, already claimed, so no turn's end
 /// hands it over again; the turn that carries it marks it delivered.
 pub fn record_claimed(store: &Store, to_session: &str, from: &BotRef, text: &str) -> Result<Letter, String> {
-    record_claimed_with_files(store, to_session, from, text, Vec::new())
+    record_claimed_with_files(store, to_session, from, text, Vec::new(), None)
 }
 
-/// [`record_claimed`] for a message with files attached.
+/// [`record_claimed`] for a message with files attached and a command and
+/// skills picked.
 pub fn record_claimed_with_files(
     store: &Store,
     to_session: &str,
     from: &BotRef,
     text: &str,
     files: Vec<AttachedFile>,
+    dispatch: Option<Dispatch>,
 ) -> Result<Letter, String> {
     let mut letter = Letter::new(to_session, from, text, MESSAGE, None);
     letter.files = files;
+    letter.dispatch = dispatch;
     store.with(|conn| {
         insert(conn, &letter)?;
         conn.prepare_cached("UPDATE mailbox SET claimed_at = ?2 WHERE id = ?1")?.execute(params![letter.id, letter.at])
@@ -543,16 +611,17 @@ pub fn edit(
 ) -> Result<(), String> {
     store.with(|conn| {
         let tx = conn.unchecked_transaction()?;
-        let held: Option<Option<String>> = tx
+        let held: Option<(Option<String>, Option<String>)> = tx
             .prepare_cached(&format!(
-                "SELECT files_json FROM mailbox
+                "SELECT files_json, dispatch_json FROM mailbox
                   WHERE id = ?1 AND to_session = ?2 AND from_kind = 'user' AND from_session IS NULL AND {PENDING}"
             ))?
-            .query_row(params![letter_id, session_id], |row| row.get(0))
+            .query_row(params![letter_id, session_id], |row| Ok((row.get(0)?, row.get(1)?)))
             .optional()?;
-        let Some(held) = held else {
+        let Some((held, dispatch)) = held else {
             return Ok(Err(not_the_users_to_change(&tx, session_id, letter_id, "edited")));
         };
+        let dispatch = dispatch_from(dispatch).and_then(|dispatch| dispatch.kept_by(text));
         let files = match files {
             None => held,
             // The ones it already holds keep what was known of them (an image
@@ -571,8 +640,8 @@ pub fn edit(
         if text.trim().is_empty() && files.is_none() {
             return Ok(Err("A message needs some text or a file.".to_string()));
         }
-        tx.prepare_cached("UPDATE mailbox SET text = ?2, files_json = ?3 WHERE id = ?1")?
-            .execute(params![letter_id, text, files])?;
+        tx.prepare_cached("UPDATE mailbox SET text = ?2, files_json = ?3, dispatch_json = ?4 WHERE id = ?1")?
+            .execute(params![letter_id, text, files, dispatch_json(dispatch.as_ref())])?;
         tx.commit()?;
         Ok(Ok(()))
     })?
@@ -664,10 +733,9 @@ fn put_first(conn: &rusqlite::Connection, session_id: &str, letter_ids: &[String
     Ok(named.len())
 }
 
-const SELECT: &str =
-    "SELECT id, to_session, from_session, from_name, text, at, from_kind, kind, event_cursor, files_json FROM mailbox";
+const SELECT: &str = "SELECT id, to_session, from_session, from_name, text, at, from_kind, kind, event_cursor, files_json, dispatch_json FROM mailbox";
 const RETURNING: &str =
-    "RETURNING id, to_session, from_session, from_name, text, at, from_kind, kind, event_cursor, files_json";
+    "RETURNING id, to_session, from_session, from_name, text, at, from_kind, kind, event_cursor, files_json, dispatch_json";
 
 /// The order a box hands its letters over in: the one the user put the queue
 /// in, else the one they came in. A reordered letter's `queue_order` stands in
@@ -691,6 +759,7 @@ fn row_to_letter(row: &rusqlite::Row) -> rusqlite::Result<Letter> {
         kind: row.get(7)?,
         event_cursor: row.get(8)?,
         files: files_from(row.get(9)?),
+        dispatch: dispatch_from(row.get(10)?),
     })
 }
 
@@ -733,6 +802,9 @@ pub fn claim(store: &Store, to_session: &str) -> Result<Option<Letter>, String> 
 
 /// Claim what one turn is handed: every waiting letter, in queue order, until
 /// their text passes `cap` characters (the first is taken whatever its size).
+/// A letter with a command is a turn of its own: it joins no other, so a
+/// `/compact` is neither run with the letters before it nor given the next one
+/// as its arguments.
 pub fn claim_batch(store: &Store, to_session: &str, cap: usize) -> Result<Vec<Letter>, String> {
     store.with(|conn| {
         let tx = conn.unchecked_transaction()?;
@@ -746,11 +818,15 @@ pub fn claim_batch(store: &Store, to_session: &str, cap: usize) -> Result<Vec<Le
         let mut spent = 0;
         for letter in pending {
             let size = letter.text.chars().count();
-            if !batch.is_empty() && spent + size > cap {
+            let command = letter.dispatch.as_ref().is_some_and(|dispatch| dispatch.command.is_some());
+            if !batch.is_empty() && (command || spent + size > cap) {
                 break;
             }
             spent += size;
             batch.push(letter);
+            if command {
+                break;
+            }
         }
         let now = now_millis();
         for letter in &batch {
@@ -1540,7 +1616,7 @@ mod tests {
     fn a_letter_keeps_its_files_from_the_box_to_the_turn() {
         let store = store();
         let to = session(&store, "to");
-        let sent = enqueue_with_files(&store, &to, &user(), "look", vec![file("/tmp/a.md"), file("/tmp/b.png")]).expect("enqueue");
+        let sent = enqueue_with_files(&store, &to, &user(), "look", vec![file("/tmp/a.md"), file("/tmp/b.png")], None).expect("enqueue");
         enqueue(&store, &to, &user(), "and no more").expect("enqueue");
         let queue = pending(&store, &to).expect("pending");
         assert_eq!(queue[0].files, Some(vec!["/tmp/a.md".to_string(), "/tmp/b.png".to_string()]));
@@ -1551,13 +1627,104 @@ mod tests {
         assert_eq!(pending(&store, &to).expect("pending")[0].queue, "steering", "claimed, not read");
     }
 
+    fn dispatch(command: Option<&str>, skills: &[&str]) -> Option<Dispatch> {
+        Dispatch::of(command, Some(&skills.iter().map(|skill| skill.to_string()).collect::<Vec<_>>()))
+    }
+
+    /// A message that asks for nothing has no dispatch at all, so a letter
+    /// stored before the column existed and one without a command read alike.
+    #[test]
+    fn a_message_with_no_command_or_skills_has_no_dispatch() {
+        assert_eq!(Dispatch::of(None, None), None);
+        assert_eq!(Dispatch::of(Some("  "), Some(&[])), None);
+        assert_eq!(dispatch(Some("compact"), &[]), Some(Dispatch { command: Some("compact".into()), skills: Vec::new() }));
+    }
+
+    /// The command and skills the user picked stay with their letter from the
+    /// box to the turn, whether it waited or was claimed on arrival.
+    #[test]
+    fn a_letter_keeps_its_command_and_skills_from_the_box_to_the_turn() {
+        let store = store();
+        let to = session(&store, "to");
+        let waits = enqueue_with_files(&store, &to, &user(), "/review main", Vec::new(), dispatch(Some("review"), &[])).expect("enqueue");
+        let skilled = enqueue_with_files(&store, &to, &user(), "use /lint here", Vec::new(), dispatch(None, &["lint"])).expect("enqueue");
+        let batch = claim_batch(&store, &to, BATCH_CHARS).expect("claim");
+        assert_eq!(batch, vec![waits]);
+        assert_eq!(claim_batch(&store, &to, BATCH_CHARS).expect("next"), vec![skilled]);
+        let direct = record_claimed_with_files(&store, &to, &user(), "/goal ship it", Vec::new(), dispatch(Some("goal"), &[])).expect("claimed");
+        release(&store, &direct.id).expect("release");
+        assert_eq!(claim_batch(&store, &to, BATCH_CHARS).expect("again")[0].dispatch, dispatch(Some("goal"), &[]));
+    }
+
+    /// A letter with a command is a turn of its own: the letters before it
+    /// leave in a batch without it, and the letters after it do not become its
+    /// arguments.
+    #[test]
+    fn a_command_goes_in_a_batch_of_its_own() {
+        let store = store();
+        let to = session(&store, "to");
+        for text in ["one", "two"] {
+            enqueue(&store, &to, &user(), text).expect("enqueue");
+        }
+        enqueue_with_files(&store, &to, &user(), "/compact", Vec::new(), dispatch(Some("compact"), &[])).expect("enqueue");
+        for text in ["three", "four"] {
+            enqueue(&store, &to, &user(), text).expect("enqueue");
+        }
+        let batches: Vec<Vec<String>> = (0..3)
+            .map(|_| claim_batch(&store, &to, BATCH_CHARS).expect("claim").into_iter().map(|letter| letter.text).collect())
+            .collect();
+        assert_eq!(batches, [vec!["one", "two"], vec!["/compact"], vec!["three", "four"]]);
+        assert!(claim_batch(&store, &to, BATCH_CHARS).expect("empty").is_empty());
+    }
+
+    /// Two commands in a row are two turns, and a command first in the box
+    /// still leaves the next letter for the turn after it.
+    #[test]
+    fn a_command_first_in_the_box_does_not_take_the_next_letter_with_it() {
+        let store = store();
+        let to = session(&store, "to");
+        enqueue_with_files(&store, &to, &user(), "/compact", Vec::new(), dispatch(Some("compact"), &[])).expect("enqueue");
+        enqueue_with_files(&store, &to, &user(), "/review", Vec::new(), dispatch(Some("review"), &[])).expect("enqueue");
+        enqueue(&store, &to, &user(), "after").expect("enqueue");
+        let sizes: Vec<usize> = (0..3).map(|_| claim_batch(&store, &to, BATCH_CHARS).expect("claim").len()).collect();
+        assert_eq!(sizes, [1, 1, 1]);
+    }
+
+    /// A skill alone joins the letters around it: it is text the model reads
+    /// with the rest.
+    #[test]
+    fn a_letter_with_only_skills_joins_a_batch() {
+        let store = store();
+        let to = session(&store, "to");
+        enqueue(&store, &to, &user(), "one").expect("enqueue");
+        enqueue_with_files(&store, &to, &user(), "/lint two", Vec::new(), dispatch(None, &["lint"])).expect("enqueue");
+        assert_eq!(claim_batch(&store, &to, BATCH_CHARS).expect("claim").len(), 2);
+    }
+
+    /// An edit that no longer opens with the command, or no longer names a
+    /// skill, takes it from the letter: the text is what is sent.
+    #[test]
+    fn an_edit_keeps_only_the_command_and_skills_the_text_still_names() {
+        let store = store();
+        let to = session(&store, "to");
+        let both = || dispatch(Some("review"), &["lint"]);
+        let skill_gone = enqueue_with_files(&store, &to, &user(), "/review /lint main", Vec::new(), both()).expect("enqueue");
+        let command_gone = enqueue_with_files(&store, &to, &user(), "/review /lint main", Vec::new(), both()).expect("enqueue");
+        let both_gone = enqueue_with_files(&store, &to, &user(), "/review /lint main", Vec::new(), both()).expect("enqueue");
+        edit(&store, &to, &skill_gone.id, "/review the lint changes", None).expect("edit");
+        edit(&store, &to, &command_gone.id, "please run /lint now", None).expect("edit");
+        edit(&store, &to, &both_gone.id, "just words", None).expect("edit");
+        let kept: Vec<Option<Dispatch>> = waiting(&store, &to).expect("waiting").into_iter().map(|letter| letter.dispatch).collect();
+        assert_eq!(kept, [dispatch(Some("review"), &[]), dispatch(None, &["lint"]), None]);
+    }
+
     /// The user changes what they wrote while it waits; a turn that took it is past that.
     #[test]
     fn an_edit_changes_a_waiting_letter_and_is_refused_once_it_is_claimed() {
         let store = store();
         let to = session(&store, "to");
         let from = session(&store, "from");
-        let mine = enqueue_with_files(&store, &to, &user(), "draft", vec![file("/tmp/a.md")]).expect("enqueue");
+        let mine = enqueue_with_files(&store, &to, &user(), "draft", vec![file("/tmp/a.md")], None).expect("enqueue");
         edit(&store, &to, &mine.id, "better", None).expect("edit the text alone");
         edit(&store, &to, &mine.id, "best", Some(vec!["/tmp/a.md".into(), "/tmp/c.md".into()])).expect("edit both");
         let queue = pending(&store, &to).expect("pending");

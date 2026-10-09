@@ -222,11 +222,160 @@ pub fn text_input(text: &str) -> Value {
     json!([{ "type": "text", "text": text, "text_elements": [] }])
 }
 
+/// A user message that invokes skills. Codex names a skill `$name` in the
+/// text, so each `/name` the user typed becomes that, and a skill whose file
+/// is known also goes as an input item of its own, which is what loads it
+/// ahead of the text. One whose file is not (the catalog was not read) stays
+/// a `$name` the model may or may not act on.
+pub fn skills_input(text: &str, skills: &[(String, Option<String>)]) -> Value {
+    let mut marks: Vec<(usize, usize)> = skills
+        .iter()
+        .flat_map(|(name, _)| super::invocations(text, name).into_iter().map(move |at| (at, name.len())))
+        .collect();
+    marks.sort();
+    marks.dedup();
+    let mut named = String::new();
+    let mut from = 0;
+    for (at, len) in marks {
+        named.push_str(&text[from..at]);
+        named.push('$');
+        named.push_str(&text[at + 1..at + 1 + len]);
+        from = at + 1 + len;
+    }
+    named.push_str(&text[from..]);
+    let mut input = vec![json!({ "type": "text", "text": named, "text_elements": [] })];
+    input.extend(
+        skills
+            .iter()
+            .filter_map(|(name, path)| Some(json!({ "type": "skill", "name": name, "path": path.as_deref()? }))),
+    );
+    Value::Array(input)
+}
+
+/// A command Crew maps to a method of Codex's own, and what it was given.
+/// Codex lists none of these, so the menu carries them.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CodexCommand {
+    /// `thread/compact/start`. Runs like a turn.
+    Compact,
+    /// `review/start`, of the working tree or, with arguments, as they say.
+    /// Runs like a turn.
+    Review(Option<String>),
+    /// `thread/goal/set`.
+    GoalSet(String),
+    /// `thread/goal/get`, for a goal with no objective.
+    GoalGet,
+    /// `thread/goal/clear`.
+    GoalClear,
+    /// `mcpServerStatus/list`.
+    Mcp,
+}
+
+impl CodexCommand {
+    /// The command a message opens with, when it is one of these. The message
+    /// is the command and its arguments, so `/compact` has to be the first
+    /// word; any other command is left to be a turn.
+    pub fn read(text: &str, command: Option<&str>) -> Option<Self> {
+        let name = command?;
+        let text = text.trim();
+        if !super::invokes_at(text, 0, name) {
+            return None;
+        }
+        let args = text[1 + name.len()..].trim();
+        match name {
+            "compact" => Some(Self::Compact),
+            "review" => Some(Self::Review(Some(args.to_string()).filter(|args| !args.is_empty()))),
+            "goal" if args.is_empty() => Some(Self::GoalGet),
+            "goal" if args == "clear" => Some(Self::GoalClear),
+            "goal" => Some(Self::GoalSet(args.to_string())),
+            "mcp" => Some(Self::Mcp),
+            _ => None,
+        }
+    }
+
+    /// Whether Codex runs it as a turn of its own (it streams events and ends
+    /// with `turn/completed`). The rest are answered at once.
+    pub fn runs_as_turn(&self) -> bool {
+        matches!(self, Self::Compact | Self::Review(_))
+    }
+
+    /// The method and its parameters.
+    pub fn request(&self, thread_id: &str) -> (&'static str, Value) {
+        match self {
+            Self::Compact => ("thread/compact/start", json!({ "threadId": thread_id })),
+            Self::Review(None) => (
+                "review/start",
+                json!({ "threadId": thread_id, "target": { "type": "uncommittedChanges" } }),
+            ),
+            Self::Review(Some(instructions)) => (
+                "review/start",
+                json!({ "threadId": thread_id, "target": { "type": "custom", "instructions": instructions } }),
+            ),
+            Self::GoalSet(objective) => ("thread/goal/set", json!({ "threadId": thread_id, "objective": objective })),
+            Self::GoalGet => ("thread/goal/get", json!({ "threadId": thread_id })),
+            Self::GoalClear => ("thread/goal/clear", json!({ "threadId": thread_id })),
+            // Without the schemas of every tool, which are most of the answer
+            // and not what a list of servers shows. With the thread, so the
+            // status is that of its own connections.
+            Self::Mcp => ("mcpServerStatus/list", json!({ "threadId": thread_id, "detail": "toolsAndAuthOnly" })),
+        }
+    }
+
+    /// What the user is told of the answer, for a command that is not a turn.
+    pub fn note(&self, answer: &Value) -> String {
+        match self {
+            Self::GoalSet(_) | Self::GoalGet => match answer.get("goal").filter(|goal| !goal.is_null()) {
+                Some(goal) => {
+                    let text = |key: &str| goal.get(key).and_then(Value::as_str).unwrap_or_default();
+                    format!("Goal ({}): {}", text("status"), text("objective"))
+                }
+                None => "No goal is set.".into(),
+            },
+            Self::GoalClear => {
+                if answer.get("cleared").and_then(Value::as_bool) == Some(true) {
+                    "Goal cleared".into()
+                } else {
+                    "No goal was set.".into()
+                }
+            }
+            Self::Mcp => mcp_note(answer),
+            Self::Compact | Self::Review(_) => String::new(),
+        }
+    }
+}
+
+/// The MCP servers of a `mcpServerStatus/list` answer, one line each.
+fn mcp_note(answer: &Value) -> String {
+    let servers = answer.get("data").and_then(Value::as_array).map(Vec::as_slice).unwrap_or_default();
+    if servers.is_empty() {
+        return "No MCP servers are configured.".into();
+    }
+    let lines: Vec<String> = servers
+        .iter()
+        .map(|server| {
+            let name = server.get("name").and_then(Value::as_str).unwrap_or("?");
+            let status = server.get("runtimeStatus").and_then(Value::as_str).unwrap_or("not started");
+            let tools = server.get("tools").and_then(Value::as_object).map_or(0, Map::len);
+            let mut line = format!("- {name}: {status}, {tools} {}", if tools == 1 { "tool" } else { "tools" });
+            if let Some(error) = server.get("toolsError").and_then(Value::as_str).filter(|error| !error.is_empty()) {
+                line.push_str(&format!(" ({error})"));
+            }
+            line
+        })
+        .collect();
+    format!("MCP servers\n{}", lines.join("\n"))
+}
+
 /// `turn/start`. The instructions go in `additionalContext` on every turn,
 /// not in `developerInstructions`, which newer model catalogs override
 /// (T3 Code found it; plan §7e.7).
 pub fn turn_start_params(thread_id: &str, text: &str, instructions: Option<&str>) -> Value {
-    let mut params = json!({ "threadId": thread_id, "input": text_input(text) });
+    turn_start_input(thread_id, text_input(text), instructions)
+}
+
+/// [`turn_start_params`] for an input already built, as skills make one.
+pub fn turn_start_input(thread_id: &str, input: Value, instructions: Option<&str>) -> Value {
+    let mut params = json!({ "threadId": thread_id, "input": input });
     if let Some(instructions) = instructions.filter(|text| !text.trim().is_empty()) {
         params["additionalContext"] = json!({ CONTEXT_KEY: { "kind": "application", "value": instructions } });
     }
@@ -1006,6 +1155,99 @@ mod protocol_tests {
         assert_eq!(params["additionalContext"]["crew"], json!({ "kind": "application", "value": "You are Planner." }));
         assert!(turn_start_params("t1", "x", None).get("additionalContext").is_none());
         assert_eq!(steer_params("t1", "u1", "more")["expectedTurnId"], "u1");
+    }
+
+    fn skill(name: &str, path: Option<&str>) -> (String, Option<String>) {
+        (name.into(), path.map(str::to_string))
+    }
+
+    /// A skill is `$name` in the text and an input item that names its file,
+    /// which is what makes Codex load it ahead of the text.
+    #[test]
+    fn a_skill_is_a_dollar_name_in_the_text_and_an_item_with_its_file() {
+        let input = skills_input(
+            "run /lint on src and then /fmt",
+            &[skill("lint", Some("/repo/.agents/skills/lint/SKILL.md")), skill("fmt", Some("/repo/.agents/skills/fmt/SKILL.md"))],
+        );
+        assert_eq!(
+            input,
+            json!([
+                { "type": "text", "text": "run $lint on src and then $fmt", "text_elements": [] },
+                { "type": "skill", "name": "lint", "path": "/repo/.agents/skills/lint/SKILL.md" },
+                { "type": "skill", "name": "fmt", "path": "/repo/.agents/skills/fmt/SKILL.md" },
+            ])
+        );
+    }
+
+    /// A skill the catalog has no file for is only the name in the text; a
+    /// name that is part of a longer one or of a path is left alone.
+    #[test]
+    fn a_skill_without_a_file_is_only_a_dollar_name() {
+        let input = skills_input("/lint first, see src/lint and /linting", &[skill("lint", None)]);
+        assert_eq!(input, json!([{ "type": "text", "text": "$lint first, see src/lint and /linting", "text_elements": [] }]));
+        let twice = skills_input("/lint then /lint", &[skill("lint", Some("/s/SKILL.md")), skill("lint", Some("/s/SKILL.md"))]);
+        assert_eq!(twice[0]["text"], "$lint then $lint");
+    }
+
+    /// The commands Crew maps to Codex's own methods, and the parameters each
+    /// is sent with.
+    #[test]
+    fn a_command_becomes_the_method_that_does_it() {
+        let read = |text: &str, name: &str| CodexCommand::read(text, Some(name)).expect(text);
+        assert_eq!(read("/compact", "compact").request("t1"), ("thread/compact/start", json!({ "threadId": "t1" })));
+        assert_eq!(
+            read("/review", "review").request("t1"),
+            ("review/start", json!({ "threadId": "t1", "target": { "type": "uncommittedChanges" } }))
+        );
+        assert_eq!(
+            read("/review the auth change", "review").request("t1"),
+            ("review/start", json!({ "threadId": "t1", "target": { "type": "custom", "instructions": "the auth change" } }))
+        );
+        assert_eq!(
+            read("/goal ship the importer", "goal").request("t1"),
+            ("thread/goal/set", json!({ "threadId": "t1", "objective": "ship the importer" }))
+        );
+        assert_eq!(read("/goal", "goal").request("t1"), ("thread/goal/get", json!({ "threadId": "t1" })));
+        assert_eq!(read("/goal clear", "goal").request("t1"), ("thread/goal/clear", json!({ "threadId": "t1" })));
+        assert_eq!(read("/mcp", "mcp").request("t1").0, "mcpServerStatus/list");
+        assert_eq!(read("/mcp", "mcp").request("t1").1["threadId"], "t1");
+    }
+
+    /// Compact and review stream and end as turns; the others are answered at once.
+    #[test]
+    fn compact_and_review_run_as_turns_and_the_rest_answer_at_once() {
+        let runs = |text: &str, name: &str| CodexCommand::read(text, Some(name)).expect(text).runs_as_turn();
+        assert!(runs("/compact", "compact") && runs("/review", "review"));
+        assert!(!runs("/goal", "goal") && !runs("/goal x", "goal") && !runs("/mcp", "mcp"));
+    }
+
+    /// Anything else is a turn: another command, no command, or one that does
+    /// not open the text.
+    #[test]
+    fn a_message_that_is_not_one_of_the_mapped_commands_is_a_turn() {
+        assert_eq!(CodexCommand::read("/init", Some("init")), None);
+        assert_eq!(CodexCommand::read("hello", None), None);
+        assert_eq!(CodexCommand::read("then /compact", Some("compact")), None);
+        assert_eq!(CodexCommand::read("/compacting", Some("compact")), None);
+    }
+
+    /// What the user is told of the answers that are not turns.
+    #[test]
+    fn the_answers_that_are_not_turns_become_notes() {
+        let goal = json!({ "goal": { "objective": "ship it", "status": "active", "threadId": "t1", "createdAt": 1, "updatedAt": 1, "timeUsedSeconds": 0, "tokensUsed": 0 } });
+        assert_eq!(CodexCommand::GoalGet.note(&goal), "Goal (active): ship it");
+        assert_eq!(CodexCommand::GoalSet("ship it".into()).note(&goal), "Goal (active): ship it");
+        assert_eq!(CodexCommand::GoalGet.note(&json!({ "goal": null })), "No goal is set.");
+        assert_eq!(CodexCommand::GoalClear.note(&json!({ "cleared": true })), "Goal cleared");
+        let servers = json!({ "data": [
+            { "name": "crew", "runtimeStatus": "connected", "tools": { "a": {}, "b": {} } },
+            { "name": "docs", "runtimeStatus": null, "tools": {}, "toolsError": "spawn failed" },
+        ] });
+        assert_eq!(
+            CodexCommand::Mcp.note(&servers),
+            "MCP servers\n- crew: connected, 2 tools\n- docs: not started, 0 tools (spawn failed)"
+        );
+        assert_eq!(CodexCommand::Mcp.note(&json!({ "data": [] })), "No MCP servers are configured.");
     }
 
     #[test]

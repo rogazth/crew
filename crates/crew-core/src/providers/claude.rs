@@ -182,7 +182,45 @@ pub fn build_claude_user_message(
     files: &[String],
     images: &[InlineImage],
 ) -> Value {
-    let body = super::assemble(String::new(), history, &with_attached_paths(text.trim(), files));
+    build_claude_dispatch_message(session_id, history, text, files, images, None, &[])
+}
+
+/// Where a command or the first skill opens in `text`, and the text from
+/// there: `(before, Some("/name rest"))`. The CLI expands a slash only at the
+/// start of the last block, so the message is cut where the invocation is. A
+/// command opens the whole message, so it counts only at the very start; a
+/// skill counts as a word of its own wherever it stands (see
+/// [`super::invokes_at`]). With neither found, the text is all `before`.
+fn split_at_invocation<'a>(text: &'a str, command: Option<&str>, skills: &[String]) -> (&'a str, Option<&'a str>) {
+    let text = text.trim();
+    if command.is_some_and(|name| !name.is_empty() && super::invokes_at(text, 0, name)) {
+        return ("", Some(text));
+    }
+    let first = skills.iter().filter_map(|name| super::invocations(text, name).into_iter().next()).min();
+    match first {
+        Some(at) => (text[..at].trim_end(), Some(&text[at..])),
+        None => (text, None),
+    }
+}
+
+/// [`build_claude_user_message`] for a message that opens with a command or
+/// invokes skills. Images come first. Then the text before the command or the
+/// first skill is a block of its own, and it carries the history and the
+/// attached-files note: the note at the end of the block that holds the slash
+/// would become the command's arguments. The invocation, `/name rest`, is the
+/// last block, where the CLI expands it. Other skills stay inline in `rest` as
+/// `/name`, for the model to start with its Skill tool.
+pub fn build_claude_dispatch_message(
+    session_id: &str,
+    history: Option<&str>,
+    text: &str,
+    files: &[String],
+    images: &[InlineImage],
+    command: Option<&str>,
+    skills: &[String],
+) -> Value {
+    let (before, invocation) = split_at_invocation(text, command, skills);
+    let body = super::assemble(String::new(), history, &with_attached_paths(before, files));
     let mut content: Vec<Value> = images
         .iter()
         .map(|image| {
@@ -196,8 +234,11 @@ pub fn build_claude_user_message(
             })
         })
         .collect();
-    if !body.is_empty() || content.is_empty() {
+    if !body.is_empty() || (content.is_empty() && invocation.is_none()) {
         content.push(json!({ "type": "text", "text": body }));
+    }
+    if let Some(invocation) = invocation {
+        content.push(json!({ "type": "text", "text": invocation }));
     }
     json!({
         "type": "user",
@@ -1231,6 +1272,89 @@ mod tests {
     use crate::turns::TurnHost;
     use crew_protocol::{HarnessEvent, TodoItem, TodoStatus, ToolDetail};
     use serde_json::json;
+
+    fn blocks(message: &Value) -> Vec<(String, String)> {
+        message["message"]["content"]
+            .as_array()
+            .expect("content")
+            .iter()
+            .map(|block| {
+                (block["type"].as_str().unwrap_or_default().to_string(), block["text"].as_str().unwrap_or_default().to_string())
+            })
+            .collect()
+    }
+
+    fn text(block: &str) -> (String, String) {
+        ("text".into(), block.into())
+    }
+
+    fn skills(names: &[&str]) -> Vec<String> {
+        names.iter().map(|name| name.to_string()).collect()
+    }
+
+    /// The CLI expands a slash only at the start of the last block, so a
+    /// command is a block on its own, last, and what the user typed before a
+    /// skill is the block ahead of it.
+    #[test]
+    fn a_command_is_the_last_block_and_the_text_before_a_skill_is_the_block_ahead() {
+        let command = build_claude_dispatch_message("s", None, "/compact keep the tests", &[], &[], Some("compact"), &[]);
+        assert_eq!(blocks(&command), [text("/compact keep the tests")]);
+
+        let skill = build_claude_dispatch_message("s", None, "check this, then /lint src and /fmt", &[], &[], None, &skills(&["lint", "fmt"]));
+        assert_eq!(blocks(&skill), [text("check this, then"), text("/lint src and /fmt")]);
+
+        let leading = build_claude_dispatch_message("s", None, "/fmt then /lint", &[], &[], None, &skills(&["lint", "fmt"]));
+        assert_eq!(blocks(&leading), [text("/fmt then /lint")], "nothing before it, so no block ahead of it");
+    }
+
+    /// The attached-files note rides in the block ahead of the slash. At the
+    /// end of the block that holds it, it would become the command's arguments.
+    #[test]
+    fn the_files_note_goes_in_the_block_before_the_slash_not_in_it() {
+        let files = vec!["/tmp/a.md".to_string()];
+        let note = "Attached files. Read them if you need their contents:\n- /tmp/a.md";
+
+        let command = build_claude_dispatch_message("s", None, "/review main", &files, &[], Some("review"), &[]);
+        assert_eq!(blocks(&command), [text(note), text("/review main")]);
+
+        let skill = build_claude_dispatch_message("s", None, "look at it /lint", &files, &[], None, &skills(&["lint"]));
+        assert_eq!(blocks(&skill), [text(&format!("look at it\n\n{note}")), text("/lint")]);
+
+        let plain = build_claude_dispatch_message("s", None, "no slash here", &files, &[], None, &skills(&["lint"]));
+        assert_eq!(blocks(&plain), [text(&format!("no slash here\n\n{note}"))], "a skill the text does not name changes nothing");
+    }
+
+    /// Images come first, whatever follows.
+    #[test]
+    fn images_come_before_every_text_block() {
+        let image = InlineImage { path: "/tmp/a.png".into(), media_type: "image/png".into(), data: "AAAA".into() };
+        let message = build_claude_dispatch_message("s", None, "see /lint", &[], &[image], None, &skills(&["lint"]));
+        let kinds: Vec<String> = blocks(&message).into_iter().map(|(kind, _)| kind).collect();
+        assert_eq!(kinds, ["image", "text", "text"]);
+        assert_eq!(blocks(&message)[1], text("see"));
+    }
+
+    /// A name that only starts like the command or the skill is not it, and
+    /// a command that does not open the text is left as text.
+    #[test]
+    fn a_name_is_matched_as_a_word_not_as_a_prefix() {
+        let split = |text: &str, command: Option<&str>, names: &[&str]| {
+            blocks(&build_claude_dispatch_message("s", None, text, &[], &[], command, &skills(names)))
+        };
+        assert_eq!(split("/linting now", None, &["lint"]), [text("/linting now")]);
+        assert_eq!(split("see src/lint and /lint/x", None, &["lint"]), [text("see src/lint and /lint/x")]);
+        assert_eq!(split("run /lint. Then stop", None, &["lint"]), [text("run"), text("/lint. Then stop")]);
+        assert_eq!(split("/compacting", Some("compact"), &[]), [text("/compacting")]);
+        assert_eq!(split("do /compact", Some("compact"), &[]), [text("do /compact")]);
+        assert_eq!(split("/figma:use now", Some("figma:use"), &[]), [text("/figma:use now")]);
+    }
+
+    /// The tail a bot is handed goes with the text before the slash.
+    #[test]
+    fn the_history_goes_with_the_text_before_the_slash() {
+        let message = build_claude_dispatch_message("s", Some("earlier"), "/lint", &[], &[], None, &skills(&["lint"]));
+        assert_eq!(blocks(&message), [text("earlier"), text("/lint")]);
+    }
 
     // Shapes as Claude Code 2.1.295 answers `get_context_usage`.
     #[test]

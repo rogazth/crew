@@ -525,6 +525,16 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         )?;
         tx.commit()?;
     }
+    if current < 32 {
+        let tx = conn.unchecked_transaction()?;
+        // The command and skills the user picked for a letter in the box.
+        crate::mailbox::migrate_dispatch(&tx)?;
+        tx.execute(
+            "INSERT INTO schema_migrations (version, applied_at) VALUES (32, ?1)",
+            params![now_millis()],
+        )?;
+        tx.commit()?;
+    }
     Ok(())
 }
 
@@ -1521,6 +1531,38 @@ mod background_entries_tests {
             .with(|conn| conn.query_row("SELECT COUNT(*) FROM background_entries", [], |row| row.get(0)))
             .unwrap();
         assert_eq!(rows, 0, "the session took its entries with it");
+    }
+
+    /// A v31 database has no column for what a letter asks of the provider.
+    /// Migration 32 adds it, and the letters already in the box read as asking
+    /// for nothing.
+    #[test]
+    fn a_v31_database_gains_the_dispatch_column_and_its_letters_ask_for_nothing() {
+        let dir = temp_dir("v32");
+        let path = dir.join("crew.sqlite3");
+        let to = {
+            let store = Store::open(path.clone()).expect("open");
+            let ws = crate::workspace::create(&store, "w".into(), dir.to_string_lossy().into()).expect("ws");
+            let session = crate::session::create(
+                &store, ws.id, "terminal".into(), "x".into(), "claude".into(), "m".into(), "".into(), "full".into(), None,
+            )
+            .expect("session");
+            crate::mailbox::enqueue(&store, &session.id, &crate::mailbox::user(), "before").expect("enqueue");
+            store
+                .with(|conn| {
+                    conn.execute_batch("ALTER TABLE mailbox DROP COLUMN dispatch_json; DELETE FROM schema_migrations WHERE version >= 32;")
+                })
+                .expect("downgrade");
+            session.id
+        };
+
+        let store = Store::open(path).expect("reopen");
+        let version: i64 = store
+            .with(|conn| conn.query_row("SELECT MAX(version) FROM schema_migrations", [], |row| row.get(0)))
+            .unwrap();
+        assert!(version >= 32, "{version}");
+        let waiting = crate::mailbox::waiting(&store, &to).expect("waiting");
+        assert_eq!((waiting.len(), waiting[0].dispatch.clone()), (1, None));
     }
 }
 

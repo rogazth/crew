@@ -17,8 +17,8 @@ use serde_json::{json, Map, Value};
 use crate::agent::AgentHost;
 use crate::bridge::Bridge;
 use crate::providers::claude::{
-    assistant_context, assistant_text_blocks, assistant_tool_uses, build_claude_spawn_args, build_claude_user_message,
-    build_control_request, build_control_response, get_context_usage_request, get_task_output_request,
+    assistant_context, assistant_text_blocks, assistant_tool_uses, build_claude_dispatch_message, build_claude_spawn_args,
+    build_claude_user_message, build_control_request, build_control_response, get_context_usage_request, get_task_output_request,
     input_json_delta_from_event, is_compact_boundary, is_message_start, is_subagent_message,
     parse_context_usage, permission_mode, parse_control_cancel_id, parse_control_request, parse_control_response, parse_questions,
     result_context_window, stop_task_request,
@@ -204,6 +204,12 @@ fn attached(params: &TurnStart) -> Vec<AttachedFile> {
         }
     }
     files
+}
+
+/// The command and skills a message asks for, as the letter that carries it
+/// keeps them.
+fn dispatch_of(params: &TurnStart) -> Option<mailbox::Dispatch> {
+    mailbox::Dispatch::of(params.command.as_deref(), params.skills.as_deref())
 }
 
 /// What `begin` answers when the session has a turn already.
@@ -469,7 +475,7 @@ impl Steer {
                 let _ = mailbox::release(store, &id);
             }
             None => {
-                let _ = mailbox::enqueue_with_files(store, session_id, &self.from, &self.text, self.files);
+                let _ = mailbox::enqueue_with_files(store, session_id, &self.from, &self.text, self.files, None);
             }
         }
     }
@@ -903,7 +909,9 @@ impl TurnHost {
     ///   the queue.
     /// - Otherwise it waits in the queue, to go with whatever else waits as
     ///   one turn when the running one ends. `steer` where the provider cannot
-    ///   take one falls back to this.
+    ///   take one falls back to this. A message with a command or skills
+    ///   always waits (see [`TurnHost::hand_in`]), and one with a command goes
+    ///   as a turn of its own.
     /// - Idle, but with letters held (a stop leaves the queue to the user):
     ///   this message is the user saying go on. It joins the queue, and all of
     ///   it goes as one turn, in order.
@@ -942,8 +950,14 @@ impl TurnHost {
     /// letter it carries.
     fn start_with_letter(&self, session: &crate::session::Session, mut params: TurnStart) -> Result<TurnStarted, String> {
         let files = params.files.clone().unwrap_or_default();
-        let letter =
-            mailbox::record_claimed_with_files(&self.store, &session.id, &mailbox::user(), &params.text, files)?;
+        let letter = mailbox::record_claimed_with_files(
+            &self.store,
+            &session.id,
+            &mailbox::user(),
+            &params.text,
+            files,
+            dispatch_of(&params),
+        )?;
         params.letter_id = Some(letter.id.clone());
         match self.start(params) {
             Ok(started) => {
@@ -959,16 +973,29 @@ impl TurnHost {
 
     /// A message for a session that has a turn, or letters held: steered into
     /// the turn where the provider takes that, else in the queue. Whatever the
-    /// queue holds goes over at once if nothing runs.
+    /// queue holds goes over at once if nothing runs. A message with a command
+    /// is a turn of its own and one with skills needs them loaded ahead (a
+    /// steer is not known to expand them), so neither is ever steered.
     fn hand_in(&self, session: &crate::session::Session, params: TurnStart, mode: SendMode) -> Result<TurnStarted, String> {
         let id = session.id.as_str();
         let files = attached(&params);
+        let dispatch = dispatch_of(&params);
         let mut written = None;
-        if mode != SendMode::Queue && STEERABLE.contains(&session.provider.as_str()) && self.is_running(id) {
+        if mode != SendMode::Queue
+            && dispatch.is_none()
+            && STEERABLE.contains(&session.provider.as_str())
+            && self.is_running(id)
+        {
             // Claimed by the turn it is written into: read, it is delivered;
             // not taken, it is released and waits like any other.
-            let letter =
-                mailbox::record_claimed_with_files(&self.store, id, &mailbox::user(), &params.text, files.clone())?;
+            let letter = mailbox::record_claimed_with_files(
+                &self.store,
+                id,
+                &mailbox::user(),
+                &params.text,
+                files.clone(),
+                None,
+            )?;
             match self.steer_files(id, &params.text, mailbox::user(), Some(letter.id.clone()), files.clone()) {
                 Ok(()) => {
                     self.tell_parent(session, &letter.id);
@@ -986,7 +1013,7 @@ impl TurnHost {
         }
         let letter = match written {
             Some(letter) => letter,
-            None => mailbox::enqueue_with_files(&self.store, id, &mailbox::user(), &params.text, files)?,
+            None => mailbox::enqueue_with_files(&self.store, id, &mailbox::user(), &params.text, files, dispatch)?,
         };
         self.tell_parent(session, &letter.id);
         // Behind a turn that ended meanwhile, or onto a queue a stop held.
@@ -1068,6 +1095,11 @@ impl TurnHost {
             }
         }
         self.clear_stop(&params.session_id);
+        if drive == Driven::Bot {
+            // A bot's persona must not see the user's commands or skills.
+            params.command = None;
+            params.skills = None;
+        }
         // Read before the new message is appended: the tail is what the bot
         // is reminded of, and this turn is not history yet. A session that
         // carries on its provider's own conversation is handed none.
@@ -1104,10 +1136,17 @@ impl TurnHost {
                     );
                 }
             }
+            // A command is the whole message, so its letter goes as typed even
+            // to a child, whose other letters from the user are enveloped.
+            let as_typed = |letter: &mailbox::Letter| {
+                is_own(drive, letter)
+                    || (letter.dispatch.as_ref().is_some_and(|dispatch| dispatch.command.is_some())
+                        && typed_by_user(drive, &letter.from))
+            };
             params.text = letters
                 .iter()
                 .map(|letter| {
-                    if is_own(drive, letter) {
+                    if as_typed(letter) {
                         letter.text.clone()
                     } else {
                         mailbox::render(letter, session.parent_id.as_deref())
@@ -1115,6 +1154,18 @@ impl TurnHost {
                 })
                 .collect::<Vec<_>>()
                 .join("\n\n");
+            // What the batch asks of the provider: a command letter is a batch
+            // of its own (see `mailbox::claim_batch`), so it is the one letter
+            // and its command; otherwise the skills of every letter.
+            let asks = |letter: &mailbox::Letter| letter.dispatch.clone().unwrap_or_default();
+            params.command = letters.iter().find_map(|letter| asks(letter).command);
+            let mut skills: Vec<String> = Vec::new();
+            for skill in letters.iter().flat_map(|letter| asks(letter).skills) {
+                if !skills.contains(&skill) {
+                    skills.push(skill);
+                }
+            }
+            params.skills = Some(skills).filter(|skills| !skills.is_empty());
         } else {
             match params.from_bot.clone() {
                 Some(from) => {
@@ -2004,7 +2055,9 @@ impl TurnHost {
     ///
     /// The one place a turn's letters are claimed, so two callers racing cannot
     /// lose one between them: the loser finds an empty box, which is the truth.
-    /// Always queued, never steered into a running turn.
+    /// Always queued, never steered into a running turn. A letter with a
+    /// command is a batch of its own, and `begin` takes the command and the
+    /// skills the batch's letters carry.
     pub fn drain_mailbox(&self, session_id: &str) -> bool {
         // Before claiming, so a letter for a busy session stays pending: a
         // wait that reads the same report can then take it back. The turn
@@ -2419,12 +2472,14 @@ impl TurnHost {
         let images = crate::files::load_inline_images(params.files.as_deref().unwrap_or(&[]));
         let inline: HashSet<String> = images.iter().map(|image| image.path.clone()).collect();
         let files = path_list(params, &inline);
-        let message = build_claude_user_message(
+        let message = build_claude_dispatch_message(
             &claude_session_id,
             history.as_deref(),
             params.text.trim(),
             &files,
             &images,
+            params.command.as_deref(),
+            params.skills.as_deref().unwrap_or_default(),
         );
         if let Err(error) = self
             .agents

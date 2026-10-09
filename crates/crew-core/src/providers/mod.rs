@@ -40,6 +40,27 @@ pub fn with_files(text: &str, files: &[String]) -> String {
     }
 }
 
+/// Whether `/name` stands at byte `at` of `text` as a word of its own: at the
+/// start or after a space, and not run on into more of a name (`/lint` is not
+/// in `/linting`, `a/lint` or `/lint/x`). A full stop or a comma after it is
+/// the sentence's.
+pub(crate) fn invokes_at(text: &str, at: usize, name: &str) -> bool {
+    let Some(rest) = text[at..].strip_prefix('/').and_then(|rest| rest.strip_prefix(name)) else {
+        return false;
+    };
+    text[..at].chars().next_back().is_none_or(char::is_whitespace)
+        && rest.chars().next().is_none_or(|c| !(c.is_alphanumeric() || matches!(c, '-' | '_' | ':' | '/')))
+}
+
+/// Every byte position of `text` where the skill `name` is invoked as
+/// `/name`; see [`invokes_at`].
+pub(crate) fn invocations(text: &str, name: &str) -> Vec<usize> {
+    if name.is_empty() {
+        return Vec::new();
+    }
+    text.match_indices(&format!("/{name}")).map(|(at, _)| at).filter(|&at| invokes_at(text, at, name)).collect()
+}
+
 /// The prompt a turn is: what the bot is, what has been said, then what is
 /// being asked now.
 ///

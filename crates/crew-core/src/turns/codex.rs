@@ -31,8 +31,9 @@ use crate::session;
 use crate::providers::codex::{
     approval_response, classify_request, completed_tool_status, exec_item, initialize_params, interrupt_params,
     is_tool_item, item_files, plan_detail, questions_response, rpc_error_message, skills_list_params, steer_params,
-    thread_id, thread_request, tool_call_id, tool_detail, tool_label, tool_name, turn_end, turn_id, turn_start_params,
-    unsupported_error, user_message_text, with_attached_paths, ApprovalKind, CodexAsk, CodexThread, TurnEnd,
+    skills_input, text_input, thread_id, thread_request, tool_call_id, tool_detail, tool_label, tool_name, turn_end,
+    turn_id, turn_start_input, unsupported_error, user_message_text, with_attached_paths, ApprovalKind, CodexAsk,
+    CodexCommand, CodexThread, TurnEnd,
 };
 use crate::providers::string_field;
 
@@ -53,6 +54,14 @@ const TERMINAL_POLL: Duration = Duration::from_secs(2);
 /// How long `skills/list` may take. It scans the skill folders on disk, and
 /// nothing waits on its answer, so this only bounds the thread that asks.
 const CATALOG_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// How a turn begins on an open thread.
+enum Start {
+    /// `turn/start`, with this input.
+    Turn(Value),
+    /// A command Crew maps to a method of Codex's own.
+    Command(CodexCommand),
+}
 
 /// A request the app server is waiting on Crew for, by the id the UI knows.
 pub(super) struct Pending<T> {
@@ -211,11 +220,28 @@ impl TurnHost {
             Some(since) => self.applied(&session, &params.cwd).turn_overrides_since(since),
             None => Map::new(),
         };
+        // A command is the whole message: its files, skills and history do not
+        // go. The rest is a turn, with the skills it invokes loaded ahead.
+        let start = match CodexCommand::read(&params.text, params.command.as_deref()) {
+            Some(command) => Start::Command(command),
+            None => {
+                let skills = self.codex_skills_named(&params);
+                Start::Turn(if skills.is_empty() { text_input(&text) } else { skills_input(&text, &skills) })
+            }
+        };
         let outcome = match self.ensure_codex(&session, &params, kept) {
-            Ok(thread) => match self.codex_turn(&session_id, &thread, &text, instructions.as_deref(), overrides) {
-                Ok(()) => self
-                    .block_on(turn_rx)
-                    .unwrap_or(TurnOutcome::Failed("Turn channel closed".into())),
+            Ok(thread) => match self.codex_turn(&session_id, &thread, start, instructions.as_deref(), overrides) {
+                Ok(settings_sent) => {
+                    // `turn/start` carries the settings a kept process is
+                    // told of; another method does not, so the next turn
+                    // must still find them changed.
+                    if let (Some(since), false) = (since, settings_sent) {
+                        if let Some(Live::Codex(live)) = self.lock().get_mut(&session_id) {
+                            live.applied = since;
+                        }
+                    }
+                    self.block_on(turn_rx).unwrap_or(TurnOutcome::Failed("Turn channel closed".into()))
+                }
                 Err(_) if self.stop_requested(&session_id) => TurnOutcome::Stopped,
                 Err(error) => TurnOutcome::Failed(error),
             },
@@ -367,15 +393,17 @@ impl TurnHost {
     }
 
     /// The turn itself, on an open thread. Returns once the turn runs; its end
-    /// arrives as `turn/completed`.
+    /// arrives as `turn/completed`. A command that Codex answers at once
+    /// (`/goal`, `/mcp`) is a turn that ends here, with its answer as a note.
+    /// Says whether the call was a `turn/start`, which carries `overrides`.
     fn codex_turn(
         &self,
         session_id: &str,
         thread_id: &str,
-        text: &str,
+        start: Start,
         instructions: Option<&str>,
         overrides: Map<String, Value>,
-    ) -> Result<(), String> {
+    ) -> Result<bool, String> {
         self.transcripts.apply(
             session_id,
             HarnessEvent::SessionProviderBound {
@@ -386,22 +414,60 @@ impl TurnHost {
         if self.stop_requested(session_id) {
             return Err("cancelled".into());
         }
-        let mut params = turn_start_params(thread_id, text, instructions);
-        if let Value::Object(params) = &mut params {
-            params.extend(overrides);
-        }
-        let started = self
-            .codex_call(session_id, "turn/start", params, OPEN_TIMEOUT)
-            .map_err(|error| self.codex_failure(session_id, "Codex did not start the turn", &error))?;
-        let turn = turn_id(&started).ok_or_else(|| "Codex started no turn.".to_string())?;
-        let mut map = self.lock();
-        if let Some(Live::Codex(live)) = map.get_mut(session_id) {
-            // `turn/completed` may already have come and gone.
-            if live.active && !live.settled && live.turn_id.is_none() {
-                live.turn_id = Some(turn);
+        let (method, params, command) = match start {
+            Start::Turn(input) => {
+                let mut params = turn_start_input(thread_id, input, instructions);
+                if let Value::Object(params) = &mut params {
+                    params.extend(overrides);
+                }
+                ("turn/start", params, None)
             }
+            Start::Command(command) => {
+                let (method, params) = command.request(thread_id);
+                (method, params, Some(command))
+            }
+        };
+        let started = self
+            .codex_call(session_id, method, params, OPEN_TIMEOUT)
+            .map_err(|error| self.codex_failure(session_id, &format!("Codex did not run {method}"), &error))?;
+        if let Some(command) = command.as_ref().filter(|command| !command.runs_as_turn()) {
+            self.transcripts.apply(session_id, HarnessEvent::SessionNote { message: command.note(&started) });
+            self.transcripts.apply(session_id, HarnessEvent::TurnCompleted { usage: None });
+            self.signal(session_id, TurnOutcome::Completed);
+            return Ok(false);
         }
-        Ok(())
+        // A compaction answers with nothing: its turn is named by the
+        // `turn/started` that follows, and ended by its `turn/completed`.
+        if let Some(turn) = turn_id(&started) {
+            let mut map = self.lock();
+            if let Some(Live::Codex(live)) = map.get_mut(session_id) {
+                // `turn/completed` may already have come and gone.
+                if live.active && !live.settled && live.turn_id.is_none() {
+                    live.turn_id = Some(turn);
+                }
+            }
+        } else if command.is_none() {
+            return Err("Codex started no turn.".into());
+        }
+        Ok(command.is_none())
+    }
+
+    /// The skills a message invokes, each with the file the catalog knows it
+    /// by. Codex loads a skill from its file, so one the catalog has not read
+    /// (yet) goes by its name in the text alone.
+    fn codex_skills_named(&self, params: &crew_protocol::TurnStart) -> Vec<(String, Option<String>)> {
+        let names = params.skills.as_deref().unwrap_or_default();
+        if names.is_empty() {
+            return Vec::new();
+        }
+        let known = self.commands.catalog("codex", &params.cwd, Vec::new(), crate::store::now_millis());
+        names
+            .iter()
+            .map(|name| {
+                let path = known.entries.iter().find(|entry| &entry.name == name).and_then(|entry| entry.path.clone());
+                (name.clone(), path)
+            })
+            .collect()
     }
 
     /// While the process lives, list the thread's background terminals
@@ -1058,6 +1124,15 @@ fn codex_item(live: &mut CodexLive, item: &Map<String, Value>, completed: bool, 
                 events.push(steer.read());
             }
         }
+        // Codex does not stream a review's words: the finished review is in
+        // the item that says it left review mode.
+        "exitedReviewMode" if completed => {
+            let review = item.get("review").and_then(Value::as_str).unwrap_or_default().trim();
+            if !review.is_empty() {
+                events.push(HarnessEvent::MessageDelta { text: review.to_string() });
+                events.push(HarnessEvent::MessageCompleted {});
+            }
+        }
         "contextCompaction" if completed => {
             events.push(HarnessEvent::SessionNote {
                 message: "Context compacted".into(),
@@ -1107,8 +1182,10 @@ fn codex_item(live: &mut CodexLive, item: &Map<String, Value>, completed: bool, 
 /// A stand-in for `codex app-server` 0.160 that speaks the part of the
 /// protocol Crew uses: the handshake, `thread/start` and `thread/resume`,
 /// `turn/start`, `turn/steer`, `turn/interrupt`, `skills/list` (one enabled
-/// skill and one disabled), and the server's own approval and question
-/// requests. Every request it gets is appended to the log as `{method,
+/// skill and one disabled), the commands Crew maps to methods
+/// (`thread/compact/start` and `review/start`, which run as turns of their
+/// own; `thread/goal/set|get|clear` and `mcpServerStatus/list`, which answer
+/// at once), and the server's own approval and question requests. Every request it gets is appended to the log as `{method,
 /// params}`, after a first line with its argv, pid and env: one such line per
 /// launch.
 ///
@@ -1134,7 +1211,7 @@ def out(m):
 def log(m):
     with open(LOG, "a") as f: f.write(json.dumps(m) + "\n")
 log({"argv": sys.argv[1:], "pid": os.getpid(), "env": {k: os.environ.get(k) for k in ["CREW_SOCKET", "CREW_TOKEN"]}})
-state = {"thread": None, "turn": None, "next": 0}
+state = {"thread": None, "turn": None, "next": 0, "goal": None}
 answers = {}
 terminals = {}
 def ask(method, params):
@@ -1241,6 +1318,20 @@ def run(turn, text):
     item_done = {"type": "agentMessage", "id": mid, "text": reply, "phase": "final_answer"}
     out({"method": "item/completed", "params": {"threadId": state["thread"], "turnId": tid, "item": item_done}})
     out({"method": "turn/completed", "params": {"threadId": state["thread"], "turn": {"id": tid, "status": "completed", "error": None}}})
+def run_side(turn, items):
+    # A turn Codex runs for a command: it begins, streams its items, and ends.
+    tid = turn["id"]
+    out({"method": "turn/started", "params": {"threadId": state["thread"], "turn": {"id": tid, "status": "inProgress"}}})
+    for phase, it in items:
+        item(phase, it)
+        time.sleep(0.02)
+    with lock:
+        state["turn"] = None
+    out({"method": "turn/completed", "params": {"threadId": state["thread"], "turn": {"id": tid, "status": "completed", "error": None}}})
+def side_turn():
+    turn = {"id": str(uuid.uuid4()), "inbox": [], "interrupted": threading.Event(), "stubborn": False}
+    state["turn"] = turn
+    return turn
 for line in sys.stdin:
     try: m = json.loads(line)
     except Exception: continue
@@ -1276,6 +1367,31 @@ for line in sys.stdin:
         out({"id": rid, "result": {"turn": {"id": turn["id"], "status": "inProgress"}}})
         out({"method": "turn/started", "params": {"threadId": state["thread"], "turn": {"id": turn["id"], "status": "inProgress"}}})
         threading.Thread(target=run, args=(turn, text), daemon=True).start()
+    elif method == "thread/compact/start":
+        # Answers with nothing; the turn is named by the notifications after it.
+        turn = side_turn()
+        out({"id": rid, "result": {}})
+        cid = "compact-" + uuid.uuid4().hex[:6]
+        threading.Thread(target=run_side, args=(turn, [("started", {"type": "contextCompaction", "id": cid}), ("completed", {"type": "contextCompaction", "id": cid})]), daemon=True).start()
+    elif method == "review/start":
+        turn = side_turn()
+        out({"id": rid, "result": {"reviewThreadId": state["thread"], "turn": {"id": turn["id"], "status": "inProgress"}}})
+        target = params.get("target") or {}
+        said = "Review of %s: no issues found." % (target.get("instructions") or target.get("type"))
+        entered = {"type": "enteredReviewMode", "id": "rv-in", "review": "current changes"}
+        exited = {"type": "exitedReviewMode", "id": "rv-out", "review": said}
+        threading.Thread(target=run_side, args=(turn, [("started", entered), ("completed", entered), ("started", exited), ("completed", exited)]), daemon=True).start()
+    elif method == "thread/goal/set":
+        state["goal"] = {"threadId": state["thread"], "objective": params.get("objective"), "status": "active", "createdAt": 1, "updatedAt": 1, "timeUsedSeconds": 0, "tokensUsed": 0, "tokenBudget": None}
+        out({"id": rid, "result": {"goal": state["goal"]}})
+    elif method == "thread/goal/get":
+        out({"id": rid, "result": {"goal": state["goal"]}})
+    elif method == "thread/goal/clear":
+        had = state["goal"] is not None
+        state["goal"] = None
+        out({"id": rid, "result": {"cleared": had}})
+    elif method == "mcpServerStatus/list":
+        out({"id": rid, "result": {"data": [{"name": "crew", "runtimeStatus": "connected", "authStatus": "unsupported", "tools": {"list_peers": {"name": "list_peers"}}, "resources": [], "resourceTemplates": []}], "nextCursor": None}})
     elif method == "turn/steer":
         with lock:
             turn = state["turn"]
@@ -1409,14 +1525,26 @@ mod catalog_tests {
         (session, dir.to_string_lossy().into_owned())
     }
 
-    /// A Codex session of `kind` on the fake app server, started with `text`.
-    /// Returns the host, the session's id, the fake's log and the folder.
-    fn started_as(kind: &str, view: Option<&str>, text: &str) -> (TurnHost, String, std::path::PathBuf, String) {
+    /// A Codex session of `kind` on the fake app server, started with `text`,
+    /// which may open with a command or invoke skills, with `known` already in
+    /// the catalog for the folder. Returns the host, the session's id, the
+    /// fake's log and the folder.
+    fn started_full(
+        kind: &str,
+        view: Option<&str>,
+        text: &str,
+        command: Option<&str>,
+        skills: Option<Vec<String>>,
+        known: Vec<CommandEntry>,
+    ) -> (TurnHost, String, std::path::PathBuf, String) {
         let host = TurnHost::test_new();
         host.test_agents().set_events(Arc::new(Lines(host.clone())));
         let (session, cwd) = codex_session(&host, kind, view);
         let (fake, log) = crate::turns::fake_codex(std::path::Path::new(&cwd));
         host.override_binary("codex", fake);
+        if !known.is_empty() {
+            host.commands.learn("codex", &cwd, Some(known), None, crate::store::now_millis());
+        }
         host.start(TurnStart {
             session_id: session.clone(),
             cwd: cwd.clone(),
@@ -1429,15 +1557,45 @@ mod catalog_tests {
             nonce: None,
             letter_id: None,
             mode: None,
-            command: None,
-            skills: None,
+            command: command.map(str::to_string),
+            skills,
         })
         .expect("start");
         (host, session, log, cwd)
     }
 
+    fn started_as(kind: &str, view: Option<&str>, text: &str) -> (TurnHost, String, std::path::PathBuf, String) {
+        started_full(kind, view, text, None, None, Vec::new())
+    }
+
     fn started(text: &str) -> (TurnHost, String, std::path::PathBuf, String) {
         started_as("terminal", Some("chat"), text)
+    }
+
+    /// The same, for a message that opens with a command or invokes skills.
+    fn started_with(
+        text: &str,
+        command: Option<&str>,
+        skills: Option<Vec<String>>,
+        known: Vec<CommandEntry>,
+    ) -> (TurnHost, String, std::path::PathBuf, String) {
+        started_full("terminal", Some("chat"), text, command, skills, known)
+    }
+
+    fn skill_entry(name: &str, path: &str) -> CommandEntry {
+        CommandEntry {
+            name: name.into(),
+            description: String::new(),
+            argument_hint: None,
+            aliases: None,
+            kind: "skill".into(),
+            path: Some(path.into()),
+        }
+    }
+
+    /// What the transcript of a session says, as plain text.
+    fn said(host: &TurnHost, session: &str) -> String {
+        host.transcripts().since(session, 0).0.into_iter().map(|block| block.text).collect::<Vec<_>>().join("\n")
     }
 
     /// Opening the thread asks for the folder's skills, and the menu then
@@ -1457,6 +1615,98 @@ mod catalog_tests {
         assert!(!entries.iter().any(|entry| entry.name == "old-notes"), "a skill the user turned off");
         assert_eq!(sent(&log, "skills/list"), vec![json!({ "cwds": [cwd] })]);
         wait_for(|| !host.is_running(&session));
+    }
+
+    /// A skill the user invoked goes to Codex as `$name` in the text and as an
+    /// item that names its file, which the catalog supplies.
+    #[test]
+    fn a_skill_goes_to_codex_as_a_dollar_name_and_an_item_with_its_file() {
+        let known = vec![skill_entry("lint", "/repo/.agents/skills/lint/SKILL.md")];
+        let (host, session, log, _) = started_with("run /lint on src", None, Some(vec!["lint".into()]), known);
+        wait_for(|| !host.is_running(&session));
+        let turns = sent(&log, "turn/start");
+        assert_eq!(
+            turns[0]["input"],
+            json!([
+                { "type": "text", "text": "run $lint on src", "text_elements": [] },
+                { "type": "skill", "name": "lint", "path": "/repo/.agents/skills/lint/SKILL.md" },
+            ])
+        );
+    }
+
+    /// A skill the catalog has not read yet is still named, as `$name`.
+    #[test]
+    fn a_skill_the_catalog_does_not_know_goes_as_a_dollar_name_alone() {
+        let (host, session, log, _) = started_with("run /lint on src", None, Some(vec!["lint".into()]), Vec::new());
+        wait_for(|| !host.is_running(&session));
+        assert_eq!(sent(&log, "turn/start")[0]["input"], json!([{ "type": "text", "text": "run $lint on src", "text_elements": [] }]));
+    }
+
+    /// `/compact` is not a turn/start: Codex compacts the thread, streams it as
+    /// a turn of its own, and the turn ends with it.
+    #[test]
+    fn compact_runs_the_threads_compaction_and_ends_with_its_turn() {
+        let (host, session, log, _) = started_with("/compact", Some("compact"), None, Vec::new());
+        wait_for(|| !host.is_running(&session));
+        assert_eq!(sent(&log, "thread/compact/start").len(), 1);
+        assert!(sent(&log, "turn/start").is_empty(), "the command was also sent as a message");
+        assert!(said(&host, &session).contains("Context compacted"), "{}", said(&host, &session));
+        let row = crate::session::get(host.test_store(), session.clone()).expect("read").expect("session");
+        assert_eq!(row.status, "done");
+    }
+
+    /// `/review` reviews the working tree, and what the review concludes is
+    /// shown as the answer: Codex streams none of it.
+    #[test]
+    fn review_reviews_the_uncommitted_changes_and_shows_its_conclusion() {
+        let (host, session, log, _) = started_with("/review", Some("review"), None, Vec::new());
+        wait_for(|| !host.is_running(&session));
+        let asked = sent(&log, "review/start");
+        assert_eq!(asked.len(), 1);
+        assert_eq!(asked[0]["target"], json!({ "type": "uncommittedChanges" }));
+        assert!(sent(&log, "turn/start").is_empty());
+        assert!(said(&host, &session).contains("Review of uncommittedChanges: no issues found."), "{}", said(&host, &session));
+    }
+
+    /// `/goal` with an objective sets it; a note says so, and the turn ends
+    /// without the model being asked anything.
+    #[test]
+    fn goal_sets_the_objective_and_answers_with_a_note_not_a_turn() {
+        let (host, session, log, _) = started_with("/goal ship the importer", Some("goal"), None, Vec::new());
+        wait_for(|| !host.is_running(&session));
+        let set = sent(&log, "thread/goal/set");
+        assert_eq!(set.len(), 1);
+        assert_eq!(set[0]["objective"], "ship the importer");
+        assert!(sent(&log, "turn/start").is_empty());
+        assert!(said(&host, &session).contains("Goal (active): ship the importer"), "{}", said(&host, &session));
+    }
+
+    /// `/goal` alone asks what the goal is.
+    #[test]
+    fn goal_alone_asks_for_the_goal() {
+        let (host, session, log, _) = started_with("/goal", Some("goal"), None, Vec::new());
+        wait_for(|| !host.is_running(&session));
+        assert_eq!(sent(&log, "thread/goal/get").len(), 1);
+        assert!(sent(&log, "thread/goal/set").is_empty());
+        assert!(said(&host, &session).contains("No goal is set."), "{}", said(&host, &session));
+    }
+
+    /// `/mcp` lists the servers as a note.
+    #[test]
+    fn mcp_lists_the_servers_as_a_note_not_a_turn() {
+        let (host, session, log, _) = started_with("/mcp", Some("mcp"), None, Vec::new());
+        wait_for(|| !host.is_running(&session));
+        assert_eq!(sent(&log, "mcpServerStatus/list").len(), 1);
+        assert!(sent(&log, "turn/start").is_empty());
+        assert!(said(&host, &session).contains("- crew: connected, 1 tool"), "{}", said(&host, &session));
+    }
+
+    /// A command Crew has no method for is a turn like any other.
+    #[test]
+    fn a_command_with_no_method_goes_as_the_text_of_a_turn() {
+        let (host, session, log, _) = started_with("/init now", Some("init"), None, Vec::new());
+        wait_for(|| !host.is_running(&session));
+        assert_eq!(sent(&log, "turn/start")[0]["input"][0]["text"], "/init now");
     }
 
     /// Codex says a skill file moved: the skills are read again while the

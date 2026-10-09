@@ -1541,7 +1541,9 @@ print(json.dumps({{"type": "step_finish", "sessionID": sid, "part": {{"id": "sf"
     /// request to `claude-control.log`, and a file `refuse-<subtype>` in its
     /// directory makes the next such request answer with an error. Its
     /// `initialize` answers two commands, `system/init` names one skill, and a
-    /// message with COMMANDS in it makes it send a changed list.
+    /// message with COMMANDS in it makes it send a changed list. Every block
+    /// of every user message it is handed is logged, one line per message, to
+    /// `claude-input.log`, though it answers the last one alone.
     fn fake_claude(dir: &Path) -> String {
         let path = dir.join("fake-claude");
         std::fs::write(
@@ -1553,6 +1555,7 @@ signal.signal(signal.SIGTERM, lambda *_: (time.sleep(0.2), os._exit(0)))
 args = sys.argv[1:]
 CONTROL = os.path.join(os.path.dirname(os.path.abspath(sys.argv[0])), "claude-control.log")
 LAUNCH = os.path.join(os.path.dirname(os.path.abspath(sys.argv[0])), "claude-launch.log")
+INPUT = os.path.join(os.path.dirname(os.path.abspath(sys.argv[0])), "claude-input.log")
 with open(LAUNCH, "a") as f: f.write(json.dumps({"argv": args, "pid": os.getpid(), "cwd": os.getcwd(), "env": {"CREW_TOKEN": os.environ.get("CREW_TOKEN", "")}}) + "\n")
 stopped = threading.Event()
 sid = args[args.index("--resume") + 1] if "--resume" in args else args[args.index("--session-id") + 1]
@@ -1606,6 +1609,10 @@ def reader():
             if req.get("subtype") == "stop_task":
                 stopped.set()
         elif rec.get("type") == "user":
+            # Every block of every message, as the CLI is handed them: it
+            # expands a slash only in the last one, so the order matters.
+            blocks = [{"type": b.get("type"), "text": b.get("text")} if b.get("type") == "text" else {"type": b.get("type")} for b in rec["message"]["content"]]
+            with open(INPUT, "a") as f: f.write(json.dumps(blocks) + "\n")
             inbox.put(rec)
 threading.Thread(target=reader, daemon=True).start()
 while True:
@@ -2062,6 +2069,48 @@ while True:
         let launches = launched(&log);
         assert_eq!(launches.len(), 2, "{launches:?}");
         assert_eq!(after_flag(&launches[1], "--resume"), Some(bound));
+    }
+
+    /// `/compact` is not a `turn/start`, so it cannot carry the settings that
+    /// changed: the turn after it still has to.
+    #[test]
+    fn a_compaction_between_a_settings_change_and_the_next_turn_does_not_swallow_the_change() {
+        let w = world();
+        let parent = w.session("terminal", "shell", "full");
+        let (id, log) = w.codex(&parent, "one", Some("ask"));
+        w.wait(&parent, &id, json!({}));
+        let row = w.settle(&id);
+        session::set_options(w.turns.store(), id.clone(), "gpt-5.6-sol".into(), "high".into(), row.service_tier.clone(), "full".into())
+            .expect("options");
+
+        w.turns
+            .start_by_user(TurnStart {
+                session_id: id.clone(),
+                cwd: session::cwd(w.turns.store(), &row).unwrap(),
+                text: "/compact".into(),
+                files: None,
+                mentions: None,
+                hidden: None,
+                from_bot: None,
+                sent_at: None,
+                nonce: None,
+                letter_id: None,
+                mode: None,
+                command: Some("compact".into()),
+                skills: None,
+            })
+            .expect("compact");
+        w.settle(&id);
+        assert_eq!(sent(&log, "thread/compact/start").len(), 1);
+        assert_eq!(sent(&log, "turn/start").len(), 1, "the compaction was not a message");
+
+        w.call(&parent, "send_message", json!({ "to": id, "text": "two" })).expect("send");
+        until("the next turn started", || sent(&log, "turn/start").len() == 2);
+        w.settle(&id);
+        let turns = sent(&log, "turn/start");
+        assert_eq!(turns[1]["model"], "gpt-5.6-sol");
+        assert_eq!(turns[1]["effort"], "high");
+        assert_eq!(launched(&log).len(), 1);
     }
 
     /// The same when the exit is heard: the entry is dropped, the tray closed,
@@ -4984,6 +5033,56 @@ time.sleep(600)
                 .expect("start")
         }
 
+        /// The same for a message that opens with a command or invokes skills.
+        fn type_with(
+            &self,
+            row: &Session,
+            text: &str,
+            command: Option<&str>,
+            skills: &[&str],
+            mode: Option<&str>,
+            files: Option<Vec<crew_protocol::AttachedFile>>,
+        ) -> crew_protocol::TurnStarted {
+            self.turns
+                .start_by_user(TurnStart {
+                    session_id: row.id.clone(),
+                    cwd: self.dir.to_string_lossy().into_owned(),
+                    text: text.into(),
+                    files,
+                    mentions: None,
+                    hidden: None,
+                    from_bot: None,
+                    sent_at: None,
+                    nonce: None,
+                    letter_id: None,
+                    mode: mode.map(str::to_string),
+                    command: command.map(str::to_string),
+                    skills: Some(skills.iter().map(|skill| skill.to_string()).collect()).filter(|skills: &Vec<String>| !skills.is_empty()),
+                })
+                .expect("start")
+        }
+
+        /// Every user message the fake Claude was handed, each as its blocks
+        /// `(type, text)` in the order they came.
+        fn claude_inputs(&self) -> Vec<Vec<(String, String)>> {
+            std::fs::read_to_string(self.dir.join("claude-input.log"))
+                .unwrap_or_default()
+                .lines()
+                .map(|line| {
+                    serde_json::from_str::<Vec<Value>>(line)
+                        .expect("a logged message")
+                        .iter()
+                        .map(|block| {
+                            (
+                                block["type"].as_str().unwrap_or_default().to_string(),
+                                block["text"].as_str().unwrap_or_default().to_string(),
+                            )
+                        })
+                        .collect()
+                })
+                .collect()
+        }
+
         /// The letters a session's queue shows the user: those the box holds and
         /// the transcript does not yet (a turn's own message is in both).
         fn waiting(&self, id: &str) -> Vec<crew_protocol::ThreadLetter> {
@@ -5041,6 +5140,99 @@ time.sleep(600)
         assert_eq!(page.letters.iter().find(|l| l.id == letter).map(|l| l.state.as_str()), Some("delivered"));
         assert!(w.blocks(&mine.id).iter().any(|block| block.text == "report: SLEEP 2 + and this"));
         assert_eq!(launched(&w.dir.join("claude-launch.log")).len(), 1, "the steer started another process");
+    }
+
+    fn text_block(text: &str) -> (String, String) {
+        ("text".into(), text.into())
+    }
+
+    /// A command sent while a turn works is not steered into it: it waits, goes
+    /// as a turn of its own after the running one, and the letters that waited
+    /// with it go before and after, not with it (a `/compact` must not be handed
+    /// them as its arguments).
+    #[test]
+    fn a_command_sent_mid_turn_is_queued_and_goes_alone_after_the_running_turn() {
+        let w = world();
+        w.turns.override_binary("claude", fake_claude(&w.dir));
+        w.turns.override_claude_home(w.dir.join("home"));
+        let mine = w.user_session("claude", "", "full");
+        w.type_to(&mine, "SLEEP 2", None, None);
+        until_claude_turn(&w, &mine.id);
+
+        w.type_to(&mine, "before", Some("queue"), None);
+        let command = w.type_with(&mine, "/compact", Some("compact"), &[], None, None);
+        assert_eq!((command.working, command.delivery.as_deref()), (true, Some("queued")), "a command is never steered");
+        w.type_to(&mine, "after one", Some("queue"), None);
+        w.type_to(&mine, "after two", Some("queue"), None);
+        assert_eq!(
+            w.queue(&mine.id),
+            ["before", "/compact", "after one", "after two"].map(|text| (text.to_string(), "waiting".to_string()))
+        );
+
+        until("the queue went over", || w.queue(&mine.id).is_empty() && !w.turns.is_running(&mine.id));
+        w.settle(&mine.id);
+        let said: Vec<String> = w.blocks(&mine.id).into_iter().filter(|block| block.role == BlockRole::User).map(|block| block.text).collect();
+        assert_eq!(said, ["SLEEP 2", "before", "/compact", "after one", "after two"]);
+        let handed: Vec<Vec<(String, String)>> = w.claude_inputs();
+        assert_eq!(
+            handed,
+            [
+                vec![text_block("SLEEP 2")],
+                vec![text_block("before")],
+                vec![text_block("/compact")],
+                vec![text_block("after one\n\nafter two")],
+            ],
+            "the command was the whole of its own message"
+        );
+        assert_eq!(launched(&w.dir.join("claude-launch.log")).len(), 1, "one process served them all");
+    }
+
+    /// A message that invokes a skill is not steered either (a steer is not
+    /// known to expand it): it waits for the turn after. What it carries goes
+    /// by the rules of a turn: the files note in the block ahead of the slash,
+    /// the slash last.
+    #[test]
+    fn a_skill_sent_mid_turn_is_queued_and_reaches_claude_as_blocks_with_the_slash_last() {
+        let w = world();
+        w.turns.override_binary("claude", fake_claude(&w.dir));
+        w.turns.override_claude_home(w.dir.join("home"));
+        let mine = w.user_session("claude", "", "full");
+        w.type_to(&mine, "SLEEP 2", None, None);
+        until_claude_turn(&w, &mine.id);
+
+        let queued = w.type_with(&mine, "look at it /lint now", None, &["lint"], None, Some(vec![file("/tmp/notes.md")]));
+        assert_eq!((queued.working, queued.delivery.as_deref()), (true, Some("queued")), "a skill is not steered");
+        until("the queue went over", || w.queue(&mine.id).is_empty() && !w.turns.is_running(&mine.id));
+        w.settle(&mine.id);
+        let handed = w.claude_inputs();
+        assert_eq!(handed.len(), 2, "{handed:?}");
+        assert_eq!(
+            handed[1],
+            [
+                text_block("look at it\n\nAttached files. Read them if you need their contents:\n- /tmp/notes.md"),
+                text_block("/lint now"),
+            ]
+        );
+    }
+
+    /// On an idle session a command needs no queue: it starts a turn at once,
+    /// and the text before a skill is its own block.
+    #[test]
+    fn a_command_on_an_idle_session_starts_a_turn_whose_message_is_the_command() {
+        let w = world();
+        w.turns.override_binary("claude", fake_claude(&w.dir));
+        w.turns.override_claude_home(w.dir.join("home"));
+        let mine = w.user_session("claude", "", "full");
+        let started = w.type_with(&mine, "/review main", Some("review"), &[], None, Some(vec![file("/tmp/notes.md")]));
+        assert_eq!(started.delivery.as_deref(), Some("started"));
+        w.settle(&mine.id);
+        assert_eq!(
+            w.claude_inputs(),
+            [vec![
+                text_block("Attached files. Read them if you need their contents:\n- /tmp/notes.md"),
+                text_block("/review main"),
+            ]]
+        );
     }
 
     /// A steer the turn did not read is not lost, and a stop leaves it where the
