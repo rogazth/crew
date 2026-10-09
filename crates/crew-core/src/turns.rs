@@ -1449,18 +1449,21 @@ impl TurnHost {
         Ok(kept.unwrap_or(crew_protocol::BackgroundOutput { output: String::new(), truncated: false }))
     }
 
-    /// Stop one background command: Claude's `stop_task`, Codex's
-    /// `thread/backgroundTerminals/terminate`. Only while its CLI is up.
+    /// Stop one entry of the board, through the provider that runs it: Claude's
+    /// `stop_task` (a shell, a monitor, a subagent, the one the turn waits on
+    /// too), Codex's `turn/interrupt` on an agent thread, Codex's
+    /// `thread/backgroundTerminals/terminate` on a terminal. Only while its
+    /// CLI is up, and not an entry that says it cannot be stopped alone.
     pub fn background_stop(&self, session_id: &str, id: &str) -> Result<(), String> {
         let known = self.background.read(session_id, |board| {
             (
-                board.command(id).map(|row| row.state),
+                board.command(id).map(|row| (row.state, row.stoppable, row.stop_note.clone())),
                 board.is_live(),
                 board.process_id(id),
                 board.command(id).and_then(|row| row.thread_id.clone()),
             )
         });
-        let Some((Some(state), live, process, thread)) = known else {
+        let Some((Some((state, stoppable, note)), live, process, thread)) = known else {
             return Err("No such background command.".into());
         };
         if state != crew_protocol::BackgroundState::Running {
@@ -1468,6 +1471,12 @@ impl TurnHost {
         }
         if !live {
             return Err("Its session's CLI is gone, and it went with it.".into());
+        }
+        if stoppable == Some(false) {
+            return Err(match note {
+                Some(note) => format!("It cannot be stopped on its own: it {note}."),
+                None => "It cannot be stopped on its own.".into(),
+            });
         }
         let kind = match self.lock().get(session_id) {
             Some(Live::Claude(_)) => "claude",
@@ -3005,11 +3014,13 @@ impl TurnHost {
         // `perTaskStopAffordance`: Crew stops background work one task at a
         // time (`stop_task`), so the CLI's interrupt is to stop the turn only
         // and spare that work. Without it the interrupt kills it all.
+        // `forwardSubagentText`: a subagent's steps carry what it said as well
+        // as the tools it called, for its entry in the panel to be read.
         self.agents.write(
             &session_id,
             &serde_json::to_string(&build_control_request(
                 &ctrl,
-                json!({ "subtype": "initialize", "perTaskStopAffordance": true }),
+                json!({ "subtype": "initialize", "perTaskStopAffordance": true, "forwardSubagentText": true }),
             ))
             .unwrap_or_default(),
         )?;
@@ -3281,7 +3292,9 @@ impl TurnHost {
             let tasks = type_name.as_deref() == Some("system")
                 && matches!(
                     subtype.as_deref(),
-                    Some("task_started" | "task_updated" | "task_notification" | "background_tasks_changed")
+                    Some(
+                        "task_started" | "task_progress" | "task_updated" | "task_notification" | "background_tasks_changed"
+                    )
                 );
             if live.mute {
                 // The interrupt's result closes the stopped turn: the process
@@ -3361,6 +3374,13 @@ impl TurnHost {
             // the agent itself said or did.
             if let Some(steps) = live.subagents.frame(&rec) {
                 drop(map);
+                // The model it runs on is named by the frames it sends.
+                let model = string_field(Some(&rec), "parent_tool_use_id").zip(
+                    rec.get("message").and_then(|message| message.get("model")).and_then(Value::as_str).map(str::to_string),
+                );
+                if let Some((call, model)) = model {
+                    self.background.touch(session_id, |board| board.claude_subagent_model(&call, &model));
+                }
                 if let Some(id) = bind {
                     self.transcripts.apply(session_id, HarnessEvent::SessionProviderBound { provider_session_id: id });
                 }
@@ -3377,7 +3397,12 @@ impl TurnHost {
                 events.push(update);
             }
             let notice = live.subagents.notice(&rec);
-            if tasks {
+            // What the board reads beside the task lines: a turn's result names
+            // the windows of its models, and the answer to an Agent call what
+            // the subagent used in all.
+            let agent_result = type_name.as_deref() == Some("user")
+                && rec.get("tool_use_result").is_some_and(|result| result.get("agentId").is_some());
+            if tasks || agent_result || type_name.as_deref() == Some("result") {
                 let call = string_field(Some(&rec), "tool_use_id").and_then(|id| {
                     live.tools_by_id.get(&id).map(|tool| (id, tool.name.clone(), tool.input.clone()))
                 });
@@ -4967,5 +4992,82 @@ mod plan_tests {
         assert!(cleared.clears_a_setting_of(&launch()));
         // A setting that was never set is not taken back.
         assert!(!launch().clears_a_setting_of(&cleared));
+    }
+}
+
+#[cfg(test)]
+mod background_stop_tests {
+    use super::*;
+    use crew_protocol::{BackgroundCommand, BackgroundKind, BackgroundState};
+
+    fn entry(id: &str, kind: BackgroundKind, stoppable: Option<bool>, note: Option<&str>) -> BackgroundCommand {
+        BackgroundCommand {
+            id: id.into(),
+            command: "Review the diff".into(),
+            description: None,
+            kind,
+            started_at: 1,
+            state: BackgroundState::Running,
+            exit_code: None,
+            ended_at: None,
+            tool_call_id: None,
+            tokens: None,
+            window: None,
+            stoppable,
+            stop_note: note.map(str::to_string),
+            activity: None,
+            model: None,
+            foreground: None,
+            thread_id: None,
+        }
+    }
+
+    fn host_with(install: impl Fn(&TurnHost, &str), rows: Vec<BackgroundCommand>) -> TurnHost {
+        let host = TurnHost::test_new();
+        install(&host, "s1");
+        host.background.touch("s1", |board| board.launch(0));
+        for row in rows {
+            host.background.touch("s1", |board| board.test_entry(row));
+        }
+        host
+    }
+
+    /// An entry that says it cannot be stopped alone is not handed to the
+    /// provider, which would stop what the row does not name (a subagent that
+    /// stops only with its turn) or fail with a message of its own.
+    #[test]
+    fn an_entry_that_cannot_be_stopped_alone_says_why_and_asks_no_provider() {
+        let rows = vec![
+            entry("a1", BackgroundKind::Subagent, Some(false), Some("stops with the turn")),
+            entry("a2", BackgroundKind::Subagent, Some(false), None),
+        ];
+        for install in [TurnHost::test_install_claude, TurnHost::test_install_codex] {
+            let host = host_with(install, rows.clone());
+            assert_eq!(host.background_stop("s1", "a1"), Err("It cannot be stopped on its own: it stops with the turn.".into()));
+            assert_eq!(host.background_stop("s1", "a2"), Err("It cannot be stopped on its own.".into()));
+            assert_eq!(host.background_stop("s1", "nope"), Err("No such background command.".into()));
+            let list = host.background_list("s1");
+            assert!(list.commands.iter().all(|row| row.state == BackgroundState::Running), "{list:?}");
+        }
+    }
+
+    /// A terminal Codex named no process for cannot be terminated, and says so
+    /// before it asks the app server.
+    #[test]
+    fn a_codex_terminal_without_a_process_errors_clearly() {
+        let host = host_with(TurnHost::test_install_codex, vec![entry("t1", BackgroundKind::Shell, Some(true), None)]);
+        assert_eq!(host.background_stop("s1", "t1"), Err("Codex named no process for it.".into()));
+    }
+
+    /// Whatever has ended needs no stop, and what ran in a CLI that is gone
+    /// went with it.
+    #[test]
+    fn an_ended_entry_needs_no_stop_and_one_without_its_cli_cannot_have_one() {
+        let host = host_with(TurnHost::test_install_claude, vec![entry("a1", BackgroundKind::Subagent, Some(true), None)]);
+        host.background.touch("s1", |board| board.settle("a1", BackgroundState::Completed, None, 5));
+        assert_eq!(host.background_stop("s1", "a1"), Ok(()));
+        host.background.touch("s1", |board| board.test_entry(entry("a2", BackgroundKind::Subagent, Some(true), None)));
+        host.background.touch("s1", |board| board.end(9, "its CLI exited"));
+        assert_eq!(host.background_stop("s1", "a2"), Ok(()), "ended with its CLI, so there is nothing to stop");
     }
 }

@@ -1514,6 +1514,10 @@ mod tests {
 
     const FOREGROUND: &str = include_str!("../../tests/fixtures/protocols/claude-subagent.jsonl");
     const BACKGROUND: &str = include_str!("../../tests/fixtures/protocols/claude-subagent-background.jsonl");
+    // 2.1.295, launched with `forwardSubagentText`.
+    const FORWARDED: &str = include_str!("../../tests/fixtures/protocols/claude-subagent-forwarded.jsonl");
+    const STOPPED: &str = include_str!("../../tests/fixtures/protocols/claude-subagent-stopped.jsonl");
+    const BACKGROUND_USAGE: &str = include_str!("../../tests/fixtures/protocols/claude-subagent-background-usage.jsonl");
 
     /// Feeds a capture's lines to a live Claude session and folds what came
     /// out into blocks, as the transcript does.
@@ -1638,6 +1642,169 @@ mod tests {
         let replies = said(&blocks, crew_protocol::BlockRole::Assistant);
         assert_eq!(replies.last().map(String::as_str), Some("The files contain \"alpha\" and \"beta\" respectively."));
         assert!(!replies.iter().any(|reply| reply.contains("I've read both files")), "{replies:?}");
+    }
+
+    /// The subagent's words are steps of its call beside its tools, and the
+    /// board has what it used and ran on once it is over: the live figure
+    /// replaced by the exact one, the model the CLI resolved, the window the
+    /// turn's result names for it.
+    #[test]
+    fn a_forwarded_subagent_has_its_words_among_the_steps_and_an_entry_with_what_it_used() {
+        use crew_protocol::{BackgroundKind, BackgroundState, BlockRole};
+        let host = TurnHost::test_new();
+        let cap = host.test_capture();
+        host.test_install_claude("s");
+        let lines: Vec<&str> = FORWARDED.lines().collect();
+        let blocks = replay(&host, &cap, &lines, Vec::new());
+        let (call, steps, state, output, background) = subagent(&blocks);
+        assert_eq!((call.status, state, background), (ToolStatus::Completed, Some(SubagentState::Done), None));
+        assert!(output.is_some_and(|report| report.ends_with("Done.") && !report.contains("[Subagent hand-back]")));
+        let words: Vec<&str> = steps.iter().filter(|step| step.role == BlockRole::Assistant).map(|step| step.text.as_str()).collect();
+        assert_eq!(words.len(), 2, "{steps:?}");
+        assert!(words[0].starts_with("Glob isn't available in this session"), "{words:?}");
+        assert!(steps.iter().any(|step| step.tool.as_ref().is_some_and(|tool| tool.name == "Bash")), "its tools are steps too");
+
+        let list = host.background_list("s");
+        assert_eq!(list.commands.len(), 1, "the agent's own tools are no entries: {list:?}");
+        let row = &list.commands[0];
+        assert_eq!((row.kind, row.state, row.foreground), (BackgroundKind::Subagent, BackgroundState::Completed, Some(true)));
+        assert_eq!((row.command.as_str(), row.tool_call_id.as_deref()), ("List markdown files", Some("toolu_014cr5Q3Xeq2gAaBzki7hzeE")));
+        assert_eq!((row.tokens, row.stoppable, row.activity.as_deref()), (Some(9561), Some(true), None));
+        assert_eq!((row.model.as_deref(), row.window), (Some("claude-haiku-5-5"), Some(1_000_000)));
+    }
+
+    /// While it works the entry shows the tokens so far and the CLI's title
+    /// for the step it is on.
+    #[test]
+    fn a_running_subagents_entry_follows_its_progress_lines() {
+        use crew_protocol::BackgroundState;
+        let host = TurnHost::test_new();
+        let cap = host.test_capture();
+        host.test_install_claude("s");
+        let lines: Vec<&str> = FORWARDED.lines().collect();
+        let mut seen = Vec::new();
+        for line in &lines {
+            host.handle_claude_line("s", line);
+            let list = host.background_list("s");
+            if let Some(row) = list.commands.first().filter(|row| row.state == BackgroundState::Running) {
+                seen.push((row.tokens, row.activity.clone()));
+            }
+        }
+        drop(cap);
+        seen.dedup();
+        assert_eq!(
+            seen,
+            vec![
+                (None, None),
+                (Some(8988), Some("Finding *.md".to_string())),
+                (Some(9391), Some("Running List markdown files in the working directory".to_string())),
+            ]
+        );
+    }
+
+    /// `stop_task` on the subagent the turn waits on: the call's row says
+    /// stopped, the entry keeps the tokens it had, and the Bash task the
+    /// subagent itself had running is no entry of its own.
+    #[test]
+    fn a_stopped_foreground_subagent_is_stopped_on_its_call_and_its_entry() {
+        use crew_protocol::BackgroundState;
+        let host = TurnHost::test_new();
+        let cap = host.test_capture();
+        host.test_install_claude("s");
+        let lines: Vec<&str> = STOPPED.lines().collect();
+        let blocks = replay(&host, &cap, &lines, Vec::new());
+        let (call, _, state, _, _) = subagent(&blocks);
+        assert_eq!((call.status, state), (ToolStatus::Failed, Some(SubagentState::Stopped)), "the model was told the call was rejected");
+        let list = host.background_list("s");
+        assert_eq!(list.commands.len(), 1, "{list:?}");
+        let row = &list.commands[0];
+        assert_eq!((row.state, row.tokens, row.activity.as_deref(), row.stop_note.as_deref()), (BackgroundState::Stopped, Some(9012), None, None));
+    }
+
+    /// A subagent sent to the background goes on after the turn that started
+    /// it, its progress lines still reaching its entry, and its notification
+    /// says what it used in all; its call was answered at once with no figure.
+    #[test]
+    fn a_background_subagents_notification_says_what_it_used() {
+        use crew_protocol::BackgroundState;
+        let host = TurnHost::test_new();
+        let cap = host.test_capture();
+        host.test_install_claude("s");
+        let lines: Vec<&str> = BACKGROUND_USAGE.lines().collect();
+        let position = |needle: &str| lines.iter().position(|line| line.contains(needle)).unwrap_or_else(|| panic!("no {needle}"));
+        let end = position(r#""type":"result""#) + 1;
+        replay(&host, &cap, &lines[..end], Vec::new());
+        let row = host.background_list("s").commands.remove(0);
+        assert_eq!((row.state, row.foreground, row.stoppable, row.tokens), (BackgroundState::Running, None, Some(true), None));
+
+        let progress = position(r#""subtype":"task_progress""#) + 1;
+        replay(&host, &cap, &lines[end..progress], Vec::new());
+        let row = host.background_list("s").commands.remove(0);
+        assert_eq!((row.state, row.tokens, row.activity.as_deref()), (BackgroundState::Running, Some(7812), Some("Reading README.md")));
+
+        replay(&host, &cap, &lines[progress..], Vec::new());
+        let row = host.background_list("s").commands.remove(0);
+        assert_eq!((row.state, row.tokens, row.activity.as_deref()), (BackgroundState::Completed, Some(8382), None));
+    }
+
+    /// A subagent can say a great deal; a step keeps only as much as any
+    /// other (`STEP_TEXT_LIMIT`).
+    #[test]
+    fn a_subagents_long_words_are_clipped_to_the_step_limit() {
+        let host = TurnHost::test_new();
+        let cap = host.test_capture();
+        host.test_install_claude("s");
+        let lines: Vec<&str> = FORWARDED.lines().collect();
+        let started = lines.iter().position(|line| line.contains(r#""subtype":"task_started""#)).expect("task_started") + 1;
+        let long = json!({
+            "type": "assistant", "parent_tool_use_id": "toolu_014cr5Q3Xeq2gAaBzki7hzeE", "agent_id": "a75a58f9327d18684",
+            "message": { "model": "claude-haiku-5-5", "id": "msg_long", "role": "assistant",
+                "content": [{ "type": "text", "text": "word ".repeat(5000) }] },
+        })
+        .to_string();
+        let mut feed: Vec<&str> = lines[..started].to_vec();
+        feed.push(&long);
+        let blocks = replay(&host, &cap, &feed, Vec::new());
+        let (_, steps, _, _, _) = subagent(&blocks);
+        let said = steps.iter().find(|step| step.role == crew_protocol::BlockRole::Assistant).expect("its words");
+        let kept = said.text.split("\n…").next().unwrap_or_default();
+        assert_eq!(kept.len(), crew_protocol::STEP_TEXT_LIMIT);
+        assert!(said.text.ends_with("more bytes") && said.text.starts_with("word word"), "{:?}", &said.text[said.text.len() - 40..]);
+    }
+
+    /// The lines of a subagent's task, as the call's state: a stop carries no
+    /// usage and still ends it, and the Bash task the subagent itself runs
+    /// names a call of its own, which is no subagent's.
+    #[test]
+    fn a_subagents_task_lines_are_its_calls_state_and_the_tasks_of_its_own_tools_are_not() {
+        let mut subagents = Subagents::default();
+        let rec = |value: Value| value.as_object().expect("record").clone();
+        let call = |id: &str| {
+            (id == "toolu_agent").then(|| {
+                ("Agent".to_string(), rec(json!({ "description": "Run 40-second sleep", "subagent_type": "Explore" })))
+            })
+        };
+        let started = rec(json!({ "type": "system", "subtype": "task_started", "task_id": "a1", "tool_use_id": "toolu_agent",
+            "description": "Run 40-second sleep", "task_type": "local_agent", "is_backgrounded": false }));
+        let Some(HarnessEvent::SubagentUpdated { call_id, state, .. }) = subagents.task(&started, call) else {
+            panic!("a subagent starts");
+        };
+        assert_eq!((call_id.as_str(), state), ("toolu_agent", Some(SubagentState::Running)));
+
+        let nested = rec(json!({ "type": "system", "subtype": "task_started", "task_id": "b1", "owned_by_subagent": true,
+            "tool_use_id": "toolu_bash", "description": "Sleep", "task_type": "local_bash", "parent_task_id": "a1" }));
+        assert!(subagents.task(&nested, |_| Some(("Bash".to_string(), Map::new()))).is_none());
+        let nested_end = rec(json!({ "type": "system", "subtype": "task_notification", "task_id": "b1", "tool_use_id": "toolu_bash",
+            "status": "stopped", "summary": "Sleep" }));
+        assert!(subagents.task(&nested_end, call).is_none(), "its tool's task ends no subagent");
+
+        let stopped = rec(json!({ "type": "system", "subtype": "task_notification", "task_id": "a1", "tool_use_id": "toolu_agent",
+            "status": "stopped", "summary": "Run 40-second sleep" }));
+        let Some(HarnessEvent::SubagentUpdated { state, output, .. }) = subagents.task(&stopped, call) else {
+            panic!("a stop is an update");
+        };
+        assert_eq!((state, output.as_deref()), (Some(SubagentState::Stopped), Some("Run 40-second sleep")));
+        assert_eq!(subagents.notice(&stopped).as_deref(), Some("Agent \"Run 40-second sleep\" was stopped"));
     }
 
     fn tool_details(lines: &[Value]) -> Vec<Option<ToolDetail>> {

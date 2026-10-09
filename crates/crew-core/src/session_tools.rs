@@ -1549,11 +1549,14 @@ print(json.dumps({{"type": "step_finish", "sessionID": sid, "part": {{"id": "sf"
     /// and answers at once; n seconds later the shell completes and the CLI
     /// starts a turn by itself on its notification, as 2.1.295 does. A task
     /// stopped with `stop_task` wakes nobody. With `SLEEP` in the same message
-    /// the turn goes on after starting it. `interrupt` ends a running turn
-    /// with an error result (a file `late-interrupt` holding seconds makes that
-    /// result come so late); it spares the background work only if
-    /// `initialize` declared `perTaskStopAffordance`, and `cancel_queued`
-    /// drops what waits unread.
+    /// the turn goes on after starting it. `AGENT n` does the same with a
+    /// subagent (`ag1`…): it reports its tokens and its step, speaks, and
+    /// completes after n seconds saying what it used; `AGENTFG n` is one the
+    /// turn waits on, which the turn's answer follows. `interrupt` ends a
+    /// running turn with an error result (a file `late-interrupt` holding
+    /// seconds makes that result come so late); it spares the background work
+    /// only if `initialize` declared `perTaskStopAffordance`, and
+    /// `cancel_queued` drops what waits unread.
     fn fake_claude(dir: &Path) -> String {
         let path = dir.join("fake-claude");
         std::fs::write(
@@ -1615,7 +1618,7 @@ def reader():
             if req.get("subtype") == "set_model": detail = req.get("model", "")
             if req.get("subtype") == "set_permission_mode": detail = req.get("mode", "")
             if req.get("subtype") == "apply_flag_settings": detail = json.dumps(req.get("settings"), sort_keys=True)
-            if req.get("subtype") == "initialize": detail = "perTaskStopAffordance" if req.get("perTaskStopAffordance") else ""
+            if req.get("subtype") == "initialize": detail = " ".join(flag for flag in ("perTaskStopAffordance", "forwardSubagentText") if req.get(flag))
             if req.get("subtype") == "interrupt": detail = "cancel_queued" if req.get("cancel_queued") else ""
             with open(CONTROL, "a") as f: f.write("%s %s\n" % (req.get("subtype"), detail))
             # A file `delay-<subtype>` holding seconds makes the next one of it
@@ -1684,6 +1687,35 @@ def background(seconds, text):
         out({"type": "system", "subtype": "background_tasks_changed", "tasks": [], "session_id": sid})
         put(("wake", text))
     threading.Thread(target=finish, daemon=True).start()
+def agent(seconds, text, foreground):
+    # A subagent as 2.1.295 reports one: the Agent call, its task, its tokens
+    # so far with the step it is on, and a frame of its own with its words.
+    n = len(tasks) + 1
+    tid, call = "ag%d" % n, "toolu_ag%d" % n
+    task = tasks[tid] = {"stop": threading.Event(), "killed": False, "done": threading.Event()}
+    out({"type": "assistant", "message": {"id": "ma%d" % n, "role": "assistant", "content": [{"type": "tool_use", "id": call, "name": "Agent", "input": {"description": "Explore the repo", "subagent_type": "Explore", "prompt": "Look around", "run_in_background": not foreground}}]}, "session_id": sid})
+    out({"type": "system", "subtype": "task_started", "task_id": tid, "tool_use_id": call, "description": "Explore the repo", "subagent_type": "Explore", "task_type": "local_agent", "is_backgrounded": not foreground, "prompt": "Look around", "session_id": sid})
+    if not foreground:
+        out({"type": "system", "subtype": "background_tasks_changed", "tasks": [{"task_id": tid, "task_type": "local_agent", "description": "Explore the repo"}], "session_id": sid})
+    out({"type": "assistant", "parent_tool_use_id": call, "agent_id": tid, "message": {"id": "msa%d" % n, "role": "assistant", "model": "fake", "content": [{"type": "text", "text": "Looking at README.md"}, {"type": "tool_use", "id": "toolu_ag%d_read" % n, "name": "Read", "input": {"file_path": "README.md"}}]}, "session_id": sid})
+    out({"type": "system", "subtype": "task_progress", "task_id": tid, "tool_use_id": call, "description": "Reading README.md", "subagent_type": "Explore", "usage": {"total_tokens": 7812, "tool_uses": 1, "duration_ms": 926}, "last_tool_name": "Read", "session_id": sid})
+    def finish():
+        task["stop"].wait(float(seconds))
+        if task["stop"].is_set():
+            out({"type": "system", "subtype": "task_updated", "task_id": tid, "patch": {"status": "killed"}, "session_id": sid})
+            out({"type": "system", "subtype": "task_notification", "task_id": tid, "tool_use_id": call, "status": "stopped", "summary": "Explore the repo", "session_id": sid})
+        else:
+            out({"type": "system", "subtype": "task_updated", "task_id": tid, "patch": {"status": "completed"}, "session_id": sid})
+            out({"type": "system", "subtype": "task_notification", "task_id": tid, "tool_use_id": call, "status": "completed", "summary": "Found it", "usage": {"total_tokens": 8382, "tool_uses": 1, "duration_ms": 2816}, "session_id": sid})
+            if foreground:
+                out({"type": "user", "parent_tool_use_id": None, "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": call, "content": [{"type": "text", "text": "Found it"}]}]}, "tool_use_result": {"status": "completed", "agentId": tid, "agentType": "Explore", "resolvedModel": "fake", "totalTokens": 8382, "totalToolUseCount": 1}, "session_id": sid})
+        if not foreground:
+            out({"type": "system", "subtype": "background_tasks_changed", "tasks": [], "session_id": sid})
+            if not task["stop"].is_set():
+                put(("wake", text))
+        task["done"].set()
+    threading.Thread(target=finish, daemon=True).start()
+    return task
 def result(reply, failed=False):
     running[0] = False
     out({"type": "result", "subtype": "error_during_execution" if failed else "success", "is_error": failed, "result": "it broke" if failed else reply, "session_id": sid, "total_cost_usd": 0, "usage": {}, "modelUsage": {"fake": {"contextWindow": 200000}}})
@@ -1722,6 +1754,16 @@ while True:
         background(b.group(1), heard[0])
         if "SLEEP" not in heard[0]:
             out({"type": "assistant", "message": {"id": "m0", "role": "assistant", "content": [{"type": "text", "text": "started it in the background"}]}, "session_id": sid})
+            result("started")
+            continue
+    g = re.search(r"AGENT(FG)? (\d+(?:\.\d+)?)", heard[0])
+    if g:
+        waited_on = agent(g.group(2), heard[0], bool(g.group(1)))
+        if g.group(1):
+            # The turn waits on it, until it completes or is stopped.
+            waited_on["done"].wait()
+        else:
+            out({"type": "assistant", "message": {"id": "m0", "role": "assistant", "content": [{"type": "text", "text": "started the agent"}]}, "session_id": sid})
             result("started")
             continue
     m = re.search(r"SLEEP (\d+(?:\.\d+)?)", heard[0])
@@ -3454,6 +3496,84 @@ time.sleep(600)
             std::thread::sleep(Duration::from_millis(25));
         }
         panic!("the tray never got there: {:?}", w.turns.background_list(id));
+    }
+
+    /// What the call of a subagent shows as its steps, in the transcript.
+    fn agent_steps(w: &World, id: &str) -> Vec<(BlockRole, String)> {
+        use crew_protocol::ToolDetail;
+        let (blocks, _) = w.turns.transcripts().since(id, 0);
+        let call = blocks
+            .iter()
+            .filter_map(|block| block.tool.as_ref())
+            .find(|tool| tool.name == "Agent")
+            .expect("the Agent call");
+        let Some(ToolDetail::Agent { steps: Some(steps), .. }) = &call.detail else {
+            panic!("the Agent call has no steps: {call:?}");
+        };
+        steps.iter().map(|step| (step.role.clone(), step.text.clone())).collect()
+    }
+
+    /// A child's subagent in the background: listed as it works with the
+    /// tokens, step and model Claude reports for it, its words among the
+    /// steps of its call (`forwardSubagentText`), stopped from the panel with
+    /// `stop_task`.
+    #[test]
+    fn a_claude_childs_background_subagent_is_listed_with_its_tokens_and_stopped_from_the_panel() {
+        use crew_protocol::{BackgroundKind, BackgroundState};
+        let w = world();
+        w.turns.override_binary("claude", fake_claude(&w.dir));
+        let parent = w.session("terminal", "shell", "full");
+        let started = w.call(&parent, "start_session", json!({ "provider": "claude", "prompt": "AGENT 30" })).expect("start");
+        let id = started["id"].as_str().unwrap().to_string();
+        let list = until_background(&w, &id, |list| list.waiting);
+        let row = &list.commands[0];
+        assert_eq!((row.id.as_str(), row.command.as_str()), ("ag1", "Explore the repo"));
+        assert_eq!((row.kind, row.state, row.foreground), (BackgroundKind::Subagent, BackgroundState::Running, None));
+        assert_eq!((row.stoppable, row.tokens, row.activity.as_deref()), (Some(true), Some(7812), Some("Reading README.md")));
+        assert_eq!((row.model.as_deref(), row.window), (Some("fake"), Some(200_000)));
+        assert_eq!(row.tool_call_id.as_deref(), Some("toolu_ag1"));
+        let steps = agent_steps(&w, &id);
+        assert!(steps.contains(&(BlockRole::Assistant, "Looking at README.md".to_string())), "{steps:?}");
+
+        w.turns.background_stop(&id, "ag1").expect("stop");
+        let row = w.turns.background_list(&id).commands.into_iter().next().expect("row");
+        assert_eq!((row.state, row.activity), (BackgroundState::Stopped, None));
+        assert_eq!(row.tokens, Some(7812), "what it had used stays");
+        let control = std::fs::read_to_string(w.dir.join("claude-control.log")).unwrap();
+        assert!(control.contains("stop_task ag1\n"), "{control}");
+        wait_ended(&w, &parent, &id);
+    }
+
+    /// A subagent the turn waits on is on the board too, and `stop_task` takes
+    /// it the same way (measured on 2.1.295). One that completes says what it
+    /// used in all, from the notification and the answer to its call.
+    #[test]
+    fn a_claude_childs_foreground_subagent_is_listed_stopped_or_left_to_complete() {
+        use crew_protocol::BackgroundState;
+        let w = world();
+        w.turns.override_binary("claude", fake_claude(&w.dir));
+        let parent = w.session("terminal", "shell", "full");
+        let started = w.call(&parent, "start_session", json!({ "provider": "claude", "prompt": "AGENTFG 30" })).expect("start");
+        let id = started["id"].as_str().unwrap().to_string();
+        let list = until_background(&w, &id, |list| list.commands.first().is_some_and(|row| row.tokens.is_some()));
+        let row = &list.commands[0];
+        assert_eq!((row.state, row.foreground, row.stoppable, row.stop_note.as_deref()), (BackgroundState::Running, Some(true), Some(true), None));
+        assert!(!list.waiting, "the turn is not held on it: it is running");
+        w.turns.background_stop(&id, "ag1").expect("stop");
+        let out = wait_ended(&w, &parent, &id);
+        assert_eq!(out["sessions"][0]["report"], "report: AGENTFG 30", "{out}");
+        let row = &w.turns.background_list(&id).commands[0];
+        assert_eq!((row.state, row.stop_note.as_deref()), (BackgroundState::Stopped, None));
+        let control = std::fs::read_to_string(w.dir.join("claude-control.log")).unwrap();
+        assert!(control.contains("stop_task ag1\n"), "{control}");
+
+        w.settle(&id);
+        w.call(&parent, "send_message", json!({ "to": id, "text": "AGENTFG 0.3" })).expect("send");
+        w.wait(&parent, &id, json!({}));
+        let list = w.turns.background_list(&id);
+        let row = list.commands.iter().find(|row| row.id == "ag2").expect("the second subagent");
+        assert_eq!((row.state, row.tokens, row.model.as_deref()), (BackgroundState::Completed, Some(8382), Some("fake")));
+        assert_eq!((row.activity.as_deref(), row.foreground), (None, Some(true)));
     }
 
     /// A child's command in the background: listed while it runs, its
@@ -5479,7 +5599,7 @@ time.sleep(600)
         assert_eq!(w.settle(&mine.id).status, "idle");
         assert!(says(&w, &mine.id, "Stopped"));
         let control = std::fs::read_to_string(w.dir.join("claude-control.log")).unwrap();
-        assert!(control.starts_with("initialize perTaskStopAffordance\n"), "{control}");
+        assert!(control.starts_with("initialize perTaskStopAffordance forwardSubagentText\n"), "{control}");
         assert!(control.contains("interrupt cancel_queued\n") && !control.contains("stop_task"), "{control}");
         let list = w.turns.background_list(&mine.id);
         assert!(list.live, "{list:?}");
@@ -6024,6 +6144,53 @@ time.sleep(600)
         assert_eq!(w.live_pid(&mine.id), pid, "the CLI's turn ran on another process");
         assert_eq!(users_lines(&w, &mine.id).len(), 1, "the CLI's turn was given a message");
         eprintln!("answered at {answered:?}, the CLI's own turn ended at {reported:?}");
+    }
+
+    /// Runs the real `claude`: one haiku turn in which the model starts an
+    /// Explore subagent in the foreground and waits on it. The entry is listed
+    /// as the one the turn waits on, with the tokens and the step the CLI
+    /// reports, and `stop_task` from the panel stops it: the subagent ends
+    /// `stopped` long before its 40 s, and the model is told the call was
+    /// rejected, which ends the turn. Needs `claude auth login`.
+    /// `cargo test -p crew-core --lib -- --ignored --test-threads=1 live_claude_stop_task`
+    #[test]
+    #[ignore]
+    fn live_claude_stop_task_stops_a_subagent_the_turn_waits_on() {
+        use crew_protocol::{BackgroundKind, BackgroundState};
+        let w = world();
+        let mine = live_users_claude(&w);
+        let _reap = Reap(&w, mine.id.clone());
+        w.type_to(
+            &mine,
+            "Use the Agent tool with subagent_type Explore and run_in_background false (a foreground subagent) whose \
+             prompt is: run exactly this with Bash: python3 -c \"import time; time.sleep(40)\" and then say done. \
+             Then reply ok.",
+            None,
+            None,
+        );
+        let list = {
+            let end = std::time::Instant::now() + Duration::from_secs(120);
+            loop {
+                let list = w.turns.background_list(&mine.id);
+                if list.commands.iter().any(|row| row.tokens.is_some_and(|tokens| tokens > 0)) {
+                    break list;
+                }
+                assert!(std::time::Instant::now() < end, "the subagent never reported its tokens: {list:?}");
+                std::thread::sleep(Duration::from_millis(200));
+            }
+        };
+        let row = list.commands.iter().find(|row| row.kind == BackgroundKind::Subagent).expect("the subagent");
+        assert_eq!((row.state, row.foreground, row.stoppable), (BackgroundState::Running, Some(true), Some(true)), "{row:?}");
+        assert!(row.activity.is_some(), "{row:?}");
+        let at = std::time::Instant::now();
+        w.turns.background_stop(&mine.id, &row.id).expect("stop the subagent");
+        until_long("the turn ended", Duration::from_secs(60), || !w.turns.is_running(&mine.id));
+        eprintln!("stopped, and the turn ended, after {:?}", at.elapsed());
+        assert!(at.elapsed() < Duration::from_secs(30), "the subagent ran to its end");
+        let row = w.turns.background_list(&mine.id).commands.into_iter().find(|one| one.id == row.id).expect("row");
+        assert_eq!(row.state, BackgroundState::Stopped, "{row:?}");
+        assert!(row.tokens.is_some_and(|tokens| tokens > 0), "{row:?}");
+        assert!(row.model.is_some() && row.window.is_some(), "{row:?}");
     }
 
     /// Runs the real `claude`: one haiku turn that leaves `sleep 60` running in

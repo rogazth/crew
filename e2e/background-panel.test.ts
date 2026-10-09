@@ -201,3 +201,29 @@ test("Clear finished empties the panel, and the line goes with it", async () => 
   // The child is still a session of the workspace: only the panel forgot it.
   assert.ok((await sessions(crew, chat.workspaceId)).some((row) => row.parentId === chat.id));
 });
+
+test("a subagent the chat's CLI runs shows its tokens and its step, and x stops it through the CLI", async () => {
+  const controls = async () => (await readFile(path.join(crew.home, "fake-claude-control.log"), "utf8").catch(() => "")).split("\n");
+  await send("agent");
+  await said(/^Reply \d+: agent$/).waitFor();
+  await waitFor(async () => (await crew.request<Session>("session_get", { id: chat.id })).status === "idle", { message: "the turn is over" });
+
+  // The turn is over and the subagent is not: it is the line under the composer.
+  const line = crew.window.getByRole("button", { name: "1 agent", exact: true });
+  await line.waitFor();
+  await line.click();
+  await sheet().waitFor();
+  const row = rows().nth(0);
+  await row.waitFor();
+  const text = await row.textContent();
+  assert.match(text ?? "", /Explore the repo.*Subagent · \d+s · 41k tokens · Reading README\.md/, text ?? "");
+  assert.equal(await row.getByRole("button", { name: "Stop" }).count(), 1, "a subagent can be stopped alone");
+
+  await crew.window.keyboard.press("x");
+  await rows().filter({ hasText: "Subagent · stopped" }).waitFor();
+  assert.ok((await controls()).includes("stop_task ag1"), (await controls()).join("\n"));
+  const board = await crew.request<{ commands: { id: string; state: string; tokens?: number }[] }>("background_list", { sessionId: chat.id });
+  assert.deepEqual([board.commands[0]?.id, board.commands[0]?.state, board.commands[0]?.tokens], ["ag1", "stopped", 41_300]);
+  await crew.window.keyboard.press("Escape");
+  await sheet().waitFor({ state: "detached" });
+});

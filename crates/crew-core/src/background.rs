@@ -19,7 +19,7 @@ use crew_protocol::{BackgroundCommand, BackgroundKind, BackgroundList, Backgroun
 use rusqlite::{params, Connection};
 use serde_json::{Map, Value};
 
-use crate::providers::unwrap_shell;
+use crate::providers::{clip, unwrap_shell};
 use crate::store::Store;
 
 /// How much of a command's output is kept: Claude's `get_task_output` reads
@@ -30,9 +30,17 @@ pub const OUTPUT_TAIL: usize = 8 * 1024;
 /// in that process, so it ended with it.
 pub const CLI_EXITED: &str = "its CLI exited";
 
+/// Why a subagent the turn waited on is stopped, when the turn ended before
+/// the CLI said how it did.
+pub const TURN_ENDED: &str = "its turn ended";
+
 /// Why an entry the last daemon left running is stopped: nobody can say what
 /// became of it while Crew was not there to watch.
 pub const CREW_RESTARTED: &str = "Crew restarted";
+
+/// How much of a step's title is kept as an entry's activity: it shares a row
+/// with the entry's name and its tokens.
+const ACTIVITY_LIMIT: usize = 120;
 
 pub type Listener = Arc<dyn Fn(BackgroundList) + Send + Sync>;
 
@@ -177,6 +185,10 @@ pub struct Board {
     codex_items: HashMap<String, CodexItem>,
     /// Codex's process id for each of its rows: what `terminate` names.
     process_ids: HashMap<String, String>,
+    /// The context window of each model Claude has reported one for, in a
+    /// turn's `modelUsage`: a subagent's model is only named as its frames
+    /// come, and its window is what its tokens are shown against.
+    windows: HashMap<String, u64>,
 }
 
 impl Board {
@@ -296,6 +308,7 @@ impl Board {
         let before = row.clone();
         if row.state == BackgroundState::Running {
             row.ended_at = Some(now);
+            row.activity = None;
         }
         // Stopped is how it ended, whatever its exit says after.
         if row.state != BackgroundState::Stopped {
@@ -344,8 +357,25 @@ impl Board {
         tool: impl Fn(&str) -> Option<(String, Map<String, Value>)>,
         now: i64,
     ) -> bool {
-        if rec.get("type").and_then(Value::as_str) != Some("system") {
-            return false;
+        match rec.get("type").and_then(Value::as_str) {
+            Some("system") => {}
+            Some("result") => {
+                let mut changed = self.claude_windows(rec);
+                // The turn is over, and a subagent it waited on with it: an
+                // interrupt may not have said how that one ended.
+                for row in &mut self.commands {
+                    if row.state == BackgroundState::Running && row.foreground == Some(true) {
+                        row.state = BackgroundState::Stopped;
+                        row.ended_at = Some(now);
+                        row.activity = None;
+                        row.stop_note = Some(TURN_ENDED.to_string());
+                        changed = true;
+                    }
+                }
+                return changed;
+            }
+            Some("user") => return self.claude_agent_result(rec),
+            _ => return false,
         }
         let task_id = rec.get("task_id").and_then(Value::as_str).map(str::to_string);
         match rec.get("subtype").and_then(Value::as_str) {
@@ -382,7 +412,9 @@ impl Board {
                     tool_call_id: tool_use_id.map(str::to_string),
                     tokens: None,
                     window: None,
-                    stoppable: None,
+                    // `stop_task` takes any task Claude reports, a subagent the
+                    // turn waits on too (measured on 2.1.295).
+                    stoppable: Some(true),
                     stop_note: None,
                     activity: None,
                     model: None,
@@ -391,10 +423,36 @@ impl Board {
                 };
                 if flag(rec, "is_backgrounded") {
                     self.add(row)
+                } else if kind == BackgroundKind::Subagent {
+                    // A subagent the turn waits on is listed as it works; the
+                    // other things run in the foreground only until they end.
+                    self.add(BackgroundCommand { foreground: Some(true), ..row })
                 } else {
                     self.foreground.insert(task_id, row);
                     false
                 }
+            }
+            Some("task_progress") => {
+                let Some(task_id) = task_id else {
+                    return false;
+                };
+                let tokens = rec.get("usage").and_then(|usage| usage.get("total_tokens")).and_then(Value::as_u64);
+                // The CLI's own title for the step it is on ("Reading
+                // README.md"), or failing that the tool's name.
+                let activity = ["description", "last_tool_name"]
+                    .iter()
+                    .filter_map(|key| rec.get(*key).and_then(Value::as_str))
+                    .find(|text| !text.trim().is_empty())
+                    .map(|text| clip(text.trim(), ACTIVITY_LIMIT));
+                let Some(row) = self.commands.iter_mut().find(|row| row.id == task_id) else {
+                    return false;
+                };
+                let before = row.clone();
+                if row.state == BackgroundState::Running {
+                    row.tokens = tokens.or(row.tokens);
+                    row.activity = activity.or(row.activity.take());
+                }
+                *row != before
             }
             Some("task_updated") => {
                 let Some(task_id) = task_id else {
@@ -405,6 +463,9 @@ impl Board {
                 if flag(&patch, "is_backgrounded") {
                     if let Some(row) = self.foreground.remove(&task_id) {
                         changed |= self.add(row);
+                    } else if let Some(row) = self.commands.iter_mut().find(|row| row.id == task_id) {
+                        // Sent to the background, the turn no longer waits on it.
+                        changed |= row.foreground.take().is_some();
                     }
                 }
                 let state = match patch.get("status").and_then(Value::as_str) {
@@ -431,7 +492,11 @@ impl Board {
                     Some("stopped") => BackgroundState::Stopped,
                     _ => return false,
                 };
-                self.settle(&task_id, state, exit_code(summary), now)
+                // What it used in all, which the CLI counts exactly once it is over.
+                let tokens = rec.get("usage").and_then(|usage| usage.get("total_tokens")).and_then(Value::as_u64);
+                let mut changed = tokens.is_some_and(|tokens| self.set_tokens(&task_id, tokens));
+                changed |= self.settle(&task_id, state, exit_code(summary), now);
+                changed
             }
             Some("background_tasks_changed") => {
                 let Some(tasks) = rec.get("tasks").and_then(Value::as_array) else {
@@ -466,7 +531,7 @@ impl Board {
                                 tool_call_id: None,
                                 tokens: None,
                                 window: None,
-                                stoppable: None,
+                                stoppable: Some(true),
                                 stop_note: None,
                                 activity: None,
                                 model: None,
@@ -482,7 +547,11 @@ impl Board {
                 let gone: Vec<String> = self
                     .commands
                     .iter()
-                    .filter(|row| row.state == BackgroundState::Running && !live.contains(&row.id))
+                    // The set lists what runs in the background: a subagent
+                    // the turn waits on is not in it, and has not ended.
+                    .filter(|row| {
+                        row.state == BackgroundState::Running && row.foreground != Some(true) && !live.contains(&row.id)
+                    })
                     .map(|row| row.id.clone())
                     .collect();
                 for id in gone {
@@ -492,6 +561,79 @@ impl Board {
             }
             _ => false,
         }
+    }
+
+    /// What a task used in all.
+    fn set_tokens(&mut self, id: &str, tokens: u64) -> bool {
+        let Some(row) = self.commands.iter_mut().find(|row| row.id == id) else {
+            return false;
+        };
+        let before = row.tokens.replace(tokens);
+        before != Some(tokens)
+    }
+
+    /// The model a Claude subagent runs on, from the frames it sends, named
+    /// by the call that started it. Its window is filled in when a turn's
+    /// result has said what the model's is.
+    pub fn claude_subagent_model(&mut self, call: &str, model: &str) -> bool {
+        // A frame the CLI wrote itself, not the model's, names a placeholder.
+        if model.is_empty() || model.starts_with('<') {
+            return false;
+        }
+        let window = self.windows.get(model).copied();
+        let Some(row) = self.commands.iter_mut().find(|row| row.tool_call_id.as_deref() == Some(call)) else {
+            return false;
+        };
+        let before = row.clone();
+        row.model = Some(model.to_string());
+        row.window = window.or(row.window);
+        *row != before
+    }
+
+    /// A turn's `result`: the window of every model it used, so that the
+    /// subagents running on one can show their tokens against it.
+    fn claude_windows(&mut self, rec: &Value) -> bool {
+        let Some(usage) = rec.get("modelUsage").and_then(Value::as_object) else {
+            return false;
+        };
+        for (model, used) in usage {
+            if let Some(window) = used.get("contextWindow").and_then(Value::as_u64).filter(|window| *window > 0) {
+                self.windows.insert(model.clone(), window);
+            }
+        }
+        let mut changed = false;
+        for row in &mut self.commands {
+            if let (None, Some(window)) = (row.window, row.model.as_ref().and_then(|model| self.windows.get(model))) {
+                row.window = Some(*window);
+                changed = true;
+            }
+        }
+        changed
+    }
+
+    /// The user message that answers an Agent call carries what the subagent
+    /// did in all: the tokens it used and the model it ran on, exact, where
+    /// the live figures run a little high.
+    fn claude_agent_result(&mut self, rec: &Value) -> bool {
+        let Some(result) = rec.get("tool_use_result").filter(|result| result.is_object()) else {
+            return false;
+        };
+        let Some(agent) = result.get("agentId").and_then(Value::as_str) else {
+            return false;
+        };
+        let model = result.get("resolvedModel").and_then(Value::as_str).filter(|model| !model.is_empty());
+        let window = model.and_then(|model| self.windows.get(model).copied());
+        let tokens = result.get("totalTokens").and_then(Value::as_u64);
+        let Some(row) = self.commands.iter_mut().find(|row| row.id == agent) else {
+            return false;
+        };
+        let before = row.clone();
+        row.tokens = tokens.or(row.tokens);
+        if let Some(model) = model {
+            row.model = Some(model.to_string());
+            row.window = window.or(row.window);
+        }
+        *row != before
     }
 
     /// A Codex item started or ended. A command is not a row yet: it becomes
@@ -535,6 +677,12 @@ impl Board {
             _ => BackgroundState::Completed,
         };
         self.settle(id, state, exit, now)
+    }
+
+    /// An entry as a test wants it, whatever the CLIs would have said.
+    #[cfg(test)]
+    pub(crate) fn test_entry(&mut self, row: BackgroundCommand) -> bool {
+        self.add(row)
     }
 
     /// Whether a Codex command item is still running: what makes a listing
@@ -693,7 +841,8 @@ impl Board {
                 tool_call_id: Some(id.to_string()),
                 tokens: None,
                 window: None,
-                stoppable: None,
+                // By its process (`thread/backgroundTerminals/terminate`).
+                stoppable: Some(true),
                 stop_note: None,
                 activity: None,
                 model: None,
@@ -960,6 +1109,167 @@ mod tests {
         assert_eq!(board.command("m1").unwrap().kind, BackgroundKind::Monitor);
     }
 
+    // Shapes as Claude Code 2.1.295 writes a subagent's lines in stream-json
+    // (`Agent` calls, `subagent_type: Explore`), as captured from a real turn.
+    fn agent_started(task: &str, backgrounded: bool) -> Value {
+        json!({ "type": "system", "subtype": "task_started", "task_id": task, "run_id": "0mv1cp8is-74a2443a",
+            "tool_use_id": "toolu_agent", "description": "List markdown files", "subagent_type": "Explore",
+            "is_backgrounded": backgrounded, "spawn_depth": 1, "task_type": "local_agent",
+            "prompt": "Use Glob to list *.md files in the current directory, then say done.", "session_id": "s1" })
+    }
+
+    fn agent_progress(task: &str, tokens: u64, description: &str, tool: &str) -> Value {
+        json!({ "type": "system", "subtype": "task_progress", "task_id": task, "run_id": "0mv1cp8is-74a2443a",
+            "tool_use_id": "toolu_agent", "description": description, "subagent_type": "Explore",
+            "usage": { "total_tokens": tokens, "tool_uses": 1, "duration_ms": 1345 }, "last_tool_name": tool,
+            "session_id": "s1" })
+    }
+
+    fn agent_notified(task: &str, status: &str, tokens: Option<u64>) -> Value {
+        let mut rec = json!({ "type": "system", "subtype": "task_notification", "task_id": task,
+            "run_id": "0mv1cp8is-74a2443a", "tool_use_id": "toolu_agent", "status": status,
+            "output_file": "/tmp/out", "summary": "Glob is not available here, so I used find instead.", "session_id": "s1" });
+        if let Some(tokens) = tokens {
+            rec["usage"] = json!({ "total_tokens": tokens, "tool_uses": 2, "duration_ms": 4187 });
+        }
+        rec
+    }
+
+    /// The user message that answers a foreground Agent call.
+    fn agent_answered(task: &str) -> Value {
+        json!({ "type": "user", "parent_tool_use_id": null, "session_id": "s1",
+            "message": { "role": "user", "content": [{ "tool_use_id": "toolu_agent", "type": "tool_result",
+                "content": [{ "type": "text", "text": "[Subagent hand-back] ... Done." }] }] },
+            "tool_use_result": { "status": "completed", "agentId": task, "agentType": "Explore",
+                "resolvedModel": "claude-haiku-5-5", "totalDurationMs": 4188, "totalTokens": 9561, "totalToolUseCount": 2 } })
+    }
+
+    fn turn_result(model: &str, window: u64) -> Value {
+        json!({ "type": "result", "subtype": "success", "is_error": false, "session_id": "s1",
+            "modelUsage": { model: { "inputTokens": 6, "outputTokens": 478, "contextWindow": window, "maxOutputTokens": 128000 } } })
+    }
+
+    #[test]
+    fn a_subagent_the_turn_waits_on_is_listed_as_it_works_with_what_it_used() {
+        let mut board = Board::default();
+        board.launch(0);
+        assert!(board.claude(&agent_started("a1", false), none, 10));
+        let row = board.command("a1").unwrap();
+        assert_eq!((row.kind, row.state, row.foreground), (BackgroundKind::Subagent, BackgroundState::Running, Some(true)));
+        assert_eq!((row.command.as_str(), row.tool_call_id.as_deref()), ("List markdown files", Some("toolu_agent")));
+        assert_eq!((row.stoppable, row.tokens, row.activity.as_deref()), (Some(true), None, None));
+
+        assert!(board.claude(&agent_progress("a1", 8988, "Finding *.md", "Glob"), none, 11));
+        let row = board.command("a1").unwrap();
+        assert_eq!((row.tokens, row.activity.as_deref()), (Some(8988), Some("Finding *.md")));
+        assert!(!board.claude(&agent_progress("a1", 8988, "Finding *.md", "Glob"), none, 12), "the same step says nothing new");
+        assert!(board.claude(&agent_progress("a1", 9391, "", "Bash"), none, 13));
+        let row = board.command("a1").unwrap();
+        assert_eq!((row.tokens, row.activity.as_deref()), (Some(9391), Some("Bash")), "without a title, the tool it used");
+
+        // The set of what runs in the background does not list it, and it has not ended.
+        assert!(!board.claude(&changed(&[]), none, 14));
+        assert_eq!(board.command("a1").unwrap().state, BackgroundState::Running);
+
+        // The live figure runs a little high: the notification's is what it used.
+        assert!(board.claude(&agent_notified("a1", "completed", Some(9561)), none, 20));
+        let row = board.command("a1").unwrap();
+        assert_eq!((row.state, row.tokens, row.activity.as_deref(), row.ended_at), (BackgroundState::Completed, Some(9561), None, Some(20)));
+        assert!(board.running().is_empty());
+    }
+
+    #[test]
+    fn a_stopped_subagent_keeps_the_tokens_it_had_used() {
+        let mut board = Board::default();
+        board.claude(&agent_started("a1", false), none, 1);
+        board.claude(&agent_progress("a1", 9012, "Running Sleep for 40 seconds", "Bash"), none, 2);
+        // A stop says no usage: the last live figure stays.
+        assert!(board.claude(&agent_notified("a1", "stopped", None), none, 3));
+        let row = board.command("a1").unwrap();
+        assert_eq!((row.state, row.tokens, row.activity.as_deref()), (BackgroundState::Stopped, Some(9012), None));
+        assert!(!board.claude(&agent_progress("a1", 9500, "Late", "Bash"), none, 4), "an ended one counts no more");
+        assert_eq!(board.command("a1").unwrap().tokens, Some(9012));
+    }
+
+    #[test]
+    fn a_subagent_sent_to_the_background_is_not_waited_on_any_more() {
+        let mut board = Board::default();
+        board.claude(&agent_started("a1", false), none, 1);
+        let moved = json!({ "type": "system", "subtype": "task_updated", "task_id": "a1", "patch": { "is_backgrounded": true } });
+        assert!(board.claude(&moved, none, 2));
+        assert_eq!(board.command("a1").unwrap().foreground, None);
+        // Now the set lists it, and it ends with it.
+        let set = json!({ "type": "system", "subtype": "background_tasks_changed", "tasks": [
+            { "task_id": "a1", "task_type": "local_agent", "description": "List markdown files" }] });
+        assert!(!board.claude(&set, none, 3));
+        assert!(board.claude(&changed(&[]), none, 4));
+        assert_eq!(board.command("a1").unwrap().state, BackgroundState::Completed);
+    }
+
+    #[test]
+    fn a_background_subagent_listed_by_the_set_alone_can_be_stopped() {
+        let mut board = Board::default();
+        let set = json!({ "type": "system", "subtype": "background_tasks_changed", "tasks": [
+            { "task_id": "a1", "run_id": "0mv1coivi-50ac145e", "task_type": "local_agent", "subagent_type": "Explore",
+              "description": "Read README and say done" }] });
+        assert!(board.claude(&set, none, 1));
+        let row = board.command("a1").unwrap();
+        assert_eq!((row.kind, row.stoppable, row.foreground), (BackgroundKind::Subagent, Some(true), None));
+    }
+
+    #[test]
+    fn the_agent_result_and_the_turn_result_give_a_subagent_its_model_and_window() {
+        let mut board = Board::default();
+        board.claude(&agent_started("a1", false), none, 1);
+        // A frame the subagent sent names its model while it works; its window
+        // is not known until a result lists the models of the turn.
+        assert!(board.claude_subagent_model("toolu_agent", "claude-haiku-5-5"));
+        assert!(!board.claude_subagent_model("toolu_agent", "claude-haiku-5-5"));
+        assert!(!board.claude_subagent_model("toolu_agent", "<synthetic>"), "a placeholder is no model");
+        assert!(!board.claude_subagent_model("toolu_elsewhere", "claude-haiku-5-5"), "another call's subagent is not this one");
+        let row = board.command("a1").unwrap();
+        assert_eq!((row.model.as_deref(), row.window), (Some("claude-haiku-5-5"), None));
+
+        assert!(board.claude(&turn_result("claude-haiku-5-5", 1_000_000), none, 2));
+        assert_eq!(board.command("a1").unwrap().window, Some(1_000_000));
+
+        // Exact at the end, and the model the CLI resolved.
+        assert!(board.claude(&agent_answered("a1"), none, 3));
+        let row = board.command("a1").unwrap();
+        assert_eq!((row.tokens, row.model.as_deref(), row.window), (Some(9561), Some("claude-haiku-5-5"), Some(1_000_000)));
+        assert!(!board.claude(&agent_answered("a1"), none, 4));
+
+        // Another subagent, on a model the result already knew.
+        board.claude(&json!({ "type": "system", "subtype": "task_started", "task_id": "a2", "tool_use_id": "toolu_a2",
+            "description": "Second", "task_type": "local_agent", "is_backgrounded": true }), none, 5);
+        assert!(board.claude_subagent_model("toolu_a2", "claude-haiku-5-5"));
+        assert_eq!(board.command("a2").unwrap().window, Some(1_000_000));
+    }
+
+    #[test]
+    fn an_agent_result_for_a_task_not_listed_changes_nothing() {
+        let mut board = Board::default();
+        assert!(!board.claude(&agent_answered("a1"), none, 1));
+        // A user message that answers any other call has no agent in it.
+        let plain = json!({ "type": "user", "message": { "role": "user", "content": [] }, "tool_use_result": "Error: nope" });
+        assert!(!board.claude(&plain, none, 2));
+        assert!(board.list("s").commands.is_empty());
+    }
+
+    #[test]
+    fn a_result_ends_the_subagent_the_turn_waited_on_and_leaves_the_ones_in_the_background() {
+        let mut board = Board::default();
+        board.claude(&agent_started("fg", false), none, 1);
+        board.claude(&json!({ "type": "system", "subtype": "task_started", "task_id": "bg", "tool_use_id": "toolu_bg_agent",
+            "description": "Sent off", "task_type": "local_agent", "is_backgrounded": true }), none, 2);
+        board.claude(&agent_progress("fg", 9012, "Running Sleep", "Bash"), none, 3);
+        assert!(board.claude(&turn_result("claude-haiku-5-5", 1_000_000), none, 4));
+        let row = board.command("fg").unwrap();
+        assert_eq!((row.state, row.ended_at, row.stop_note.as_deref(), row.activity.as_deref()), (BackgroundState::Stopped, Some(4), Some(TURN_ENDED), None));
+        assert_eq!(board.command("bg").unwrap().state, BackgroundState::Running);
+        assert!(!board.claude(&turn_result("claude-haiku-5-5", 1_000_000), none, 5), "nothing more to end");
+    }
+
     /// A board with a shell still running (`b1`) and one that finished (`b2`),
     /// on a CLI that is up.
     fn board_with_one_running() -> Board {
@@ -1060,6 +1370,7 @@ mod tests {
         let row = board.command("exec-1").unwrap();
         assert_eq!((row.command.as_str(), row.started_at, row.state), ("sleep 120", 5, BackgroundState::Running));
         assert_eq!(row.tool_call_id.as_deref(), Some("exec-1"));
+        assert_eq!(row.stoppable, Some(true), "a terminal is stopped through its process");
         assert_eq!(board.process_id("exec-1").as_deref(), Some("87302"));
         board.codex_output("exec-1", "tock\n");
         assert_eq!(board.output("exec-1").unwrap().output, "tick\ntock\n");

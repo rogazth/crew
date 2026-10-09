@@ -229,7 +229,7 @@ test("Esc stops a running turn in the chat, and the next message gets its answer
   await waitFor(async () => (await controls()).includes("interrupt cancel_queued"), {
     message: "the CLI was told to interrupt",
   });
-  assert.ok((await controls()).includes("initialize perTaskStopAffordance"), (await controls()).join("\n"));
+  assert.ok((await controls()).includes("initialize perTaskStopAffordance forwardSubagentText"), (await controls()).join("\n"));
   await waitFor(async () => (await crew.request<Session>("session_get", { id: session.id })).status === "idle", {
     message: "the session is idle again",
   });

@@ -321,6 +321,14 @@ the bottom as each decision lands.
     thread; opencode interrupt on the child session; Crew `stop_session`;
     background shells through their own kill. An entry the provider cannot
     stop on its own says so instead of showing a dead button.
+    Measured on Claude 2.1.295: `stop_task` takes a subagent the turn waits
+    on as well as a background one: it ends `stopped` at once, the Agent call
+    answers "rejected", and the model's turn ends with it. So every Claude
+    entry is stoppable; `stop_note` ("stops with the turn") stays for a kind
+    that proves otherwise. `initialize` with `forwardSubagentText` is
+    accepted and puts the subagent's words among its steps; `task_progress`
+    and `task_notification` carry `usage.total_tokens`, and the Agent call's
+    answer `totalTokens` and `resolvedModel`.
 36. **Entries do not disappear.** A subagent or command stays listed, with
     its state (running, done, failed, stopped) and its output, until the
     session ends or the user clears it. Its state comes from the protocol's
