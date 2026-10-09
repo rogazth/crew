@@ -407,9 +407,9 @@ the terminal view.
 | 4–7 | Live process per session | done for Claude and Codex subagents and chat sessions; opencode and Cursor with step 5 |
 | 8 | Setting sources by kind | done |
 | 9 | opencode on `serve` | todo |
-| 10–11 | `/` menu from the provider, anywhere in the message | todo |
-| 12–14 | Dispatch per provider | todo |
-| 15 | Reload and Restart session | todo |
+| 10–11 | `/` menu from the provider, anywhere in the message | done for Claude, Codex and Cursor; opencode with step 5 |
+| 12–14 | Dispatch per provider | done for Claude, Codex and Cursor; opencode with step 5 |
+| 15 | Reload and Restart session | done |
 | 16 | Fast mode check and toggle | done |
 | 17 | Cursor plugin skills | todo |
 | 18–21 | MCP: native config, status, sign-in, Cursor HTTP | todo |
@@ -418,4 +418,4 @@ the terminal view.
 | 26–27 | History reading and `ptySend.ts` | done (chat over the PTY removed) |
 | 28–29 | Context meter | Claude and Codex emit it, shown under the composer; opencode and Cursor with step 5 |
 | 30–32 | Enter never interrupts; steer or queue | done |
-| 33–36 | Background panel: subagents and commands (34b tokens, 34c Codex threadId) | todo |
+| 33–36 | Background panel: subagents and commands (34b tokens, 34c Codex threadId) | done |
