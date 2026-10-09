@@ -622,8 +622,10 @@ function redraw(done) {
  * --output-format stream-json`: a JSON object a line each way.
  *
  * - `control_request`s are answered with a success `control_response`:
- *   `initialize` (the first one is how Crew knows the CLI is up), `interrupt`
- *   (which also ends the turn running), `set_model` and `set_permission_mode`
+ *   `initialize` (the first one is how Crew knows the CLI is up; its detail
+ *   says whether it declared `perTaskStopAffordance`), `interrupt` (which
+ *   also ends the turn running, and with `cancel_queued`, its detail, drops
+ *   the messages waiting for a turn), `set_model` and `set_permission_mode`
  *   (which change what the next turn says), and the rest. Each but
  *   `get_context_usage`, which Crew asks on its own schedule, is appended to
  *   $HOME/fake-claude-control.log as `<subtype> <detail>`, one a line.
@@ -695,6 +697,8 @@ function serve() {
     if (subtype === "set_model") detail = request.model || "";
     if (subtype === "set_permission_mode") detail = request.mode || "";
     if (subtype === "apply_flag_settings") detail = JSON.stringify(request.settings);
+    if (subtype === "initialize" && request.perTaskStopAffordance) detail = "perTaskStopAffordance";
+    if (subtype === "interrupt" && request.cancel_queued) detail = "cancel_queued";
     if (subtype === "set_model") model = request.model || null;
     if (subtype === "set_permission_mode" && request.mode) mode = request.mode;
     fs.appendFileSync(path.join(HOME, "fake-claude-control.log"), `${subtype} ${detail}\n`);
@@ -704,7 +708,10 @@ function serve() {
       reload_skills: { skills: SKILLS.map((name) => ({ name })) },
     };
     answer(rec.request_id, reply[subtype] || {});
-    if (subtype === "interrupt") stop();
+    if (subtype === "interrupt") {
+      if (request.cancel_queued) waiting.length = 0;
+      stop();
+    }
   }
 
   /** The `interrupt` request: the turn running ends where it is, as an error result. */

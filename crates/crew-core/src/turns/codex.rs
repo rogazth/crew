@@ -312,19 +312,29 @@ impl TurnHost {
         };
         // A steer the turn ended before reading is not lost: it waits in the
         // box, and the end of this turn hands it over as the next one.
-        let unread = match self.lock().get_mut(&session_id) {
+        // A stopped turn that Codex closed itself (`turn/completed`) leaves
+        // the thread idle; one it never answered is left in a state nobody
+        // vouches for.
+        let (unread, closed) = match self.lock().get_mut(&session_id) {
             Some(Live::Codex(live)) => {
                 live.release();
-                std::mem::take(&mut live.steers)
+                (std::mem::take(&mut live.steers), !live.cancelled)
             }
-            _ => Vec::new(),
+            _ => (Vec::new(), false),
         };
         for steer in unread {
             steer.put_back(&self.store, &session_id);
         }
         // Background terminals end with the process: a child that keeps it
-        // keeps them too, and its next turn finds them in the tray.
-        self.park(&session, &outcome);
+        // keeps them too, and its next turn finds them in the tray. An
+        // interrupt does not end them (the TUI has `/stop` for that), so a
+        // stopped turn keeps the process too, and Esc stops only the turn.
+        let clean = match outcome {
+            TurnOutcome::Completed => true,
+            TurnOutcome::Stopped => closed,
+            TurnOutcome::Failed(_) => false,
+        };
+        self.park(&session, clean);
         outcome
     }
 
@@ -1112,6 +1122,9 @@ impl TurnHost {
                     }
                     live.last_turn = live.turn_id.take().or(turn);
                     if live.cancelled {
+                        // Closed by Codex: the stop is over, and the thread is
+                        // the next turn's to run on.
+                        live.cancelled = false;
                         outcome = Some(TurnOutcome::Stopped);
                     } else {
                         live.follow.message = None;

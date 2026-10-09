@@ -99,7 +99,8 @@ fn control_timeout(request: &Value) -> Duration {
 /// background commands it left running: Claude picks the conversation up by
 /// itself when they finish, with another `result`. Past this, the turn ends on
 /// the result it had, so a server left running in the background cannot hold
-/// it forever.
+/// it forever; the process stays up with the work, and the turn the CLI
+/// starts when it reports is the child's next.
 const BACKGROUND_GRACE: Duration = Duration::from_secs(if cfg!(test) { 4 } else { 600 });
 /// How long a session's process stays up with no turn on it before it is let
 /// go. A process holds its CLI and its MCP servers in memory; the next message
@@ -506,8 +507,10 @@ fn woken(live: &mut ClaudeLive, events: &mut Vec<HarnessEvent>) {
 
 /// One Claude Code process and the conversation it carries. What lives as long
 /// as the process is the conversation's id, the request counters, the control
-/// calls in flight, the stderr tail and the launch settings; the rest belongs
-/// to the turn that is running and starts over in [`ClaudeLive::begin_turn`].
+/// calls in flight, the stderr tail, the launch settings, and what it runs in
+/// the background (the work, its subagents, the steers it still holds); the
+/// rest belongs to the turn that is running and starts over in
+/// [`ClaudeLive::begin_turn`].
 struct ClaudeLive {
     epoch: u64,
     /// Turns begun on this process, so a timer armed in one cannot act on a
@@ -517,15 +520,27 @@ struct ClaudeLive {
     applied: Launch,
     claude_session_id: String,
     /// Whether a result waits for the background commands: a child's turn
-    /// does, since its report is the last thing it says, and so does the
-    /// user's, whose answer is what the commands made of the work (ending it
-    /// on the first result would let go of the process, and of them). A bot's
-    /// ends on its first.
+    /// does, since its report is the last thing it says. The user's and a
+    /// bot's end on their result: the user's process stays up with the work,
+    /// and the turn the CLI starts by itself when it reports is taken as one
+    /// nobody sent ([`TurnHost::adopt_claude_turn`]).
     waits_for_background: bool,
     /// Results that ended nothing yet, so the grace timer can tell its own
     /// wait from a later one. Counts on for the life of the process: it is
     /// never started over, so a timer of an earlier turn cannot find it equal.
     held_results: u64,
+    /// The running turn's result came and is held on background work: the
+    /// CLI is idle until that work reports, so there is no turn in it to
+    /// interrupt.
+    held: bool,
+    /// Background work finished in a way that wakes the model (it completed or
+    /// failed; a task stopped wakes nobody), and the model has not spoken
+    /// since: the CLI is about to start a turn on it.
+    wakes: bool,
+    /// The running turn is one the CLI started by itself. With no sender for
+    /// its outcome (`turn_tx` empty) it is waiting for the turn of Crew's that
+    /// was being started when it began: that turn takes it over.
+    self_started: bool,
     /// Control requests Crew sent and waits on, by request id.
     calls: HashMap<String, Sender<Result<Value, String>>>,
     next_ui: u64,
@@ -543,7 +558,9 @@ struct ClaudeLive {
     /// must not stand for the folder.
     menu_cwd: Option<String>,
     stderr: Vec<String>,
-    /// Steers written and not yet echoed, oldest first.
+    /// Steers written and not yet echoed, oldest first. A turn that ends
+    /// before reading one leaves it here: the CLI starts a turn of its own on
+    /// it, and its echo there is where the transcript gets it.
     steers: Vec<Steer>,
     /// Background commands Claude started and has not heard the end of, by
     /// task id. While any is open, a child's `result` is not the end of its
@@ -557,9 +574,14 @@ struct ClaudeLive {
     questions: HashMap<u64, PendingQuestion>,
     tools_by_index: HashMap<i64, InFlightTool>,
     tools_by_id: HashMap<String, InFlightTool>,
-    /// The subagents it started: their frames go to their calls' rows.
+    /// The subagents it started: their frames go to their calls' rows. A
+    /// background one outlives the turn that sent it.
     subagents: Subagents,
+    /// The turn was stopped and the CLI has not said it is over yet.
     cancelled: bool,
+    /// Deaf until the interrupt's `result`: what Claude says to the interrupt
+    /// is not the outcome of the turn, which ended when it was stopped, nor of
+    /// the next one. Its background work is still heard.
     mute: bool,
     active: bool,
     turn_tx: Option<oneshot::Sender<TurnOutcome>>,
@@ -580,6 +602,9 @@ impl ClaudeLive {
             claude_session_id,
             waits_for_background,
             held_results: 0,
+            held: false,
+            wakes: false,
+            self_started: false,
             calls: HashMap::new(),
             next_ui: 1,
             next_control: 1,
@@ -606,21 +631,38 @@ impl ClaudeLive {
     }
 
     /// A turn starts on the process the last one left: what that turn knew of
-    /// itself goes, what belongs to the process stays.
-    fn begin_turn(&mut self, turn_tx: oneshot::Sender<TurnOutcome>) {
+    /// itself goes, what belongs to the process stays. The background work
+    /// and its subagents are the process's: they run on between turns. So are
+    /// the steers a turn left unread, which the CLI still holds, and what
+    /// woke the model, which is said once it speaks. `turn_tx` is `None` for
+    /// a turn the CLI started by itself while a turn of Crew's was on its way
+    /// in: that one takes it over.
+    fn begin_turn(&mut self, turn_tx: Option<oneshot::Sender<TurnOutcome>>, self_started: bool) {
         self.turn += 1;
         drop_pending(self);
-        self.steers.clear();
-        self.background.clear();
-        self.woken_by.clear();
         self.tools_by_index.clear();
         self.tools_by_id.clear();
-        self.subagents = Subagents::default();
         self.cancelled = false;
         self.mute = false;
+        self.held = false;
+        self.self_started = self_started;
         self.active = true;
-        self.turn_tx = Some(turn_tx);
+        self.turn_tx = turn_tx;
         self.emitted_assistant.clear();
+    }
+
+    /// A turn the CLI started by itself, that a turn of Crew's is to take over.
+    fn unclaimed(&self) -> bool {
+        self.active && self.self_started && self.turn_tx.is_none()
+    }
+
+    /// The running turn is over: it ends with nothing held.
+    fn end_turn(&mut self, outcome: TurnOutcome) {
+        self.active = false;
+        self.held = false;
+        if let Some(tx) = self.turn_tx.take() {
+            let _ = tx.send(outcome);
+        }
     }
 }
 
@@ -690,7 +732,16 @@ pub struct TurnHost {
     /// at the head of the queue: the end of that stop hands the queue over
     /// instead of holding it.
     sending_now: Arc<Mutex<HashSet<String>>>,
+    /// Run once by the next Claude turn just before its message goes in: a
+    /// test puts the CLI's own turn there, the race that is otherwise a
+    /// matter of milliseconds.
+    #[cfg(test)]
+    before_message: Arc<Mutex<Option<Hook>>>,
 }
+
+/// What a test runs at a point of a turn's own choosing.
+#[cfg(test)]
+type Hook = Box<dyn FnOnce() + Send>;
 
 impl TurnHost {
     pub fn new(agents: AgentHost, store: Store, transcripts: TranscriptHub, bridge: Bridge) -> Self {
@@ -717,6 +768,8 @@ impl TurnHost {
             contexts: Arc::new(Mutex::new(HashMap::new())),
             idle: Arc::new(Mutex::new(HashMap::new())),
             sending_now: Arc::new(Mutex::new(HashSet::new())),
+            #[cfg(test)]
+            before_message: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -905,8 +958,9 @@ impl TurnHost {
     /// - Idle, nothing held: a turn of its own, whatever `mode` says.
     /// - A turn running, and the provider takes a message into one (Claude,
     ///   Codex) and `mode` is not `queue`: steered into it. Its echo marks the
-    ///   letter delivered; a turn that ends before reading it gives it back to
-    ///   the queue.
+    ///   letter delivered. A turn that ends before reading it gives it back to
+    ///   the queue, unless the CLI still holds it to start a turn of its own
+    ///   on (Claude, after a result), where its echo is read.
     /// - Otherwise it waits in the queue, to go with whatever else waits as
     ///   one turn when the running one ends. `steer` where the provider cannot
     ///   take one falls back to this. A message with a command or skills
@@ -1659,13 +1713,13 @@ impl TurnHost {
                         HarnessEvent::SessionEnded { code },
                     );
                     self.signal(session_id, TurnOutcome::Failed(exit_message(provider, code, &stderr)));
-                } else if !mid && !cancelled && row.initialized && row.steers.is_empty() {
-                    // No turn is running: a process a child kept died while
-                    // idle. Its entry goes, so the next message launches one
-                    // and resumes the conversation, and what it ran in the
-                    // background went with it. One that never came up is the
-                    // launch's to report, and a turn that ended with a steer
-                    // unread has that steer to hand back first.
+                } else if !mid && row.initialized {
+                    // No turn is running: a kept process died while idle (or
+                    // while it answered a stop). Its entry goes, so the next
+                    // message launches one and resumes the conversation; what
+                    // it ran in the background went with it, and the steers
+                    // it still held go back in the box. One that never came
+                    // up is the launch's to report.
                     drop(map);
                     self.detach(session_id);
                     self.close_tray(session_id);
@@ -1723,12 +1777,7 @@ impl TurnHost {
         let mut map = self.lock();
         if let Some(live) = map.get_mut(session_id) {
             match live {
-                Live::Claude(row) => {
-                    row.active = false;
-                    if let Some(tx) = row.turn_tx.take() {
-                        let _ = tx.send(outcome);
-                    }
-                }
+                Live::Claude(row) => row.end_turn(outcome),
                 Live::Codex(row) => {
                     row.active = false;
                     row.settled = true;
@@ -1754,70 +1803,56 @@ impl TurnHost {
         }
     }
 
+    /// Stop the session's turn. Only the turn (plan decision Q1, as Claude
+    /// Code does): what it left running in the background goes on, and is
+    /// stopped from the panel one by one. With `kill`, a CLI that does not
+    /// answer the stop is let go after [`INTERRUPT_GRACE`].
     fn cancel(&self, session_id: &str, kill: bool) {
         self.mark_stop(session_id);
         // Codex and Cursor are asked to stop their turn, and its end ends
-        // this one; the process goes with it. Without a turn to interrupt, it
-        // settles here.
+        // this one. Without a turn to interrupt, it settles here.
         if self.codex_interrupt(session_id) || self.cursor_interrupt(session_id) {
             return;
         }
-        // What Claude left running in the background is stopped first, then
-        // the turn: a task stopped after the interrupt would finish later and
-        // wake Claude again (monocode's order).
-        let running = self
-            .background
-            .read(session_id, |board| if board.is_live() { board.running() } else { Vec::new() })
-            .unwrap_or_default();
-        let (interrupt, stops) = {
+        // Claude is interrupted, never told to stop its tasks: `initialize`
+        // declared a stop per task, so the interrupt spares them (measured on
+        // 2.1.295). `cancel_queued` takes back what the turn had not read yet,
+        // which the turn's end puts back in the box for the user, rather than
+        // leaving it for the CLI to start a turn on. A turn whose result is
+        // held on background work has nothing running in the CLI to
+        // interrupt; it just ends.
+        let interrupt = {
             let mut map = self.lock();
-            if let Some(Live::Claude(row)) = map.get_mut(session_id) {
-                if row.active {
-                    // Deaf from here: what Claude says to the interrupt is
-                    // not the turn's outcome. The turn ends below, once the
-                    // requests are written, before its CLI is let go.
+            match map.get_mut(session_id) {
+                Some(Live::Claude(row)) if row.active && !row.held => {
+                    // Deaf from here until the interrupt's result: that is
+                    // not the turn's outcome, nor the next one's.
                     row.cancelled = true;
                     row.mute = true;
-                    let mut next = || {
-                        let id = format!("ctrl-{}", row.next_control);
-                        row.next_control += 1;
-                        id
-                    };
-                    let stops: Vec<(String, String)> = running.iter().map(|task| (next(), task.clone())).collect();
-                    (Some(next()), stops)
-                } else {
-                    (None, Vec::new())
+                    let id = format!("ctrl-{}", row.next_control);
+                    row.next_control += 1;
+                    Some((id, row.epoch, row.turn))
                 }
-            } else {
-                (None, Vec::new())
+                _ => None,
             }
         };
-        for (id, task) in &stops {
+        if let Some((id, _, _)) = &interrupt {
             let _ = self.agents.write(
                 session_id,
-                &serde_json::to_string(&build_control_request(id, stop_task_request(task))).unwrap_or_default(),
-            );
-        }
-        if let Some(id) = &interrupt {
-            let _ = self.agents.write(
-                session_id,
-                &serde_json::to_string(&build_control_request(id, json!({ "subtype": "interrupt" })))
+                &serde_json::to_string(&build_control_request(id, json!({ "subtype": "interrupt", "cancel_queued": true })))
                     .unwrap_or_default(),
             );
         }
-        let mut armed = None;
+        let mut claude = false;
         {
             let mut map = self.lock();
             if let Some(live) = map.get_mut(session_id) {
                 match live {
                     Live::Claude(row) => {
-                        armed = Some(row.epoch);
-                        row.cancelled = true;
-                        row.mute = true;
-                        row.active = false;
-                        drop_pending(row);
-                        if let Some(tx) = row.turn_tx.take() {
-                            let _ = tx.send(TurnOutcome::Stopped);
+                        claude = true;
+                        if row.active {
+                            drop_pending(row);
+                            row.end_turn(TurnOutcome::Stopped);
                         }
                     }
                     Live::Codex(row) => {
@@ -1849,34 +1884,46 @@ impl TurnHost {
                 }
             }
         }
-        if interrupt.is_some() {
+        if let Some((_, epoch, turn)) = interrupt {
             if kill {
                 let host = self.clone();
                 let session_id = session_id.to_string();
                 self.after(INTERRUPT_GRACE, move || {
-                    // Only the process it was armed for: the turn's end lets
-                    // it go, and a launch for the next message in the grace
-                    // is not this stop's to kill.
-                    let replaced = matches!(
+                    // A CLI that has not answered the interrupt by now is in a
+                    // state nobody vouches for: it goes, and what it ran in
+                    // the background with it. Only the stop it was armed for:
+                    // a process launched since, or a later stop on this one,
+                    // is not its to judge.
+                    let hung = matches!(
                         host.lock().get(&session_id),
-                        Some(Live::Claude(row)) if Some(row.epoch) != armed
+                        Some(Live::Claude(row)) if row.epoch == epoch && row.turn == turn && row.mute
                     );
-                    if !replaced {
+                    if hung {
                         host.release(&session_id);
                     }
                 });
-                return;
             }
+            return;
         }
-        // The process goes with the stop, and so does the tray it kept open.
-        if kill {
+        // A Claude process stays: with no turn running there was nothing to
+        // stop, and what it runs in the background is not the stop's. The
+        // other CLIs go with the stop.
+        if kill && !claude {
             self.release(session_id);
         }
     }
 
+    /// Forget a session's process. The steers a Claude process still held,
+    /// which no turn will read now, go back in the box under the ids they were
+    /// written with.
     fn detach(&self, session_id: &str) {
-        self.lock().remove(session_id);
+        let gone = self.lock().remove(session_id);
         self.idle.lock().unwrap_or_else(|e| e.into_inner()).remove(session_id);
+        if let Some(Live::Claude(mut live)) = gone {
+            for steer in std::mem::take(&mut live.steers) {
+                steer.put_back(&self.store, session_id);
+            }
+        }
     }
 
     /// Since when a session's process has been up with no turn on it. `None`
@@ -1886,17 +1933,15 @@ impl TurnHost {
     }
 
     /// The end of a turn on a driver that can keep its process: it stays for
-    /// the next turn when the session keeps its process and this one went
-    /// well, and goes otherwise. A turn that failed or was stopped leaves the
-    /// process in a state nobody vouches for (an interrupt's late answer
-    /// would end the next turn), and a session that is exiting has no next
-    /// turn.
-    fn park(&self, session: &crate::session::Session, outcome: &TurnOutcome) {
+    /// the next turn when the session keeps its process and the driver
+    /// vouches for the state the turn left it in (`clean`), and goes
+    /// otherwise. A turn that failed leaves it in a state nobody vouches for;
+    /// a stopped one is clean once the CLI has closed it (Claude: the
+    /// interrupt's own result, which the next turn waits for; Codex: its
+    /// `turn/completed`). A session that is exiting has no next turn.
+    fn park(&self, session: &crate::session::Session, clean: bool) {
         let exiting = self.exiting.lock().unwrap_or_else(|e| e.into_inner()).contains_key(&session.id);
-        let kept = keeps_process(session)
-            && matches!(outcome, TurnOutcome::Completed)
-            && !exiting
-            && self.lock().contains_key(&session.id);
+        let kept = keeps_process(session) && clean && !exiting && self.lock().contains_key(&session.id);
         if kept {
             self.idle.lock().unwrap_or_else(|e| e.into_inner()).insert(session.id.clone(), Instant::now());
         } else {
@@ -1992,7 +2037,6 @@ impl TurnHost {
     }
 
     fn run_turn(&self, session: crate::session::Session, params: TurnStart, history: Option<String>, carried: Vec<String>) {
-        let session_id = session.id.clone();
         let row = session.clone();
         let outcome = match session.provider.as_str() {
             "claude" => self.run_claude(session, params, history),
@@ -2003,6 +2047,15 @@ impl TurnHost {
                 "{other} agents are not wired up yet. Pick Claude for now."
             )),
         };
+        self.finish_turn(row, outcome, carried);
+    }
+
+    /// What every turn's end does, whoever started it: the tray, the letters
+    /// it carried, the status the user sees, and the queue, which goes over
+    /// as the next turn. A turn the CLI started by itself, that took the place
+    /// of the one ending, starts its own watch here.
+    fn finish_turn(&self, row: crate::session::Session, outcome: TurnOutcome, carried: Vec<String>) {
+        let session_id = row.id.clone();
         // The CLI is gone, unless the session kept it for its next turn: then
         // what it left running in the background still runs.
         if self.idle_since(&session_id).is_none() {
@@ -2013,13 +2066,30 @@ impl TurnHost {
         // start hands them over again.
         let _ = mailbox::delivered(&self.store, &carried);
         // The turn is over: the next one may start, and the drain below is
-        // what starts it.
-        self.running.lock().unwrap_or_else(|e| e.into_inner()).remove(&session_id);
+        // what starts it. A turn the CLI began by itself while this one was
+        // ending found the session still running, and waits for no turn of
+        // Crew's now: it is watched as one nobody sent.
+        let adopted = {
+            let mut running = self.running.lock().unwrap_or_else(|e| e.into_inner());
+            running.remove(&session_id);
+            self.claim_unclaimed(&mut running, &session_id)
+        };
         // Taken after the turn is out of `running`, so a Send now that comes
         // either side of it finds it ended or finds the flag.
         let sent_now = self.sending_now.lock().unwrap_or_else(|e| e.into_inner()).remove(&session_id);
-        if driven(&row) == Some(Driven::Child) {
-            self.settle_child(&row, outcome, sent_now);
+        // This turn settles first, so the status the adopted one sets is the
+        // last; the queue waits for that one's end.
+        self.settle_turn(&row, outcome, sent_now);
+        if let Some(rx) = adopted {
+            self.watch_adopted(&row, rx);
+        }
+    }
+
+    /// How a turn's end shows, and whether the queue goes over now.
+    fn settle_turn(&self, row: &crate::session::Session, outcome: TurnOutcome, sent_now: bool) {
+        let session_id = row.id.clone();
+        if driven(row) == Some(Driven::Child) {
+            self.settle_child(row, outcome, sent_now);
             return;
         }
         // A bot and the user's own session settle alike: nobody waits on their
@@ -2407,33 +2477,135 @@ impl TurnHost {
         params: TurnStart,
         history: Option<String>,
     ) -> TurnOutcome {
-        let session_id = session.id.clone();
         let outcome = self.claude_turn(&session, &params, history);
-        // A steer the turn ended before reading is not lost: it waits in the
-        // box, and the end of this turn hands it over as the next one.
-        let (unread, background) = match self.lock().get_mut(&session_id) {
+        self.claude_turn_ended(&session, &outcome);
+        outcome
+    }
+
+    /// What a Claude turn's end leaves of its process, for a turn Crew sent
+    /// and one the CLI started alike. The session keeps it for its next turn
+    /// (see [`TurnHost::park`]) when the turn completed, or was stopped: the
+    /// next turn waits for the interrupt's own result before it runs on it.
+    /// What it runs in the background stays with it, and pins it.
+    ///
+    /// A steer the turn ended before reading is not lost. After a result the
+    /// CLI still holds it, and starts a turn of its own on it, whose echo puts
+    /// it in the transcript: it stays the process's. A stop took it back from
+    /// the CLI (`cancel_queued`) and a failure leaves nobody to start that
+    /// turn: then it waits in the box, and the end of this turn hands it over
+    /// as the next one, or leaves it to the user after a stop.
+    fn claude_turn_ended(&self, session: &crate::session::Session, outcome: &TurnOutcome) {
+        let session_id = session.id.as_str();
+        let unread = match self.lock().get_mut(session_id) {
             Some(Live::Claude(live)) => {
                 drop_pending(live);
-                (std::mem::take(&mut live.steers), !live.background.is_empty())
+                if matches!(outcome, TurnOutcome::Completed) {
+                    Vec::new()
+                } else {
+                    std::mem::take(&mut live.steers)
+                }
             }
-            _ => (Vec::new(), false),
+            _ => Vec::new(),
         };
-        let unread_any = !unread.is_empty();
         for steer in unread {
-            steer.put_back(&self.store, &session_id);
+            steer.put_back(&self.store, session_id);
         }
-        // A child keeps the CLI for its next turn, unless this one leaves it
-        // somewhere that turn cannot start from. A steer it never read is
-        // still queued inside the CLI, which would start a turn of its own on
-        // it, and the box hands the same message over again; and background
-        // commands still open (the grace ran out) wake Claude by itself later.
-        // Those, a stop, a failure and a bot's turn let it go.
-        if unread_any || background {
-            self.release(&session_id);
-        } else {
-            self.park(&session, &outcome);
+        self.park(session, matches!(outcome, TurnOutcome::Completed | TurnOutcome::Stopped));
+    }
+
+    /// Take a turn the CLI started by itself as one nobody sent: the session
+    /// is working, its events land in the transcript as a turn with no
+    /// message of the user's, and it settles at its `result` like any other
+    /// (plan decision Q2). What is sent meanwhile steers or queues as into
+    /// any running turn. Called by the reader as the CLI says `system/init`
+    /// with no turn of Crew's running on the process of `epoch`.
+    ///
+    /// The race with a turn of Crew's being started that same moment is
+    /// settled at that boundary: a turn whose user message is not written yet
+    /// (the session is claimed but the process idle) takes this one over, and
+    /// its message goes in as a steer of it would; one whose message is
+    /// written already is running, and the CLI's turn is read as its own.
+    fn adopt_claude_turn(&self, session_id: &str, epoch: u64) {
+        // A bot's process goes with its turn: what it would start after its
+        // result is nobody's.
+        let Ok(Some(row)) = session::get(&self.store, session_id.to_string()) else {
+            return;
+        };
+        if !keeps_process(&row) {
+            return;
         }
-        outcome
+        let rx = {
+            let mut running = self.running.lock().unwrap_or_else(|e| e.into_inner());
+            let mut map = self.lock();
+            let Some(Live::Claude(live)) = map.get_mut(session_id) else {
+                return;
+            };
+            if live.epoch != epoch || live.active || live.mute || !live.initialized {
+                return;
+            }
+            if running.contains(session_id) {
+                live.begin_turn(None, true);
+                None
+            } else {
+                let (tx, rx) = oneshot::channel();
+                live.begin_turn(Some(tx), true);
+                running.insert(session_id.to_string());
+                Some(rx)
+            }
+        };
+        self.idle.lock().unwrap_or_else(|e| e.into_inner()).remove(session_id);
+        if let Some(rx) = rx {
+            self.watch_adopted(&row, rx);
+        }
+    }
+
+    /// A turn the CLI started by itself that no turn of Crew's took over, now
+    /// claimed as the session's running turn; under `running`, which the
+    /// caller holds. Its outcome comes on the receiver.
+    fn claim_unclaimed(
+        &self,
+        running: &mut HashSet<String>,
+        session_id: &str,
+    ) -> Option<oneshot::Receiver<TurnOutcome>> {
+        let mut map = self.lock();
+        let Some(Live::Claude(live)) = map.get_mut(session_id) else {
+            return None;
+        };
+        if !live.unclaimed() || running.contains(session_id) {
+            return None;
+        }
+        let (tx, rx) = oneshot::channel();
+        live.turn_tx = Some(tx);
+        running.insert(session_id.to_string());
+        Some(rx)
+    }
+
+    /// The session works on a turn the CLI started by itself, until it ends.
+    fn watch_adopted(&self, row: &crate::session::Session, rx: oneshot::Receiver<TurnOutcome>) {
+        self.idle.lock().unwrap_or_else(|e| e.into_inner()).remove(&row.id);
+        self.transcripts.set_working(&row.id, true);
+        self.transcripts.set_status(&row.id, "working", row.provider_session_id.as_deref());
+        self.transcripts.apply(&row.id, HarnessEvent::SessionStarted {});
+        let host = self.clone();
+        let row = row.clone();
+        thread::spawn(move || {
+            let outcome = host.block_on(rx).unwrap_or(TurnOutcome::Failed("Turn channel closed".into()));
+            host.claude_turn_ended(&row, &outcome);
+            host.finish_turn(row, outcome, Vec::new());
+        });
+    }
+
+    /// Until the stop of the turn before has been answered by its own
+    /// `result`, which must not end the next one; at most [`INTERRUPT_GRACE`],
+    /// after which the stop's own timer lets go of a CLI that never answered.
+    fn await_interrupt(&self, session_id: &str) {
+        let until = Instant::now() + INTERRUPT_GRACE;
+        while Instant::now() < until {
+            if !matches!(self.lock().get(session_id), Some(Live::Claude(live)) if live.mute) {
+                return;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
     }
 
     /// The turn itself, on a process armed and launched for it: the user
@@ -2462,6 +2634,10 @@ impl TurnHost {
         if self.stop_requested(&session_id) {
             return TurnOutcome::Stopped;
         }
+        #[cfg(test)]
+        if let Some(hook) = self.before_message.lock().unwrap_or_else(|e| e.into_inner()).take() {
+            hook();
+        }
         let (turn_rx, claude_session_id) = {
             let mut map = self.lock();
             let Some(Live::Claude(live)) = map.get_mut(&session_id) else {
@@ -2475,7 +2651,14 @@ impl TurnHost {
                 return TurnOutcome::Stopped;
             }
             let (tx, rx) = oneshot::channel();
-            live.begin_turn(tx);
+            // The CLI started a turn by itself before this message went in:
+            // the message joins it, read at its next step or by the turn the
+            // CLI starts on it next, and that turn's end is this one's.
+            if live.unclaimed() {
+                live.turn_tx = Some(tx);
+            } else {
+                live.begin_turn(Some(tx), false);
+            }
             (rx, live.claude_session_id.clone())
         };
         let images = crate::files::load_inline_images(params.files.as_deref().unwrap_or(&[]));
@@ -2505,7 +2688,8 @@ impl TurnHost {
     /// message in the transcript. Refused when no Claude turn is live to take
     /// it, so the caller can queue it instead.
     /// `letter` is the letter it is, already claimed: read, it is delivered;
-    /// unread when the turn ends, it goes back in the box.
+    /// unread when the turn ends, it waits for the turn the CLI starts on it,
+    /// or goes back in the box (see [`TurnHost::claude_turn_ended`]).
     pub fn steer(
         &self,
         session_id: &str,
@@ -2623,12 +2807,18 @@ impl TurnHost {
     fn claude_arm(&self, session: &crate::session::Session, cwd: &str) -> (bool, Vec<Change>) {
         let session_id = session.id.as_str();
         let applied = self.applied(session, cwd);
+        // A stop of the turn before is answered first: its late `result`
+        // would otherwise end this turn.
+        self.await_interrupt(session_id);
         // Asked before the lock: a process that died while idle without its
         // exit being heard (it was killed under us) is not one to write to.
         let alive = self.agents.running().iter().any(|id| id == session_id);
         let fast_allowed =
             crate::provider_session::claude_fast_mode().availability != crew_protocol::FastModeAvailability::Hidden;
         let plan = match self.lock().get(session_id) {
+            // A turn the CLI started by itself, that this one takes over: the
+            // settings wait for the next turn, as nothing changes mid-turn.
+            Some(Live::Claude(live)) if alive && live.unclaimed() => Some(Plan::Changes(Vec::new())),
             Some(Live::Claude(live)) if alive && live.initialized && !live.active && !live.cancelled => {
                 Some(claude_plan(&live.applied, &applied, fast_allowed))
             }
@@ -2660,7 +2850,7 @@ impl TurnHost {
             Some(Driven::User) => conversation_to_resume(session).unwrap_or_else(|| session.id.clone()),
             _ => conversation_to_resume(session).unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
         };
-        let waits_for_background = carries_conversation(session);
+        let waits_for_background = driven(session) == Some(Driven::Child);
         self.lock().insert(
             session_id.to_string(),
             Live::Claude(Box::new(ClaudeLive::new(claude_session_id, waits_for_background, applied))),
@@ -2812,10 +3002,16 @@ impl TurnHost {
             live.menu_cwd = spawn.user_settings.then(|| params.cwd.clone());
             id
         };
+        // `perTaskStopAffordance`: Crew stops background work one task at a
+        // time (`stop_task`), so the CLI's interrupt is to stop the turn only
+        // and spare that work. Without it the interrupt kills it all.
         self.agents.write(
             &session_id,
-            &serde_json::to_string(&build_control_request(&ctrl, json!({ "subtype": "initialize" })))
-                .unwrap_or_default(),
+            &serde_json::to_string(&build_control_request(
+                &ctrl,
+                json!({ "subtype": "initialize", "perTaskStopAffordance": true }),
+            ))
+            .unwrap_or_default(),
         )?;
         let init = self.block_on(async { tokio::time::timeout(INIT_TIMEOUT, init_rx).await });
         // Waited for once: the CLI says it is up at the start of every turn,
@@ -3073,13 +3269,31 @@ impl TurnHost {
         // of a turn with the window its `result` names.
         let mut used: Option<u64> = None;
         let mut ask: Option<(bool, Option<u64>)> = None;
+        // The background work's end, which no turn has to be running to hear.
+        let mut unheld = false;
         {
             let mut map = self.lock();
             let Some(Live::Claude(live)) = map.get_mut(session_id) else {
                 return;
             };
+            let type_name = string_field(Some(&rec), "type");
+            let subtype = string_field(Some(&rec), "subtype");
+            let tasks = type_name.as_deref() == Some("system")
+                && matches!(
+                    subtype.as_deref(),
+                    Some("task_started" | "task_updated" | "task_notification" | "background_tasks_changed")
+                );
             if live.mute {
-                return;
+                // The interrupt's result closes the stopped turn: the process
+                // is the next turn's to run on. Till then only the background
+                // work, which the interrupt spared, is heard.
+                if type_name.as_deref() == Some("result") {
+                    live.mute = false;
+                    live.cancelled = false;
+                }
+                if !tasks {
+                    return;
+                }
             }
             if let Some(from_line) = session_id_from_message(&rec) {
                 if from_line != live.claude_session_id {
@@ -3087,8 +3301,6 @@ impl TurnHost {
                     bind = Some(from_line);
                 }
             }
-            let type_name = string_field(Some(&rec), "type");
-            let subtype = string_field(Some(&rec), "subtype");
             // The menu: the CLI sends the whole list again when it finds
             // skills as the agent works in a folder, and a turn's `init` names
             // the skills among the commands.
@@ -3120,6 +3332,15 @@ impl TurnHost {
                         skills.map(crate::commands::claude_skill_names),
                     )
                 });
+                // A turn starting with none of Crew's running is one the CLI
+                // started by itself: background work reported, or a steer a
+                // turn left unread. Within a turn held on background work, it
+                // is that turn carrying on.
+                let turn_starts = subtype.as_deref() == Some("init") && live.initialized;
+                let adopt = (turn_starts && !live.active).then_some(live.epoch);
+                if turn_starts && live.active {
+                    live.held = false;
+                }
                 if !live.initialized {
                     live.initialized = true;
                     if let Some(tx) = live.init_tx.take() {
@@ -3130,6 +3351,9 @@ impl TurnHost {
                 if let Some((cwd, entries, skills)) = menu.filter(|(_, entries, skills)| entries.is_some() || skills.is_some())
                 {
                     self.learn_commands(session_id, &cwd, entries, skills);
+                }
+                if let Some(epoch) = adopt {
+                    self.adopt_claude_turn(session_id, epoch);
                 }
                 return;
             }
@@ -3153,12 +3377,7 @@ impl TurnHost {
                 events.push(update);
             }
             let notice = live.subagents.notice(&rec);
-            if type_name.as_deref() == Some("system")
-                && matches!(
-                    subtype.as_deref(),
-                    Some("task_started" | "task_updated" | "task_notification" | "background_tasks_changed")
-                )
-            {
+            if tasks {
                 let call = string_field(Some(&rec), "tool_use_id").and_then(|id| {
                     live.tools_by_id.get(&id).map(|tool| (id, tool.name.clone(), tool.input.clone()))
                 });
@@ -3175,22 +3394,27 @@ impl TurnHost {
                         if let Some(task) = string_field(Some(&rec), "task_id") {
                             live.background.remove(&task);
                         }
-                        let summary = notice.or_else(|| string_field(Some(&rec), "summary"));
-                        if let Some(summary) = summary.filter(|s| !s.trim().is_empty()) {
-                            let summary = summary.trim().to_string();
-                            if !live.woken_by.contains(&summary) {
-                                live.woken_by.push(summary);
+                        // Only what wakes the model is what woke it.
+                        if wakes_the_model(string_field(Some(&rec), "status").as_deref()) {
+                            live.wakes = true;
+                            let summary = notice.or_else(|| string_field(Some(&rec), "summary"));
+                            if let Some(summary) = summary.filter(|s| !s.trim().is_empty()) {
+                                let summary = summary.trim().to_string();
+                                if !live.woken_by.contains(&summary) {
+                                    live.woken_by.push(summary);
+                                }
                             }
                         }
                     }
                     Some("task_updated") => {
-                        let done = rec
-                            .get("patch")
-                            .and_then(|patch| patch.get("status"))
-                            .and_then(Value::as_str)
-                            .is_some_and(|status| matches!(status, "completed" | "failed" | "killed" | "stopped"));
+                        let status =
+                            rec.get("patch").and_then(|patch| patch.get("status")).and_then(Value::as_str);
+                        let done = status.is_some_and(|status| matches!(status, "completed" | "failed" | "killed" | "stopped"));
                         if let (true, Some(task)) = (done, string_field(Some(&rec), "task_id")) {
                             live.background.remove(&task);
+                            // Said before its notification: a held turn must
+                            // not end in between on work that is to wake it.
+                            live.wakes |= wakes_the_model(status);
                         }
                     }
                     _ => {}
@@ -3219,10 +3443,9 @@ impl TurnHost {
                 }
             } else if type_name.as_deref() == Some("user") {
                 // A steer Claude has just taken in: it goes in the transcript
-                // here, where the model read it. Only while the turn runs: an
-                // echo after its result is the CLI starting a turn of its own
-                // on a steer the turn never read, which stays unread, so the
-                // process is let go and the box hands the steer over once.
+                // here, where the model read it, whether in the turn it was
+                // written into or in the one the CLI starts by itself on a
+                // steer a turn left unread.
                 if let Some(echo) = crate::providers::claude::replayed_text(&rec).filter(|_| live.active) {
                     if let Some(at) = live.steers.iter().position(|steer| steer.sent.trim() == echo) {
                         let steer = live.steers.remove(at);
@@ -3272,19 +3495,28 @@ impl TurnHost {
                     // Not over: Claude carries on by itself once its
                     // background commands finish, and that is the report.
                     live.held_results += 1;
+                    live.held = true;
                     hold = Some((live.held_results, live.epoch, live.turn));
                 } else {
-                    live.active = false;
                     if !live.cancelled {
                         ask = Some((false, result_context_window(&rec)));
                     }
-                    if let Some(tx) = live.turn_tx.take() {
-                        let _ = tx.send(match failed {
-                            Some(message) => TurnOutcome::Failed(message),
-                            None => TurnOutcome::Completed,
-                        });
-                    }
+                    live.end_turn(match failed {
+                        Some(message) => TurnOutcome::Failed(message),
+                        None => TurnOutcome::Completed,
+                    });
                 }
+            }
+            // The model speaking is what woke it, at work again.
+            if spoke && !is_subagent_message(&rec) {
+                live.wakes = false;
+                live.held = false;
+            }
+            // What a held turn waited on was stopped, which wakes nobody: the
+            // CLI starts no turn on it, so the result it had is the end.
+            if live.active && live.held && live.background.is_empty() && !live.wakes {
+                live.end_turn(TurnOutcome::Completed);
+                unheld = true;
             }
         }
         if let Some((rec, call)) = task {
@@ -3301,7 +3533,7 @@ impl TurnHost {
         // speaking again is the end of that.
         if hold.is_some() {
             self.background.touch(session_id, |board| board.set_waiting(true));
-        } else if spoke {
+        } else if spoke || unheld {
             self.background.touch(session_id, |board| board.set_waiting(false));
         }
         if let Some(id) = bind {
@@ -3329,10 +3561,13 @@ impl TurnHost {
                 // none is not the one this wait was for.
                 let still = matches!(
                     host.lock().get(&id),
-                    Some(Live::Claude(live)) if live.active && live.epoch == epoch && live.turn == turn && live.held_results == held
+                    Some(Live::Claude(live))
+                        if live.active && live.held && live.epoch == epoch && live.turn == turn && live.held_results == held
                 );
                 if still {
                     host.signal(&id, TurnOutcome::Completed);
+                    // The work runs on, but no turn waits on it now.
+                    host.background.touch(&id, |board| board.set_waiting(false));
                 }
             });
         }
@@ -3805,6 +4040,14 @@ fn claude_assistant(live: &mut ClaudeLive, rec: &Map<String, Value>, events: &mu
     }
 }
 
+/// Whether background work that ended with `status` wakes the model: the CLI
+/// starts a turn on a task that completed or failed, and on none the user
+/// stopped (measured on 2.1.295: `stop_task` on an idle CLI says
+/// `task_notification` with `stopped`, and nothing follows).
+fn wakes_the_model(status: Option<&str>) -> bool {
+    !matches!(status, Some("stopped" | "killed"))
+}
+
 fn drop_pending(live: &mut ClaudeLive) {
     for (_, pending) in live.approvals.drain() {
         let _ = pending.tx.send(ApprovalResolution::Deny);
@@ -3899,6 +4142,11 @@ impl TurnHost {
         let applied = Arc::new(Applied::default());
         self.transcripts.set_events(applied.clone());
         applied
+    }
+
+    /// Runs `hook` once, as the next Claude turn is about to write its message.
+    pub(crate) fn test_before_message(&self, hook: impl FnOnce() + Send + 'static) {
+        *self.before_message.lock().unwrap_or_else(|e| e.into_inner()) = Some(Box::new(hook));
     }
 
     pub(crate) fn test_install_claude(&self, id: &str) {

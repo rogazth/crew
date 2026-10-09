@@ -225,15 +225,22 @@ test("Esc stops a running turn in the chat, and the next message gets its answer
   });
   await composer().press("Escape");
   await stop.waitFor({ state: "detached" });
-  await waitFor(async () => (await controls()).includes("interrupt "), { message: "the CLI was told to interrupt" });
+  // The turn is interrupted, sparing what runs in the background; nothing is told to stop.
+  await waitFor(async () => (await controls()).includes("interrupt cancel_queued"), {
+    message: "the CLI was told to interrupt",
+  });
+  assert.ok((await controls()).includes("initialize perTaskStopAffordance"), (await controls()).join("\n"));
   await waitFor(async () => (await crew.request<Session>("session_get", { id: session.id })).status === "idle", {
     message: "the session is idle again",
   });
   assert.equal(await said(/^Reply \d+: work 30$/).count(), 0, "the stopped turn answered anyway");
 
-  // The conversation goes on from where it stopped.
+  // The conversation goes on from where it stopped, on the same process: its second turn.
   await send("after the stop");
-  await said(/^Reply \d+: after the stop$/).waitFor();
+  await said("Reply 2: after the stop").waitFor();
+  const launches = await launchesOf(session);
+  assert.equal(launches.length, 1, "the stop let the CLI go");
+  assert.ok(alive(launches[0]!.pid), "the CLI that took the stopped turn is not the one running");
 });
 
 test("a / in the chat lists the CLI's commands and skills with Crew's actions, and a picked skill goes with the message", async () => {
@@ -490,10 +497,12 @@ test("Send now stops the turn running and the next turn starts with that message
   const sheet = await openQueue(2);
   await row(sheet, "and this later").getByRole("button", { name: "Send now" }).click();
 
-  // The turn running was interrupted, and the queue went over as one turn headed by the one sent now.
-  await waitFor(async () => (await controls()).includes("interrupt "), { message: "the CLI was told to interrupt" });
-  // (A stop ends the CLI's process and the next turn resumes it, so the count in its reply starts over.)
-  const reply = replies(/^Reply \d+:/).filter({ hasText: "do this first" });
+  // The turn running was interrupted, and the queue went over as one turn headed by the one sent now,
+  // on the same process: its second turn.
+  await waitFor(async () => (await controls()).includes("interrupt cancel_queued"), {
+    message: "the CLI was told to interrupt",
+  });
+  const reply = replies(/^Reply 2:/).filter({ hasText: "do this first" });
   await reply.waitFor();
   const text = (await reply.textContent()) ?? "";
   assert.ok(text.indexOf("and this later") >= 0 && text.indexOf("and this later") < text.indexOf("do this first"), text);
@@ -502,6 +511,7 @@ test("Send now stops the turn running and the next turn starts with that message
   assert.equal(turns.length, 2, JSON.stringify(turns));
   assert.ok(turns[1]!.indexOf("and this later") < turns[1]!.indexOf("do this first"), turns[1]);
   assert.equal(await chips().count(), 0);
+  assert.equal((await launchesOf(session)).length, 1, "the stop let the CLI go");
   await idle(session);
 });
 
@@ -520,7 +530,9 @@ test("Esc holds what waits: its chip stays, and the next message sends both", as
   );
 
   await send("go on then");
-  await replies(/^Reply \d+: held for later/).waitFor();
+  // On the process the stopped turn had: its second turn.
+  await replies(/^Reply 2: held for later/).waitFor();
+  assert.equal((await launchesOf(session)).length, 1, "the stop let the CLI go");
   const turns = await heard(cwd, session);
   assert.equal(turns.length, 2, JSON.stringify(turns));
   assert.ok(turns[1]!.indexOf("held for later") >= 0 && turns[1]!.indexOf("held for later") < turns[1]!.indexOf("go on then"), turns[1]);

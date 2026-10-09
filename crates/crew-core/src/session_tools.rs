@@ -1544,27 +1544,60 @@ print(json.dumps({{"type": "step_finish", "sessionID": sid, "part": {{"id": "sf"
     /// message with COMMANDS in it makes it send a changed list. Every block
     /// of every user message it is handed is logged, one line per message, to
     /// `claude-input.log`, though it answers the last one alone.
+    ///
+    /// `BACKGROUND n` starts a shell in the background (`bg1`, then `bg2`…)
+    /// and answers at once; n seconds later the shell completes and the CLI
+    /// starts a turn by itself on its notification, as 2.1.295 does. A task
+    /// stopped with `stop_task` wakes nobody. With `SLEEP` in the same message
+    /// the turn goes on after starting it. `interrupt` ends a running turn
+    /// with an error result (a file `late-interrupt` holding seconds makes that
+    /// result come so late); it spares the background work only if
+    /// `initialize` declared `perTaskStopAffordance`, and `cancel_queued`
+    /// drops what waits unread.
     fn fake_claude(dir: &Path) -> String {
         let path = dir.join("fake-claude");
         std::fs::write(
             &path,
             r#"#!/usr/bin/env python3
-import json, os, signal, sys, threading, time, re, uuid, queue
+import collections, json, os, signal, sys, threading, time, re, uuid
 # A moment to read what was written just before the end, as a CLI would.
 signal.signal(signal.SIGTERM, lambda *_: (time.sleep(0.2), os._exit(0)))
 args = sys.argv[1:]
-CONTROL = os.path.join(os.path.dirname(os.path.abspath(sys.argv[0])), "claude-control.log")
-LAUNCH = os.path.join(os.path.dirname(os.path.abspath(sys.argv[0])), "claude-launch.log")
-INPUT = os.path.join(os.path.dirname(os.path.abspath(sys.argv[0])), "claude-input.log")
+HERE = os.path.dirname(os.path.abspath(sys.argv[0]))
+CONTROL = os.path.join(HERE, "claude-control.log")
+LAUNCH = os.path.join(HERE, "claude-launch.log")
+INPUT = os.path.join(HERE, "claude-input.log")
 with open(LAUNCH, "a") as f: f.write(json.dumps({"argv": args, "pid": os.getpid(), "cwd": os.getcwd(), "env": {"CREW_TOKEN": os.environ.get("CREW_TOKEN", "")}}) + "\n")
-stopped = threading.Event()
 sid = args[args.index("--resume") + 1] if "--resume" in args else args[args.index("--session-id") + 1]
 replay = "--replay-user-messages" in args
-inbox = queue.Queue()
+spare = [False]
+# What waits for the main loop: ("user", text) from stdin, ("wake", text) from
+# background work that completed.
+cond = threading.Condition()
+items = collections.deque()
+running = [False]
+interrupted = threading.Event()
+tasks = {}
 def out(obj):
     print(json.dumps(obj), flush=True)
 def text_of(rec):
     return rec["message"]["content"][-1]["text"]
+def put(item):
+    with cond:
+        items.append(item)
+        cond.notify()
+def take():
+    with cond:
+        while not items:
+            cond.wait()
+        return items.popleft()
+def take_user():
+    with cond:
+        for at, item in enumerate(items):
+            if item[0] == "user":
+                del items[at]
+                return item[1]
+    return None
 def reader():
     for line in sys.stdin:
         try:
@@ -1582,10 +1615,12 @@ def reader():
             if req.get("subtype") == "set_model": detail = req.get("model", "")
             if req.get("subtype") == "set_permission_mode": detail = req.get("mode", "")
             if req.get("subtype") == "apply_flag_settings": detail = json.dumps(req.get("settings"), sort_keys=True)
+            if req.get("subtype") == "initialize": detail = "perTaskStopAffordance" if req.get("perTaskStopAffordance") else ""
+            if req.get("subtype") == "interrupt": detail = "cancel_queued" if req.get("cancel_queued") else ""
             with open(CONTROL, "a") as f: f.write("%s %s\n" % (req.get("subtype"), detail))
             # A file `delay-<subtype>` holding seconds makes the next one of it
             # answer that late, as the CLI does a set_model it checks with the server.
-            late = os.path.join(os.path.dirname(os.path.abspath(sys.argv[0])), "delay-" + str(req.get("subtype")))
+            late = os.path.join(HERE, "delay-" + str(req.get("subtype")))
             if os.path.exists(late):
                 seconds = float(open(late).read() or "0")
                 os.remove(late)
@@ -1593,7 +1628,7 @@ def reader():
                 continue
             # A file named for the subtype makes the next one of it refuse; if it
             # holds a number, that many of them.
-            refuse = os.path.join(os.path.dirname(os.path.abspath(sys.argv[0])), "refuse-" + str(req.get("subtype")))
+            refuse = os.path.join(HERE, "refuse-" + str(req.get("subtype")))
             if os.path.exists(refuse):
                 left = int(open(refuse).read().strip() or "1") - 1
                 if left > 0:
@@ -1604,21 +1639,79 @@ def reader():
                 continue
             answer = {"output": "tick\n", "total_bytes": 5, "truncated": False} if req.get("subtype") == "get_task_output" else {}
             if req.get("subtype") == "initialize":
+                spare[0] = bool(req.get("perTaskStopAffordance"))
                 answer = {"commands": [{"name": "prototype", "description": "Build a prototype", "argumentHint": ""}, {"name": "compact", "description": "Free up context", "argumentHint": "<hint>", "builtin": True}]}
+            if req.get("subtype") == "interrupt":
+                answer = {"still_queued": []}
+                if req.get("cancel_queued"):
+                    with cond:
+                        items.clear()
+                # Without the declaration the interrupt takes the background work too.
+                if not spare[0]:
+                    for task in tasks.values():
+                        task["killed"] = True
+                        task["stop"].set()
+                if running[0]:
+                    interrupted.set()
             out({"type": "control_response", "response": {"subtype": "success", "request_id": rec["request_id"], "response": answer}})
-            if req.get("subtype") == "stop_task":
-                stopped.set()
+            if req.get("subtype") == "stop_task" and req.get("task_id") in tasks:
+                tasks[req["task_id"]]["stop"].set()
         elif rec.get("type") == "user":
             # Every block of every message, as the CLI is handed them: it
             # expands a slash only in the last one, so the order matters.
             blocks = [{"type": b.get("type"), "text": b.get("text")} if b.get("type") == "text" else {"type": b.get("type")} for b in rec["message"]["content"]]
             with open(INPUT, "a") as f: f.write(json.dumps(blocks) + "\n")
-            inbox.put(rec)
+            put(("user", text_of(rec)))
 threading.Thread(target=reader, daemon=True).start()
+def background(seconds, text):
+    # As written, for the command; as a number, for the wait.
+    n = len(tasks) + 1
+    tid, call = "bg%d" % n, "toolu_bg" if n == 1 else "toolu_bg%d" % n
+    task = tasks[tid] = {"stop": threading.Event(), "killed": False}
+    out({"type": "assistant", "message": {"id": "mb%d" % n, "role": "assistant", "content": [{"type": "tool_use", "id": call, "name": "Bash", "input": {"command": "sleep %s" % seconds, "description": "Wait in the background", "run_in_background": True}}]}, "session_id": sid})
+    out({"type": "system", "subtype": "task_started", "task_id": tid, "tool_use_id": call, "description": "Wait in the background", "task_type": "local_bash", "is_backgrounded": True, "session_id": sid})
+    out({"type": "system", "subtype": "background_tasks_changed", "tasks": [{"task_id": tid, "task_type": "local_bash", "description": "Wait in the background"}], "session_id": sid})
+    def finish():
+        task["stop"].wait(float(seconds))
+        if task["stop"].is_set():
+            status = "killed" if task["killed"] else "stopped"
+            out({"type": "system", "subtype": "task_updated", "task_id": tid, "patch": {"status": "killed"}, "session_id": sid})
+            out({"type": "system", "subtype": "task_notification", "task_id": tid, "tool_use_id": call, "status": status, "summary": "Wait in the background", "session_id": sid})
+            out({"type": "system", "subtype": "background_tasks_changed", "tasks": [], "session_id": sid})
+            return
+        out({"type": "system", "subtype": "task_updated", "task_id": tid, "patch": {"status": "completed"}, "session_id": sid})
+        out({"type": "system", "subtype": "task_notification", "task_id": tid, "tool_use_id": call, "status": "completed", "summary": "Background command completed (exit code 0)", "session_id": sid})
+        out({"type": "system", "subtype": "background_tasks_changed", "tasks": [], "session_id": sid})
+        put(("wake", text))
+    threading.Thread(target=finish, daemon=True).start()
+def result(reply, failed=False):
+    running[0] = False
+    out({"type": "result", "subtype": "error_during_execution" if failed else "success", "is_error": failed, "result": "it broke" if failed else reply, "session_id": sid, "total_cost_usd": 0, "usage": {}, "modelUsage": {"fake": {"contextWindow": 200000}}})
+def stopped():
+    # The interrupted turn ends where it is, as an error result.
+    if not interrupted.is_set():
+        return False
+    late = os.path.join(HERE, "late-interrupt")
+    if os.path.exists(late):
+        seconds = float(open(late).read() or "0")
+        os.remove(late)
+        time.sleep(seconds)
+    interrupted.clear()
+    running[0] = False
+    out({"type": "result", "subtype": "error_during_execution", "is_error": True, "result": "[Request interrupted by user]", "session_id": sid, "total_cost_usd": 0, "usage": {}})
+    return True
 while True:
-    first = inbox.get()
-    heard = [text_of(first)]
+    kind, first = take()
+    running[0] = True
+    interrupted.clear()
     out({"type": "system", "subtype": "init", "session_id": sid, "model": "fake", "tools": [], "skills": ["prototype"]})
+    if kind == "wake":
+        # A turn of its own, on the notification of what it left running.
+        reply = "report: %s + the background command finished" % first.strip().splitlines()[-1]
+        out({"type": "assistant", "message": {"id": "m" + uuid.uuid4().hex[:6], "role": "assistant", "content": [{"type": "text", "text": reply}]}, "session_id": sid})
+        result(reply)
+        continue
+    heard = [first]
     # COMMANDS finds a skill in a folder mid-session: the whole list again.
     if "COMMANDS" in heard[0]:
         out({"type": "system", "subtype": "commands_changed", "session_id": sid, "commands": [{"name": "prototype", "description": "Build a prototype", "argumentHint": ""}, {"name": "deploy", "description": "Ship it", "argumentHint": "<env>"}]})
@@ -1626,26 +1719,22 @@ while True:
         out({"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": heard[0]}]}, "session_id": sid})
     b = re.search(r"BACKGROUND (\d+(?:\.\d+)?)", heard[0])
     if b:
-        out({"type": "assistant", "message": {"id": "mb", "role": "assistant", "content": [{"type": "tool_use", "id": "toolu_bg", "name": "Bash", "input": {"command": "sleep %s" % b.group(1), "description": "Wait in the background", "run_in_background": True}}]}, "session_id": sid})
-        out({"type": "system", "subtype": "task_started", "task_id": "bg1", "tool_use_id": "toolu_bg", "description": "Wait in the background", "task_type": "local_bash", "is_backgrounded": True, "session_id": sid})
-        out({"type": "system", "subtype": "background_tasks_changed", "tasks": [{"task_id": "bg1", "task_type": "local_bash", "description": "Wait in the background"}], "session_id": sid})
-        out({"type": "assistant", "message": {"id": "m0", "role": "assistant", "content": [{"type": "text", "text": "started it in the background"}]}, "session_id": sid})
-        out({"type": "result", "subtype": "success", "is_error": False, "result": "started", "session_id": sid, "total_cost_usd": 0, "usage": {}})
-        stopped.wait(float(b.group(1)))
-        out({"type": "system", "subtype": "background_tasks_changed", "tasks": [], "session_id": sid})
-        if stopped.is_set():
-            out({"type": "system", "subtype": "task_notification", "task_id": "bg1", "status": "stopped", "summary": "Background command stopped", "session_id": sid})
-            heard.append("the background command was stopped")
-        else:
-            out({"type": "system", "subtype": "task_notification", "task_id": "bg1", "status": "completed", "summary": "Background command completed (exit code 0)", "session_id": sid})
-            heard.append("the background command finished")
+        background(b.group(1), heard[0])
+        if "SLEEP" not in heard[0]:
+            out({"type": "assistant", "message": {"id": "m0", "role": "assistant", "content": [{"type": "text", "text": "started it in the background"}]}, "session_id": sid})
+            result("started")
+            continue
     m = re.search(r"SLEEP (\d+(?:\.\d+)?)", heard[0])
     if m:
-        time.sleep(float(m.group(1)))
+        interrupted.wait(float(m.group(1)))
+    if stopped():
+        continue
     # STUBBORN never looks up before it answers: what is sent meanwhile stays
     # queued, and the CLI starts a turn of its own on it afterwards.
-    while "STUBBORN" not in heard[0] and not inbox.empty():
-        more = text_of(inbox.get())
+    while "STUBBORN" not in heard[0]:
+        more = take_user()
+        if more is None:
+            break
         if replay:
             out({"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": more}]}, "session_id": sid})
         heard.append(more)
@@ -1659,8 +1748,7 @@ while True:
     out({"type": "assistant", "message": {"id": mid, "role": "assistant", "usage": usage, "content": [{"type": "text", "text": reply}]}, "session_id": sid})
     if "TWICE" in heard[0]:
         out({"type": "assistant", "message": {"id": mid, "role": "assistant", "usage": dict(usage, input_tokens=50000), "content": [{"type": "text", "text": reply}]}, "session_id": sid})
-    failed = "FAIL" in heard[0]
-    out({"type": "result", "subtype": "error_during_execution" if failed else "success", "is_error": failed, "result": "it broke" if failed else reply, "session_id": sid, "total_cost_usd": 0, "usage": {}, "modelUsage": {"fake": {"contextWindow": 200000}}})
+    result(reply, "FAIL" in heard[0])
 "#,
         )
         .expect("write fake");
@@ -1982,6 +2070,20 @@ while True:
         }
     }
 
+    /// The wait, for a turn whose end may come just before it: a child is
+    /// idle a moment before the event of its turn is written, which a wait
+    /// in between reads as nothing running.
+    fn wait_ended(w: &World, caller: &Caller, id: &str) -> Value {
+        for _ in 0..40 {
+            let out = w.wait(caller, id, json!({}));
+            if out["result"] != "nothing-running" {
+                return out;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        w.wait(caller, id, json!({}))
+    }
+
     /// The value a launch's argv gives a flag.
     fn after_flag(launch: &Value, flag: &str) -> Option<String> {
         let argv = launch["argv"].as_array()?;
@@ -2207,28 +2309,73 @@ while True:
         assert_eq!(w.wait(&parent, &id, json!({}))["sessions"][0]["report"], "report: SLEEP 1");
     }
 
-    /// A stop leaves the process in a state nobody vouches for (its answer to
-    /// the interrupt would end the next turn): it goes with the turn, and the
-    /// next message launches another on the same conversation.
+    /// A stop interrupts the turn and keeps the process: the CLI closes the
+    /// stopped turn with a result of its own, and the next message is a turn
+    /// on the same process, with nothing launched.
     #[test]
-    fn a_stopped_claude_turn_releases_the_process_and_the_next_turn_resumes() {
+    fn a_stopped_claude_turn_keeps_the_process_and_the_next_turn_runs_on_it() {
+        let w = world();
+        let parent = w.session("terminal", "shell", "full");
+        let (id, log) = w.claude(&parent, "SLEEP 30");
+        until_claude_turn(&w, &id);
+        w.turns.stop(&id).expect("stop");
+        w.settle(&id);
+        assert_eq!(w.turns.test_agents().running(), vec![id.clone()], "the stopped turn's process went");
+        assert!(w.turns.idle_since(&id).is_some());
+        assert_eq!(wait_ended(&w, &parent, &id)["sessions"][0]["outcome"], "stopped");
+        assert_eq!(w.claude_control(), ["interrupt cancel_queued"]);
+
+        let more = w.call(&parent, "send_message", json!({ "to": id, "text": "again" })).expect("send");
+        assert_eq!(more["delivery"], "started", "{more}");
+        assert_eq!(w.wait(&parent, &id, json!({}))["sessions"][0]["report"], "report: again");
+        assert_eq!(launched(&log).len(), 1, "a process was launched for the next turn");
+    }
+
+    /// The interrupt's own result can come after the next turn has been sent
+    /// for: that turn waits for it, so the late result ends the stopped turn
+    /// on the CLI's side and not the next one, which runs on the same process.
+    #[test]
+    fn an_interrupts_late_result_does_not_end_the_next_claude_turn() {
+        let w = world();
+        let parent = w.session("terminal", "shell", "full");
+        let (id, log) = w.claude(&parent, "SLEEP 30");
+        until_claude_turn(&w, &id);
+        std::fs::write(w.dir.join("late-interrupt"), "0.6").expect("late");
+        w.turns.stop(&id).expect("stop");
+        w.settle(&id);
+        w.call(&parent, "send_message", json!({ "to": id, "text": "SLEEP 1" })).expect("send");
+        let out = w.wait(&parent, &id, json!({}));
+        assert_eq!(out["sessions"][0]["outcome"], "stopped", "{out}");
+        let out = w.wait(&parent, &id, json!({}));
+        assert_eq!(out["sessions"][0]["report"], "report: SLEEP 1", "the late result ended the next turn: {out}");
+        assert_eq!(launched(&log).len(), 1);
+    }
+
+    /// A CLI that does not answer the interrupt within the grace is in a state
+    /// nobody vouches for: it is let go, and the next turn launches another on
+    /// the same conversation.
+    #[test]
+    fn a_claude_process_that_never_answers_its_interrupt_is_let_go() {
         let w = world();
         let parent = w.session("terminal", "shell", "full");
         let (id, log) = w.claude(&parent, "SLEEP 30");
         until_claude_turn(&w, &id);
         let bound = w.row(&id).provider_session_id.expect("bound");
+        std::fs::write(w.dir.join("late-interrupt"), "20").expect("late");
         w.turns.stop(&id).expect("stop");
         w.settle(&id);
-        assert!(w.turns.test_agents().running().is_empty(), "the stopped turn's process was kept");
-        assert!(w.turns.idle_since(&id).is_none());
-        assert_eq!(w.wait(&parent, &id, json!({}))["sessions"][0]["outcome"], "stopped");
+        until("the hung process went", || {
+            w.turns.test_agents().running().is_empty() && w.turns.idle_since(&id).is_none()
+        });
 
-        let more = w.call(&parent, "send_message", json!({ "to": id, "text": "again" })).expect("send");
-        assert_eq!(more["delivery"], "started", "{more}");
-        assert_eq!(w.wait(&parent, &id, json!({}))["sessions"][0]["report"], "report: again");
+        w.call(&parent, "send_message", json!({ "to": id, "text": "again" })).expect("send");
+        let mut out = w.wait(&parent, &id, json!({}));
+        if out["sessions"][0]["outcome"] == "stopped" {
+            out = w.wait(&parent, &id, json!({}));
+        }
+        assert_eq!(out["sessions"][0]["report"], "report: again", "{out}");
         let launches = launched(&log);
         assert_eq!(launches.len(), 2, "{launches:?}");
-        assert_eq!(after_flag(&launches[0], "--session-id"), Some(bound.clone()));
         assert_eq!(after_flag(&launches[1], "--resume"), Some(bound));
     }
 
@@ -2242,7 +2389,7 @@ while True:
         until_claude_turn(&w, &id);
         w.turns.stop(&id).expect("stop");
         w.settle(&id);
-        assert_eq!(w.wait(&parent, &id, json!({}))["sessions"][0]["outcome"], "stopped");
+        assert_eq!(wait_ended(&w, &parent, &id)["sessions"][0]["outcome"], "stopped");
         w.call(&parent, "send_message", json!({ "to": id, "text": "SLEEP 3" })).expect("send");
         // Past the stopped turn's grace, which is over while this one still runs.
         let out = w.wait(&parent, &id, json!({}));
@@ -2265,27 +2412,26 @@ while True:
     }
 
     /// A steer the turn answered without reading is queued inside the CLI,
-    /// which would start a turn of its own on it: so the process is let go,
-    /// and the steer goes back in the box and is handed over once.
+    /// which starts a turn of its own on it: that turn is the session's next,
+    /// on the same process, and the steer's echo there is where it is read,
+    /// once.
     #[test]
-    fn a_steer_a_claude_turn_never_read_releases_the_process_and_goes_back_to_the_box() {
+    fn a_steer_a_claude_turn_never_read_is_read_in_the_turn_the_cli_starts_on_it() {
         let w = world();
         let parent = w.session("terminal", "shell", "full");
         let (id, log) = w.claude(&parent, "STUBBORN SLEEP 2");
         until_claude_turn(&w, &id);
         let steered = w.call(&parent, "send_message", json!({ "to": id, "text": "and this", "steer": true })).expect("steer");
         assert_eq!(steered["delivery"], "steered", "{steered}");
-        // The box hands it over as the next turn, on a process of its own. A
-        // wait that comes before that turn starts is told of the first one.
-        let mut out = w.wait(&parent, &id, json!({}));
-        if out["sessions"][0]["report"] == "report: STUBBORN SLEEP 2" {
-            out = w.wait(&parent, &id, json!({}));
-        }
-        assert_eq!(out["sessions"][0]["report"], "report: and this", "{out}");
+        // The CLI's own turn follows, a moment later: a wait may come before
+        // it or after.
+        w.wait(&parent, &id, json!({}));
+        until("the CLI's own turn ended", || {
+            w.turns.transcripts().since(&id, 0).0.iter().any(|block| block.text == "report: and this") && !w.turns.is_running(&id)
+        });
         w.settle(&id);
-        let launches = launched(&log);
-        assert_eq!(launches.len(), 2, "{launches:?}");
-        assert!(after_flag(&launches[1], "--resume").is_some(), "{}", launches[1]);
+        assert_eq!(launched(&log).len(), 1, "a process was launched for it");
+        assert_eq!(mailbox::waiting_count(w.turns.store(), &id).unwrap(), 0, "the box holds it again");
         let read = w.call(&parent, "read_session", json!({ "session": id })).expect("read");
         let text = read["text"].as_str().unwrap();
         assert_eq!(text.matches("report: STUBBORN SLEEP 2").count(), 1, "{text}");
@@ -2439,33 +2585,30 @@ time.sleep(600)
         assert!(!w.turns.commands().holds("claude", &w.dir.to_string_lossy()));
     }
 
-    /// Background commands still open when the grace runs out would wake
-    /// Claude by themselves later: the turn ends on the result it had, and the
-    /// process goes with it, tray and all.
+    /// Background commands still open when the grace runs out: the turn ends
+    /// on the result it had, and the process stays up with them, pinned, so
+    /// the next turn runs on it and the work goes on.
     #[test]
-    fn a_claude_turn_that_ends_with_background_work_open_releases_the_process() {
+    fn a_claude_childs_turn_that_outwaits_its_grace_ends_and_keeps_the_process_with_the_work() {
+        use crew_protocol::BackgroundState;
         let w = world();
         let parent = w.session("terminal", "shell", "full");
         let (id, log) = w.claude(&parent, "BACKGROUND 60");
         let out = w.wait(&parent, &id, json!({}));
         assert_eq!(out["sessions"][0]["report"], "started it in the background", "{out}");
         w.settle(&id);
-        assert!(w.turns.test_agents().running().is_empty(), "a process with work open was kept");
-        assert!(w.turns.idle_since(&id).is_none());
-        // What it ran went with it: the entry is listed, stopped, and says why.
+        assert_eq!(w.turns.test_agents().running(), vec![id.clone()], "the process went with the work");
         let list = w.turns.background_list(&id);
-        assert!(!list.live);
-        assert_eq!(list.commands[0].state, crew_protocol::BackgroundState::Stopped);
-        assert_eq!(list.commands[0].stop_note.as_deref(), Some("its CLI exited"));
+        assert!(list.live && !list.waiting, "{list:?}");
+        assert_eq!(list.commands[0].state, BackgroundState::Running);
+        std::thread::sleep(Duration::from_millis(5));
+        assert!(w.turns.release_idle(Duration::from_millis(1), Duration::from_secs(3600)).is_empty(), "a pinned process was let go");
 
         w.call(&parent, "send_message", json!({ "to": id, "text": "again" })).expect("send");
         assert_eq!(w.wait(&parent, &id, json!({}))["sessions"][0]["report"], "report: again");
-        let launches = launched(&log);
-        assert_eq!(launches.len(), 2, "{launches:?}");
-        assert!(after_flag(&launches[1], "--resume").is_some(), "{}", launches[1]);
-        // The new process did not wipe it.
-        let relaunched = w.turns.background_list(&id);
-        assert_eq!(relaunched.commands, list.commands);
+        assert_eq!(launched(&log).len(), 1, "a process was launched for the next turn");
+        assert_eq!(w.turns.background_list(&id).commands[0].state, BackgroundState::Running);
+        w.turns.release(&id);
     }
 
     /// What the CLI takes while it idles is told to it between turns, on the
@@ -2856,26 +2999,35 @@ time.sleep(600)
         assert_eq!(sent(&log, "turn/start").len(), 2);
     }
 
-    /// A stop leaves the process in a state nobody vouches for: it goes with
-    /// the turn, and the next message launches another on the same thread.
+    /// A stop Codex closes (`turn/completed`, interrupted) leaves the thread
+    /// idle: the process stays, with the background terminals an interrupt
+    /// does not end, and the next message is a turn on it.
     #[test]
-    fn a_stopped_codex_turn_releases_the_process_and_the_next_turn_launches_again() {
+    fn a_stopped_codex_turn_keeps_the_process_and_its_background_terminals() {
+        use crew_protocol::BackgroundState;
         let w = world();
         let parent = w.session("terminal", "shell", "full");
-        let (id, log) = w.codex(&parent, "SLEEP 30", None);
-        until_tool(&w, &parent, &id);
-        let bound = w.row(&id).provider_session_id.expect("bound");
+        let (id, log) = w.codex(&parent, "BGKEEP 30", None);
+        w.wait(&parent, &id, json!({}));
+        until_background(&w, &id, |list| !list.commands.is_empty());
+        w.call(&parent, "send_message", json!({ "to": id, "text": "SLEEP 30" })).expect("send");
+        until("the second turn runs", || sent(&log, "turn/start").len() == 2 && w.turns.is_running(&id));
+        std::thread::sleep(Duration::from_millis(300));
         w.turns.stop(&id).expect("stop");
+        assert_eq!(wait_ended(&w, &parent, &id)["sessions"][0]["outcome"], "stopped");
         w.settle(&id);
-        assert!(w.turns.test_agents().running().is_empty(), "the stopped turn's process was kept");
-        assert!(w.turns.idle_since(&id).is_none());
-        assert_eq!(w.wait(&parent, &id, json!({}))["sessions"][0]["outcome"], "stopped");
+        assert_eq!(w.turns.test_agents().running(), vec![id.clone()], "the stopped turn's process went");
+        assert!(w.turns.idle_since(&id).is_some());
+        let list = w.turns.background_list(&id);
+        assert!(list.live, "{list:?}");
+        assert_eq!(list.commands[0].state, BackgroundState::Running);
 
         let more = w.call(&parent, "send_message", json!({ "to": id, "text": "again" })).expect("send");
         assert_eq!(more["delivery"], "started", "{more}");
         assert_eq!(w.wait(&parent, &id, json!({}))["sessions"][0]["report"], "report: again");
-        assert_eq!(launched(&log).len(), 2);
-        assert_eq!(sent(&log, "thread/resume")[0]["threadId"], json!(bound));
+        assert_eq!(launched(&log).len(), 1);
+        assert!(sent(&log, "thread/resume").is_empty());
+        w.turns.release(&id);
     }
 
     /// The timer that ends a stopped turn the app server will not end is the
@@ -2888,7 +3040,7 @@ time.sleep(600)
         until_tool(&w, &parent, &id);
         w.turns.stop(&id).expect("stop");
         w.settle(&id);
-        assert_eq!(w.wait(&parent, &id, json!({}))["sessions"][0]["outcome"], "stopped");
+        assert_eq!(wait_ended(&w, &parent, &id)["sessions"][0]["outcome"], "stopped");
         w.call(&parent, "send_message", json!({ "to": id, "text": "SLEEP 4" })).expect("send");
         // Past the stopped turn's grace, which is over while this one still runs.
         let out = w.wait(&parent, &id, json!({}));
@@ -3324,8 +3476,10 @@ time.sleep(600)
         assert_eq!(w.turns.background_output(&id, "bg1").expect("output").output, "tick\n");
         w.turns.background_stop(&id, "bg1").expect("stop");
         assert_eq!(w.turns.background_list(&id).commands[0].state, BackgroundState::Stopped);
-        let out = w.wait(&parent, &id, json!({}));
-        assert_eq!(out["sessions"][0]["report"], "report: BACKGROUND 30 + the background command was stopped", "{out}");
+        // A task stopped wakes nobody: the turn held on it ends on the result
+        // it had, as the stop is answered.
+        let out = wait_ended(&w, &parent, &id);
+        assert_eq!(out["sessions"][0]["report"], "started it in the background", "{out}");
         // Nothing is left running, so the CLI is kept for the next turn: the
         // row stays, ended, and its output is the last read.
         w.settle(&id);
@@ -3422,28 +3576,29 @@ time.sleep(600)
         assert!(last.commands.is_empty(), "the window was told of the clear: {last:?}");
     }
 
-    /// Stopping a turn stops what it left in the background first, then
-    /// interrupts it, so a task stopped late cannot wake Claude again.
+    /// Esc on a child whose result is held on its background work stops the
+    /// turn only: there is no turn in the CLI to interrupt, nothing is told
+    /// to stop, and the work runs on in the process the child keeps.
     #[test]
-    fn stopping_a_claude_turn_stops_its_background_commands_before_the_interrupt() {
+    fn stopping_a_claude_child_held_on_background_work_ends_its_turn_and_spares_the_work() {
+        use crew_protocol::BackgroundState;
         let w = world();
-        w.turns.override_binary("claude", fake_claude(&w.dir));
         let parent = w.session("terminal", "shell", "full");
-        let started = w.call(&parent, "start_session", json!({ "provider": "claude", "prompt": "BACKGROUND 30" })).expect("start");
-        let id = started["id"].as_str().unwrap().to_string();
+        let (id, log) = w.claude(&parent, "BACKGROUND 30");
         until_background(&w, &id, |list| list.waiting);
         w.turns.stop(&id).expect("stop");
-        let log = w.dir.join("claude-control.log");
-        for _ in 0..200 {
-            if std::fs::read_to_string(&log).unwrap_or_default().contains("interrupt") {
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(25));
-        }
-        let control = std::fs::read_to_string(&log).unwrap();
-        assert!(control.ends_with("stop_task bg1\ninterrupt \n"), "{control}");
-        let list = until_background(&w, &id, |list| !list.live);
-        assert_eq!(list.commands[0].state, crew_protocol::BackgroundState::Stopped);
+        assert_eq!(wait_ended(&w, &parent, &id)["sessions"][0]["outcome"], "stopped");
+        w.settle(&id);
+        assert!(w.claude_control().is_empty(), "{:?}", w.claude_control());
+        let list = w.turns.background_list(&id);
+        assert!(list.live, "{list:?}");
+        assert_eq!(list.commands[0].state, BackgroundState::Running);
+        assert_eq!(w.turns.test_agents().running(), vec![id.clone()]);
+
+        w.call(&parent, "send_message", json!({ "to": id, "text": "again" })).expect("send");
+        assert_eq!(w.wait(&parent, &id, json!({}))["sessions"][0]["report"], "report: again");
+        assert_eq!(launched(&log).len(), 1);
+        w.turns.release(&id);
     }
 
     /// The readings a session's context meter was told, in order.
@@ -3648,10 +3803,11 @@ time.sleep(600)
         w.turns.release(&id);
     }
 
-    /// Stopping an idle child closes its tray with its process, whether the
-    /// stop comes from the window or from `stop_session`.
+    /// Esc on an idle Claude child stops nothing: its process and its tray
+    /// stay, with whatever runs in the background. `stop_session` ends the
+    /// child, and closes the tray with its process.
     #[test]
-    fn stopping_an_idle_child_closes_its_tray() {
+    fn stopping_an_idle_child_from_the_window_keeps_its_tray_and_stop_session_closes_it() {
         let w = world();
         let parent = w.session("terminal", "shell", "full");
         let (kept, _) = w.claude(&parent, "one");
@@ -3659,8 +3815,9 @@ time.sleep(600)
         w.settle(&kept);
         assert!(w.turns.background_list(&kept).live, "the kept process's tray is closed");
         w.turns.stop(&kept).expect("stop");
-        assert!(w.turns.test_agents().running().is_empty());
-        assert!(!w.turns.background_list(&kept).live, "its tray is still open");
+        assert_eq!(w.turns.test_agents().running(), vec![kept.clone()], "the idle process went with the stop");
+        assert!(w.turns.background_list(&kept).live, "its tray was closed");
+        w.turns.release(&kept);
 
         let (exited, _) = w.claude(&parent, "two");
         w.wait(&parent, &exited, json!({}));
@@ -5260,6 +5417,150 @@ time.sleep(600)
         assert_eq!(said, ["STUBBORN SLEEP 5", "and this", "next"]);
     }
 
+    /// The user's Claude session with fake Claude, its home in the test's dir.
+    fn users_claude(w: &World) -> Session {
+        w.turns.override_binary("claude", fake_claude(&w.dir));
+        w.turns.override_claude_home(w.dir.join("home"));
+        w.user_session("claude", "", "full")
+    }
+
+    /// Whether some block of the session's says exactly `text`.
+    fn says(w: &World, id: &str, text: &str) -> bool {
+        w.blocks(id).iter().any(|block| block.text == text)
+    }
+
+    /// What the user's own messages in the session say, in order.
+    fn users_lines(w: &World, id: &str) -> Vec<String> {
+        w.blocks(id).into_iter().filter(|block| block.role == BlockRole::User).map(|block| block.text).collect()
+    }
+
+    /// The user's turn ends at its answer with work left in the background:
+    /// the process stays up with it, pinned, and the turn the CLI starts by
+    /// itself when the work reports is the session's, with no message of the
+    /// user's, its reply in the transcript, and the entry done.
+    #[test]
+    fn a_users_claude_turn_ends_at_its_answer_and_the_turn_the_cli_starts_when_its_work_reports_is_adopted() {
+        use crew_protocol::BackgroundState;
+        let w = world();
+        let mine = users_claude(&w);
+        assert_eq!(w.type_to(&mine, "BACKGROUND 1.5", None, None).delivery.as_deref(), Some("started"));
+        assert_eq!(w.settle(&mine.id).status, "done");
+        assert!(says(&w, &mine.id, "started it in the background"));
+        let list = w.turns.background_list(&mine.id);
+        assert!(list.live && !list.waiting, "{list:?}");
+        assert_eq!(list.commands[0].state, BackgroundState::Running);
+        assert!(w.turns.is_pinned(&mine.id));
+        std::thread::sleep(Duration::from_millis(5));
+        assert!(w.turns.release_idle(Duration::from_millis(1), Duration::from_secs(3600)).is_empty(), "a pinned process was let go");
+
+        let reply = "report: BACKGROUND 1.5 + the background command finished";
+        until("the CLI's own turn ended", || says(&w, &mine.id, reply) && !w.turns.is_running(&mine.id));
+        assert_eq!(w.settle(&mine.id).status, "done");
+        assert_eq!(w.turns.background_list(&mine.id).commands[0].state, BackgroundState::Completed);
+        assert_eq!(users_lines(&w, &mine.id), ["BACKGROUND 1.5"], "the CLI's turn was given a message");
+        assert!(says(&w, &mine.id, "Background command completed (exit code 0)"), "nothing says what woke it");
+        assert_eq!(launched(&w.dir.join("claude-launch.log")).len(), 1);
+        assert_eq!(w.turns.test_agents().running(), vec![mine.id.clone()]);
+        w.turns.release(&mine.id);
+    }
+
+    /// Esc stops the turn and nothing else: the CLI is interrupted with the
+    /// background work spared (declared at `initialize`), no task is told to
+    /// stop, and the next message runs on the same process while the work
+    /// goes on. Stopped from the panel, the work wakes nobody.
+    #[test]
+    fn esc_on_a_users_claude_turn_stops_the_turn_and_spares_its_background_work() {
+        use crew_protocol::BackgroundState;
+        let w = world();
+        let mine = users_claude(&w);
+        w.type_to(&mine, "BACKGROUND 30 SLEEP 30", None, None);
+        until_background(&w, &mine.id, |list| list.commands.iter().any(|row| row.state == BackgroundState::Running));
+        w.turns.stop(&mine.id).expect("stop");
+        assert_eq!(w.settle(&mine.id).status, "idle");
+        assert!(says(&w, &mine.id, "Stopped"));
+        let control = std::fs::read_to_string(w.dir.join("claude-control.log")).unwrap();
+        assert!(control.starts_with("initialize perTaskStopAffordance\n"), "{control}");
+        assert!(control.contains("interrupt cancel_queued\n") && !control.contains("stop_task"), "{control}");
+        let list = w.turns.background_list(&mine.id);
+        assert!(list.live, "{list:?}");
+        assert_eq!(list.commands[0].state, BackgroundState::Running);
+        assert_eq!(w.turns.test_agents().running(), vec![mine.id.clone()]);
+
+        assert_eq!(w.type_to(&mine, "next", None, None).delivery.as_deref(), Some("started"));
+        until("the next turn answered", || says(&w, &mine.id, "report: next") && !w.turns.is_running(&mine.id));
+        assert_eq!(launched(&w.dir.join("claude-launch.log")).len(), 1, "the next turn launched a process");
+        assert_eq!(w.turns.background_list(&mine.id).commands[0].state, BackgroundState::Running);
+
+        w.turns.background_stop(&mine.id, "bg1").expect("stop the task");
+        std::thread::sleep(Duration::from_millis(400));
+        assert!(!w.turns.is_running(&mine.id), "a task stopped from the panel woke the model");
+        assert_eq!(w.turns.background_list(&mine.id).commands[0].state, BackgroundState::Stopped);
+        w.turns.release(&mine.id);
+    }
+
+    /// Send now stops the turn the same way: the queue goes over as the next
+    /// turn on the process the stopped one had.
+    #[test]
+    fn send_now_interrupts_a_users_claude_turn_and_the_queue_runs_on_the_same_process() {
+        let w = world();
+        let mine = users_claude(&w);
+        w.type_to(&mine, "SLEEP 30", None, None);
+        until_claude_turn(&w, &mine.id);
+        let b = w.type_to(&mine, "b", Some("queue"), None).letter_id.expect("letter");
+        w.turns.send_now(&mine.id, &b).expect("send now");
+        until("the queue went over", || says(&w, &mine.id, "report: b") && !w.turns.is_running(&mine.id));
+        assert!(says(&w, &mine.id, "Stopped"));
+        assert_eq!(w.claude_control(), ["interrupt cancel_queued"]);
+        assert_eq!(launched(&w.dir.join("claude-launch.log")).len(), 1, "the stop let the process go");
+        w.turns.release(&mine.id);
+    }
+
+    /// The CLI starts a turn by itself just as Crew's turn is about to write
+    /// its message: Crew's turn takes the CLI's over, and its message goes in
+    /// as a steer of it, so there is one turn running, not two, and the
+    /// session settles.
+    #[test]
+    fn a_message_crew_sends_as_the_cli_starts_a_turn_by_itself_joins_that_turn() {
+        let w = world();
+        let mine = users_claude(&w);
+        w.type_to(&mine, "one", None, None);
+        w.settle(&mine.id);
+        let bound = w.row(&mine.id).provider_session_id.expect("bound");
+        let host = w.turns.clone();
+        let id = mine.id.clone();
+        w.turns.test_before_message(move || {
+            let init = json!({ "type": "system", "subtype": "init", "session_id": bound, "model": "fake", "tools": [] });
+            host.on_agent_lines("agent-stdout", &id, vec![init.to_string()]);
+        });
+        assert_eq!(w.type_to(&mine, "two", None, None).delivery.as_deref(), Some("started"));
+        until("the turn ended", || says(&w, &mine.id, "report: two") && !w.turns.is_running(&mine.id));
+        assert_eq!(w.settle(&mine.id).status, "done");
+        assert_eq!(users_lines(&w, &mine.id), ["one", "two"]);
+
+        assert_eq!(w.type_to(&mine, "three", None, None).delivery.as_deref(), Some("started"));
+        until("the next turn ended", || says(&w, &mine.id, "report: three") && !w.turns.is_running(&mine.id));
+        assert_eq!(launched(&w.dir.join("claude-launch.log")).len(), 1);
+        w.turns.release(&mine.id);
+    }
+
+    /// Work that reports the moment the turn answers: the CLI's own turn starts
+    /// while Crew is still ending the one before, and is taken all the same.
+    #[test]
+    fn a_turn_the_cli_starts_as_the_last_one_ends_is_adopted() {
+        let w = world();
+        let mine = users_claude(&w);
+        for round in 1..=3 {
+            w.type_to(&mine, "BACKGROUND 0.05", None, None);
+            let reply = "report: BACKGROUND 0.05 + the background command finished";
+            until("the CLI's own turn ended", || {
+                w.blocks(&mine.id).iter().filter(|block| block.text == reply).count() == round && !w.turns.is_running(&mine.id)
+            });
+            assert_eq!(w.settle(&mine.id).status, "done");
+        }
+        assert_eq!(launched(&w.dir.join("claude-launch.log")).len(), 1);
+        w.turns.release(&mine.id);
+    }
+
     /// Cursor and opencode take nothing into a turn that runs (`steer` asked
     /// for or not): the message waits, and goes as the next turn.
     #[test]
@@ -5665,6 +5966,110 @@ time.sleep(600)
         says_one(&w.live_say(&parent, &id, "Again: reply with just the word one."));
         w.settle(&id);
         assert_eq!(w.live_pid(&id), pid, "the second turn started another process");
+    }
+
+    /// Until `done` holds, for as long as a real model may take.
+    fn until_long(what: &str, limit: Duration, done: impl Fn() -> bool) {
+        let end = std::time::Instant::now() + limit;
+        while std::time::Instant::now() < end {
+            if done() {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(200));
+        }
+        panic!("never {what}");
+    }
+
+    /// The user's own session on the real `claude`, on haiku.
+    fn live_users_claude(w: &World) -> Session {
+        w.turns.override_binary("claude", real_binary("claude"));
+        w.user_session("claude", "claude-haiku-5-5", "full")
+    }
+
+    /// Runs the real `claude`: one haiku turn that leaves `sleep 20` running in
+    /// the background and answers, which ends the turn with the process up;
+    /// then, when the shell completes, the turn the CLI starts by itself,
+    /// which the session takes as its own. Needs `claude auth login`.
+    /// `cargo test -p crew-core --lib -- --ignored --test-threads=1 live_claude_background`
+    #[test]
+    #[ignore]
+    fn live_claude_background_work_outlives_the_turn_and_the_cli_reports_it_in_a_turn_of_its_own() {
+        use crew_protocol::BackgroundState;
+        let w = world();
+        let mine = live_users_claude(&w);
+        let _reap = Reap(&w, mine.id.clone());
+        let at = std::time::Instant::now();
+        w.type_to(
+            &mine,
+            "Use the Bash tool with run_in_background: true to run `sleep 20`. Then reply with just the word started. \
+             When you are told it finished, reply with just the word done.",
+            None,
+            None,
+        );
+        until_long("the turn answered", Duration::from_secs(120), || {
+            !w.turns.is_running(&mine.id) && w.row(&mine.id).status == "done"
+        });
+        let answered = at.elapsed();
+        let list = w.turns.background_list(&mine.id);
+        assert!(list.live && list.commands.len() == 1, "{list:?}");
+        assert_eq!(list.commands[0].state, BackgroundState::Running, "{list:?}");
+        assert!(w.turns.is_pinned(&mine.id));
+        let pid = w.live_pid(&mine.id);
+
+        let done = || w.blocks(&mine.id).iter().any(|block| block.role == BlockRole::Assistant && block.text.to_lowercase().contains("done"));
+        until_long("the CLI's own turn ended", Duration::from_secs(120), || done() && !w.turns.is_running(&mine.id));
+        let reported = at.elapsed();
+        assert_eq!(w.row(&mine.id).status, "done");
+        assert_eq!(w.turns.background_list(&mine.id).commands[0].state, BackgroundState::Completed);
+        assert_eq!(w.live_pid(&mine.id), pid, "the CLI's turn ran on another process");
+        assert_eq!(users_lines(&w, &mine.id).len(), 1, "the CLI's turn was given a message");
+        eprintln!("answered at {answered:?}, the CLI's own turn ended at {reported:?}");
+    }
+
+    /// Runs the real `claude`: one haiku turn that leaves `sleep 60` running in
+    /// the background and goes on in the foreground, stopped with Esc. The
+    /// interrupt (with `perTaskStopAffordance` declared) spares the shell, the
+    /// process stays, and the shell is stopped from the panel after, which
+    /// wakes nobody. Needs `claude auth login`.
+    /// `cargo test -p crew-core --lib -- --ignored --test-threads=1 live_claude_esc`
+    #[test]
+    #[ignore]
+    fn live_claude_esc_stops_the_turn_and_spares_the_work_in_the_background() {
+        use crew_protocol::BackgroundState;
+        let w = world();
+        let mine = live_users_claude(&w);
+        let _reap = Reap(&w, mine.id.clone());
+        w.type_to(
+            &mine,
+            "First use the Bash tool with run_in_background: true to run `sleep 60`. Then, in a separate Bash call in \
+             the foreground, run `python3 -c \"import time; time.sleep(20)\"`. Then reply with just the word ok.",
+            None,
+            None,
+        );
+        until_long("the shell runs in the background", Duration::from_secs(120), || {
+            w.turns.background_list(&mine.id).commands.iter().any(|row| row.state == BackgroundState::Running)
+        });
+        std::thread::sleep(Duration::from_secs(3));
+        assert!(w.turns.is_running(&mine.id), "the turn ended before it could be stopped");
+        let pid = w.live_pid(&mine.id);
+        w.turns.stop(&mine.id).expect("stop");
+        until_long("the session is idle", Duration::from_secs(30), || {
+            !w.turns.is_running(&mine.id) && w.row(&mine.id).status == "idle"
+        });
+        // The interrupt's own result came: the process is idle, kept.
+        until_long("the stop was answered", Duration::from_secs(10), || w.turns.idle_since(&mine.id).is_some());
+        std::thread::sleep(Duration::from_secs(2));
+        let list = w.turns.background_list(&mine.id);
+        assert!(list.live, "{list:?}");
+        let shell = list.commands.iter().find(|row| row.state == BackgroundState::Running).expect("the interrupt took the shell");
+        assert_eq!(w.live_pid(&mine.id), pid, "the stop let the process go");
+        assert!(w.turns.background_output(&mine.id, &shell.id).is_ok());
+
+        w.turns.background_stop(&mine.id, &shell.id).expect("stop the shell");
+        std::thread::sleep(Duration::from_secs(5));
+        assert!(!w.turns.is_running(&mine.id), "a shell stopped from the panel woke the model");
+        let row = w.turns.background_list(&mine.id).commands.into_iter().find(|row| row.id == shell.id).expect("row");
+        assert_eq!(row.state, BackgroundState::Stopped);
     }
 
     /// Runs the real `claude`: three turns, haiku then sonnet, with the model
