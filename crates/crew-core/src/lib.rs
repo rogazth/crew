@@ -20,6 +20,7 @@ pub mod providers;
 pub(crate) mod fakes;
 pub mod file_search;
 pub mod files;
+pub mod http_local;
 pub mod mailbox;
 pub mod mcp;
 pub mod media;
