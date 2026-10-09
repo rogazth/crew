@@ -259,6 +259,26 @@ impl TranscriptHub {
         seq
     }
 
+    /// Tells the windows of an event that is a reading of the moment, not
+    /// history: it takes the next number in the live counter, so the windows
+    /// stay in step, and goes no further. The blocks do not change, nothing is
+    /// marked unsaved and no save is armed, so a reading per model request
+    /// costs the transcript nothing.
+    pub fn emit_live(&self, session_id: &str, event: HarnessEvent) -> u64 {
+        let seq = {
+            let mut map = self.lock();
+            let row = map
+                .entry(session_id.to_string())
+                .or_insert_with(|| self.hydrate(session_id));
+            row.seq += 1;
+            row.seq
+        };
+        if let Some(events) = self.events() {
+            events.apply(session_id, seq, &event);
+        }
+        seq
+    }
+
     pub fn append_system(&self, session_id: &str, text: &str) {
         self.apply(
             session_id,
@@ -430,6 +450,43 @@ mod tests {
             .with(|conn| crate::messages::all(conn, &session.id))
             .expect("read back");
         assert!(stored.iter().any(|block| block.text == "ok"));
+    }
+
+    /// A live reading takes a number in the counter and reaches the windows,
+    /// and leaves the transcript as it was: no block, nothing to save.
+    #[test]
+    fn a_live_event_is_heard_by_the_windows_and_never_saved() {
+        let store = tmp_store();
+        let workspace = crate::workspace::create(&store, "w".into(), std::env::temp_dir().to_string_lossy().into()).unwrap();
+        let session = crate::session::create(
+            &store,
+            workspace.id,
+            "bot".into(),
+            "A".into(),
+            "claude".into(),
+            "m".into(),
+            "".into(),
+            "ask".into(),
+        )
+        .unwrap();
+        let hub = TranscriptHub::new(store.clone());
+        let heard = Arc::new(crate::turns::Applied::default());
+        hub.set_events(heard.clone());
+        hub.append_user(&session.id, "hi", false, None, None);
+        hub.flush(&session.id);
+        let before = hub.window(&session.id, None, None);
+        let seq = hub.emit_live(
+            &session.id,
+            HarnessEvent::ContextUpdated { used: 10, window: Some(100), auto_compact_at: None },
+        );
+        assert_eq!(seq, before.seq + 1);
+        assert_eq!(hub.window(&session.id, None, None).seq, seq);
+        assert_eq!(hub.window(&session.id, None, None).blocks, before.blocks);
+        assert!(matches!(heard.take().last(), Some(HarnessEvent::ContextUpdated { used: 10, .. })));
+        // Nothing is unsaved, so a flush has nothing to write.
+        assert!(!hub.lock().get(&session.id).expect("row").dirty);
+        let stored = store.with(|conn| crate::messages::all(conn, &session.id)).expect("read back");
+        assert_eq!(stored.len(), before.blocks.len());
     }
 }
 

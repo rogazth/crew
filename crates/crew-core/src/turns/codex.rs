@@ -17,7 +17,7 @@ use std::sync::mpsc::{self, RecvTimeoutError};
 use std::thread;
 use std::time::Duration;
 
-use crew_protocol::{ApprovalDecision, ApprovalResolution, HarnessEvent};
+use crew_protocol::{ApprovalDecision, ApprovalResolution, ContextReading, HarnessEvent};
 use serde_json::{json, Map, Value};
 use tokio::sync::oneshot;
 
@@ -754,6 +754,20 @@ impl TurnHost {
         self.codex_reply(session_id, &rpc_id, questions_response(&questions, answers.as_ref()));
     }
 
+    /// How full the thread is: what its newest model response held (`last`,
+    /// never `total`, which adds up every response of the thread) over the
+    /// model's window. Codex does not say where it compacts by itself.
+    fn codex_context(&self, session_id: &str, params: &Value) {
+        let Some(usage) = params.get("tokenUsage") else {
+            return;
+        };
+        let Some(used) = usage.pointer("/last/totalTokens").and_then(Value::as_u64) else {
+            return;
+        };
+        let window = usage.get("modelContextWindow").and_then(Value::as_u64).filter(|window| *window > 0);
+        self.publish_context(session_id, |_| Some(ContextReading { used, window, auto_compact_at: None }));
+    }
+
     fn codex_notification(&self, session_id: &str, method: &str, params: &Value) {
         let mut events = Vec::new();
         let mut outcome = None;
@@ -768,6 +782,13 @@ impl TurnHost {
             // what names another is not this turn's to take.
             let thread = params.get("threadId").and_then(Value::as_str);
             if thread.zip(live.thread_id.as_deref()).is_some_and(|(said, mine)| said != mine) {
+                return;
+            }
+            // The thread's, not the turn's: it names the turn it was read in,
+            // which may be over, and it may come with none running.
+            if method == "thread/tokenUsage/updated" {
+                drop(map);
+                self.codex_context(session_id, params);
                 return;
             }
             let turn = params.get("turnId").or_else(|| params.pointer("/turn/id")).and_then(Value::as_str);
@@ -1013,7 +1034,8 @@ fn codex_item(live: &mut CodexLive, item: &Map<String, Value>, completed: bool, 
 /// What a turn does is spelled in its text: `SLEEP <s>` runs a command that
 /// long (steers land after it), `ASK` asks to run one, `QUESTION` asks which
 /// color, `MCP` calls Crew's `list_peers`, `FAIL` fails the turn,
-/// `STUBBORN` ignores an interrupt, `STALE` has the turn begin with a delta
+/// `STUBBORN` ignores an interrupt, `TOKENS` reports the thread's token usage
+/// twice, the second time with no window, `STALE` has the turn begin with a delta
 /// and a failed end that name the turn before it. It answers `report: <last line>`, with
 /// ` + <steer>` for each steer it took.
 #[cfg(test)]
@@ -1121,6 +1143,12 @@ def run(turn, text):
         state["turn"] = None
         out({"method": "turn/completed", "params": {"threadId": state["thread"], "turn": {"id": tid, "status": "failed", "error": {"message": "boom"}}}})
         return
+    if "TOKENS" in text:
+        # `total` adds up the whole thread; `last` is what the newest response held.
+        # The second reading names no window.
+        for last, total, window in ((5000, 90000, 258400), (6000, 96000, None)):
+            usage = lambda n: {"totalTokens": n, "inputTokens": n - 10, "cachedInputTokens": 0, "outputTokens": 10, "reasoningOutputTokens": 0}
+            out({"method": "thread/tokenUsage/updated", "params": {"threadId": state["thread"], "turnId": tid, "tokenUsage": {"last": usage(last), "total": usage(total), "modelContextWindow": window}}})
     reply = "report: " + " + ".join(heard)
     mid = "msg_" + uuid.uuid4().hex[:8]
     item("started", {"type": "agentMessage", "id": mid, "text": "", "phase": "final_answer"})
@@ -1192,4 +1220,41 @@ for line in sys.stdin:
     std::fs::write(&path, script).expect("write fake codex");
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
     (path.to_string_lossy().into_owned(), log)
+}
+
+#[cfg(test)]
+mod context_tests {
+    use super::*;
+    use crew_protocol::ContextReading;
+
+    fn usage(thread: &str, turn: &str, last: u64, total: u64) -> Value {
+        json!({
+            "threadId": thread,
+            "turnId": turn,
+            "tokenUsage": {
+                "last": { "totalTokens": last },
+                "total": { "totalTokens": total },
+                "modelContextWindow": 258_400,
+            },
+        })
+    }
+
+    /// The reading is the thread's: it is taken with no turn running, and
+    /// naming a turn that is over, but not from another thread.
+    #[test]
+    fn a_token_reading_is_taken_between_turns_but_not_from_another_thread() {
+        let host = TurnHost::test_new();
+        host.test_install_codex("s");
+        if let Some(Live::Codex(live)) = host.lock().get_mut("s") {
+            live.thread_id = Some("t1".into());
+            live.last_turn = Some("old".into());
+        }
+        host.codex_notification("s", "thread/tokenUsage/updated", &usage("t2", "x", 1, 2));
+        assert_eq!(host.context("s"), None);
+        host.codex_notification("s", "thread/tokenUsage/updated", &usage("t1", "old", 7000, 70_000));
+        assert_eq!(
+            host.context("s"),
+            Some(ContextReading { used: 7000, window: Some(258_400), auto_compact_at: None })
+        );
+    }
 }

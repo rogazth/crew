@@ -16,10 +16,11 @@ use serde_json::{json, Map, Value};
 use crate::agent::AgentHost;
 use crate::bridge::Bridge;
 use crate::providers::claude::{
-    assistant_text_blocks, assistant_tool_uses, build_claude_spawn_args, build_claude_user_message,
-    build_control_request, build_control_response, get_task_output_request, input_json_delta_from_event,
-    is_compact_boundary, is_message_start, is_subagent_message, parse_control_cancel_id, parse_control_request,
-    parse_control_response, parse_questions, stop_task_request,
+    assistant_context, assistant_text_blocks, assistant_tool_uses, build_claude_spawn_args, build_claude_user_message,
+    build_control_request, build_control_response, get_context_usage_request, get_task_output_request,
+    input_json_delta_from_event, is_compact_boundary, is_message_start, is_subagent_message,
+    parse_context_usage, parse_control_cancel_id, parse_control_request, parse_control_response, parse_questions,
+    result_context_window, stop_task_request,
     session_id_from_message, stream_text_delta, to_permission_result,
     to_question_result, tool_detail as claude_tool_detail, tool_label as claude_tool_label,
     tool_result_detail as claude_tool_result_detail, tool_result_files as claude_tool_result_files,
@@ -279,6 +280,10 @@ struct ClaudeLive {
     active: bool,
     turn_tx: Option<oneshot::Sender<TurnOutcome>>,
     emitted_assistant: String,
+    /// The id of the assistant message whose usage was last read: the CLI
+    /// says one message once for each block it holds, with the same usage.
+    /// Lives as long as the process, since ids do not repeat.
+    context_message: String,
 }
 
 impl ClaudeLive {
@@ -310,6 +315,7 @@ impl ClaudeLive {
             active: false,
             turn_tx: None,
             emitted_assistant: String::new(),
+            context_message: String::new(),
         }
     }
 
@@ -696,16 +702,77 @@ impl TurnHost {
     /// reading without a window keeps the last window and auto-compact point.
     pub fn record_context(&self, session_id: &str, reading: ContextReading) -> ContextReading {
         let mut contexts = self.contexts.lock().unwrap_or_else(|e| e.into_inner());
-        let merged = match (contexts.get(session_id), reading.window) {
-            (Some(last), None) => ContextReading {
-                used: reading.used,
-                window: last.window,
-                auto_compact_at: last.auto_compact_at,
-            },
-            _ => reading,
-        };
+        let merged = merge_context(contexts.get(session_id), reading);
         contexts.insert(session_id.to_string(), merged.clone());
         merged
+    }
+
+    /// Records a reading, built from the last one if there is one, and tells
+    /// the windows the merged reading when it is not the one they have. All
+    /// under the one lock, so two readers of the CLI cannot cross: the
+    /// reader thread's `used` and a spawned thread's window each build on
+    /// the other's.
+    fn publish_context(&self, session_id: &str, next: impl FnOnce(Option<&ContextReading>) -> Option<ContextReading>) {
+        let mut contexts = self.contexts.lock().unwrap_or_else(|e| e.into_inner());
+        let last = contexts.get(session_id);
+        let Some(reading) = next(last) else {
+            return;
+        };
+        let merged = merge_context(last, reading);
+        if last == Some(&merged) {
+            return;
+        }
+        contexts.insert(session_id.to_string(), merged.clone());
+        // A reading of the moment, not history: it does not go in the transcript.
+        self.transcripts.emit_live(
+            session_id,
+            HarnessEvent::ContextUpdated {
+                used: merged.used,
+                window: merged.window,
+                auto_compact_at: merged.auto_compact_at,
+            },
+        );
+    }
+
+    /// Asks Claude how large its window is, on a thread of its own: the
+    /// answer comes in on the reader thread, which is the one calling this, so
+    /// waiting for it there would never end. `compacted` says the last
+    /// message's usage is from before a compaction, and the CLI's own count
+    /// is the better `used`; `fallback` is the window the turn's `result`
+    /// named, for a CLI that does not answer.
+    fn ask_claude_context(&self, session_id: &str, compacted: bool, fallback: Option<u64>) {
+        let epoch = match self.lock().get(session_id) {
+            Some(Live::Claude(live)) => live.epoch,
+            _ => return,
+        };
+        let host = self.clone();
+        let id = session_id.to_string();
+        thread::spawn(move || {
+            let usage = host
+                .claude_control_on(&id, Some(epoch), get_context_usage_request())
+                .ok()
+                .and_then(|response| parse_context_usage(&response));
+            match (usage, fallback) {
+                (Some(usage), _) => host.publish_context(&id, |last| {
+                    let used = if compacted {
+                        usage.total.or(last.map(|last| last.used))
+                    } else {
+                        last.map(|last| last.used).or(usage.total)
+                    };
+                    used.map(|used| ContextReading {
+                        used,
+                        window: Some(usage.window),
+                        auto_compact_at: usage.auto_compact_at,
+                    })
+                }),
+                // Only the window: what compacts it by itself is not told.
+                (None, Some(window)) => host.publish_context(&id, |last| {
+                    last.filter(|last| last.window.is_none())
+                        .map(|last| ContextReading { used: last.used, window: Some(window), auto_compact_at: None })
+                }),
+                (None, None) => {}
+            }
+        });
     }
 
     /// The end of a background command's output: asked of the CLI while it
@@ -775,12 +842,22 @@ impl TurnHost {
 
     /// Send Claude a control request and wait for its answer.
     fn claude_control(&self, session_id: &str, request: Value) -> Result<Value, String> {
+        self.claude_control_on(session_id, None, request)
+    }
+
+    /// [`TurnHost::claude_control`], for the process `epoch` names only: an
+    /// ask that outlived its process must not reach the next one, whose
+    /// control ids start over and whose `initialize` would take its answer.
+    fn claude_control_on(&self, session_id: &str, epoch: Option<u64>, request: Value) -> Result<Value, String> {
         let (tx, rx) = mpsc::channel();
         let id = {
             let mut map = self.lock();
             let Some(Live::Claude(live)) = map.get_mut(session_id) else {
                 return Err("Claude Code is not running.".into());
             };
+            if epoch.is_some_and(|epoch| epoch != live.epoch || !live.initialized) {
+                return Err("Claude Code is not running.".into());
+            }
             let id = format!("ctrl-{}", live.next_control);
             live.next_control += 1;
             live.calls.insert(id.clone(), tx);
@@ -2004,7 +2081,8 @@ impl TurnHost {
             live.init_tx = None;
         }
         match init {
-            Ok(Ok(true)) => {}
+            // Up: how large its window is, for a meter before the first answer.
+            Ok(Ok(true)) => self.ask_claude_context(&session_id, false, None),
             Ok(Ok(false)) | Ok(Err(_)) => {
                 let stderr = self
                     .lock()
@@ -2244,6 +2322,11 @@ impl TurnHost {
         // A task line for the tray, with the call that started its task.
         let mut task: Option<(Value, Option<(String, String, Map<String, Value>)>)> = None;
         let mut spoke = false;
+        // What the model's newest request filled of its window; and whether to
+        // ask the CLI for the window again: after a compaction, or at the end
+        // of a turn with the window its `result` names.
+        let mut used: Option<u64> = None;
+        let mut ask: Option<(bool, Option<u64>)> = None;
         {
             let mut map = self.lock();
             let Some(Live::Claude(live)) = map.get_mut(session_id) else {
@@ -2339,6 +2422,7 @@ impl TurnHost {
                 events.push(HarnessEvent::SessionNote {
                     message: "Context compacted".into(),
                 });
+                ask = Some((true, None));
             } else if type_name.as_deref() == Some("stream_event") {
                 woken(live, &mut events);
                 spoke = true;
@@ -2347,6 +2431,14 @@ impl TurnHost {
                 woken(live, &mut events);
                 spoke = true;
                 claude_assistant(live, &rec, &mut events);
+                // One reading per model request, from the first frame of its
+                // message; a subagent's request fills its own window.
+                if !is_subagent_message(&rec) {
+                    if let Some((id, tokens)) = assistant_context(&rec).filter(|(id, _)| *id != live.context_message) {
+                        live.context_message = id;
+                        used = Some(tokens);
+                    }
+                }
             } else if type_name.as_deref() == Some("user") {
                 // A steer Claude has just taken in: it goes in the transcript
                 // here, where the model read it.
@@ -2408,6 +2500,9 @@ impl TurnHost {
                     hold = Some((live.held_results, live.epoch, live.turn));
                 } else {
                     live.active = false;
+                    if !live.cancelled {
+                        ask = Some((false, result_context_window(&rec)));
+                    }
                     if let Some(tx) = live.turn_tx.take() {
                         let _ = tx.send(match failed {
                             Some(message) => TurnOutcome::Failed(message),
@@ -2444,6 +2539,12 @@ impl TurnHost {
         }
         for event in events {
             self.transcripts.apply(session_id, event);
+        }
+        if let Some(used) = used {
+            self.publish_context(session_id, |_| Some(ContextReading { used, window: None, auto_compact_at: None }));
+        }
+        if let Some((compacted, fallback)) = ask {
+            self.ask_claude_context(session_id, compacted, fallback);
         }
         if let Some((held, epoch, turn)) = hold {
             let host = self.clone();
@@ -2800,6 +2901,19 @@ impl TurnHost {
             .apply(session_id, HarnessEvent::MessageDelta { text: extra });
         self.transcripts
             .apply(session_id, HarnessEvent::MessageCompleted {});
+    }
+}
+
+/// The reading a new one makes after the last: one without a window keeps the
+/// last window and auto-compact point.
+fn merge_context(last: Option<&ContextReading>, reading: ContextReading) -> ContextReading {
+    match (last, reading.window) {
+        (Some(last), None) => ContextReading {
+            used: reading.used,
+            window: last.window,
+            auto_compact_at: last.auto_compact_at,
+        },
+        _ => reading,
     }
 }
 
@@ -3564,6 +3678,89 @@ mod context_tests {
         host.record_context("s1", reading(10, Some(200_000), Some(180_000)));
         let merged = host.record_context("s1", reading(40, Some(1_000_000), None));
         assert_eq!(merged, reading(40, Some(1_000_000), None));
+    }
+
+    fn assistant(id: &str, parent: Option<&str>, input: u64, output: u64) -> String {
+        json!({
+            "type": "assistant",
+            "parent_tool_use_id": parent,
+            "message": {
+                "id": id,
+                "role": "assistant",
+                "usage": { "input_tokens": input, "cache_read_input_tokens": 1000, "cache_creation_input_tokens": 10, "output_tokens": output },
+                "content": [{ "type": "text", "text": "hi" }],
+            },
+        })
+        .to_string()
+    }
+
+    /// One reading per model request of the main agent: a frame of a subagent,
+    /// the same message said again, and one with no tokens move nothing; and
+    /// the readings keep the window that was asked for.
+    #[test]
+    fn claude_readings_come_once_per_request_from_the_main_agent() {
+        let host = TurnHost::test_new();
+        let applied = host.test_capture();
+        host.test_install_claude("s");
+        host.record_context("s", reading(1, Some(200_000), Some(160_000)));
+        let used = || {
+            applied
+                .take()
+                .into_iter()
+                .filter_map(|event| match event {
+                    HarnessEvent::ContextUpdated { used, window, .. } => Some((used, window)),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        host.handle_claude_line("s", &assistant("m1", None, 100, 5));
+        host.handle_claude_line("s", &assistant("m1", None, 5000, 50));
+        host.handle_claude_line("s", &assistant("sub", Some("toolu_1"), 90_000, 5));
+        // The CLI's own notice, which counts no tokens.
+        host.handle_claude_line(
+            "s",
+            &json!({
+                "type": "assistant",
+                "message": {
+                    "id": "none",
+                    "usage": { "input_tokens": 0, "cache_read_input_tokens": 0, "output_tokens": 0 },
+                    "content": [{ "type": "text", "text": "No response requested." }],
+                },
+            })
+            .to_string(),
+        );
+        assert_eq!(used(), vec![(1115, Some(200_000))]);
+        host.handle_claude_line("s", &assistant("m2", None, 200, 7));
+        assert_eq!(used(), vec![(1217, Some(200_000))]);
+        assert_eq!(host.context("s"), Some(reading(1217, Some(200_000), Some(160_000))));
+    }
+
+    /// A CLI that does not answer `get_context_usage` still has a window: the
+    /// one its `result` names for the model, unless one is known already.
+    #[test]
+    fn the_window_a_result_names_stands_in_when_the_cli_does_not_answer() {
+        let host = TurnHost::test_new();
+        host.test_install_claude("s");
+        host.handle_claude_line("s", &assistant("m1", None, 100, 5));
+        assert_eq!(host.context("s"), Some(reading(1115, None, None)));
+        host.handle_claude_line(
+            "s",
+            &json!({
+                "type": "result",
+                "subtype": "success",
+                "is_error": false,
+                "result": "ok",
+                "modelUsage": { "claude-opus": { "contextWindow": 1_000_000 }, "claude-haiku": { "contextWindow": 200_000 } },
+            })
+            .to_string(),
+        );
+        for _ in 0..200 {
+            if host.context("s").is_some_and(|last| last.window.is_some()) {
+                break;
+            }
+            thread::sleep(Duration::from_millis(25));
+        }
+        assert_eq!(host.context("s"), Some(reading(1115, Some(1_000_000), None)));
     }
 
     #[test]

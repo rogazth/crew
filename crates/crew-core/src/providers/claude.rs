@@ -635,6 +635,56 @@ pub fn turn_usage(rec: &Map<String, Value>) -> TurnUsage {
     }
 }
 
+/// The message id and the context it filled, from a top-level assistant frame:
+/// what the model read (input, cache) plus what it wrote. A frame with no id,
+/// or none of either (the CLI's own synthetic notices), reads as nothing.
+pub fn assistant_context(rec: &Map<String, Value>) -> Option<(String, u64)> {
+    let message = rec.get("message").and_then(as_record)?;
+    let id = string_field(Some(message), "id").filter(|id| !id.is_empty())?;
+    let usage = message.get("usage").and_then(as_record)?;
+    let used: f64 = ["input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens", "output_tokens"]
+        .iter()
+        .map(|key| finite_number(usage.get(*key)).unwrap_or(0.0))
+        .sum();
+    (used >= 1.0).then(|| (id, used as u64))
+}
+
+/// The largest context window a `result` names among the models it used. The
+/// main model's is the widest in practice: a subagent runs on a smaller one.
+pub fn result_context_window(rec: &Map<String, Value>) -> Option<u64> {
+    rec.get("modelUsage")
+        .and_then(as_record)?
+        .values()
+        .filter_map(|model| finite_number(as_record(model)?.get("contextWindow")))
+        .filter(|window| *window >= 1.0)
+        .map(|window| window as u64)
+        .max()
+}
+
+/// What `get_context_usage` answers: the window, where the CLI compacts by
+/// itself (none when it will not), and the tokens it counts now.
+#[derive(Debug, PartialEq)]
+pub struct ContextUsage {
+    pub window: u64,
+    pub auto_compact_at: Option<u64>,
+    pub total: Option<u64>,
+}
+
+pub fn parse_context_usage(response: &Value) -> Option<ContextUsage> {
+    let response = response.as_object()?;
+    let count = |key: &str| finite_number(response.get(key)).filter(|n| *n >= 1.0).map(|n| n as u64);
+    Some(ContextUsage {
+        window: count("maxTokens")?,
+        auto_compact_at: count("autoCompactThreshold")
+            .filter(|_| response.get("isAutoCompactEnabled") != Some(&Value::Bool(false))),
+        total: count("totalTokens"),
+    })
+}
+
+pub fn get_context_usage_request() -> Value {
+    json!({ "subtype": "get_context_usage" })
+}
+
 pub fn turn_failed(rec: &Map<String, Value>) -> Option<String> {
     let subtype = string_field(Some(rec), "subtype");
     let failed = rec.get("is_error") == Some(&Value::Bool(true))
@@ -1175,6 +1225,23 @@ mod tests {
     use crate::turns::TurnHost;
     use crew_protocol::{HarnessEvent, TodoItem, TodoStatus, ToolDetail};
     use serde_json::json;
+
+    // Shapes as Claude Code 2.1.295 answers `get_context_usage`.
+    #[test]
+    fn the_context_window_is_read_from_get_context_usage_and_from_a_result() {
+        let answer = json!({ "totalTokens": 15000, "maxTokens": 200000, "rawMaxTokens": 200000,
+            "autoCompactThreshold": 167000, "isAutoCompactEnabled": true, "model": "claude-opus" });
+        assert_eq!(
+            parse_context_usage(&answer),
+            Some(ContextUsage { window: 200_000, auto_compact_at: Some(167_000), total: Some(15_000) })
+        );
+        let off = json!({ "maxTokens": 200000, "autoCompactThreshold": 167000, "isAutoCompactEnabled": false });
+        assert_eq!(parse_context_usage(&off).and_then(|usage| usage.auto_compact_at), None);
+        assert_eq!(parse_context_usage(&json!({})), None);
+        let result = json!({ "modelUsage": { "a": { "contextWindow": 200000 }, "b": { "contextWindow": 1000000 } } });
+        assert_eq!(result_context_window(result.as_object().unwrap()), Some(1_000_000));
+        assert_eq!(result_context_window(json!({}).as_object().unwrap()), None);
+    }
 
     // Shapes as Claude Code 2.1.290 declares them for its control channel.
     #[test]

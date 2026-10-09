@@ -1564,6 +1564,10 @@ def reader():
             continue
         if rec.get("type") == "control_request":
             req = rec.get("request") or {}
+            if req.get("subtype") == "get_context_usage":
+                # Asked on its own schedule, so it stays out of the control log.
+                out({"type": "control_response", "response": {"subtype": "success", "request_id": rec["request_id"], "response": {"totalTokens": 1234, "maxTokens": 200000, "rawMaxTokens": 200000, "autoCompactThreshold": 160000, "isAutoCompactEnabled": True, "model": "fake"}}})
+                continue
             with open(CONTROL, "a") as f: f.write("%s %s\n" % (req.get("subtype"), req.get("task_id", "")))
             answer = {"output": "tick\n", "total_bytes": 5, "truncated": False} if req.get("subtype") == "get_task_output" else {}
             out({"type": "control_response", "response": {"subtype": "success", "request_id": rec["request_id"], "response": answer}})
@@ -1604,9 +1608,17 @@ while True:
             out({"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": more}]}, "session_id": sid})
         heard.append(more)
     reply = "report: " + " + ".join(h.strip().splitlines()[-1] for h in heard)
-    out({"type": "assistant", "message": {"id": "m" + uuid.uuid4().hex[:6], "role": "assistant", "content": [{"type": "text", "text": reply}]}, "session_id": sid})
+    # The request's usage: 100 + 1000 + 10 + 5 tokens. A subagent's frame and a
+    # message said twice carry usage too, which are not new readings.
+    usage = {"input_tokens": 100, "cache_read_input_tokens": 1000, "cache_creation_input_tokens": 10, "output_tokens": 5}
+    mid = "m" + uuid.uuid4().hex[:6]
+    if "SUBAGENT" in heard[0]:
+        out({"type": "assistant", "parent_tool_use_id": "toolu_sub", "message": {"id": "msub", "role": "assistant", "usage": dict(usage, input_tokens=90000), "content": [{"type": "text", "text": "inside"}]}, "session_id": sid})
+    out({"type": "assistant", "message": {"id": mid, "role": "assistant", "usage": usage, "content": [{"type": "text", "text": reply}]}, "session_id": sid})
+    if "TWICE" in heard[0]:
+        out({"type": "assistant", "message": {"id": mid, "role": "assistant", "usage": dict(usage, input_tokens=50000), "content": [{"type": "text", "text": reply}]}, "session_id": sid})
     failed = "FAIL" in heard[0]
-    out({"type": "result", "subtype": "error_during_execution" if failed else "success", "is_error": failed, "result": "it broke" if failed else reply, "session_id": sid, "total_cost_usd": 0, "usage": {}})
+    out({"type": "result", "subtype": "error_during_execution" if failed else "success", "is_error": failed, "result": "it broke" if failed else reply, "session_id": sid, "total_cost_usd": 0, "usage": {}, "modelUsage": {"fake": {"contextWindow": 200000}}})
 "#,
         )
         .expect("write fake");
@@ -2958,6 +2970,95 @@ while True:
         assert!(control.ends_with("stop_task bg1\ninterrupt \n"), "{control}");
         let list = until_background(&w, &id, |list| !list.live);
         assert_eq!(list.commands[0].state, crew_protocol::BackgroundState::Stopped);
+    }
+
+    /// The readings a session's context meter was told, in order.
+    fn context_readings(applied: &crate::turns::Applied) -> Vec<crew_protocol::ContextReading> {
+        applied
+            .take()
+            .into_iter()
+            .filter_map(|event| match event {
+                crew_protocol::HarnessEvent::ContextUpdated { used, window, auto_compact_at } => {
+                    Some(crew_protocol::ContextReading { used, window, auto_compact_at })
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Until the session's merged reading is the one wanted: the window comes
+    /// in on a thread of its own, after the turn.
+    fn until_context(w: &World, id: &str, want: crew_protocol::ContextReading) {
+        for _ in 0..400 {
+            if w.turns.context(id).as_ref() == Some(&want) {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        panic!("the meter never read {want:?}: {:?}", w.turns.context(id));
+    }
+
+    /// Claude's context meter: `used` is what each request of the main agent
+    /// filled (input, cache and output), once per message, and the window and
+    /// auto-compact point are what `get_context_usage` says. A subagent's
+    /// frame and a message said twice move nothing, and none of it is saved
+    /// in the transcript.
+    #[test]
+    fn a_claude_childs_context_is_read_once_per_request_and_never_saved() {
+        use crew_protocol::ContextReading;
+        let w = world();
+        let applied = w.turns.test_capture();
+        w.turns.override_binary("claude", fake_claude(&w.dir));
+        let parent = w.session("terminal", "shell", "full");
+        let started = w
+            .call(&parent, "start_session", json!({ "provider": "claude", "prompt": "SUBAGENT TWICE" }))
+            .expect("start");
+        let id = started["id"].as_str().unwrap().to_string();
+        w.wait(&parent, &id, json!({}));
+        w.settle(&id);
+        let full = ContextReading { used: 1115, window: Some(200_000), auto_compact_at: Some(160_000) };
+        until_context(&w, &id, full.clone());
+        let heard = context_readings(&applied);
+        // 1234 is the CLI's own count, which seeds the meter before the first
+        // answer; 91115 and 51015 are the subagent's frame and the repeat.
+        assert!(!heard.is_empty() && heard.iter().all(|reading| [1234, 1115].contains(&reading.used)), "{heard:?}");
+        assert_eq!(heard.last(), Some(&full), "{heard:?}");
+        assert!(heard.iter().filter(|reading| reading.used == 1115).count() <= 2, "{heard:?}");
+        // A reading without a window kept the window; the next turn's request
+        // fills more of it and the same window stays.
+        w.call(&parent, "send_message", json!({ "to": id, "text": "again" })).expect("send");
+        w.wait(&parent, &id, json!({}));
+        w.settle(&id);
+        until_context(&w, &id, full);
+        // The transcript holds the conversation and no meter.
+        w.turns.transcripts().flush(&id);
+        let stored = w.turns.store().with(|conn| crate::messages::all(conn, &id)).expect("read back");
+        let live = w.turns.transcripts().since(&id, 0).0;
+        assert_eq!(stored.len(), live.len());
+        assert!(!serde_json::to_string(&stored).unwrap().contains("context"), "{stored:?}");
+    }
+
+    /// Codex's meter reads what the newest response held (`last`), never the
+    /// thread's running `total`, over the model's window; a reading that names
+    /// no window keeps the one before.
+    #[test]
+    fn a_codex_childs_context_is_the_last_response_not_the_thread_total() {
+        use crew_protocol::ContextReading;
+        let w = world();
+        let applied = w.turns.test_capture();
+        let parent = w.session("terminal", "shell", "full");
+        let (id, _) = w.codex(&parent, "TOKENS", None);
+        w.wait(&parent, &id, json!({}));
+        w.settle(&id);
+        let heard = context_readings(&applied);
+        assert_eq!(
+            heard,
+            vec![
+                ContextReading { used: 5000, window: Some(258_400), auto_compact_at: None },
+                ContextReading { used: 6000, window: Some(258_400), auto_compact_at: None },
+            ],
+        );
+        assert_eq!(w.turns.context(&id), heard.last().cloned());
     }
 
     /// A Codex command that outlives its call is a background terminal: the
