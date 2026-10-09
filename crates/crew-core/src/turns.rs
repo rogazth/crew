@@ -670,7 +670,8 @@ pub struct TurnHost {
     /// a check on it alone let a message that arrived in between start a
     /// second turn on the same session.
     running: Arc<Mutex<HashSet<String>>>,
-    /// What each session's turn left running in the background.
+    /// What each session has running in the background, kept for the life of
+    /// the session rather than of a turn or a process.
     background: crate::background::BackgroundHost,
     /// The `/` menu each provider offers in each folder.
     commands: crate::commands::CommandsHost,
@@ -687,6 +688,9 @@ pub struct TurnHost {
 
 impl TurnHost {
     pub fn new(agents: AgentHost, store: Store, transcripts: TranscriptHub, bridge: Bridge) -> Self {
+        // What the last daemon left on the boards comes back here, its running
+        // entries stopped: no process of theirs is left to read or stop.
+        let background = crate::background::BackgroundHost::persisted(store.clone());
         Self {
             agents,
             store,
@@ -702,7 +706,7 @@ impl TurnHost {
             signal: crate::session_events::Signal::default(),
             exiting: Arc::new(Mutex::new(HashMap::new())),
             running: Arc::new(Mutex::new(HashSet::new())),
-            background: crate::background::BackgroundHost::default(),
+            background,
             commands: crate::commands::CommandsHost::default(),
             contexts: Arc::new(Mutex::new(HashMap::new())),
             idle: Arc::new(Mutex::new(HashMap::new())),
@@ -1375,6 +1379,13 @@ impl TurnHost {
         Ok(())
     }
 
+    /// Clear a session's finished entries from its list: the named ones, or
+    /// every one when `ids` is absent. A running entry is never cleared. The
+    /// window hears of it as any other change of the list.
+    pub fn background_clear(&self, session_id: &str, ids: Option<&[String]>) {
+        self.background.clear(session_id, ids);
+    }
+
     /// Send Claude a control request and wait for its answer.
     fn claude_control(&self, session_id: &str, request: Value) -> Result<Value, String> {
         self.claude_control_on(session_id, None, request)
@@ -1879,10 +1890,11 @@ impl TurnHost {
     }
 
     /// The CLI is gone, and what it left running in the background went with
-    /// it: the tray keeps the rows, ended, until the next process.
+    /// it: the tray keeps the rows, stopped and saying so, until the user
+    /// clears them.
     fn close_tray(&self, session_id: &str) {
         let now = crate::store::now_millis();
-        self.background.touch(session_id, |board| board.end(now));
+        self.background.touch(session_id, |board| board.end(now, crate::background::CLI_EXITED));
     }
 
     fn resolve_bin(&self, name: &str) -> Result<String, String> {
@@ -2560,9 +2572,8 @@ impl TurnHost {
         };
         if let Some(Plan::Changes(changes)) = plan {
             self.idle.lock().unwrap_or_else(|e| e.into_inner()).remove(session_id);
-            // Nothing runs in the background of a process that was kept, so
-            // the tray starts empty, as it does after a launch.
-            self.background.touch(session_id, crate::background::Board::begin);
+            // The board is not touched: the process is the one that ran what
+            // it lists, so the entries stay and go on updating from its events.
             return (true, changes);
         }
         // A setting only a launch sets, a stop, or a process that is gone:
@@ -2590,7 +2601,10 @@ impl TurnHost {
             session_id.to_string(),
             Live::Claude(Box::new(ClaudeLive::new(claude_session_id, waits_for_background, applied))),
         );
-        self.background.touch(session_id, crate::background::Board::begin);
+        // The entries stay; what the process before this one still ran is
+        // stopped, since it was killed above without its end being heard.
+        let now = crate::store::now_millis();
+        self.background.touch(session_id, |board| board.launch(now));
     }
 
     /// Tell a kept process its new settings, before the user message goes in.

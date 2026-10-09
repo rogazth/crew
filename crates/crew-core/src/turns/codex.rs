@@ -272,7 +272,7 @@ impl TurnHost {
         self.lock()
             .insert(session_id.to_string(), Live::Codex(Box::new(CodexLive::new(Some(tx), applied))));
         self.idle.lock().unwrap_or_else(|e| e.into_inner()).remove(session_id);
-        self.background.touch(session_id, crate::background::Board::begin);
+        self.background.touch(session_id, |board| board.launch(crate::store::now_millis()));
         None
     }
 

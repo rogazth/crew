@@ -4,22 +4,35 @@
 //! session, kept from the CLI's own events; the window lists it as the tray
 //! above the composer.
 //!
-//! A board lives from the start of a turn to the start of the next. While the
-//! turn's CLI is up (`live`) a command's output can be read and it can be
+//! A board lives as long as its session (plan decision 36): a turn, a new
+//! process and a restart of Crew leave its entries where they are. While the
+//! session's CLI is up (`live`) a command's output can be read and it can be
 //! stopped; once the CLI is gone, whatever still ran went with it, and the
-//! rows stay, ended, until the next turn clears them.
+//! rows stay, stopped and saying why, until the user clears them or the
+//! session is deleted. They are kept in the `background_entries` table,
+//! written as they change and read back when the daemon starts.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use crew_protocol::{BackgroundCommand, BackgroundKind, BackgroundList, BackgroundOutput, BackgroundState};
+use rusqlite::{params, Connection};
 use serde_json::{Map, Value};
 
 use crate::providers::unwrap_shell;
+use crate::store::Store;
 
 /// How much of a command's output is kept: Claude's `get_task_output` reads
 /// the same last 8 KiB.
 pub const OUTPUT_TAIL: usize = 8 * 1024;
+
+/// Why a stopped entry stopped, when its CLI went away under it: the work ran
+/// in that process, so it ended with it.
+pub const CLI_EXITED: &str = "its CLI exited";
+
+/// Why an entry the last daemon left running is stopped: nobody can say what
+/// became of it while Crew was not there to watch.
+pub const CREW_RESTARTED: &str = "Crew restarted";
 
 pub type Listener = Arc<dyn Fn(BackgroundList) + Send + Sync>;
 
@@ -28,9 +41,39 @@ pub type Listener = Arc<dyn Fn(BackgroundList) + Send + Sync>;
 pub struct BackgroundHost {
     inner: Arc<Mutex<HashMap<String, Board>>>,
     listener: Arc<Mutex<Option<Listener>>>,
+    /// Where the boards are kept between runs; none for a host that only
+    /// lives in memory.
+    store: Option<Store>,
 }
 
 impl BackgroundHost {
+    /// A host whose boards are kept in `store`: it starts with what the last
+    /// daemon left there, and writes every change through. What that daemon
+    /// left running is stopped ([`CREW_RESTARTED`]), since nothing of it is
+    /// there to be read or stopped any more.
+    pub fn persisted(store: Store) -> Self {
+        let host = Self { store: Some(store.clone()), ..Self::default() };
+        let saved = match store.with(load) {
+            Ok(saved) => saved,
+            Err(error) => {
+                eprintln!("[crewd] the background entries were not read: {error}");
+                return host;
+            }
+        };
+        let now = crate::store::now_millis();
+        {
+            let mut map = host.inner.lock().unwrap_or_else(|e| e.into_inner());
+            for (session_id, rows) in saved {
+                let mut board = Board::restored(rows);
+                if board.end(now, CREW_RESTARTED) {
+                    host.persist(&session_id, &mut board);
+                }
+                map.insert(session_id, board);
+            }
+        }
+        host
+    }
+
     pub fn set_listener(&self, listener: Listener) {
         *self.listener.lock().unwrap_or_else(|e| e.into_inner()) = Some(listener);
     }
@@ -50,6 +93,11 @@ impl BackgroundHost {
             let mut map = self.inner.lock().unwrap_or_else(|e| e.into_inner());
             let board = map.entry(session_id.to_string()).or_default();
             let (changed, value) = change(board);
+            if changed {
+                // Written under the lock, so two changes reach the table in
+                // the order they were made.
+                self.persist(session_id, board);
+            }
             (changed, value, changed.then(|| board.list(session_id)))
         };
         if let (true, Some(list)) = (changed, list) {
@@ -59,6 +107,33 @@ impl BackgroundHost {
             }
         }
         value
+    }
+
+    /// Write a board's entries through to the table when they differ from what
+    /// is there. A session that is gone has no row to hang them on; that and
+    /// any other failure is told and left, since the board in memory is right.
+    fn persist(&self, session_id: &str, board: &mut Board) {
+        let Some(store) = &self.store else {
+            return;
+        };
+        if board.commands == board.saved {
+            return;
+        }
+        match store.with(|conn| save(conn, session_id, &board.commands, &board.outputs)) {
+            Ok(()) => board.saved = board.commands.clone(),
+            Err(error) => eprintln!("[crewd] session {session_id}: the background entries were not written: {error}"),
+        }
+    }
+
+    /// Drop a deleted session's board. Its rows went with the session.
+    pub fn forget(&self, session_id: &str) {
+        self.inner.lock().unwrap_or_else(|e| e.into_inner()).remove(session_id);
+    }
+
+    /// The user clears a session's finished entries: the ones named in `ids`,
+    /// or all of them when none are named.
+    pub fn clear(&self, session_id: &str, ids: Option<&[String]>) {
+        self.touch(session_id, |board| board.clear(ids));
     }
 
     /// Change a board for its side effects alone.
@@ -90,6 +165,9 @@ pub struct Board {
     commands: Vec<BackgroundCommand>,
     /// The last output read of each command, kept for when its CLI is gone.
     outputs: HashMap<String, BackgroundOutput>,
+    /// The commands as last written to the table, so a change that moves
+    /// nothing of them writes nothing.
+    saved: Vec<BackgroundCommand>,
     live: bool,
     waiting: bool,
     /// Claude tasks started in the foreground: one moved to the background
@@ -128,28 +206,79 @@ impl Board {
             .collect()
     }
 
-    /// A turn starts with a CLI of its own: what the last one left is gone.
-    pub fn begin(&mut self) -> bool {
-        let changed = !self.commands.is_empty() || !self.live || self.waiting;
-        *self = Board { live: true, ..Board::default() };
+    /// The entries of a board read back from the table: not live, as nothing
+    /// of the process that ran them is left.
+    fn restored(rows: Saved) -> Self {
+        let mut board = Board::default();
+        for (command, output) in rows {
+            if let Some(output) = output {
+                board.outputs.insert(command.id.clone(), output);
+            }
+            board.commands.push(command);
+        }
+        board.saved = board.commands.clone();
+        board
+    }
+
+    /// A CLI comes up for the session. The entries stay: the ones the process
+    /// before it still ran are stopped ([`CLI_EXITED`]), for a process killed
+    /// to be replaced does not pass through [`Board::end`], and what is tied
+    /// to a process (tasks started in the foreground, Codex items, process
+    /// ids) starts over.
+    pub fn launch(&mut self, now: i64) -> bool {
+        let mut changed = self.stop_running(now, CLI_EXITED);
+        changed |= !self.live || self.waiting;
+        self.forget_process();
+        self.live = true;
+        self.waiting = false;
         changed
     }
 
-    /// The turn's CLI is gone, and what it still ran with it.
-    pub fn end(&mut self, now: i64) -> bool {
+    /// The session's CLI is gone, and what it still ran with it: those entries
+    /// are stopped, with `reason` to say why. None of the work this board
+    /// tracks outlives its CLI; work that did would be left running here.
+    pub fn end(&mut self, now: i64, reason: &str) -> bool {
         let mut changed = self.live || self.waiting;
         self.live = false;
         self.waiting = false;
+        changed |= self.stop_running(now, reason);
+        self.forget_process();
+        changed
+    }
+
+    fn stop_running(&mut self, now: i64, reason: &str) -> bool {
+        let mut changed = false;
         for row in &mut self.commands {
             if row.state == BackgroundState::Running {
                 row.state = BackgroundState::Stopped;
                 row.ended_at = Some(now);
+                row.stop_note = Some(reason.to_string());
                 changed = true;
             }
         }
+        changed
+    }
+
+    fn forget_process(&mut self) {
         self.foreground.clear();
         self.codex_items.clear();
-        changed
+        self.process_ids.clear();
+    }
+
+    /// The user clears finished entries from the list: the ones named in
+    /// `ids`, or all of them when none are. A running one stays whatever is
+    /// asked, since it would vanish from the list while its work goes on.
+    pub fn clear(&mut self, ids: Option<&[String]>) -> bool {
+        let before = self.commands.len();
+        let gone = |row: &BackgroundCommand| {
+            row.state != BackgroundState::Running && ids.is_none_or(|ids| ids.contains(&row.id))
+        };
+        let cleared: Vec<String> = self.commands.iter().filter(|row| gone(row)).map(|row| row.id.clone()).collect();
+        self.commands.retain(|row| !gone(row));
+        for id in &cleared {
+            self.outputs.remove(id);
+        }
+        self.commands.len() != before
     }
 
     pub fn set_waiting(&mut self, waiting: bool) -> bool {
@@ -542,6 +671,83 @@ pub fn tail(output: &str) -> BackgroundOutput {
     BackgroundOutput { output: output[cut..].to_string(), truncated: true }
 }
 
+/// A session's entries, one row each, in the order the board lists them. The
+/// entry is its JSON, so a field the protocol grows needs no column; the
+/// output is the tail the board last read of it. They go with their session.
+pub const MIGRATION_V31: &str = "
+CREATE TABLE IF NOT EXISTS background_entries (
+  session_id       TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  position         INTEGER NOT NULL,
+  id               TEXT NOT NULL,
+  entry_json       TEXT NOT NULL,
+  output           TEXT,
+  output_truncated INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (session_id, id)
+);
+";
+
+/// Replace a session's saved entries with `commands`, and the output kept for
+/// each.
+pub(crate) fn save(
+    conn: &Connection,
+    session_id: &str,
+    commands: &[BackgroundCommand],
+    outputs: &HashMap<String, BackgroundOutput>,
+) -> rusqlite::Result<()> {
+    let tx = conn.unchecked_transaction()?;
+    tx.execute("DELETE FROM background_entries WHERE session_id = ?1", params![session_id])?;
+    for (position, command) in commands.iter().enumerate() {
+        let entry = serde_json::to_string(command).map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        let output = outputs.get(&command.id);
+        tx.execute(
+            "INSERT INTO background_entries (session_id, position, id, entry_json, output, output_truncated)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                session_id,
+                position as i64,
+                command.id,
+                entry,
+                output.map(|output| output.output.as_str()),
+                output.is_some_and(|output| output.truncated),
+            ],
+        )?;
+    }
+    tx.commit()
+}
+
+/// A session's saved entries, each with the output kept for it.
+type Saved = Vec<(BackgroundCommand, Option<BackgroundOutput>)>;
+
+/// Every session's saved entries, in the order they were listed. A row whose
+/// entry does not read (written by a build that knew a shape this one does
+/// not) is left out rather than failing the rest.
+pub(crate) fn load(conn: &Connection) -> rusqlite::Result<Vec<(String, Saved)>> {
+    let mut statement = conn.prepare(
+        "SELECT session_id, entry_json, output, output_truncated FROM background_entries ORDER BY session_id, position",
+    )?;
+    let rows = statement.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, Option<String>>(2)?,
+            row.get::<_, bool>(3)?,
+        ))
+    })?;
+    let mut out: Vec<(String, Saved)> = Vec::new();
+    for row in rows {
+        let (session_id, entry, output, truncated) = row?;
+        let Ok(command) = serde_json::from_str::<BackgroundCommand>(&entry) else {
+            continue;
+        };
+        let output = output.map(|output| BackgroundOutput { output, truncated });
+        match out.last_mut() {
+            Some((last, rows)) if *last == session_id => rows.push((command, output)),
+            _ => out.push((session_id, vec![(command, output)])),
+        }
+    }
+    Ok(out)
+}
+
 /// What `get_task_output` answers, as the window shows it.
 pub fn claude_output(response: &Value) -> BackgroundOutput {
     BackgroundOutput {
@@ -591,7 +797,7 @@ mod tests {
     #[test]
     fn a_shell_sent_to_the_background_runs_until_its_notification() {
         let mut board = Board::default();
-        assert!(board.begin());
+        assert!(board.launch(0));
         assert!(board.claude(&started("b1", true), bash("sleep 120"), 10));
         assert!(!board.claude(&changed(&["b1"]), none, 11), "the full set says nothing new");
         let row = board.command("b1").unwrap();
@@ -611,7 +817,6 @@ mod tests {
     #[test]
     fn a_completed_shell_keeps_its_exit_code() {
         let mut board = Board::default();
-        board.begin();
         board.claude(&started("b1", true), bash("make"), 1);
         assert!(board.claude(&notified("b1", "completed", "Background command \"make\" completed (exit code 0)"), none, 2));
         let row = board.command("b1").unwrap();
@@ -622,7 +827,6 @@ mod tests {
     #[test]
     fn a_foreground_task_counts_once_it_is_moved_to_the_background() {
         let mut board = Board::default();
-        board.begin();
         assert!(!board.claude(&started("b1", false), bash("npm run dev"), 1), "a foreground call is no row");
         assert!(board.command("b1").is_none());
         let moved = json!({ "type": "system", "subtype": "task_updated", "task_id": "b1", "patch": { "is_backgrounded": true } });
@@ -637,7 +841,6 @@ mod tests {
     #[test]
     fn the_full_set_alone_is_enough_to_list_a_task() {
         let mut board = Board::default();
-        board.begin();
         let set = json!({ "type": "system", "subtype": "background_tasks_changed", "tasks": [
             { "task_id": "a1", "task_type": "local_agent", "description": "Review the diff" },
             { "task_id": "w1", "task_type": "monitor_mcp", "description": "Watch artifact", "ambient": true },
@@ -657,7 +860,6 @@ mod tests {
     #[test]
     fn a_monitor_reads_as_one() {
         let mut board = Board::default();
-        board.begin();
         let monitor = |id: &str| {
             (id == "toolu_m").then(|| ("Monitor".to_string(), json!({ "command": "tail -f log" }).as_object().unwrap().clone()))
         };
@@ -667,24 +869,75 @@ mod tests {
         assert_eq!(board.command("m1").unwrap().kind, BackgroundKind::Monitor);
     }
 
-    #[test]
-    fn the_end_of_the_cli_stops_what_still_ran_and_the_next_turn_clears_it() {
+    /// A board with a shell still running (`b1`) and one that finished (`b2`),
+    /// on a CLI that is up.
+    fn board_with_one_running() -> Board {
         let mut board = Board::default();
-        board.begin();
+        board.launch(0);
         board.claude(&started("b1", true), bash("sleep 120"), 1);
         board.claude(&json!({ "type": "system", "subtype": "task_started", "task_id": "b2", "tool_use_id": "x",
             "description": "echo hi", "task_type": "local_bash", "is_backgrounded": true }), none, 1);
         board.claude(&notified("b2", "completed", "done (exit code 0)"), none, 2);
+        board
+    }
+
+    #[test]
+    fn the_end_of_the_cli_stops_what_still_ran_and_says_why() {
+        let mut board = board_with_one_running();
         assert!(board.set_waiting(true));
         assert!(board.list("s").waiting);
-        assert!(board.end(9));
+        assert!(board.end(9, CLI_EXITED));
         let list = board.list("s");
         assert!(!list.live && !list.waiting);
-        assert_eq!(board.command("b1").unwrap().state, BackgroundState::Stopped);
-        assert_eq!(board.command("b1").unwrap().ended_at, Some(9));
-        assert_eq!(board.command("b2").unwrap().state, BackgroundState::Completed, "an ended one keeps how it ended");
-        assert!(board.begin());
-        assert!(board.list("s").commands.is_empty() && board.is_live());
+        let stopped = board.command("b1").unwrap();
+        assert_eq!((stopped.state, stopped.ended_at), (BackgroundState::Stopped, Some(9)));
+        assert_eq!(stopped.stop_note.as_deref(), Some("its CLI exited"));
+        let done = board.command("b2").unwrap();
+        assert_eq!(done.state, BackgroundState::Completed, "an ended one keeps how it ended");
+        assert_eq!(done.stop_note, None, "and has nothing to explain");
+        assert!(!board.end(10, CLI_EXITED), "a second end moves nothing");
+    }
+
+    /// What the entries keep through is the point of the board: a CLI that
+    /// comes up again (the next turn on the same process needs no `launch`
+    /// at all) finds them where the last left them.
+    #[test]
+    fn a_new_cli_keeps_the_entries_and_stops_only_what_the_old_one_still_ran() {
+        let mut board = board_with_one_running();
+        // The old process was killed to be replaced, without its end heard.
+        assert!(board.launch(20));
+        assert!(board.is_live());
+        assert_eq!(board.list("s").commands.len(), 2);
+        let stopped = board.command("b1").unwrap();
+        assert_eq!((stopped.state, stopped.stop_note.as_deref()), (BackgroundState::Stopped, Some("its CLI exited")));
+        assert_eq!(board.command("b2").unwrap().state, BackgroundState::Completed);
+        assert!(board.running().is_empty());
+        // A task heard of on the new process is listed beside them.
+        board.claude(&started("b3", true), bash("npm run dev"), 21);
+        assert_eq!(board.running(), ["b3"]);
+        assert_eq!(board.list("s").commands.len(), 3);
+    }
+
+    #[test]
+    fn clearing_removes_the_finished_entries_and_never_a_running_one() {
+        let mut board = board_with_one_running();
+        board.claude(&started("b3", true), bash("npm run dev"), 3);
+        board.keep_output("b2", BackgroundOutput { output: "hi\n".into(), truncated: false });
+        // Naming a running one clears nothing of it.
+        assert!(!board.clear(Some(&["b1".to_string()])));
+        assert_eq!(board.list("s").commands.len(), 3);
+        // Naming one finished clears that one, and its output with it.
+        assert!(board.clear(Some(&["b2".to_string(), "missing".to_string()])));
+        assert!(board.command("b2").is_none() && board.output("b2").is_none());
+        board.end(9, CLI_EXITED);
+        // No ids: every finished one, the two the CLI's end stopped included.
+        assert!(board.clear(None));
+        assert!(board.list("s").commands.is_empty());
+        assert!(!board.clear(None), "nothing left to clear");
+
+        let mut board = board_with_one_running();
+        assert!(board.clear(None));
+        assert_eq!(board.running(), ["b1"], "a bare clear leaves what still runs");
     }
 
     // Shapes as `codex app-server` 0.160 sends them.
@@ -700,7 +953,6 @@ mod tests {
     #[test]
     fn a_codex_command_is_a_row_once_it_is_a_background_terminal() {
         let mut board = Board::default();
-        board.begin();
         assert!(!board.codex_item(&exec("inProgress", Value::Null, Value::Null), false, 5));
         assert!(board.codex_running());
         board.codex_output("exec-1", "tick\n");
@@ -730,7 +982,6 @@ mod tests {
     #[test]
     fn a_codex_terminal_no_longer_listed_has_ended() {
         let mut board = Board::default();
-        board.begin();
         board.codex_item(&exec("inProgress", Value::Null, Value::Null), false, 1);
         board.codex_item(json!({ "type": "agentMessage", "id": "m1", "text": "" }).as_object().unwrap(), false, 1);
         assert!(board.codex_listed(&[json!({ "itemId": "exec-1", "processId": "87302", "command": "sleep 120" })], 2));
@@ -741,7 +992,6 @@ mod tests {
     #[test]
     fn output_keeps_only_its_tail() {
         let mut board = Board::default();
-        board.begin();
         board.codex_item(&exec("inProgress", Value::Null, Value::Null), false, 1);
         board.codex_output("exec-1", &"é".repeat(OUTPUT_TAIL));
         let kept = board.output("exec-1").unwrap();
@@ -764,7 +1014,7 @@ mod tests {
         let heard = Arc::new(Mutex::new(Vec::new()));
         let into = heard.clone();
         host.set_listener(Arc::new(move |list| into.lock().unwrap().push(list)));
-        host.touch("s1", Board::begin);
+        host.touch("s1", |board| board.launch(0));
         host.touch("s1", |board| board.claude(&started("b1", true), bash("sleep 120"), 1));
         host.touch("s1", |board| board.claude(&changed(&["b1"]), none, 2));
         let heard = heard.lock().unwrap();
@@ -773,5 +1023,104 @@ mod tests {
         assert!(heard[1].live);
         assert_eq!(host.list("s1").commands.len(), 1);
         assert!(host.list("other").commands.is_empty());
+    }
+
+    #[test]
+    fn clearing_through_the_host_tells_the_listener_like_any_change() {
+        let host = BackgroundHost::default();
+        let heard = Arc::new(Mutex::new(Vec::new()));
+        let into = heard.clone();
+        host.set_listener(Arc::new(move |list| into.lock().unwrap().push(list)));
+        host.touch("s1", |board| board.claude(&started("b1", true), bash("make"), 1));
+        host.touch("s1", |board| board.claude(&notified("b1", "completed", "done (exit code 0)"), none, 2));
+        host.clear("s1", Some(&["nope".to_string()]));
+        host.clear("s1", None);
+        host.clear("s1", None);
+        let heard = heard.lock().unwrap();
+        assert_eq!(heard.len(), 3, "the empty clears said nothing");
+        assert!(heard[2].commands.is_empty());
+    }
+
+    fn temp_store() -> (Store, String) {
+        let dir = std::env::temp_dir().join(format!("crew-bg-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let store = Store::open(dir.join("crew.sqlite3")).expect("open");
+        let ws = crate::workspace::create(&store, "w".into(), dir.to_string_lossy().into()).expect("workspace");
+        let session = crate::session::create(
+            &store, ws.id, "terminal".into(), "x".into(), "claude".into(), "m".into(), "".into(), "full".into(), None,
+        )
+        .expect("session");
+        (store, session.id)
+    }
+
+    /// Entries written as they change come back in the order they were
+    /// listed, with the output kept for them, and one cleared stays gone.
+    #[test]
+    fn the_entries_of_a_session_round_trip_through_the_store() {
+        let (store, id) = temp_store();
+        let host = BackgroundHost::persisted(store.clone());
+        host.touch(&id, |board| board.launch(0));
+        host.touch(&id, |board| board.claude(&started("b1", true), bash("sleep 120"), 1));
+        host.touch(&id, |board| board.claude(&notified("b1", "failed", "failed with exit code 2"), none, 2));
+        host.touch(&id, |board| {
+            board.keep_output("b1", BackgroundOutput { output: "boom\n".into(), truncated: true });
+            board.claude(&started("b2", true), bash("npm run dev"), 3)
+        });
+        let saved = store.with(load).expect("load");
+        assert_eq!(saved.len(), 1);
+        let (session_id, rows) = &saved[0];
+        assert_eq!(session_id, &id);
+        let ids: Vec<&str> = rows.iter().map(|(row, _)| row.id.as_str()).collect();
+        assert_eq!(ids, ["b1", "b2"]);
+        assert_eq!(rows[0].0, host.list(&id).commands[0]);
+        assert_eq!(rows[0].1, Some(BackgroundOutput { output: "boom\n".into(), truncated: true }));
+        assert_eq!(rows[1].1, None);
+
+        host.clear(&id, Some(&["b1".to_string()]));
+        let saved = store.with(load).expect("load");
+        assert_eq!(saved[0].1.len(), 1, "the finished one was cleared: {saved:?}");
+        assert_eq!(saved[0].1[0].0.id, "b2", "the running one stays");
+    }
+
+    /// Starting the daemon again: what the last one left running is stopped,
+    /// saying Crew restarted; what had ended keeps how it ended; and the
+    /// stop is written, so a third start finds nothing to change.
+    #[test]
+    fn a_restart_stops_the_entries_the_last_daemon_left_running() {
+        let (store, id) = temp_store();
+        {
+            let host = BackgroundHost::persisted(store.clone());
+            host.touch(&id, |board| board.launch(0));
+            host.touch(&id, |board| board.claude(&started("b1", true), bash("sleep 120"), 1));
+            host.touch(&id, |board| board.claude(&started("b2", true), bash("make"), 2));
+            host.touch(&id, |board| board.claude(&notified("b2", "completed", "done (exit code 0)"), none, 3));
+            assert_eq!(host.list(&id).commands[0].state, BackgroundState::Running);
+        }
+        let host = BackgroundHost::persisted(store.clone());
+        let list = host.list(&id);
+        assert!(!list.live && !list.waiting, "no CLI of the old daemon is left");
+        let [first, second] = &list.commands[..] else {
+            panic!("{list:?}");
+        };
+        assert_eq!((first.state, first.stop_note.as_deref()), (BackgroundState::Stopped, Some("Crew restarted")));
+        assert!(first.ended_at.is_some());
+        assert_eq!((second.state, second.exit_code, second.stop_note.clone()), (BackgroundState::Completed, Some(0), None));
+        let saved = store.with(load).expect("load");
+        assert_eq!(saved[0].1[0].0.state, BackgroundState::Stopped, "the sweep is written");
+        let again = BackgroundHost::persisted(store);
+        assert_eq!(again.list(&id).commands, list.commands);
+    }
+
+    /// A deleted session's rows go with it, and its board with `forget`.
+    #[test]
+    fn the_entries_of_a_deleted_session_go_with_it() {
+        let (store, id) = temp_store();
+        let host = BackgroundHost::persisted(store.clone());
+        host.touch(&id, |board| board.claude(&started("b1", true), bash("make"), 1));
+        assert_eq!(store.with(load).expect("load").len(), 1);
+        crate::session::delete(&store, id.clone()).expect("delete");
+        assert!(store.with(load).expect("load").is_empty());
+        host.forget(&id);
+        assert!(host.list(&id).commands.is_empty());
     }
 }

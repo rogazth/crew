@@ -66,7 +66,8 @@ pub struct BackgroundCommand {
     #[ts(optional)]
     pub stoppable: Option<bool>,
     /// Why it cannot be stopped alone, shown where the stop would be, such as
-    /// "stops with the turn".
+    /// "stops with the turn". On a stopped entry, why it stopped when nobody
+    /// asked it to: "its CLI exited", "Crew restarted".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub stop_note: Option<String>,
@@ -113,7 +114,7 @@ pub struct BackgroundList {
     pub session_id: String,
     pub commands: Vec<BackgroundCommand>,
     /// The CLI that runs them is up: their output can be read and they can be
-    /// stopped. Once it is gone they stay, ended, until the next turn.
+    /// stopped. Once it is gone they stay, ended, until they are cleared.
     pub live: bool,
     /// The turn has answered, and only its background commands keep it open:
     /// the CLI takes it up again when they finish.

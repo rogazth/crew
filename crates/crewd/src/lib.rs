@@ -1323,7 +1323,11 @@ async fn delete_session(hosts: &Hosts, id: String) -> Result<(), String> {
     // a session that no longer exists should not still be able to call.
     hosts.bridge.revoke(&id);
     hosts.browser.leases().release_all(&id, app_state::now_millis());
-    block(move || session::delete(&store, id)).await
+    let gone = id.clone();
+    block(move || session::delete(&store, id)).await?;
+    // Its background entries went with its row; the board in memory goes too.
+    hosts.turns.background().forget(&gone);
+    Ok(())
 }
 
 const DAY_MS: i64 = 24 * 60 * 60 * 1000;
@@ -1961,6 +1965,16 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
             let proto::BackgroundRequest { session_id, id } = parse(params)?;
             let turns = hosts.turns.clone();
             block(move || turns.background_stop(&session_id, &id)).await?;
+            Ok(Value::Null)
+        }
+        "background_clear" => {
+            let proto::BackgroundClear { session_id, ids } = parse(params)?;
+            let turns = hosts.turns.clone();
+            block(move || {
+                turns.background_clear(&session_id, ids.as_deref());
+                Ok(())
+            })
+            .await?;
             Ok(Value::Null)
         }
         "session_context" => {
@@ -4232,6 +4246,64 @@ for line in sys.stdin:
             .output()
             .expect("git");
         assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+    }
+
+    /// A session's background entries outlive a daemon: the one that was
+    /// running when it stopped comes back stopped, and `background_clear`
+    /// takes the finished ones off the list, the named or all, telling every
+    /// window as any other change of the list does.
+    #[tokio::test]
+    async fn background_clear_takes_finished_entries_off_a_list_that_survived_a_restart() {
+        let dir = std::fs::canonicalize(test_dir("background-clear")).expect("dir");
+        let session = {
+            let store = Store::open(dir.join("crew.sqlite3")).expect("store");
+            let made = workspace::create(&store, "w".into(), dir.to_string_lossy().into()).expect("workspace");
+            let session = session::create(
+                &store, made.id, "terminal".into(), "x".into(), "claude".into(), "m".into(), "".into(), "full".into(), None,
+            )
+            .expect("session");
+            for (position, (id, state)) in [("done", "completed"), ("was-running", "running")].into_iter().enumerate() {
+                let entry = serde_json::json!({ "id": id, "command": "make", "kind": "shell", "startedAt": 1, "state": state });
+                store
+                    .with(|conn| {
+                        conn.execute(
+                            "INSERT INTO background_entries (session_id, position, id, entry_json) VALUES (?1, ?2, ?3, ?4)",
+                            (&session.id, position as i64, id, entry.to_string()),
+                        )
+                    })
+                    .expect("seed");
+            }
+            session.id
+        };
+        let handle = test_serve(&dir);
+        let mut ws = connect_authed(&handle).await;
+
+        let listed = rpc(&mut ws, 1, "background_list", serde_json::json!({ "sessionId": session })).await;
+        let list: proto::BackgroundList = serde_json::from_value(listed.result.expect("list")).expect("list");
+        let states: Vec<_> = list.commands.iter().map(|row| (row.id.as_str(), row.state)).collect();
+        assert_eq!(
+            states,
+            [("done", proto::BackgroundState::Completed), ("was-running", proto::BackgroundState::Stopped)]
+        );
+        assert_eq!(list.commands[1].stop_note.as_deref(), Some("Crew restarted"));
+
+        // The push comes before the answer to the call that caused it.
+        let params = serde_json::json!({ "sessionId": session, "ids": ["done"] });
+        send_json(&mut ws, &Request { id: 2, method: "background_clear".into(), params }).await;
+        let heard = wait_event(&mut ws, "background-changed").await;
+        let named = wait_response(&mut ws, 2).await;
+        assert!(named.ok, "{:?}", named.error);
+        let list: proto::BackgroundList = serde_json::from_value(heard.payload).expect("list");
+        let ids: Vec<_> = list.commands.iter().map(|row| row.id.as_str()).collect();
+        assert_eq!(ids, ["was-running"]);
+
+        let params = serde_json::json!({ "sessionId": session });
+        send_json(&mut ws, &Request { id: 3, method: "background_clear".into(), params }).await;
+        let heard = wait_event(&mut ws, "background-changed").await;
+        assert!(wait_response(&mut ws, 3).await.ok);
+        let list: proto::BackgroundList = serde_json::from_value(heard.payload).expect("list");
+        assert!(list.commands.is_empty(), "{list:?}");
+        handle.shutdown();
     }
 
     /// Removing a worktree takes the sessions that ran in it, and only those;

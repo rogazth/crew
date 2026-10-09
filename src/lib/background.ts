@@ -76,9 +76,9 @@ export function traySummary(commands: readonly BackgroundCommand[]): string {
 }
 
 /**
- * What the tray of a turn Crew drives lists. The daemon clears the last
- * turn's commands when the next one starts (U3), so whatever it holds is the
- * running turn's, or the last one's once it is over.
+ * What the tray of a turn Crew drives lists: every entry of the session,
+ * running or ended. They stay across turns, processes and restarts of Crew
+ * until the user clears them (`backgroundClear`) or the session goes.
  */
 export function turnTray(list: BackgroundList | null): BackgroundCommand[] {
   return list?.commands ?? [];

@@ -514,6 +514,17 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         )?;
         tx.commit()?;
     }
+    if current < 31 {
+        let tx = conn.unchecked_transaction()?;
+        // What a session's CLI left running in the background, kept for the
+        // life of the session (see `background`).
+        tx.execute_batch(crate::background::MIGRATION_V31)?;
+        tx.execute(
+            "INSERT INTO schema_migrations (version, applied_at) VALUES (31, ?1)",
+            params![now_millis()],
+        )?;
+        tx.commit()?;
+    }
     Ok(())
 }
 
@@ -1448,6 +1459,68 @@ mod view_tests {
         let store = Store::open(path).expect("reopen");
         let view = crate::session::get(&store, claude).unwrap().expect("row").view;
         assert_eq!(view, "terminal");
+    }
+}
+
+#[cfg(test)]
+mod background_entries_tests {
+    use super::*;
+
+    fn temp_dir(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("crew-{tag}-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        dir
+    }
+
+    /// A v30 database has no table for background entries. Migration 31 adds
+    /// it, empty, and opening again changes nothing: the entries written in
+    /// between are still there, and go with their session.
+    #[test]
+    fn a_v30_database_gains_the_background_entries_table() {
+        let dir = temp_dir("v31");
+        let path = dir.join("crew.sqlite3");
+        let id = {
+            let store = Store::open(path.clone()).expect("open");
+            let ws = crate::workspace::create(&store, "w".into(), dir.to_string_lossy().into()).expect("ws");
+            let session = crate::session::create(
+                &store, ws.id, "terminal".into(), "x".into(), "claude".into(), "m".into(), "".into(), "full".into(), None,
+            )
+            .expect("session");
+            store
+                .with(|conn| conn.execute_batch("DROP TABLE background_entries; DELETE FROM schema_migrations WHERE version >= 31;"))
+                .expect("downgrade");
+            session.id
+        };
+
+        let store = Store::open(path.clone()).expect("reopen");
+        let version: i64 = store
+            .with(|conn| conn.query_row("SELECT MAX(version) FROM schema_migrations", [], |row| row.get(0)))
+            .unwrap();
+        assert!(version >= 31, "{version}");
+        let rows: i64 = store
+            .with(|conn| conn.query_row("SELECT COUNT(*) FROM background_entries", [], |row| row.get(0)))
+            .unwrap();
+        assert_eq!(rows, 0);
+
+        store
+            .with(|conn| {
+                conn.execute(
+                    "INSERT INTO background_entries (session_id, position, id, entry_json) VALUES (?1, 0, 'b1', '{}')",
+                    params![id],
+                )
+            })
+            .expect("insert");
+        drop(store);
+        let store = Store::open(path).expect("third open");
+        let rows: i64 = store
+            .with(|conn| conn.query_row("SELECT COUNT(*) FROM background_entries", [], |row| row.get(0)))
+            .unwrap();
+        assert_eq!(rows, 1, "opening again left the entries alone");
+        crate::session::delete(&store, id).expect("delete");
+        let rows: i64 = store
+            .with(|conn| conn.query_row("SELECT COUNT(*) FROM background_entries", [], |row| row.get(0)))
+            .unwrap();
+        assert_eq!(rows, 0, "the session took its entries with it");
     }
 }
 

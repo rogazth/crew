@@ -60,7 +60,8 @@ window?: number,
 stoppable?: boolean, 
 /**
  * Why it cannot be stopped alone, shown where the stop would be, such as
- * "stops with the turn".
+ * "stops with the turn". On a stopped entry, why it stopped when nobody
+ * asked it to: "its CLI exited", "Crew restarted".
  */
 stopNote?: string, 
 /**
@@ -92,7 +93,7 @@ export type BackgroundKind = "shell" | "monitor" | "subagent";
 export type BackgroundList = { sessionId: string, commands: Array<BackgroundCommand>, 
 /**
  * The CLI that runs them is up: their output can be read and they can be
- * stopped. Once it is gone they stay, ended, until the next turn.
+ * stopped. Once it is gone they stay, ended, until they are cleared.
  */
 live: boolean, 
 /**

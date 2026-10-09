@@ -2403,13 +2403,20 @@ time.sleep(600)
         w.settle(&id);
         assert!(w.turns.test_agents().running().is_empty(), "a process with work open was kept");
         assert!(w.turns.idle_since(&id).is_none());
-        assert!(!w.turns.background_list(&id).live);
+        // What it ran went with it: the entry is listed, stopped, and says why.
+        let list = w.turns.background_list(&id);
+        assert!(!list.live);
+        assert_eq!(list.commands[0].state, crew_protocol::BackgroundState::Stopped);
+        assert_eq!(list.commands[0].stop_note.as_deref(), Some("its CLI exited"));
 
         w.call(&parent, "send_message", json!({ "to": id, "text": "again" })).expect("send");
         assert_eq!(w.wait(&parent, &id, json!({}))["sessions"][0]["report"], "report: again");
         let launches = launched(&log);
         assert_eq!(launches.len(), 2, "{launches:?}");
         assert!(after_flag(&launches[1], "--resume").is_some(), "{}", launches[1]);
+        // The new process did not wipe it.
+        let relaunched = w.turns.background_list(&id);
+        assert_eq!(relaunched.commands, list.commands);
     }
 
     /// What the CLI takes while it idles is told to it between turns, on the
@@ -3250,7 +3257,7 @@ time.sleep(600)
 
     /// A child's command in the background: listed while it runs, its
     /// output read from Claude, stopped from the tray, and kept, ended, once
-    /// the turn is over; the next turn starts with the tray empty.
+    /// the turn is over; the next turn still lists it.
     #[test]
     fn a_claude_childs_background_command_is_listed_read_and_stopped() {
         use crew_protocol::{BackgroundKind, BackgroundState};
@@ -3280,10 +3287,90 @@ time.sleep(600)
         assert!(w.turns.background_stop(&id, "bg1").is_ok(), "an ended command needs no stop");
         let control = std::fs::read_to_string(w.dir.join("claude-control.log")).unwrap();
         assert!(control.contains("get_task_output bg1\nstop_task bg1\n"), "{control}");
-        // The next turn starts with an empty tray.
+        // The next turn still lists it.
         w.call(&parent, "send_message", json!({ "to": id, "text": "again" })).expect("send");
-        until_background(&w, &id, |list| list.commands.is_empty());
         w.wait(&parent, &id, json!({}));
+        let next = w.turns.background_list(&id);
+        assert_eq!(next.commands.len(), 1, "{next:?}");
+        assert_eq!(next.commands[0].state, BackgroundState::Stopped);
+    }
+
+    /// The board is the session's, not the turn's: a task of turn one is
+    /// listed in turn two on the process the first turn left up, with how it
+    /// ended, and no process was launched for it.
+    #[test]
+    fn a_task_from_turn_one_is_still_listed_in_turn_two_on_the_kept_process() {
+        use crew_protocol::BackgroundState;
+        let w = world();
+        w.turns.override_binary("claude", fake_claude(&w.dir));
+        let parent = w.session("terminal", "shell", "full");
+        let started = w.call(&parent, "start_session", json!({ "provider": "claude", "prompt": "BACKGROUND 1.5" })).expect("start");
+        let id = started["id"].as_str().unwrap().to_string();
+        let log = w.dir.join("claude-launch.log");
+        let out = w.wait(&parent, &id, json!({}));
+        assert_eq!(out["sessions"][0]["report"], "report: BACKGROUND 1.5 + the background command finished", "{out}");
+        w.settle(&id);
+        let one = until_background(&w, &id, |list| !list.waiting && list.commands.iter().all(|row| row.state != BackgroundState::Running));
+        assert_eq!((one.commands.len(), one.commands[0].state), (1, BackgroundState::Completed));
+        assert!(w.turns.idle_since(&id).is_some(), "the process was not kept");
+
+        w.call(&parent, "send_message", json!({ "to": id, "text": "again" })).expect("send");
+        assert_eq!(w.wait(&parent, &id, json!({}))["sessions"][0]["report"], "report: again");
+        let two = w.turns.background_list(&id);
+        assert!(two.live);
+        assert_eq!(two.commands, one.commands, "turn two changed what turn one left");
+        assert_eq!(launched(&log).len(), 1, "a second process was launched");
+    }
+
+    /// A process that dies under work it still ran (here, killed from
+    /// outside) takes that work with it: the entries stop, saying so, and stay
+    /// listed.
+    #[test]
+    fn a_claude_process_that_dies_with_work_running_stops_its_entries() {
+        use crew_protocol::BackgroundState;
+        let w = world();
+        w.turns.override_binary("claude", fake_claude(&w.dir));
+        let parent = w.session("terminal", "shell", "full");
+        let started = w.call(&parent, "start_session", json!({ "provider": "claude", "prompt": "BACKGROUND 60" })).expect("start");
+        let id = started["id"].as_str().unwrap().to_string();
+        let log = w.dir.join("claude-launch.log");
+        let list = until_background(&w, &id, |list| list.waiting);
+        assert_eq!(list.commands[0].state, BackgroundState::Running);
+
+        let pid = launched(&log)[0]["pid"].as_u64().expect("pid").to_string();
+        std::process::Command::new("kill").args(["-9", pid.as_str()]).status().expect("kill");
+        let after = until_background(&w, &id, |list| !list.live);
+        let row = &after.commands[0];
+        assert_eq!((row.state, row.stop_note.as_deref()), (BackgroundState::Stopped, Some("its CLI exited")));
+        assert!(row.ended_at.is_some());
+    }
+
+    /// Clearing from the window: the finished entries go, a running one stays,
+    /// and the list the window hears is the cleared one.
+    #[test]
+    fn clearing_a_sessions_background_entries_leaves_what_runs() {
+        use crew_protocol::BackgroundState;
+        let w = world();
+        w.turns.override_binary("claude", fake_claude(&w.dir));
+        let heard = Arc::new(Mutex::new(Vec::new()));
+        let into = heard.clone();
+        w.turns.background().set_listener(Arc::new(move |list| into.lock().unwrap().push(list)));
+        let parent = w.session("terminal", "shell", "full");
+        let started = w.call(&parent, "start_session", json!({ "provider": "claude", "prompt": "BACKGROUND 30" })).expect("start");
+        let id = started["id"].as_str().unwrap().to_string();
+        until_background(&w, &id, |list| list.waiting);
+        w.turns.background_clear(&id, None);
+        assert_eq!(w.turns.background_list(&id).commands[0].state, BackgroundState::Running, "a running entry was cleared");
+        w.turns.background_stop(&id, "bg1").expect("stop");
+        w.wait(&parent, &id, json!({}));
+        w.settle(&id);
+        w.turns.background_clear(&id, Some(&["other".to_string()]));
+        assert_eq!(w.turns.background_list(&id).commands.len(), 1, "an id it does not know cleared something");
+        w.turns.background_clear(&id, Some(&["bg1".to_string()]));
+        assert!(w.turns.background_list(&id).commands.is_empty());
+        let heard = heard.lock().unwrap();
+        let last = heard.iter().rev().find(|list| list.session_id == id).expect("a push");
+        assert!(last.commands.is_empty(), "the window was told of the clear: {last:?}");
     }
 
     /// Stopping a turn stops what it left in the background first, then

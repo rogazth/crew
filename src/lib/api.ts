@@ -184,6 +184,13 @@ export const backgroundOutput = (sessionId: string, id: string): Promise<Backgro
 export const backgroundStop = (sessionId: string, id: string): Promise<void> =>
   client.request("background_stop", { sessionId, id });
 
+/**
+ * Clears a session's finished background entries from its list: the named
+ * ones, or every finished one when `ids` is absent. A running one stays.
+ */
+export const backgroundClear = (sessionId: string, ids?: string[]): Promise<void> =>
+  client.request("background_clear", { sessionId, ids });
+
 export const turnStart = (params: {
   sessionId: string;
   cwd: string;
