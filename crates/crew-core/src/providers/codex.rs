@@ -510,6 +510,7 @@ pub fn exec_item(item: &Map<String, Value>) -> Option<Map<String, Value>> {
         }
         "collabAgentToolCall" => {
             copy(&mut out, "tool", "tool");
+            copy(&mut out, "prompt", "prompt");
             "collab_tool_call"
         }
         "imageView" => {
@@ -848,7 +849,12 @@ pub fn tool_label(item: &Map<String, Value>) -> String {
         Some("web_search") => string_field(Some(item), "query")
             .map(|query| format!("Search {}", clip(&query, 40)))
             .unwrap_or_else(|| "Search".into()),
-        Some("collab_tool_call") => string_field(Some(item), "tool").unwrap_or_else(|| "Collab".into()),
+        // A spawn is named by what the agent was sent to do; the other collab
+        // calls (waiting on one, writing to one) by the tool.
+        Some("collab_tool_call") => match spawn_prompt(item) {
+            Some(prompt) => clip(&prompt, 72),
+            None => string_field(Some(item), "tool").unwrap_or_else(|| "Collab".into()),
+        },
         Some("todo_list") => "Todos".into(),
         Some("image_view") => string_field(Some(item), "path")
             .and_then(|path| crate::media::local(&path))
@@ -928,6 +934,21 @@ pub fn tool_detail(item: &Map<String, Value>) -> Option<ToolDetail> {
         Some("todo_list") => Some(ToolDetail::Todo {
             items: todo_items(item.get("items"))?,
         }),
+        // The agent it started: its own work lands in `steps`, from its
+        // thread's notifications, and it runs on after the call returns.
+        Some("collab_tool_call") => {
+            let prompt = spawn_prompt(item)?;
+            Some(ToolDetail::Agent {
+                description: clip(&prompt, 72),
+                agent_type: None,
+                prompt: Some(prompt),
+                output: None,
+                background: Some(true),
+                state: None,
+                activity: None,
+                steps: None,
+            })
+        }
         Some("image_view") => Some(ToolDetail::File {
             path: crate::media::local(&string_field(Some(item), "path")?)?.path,
             line_start: None,
@@ -939,6 +960,30 @@ pub fn tool_detail(item: &Map<String, Value>) -> Option<ToolDetail> {
         }),
         _ => None,
     }
+}
+
+/// What a `spawnAgent` call sent the agent to do. Only a spawn has it: the
+/// other collab calls act on an agent that already exists.
+fn spawn_prompt(item: &Map<String, Value>) -> Option<String> {
+    if string_field(Some(item), "tool").as_deref() != Some("spawnAgent") {
+        return None;
+    }
+    string_field(Some(item), "prompt").filter(|prompt| !prompt.trim().is_empty())
+}
+
+/// The threads a `spawnAgent` call started, from a raw app-server item. The
+/// call names none while it starts (`receiverThreadIds` is empty on
+/// `item/started`), so only the item that completed answers.
+pub fn spawned_threads(item: &Map<String, Value>) -> Vec<String> {
+    if string_field(Some(item), "type").as_deref() != Some("collabAgentToolCall")
+        || string_field(Some(item), "tool").as_deref() != Some("spawnAgent")
+    {
+        return Vec::new();
+    }
+    item.get("receiverThreadIds")
+        .and_then(Value::as_array)
+        .map(|ids| ids.iter().filter_map(|id| id.as_str().map(str::to_string)).collect())
+        .unwrap_or_default()
 }
 
 /// MCP results arrive as a list of content blocks; everything else is a string.
@@ -1340,6 +1385,41 @@ mod protocol_tests {
         assert!(exec_item(json!({ "type": "reasoning", "id": "r" }).as_object().unwrap()).is_none());
         let plan = plan_detail(&json!({ "plan": [{ "step": "a", "status": "completed" }, { "step": "b", "status": "inProgress" }] }));
         assert!(matches!(plan, Some(ToolDetail::Todo { ref items }) if items.len() == 2), "{plan:?}");
+    }
+
+    /// Shapes as `codex app-server` 0.160 sent them for one real spawn: the
+    /// call names no thread when it starts, and one when it completes.
+    #[test]
+    fn a_spawn_call_reads_as_an_agent_and_names_its_thread_once_it_completed() {
+        let started = json!({ "type": "collabAgentToolCall", "id": "exec-1", "tool": "spawnAgent", "status": "inProgress",
+            "senderThreadId": "t1", "receiverThreadIds": [], "prompt": "Reply with just the word one.\nThen stop.",
+            "model": "", "reasoningEffort": "medium", "agentsStates": {} });
+        let completed = json!({ "type": "collabAgentToolCall", "id": "exec-1", "tool": "spawnAgent", "status": "completed",
+            "senderThreadId": "t1", "receiverThreadIds": ["t2"], "prompt": "Reply with just the word one.\nThen stop.",
+            "model": "gpt-5.6-luna", "reasoningEffort": "low", "agentsStates": { "t2": { "status": "pendingInit", "message": null } } });
+        let row = exec_item(started.as_object().unwrap()).unwrap();
+        assert_eq!(tool_label(&row), "Reply with just the word one.");
+        assert_eq!(
+            tool_detail(&row),
+            Some(ToolDetail::Agent {
+                description: "Reply with just the word one.".into(),
+                agent_type: None,
+                prompt: Some("Reply with just the word one.\nThen stop.".into()),
+                output: None,
+                background: Some(true),
+                state: None,
+                activity: None,
+                steps: None,
+            })
+        );
+        assert!(spawned_threads(started.as_object().unwrap()).is_empty());
+        assert_eq!(spawned_threads(completed.as_object().unwrap()), ["t2"]);
+        // Waiting on an agent acts on one that exists: a plain row, no threads to name.
+        let wait = json!({ "type": "collabAgentToolCall", "id": "exec-2", "tool": "wait", "status": "completed",
+            "senderThreadId": "t1", "receiverThreadIds": ["t2"], "prompt": null, "model": null, "agentsStates": {} });
+        let row = exec_item(wait.as_object().unwrap()).unwrap();
+        assert_eq!((tool_label(&row), tool_detail(&row)), ("wait".to_string(), None));
+        assert!(spawned_threads(wait.as_object().unwrap()).is_empty());
     }
 }
 

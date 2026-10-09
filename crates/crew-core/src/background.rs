@@ -540,7 +540,97 @@ impl Board {
     /// Whether a Codex command item is still running: what makes a listing
     /// of the background terminals worth asking for.
     pub fn codex_running(&self) -> bool {
-        !self.codex_items.is_empty() || self.commands.iter().any(|row| row.state == BackgroundState::Running)
+        !self.codex_items.is_empty()
+            || self.commands.iter().any(|row| row.state == BackgroundState::Running && row.thread_id.is_none())
+    }
+
+    /// An agent thread the model spawned, in the entry of its own. The entry
+    /// is the thread's id, so a call that names it again fills in what the
+    /// first left out and adds no second row. It runs from the start: its
+    /// turn begins moments after the call, and the entry says so before that.
+    pub fn codex_child(
+        &mut self,
+        thread: &str,
+        call: &str,
+        label: &str,
+        nickname: Option<&str>,
+        model: Option<&str>,
+        now: i64,
+    ) -> bool {
+        if let Some(known) = self.commands.iter_mut().find(|row| row.thread_id.as_deref() == Some(thread)) {
+            let before = known.clone();
+            if known.description.is_none() {
+                known.description = nickname.map(str::to_string);
+            }
+            if known.model.is_none() {
+                known.model = model.map(str::to_string);
+            }
+            return *known != before;
+        }
+        self.add(BackgroundCommand {
+            id: thread.to_string(),
+            command: label.to_string(),
+            description: nickname.map(str::to_string),
+            kind: BackgroundKind::Subagent,
+            started_at: now,
+            state: BackgroundState::Running,
+            exit_code: None,
+            ended_at: None,
+            tool_call_id: Some(call.to_string()),
+            tokens: None,
+            window: None,
+            // Its turn is interrupted on its thread.
+            stoppable: Some(true),
+            stop_note: None,
+            activity: None,
+            model: model.map(str::to_string),
+            foreground: None,
+            thread_id: Some(thread.to_string()),
+        })
+    }
+
+    /// An agent thread began a turn, or ended the one it ran. A thread that
+    /// ended goes on after a message to it: the entry runs again, as new.
+    pub fn codex_child_state(&mut self, thread: &str, state: BackgroundState, now: i64) -> bool {
+        let Some(at) = self.commands.iter().position(|row| row.thread_id.as_deref() == Some(thread)) else {
+            return false;
+        };
+        let before = self.commands[at].clone();
+        if state == BackgroundState::Running {
+            let row = &mut self.commands[at];
+            row.state = state;
+            row.ended_at = None;
+            row.exit_code = None;
+            row.stop_note = None;
+        } else {
+            self.commands[at].activity = None;
+            self.settle(&before.id, state, None, now);
+        }
+        self.commands[at] != before
+    }
+
+    /// An agent thread's token reading: what its newest response held, over
+    /// its model's window. A reading that names no window keeps the last one.
+    pub fn codex_child_usage(&mut self, thread: &str, tokens: u64, window: Option<u64>) -> bool {
+        let Some(row) = self.commands.iter_mut().find(|row| row.thread_id.as_deref() == Some(thread)) else {
+            return false;
+        };
+        let before = row.clone();
+        row.tokens = Some(tokens);
+        row.window = window.or(row.window);
+        *row != before
+    }
+
+    /// What an agent thread is on now: the call it last started.
+    pub fn codex_child_activity(&mut self, thread: &str, activity: &str) -> bool {
+        let Some(row) = self.commands.iter_mut().find(|row| row.thread_id.as_deref() == Some(thread)) else {
+            return false;
+        };
+        if row.state != BackgroundState::Running || row.activity.as_deref() == Some(activity) {
+            return false;
+        }
+        row.activity = Some(activity.to_string());
+        true
     }
 
     /// Output a Codex command wrote, as it streams.
@@ -614,7 +704,8 @@ impl Board {
         let gone: Vec<String> = self
             .commands
             .iter()
-            .filter(|row| row.state == BackgroundState::Running && !listed.contains(&row.id))
+            // An agent thread is no terminal: its own turns say when it ends.
+            .filter(|row| row.state == BackgroundState::Running && row.thread_id.is_none() && !listed.contains(&row.id))
             .map(|row| row.id.clone())
             .collect();
         for id in gone {
@@ -987,6 +1078,40 @@ mod tests {
         assert!(board.codex_listed(&[json!({ "itemId": "exec-1", "processId": "87302", "command": "sleep 120" })], 2));
         assert!(board.codex_listed(&[], 3));
         assert_eq!(board.command("exec-1").unwrap().state, BackgroundState::Completed);
+    }
+
+    /// An agent the model spawned is a row of its own: running from its call,
+    /// ended and run again by its turns, with the tokens of its thread; and
+    /// the terminals' listing, which knows no thread, never ends it.
+    #[test]
+    fn a_codex_agent_thread_is_a_row_its_turns_start_and_end_and_no_terminal_listing_settles() {
+        let mut board = Board::default();
+        assert!(board.codex_child("t2", "call-1", "Check the tests", Some("Ampere"), Some("gpt-5.6-luna"), 5));
+        assert!(!board.codex_child("t2", "call-1", "Check the tests", Some("Ampere"), Some("gpt-5.6-luna"), 6), "named twice");
+        let row = board.command("t2").unwrap();
+        assert_eq!((row.kind, row.state, row.started_at), (BackgroundKind::Subagent, BackgroundState::Running, 5));
+        assert_eq!((row.thread_id.as_deref(), row.tool_call_id.as_deref(), row.stoppable), (Some("t2"), Some("call-1"), Some(true)));
+        assert!(!board.codex_running(), "an agent is not a command the app server lists");
+        assert!(!board.codex_listed(&[], 7));
+        assert_eq!(board.command("t2").unwrap().state, BackgroundState::Running);
+
+        assert!(board.codex_child_usage("t2", 4000, Some(100_000)));
+        assert!(board.codex_child_usage("t2", 6000, None));
+        let row = board.command("t2").unwrap();
+        assert_eq!((row.tokens, row.window), (Some(6000), Some(100_000)), "a reading with no window keeps the last");
+        assert!(board.codex_child_activity("t2", "echo one"));
+
+        assert!(board.codex_child_state("t2", BackgroundState::Completed, 9));
+        let row = board.command("t2").unwrap();
+        assert_eq!((row.state, row.ended_at, row.activity.as_deref()), (BackgroundState::Completed, Some(9), None));
+        // A message to the agent starts another turn: it runs again, as new.
+        assert!(board.codex_child_state("t2", BackgroundState::Running, 10));
+        let row = board.command("t2").unwrap();
+        assert_eq!((row.state, row.ended_at), (BackgroundState::Running, None));
+        assert!(board.codex_child_state("t2", BackgroundState::Stopped, 12));
+        assert!(!board.codex_child_state("t2", BackgroundState::Completed, 13), "a stop is how it ended");
+        assert_eq!(board.command("t2").unwrap().state, BackgroundState::Stopped);
+        assert!(!board.codex_child_state("t3", BackgroundState::Running, 14), "no such agent");
     }
 
     #[test]

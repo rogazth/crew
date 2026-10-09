@@ -5733,6 +5733,53 @@ time.sleep(600)
         assert_eq!(w.live_pid(&id), pid, "the effort change started another app server");
     }
 
+    /// Runs the real `codex app-server`: one gpt-5.6-luna turn at low effort
+    /// in which the model spawns an agent that says one. The agent's words are
+    /// the steps of the spawn call and its tokens and end are its entry's; the
+    /// parent's message holds the parent's words alone. Needs `codex login`.
+    /// `cargo test -p crew-core --lib -- --ignored --test-threads=1 --nocapture live_codex_a_spawned`
+    #[test]
+    #[ignore]
+    fn live_codex_a_spawned_agent_is_steps_and_an_entry_and_none_of_the_parents_message() {
+        use crew_protocol::{BackgroundKind, BackgroundState, BlockRole, ToolDetail};
+        let w = world();
+        let parent = w.session("terminal", "shell", "full");
+        let id = w.live_child(&parent, "codex", "gpt-5.6-luna", "low", "full");
+        let _reap = Reap(&w, id.clone());
+
+        let report = w.live_say(
+            &parent,
+            &id,
+            "Spawn exactly one subagent whose task is to reply with just the word one. Wait for it, then reply with just the word finished. Do nothing else.",
+        );
+        w.settle(&id);
+        let list = until_background(&w, &id, |list| list.commands.iter().any(|row| row.state != BackgroundState::Running));
+        let blocks = w.turns.transcripts().since(&id, 0).0;
+        eprintln!("report: {report:?}\nentry: {:#?}", list.commands);
+        for block in &blocks {
+            eprintln!("{:?} {:?} {:?}", block.role, block.text, block.tool.as_ref().map(|tool| (&tool.name, &tool.status, &tool.detail)));
+        }
+
+        let row = list.commands.iter().find(|row| row.kind == BackgroundKind::Subagent).expect("an entry for the agent");
+        assert_eq!(row.state, BackgroundState::Completed, "{row:?}");
+        assert!(row.thread_id.is_some() && row.tool_call_id.is_some(), "{row:?}");
+        assert!(row.tokens.is_some_and(|tokens| tokens > 0) && row.window.is_some(), "{row:?}");
+        let call = blocks
+            .iter()
+            .filter_map(|block| block.tool.as_ref())
+            .find(|tool| Some(&tool.call_id) == row.tool_call_id.as_ref())
+            .expect("the spawn call");
+        let Some(ToolDetail::Agent { steps: Some(steps), .. }) = &call.detail else {
+            panic!("the spawn call has no steps: {call:?}");
+        };
+        assert!(
+            steps.iter().any(|step| step.role == BlockRole::Assistant && step.text.to_lowercase().contains("one")),
+            "{steps:?}"
+        );
+        let said: String = blocks.iter().filter(|block| block.role == BlockRole::Assistant).map(|block| block.text.as_str()).collect();
+        assert!(said.to_lowercase().contains("finished") && !said.to_lowercase().contains("one"), "the parent's message was {said:?}");
+    }
+
     /// Runs the real `claude`: three haiku turns. Ask to Edits is a control
     /// request on the live process; Edits to Full is a flag of the launch, so
     /// another process takes the same conversation, and still remembers it.

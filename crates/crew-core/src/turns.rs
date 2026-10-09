@@ -1399,9 +1399,14 @@ impl TurnHost {
     /// `thread/backgroundTerminals/terminate`. Only while its CLI is up.
     pub fn background_stop(&self, session_id: &str, id: &str) -> Result<(), String> {
         let known = self.background.read(session_id, |board| {
-            (board.command(id).map(|row| row.state), board.is_live(), board.process_id(id))
+            (
+                board.command(id).map(|row| row.state),
+                board.is_live(),
+                board.process_id(id),
+                board.command(id).and_then(|row| row.thread_id.clone()),
+            )
         });
-        let Some((Some(state), live, process)) = known else {
+        let Some((Some(state), live, process, thread)) = known else {
             return Err("No such background command.".into());
         };
         if state != crew_protocol::BackgroundState::Running {
@@ -1419,10 +1424,14 @@ impl TurnHost {
             "claude" => {
                 self.claude_control(session_id, stop_task_request(id))?;
             }
-            "codex" => {
-                let process = process.ok_or_else(|| "Codex named no process for it.".to_string())?;
-                self.codex_terminate(session_id, &process)?;
-            }
+            // An agent thread is stopped by its turn; a terminal by its process.
+            "codex" => match thread {
+                Some(thread) => self.codex_interrupt_child(session_id, &thread)?,
+                None => {
+                    let process = process.ok_or_else(|| "Codex named no process for it.".to_string())?;
+                    self.codex_terminate(session_id, &process)?;
+                }
+            },
             _ => return Err("Its session's CLI is gone, and it went with it.".into()),
         }
         let now = crate::store::now_millis();
