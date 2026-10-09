@@ -740,6 +740,12 @@ pub fn claude_fast_mode() -> FastMode {
     }
 }
 
+/// The reading as it stands, without asking again: for what only wants to
+/// know whether the toggle shows, and would not start a CLI to find out.
+pub fn claude_fast_mode_cached() -> Option<FastMode> {
+    CLAUDE_FAST_MODE.lock().unwrap_or_else(|e| e.into_inner()).as_ref().map(|(_, mode)| mode.clone())
+}
+
 /// Feeds a reading Claude gave on a turn into the same cache. `state` and
 /// `reason` are its `fast_mode_state` and `fast_mode_disabled_reason`.
 pub fn note_claude_fast_mode(state: Option<&str>, reason: Option<&str>) {
@@ -787,8 +793,9 @@ fn refresh_claude_fast_mode() {
 /// reports the state when fast mode is opted into, hence the setting. It is
 /// stopped once it has answered.
 fn probe_claude_fast_mode(binary: &Path) -> Result<(Option<String>, Option<String>), String> {
-    let mut child = Command::new(binary)
-        .args([
+    let (mut child, mut stdin, lines) = spawn_claude_control(
+        binary,
+        &[
             "--output-format",
             "stream-json",
             "--verbose",
@@ -798,24 +805,10 @@ fn probe_claude_fast_mode(binary: &Path) -> Result<(Option<String>, Option<Strin
             "--strict-mcp-config",
             "--settings",
             r#"{"fastMode":true}"#,
-        ])
-        .env("PATH", shell_path::joined())
-        .current_dir(home().unwrap_or_else(std::env::temp_dir))
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|e| format!("claude fast mode: {e}"))?;
-    let mut stdin = child.stdin.take().ok_or("claude fast mode: no stdin")?;
-    let stdout = child.stdout.take().ok_or("claude fast mode: no stdout")?;
-    let (sender, lines) = mpsc::channel();
-    thread::spawn(move || {
-        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-            if sender.send(line).is_err() {
-                break;
-            }
-        }
-    });
+        ],
+        &home().unwrap_or_else(std::env::temp_dir),
+        "claude fast mode",
+    )?;
     let outcome = initialize_for_fast_mode(&mut stdin, &lines);
     let _ = child.kill();
     let _ = child.wait();
@@ -845,6 +838,109 @@ fn initialize_for_fast_mode(
         let text = |key: &str| response.get(key).and_then(Value::as_str).map(str::to_string);
         return Ok((text("fast_mode_state"), text("fast_mode_disabled_reason")));
     }
+}
+
+/// A Claude CLI started to be asked over its control channel, with the lines
+/// it prints coming through the receiver. The caller kills it.
+fn spawn_claude_control(
+    binary: &Path,
+    args: &[&str],
+    cwd: &Path,
+    what: &str,
+) -> Result<(std::process::Child, ChildStdin, mpsc::Receiver<String>), String> {
+    let mut child = Command::new(binary)
+        .args(args)
+        .env("PATH", shell_path::joined())
+        .current_dir(cwd)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| format!("{what}: {e}"))?;
+    let (Some(stdin), Some(stdout)) = (child.stdin.take(), child.stdout.take()) else {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(format!("{what}: no pipes"));
+    };
+    let (sender, lines) = mpsc::channel();
+    thread::spawn(move || {
+        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+            if sender.send(line).is_err() {
+                break;
+            }
+        }
+    });
+    Ok((child, stdin, lines))
+}
+
+/// What a Claude CLI lists for a folder: its commands, and the names among
+/// them that are skills.
+#[derive(Debug, PartialEq, Eq)]
+pub struct ClaudeMenu {
+    pub commands: Vec<crew_protocol::CommandEntry>,
+    pub skills: std::collections::HashSet<String>,
+}
+
+/// Asks a Claude CLI for the `/` menu of `cwd` without a model turn: it is
+/// started with the user's, the project's and the local settings the user's
+/// sessions read and none of their MCP servers, sent `initialize` for the
+/// commands and `reload_skills` for which of them are skills, and killed once
+/// both have answered. A CLI too old to know `reload_skills` leaves the skills
+/// out and the commands stand.
+pub fn probe_claude_commands(binary: &Path, cwd: &Path) -> Result<ClaudeMenu, String> {
+    let (mut child, mut stdin, lines) = spawn_claude_control(
+        binary,
+        &[
+            "-p",
+            "--output-format",
+            "stream-json",
+            "--verbose",
+            "--input-format",
+            "stream-json",
+            "--setting-sources=user,project,local",
+            "--strict-mcp-config",
+        ],
+        cwd,
+        "claude commands",
+    )?;
+    let outcome = ask_claude_menu(&mut stdin, &lines);
+    let _ = child.kill();
+    let _ = child.wait();
+    outcome
+}
+
+fn ask_claude_menu(stdin: &mut ChildStdin, lines: &mpsc::Receiver<String>) -> Result<ClaudeMenu, String> {
+    for (id, subtype) in [("1", "initialize"), ("2", "reload_skills")] {
+        let request = build_control_request(id, json!({ "subtype": subtype }));
+        writeln!(stdin, "{request}").and_then(|_| stdin.flush()).map_err(|e| format!("claude commands: {e}"))?;
+    }
+    let deadline = Instant::now() + MODELS_TIMEOUT;
+    let mut commands: Option<Vec<crew_protocol::CommandEntry>> = None;
+    let mut skills: Option<std::collections::HashSet<String>> = None;
+    while commands.is_none() || skills.is_none() {
+        let line = lines
+            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            .map_err(|e| match e {
+                mpsc::RecvTimeoutError::Timeout => "claude commands did not answer".to_string(),
+                mpsc::RecvTimeoutError::Disconnected => "claude commands exited before answering".to_string(),
+            })?;
+        let Ok(Value::Object(record)) = serde_json::from_str::<Value>(&line) else { continue };
+        let Some((id, answer)) = parse_control_response(&record) else { continue };
+        match id.as_str() {
+            "1" => {
+                let response = answer?;
+                commands = Some(crate::commands::claude_entries(response.get("commands").unwrap_or(&Value::Null)));
+            }
+            "2" => {
+                skills = Some(match answer {
+                    Ok(response) => crate::commands::claude_skill_names(response.get("skills").unwrap_or(&Value::Null)),
+                    Err(_) => Default::default(),
+                });
+            }
+            _ => {}
+        }
+    }
+    Ok(ClaudeMenu { commands: commands.unwrap_or_default(), skills: skills.unwrap_or_default() })
 }
 
 /// What Crew shows for a reading. A reason that rules the account out hides the
@@ -1530,6 +1626,97 @@ time.sleep(600)
         .expect("write fake");
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
         assert_eq!(probe_claude_fast_mode(&path), Ok((Some("off".into()), Some("extra_usage_disabled".into()))));
+    }
+
+    /// A Claude that answers `initialize` and then `reload_skills`, and writes
+    /// down how it was started. `reload` is the line it answers the second with.
+    fn fake_menu_claude(dir: &Path, reload: &str) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let path = dir.join("fake-claude");
+        std::fs::write(
+            &path,
+            format!(
+                r#"#!/usr/bin/env python3
+import json, os, sys, time
+open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "seen.json"), "w").write(json.dumps({{"argv": sys.argv[1:], "cwd": os.getcwd()}}))
+first = json.loads(sys.stdin.readline())
+second = json.loads(sys.stdin.readline())
+assert first["request"]["subtype"] == "initialize" and second["request"]["subtype"] == "reload_skills"
+print(json.dumps({{"type": "system", "subtype": "hook_started"}}), flush=True)
+print(json.dumps({{"type": "control_response", "response": {{"subtype": "success", "request_id": first["request_id"], "response": {{"commands": [
+  {{"name": "prototype", "description": "Build a prototype", "argumentHint": ""}},
+  {{"name": "compact", "description": "Free up context", "argumentHint": "<hint>", "builtin": True}}]}}}}}}), flush=True)
+print({reload}, flush=True)
+time.sleep(600)
+"#
+            ),
+        )
+        .expect("write fake");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        path
+    }
+
+    /// The probe starts the CLI in the folder with the settings of a user's
+    /// session and none of their servers, and reads the commands and which of
+    /// them are skills off its two answers.
+    #[test]
+    fn the_claude_probe_reads_the_commands_and_skills_of_a_folder() {
+        let dir = temp_dir("claude-commands");
+        let work = dir.join("work");
+        std::fs::create_dir_all(&work).unwrap();
+        let reload = r#"json.dumps({"type": "control_response", "response": {"subtype": "success", "request_id": second["request_id"], "response": {"skills": [{"name": "prototype"}]}}})"#;
+        let path = fake_menu_claude(&dir, reload);
+
+        let menu = probe_claude_commands(&path, &work).expect("menu");
+        let names: Vec<_> = menu.commands.iter().map(|entry| entry.name.as_str()).collect();
+        assert_eq!(names, ["prototype", "compact"]);
+        assert_eq!(menu.commands[1].argument_hint.as_deref(), Some("<hint>"));
+        assert_eq!(menu.skills, std::collections::HashSet::from(["prototype".to_string()]));
+
+        let seen: Value = serde_json::from_str(&std::fs::read_to_string(dir.join("seen.json")).unwrap()).unwrap();
+        let argv: Vec<_> = seen["argv"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
+        assert!(argv.contains(&"--setting-sources=user,project,local"), "{argv:?}");
+        assert!(argv.contains(&"--strict-mcp-config"), "{argv:?}");
+        assert_eq!(
+            std::fs::canonicalize(seen["cwd"].as_str().unwrap()).unwrap(),
+            std::fs::canonicalize(&work).unwrap()
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A CLI that refuses `reload_skills` still gives its commands; they are
+    /// all commands then.
+    #[test]
+    fn the_claude_probe_keeps_the_commands_when_reload_skills_is_refused() {
+        let dir = temp_dir("claude-commands-old");
+        let reload = r#"json.dumps({"type": "control_response", "response": {"subtype": "error", "request_id": second["request_id"], "error": "Unsupported"}})"#;
+        let path = fake_menu_claude(&dir, reload);
+        let menu = probe_claude_commands(&path, &dir).expect("menu");
+        assert_eq!(menu.commands.len(), 2);
+        assert!(menu.skills.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The installed Claude, asked with no model turn: it lists its own
+    /// commands, the skills are among them, and `/login` is not.
+    #[test]
+    #[ignore = "starts the installed claude"]
+    fn the_installed_claude_lists_its_commands_and_skills() {
+        let binary = shell_path::resolve("claude").expect("claude on the PATH");
+        let menu = probe_claude_commands(&binary, &std::env::current_dir().unwrap()).expect("menu");
+        let names: Vec<_> = menu.commands.iter().map(|entry| entry.name.as_str()).collect();
+        assert!(names.contains(&"compact") && names.contains(&"context"), "{names:?}");
+        assert!(!names.contains(&"login"), "{names:?}");
+        assert!(!menu.skills.is_empty() && !menu.skills.contains("compact"), "{:?}", menu.skills);
+    }
+
+    /// A CLI that is not there is an error to report, not a hang.
+    #[test]
+    fn the_claude_probe_reports_a_binary_that_is_not_there() {
+        let dir = temp_dir("claude-commands-missing");
+        let error = probe_claude_commands(&dir.join("absent"), &dir).expect_err("no binary");
+        assert!(error.starts_with("claude commands:"), "{error}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     fn temp_dir(name: &str) -> PathBuf {

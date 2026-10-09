@@ -75,6 +75,19 @@ const SET_MODEL_TIMEOUT: Duration = Duration::from_secs(10);
 /// What a control request that waited out its timeout fails with.
 const NO_ANSWER: &str = "Claude Code did not answer in time.";
 
+/// Whether the `/` menu lists `/fast` for this provider. Claude's depends on
+/// the account, as the reading last taken of it says: this does not ask again,
+/// which would start a CLI for a menu.
+fn offers_fast(provider: &str) -> bool {
+    use crew_protocol::FastModeAvailability::{Available, Cooldown};
+    match provider {
+        "claude" => crate::provider_session::claude_fast_mode_cached()
+            .is_some_and(|mode| matches!(mode.availability, Available | Cooldown)),
+        "codex" | "cursor" => true,
+        _ => false,
+    }
+}
+
 /// How long the answer to this control request is waited for.
 fn control_timeout(request: &Value) -> Duration {
     match request.get("subtype").and_then(Value::as_str) {
@@ -516,6 +529,13 @@ struct ClaudeLive {
     initialized: bool,
     /// Only while the process is being launched: what waits for its first word.
     init_tx: Option<oneshot::Sender<bool>>,
+    /// Only while the process is being launched: the id `initialize` was sent
+    /// under, so its answer, which lists the commands, is told from the rest.
+    init_id: Option<String>,
+    /// The folder whose `/` menu this process keeps current, when it is the
+    /// user's own menu: a bot's CLI reads fewer settings, so what it lists
+    /// must not stand for the folder.
+    menu_cwd: Option<String>,
     stderr: Vec<String>,
     /// Steers written and not yet echoed, oldest first.
     steers: Vec<Steer>,
@@ -559,6 +579,8 @@ impl ClaudeLive {
             next_control: 1,
             initialized: false,
             init_tx: None,
+            init_id: None,
+            menu_cwd: None,
             stderr: Vec::new(),
             steers: Vec::new(),
             background: HashSet::new(),
@@ -650,6 +672,8 @@ pub struct TurnHost {
     running: Arc<Mutex<HashSet<String>>>,
     /// What each session's turn left running in the background.
     background: crate::background::BackgroundHost,
+    /// The `/` menu each provider offers in each folder.
+    commands: crate::commands::CommandsHost,
     /// The newest context reading of each session, merged as they come.
     contexts: Arc<Mutex<HashMap<String, ContextReading>>>,
     /// Sessions whose process is up with no turn on it, since when. Apart from
@@ -679,6 +703,7 @@ impl TurnHost {
             exiting: Arc::new(Mutex::new(HashMap::new())),
             running: Arc::new(Mutex::new(HashSet::new())),
             background: crate::background::BackgroundHost::default(),
+            commands: crate::commands::CommandsHost::default(),
             contexts: Arc::new(Mutex::new(HashMap::new())),
             idle: Arc::new(Mutex::new(HashMap::new())),
             sending_now: Arc::new(Mutex::new(HashSet::new())),
@@ -689,6 +714,11 @@ impl TurnHost {
     /// when they change.
     pub fn background(&self) -> &crate::background::BackgroundHost {
         &self.background
+    }
+
+    /// Every folder's `/` menu: crewd hears when one changes.
+    pub fn commands(&self) -> &crate::commands::CommandsHost {
+        &self.commands
     }
 
     /// What a waiter on a child session sleeps on.
@@ -1133,6 +1163,69 @@ impl TurnHost {
     /// What a session's turn left running in the background.
     pub fn background_list(&self, session_id: &str) -> crew_protocol::BackgroundList {
         self.background.list(session_id)
+    }
+
+    /// The `/` menu a session offers: its provider's commands and skills in its
+    /// folder, after Crew's own actions. A live Claude keeps its folder's
+    /// catalog current, so once one is held it is answered as it stands. With
+    /// no process up, a catalog older than [`crate::commands::MAX_AGE_MS`] (or
+    /// none) is read again by starting the CLI with no turn, which takes a
+    /// moment, so this is for a thread that may wait. A CLI that cannot be
+    /// asked leaves the menu to Crew's actions. A bot gets those alone: its
+    /// persona must not see the user's skills.
+    pub fn commands_list(&self, session_id: &str) -> Result<crew_protocol::CommandCatalog, String> {
+        let session = session::get(&self.store, session_id.to_string())?.ok_or("No such session")?;
+        let provider = session.provider.clone();
+        let now = crate::store::now_millis();
+        if session.kind == "bot" {
+            return Ok(crew_protocol::CommandCatalog { entries: crate::commands::crew_actions(offers_fast(&provider)), at: now });
+        }
+        let cwd = session::cwd(&self.store, &session)?;
+        if provider == "claude" {
+            let live = matches!(self.lock().get(session_id), Some(Live::Claude(live)) if live.menu_cwd.as_deref() == Some(cwd.as_str()));
+            let held = if live { self.commands.holds(&provider, &cwd) } else { self.commands.is_fresh(&provider, &cwd, now) };
+            if !held {
+                self.probe_claude_commands(session_id, &cwd);
+            }
+        }
+        Ok(self.commands_catalog(&provider, &cwd))
+    }
+
+    /// Reads a folder's Claude menu with a CLI of its own. One at a time: a
+    /// list that arrives while another probes waits, and finds the answer.
+    fn probe_claude_commands(&self, session_id: &str, cwd: &str) {
+        let _probing = self.commands.probe_lock();
+        if self.commands.is_fresh("claude", cwd, crate::store::now_millis()) {
+            return;
+        }
+        let probed = self
+            .resolve_bin("claude")
+            .and_then(|binary| crate::provider_session::probe_claude_commands(std::path::Path::new(&binary), std::path::Path::new(cwd)));
+        match probed {
+            Ok(menu) => self.learn_commands(session_id, cwd, Some(menu.commands), Some(menu.skills)),
+            Err(error) => eprintln!("[commands] {error}"),
+        }
+    }
+
+    /// Keeps what Claude said of a folder's menu, and tells the windows of the
+    /// session when it changed.
+    fn learn_commands(
+        &self,
+        session_id: &str,
+        cwd: &str,
+        entries: Option<Vec<crew_protocol::CommandEntry>>,
+        skills: Option<HashSet<String>>,
+    ) {
+        if self.commands.learn("claude", cwd, entries, skills, crate::store::now_millis()) {
+            self.commands.notify(crew_protocol::CommandsChanged {
+                session_id: session_id.to_string(),
+                catalog: self.commands_catalog("claude", cwd),
+            });
+        }
+    }
+
+    fn commands_catalog(&self, provider: &str, cwd: &str) -> crew_protocol::CommandCatalog {
+        self.commands.catalog(provider, cwd, crate::commands::crew_actions(offers_fast(provider)), crate::store::now_millis())
     }
 
     /// The session's newest context reading, if one came.
@@ -2635,6 +2728,10 @@ impl TurnHost {
             };
             let id = format!("ctrl-{}", live.next_control);
             live.next_control += 1;
+            // Not a call waited on: its answer is what tells the CLI is up,
+            // and it is also the first to list the commands.
+            live.init_id = Some(id.clone());
+            live.menu_cwd = spawn.user_settings.then(|| params.cwd.clone());
             id
         };
         self.agents.write(
@@ -2647,6 +2744,7 @@ impl TurnHost {
         // and that is nobody's to take.
         if let Some(Live::Claude(live)) = self.lock().get_mut(&session_id) {
             live.init_tx = None;
+            live.init_id = None;
         }
         match init {
             // Up: how large its window is, for a meter before the first answer.
@@ -2913,15 +3011,47 @@ impl TurnHost {
             }
             let type_name = string_field(Some(&rec), "type");
             let subtype = string_field(Some(&rec), "subtype");
+            // The menu: the CLI sends the whole list again when it finds
+            // skills as the agent works in a folder, and a turn's `init` names
+            // the skills among the commands.
+            if type_name.as_deref() == Some("system") && subtype.as_deref() == Some("commands_changed") {
+                let menu = live.menu_cwd.clone().zip(rec.get("commands").map(crate::commands::claude_entries));
+                drop(map);
+                if let Some((cwd, entries)) = menu {
+                    self.learn_commands(session_id, &cwd, Some(entries), None);
+                }
+                return;
+            }
             if type_name.as_deref() == Some("control_response")
                 || (type_name.as_deref() == Some("system")
                     && matches!(subtype.as_deref(), Some("init" | "initialized")))
             {
+                // What the line teaches of the menu: the answer to
+                // `initialize` lists the commands, and `init` the skills.
+                let answer = parse_control_response(&rec)
+                    .filter(|(id, _)| live.init_id.as_deref() == Some(id.as_str()))
+                    .and_then(|(_, result)| result.ok());
+                if answer.is_some() {
+                    live.init_id = None;
+                }
+                let skills = (subtype.as_deref() == Some("init")).then(|| rec.get("skills")).flatten();
+                let menu = live.menu_cwd.clone().map(|cwd| {
+                    (
+                        cwd,
+                        answer.as_ref().and_then(|answer| answer.get("commands")).map(crate::commands::claude_entries),
+                        skills.map(crate::commands::claude_skill_names),
+                    )
+                });
                 if !live.initialized {
                     live.initialized = true;
                     if let Some(tx) = live.init_tx.take() {
                         let _ = tx.send(true);
                     }
+                }
+                drop(map);
+                if let Some((cwd, entries, skills)) = menu.filter(|(_, entries, skills)| entries.is_some() || skills.is_some())
+                {
+                    self.learn_commands(session_id, &cwd, entries, skills);
                 }
                 return;
             }

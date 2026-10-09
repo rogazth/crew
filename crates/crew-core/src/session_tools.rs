@@ -1539,7 +1539,9 @@ print(json.dumps({{"type": "step_finish", "sessionID": sid, "part": {{"id": "sf"
     /// serves as many turns as it is sent on one stdin. Each launch is logged
     /// to `claude-launch.log` with its argv, pid and token; each control
     /// request to `claude-control.log`, and a file `refuse-<subtype>` in its
-    /// directory makes the next such request answer with an error.
+    /// directory makes the next such request answer with an error. Its
+    /// `initialize` answers two commands, `system/init` names one skill, and a
+    /// message with COMMANDS in it makes it send a changed list.
     fn fake_claude(dir: &Path) -> String {
         let path = dir.join("fake-claude");
         std::fs::write(
@@ -1598,6 +1600,8 @@ def reader():
                 out({"type": "control_response", "response": {"subtype": "error", "request_id": rec["request_id"], "error": "no"}})
                 continue
             answer = {"output": "tick\n", "total_bytes": 5, "truncated": False} if req.get("subtype") == "get_task_output" else {}
+            if req.get("subtype") == "initialize":
+                answer = {"commands": [{"name": "prototype", "description": "Build a prototype", "argumentHint": ""}, {"name": "compact", "description": "Free up context", "argumentHint": "<hint>", "builtin": True}]}
             out({"type": "control_response", "response": {"subtype": "success", "request_id": rec["request_id"], "response": answer}})
             if req.get("subtype") == "stop_task":
                 stopped.set()
@@ -1607,7 +1611,10 @@ threading.Thread(target=reader, daemon=True).start()
 while True:
     first = inbox.get()
     heard = [text_of(first)]
-    out({"type": "system", "subtype": "init", "session_id": sid, "model": "fake", "tools": []})
+    out({"type": "system", "subtype": "init", "session_id": sid, "model": "fake", "tools": [], "skills": ["prototype"]})
+    # COMMANDS finds a skill in a folder mid-session: the whole list again.
+    if "COMMANDS" in heard[0]:
+        out({"type": "system", "subtype": "commands_changed", "session_id": sid, "commands": [{"name": "prototype", "description": "Build a prototype", "argumentHint": ""}, {"name": "deploy", "description": "Ship it", "argumentHint": "<env>"}]})
     if replay:
         out({"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": heard[0]}]}, "session_id": sid})
     b = re.search(r"BACKGROUND (\d+(?:\.\d+)?)", heard[0])
@@ -2234,6 +2241,153 @@ while True:
         let text = read["text"].as_str().unwrap();
         assert_eq!(text.matches("report: STUBBORN SLEEP 2").count(), 1, "{text}");
         assert_eq!(text.matches("] and this").count(), 1, "{text}");
+    }
+
+    /// What a session's menu pushed to the windows, in order.
+    fn hear_commands(w: &World) -> Arc<Mutex<Vec<crew_protocol::CommandsChanged>>> {
+        let heard = Arc::new(Mutex::new(Vec::new()));
+        let seen = heard.clone();
+        w.turns.commands().set_listener(Arc::new(move |change| seen.lock().unwrap().push(change)));
+        heard
+    }
+
+    /// The menu's entries that came from the CLI, as (name, kind).
+    fn provider_entries(catalog: &crew_protocol::CommandCatalog) -> Vec<(String, String)> {
+        catalog
+            .entries
+            .iter()
+            .filter(|entry| entry.kind != "crew")
+            .map(|entry| (entry.name.clone(), entry.kind.clone()))
+            .collect()
+    }
+
+    /// The menu of a folder comes from the CLI the session already runs: the
+    /// commands its `initialize` answered, the skills among them that its
+    /// turn's `init` named, and the whole list again when it changes. Each
+    /// change reaches the windows, and no CLI is started to ask.
+    #[test]
+    fn a_claude_sessions_menu_follows_what_its_cli_says_of_the_folder() {
+        let w = world();
+        let heard = hear_commands(&w);
+        let parent = w.session("terminal", "shell", "full");
+        let (id, log) = w.claude(&parent, "hello");
+        w.wait(&parent, &id, json!({}));
+        w.settle(&id);
+
+        let menu = w.turns.commands_list(&id).expect("menu");
+        assert_eq!(
+            provider_entries(&menu),
+            [("prototype".to_string(), "skill".to_string()), ("compact".to_string(), "command".to_string())]
+        );
+        let actions: Vec<_> = menu.entries.iter().filter(|e| e.kind == "crew").map(|e| e.name.as_str()).collect();
+        assert!(["model", "effort", "access", "restart", "reload"].iter().all(|name| actions.contains(name)), "{actions:?}");
+        {
+            let heard = heard.lock().unwrap();
+            let last = heard.last().expect("a push");
+            assert_eq!(last.session_id, id);
+            assert_eq!(provider_entries(&last.catalog), provider_entries(&menu));
+        }
+
+        // A skill found as the agent works: the list is replaced, and the
+        // skills the turn named still stand.
+        w.call(&parent, "send_message", json!({ "to": id, "text": "COMMANDS" })).expect("send");
+        w.wait(&parent, &id, json!({}));
+        w.settle(&id);
+        let menu = w.turns.commands_list(&id).expect("menu");
+        assert_eq!(
+            provider_entries(&menu),
+            [("prototype".to_string(), "skill".to_string()), ("deploy".to_string(), "command".to_string())]
+        );
+        assert_eq!(menu.entries.iter().find(|e| e.name == "deploy").unwrap().argument_hint.as_deref(), Some("<env>"));
+        let pushed = provider_entries(&heard.lock().unwrap().last().expect("a push").catalog);
+        assert_eq!(pushed, provider_entries(&menu));
+        assert_eq!(launched(&log).len(), 1, "a list started a CLI");
+    }
+
+    /// A bot's menu is Crew's actions alone, whatever its folder holds: its
+    /// persona must not see the user's skills, and no CLI is asked.
+    #[test]
+    fn a_bots_menu_is_crews_actions_alone() {
+        let w = world();
+        let bot = w.session("bot", "helper", "ask");
+        let id = bot.session_id().unwrap().to_string();
+        let menu = w.turns.commands_list(&id).expect("menu");
+        assert!(!menu.entries.is_empty() && menu.entries.iter().all(|entry| entry.kind == "crew"), "{menu:?}");
+        assert!(!w.turns.commands().holds("claude", &w.dir.to_string_lossy()));
+        assert!(w.turns.commands_list("nobody").is_err());
+    }
+
+    /// A Claude that answers `initialize` and `reload_skills`, and logs how it
+    /// was started: what a probe launches.
+    fn fake_menu_claude(dir: &Path) -> String {
+        let path = dir.join("fake-menu-claude");
+        std::fs::write(
+            &path,
+            r#"#!/usr/bin/env python3
+import json, os, sys, time
+with open(os.path.join(os.path.dirname(os.path.abspath(sys.argv[0])), "menu-launch.log"), "a") as f:
+    f.write(json.dumps({"argv": sys.argv[1:], "cwd": os.getcwd()}) + "\n")
+first = json.loads(sys.stdin.readline())
+second = json.loads(sys.stdin.readline())
+def answer(rec, body):
+    print(json.dumps({"type": "control_response", "response": {"subtype": "success", "request_id": rec["request_id"], "response": body}}), flush=True)
+answer(first, {"commands": [{"name": "prototype", "description": "Build a prototype", "argumentHint": ""}, {"name": "compact", "description": "Free up context", "argumentHint": "<hint>"}]})
+answer(second, {"skills": [{"name": "prototype"}]})
+time.sleep(600)
+"#,
+        )
+        .expect("write fake");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        path.to_string_lossy().into_owned()
+    }
+
+    /// With no process up the CLI is started once for the folder, with no
+    /// turn, and what it said is kept: the next list, from this session or
+    /// another in the folder, starts nothing. The windows are told.
+    #[test]
+    fn a_claude_session_with_no_process_has_its_folders_menu_read_once() {
+        let w = world();
+        let heard = hear_commands(&w);
+        w.turns.override_binary("claude", fake_menu_claude(&w.dir));
+        let make = |name: &str| {
+            session::create(w.turns.store(), w.workspace.clone(), "terminal".into(), name.into(), "claude".into(), String::new(), String::new(), "ask".into(), None)
+                .expect("session")
+                .id
+        };
+        let (one, two) = (make("one"), make("two"));
+
+        let menu = w.turns.commands_list(&one).expect("menu");
+        assert_eq!(
+            provider_entries(&menu),
+            [("prototype".to_string(), "skill".to_string()), ("compact".to_string(), "command".to_string())]
+        );
+        assert_eq!(provider_entries(&w.turns.commands_list(&two).expect("menu")), provider_entries(&menu));
+        let launches = launched(&w.dir.join("menu-launch.log"));
+        assert_eq!(launches.len(), 1, "{launches:?}");
+        let argv: Vec<_> = launches[0]["argv"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
+        assert!(argv.contains(&"--setting-sources=user,project,local") && argv.contains(&"--strict-mcp-config"), "{argv:?}");
+        assert_eq!(
+            std::fs::canonicalize(launches[0]["cwd"].as_str().unwrap()).unwrap(),
+            std::fs::canonicalize(&w.dir).unwrap()
+        );
+        let heard = heard.lock().unwrap();
+        assert_eq!(heard.len(), 1, "{heard:?}");
+        assert_eq!(heard[0].session_id, one);
+        assert_eq!(provider_entries(&heard[0].catalog), provider_entries(&menu));
+    }
+
+    /// A CLI that cannot be asked leaves the menu to Crew's actions, and is
+    /// asked again next time rather than remembered as empty.
+    #[test]
+    fn a_claude_that_cannot_be_asked_leaves_the_menu_to_crews_actions() {
+        let w = world();
+        w.turns.override_binary("claude", w.dir.join("absent").to_string_lossy().into_owned());
+        let id = session::create(w.turns.store(), w.workspace.clone(), "terminal".into(), "x".into(), "claude".into(), String::new(), String::new(), "ask".into(), None)
+            .expect("session")
+            .id;
+        let menu = w.turns.commands_list(&id).expect("menu");
+        assert!(menu.entries.iter().all(|entry| entry.kind == "crew"), "{menu:?}");
+        assert!(!w.turns.commands().holds("claude", &w.dir.to_string_lossy()));
     }
 
     /// Background commands still open when the grace runs out would wake

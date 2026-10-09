@@ -575,6 +575,9 @@ pub fn serve_on(config: Config, listen: Listen) -> Result<Handle, String> {
     // What a turn left running in the background reaches every window.
     let tray = hub.clone();
     turns.background().set_listener(Arc::new(move |list| tray.emit("background-changed", list)));
+    // A session's `/` menu changing reaches every window.
+    let menu = hub.clone();
+    turns.commands().set_listener(Arc::new(move |change| menu.emit("commands-changed", change)));
     // Claude's fast mode is the account's, so every window hears a change.
     let fast_mode = hub.clone();
     provider_session::set_claude_fast_mode_listener(move |mode| fast_mode.emit("fast-mode-changed", mode));
@@ -1944,6 +1947,11 @@ async fn dispatch(hosts: &Hosts, method: &str, params: Value) -> Result<Value, S
             let SessionId { session_id } = parse(params)?;
             json(hosts.turns.background_list(&session_id))
         }
+        "commands_list" => {
+            let proto::CommandsList { session_id } = parse(params)?;
+            let turns = hosts.turns.clone();
+            json(block(move || turns.commands_list(&session_id)).await?)
+        }
         "background_output" => {
             let proto::BackgroundRequest { session_id, id } = parse(params)?;
             let turns = hosts.turns.clone();
@@ -2875,6 +2883,95 @@ for line in sys.stdin:
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
         path
+    }
+
+    /// A Claude that answers `initialize` with two commands and `reload_skills`
+    /// with the skill among them: what the daemon starts to read a menu.
+    fn write_fake_claude_menu(dir: &std::path::Path) -> std::path::PathBuf {
+        let path = dir.join("fake-claude-menu");
+        std::fs::write(
+            &path,
+            r#"#!/usr/bin/env python3
+import json, sys, time
+def answer(rec, body):
+    print(json.dumps({"type": "control_response", "response": {"subtype": "success", "request_id": rec["request_id"], "response": body}}), flush=True)
+first = json.loads(sys.stdin.readline())
+second = json.loads(sys.stdin.readline())
+answer(first, {"commands": [{"name": "prototype", "description": "Build a prototype", "argumentHint": ""}, {"name": "compact", "description": "Free up context", "argumentHint": "<hint>", "builtin": True}]})
+answer(second, {"skills": [{"name": "prototype"}]})
+time.sleep(600)
+"#,
+        )
+        .expect("fake claude");
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        path
+    }
+
+    /// `commands_list` answers a session's menu, Crew's actions first and then
+    /// what its provider's CLI lists in the folder, skills told from commands;
+    /// the window hears the read as `commands-changed`, and a bot's menu is
+    /// Crew's actions alone.
+    #[tokio::test]
+    async fn commands_list_answers_a_sessions_menu_and_the_window_hears_it_change() {
+        let dir = test_dir("commands-list");
+        let handle = test_serve(&dir);
+        handle.override_agent_binary("claude", write_fake_claude_menu(&dir).to_string_lossy().into_owned());
+        let mut ws = connect_authed(&handle).await;
+        let workspace: proto::Workspace = serde_json::from_value(
+            rpc(&mut ws, 1, "workspace_create", serde_json::json!({ "name": "w", "path": dir.to_string_lossy() }))
+                .await
+                .result
+                .expect("ws"),
+        )
+        .expect("workspace");
+        let make = |id: u32, kind: &str| {
+            let params = serde_json::json!({
+                "workspaceId": workspace.id, "kind": kind, "name": "n", "provider": "claude",
+                "model": "", "description": "", "autonomy": "ask"
+            });
+            (id, params)
+        };
+        let mut sessions = Vec::new();
+        for (id, kind) in [(2, "terminal"), (3, "bot")] {
+            let (id, params) = make(id, kind);
+            let made = rpc(&mut ws, id, "session_create", params).await;
+            let session: proto::Session = serde_json::from_value(made.result.expect("session")).expect("session");
+            sessions.push(session.id);
+        }
+
+        send_json(&mut ws, &Request { id: 4, method: "commands_list".into(), params: serde_json::json!({ "sessionId": sessions[0] }) }).await;
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+        let (mut response, mut pushed) = (None, None);
+        while response.is_none() || pushed.is_none() {
+            let msg = tokio::time::timeout_at(deadline, ws.next()).await.expect("rpc timeout").expect("closed").expect("ws");
+            let Message::Text(text) = msg else { continue };
+            if let Ok(reply) = serde_json::from_str::<proto::Response>(text.as_ref()) {
+                if reply.id == 4 {
+                    response = Some(reply);
+                }
+            } else if let Ok(event) = serde_json::from_str::<proto::Event>(text.as_ref()) {
+                if event.event == "commands-changed" {
+                    pushed = Some(serde_json::from_value::<proto::CommandsChanged>(event.payload).expect("push"));
+                }
+            }
+        }
+        let response = response.unwrap();
+        assert!(response.ok, "{:?}", response.error);
+        let catalog: proto::CommandCatalog = serde_json::from_value(response.result.expect("catalog")).expect("catalog");
+        let kinds: Vec<_> = catalog.entries.iter().map(|entry| (entry.name.as_str(), entry.kind.as_str())).collect();
+        assert_eq!(&kinds[kinds.len() - 2..], [("prototype", "skill"), ("compact", "command")], "{kinds:?}");
+        assert!(kinds.contains(&("model", "crew")) && kinds.contains(&("reload", "crew")), "{kinds:?}");
+        let pushed = pushed.unwrap();
+        assert_eq!(pushed.session_id, sessions[0]);
+        assert_eq!(pushed.catalog, catalog);
+
+        let bot = rpc(&mut ws, 5, "commands_list", serde_json::json!({ "sessionId": sessions[1] })).await;
+        let bot: proto::CommandCatalog = serde_json::from_value(bot.result.expect("catalog")).expect("catalog");
+        assert!(bot.entries.iter().all(|entry| entry.kind == "crew"), "{bot:?}");
+        let unknown = rpc(&mut ws, 6, "commands_list", serde_json::json!({ "sessionId": "nobody" })).await;
+        assert!(!unknown.ok);
+        handle.shutdown();
     }
 
     /// A request whose change to the user's queue the window hears of, as

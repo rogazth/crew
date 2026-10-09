@@ -12,6 +12,7 @@ pub mod browser_relay;
 pub mod browser_tools;
 pub mod claude_title;
 pub mod command_sources;
+pub mod commands;
 pub mod cron;
 pub mod provider_session;
 pub mod providers;
