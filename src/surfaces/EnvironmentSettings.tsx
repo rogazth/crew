@@ -413,10 +413,12 @@ function Health({ link }: { link: EnvLink }) {
       <dd className="flex flex-wrap items-center gap-1.5">
         {PROVIDERS.map((provider) => {
           const found = installed.has(provider.binary);
+          // opencode says which version runs, or why none does (a 1.x install).
+          const said = provider.id === "opencode" ? info.opencode : undefined;
           return (
             <span
               key={provider.id}
-              title={found ? provider.binary : `${provider.binary} isn't installed there`}
+              title={said ?? (found ? provider.binary : `${provider.binary} isn't installed there`)}
               className={`flex h-6 items-center gap-1.5 rounded-md px-1.5 ring-1 ring-hairline ${found ? "" : "opacity-40"}`}
             >
               <ProviderIcon provider={provider.id} className="size-3.5" />

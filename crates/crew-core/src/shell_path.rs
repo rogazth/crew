@@ -86,6 +86,15 @@ pub fn resolve_opencode() -> Result<PathBuf, String> {
     opencode_in(&ordered_dirs(true))
 }
 
+/// What Settings says of opencode: the version line of the one Crew runs, or
+/// why it runs none, with the command that installs 2.x.
+pub fn opencode_report() -> String {
+    match resolve_opencode() {
+        Ok(path) => version_line(&path).unwrap_or_else(|| format!("opencode at {}", path.display())),
+        Err(why) => why,
+    }
+}
+
 fn opencode_in(dirs: &[PathBuf]) -> Result<PathBuf, String> {
     let is_v2 = |path: &Path| version_line(path).is_some_and(|line| line.starts_with("opencode v2."));
     if let Some(path) = find_in(dirs, "opencode", is_v2) {

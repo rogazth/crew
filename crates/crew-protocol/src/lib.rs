@@ -122,6 +122,12 @@ pub struct MachineInfo {
     pub agents_running: u32,
     /// The agent CLIs found on the daemon's PATH.
     pub installed: Vec<String>,
+    /// The opencode Crew runs, as it prints its version (`opencode v2.0.26`),
+    /// or why it runs none: a 1.x install is not one, and the line says how
+    /// to get 2.x.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub opencode: Option<String>,
     /// The SOCKS port beside `crewd serve`, for a remote workspace's browser.
     /// Absent on the window's own daemon.
     #[serde(default, skip_serializing_if = "Option::is_none")]

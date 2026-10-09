@@ -25,6 +25,7 @@ pub fn info(agents_running: u32) -> MachineInfo {
         memory_available,
         agents_running,
         installed: AgentHost::installed(AGENT_CLIS.iter().map(|name| name.to_string()).collect()),
+        opencode: Some(crew_core::shell_path::opencode_report()),
         socks_port: None,
     }
 }
