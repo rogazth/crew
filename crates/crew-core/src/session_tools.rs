@@ -579,6 +579,9 @@ impl SessionTools {
         // An independent session that has exited takes the letter as a turn
         // on the conversation it left (plan decision 14).
         let resuming = target.status == "exited";
+        if resuming && session::is_archived(&self.store, &target.id)? {
+            return Err(format!("{} is archived: it has ended and is hidden, so a letter does not resume it.", target.name));
+        }
         let mut fell_back = None;
         // The letter a steer that did not go through left in the box.
         let mut released = None;
