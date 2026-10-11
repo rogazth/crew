@@ -1886,6 +1886,8 @@ while True:
         log: PathBuf,
         made: Arc<Mutex<Vec<String>>>,
         dir: PathBuf,
+        /// The fake opencode server's script: its `.mcp` beside it lists its servers.
+        fake: String,
     }
 
     fn world() -> World {
@@ -1894,7 +1896,7 @@ while True:
         let dir = std::env::temp_dir().join(format!("crew-st-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).expect("dir");
         let (fake, log) = fake_opencode(&dir);
-        turns.override_binary("opencode", fake);
+        turns.override_binary("opencode", fake.clone());
         let workspace = crate::workspace::create(turns.store(), "w".into(), dir.to_string_lossy().into())
             .expect("workspace")
             .id;
@@ -1920,7 +1922,7 @@ while True:
         ));
         // As the daemon has it: the sheet in a session's prompt names these.
         turns.toolbox().register(tools.clone());
-        World { turns, tools, workspace, log, made, dir: dir_kept }
+        World { turns, tools, workspace, log, made, dir: dir_kept, fake }
     }
 
     impl World {
@@ -2829,6 +2831,103 @@ time.sleep(600)
         w.turns.commands_reload(&mine.id).expect("reload");
         until("asked again", || mcp_asks(&w) >= 4);
         w.turns.release(&mine.id);
+    }
+
+    /// Sets the servers the fake opencode server lists for its folders. Its
+    /// `.mcp` file is read when the server starts, so it is set before a turn.
+    fn opencode_servers(w: &World, rows: Value) {
+        std::fs::write(format!("{}.mcp", w.fake), rows.to_string()).expect("servers");
+    }
+
+    /// An opencode session lists its folder's servers as its server says them:
+    /// a failure keeps the server's words, a login is offered as opencode's
+    /// page, and a server's own change reaches the windows.
+    #[test]
+    fn an_opencode_session_lists_its_servers_and_hears_them_change() {
+        use crew_protocol::McpState::{Connected, Disabled, Failed, NeedsAuth};
+        let w = world();
+        opencode_servers(
+            &w,
+            json!([
+                { "name": "crew", "status": "connected" },
+                { "name": "broken", "status": "failed", "error": "NotFound: ChildProcess.spawn (/nope)" },
+                { "name": "sentry", "status": "needs_auth", "error": "requires a login", "integrationID": "mcp_sentry", "completes": true },
+                { "name": "off", "status": "disabled" }
+            ]),
+        );
+        let heard = hear_mcp(&w);
+        let mine = w.user_session("opencode", "opencode/nemotron-3.5-lightning-free", "full");
+        assert_eq!(w.turns.mcp_list(&mine.id).expect("list"), crew_protocol::McpStatus { servers: Vec::new(), reported: false });
+        w.type_to(&mine, "Reply with just the word one.", None, None);
+        until("the servers are listed", || mcp_named(&w, &mine.id, "off").is_some());
+        let list = w.turns.mcp_list(&mine.id).expect("list");
+        assert!(list.reported);
+        let states: Vec<_> = list.servers.iter().map(|server| (server.name.as_str(), server.state)).collect();
+        assert_eq!(states, [("crew", Connected), ("broken", Failed), ("sentry", NeedsAuth), ("off", Disabled)]);
+        assert_eq!(list.servers[1].error.as_deref(), Some("NotFound: ChildProcess.spawn (/nope)"));
+        assert_eq!(list.servers[2].sign_in, None, "the page is minted when asked for");
+        let pushed = serde_json::to_string(&*heard.lock().unwrap()).expect("json");
+        assert!(pushed.contains("needs_auth") && !pushed.contains("mcp_sentry"), "{pushed}");
+        w.settle(&mine.id);
+    }
+
+    /// A login is opencode's own: the page it names is the one to open, and
+    /// the server connects by itself once the browser's redirect is taken,
+    /// which the windows hear. A server that wants a code back is not taken
+    /// here, and one without a sign-in has none to offer.
+    #[test]
+    fn an_opencode_server_signs_in_with_its_own_page_and_connects_after() {
+        use crew_protocol::McpState::{Connected, NeedsAuth};
+        let w = world();
+        opencode_servers(
+            &w,
+            json!([
+                { "name": "crew", "status": "connected" },
+                { "name": "sentry", "status": "needs_auth", "error": "requires a login", "integrationID": "mcp_sentry", "completes": true },
+                { "name": "codes", "status": "needs_auth", "error": "requires a login", "integrationID": "mcp_codes", "mode": "code" }
+            ]),
+        );
+        let mine = w.user_session("opencode", "opencode/nemotron-3.5-lightning-free", "full");
+        w.type_to(&mine, "Reply with just the word one.", None, None);
+        until("the servers are listed", || mcp_named(&w, &mine.id, "codes").is_some());
+        assert_eq!(
+            w.turns.mcp_login(&mine.id, "sentry").expect("login"),
+            crew_protocol::McpSignIn::Url { url: "https://auth.example/authorize?server=sentry".into() }
+        );
+        until("connected once the redirect is taken", || mcp_named(&w, &mine.id, "sentry").is_some_and(|server| server.state == Connected));
+        assert!(w.turns.mcp_login(&mine.id, "crew").expect_err("login").contains("no sign-in"));
+        assert!(w.turns.mcp_login(&mine.id, "nothing").is_err());
+        let code = w.turns.mcp_login(&mine.id, "codes").expect_err("a code");
+        assert!(code.contains("opencode mcp auth codes"), "{code}");
+        assert_eq!(mcp_named(&w, &mine.id, "codes").expect("codes").state, NeedsAuth);
+        w.settle(&mine.id);
+    }
+
+    /// Reconnect has opencode connect the server again, and answers the list
+    /// as it stands after; a server that fails again says so, and one that is
+    /// not listed is an error.
+    #[test]
+    fn reconnect_connects_an_opencode_server_again() {
+        use crew_protocol::McpState::{Connected, Failed};
+        let w = world();
+        opencode_servers(
+            &w,
+            json!([
+                { "name": "crew", "status": "connected" },
+                { "name": "flaky", "status": "failed", "error": "timeout", "connects": "connected" },
+                { "name": "down", "status": "failed", "error": "refused", "connects": "failed" }
+            ]),
+        );
+        let mine = w.user_session("opencode", "opencode/nemotron-3.5-lightning-free", "full");
+        w.type_to(&mine, "Reply with just the word one.", None, None);
+        until("the servers are listed", || mcp_named(&w, &mine.id, "down").is_some());
+        let after = w.turns.mcp_reconnect(&mine.id, "flaky").expect("reconnect");
+        assert_eq!(after.servers.iter().find(|server| server.name == "flaky").map(|server| server.state), Some(Connected));
+        let again = w.turns.mcp_reconnect(&mine.id, "down").expect("reconnect");
+        assert_eq!(again.servers.iter().find(|server| server.name == "down").map(|server| server.state), Some(Failed));
+        assert!(w.turns.mcp_reconnect(&mine.id, "nothing").is_err());
+        assert_eq!(mcp_named(&w, &mine.id, "flaky").expect("flaky").state, Connected);
+        w.settle(&mine.id);
     }
 
     /// Cursor says nothing of its servers, so none are reported, and there is

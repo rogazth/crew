@@ -265,6 +265,7 @@ impl TurnHost {
         };
         self.transcripts.apply(id, HarnessEvent::SessionProviderBound { provider_session_id: oc.clone() });
         self.transcripts.apply(id, HarnessEvent::SessionStarted {});
+        self.opencode_read_mcp_soon(id, &params.cwd);
         let window = self.opencode_window(&conn, &params.cwd, session);
         if let Some(Live::Opencode(live)) = self.lock().get_mut(id) {
             live.window = window;
@@ -702,6 +703,11 @@ impl TurnHost {
                 "command.updated" | "skill.updated" => {
                     if let Some(cwd) = crate::providers::opencode::directory_of(event) {
                         self.opencode_menu_changed(cwd);
+                    }
+                }
+                "mcp.status.changed" => {
+                    if let Some(cwd) = crate::providers::opencode::directory_of(event) {
+                        self.opencode_mcp_changed(cwd);
                     }
                 }
                 "model.updated" => self.opencode.forget_windows(),
@@ -1170,6 +1176,97 @@ impl TurnHost {
         }
         Ok(self.reloaded("Reloaded commands, skills and MCP servers", "opencode", cwd))
     }
+
+    /// Reads a folder's MCP servers as opencode says them (`GET /api/mcp` in
+    /// that folder) and gives the list to the session asked for and to each
+    /// live session of the folder: they share the folder's servers.
+    pub(super) fn opencode_read_mcp(&self, cwd: &str, session_id: &str) -> Result<(), String> {
+        let conn = self.opencode_conn(None)?;
+        let listed = ok(conn.client().get_json_in("/api/mcp", cwd), "list its MCP servers")?;
+        let servers = crate::providers::opencode::mcp_servers(listed.get("data").unwrap_or(&Value::Null));
+        let mut ids = self.opencode_sessions_in(cwd);
+        if !ids.iter().any(|id| id == session_id) {
+            ids.push(session_id.to_string());
+        }
+        for id in ids {
+            self.mcp_status.learn(&id, servers.clone());
+        }
+        Ok(())
+    }
+
+    /// Reads a folder's servers on a thread of its own, for the session that
+    /// asks, and again when opencode says one changed: a change that comes
+    /// while a read is under way makes the read go round once more, as Claude's
+    /// and Codex's do.
+    pub(super) fn opencode_read_mcp_soon(&self, session_id: &str, cwd: &str) {
+        if !self.mcp_status.claim(session_id, true) {
+            return;
+        }
+        let host = self.clone();
+        let (id, cwd) = (session_id.to_string(), cwd.to_string());
+        thread::spawn(move || loop {
+            if let Err(error) = host.opencode_read_mcp(&cwd, &id) {
+                eprintln!("[mcp] {error}");
+            }
+            if !host.mcp_status.release(&id) {
+                break;
+            }
+        });
+    }
+
+    /// `mcp.status.changed`: a server of a folder changed. The folder's live
+    /// sessions are read, through the first of them.
+    fn opencode_mcp_changed(&self, cwd: &str) {
+        if let Some(id) = self.opencode_sessions_in(cwd).into_iter().next() {
+            self.opencode_read_mcp_soon(&id, cwd);
+        }
+    }
+
+    /// The live opencode sessions whose folder is `cwd`.
+    fn opencode_sessions_in(&self, cwd: &str) -> Vec<String> {
+        self.lock()
+            .iter()
+            .filter_map(|(id, live)| match live {
+                Live::Opencode(live) if live.cwd == cwd => Some(id.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Starts a server's sign-in with opencode (`connect/oauth`) and gives the
+    /// page to open. opencode's own callback takes the browser's redirect and
+    /// stores the token, and the server connects; its status change reaches
+    /// the windows as an event. A sign-in that ends in a code the user copies
+    /// back is not taken here.
+    pub(super) fn opencode_mcp_login(&self, cwd: &str, name: &str) -> Result<String, String> {
+        let conn = self.opencode_conn(None)?;
+        let client = conn.client();
+        let listed = ok(client.get_json_in("/api/mcp", cwd), "list its MCP servers")?;
+        let integration = crate::providers::opencode::mcp_integration(listed.get("data").unwrap_or(&Value::Null), name)
+            .ok_or_else(|| format!("opencode offers no sign-in for {name}."))?;
+        let path = crate::providers::opencode::path_segment(&integration);
+        let info = ok(client.get_json_in(&format!("/api/integration/{path}"), cwd), "read the sign-in")?;
+        let method = crate::providers::opencode::oauth_method(&info)
+            .ok_or_else(|| format!("opencode offers no OAuth sign-in for {name}."))?;
+        let started = ok(
+            client.post_json_in(&format!("/api/integration/{path}/connect/oauth"), Some(&json!({ "methodID": method })), cwd),
+            "start the sign-in",
+        )?;
+        match crate::providers::opencode::sign_in_attempt(&started) {
+            Some((url, mode)) if mode == "auto" => Ok(url),
+            Some(_) => Err(format!("opencode finishes {name}'s sign-in with a code from its page, which Crew does not take. Run `opencode mcp auth {name}` in a terminal.")),
+            None => Err("opencode gave no page to sign in on.".into()),
+        }
+    }
+
+    /// Has opencode connect one server again (`experimental/mcp/{name}/connect`,
+    /// answered once it has tried).
+    pub(super) fn opencode_mcp_reconnect(&self, cwd: &str, name: &str) -> Result<(), String> {
+        let conn = self.opencode_conn(None)?;
+        let path = crate::providers::opencode::path_segment(name);
+        ok(conn.client().post_json_in(&format!("/api/experimental/mcp/{path}/connect"), None, cwd), "connect the server")?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -1186,7 +1283,9 @@ pub(crate) fn fake_opencode_server(dir: &std::path::Path) -> (String, std::path:
 /// and each turn's message, with the session's persona and settings, to
 /// `launches.jsonl` beside it. A file `.version` beside it is the version it
 /// says; `.migrating` makes the migration run for a few reads; `.empty-first`
-/// answers a folder's first menu read empty.
+/// answers a folder's first menu read empty; `.mcp` is the list of its MCP
+/// servers (the default is one connected `crew`), each `{name, status, error?,
+/// integrationID?, mode?, completes?, connects?}`.
 ///
 /// A turn answers `report: ` and the last line of every message it read, the
 /// steers it took at its step boundaries joined with ` + `. `SLEEP n` makes
@@ -1216,14 +1315,26 @@ subscribers = []
 sessions = {}
 waits = {}
 state = {"migration": int(read(BASE + ".migrating", "0") or 0), "menus": set()}
+# The MCP servers, from BASE.mcp when there is one: {name, status, error?, integrationID?, mode?, completes?, connects?}.
+# A server with an integrationID is one that signs in; `completes` has its sign-in finish by itself.
+mcp = {row["name"]: row for row in json.loads(read(BASE + ".mcp") or '[{"name": "crew", "status": "connected"}]')}
+def mcp_view(row):
+    status = {"status": row["status"]}
+    if row["status"] in ("failed", "needs_auth"): status["error"] = row.get("error", "")
+    out = {"name": row["name"], "status": status}
+    if "integrationID" in row: out["integrationID"] = row["integrationID"]
+    return out
+def mcp_by_integration(iid):
+    return next((row for row in mcp.values() if row.get("integrationID") == iid), None)
 def append(path, record):
     with lock:
         with open(path, "a") as f: f.write(json.dumps(record) + "\n")
 append(BASE + ".launch", {"argv": sys.argv[1:], "pid": os.getpid(), "env": sorted(k for k in os.environ if k.startswith(("CREW_", "OPENCODE_"))), "env_values": sorted(os.environ.values()), "config": json.loads(CONFIG or "{}"), "password_on_argv": PASSWORD != "" and any(PASSWORD in a for a in sys.argv)})
 def now(): return int(time.time() * 1000)
 def hexid(prefix): return prefix + uuid.uuid4().hex[:24]
-def emit(kind, data, sid=None):
+def emit(kind, data, sid=None, directory=None):
     event = {"id": hexid("evt_"), "created": now(), "type": kind, "data": data}
+    if directory is not None: event["location"] = {"directory": directory}
     with lock:
         for q in list(subscribers): q.put(event)
 def info(s):
@@ -1413,8 +1524,34 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/skill":
                 return self.reply(200, {"location": {"directory": directory}, "data": [{"id": "review-pr", "name": "Review PR", "description": "Reviews a pull request.", "path": directory + "/.opencode/skills/review-pr/SKILL.md", "content": "..."}]})
             return self.reply(200, {"location": {"directory": directory}, "data": [{"id": "nemotron-3.5-lightning-free", "modelID": "nemotron-3.5-lightning-free", "providerID": "opencode", "limit": {"context": 262144, "output": 32768}}]})
-        if path == "/api/mcp":
-            return self.reply(200, {"data": [{"name": "crew", "status": {"status": "connected"}}]})
+        if path == "/api/mcp" and method == "GET":
+            return self.reply(200, {"location": {"directory": directory}, "data": [mcp_view(row) for row in mcp.values()]})
+        if len(parts) == 5 and parts[:3] == ["api", "experimental", "mcp"] and method == "POST":
+            name = unquote(parts[3])
+            row = mcp.get(name)
+            if not row: return self.reply(404, {"_tag": "McpServerNotFoundError", "server": name, "message": "MCP server not found: " + name})
+            row["status"] = row.get("connects", "connected") if parts[4] == "connect" else "disabled"
+            emit("mcp.status.changed", {"server": name}, directory=directory)
+            return self.reply(204)
+        if len(parts) == 3 and parts[:2] == ["api", "integration"] and method == "GET":
+            row = mcp_by_integration(unquote(parts[2]))
+            if not row: return self.reply(404, {"_tag": "IntegrationNotFoundError", "integrationID": parts[2], "message": "Integration not found"})
+            iid = row["integrationID"]
+            return self.reply(200, {"location": {"directory": directory}, "data": {"id": iid, "name": row["name"], "metadata": {"source": "mcp"}, "methods": [{"id": iid, "type": "oauth", "label": row["name"]}], "connections": []}})
+        if len(parts) == 5 and parts[:2] == ["api", "integration"] and parts[3:] == ["connect", "oauth"] and method == "POST":
+            row = mcp_by_integration(unquote(parts[2]))
+            if not row: return self.reply(404, {"_tag": "IntegrationNotFoundError", "integrationID": parts[2], "message": "Integration not found"})
+            if (body or {}).get("methodID") != row["integrationID"]: return self.reply(400, {"_tag": "InvalidRequestError", "message": "Unknown method", "kind": "integration_authorization"})
+            mode = row.get("mode", "auto")
+            if row.get("completes") and mode == "auto":
+                # The browser's redirect, played: the server takes the token and connects.
+                def finish(row=row, directory=directory):
+                    time.sleep(0.3)
+                    row["status"] = "connected"
+                    emit("mcp.status.changed", {"server": row["name"]}, directory=directory)
+                threading.Thread(target=finish, daemon=True).start()
+            url = "https://auth.example/authorize?server=" + row["name"]
+            return self.reply(200, {"location": {"directory": directory}, "data": {"attemptID": hexid("con_"), "url": url, "instructions": "Authorize " + row["name"] + " in your browser.", "mode": mode, "time": {"created": now(), "expires": now() + 600000}}})
         if path == "/api/location/reload":
             emit("location.shutdown", {})
             return self.reply(204)

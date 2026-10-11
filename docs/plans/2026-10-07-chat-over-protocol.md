@@ -177,11 +177,12 @@ the bottom as each decision lands.
 20. **MCP status per session.** The chat shows which servers are connected,
     failed or need a login, from the provider: Claude `mcp_status` (and
     `mcp_reconnect`, `mcp_toggle`), Codex `mcpServerStatus/list` and its
-    startup notifications, opencode `/mcp`. A server that needs OAuth says so
-    instead of its tools silently missing. Signing in goes through the
-    provider's own login (Codex `mcpServer/oauth/login`, `opencode mcp auth`,
-    the CLI's `mcp login` in a terminal), so tokens stay where the provider
-    keeps them.
+    startup notifications, opencode `GET /api/mcp` and its `mcp.status.changed`
+    events. A server that needs OAuth says so instead of its tools silently
+    missing. Signing in goes through the provider's own login (Codex
+    `mcpServer/oauth/login`, opencode's `integration/{id}/connect/oauth`, the
+    CLI's `mcp login` in a terminal), so tokens stay where the provider keeps
+    them.
 21. **Cursor ACP takes injected HTTP and SSE servers** (2026.10.01, verified:
     `session/new` `mcpServers` with `type: "http" | "sse"` and `headers`
     connected without a prompt; the model listed and called their tools).
@@ -412,7 +413,7 @@ the terminal view.
 | 15 | Reload and Restart session | done |
 | 16 | Fast mode check and toggle | done |
 | 17 | Cursor plugin skills | done (read from the plugin cache; its body goes in the prompt) |
-| 18–21 | MCP: native config, status, sign-in, Cursor HTTP | done for Claude, Codex and Cursor; opencode status and sign-in todo |
+| 18–21 | MCP: native config, status, sign-in, Cursor HTTP | done for Claude, Codex, Cursor and opencode (status from `GET /api/mcp` and `mcp.status.changed`; sign-in is opencode's OAuth attempt, its page opened in the browser; reconnect is `experimental/mcp/{name}/connect`; checked live on 2.0.26 with an OAuth stand-in server) |
 | 22 | Cursor stays on ACP | done (no change) |
 | 23–25 | `--disable-codebase-ref`, group kill on reap, startup sweep | done |
 | 26–27 | History reading and `ptySend.ts` | done (chat over the PTY removed) |

@@ -6,7 +6,7 @@
 
 use std::collections::HashMap;
 
-use crew_protocol::{CommandEntry, EditHunk, Question, QuestionOption, ToolDetail, ToolStatus, TurnUsage};
+use crew_protocol::{CommandEntry, EditHunk, McpServer, McpState, Question, QuestionOption, ToolDetail, ToolStatus, TurnUsage};
 use serde_json::{json, Map, Value};
 
 use super::runtime::Autonomy;
@@ -623,9 +623,156 @@ pub fn context_window(models: &Value, model: &Value) -> Option<u64> {
         .as_u64()
 }
 
+/// The servers of `GET /api/mcp`'s `data` (plan decision 20): each is
+/// `{name, status: {status, error?}, integrationID?}`. A server that needs a
+/// login names the integration its sign-in is started under, which is read
+/// when the user asks, so no sign-in is named here.
+pub fn mcp_servers(list: &Value) -> Vec<McpServer> {
+    list.as_array()
+        .map(Vec::as_slice)
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|row| {
+            let row = as_record(row)?;
+            let name = string_field(Some(row), "name")?;
+            let status = row.get("status").and_then(as_record);
+            let state = mcp_state(&string_field(status, "status").unwrap_or_default());
+            let error = string_field(status, "error")
+                .filter(|_| matches!(state, McpState::Failed | McpState::NeedsAuth))
+                .map(|error| crate::mcp_status::clip(&error));
+            Some(McpServer { name, state, error, sign_in: None })
+        })
+        .collect()
+}
+
+fn mcp_state(status: &str) -> McpState {
+    match status {
+        "connected" => McpState::Connected,
+        "pending" => McpState::Pending,
+        "failed" => McpState::Failed,
+        "needs_auth" => McpState::NeedsAuth,
+        "disabled" => McpState::Disabled,
+        _ => McpState::Unknown,
+    }
+}
+
+/// The integration a named server's sign-in is under (`integrationID`), when
+/// the server has one.
+pub fn mcp_integration(list: &Value, name: &str) -> Option<String> {
+    list.as_array()?
+        .iter()
+        .filter_map(as_record)
+        .find(|row| string_field(Some(row), "name").as_deref() == Some(name))
+        .and_then(|row| string_field(Some(row), "integrationID"))
+}
+
+/// The OAuth method of an integration (`GET /api/integration/{id}`'s
+/// `data.methods`), which is what a sign-in starts with.
+pub fn oauth_method(integration: &Value) -> Option<String> {
+    integration
+        .pointer("/data/methods")?
+        .as_array()?
+        .iter()
+        .filter_map(as_record)
+        .find(|method| string_field(Some(method), "type").as_deref() == Some("oauth"))
+        .and_then(|method| string_field(Some(method), "id"))
+}
+
+/// The page a started sign-in sends the user to, and how opencode finishes
+/// it: `auto` when its own callback takes the browser's redirect, `code`
+/// when the user has to copy a code back (`data.url`, `data.mode`).
+pub fn sign_in_attempt(reply: &Value) -> Option<(String, String)> {
+    let data = reply.get("data")?;
+    Some((string_field(as_record(data), "url")?, string_field(as_record(data), "mode")?))
+}
+
+/// A value as one URL path segment: every byte but the unreserved ones is
+/// percent-encoded, so a server named with a space or a slash still addresses
+/// its own route.
+pub fn path_segment(raw: &str) -> String {
+    raw.bytes()
+        .map(|byte| match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => (byte as char).to_string(),
+            _ => format!("%{byte:02X}"),
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Each status says the state Crew shows; a failure or a login keeps the
+    /// provider's words, clipped, and a connected server keeps none.
+    #[test]
+    fn mcp_servers_map_opencodes_statuses_to_crews_states() {
+        let answer = json!({
+            "location": { "directory": "/w" },
+            "data": [
+                { "name": "crew", "status": { "status": "connected" } },
+                { "name": "figma", "status": { "status": "pending" } },
+                { "name": "broken", "status": { "status": "failed", "error": "NotFound: ChildProcess.spawn (/nope)" } },
+                { "name": "sentry", "status": { "status": "needs_auth", "error": "requires a login" }, "integrationID": "mcp_1" },
+                { "name": "off", "status": { "status": "disabled" } },
+                { "name": "odd", "status": { "status": "sleeping" } },
+                { "status": { "status": "connected" } }
+            ]
+        });
+        let servers = mcp_servers(&answer["data"]);
+        let states: Vec<_> = servers.iter().map(|server| (server.name.as_str(), server.state)).collect();
+        assert_eq!(
+            states,
+            [
+                ("crew", McpState::Connected),
+                ("figma", McpState::Pending),
+                ("broken", McpState::Failed),
+                ("sentry", McpState::NeedsAuth),
+                ("off", McpState::Disabled),
+                ("odd", McpState::Unknown),
+            ]
+        );
+        assert_eq!(servers[2].error.as_deref(), Some("NotFound: ChildProcess.spawn (/nope)"));
+        assert_eq!(servers[3].error.as_deref(), Some("requires a login"));
+        assert!(servers.iter().all(|server| server.sign_in.is_none()));
+        let long = json!([{ "name": "x", "status": { "status": "failed", "error": "e".repeat(900) } }]);
+        assert!(mcp_servers(&long)[0].error.as_deref().is_some_and(|error| error.len() <= crate::mcp_status::ERROR_LIMIT + 3));
+    }
+
+    /// A sign-in is found under the server's integration, and its OAuth
+    /// method is the integration's one `oauth` method.
+    #[test]
+    fn a_servers_sign_in_is_its_integration_and_oauth_method() {
+        let list = json!({ "data": [
+            { "name": "crew", "status": { "status": "connected" } },
+            { "name": "sentry", "status": { "status": "needs_auth", "error": "x" }, "integrationID": "mcp_1" }
+        ] });
+        assert_eq!(mcp_integration(&list["data"], "sentry").as_deref(), Some("mcp_1"));
+        assert_eq!(mcp_integration(&list["data"], "crew"), None);
+        assert_eq!(mcp_integration(&list["data"], "nothing"), None);
+        let info = json!({ "data": { "id": "mcp_1", "methods": [
+            { "id": "mcp_1", "type": "oauth", "label": "sentry" }
+        ] } });
+        assert_eq!(oauth_method(&info).as_deref(), Some("mcp_1"));
+        assert_eq!(oauth_method(&json!({ "data": { "methods": [{ "id": "k", "type": "key" }] } })), None);
+    }
+
+    /// The attempt names its page and how it finishes; without either, there
+    /// is no sign-in to offer.
+    #[test]
+    fn a_started_sign_in_names_its_page_and_mode() {
+        let reply = json!({ "location": {}, "data": { "attemptID": "con_1", "url": "https://auth.example/authorize?x=1", "mode": "auto" } });
+        assert_eq!(sign_in_attempt(&reply), Some(("https://auth.example/authorize?x=1".into(), "auto".into())));
+        assert_eq!(sign_in_attempt(&json!({ "data": { "url": "https://x" } })), None);
+    }
+
+    /// A server name goes into a route as one segment, spaces and slashes
+    /// escaped, plain names untouched.
+    #[test]
+    fn a_server_name_is_one_percent_encoded_path_segment() {
+        assert_eq!(path_segment("sentry"), "sentry");
+        assert_eq!(path_segment("claude.ai Figma/x"), "claude.ai%20Figma%2Fx");
+        assert_eq!(path_segment("mcp_10db8c72d861dde6"), "mcp_10db8c72d861dde6");
+    }
 
     /// The rules a session runs under say what Crew's autonomy means, and
     /// Crew's own tools never ask.

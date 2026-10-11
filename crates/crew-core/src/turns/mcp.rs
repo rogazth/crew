@@ -9,8 +9,11 @@
 //!   prompt, so the window runs it in a terminal tab and asks for the
 //!   reconnect when it exits.
 //! - Codex is in `turns/codex.rs`: its list, its startup notices, its login.
-//! - Cursor does not say what its servers are, and opencode's are not read yet:
-//!   neither is `reported`.
+//! - opencode lists its servers per folder (`GET /api/mcp`), and says a change
+//!   as `mcp.status.changed`; a sign-in is its OAuth attempt, whose page opens
+//!   in the browser, and a reconnect is `experimental/mcp/{name}/connect`. See
+//!   `turns/opencode.rs`.
+//! - Cursor does not say what its servers are: it is not `reported`.
 
 use std::thread;
 use std::time::Duration;
@@ -56,6 +59,11 @@ impl TurnHost {
                 self.mcp_known(session_id, name)?;
                 self.codex_mcp_login(session_id, name).map(|url| McpSignIn::Url { url })
             }
+            "opencode" => {
+                self.mcp_known(session_id, name)?;
+                let cwd = session::cwd(&self.store, &session)?;
+                self.opencode_mcp_login(&cwd, name).map(|url| McpSignIn::Url { url })
+            }
             "cursor" => Err("Cursor does not report its servers, so Crew cannot sign in to them.".into()),
             other => Err(format!("Crew does not sign in to {other}'s servers yet.")),
         }
@@ -77,6 +85,12 @@ impl TurnHost {
             "codex" => {
                 self.mcp_known(session_id, name)?;
                 self.codex_mcp_reconnect(session_id)?;
+            }
+            "opencode" => {
+                self.mcp_known(session_id, name)?;
+                let cwd = session::cwd(&self.store, &session)?;
+                self.opencode_mcp_reconnect(&cwd, name)?;
+                self.opencode_read_mcp(&cwd, session_id)?;
             }
             "cursor" => return Err("Cursor does not report its servers, so Crew cannot reconnect them.".into()),
             other => return Err(format!("Crew does not reconnect {other}'s servers yet.")),
