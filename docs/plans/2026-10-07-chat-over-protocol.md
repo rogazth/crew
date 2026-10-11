@@ -411,7 +411,7 @@ the terminal view.
 | 12–14 | Dispatch per provider | done for Claude, Codex and Cursor; opencode with step 5 |
 | 15 | Reload and Restart session | done |
 | 16 | Fast mode check and toggle | done |
-| 17 | Cursor plugin skills | todo |
+| 17 | Cursor plugin skills | done (read from the plugin cache; its body goes in the prompt) |
 | 18–21 | MCP: native config, status, sign-in, Cursor HTTP | todo |
 | 22 | Cursor stays on ACP | done (no change) |
 | 23–25 | `--disable-codebase-ref`, group kill on reap, startup sweep | done |
