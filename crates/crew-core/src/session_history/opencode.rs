@@ -21,9 +21,8 @@ use serde_json::{Map, Value};
 
 use super::{Change, SessionHistory, Window, MAX_RECORD_BYTES};
 use crate::blocks::{apply_event, settle_turn};
-use crate::providers::opencode::{
-    add_step_usage, parse_tool_call, step_failure, stream_error_message, text_part, turn_ended,
-};
+mod parts;
+use parts::{add_step_usage, parse_tool_call, step_failure, stream_error_message, text_part, turn_ended};
 use crate::providers::{as_record, string_field};
 
 /// Where a message sits in the session: opencode orders them by creation time,
