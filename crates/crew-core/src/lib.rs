@@ -31,6 +31,7 @@ pub mod process_tools;
 pub mod prompts;
 pub mod pty;
 pub mod remote;
+pub mod requests;
 pub mod routine;
 pub mod schedule;
 pub mod scheduler;

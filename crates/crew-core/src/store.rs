@@ -558,6 +558,16 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         )?;
         tx.commit()?;
     }
+    if current < 35 {
+        let tx = conn.unchecked_transaction()?;
+        // What a starting tool made, under the caller's `request_id`.
+        tx.execute_batch(crate::requests::MIGRATION_V35)?;
+        tx.execute(
+            "INSERT INTO schema_migrations (version, applied_at) VALUES (35, ?1)",
+            params![now_millis()],
+        )?;
+        tx.commit()?;
+    }
     Ok(())
 }
 

@@ -18,8 +18,8 @@
 //! `steer` puts it into the running turn where the CLI can take that. To a
 //! subagent waiting on a question, it is the answer.
 
-use std::collections::{BTreeMap, HashMap};
-use std::sync::Arc;
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use crew_protocol::{ApprovalDecision, Block, BlockRole, ToolStatus, TurnStart};
@@ -33,6 +33,21 @@ use crate::store::{now_millis, Store};
 use crate::tools::{cli, provider_models, provider_names, text, unknown_model, Audience, Tool, ToolFamily, ToolOutput, GLOSSARY};
 use crate::turns::{TurnHost, STEERABLE};
 use crate::worktree::Worktree;
+
+/// Most sessions one `start_sessions` call starts.
+pub const BATCH_MAX: usize = 20;
+/// Longest `request_id`.
+const REQUEST_ID_MAX: usize = 128;
+
+/// The call's `request_id`, if it gave one.
+fn request_id(args: &Value) -> Result<Option<String>, String> {
+    match args.get("request_id") {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(id)) if id.trim().is_empty() => Ok(None),
+        Some(Value::String(id)) if id.trim().chars().count() <= REQUEST_ID_MAX => Ok(Some(id.trim().to_string())),
+        Some(_) => Err(format!("request_id is a string of at most {REQUEST_ID_MAX} characters")),
+    }
+}
 
 /// Live sessions one parent may have: anything not exited counts.
 pub const LIVE_CAP: usize = 4;
@@ -71,6 +86,9 @@ pub struct SessionTools {
     /// The workspace's processes, for a parent deciding a process its child
     /// defined under ask autonomy.
     processes: Option<crate::process::ProcessHost>,
+    /// Start requests being made right now, by caller and `request_id`, so a
+    /// retry that overlaps its first call does not start everything twice.
+    in_flight: Mutex<HashSet<String>>,
 }
 
 /// What a caller may ask a session to run with, least first.
@@ -97,6 +115,7 @@ impl SessionTools {
             on_created,
             make_worktree,
             processes: None,
+            in_flight: Mutex::new(HashSet::new()),
         }
     }
 
@@ -682,7 +701,7 @@ impl SessionTools {
     /// they make: the prompt, the provider and model, the autonomy ceiling and
     /// the worktree.
     fn start(&self, caller: &Caller, args: &Value, how: Start) -> Result<Value, String> {
-        let workspace = caller.workspace_id()?.to_string();
+        caller.workspace_id()?;
         if args.get("owner").is_some_and(|owner| !owner.is_null()) {
             return Err(
                 "owner is gone. delegate hands a job to a subagent that reports to you; start_session starts a \
@@ -711,6 +730,78 @@ impl SessionTools {
             );
         }
         let timeout = wait_seconds(args)?;
+        let tool = if how == Start::Delegate { "delegate" } else { "start_session" };
+        let (made, repeated) = self.once(caller, args, tool, || {
+            let mut kept = None;
+            self.make_session(caller, args, how, &mut kept).map(|(_, out)| out)
+        })?;
+        let id = made["id"].as_str().unwrap_or_default().to_string();
+        let mut out = made;
+        let Some(row) = session::get(&self.store, id.clone())? else {
+            out["repeated"] = json!(true);
+            out["status"] = json!("gone");
+            out["note"] = json!("An earlier call with this request_id started it, and it has since been deleted. Nothing new was started: use a fresh request_id to start another.");
+            return Ok(out);
+        };
+        let name = row.name.clone();
+        let waited = if how == Start::Launch {
+            let hears = Self::hears(caller) && caller.session().is_some();
+            json!({
+                "status": "starting",
+                "note": format!(
+                    "{name} is a separate session, the user's: it opens in its own tab in Crew and works on the prompt \
+                     now. It reports to nobody, so its work does not come back to you{}",
+                    if hears {
+                        format!(
+                            "; it can reach you with send_message to {} if the prompt says to. read_session and \
+                             stop_session are for subagents.",
+                            caller.session_id().unwrap_or_default()
+                        )
+                    } else {
+                        ".".to_string()
+                    }
+                )
+            })
+        } else if wait {
+            self.await_turn(caller, &row, Duration::from_secs(timeout))?
+        } else {
+            json!({
+                "status": "starting",
+                "note": match caller {
+                    Caller::Bot(_) => "It is working on the prompt now. Its report wakes you when its turn ends: end your \
+                                       turn rather than wait. read_session shows what it did; send_message gives it more.",
+                    Caller::Terminal(_) => "It is working on the prompt now. Nothing wakes you when it reports, so check it \
+                                            with read_session (or pass wait: true next time); send_message gives it more.",
+                    _ => "It is working on the prompt now; its chat is in Crew. read_session shows what it did.",
+                }
+            })
+        };
+        if let (Some(out), Some(waited)) = (out.as_object_mut(), waited.as_object()) {
+            out.extend(waited.clone());
+        }
+        if repeated {
+            out["repeated"] = json!(true);
+            if !wait {
+                out["status"] = json!(self.peer_status(caller, &row));
+                out["note"] = json!("An earlier call with this request_id already started it; nothing new was started. read_session shows what it did.");
+            }
+        }
+        Ok(out)
+    }
+
+    /// Make a session and start its first turn: everything `delegate` and
+    /// `start_session` share, and what each entry of `start_sessions` does.
+    /// `kept` is set to the worktree this call made, so a caller whose session
+    /// then failed can say it was left behind. Returns the row and what the
+    /// tool says of it.
+    fn make_session(
+        &self,
+        caller: &Caller,
+        args: &Value,
+        how: Start,
+        kept: &mut Option<String>,
+    ) -> Result<(Session, Value), String> {
+        let workspace = caller.workspace_id()?.to_string();
         let prompt = text(args.get("prompt"))
             .ok_or_else(|| "prompt is required: the session starts with nothing but it".to_string())?;
         let provider = text(args.get("provider"))
@@ -761,7 +852,10 @@ impl SessionTools {
                 }
             }
         }
-        let worktree = self.worktree(caller, &workspace, args.get("worktree"), &name)?;
+        let (worktree, made_tree) = self.worktree(caller, &workspace, args.get("worktree"), &name)?;
+        if made_tree {
+            *kept = worktree.clone();
+        }
         let row = match how {
             Start::Delegate => session::create_child(
                 &self.store,
@@ -813,7 +907,7 @@ impl SessionTools {
             let _ = session::set_status(&self.store, row.id.clone(), "error".into());
             return Err(format!("The session was made ({}) but its first turn did not start: {error}", row.id));
         }
-        let mut out = json!({
+        let out = json!({
             "id": row.id,
             "letter_id": letter.id,
             "name": name,
@@ -826,40 +920,106 @@ impl SessionTools {
                 crate::worktree::branches(tree).into_iter().find(|(path, _)| path == tree).and_then(|(_, branch)| branch)
             }),
         });
-        let waited = if how == Start::Launch {
-            let hears = Self::hears(caller) && caller.session().is_some();
-            json!({
-                "status": "starting",
-                "note": format!(
-                    "{name} is a separate session, the user's: it opens in its own tab in Crew and works on the prompt \
-                     now. It reports to nobody, so its work does not come back to you{}",
-                    if hears {
-                        format!(
-                            "; it can reach you with send_message to {} if the prompt says to. read_session and \
-                             stop_session are for subagents.",
-                            caller.session_id().unwrap_or_default()
-                        )
-                    } else {
-                        ".".to_string()
-                    }
-                )
-            })
-        } else if wait {
-            self.await_turn(caller, &row, Duration::from_secs(timeout))?
-        } else {
-            json!({
-                "status": "starting",
-                "note": match caller {
-                    Caller::Bot(_) => "It is working on the prompt now. Its report wakes you when its turn ends: end your \
-                                       turn rather than wait. read_session shows what it did; send_message gives it more.",
-                    Caller::Terminal(_) => "It is working on the prompt now. Nothing wakes you when it reports, so check it \
-                                            with read_session (or pass wait: true next time); send_message gives it more.",
-                    _ => "It is working on the prompt now; its chat is in Crew. read_session shows what it did.",
-                }
-            })
+        Ok((row, out))
+    }
+
+    /// Runs `make` once per `request_id`: a retry with the same id from the
+    /// same caller gets what the first call made, and `true` for repeated. With
+    /// no id it just runs. A call that failed leaves nothing behind, so its
+    /// retry runs again.
+    fn once(
+        &self,
+        caller: &Caller,
+        args: &Value,
+        tool: &str,
+        make: impl FnOnce() -> Result<Value, String>,
+    ) -> Result<(Value, bool), String> {
+        let Some(request) = request_id(args)? else {
+            return Ok((make()?, false));
         };
-        if let (Some(out), Some(waited)) = (out.as_object_mut(), waited.as_object()) {
-            out.extend(waited.clone());
+        let who = caller.session_id().unwrap_or("user").to_string();
+        if let Some((was, made)) = crate::requests::get(&self.store, &who, &request)? {
+            if was != tool {
+                return Err(format!(
+                    "request_id {request} was already used by {was}, not {tool}: an id names one call. Use a fresh one."
+                ));
+            }
+            return Ok((made, true));
+        }
+        let key = format!("{who}\u{0}{request}");
+        if !self.in_flight.lock().unwrap_or_else(|e| e.into_inner()).insert(key.clone()) {
+            return Err(format!(
+                "A call with request_id {request} is still starting its sessions. Retry in a moment: it then returns what that call made."
+            ));
+        }
+        let made = make();
+        self.in_flight.lock().unwrap_or_else(|e| e.into_inner()).remove(&key);
+        let made = made?;
+        crate::requests::put(&self.store, &who, &request, tool, &made)?;
+        Ok((made, false))
+    }
+
+    /// `start_sessions`: up to [`BATCH_MAX`] separate sessions in one call,
+    /// each made on its own. An entry that fails does not stop the others, and
+    /// a worktree made for one that then failed stays, named in its result.
+    fn start_many(&self, caller: &Caller, args: &Value) -> Result<Value, String> {
+        caller.workspace_id()?;
+        let list = args
+            .get("sessions")
+            .and_then(Value::as_array)
+            .ok_or("sessions is required: a list of 1 to 20 entries, each with its own prompt")?;
+        if list.is_empty() {
+            return Err("sessions is empty: give 1 to 20 entries, each with its own prompt".into());
+        }
+        if list.len() > BATCH_MAX {
+            return Err(format!(
+                "{} entries: start_sessions takes at most {BATCH_MAX} and refuses a longer list whole. Nothing was \
+                 started: send it in lists of {BATCH_MAX} or fewer.",
+                list.len()
+            ));
+        }
+        let (made, repeated) = self.once(caller, args, "start_sessions", || {
+            let mut results = Vec::new();
+            for (index, entry) in list.iter().enumerate() {
+                let mut kept = None;
+                let outcome = if entry.is_object() {
+                    self.make_session(caller, entry, Start::Launch, &mut kept)
+                } else {
+                    Err("an entry is an object with at least a prompt".to_string())
+                };
+                results.push(match outcome {
+                    Ok((_, mut out)) => {
+                        out["index"] = json!(index);
+                        out["ok"] = json!(true);
+                        out["status"] = json!("starting");
+                        out
+                    }
+                    Err(error) => {
+                        let mut out = json!({ "index": index, "ok": false, "error": error });
+                        if let Some(tree) = kept {
+                            out["worktree"] = json!(tree);
+                            out["note"] = json!(
+                                "The worktree was made for this entry and is kept, so it is not made twice: start the \
+                                 entry again with worktree set to this path, or remove it."
+                            );
+                        }
+                        out
+                    }
+                });
+            }
+            let started = results.iter().filter(|out| out["ok"] == true).count();
+            Ok(json!({
+                "started": started,
+                "failed": results.len() - started,
+                "sessions": results,
+                "note": "Each is a separate session of the user's, in its own tab in Crew, working on its prompt now. \
+                         They report to nobody, so their work does not come back to you."
+            }))
+        })?;
+        let mut out = made;
+        if repeated {
+            out["repeated"] = json!(true);
+            out["note"] = json!("An earlier call with this request_id already made these; nothing new was started.");
         }
         Ok(out)
     }
@@ -999,15 +1159,21 @@ impl SessionTools {
         json!({ "status": "running", "note": note })
     }
 
-    /// Where a new session works: `current` (the caller's own folder), `new`
+    /// Where a new session works (and whether this call made the worktree): `current` (the caller's own folder), `new`
     /// (a branch of its own), or a branch or a worktree path, made if it is
     /// not there yet (checked out if the branch exists, tracked from a remote
     /// if only a remote has it, otherwise made from the main checkout's HEAD).
-    fn worktree(&self, caller: &Caller, workspace: &str, wanted: Option<&Value>, name: &str) -> Result<Option<String>, String> {
+    fn worktree(
+        &self,
+        caller: &Caller,
+        workspace: &str,
+        wanted: Option<&Value>,
+        name: &str,
+    ) -> Result<(Option<String>, bool), String> {
         let here = caller.worktree().map(str::to_string);
         let wanted = text(wanted).unwrap_or_else(|| "current".into());
         if wanted == "current" {
-            return Ok(here);
+            return Ok((here, false));
         }
         let folder = match &here {
             Some(tree) if std::path::Path::new(tree).is_dir() => tree.clone(),
@@ -1018,16 +1184,16 @@ impl SessionTools {
         if wanted == "new" {
             let suffix = &uuid::Uuid::new_v4().simple().to_string()[..4];
             let branch = format!("crew/{}-{suffix}", branch_slug(name));
-            return (self.make_worktree)(&folder, &branch).map(|tree| Some(tree.path));
+            return (self.make_worktree)(&folder, &branch).map(|tree| (Some(tree.path), true));
         }
         let existing = crate::worktree::list(&folder).into_iter().find(|tree| {
             tree.branch.as_deref() == Some(wanted.as_str()) || tree.path == wanted
         });
         match existing {
-            Some(tree) if tree.main => Ok(None),
-            Some(tree) => Ok(Some(tree.path)),
+            Some(tree) if tree.main => Ok((None, false)),
+            Some(tree) => Ok((Some(tree.path), false)),
             None if wanted.starts_with('/') => Err(format!("{wanted} is not a worktree of this workspace")),
-            None => (self.make_worktree)(&folder, &wanted).map(|tree| Some(tree.path)),
+            None => (self.make_worktree)(&folder, &wanted).map(|tree| (Some(tree.path), true)),
         }
     }
 
@@ -1394,6 +1560,10 @@ fn session_arg() -> Value {
     json!({ "type": "string", "description": "The subagent's id, from delegate or list_peers." })
 }
 
+fn request_id_property() -> Value {
+    json!({ "type": "string", "description": "Makes the call safe to retry: a second call with the same request_id from you returns what the first one made, and starts nothing. Pick one per job (a short unique string) and send it again if the call timed out." })
+}
+
 /// The arguments `delegate` and `start_session` share; `delegate` also waits.
 fn start_schema(wait: bool) -> Value {
     let mut properties = json!({
@@ -1404,6 +1574,7 @@ fn start_schema(wait: bool) -> Value {
         "name": { "type": "string", "description": "What it is listed as. Defaults to the provider and the first words of the prompt." },
         "autonomy": { "type": "string", "enum": ["ask", "edits", "auto", "full"], "description": "Defaults to yours. Never more than yours." }
     });
+    properties["request_id"] = request_id_property();
     if wait {
         properties["wait"] = json!({ "type": "boolean", "description": "Block until its turn ends and return its report." });
         properties["timeout_s"] = json!({ "type": "integer", "minimum": 1, "maximum": WAIT_MAX_S, "description": "With wait: seconds to wait, 600 by default, 3600 at most." });
@@ -1453,7 +1624,7 @@ pub fn catalog() -> Vec<Tool> {
                 "Each time it ends a turn you started, its final message, its report, comes back to you; a bot is woken by it as a turn of its own, so end your turn rather than wait. Nothing wakes a terminal session, which reads reports with read_session or waits for one. A turn the user starts in its tab reports only to the user. read_session reads what it did, send_message gives it more or answers its question, stop_session ends it. ",
                 "wait: true blocks here until its turn ends and returns the report, or returns early with its questions if it asks one; timeout_s is 600 by default and 3600 at most, and on timeout it keeps working (status running). For work that takes more than a few minutes, do not wait. ",
                 "worktree: current (yours, the default), new (a fresh branch and worktree of its own), or a branch name or worktree path. It runs with your autonomy or less, never more. At most 4 live subagents of your own at once; one idle for 30 minutes exits, and a subagent that has exited stays exited: start another. A subagent cannot delegate. ",
-                "Use start_session instead when the user wants a separate session they can see and talk to. A bot outlives its sessions: to hand work to a bot, use send_message."
+                "request_id makes the call safe to retry: the same id from you returns the subagent the first call made. Use start_session instead when the user wants a separate session they can see and talk to. A bot outlives its sessions: to hand work to a bot, use send_message."
             ),
             schema: start_schema(true),
             audience: Audience::EVERYONE,
@@ -1465,11 +1636,46 @@ pub fn catalog() -> Vec<Tool> {
                 "Start a separate session: a provider CLI (claude, codex, opencode or cursor) working on prompt, in this workspace, that shows in the sidebar like one the user opened. It is the user's: it works for the user, reports to nobody, is not capped and is not ended when idle. It opens as a chat. ",
                 "Use it when the user wants a session they can see and talk to. Do not use it just because the user said \"subagent\": that is delegate. ",
                 "It sees nothing of your conversation: put everything it needs in the prompt. Its first prompt arrives in a message naming you, so it can answer with send_message to your id (unless your CLI takes no letters); to coordinate, say so in the prompt (\"product decisions: ask me with send_message to <your id>, not the user\"). Crew does nothing more for you than record that you launched it. read_session and stop_session are for subagents. ",
-                "worktree: current (yours, the default), new (a fresh branch and worktree of its own), or a branch name or worktree path. It runs with your autonomy or less, never more. A subagent may call this."
+                "worktree: current (yours, the default), new (a fresh branch and worktree of its own), or a branch name or worktree path. It runs with your autonomy or less, never more. request_id makes the call safe to retry: the same id from you returns the session the first call made. For several at once, start_sessions. A subagent may call this."
             ),
             schema: start_schema(false),
             audience: Audience::EVERYONE,
             cli: vec![cli("sessions", "start").rest(&["prompt"]).eg("crew sessions start --worktree new -- carry on with the plan in docs/plan.md\n  crew sessions start --provider codex --name Reviewer review the diff on main")],
+        },
+        Tool {
+            name: "start_sessions",
+            description: concat!(
+                "Start several separate sessions in one call: sessions is a list of 1 to 20 entries, each what start_session takes (prompt, provider, model, worktree, name, autonomy), each with its own prompt. Each is the user's, like one start_session makes: it shows in the sidebar, reports to nobody and is not capped. ",
+                "Each entry succeeds or fails on its own, and the result lists both: sessions has one result per entry, in order, with ok, and on a failure the error. A worktree made for an entry that then failed is kept and named in its result. More than 20 entries is refused whole, before anything starts. ",
+                "request_id makes the whole call safe to retry. Use it for independent jobs that each need a session of their own; for one, use start_session."
+            ),
+            schema: json!({
+                "type": "object",
+                "properties": {
+                    "sessions": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": BATCH_MAX,
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "prompt": start_schema(false)["properties"]["prompt"].clone(),
+                                "provider": start_schema(false)["properties"]["provider"].clone(),
+                                "model": start_schema(false)["properties"]["model"].clone(),
+                                "worktree": start_schema(false)["properties"]["worktree"].clone(),
+                                "name": start_schema(false)["properties"]["name"].clone(),
+                                "autonomy": start_schema(false)["properties"]["autonomy"].clone()
+                            },
+                            "required": ["prompt"]
+                        },
+                        "description": "One entry per session to start."
+                    },
+                    "request_id": request_id_property()
+                },
+                "required": ["sessions"]
+            }),
+            audience: Audience::EVERYONE,
+            cli: vec![],
         },
         Tool {
             name: "read_session",
@@ -1512,8 +1718,8 @@ impl ToolFamily for SessionTools {
             "{GLOSSARY} delegate hands a job to a subagent (another provider CLI, in this checkout or a worktree of \
              its own): its report wakes a bot when its turn ends, or wait: true waits for it; read_session reads \
              what it did, send_message gives it more, stop_session ends it. start_session starts a separate session \
-             the user can see and talk to, which reports to nobody; do not use it just because the user said \
-             \"subagent\". send_message writes to any bot or session that does not have more autonomy than you do. \
+             the user can see and talk to, which reports to nobody (start_sessions, up to 20 at once); do not use it \
+             just because the user said \"subagent\". send_message writes to any bot or session that does not have more autonomy than you do. \
              list_peers lists who you can write to."
         ) };
         if let (Some(me), Ok(workspace)) = (caller.session(), caller.workspace_id()) {
@@ -1539,6 +1745,7 @@ impl ToolFamily for SessionTools {
             "send_message" => self.send(caller, args)?,
             "delegate" => self.start(caller, args, Start::Delegate)?,
             "start_session" => self.start(caller, args, Start::Launch)?,
+            "start_sessions" => self.start_many(caller, args)?,
             "read_session" => self.read(caller, args)?,
             "stop_session" => self.stop(caller, args)?,
             _ => return Err(format!("Unknown tool \"{name}\"")),
@@ -1552,7 +1759,6 @@ mod tests {
     use super::*;
     use crate::caller::CallerKind;
     use std::path::{Path, PathBuf};
-    use std::sync::Mutex;
 
     /// opencode's server (`turns::fake_opencode_server`), and the log of each
     /// turn's message beside it: a turn answers with the last line of what it
@@ -7186,5 +7392,151 @@ time.sleep(600)
         w.settle(&id);
         assert_ne!(w.live_pid(&id), first, "Edits to Full kept the process");
         assert!(report.to_lowercase().contains("mango"), "the conversation was not resumed: {report:?}");
+    }
+
+    fn entry(prompt: &str) -> Value {
+        json!({ "provider": "opencode", "prompt": prompt })
+    }
+
+    /// Decision 9: each entry succeeds or fails on its own, and the result
+    /// lists both; a longer list than 20 is refused whole.
+    #[test]
+    fn start_sessions_starts_each_entry_on_its_own_and_lists_both() {
+        let w = world();
+        let shell = w.session("terminal", "shell", "full");
+        let out = w
+            .call(
+                &shell,
+                "start_sessions",
+                json!({ "sessions": [
+                    entry("first job"),
+                    json!({ "provider": "nope", "prompt": "bad provider" }),
+                    json!({ "provider": "opencode" }),
+                    json!({ "provider": "opencode", "prompt": "third job", "name": "Third", "worktree": "new" }),
+                    "not an object"
+                ] }),
+            )
+            .expect("a batch");
+        assert_eq!((out["started"].clone(), out["failed"].clone()), (json!(2), json!(3)), "{out}");
+        let results = out["sessions"].as_array().unwrap();
+        assert_eq!(results.iter().map(|r| r["ok"] == true).collect::<Vec<_>>(), [true, false, false, true, false]);
+        assert!(results[1]["error"].as_str().unwrap().contains("Unknown provider"), "{out}");
+        assert!(results[2]["error"].as_str().unwrap().contains("prompt is required"), "{out}");
+        assert_eq!(results[3]["name"], "Third");
+        for index in [0, 3] {
+            let id = results[index]["id"].as_str().unwrap().to_string();
+            let row = w.row(&id);
+            // Each is a separate session of the user's, launched by the caller.
+            assert_eq!((row.kind.as_str(), row.view.as_str(), row.parent_id.as_deref()), ("terminal", "chat", None));
+            assert_eq!(row.launched_by.as_deref(), shell.session_id());
+            assert!(w.made.lock().unwrap().contains(&id));
+            w.settle(&id);
+        }
+        assert!(w.row(results[3]["id"].as_str().unwrap()).worktree.is_some());
+        assert_eq!(results[0]["worktree"], "main checkout");
+    }
+
+    #[test]
+    fn start_sessions_refuses_a_list_over_twenty_whole_and_an_empty_one() {
+        let w = world();
+        let shell = w.session("terminal", "shell", "full");
+        let before = session::list(w.turns.store(), w.workspace.clone()).unwrap().len();
+        let many: Vec<Value> = (0..=BATCH_MAX).map(|n| entry(&format!("job {n}"))).collect();
+        let out = w.call(&shell, "start_sessions", json!({ "sessions": many }));
+        assert!(out.is_err_and(|e| e.contains("at most 20") && e.contains("Nothing was started")));
+        assert!(w.call(&shell, "start_sessions", json!({ "sessions": [] })).is_err());
+        assert!(w.call(&shell, "start_sessions", json!({})).is_err());
+        assert_eq!(session::list(w.turns.store(), w.workspace.clone()).unwrap().len(), before, "something started");
+        // Twenty is the most that goes.
+        let twenty: Vec<Value> = (0..BATCH_MAX).map(|n| entry(&format!("job {n}"))).collect();
+        let out = w.call(&shell, "start_sessions", json!({ "sessions": twenty })).expect("twenty");
+        assert_eq!(out["started"], 20, "{out}");
+        for result in out["sessions"].as_array().unwrap() {
+            w.settle(result["id"].as_str().unwrap());
+        }
+    }
+
+    #[test]
+    fn a_worktree_made_for_an_entry_that_failed_is_kept_and_named() {
+        let w = world();
+        let trees = w.dir.join("kept");
+        let store = w.turns.store().clone();
+        let workspace = w.workspace.clone();
+        let tools = SessionTools::with_worktrees(
+            w.turns.clone(),
+            Arc::new(|_: &Session| {}),
+            Arc::new(move |_: &str, branch: &str| {
+                let path = trees.join(crate::worktree::slug(branch));
+                std::fs::create_dir_all(&path).map_err(|e| e.to_string())?;
+                // The workspace goes while the worktree is being made, so the
+                // session that was to run in it cannot be.
+                crate::workspace::delete(&store, workspace.clone())?;
+                Ok(Worktree { path: path.to_string_lossy().into_owned(), branch: Some(branch.to_string()), main: false, add: 0, del: 0, dirty: 0 })
+            }),
+        );
+        let user = w.user();
+        let out = match tools.run(&user, "start_sessions", &json!({ "sessions": [json!({ "provider": "opencode", "prompt": "x", "worktree": "new" })] })).expect("a batch") {
+            ToolOutput::Value(value) => value,
+            ToolOutput::Content(_) => panic!("content"),
+        };
+        assert_eq!((out["started"].clone(), out["failed"].clone()), (json!(0), json!(1)), "{out}");
+        let failed = &out["sessions"][0];
+        let tree = failed["worktree"].as_str().expect("the worktree is named");
+        assert!(std::path::Path::new(tree).is_dir(), "{failed}");
+        assert!(failed["note"].as_str().unwrap().contains("kept"), "{failed}");
+        assert!(failed["error"].as_str().unwrap().contains(tree), "{failed}");
+    }
+
+    /// Decision 10: a retry with the same request_id from the same caller
+    /// returns what the first call made.
+    #[test]
+    fn a_retry_with_the_same_request_id_returns_what_the_first_call_made() {
+        let w = world();
+        let shell = w.session("terminal", "shell", "full");
+        let other = w.session("terminal", "other", "full");
+        let args = json!({ "provider": "opencode", "prompt": "job", "request_id": "job-1" });
+        let first = w.call(&shell, "delegate", args.clone()).expect("first");
+        let again = w.call(&shell, "delegate", args.clone()).expect("retry");
+        assert_eq!(first["id"], again["id"]);
+        assert_eq!(again["repeated"], true, "{again}");
+        assert!(first.get("repeated").is_none());
+        let id = first["id"].as_str().unwrap().to_string();
+        assert_eq!(w.live_of(shell.session_id().unwrap()).len(), 1, "a retry started another");
+        // Per caller: another caller's id of the same text is its own.
+        let theirs = w.call(&other, "delegate", args.clone()).expect("other");
+        assert_ne!(theirs["id"], first["id"]);
+        // A retry that waits waits for the first call's session.
+        let waited = w.call(&shell, "delegate", json!({ "provider": "opencode", "prompt": "job", "request_id": "job-1", "wait": true, "timeout_s": 20 })).expect("wait");
+        assert_eq!(waited["id"], first["id"]);
+        assert_eq!(waited["status"], "reported", "{waited}");
+        // An id names one tool.
+        let mixed = w.call(&shell, "start_session", args.clone());
+        assert!(mixed.is_err_and(|e| e.contains("already used by delegate")));
+        // Without one, every call starts its own.
+        let plain = json!({ "provider": "opencode", "prompt": "job" });
+        let one = w.call(&shell, "start_session", plain.clone()).expect("one");
+        let two = w.call(&shell, "start_session", plain).expect("two");
+        assert_ne!(one["id"], two["id"]);
+        // A bad id is refused.
+        assert!(w.call(&shell, "start_session", json!({ "provider": "opencode", "prompt": "x", "request_id": 7 })).is_err());
+        for id in [id, theirs["id"].as_str().unwrap().into(), one["id"].as_str().unwrap().into(), two["id"].as_str().unwrap().into()] {
+            w.settle(&id);
+        }
+    }
+
+    #[test]
+    fn a_batch_retried_with_its_request_id_starts_nothing_twice() {
+        let w = world();
+        let user = w.user();
+        let args = json!({ "request_id": "batch-1", "sessions": [entry("a"), entry("b")] });
+        let first = w.call(&user, "start_sessions", args.clone()).expect("first");
+        let again = w.call(&user, "start_sessions", args).expect("retry");
+        assert_eq!(first["sessions"], again["sessions"]);
+        assert_eq!(again["repeated"], true);
+        let all = session::list(w.turns.store(), w.workspace.clone()).unwrap();
+        assert_eq!(all.len(), 2, "{all:?}");
+        for row in all {
+            w.settle(&row.id);
+        }
     }
 }
